@@ -3,6 +3,11 @@
 # build/packages/<name>. The Ziran package tool comes from the toolchain commit
 # in the same lock, so a fresh clone needs only git, make, and a C compiler.
 #
+# Sources already on disk are used before the network: set
+# ZIRAN_PACKAGE_SOURCES to a directory of checkouts, or build from F-Droid,
+# whose srclibs in ../srclib are found automatically. Each must contain the
+# locked commit; see scripts/seed-package-sources.py.
+#
 #   sh scripts/packages.sh            # use ziran.local.toml overrides if present
 #   sh scripts/packages.sh --locked   # release/CI: exact lock, no overrides
 #   sh scripts/packages.sh --offline  # use only the package cache
@@ -28,6 +33,9 @@ tool_commit=$(toolchain_field commit)
 bootstrap="$root/build/ziran-bootstrap"
 ziran=${ZIRAN:-"$bootstrap/build/bin/ziran"}
 
+python3 scripts/seed-package-sources.py
+tool_cache="${XDG_CACHE_HOME:-$HOME/.cache}/ziran/sources/$(python3 -c 'import hashlib, sys; print("p" + hashlib.sha256(f"{sys.argv[1]}\n{sys.argv[2]}".encode()).hexdigest()[:16])' "$tool_url" "$tool_commit")"
+
 if [ -z "${ZIRAN:-}" ]; then
     current=$(git -C "$bootstrap" rev-parse HEAD 2>/dev/null || true)
     if [ "$current" != "$tool_commit" ]; then
@@ -37,10 +45,15 @@ if [ -z "${ZIRAN:-}" ]; then
                 exit 1 ;;
         esac
         rm -rf "$bootstrap"
-        mkdir -p "$bootstrap"
-        git -C "$bootstrap" init -q
-        git -C "$bootstrap" fetch -q --depth 1 "$tool_url" "$tool_commit"
-        git -C "$bootstrap" checkout -q --detach FETCH_HEAD
+        if [ -d "$tool_cache" ]; then
+            git clone -q --no-checkout "$tool_cache" "$bootstrap"
+            git -C "$bootstrap" checkout -q --detach "$tool_commit"
+        else
+            mkdir -p "$bootstrap"
+            git -C "$bootstrap" init -q
+            git -C "$bootstrap" fetch -q --depth 1 "$tool_url" "$tool_commit"
+            git -C "$bootstrap" checkout -q --detach FETCH_HEAD
+        fi
     fi
     if [ ! -x "$ziran" ]; then
         env -u DISPLAY -u WAYLAND_DISPLAY make -C "$bootstrap" -s all >&2

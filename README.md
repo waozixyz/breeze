@@ -89,6 +89,10 @@ written under `build/dist/`.
 Dependencies, including Kryon and the Ziran toolchain, are pinned in
 `ziran.lock`. `make` fetches them into the Ziran package cache and links them
 under `build/packages/`; `sh scripts/packages.sh` does the same by hand.
+Builders that supply the sources themselves need no network: put Git checkouts
+containing the locked commits (including Kryon's `raylib` submodule) in
+`$ZIRAN_PACKAGE_SOURCES`, or declare them as F-Droid srclibs, which are found
+in `../srclib` automatically.
 
 To debug Inbe against the root Kryon checkout, map it in an ignored
 `ziran.local.toml`:
