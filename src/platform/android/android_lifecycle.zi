@@ -1,0 +1,154 @@
+#import, file "../../app/app_types.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/current_app.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/audio_selection.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/music_library.zi";
+
+c :: #system_library "c";
+
+android_timer_activate :: () #foreign c;
+android_timer_deactivate :: () #foreign c;
+app_audio_ensure_ready :: (app: *InnerBreeze) #foreign c;
+meditation_music_start_download :: (app: *InnerBreeze) #foreign c;
+save_settings :: (app: *InnerBreeze) #foreign c;
+
+background_execution_active: s32 = 0;
+auto_paused_for_lifecycle: s32 = 0;
+
+#program_export
+android_lifecycle_reset :: () {
+    background_execution_active = 0
+    auto_paused_for_lifecycle = 0
+}
+
+android_play_in_background :: () -> s32 {
+    app := CurrentApp()
+    if app == null {
+        return 0
+    }
+    return app.breathing.play_in_background
+}
+
+android_set_background_active :: (active: s32) {
+    app := CurrentApp()
+    if active != 0 {
+        if app != null {
+            app.backgrounded = 1
+        }
+        android_timer_activate()
+    } else {
+        android_timer_deactivate()
+        if app != null {
+            app.backgrounded = 0
+        }
+    }
+}
+
+android_pause_session :: () -> s32 {
+    app := CurrentApp()
+    if app == null || app.session_paused != 0 {
+        return 0
+    }
+    app.session_paused = 1
+    app.backgrounded = 1
+    return 1
+}
+
+android_resume_session :: () {
+    app := CurrentApp()
+    if app == null || app.session_paused == 0 {
+        return
+    }
+    app.session_paused = 0
+    app.backgrounded = 0
+}
+
+#program_export
+android_sync_lifecycle :: (activity_paused: s32,
+    indicator_visible: s32) -> s32 {
+    run_in_background: s32 = 0
+    if android_play_in_background() != 0  && activity_paused != 0 && indicator_visible != 0 {
+        run_in_background = 1
+    }
+    pause_for_lifecycle := activity_paused != 0 && run_in_background == 0
+
+    if background_execution_active != run_in_background {
+        android_set_background_active(run_in_background)
+        background_execution_active = run_in_background
+    }
+    if pause_for_lifecycle && auto_paused_for_lifecycle == 0 {
+        auto_paused_for_lifecycle = android_pause_session()
+    } else if !pause_for_lifecycle && auto_paused_for_lifecycle != 0 {
+        android_resume_session()
+        auto_paused_for_lifecycle = 0
+    }
+    return background_execution_active
+}
+
+#program_export
+android_invalidate_graphics_resources :: () {
+    app := CurrentApp()
+    if app != null {
+        app.graphics_reload_requested = 1
+    }
+}
+
+#program_export
+android_practice_to_start :: (practice_id: s32) -> s32 {
+    app := CurrentApp()
+    if app == null {
+        return -1
+    }
+    if practice_id < 0 {
+        practice_id = app.exercise_type
+    }
+    return practice_clamp_id(practice_id)
+}
+
+#program_export
+android_debug_import_music_for_practice :: (path: *u8,
+    practice_id: s32) -> s32 {
+    app := CurrentApp()
+    if app == null || path == null {
+        return 0
+    }
+    path_text := AppTextFromCString(path, FS_PATH_MAX)
+    if path_text.count == 0 || path_text.count >= FS_PATH_MAX {
+        return 0
+    }
+    error_code: s32 = AUDIO_IMPORT_ERROR_UNKNOWN
+    app_audio_ensure_ready(app)
+    if !app_audio_import_custom_music_ex(app, path_text, *error_code) {
+        return 0
+    }
+
+    practice_id = practice_clamp_id(practice_id)
+    track := AUDIO_BUILTIN_MUSIC_COUNT + app.audio_custom_music_count - 1
+    app.meditation.music_practice_tracks[practice_id] = track
+    app.meditation.music_track = track
+    app_audio_music_sanitize_selection(app)
+    app.sound_volume = 0
+    app.music_volume = 100
+    save_settings(app)
+    return 1
+}
+
+#program_export
+android_debug_start_music_download :: () -> s32 {
+    app := CurrentApp()
+    if app == null {
+        return 0
+    }
+    meditation_music_start_download(app)
+    return 1
+}
+
+#program_export
+android_can_open_donation_reminder :: () -> s32 {
+    if CurrentApp() == null {
+        return 0
+    }
+    return 1
+}

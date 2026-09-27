@@ -1,0 +1,33 @@
+#import, file "../src/app/update_policy.zi";
+
+GoodAppcast :: "{\"version\":\"2.0.7\",\"notes_url\":\"https://example.org/release\",\"channels\":{\"appimage\":{\"url\":\"https://example.org/inbe.AppImage\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"size\":123456}}}"
+BadHashAppcast :: "{\"version\":\"2.0.7\",\"notes_url\":\"https://example.org/release\",\"channels\":{\"appimage\":{\"url\":\"https://example.org/inbe.AppImage\",\"sha256\":\"abcd\",\"size\":123456}}}"
+HttpReleaseAppcast :: "{\"version\":\"2.0.7\",\"notes_url\":\"http://example.org/release\"}"
+HttpArtifactAppcast :: "{\"version\":\"2.0.7\",\"notes_url\":\"https://example.org/release\",\"channels\":{\"appimage\":{\"url\":\"http://example.org/inbe.AppImage\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"size\":123456}}}"
+
+#program_export
+Answer :: () -> s32 {
+    if !ReleaseIsNewer("2.0.7", "2.0.6") { return 1 }
+    if ReleaseIsNewer("2.0.6", "2.0.6") { return 2 }
+    if ReleaseIsNewer("2.0.5", "2.0.6") { return 3 }
+    if ReleaseIsNewer("2.0.7-preview", "2.0.6") { return 4 }
+    if ReleaseIsNewer("999999999999.0.0", "2.0.6") { return 5 }
+
+    selected := SelectAppcast(GoodAppcast, "2.0.6", "appimage")
+    if !selected.valid || !selected.newer || !selected.self_update ||
+        selected.artifact_size != 123456 { return 6 }
+    managed := SelectAppcast(GoodAppcast, "2.0.6", "")
+    if !managed.valid || !managed.newer || managed.self_update { return 7 }
+    current := SelectAppcast(GoodAppcast, "2.0.7", "appimage")
+    if !current.valid || current.newer || current.self_update { return 8 }
+    bad_hash := SelectAppcast(BadHashAppcast, "2.0.6", "appimage")
+    if bad_hash.valid { return 9 }
+    malformed := SelectAppcast("{\"version\":", "2.0.6", "appimage")
+    if malformed.valid { return 10 }
+    insecure_release := SelectAppcast(HttpReleaseAppcast, "2.0.6", "")
+    if insecure_release.valid { return 11 }
+    insecure_artifact := SelectAppcast(HttpArtifactAppcast,
+        "2.0.6", "appimage")
+    if !insecure_artifact.valid || insecure_artifact.self_update { return 12 }
+    return 42
+}

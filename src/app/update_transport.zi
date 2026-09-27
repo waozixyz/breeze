@@ -1,0 +1,623 @@
+// Shared native transport ABI for the updater workers.
+#import "c_string"
+
+#scope_export
+c :: #system_library "c";
+UpdateGetEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+UpdateCStringLength :: (text: *u8) -> usize #foreign c "strlen";
+UpdateMemoryCopy :: (destination: *void, source: *void,
+    length: usize) -> *void #foreign c "memcpy";
+
+UpdateTextEquals :: (pointer: *u8, text: string) -> bool {
+    if pointer == null {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)text.count {
+        if pointer[index] != text[index] {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+UpdateCopyAddress :: (address: *u8, destination: []u8) -> bool {
+    if address == null {
+        return false
+    }
+    length := UpdateCStringLength(address)
+    if length < 9 || length >= cast(usize)destination.count {
+        return false
+    }
+    if !UpdateTextEquals(address, "https://") &&
+        !UpdateTextEquals(address, "http://") {
+        return false
+    }
+    unused UpdateMemoryCopy(cast(*void)(*destination[0]),
+        cast(*void)address, length + cast(usize)1)
+    return true
+}
+
+#if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+    sdl :: #system_library "SDL2";
+    curl :: #system_library "curl";
+    UpdateThreadRoutine :: #type (*void) -> s32 #c_call;
+    UpdateReceiveRoutine :: #type (*u8, usize, usize, *void) -> usize #c_call;
+    UpdateAtomicSet :: (value: *s32, replacement: s32) -> s32 #foreign sdl "SDL_AtomicSet";
+    UpdateAtomicGet :: (value: *s32) -> s32 #foreign sdl "SDL_AtomicGet";
+    UpdateThreadStart :: (routine: UpdateThreadRoutine, name: *u8,
+        argument: *void) -> *void #foreign sdl "SDL_CreateThread";
+    UpdateThreadWait :: (thread: *void, status: *s32) #foreign sdl "SDL_WaitThread";
+    #if #defined(_WIN32) {
+        UpdateCurlGlobalInit :: (flags: s32) -> s32 #foreign curl "curl_global_init";
+    } else {
+        UpdateCurlGlobalInit :: (flags: isize) -> s32 #foreign curl "curl_global_init";
+    }
+    UpdateCurlCreate :: () -> *void #foreign curl "curl_easy_init";
+    UpdateCurlSet :: (handle: *void, option: s32,
+        arguments: ..any) -> s32 #foreign curl "curl_easy_setopt";
+    UpdateCurlInfo :: (handle: *void, information: s32,
+        arguments: ..any) -> s32 #foreign curl "curl_easy_getinfo";
+    UpdateCurlPerform :: (handle: *void) -> s32 #foreign curl "curl_easy_perform";
+    UpdateCurlDestroy :: (handle: *void) #foreign curl "curl_easy_cleanup";
+
+    // Values from the public curl option ABI; long options use C long.
+    UPDATE_CURL_URL :: 10002
+    UPDATE_CURL_WRITEFUNCTION :: 20011
+    UPDATE_CURL_TIMEOUT :: 13
+    UPDATE_CURL_USERAGENT :: 10018
+    UPDATE_CURL_FOLLOWLOCATION :: 52
+    UPDATE_CURL_MAXREDIRS :: 68
+    UPDATE_CURL_CONNECTTIMEOUT :: 78
+    UPDATE_CURL_NOSIGNAL :: 99
+    UPDATE_CURL_MAXFILESIZE_LARGE :: 30117
+    UPDATE_CURL_TIMEOUT_MS :: 155
+    UPDATE_CURL_CONNECTTIMEOUT_MS :: 156
+    UPDATE_CURL_PROTOCOLS :: 10318
+    UPDATE_CURL_REDIRECT_PROTOCOLS :: 10319
+    UPDATE_CURL_RESPONSE_CODE :: 2097154
+
+    InitializeUpdateTransport :: () -> bool {
+        #if #defined(_WIN32) {
+            return UpdateCurlGlobalInit(3) == 0
+        } else {
+            return UpdateCurlGlobalInit(cast(isize)3) == 0
+        }
+    }
+
+    UpdateCurlSetLong :: (handle: *void, option: s32, value: s32) -> s32 {
+        #if #defined(_WIN32) {
+            return UpdateCurlSet(handle, option, value)
+        } else {
+            return UpdateCurlSet(handle, option, cast(isize)value)
+        }
+    }
+
+    UpdateCurlStatus :: (handle: *void) -> s64 {
+        #if #defined(_WIN32) {
+            status: s32 = 0
+            unused UpdateCurlInfo(handle, UPDATE_CURL_RESPONSE_CODE, *status)
+            return cast(s64)status
+        } else {
+            status: isize = cast(isize)0
+            unused UpdateCurlInfo(handle, UPDATE_CURL_RESPONSE_CODE, *status)
+            return cast(s64)status
+        }
+    }
+
+    UpdateConfigureCurl :: (handle: *void, address: *u8,
+        receive: UpdateReceiveRoutine) -> bool {
+        protocols: [16]u8
+        user_agent: [24]u8
+        unused CopyCString("http,https", protocols[:])
+        if UpdateTextEquals(address, "https://") {
+            unused CopyCString("https", protocols[:])
+        }
+        unused CopyCString("Inbe updater/1", user_agent[:])
+        return UpdateCurlSet(handle, UPDATE_CURL_URL, address) == 0 &&
+            UpdateCurlSet(handle, UPDATE_CURL_WRITEFUNCTION, receive) == 0 &&
+            UpdateCurlSetLong(handle, UPDATE_CURL_FOLLOWLOCATION, 1) == 0 &&
+            UpdateCurlSetLong(handle, UPDATE_CURL_MAXREDIRS, 5) == 0 &&
+            UpdateCurlSet(handle, UPDATE_CURL_PROTOCOLS, *protocols[0]) == 0 &&
+            UpdateCurlSet(handle, UPDATE_CURL_REDIRECT_PROTOCOLS, *protocols[0]) == 0 &&
+            UpdateCurlSetLong(handle, UPDATE_CURL_NOSIGNAL, 1) == 0 &&
+            UpdateCurlSet(handle, UPDATE_CURL_USERAGENT, *user_agent[0]) == 0
+    }
+}
+
+// An asynchronous, bounded appcast transfer. Release policy is in update_check.
+
+
+#if #defined(_WIN32) {
+    UpdateTime :: (result: *s64) -> s64 #foreign c "_time64";
+} else {
+    UpdateTime :: (result: *isize) -> isize #foreign c "time";
+}
+
+update_channel_name: [32]u8;
+
+#program_export
+app_update_getenv :: (name: *u8) -> *u8 {
+    return UpdateGetEnvironment(name)
+}
+
+#program_export
+app_update_now :: () -> s64 {
+    return cast(s64)UpdateTime(null)
+}
+
+#program_export
+app_update_channel_key :: () -> *u8 {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        return null
+    }
+    #if #defined(_WIN32) {
+        unused CopyCString("windows", update_channel_name[:])
+        return *update_channel_name[0]
+    }
+    name: [16]u8
+    unused CopyCString("APPIMAGE", name[:])
+    appimage := UpdateGetEnvironment(*name[0])
+    if appimage == null || appimage[0] == cast(u8)0 {
+        return null
+    }
+    #if #defined(__aarch64__) || #defined(_M_ARM64) {
+        unused CopyCString("appimage-arm64", update_channel_name[:])
+    } else #if #defined(__x86_64__) || #defined(_M_X64) || #defined(__i386__) || #defined(_M_IX86) {
+        unused CopyCString("appimage-amd64", update_channel_name[:])
+    } else {
+        unused CopyCString("appimage", update_channel_name[:])
+    }
+    return *update_channel_name[0]
+}
+
+#if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+    update_fetch_state: s32;
+    update_fetch_thread: *void;
+    update_fetch_address: [2048]u8;
+    update_fetch_body: [32768]u8;
+    update_fetch_length: usize;
+    update_fetch_ok: bool;
+
+    ReceiveAppcast :: (data: *u8, size: usize,
+        count: usize, argument: *void) -> usize {
+        unused argument
+        if size != 0 && count > cast(usize)-1 / size {
+            return 0
+        }
+        length := size * count
+        if length > cast(usize)32767 - update_fetch_length {
+            return 0
+        }
+        unused UpdateMemoryCopy(cast(*void)(*update_fetch_body[update_fetch_length]),
+            cast(*void)data, length)
+        update_fetch_length += length
+        update_fetch_body[update_fetch_length] = 0
+        return length
+    }
+
+    FetchAppcast :: (argument: *void) -> s32 {
+        unused argument
+        handle := UpdateCurlCreate()
+        result: s32 = 2
+        status: s64 = 0
+        if handle != null {
+            receive: UpdateReceiveRoutine = ReceiveAppcast
+            if UpdateConfigureCurl(handle, *update_fetch_address[0], receive) &&
+                UpdateCurlSetLong(handle, UPDATE_CURL_TIMEOUT_MS, 20000) == 0 &&
+                UpdateCurlSetLong(handle, UPDATE_CURL_CONNECTTIMEOUT_MS, 10000) == 0 {
+                result = UpdateCurlPerform(handle)
+            }
+            if result == 0 {
+                status = UpdateCurlStatus(handle)
+            }
+            UpdateCurlDestroy(handle)
+        }
+        update_fetch_ok = result == 0 && status == 200 && update_fetch_length > 0
+        unused UpdateAtomicSet(*update_fetch_state, 2)
+        return 0
+    }
+}
+
+#program_export
+app_update_fetch_start :: (address: *u8) -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        if UpdateAtomicGet(*update_fetch_state) != 0 ||
+            !UpdateCopyAddress(address, update_fetch_address[:]) {
+            return 0
+        }
+        if !InitializeUpdateTransport() {
+            return 0
+        }
+        update_fetch_length = 0
+        update_fetch_body[0] = 0
+        update_fetch_ok = false
+        unused UpdateAtomicSet(*update_fetch_state, 1)
+        thread_name: [24]u8
+        unused CopyCString("inbe-appcast", thread_name[:])
+        routine: UpdateThreadRoutine = FetchAppcast
+        update_fetch_thread = UpdateThreadStart(routine, *thread_name[0], null)
+        if update_fetch_thread == null {
+            unused UpdateAtomicSet(*update_fetch_state, 0)
+            return 0
+        }
+        return 1
+    }
+    unused address
+    return 0
+}
+
+// -1 while pending, zero on failure, positive byte count on success.
+#program_export
+app_update_fetch_poll :: (output: *u8, capacity: u64) -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        state := UpdateAtomicGet(*update_fetch_state)
+        if state == 1 {
+            return -1
+        }
+        if state != 2 {
+            return 0
+        }
+        UpdateThreadWait(update_fetch_thread, null)
+        update_fetch_thread = null
+        length: s32 = 0
+        if update_fetch_ok && output != null &&
+            capacity > cast(u64)update_fetch_length {
+            unused UpdateMemoryCopy(cast(*void)output,
+                cast(*void)(*update_fetch_body[0]), update_fetch_length + cast(usize)1)
+            length = cast(s32)update_fetch_length
+        }
+        unused UpdateAtomicSet(*update_fetch_state, 0)
+        return length
+    }
+    unused output
+    unused capacity
+    return 0
+}
+
+// POSIX staging is available for the AppImage self-update path.
+#if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+    UpdateTemporaryFile :: (name: *u8) -> s32 #foreign c "mkstemp";
+    UpdateFileFromDescriptor :: (descriptor: s32, mode: *u8) -> *void #foreign c "fdopen";
+    UpdateFileOpen :: (name: *u8, mode: *u8) -> *void #foreign c "fopen";
+    UpdateFileWrite :: (data: *u8, size: usize, count: usize,
+        handle: *void) -> usize #foreign c "fwrite";
+    UpdateFileRead :: (data: *u8, size: usize, count: usize,
+        handle: *void) -> usize #foreign c "fread";
+    UpdateFileError :: (handle: *void) -> s32 #foreign c "ferror";
+    UpdateFileFlush :: (handle: *void) -> s32 #foreign c "fflush";
+    UpdateFileDescriptor :: (handle: *void) -> s32 #foreign c "fileno";
+    UpdateFileClose :: (handle: *void) -> s32 #foreign c "fclose";
+    UpdateDescriptorSync :: (descriptor: s32) -> s32 #foreign c "fsync";
+    UpdateDescriptorClose :: (descriptor: s32) -> s32 #foreign c "close";
+    UpdateDescriptorMode :: (descriptor: s32, mode: u32) -> s32 #foreign c "fchmod";
+    UpdateDescriptorWrite :: (descriptor: s32, data: *u8,
+        length: usize) -> isize #foreign c "write";
+    UpdateUnlink :: (path: *u8) -> s32 #foreign c "unlink";
+    UpdateRename :: (source: *u8, destination: *u8) -> s32 #foreign c "rename";
+    UpdateExec :: (path: *u8, arguments: **u8) -> s32 #foreign c "execv";
+
+    UpdateExecArguments :: struct {
+        program: *u8
+        terminator: *u8
+    }
+
+    update_download_state: s32;
+    update_download_progress: s32;
+    update_download_thread: *void;
+    update_download_file: *void;
+    update_download_address: [2048]u8;
+    update_download_path: [4096]u8;
+    update_expected_bytes: u64;
+    update_received_bytes: u64;
+    update_download_ok: bool;
+
+    WriteUpdateArtifact :: (data: *u8, size: usize,
+        count: usize, argument: *void) -> usize {
+        unused argument
+        if size != 0 && count > cast(usize)-1 / size {
+            return 0
+        }
+        length := size * count
+        if cast(u64)length > update_expected_bytes - update_received_bytes ||
+            UpdateFileWrite(data, cast(usize)1, length, update_download_file) != length {
+            return 0
+        }
+        update_received_bytes += cast(u64)length
+        unused UpdateAtomicSet(*update_download_progress,
+            cast(s32)(update_received_bytes * 1000 / update_expected_bytes))
+        return length
+    }
+
+    DownloadUpdateArtifact :: (argument: *void) -> s32 {
+        unused argument
+        handle := UpdateCurlCreate()
+        result: s32 = 2
+        status: s64 = 0
+        if handle != null {
+            receive: UpdateReceiveRoutine = WriteUpdateArtifact
+            if UpdateConfigureCurl(handle, *update_download_address[0], receive) &&
+                UpdateCurlSetLong(handle, UPDATE_CURL_TIMEOUT, 900) == 0 &&
+                UpdateCurlSetLong(handle, UPDATE_CURL_CONNECTTIMEOUT, 15) == 0 &&
+                UpdateCurlSet(handle, UPDATE_CURL_MAXFILESIZE_LARGE,
+                    cast(s64)update_expected_bytes) == 0 {
+                result = UpdateCurlPerform(handle)
+            }
+            if result == 0 {
+                status = UpdateCurlStatus(handle)
+            }
+            UpdateCurlDestroy(handle)
+        }
+        update_download_ok = result == 0 && status == 200 &&
+            update_received_bytes == update_expected_bytes &&
+            UpdateFileFlush(update_download_file) == 0 &&
+            UpdateDescriptorSync(UpdateFileDescriptor(update_download_file)) == 0
+        if UpdateFileClose(update_download_file) != 0 {
+            update_download_ok = false
+        }
+        update_download_file = null
+        if !update_download_ok {
+            unused UpdateUnlink(*update_download_path[0])
+        }
+        unused UpdateAtomicSet(*update_download_state, 2)
+        return 0
+    }
+
+    PrepareUpdatePath :: (directory: *u8, suffix: string, output: []u8) -> bool {
+        length := UpdateCStringLength(directory)
+        if cast(s64)length + cast(s64)suffix.count >= cast(s64)output.count {
+            return false
+        }
+        unused UpdateMemoryCopy(cast(*void)(*output[0]),
+            cast(*void)directory, length)
+        offset := cast(s64)length
+        index: s64 = 0
+        while index < cast(s64)suffix.count {
+            output[offset + index] = suffix[index]
+            index += 1
+        }
+        output[offset + index] = 0
+        return true
+    }
+
+    UpdateStagingFailed :: (source: *void, output: s32, staged: *u8) -> s32 {
+        unused UpdateFileClose(source)
+        unused UpdateDescriptorClose(output)
+        unused UpdateUnlink(staged)
+        return 0
+    }
+}
+
+#program_export
+app_update_download_start :: (address: *u8, size: u64) -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        if size == 0 || size > 2147483648 ||
+            UpdateAtomicGet(*update_download_state) != 0 ||
+            !UpdateCopyAddress(address, update_download_address[:]) {
+            return 0
+        }
+        if !InitializeUpdateTransport() {
+            return 0
+        }
+        environment_name: [16]u8
+        fallback_directory: [8]u8
+        unused CopyCString("TMPDIR", environment_name[:])
+        unused CopyCString("/tmp", fallback_directory[:])
+        temporary := UpdateGetEnvironment(*environment_name[0])
+        if temporary == null || temporary[0] == cast(u8)0 {
+            temporary = *fallback_directory[0]
+        }
+        if !PrepareUpdatePath(temporary, "/inbe-update-XXXXXX",
+            update_download_path[:]) {
+            return 0
+        }
+        descriptor := UpdateTemporaryFile(*update_download_path[0])
+        if descriptor < 0 {
+            return 0
+        }
+        mode: [4]u8
+        unused CopyCString("wb", mode[:])
+        update_download_file = UpdateFileFromDescriptor(descriptor, *mode[0])
+        if update_download_file == null {
+            unused UpdateDescriptorClose(descriptor)
+            unused UpdateUnlink(*update_download_path[0])
+            return 0
+        }
+        update_expected_bytes = size
+        update_received_bytes = 0
+        update_download_ok = false
+        unused UpdateAtomicSet(*update_download_progress, 0)
+        unused UpdateAtomicSet(*update_download_state, 1)
+        name: [24]u8
+        unused CopyCString("inbe-update", name[:])
+        routine: UpdateThreadRoutine = DownloadUpdateArtifact
+        update_download_thread = UpdateThreadStart(routine, *name[0], null)
+        if update_download_thread == null {
+            unused UpdateAtomicSet(*update_download_state, 0)
+            unused UpdateFileClose(update_download_file)
+            update_download_file = null
+            unused UpdateUnlink(*update_download_path[0])
+            return 0
+        }
+        return 1
+    }
+    unused address
+    unused size
+    return 0
+}
+
+// -1 while pending, zero on failure, one on a complete artifact.
+#program_export
+app_update_download_poll :: (path: *u8, capacity: u64) -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        state := UpdateAtomicGet(*update_download_state)
+        if state == 1 {
+            return -1
+        }
+        if state != 2 {
+            return 0
+        }
+        UpdateThreadWait(update_download_thread, null)
+        update_download_thread = null
+        length := UpdateCStringLength(*update_download_path[0])
+        success := update_download_ok && path != null && capacity > cast(u64)length
+        if success {
+            unused UpdateMemoryCopy(cast(*void)path,
+                cast(*void)(*update_download_path[0]), length + cast(usize)1)
+        }
+        unused UpdateAtomicSet(*update_download_state, 0)
+        return ifx (success) then (1) else (0)
+    }
+    unused path
+    unused capacity
+    return 0
+}
+
+#program_export
+app_update_download_progress :: () -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        return UpdateAtomicGet(*update_download_progress)
+    }
+    return 0
+}
+
+#program_export
+app_update_verified_file_open :: () -> *void {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        if !update_download_ok || update_download_path[0] == cast(u8)0 {
+            return null
+        }
+        mode: [4]u8
+        unused CopyCString("rb", mode[:])
+        return UpdateFileOpen(*update_download_path[0], *mode[0])
+    }
+    return null
+}
+
+#program_export
+app_update_file_read :: (handle: *void, buffer: *u8, capacity: u64) -> s64 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        if handle == null || buffer == null || capacity == 0 || capacity > 65536 {
+            return -1
+        }
+        length := UpdateFileRead(buffer, cast(usize)1, cast(usize)capacity, handle)
+        if length == 0 && UpdateFileError(handle) != 0 {
+            return -1
+        }
+        return cast(s64)length
+    }
+    unused handle
+    unused buffer
+    unused capacity
+    return -1
+}
+
+#program_export
+app_update_file_close :: (handle: *void) -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        return ifx (handle != null && UpdateFileClose(handle) == 0) then (1) else (0)
+    }
+    unused handle
+    return 0
+}
+
+#program_export
+app_update_discard_download :: () {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        if UpdateAtomicGet(*update_download_state) != 0 {
+            return
+        }
+        if update_download_path[0] != cast(u8)0 {
+            unused UpdateUnlink(*update_download_path[0])
+        }
+        update_download_path[0] = 0
+        update_download_ok = false
+    }
+}
+
+#program_export
+app_update_can_apply :: () -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        name: [16]u8
+        unused CopyCString("APPIMAGE", name[:])
+        path := UpdateGetEnvironment(*name[0])
+        return ifx (path != null && path[0] != cast(u8)0) then (1) else (0)
+    }
+    return 0
+}
+
+// Called after update_check verified SHA-256 and the application shut down.
+#program_export
+app_update_appimage_exec :: () -> s32 {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && #defined(NATIVE_WINDOW_HAVE_SDL) {
+        name: [16]u8
+        unused CopyCString("APPIMAGE", name[:])
+        appimage := UpdateGetEnvironment(*name[0])
+        if !update_download_ok || update_download_path[0] == cast(u8)0 ||
+            appimage == null || appimage[0] == cast(u8)0 {
+            return 0
+        }
+        staged: [4096]u8
+        separator: s64 = -1
+        index: s64 = 0
+        while appimage[index] != cast(u8)0 {
+            if appimage[index] == cast(u8)47 {
+                separator = index
+            }
+            index += 1
+        }
+        if separator <= 0 || separator + 20 >= cast(s64)staged.count {
+            return 0
+        }
+        unused UpdateMemoryCopy(cast(*void)(*staged[0]),
+            cast(*void)appimage, cast(usize)separator)
+        unused CopyCString("/.inbe-update-XXXXXX", staged[separator:])
+        mode: [4]u8
+        unused CopyCString("rb", mode[:])
+        source := UpdateFileOpen(*update_download_path[0], *mode[0])
+        if source == null {
+            return 0
+        }
+        output := UpdateTemporaryFile(*staged[0])
+        if output < 0 {
+            unused UpdateFileClose(source)
+            return 0
+        }
+        buffer: [65536]u8
+        while true {
+            length := UpdateFileRead(*buffer[0], cast(usize)1,
+                cast(usize)buffer.count, source)
+            if length == 0 {
+                break
+            }
+            written: usize = cast(usize)0
+            while written < length {
+                result := UpdateDescriptorWrite(output, *buffer[written], length - written)
+                if result <= cast(isize)0 {
+                    return UpdateStagingFailed(source, output, *staged[0])
+                }
+                written += cast(usize)result
+            }
+        }
+        if UpdateFileError(source) != 0 || UpdateDescriptorMode(output, cast(u32)493) != 0 ||
+            UpdateDescriptorSync(output) != 0 {
+            return UpdateStagingFailed(source, output, *staged[0])
+        }
+        unused UpdateFileClose(source)
+        if UpdateDescriptorClose(output) != 0 {
+            unused UpdateUnlink(*staged[0])
+            return 0
+        }
+        if UpdateRename(*staged[0], appimage) != 0 {
+            unused UpdateUnlink(*staged[0])
+            return 0
+        }
+        unused UpdateUnlink(*update_download_path[0])
+        arguments: UpdateExecArguments
+        arguments.program = appimage
+        arguments.terminator = null
+        unused UpdateExec(appimage, *arguments.program)
+    }
+    return 0
+}

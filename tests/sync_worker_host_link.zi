@@ -1,0 +1,46 @@
+#import, file "../src/app/sync_worker_host.zi";
+
+c :: #system_library "c";
+TestUsleep :: (microseconds: u32) -> s32 #foreign c "usleep";
+worker_done: s32;
+
+Worker :: (userdata: *void) {
+    unused userdata
+    SyncLock()
+    worker_done += 1
+    SyncUnlock()
+}
+
+#program_export
+StartWorker :: () -> s32 {
+    return SyncStart(Worker, null)
+}
+
+#program_export
+WorkerStatus :: () -> s32 {
+    SyncLock()
+    result: s32 = worker_done
+    SyncUnlock()
+    return result
+}
+
+#program_export
+main :: () -> s32 {
+    index: s32 = 0
+    while index < 16 {
+        if StartWorker() != 1 {
+            return 1
+        }
+        index += 1
+    }
+    SyncSleepSeconds(0)
+    attempts: s32 = 0
+    while attempts < 200 && WorkerStatus() < 16 {
+        TestUsleep(10000)
+        attempts += 1
+    }
+    if WorkerStatus() != 16 {
+        return 2
+    }
+    return 0
+}

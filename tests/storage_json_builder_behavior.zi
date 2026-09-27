@@ -1,0 +1,68 @@
+#import, file "../src/storage/json.zi";
+
+CStringEquals :: (actual: *u8, expected: string) -> bool {
+    if actual == null {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)expected.count {
+        if actual[index] != expected[index] {
+            return false
+        }
+        index += 1
+    }
+    return actual[index] == cast(u8)0
+}
+
+#program_export
+Answer :: () -> s32 {
+    json: StorageJsonBuilder = .{}
+    json.ok = 1
+    key: [2]u8 = .[107, 0]
+    value: [4]u8 = .[97, 10, 98, 0]
+    storage_json_builder_append_key_string(*json, *key[0], *value[0])
+    if json.ok == 0 || !CStringEquals(json.data, "\"k\":\"a\\nb\"") ||
+        json.len != 10 {
+        return 1
+    }
+
+    storage_json_builder_append_text(*json, ",")
+    storage_json_builder_append_string(*json, null)
+    if !CStringEquals(json.data, "\"k\":\"a\\nb\",\"\"") {
+        return 2
+    }
+
+    chunk: [1200]u8
+    index: s32 = 0
+    while index < 1200 {
+        chunk[index] = cast(u8)120
+        index += 1
+    }
+    storage_json_builder_append_len(*json, *chunk[0], 1200)
+    if json.ok == 0 || json.cap <= json.len ||
+        json.data[json.len - 1] != cast(u8)120 ||
+        json.data[json.len] != cast(u8)0 {
+        return 3
+    }
+    if storage_json_builder_reserve(*json, 2147483647) != 0 || json.ok != 0 {
+        return 4
+    }
+    storage_json_builder_free(*json)
+    if json.data != null || json.len != 0 || json.cap != 0 || json.ok != 0 {
+        return 5
+    }
+
+    json.ok = 1
+    storage_json_builder_append_epoch(*json, 946684800)
+    if json.ok == 0 ||
+        !CStringEquals(json.data, "\"2000-01-01T00:00:00Z\"") {
+        return 6
+    }
+    storage_json_builder_free(*json)
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    return Answer()
+}

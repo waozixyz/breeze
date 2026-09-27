@@ -1,0 +1,149 @@
+#import "c_string"
+#import, file "sqlite.zi";
+
+// Filesystem calls have native platform implementations. Upgrade decisions and
+// the SQLite backup live here in checked Ziran.
+c :: #system_library "c";
+UpgradePathExists :: (path: *u8) -> s32 #foreign c "path_exists";
+UpgradeRemove :: (path: *u8) -> s32 #foreign c "storage_remove_path";
+UpgradeRename :: (source: *u8, destination: *u8) -> s32 #foreign c "storage_rename_path";
+UpgradeWriteMarker :: (path: *u8, value: *u8) -> s32 #foreign c "storage_write_migration_marker";
+UpgradeLoadFile :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
+UpgradeUnloadFile :: (bytes: *u8) #foreign c "UnloadFileData";
+
+UpgradePathCapacity :: 512
+
+UpgradeCopyPath :: (source: *u8, output: *u8, capacity: u64) -> bool {
+    if source == null || output == null || capacity == 0 {
+        return false
+    }
+    index: u64 = 0
+    while index + 1 < capacity && index < UpgradePathCapacity  && source[index] != cast(u8)0 {
+        output[index] = source[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return index > 0 && source[index] == cast(u8)0
+}
+
+UpgradeValidPath :: (path: *u8) -> bool {
+    if path == null {
+        return false
+    }
+    index: s32 = 0
+    while index < UpgradePathCapacity && path[index] != cast(u8)0 {
+        index += 1
+    }
+    return index > 0 && index < UpgradePathCapacity
+}
+
+UpgradeMarkerValid :: (marker: *u8, database_name: *u8) -> bool {
+    size: s32 = 0
+    bytes := UpgradeLoadFile(marker, *size)
+    if bytes == null || size <= 1 {
+        if bytes != null {
+            UpgradeUnloadFile(bytes)
+        }
+        return false
+    }
+    index: s32 = 0
+    while index < size && database_name[index] != cast(u8)0  && bytes[index] == database_name[index] {
+        index += 1
+    }
+    valid := database_name[index] == cast(u8)0  && index + 1 == size && bytes[index] == cast(u8)10
+    UpgradeUnloadFile(bytes)
+    return valid
+}
+
+UpgradeQuickCheck :: (database: *void) -> bool {
+    query: [32]u8
+    if !CopyCString("PRAGMA quick_check", query[:]) {
+        return false
+    }
+    statement: *void = null
+    if SqlitePrepare(database, *query[0], -1, *statement, null) != 0 {
+        return false
+    }
+    valid := false
+    if SqliteStep(statement) == 100 {
+        result := SqliteColumnText(statement, 0)
+        valid = result != null && result[0] == cast(u8)111  && result[1] == cast(u8)107 && result[2] == cast(u8)0
+    }
+    unused SqliteFinalize(statement)
+    return valid
+}
+
+UpgradeCopyDatabase :: (legacy: *u8, current: *u8, marker: *u8,
+    temporary: *u8, database_name: *u8) -> s32 {
+    source: *void = null
+    destination: *void = null
+    copied := false
+    unused UpgradeRemove(temporary)
+
+    if SqliteOpen(legacy, *source, 2) == 0  && SqliteOpen(temporary, *destination, 6) == 0 {
+        backup := SqliteBackupInit(destination, source)
+        if backup != null {
+            step_result := SqliteBackupStep(backup, -1)
+            finish_result := SqliteBackupFinish(backup)
+            copied = step_result == 101 && finish_result == 0  && UpgradeQuickCheck(destination)
+        }
+    }
+    if destination != null {
+        if SqliteClose(destination) != 0 {
+            copied = false
+        }
+    }
+    if source != null {
+        if SqliteClose(source) != 0 {
+            copied = false
+        }
+    }
+    if copied && UpgradePathExists(current) == 0  && UpgradeRename(temporary, current) != 0 {
+        if UpgradeWriteMarker(marker, database_name) != 0  && UpgradeMarkerValid(marker, database_name) {
+            return 1
+        }
+        // The new copy exists, but a missing completion marker makes the two
+        // names ambiguous. Fail closed rather than reopening the older file.
+        return -1
+    }
+    unused UpgradeRemove(temporary)
+    return 0
+}
+
+// A conflicting old and current database without a completed-copy marker is
+// ambiguous. Fail closed rather than silently choosing either one.
+#program_export
+select_database_path :: (legacy: *u8, current: *u8, marker: *u8,
+    temporary: *u8, database_name: *u8, output: *u8,
+    output_capacity: u64) -> s32 {
+    if output == null || output_capacity == 0 {
+        return 0
+    }
+    output[0] = cast(u8)0
+    if !UpgradeValidPath(legacy) || !UpgradeValidPath(current)  || !UpgradeValidPath(marker) || !UpgradeValidPath(temporary)  || !UpgradeValidPath(database_name)  || !UpgradeCopyPath(legacy, output, output_capacity)  || !UpgradeCopyPath(current, output, output_capacity) {
+        output[0] = cast(u8)0
+        return 0
+    }
+    old_exists := UpgradePathExists(legacy) != 0
+    new_exists := UpgradePathExists(current) != 0
+    if old_exists && new_exists  && !UpgradeMarkerValid(marker, database_name) {
+        output[0] = cast(u8)0
+        return 0
+    }
+    if old_exists && !new_exists {
+        copied := UpgradeCopyDatabase(legacy, current, marker, temporary,
+            database_name)
+        if copied < 0 {
+            output[0] = cast(u8)0
+            return 0
+        }
+        if copied == 0 {
+            if UpgradeCopyPath(legacy, output, output_capacity) {
+                return 1
+            }
+            output[0] = cast(u8)0
+            return 0
+        }
+    }
+    return 1
+}

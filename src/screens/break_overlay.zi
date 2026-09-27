@@ -1,0 +1,470 @@
+c :: #system_library "c";
+fmaxf :: (a: float32, b: float32) -> float32 #foreign c;
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../platform/raylib_host.zi";
+raylib :: #system_library "raylib";
+IsMouseButtonPressed :: (button: s32) -> bool #foreign raylib;
+GetMousePosition :: () -> Vector2 #foreign raylib;
+#import, file "../breaks/break_rules.zi";
+
+using TextAlign;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+#import "control_props"
+#import "text_align"
+#import "text_props"
+#import, file "../app/metrics.zi";
+#import, file "../app/current_app.zi";
+#import "button_widget"
+#import "box_props"
+#import "box_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "tree_input"
+#import "button_props"
+#import, file "../breaks/break_types.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+
+// Defined in breaks/app_breaks.zi; declared extern to keep the module
+// graph acyclic (app_breaks imports this module for the overlay window).
+app_breaks_start_practice :: (app: *InnerBreeze, t: s32, practice_id: s32) #foreign c;
+app_breaks_open_habits :: (app: *InnerBreeze, t: s32) #foreign c;
+
+BREAK_OVERLAY_HABITS_CHIP_ID :: -1
+BREAK_OVERLAY_CHIP_MAX :: 5
+
+break_overlay_active :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+    return cast(s32)(app.breathing.screen == ScreenBreak)
+}
+
+break_overlay_remaining_s :: (app: *InnerBreeze, t: s32) -> s32 {
+    timer := *app.breaks.timers[t]
+    left := timer.duration_s - timer.idle_s
+    if left < 0 {
+        left = 0
+    }
+    return left
+}
+
+break_overlay_draw_bar :: (app: *InnerBreeze, x: s32, y: s32,
+    w: s32, h: s32, fraction: s32) {
+    track := DarkenColor(StyleTokenColor("canvas"), 26)
+    border := DarkenColor(StyleTokenColor("text"), 60)
+    fill := Color.{.r = 74, .g = 178, .b = 102, .a = 255}
+
+    Box(app.ui.session, BoxProps.{
+        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)w, cast(float32)h},
+        .fill = track,
+        .border = border
+    })
+
+    filled := w * fraction / 100
+    if filled > 0 {
+        if filled > w {
+            filled = w
+        }
+        Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)(x + 1),
+                cast(float32)(y + 1), cast(float32)filled,
+                cast(float32)(h - 2)},
+            .fill = fill
+        })
+    }
+}
+
+// Practice chips below the panel: running a practice replaces the break
+// (app_breaks_start_practice takes it and freezes scheduling for the
+// session). Shared by the draw path and both click paths so the geometry
+// has a single source of truth.
+break_overlay_practice_chips :: (app: *InnerBreeze, view_w: s32, view_h: s32,
+                                 out_rects: *Rectangle, out_ids: *s32) -> s32 {
+    if app == null || out_rects == null || out_ids == null {
+        return 0
+    }
+    ids: [BREAK_OVERLAY_CHIP_MAX] s32 = .[0, 0, 0, 0, 0]
+    widths: [BREAK_OVERLAY_CHIP_MAX] s32 = .[0, 0, 0, 0, 0]
+    count: s32 = 0
+    {
+        i: s32 = 0
+        while i < practice_count() && count < BREAK_OVERLAY_CHIP_MAX - 1 {
+            id := practice_ordered_id(i)
+            ids[count] = id
+            widths[count] = AppTextWidth(practice_label(id), Text12) +                             AppScale(24)
+            count += 1
+            i += 1
+        }
+
+    }
+    ids[count] = BREAK_OVERLAY_HABITS_CHIP_ID
+    widths[count] = AppTextWidth(LocaleText("tab_habits"), Text12) +                     AppScale(24)
+    count += 1
+    if count == 0 {
+        return 0
+    }
+
+    panel_w := view_w * 72 / 100
+    if panel_w > AppScale(560) {
+        panel_w = AppScale(560)
+    }
+    if panel_w < AppScale(280) {
+        panel_w = AppScale(280)
+    }
+    panel_h := view_h * 46 / 100
+    if panel_h > AppScale(420) {
+        panel_h = AppScale(420)
+    }
+    if panel_h < AppScale(240) {
+        panel_h = AppScale(240)
+    }
+    panel_y := view_h / 2 - panel_h / 2
+
+    avail := panel_w - AppScale(48)
+    gap := AppScale(8)
+    chip_h := AppScale(34)
+    y := panel_y + panel_h + AppScale(14)
+
+    total := (count - 1) * gap
+    {
+        i: s32 = 0
+        while i < count {
+            total += widths[i]
+            i += 1
+        }
+
+    }
+    if total <= avail {
+        x := view_w / 2 - total / 2
+        {
+            i: s32 = 0
+            while i < count {
+                out_rects[i] = Rectangle.{cast(float32)x, cast(float32)y,
+                                           cast(float32)widths[i], cast(float32)chip_h
+}
+                out_ids[i] = ids[i]
+                x += widths[i] + gap
+                i += 1
+            }
+
+        }
+        return count
+    }
+
+    cols: s32 = ifx (count > 1) then (2) else (1)
+    chip_w := (avail - (cols - 1) * gap) / cols
+    row_w := cols * chip_w + (cols - 1) * gap
+    {
+        i: s32 = 0
+        while i < count {
+            col := i % cols
+            row := i / cols
+            x := view_w / 2 - row_w / 2 + col * (chip_w + gap)
+            out_rects[i] = Rectangle.{cast(float32)x, cast(float32)(y + row * (chip_h + gap)),
+                                       cast(float32)chip_w, cast(float32)chip_h
+}
+            out_ids[i] = ids[i]
+            i += 1
+        }
+
+    }
+    return count
+}
+
+break_overlay_draw_practice_chips :: (app: *InnerBreeze, w: s32, h: s32) {
+    rects: [BREAK_OVERLAY_CHIP_MAX] Rectangle
+    ids: [BREAK_OVERLAY_CHIP_MAX] s32 = .[0, 0, 0, 0, 0]
+    chips := break_overlay_practice_chips(app, w, h, *rects[0], *ids[0])
+
+    if chips <= 0 {
+        return
+    }
+    chip_fill := DarkenColor(StyleTokenColor("canvas"), 18)
+    chip_border := DarkenColor(StyleTokenColor("text"), 55)
+    {
+        i: s32 = 0
+        while i < chips {
+
+        r: Rectangle = rects[i]
+        Box(app.ui.session, BoxProps.{
+            .bounds = r,
+            .fill = chip_fill,
+            .border = chip_border
+        })
+        label: string = ifx (ids[i] == BREAK_OVERLAY_HABITS_CHIP_ID) then (LocaleText("tab_habits")) else (practice_label(ids[i]))
+        lw := AppTextWidth(label, Text12)
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(cast(s32)r.x + (cast(s32)r.width - lw) / 2), cast(float32)(cast(s32)r.y + AppScale(10)), 0, 0},
+            .text = label,
+            .wrap=cast(TextWrap)TextWrapNone
+        })
+
+            i += 1
+        }
+        }
+}
+
+break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
+    if app == null {
+        return
+    }
+
+    t := BreakActive(app.breaks)
+    if t < 0 {
+        return
+    }
+
+    timer := *app.breaks.timers[t]
+    panel_w := w * 72 / 100
+    if panel_w > AppScale(560) {
+        panel_w = AppScale(560)
+    }
+    if panel_w < AppScale(280) {
+        panel_w = AppScale(280)
+    }
+    panel_h := h * 46 / 100
+    if panel_h > AppScale(420) {
+        panel_h = AppScale(420)
+    }
+    if panel_h < AppScale(240) {
+        panel_h = AppScale(240)
+    }
+    panel_x := w / 2 - panel_w / 2
+    panel_y := h / 2 - panel_h / 2
+
+    scrim := DarkenColor(DarkenColor(StyleTokenColor("canvas"), 8), 30)
+    Box(app.ui.session, BoxProps.{
+        .bounds = Rectangle.{0.0, 0.0, cast(float32)w,
+            cast(float32)h},
+        .fill = scrim
+    })
+
+    activity_flash := app.break_input_active != 0 && (app.breathing.frame / 30) % 2 == 0
+    border: Color = ifx (activity_flash) then (Color.{.r = 222, .g = 140, .b = 44, .a = 255}) else (DarkenColor(StyleTokenColor("text"), 62))
+    fill := DarkenColor(StyleTokenColor("canvas"), 12)
+
+    Box(app.ui.session, BoxProps.{
+        .bounds = Rectangle.{cast(float32)panel_x,
+            cast(float32)panel_y, cast(float32)panel_w,
+            cast(float32)panel_h},
+        .fill = fill,
+        .border = border
+    })
+
+    title_font: s32 = AppScale(Text24)
+    body_font: s32 = AppScale(Text16)
+    title: string
+    body: string
+    if t == BREAK_REST {
+        title = LocaleText("break_rest_title")
+    } else if t == BREAK_DAILY {
+        title = LocaleText("break_daily_title")
+    } else {
+        title = LocaleText("break_micro_title")
+    }
+    if t == BREAK_REST {
+        body = LocaleText("break_rest_body")
+    } else if t == BREAK_DAILY {
+        body = LocaleText("break_daily_body")
+    } else {
+        body = LocaleText("break_micro_body")
+    }
+    title_w := AppTextWidth(title, title_font)
+    text_x := w / 2
+
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(text_x - title_w / 2), cast(float32)(panel_y + AppScale(28)), 0, 0},
+        .text = title,
+        .wrap=cast(TextWrap)TextWrapNone
+    })
+
+    remaining := break_overlay_remaining_s(app, t)
+    time_text_w: s32 = 0
+    if timer.duration_s > 0 {
+        time_text := BreakFormatDuration(remaining)
+        time_label: [96]u8
+        time_args: [1]FormatArg = .[
+            FormatArg.{
+                .text = AppTextFromCString(*time_text.bytes[0],
+                    time_text.count + 1),
+                .is_text = true
+            }
+        ]
+        FormatTemplate(LocaleText("break_time_remaining"),
+            time_args[:], time_label[:])
+        remaining_label := FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*time_label[0],
+                size_of(type_of(time_label))))
+        time_text_w = AppTextWidth(remaining_label, body_font)
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(text_x - time_text_w / 2), cast(float32)(panel_y + AppScale(64)), 0, 0},
+            .text = remaining_label,
+            .wrap=cast(TextWrap)TextWrapNone
+        })
+    }
+
+    if timer.duration_s > 0 {
+        fraction := timer.idle_s * 100 / timer.duration_s
+        if fraction > 100 {
+            fraction = 100
+        }
+        bar_w := panel_w - AppScale(48)
+        break_overlay_draw_bar(app, panel_x + AppScale(24),
+                               panel_y + AppScale(96),
+                               bar_w, AppScale(16), fraction)
+    }
+
+    body_y: s32 = panel_y + AppScale(132)
+    body_w := panel_w - AppScale(48)
+    body_h := AppParagraphHeight(body, body_w, body_font, AppScale(3))
+    Text(app.ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(panel_x + AppScale(24)),
+            cast(float32)body_y, cast(float32)body_w,
+            cast(float32)body_h},
+        .text = body,
+        .font = body_font,
+        .wrap = cast(TextWrap)TextWrapAuto
+    })
+
+    if activity_flash {
+        active_note := LocaleText("break_stay_idle_note")
+        active_w := AppTextWidth(active_note, body_font)
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(text_x - active_w / 2), cast(float32)(panel_y + panel_h - AppScale(96)), 0, 0},
+            .text = active_note,
+            .wrap=cast(TextWrap)TextWrapNone
+        })
+    }
+
+    button_y := panel_y + panel_h - AppScale(56)
+    button_w := AppScale(132)
+    gap := AppScale(12)
+    count: s32 = 0
+    if timer.show_postpone != 0 {
+        count += 1
+    }
+    if timer.show_skip != 0 {
+        count += 1
+    }
+    if t == BREAK_MICRO {
+        count += 1
+    }
+    row_w := count * button_w + (count - 1) * gap
+    button_x := w / 2 - row_w / 2
+    locked := timer.lock_buttons_s > 0
+
+
+    if timer.show_postpone != 0 {
+        if locked {
+            locked_label: [64] u8
+            lock_args: [1]FormatArg = .[
+                FormatArg.{.number = timer.lock_buttons_s}
+            ]
+            FormatTemplate(LocaleText("break_lock_note"),
+                lock_args[:], locked_label[:])
+            lock_text := FrameTextHold(*app.ui.frame_text,
+                AppTextFromCString(*locked_label[0],
+                    size_of(type_of(locked_label))))
+            Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
+                           cast(float32)button_w, cast(float32)AppScale(32)},
+                .text = lock_text,
+                .wrap = cast(TextWrap)TextWrapNone,
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter
+            })
+        } else {
+            if Button(CurrentApp().ui.session, ButtonProps.{
+        .id = 4101, .label = LocaleText("break_postpone_button"),
+        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_postpone_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
+                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_postpone_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    }) != 0 {
+                app.breaks = BreakPostpone(app.breaks, t)
+                return
+            }
+        }
+        button_x += button_w + gap
+    }
+
+    if timer.show_skip != 0 {
+        if !locked {
+            if Button(CurrentApp().ui.session, ButtonProps.{
+        .id = 4102, .label = LocaleText("break_skip_button"),
+        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_skip_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
+                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_skip_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    }) != 0 {
+                app.breaks = BreakSkip(app.breaks, t)
+                return
+            }
+        }
+        button_x += button_w + gap
+    }
+
+    if t == BREAK_MICRO {
+        if Button(CurrentApp().ui.session, ButtonProps.{
+        .id = 4103, .label = LocaleText("break_rest_now_button"),
+        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_rest_now_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
+                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_rest_now_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    }) != 0 {
+            app.breaks = BreakForce(app.breaks, BREAK_REST)
+            return
+        }
+    }
+
+    break_overlay_draw_practice_chips(app, w, h)
+}
+
+// Main-window route (ScreenBreak): the overlay sized to the app view.
+break_overlay_draw :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    t := BreakActive(app.breaks)
+    if t < 0 {
+        app_switch_screen(app, ifx (app.break_prev_screen != 0) then (app.break_prev_screen) else (ScreenStart))
+        return
+    }
+    break_overlay_draw_sized(app, app.ui.view_width, app.ui.view_height)
+
+    // Practice chip clicks for this route; the overlay-window route
+    // hit-tests the same geometry in app_breaks_window_click.
+    if IsMouseButtonPressed(MOUSE_BUTTON_LEFT) {
+        mouse := GetMousePosition()
+        if TreeHitAt(app.ui.session, mouse.x, mouse.y) >= 0 {
+            return
+        }
+        rects: [BREAK_OVERLAY_CHIP_MAX] Rectangle
+        ids: [BREAK_OVERLAY_CHIP_MAX] s32 = .[0, 0, 0, 0, 0]
+        chips := break_overlay_practice_chips(app, app.ui.view_width, app.ui.view_height,
+                                              *rects[0], *ids[0])
+        {
+            i: s32 = 0
+            while i < chips {
+                if PointInBounds(mouse.x, mouse.y, rects[i]) {
+                    if ids[i] == BREAK_OVERLAY_HABITS_CHIP_ID {
+                        app_breaks_open_habits(app, t)
+                    } else {
+                        app_breaks_start_practice(app, t, ids[i])
+                    }
+                    return
+                }
+                i += 1
+            }
+
+        }
+    }
+}

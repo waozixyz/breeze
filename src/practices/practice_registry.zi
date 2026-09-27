@@ -1,0 +1,298 @@
+c :: #system_library "c";
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/app.zi";
+#import, file "../app/locale.zi";
+#import, file "meditation/meditation_practice.zi";
+#import, file "meditation/meditation_session.zi";
+#import, file "meditation/meditation_config.zi";
+#import, file "meditation/meditation_manual.zi";
+#import, file "sun_salutation/sun_salutation_practice.zi";
+#import, file "sun_salutation/sun_salutation_entry.zi";
+#import, file "sun_salutation/sun_salutation_manual.zi";
+#import, file "sun_salutation/sun_salutation_session.zi";
+#import, file "patterns/patterns_practice.zi";
+#import, file "patterns/patterns_entry.zi";
+#import, file "patterns/patterns_manual.zi";
+#import, file "whm/whm_practice.zi";
+#import, file "whm/whm_session.zi";
+#import, file "whm/whm_manual.zi";
+#import, file "whm/whm_config.zi";
+
+using ExerciseType;
+
+ANDROID :: #defined(ANDROID_BUILD)
+
+#if ANDROID {
+    #import, file "../platform/android/android_wakelock.zi";
+    #import, file "../platform/android/android_timer_host.zi";
+    #import, file "../app/current_app.zi";
+
+    android_background_session_started: s32 = 0;
+}
+
+PracticeVoidFn :: #type (app: *InnerBreeze) -> ();
+PracticeCloseManualFn :: #type (app: *InnerBreeze, manual: s32) -> ();
+PracticeDrawSessionFn :: #type (app: *InnerBreeze, x: s32, y: s32) -> ();
+PracticeIsActiveFn :: #type (app: *InnerBreeze) -> s32;
+PracticeAdvanceElapsedFn :: #type (app: *InnerBreeze, elapsed: s32) -> ();
+
+PracticeDefinition :: struct {
+    id: ExerciseType
+    label_key: string
+    init: PracticeVoidFn
+    destroy: PracticeVoidFn
+    start: PracticeVoidFn
+    draw_manual: PracticeVoidFn
+    close_manual: PracticeCloseManualFn
+    draw_config: PracticeVoidFn
+    leave_config: PracticeVoidFn
+    update: PracticeVoidFn
+    draw_setup_modal: PracticeVoidFn
+    draw_active_session: PracticeDrawSessionFn
+    request_exit: PracticeVoidFn
+    is_active: PracticeIsActiveFn
+    background_start: PracticeVoidFn
+    background_stop: PracticeVoidFn
+    advance_elapsed: PracticeAdvanceElapsedFn
+}
+
+practices: [EXERCISE_COUNT]PracticeDefinition;
+practices_initialized: bool;
+
+practice_initialize_definitions :: () {
+    if practices_initialized {
+        return
+    }
+
+    whm: PracticeDefinition
+    whm.id = cast(ExerciseType)EXERCISE_WIM_HOF
+    whm.label_key = "exercise_wim_hof"
+    whm.start = whm_practice_start
+    whm.draw_manual = whm_manual_draw
+    whm.close_manual = whm_manual_close
+    whm.draw_config = whm_config_screen_draw
+    whm.leave_config = whm_practice_leave_config
+    whm.is_active = practice_whm_is_active
+    whm.background_start = session_background_start
+    whm.advance_elapsed = session_advance_elapsed
+    practices[0] = whm
+
+    meditation: PracticeDefinition
+    meditation.id = cast(ExerciseType)EXERCISE_MEDITATION
+    meditation.label_key = "exercise_meditation"
+    meditation.init = meditation_practice_init
+    meditation.destroy = meditation_practice_destroy
+    meditation.start = meditation_practice_start
+    meditation.draw_manual = meditation_manual_draw
+    meditation.close_manual = meditation_manual_close
+    meditation.draw_config = meditation_config_screen_draw
+    meditation.leave_config = meditation_practice_leave_config
+    meditation.update = meditation_practice_update
+    meditation.draw_setup_modal = meditation_draw_setup_modal
+    meditation.draw_active_session = meditation_draw_screen
+    meditation.request_exit = meditation_request_exit
+    meditation.is_active = practice_meditation_is_active
+    meditation.advance_elapsed = meditation_advance_elapsed
+    practices[1] = meditation
+
+    sun: PracticeDefinition
+    sun.id = cast(ExerciseType)EXERCISE_SUN_SALUTATION
+    sun.label_key = "exercise_sun_salutation"
+    sun.init = sun_salutation_practice_init
+    sun.start = sun_salutation_practice_start
+    sun.draw_manual = sun_manual_draw
+    sun.close_manual = sun_manual_close
+    sun.draw_config = sun_salutation_config_screen_draw
+    sun.draw_active_session = sun_salutation_draw_screen
+    sun.request_exit = sun_salutation_request_exit
+    sun.is_active = practice_sun_salutation_is_active
+    practices[2] = sun
+
+    patterns: PracticeDefinition
+    patterns.id = cast(ExerciseType)EXERCISE_PATTERNS
+    patterns.label_key = "exercise_patterns"
+    patterns.init = patterns_practice_init
+    patterns.destroy = patterns_practice_destroy
+    patterns.start = patterns_practice_start
+    patterns.draw_manual = patterns_manual_draw
+    patterns.close_manual = patterns_manual_close
+    patterns.draw_config = patterns_config_screen_draw
+    patterns.leave_config = patterns_practice_leave_config
+    patterns.draw_active_session = patterns_draw_screen
+    patterns.request_exit = patterns_request_exit
+    patterns.is_active = practice_patterns_is_active
+    patterns.advance_elapsed = patterns_advance_elapsed
+    practices[3] = patterns
+
+    practices_initialized = true
+}
+
+practice_whm_is_active :: (app: *InnerBreeze) -> s32 {
+    if app != null && app.breathing.screen == ScreenSession {
+        return 1
+    }
+    return 0
+}
+
+practice_meditation_is_active :: (app: *InnerBreeze) -> s32 {
+    return ifx (app != null && app.breathing.screen == ScreenMeditation) then (1) else (0)
+}
+
+practice_sun_salutation_is_active :: (app: *InnerBreeze) -> s32 {
+    return ifx (app != null && app.breathing.screen == ScreenSunSalutation) then (1) else (0)
+}
+
+practice_patterns_is_active :: (app: *InnerBreeze) -> s32 {
+    return ifx (app != null && app.breathing.screen == ScreenPatterns) then (1) else (0)
+}
+
+practice_get :: (id: s32) -> *PracticeDefinition {
+    practice_initialize_definitions()
+    id = practice_clamp_id(id)
+    return *practices[id]
+}
+
+practice_label :: (id: s32) -> string {
+    if id == EXERCISE_MEDITATION {
+        return LocaleText("exercise_meditation")
+    }
+    if id == EXERCISE_SUN_SALUTATION {
+        return LocaleText("exercise_sun_salutation")
+    }
+    if id == EXERCISE_PATTERNS {
+        return LocaleText("exercise_patterns")
+    }
+    return LocaleText("exercise_wim_hof")
+}
+
+practice_active :: (app: *InnerBreeze) -> *PracticeDefinition {
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice := practice_get(i)
+            if practice.is_active != null && practice.is_active(app) != 0 {
+                return practice
+            }
+            i += 1
+        }
+    }
+    return null
+}
+
+practice_active_supports_background :: (app: *InnerBreeze) -> s32 {
+    practice := practice_active(app)
+    return ifx (practice != null && practice.advance_elapsed != null) then (1) else (0)
+}
+
+#program_export
+practice_background_start :: (app: *InnerBreeze, id: s32) {
+    practice: *PracticeDefinition = null
+
+    if app == null {
+        return
+    }
+
+    practice = practice_get(id)
+
+    #if ANDROID {
+        SetCurrentApp(app)
+    }
+
+    if practice == null || practice.advance_elapsed == null {
+        return
+    }
+
+    if practice.background_start != null {
+        practice.background_start(app)
+    }
+
+    #if ANDROID {
+        if app.breathing.play_in_background != 0 {
+            android_wakelock_acquire()
+            android_timer_set_app(cast(*void)app)
+            android_timer_start()
+            android_background_session_started = 1
+        }
+    }
+}
+
+practice_active_background_start :: (app: *InnerBreeze) {
+    practice := practice_active(app)
+
+    if practice == null {
+        return
+    }
+    practice_background_start(app, cast(s32)practice.id)
+}
+
+#program_export
+practice_active_background_stop :: (app: *InnerBreeze) {
+    practice := practice_active(app)
+
+    if app == null {
+        return
+    }
+
+    if practice != null && practice.background_stop != null {
+        practice.background_stop(app)
+    }
+
+    #if ANDROID {
+        if android_background_session_started != 0 {
+            android_background_session_started = 0
+            android_timer_deactivate()
+            android_timer_stop()
+            android_timer_set_app(null)
+            android_wakelock_release()
+        }
+    }
+}
+
+#program_export
+practice_active_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
+    practice: *PracticeDefinition = null
+
+    if app == null || elapsed_ms <= 0 || app.breathing.play_in_background == 0 {
+        return
+    }
+
+    practice = practice_active(app)
+    if practice == null || practice.advance_elapsed == null {
+        return
+    }
+
+    practice.advance_elapsed(app, elapsed_ms)
+    if practice.update != null && practice.is_active != null  && practice.is_active(app) != 0 {
+        practice.update(app)
+    }
+}
+
+practice_update_circle_bounds :: (app: *InnerBreeze, top_reserve: s32, bottom_reserve: s32) {
+    if app != null {
+        session_update_circle_bounds_for_view(app, *app.breathing,
+            top_reserve, bottom_reserve)
+    }
+}
+
+#program_export
+practice_update_session_sounds :: (app: *InnerBreeze) {
+    update_session_sounds(app)
+}
+
+practice_ensure_results_saved :: (app: *InnerBreeze) -> s32 {
+    return session_ensure_results_saved(app)
+}
+
+practice_draw_start_preview :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> s32 {
+    return session_draw_start_preview(app, center_x, center_y)
+}
+
+practice_draw_active_breathing :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    session_draw_inbe(app, center_x, center_y)
+}
+
+practice_update_active_breathing :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover: *s32) {
+    session_update_screen(app, center_x, center_y, hover)
+}

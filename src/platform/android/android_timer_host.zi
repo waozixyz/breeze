@@ -1,0 +1,177 @@
+#import, file "android_mutex.zi";
+#import, file "android_timer.zi";
+
+#if #defined(ANDROID_BUILD) {
+    c :: #system_library "c";
+    TimerThreadRoutine :: #type (*void) -> *void #c_call;
+    TimerThreadCreate :: (thread: *usize, attributes: *void,
+        routine: TimerThreadRoutine, argument: *void) -> s32 #foreign c "pthread_create";
+    TimerThreadJoin :: (thread: usize, result: **void) -> s32 #foreign c "pthread_join";
+    TimerThreadDetach :: (thread: usize) -> s32 #foreign c "pthread_detach";
+    TimerThreadSelf :: () -> usize #foreign c "pthread_self";
+    TimerThreadEqual :: (left: usize, right: usize) -> s32 #foreign c "pthread_equal";
+    TimerConditionWait :: (condition: *void,
+        mutex: *AndroidMutex) -> s32 #foreign c "pthread_cond_wait";
+    TimerConditionBroadcast :: (condition: *void) -> s32 #foreign c "pthread_cond_broadcast";
+    TimerTimespec :: struct {
+        seconds: isize
+        nanoseconds: isize
+    }
+    TimerClockGet :: (clock: s32, now: *TimerTimespec) -> s32 #foreign c "clock_gettime";
+    TimerNanoSleep :: (duration: *TimerTimespec,
+        remaining: *TimerTimespec) -> s32 #foreign c "nanosleep";
+    TimerAdvance :: (app: *void, elapsed_ms: s32) #foreign c "practice_active_advance_elapsed";
+
+    timer_thread: usize;
+    timer_mutex: AndroidMutex;
+    timer_stopped: [8]u64;
+    app_state_mutex: AndroidMutex;
+    timer_running: bool;
+    timer_stopping: bool;
+    timer_active: bool;
+    timer_app: *void;
+
+    TimerSleep :: (nanoseconds: isize) {
+        duration: TimerTimespec
+        duration.nanoseconds = nanoseconds
+        TimerNanoSleep(*duration, null)
+    }
+
+    TimerNowNanoseconds :: () -> s64 {
+        now: TimerTimespec
+        if TimerClockGet(1, *now) != 0 {
+            return 0
+        }
+        return cast(s64)now.seconds * 1000000000 + cast(s64)now.nanoseconds
+    }
+
+    TimerMain :: (argument: *void) -> *void {
+        unused argument
+        previous_nanoseconds: s64 = 0
+        while true {
+            AndroidMutexLock(*timer_mutex)
+            running := timer_running
+            active := timer_active
+            app := timer_app
+            AndroidMutexUnlock(*timer_mutex)
+            if !running {
+                break
+            }
+            if active && app != null {
+                now_nanoseconds := TimerNowNanoseconds()
+                elapsed := TimerElapsedMillis(previous_nanoseconds,
+                    now_nanoseconds)
+                previous_nanoseconds = now_nanoseconds
+                AndroidMutexLock(*app_state_mutex)
+                AndroidMutexLock(*timer_mutex)
+                app = null
+                if timer_running && timer_active {
+                    app = timer_app
+                }
+                AndroidMutexUnlock(*timer_mutex)
+                if app != null {
+                    TimerAdvance(app, elapsed)
+                }
+                AndroidMutexUnlock(*app_state_mutex)
+                TimerSleep(cast(isize)100000000)
+            } else {
+                previous_nanoseconds = 0
+                TimerSleep(cast(isize)50000000)
+            }
+        }
+        AndroidMutexLock(*timer_mutex)
+        timer_stopping = false
+        TimerConditionBroadcast(cast(*void)*timer_stopped[0])
+        AndroidMutexUnlock(*timer_mutex)
+        return null
+    }
+}
+
+#program_export
+android_timer_set_app :: (app: *void) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*app_state_mutex)
+        AndroidMutexLock(*timer_mutex)
+        timer_app = app
+        AndroidMutexUnlock(*timer_mutex)
+        AndroidMutexUnlock(*app_state_mutex)
+    }
+    unused app
+}
+
+#program_export
+android_timer_get_mutex :: () -> *void {
+    #if #defined(ANDROID_BUILD) {
+        return cast(*void)*app_state_mutex
+    }
+    return null
+}
+
+#program_export
+android_timer_start :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        while timer_stopping {
+            TimerConditionWait(cast(*void)*timer_stopped[0], *timer_mutex)
+        }
+        if timer_running {
+            timer_active = true
+            AndroidMutexUnlock(*timer_mutex)
+            return
+        }
+        timer_running = true
+        timer_active = false
+        routine: TimerThreadRoutine = TimerMain
+        if TimerThreadCreate(*timer_thread, null, routine, null) != 0 {
+            timer_running = false
+        }
+        AndroidMutexUnlock(*timer_mutex)
+    }
+}
+
+#program_export
+android_timer_stop :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        if !timer_running {
+            while timer_stopping && TimerThreadEqual(TimerThreadSelf(),
+                timer_thread) == 0 {
+                TimerConditionWait(cast(*void)*timer_stopped[0], *timer_mutex)
+            }
+            if !timer_running {
+                timer_app = null
+                AndroidMutexUnlock(*timer_mutex)
+                return
+            }
+        }
+        stopped_thread := timer_thread
+        timer_running = false
+        timer_stopping = true
+        timer_active = false
+        timer_app = null
+        AndroidMutexUnlock(*timer_mutex)
+        if TimerThreadEqual(TimerThreadSelf(), stopped_thread) != 0 {
+            TimerThreadDetach(stopped_thread)
+        } else {
+            TimerThreadJoin(stopped_thread, null)
+        }
+    }
+}
+
+#program_export
+android_timer_activate :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        timer_active = true
+        AndroidMutexUnlock(*timer_mutex)
+    }
+}
+
+#program_export
+android_timer_deactivate :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        timer_active = false
+        AndroidMutexUnlock(*timer_mutex)
+    }
+}

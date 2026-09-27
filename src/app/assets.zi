@@ -1,0 +1,127 @@
+// Borrow embedded app data. The generated asset table owns its bytes.
+#import "byte_text_linux"
+
+c :: #system_library "c";
+
+AssetView :: struct {
+    data: string
+    mime: string
+    found: bool
+}
+
+EmbeddedAssetEntry :: struct {
+    path: *u8
+    mime: *u8
+    data: *u8
+    size: usize
+}
+
+AssetBlobResult :: struct {
+    data: *u8
+    size: usize
+    mime: *u8
+    found: bool
+}
+
+AssetEntryAt :: (index: usize) -> *EmbeddedAssetEntry #foreign c "asset_entry_at";
+AssetEntryTotal :: () -> usize #foreign c "asset_entry_total";
+
+AssetCompare :: (path: string, entry: *u8) -> s32 {
+    index: usize = 0
+    while index < cast(usize)path.count && entry[index] != cast(u8)0 {
+        left := path[index]
+        right := entry[index]
+        if left < right {
+            return -1
+        }
+        if left > right {
+            return 1
+        }
+        index += 1
+    }
+    if index < cast(usize)path.count {
+        return 1
+    }
+    if entry[index] != cast(u8)0 {
+        return -1
+    }
+    return 0
+}
+
+AssetFind :: (path: string) -> *EmbeddedAssetEntry {
+    if path.count == 0 {
+        return null
+    }
+    low: usize = 0
+    high := AssetEntryTotal()
+    while low < high {
+        middle := low + (high - low) / 2
+        entry := AssetEntryAt(middle)
+        if entry == null {
+            return null
+        }
+        order := AssetCompare(path, entry.path)
+        if order < 0 {
+            high = middle
+        } else if order > 0 {
+            low = middle + 1
+        } else {
+            return entry
+        }
+    }
+    return null
+}
+
+AssetViewFor :: (path: string) -> AssetView {
+    result: AssetView
+    entry := AssetFind(path)
+    if entry == null {
+        return result
+    }
+    result.data = TextFromBytes(BytesFromPointer(entry.data,
+        cast(u64)entry.size))
+    result.mime = TextFromCString(entry.mime)
+    result.found = true
+    return result
+}
+
+#program_export
+AssetRead :: (path: string) -> AssetView {
+    return AssetViewFor(path)
+}
+
+#program_export
+AssetReadBytes :: (path: []u8) -> AssetView {
+    result: AssetView
+    if path.count <= 0 || path.count > 4096 {
+        return result
+    }
+    return AssetViewFor(TextFromBytes(path))
+}
+
+#program_export
+asset_lookup_bytes :: (path: *u8, length: usize) -> AssetBlobResult {
+    result: AssetBlobResult
+    if path == null || length == 0 || length > cast(usize)9223372036854775807 {
+        return result
+    }
+    entry := AssetFind(TextFromBytes(BytesFromPointer(path,
+        cast(u64)length)))
+    if entry == null {
+        return result
+    }
+    result.data = entry.data
+    result.size = entry.size
+    result.mime = entry.mime
+    result.found = true
+    return result
+}
+
+#program_export
+asset_lookup :: (path: *u8) -> AssetBlobResult {
+    if path == null {
+        result: AssetBlobResult
+        return result
+    }
+    return asset_lookup_bytes(path, cast(usize)TextFromCString(path).count)
+}

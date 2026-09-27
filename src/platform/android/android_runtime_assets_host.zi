@@ -1,0 +1,280 @@
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+#import "c_string"
+
+AssetCopyError :: (output: *u8, capacity: s32, text: string) {
+    if output == null || capacity <= 0 {
+        return
+    }
+    length: s32 = 0
+    while length < capacity - 1 && cast(s64)length < text.count {
+        output[length] = text[length]
+        length += 1
+    }
+    output[length] = 0
+}
+
+AssetCopyErrorCString :: (output: *u8, capacity: s32, text: *u8) {
+    if output == null || capacity <= 0 {
+        return
+    }
+    length: s32 = 0
+    if text != null {
+        while length < capacity - 1 && text[length] != 0 {
+            output[length] = text[length]
+            length += 1
+        }
+    }
+    output[length] = 0
+}
+
+#if #defined(ANDROID_BUILD) {
+    c :: #system_library "c";
+    AssetAllocate :: (count: usize, size: usize) -> *void #foreign c "calloc";
+    AssetFree :: (memory: *void) #foreign c "free";
+
+    DownloadJob :: struct {
+        handle: u64
+        status: s32
+        http_status: s32
+        bytes: u64
+        total_bytes: u64
+        error: [256]u8
+        next: *DownloadJob
+    }
+    download_mutex: AndroidMutex;
+    download_jobs: *DownloadJob;
+    next_handle: u64 = 1;
+
+    AssetFindJob :: (handle: u64) -> *DownloadJob {
+        job := download_jobs
+        while job != null {
+            if job.handle == handle {
+                return job
+            }
+            job = job.next
+        }
+        return null
+    }
+
+    AssetStart :: (session: *ActivityJniSession, handle: u64,
+        url: *u8, path: *u8) -> bool {
+        method := JniMethod(session, "startRuntimeAssetDownload",
+            "(Ljava/lang/String;Ljava/lang/String;J)V")
+        if method == null {
+            return false
+        }
+        env := session.env
+        arguments: [3]JniValue
+        arguments[0].reference = JniString(env, url)
+        arguments[1].reference = JniString(env, path)
+        arguments[2].long_integer = cast(s64)handle
+        if arguments[0].reference == null || arguments[1].reference == null {
+            return false
+        }
+        env.functions.CallVoidMethodA(env, session.activity, method,
+            *arguments[0])
+        return env.functions.ExceptionCheck(env) == 0
+    }
+}
+
+#program_export
+android_asset_release_host :: (handle: u64) {
+    #if #defined(ANDROID_BUILD) {
+        removed: *DownloadJob
+        AndroidMutexLock(*download_mutex)
+        previous: *DownloadJob
+        job := download_jobs
+        while job != null {
+            if job.handle == handle {
+                removed = job
+                if previous == null {
+                    download_jobs = job.next
+                } else {
+                    previous.next = job.next
+                }
+                break
+            }
+            previous = job
+            job = job.next
+        }
+        AndroidMutexUnlock(*download_mutex)
+        AssetFree(cast(*void)removed)
+    }
+    unused handle
+}
+
+#program_export
+android_asset_start_host :: (url: *u8, path: *u8,
+    error: *u8, error_capacity: s32) -> u64 {
+    #if #defined(ANDROID_BUILD) {
+        AssetCopyError(error, error_capacity, "")
+        if url == null || path == null || url[0] == 0 || path[0] == 0 {
+            AssetCopyError(error, error_capacity, "Missing download URL or path")
+            return 0
+        }
+        job := cast(*DownloadJob)AssetAllocate(1, size_of(DownloadJob))
+        if job == null {
+            AssetCopyError(error, error_capacity, "Could not allocate download")
+            return 0
+        }
+        AndroidMutexLock(*download_mutex)
+        if next_handle == 0 || next_handle > cast(u64)9223372036854775807 {
+            AndroidMutexUnlock(*download_mutex)
+            AssetFree(cast(*void)job)
+            AssetCopyError(error, error_capacity, "Download handle limit reached")
+            return 0
+        }
+        handle := next_handle
+        next_handle += 1
+        job.handle = handle
+        job.status = 1
+        job.next = download_jobs
+        download_jobs = job
+        AndroidMutexUnlock(*download_mutex)
+        session: ActivityJniSession
+        started := false
+        failure := "Android activity is not ready"
+        if activity_jni_attach(*session) != 0 {
+            started = AssetStart(*session, handle, url, path)
+            failure = "Android download failed to start"
+            activity_jni_detach(*session)
+        }
+        if started {
+            return handle
+        }
+        android_asset_release_host(handle)
+        AssetCopyError(error, error_capacity, failure)
+        return 0
+    }
+    unused url
+    unused path
+    AssetCopyError(error, error_capacity, "Android download unavailable")
+    return 0
+}
+
+#program_export
+android_asset_poll_host :: (handle: u64, status: *s32,
+    http_status: *s32, bytes: *u64, total_bytes: *u64, error: *u8,
+    error_capacity: s32) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        if status == null || http_status == null || bytes == null ||
+            total_bytes == null {
+            return false
+        }
+        AndroidMutexLock(*download_mutex)
+        job := AssetFindJob(handle)
+        if job == null {
+            AndroidMutexUnlock(*download_mutex)
+            return false
+        }
+        status[0] = job.status
+        http_status[0] = job.http_status
+        bytes[0] = job.bytes
+        total_bytes[0] = job.total_bytes
+        AssetCopyErrorCString(error, error_capacity, *job.error[0])
+        AndroidMutexUnlock(*download_mutex)
+        return true
+    }
+    unused handle
+    unused status
+    unused http_status
+    unused bytes
+    unused total_bytes
+    AssetCopyError(error, error_capacity, "")
+    return false
+}
+
+#program_export
+android_runtime_asset_native_succeeded :: (env: *JniEnv, activity: *void,
+    handle: s64, bytes: s64, http_status: s32) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        if handle <= 0 {
+            return
+        }
+        AndroidMutexLock(*download_mutex)
+        job := AssetFindJob(cast(u64)handle)
+        if job != null && job.status == 1 {
+            job.http_status = http_status
+            job.bytes = 0
+            if bytes > 0 {
+                job.bytes = cast(u64)bytes
+            }
+            if job.total_bytes == 0 {
+                job.total_bytes = job.bytes
+            }
+            job.error[0] = 0
+            job.status = 2
+        }
+        AndroidMutexUnlock(*download_mutex)
+    }
+    unused handle
+    unused bytes
+    unused http_status
+}
+
+#program_export
+android_runtime_asset_native_progress :: (env: *JniEnv, activity: *void,
+    handle: s64, bytes: s64, total_bytes: s64) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        if handle <= 0 {
+            return
+        }
+        AndroidMutexLock(*download_mutex)
+        job := AssetFindJob(cast(u64)handle)
+        if job != null && job.status == 1 {
+            job.bytes = 0
+            job.total_bytes = 0
+            if bytes > 0 {
+                job.bytes = cast(u64)bytes
+            }
+            if total_bytes > 0 {
+                job.total_bytes = cast(u64)total_bytes
+            }
+        }
+        AndroidMutexUnlock(*download_mutex)
+    }
+    unused handle
+    unused bytes
+    unused total_bytes
+}
+
+#program_export
+android_runtime_asset_native_failed :: (env: *JniEnv, activity: *void,
+    handle: s64, http_status: s32, error: *void) {
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        if handle <= 0 {
+            return
+        }
+        message: *u8
+        if error != null {
+            message = env.functions.GetStringUTFChars(env, error, null)
+        }
+        bounded_error: [256]u8
+        if message != null && message[0] != 0 {
+            AssetCopyErrorCString(*bounded_error[0], 256, message)
+        } else {
+            AssetCopyError(*bounded_error[0], 256, "Android download failed")
+        }
+        if message != null {
+            env.functions.ReleaseStringUTFChars(env, error, message)
+        }
+        AndroidMutexLock(*download_mutex)
+        job := AssetFindJob(cast(u64)handle)
+        if job != null && job.status == 1 {
+            job.http_status = http_status
+            job.error = bounded_error
+            job.status = 3
+        }
+        AndroidMutexUnlock(*download_mutex)
+    }
+    unused env
+    unused handle
+    unused http_status
+    unused error
+}

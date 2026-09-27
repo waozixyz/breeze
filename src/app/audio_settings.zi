@@ -1,0 +1,92 @@
+#import, file "app_types.zi";
+#import, file "settings_cache.zi";
+#import, file "settings_key.zi";
+#import, file "settings_store.zi";
+
+AudioCueKey :: (cue: s32) -> string {
+    if cue == 0 { return "audio_cue_breath_in" }
+    if cue == 1 { return "audio_cue_breath_out" }
+    return "audio_cue_bell"
+}
+
+AudioItemKey :: (prefix: string, index: s32, field: string) -> SettingsKey {
+    return SettingsKeyIndexed(prefix, index, field)
+}
+
+AudioDefaultTitle :: (output: []u8) {
+    text: string = "Custom audio"
+    if output.count == 0 { return }
+    copied: s32 = cast(s32)text.count
+    if copied >= cast(s32)output.count { copied = cast(s32)output.count - 1 }
+    for i: 0..(cast(int)copied - 1) { output[i] = text[i] }
+    output[copied] = 0
+}
+
+AudioLoadItem :: (prefix: string, index: s32) -> AudioLibraryItem {
+    item: AudioLibraryItem
+    title: SettingsKey = AudioItemKey(prefix, index, "_title")
+    path: SettingsKey = AudioItemKey(prefix, index, "_path")
+    if title.valid {
+        SettingsCacheCopyTextBytes(title.bytes[0:title.count], item.title[:])
+    }
+    if item.title[0] == 0 { AudioDefaultTitle(item.title[:]) }
+    if path.valid {
+        SettingsCacheCopyTextBytes(path.bytes[0:path.count], item.path[:])
+    }
+    return item
+}
+
+AudioSaveItem :: (item: AudioLibraryItem, prefix: string, index: s32) {
+    title: SettingsKey = AudioItemKey(prefix, index, "_title")
+    path: SettingsKey = AudioItemKey(prefix, index, "_path")
+    if title.valid { SettingsStoreKeyText(title, item.title[:]) }
+    if path.valid { SettingsStoreKeyText(path, item.path[:]) }
+}
+
+#program_export
+AudioSettingsLoad :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.audio_custom_sound_count = SettingsCacheInt("audio_custom_sound_count", 0)
+    if app.audio_custom_sound_count < 0 { app.audio_custom_sound_count = 0 }
+    if app.audio_custom_sound_count > AUDIO_CUSTOM_SOUND_MAX {
+        app.audio_custom_sound_count = AUDIO_CUSTOM_SOUND_MAX
+    }
+    for i: 0..(cast(int)app.audio_custom_sound_count - 1) {
+        app.audio_custom_sounds[i] = AudioLoadItem("audio_custom_sound_", cast(s32)i)
+    }
+    app.audio_custom_music_count = SettingsCacheInt("audio_custom_music_count", 0)
+    if app.audio_custom_music_count < 0 { app.audio_custom_music_count = 0 }
+    if app.audio_custom_music_count > AUDIO_CUSTOM_MUSIC_MAX {
+        app.audio_custom_music_count = AUDIO_CUSTOM_MUSIC_MAX
+    }
+    for i: 0..(cast(int)app.audio_custom_music_count - 1) {
+        app.audio_custom_music[i] = AudioLoadItem("audio_custom_music_", cast(s32)i)
+    }
+    for i: 0..(AUDIO_CUE_COUNT - 1) {
+        selected: s32 = SettingsCacheInt(AudioCueKey(cast(s32)i), 0)
+        if selected < 0 || selected > app.audio_custom_sound_count {
+            selected = 0
+        }
+        app.audio_cue_selected[i] = selected
+    }
+}
+
+#program_export
+AudioSettingsSave :: (app: *InnerBreeze) {
+    if app == null { return }
+    SettingsStoreInt("audio_custom_sound_count", app.audio_custom_sound_count)
+    for i: 0..(AUDIO_CUSTOM_SOUND_MAX - 1) {
+        item: AudioLibraryItem
+        if cast(s32)i < app.audio_custom_sound_count { item = app.audio_custom_sounds[i] }
+        AudioSaveItem(item, "audio_custom_sound_", cast(s32)i)
+    }
+    SettingsStoreInt("audio_custom_music_count", app.audio_custom_music_count)
+    for i: 0..(AUDIO_CUSTOM_MUSIC_MAX - 1) {
+        item: AudioLibraryItem
+        if cast(s32)i < app.audio_custom_music_count { item = app.audio_custom_music[i] }
+        AudioSaveItem(item, "audio_custom_music_", cast(s32)i)
+    }
+    for i: 0..(AUDIO_CUE_COUNT - 1) {
+        SettingsStoreInt(AudioCueKey(cast(s32)i), app.audio_cue_selected[i])
+    }
+}

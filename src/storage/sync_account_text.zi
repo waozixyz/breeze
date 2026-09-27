@@ -1,0 +1,76 @@
+#import, file "account_types.zi";
+
+AccountTextAppend :: (output: *u8, capacity: s64,
+    cursor: *s64, value: string) -> bool {
+    if output == null || cursor == null || capacity <= 0 ||
+        cursor.* < 0 || cursor.* >= capacity ||
+        cast(s64)value.count > capacity - cursor.* - 1 {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if byte == 0 {
+            return false
+        }
+        output[cursor.* + index] = byte
+        index += 1
+    }
+    cursor.* += cast(s64)value.count
+    output[cursor.*] = 0
+    return true
+}
+
+AccountTextAppendField :: (output: *u8, capacity: s64,
+    cursor: *s64, field: *u8, field_capacity: s64) -> bool {
+    if output == null || cursor == null || field == null ||
+        field_capacity <= 0 || capacity <= 0 ||
+        cursor.* < 0 || cursor.* >= capacity {
+        return false
+    }
+    length: s64 = 0
+    while length < field_capacity && field[length] != 0 {
+        length += 1
+    }
+    if length == 0 || length == field_capacity ||
+        length > capacity - cursor.* - 1 {
+        return false
+    }
+    index: s64 = 0
+    while index < length {
+        output[cursor.* + index] = field[index]
+        index += 1
+    }
+    cursor.* += length
+    output[cursor.*] = 0
+    return true
+}
+
+#program_export
+ExportSyncAccountText :: (account: *SyncAccount,
+    output: *u8, output_size: s64) -> s32 {
+    if output == null || output_size <= 0 {
+        return 0
+    }
+    output[0] = 0
+    if account == null || account.public_id[0] == 0 ||
+        account.public_key_hex[0] == 0 || account.private_key_hex[0] == 0 {
+        return 0
+    }
+    cursor: s64 = 0
+    if !AccountTextAppend(output, output_size, *cursor,
+        "account-key-v1\nalgorithm=ML-DSA-44\npublic_id=") ||
+        !AccountTextAppendField(output, output_size, *cursor,
+            *account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) ||
+        !AccountTextAppend(output, output_size, *cursor, "\npublic_key=") ||
+        !AccountTextAppendField(output, output_size, *cursor,
+            *account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE) ||
+        !AccountTextAppend(output, output_size, *cursor, "\nprivate_key=") ||
+        !AccountTextAppendField(output, output_size, *cursor,
+            *account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) ||
+        !AccountTextAppend(output, output_size, *cursor, "\n") {
+        output[0] = 0
+        return 0
+    }
+    return 1
+}

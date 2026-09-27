@@ -1,0 +1,311 @@
+#import, file "../../app/modal_rules.zi";
+#import "button_widget"
+#import, file "../../app/locale.zi";
+c :: #system_library "c";
+#import "drawing_props"
+#import, file "../../app/metrics.zi";
+update_available :: () -> s32 #foreign c "update_available";
+update_can_self_update :: () -> s32 #foreign c "update_can_self_update";
+update_is_downloading :: () -> s32 #foreign c "update_is_downloading";
+update_download_fraction :: () -> float64 #foreign c "update_download_fraction";
+update_row_action :: () #foreign c "update_row_action";
+update_row_text_native :: () -> *u8 #foreign c "update_row_text";
+update_action_label_native :: () -> *u8 #foreign c "update_action_label";
+update_error_text_native :: () -> *u8 #foreign c "update_error_text";
+update_download_url_native :: () -> *u8 #foreign c "update_download_url";
+
+update_host_text :: (value: *u8) -> string {
+    if value == null { return "" }
+    return AppTextFromCString(value, 1024)
+}
+#import, file "../../app/app_types.zi";
+
+#import, file "../../app/app.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../core/version.zi";
+#import, file "../../platform/uri.zi";
+#import "link_widget"
+
+
+
+
+using ModalType;
+#import "text_props"
+using TextWrap;
+#import "control_props"
+#import, file "../../app/current_app.zi";
+#import "image_widget"
+#import "text_widget"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "image_props"
+#import "link_props"
+using ButtonTone;
+using ButtonEmphasis;
+
+about_link_icon_columns :: (content_w: s32) -> s32 {
+    link_count: s32 = 3
+    icon_size: s32 = AppScale(32)
+    icon_padding: s32 = AppScale(4)
+    icon_spacing: s32 = AppScale(20)
+    icon_btn_w: s32 = icon_size + icon_padding * 2
+    max_columns: s32 = 3
+    min_columns: s32 = 2
+    if content_w < AppScale(240) {
+        min_columns = 2
+    }
+
+    {
+        columns: s32 = max_columns
+        while columns >= min_columns {
+            total_w := icon_btn_w * columns + icon_spacing * (columns - 1)
+            if total_w <= content_w {
+                return columns
+            }
+            columns -= 1
+        }
+    }
+    return min_columns
+}
+
+about_link_icons_height :: (content_w: s32) -> s32 {
+    link_count: s32 = 3
+    icon_size: s32 = AppScale(32)
+    icon_padding: s32 = AppScale(4)
+    row_spacing: s32 = AppScale(16)
+    icon_btn_w: s32 = icon_size + icon_padding * 2
+    columns: s32 = about_link_icon_columns(content_w)
+    rows: s32 = (link_count + columns - 1) / columns
+
+    return rows * icon_btn_w + (rows - 1) * row_spacing
+}
+
+settings_about_content_height :: (content_w: s32) -> s32 {
+    description := ParagraphSpec.{
+        .text = LocaleText("about_text"),
+        .width = content_w,
+        .font = AppFontSize(),
+        .line_gap = AppScale(4)
+    }
+    update_row := ifx (update_available() != 0) then (AppScale(72)) else (0)
+
+    return AppScale(248) + update_row + AppParagraphHeight(description.text, description.width,
+                              description.font, description.line_gap) + about_link_icons_height(content_w)
+}
+
+ABOUT_SOCIAL_DISCORD :: 0
+ABOUT_SOCIAL_TELEGRAM :: 1
+ABOUT_SOCIAL_GITHUB :: 2
+
+about_social_icon_asset :: (app: *InnerBreeze, kind: s32) -> string {
+    if kind == ABOUT_SOCIAL_TELEGRAM {
+        return "assets/social/telegram.png"
+    }
+    if kind == ABOUT_SOCIAL_GITHUB {
+        return ifx (app != null && app.dark_mode == 0) then ("assets/social/github-dark-on-light.png") else ("assets/social/github-light-on-dark.png")
+    }
+    return "assets/social/discord.png"
+}
+
+about_social_icon_alt :: (kind: s32) -> string {
+    if kind == ABOUT_SOCIAL_TELEGRAM {
+        return "Telegram"
+    }
+    if kind == ABOUT_SOCIAL_GITHUB {
+        return "GitHub"
+    }
+    return "Discord"
+}
+
+about_draw_link_icons :: (app: *InnerBreeze, content_x: s32, content_w: s32, y: *s32) {
+    link_count: s32 = 3
+    icon_size: s32 = AppScale(32)
+    icon_padding: s32 = AppScale(4)
+    icon_spacing: s32 = AppScale(20)
+    icon_btn_w: s32 = icon_size + icon_padding * 2
+    columns: s32 = about_link_icon_columns(content_w)
+    grid_w: s32 = icon_btn_w * columns + icon_spacing * (columns - 1)
+    links_start_x: s32 = content_x + (content_w - grid_w) / 2
+    row_spacing: s32 = AppScale(16)
+    urls: [3] string = .["https://discord.com/invite/JbGZ4yENDt", "https://t.me/lotusinbe", "https://github.com/waozixyz/breathing",]
+
+    {
+        i: s32 = 0
+        while i < link_count {
+            col: s32 = i % columns
+            row: s32 = i / columns
+            button_x: s32 = links_start_x + col * (icon_btn_w + icon_spacing)
+            button_y: s32 = y.* + row * (icon_btn_w + row_spacing)
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
+                           cast(float32)icon_btn_w, cast(float32)icon_btn_w},
+                .id = cast(s32)18100 + i,
+                .icon_only = true,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+            }) != 0 {
+                OpenUri(urls[i])
+            }
+            Image(CurrentApp().ui.session, ImageProps.{
+                .asset_path = about_social_icon_asset(app, i),
+                .alt_text = about_social_icon_alt(i),
+                .bounds = Rectangle.{cast(float32)(button_x + icon_padding),
+                           cast(float32)(button_y + icon_padding),
+                           cast(float32)icon_size, cast(float32)icon_size}
+            })
+            i += 1
+        }
+    }
+    y.* += about_link_icons_height(content_w)
+}
+
+about_draw_donate_button :: (app: *InnerBreeze, content_x: s32, content_w: s32, y: *s32) {
+
+    button_h := AppScale(38)
+    button_w := AppScale(220)
+
+    if button_w > content_w {
+        button_w = content_w
+    }
+
+    if Button(CurrentApp().ui.session, ButtonProps.{
+        .bounds = Rectangle.{cast(float32)(content_x + (content_w - button_w) / 2), cast(float32)y.*, cast(float32)(button_w), cast(float32)(button_h)},
+        .label = LocaleText("donation_reminder_donate_button"),
+        .tone = cast(ButtonTone)ButtonToneAccent,
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+        .disabled = false
+    }) != 0 {
+        app_open_modal(app, cast(ModalType)ModalAboutDonation)
+    }
+    y.* += button_h
+}
+
+settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    version_text: [32] u8
+    title_font := AppTitleFontSize(LocaleText("app_title"), w)
+    font := AppFontSize()
+    logo_size := AppScale(56)
+    text_w: s32 = 0
+    description := ParagraphSpec.{}
+
+    y.* += AppScale(16)
+    Image(CurrentApp().ui.session, ImageProps.{
+        .asset_path = "assets/app/icon.png",
+        .alt_text = "Inner Breeze",
+        .bounds = Rectangle.{cast(float32)(x + (w - logo_size) / 2), cast(float32)y.*, cast(float32)logo_size, cast(float32)logo_size}
+    })
+    y.* += logo_size + AppScale(12)
+
+    text_w = AppTextWidth(LocaleText("app_title"), title_font)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(x + (w - text_w) / 2), cast(float32)y.*, 0, 0},
+        .text=(LocaleText("app_title")),
+        .wrap=cast(TextWrap)TextWrapNone
+    })
+    y.* += AppScale(34)
+
+    version_args: [1]FormatArg = .[FormatArg.{.text = VersionString, .is_text = true}]
+    FormatTemplate("v%s", version_args[:], version_text[:])
+    version_label := AppTextFromCString(*version_text[0], size_of(type_of(version_text)))
+    text_w = AppTextWidth(version_label, font)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(x + (w - text_w) / 2), cast(float32)y.*, 0, 0},
+        .text=version_label,
+        .wrap=cast(TextWrap)TextWrapNone
+    })
+    y.* += AppScale(28)
+
+    if update_available() != 0 {
+        if update_can_self_update() != 0 {
+            /* Self-service channels (AppImage, Windows portable): a row that
+             * walks check -> download -> verified -> restart. */
+            Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(x), cast(float32)y.*, 0, 0},
+                .text=update_host_text(update_row_text_native()),
+                .wrap=cast(TextWrap)TextWrapNone
+            })
+            y.* += AppScale(26)
+            if update_is_downloading() != 0 {
+                fraction := update_download_fraction()
+                progress: s32 = ifx (fraction >= 0.0) then (cast(s32)(fraction * 100.0 + 0.5)) else (-1)
+                progress_text: [40] u8
+                if progress >= 0 {
+                    progress_args: [2]FormatArg = .[
+                        FormatArg.{.text = LocaleText("update_downloading"), .is_text = true},
+                        FormatArg.{.number = progress}
+                    ]
+                    FormatTemplate("%s %d%%", progress_args[:], progress_text[:])
+                } else {
+                    AppCopyText(LocaleText("update_downloading"), progress_text[:])
+                }
+                Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)y.*, 0, 0},
+                    .text=AppTextFromCString(*progress_text[0], size_of(type_of(progress_text))),
+                    .wrap=cast(TextWrap)TextWrapNone
+                })
+                y.* += AppScale(22)
+            } else {
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                    .id = 18420,
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*),
+                               cast(float32)w, cast(float32)AppScale(36)},
+                    .label = update_host_text(update_action_label_native()),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .full_width = true
+                }) != 0 {
+                    update_row_action()
+                }
+                y.* += AppScale(36)
+            }
+            error_text := update_host_text(update_error_text_native())
+            if error_text.count != 0 {
+                Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)y.*, 0, 0},
+                    .text=(error_text),
+                    .wrap=cast(TextWrap)TextWrapNone
+                })
+                y.* += AppScale(20)
+            }
+        } else {
+            /* System-managed or source installs: link out to the release. */
+            update_text := update_host_text(update_row_text_native())
+            update_w := AppTextWidth(update_text, font)
+            link_result := Link(CurrentApp().ui.session, LinkProps.{
+                .bounds = Rectangle.{cast(float32)(x + (w - update_w) / 2), cast(float32)(y.*),
+                           cast(float32)update_w, cast(float32)AppScale(24)},
+                .text = update_text,
+                .link = update_host_text(update_download_url_native()),
+                .focus_id = 18421
+            })
+            if link_result.open_url {
+                OpenUri(link_result.url)
+            }
+            y.* += AppScale(30)
+        }
+        y.* += AppScale(8)
+    }
+
+    description = ParagraphSpec.{
+        .text = LocaleText("about_text"),
+        .width = w,
+        .font = font,
+        .line_gap = AppScale(4)
+    }
+    description_h := AppParagraphHeight(description.text, description.width,
+                                        description.font, description.line_gap)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)description_h},
+        .text = description.text,
+        .wrap = cast(TextWrap)TextWrapAuto
+    })
+    y.* += description_h
+    y.* += AppScale(18)
+
+    about_draw_link_icons(app, x, w, y)
+    y.* += AppScale(18)
+    about_draw_donate_button(app, x, w, y)
+    y.* += AppScale(32)
+}

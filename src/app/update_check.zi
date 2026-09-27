@@ -1,0 +1,409 @@
+#import, file "update_policy.zi";
+#import "text_buffer"
+#import, file "locale.zi";
+#import, file "../core/version.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "current_app.zi";
+#import, file "app_types.zi";
+
+#import, file "update_transport.zi";
+
+APPCAST_URL :: "https://github.com/waozixyz/inbe/releases/latest/download/appcast.json"
+UPDATE_CHECK_INTERVAL_S :: 24 * 60 * 60
+UPDATE_LAST_CHECK_KEY :: "update_check_last_unix"
+
+update_started: bool;
+update_available_flag: bool;
+update_state: s32;
+update_apply_armed: bool;
+update_release_version: [64]u8;
+update_release_url: [2048]u8;
+update_channel: [32]u8;
+update_artifact_url: [2048]u8;
+update_artifact_hash: [65]u8;
+update_artifact_size: s64;
+update_artifact_present: bool;
+update_verified_bytes: s64;
+update_verify_file: *void;
+update_digest: Sha256Context;
+update_verify_buffer: [65536]u8;
+update_digest_text: [65]u8;
+update_file_path: [4096]u8;
+update_url: [2048]u8;
+update_document: [32768]u8;
+update_row_label: [192]u8;
+update_action_text: [192]u8;
+update_error_buffer: [192]u8;
+update_empty: [1]u8;
+
+UpdateCopy :: (source: string, output: []u8) -> bool {
+    if source.count >= output.count {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)source.count {
+        output[index] = source[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return true
+}
+
+UpdateCopyPointer :: (source: *u8, output: []u8) -> bool {
+    if source == null {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)output.count {
+        ch := source[index]
+        output[index] = ch
+        if ch == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    output[0] = cast(u8)0
+    return false
+}
+
+UpdateJoinLabel :: (prefix: string, suffix: string,
+    output: []u8) -> bool {
+    if prefix.count + suffix.count + 4 >= output.count {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)prefix.count {
+        output[index] = prefix[index]
+        index += 1
+    }
+    output[index] = cast(u8)58
+    output[index + 1] = cast(u8)32
+    output[index + 2] = cast(u8)118
+    index += 3
+    offset: s64 = 0
+    while offset < cast(s64)suffix.count {
+        output[index + offset] = suffix[offset]
+        offset += 1
+    }
+    output[index + offset] = cast(u8)0
+    return true
+}
+
+UpdateDefaultReleaseUrl :: () -> *u8 {
+    if update_release_url[0] != cast(u8)0 {
+        return *update_release_url[0]
+    }
+    unused UpdateCopy("https://github.com/waozixyz/inbe/releases",
+        update_release_url[:])
+    return *update_release_url[0]
+}
+
+UpdateArtifactFailed :: () {
+    if update_verify_file != null {
+        unused app_update_file_close(update_verify_file)
+        update_verify_file = null
+    }
+    app_update_discard_download()
+    update_state = 4
+}
+
+UpdateDigestMatches :: () -> bool {
+    digest: [32]u8
+    Sha256Finish(*update_digest, *digest[0])
+    if SyncCryptoBytesToHex(*digest[0], 32,
+        *update_digest_text[0], 65) == 0 { return false }
+    index: s32 = 0
+    while index < 64 {
+        expected := update_artifact_hash[index]
+        if expected >= cast(u8)65 && expected <= cast(u8)70 {
+            expected += cast(u8)32
+        }
+        if update_digest_text[index] != expected {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+UpdateVerifyStep :: () {
+    if update_verify_file == null {
+        return
+    }
+    chunk: s32 = 0
+    while chunk < 16 {
+        count := app_update_file_read(update_verify_file,
+            *update_verify_buffer[0], cast(u64)update_verify_buffer.count)
+        if count < 0 {
+            UpdateArtifactFailed()
+            return
+        }
+        if count == 0 {
+            unused app_update_file_close(update_verify_file)
+            update_verify_file = null
+            if update_verified_bytes != update_artifact_size ||
+                !UpdateDigestMatches() {
+                UpdateArtifactFailed()
+                return
+            }
+            update_state = 3
+            return
+        }
+        if count > update_artifact_size - update_verified_bytes {
+            UpdateArtifactFailed()
+            return
+        }
+        Sha256Update(*update_digest, *update_verify_buffer[0], count)
+        update_verified_bytes += count
+        chunk += 1
+    }
+}
+
+UpdatePollArtifact :: () {
+    if update_state != 2 {
+        return
+    }
+    if update_verify_file != null {
+        UpdateVerifyStep()
+        return
+    }
+    result := app_update_download_poll(*update_file_path[0],
+        cast(u64)update_file_path.count)
+    if result < 0 {
+        return
+    }
+    if result == 0 {
+        UpdateArtifactFailed()
+        return
+    }
+    update_verify_file = app_update_verified_file_open()
+    if update_verify_file == null {
+        UpdateArtifactFailed()
+        return
+    }
+    update_verified_bytes = 0
+    Sha256Initialize(*update_digest)
+    UpdateVerifyStep()
+}
+
+#program_export
+update_check_start :: () {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        if update_started {
+            return
+        }
+        override_name: [24]u8
+        data_root_name: [14]u8
+        unused UpdateCopy("UPDATE_APPCAST_OVERRIDE", override_name[:])
+        unused UpdateCopy("APP_DATA_ROOT", data_root_name[:])
+        override := app_update_getenv(*override_name[0])
+        if app_update_getenv(*data_root_name[0]) != null &&
+            (override == null || override[0] == cast(u8)0) { return }
+        if override == null || override[0] == cast(u8)0 {
+            now := app_update_now()
+            last := storage_get_setting_int(UPDATE_LAST_CHECK_KEY, 0)
+            if last > 0 && now >= cast(s64)last &&
+                now - cast(s64)last < cast(s64)UPDATE_CHECK_INTERVAL_S { return }
+            if !UpdateCopy(APPCAST_URL, update_url[:]) {
+                return
+            }
+        } else if !UpdateCopyPointer(override, update_url[:]) {
+            return
+        }
+        update_started = app_update_fetch_start(*update_url[0]) != 0
+    }
+}
+
+#program_export
+update_check_poll :: () {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        UpdatePollArtifact()
+        if !update_started {
+            return
+        }
+        length := app_update_fetch_poll(*update_document[0],
+            cast(u64)update_document.count)
+        if length < 0 {
+            return
+        }
+        update_started = false
+        storage_set_setting_int(UPDATE_LAST_CHECK_KEY,
+            cast(s32)app_update_now())
+        if length == 0 {
+            return
+        }
+        document := TextView(update_document[0:length])
+        channel: string = ""
+        channel_pointer := app_update_channel_key()
+        if channel_pointer != null &&
+            UpdateCopyPointer(channel_pointer, update_channel[:]) {
+            channel_end: s32 = 0
+            while channel_end < 31 &&
+                update_channel[channel_end] != cast(u8)0 {
+                channel_end += 1
+            }
+            channel = TextView(update_channel[0:channel_end])
+        }
+        selection := SelectAppcast(document, VersionString, channel)
+        if !selection.valid || !selection.newer {
+            return
+        }
+        if !UpdateCopy(TextUntilNul(selection.version[:]),
+            update_release_version[:]) ||
+            !UpdateCopy(TextUntilNul(selection.release_url[:]),
+                update_release_url[:]) { return }
+        if selection.self_update && selection.artifact_size <= 2147483648 &&
+            UpdateCopy(TextUntilNul(selection.artifact_url[:]),
+                update_artifact_url[:]) &&
+            UpdateCopy(TextUntilNul(selection.sha256[:]),
+                update_artifact_hash[:]) {
+            update_artifact_size = selection.artifact_size
+            update_artifact_present = true
+        }
+        update_available_flag = true
+        update_state = 1
+    }
+}
+
+#program_export
+update_available :: () -> s32 {
+    return ifx (update_available_flag) then (1) else (0)
+}
+
+#program_export
+update_row_text :: () -> *u8 {
+    if !update_available_flag {
+        return *update_row_label[0]
+    }
+    index: s32 = 0
+    while index < 63 && update_release_version[index] != cast(u8)0 {
+        index += 1
+    }
+    version := TextView(update_release_version[0:index])
+    unused UpdateJoinLabel(LocaleText("update_available_row"),
+        version, update_row_label[:])
+    return *update_row_label[0]
+}
+
+#program_export
+update_download_url :: () -> *u8 {
+    return UpdateDefaultReleaseUrl()
+}
+
+#program_export
+update_flow :: () -> s32 {
+    return update_state
+}
+
+#program_export
+update_can_self_update :: () -> s32 {
+    return ifx (update_artifact_present && app_update_can_apply() != 0) then (1) else (0)
+}
+
+#program_export
+update_download_fraction :: () -> float64 {
+    if update_state != 2 {
+        return -1.0
+    }
+    return cast(float64)app_update_download_progress() / 1000.0
+}
+
+#program_export
+update_flow_error :: () -> *u8 {
+    if update_state != 4 {
+        return null
+    }
+    return update_error_text()
+}
+
+#program_export
+update_is_downloading :: () -> s32 {
+    return ifx (update_state == 2) then (1) else (0)
+}
+
+#program_export
+update_action_label :: () -> *u8 {
+    if update_state == 3 {
+        unused UpdateCopy(LocaleText("update_restart"), update_action_text[:])
+        return *update_action_text[0]
+    }
+    if update_state == 4 {
+        unused UpdateCopy(LocaleText("update_retry"), update_action_text[:])
+        return *update_action_text[0]
+    }
+    index: s32 = 0
+    while index < 63 && update_release_version[index] != cast(u8)0 {
+        index += 1
+    }
+    version := TextView(update_release_version[0:index])
+    prefix := LocaleText("update_download")
+    if prefix.count + version.count + 3 >= update_action_text.count {
+        return *update_empty[0]
+    }
+    output: s64 = 0
+    while output < cast(s64)prefix.count {
+        update_action_text[output] = prefix[output]
+        output += 1
+    }
+    update_action_text[output] = cast(u8)32
+    update_action_text[output + 1] = cast(u8)118
+    output += 2
+    part: s64 = 0
+    while part < cast(s64)version.count {
+        update_action_text[output + part] = version[part]
+        part += 1
+    }
+    update_action_text[output + part] = cast(u8)0
+    return *update_action_text[0]
+}
+
+#program_export
+update_row_action :: () {
+    if update_state == 3 {
+        update_apply()
+        return
+    }
+    if (update_state != 1 && update_state != 4) ||
+        update_can_self_update() == 0 { return }
+    if app_update_download_start(*update_artifact_url[0],
+        cast(u64)update_artifact_size) != 0 {
+        update_state = 2
+    } else {
+        update_state = 4
+    }
+}
+
+#program_export
+update_error_text :: () -> *u8 {
+    if update_state != 4 {
+        return *update_empty[0]
+    }
+    unused UpdateCopy(LocaleText("update_failed"), update_error_buffer[:])
+    return *update_error_buffer[0]
+}
+
+#program_export
+update_apply :: () {
+    if update_state != 3 || update_can_self_update() == 0 {
+        return
+    }
+    app := CurrentApp()
+    update_apply_armed = true
+    update_state = 0
+    if app != null {
+        app.request_quit = 1
+    }
+}
+
+#program_export
+update_apply_at_exit :: () -> s32 {
+    if !update_apply_armed {
+        app_update_discard_download()
+        return 0
+    }
+    update_apply_armed = false
+    result := app_update_appimage_exec()
+    app_update_discard_download()
+    return result
+}

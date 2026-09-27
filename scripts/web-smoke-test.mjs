@@ -576,9 +576,9 @@ async function waitForStorageIdle(client) {
   while (Date.now() - start < timeoutMs) {
     const result = await client.send('Runtime.evaluate', {
       expression: `(() => ({
-        syncing: !!Module.__kryonStorageSyncing,
-        pending: !!Module.__kryonStorageSyncPending,
-        timer: !!Module.__kryonStorageSyncTimer
+        syncing: !!Module.__inbeStorageSyncing,
+        pending: !!Module.__inbeStorageSyncPending,
+        timer: !!Module.__inbeStorageSyncTimer
       }))()`,
       returnByValue: true
     });
@@ -600,7 +600,7 @@ async function waitForStorageIdleBidi(client, context) {
       target: { context },
       awaitPromise: false,
       resultOwnership: 'none',
-      expression: "JSON.stringify((() => ({ syncing: !!Module.__kryonStorageSyncing, pending: !!Module.__kryonStorageSyncPending, timer: !!Module.__kryonStorageSyncTimer }))())"
+      expression: "JSON.stringify((() => ({ syncing: !!Module.__inbeStorageSyncing, pending: !!Module.__inbeStorageSyncPending, timer: !!Module.__inbeStorageSyncTimer }))())"
     });
     try {
       lastState = JSON.parse(result.result?.value || '{}');
@@ -677,9 +677,9 @@ async function verifyReloadPersistence(client) {
     expression: `(async () => {
       try { FS.mkdir('/home/inbe'); } catch (e) {}
       FS.writeFile('/home/inbe/web-smoke-persist.txt', ${JSON.stringify(marker)});
-      if (typeof Module.__kryonFlushStorageSync !== 'function')
+      if (typeof Module.__inbeFlushStorageSync !== 'function')
         throw new Error('missing immediate storage flush helper');
-      return await Module.__kryonFlushStorageSync(true);
+      return await Module.__inbeFlushStorageSync(true);
     })()`,
     awaitPromise: true,
     returnByValue: true
@@ -706,7 +706,7 @@ async function verifyReloadPersistence(client) {
 
 async function verifyAppSettingsReloadPersistence(client) {
   await waitForStorageIdle(client);
-  let ok = await pageJson(client, `(async () => { ${wasmHookEvalHelper()} await callWasmHook('app_web_test_save_onboarding_state'); await Module.__kryonFlushStorageSync(true); return true; })()`, true);
+  let ok = await pageJson(client, `(async () => { ${wasmHookEvalHelper()} await callWasmHook('app_web_test_save_onboarding_state'); await Module.__inbeFlushStorageSync(true); return true; })()`, true);
   if (!ok)
     throw new Error('failed to invoke app settings save test hook');
   await waitForStorageIdle(client);
@@ -762,7 +762,7 @@ async function verifySyncKeyImport(client) {
   if (!state.ok)
     throw new Error(`web sync key import hook failed; code=${state.code}`);
   const flush = await client.send('Runtime.evaluate', {
-    expression: "(async () => await Module.__kryonFlushStorageSync(true))()",
+    expression: "(async () => await Module.__inbeFlushStorageSync(true))()",
     awaitPromise: true,
     returnByValue: true
   });
@@ -780,7 +780,7 @@ async function verifyAppSettingsReloadPersistenceBidi(client, context) {
     target: { context },
     awaitPromise: true,
     resultOwnership: 'none',
-    expression: `(async () => JSON.stringify(await (async () => { ${wasmHookEvalHelper()} try { await callWasmHook('app_web_test_save_onboarding_state'); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; } await Module.__kryonFlushStorageSync(true); return { ok: Module._app_web_test_onboarding_state && Module._app_web_test_onboarding_state() === 1 }; })()))()`
+    expression: `(async () => JSON.stringify(await (async () => { ${wasmHookEvalHelper()} try { await callWasmHook('app_web_test_save_onboarding_state'); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; } await Module.__inbeFlushStorageSync(true); return { ok: Module._app_web_test_onboarding_state && Module._app_web_test_onboarding_state() === 1 }; })()))()`
   });
   const state = JSON.parse(result.result?.value || '{}');
   if (!state.ok)
@@ -806,7 +806,7 @@ async function verifyAppSettingsImmediateBidi(client, context) {
     target: { context },
     awaitPromise: true,
     resultOwnership: 'none',
-    expression: `(async () => JSON.stringify(await (async () => { ${wasmHookEvalHelper()} try { await callWasmHook('app_web_test_save_onboarding_state'); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; } await Module.__kryonFlushStorageSync(true); return { ok: Module._app_web_test_onboarding_state && Module._app_web_test_onboarding_state() === 1 }; })()))()`
+    expression: `(async () => JSON.stringify(await (async () => { ${wasmHookEvalHelper()} try { await callWasmHook('app_web_test_save_onboarding_state'); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; } await Module.__inbeFlushStorageSync(true); return { ok: Module._app_web_test_onboarding_state && Module._app_web_test_onboarding_state() === 1 }; })()))()`
   });
   let state = JSON.parse(result.result?.value || '{}');
   if (!state.ok)
@@ -845,9 +845,9 @@ async function verifySyncKeyImportBidi(client, context) {
         }
         if (code !== 1)
           return { ok: false, code };
-        if (typeof Module.__kryonFlushStorageSync !== 'function')
+        if (typeof Module.__inbeFlushStorageSync !== 'function')
           return { ok: false, code: -97 };
-        if (!await Module.__kryonFlushStorageSync(true))
+        if (!await Module.__inbeFlushStorageSync(true))
           return { ok: false, code: -96 };
         try {
           code = Module._app_web_test_sync_key_state();
@@ -1019,7 +1019,7 @@ async function verifyFirstRunGuideCanvasFlow(client) {
       return { ok: false, reason: 'missing first-run guide state hooks' };
     ${wasmHookEvalHelper()}
     await callWasmHook('app_web_test_show_first_run_guide');
-    await Module.__kryonFlushStorageSync(true);
+    await Module.__inbeFlushStorageSync(true);
     return { ok: true };
   })()))()`, true);
   if (state?.ok) {
@@ -1058,7 +1058,7 @@ async function verifyFirstRunGuideCanvasFlow(client) {
   state = await pageJson(client, `(async () => JSON.stringify(await (async () => {
     ${wasmHookEvalHelper()}
     await callWasmHook('app_web_test_save_onboarding_state');
-    await Module.__kryonFlushStorageSync(true);
+    await Module.__inbeFlushStorageSync(true);
     return {
       active: Module._app_web_test_first_run_guide_active(),
       step: Module._app_web_test_first_run_guide_step(),
@@ -1337,9 +1337,9 @@ async function verifyPracticeCompletionPersistence(client) {
     ${wasmHookEvalHelper()}
     await callWasmHook('app_web_test_complete_practice');
     const persisted = !!Module._app_web_test_completed_practice_persisted();
-    const flushed = await Module.__kryonFlushStorageSync(true);
+    const flushed = await Module.__inbeFlushStorageSync(true);
     return { persisted, flushed, stage: Module._app_web_test_completion_stage(),
-      storageError: Module.__kryonStorageSyncLastError };
+      storageError: Module.__inbeStorageSyncLastError };
   })()`, true);
   if (!result.persisted || !result.flushed)
     throw new Error('practice pause/resume/completion failed: ' + JSON.stringify(result));

@@ -1,0 +1,436 @@
+c :: #system_library "c";
+raylib_log :: #system_library "raylib";
+LOG_INFO :: 3
+LOG_WARNING :: 4
+LOG_ERROR :: 5
+#import, file "trace_log.zi";
+SetTraceLogLevel :: (level: s32) #foreign raylib_log;
+app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
+#import, file "../app/app_types.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../app/application.zi";
+#import, file "desktop_identity.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/screenshot_request.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/dpi_state.zi";
+#import, file "environment.zi";
+#import, file "raylib_host.zi";
+raylib :: #system_library "raylib";
+SetConfigFlags :: (flags: u32) #foreign raylib;
+SetExitKey :: (key: s32) #foreign raylib;
+GetScreenWidth :: () -> s32 #foreign raylib;
+GetScreenHeight :: () -> s32 #foreign raylib;
+GetRenderWidth :: () -> s32 #foreign raylib;
+GetRenderHeight :: () -> s32 #foreign raylib;
+GetMousePosition :: () -> Vector2 #foreign raylib;
+IsKeyPressed :: (key: s32) -> bool #foreign raylib;
+IsMouseButtonPressed :: (button: s32) -> bool #foreign raylib;
+IsMouseButtonDown :: (button: s32) -> bool #foreign raylib;
+IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib;
+GetTime :: () -> float64 #foreign raylib;
+GetMouseWheelMove :: () -> float32 #foreign raylib;
+SetMouseCursor :: (cursor: s32) #foreign raylib;
+BeginDrawing :: () #foreign raylib;
+EndDrawing :: () #foreign raylib;
+ClearBackground :: (color: Color) #foreign raylib;
+SetTargetFPS :: (fps: s32) #foreign raylib;
+LoadImageFromScreen :: () -> RaylibImage #foreign raylib;
+UnloadImage :: (image: RaylibImage) #foreign raylib;
+#import "c_string"
+#import "geometry"
+#import "layout"
+#import "tree_draw"
+#import "tree"
+#import "tree_input"
+#import "session"
+#import "swipe_props"
+#import, file "scroll_input.zi";
+
+#import, file "../app/app.zi";
+#import, file "../breaks/break_rules.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "../app/current_app.zi";
+#import, file "tray.zi";
+#import, file "../app/screenshots.zi";
+#import, file "../app/screenshot_arguments.zi";
+#import, file "../app/theme_catalog.zi";
+#import, file "../breaks/app_breaks.zi";
+#import, file "secondary_window.zi";
+#import "drawing_props"
+#if #defined(PLATFORM_WEB) {
+    #import "web_window"
+}
+
+
+
+
+
+
+
+
+WindowSize :: struct {
+    width: s32
+    height: s32
+}
+
+HostEnv :: (name: string) -> *u8 {
+    bytes: [64]u8
+    if !CopyCString(name, bytes[:]) { return null }
+    return app_getenv_bytes(*bytes[0])
+}
+
+native_limit_allocators :: () #foreign c;
+native_screenshot_data_root :: () #foreign c;
+native_install_trace_log_filter :: () #foreign c;
+native_apply_desktop_identity :: (app_id: *u8, display_name: *u8) #foreign c;
+native_take_window_close :: () -> s32 #foreign c;
+native_window_environment :: () #foreign c;
+native_before_window :: () #foreign c;
+native_after_window :: (icon_path: *u8) -> s32 #foreign c;
+native_platform_shutdown :: () #foreign c;
+native_update_apply_at_exit :: () -> s32 #foreign c;
+
+
+#if #defined(ANDROID_BUILD) {
+    #import "android_surface"
+    #import, file "android/android_device.zi";
+    native_android_frame_viewport :: (viewport: *AndroidViewport) -> s32 #foreign c;
+}
+
+#if #defined(PLATFORM_WEB) {
+    native_start_web_loop :: (app: *InnerBreeze) #foreign c;
+} else {
+    native_install_shutdown_handlers :: () #foreign c;
+    native_shutdown_requested :: () -> s32 #foreign c;
+}
+
+Prepare :: (argc: s32, argv: **u8) {
+    native_limit_allocators()
+    screenshot := current_screenshot_request()
+    args: [128]string
+    arg_count := ScreenshotArguments(argc, argv, args[:])
+    invalid_arguments := arg_count < 0
+    if invalid_arguments {
+        arg_count = 0
+    }
+    screenshot.* = ScreenshotParse(args[0:arg_count], config.width, config.height,
+        ThemeCount, AndroidPlatform() == 0 && WebPlatform() == 0)
+    if invalid_arguments {
+        screenshot.active = 1
+        screenshot.valid = false
+    }
+    if screenshot.active != 0 {
+        native_screenshot_data_root()
+    }
+    native_install_trace_log_filter()
+    if screenshot.active == 0 {
+        // A separate data root identifies a debug desktop profile.
+        #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+            override_root := HostEnv("APP_DATA_ROOT")
+            debug_profile := override_root != null && override_root[0] != cast(u8)0
+            identity := DesktopIdentity(debug_profile)
+            AppCopyText(identity.display_name, config.title[:])
+            if debug_profile {
+                config.title_custom = 1
+            }
+            app_id: [64]u8
+            display_name: [64]u8
+            if CopyCString(identity.app_id, app_id[:]) &&
+                CopyCString(identity.display_name, display_name[:]) {
+                native_apply_desktop_identity(*app_id[0], *display_name[0])
+            }
+        }
+    } else {
+        AppCopyText("Inner Breeze", config.title[:])
+        SetTraceLogLevel(LOG_WARNING)
+        config.width = screenshot.width
+        config.height = screenshot.height
+    }
+}
+
+WindowTitle :: () -> string {
+    return AppTextFromCString(*config.title[0], 64)
+}
+
+TakeWindowCloseRequest :: () -> s32 {
+    return native_take_window_close()
+}
+
+InitialWindowSize :: () -> WindowSize {
+    size := WindowSize.{config.width, config.height }
+    #if #defined(ANDROID_BUILD) {
+        size.width = 0
+        size.height = 0
+    }
+    #if #defined(PLATFORM_WEB) {
+        browser_size := BrowserViewportSize(config.width, config.height)
+        size.width = browser_size.width
+        size.height = browser_size.height
+        config.width = size.width
+        config.height = size.height
+    }
+    return size
+}
+
+ConfigureWindow :: () {
+    native_window_environment()
+    #if #defined(PLATFORM_WEB) {
+        SetConfigFlags(FLAG_WINDOW_RESIZABLE)
+    } else {
+        #if !#defined(ANDROID_BUILD) {
+            SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_ALWAYS_RUN)
+        }
+    }
+    native_before_window()
+}
+
+FinishWindowSetup :: () -> s32 {
+    icon_path: [64]u8
+    if !CopyCString("assets/app/icon.png", icon_path[:]) ||
+        native_after_window(*icon_path[0]) == 0 {
+        return 0
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        // ESC belongs to Inbe's screen and close-prompt handling.
+        SetExitKey(0)
+    }
+    InitDPI()
+    return 1
+}
+
+FinishAppSetup :: (app: *InnerBreeze, argc: s32, argv: **u8) {
+    native_after_app_init(app, argc, argv)
+}
+
+DrawFrame :: (app: *InnerBreeze) {
+    app_frame(app)
+}
+
+app_frame_probe_count: s32;
+
+#program_export
+app_frame :: (app: *InnerBreeze) {
+    first_frame := app_frame_probe_count == 0
+    app_frame_probe_count += 1
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: frame entered")
+    }
+    #if #defined(PLATFORM_WEB) {
+        ResizeBrowserWindow()
+    }
+    width := GetScreenWidth()
+    height := GetScreenHeight()
+
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        render_width := GetRenderWidth()
+        render_height := GetRenderHeight()
+        if render_width > width {
+            width = render_width
+        }
+        if render_height > height {
+            height = render_height
+        }
+    }
+
+    screen_mouse: Vector2 = GetMousePosition()
+    mouse: Vector2 = screen_mouse
+    if app.camera.zoom > 0.0 {
+        mouse = ScreenToWorld(screen_mouse, app.camera)
+    }
+    app.ui.mouse_x = cast(s32)mouse.x
+    app.ui.mouse_y = cast(s32)mouse.y
+    app.ui.keyboard_active = IsKeyPressed(KEY_TAB)  || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)  || IsKeyPressed(KEY_ESCAPE)
+    app.ui.manual_previous = IsKeyPressed(KEY_LEFT)
+    app.ui.manual_next = IsKeyPressed(KEY_RIGHT)
+    app.ui.manual_finish = IsKeyPressed(KEY_ENTER)
+    app.ui.manual_close = IsKeyPressed(KEY_BACK) || IsKeyPressed(KEY_ESCAPE)
+    app.ui.text_input_active = app.elist.input_focused != 0 ||
+        app.habit_edit.focused != 0 ||
+        app.habit_edit.description_focused != 0 ||
+        app.profile_friend_input_focused != 0 ||
+        app.profile_name_focused != 0 ||
+        app.profile_intention_focused != 0 ||
+        app.sync_server_url_focused != 0 ||
+        app.sync_alias_focused != 0 ||
+        app.habit_session_edit.active != 0
+    pointer: PointerFrame
+    pointer.x = mouse.x
+    pointer.y = mouse.y
+    pointer.pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
+    pointer.down = IsMouseButtonDown(MOUSE_BUTTON_LEFT)
+    pointer.released = IsMouseButtonReleased(MOUSE_BUTTON_LEFT)
+    app.ui.manual_swipe_frame.pointer = mouse
+    app.ui.manual_swipe_frame.pressed = pointer.pressed
+    app.ui.manual_swipe_frame.down = pointer.down
+    app.ui.manual_swipe_frame.released = pointer.released
+    app.ui.manual_swipe_frame.input_clear = true
+    pointer_hit := TreeHitAt(app.ui.session, mouse.x, mouse.y)
+    app.ui.manual_swipe_frame.owner_clear = !app.ui.manual_swipe_owner  && pointer_hit < 0
+    app.ui.manual_swipe_frame.owner_is_swipe = app.ui.manual_swipe_owner
+    app.ui.manual_swipe_frame.now_seconds = GetTime()
+    app.ui.manual_swipe_frame.scale = MetricsScale()
+    app.ui.pointer_active = pointer.pressed || pointer.down  || pointer.released || IsMouseButtonDown(MOUSE_BUTTON_RIGHT)  || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)  || IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)
+    TreePointerUpdate(app.ui.session, pointer)
+    if pointer_hit >= 0 {
+        SetMouseCursor(4)
+    } else {
+        SetMouseCursor(0)
+    }
+    BeginScrollFrame(app.ui.session, mouse, pointer.pressed, pointer.down,
+        pointer.released, GetMouseWheelMove())
+
+    frame_bounds := Rectangle.{0.0, 0.0,
+        cast(float32)width, cast(float32)height}
+    #if #defined(ANDROID_BUILD) {
+        viewport: AndroidViewport
+        if native_android_frame_viewport(*viewport) == 0 {
+            return
+        }
+        frame_bounds = Rectangle.{cast(float32)viewport.x,
+            cast(float32)viewport.y, cast(float32)viewport.width,
+            cast(float32)viewport.height}
+        android_text_input_begin_frame(app.ui.session)
+    }
+    BeginDrawing()
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: drawing begun")
+    }
+    ClearBackground(StyleTokenColor("canvas"))
+    app_update_draw(cast(*void)app, frame_bounds)
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: app draw complete")
+    }
+    #if #defined(ANDROID_BUILD) {
+        active := app.elist.input_focused != 0 ||
+            app.habit_edit.focused != 0 ||
+            app.habit_edit.description_focused != 0 ||
+            app.profile_friend_input_focused != 0 ||
+            app.profile_name_focused != 0 ||
+            app.profile_intention_focused != 0 ||
+            app.sync_server_url_focused != 0 ||
+            app.sync_alias_focused != 0 ||
+            app.habit_session_edit.active != 0
+        android_text_input_frame(app.ui.session, active)
+    }
+    EndDrawing()
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: drawing ended")
+    }
+    PumpSecondaryWindows()
+    if app.ui.frame_target_changed {
+        SetTargetFPS(app.ui.frame_target_fps)
+        app.ui.frame_target_changed = false
+    }
+    app_breaks_hud_update(app)
+    app_breaks_window_update(app)
+}
+
+ScreenshotRequested :: () -> s32 {
+    return current_screenshot_request().active
+}
+
+CaptureScreenshot :: (app: *InnerBreeze) -> s32 {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        unused app
+        return 0
+    } else {
+        request := current_screenshot_request()
+        if request == null || request.active == 0 {
+            return 0
+        }
+        if !request.valid {
+            TraceLog(LOG_ERROR, "APP: invalid screenshot request")
+            return -1
+        }
+
+        setup_screenshot_scene(app, request)
+        warmup_frames := screenshot_warmup_frames(request)
+        {
+            frame: s32 = 0
+            while frame < warmup_frames {
+                app_frame(app)
+                frame += 1
+            }
+        }
+        screenshot_after_warmup(app, request)
+
+        // External capture on GL stacks where the direct readback is blank.
+        if HostEnv("APP_SHOT_WINDOW") != null {
+            while true {
+                app_frame(app)
+            }
+        }
+
+        capture: RaylibImage = LoadImageFromScreen()
+        if capture.data == null {
+            TraceLog(LOG_ERROR, "APP: screenshot readback failed")
+            return -1
+        }
+        saved := ExportImage(capture,
+            AppTextFromCString(*request.output[0], 512))
+        UnloadImage(capture)
+        return ifx (saved) then (1) else (-1)
+}
+}
+
+ShouldStartHidden :: (app: *InnerBreeze) -> s32 {
+    return native_should_start_hidden(app)
+}
+
+Shutdown :: () {
+    native_platform_shutdown()
+}
+
+ApplyPendingUpdate :: () -> s32 {
+    return native_update_apply_at_exit()
+}
+
+#if #defined(PLATFORM_WEB) {
+    StartWebLoop :: (app: *InnerBreeze) {
+        native_start_web_loop(app)
+    }
+} else {
+    InstallShutdownHandlers :: () {
+        native_install_shutdown_handlers()
+    }
+
+    ShutdownRequested :: () -> s32 {
+        return native_shutdown_requested()
+    }
+}
+
+#program_export
+native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
+    if app == null {
+        return
+    }
+    SetCurrentApp(app)
+    TraceLog(LOG_INFO, "APP: Global app pointer set")
+    {
+        argi: s32 = 1
+        while argi < argc {
+            if AppTextFromCString(argv[argi], 12) == "--break-now" {
+                app.breaks_enabled = 1
+                app.breaks = BreakForce(app.breaks, BREAK_MICRO)
+                TraceLog(LOG_INFO, "APP: forced micro break from --break-now")
+            }
+            argi += 1
+        }
+    }
+    #if #defined(ANDROID_BUILD) {
+        app.fullscreen_enabled = 0
+    }
+}
+
+#program_export
+native_should_start_hidden :: (app: *InnerBreeze) -> s32 {
+    #if #defined(DESKTOP_TRAY_ENABLED) {
+        return cast(s32)(app != null &&
+            app.desktop_startup_mode == STARTUP_HIDDEN &&
+            ScreenshotRequested() == 0 && desktop_tray_ready() != 0)
+    } else {
+        unused app
+        return 0
+    }
+}

@@ -1,0 +1,150 @@
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/locale.zi";
+#import, file "../breaks/break_rules.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "../practices/patterns/patterns_rules.zi";
+#import, file "../practices/patterns/patterns_session_rules.zi";
+#import, file "../practices/sun_salutation/sun_salutation_rules.zi";
+#import, file "../practices/sun_salutation/sun_salutation_labels.zi";
+
+TraySunSalutationStepSeconds :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return SUN_SALUTATION_DEFAULT_START_SECONDS
+    }
+    return SalutationStepSeconds(app.sun_salutation)
+}
+#program_export
+BuildTrayStatusText :: (app: *InnerBreeze, text: []u8) {
+    if text.count == 0 {
+        return
+    }
+    AppCopyText("Inner Breeze", text)
+    if app == null {
+        return
+    }
+    if app.breathing.screen == ScreenSession {
+        count: s32 = BreathDigitsRead(app.breathing.count[:])
+        max_breaths: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
+        if app.session_paused != 0 {
+            AppCopyText(LocaleText("tray_wim_hof_paused"), text)
+        } else {
+            if app.breathing.phase == BreathPhaseBreathe {
+                args: [2]FormatArg = .[
+                FormatArg.{.number = count},
+                FormatArg.{.number = max_breaths}
+                ]
+                FormatTemplate(LocaleText("tray_wim_hof_breath"), args[:], text)
+            } else if app.breathing.phase == BreathPhaseHold {
+                args: [1]FormatArg = .[FormatArg.{.number = count}]
+                FormatTemplate(LocaleText("tray_wim_hof_hold"), args[:], text)
+            } else if app.breathing.phase == BreathPhaseRecover {
+                count = 15 - count
+                if count < 0 {
+                    count = 0
+                }
+                args: [1]FormatArg = .[FormatArg.{.number = count}]
+                FormatTemplate(LocaleText("tray_wim_hof_breathe_in"), args[:], text)
+            } else if app.breathing.phase == BreathPhaseNext {
+                AppCopyText(LocaleText("tray_wim_hof_next_round"), text)
+            } else {
+                pause: s32 = ifx (app.breathing.round == 0) then (3) else (app.breathing.pause_seconds)
+                remaining: s32 = ifx (pause > 0) then (pause - app.breathing.sectick / 60) else (0)
+                if remaining < 0 {
+                    remaining = 0
+                }
+                args: [1]FormatArg = .[FormatArg.{.number = remaining}]
+                FormatTemplate(LocaleText("tray_wim_hof_starting_seconds"), args[:], text)
+            }
+        }
+    } else if app.breathing.screen == ScreenMeditation {
+        remaining: s32 = app.meditation.remaining_seconds
+        if remaining < 0 {
+            remaining = 0
+        }
+        args: [2]FormatArg = .[
+        FormatArg.{.number = remaining / 60},
+        FormatArg.{.number = remaining % 60}
+        ]
+        key := ifx (app.session_paused != 0) then ("tray_meditation_paused") else ("tray_meditation_left")
+        FormatTemplate(LocaleText(key), args[:], text)
+    } else if app.breathing.screen == ScreenSunSalutation {
+        step_seconds: s32 = TraySunSalutationStepSeconds(app)
+        elapsed: s32 = app.sun_salutation.step_ticks / 60
+        if elapsed < 0 {
+            elapsed = 0
+        }
+        if elapsed > step_seconds {
+            elapsed = step_seconds
+        }
+        args: [5]FormatArg = .[
+        FormatArg.{.text = SunSalutationStepTitle(app.sun_salutation.step), .is_text = true},
+        FormatArg.{.number = app.sun_salutation.repetition + 1},
+        FormatArg.{.number = app.sun_salutation.repetitions},
+        FormatArg.{.number = elapsed},
+        FormatArg.{.number = step_seconds}
+        ]
+        key := ifx (app.session_paused != 0) then ("tray_sun_salutation_paused") else ("tray_sun_salutation")
+        FormatTemplate(LocaleText(key), args[:], text)
+    } else if app.breathing.screen == ScreenPatterns && app.patterns.active != 0 {
+        phase: s32 = app.patterns.phase
+        left: s32 = patterns_phase_remaining_seconds(app)
+        session_time: s32
+        if app.patterns.duration_minutes > 0 {
+            session_time = app.patterns.duration_minutes * 60 -                 app.patterns.elapsed_seconds
+            if session_time < 0 {
+                session_time = 0
+            }
+            args: [4]FormatArg = .[
+            FormatArg.{.text = LocaleText(patterns_phase_label_key(phase)), .is_text = true},
+            FormatArg.{.number = left},
+            FormatArg.{.number = session_time / 60},
+            FormatArg.{.number = session_time % 60}
+            ]
+            key := ifx (app.patterns.paused != 0) then ("tray_patterns_left_paused") else ("tray_patterns_left")
+            FormatTemplate(LocaleText(key), args[:], text)
+        } else {
+            session_time = app.patterns.elapsed_seconds
+            if session_time < 0 {
+                session_time = 0
+            }
+            args: [4]FormatArg = .[
+            FormatArg.{.text = LocaleText(patterns_phase_label_key(phase)), .is_text = true},
+            FormatArg.{.number = left},
+            FormatArg.{.number = session_time / 60},
+            FormatArg.{.number = session_time % 60}
+            ]
+            key := ifx (app.patterns.paused != 0) then ("tray_patterns_elapsed_paused") else ("tray_patterns_elapsed")
+            FormatTemplate(LocaleText(key), args[:], text)
+        }
+    } else if app.breaks_enabled != 0 {
+        if app.breaks.mode == BreakModeSuspended {
+            AppCopyText(LocaleText("settings_breaks_mode_suspended"), text)
+        } else if app.breaks.mode == BreakModeQuiet {
+            AppCopyText(LocaleText("settings_breaks_mode_quiet"), text)
+        } else {
+            next_break: s32 = -1
+            {
+                t: s32 = 0
+                while t < BREAK_TYPE_COUNT {
+                    due: s32 = BreakNextDueSeconds(app.breaks, t)
+                    if due > 0 && (next_break < 0 || due < next_break) {
+                        next_break = due
+                    }
+                    t += 1
+                }
+
+            }
+            if next_break > 0 {
+                due := BreakFormatDuration(next_break)
+                args: [1]FormatArg = .[
+                FormatArg.{.text = AppTextFromCString(*due.bytes[0], cast(s32)due.bytes.count), .is_text = true}
+                ]
+                FormatTemplate(LocaleText("tray_next_break"), args[:], text)
+            }
+        }
+    }
+}

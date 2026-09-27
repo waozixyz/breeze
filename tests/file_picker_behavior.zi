@@ -1,0 +1,62 @@
+#import "file_picker"
+#import "audio_picker_host"
+#import "c_string"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+SetEnvironment :: (name: *u8, value: *u8,
+    overwrite: s32) -> s32 #foreign c "setenv";
+
+ExpectSelection :: (scenario: string, save: bool, expected: s32,
+    path: string, capacity: s32) -> bool {
+    name: [32]u8
+    value: [32]u8
+    title: [32]u8
+    filter: [64]u8
+    suggested: [64]u8
+    output: [128]u8
+    if !CopyCString("PICKER_SCENARIO", name[:]) ||
+        !CopyCString(scenario, value[:]) ||
+        !CopyCString("Choose data", title[:]) ||
+        !CopyCString("Data files | *.zip *.json", filter[:]) ||
+        !CopyCString("backup ; literal.zip", suggested[:]) {
+        return false
+    }
+    if SetEnvironment(*name[0], *value[0], 1) != 0 {
+        return false
+    }
+    output[0] = 99
+    actual := app_pick_file(*title[0], *filter[0], *suggested[0],
+        save, *output[0], capacity)
+    return actual == expected && TextFromCString(*output[0]) == path
+}
+
+#program_export
+main :: () -> s32 {
+    if !ExpectSelection("data", false, 1, "/tmp/data file.zip", 128) {
+        return 1
+    }
+    if !ExpectSelection("save", true, 1, "/tmp/backup ; literal.zip", 128) {
+        return 2
+    }
+    if !ExpectSelection("cancel", false, 0, "", 128) {
+        return 3
+    }
+    if !ExpectSelection("unavailable", false, -1, "", 128) {
+        return 4
+    }
+    if !ExpectSelection("overflow", false, -1, "", 8) {
+        return 5
+    }
+    if !ExpectSelection("empty", false, -1, "", 128) {
+        return 6
+    }
+    if !ExpectSelection("signal", false, -1, "", 128) {
+        return 7
+    }
+    output: [128]u8
+    if app_pick_file(null, null, null, false, *output[0], 128) != -1 {
+        return 8
+    }
+    return 0
+}

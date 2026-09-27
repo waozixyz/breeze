@@ -1,0 +1,38 @@
+#import, file "../src/app/update_transport.zi";
+#import "c_string"
+
+c :: #system_library "c";
+ProbeEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+ProbeInteger :: (text: *u8) -> s32 #foreign c "atoi";
+ProbeSleep :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+#program_export
+main :: () -> s32 {
+    address_name: [32]u8
+    size_name: [32]u8
+    unused CopyCString("INBE_TEST_UPDATE_URL", address_name[:])
+    unused CopyCString("INBE_TEST_UPDATE_SIZE", size_name[:])
+    address := ProbeEnvironment(*address_name[0])
+    size_text := ProbeEnvironment(*size_name[0])
+    if address == null || size_text == null {
+        return 90
+    }
+    if app_update_download_start(address, cast(u64)ProbeInteger(size_text)) == 0 {
+        return 91
+    }
+    path: [4096]u8
+    index: s32 = 0
+    while index < 1000 {
+        result := app_update_download_poll(*path[0], cast(u64)path.count)
+        if result > 0 {
+            unused app_update_appimage_exec()
+            return 93
+        }
+        if result == 0 {
+            return 92
+        }
+        unused ProbeSleep(cast(u32)10000)
+        index += 1
+    }
+    return 94
+}

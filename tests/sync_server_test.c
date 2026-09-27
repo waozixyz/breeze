@@ -123,7 +123,7 @@ static void synchronize(const char *url) {
         }
         StorageSyncStatus status;
         assert(storage_sync_status(&status));
-        if(!status.queued_changes && !status.secure_migration_pending) return;
+        if(!status.queued_changes) return;
     }
     fprintf(stderr, "sync did not drain queued changes\n");
     exit(1);

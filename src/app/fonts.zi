@@ -1,0 +1,141 @@
+#import "typeface_source"
+#import, file "app_types.zi";
+#import, file "font_assets.zi";
+#import, file "assets.zi";
+#import, file "../platform/environment.zi";
+
+language_seed: [96]s32;
+language_seed_ready: bool;
+
+FontExtensionFor :: (path: string) -> string {
+    if path == FONT_SC || path == FONT_JP || path == FONT_KR  || path == FONT_TC {
+        return ".otf"
+    }
+    return ".ttf"
+}
+
+RegisterFontAsset :: (name: string, path: string,
+    seed: *s32, seed_count: s32) -> bool {
+    asset := AssetRead(path)
+    if asset.found {
+        return RegisterTypefaceData(name, FontExtensionFor(path),
+            asset.data, seed, seed_count)
+    }
+    if Plan9Platform() != 0 {
+        return RegisterTypefaceFile(name, path, seed, seed_count)
+    }
+    return false
+}
+
+RegisterAndroidFontFallbacks :: () {
+    RegisterTypefaceFile("sys-sc", "/system/fonts/NotoSansSC-Regular.otf", null, 0)
+    RegisterTypefaceFile("sys-jp", "/system/fonts/NotoSansJP-Regular.otf", null, 0)
+    RegisterTypefaceFile("sys-kr", "/system/fonts/NotoSansKR-Regular.otf", null, 0)
+    RegisterTypefaceFile("sys-tc", "/system/fonts/NotoSansTC-Regular.otf", null, 0)
+    RegisterTypefaceFile("sys-latin", "/system/fonts/NotoSans-Regular.ttf", null, 0)
+    RegisterTypefaceFile("sys-roboto", "/system/fonts/Roboto-Regular.ttf", null, 0)
+}
+
+LanguageSeed :: () -> *s32 {
+    if !language_seed_ready {
+        codepoint: s32 = 0x20
+        index: s32 = 0
+        while codepoint <= 0x7E {
+            language_seed[index] = codepoint
+            codepoint += 1
+            index += 1
+        }
+        language_seed[index] = 0x00A0
+        language_seed_ready = true
+    }
+    return *language_seed[0]
+}
+
+RegisterLanguagePickerFonts :: () {
+    seed := LanguageSeed()
+    RegisterFontAsset("ui-lang-latin", FONT_LATIN, null, 0)
+    RegisterFontAsset("ui-lang-ja", FONT_JP, seed, 96)
+    RegisterFontAsset("ui-lang-ko", FONT_KR, seed, 96)
+    RegisterFontAsset("ui-lang-zh", FONT_SC, seed, 96)
+}
+
+SavedLocaleEquals :: (app: *InnerBreeze, code: string) -> bool {
+    if code.count >= 16 {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)code.count {
+        if app.language[index] != code[index] {
+            return false
+        }
+        index += 1
+    }
+    return app.language[index] == 0
+}
+
+LocaleCodeFor :: (app: *InnerBreeze) -> string {
+    if SavedLocaleEquals(app, "zh") {
+        return "zh"
+    }
+    if SavedLocaleEquals(app, "ja") {
+        return "ja"
+    }
+    if SavedLocaleEquals(app, "ko") {
+        return "ko"
+    }
+    if SavedLocaleEquals(app, "zh-TW") {
+        return "zh-TW"
+    }
+    if SavedLocaleEquals(app, "zh_Hant") {
+        return "zh_Hant"
+    }
+    return "en"
+}
+
+#program_export
+LoadLocaleFont :: (app: *InnerBreeze) -> bool {
+    if app == null {
+        return false
+    }
+    path := FontAssetForLocale(LocaleCodeFor(app))
+    asset := AssetRead(path)
+    if !asset.found && Plan9Platform() == 0 {
+        return false
+    }
+
+    if PreviewMode() == 0 {
+        ClearTypefaces()
+    }
+
+    system_font: bool = false
+    if DesktopPlatform() != 0 && WindowsPlatform() == 0  && Plan9Platform() == 0 {
+        system_font = RegisterSystemTypeface("ui")
+    }
+    if system_font {
+        RegisterFontAsset("ui-locale", path, null, 0)
+    } else if !RegisterFontAsset("ui", path, null, 0) {
+        return false
+    }
+
+    if AndroidPlatform() != 0 {
+        RegisterAndroidFontFallbacks()
+    }
+    RegisterLanguagePickerFonts()
+    if !UseTypeface("ui") {
+        if PreviewMode() == 0 {
+            ClearTypefaces()
+        }
+        return false
+    }
+    return true
+}
+
+#program_export
+ReleaseLocaleFont :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if PreviewMode() == 0 {
+        ClearTypefaces()
+    }
+}

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-screen="$root/src/screens/settings/settings_screen.kry"
+screen="$root/src/screens/settings/settings_screen.zi"
 
 for symbol in \
     "settings_screen_normalize" \

@@ -1,0 +1,694 @@
+#if #defined(DESKTOP_TRAY_ENABLED) && !#defined(_WIN32) && !#defined(KRYON_BACKEND_TERMI) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    #import "c_string"
+    c :: #system_library "c";
+    #import, file "desktop_tray_data.zi";
+    GtkTrayAllocate :: (count: usize, bytes: usize) -> *void #foreign c "calloc";
+    GtkTrayGetEnv :: (name: *u8) -> *u8 #foreign c "getenv";
+    TRAY_INDICATOR :: #defined(DESKTOP_TRAY_AYATANA) || #defined(DESKTOP_TRAY_APPINDICATOR)
+    #import, file "gtk_dl.zi";
+
+    TrayThreadCallback :: #type (*void) -> *void #c_call;
+    TraySignalCallback :: #type (*void, *void) -> void #c_call;
+    TrayEmbeddedCallback :: #type (*void, *void, *void) -> void #c_call;
+    TrayPopupCallback :: #type (*void, u32, u32, *void) -> void #c_call;
+    TrayOnce :: (state: *s32, routine: GtkOnceCallback) -> s32 #foreign c "pthread_once";
+    TrayMutexInit :: (mutex: *void, attributes: *void) -> s32 #foreign c "pthread_mutex_init";
+    TrayMutexLock :: (mutex: *void) -> s32 #foreign c "pthread_mutex_lock";
+    TrayMutexUnlock :: (mutex: *void) -> s32 #foreign c "pthread_mutex_unlock";
+    TrayConditionInit :: (condition: *void, attributes: *void) -> s32 #foreign c "pthread_cond_init";
+    TrayConditionWait :: (condition: *void, mutex: *void) -> s32 #foreign c "pthread_cond_wait";
+    TrayConditionSignal :: (condition: *void) -> s32 #foreign c "pthread_cond_signal";
+    TrayThreadCreate :: (thread: *usize, attributes: *void,
+        routine: TrayThreadCallback, argument: *void) -> s32 #foreign c "pthread_create";
+    TrayThreadJoin :: (thread: usize, result: **void) -> s32 #foreign c "pthread_join";
+    TrayReadLink :: (path: *u8, output: *u8, capacity: usize) -> isize #foreign c "readlink";
+    TrayAbort :: () #foreign c "abort";
+
+    TRAY_STARTING :: 0
+    TRAY_READY :: 1
+    TRAY_FAILED :: 2
+    TRAY_STOPPED :: 3
+
+    TrayLockOnce: s32;
+    TrayMutex: *void;
+    TrayCondition: *void;
+    TrayThread: usize;
+    TrayStarted: bool;
+    TrayState: s32 = TRAY_STOPPED;
+    TrayPendingAction: s32;
+    TrayActivateAction: s32;
+    TrayIconEmbedded: bool;
+    TrayMenuMapped: bool;
+    TrayMenuPending: bool;
+    TrayStatusPending: bool;
+    TrayIconPending: bool;
+    TrayReadyMilliseconds: s64;
+    TrayTitle: [128]u8;
+    TrayStatusText: [128]u8;
+    TrayIconName: [128]u8;
+    TrayIconOverride: [512]u8;
+    TrayIconPaths: **u8;
+    TrayItems: *DesktopTrayMenuItem;
+    TrayItemCount: s32;
+    TrayMenu: *void;
+    TrayStatusIcon: *void;
+    TrayIndicator: *void;
+    TrayIconPath: [512]u8;
+    TrayCandidatePath: *u8;
+
+    TrayInitializeLock :: () {
+        // pthread objects are opaque. This aligned storage accommodates the
+        // supported Linux and BSD pthread ABIs without depending on C headers.
+        TrayMutex = GtkTrayAllocate(1, 128)
+        TrayCondition = GtkTrayAllocate(1, 128)
+        if TrayMutex == null || TrayCondition == null {
+            TrayAbort()
+        }
+        if TrayMutexInit(TrayMutex, null) != 0 ||
+        TrayConditionInit(TrayCondition, null) != 0 {
+            TrayAbort()
+        }
+    }
+
+    TrayLock :: () {
+        routine: GtkOnceCallback = TrayInitializeLock
+        if TrayOnce(*TrayLockOnce, routine) != 0 ||
+        TrayMutexLock(TrayMutex) != 0 {
+            TrayAbort()
+        }
+    }
+
+    TrayUnlock :: () {
+        if TrayMutexUnlock(TrayMutex) != 0 {
+            TrayAbort()
+        }
+    }
+
+    TrayIdle :: (routine: GtkIdleCallback) {
+        raw := cast(**void)*routine
+        LoadedGIdleAdd(raw[0], null)
+    }
+
+    TrayConnectRaw :: (object: *void, signal: string,
+        callback: *void, data: *void) {
+        bytes: [64]u8
+        if CopyCString(signal, bytes[:]) {
+            LoadedGSignalConnectData(object, *bytes[0], callback, data, null, 0)
+        }
+    }
+
+    TrayConnect :: (object: *void, signal: string,
+        routine: TraySignalCallback, data: *void) {
+        raw := cast(**void)*routine
+        TrayConnectRaw(object, signal, raw[0], data)
+    }
+
+    TraySetState :: (state: s32) {
+        TrayLock()
+        TrayState = state
+        TrayConditionSignal(TrayCondition)
+        TrayUnlock()
+    }
+
+    TraySetAction :: (action: s32) {
+        TrayLock()
+        if TrayState == TRAY_READY {
+            TrayPendingAction = action
+        }
+        TrayUnlock()
+    }
+
+    TrayMenuMap :: (widget: *void, data: *void) {
+        unused widget
+        unused data
+        TrayLock()
+        TrayMenuMapped = true
+        TrayUnlock()
+    }
+
+    TrayMenuUnmap :: (widget: *void, data: *void) {
+        unused widget
+        unused data
+        TrayLock()
+        TrayMenuMapped = false
+        pending := TrayMenuPending && TrayState == TRAY_READY
+        TrayUnlock()
+        // Keep the current popup while the user navigates it. The newest
+        // snapshot replaces it only after it has naturally closed.
+        if pending {
+            routine: GtkIdleCallback = TrayApplyMenu
+            TrayIdle(routine)
+        }
+    }
+
+    TrayMenuAction :: (widget: *void, data: *void) {
+        unused widget
+        TraySetAction(cast(s32)cast(isize)data)
+    }
+
+    TrayCreateGtkMenu :: (items: *DesktopTrayMenuItem, count: s32) -> *void {
+        menu := LoadedGtkMenuNew()
+        if menu == null {
+            return null
+        }
+        empty: [1]u8
+        index: s32 = 0
+        while index < count {
+            if items[index].kind == DESKTOP_TRAY_MENU_ITEM_SEPARATOR {
+                LoadedGtkMenuShellAppend(menu, LoadedGtkSeparatorMenuItemNew())
+            }
+            if items[index].kind != DESKTOP_TRAY_MENU_ITEM_SEPARATOR {
+                label := items[index].label
+                if label == null {
+                    label = *empty[0]
+                }
+                item := LoadedGtkMenuItemNewWithLabel(label)
+                LoadedGtkWidgetSetSensitive(item, items[index].enabled)
+                if items[index].kind == DESKTOP_TRAY_MENU_ITEM_SUBMENU {
+                    child := TrayCreateGtkMenu(items[index].children,
+                        items[index].child_count)
+                    LoadedGtkMenuItemSetSubmenu(item, child)
+                }
+                if items[index].kind != DESKTOP_TRAY_MENU_ITEM_SUBMENU {
+                    routine: TraySignalCallback = TrayMenuAction
+                    TrayConnect(item, "activate", routine,
+                        cast(*void)cast(isize)items[index].action)
+                }
+                LoadedGtkMenuShellAppend(menu, item)
+            }
+            index += 1
+        }
+        LoadedGtkWidgetShowAll(menu)
+        return menu
+    }
+
+    TrayCreateMenu :: () -> *void {
+        TrayLock()
+        count := TrayItemCount
+        snapshot := TrayCopyItems(TrayItems, count)
+        TrayUnlock()
+        if count > 0 && snapshot == null {
+            count = 0
+        }
+        menu := TrayCreateGtkMenu(snapshot, count)
+        TrayFreeItems(snapshot, count)
+        map: TraySignalCallback = TrayMenuMap
+        unmap: TraySignalCallback = TrayMenuUnmap
+        TrayConnect(menu, "map", map, null)
+        TrayConnect(menu, "unmap", unmap, null)
+        return menu
+    }
+
+    TrayApplyMenu :: (data: *void) -> s32 {
+        unused data
+        TrayLock()
+        if TrayState != TRAY_READY || TrayMenuMapped {
+            TrayUnlock()
+            return 0
+        }
+        TrayMenuPending = false
+        TrayUnlock()
+        next := TrayCreateMenu()
+        previous := TrayMenu
+        TrayMenu = next
+        #if TRAY_INDICATOR {
+            if TrayIndicator != null {
+                LoadedAppIndicatorSetMenu(TrayIndicator, next)
+            }
+        }
+        #if !TRAY_INDICATOR {
+            if previous != null {
+                LoadedGtkWidgetDestroy(previous)
+            }
+        }
+        return 0
+    }
+
+    TraySetMenu :: (items: *DesktopTrayMenuItem, count: s32) {
+        copy := TrayCopyItems(items, count)
+        if count > 0 && copy == null {
+            return
+        }
+        TrayLock()
+        previous := TrayItems
+        previous_count := TrayItemCount
+        TrayItems = copy
+        TrayItemCount = 0
+        if count > 0 {
+            TrayItemCount = count
+        }
+        if TrayState == TRAY_READY && !TrayMenuPending {
+            TrayMenuPending = true
+            routine: GtkIdleCallback = TrayApplyMenu
+            TrayIdle(routine)
+        }
+        TrayUnlock()
+        TrayFreeItems(previous, previous_count)
+    }
+
+    TraySetStatus :: (text: *u8) {
+        TrayLock()
+        source := text
+        if source == null {
+            source = *TrayTitle[0]
+        }
+        TrayCopyText(source, TrayStatusText[:])
+        if TrayState == TRAY_READY && !TrayStatusPending {
+            TrayStatusPending = true
+            routine: GtkIdleCallback = TrayApplyStatus
+            TrayIdle(routine)
+        }
+        TrayUnlock()
+    }
+
+    TrayApplyStatus :: (data: *void) -> s32 {
+        unused data
+        text: [128]u8
+        TrayLock()
+        TrayStatusPending = false
+        ready := TrayState == TRAY_READY
+        TrayCopyText(*TrayStatusText[0], text[:])
+        TrayUnlock()
+        if !ready {
+            return 0
+        }
+        if TrayStatusIcon != null {
+            LoadedGtkStatusIconSetTitle(TrayStatusIcon, *text[0])
+            LoadedGtkStatusIconSetTooltipText(TrayStatusIcon, *text[0])
+        }
+        #if TRAY_INDICATOR {
+            if TrayIndicator != null {
+                LoadedAppIndicatorSetTitle(TrayIndicator, *text[0])
+            }
+        }
+        return 0
+    }
+
+    TraySetIcon :: (path: *u8) {
+        TrayLock()
+        TrayCopyText(path, TrayIconOverride[:])
+        if TrayState == TRAY_READY && !TrayIconPending {
+            TrayIconPending = true
+            routine: GtkIdleCallback = TrayApplyIcon
+            TrayIdle(routine)
+        }
+        TrayUnlock()
+    }
+
+    TrayApplyIcon :: (data: *void) -> s32 {
+        unused data
+        path: [512]u8
+        TrayLock()
+        TrayIconPending = false
+        ready := TrayState == TRAY_READY
+        TrayCopyText(*TrayIconOverride[0], path[:])
+        TrayUnlock()
+        if !ready {
+            return 0
+        }
+        source := *path[0]
+        if path[0] == 0 {
+            source = TrayFindIcon()
+        }
+        if TrayStatusIcon != null {
+            if source != null {
+                LoadedGtkStatusIconSetFromFile(TrayStatusIcon, source)
+            }
+            if source == null {
+                LoadedGtkStatusIconSetFromIconName(TrayStatusIcon, *TrayIconName[0])
+            }
+        }
+        #if TRAY_INDICATOR {
+            if TrayIndicator != null {
+                if source == null {
+                    source = *TrayIconName[0]
+                }
+                LoadedAppIndicatorSetIconFull(TrayIndicator, source, *TrayTitle[0])
+            }
+        }
+        return 0
+    }
+
+    TrayAppend :: (output: []u8, text: *u8) -> bool {
+        length: s32 = 0
+        while length < cast(s32)output.count && output[length] != 0 {
+            length += 1
+        }
+        if text == null {
+            return length < cast(s32)output.count
+        }
+        index: s32 = 0
+        while text[index] != 0 {
+            if length + 1 >= cast(s32)output.count {
+                return false
+            }
+            output[length] = text[index]
+            length += 1
+            index += 1
+        }
+        output[length] = 0
+        return true
+    }
+
+    TrayAppendText :: (output: []u8, text: string) -> bool {
+        bytes: [128]u8
+        if !CopyCString(text, bytes[:]) {
+            return false
+        }
+        return TrayAppend(output, *bytes[0])
+    }
+
+    TrayIconAt :: (directory: *u8) -> bool {
+        TrayIconPath[0] = 0
+        if !TrayAppend(TrayIconPath[:], directory) ||
+        !TrayAppendText(TrayIconPath[:], "/") ||
+        !TrayAppend(TrayIconPath[:], *TrayIconName[0]) ||
+        !TrayAppendText(TrayIconPath[:], ".png") {
+            return false
+        }
+        return LoadedGFileTest(*TrayIconPath[0], 1) != 0
+    }
+
+    TrayThemeIcon :: (directory: *u8, prefix: string) -> bool {
+        sizes: [11]string = .["512x512", "256x256", "192x192", "128x128",
+        "96x96", "64x64", "48x48", "32x32", "24x24", "16x16", "scalable"]
+        index: s32 = 0
+        while index < 11 {
+            path: [512]u8
+            if TrayAppend(path[:], directory) && TrayAppendText(path[:], prefix) &&
+            TrayAppendText(path[:], sizes[index]) && TrayAppendText(path[:], "/apps") {
+                if TrayIconAt(*path[0]) {
+                    return true
+                }
+            }
+            index += 1
+        }
+        return false
+    }
+
+    TrayFindIcon :: () -> *u8 {
+        executable: [384]u8
+        link: [32]u8
+        #if #defined(__FreeBSD__) {
+            CopyCString("/proc/curproc/file", link[:])
+        }
+        #if !#defined(__FreeBSD__) {
+            CopyCString("/proc/self/exe", link[:])
+        }
+        length := cast(s64)TrayReadLink(*link[0], *executable[0], 383)
+        if length > 0 && length < 383 {
+            executable[length] = 0
+            slash := length - 1
+            while slash >= 0 && executable[slash] != #char "/" {
+                slash -= 1
+            }
+            if slash >= 0 {
+                executable[slash] = 0
+            }
+            if slash < 0 {
+                executable[0] = 0
+            }
+        }
+        if length <= 0 || length >= 383 {
+            executable[0] = 0
+        }
+        if executable[0] != 0 && TrayIconAt(*executable[0]) {
+            return *TrayIconPath[0]
+        }
+        if TrayIconPaths != null {
+            index: s32 = 0
+            while TrayIconPaths[index] != null {
+                candidate := TrayIconPaths[index]
+                if LoadedGFileTest(candidate, 1) != 0 {
+                    absolute := LoadedGCanonicalizeFilename(candidate, null)
+                    if absolute != null {
+                        LoadedGFree(cast(*void)TrayCandidatePath)
+                        TrayCandidatePath = absolute
+                        return absolute
+                    }
+                    return candidate
+                }
+                index += 1
+            }
+        }
+        if executable[0] != 0 &&
+        TrayThemeIcon(*executable[0], "/../share/icons/hicolor/") {
+            return *TrayIconPath[0]
+        }
+        name: [24]u8
+        CopyCString("XDG_DATA_DIRS", name[:])
+        directories := GtkTrayGetEnv(*name[0])
+        defaults: [48]u8
+        if directories == null || directories[0] == 0 {
+            CopyCString("/usr/local/share:/usr/share", defaults[:])
+            directories = *defaults[0]
+        }
+        offset: usize = 0
+        while directories[offset] != 0 {
+            directory: [512]u8
+            index: s32 = 0
+            overflow := false
+            while directories[offset] != 0 && directories[offset] != #char ":" {
+                if index + 1 >= 512 {
+                    overflow = true
+                }
+                if !overflow {
+                    directory[index] = directories[offset]
+                    index += 1
+                }
+                offset += 1
+            }
+            directory[index] = 0
+            if !overflow && index > 0 &&
+            TrayThemeIcon(*directory[0], "/icons/hicolor/") {
+                return *TrayIconPath[0]
+            }
+            if directories[offset] == #char ":" {
+                offset += 1
+            }
+        }
+        return null
+    }
+
+    TrayEmbeddedChanged :: (icon: *void, property: *void, data: *void) {
+        unused property
+        unused data
+        embedded := LoadedGtkStatusIconIsEmbedded(icon) != 0
+        TrayLock()
+        TrayIconEmbedded = embedded
+        TrayUnlock()
+    }
+
+    TrayActivate :: (icon: *void, data: *void) {
+        unused data
+        if LoadedGtkStatusIconIsEmbedded(icon) == 0 {
+            return
+        }
+        // Some hosts activate while embedding. Ignore that handshake so the
+        // app does not hide its own window immediately after launch.
+        elapsed := LoadedGGetMonotonicTime() / 1000 - TrayReadyMilliseconds
+        if TrayReadyMilliseconds != 0 && elapsed < 2000 {
+            return
+        }
+        TrayLock()
+        action := TrayActivateAction
+        TrayUnlock()
+        if action != 0 {
+            TraySetAction(action)
+        }
+    }
+
+    TrayPopup :: (icon: *void, button: u32, time: u32, data: *void) {
+        unused data
+        if TrayMenu != null {
+            position := cast(**void)*LoadedGtkStatusIconPositionMenu
+            LoadedGtkMenuPopup(TrayMenu, null, null, position[0], icon, button, time)
+        }
+    }
+
+    TrayQuit :: (data: *void) -> s32 {
+        unused data
+        LoadedGtkMainQuit()
+        return 0
+    }
+
+    TrayReleaseGtk :: () {
+        if TrayStatusIcon != null {
+            LoadedGtkStatusIconSetVisible(TrayStatusIcon, 0)
+            LoadedGObjectUnref(TrayStatusIcon)
+            TrayStatusIcon = null
+        }
+        if TrayMenu != null {
+            LoadedGtkWidgetDestroy(TrayMenu)
+            TrayMenu = null
+        }
+        #if TRAY_INDICATOR {
+            if TrayIndicator != null {
+                LoadedAppIndicatorSetStatus(TrayIndicator, 0)
+                LoadedGObjectUnref(TrayIndicator)
+                TrayIndicator = null
+            }
+        }
+        LoadedGFree(cast(*void)TrayCandidatePath)
+        TrayCandidatePath = null
+    }
+
+    TrayRun :: (argument: *void) -> *void {
+        unused argument
+        if DesktopTrayGtkEnsure() == 0 || LoadedGtkInitCheck(null, null) == 0 {
+            TraySetState(TRAY_FAILED)
+            return null
+        }
+        TrayMenu = TrayCreateMenu()
+        icon_path := TrayFindIcon()
+        #if TRAY_INDICATOR {
+            TrayIndicator = LoadedAppIndicatorNew(*TrayIconName[0], *TrayIconName[0], 0)
+            if TrayIndicator == null {
+                TraySetState(TRAY_FAILED)
+                TrayReleaseGtk()
+                return null
+            }
+            LoadedAppIndicatorSetStatus(TrayIndicator, 1)
+            if icon_path == null {
+                icon_path = *TrayIconName[0]
+            }
+            LoadedAppIndicatorSetIconFull(TrayIndicator, icon_path, *TrayTitle[0])
+            LoadedAppIndicatorSetMenu(TrayIndicator, TrayMenu)
+        }
+        #if !TRAY_INDICATOR {
+            if icon_path != null {
+                TrayStatusIcon = LoadedGtkStatusIconNewFromFile(icon_path)
+            }
+            if icon_path == null {
+                TrayStatusIcon = LoadedGtkStatusIconNewFromIconName(*TrayIconName[0])
+            }
+            if TrayStatusIcon == null {
+                TraySetState(TRAY_FAILED)
+                TrayReleaseGtk()
+                return null
+            }
+            LoadedGtkStatusIconSetTitle(TrayStatusIcon, *TrayTitle[0])
+            LoadedGtkStatusIconSetTooltipText(TrayStatusIcon, *TrayTitle[0])
+            LoadedGtkStatusIconSetVisible(TrayStatusIcon, 1)
+            activate: TraySignalCallback = TrayActivate
+            TrayConnect(TrayStatusIcon, "activate", activate, null)
+            popup: TrayPopupCallback = TrayPopup
+            popup_raw := cast(**void)*popup
+            TrayConnectRaw(TrayStatusIcon, "popup-menu", popup_raw[0], null)
+            embedded: TrayEmbeddedCallback = TrayEmbeddedChanged
+            embedded_raw := cast(**void)*embedded
+            TrayConnectRaw(TrayStatusIcon, "notify::embedded", embedded_raw[0], null)
+            TrayEmbeddedChanged(TrayStatusIcon, null, null)
+        }
+        TrayReadyMilliseconds = LoadedGGetMonotonicTime() / 1000
+        TraySetState(TRAY_READY)
+        LoadedGtkMain()
+        TraySetState(TRAY_STOPPED)
+        TrayReleaseGtk()
+        return null
+    }
+
+    TrayInit :: (spec: *DesktopTraySpec) -> s32 {
+        if spec == null {
+            return 0
+        }
+        if TrayStarted {
+            TrayLock()
+            ready := TrayState == TRAY_READY
+            TrayUnlock()
+            if ready {
+                return 1
+            }
+            return 0
+        }
+        CopyCString("App", TrayTitle[:])
+        if spec.title != null {
+            TrayCopyText(spec.title, TrayTitle[:])
+        }
+        CopyCString("application-x-executable", TrayIconName[:])
+        if spec.icon_name != null {
+            TrayCopyText(spec.icon_name, TrayIconName[:])
+        }
+        TrayCopyText(*TrayTitle[0], TrayStatusText[:])
+        TrayIconPaths = spec.icon_paths
+        TraySetMenu(spec.menu_items, spec.menu_item_count)
+        TrayLock()
+        TrayActivateAction = spec.activate_action
+        TrayState = TRAY_STARTING
+        TrayIconEmbedded = false
+        TrayMenuMapped = false
+        TrayMenuPending = false
+        TrayStatusPending = false
+        TrayIconPending = false
+        TrayIconOverride[0] = 0
+        TrayPendingAction = 0
+        TrayUnlock()
+        routine: TrayThreadCallback = TrayRun
+        if TrayThreadCreate(*TrayThread, null, routine, null) != 0 {
+            TraySetState(TRAY_FAILED)
+            return 0
+        }
+        TrayStarted = true
+        TrayLock()
+        while TrayState == TRAY_STARTING {
+            TrayConditionWait(TrayCondition, TrayMutex)
+        }
+        ready := TrayState == TRAY_READY
+        TrayUnlock()
+        if !ready {
+            TrayThreadJoin(TrayThread, null)
+            TrayStarted = false
+            return 0
+        }
+        return 1
+    }
+
+    TrayVisible :: () -> s32 {
+        TrayLock()
+        visible := TrayState == TRAY_READY && TrayIconEmbedded
+        TrayUnlock()
+        // AppIndicator cannot prove a host is displaying its icon.
+        if visible {
+            return 1
+        }
+        return 0
+    }
+
+    TrayPollAction :: () -> s32 {
+        TrayLock()
+        action := TrayPendingAction
+        TrayPendingAction = 0
+        TrayUnlock()
+        return action
+    }
+
+    TraySetActivate :: (action: s32) {
+        TrayLock()
+        TrayActivateAction = action
+        TrayUnlock()
+    }
+
+    TrayShutdown :: () {
+        TrayLock()
+        ready := TrayState == TRAY_READY
+        TrayUnlock()
+        if TrayStarted && ready {
+            routine: GtkIdleCallback = TrayQuit
+            TrayIdle(routine)
+        }
+        if TrayStarted {
+            TrayThreadJoin(TrayThread, null)
+            TrayStarted = false
+        }
+        TrayLock()
+        items := TrayItems
+        count := TrayItemCount
+        TrayItems = null
+        TrayItemCount = 0
+        TrayPendingAction = 0
+        TrayIconEmbedded = false
+        TrayUnlock()
+        TrayFreeItems(items, count)
+    }
+
+}

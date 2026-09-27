@@ -1,0 +1,735 @@
+#import "drawing_props"
+#import "date_time"
+c :: #system_library "c";
+
+Tm :: struct {
+    tm_sec: s32
+    tm_min: s32
+    tm_hour: s32
+    tm_mday: s32
+    tm_mon: s32
+    tm_year: s32
+    tm_wday: s32
+    tm_yday: s32
+    tm_isdst: s32
+}
+
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app.zi";
+#import, file "habit_types.zi";
+#import, file "habit_memory.zi";
+#import, file "habit_calendar.zi";
+#import, file "habit_days.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/storage_habits.zi";
+#import, file "../app/locale.zi";
+#import, file "../storage/data.zi";
+#import, file "../storage/storage_core.zi";
+
+
+
+
+
+
+
+using ExerciseType;
+using HabitSyncMode;
+
+habit_model_copy_text_boundary :: (dst: *u8, dst_size: s64, src: string) #foreign c "app_copy_text";
+habit_model_append_text_boundary :: (dst: *u8, dst_size: s64, src: string) #foreign c "app_append_text";
+habit_model_copy_bytes :: (dst: *void, src: *void, count: s64) {
+    if dst == null || src == null || count <= 0 { return }
+    output := cast(*u8)dst
+    input := cast(*u8)src
+    index: s64 = 0
+    while index < count {
+        output[index] = input[index]
+        index += 1
+    }
+}
+
+habit_model_clear_bytes :: (dst: *void, count: s64) {
+    if dst == null || count <= 0 { return }
+    output := cast(*u8)dst
+    index: s64 = 0
+    while index < count {
+        output[index] = cast(u8)0
+        index += 1
+    }
+}
+
+habit_model_text_equal :: (first: string, second: string) -> bool {
+    return first == second
+}
+
+copy_text :: (dst: *u8, dst_size: s64, src: string) {
+    habit_model_copy_text_boundary(dst, cast(s64)dst_size, src)
+}
+
+habit_find_day :: (habit: *Habit, day_index: s32) -> s32 {
+    if habit == null || habit.days == null {
+        return -1
+    }
+    {
+        i: s32 = 0
+        while i < habit.day_count {
+            if habit.days[i].day_index == day_index {
+                return i
+            }
+            i += 1
+        }
+    }
+    return -1
+}
+
+#program_export
+habits_today_index :: () -> s32 {
+    local := LocalNow()
+    if !local.valid { return 0 }
+    return local.year * 10000 + local.month * 100 + local.day
+}
+
+#program_export
+habit_completed_day :: (habit: *Habit, day_index: s32) -> s32 {
+    index := habit_find_day(habit, day_index)
+    if index >= 0 && habit_counting_enabled(habit) != 0 {
+        count := ifx (habit.days[index].count > 0) then (habit.days[index].count) else (ifx (habit.days[index].completed != 0) then (1) else (0))
+        if count >= habit_counter_target(habit) { return 1 }
+        return 0
+    }
+    if index < 0 {
+        return 0
+    }
+    if habit.days[index].completed != 0 {
+        return 1
+    }
+    return ifx (habit.days[index].count > 0) then (1) else (0)
+}
+
+habit_completed_today :: (habit: *Habit) -> s32 {
+    return habit_completed_day(habit, habits_today_index())
+}
+
+habits_save :: (habits: *Habits) {
+    if habits != null {
+        habits.dirty = 0
+        habits.pending_day_save_count = 0
+    }
+    storage_habits_save(cast(*void)habits)
+    if habits != null {
+        habits.loaded_count = habits.count
+        {
+            i: s32 = 0
+            while i < habits.loaded_count {
+                habit_model_copy_text_boundary(*habits.loaded_ids[i][0], 40, AppTextFromCString(*habits.items[i].id[0], 40))
+                i += 1
+            }
+        }
+        {
+            i: s32 = habits.loaded_count
+            while i < HABIT_MAX {
+                habits.loaded_ids[i][0] = cast(u8)0
+                i += 1
+            }
+        }
+    }
+}
+
+habits_queue_day_save_completed :: (habits: *Habits, habit: *Habit,
+    day_index: s32, count: s32, total: s32) {
+    completed_arg: s32 = 0
+    if count > 0 {
+        completed_arg = 1
+    }
+    habits_queue_day_save(habits, habit, day_index, completed_arg, total)
+}
+
+habits_queue_day_save :: (habits: *Habits, habit: *Habit,
+    day_index: s32, completed: s32,
+    count: s32) {
+    pending: *HabitDaySave
+
+    if habits == null || habit == null || habit.id[0] == #char "\0"  || day_index <= 0 {
+        return
+    }
+    if count < 0 {
+        count = 0
+    }
+    if count > 0 {
+        completed = 1
+    }
+    {
+        i: s32 = 0
+        while i < habits.pending_day_save_count {
+            pending = *habits.pending_day_saves[i]
+            if pending.day_index == day_index && habit_model_text_equal(
+                AppTextFromCString(*pending.habit_id[0], 40),
+                AppTextFromCString(*habit.id[0], 40)) {
+                pending.completed = ifx (completed != 0) then (1) else (0)
+                pending.count = count
+                return
+            }
+            i += 1
+        }
+    }
+    if habits.pending_day_save_count >= HABIT_PENDING_DAY_SAVE_MAX {
+        habits.dirty = 1
+        return
+    }
+    pending = *habits.pending_day_saves[habits.pending_day_save_count]
+    habit_model_copy_text_boundary(*pending.habit_id[0], 40, AppTextFromCString(*habit.id[0], 40))
+    pending.day_index = day_index
+    pending.completed = ifx (completed != 0) then (1) else (0)
+    pending.count = count
+    habits.pending_day_save_count += 1
+}
+
+habits_flush_day_saves :: (habits: *Habits) {
+    pending: [HABIT_PENDING_DAY_SAVE_MAX] HabitDaySave
+    count: s32
+
+    if habits == null || habits.pending_day_save_count <= 0 {
+        return
+    }
+    count = habits.pending_day_save_count
+    if count > HABIT_PENDING_DAY_SAVE_MAX {
+        count = HABIT_PENDING_DAY_SAVE_MAX
+    }
+    habit_model_copy_bytes(cast(*void)*pending[0],
+        cast(*void)*habits.pending_day_saves[0],
+        cast(s64)count * size_of(type_of(pending[0])))
+    habits.pending_day_save_count = 0
+    {
+        i: s32 = 0
+        while i < count {
+            if storage_habit_day_save(AppTextFromCString(*pending[i].habit_id[0], 40),
+                pending[i].day_index,
+                pending[i].completed,
+                pending[i].count) != 0 {
+                habits.dirty = 1
+            }
+            i += 1
+        }
+    }
+}
+
+#program_export
+habits_flush_save :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.habits.dirty != 0 {
+        habits_save(*app.habits)
+    } else {
+        habits_flush_day_saves(*app.habits)
+    }
+}
+
+habits_clear_days :: (habits: *Habits) -> s32 {
+    cleared: s32 = 0
+
+    if habits == null {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < habits.count {
+            habit: *Habit = *habits.items[i]
+            {
+                d: s32 = 0
+                while d < habit.day_count {
+                    if habit.days[d].day_index > 0  || habit.days[d].completed != 0  || habit.days[d].count > 0 {
+                        cleared += 1
+                    }
+                    d += 1
+                }
+            }
+            habit.day_count = 0
+            i += 1
+        }
+    }
+    if cleared != 0 {
+        return 1
+    }
+    return 0
+}
+
+habits_add_default :: (habits: *Habits) {
+    name: [HABIT_NAME_SIZE] u8
+
+    if habits == null || habits.count >= HABIT_MAX {
+        return
+    }
+
+    number := habits.count + 1
+    suffix: [32] u8
+    AppFormatS32(number, suffix[:])
+    habit_model_copy_text_boundary(*name[0], 64, AppTextFromCString(*suffix[0], 32))
+    habits_add_custom(habits, AppTextFromCString(*name[0], 64), Color.{.r = 99, .g = 196, .b = 165, .a = 255},
+        HABIT_SYNC_NONE, 0)
+}
+
+habits_add_seed :: (habits: *Habits, id: string, name: string,
+    description: string, color: Color, activity_mask: s32) {
+    habit: *Habit
+
+    if habits == null || habits.count >= HABIT_MAX {
+        return
+    }
+
+    habit = *habits.items[habits.count]
+    habits.count += 1
+    habit_model_clear_bytes(cast(*void)habit,
+        size_of(type_of(habit.*)))
+    habit_model_copy_text_boundary(*habit.id[0], 40, id)
+    habit_model_copy_text_boundary(*habit.name[0], 64, name)
+    habit_model_copy_text_boundary(*habit.description[0], 128, description)
+    habit.color = color
+    habit.sync_mode = HABIT_SYNC_ACTIVITIES
+    habit.sync_activity = activity_mask
+    habit.counter_enabled = 0
+    habit.counter_target = 1
+}
+
+habits_add_default_set :: (habits: *Habits) {
+    if habits == null {
+        return
+    }
+
+    habits_free(habits)
+    habit_model_clear_bytes(cast(*void)habits,
+        size_of(type_of(<<habits)))
+    habits_add_seed(habits,
+        "meditation",
+        LocaleText("habit_default_meditation_name"),
+        LocaleText("habit_default_meditation_description"),
+        Color.{.r = 126, .g = 183, .b = 230, .a = 255},
+        habit_activity_mask_for(EXERCISE_WIM_HOF) |
+        habit_activity_mask_for(EXERCISE_MEDITATION) |
+        habit_activity_mask_for(EXERCISE_PATTERNS))
+    habits_add_seed(habits,
+        "yoga",
+        LocaleText("habit_default_yoga_name"),
+        LocaleText("habit_default_yoga_description"),
+        Color.{.r = 239, .g = 178, .b = 102, .a = 255},
+        habit_activity_mask_for(EXERCISE_SUN_SALUTATION))
+    habits.selected = -1
+    habits.loaded = 1
+    habits_save(habits)
+}
+
+#program_export
+habits_seed_default_set_if_needed :: (habits: *Habits) -> s32 {
+    if habits == null || habits.count > 0 {
+        return 0
+    }
+    habits_add_default_set(habits)
+    if habits.count > 0 {
+        return 1
+    }
+    return 0
+}
+
+habits_delete :: (habits: *Habits, index: s32) {
+    if habits == null || index < 0 || index >= habits.count {
+        return
+    }
+
+    free(cast(*void)habits.items[index].days)
+    {
+        i: s32 = index
+        while i < habits.count - 1 {
+            habits.items[i] = habits.items[i + 1]
+            i += 1
+        }
+    }
+    habits.count -= 1
+    habit_model_clear_bytes(cast(*void)*habits.items[habits.count],
+        size_of(type_of(habits.items[0])))
+
+    if habits.selected > index {
+        habits.selected -= 1
+    } else if habits.selected >= habits.count {
+        habits.selected = habits.count - 1
+    }
+    habits_save(habits)
+}
+
+habits_move :: (habits: *Habits, from_index: s32, to_index: s32) -> s32 {
+    moved: Habit
+
+    if habits == null || from_index < 0 || to_index < 0  || from_index >= habits.count || to_index >= habits.count  || from_index == to_index {
+        return 0
+    }
+
+    moved = habits.items[from_index]
+    if from_index < to_index {
+        {
+            i: s32 = from_index
+            while i < to_index {
+                habits.items[i] = habits.items[i + 1]
+                i += 1
+            }
+        }
+    } else {
+        {
+            i: s32 = from_index
+            while i > to_index {
+                habits.items[i] = habits.items[i - 1]
+                i -= 1
+            }
+        }
+    }
+    habits.items[to_index] = moved
+
+    if habits.selected == from_index {
+        habits.selected = to_index
+    } else if from_index < to_index  && habits.selected > from_index  && habits.selected <= to_index {
+        habits.selected -= 1
+    } else if from_index > to_index  && habits.selected >= to_index  && habits.selected < from_index {
+        habits.selected += 1
+    }
+
+    habits_save(habits)
+    return 1
+}
+
+habits_name_exists :: (habits: *Habits, name: string, exclude_index: s32) -> s32 {
+    if habits == null || name.count == 0 {
+        return 0
+    }
+
+    {
+        i: s32 = 0
+        while i < habits.count {
+            if i == exclude_index {
+                i += 1; continue
+            }
+            if habit_model_text_equal(
+                AppTextFromCString(*habits.items[i].name[0], 64), name) {
+                return 1
+            }
+            i += 1
+        }
+    }
+    return 0
+}
+
+habits_generate_unique_name :: (habits: *Habits, name_buffer: *u8,
+    buffer_size: s64, base_name: string) {
+    if habits == null || base_name.count == 0 {
+        return
+    }
+
+    habit_model_copy_text_boundary(name_buffer, buffer_size, base_name)
+    if habits_name_exists(habits, base_name, -1) == 0 {
+        return
+    }
+
+    {
+        i: s32 = 2
+        while i < 100 {
+            number_text: [16] u8
+            AppFormatS32(i, number_text[:])
+            habit_model_copy_text_boundary(name_buffer, buffer_size, base_name)
+            habit_model_append_text_boundary(name_buffer, buffer_size, " ")
+            habit_model_append_text_boundary(name_buffer, buffer_size, AppTextFromCString(*number_text[0], 16))
+            if habits_name_exists(habits, AppTextFromCString(name_buffer, 128), -1) == 0 {
+                return
+            }
+            i += 1
+        }
+    }
+
+    stamp: [32] u8
+    AppFormatS32(cast(s32)UnixNow(), stamp[:])
+    habit_model_copy_text_boundary(name_buffer, buffer_size, base_name)
+    habit_model_append_text_boundary(name_buffer, buffer_size, " ")
+    habit_model_append_text_boundary(name_buffer, buffer_size, AppTextFromCString(*stamp[0], 32))
+}
+
+habits_add_custom :: (habits: *Habits, name: string, color: Color,
+    sync_mode: s32, sync_activity: s32) -> s32 {
+    habit: *Habit
+    unique_name: [HABIT_NAME_SIZE] u8
+    final_name: string = ifx (name.count > 0) then (name) else ("Habit")
+
+    if habits == null || habits.count >= HABIT_MAX {
+        return -1
+    }
+
+    if habits_name_exists(habits, final_name, -1) != 0 {
+        habits_generate_unique_name(habits, *unique_name[0], 64, final_name)
+        final_name = AppTextFromCString(*unique_name[0], 64)
+    }
+
+    habit = *habits.items[habits.count]
+    habit_model_clear_bytes(cast(*void)habit,
+        size_of(type_of(habit.*)))
+    uuid: [37] u8
+    storage_make_uuid(*uuid[0])
+    habit_model_copy_text_boundary(*habit.id[0], 40, AppTextFromCString(*uuid[0], 37))
+    habit_model_copy_text_boundary(*habit.name[0], 64, final_name)
+    habit.color = color
+    habit.color.a = 255
+    habit.sync_mode = sync_mode
+    habit.sync_activity = sync_activity
+    habit.counter_enabled = 0
+    habit.counter_target = 1
+    index := habits.count
+    habits.count += 1
+    habits_save(habits)
+    return index
+}
+
+habits_init_with_defaults :: (habits: *Habits, seed_defaults: s32) {
+    if habits == null {
+        return
+    }
+    if habits.hold_stats_range_days != 31 {
+        habits.hold_stats_range_days = 7
+    }
+    data_init()
+    if storage_habits_load(cast(*void)habits) != 0 {
+        if habits.hold_stats_range_days != 31 {
+            habits.hold_stats_range_days = 7
+        }
+        if habits.count <= 0 {
+            if seed_defaults != 0 {
+                habits_seed_default_set_if_needed(habits)
+            }
+            habits.loaded = 1
+            return
+        }
+        if habits.count == 3 &&
+            habit_model_text_equal(AppTextFromCString(
+                *habits.items[0].id[0], 40), "mind") &&
+            habit_model_text_equal(AppTextFromCString(
+                *habits.items[1].id[0], 40), "yoga") &&
+            habit_model_text_equal(AppTextFromCString(
+                *habits.items[2].id[0], 40), "fitness") {
+            if seed_defaults != 0 {
+                habits_add_default_set(habits)
+            }
+            return
+        }
+        if habits.selected >= habits.count {
+            habits.selected = -1
+        }
+        habits.loaded = 1
+        return
+    }
+    if seed_defaults != 0 {
+        habits_add_default_set(habits)
+    } else {
+        habits_free(habits)
+        habit_model_clear_bytes(cast(*void)habits,
+            size_of(type_of(<<habits)))
+        habits.loaded = 1
+    }
+    if habits.hold_stats_range_days != 31 {
+        habits.hold_stats_range_days = 7
+    }
+}
+
+habits_init :: (habits: *Habits) {
+    habits_init_with_defaults(habits, 1)
+}
+
+#program_export
+habit_set_day :: (habits: *Habits, index: s32, day_index: s32, completed: s32) {
+    habit: *Habit
+    existing_index: s32
+    count: s32
+
+    if habits == null || index < 0 || index >= habits.count || day_index <= 0 {
+        return
+    }
+
+    habit = *habits.items[index]
+    count = ifx (completed != 0) then (1) else (0)
+    existing_index = habit_find_day(habit, day_index)
+    if existing_index >= 0 {
+        habit.days[existing_index].completed = completed
+        habit.days[existing_index].count = count
+    } else if completed != 0 && habit_reserve_days(habit, habit.day_count + 1) != 0 {
+        habit.days[habit.day_count].day_index = day_index
+        habit.days[habit.day_count].completed = 1
+        habit.days[habit.day_count].count = count
+        habit.day_count += 1
+    }
+    habits_queue_day_save(habits, habit, day_index, completed, count)
+}
+
+#program_export
+habit_set_day_count :: (habits: *Habits, index: s32, day_index: s32, count: s32) {
+    habit: *Habit
+    existing_index: s32
+
+    if habits == null || index < 0 || index >= habits.count || day_index <= 0 {
+        return
+    }
+    if count < 0 {
+        count = 0
+    }
+
+    habit = *habits.items[index]
+    existing_index = habit_find_day(habit, day_index)
+    if existing_index >= 0 {
+        habit.days[existing_index].count = count
+        if count > 0 {
+            habit.days[existing_index].completed = 1
+        } else {
+            habit.days[existing_index].completed = 0
+        }
+    } else if count > 0 && habit_reserve_days(habit, habit.day_count + 1) != 0 {
+        habit.days[habit.day_count].day_index = day_index
+        habit.days[habit.day_count].count = count
+        habit.days[habit.day_count].completed = 1
+        habit.day_count += 1
+    }
+    habits_queue_day_save_completed(habits, habit, day_index, count, count)
+}
+
+habit_toggle_day :: (habits: *Habits, index: s32, day_index: s32) {
+    habit: *Habit
+    existing_index: s32
+
+    if habits == null || index < 0 || index >= habits.count || day_index <= 0 {
+        return
+    }
+
+    habit = *habits.items[index]
+    existing_index = habit_find_day(habit, day_index)
+    if existing_index >= 0 {
+        completed: s32 = ifx (habit.days[existing_index].completed != 0  || habit.days[existing_index].count > 0) then (0) else (1)
+        habit.days[existing_index].completed = completed
+        habit.days[existing_index].count = ifx (completed != 0) then (1) else (0)
+    } else if habit_reserve_days(habit, habit.day_count + 1) != 0 {
+        habit.days[habit.day_count].day_index = day_index
+        habit.days[habit.day_count].completed = 1
+        habit.days[habit.day_count].count = 1
+        habit.day_count += 1
+    }
+    habits_queue_day_save(habits, habit, day_index,
+        habit_completed_day(habit, day_index),
+        HabitDayCount(habit, day_index))
+}
+
+habit_increment_day :: (habits: *Habits, index: s32, day_index: s32, delta: s32) {
+    if habits == null || index < 0 || index >= habits.count || day_index <= 0 {
+        return
+    }
+    count := HabitDayCount(*habits.items[index], day_index) + delta
+    habit_set_day_count(habits, index, day_index, count)
+}
+
+habit_toggle_today :: (habits: *Habits, index: s32) {
+    habit_toggle_day(habits, index, habits_today_index())
+}
+
+habit_matches_activity :: (habit: *Habit, exercise_type: s32) -> s32 {
+    if habit == null {
+        return 0
+    }
+    if habit.sync_mode == HABIT_SYNC_ACTIVITIES {
+        if (habit.sync_activity & habit_activity_mask_for(exercise_type)) != 0 {
+            return 1
+        }
+        return 0
+    }
+    return 0
+}
+
+#program_export
+sync_habits_for_activity :: (app: *InnerBreeze, exercise_type: s32) {
+    changed: s32 = 0
+
+    if app == null {
+        return
+    }
+
+    today := habits_today_index()
+    selected := app.habits.selected
+    {
+        i: s32 = 0
+        while i < app.habits.count {
+            habit: *Habit = *app.habits.items[i]
+            if habit_matches_activity(habit, exercise_type) != 0 {
+                if habit_completed_day(habit, today) == 0 {
+                    habit_set_day(*app.habits, i, today, 1)
+                    changed = 1
+                }
+            }
+            i += 1
+        }
+    }
+    if changed != 0 {
+        app.habits.selected = selected
+        habits_save(*app.habits)
+    }
+}
+
+habit_is_linked :: (habit: *Habit) -> s32 {
+    if habit != null && habit.sync_mode != HABIT_SYNC_NONE {
+        return 1
+    }
+    return 0
+}
+
+habit_format_date :: (day_index: s32, out: *u8, out_size: s64) {
+    year_text: [8] u8
+    month_text: [8] u8
+    day_text: [8] u8
+    AppFormatS32(day_index / 10000, year_text[:])
+    AppFormatS32((day_index / 100) % 100, month_text[:])
+    AppFormatS32(day_index % 100, day_text[:])
+    habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*year_text[0], 8))
+    habit_model_append_text_boundary(out, out_size, "-")
+    habit_model_append_text_boundary(out, out_size, AppTextFromCString(*month_text[0], 8))
+    habit_model_append_text_boundary(out, out_size, "-")
+    habit_model_append_text_boundary(out, out_size, AppTextFromCString(*day_text[0], 8))
+}
+
+habit_format_duration :: (seconds: s32, out: *u8, out_size: s64) {
+    if out == null || out_size == 0 {
+        return
+    }
+    if seconds < 0 {
+        seconds = 0
+    }
+
+    hours := seconds / 3600
+    minutes := (seconds % 3600) / 60
+    secs := seconds % 60
+
+    hours_text: [8] u8
+    minutes_text: [8] u8
+    secs_text: [8] u8
+    AppFormatS32(hours, hours_text[:])
+    AppFormatS32(minutes, minutes_text[:])
+    AppFormatS32(secs, secs_text[:])
+    if hours > 0 {
+        habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*hours_text[0], 8))
+        habit_model_append_text_boundary(out, out_size, "h ")
+        habit_model_append_text_boundary(out, out_size, AppTextFromCString(*minutes_text[0], 8))
+        habit_model_append_text_boundary(out, out_size, "m")
+    } else {
+        habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*minutes_text[0], 8))
+        habit_model_append_text_boundary(out, out_size, "m ")
+        habit_model_append_text_boundary(out, out_size, AppTextFromCString(*secs_text[0], 8))
+        habit_model_append_text_boundary(out, out_size, "s")
+    }
+}
+
+
+free :: (ptr: *void) #foreign c;
+
+habit_tm_date_index :: (tm: *Tm) -> s32 {
+    if tm == null {
+        return 0
+    }
+    return (tm.tm_year + 1900) * 10000 +            (tm.tm_mon + 1) * 100 +            tm.tm_mday
+}

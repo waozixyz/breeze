@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+bin=${1:-"$root/build/ziran-toolchain/bin"}
+work=$root/build/music-library-zi-test
+mkdir -p "$work/c" "$work/stubs"
+"$bin/zi2zir" --check-only --root "$root/src" \
+    --module-path "$root/vendor/kryon/src/ui" \
+    --module-path "$root/vendor/ziran/std" \
+    "$root/src/app/music_library.zi"
+"$bin/zi2c" --no-main --root "$root/src" \
+    --module-path "$root/vendor/kryon/src/ui" \
+    --module-path "$root/vendor/ziran/std" \
+    -o "$work/c" "$root/src/app/music_library.zi" \
+    "$root/src/app/music_library_host.zi"
+"$bin/zi2c" --no-main --root "$root/tests" \
+    --module-path "$root/vendor/ziran/std" \
+    -o "$work/stubs" "$root/tests/music_library_host_stubs.zi"
+"${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
+    -fdata-sections -Wl,--gc-sections \
+    -I"$root/vendor/ziran/include" -iquote "$work/c" \
+    -iquote "$work/stubs" \
+    "$root/tests/music_library_link_test.c" \
+    "$work/stubs/music_library_host_stubs.c" \
+    "$work/c/app/music_library_host.c" \
+    "$work/c/app/music_library.c" "$work/c/c_string.c" \
+    "$work/c/byte_text_linux.c" "$work/c/environment.c" \
+    -o "$work/test"
+fixture=$(mktemp -d "$work/fixture.XXXXXX")
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+    APP_DATA_ROOT="$fixture" "$work/test" "$fixture"

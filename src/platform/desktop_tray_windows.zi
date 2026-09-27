@@ -1,0 +1,325 @@
+#if #defined(_WIN32) && !#defined(KRYON_BACKEND_TERMI) {
+    #import "c_string"
+    c :: #system_library "c";
+    #import, file "desktop_tray_data.zi";
+    user32 :: #system_library "user32";
+    kernel32 :: #system_library "kernel32";
+    shell32 :: #system_library "shell32";
+    TrayWindowProcedure :: #type (*void, u32, usize, isize) -> isize #c_call;
+    TrayWindowClass :: struct {
+        size: u32
+        style: u32
+        procedure: *void
+        class_extra: s32
+        window_extra: s32
+        instance: *void
+        icon: *void
+        cursor: *void
+        background: *void
+        menu_name: *u16
+        class_name: *u16
+        small_icon: *void
+    }
+    TrayGuid :: struct {
+        first: u32
+        second: u16
+        third: u16
+        bytes: [8]u8
+    }
+    TrayNotifyIcon :: struct {
+        size: u32
+        window: *void
+        id: u32
+        flags: u32
+        callback_message: u32
+        icon: *void
+        tip: [128]u16
+        state: u32
+        state_mask: u32
+        info: [256]u16
+        version: u32
+        info_title: [64]u16
+        info_flags: u32
+        guid: TrayGuid
+        balloon_icon: *void
+    }
+    TrayIconIdentifier :: struct {
+        size: u32
+        window: *void
+        id: u32
+        guid: TrayGuid
+    }
+    TrayPoint :: struct {
+        x: s32
+        y: s32
+    }
+    TrayRectangle :: struct {
+        left: s32
+        top: s32
+        right: s32
+        bottom: s32
+    }
+    TrayMessage :: struct {
+        window: *void
+        message: u32
+        wparam: usize
+        lparam: isize
+        time: u32
+        point: TrayPoint
+        private: u32
+    }
+    TrayWideText :: (codepage: u32, flags: u32, source: *u8, bytes: s32,
+        output: *u16, capacity: s32) -> s32 #foreign kernel32 "MultiByteToWideChar";
+    TrayModule :: (name: *u16) -> *void #foreign kernel32 "GetModuleHandleW";
+    TrayRegister :: (window_class: *TrayWindowClass) -> u16 #foreign user32 "RegisterClassExW";
+    TrayCreateWindow :: (extended_style: u32, class_name: *u16, title: *u16,
+        style: u32, x: s32, y: s32, width: s32, height: s32, parent: *void,
+        menu: *void, instance: *void, data: *void) -> *void #foreign user32 "CreateWindowExW";
+    TrayDestroyWindow :: (window: *void) -> s32 #foreign user32 "DestroyWindow";
+    TrayDefaultProcedure :: (window: *void, message: u32, wparam: usize,
+        lparam: isize) -> isize #foreign user32 "DefWindowProcW";
+    TrayLoadIcon :: (instance: *void, name: *u16) -> *void #foreign user32 "LoadIconW";
+    TrayNotify :: (message: u32, icon: *TrayNotifyIcon) -> s32 #foreign shell32 "Shell_NotifyIconW";
+    TrayIconBounds :: (icon: *TrayIconIdentifier, bounds: *TrayRectangle) -> s32 #foreign shell32 "Shell_NotifyIconGetRect";
+    TrayCreatePopup :: () -> *void #foreign user32 "CreatePopupMenu";
+    TrayAppendMenu :: (menu: *void, flags: u32, identifier: usize,
+        label: *u16) -> s32 #foreign user32 "AppendMenuW";
+    TrayGetCursor :: (position: *TrayPoint) -> s32 #foreign user32 "GetCursorPos";
+    TrayForeground :: (window: *void) -> s32 #foreign user32 "SetForegroundWindow";
+    TrayTrackMenu :: (menu: *void, flags: u32, x: s32, y: s32, reserved: s32,
+        window: *void, bounds: *TrayRectangle) -> s32 #foreign user32 "TrackPopupMenu";
+    TrayPostMessage :: (window: *void, message: u32, wparam: usize,
+        lparam: isize) -> s32 #foreign user32 "PostMessageW";
+    TrayDestroyMenu :: (menu: *void) -> s32 #foreign user32 "DestroyMenu";
+    TrayPeekMessage :: (message: *TrayMessage, window: *void, first: u32,
+        last: u32, remove: u32) -> s32 #foreign user32 "PeekMessageW";
+    TrayTranslateMessage :: (message: *TrayMessage) -> s32 #foreign user32 "TranslateMessage";
+    TrayDispatchMessage :: (message: *TrayMessage) -> isize #foreign user32 "DispatchMessageW";
+
+    TRAY_MESSAGE :: 32844
+    TRAY_ICON_ID :: 19282
+    TRAY_COMMAND_BASE :: 20736
+    TRAY_COMMAND_MAX :: 256
+    TrayWindow: *void;
+    TrayIcon: TrayNotifyIcon;
+    TrayItems: *DesktopTrayMenuItem;
+    TrayItemCount: s32;
+    TrayActivateAction: s32;
+    TrayPendingAction: s32;
+    TrayCommandActions: [256]s32;
+    TrayCommandCount: s32;
+    TrayTitle: [128]u8;
+
+    TrayToWide :: (source: *u8, output: []u16) {
+        if output.count == 0 {
+            return
+        }
+        output[0] = 0
+        if source != null {
+            if TrayWideText(65001, 8, source, -1, *output[0], cast(s32)output.count) == 0 {
+                TrayWideText(0, 0, source, -1, *output[0], cast(s32)output.count)
+            }
+        }
+        output[output.count - 1] = 0
+    }
+
+    TrayBuildMenu :: (items: *DesktopTrayMenuItem, count: s32) -> *void {
+        menu := TrayCreatePopup()
+        if menu == null {
+            return null
+        }
+        index: s32 = 0
+        while index < count {
+            if items[index].kind == DESKTOP_TRAY_MENU_ITEM_SEPARATOR {
+                TrayAppendMenu(menu, 2048, 0, null)
+            }
+            if items[index].kind != DESKTOP_TRAY_MENU_ITEM_SEPARATOR {
+                label: [160]u16
+                TrayToWide(items[index].label, label[:])
+                flags: u32 = 0
+                if items[index].enabled == 0 {
+                    flags = flags | 1
+                }
+                if items[index].kind == DESKTOP_TRAY_MENU_ITEM_SUBMENU {
+                    child := TrayBuildMenu(items[index].children, items[index].child_count)
+                    TrayAppendMenu(menu, flags | 16, cast(usize)child, *label[0])
+                }
+                if items[index].kind != DESKTOP_TRAY_MENU_ITEM_SUBMENU &&
+                TrayCommandCount < TRAY_COMMAND_MAX {
+                    command := TRAY_COMMAND_BASE + TrayCommandCount
+                    TrayCommandActions[TrayCommandCount] = items[index].action
+                    TrayCommandCount += 1
+                    TrayAppendMenu(menu, flags, cast(usize)command, *label[0])
+                }
+            }
+            index += 1
+        }
+        return menu
+    }
+
+    TrayShowMenu :: () {
+        TrayCommandCount = 0
+        menu := TrayBuildMenu(TrayItems, TrayItemCount)
+        if menu == null {
+            return
+        }
+        position: TrayPoint
+        TrayGetCursor(*position)
+        // This private message window is created by Inbe. No foreign window
+        // is enumerated, hidden, closed, or otherwise managed here.
+        TrayForeground(TrayWindow)
+        TrayTrackMenu(menu, 34, position.x, position.y, 0, TrayWindow, null)
+        TrayPostMessage(TrayWindow, 0, cast(usize)0, cast(isize)0)
+        TrayDestroyMenu(menu)
+    }
+
+    TrayWindowProc :: (window: *void, message: u32,
+        wparam: usize, lparam: isize) -> isize {
+        if window == TrayWindow && message == TRAY_MESSAGE {
+            event := cast(u32)lparam
+            if event == 514 || event == 1024 || event == 1025 {
+                TrayPendingAction = TrayActivateAction
+            }
+            if event == 517 || event == 123 {
+                TrayShowMenu()
+            }
+            return cast(isize)0
+        }
+        if window == TrayWindow && message == 273 {
+            command := cast(s32)(cast(u32)wparam & 65535)
+            if command >= TRAY_COMMAND_BASE &&
+            command < TRAY_COMMAND_BASE + TrayCommandCount {
+                TrayPendingAction = TrayCommandActions[command - TRAY_COMMAND_BASE]
+            }
+            return cast(isize)0
+        }
+        return TrayDefaultProcedure(window, message, wparam, lparam)
+    }
+
+    TraySetMenu :: (items: *DesktopTrayMenuItem, count: s32) {
+        copy := TrayCopyItems(items, count)
+        if count > 0 && copy == null {
+            return
+        }
+        TrayFreeItems(TrayItems, TrayItemCount)
+        TrayItems = copy
+        TrayItemCount = 0
+        if copy != null {
+            TrayItemCount = count
+        }
+    }
+
+    TrayInit :: (spec: *DesktopTraySpec) -> s32 {
+        if spec == null {
+            return 0
+        }
+        if TrayWindow != null {
+            return 1
+        }
+        class_bytes: [32]u8
+        class_name: [32]u16
+        CopyCString("InbeDesktopTrayWindow", class_bytes[:])
+        TrayToWide(*class_bytes[0], class_name[:])
+        instance := TrayModule(null)
+        window_class: TrayWindowClass
+        window_class.size = cast(u32)size_of(TrayWindowClass)
+        routine: TrayWindowProcedure = TrayWindowProc
+        raw_routine := cast(**void)*routine
+        window_class.procedure = raw_routine[0]
+        window_class.instance = instance
+        window_class.class_name = *class_name[0]
+        TrayRegister(*window_class)
+        empty: [1]u16
+        TrayWindow = TrayCreateWindow(128, *class_name[0], *empty[0],
+            2147483648, 0, 0, 0, 0, null, null, instance, null)
+        if TrayWindow == null {
+            return 0
+        }
+        CopyCString("App", TrayTitle[:])
+        if spec.title != null {
+            TrayCopyText(spec.title, TrayTitle[:])
+        }
+        TrayActivateAction = spec.activate_action
+        TraySetMenu(spec.menu_items, spec.menu_item_count)
+        TrayIcon = .{}
+        TrayIcon.size = cast(u32)size_of(TrayNotifyIcon)
+        TrayIcon.window = TrayWindow
+        TrayIcon.id = TRAY_ICON_ID
+        TrayIcon.flags = 7
+        TrayIcon.callback_message = TRAY_MESSAGE
+        TrayIcon.icon = TrayLoadIcon(instance, cast(*u16)cast(usize)32512)
+        if TrayIcon.icon == null {
+            TrayIcon.icon = TrayLoadIcon(null, cast(*u16)cast(usize)32512)
+        }
+        TrayToWide(*TrayTitle[0], TrayIcon.tip[:])
+        if TrayNotify(0, *TrayIcon) == 0 {
+            TrayShutdown()
+            return 0
+        }
+        TrayIcon.version = 3
+        TrayNotify(4, *TrayIcon)
+        return 1
+    }
+
+    TrayVisible :: () -> s32 {
+        if TrayWindow == null {
+            return 0
+        }
+        icon: TrayIconIdentifier
+        bounds: TrayRectangle
+        icon.size = cast(u32)size_of(TrayIconIdentifier)
+        icon.window = TrayWindow
+        icon.id = TRAY_ICON_ID
+        if TrayIconBounds(*icon, *bounds) >= 0 {
+            return 1
+        }
+        return 0
+    }
+
+    TrayPollAction :: () -> s32 {
+        message: TrayMessage
+        while TrayWindow != null && TrayPeekMessage(*message, TrayWindow, 0, 0, 1) != 0 {
+            TrayTranslateMessage(*message)
+            TrayDispatchMessage(*message)
+        }
+        action := TrayPendingAction
+        TrayPendingAction = 0
+        return action
+    }
+
+    TraySetStatus :: (text: *u8) {
+        if TrayWindow == null {
+            return
+        }
+        source := text
+        if source == null {
+            source = *TrayTitle[0]
+        }
+        TrayToWide(source, TrayIcon.tip[:])
+        TrayIcon.flags = 4
+        TrayNotify(1, *TrayIcon)
+    }
+
+    TraySetActivate :: (action: s32) {
+        TrayActivateAction = action
+    }
+
+    TraySetIcon :: (path: *u8) {
+        unused path
+        // The Windows tray retains its executable resource icon, as before.
+    }
+
+    TrayShutdown :: () {
+        if TrayWindow != null {
+            TrayNotify(2, *TrayIcon)
+        }
+        TrayFreeItems(TrayItems, TrayItemCount)
+        TrayItems = null
+        TrayItemCount = 0
+        if TrayWindow != null {
+            TrayDestroyWindow(TrayWindow)
+            TrayWindow = null
+        }
+        TrayPendingAction = 0
+    }
+}

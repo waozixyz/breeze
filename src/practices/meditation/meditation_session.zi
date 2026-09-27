@@ -1,0 +1,529 @@
+c3 :: #system_library "c";
+practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c3;
+practice_active_background_stop :: (app: *InnerBreeze) #foreign c3;
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
+sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
+app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32,
+    save_message: string, discard_message: string) -> SessionExitModalResult #foreign c3;
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import "layout"
+#import "layout_widget"
+#import "tree"
+#import, file "../../app/app_notifications.zi";
+#import, file "../../app/app.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_nav.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/audio.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/practice_title_bar.zi";
+#import, file "../../storage/data.zi";
+#import, file "meditation_music.zi";
+#import, file "meditation_timing.zi";
+#import, file "../practice_audio_controls.zi";
+#import, file "../session_results.zi";
+#import "control_props"
+#import "text_align"
+#import "text_props"
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/draw.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "modal_props"
+#import "modal_widget"
+
+using SessionExitModalResult;
+using ModalType;
+using ExerciseType;
+using TextAlign;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+background_remainder_ms: s32 = 0;
+
+duration_presets: [5]s32 = .[
+    5 * 60,
+    15 * 60,
+    30 * 60,
+    60 * 60,
+    2 * 60 * 60
+];
+
+meditation_start_seconds :: (app: *InnerBreeze, seconds: s32) {
+    if app == null {
+        return
+    }
+
+    if seconds < 60 {
+        seconds = 60
+    }
+
+    app.meditation.duration_seconds = seconds
+    app.meditation.remaining_seconds = seconds
+    app.meditation.frame_ticks = 0
+    app.meditation.complete_waiting = 0
+    background_remainder_ms = 0
+    last_bell_index = 0
+    app.session_paused = 0
+    app.volume_popup_active = 0
+    app_close_modal(app)
+    app_switch_screen(app, ScreenMeditation)
+    app_play_bell_cue(app, 1.0f)
+    meditation_music_start_session(app)
+    practice_background_start(app, EXERCISE_MEDITATION)
+}
+
+// Interval bell: ring once for every completed interval while the session
+// runs (foreground tick and background advance both funnel through here).
+last_bell_index: s32 = 0;
+
+maybe_interval_bell :: (app: *InnerBreeze) {
+    interval := app.meditation.interval_bell_minutes * 60
+
+    if interval <= 0 || app.meditation.complete_waiting != 0 {
+        return
+    }
+    index := elapsed_seconds(app) / interval
+    if index > last_bell_index {
+        last_bell_index = index
+        app_play_bell_cue(app, 0.85f)
+    }
+}
+
+meditation_configured_duration_seconds :: (app: *InnerBreeze) -> s32 {
+    mode: s32
+
+    if app == null {
+        return duration_presets[1]
+    }
+
+    mode = app.meditation.duration_mode
+    if mode >= 0 && mode < 5 {
+        return duration_presets[mode]
+    }
+    minutes := app.meditation.custom_minutes
+    if minutes < 1 {
+        minutes = 1
+    }
+    if minutes > 240 {
+        minutes = 240
+    }
+    return minutes * 60
+}
+
+#program_export
+meditation_start_configured :: (app: *InnerBreeze) {
+    meditation_start_seconds(app, meditation_configured_duration_seconds(app))
+}
+
+finish :: (app: *InnerBreeze) {
+    duration: s32
+    result_path: [FS_PATH_MAX] u8
+
+    if app == null {
+        return
+    }
+    result_path[0] = cast(u8)0
+    send_session_complete(app)
+
+    duration = app.meditation.duration_seconds
+    if duration >= 60 {
+        session_duration := duration
+
+        if data_save_session_path_for_activity(*session_duration,
+                                               1,
+                                               0,
+                                               EXERCISE_MEDITATION,
+                                               *result_path[0],
+                                               size_of(type_of(result_path))) != 0 {
+            sync_habits_for_activity(app, EXERCISE_MEDITATION)
+            app_auto_sync(app)
+        }
+    }
+
+    if app.meditation.complete_waiting == 0 {
+        app_play_bell_cue(app, 1.0f)
+    }
+
+    app.meditation.duration_seconds = 0
+    app.meditation.remaining_seconds = 0
+    app.meditation.frame_ticks = 0
+    app.meditation.complete_waiting = 0
+    background_remainder_ms = 0
+    app.session_paused = 0
+    app.volume_popup_active = 0
+    meditation_music_stop(app)
+    practice_active_background_stop(app)
+    app_prepare_session_results(app, EXERCISE_MEDITATION, duration, 0, null,
+                                null, 0, *result_path[0])
+    app_switch_screen(app, ScreenResults)
+}
+
+timer_complete :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    if app.meditation.show_extend_controls != 0 {
+        app.meditation.remaining_seconds = 0
+        app.meditation.frame_ticks = 0
+        if app.meditation.complete_waiting == 0 {
+            app.meditation.complete_waiting = 1
+            meditation_music_fade_out(app)
+            app_play_bell_cue(app, 1.0f)
+        }
+        return
+    }
+
+    finish(app)
+}
+
+meditation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
+    if app == null || elapsed_ms <= 0 {
+        return
+    }
+    if app.breathing.screen != ScreenMeditation || app.session_paused != 0 {
+        background_remainder_ms = 0
+        return
+    }
+
+    step := AdvanceMeditationTime(app.meditation.remaining_seconds,
+                                  background_remainder_ms, elapsed_ms)
+    background_remainder_ms = step.remainder_ms
+    if step.elapsed_seconds <= 0 {
+        return
+    }
+
+    app.meditation.remaining_seconds = step.remaining_seconds
+    if !step.completed {
+        maybe_interval_bell(app)
+    }
+    app.meditation.frame_ticks = 0
+
+    if step.completed {
+        timer_complete(app)
+    }
+}
+
+elapsed_seconds :: (app: *InnerBreeze) -> s32 {
+    elapsed: s32
+
+    if app == null {
+        return 0
+    }
+
+    elapsed = app.meditation.duration_seconds -               app.meditation.remaining_seconds
+    if elapsed < 0 {
+        elapsed = 0
+    }
+    if elapsed > app.meditation.duration_seconds {
+        elapsed = app.meditation.duration_seconds
+    }
+    return elapsed
+}
+
+save_elapsed :: (app: *InnerBreeze) -> s32 {
+    elapsed: s32
+
+    if app == null {
+        return 0
+    }
+
+    elapsed = elapsed_seconds(app)
+    if elapsed < 60 {
+        return 0
+    }
+    if data_save_session_path_for_activity(*elapsed,
+                                           1,
+                                           0,
+                                           EXERCISE_MEDITATION,
+                                           null,
+                                           0) != 0 {
+        sync_habits_for_activity(app, EXERCISE_MEDITATION)
+        app_auto_sync(app)
+        return 1
+    }
+    return 0
+}
+
+exit_to_start :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    meditation_music_stop(app)
+    app.meditation.duration_seconds = 0
+    app.meditation.remaining_seconds = 0
+    app.meditation.frame_ticks = 0
+    app.meditation.complete_waiting = 0
+    background_remainder_ms = 0
+    app.session_paused = 0
+    app.volume_popup_active = 0
+    app_close_modal(app)
+    practice_active_background_stop(app)
+    app_switch_screen(app, ScreenStart)
+}
+
+meditation_request_exit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+}
+
+handle_exit_modal :: (app: *InnerBreeze) -> s32 {
+    elapsed: s32
+    result: SessionExitModalResult
+
+    if app == null || app.modal.active == 0 ||
+        app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        return 0
+    }
+
+    elapsed = elapsed_seconds(app)
+    result = app_draw_session_exit_modal(app,
+        ifx (elapsed >= 60) then (1) else (0),
+        LocaleText("meditation_save_elapsed_message"),
+        LocaleText("meditation_under_minute_exit_message")
+    )
+
+    if result == cast(SessionExitModalResult)SessionExitModalCancel {
+        app_close_modal(app)
+    } else if result == cast(SessionExitModalResult)SessionExitModalSave ||
+        result == cast(SessionExitModalResult)SessionExitModalDiscard {
+        if result == cast(SessionExitModalResult)SessionExitModalSave {
+            save_elapsed(app)
+        }
+        exit_to_start(app)
+    }
+    return 1
+}
+
+append_two_digits :: (dst: []u8, cursor: *s32, value: s32) -> bool {
+    if value < 10 && !TextBufferAppendByte(dst, cursor, cast(u8)48) {
+        return false
+    }
+    return TextBufferAppendNumber(dst, cursor, value)
+}
+
+format_time :: (dst: []u8, seconds: s32) {
+    hours: s32
+    minutes: s32
+    secs: s32
+    cursor: s32 = 0
+
+    if dst.count == 0 {
+        return
+    }
+    dst[0] = cast(u8)0
+    if seconds < 0 {
+        seconds = 0
+    }
+
+    hours = seconds / 3600
+    minutes = (seconds / 60) % 60
+    secs = seconds % 60
+
+    if hours > 0 {
+        if !TextBufferAppendNumber(dst, *cursor, hours) ||
+            !TextBufferAppendByte(dst, *cursor, cast(u8)58) ||
+            !append_two_digits(dst, *cursor, minutes) {
+            return
+        }
+    } else {
+        if !TextBufferAppendNumber(dst, *cursor, minutes) {
+            return
+        }
+    }
+    if !TextBufferAppendByte(dst, *cursor, cast(u8)58) {
+        return
+    }
+    append_two_digits(dst, *cursor, secs)
+}
+
+extend_session :: (app: *InnerBreeze, seconds: s32) {
+    was_complete: s32
+
+    if app == null || seconds <= 0 {
+        return
+    }
+
+    was_complete = app.meditation.complete_waiting
+    app.meditation.duration_seconds += seconds
+    app.meditation.remaining_seconds += seconds
+    app.meditation.complete_waiting = 0
+    app.meditation.frame_ticks = 0
+    if was_complete != 0 {
+        meditation_music_start_session(app)
+    }
+}
+
+meditation_draw_setup_modal :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    actions: [6]ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("duration_5m"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("duration_15m"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("duration_30m"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("duration_1h"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("duration_2h"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("cancel_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}
+    ]
+    result := ActionModal(app.ui.session,
+        ActionModalProps.{.title = LocaleText("meditation_title")},
+        actions[:6]).action
+    if result >= 1 && result <= 5 {
+        meditation_start_seconds(app, duration_presets[result - 1])
+    } else if result == 6 || result == -1 {
+        app_close_modal(app)
+    }
+}
+
+draw_extend_controls :: (app: *InnerBreeze, center_x: s32, y: s32) {
+    add_seconds: [3] s32 = .[60, 5 * 60, 10 * 60]
+    labels: [3] string = .["+1", "+5", "+10"]
+    gap := AppScale(8)
+    btn_h := AppScale(34)
+    btn_w := AppScale(58)
+    finish_w := AppScale(96)
+    total_w := btn_w * 3 + gap * 2
+    x := center_x - total_w / 2
+
+    if app == null || app.meditation.show_extend_controls == 0 {
+        return
+    }
+
+    if x < AppScale(12) {
+        x = AppScale(12)
+    }
+    if x + total_w > app.ui.view_width - AppScale(12) {
+        x = app.ui.view_width - AppScale(12) - total_w
+    }
+
+    {
+        i: s32 = 0
+        while i < 3 {
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)(x + i * (btn_w + gap)), cast(float32)(y), cast(float32)(btn_w), cast(float32)(btn_h)},
+                .label = labels[i],
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = false
+            }) != 0 {
+                extend_session(app, add_seconds[i])
+            }
+            i += 1
+        }
+    }
+
+    if app.meditation.complete_waiting != 0 {
+        finish_x := center_x - finish_w / 2
+        finish_y := y + btn_h + AppScale(10)
+
+        if finish_x < AppScale(12) {
+            finish_x = AppScale(12)
+        }
+        if finish_x + finish_w > app.ui.view_width - AppScale(12) {
+            finish_x = app.ui.view_width - AppScale(12) - finish_w
+        }
+
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(finish_x), cast(float32)(finish_y), cast(float32)(finish_w), cast(float32)(btn_h)},
+            .label = LocaleText("finish_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = false
+        }) != 0 {
+            finish(app)
+        }
+    }
+}
+
+meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    time_text: [32] u8
+    font: s32
+    circle: Color = StyleTokenColor("accent")
+    circle_radius := AppScale(86)
+    title_h := PracticeTitleBarHeight()
+
+    if PracticeTitleBar(app, LocaleText("meditation_title"), title_h) {
+        meditation_request_exit(app)
+        return
+    }
+
+    if handle_exit_modal(app) != 0 {
+        return
+    }
+
+    practice_draw_audio_controls(app)
+
+    DrawCircle(center_x, center_y, cast(float32)(circle_radius + AppScale(20)),
+               Fade(circle, 0.24f))
+    DrawCircle(center_x, center_y, cast(float32)circle_radius, circle)
+
+    format_time(time_text[:], app.meditation.remaining_seconds)
+    time_label := AppTextFromCString(*time_text[0], 32)
+    font = AppFitFontSize(time_label, circle_radius * 2 - AppScale(20),
+                          AppScale(Text24), AppScale(Text16))
+    Text(CurrentApp().ui.session, TextProps.{
+        .text = FrameTextHold(*app.ui.frame_text, time_label),
+        .bounds = Rectangle.{cast(float32)(center_x - circle_radius),
+                   cast(float32)(center_y - circle_radius),
+                   cast(float32)(circle_radius * 2), cast(float32)(circle_radius * 2)},
+        .font = font,
+        .class_name = 0,
+        .wrap = cast(TextWrap)TextWrapNone,
+        .align = cast(TextAlign)TextAlignCenter,
+        .vertical_align = cast(TextAlign)TextAlignCenter
+    })
+
+    draw_extend_controls(app, center_x, center_y + circle_radius + AppScale(24))
+    if app.meditation.complete_waiting != 0 {
+        return
+    }
+
+    if app.backgrounded == 0 {
+        app.meditation.frame_ticks += 1
+        if app.meditation.frame_ticks >= 60 {
+            app.meditation.frame_ticks = 0
+            if app.meditation.remaining_seconds > 0 {
+                app.meditation.remaining_seconds -= 1
+                maybe_interval_bell(app)
+            }
+            if app.meditation.remaining_seconds <= 0 {
+                timer_complete(app)
+            }
+        }
+    }
+}
+
+meditation :: (app: *InnerBreeze) {
+    root: ColumnProps
+    root.key = KeyHash("meditation/root")
+    Screen(CurrentApp().ui.session, root)
+    meditation_draw_screen(app, app.ui.view_width / 2, app.ui.view_height / 2)
+    End(CurrentApp().ui.session)
+}

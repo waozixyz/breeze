@@ -1,0 +1,197 @@
+#import "text_input"
+#import "text_input_props"
+#import, file "../app/text_buffers.zi";
+#if #defined(ANDROID_BUILD) {
+    #import, file "android/android_device.zi";
+}
+
+raylib :: #system_library "raylib";
+
+TextInputGetCharPressed :: () -> s32 #foreign raylib "GetCharPressed";
+TextInputIsKeyPressed :: (key: s32) -> bool #foreign raylib "IsKeyPressed";
+TextInputIsKeyDown :: (key: s32) -> bool #foreign raylib "IsKeyDown";
+TextInputGetClipboardText :: () -> *u8 #foreign raylib "GetClipboardText";
+TextInputSetClipboardText :: (value: *u8) #foreign raylib "SetClipboardText";
+
+TextInputKeyA :: 65;
+TextInputKeyC :: 67;
+TextInputKeyV :: 86;
+TextInputKeyX :: 88;
+TextInputKeyEscape :: 256;
+TextInputKeyEnter :: 257;
+TextInputKeyBackspace :: 259;
+TextInputKeyDelete :: 261;
+TextInputKeyRight :: 262;
+TextInputKeyLeft :: 263;
+TextInputKeyDownArrow :: 264;
+TextInputKeyUpArrow :: 265;
+TextInputKeyPageUp :: 266;
+TextInputKeyPageDown :: 267;
+TextInputKeyHome :: 268;
+TextInputKeyEnd :: 269;
+TextInputKeyLeftShift :: 340;
+TextInputKeyLeftControl :: 341;
+TextInputKeyRightShift :: 344;
+TextInputKeyRightControl :: 345;
+
+#program_export
+TextInputKeyPressed :: (key: s32) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        if key == TextInputKeyBackspace || key == TextInputKeyEnter {
+            return android_text_input_key_pressed(key)
+        }
+    }
+    return TextInputIsKeyPressed(key)
+}
+
+#program_export
+TextInputKeyDown :: (key: s32) -> bool {
+    return TextInputIsKeyDown(key)
+}
+
+#program_export
+TextInputCharacter :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return android_text_input_character()
+    }
+    return TextInputGetCharPressed()
+}
+
+#program_export
+TextInputClipboardText :: () -> string {
+    return AppTextFromCString(TextInputGetClipboardText(), 4096)
+}
+
+// Raylib returns Unicode codepoints. The field receives UTF-8 bytes and
+// applies them to its own storage after Kryon returns an edit range.
+#program_export
+TextInputAppendCodepoint :: (bytes: []u8, used: s32,
+    codepoint: s32) -> s32 {
+    if bytes.count > 2147483647 || used < 0 ||
+    used >= cast(s32)bytes.count ||
+    codepoint < 32 || codepoint == 127 ||
+    (codepoint >= 128 && codepoint < 160) ||
+    codepoint > 1114111 ||
+    (codepoint >= 55296 && codepoint <= 57343) {
+        return used
+    }
+    width: s32 = 1
+    if codepoint >= 65536 {
+        width = 4
+    } else if codepoint >= 2048 {
+        width = 3
+    } else if codepoint >= 128 {
+        width = 2
+    }
+    if used + width >= cast(s32)bytes.count { return used }
+    if width == 1 {
+        bytes[used] = cast(u8)codepoint
+    } else if width == 2 {
+        bytes[used] = cast(u8)(192 + codepoint / 64)
+        bytes[used + 1] = cast(u8)(128 + codepoint % 64)
+    } else if width == 3 {
+        bytes[used] = cast(u8)(224 + codepoint / 4096)
+        bytes[used + 1] = cast(u8)(128 + (codepoint / 64) % 64)
+        bytes[used + 2] = cast(u8)(128 + codepoint % 64)
+    } else {
+        bytes[used] = cast(u8)(240 + codepoint / 262144)
+        bytes[used + 1] = cast(u8)(128 + (codepoint / 4096) % 64)
+        bytes[used + 2] = cast(u8)(128 + (codepoint / 64) % 64)
+        bytes[used + 3] = cast(u8)(128 + codepoint % 64)
+    }
+    used += width
+    bytes[used] = cast(u8)0
+    return used
+}
+
+#program_export
+SampleTextFieldInput :: (focused: bool, typed: []u8) -> TextFieldInput {
+    input: TextFieldInput
+    if typed.count == 0 { return input }
+    typed[0] = cast(u8)0
+    if !focused { return input }
+
+    control: bool = TextInputIsKeyDown(TextInputKeyLeftControl) ||
+    TextInputIsKeyDown(TextInputKeyRightControl)
+    used: s32 = 0
+    codepoint: s32 = TextInputCharacter()
+    while codepoint != 0 {
+        if !control {
+            used = TextInputAppendCodepoint(typed, used, codepoint)
+        }
+        codepoint = TextInputCharacter()
+    }
+    input.text = AppTextFromCString(*typed[0], cast(s32)typed.count)
+
+    input.shift = TextInputIsKeyDown(TextInputKeyLeftShift) ||
+    TextInputIsKeyDown(TextInputKeyRightShift)
+    input.left = TextInputKeyPressed(TextInputKeyLeft)
+    input.right = TextInputKeyPressed(TextInputKeyRight)
+    input.home = TextInputKeyPressed(TextInputKeyHome)
+    input.end = TextInputKeyPressed(TextInputKeyEnd)
+    input.backspace = TextInputKeyPressed(TextInputKeyBackspace)
+    input.delete_forward = TextInputKeyPressed(TextInputKeyDelete)
+    input.select_all = control && TextInputKeyPressed(TextInputKeyA)
+    input.copy = control && TextInputKeyPressed(TextInputKeyC)
+    input.cut = control && TextInputKeyPressed(TextInputKeyX)
+    input.paste = control && TextInputKeyPressed(TextInputKeyV)
+    if input.paste {
+        input.paste_text = AppTextFromCString(TextInputGetClipboardText(), 4096)
+    }
+    input.commit = TextInputKeyPressed(TextInputKeyEnter)
+    input.escape = TextInputKeyPressed(TextInputKeyEscape)
+    return input
+}
+
+#program_export
+SampleTextAreaInput :: (focused: bool, typed: []u8) -> TextAreaInput {
+    input: TextAreaInput
+    if typed.count == 0 { return input }
+    typed[0] = cast(u8)0
+    if !focused { return input }
+
+    control := TextInputIsKeyDown(TextInputKeyLeftControl) ||
+    TextInputIsKeyDown(TextInputKeyRightControl)
+    used: s32 = 0
+    codepoint := TextInputCharacter()
+    while codepoint != 0 {
+        if !control {
+            used = TextInputAppendCodepoint(typed, used, codepoint)
+        }
+        codepoint = TextInputCharacter()
+    }
+    input.text = AppTextFromCString(*typed[0], cast(s32)typed.count)
+    input.shift = TextInputIsKeyDown(TextInputKeyLeftShift) ||
+    TextInputIsKeyDown(TextInputKeyRightShift)
+    input.left = TextInputKeyPressed(TextInputKeyLeft)
+    input.right = TextInputKeyPressed(TextInputKeyRight)
+    input.up = TextInputKeyPressed(TextInputKeyUpArrow)
+    input.down = TextInputKeyPressed(TextInputKeyDownArrow)
+    input.home = TextInputKeyPressed(TextInputKeyHome)
+    input.end = TextInputKeyPressed(TextInputKeyEnd)
+    input.document_home = control && input.home
+    input.document_end = control && input.end
+    input.page_up = TextInputKeyPressed(TextInputKeyPageUp)
+    input.page_down = TextInputKeyPressed(TextInputKeyPageDown)
+    input.backspace = TextInputKeyPressed(TextInputKeyBackspace)
+    input.delete_forward = TextInputKeyPressed(TextInputKeyDelete)
+    input.select_all = control && TextInputKeyPressed(TextInputKeyA)
+    input.copy = control && TextInputKeyPressed(TextInputKeyC)
+    input.cut = control && TextInputKeyPressed(TextInputKeyX)
+    input.paste = control && TextInputKeyPressed(TextInputKeyV)
+    if input.paste {
+        input.paste_text = AppTextFromCString(TextInputGetClipboardText(), 4096)
+    }
+    input.enter = TextInputKeyPressed(TextInputKeyEnter) && !control
+    input.commit = TextInputKeyPressed(TextInputKeyEnter) && control
+    input.escape = TextInputKeyPressed(TextInputKeyEscape)
+    return input
+}
+
+#program_export
+TextInputWriteClipboard :: (value: string) -> bool {
+    bytes: [4096]u8
+    if !AppCopyText(value, bytes[:]) { return false }
+    TextInputSetClipboardText(*bytes[0])
+    return true
+}

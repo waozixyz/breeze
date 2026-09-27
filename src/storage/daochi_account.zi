@@ -1,0 +1,75 @@
+// Inbe's account and signing adapter for the independent Daochi client.
+// Daochi owns protocol behavior; Inbe owns its key store and data merge.
+#import "client"
+#import "auth"
+#import "sync"
+#import "net_http"
+#import "byte_text_linux"
+#import, file "account_types.zi";
+#import, file "sync_account_sign.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
+
+AccountField :: (data: *u8, capacity: s64) -> string {
+    if data == null || capacity <= 0 {
+        return ""
+    }
+    length: s64 = 0
+    while length < capacity && data[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == capacity {
+        return ""
+    }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+
+DigestBody :: (body: string, output: []u8) -> bool {
+    if body.count == 0 || body.count > 9223372036854775807 ||
+        output.count < 65 {
+        return false
+    }
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*body)
+    SyncCryptoSha256Hex(descriptor.data, cast(s64)body.count, *output[0])
+    return output[0] != cast(u8)0
+}
+
+#scope_export
+NativeNonce :: (context: *void, output: []u8) -> bool {
+    unused context
+    if output.count < 65 { return false }
+    random_bytes: [32]u8
+    if SyncCryptoRandom(*random_bytes[0], 32) == 0 { return false }
+    result := SyncCryptoBytesToHex(*random_bytes[0], 32,
+        *output[0], cast(s64)output.count) != 0
+    SyncCryptoWipe(*random_bytes[0], 32)
+    return result
+}
+
+OpenAccountClient :: (base_url: string, account: *SyncAccount,
+    client_id: string, output: *Client) -> bool {
+    if output == null || account == null {
+        return false
+    }
+    output.* = Client.{}
+    account_id := AccountField(*account.public_id[0],
+        SYNC_PUBLIC_ID_HEX_SIZE)
+    public_key := AccountField(*account.public_key_hex[0],
+        SYNC_PUBLIC_KEY_HEX_SIZE)
+    if account_id.count != 64 || public_key.count == 0 ||
+        account.private_key_hex[0] == cast(u8)0 ||
+        client_id.count == 0 {
+        return false
+    }
+    identity: Identity
+    identity.account_id = account_id
+    identity.public_key = public_key
+    identity.client_id = client_id
+    identity.signing_context = cast(*void)account
+    output.server_url = base_url
+    output.app_id = "inbe"
+    output.identity = identity
+    output.digest = DigestBody
+    output.signer = SignAccountMessage
+    return true
+}

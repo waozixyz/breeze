@@ -1,0 +1,249 @@
+#import "sync"
+// Persistent account operations advanced by the application event loop.
+#import "auth"
+#import "client"
+#import "async_client"
+#import "async_sync"
+#import "async_account"
+#import "net_http"
+#import "url"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "account_types.zi";
+#import, file "daochi_account.zi";
+#import, file "sync_session.zi";
+#import, file "sync_account.zi";
+#import, file "sync_crypto_random.zi";
+#import, file "device_key.zi";
+#import, file "device_key_store.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+
+c :: #system_library "c";
+AsyncAllocate :: (size: usize) -> *void #foreign c "malloc";
+AsyncFree :: (pointer: *void) #foreign c "free";
+AsyncTime :: (out: *s64) -> s64 #foreign c "time";
+AsyncResponseCapacity :: 16777216;
+
+StoredOperation :: struct {
+    account: SyncAccount
+    session: Session
+    client: Client
+    server: [512]u8
+    client_id: [128]u8
+    method: [16]u8
+    path: [1024]u8
+    body: [8192]u8
+    request: PendingRequest
+    sync: PendingSync
+    deletion: PendingDeletion
+    material: DeviceKeyMaterial
+    payload: *u8
+    response: *u8
+    active: bool
+    is_sync: bool
+    is_deletion: bool
+    connected_only: bool
+    result: s32
+    changed: s32
+}
+
+StoredIdentityCurrent :: (operation: *StoredOperation) -> bool {
+    if operation == null ||
+        storage_get_setting_text("sync_public_id") !=
+            AccountField(*operation.account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) {
+        return false
+    }
+    if operation.connected_only {
+        normalized: [512]u8
+        if storage_sync_enabled() == 0 ||
+            !NormalizeUrl(storage_get_setting_text("sync_server_url"), normalized[:]) ||
+            TextUntilNul(normalized[:]) != TextUntilNul(operation.server[:]) {
+            return false
+        }
+    }
+    return true
+}
+
+ReleaseStoredOperation :: (operation: *StoredOperation) {
+    if operation.payload != null {
+        storage_free_sync_payload_json(operation.payload)
+        operation.payload = null
+    }
+    if operation.response != null {
+        AsyncFree(cast(*void)operation.response)
+        operation.response = null
+    }
+    WipeDeviceKey(*operation.material)
+    SyncCryptoWipe(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    operation.active = false
+}
+
+CancelStoredOperation :: (operation: *StoredOperation) {
+    if operation == null || !operation.active {
+        return
+    }
+    if operation.is_sync {
+        CancelSync(*operation.sync)
+    } else if operation.is_deletion {
+        CancelDeletion(*operation.deletion)
+    } else {
+        CancelRequest(*operation.request)
+    }
+    operation.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    ReleaseStoredOperation(operation)
+}
+
+PrepareStoredOperation :: (operation: *StoredOperation, server: string,
+    connected_only: bool) -> bool {
+    if operation == null || operation.active {
+        return false
+    }
+    operation.* = StoredOperation.{}
+    operation.connected_only = connected_only
+    operation.result = cast(s32)AuthResult.AUTH_INVALID_URL
+    if !NormalizeUrl(server, operation.server[:]) {
+        return false
+    }
+    operation.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    if sync_account_load(*operation.account) == 0 ||
+        !AppCopyText(storage_sync_client_id(), operation.client_id[:]) ||
+        !OpenAccountClient(TextUntilNul(operation.server[:]), *operation.account,
+            TextUntilNul(operation.client_id[:]), *operation.client) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    if !StoredIdentityCurrent(operation) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    LoadSavedSession(*operation.session, AsyncTime(null))
+    operation.active = true
+    return true
+}
+
+BeginStoredSync :: (operation: *StoredOperation, server: string,
+    transport: AsyncTransport) -> bool {
+    if !PrepareStoredOperation(operation, server, true) {
+        return false
+    }
+    operation.is_sync = true
+    operation.result = cast(s32)AuthResult.AUTH_SIGN_FAILED
+    if !LoadOrCreateDeviceKey(*operation.material) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    operation.payload = storage_build_sync_payload_json(
+        operation.client.identity.account_id, operation.client.identity.public_key)
+    if operation.payload == null {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    operation.response = cast(*u8)AsyncAllocate(AsyncResponseCapacity)
+    if operation.response == null {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    if !BeginSync(*operation.sync, operation.client, *operation.session,
+        DeviceFromKey(*operation.material), AsyncTime(null), null, NativeNonce,
+        transport, TextFromCString(operation.payload),
+        BytesFromPointer(operation.response, AsyncResponseCapacity)) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    return true
+}
+
+// Strings are copied before returning. Output and transport context must live
+// until PollStoredOperation completes or CancelStoredOperation returns.
+BeginStoredRequest :: (operation: *StoredOperation, server: string,
+    transport: AsyncTransport, method: string, path: string, body: string,
+    output: []u8, connected_only: bool) -> bool {
+    if !PrepareStoredOperation(operation, server, connected_only) {
+        return false
+    }
+    operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    if !AppCopyText(method, operation.method[:]) ||
+        !AppCopyText(path, operation.path[:]) ||
+        !AppCopyText(body, operation.body[:]) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    headers: [1]HttpHeader
+    if !BeginRequest(*operation.request, operation.client, *operation.session,
+        AsyncTime(null), transport, TextUntilNul(operation.method[:]),
+        TextUntilNul(operation.path[:]), TextUntilNul(operation.body[:]),
+        output, headers[0:0]) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    return true
+}
+
+BeginStoredDelete :: (operation: *StoredOperation, server: string,
+    transport: AsyncTransport) -> bool {
+    if !PrepareStoredOperation(operation, server, true) {
+        return false
+    }
+    operation.is_deletion = true
+    if !BeginDeletion(*operation.deletion, operation.client, transport) {
+        operation.result = cast(s32)operation.deletion.result
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    return true
+}
+
+BeginStoredSession :: (operation: *StoredOperation, server: string,
+    transport: AsyncTransport) -> bool {
+    if !PrepareStoredOperation(operation, server, true) {
+        return false
+    }
+    if !BeginSession(*operation.request, operation.client, *operation.session,
+        AsyncTime(null), transport) {
+        ReleaseStoredOperation(operation)
+        return false
+    }
+    return true
+}
+
+PollStoredOperation :: (operation: *StoredOperation) -> bool {
+    if operation == null || !operation.active {
+        return true
+    }
+    if !StoredIdentityCurrent(operation) {
+        CancelStoredOperation(operation)
+        return true
+    }
+    if operation.is_sync {
+        if !PollSync(*operation.sync) {
+            return false
+        }
+        operation.result = cast(s32)operation.sync.result
+        if operation.result == cast(s32)AuthResult.AUTH_OK {
+            if storage_apply_sync_response_json(TextUntilNul(
+                BytesFromPointer(operation.response, AsyncResponseCapacity))) == 0 {
+                operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+            } else {
+                storage_purge_synced_deleted_data()
+                operation.changed = storage_last_sync_changed()
+            }
+        }
+    } else if operation.is_deletion {
+        if !PollDeletion(*operation.deletion) {
+            return false
+        }
+        operation.result = cast(s32)operation.deletion.result
+    } else {
+        if !PollRequest(*operation.request) {
+            return false
+        }
+        operation.result = cast(s32)operation.request.result
+    }
+    if !operation.is_deletion {
+        SaveSession(*operation.session)
+    }
+    ReleaseStoredOperation(operation)
+    return true
+}

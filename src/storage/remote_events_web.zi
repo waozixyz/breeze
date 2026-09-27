@@ -1,0 +1,105 @@
+#import "client"
+#import "async_client"
+// Browser sockets carry bounded events; Daochi validates each account event.
+#import "events"
+#import "auth"
+#import "text_buffer"
+#import, file "sync_async.zi";
+#import, file "sync_session.zi";
+#import, file "../platform/browser_network.zi";
+#import, file "../app/text_buffers.zi";
+
+c :: #system_library "c";
+EventTime :: (out: *s64) -> s64 #foreign c "time";
+
+RemoteEvents :: struct {
+    operation: StoredOperation
+    transfer: BrowserTransfer
+    server: [512]u8
+    socket: s32
+    ready: bool
+    authenticating: bool
+}
+
+CloseRemoteEvents :: (events: *RemoteEvents) {
+    CancelStoredOperation(*events.operation)
+    if events.socket != 0 {
+        CloseBrowserSocket(events.socket)
+    }
+    events.* = RemoteEvents.{}
+}
+
+BeginRemoteEvents :: (events: *RemoteEvents, server: string) -> bool {
+    if events.authenticating || events.socket != 0 {
+        return TextUntilNul(events.server[:]) == server
+    }
+    events.* = RemoteEvents.{}
+    if !AppCopyText(server, events.server[:]) ||
+        !BeginStoredSession(*events.operation, server, BrowserTransport(*events.transfer)) {
+        return false
+    }
+    events.authenticating = true
+    return true
+}
+
+// -1 waits, 0 requires reconnect, 1 reports a validated ready/change event.
+PollRemoteEvents :: (events: *RemoteEvents) -> s32 {
+    if !StoredIdentityCurrent(*events.operation) {
+        CloseRemoteEvents(events)
+        return 0
+    }
+    if events.authenticating {
+        if !PollStoredOperation(*events.operation) {
+            return -1
+        }
+        events.authenticating = false
+        if events.operation.result != cast(s32)AuthResult.AUTH_OK {
+            CloseRemoteEvents(events)
+            return 0
+        }
+        url: [2048]u8
+        authorization: [8192]u8
+        if !EventUrl(TextUntilNul(events.server[:]), url[:]) ||
+            !AppCopyText("bearer.", authorization[:]) ||
+            !AppAppendText(TextUntilNul(events.operation.session.token[:]), authorization[:]) {
+            CloseRemoteEvents(events)
+            return 0
+        }
+        events.socket = OpenBrowserSocket(TextUntilNul(url[:]), "daochi-sync-v1",
+            TextUntilNul(authorization[:]), 4096)
+        if events.socket == 0 {
+            CloseRemoteEvents(events)
+            return 0
+        }
+    }
+    if events.socket == 0 {
+        return 0
+    }
+    if !TokenValid(*events.operation.session, EventTime(null)) {
+        CloseRemoteEvents(events)
+        return 0
+    }
+    response: [4096]u8
+    received := PollBrowserSocket(events.socket, response[:])
+    if received == 0 {
+        // Browser WebSocket errors conceal HTTP 401. Refresh authentication
+        // after a connection that closed before any valid account event.
+        if !events.ready {
+            ClearSession(*events.operation.session)
+            SaveSession(*events.operation.session)
+        }
+        CloseRemoteEvents(events)
+        return 0
+    }
+    if received < 0 {
+        return -1
+    }
+    event := ParseRemoteEvent(TextUntilNul(response[:]),
+        events.operation.client.identity.account_id)
+    if event.kind == cast(EventKind)EventKind.EVENT_INVALID {
+        CloseRemoteEvents(events)
+        return 0
+    }
+    events.ready = true
+    return 1
+}

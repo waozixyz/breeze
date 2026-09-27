@@ -1,4 +1,3 @@
-#include "core/breath_engine.h"
 #include "kry_archive.h"
 #include "kryon.h"
 #include "habits/habit_types.h"
@@ -19,8 +18,8 @@
 static int g_failures = 0;
 static int g_seen_topic = -1;
 static int g_seen_activity = -1;
-static int g_seen_round_count = -1;
-static int g_seen_first_round = -1;
+
+static void fill_test_private_key(char out[5121]);
 
 void
 data_init(void)
@@ -336,11 +335,18 @@ static void
 test_sync_backfill_includes_existing_habits(void)
 {
     char root[512];
+    char private_key[5121];
     Habits habits;
     char *payload;
 
     make_clean_root(root, sizeof(root), "sync-existing-habit-backfill");
     check_true("init backfill sync db", storage_init(root));
+    check_true("sync refuses payload without a private record key",
+               storage_build_sync_payload_json("test-hash", "test-public-key") == NULL);
+    fill_test_private_key(private_key);
+    storage_set_setting_text("sync_public_id", "test-public-id");
+    storage_set_setting_text("sync_public_key", "test-public-key");
+    storage_set_setting_text("sync_private_key", private_key);
     memset(&habits, 0, sizeof(habits));
     habits_add_default_set(&habits);
     habits_save(&habits);
@@ -366,10 +372,10 @@ test_sync_backfill_includes_existing_habits(void)
 
     check_true("reopen backfill sync db", storage_init(root));
     payload = storage_build_sync_payload_json("test-hash", "test-public-key");
-    check_true("existing habit included by one-time sync backfill",
-               payload != NULL && strstr(payload, "\"ops\":[{") != NULL &&
-                   strstr(payload, "\"entity_type\":\"habit\"") != NULL &&
-                   strstr(payload, "\"payload\":{\"id\"") != NULL);
+    check_true("existing habit included in encrypted sync backfill",
+               payload != NULL &&
+                   strstr(payload, "\"ops\":") == NULL &&
+                   strstr(payload, "private.inbe.v1.habits") != NULL);
     storage_free_sync_payload_json(payload);
 
     storage_close();
@@ -433,18 +439,52 @@ fill_test_private_key(char out[5121])
 }
 
 static void
-test_sync_payload_includes_v6_encrypted_records(void)
+test_sync_rejects_unencrypted_outbox_record(void)
 {
     char root[512];
     char db_path[512];
+    char private_key[5121];
+    sqlite3 *db = NULL;
+    StorageSyncStatus status;
+    char *payload;
+
+    make_clean_root(root, sizeof(root), "sync-unknown-record");
+    check_true("init unknown record db", storage_init(root));
+    fill_test_private_key(private_key);
+    storage_set_setting_text("sync_public_id", "test-public-id");
+    storage_set_setting_text("sync_public_key", "test-public-key");
+    storage_set_setting_text("sync_private_key", private_key);
+    make_path(db_path, sizeof(db_path), root, "inbe.db");
+    check_true("open unknown record db", sqlite3_open(db_path, &db) == SQLITE_OK);
+    if(db != NULL) {
+        check_true("queue unknown record",
+                   sqlite3_exec(db,
+                                "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) "
+                                "VALUES('unknown','record-1',0,1)",
+                                NULL, NULL, NULL) == SQLITE_OK);
+        sqlite3_close(db);
+    }
+
+    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
+    check_true("unknown queued record rejects payload", payload == NULL);
+    storage_free_sync_payload_json(payload);
+    memset(&status, 0, sizeof(status));
+    check_true("unknown record status remains available", storage_sync_status(&status));
+    check_true("unknown queued record stays pending", status.queued_changes > 0);
+    storage_close();
+    remove_tree(root);
+}
+
+static void
+test_sync_payload_includes_v6_encrypted_records(void)
+{
+    char root[512];
     char private_key[5121];
     char collection[80];
     char record_id[180];
     char ciphertext[512];
     Habits habits;
-    StorageSyncStatus status;
     char *payload;
-    sqlite3 *db = NULL;
     int count;
 
     make_clean_root(root, sizeof(root), "sync-v6-encrypted-records");
@@ -463,13 +503,13 @@ test_sync_payload_includes_v6_encrypted_records(void)
                payload != NULL && strstr(payload, "\"protocol_version\":6") != NULL);
     check_true("inbe app id in sync payload",
                payload != NULL && strstr(payload, "\"app_id\":\"inbe\"") != NULL);
-    check_true("v6 legacy data opt-in in sync payload",
-               payload != NULL && strstr(payload, "\"include_legacy_data\":true") != NULL);
-    check_true("v6 compatibility capabilities in sync payload",
+    check_true("v6 payload has no legacy data opt-in",
+               payload != NULL && strstr(payload, "include_legacy_data") == NULL);
+    check_true("v6 encrypted capabilities in sync payload",
                payload != NULL && strstr(payload, "\"client_capabilities\"") != NULL &&
                    strstr(payload, "v6-device-transactions") != NULL &&
                    strstr(payload, "encrypted-primary") != NULL &&
-                   strstr(payload, "legacy-dual-write") != NULL);
+                   strstr(payload, "legacy-dual-write") == NULL);
     count = storage_json_array_count_path(payload, "$.encrypted_records");
     check_true("v6 encrypted records present", count > 0);
     check_true("first encrypted collection",
@@ -488,302 +528,41 @@ test_sync_payload_includes_v6_encrypted_records(void)
                    ciphertext[0] != '\0' && strstr(ciphertext, "Yoga") == NULL);
     storage_free_sync_payload_json(payload);
 
-    check_true("apply v4 transition response",
-               storage_apply_sync_response_json(
-                   "{\"protocol_version\":4,\"latest_protocol\":4,\"status\":\"ok\","
-                   "\"server_version\":10,\"server_clock\":10,"
-                   "\"server_state_hash\":\"abc\","
-                   "\"changes_complete\":true,\"full_snapshot_required\":false,"
-                   "\"changes\":{\"habits\":[{\"id\":\"remote-habit\","
-                   "\"name\":\"Remote\",\"color_r\":80,\"color_g\":120,"
-                   "\"color_b\":160,\"sync_mode\":1,\"sync_activity\":1,"
-                   "\"counter_enabled\":0,\"sort_order\":20,"
-                   "\"deleted_at\":0,\"updated_at\":\"2026-08-29T12:30:00Z\"}],"
-                   "\"habit_days\":[],\"sessions\":[],"
-                   "\"meditation_logs\":[],\"social_cache\":[],"
-                   "\"encrypted_records\":[]}}"));
+    check_true("pre-v6 response rejected",
+               !storage_apply_sync_response_json(
+                   "{\"protocol_version\":4,\"status\":\"ok\","
+                   "\"server_version\":10,\"changes\":{\"encrypted_records\":[]}}"));
     payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    count = storage_json_array_count_path(payload, "$.encrypted_records");
-    check_true("v4 migration continues after legacy rows arrive", count > 0);
+    check_true("queued encrypted records survive rejected response",
+               payload != NULL &&
+                   storage_json_array_count_path(payload, "$.encrypted_records") > 0);
     storage_free_sync_payload_json(payload);
-
-    check_true("apply v4 transition completion response",
-               storage_apply_sync_response_json(
-                   "{\"protocol_version\":4,\"latest_protocol\":4,\"status\":\"ok\","
-                   "\"server_version\":11,\"server_clock\":11,"
-                   "\"server_state_hash\":\"def\","
-                   "\"changes_complete\":true,\"full_snapshot_required\":false,"
-                   "\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[],"
-                   "\"meditation_logs\":[],\"social_cache\":[],"
-                   "\"encrypted_records\":[]}}"));
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_int("v4 encrypted shadow backfill complete",
-              storage_json_array_count_path(payload, "$.encrypted_records"), 0);
-    storage_free_sync_payload_json(payload);
-
-    storage_enqueue_all_sync_state();
-    memset(&status, 0, sizeof(status));
-    check_true("v4 stale shadow queue status", storage_sync_status(&status));
-    check_true("v4 stale shadow queue recreated", status.queued_changes > 0);
-    storage_close();
-
-    make_path(db_path, sizeof(db_path), root, "inbe.db");
-    check_true("open stale v4 queue db", sqlite3_open(db_path, &db) == SQLITE_OK);
-    if(db != NULL) {
-        check_true("mark stale completed v4 queue",
-                   sqlite3_exec(db,
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_complete_v2','1');"
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_legacy_seen_v2','1');"
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_queued_v2','1');",
-                                NULL, NULL, NULL) == SQLITE_OK);
-        sqlite3_close(db);
-        db = NULL;
-    }
-    check_true("reopen stale completed v4 queue db", storage_init(root));
-    memset(&status, 0, sizeof(status));
-    check_true("load stale completed v4 queue status", storage_sync_status(&status));
-    check_int("stale completed v4 queue cleared", (int)status.queued_changes, 0);
-    check_int("stale completed v4 queue is not pending",
-              status.secure_migration_pending, 0);
 
     storage_close();
     remove_tree(root);
 }
 
 static void
-test_sync_legacy_write_policy_requeues_projection(void)
+test_sync_ignores_plaintext_private_response(void)
 {
     char root[512];
-    char private_key[5121];
-    Habits habits;
-    char *payload;
-    const char *disabled_response =
-        "{\"protocol_version\":6,\"latest_protocol\":6,\"status\":\"ok\","
-        "\"server_version\":20,\"server_clock\":20,"
-        "\"changes_complete\":true,\"full_snapshot_required\":false,"
-        "\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[],"
-        "\"meditation_logs\":[],\"social_cache\":[],\"encrypted_records\":[]},"
-        "\"legacy_write_required\":false}";
-    const char *reactivated_response =
-        "{\"protocol_version\":6,\"latest_protocol\":6,\"status\":\"ok\","
-        "\"server_version\":21,\"server_clock\":21,"
-        "\"changes_complete\":true,\"full_snapshot_required\":false,"
-        "\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[],"
-        "\"meditation_logs\":[],\"social_cache\":[],\"encrypted_records\":[]},"
-        "\"legacy_write_required\":true,\"legacy_projection_epoch\":1234}";
+    const char *response =
+        "{\"protocol_version\":6,\"status\":\"ok\","
+        "\"server_version\":12,\"server_clock\":12,"
+        "\"changes\":{\"habits\":[{\"id\":\"plaintext-habit\","
+        "\"name\":\"Unexpected\",\"color_r\":1,\"color_g\":2,"
+        "\"color_b\":3,\"sync_mode\":0,\"sync_activity\":0,"
+        "\"counter_enabled\":0,\"sort_order\":0,\"deleted_at\":0,"
+        "\"updated_at\":\"2026-08-29T12:30:00Z\"}],"
+        "\"habit_days\":[],\"sessions\":[],\"encrypted_records\":[]}}";
 
-    make_clean_root(root, sizeof(root), "sync-legacy-write-policy");
-    check_true("init legacy write policy db", storage_init(root));
-    fill_test_private_key(private_key);
-    storage_set_setting_text("sync_public_id", "test-public-id");
-    storage_set_setting_text("sync_public_key", "test-public-key");
-    storage_set_setting_text("sync_private_key", private_key);
-    memset(&habits, 0, sizeof(habits));
-    habits_add_default_set(&habits);
-    habits_save(&habits);
-
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("legacy projection enabled before server policy",
-               payload != NULL && strstr(payload, "\"ops\":[{") != NULL);
-    storage_free_sync_payload_json(payload);
-
-    check_true("apply disabled legacy write policy",
-               storage_apply_sync_response_json(disabled_response));
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("legacy projection disabled after quiet window",
-               payload != NULL && strstr(payload, "\"ops\":[]") != NULL);
-    storage_free_sync_payload_json(payload);
-
-    check_true("apply reactivated legacy write policy",
-               storage_apply_sync_response_json(reactivated_response));
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("legacy projection requeued when old device returns",
-               payload != NULL && strstr(payload, "\"ops\":[{") != NULL);
-    storage_free_sync_payload_json(payload);
-
-    storage_close();
-    remove_tree(root);
-}
-
-static void
-seed_versioned_sync_account(const char *root, int encrypted_shadow_complete)
-{
-    char db_path[512];
-    sqlite3 *db = NULL;
-    char *err = NULL;
-    const char *sql =
-        "DELETE FROM sync_outbox;"
-        "DELETE FROM session_rounds;"
-        "DELETE FROM sessions;"
-        "DELETE FROM habit_days;"
-        "DELETE FROM habits;"
-        "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,"
-        "sync_activity,counter_enabled,sort_order,deleted_at,updated_at) "
-        "VALUES('release-hydrate',(SELECT id FROM users LIMIT 1),'Hydrate',"
-        "42,133,180,1,1,1,10,0,1781902800);"
-        "INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) "
-        "VALUES('release-hydrate',20260829,1,5,0,1781902800);"
-        "INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,"
-        "imported_at,rounds_hash,mood_before,mood_after,energy,stress,note,tags,"
-        "deleted_at,updated_at) "
-        "VALUES('release-session',(SELECT id FROM users LIMIT 1),1781902800,20260829,"
-        "0,1,'release-fixture',1781902800,12345,2,4,3,1,'migrated cleanly',"
-        "'morning',0,1781902920);"
-        "INSERT INTO session_rounds(session_id,round_index,seconds) "
-        "VALUES('release-session',0,45);"
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','300');"
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');"
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');"
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_upload_at','1781902920');";
-
-    make_path(db_path, sizeof(db_path), root, "inbe.db");
-    check_true("open versioned sync fixture db", sqlite3_open(db_path, &db) == SQLITE_OK);
-    if(db == NULL)
-        return;
-    check_true("seed versioned sync fixture rows",
-               sqlite3_exec(db, sql, NULL, NULL, &err) == SQLITE_OK);
-    if(err != NULL) {
-        fprintf(stderr, "SQL error: %s\n", err);
-        sqlite3_free(err);
-        err = NULL;
-    }
-    if(encrypted_shadow_complete) {
-        check_true("mark versioned v4 encrypted shadow complete",
-                   sqlite3_exec(db,
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_complete_v2','1');"
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_legacy_seen_v2','1');"
-                                "INSERT OR REPLACE INTO meta(key,value) "
-                                "VALUES('sync_encrypted_shadow_v4_queued_v2','1');",
-                                NULL, NULL, &err) == SQLITE_OK);
-        if(err != NULL) {
-            fprintf(stderr, "SQL error: %s\n", err);
-            sqlite3_free(err);
-        }
-    } else {
-        check_true("clear versioned encrypted shadow markers",
-                   sqlite3_exec(db,
-                                "DELETE FROM meta WHERE key IN ("
-                                "'sync_encrypted_shadow_v4_complete_v2',"
-                                "'sync_encrypted_shadow_v4_legacy_seen_v2',"
-                                "'sync_encrypted_shadow_v4_queued_v2',"
-                                "'sync_encrypted_shadow_v4_total_v2');",
-                                NULL, NULL, &err) == SQLITE_OK);
-        if(err != NULL) {
-            fprintf(stderr, "SQL error: %s\n", err);
-            sqlite3_free(err);
-        }
-    }
-    sqlite3_close(db);
-}
-
-static void
-assert_versioned_fixture_displayed(const char *label)
-{
-    Habits habits;
-
-    memset(&habits, 0, sizeof(habits));
-    check_true(label, storage_habits_load(&habits));
-    check_true("versioned Hydrate habit is displayable",
-               find_habit_ci(&habits, "Hydrate") != NULL);
-    check_int("versioned habit count", storage_habit_count(), 1);
-    check_int("versioned session count", storage_session_count(), 1);
-    habits_free(&habits);
-}
-
-static void
-test_sync_migration_matrix_keeps_release_data_displayable(void)
-{
-    char root[512];
-    char private_key[5121];
-    char *payload;
-    StorageSyncStatus status;
-
-    fill_test_private_key(private_key);
-
-    make_clean_root(root, sizeof(root), "sync-migration-v3-fixture");
-    check_true("init v3 release fixture db", storage_init(root));
-    storage_set_setting_text("sync_public_id", "test-public-id");
-    storage_set_setting_text("sync_public_key", "test-public-key");
-    storage_set_setting_text("sync_private_key", private_key);
-    storage_close();
-    seed_versioned_sync_account(root, 0);
-    check_true("open migrated v3 release fixture db", storage_init(root));
-    assert_versioned_fixture_displayed("load migrated v3 release fixture habits");
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("migrated v3 payload upgrades cleanly to v6",
-               payload != NULL && strstr(payload, "\"protocol_version\":6") != NULL);
-    check_true("migrated v3 payload registers breathing",
-               payload != NULL && strstr(payload, "\"app_id\":\"inbe\"") != NULL);
-    check_true("migrated v3 payload queues encrypted shadow",
-               storage_json_array_count_path(payload, "$.encrypted_records") > 0);
-    storage_free_sync_payload_json(payload);
-    storage_close();
-    remove_tree(root);
-
-    make_clean_root(root, sizeof(root), "sync-migration-v4-fixture");
-    check_true("init v4 release fixture db", storage_init(root));
-    storage_set_setting_text("sync_public_id", "test-public-id");
-    storage_set_setting_text("sync_public_key", "test-public-key");
-    storage_set_setting_text("sync_private_key", private_key);
-    storage_close();
-    seed_versioned_sync_account(root, 1);
-    check_true("open migrated v4 release fixture db", storage_init(root));
-    assert_versioned_fixture_displayed("load migrated v4 release fixture habits");
-    memset(&status, 0, sizeof(status));
-    check_true("load migrated v4 sync status", storage_sync_status(&status));
-    check_int("migrated v4 secure migration complete", status.secure_migration_pending, 0);
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("migrated v4 payload upgrades cleanly to v6",
-               payload != NULL && strstr(payload, "\"protocol_version\":6") != NULL);
-    check_true("migrated v4 payload registers breathing",
-               payload != NULL && strstr(payload, "\"app_id\":\"inbe\"") != NULL);
-    check_int("migrated v4 does not rerun encrypted migration",
-              storage_json_array_count_path(payload, "$.encrypted_records"), 0);
-    storage_free_sync_payload_json(payload);
-    storage_close();
-    remove_tree(root);
-
-    make_clean_root(root, sizeof(root), "sync-migration-v5-fixture");
-    check_true("init v5 release fixture db", storage_init(root));
-    check_true("apply v5 release fixture snapshot",
-               storage_apply_sync_response_json(
-                   "{\"protocol_version\":5,\"latest_protocol\":5,\"status\":\"ok\","
-                   "\"server_version\":500,\"server_clock\":500,"
-                   "\"server_state_hash\":\"v5fixture\","
-                   "\"changes_complete\":true,\"full_snapshot_required\":false,"
-                   "\"changes\":{\"habits\":[{\"id\":\"release-hydrate\","
-                   "\"name\":\"Hydrate\",\"color_r\":42,\"color_g\":133,"
-                   "\"color_b\":180,\"sync_mode\":1,\"sync_activity\":1,"
-                   "\"counter_enabled\":1,\"sort_order\":10,\"deleted_at\":0,"
-                   "\"updated_at\":\"2026-08-29T12:00:00Z\"}],"
-                   "\"habit_days\":[{\"habit_id\":\"release-hydrate\","
-                   "\"local_date\":20260829,\"completed\":true,\"count\":5,"
-                   "\"updated_at\":\"2026-08-29T12:00:00Z\"}],"
-                   "\"sessions\":[{\"id\":\"release-session\","
-                   "\"started_at\":\"2026-08-29T12:00:00Z\","
-                   "\"local_date\":20260829,\"topic\":\"0\",\"activity\":1,"
-                   "\"source\":\"release-fixture\",\"rounds_hash\":\"12345\","
-                   "\"deleted_at\":0,\"updated_at\":\"2026-08-29T12:02:00Z\","
-                   "\"rounds\":[{\"round_index\":0,\"breaths\":0,"
-                   "\"hold_seconds\":45}]}],\"meditation_logs\":[],"
-                   "\"social_cache\":[],\"encrypted_records\":[]}}"));
-    assert_versioned_fixture_displayed("load migrated v5 release fixture habits");
-    memset(&status, 0, sizeof(status));
-    check_true("load v5 fixture sync status", storage_sync_status(&status));
-    check_int("v5 fixture latest protocol", status.latest_protocol, 5);
-    check_int("v5 fixture has no protocol upgrade warning",
-              status.protocol_upgrade_available, 0);
-    payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
-    check_true("migrated v5 payload upgrades cleanly to v6",
-               payload != NULL && strstr(payload, "\"protocol_version\":6") != NULL);
-    check_true("v5 fixture payload registers breathing",
-               payload != NULL && strstr(payload, "\"app_id\":\"inbe\"") != NULL);
-    storage_free_sync_payload_json(payload);
+    make_clean_root(root, sizeof(root), "sync-plaintext-ignored");
+    check_true("init plaintext response db", storage_init(root));
+    check_true("apply v6 response with plaintext private row",
+               storage_apply_sync_response_json(response));
+    check_int("plaintext private row ignored", storage_habit_count(), 0);
+    check_int("plaintext row does not signal changed private data",
+              storage_last_sync_changed(), 0);
     storage_close();
     remove_tree(root);
 }
@@ -1685,25 +1464,6 @@ metadata_history_callback(const char *id, int year, int month, int day, int hour
 }
 
 static void
-legacy_history_callback(const char *id, int year, int month, int day, int hour, int minute,
-                        int second, int topic, int activity, const int *rounds, int round_count,
-                        void *user)
-{
-    (void)id;
-    (void)year;
-    (void)month;
-    (void)day;
-    (void)hour;
-    (void)minute;
-    (void)second;
-    (void)topic;
-    (void)activity;
-    (void)user;
-    g_seen_round_count = round_count;
-    g_seen_first_round = round_count > 0 ? rounds[0] : -1;
-}
-
-static void
 test_session_metadata(void)
 {
     char root[512];
@@ -1784,39 +1544,39 @@ test_zip_db_import(void)
 }
 
 static void
-test_historical_inbe_archive_import(void)
+test_current_archive_entry_import(void)
 {
-    char source[512], dest[512], export_path[512], historical_path[512];
-    Archive exported = {0}, historical = {0};
+    char source[512], dest[512], export_path[512], roundtrip_path[512];
+    Archive exported = {0}, roundtrip = {0};
     void *database = NULL;
     size_t database_size = 0;
 
-    make_clean_root(source, sizeof(source), "historical-inbe-source");
-    make_clean_root(dest, sizeof(dest), "historical-inbe-dest");
+    make_clean_root(source, sizeof(source), "current-archive-source");
+    make_clean_root(dest, sizeof(dest), "current-archive-dest");
     write_source_database(source);
     make_path(export_path, sizeof(export_path), source, "export.zip");
-    make_path(historical_path, sizeof(historical_path), source, "historical-inbe.zip");
-    check_true("init historical export source", storage_init(source));
-    check_true("export database for historical fixture", storage_export_zip(export_path));
+    make_path(roundtrip_path, sizeof(roundtrip_path), source, "current-inbe.zip");
+    check_true("init current export source", storage_init(source));
+    check_true("export database for current fixture", storage_export_zip(export_path));
     storage_close();
 
     check_true("open exported archive", ArchiveOpenZip(&exported, export_path));
-    database = ArchiveReadNamedEntryHeap(&exported, "breathing-data/breathing.db",
+    database = ArchiveReadNamedEntryHeap(&exported, STORAGE_EXPORT_ENTRY_DB,
                                          &database_size);
     check_true("read exported database", database != NULL && database_size > 0);
     ArchiveClose(&exported);
-    check_true("create historical Inbe archive", ArchiveCreateZip(&historical, historical_path));
+    check_true("create current Inbe archive", ArchiveCreateZip(&roundtrip, roundtrip_path));
     if(database != NULL) {
-        check_true("write historical Inbe database entry",
-                   ArchiveAddMemory(&historical, "inbe-data/inbe.db", database,
+        check_true("write current Inbe database entry",
+                   ArchiveAddMemory(&roundtrip, STORAGE_EXPORT_ENTRY_DB, database,
                                     database_size, ARCHIVE_DEFLATE));
     }
-    check_true("finish historical Inbe archive", ArchiveFinishZip(&historical));
-    ArchiveClose(&historical);
+    check_true("finish current Inbe archive", ArchiveFinishZip(&roundtrip));
+    ArchiveClose(&roundtrip);
     free(database);
 
-    check_true("init historical Inbe import destination", storage_init(dest));
-    check_true("import historical Inbe archive", storage_import_zip(historical_path));
+    check_true("init current Inbe import destination", storage_init(dest));
+    check_true("import current Inbe archive", storage_import_zip(roundtrip_path));
     storage_close();
     assert_imported_database(dest);
     remove_tree(source);
@@ -2341,7 +2101,7 @@ test_import_modes_preserve_habits_and_settings_choice(void)
 }
 
 static void
-write_legacy_zip(const char *path, const char *prefix)
+write_unsupported_file_session_zip(const char *path, const char *prefix)
 {
     Archive archive;
     char archive_name[256];
@@ -2361,23 +2121,23 @@ write_legacy_zip(const char *path, const char *prefix)
 }
 
 static void
-test_legacy_zip_import(void)
+test_unsupported_file_session_zip(void)
 {
     char source[512], dest[512], zip_path[512];
+    StorageImportInfo info;
 
     make_clean_root(source, sizeof(source), "legacy-source");
     make_clean_root(dest, sizeof(dest), "legacy-dest");
     make_path(zip_path, sizeof(zip_path), source, "legacy.zip");
-    write_legacy_zip(zip_path, "custom-root");
+    write_unsupported_file_session_zip(zip_path, "custom-root");
 
     check_true("init legacy import dest", storage_init(dest));
-    check_true("legacy zip import", storage_import_zip(zip_path));
-    check_int("legacy imported sessions", storage_session_count(), 1);
-    g_seen_round_count = -1;
-    g_seen_first_round = -1;
-    storage_list_session_records(legacy_history_callback, NULL);
-    check_int("legacy round count", g_seen_round_count, 4);
-    check_int("legacy first round", g_seen_first_round, 31);
+    memset(&info, 0, sizeof(info));
+    check_true("unsupported file-session zip inspection rejected",
+               !storage_inspect_import(zip_path, &info));
+    check_true("unsupported file-session zip stays invalid", !info.valid);
+    check_true("unsupported file-session zip rejected", !storage_import_zip(zip_path));
+    check_int("unsupported zip imports no sessions", storage_session_count(), 0);
     storage_close();
 
     remove_tree(source);
@@ -2461,7 +2221,7 @@ test_onelist_import_and_sync_collections(void)
 }
 
 static void
-test_legacy_file_startup_migration(void)
+test_historical_file_session_startup(void)
 {
     char root[512];
     char session_path[512];
@@ -2471,17 +2231,13 @@ test_legacy_file_startup_migration(void)
     make_path(session_path, sizeof(session_path), root, "2026/06/13/breathing-010203");
     write_text_file(session_path, "31\n35\n39\n27\n");
 
-    check_true("init legacy file migration db", storage_init(root));
-    check_int("legacy file migrated sessions", storage_session_count(), 1);
-    g_seen_round_count = -1;
-    g_seen_first_round = -1;
-    storage_list_session_records(legacy_history_callback, NULL);
-    check_int("legacy file round count", g_seen_round_count, 4);
-    check_int("legacy file first round", g_seen_first_round, 31);
+    check_true("init with historical file sessions", storage_init(root));
+    check_int("historical session imported", storage_session_count(), 1);
+    check_true("historical source file retained", FileExists(session_path));
     storage_close();
 
-    check_true("reopen migrated db", storage_init(root));
-    check_int("legacy file migration one session", storage_session_count(), 1);
+    check_true("reopen after file import", storage_init(root));
+    check_int("historical session not duplicated", storage_session_count(), 1);
     storage_close();
     remove_tree(root);
 }
@@ -2697,86 +2453,65 @@ test_checkin_backup_restore(void)
 }
 
 static void
-test_database_filename_migration(void)
+test_legacy_database_filename_is_migrated(void)
 {
-    char root[512], current[512], legacy[512], current_wal[512], legacy_wal[512];
-    char current_shm[512], legacy_shm[512];
-    sqlite3 *db = NULL;
+    char root[512], current[512], old_path[512], marker[512];
 
-    make_clean_root(root, sizeof(root), "database-name-migration");
+    make_clean_root(root, sizeof(root), "legacy-database-name");
     write_source_database(root);
-    make_path(current, sizeof(current), root, "inbe.db");
-    make_path(legacy, sizeof(legacy), root, "breathing.db");
-    make_path(current_wal, sizeof(current_wal), root, "inbe.db-wal");
-    make_path(legacy_wal, sizeof(legacy_wal), root, "breathing.db-wal");
-    make_path(current_shm, sizeof(current_shm), root, "inbe.db-shm");
-    make_path(legacy_shm, sizeof(legacy_shm), root, "breathing.db-shm");
-    check_true("open source database with WAL", sqlite3_open(current, &db) == SQLITE_OK);
-    if(db != NULL) {
-        check_true("keep WAL on close", sqlite3_db_config(db, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, NULL) == SQLITE_OK);
-        check_true("write uncheckpointed data",
-                   sqlite3_exec(db, "INSERT OR REPLACE INTO meta(key,value) "
-                                    "VALUES('migration-test','preserved')", NULL, NULL, NULL) == SQLITE_OK);
-        check_true("close source database", sqlite3_close(db) == SQLITE_OK);
-    }
-    check_true("source WAL contains pending data", FileExists(current_wal));
-    check_true("move source to legacy filename", rename(current, legacy) == 0);
-    check_true("move legacy WAL", rename(current_wal, legacy_wal) == 0);
-    if(FileExists(current_shm))
-        check_true("move legacy shared memory", rename(current_shm, legacy_shm) == 0);
-    check_true("legacy database exists", FileExists(legacy));
-    check_true("migrate legacy database", storage_init(root));
-    check_int("migrated sessions preserved", storage_session_count(), 1);
+    make_path(current, sizeof(current), root, STORAGE_DB_NAME);
+    make_path(old_path, sizeof(old_path), root, STORAGE_DB_NAME_LEGACY);
+    snprintf(marker, sizeof(marker), "%s.migrated", current);
+    check_true("move database to older filename", rename(current, old_path) == 0);
+    check_true("upgrade older database", storage_init(root));
+    check_int("older database sessions preserved", storage_session_count(), 1);
     storage_close();
-    check_true("current database exists after migration", FileExists(current));
-    check_true("legacy database retained as rollback copy", FileExists(legacy));
-    check_int("uncheckpointed WAL data preserved",
-              read_raw_count_query(root, "SELECT COUNT(*) FROM meta WHERE key='migration-test' AND value='preserved'"), 1);
-    check_true("repeat migration is idempotent", storage_init(root));
-    check_int("sessions preserved after repeat startup", storage_session_count(), 1);
-    storage_close();
+    check_true("current database created", FileExists(current));
+    check_true("older database retained", FileExists(old_path));
+    check_true("completed-copy marker created", FileExists(marker));
     remove_tree(root);
 }
 
 static void
-test_database_filename_conflict_preserves_both(void)
+test_conflicting_database_names_fail_closed(void)
 {
-    char root[512], current[512], legacy[512];
+    char root[512], current[512], old_path[512];
     FILE *file;
 
     make_clean_root(root, sizeof(root), "database-name-conflict");
     write_source_database(root);
-    make_path(current, sizeof(current), root, "inbe.db");
-    make_path(legacy, sizeof(legacy), root, "breathing.db");
-    file = fopen(legacy, "wb");
-    check_true("create conflicting legacy file", file != NULL);
+    make_path(current, sizeof(current), root, STORAGE_DB_NAME);
+    make_path(old_path, sizeof(old_path), root, STORAGE_DB_NAME_LEGACY);
+    file = fopen(old_path, "wb");
+    check_true("create conflicting database file", file != NULL);
     if(file != NULL) {
-        fputs("legacy sentinel", file);
+        fputs("old data", file);
         fclose(file);
     }
-    check_true("conflicting database names reject startup", !storage_init(root));
-    check_true("current database preserved on conflict", FileExists(current));
-    check_true("legacy database preserved on conflict", FileExists(legacy));
+    check_true("database name conflict fails closed", !storage_init(root));
+    storage_close();
+    check_true("current database preserved", FileExists(current));
+    check_true("conflicting file preserved", FileExists(old_path));
     remove_tree(root);
 }
 
 int
 main(void)
 {
-    test_database_filename_migration();
-    test_database_filename_conflict_preserves_both();
+    test_legacy_database_filename_is_migrated();
+    test_conflicting_database_names_fail_closed();
     test_checkin_backup_restore();
     test_raw_db_import();
     test_zip_db_import();
-    test_historical_inbe_archive_import();
+    test_current_archive_entry_import();
     test_habit_name_merge_import();
     test_import_conflict_prefers_data_over_empty();
     test_delete_all_resets_habits_to_empty_storage();
     test_delete_all_without_sync_account_does_not_queue_remote_deletes();
     test_deleted_habit_payload_clears_remote_days();
     test_import_modes_preserve_habits_and_settings_choice();
-    test_legacy_zip_import();
-    test_legacy_file_startup_migration();
+    test_unsupported_file_session_zip();
+    test_historical_file_session_startup();
     test_tickmate_db_import();
     test_tickmate_reimport_recovers_counter_data();
     test_external_tickmate_db_import();
@@ -2790,8 +2525,8 @@ main(void)
     test_sync_payload_excludes_local_settings();
     test_sync_payload_includes_queued_current_edits();
     test_sync_payload_includes_v6_encrypted_records();
-    test_sync_legacy_write_policy_requeues_projection();
-    test_sync_migration_matrix_keeps_release_data_displayable();
+    test_sync_ignores_plaintext_private_response();
+    test_sync_rejects_unencrypted_outbox_record();
     test_sync_payload_batches_large_outbox();
     test_sync_outbox_preserves_edits_after_snapshot();
     test_sync_apply_preserves_counter_counts();

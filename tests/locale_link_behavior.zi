@@ -1,0 +1,87 @@
+#import, file "../src/app/locale.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/app/locale_preferences.zi";
+#import "locale_parser";
+#import "locale_policy";
+
+VerifyCatalog :: (code: string) -> bool {
+    if !LocaleUse(code) {
+        return false
+    }
+    active: AssetView
+    if code == "es" {
+        active = AssetRead("locales/es.txt")
+    } else if code == "ru" {
+        active = AssetRead("locales/ru.txt")
+    } else if code == "ja" {
+        active = AssetRead("locales/ja.txt")
+    } else {
+        active = AssetRead("locales/en.txt")
+    }
+    english := AssetRead("locales/en.txt")
+    if !active.found || !english.found {
+        return false
+    }
+    // Compare every shipped key against the uncached parser. This catches
+    // collisions, multiline values, Unicode, and language switch invalidation.
+    cursor: s32 = 0
+    checked: s32 = 0
+    while cursor < cast(s32)english.data.count {
+        line := LocaleNextLine(english.data, cursor)
+        cursor = line.next
+        if line.end - line.start > 2 &&
+            english.data[line.start] == cast(u8)91 &&
+            english.data[line.end - 1] == cast(u8)93 {
+            key := english.data[line.start + 1:line.end - 1]
+            expected := LocaleResolveCatalog(active.data, english.data, key)
+            if LocaleText(key) != expected {
+                return false
+            }
+            checked += 1
+        }
+    }
+    return checked > 600
+}
+
+#program_export
+Answer :: () -> s32 {
+    if app_locale_preferences() != LocaleSystemPreferences() {
+        return 99
+    }
+    if LocaleLanguageCount() != 12 {
+        return -1
+    }
+    english := LocaleLanguageAt(0)
+    spanish := LocaleLanguageAt(1)
+    if english.code != "en" || english.label != "English" ||
+        spanish.code != "es" || spanish.label != "Español" {
+        return -2
+    }
+    if LocaleLanguageAt(12).code.count != 0 ||
+        LocaleActiveCode() != "en" || LocaleText("close_button") != "Close" {
+        return -3
+    }
+    if !LocaleUse("es") || LocaleActiveCode() != "es" ||
+        LocaleText("close_button") != "Cerrar" {
+        return -4
+    }
+    if LocaleUse("../secrets") || LocaleActiveCode() != "es" ||
+        LocaleText("missing_locale_key") != "missing_locale_key" {
+        return -5
+    }
+    if !LocaleUse("en") || LocaleText("close_button") != "Close" {
+        return -6
+    }
+    if LocalePreferred("es_AR.UTF-8") != "es" ||
+        LocalePreferred("xx:ja_JP.UTF-8") != "ja" ||
+        LocalePreferred("xx") != "en" ||
+        LocalePreferred(LocaleSystemPreferences()) != "es" {
+        return -8
+    }
+    if !VerifyCatalog("es") || !VerifyCatalog("ru") ||
+        !VerifyCatalog("ja") || !VerifyCatalog("en") {
+        return -7
+    }
+    return 42
+}
+#import, file "../src/app/host_services.zi";

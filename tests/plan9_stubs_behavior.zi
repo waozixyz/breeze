@@ -1,0 +1,49 @@
+#import, file "../src/platform/plan9/sqlite3_stub.zi";
+#import, file "../src/platform/plan9/storage_import_stub.zi";
+#import "c_string"
+
+#program_export
+main :: () -> s32 {
+    database: *void
+    if sqlite3_open(null, null) != 21 || sqlite3_open(null, *database) != 0 ||
+    database == null {
+        return 1
+    }
+    sql: [24]u8
+    CopyCString("SELECT 1;", sql[:])
+    statement: *void
+    tail: *u8
+    if sqlite3_prepare_v2(database, *sql[0], -1, *statement, *tail) != 0 ||
+    statement == null || tail != *sql[9] || sqlite3_step(statement) != 101 {
+        return 2
+    }
+    if sqlite3_column_int(statement, 0) != 0 ||
+    sqlite3_column_int64(statement, 0) != 0 ||
+    sqlite3_column_double(statement, 0) != 0.0 ||
+    sqlite3_changes(database) != 0 || sqlite3_get_autocommit(database) != 1 {
+        return 3
+    }
+    empty := sqlite3_column_text(statement, 0)
+    error := sqlite3_errmsg(database)
+    if empty == null || empty[0] != 0 || error == null || error[0] != #char "s" {
+        return 4
+    }
+    exec_error := *sql[0]
+    if sqlite3_exec(database, *sql[0], null, null, *exec_error) != 0 || exec_error != null {
+        return 5
+    }
+    sqlite3_finalize(statement)
+    sqlite3_close(database)
+    info: Plan9ImportInfo = .{1, 1, 1, 1, 11, 12, 13}
+    if storage_inspect_import("archive.zip", *info) != 0 || info.valid != 0 ||
+    info.has_sessions != 0 || info.has_habits != 0 || info.has_settings != 0 ||
+    info.session_count != 0 || info.habit_count != 0 || info.setting_count != 0 {
+        return 6
+    }
+    if storage_export_zip("archive.zip") != 0 ||
+    storage_import_zip("archive.zip") != 0 ||
+    storage_import_zip_ex("archive.zip", 1) != 0 {
+        return 7
+    }
+    return 0
+}

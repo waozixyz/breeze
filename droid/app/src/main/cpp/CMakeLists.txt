@@ -9,25 +9,14 @@ else()
     set(CMAKE_C_COMPILER_LAUNCHER "" CACHE STRING "" FORCE)
 endif()
 
-set(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../..")
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 set(SRC_DIR "${REPO_ROOT}/src")
+set(MONOCYPHER_DIR "${REPO_ROOT}/vendor/monocypher/src")
 if(NOT DEFINED KRYON_DIR)
     set(KRYON_DIR "${REPO_ROOT}/vendor/kryon")
 endif()
 get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}")
 set(RAYLIB_DIR "${KRYON_DIR}/vendor/raylib/src")
-set(KRYON_RAYLIB_GENERATED_DIR "${CMAKE_BINARY_DIR}/kryon/raylib_generated")
-set(KRYON_COMPAT_GENERATED_HEADER "${KRYON_RAYLIB_GENERATED_DIR}/kryon_compat.generated.h")
-set(KRYON_RAYLIB_BACKEND_RENAME_HEADER "${KRYON_RAYLIB_GENERATED_DIR}/raylib_backend_rename.h")
-set(KRYON_RAYLIB_WRAPPERS_C "${KRYON_RAYLIB_GENERATED_DIR}/kryon_raylib_wrappers.c")
-set(KRYON_NULL_BACKEND_C "${KRYON_RAYLIB_GENERATED_DIR}/kryon_null_backend.c")
-# Icon outputs must live outside kryon/generated: the k2c regeneration step
-# wipes that whole directory, which would delete these mid-build.
-set(KRYON_ICON_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/kryon/generated-icons/include")
-set(KRYON_ICON_GENERATED_SRC_DIR "${CMAKE_BINARY_DIR}/kryon/generated-icons/src")
-set(KRYON_ICON_ASSETS_C "${KRYON_ICON_GENERATED_SRC_DIR}/ui/ui_icon_assets.c")
-set(KRYON_ICON_NAMES_C "${KRYON_ICON_GENERATED_SRC_DIR}/ui/ui_icon_names.c")
-set(KRYON_ICON_TYPES_H "${KRYON_ICON_GENERATED_INCLUDE_DIR}/ui_icon_types.h")
 set(SQLITE_DIR "${REPO_ROOT}/vendor/sqlite")
 set(SQLITE_BUILD_DIR "${CMAKE_BINARY_DIR}/sqlite")
 set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
@@ -43,200 +32,139 @@ foreach(oqs_x86_feature
         BMI1 BMI2 FMA PCLMULQDQ POPCNT SSE SSE2 SSE3 VPCLMULQDQ)
     set(OQS_USE_${oqs_x86_feature}_INSTRUCTIONS OFF CACHE BOOL "" FORCE)
 endforeach()
-add_subdirectory("${KRYON_DIR}/vendor/liboqs" "${CMAKE_BINARY_DIR}/liboqs")
+add_subdirectory("${REPO_ROOT}/vendor/liboqs" "${CMAKE_BINARY_DIR}/liboqs")
 if(NOT TARGET oqs)
     message(FATAL_ERROR "Android builds require liboqs for sync account crypto")
 endif()
-file(GLOB_RECURSE KRYON_SOURCES CONFIGURE_DEPENDS "${KRYON_DIR}/src/*.c")
-list(REMOVE_ITEM KRYON_SOURCES "${KRYON_DIR}/src/file_dialog/file_dialog.c")
-list(REMOVE_ITEM KRYON_SOURCES "${KRYON_DIR}/src/ui/ui_icon_assets.c")
-list(REMOVE_ITEM KRYON_SOURCES "${KRYON_DIR}/src/ui/ui_icon_names.c")
-# The src/backend/ canvas/software renderers implement raylib-named functions
-# for no-raylib hosts; Android links real raylib, so compiling those is a
-# duplicate-symbol link error. Keep Kryon's shared front-end backend glue.
-list(FILTER KRYON_SOURCES EXCLUDE REGEX "${KRYON_DIR}/src/backend/.*")
-list(FILTER KRYON_SOURCES EXCLUDE REGEX "${KRYON_DIR}/src/platform/plan9/.*")
-list(APPEND KRYON_SOURCES
-    "${KRYON_DIR}/src/backend/kry_backend.c"
-    "${KRYON_DIR}/src/backend/kry_backend_draw.c"
-    "${KRYON_DIR}/src/backend/kry_dpi.c"
-    "${KRYON_DIR}/src/backend/kry_event_wait.c"
-    "${KRYON_DIR}/src/backend/kry_icon_atlas.c"
-    "${KRYON_DIR}/src/backend/kry_layer_texture.c"
-    "${KRYON_DIR}/src/backend/kry_style_build_mode.c"
-    "${KRYON_DIR}/src/backend/kry_ui_platform.c"
-    "${KRYON_DIR}/src/backend/kry_unicode.c"
-    "${KRYON_DIR}/src/backend/kry_image.c"
-    "${KRYON_DIR}/src/backend/kry_image_decode.c"
-    "${KRYON_DIR}/src/backend/kry_input.c"
-    "${KRYON_DIR}/src/backend/kry_instance.c"
-    "${KRYON_DIR}/src/backend/kry_screenshot.c"
-    "${KRYON_DIR}/src/backend/kry_sw_png.c"
-    "${KRYON_DIR}/src/backend/kry_surface_math.c"
-    "${KRYON_ICON_ASSETS_C}"
-    "${KRYON_ICON_NAMES_C}")
-# this app is UI-only: drop the 2D physics subsystem (Box2D). Mirror the
-# KRYON_PHYSICS_SRCS filter the desktop Makefile applies via vendor.mk.
-list(REMOVE_ITEM KRYON_SOURCES
-    "${KRYON_DIR}/src/scene/physics_world.c"
-    "${KRYON_DIR}/src/scene/node_body2d.c"
-    "${KRYON_DIR}/src/scene/node_area2d.c"
-    "${KRYON_DIR}/src/scene/node_collision_shape2d.c")
-file(GLOB KRYON_K2C_SOURCES CONFIGURE_DEPENDS "${KRYON_DIR}/cmd/k2c/*.c")
-file(GLOB KRYON_KIR_SOURCES CONFIGURE_DEPENDS "${KRYON_DIR}/cmd/kir/*.c")
-file(GLOB KRYON_K2C_HEADERS CONFIGURE_DEPENDS
-    "${KRYON_DIR}/cmd/k2c/*.h" "${KRYON_DIR}/cmd/kir/*.h")
-list(APPEND KRYON_K2C_SOURCES ${KRYON_KIR_SOURCES}
-    "${KRYON_DIR}/src/kry_std/kry_json.c")
-list(SORT KRYON_K2C_SOURCES)
-find_program(HOST_CC NAMES cc clang gcc REQUIRED)
+set(ZIRAN_DIR "${REPO_ROOT}/vendor/ziran")
+set(ZIRAN_BUILD_DIR "${REPO_ROOT}/build/ziran-toolchain")
+set(ZI2C_BIN "${ZIRAN_BUILD_DIR}/bin/zi2c")
+set(ZI2ZIR_BIN "${ZIRAN_BUILD_DIR}/bin/zi2zir")
+file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS
+    "${ZIRAN_DIR}/cmd/zir/*.c" "${ZIRAN_DIR}/cmd/zir/*.h"
+    "${ZIRAN_DIR}/cmd/zir-c/*.c" "${ZIRAN_DIR}/cmd/zir-c/*.h"
+    "${ZIRAN_DIR}/cmd/zir-ir/*.c" "${ZIRAN_DIR}/cmd/zir-ir/*.h")
+find_program(HOST_MAKE NAMES make gmake REQUIRED)
 find_program(HOST_PYTHON NAMES python3 REQUIRED)
 find_program(HOST_NODE NAMES node REQUIRED)
 set(APP_PROOF_DIR "${CMAKE_BINARY_DIR}/proofs")
 add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-sync-retry.mjs"
-        "${APP_PROOF_DIR}/sync_retry_table.h"
+        "${SRC_DIR}/app/sync_retry.zi"
     COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-storage-layout.mjs"
-        "${APP_PROOF_DIR}/storage_layout.h"
-    BYPRODUCTS "${APP_PROOF_DIR}/sync_retry_table.h"
-        "${APP_PROOF_DIR}/storage_layout.h"
+        "${APP_PROOF_DIR}/storage_layout.h" "${SRC_DIR}/storage/storage_layout.zi"
+    BYPRODUCTS "${APP_PROOF_DIR}/storage_layout.h"
     WORKING_DIRECTORY "${REPO_ROOT}"
     COMMENT "Checking release consistency and proving app laws"
     VERBATIM
 )
-set(KRYON_K2C "${CMAKE_BINARY_DIR}/host-tools/k2c")
-# needs the kir headers on the include path
-set(APP_KRY_GEN_DIR "${CMAKE_BINARY_DIR}/kryon/generated")
-file(GLOB_RECURSE APP_KRY_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.kry")
-list(SORT APP_KRY_SOURCES)
-# App-layer sources are cross-platform modules that belong in every build.
-# Glob them so adding an app .c file needs no edit here -- this list had
-# drifted out of sync with the Makefile APP_SRCS more than once.
-file(GLOB APP_C_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/app/*.c")
-list(SORT APP_C_SOURCES)
-set(APP_KRY_GENERATED_SOURCES)
-set(APP_KRY_GENERATED_HEADERS)
-set(APP_KRY_COMMAND_SOURCES)
-foreach(kry_source ${APP_KRY_SOURCES})
-    file(RELATIVE_PATH kry_rel "${REPO_ROOT}" "${kry_source}")
-    list(APPEND APP_KRY_COMMAND_SOURCES "${kry_rel}")
-    get_filename_component(kry_rel_dir "${kry_rel}" DIRECTORY)
-    get_filename_component(kry_name "${kry_rel}" NAME_WE)
-    set(kry_output_c "${APP_KRY_GEN_DIR}/${kry_rel_dir}/${kry_name}.c")
-    set(kry_output_h "${APP_KRY_GEN_DIR}/${kry_rel_dir}/${kry_name}.h")
-    list(APPEND APP_KRY_GENERATED_SOURCES "${kry_output_c}")
-    list(APPEND APP_KRY_GENERATED_HEADERS "${kry_output_h}")
-endforeach()
-set(APP_KRY_PROJECT_HEADER "${APP_KRY_GEN_DIR}/kryon_project.h")
 add_custom_command(
-    OUTPUT ${APP_KRY_GENERATED_SOURCES} ${APP_KRY_GENERATED_HEADERS} "${APP_KRY_PROJECT_HEADER}"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory "${APP_KRY_GEN_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_KRY_GEN_DIR}"
-    COMMAND "${KRYON_K2C}" --root "${REPO_ROOT}" -o "${APP_KRY_GEN_DIR}" ${APP_KRY_COMMAND_SOURCES}
-    DEPENDS ${APP_KRY_SOURCES} "${KRYON_K2C}"
-    WORKING_DIRECTORY "${REPO_ROOT}"
+    OUTPUT "${ZI2C_BIN}"
+    BYPRODUCTS "${ZI2ZIR_BIN}"
+    COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+        "BUILD_DIR=${ZIRAN_BUILD_DIR}" all
+    DEPENDS ${ZIRAN_SOURCES} "${ZIRAN_DIR}/Makefile"
     VERBATIM
 )
-add_custom_command(
-    OUTPUT "${KRYON_K2C}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/host-tools"
-    # VERBATIM escapes embedded quotes, so unquoted -I paths (no spaces here)
-    COMMAND "${HOST_CC}" -Wall -Wextra -O2 -I${KRYON_DIR}/include -I${KRYON_DIR}/cmd/kir -I${KRYON_DIR}/cmd/k2c -o "${KRYON_K2C}" ${KRYON_K2C_SOURCES}
-    DEPENDS ${KRYON_K2C_SOURCES} ${KRYON_K2C_HEADERS}
-    VERBATIM
-)
-# Kryon ships part of its runtime as Kry modules transpiled at build time
-# (runtime/*.kry -> generated/src/runtime/*.c). Downstream C builds compile
-# the generated sources and put their directory on the include path so
-# kryon's own C files can #include "runtime/*.h".
-set(KRYON_RUNTIME_GEN_DIR "${CMAKE_BINARY_DIR}/kryon/generated-runtime")
-file(GLOB KRYON_RUNTIME_MODULE_FILES CONFIGURE_DEPENDS
-    "${KRYON_DIR}/runtime/*.kry")
-set(KRYON_RUNTIME_KRY_MODULES)
-foreach(kryon_module_file ${KRYON_RUNTIME_MODULE_FILES})
-    file(RELATIVE_PATH kryon_module "${KRYON_DIR}" "${kryon_module_file}")
-    list(APPEND KRYON_RUNTIME_KRY_MODULES "${kryon_module}")
-endforeach()
-set(KRYON_RUNTIME_KRY_FILES)
-set(KRYON_RUNTIME_GENERATED_C)
-foreach(kryon_module ${KRYON_RUNTIME_KRY_MODULES})
-    list(APPEND KRYON_RUNTIME_KRY_FILES "${KRYON_DIR}/${kryon_module}")
-    string(REGEX REPLACE "\\.kry$" ".c" kryon_module_c "${kryon_module}")
-    list(APPEND KRYON_RUNTIME_GENERATED_C "${KRYON_RUNTIME_GEN_DIR}/${kryon_module_c}")
-endforeach()
-add_custom_command(
-    OUTPUT ${KRYON_RUNTIME_GENERATED_C}
-    COMMAND "${KRYON_K2C}" --strict --no-main --root "${KRYON_DIR}" -o "${KRYON_RUNTIME_GEN_DIR}" ${KRYON_RUNTIME_KRY_MODULES}
-    DEPENDS "${KRYON_K2C}" ${KRYON_RUNTIME_KRY_FILES}
-    WORKING_DIRECTORY "${KRYON_DIR}"
-    VERBATIM
-)
-add_custom_target(kryon_runtime_generated DEPENDS ${KRYON_RUNTIME_GENERATED_C})
-list(APPEND KRYON_SOURCES ${KRYON_RUNTIME_GENERATED_C})
-# Kryon's .kry-backed UI modules generate the public ui/*.h headers that the
-# retained handwritten src/ui/*.c host services include, plus the generated
-# implementations for the migrated widgets. Mirrors the root Makefile's
-# KRYON_UI pass (k2c --no-main --root kryon/src), which runs after the
-# runtime pass.
-set(KRYON_UI_GEN_DIR "${CMAKE_BINARY_DIR}/kryon/generated-ui")
-file(GLOB KRYON_UI_MODULE_FILES CONFIGURE_DEPENDS
-    "${KRYON_DIR}/src/ui/*.kry")
-set(KRYON_UI_GENERATED_C)
-foreach(kryon_module_file ${KRYON_UI_MODULE_FILES})
-    file(RELATIVE_PATH kryon_module "${KRYON_DIR}/src" "${kryon_module_file}")
-    string(REGEX REPLACE "\\.kry$" ".c" kryon_module_c "${kryon_module}")
-    list(APPEND KRYON_UI_GENERATED_C "${KRYON_UI_GEN_DIR}/${kryon_module_c}")
-endforeach()
-add_custom_command(
-    OUTPUT ${KRYON_UI_GENERATED_C}
-    COMMAND "${KRYON_K2C}" --no-main --root "${KRYON_DIR}/src" -o "${KRYON_UI_GEN_DIR}" ${KRYON_UI_MODULE_FILES}
-    DEPENDS "${KRYON_K2C}" ${KRYON_UI_MODULE_FILES} ${KRYON_RUNTIME_GENERATED_C}
-    WORKING_DIRECTORY "${KRYON_DIR}"
-    VERBATIM
-)
-add_custom_target(kryon_ui_generated DEPENDS ${KRYON_UI_GENERATED_C})
-list(APPEND KRYON_SOURCES ${KRYON_UI_GENERATED_C})
-add_custom_target(app_kry_generated DEPENDS
-    ${APP_KRY_GENERATED_SOURCES}
-    ${APP_KRY_GENERATED_HEADERS}
-    "${APP_KRY_PROJECT_HEADER}"
-)
-add_custom_target(app_clean_runtime_api
-    COMMAND "${HOST_PYTHON}"
-        "${KRYON_DIR}/scripts/check-clean-text-api.py"
-        "${SRC_DIR}"
-    WORKING_DIRECTORY "${REPO_ROOT}"
-    COMMENT "Rejecting stale or duplicate Kryon runtime API usage"
-    VERBATIM
-)
-add_dependencies(app_kry_generated app_clean_runtime_api app_build_laws)
+set(APP_ZIRAN_GEN_DIR "${CMAKE_BINARY_DIR}/ziran/generated")
+set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
+file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
+file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
+    "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
+    "${KRYON_DIR}/src/kss/*.zi" "${REPO_ROOT}/vendor/game2d/src/*.zi"
+    "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/vendor/daochi-client/*.zi")
+set(APP_ZIRAN_DEFINES --define ANDROID_BUILD)
+set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD")
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(APP_ZIRAN_ARCH __aarch64__)
+elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+    set(APP_ZIRAN_ARCH __arm__)
+elseif(ANDROID_ABI STREQUAL "x86_64")
+    set(APP_ZIRAN_ARCH __x86_64__)
+elseif(ANDROID_ABI STREQUAL "x86")
+    set(APP_ZIRAN_ARCH __i386__)
+else()
+    message(FATAL_ERROR "Unsupported Android ABI: ${ANDROID_ABI}")
+endif()
+list(APPEND APP_ZIRAN_DEFINES --define ${APP_ZIRAN_ARCH})
+string(APPEND APP_ZIRAN_CHECK_DEFINES " ${APP_ZIRAN_ARCH}")
 
+# CMake needs the complete emitted import graph before it creates build rules.
+# Run the same required law gates before this initial source generation.
+execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+    "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-sync-retry.mjs"
+    "${SRC_DIR}/app/sync_retry.zi" WORKING_DIRECTORY "${REPO_ROOT}"
+    COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-storage-layout.mjs"
+    "${APP_PROOF_DIR}/storage_layout.h" "${SRC_DIR}/storage/storage_layout.zi"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+set(APP_GENERATE_ZIRAN_COMMAND "${HOST_PYTHON}"
+    "${REPO_ROOT}/scripts/generate-android-sources.py"
+    --compiler "${ZI2C_BIN}" --root "${REPO_ROOT}" --kryon "${KRYON_DIR}"
+    --output "${APP_ZIRAN_GEN_DIR}" --manifest "${APP_ZIRAN_MANIFEST}"
+    ${APP_ZIRAN_DEFINES})
+set(APP_ZIRAN_STAMP "${CMAKE_BINARY_DIR}/ziran/generated.stamp")
+set(APP_ZIRAN_INPUTS_FILE "${CMAKE_BINARY_DIR}/ziran/generation-inputs.txt")
+set(APP_ZIRAN_INPUTS "${APP_GENERATE_ZIRAN_COMMAND};${APP_ZIRAN_SOURCES};${APP_LIBRARY_ZIRAN_SOURCES}")
+set(APP_ZIRAN_GENERATE TRUE)
+if(EXISTS "${APP_ZIRAN_MANIFEST}" AND EXISTS "${APP_ZIRAN_STAMP}" AND
+        EXISTS "${APP_ZIRAN_INPUTS_FILE}")
+    file(READ "${APP_ZIRAN_INPUTS_FILE}" APP_ZIRAN_OLD_INPUTS)
+    if(APP_ZIRAN_OLD_INPUTS STREQUAL APP_ZIRAN_INPUTS)
+        set(APP_ZIRAN_GENERATE FALSE)
+        include("${APP_ZIRAN_MANIFEST}")
+        foreach(input ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES}
+                "${ZI2C_BIN}" "${REPO_ROOT}/scripts/generate-android-sources.py")
+            if("${input}" IS_NEWER_THAN "${APP_ZIRAN_STAMP}")
+                set(APP_ZIRAN_GENERATE TRUE)
+            endif()
+        endforeach()
+        foreach(output ${APP_ZIRAN_GENERATED_SOURCES} ${APP_ZIRAN_GENERATED_HEADERS})
+            if(NOT EXISTS "${output}")
+                set(APP_ZIRAN_GENERATE TRUE)
+            endif()
+        endforeach()
+    endif()
+endif()
+if(APP_ZIRAN_GENERATE)
+    execute_process(COMMAND ${APP_GENERATE_ZIRAN_COMMAND}
+        WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+    file(WRITE "${APP_ZIRAN_INPUTS_FILE}" "${APP_ZIRAN_INPUTS}")
+    file(TOUCH "${APP_ZIRAN_STAMP}")
+endif()
+include("${APP_ZIRAN_MANIFEST}")
 add_custom_command(
-    OUTPUT
-        "${KRYON_COMPAT_GENERATED_HEADER}"
-        "${KRYON_RAYLIB_BACKEND_RENAME_HEADER}"
-        "${KRYON_RAYLIB_WRAPPERS_C}"
-        "${KRYON_NULL_BACKEND_C}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${KRYON_RAYLIB_GENERATED_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E env KRYON_COMPAT_AUDIO=0
-        sh "${KRYON_DIR}/tools/generate-kryon-compat.sh"
-        "${RAYLIB_DIR}/raylib.h"
-        "${KRYON_COMPAT_GENERATED_HEADER}"
-        "${KRYON_RAYLIB_BACKEND_RENAME_HEADER}"
-        "${KRYON_RAYLIB_WRAPPERS_C}"
-        "${KRYON_NULL_BACKEND_C}"
-    DEPENDS "${KRYON_DIR}/tools/generate-kryon-compat.sh" "${RAYLIB_DIR}/raylib.h"
-    VERBATIM
-)
-add_custom_target(kryon_raylib_generated DEPENDS
-    "${KRYON_COMPAT_GENERATED_HEADER}"
-    "${KRYON_RAYLIB_BACKEND_RENAME_HEADER}"
-    "${KRYON_RAYLIB_WRAPPERS_C}"
-    "${KRYON_NULL_BACKEND_C}"
-)
+    OUTPUT "${APP_ZIRAN_STAMP}"
+    BYPRODUCTS ${APP_ZIRAN_GENERATED_SOURCES} ${APP_ZIRAN_GENERATED_HEADERS}
+    COMMAND ${APP_GENERATE_ZIRAN_COMMAND}
+    COMMAND ${CMAKE_COMMAND} -E touch "${APP_ZIRAN_STAMP}"
+    DEPENDS ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES} "${ZI2C_BIN}"
+        "${REPO_ROOT}/scripts/generate-android-sources.py"
+        "${REPO_ROOT}/scripts/run-ziran.sh"
+    WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
+add_custom_target(app_ziran_generated DEPENDS "${APP_ZIRAN_STAMP}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES}
+    "${REPO_ROOT}/scripts/generate-android-sources.py")
+set_source_files_properties(${APP_ZIRAN_GENERATED_SOURCES}
+    ${APP_ZIRAN_GENERATED_HEADERS} PROPERTIES GENERATED TRUE)
+add_custom_target(app_clean_runtime_api
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-clean-text-api.py" "${SRC_DIR}"
+    WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
+add_custom_target(app_zi_check
+    COMMAND ${CMAKE_COMMAND} -E env "ZI_CHECK_DEFINES=${APP_ZIRAN_CHECK_DEFINES}"
+        "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-zi-sources.py" "${ZI2ZIR_BIN}"
+    DEPENDS "${ZI2C_BIN}" WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
+add_dependencies(app_zi_check app_build_laws)
+add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi_check)
+
 file(GLOB APP_LOCALE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/locales/*.txt")
 file(GLOB APP_SOUND_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/sounds/*.ogg")
+file(GLOB APP_SOCIAL_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/social/*.png")
 file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/practices/*/banner*.png")
 file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
     "${KRYON_DIR}/styles/kryon/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
@@ -251,6 +179,7 @@ endforeach()
 set(APP_EMBEDDED_INPUTS
     ${APP_STYLE_ASSETS}
     ${APP_LOCALE_ASSETS}
+    assets/app/icon.png
     assets/app/icon-sky-cradle.png
     assets/app/icon-ink-and-air.png
     assets/easteregg/art.png
@@ -259,9 +188,14 @@ set(APP_EMBEDDED_INPUTS
     assets/practices/whm/2.png
     assets/practices/meditation/1.png
     assets/pet/egg1.png
+    vendor/kryon/icons/ui.png
+    vendor/kryon/icons/pfp.png
     ${APP_PRACTICE_BANNER_ASSETS}
+    ${APP_SOCIAL_ASSETS}
     assets/practices/sunsalutation/poses_man_sheet.png
     assets/practices/sunsalutation/poses_woman_sheet.png
+    assets/practices/sunsalutation/transition_01_01_to_02_man_sheet.png
+    assets/practices/sunsalutation/transition_02_02_to_03_man_sheet.png
     assets/fonts/subset/NotoSans-App-Regular.ttf
     assets/fonts/subset/NotoSansSC-App-Regular.otf
     assets/fonts/subset/NotoSansJP-App-Regular.otf
@@ -277,8 +211,9 @@ set(APP_EMBEDDED_ASSETS_C "${CMAKE_BINARY_DIR}/app_embedded_assets.c")
 
 add_custom_command(
     OUTPUT "${APP_EMBEDDED_ASSETS_C}"
-    COMMAND sh "${KRYON_DIR}/scripts/embed-assets.sh" "${APP_EMBEDDED_ASSETS_C}" ${APP_EMBEDDED_INPUTS}
-    DEPENDS "${KRYON_DIR}/scripts/embed-assets.sh" ${APP_EMBEDDED_DEPS}
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/embed-app-assets.py"
+        "${APP_EMBEDDED_ASSETS_C}" ${APP_EMBEDDED_INPUTS}
+    DEPENDS "${REPO_ROOT}/scripts/embed-app-assets.py" ${APP_EMBEDDED_DEPS}
     WORKING_DIRECTORY "${REPO_ROOT}"
     VERBATIM
 )
@@ -299,7 +234,6 @@ add_library(raylib STATIC
     "${RAYLIB_DIR}/rtext.c"
     "${RAYLIB_DIR}/raudio.c"
 )
-add_dependencies(raylib kryon_raylib_generated)
 
 target_compile_definitions(raylib PRIVATE
     PLATFORM_ANDROID
@@ -320,7 +254,6 @@ target_compile_definitions(raylib PRIVATE
 )
 
 target_compile_options(raylib PRIVATE
-    -include "${KRYON_RAYLIB_BACKEND_RENAME_HEADER}"
     -Oz
     -ffunction-sections
     -fdata-sections
@@ -332,67 +265,29 @@ target_include_directories(raylib PUBLIC
 )
 
 add_library(main SHARED
-    "${SRC_DIR}/platform/main_host.c"
-    ${APP_C_SOURCES}
-    "${SRC_DIR}/storage/storage_json_builder.c"
+    "${MONOCYPHER_DIR}/monocypher.c"
+    "${MONOCYPHER_DIR}/optional/monocypher-ed25519.c"
     "${SQLITE_AMALGAMATION_C}"
-    "${SRC_DIR}/platform/android/android_device.c"
-    "${SRC_DIR}/platform/android/android_share.c"
     "${APP_EMBEDDED_ASSETS_C}"
-    ${APP_KRY_GENERATED_SOURCES}
-    ${KRYON_SOURCES}
-    "${KRYON_RAYLIB_WRAPPERS_C}"
-    "${SRC_DIR}/platform/android/android_insets.c"
+    ${APP_ZIRAN_GENERATED_SOURCES}
     "${NATIVE_APP_GLUE_DIR}/android_native_app_glue.c"
 )
-add_dependencies(main app_kry_generated kryon_raylib_generated
-    kryon_runtime_generated kryon_ui_generated app_build_laws)
-
-file(GLOB_RECURSE KRYON_ICON_FILES CONFIGURE_DEPENDS "${KRYON_DIR}/icons/*.png" "${KRYON_DIR}/icons/*.json")
-add_custom_command(
-    OUTPUT "${KRYON_ICON_ASSETS_C}" "${KRYON_ICON_NAMES_C}" "${KRYON_ICON_TYPES_H}"
-    COMMAND "${HOST_PYTHON}" "${KRYON_DIR}/scripts/embed-icon-sheets.py"
-            icons
-            "${KRYON_ICON_ASSETS_C}"
-            --types-output "${KRYON_ICON_TYPES_H}"
-            --names-output "${KRYON_ICON_NAMES_C}"
-    DEPENDS "${KRYON_DIR}/scripts/embed-icon-sheets.py" ${KRYON_ICON_FILES}
-    WORKING_DIRECTORY "${KRYON_DIR}"
-    VERBATIM)
-add_custom_target(kryon_icon_assets_generated DEPENDS "${KRYON_ICON_ASSETS_C}" "${KRYON_ICON_NAMES_C}" "${KRYON_ICON_TYPES_H}")
-add_dependencies(main kryon_icon_assets_generated)
+add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
 
 target_include_directories(main PRIVATE
     "${APP_PROOF_DIR}"
-    "${KRYON_ICON_GENERATED_INCLUDE_DIR}"
-    "${KRYON_DIR}/include"
-    "${KRYON_DIR}/src"
-    "${KRYON_DIR}/src/ui"
-    "${KRYON_DIR}/src/platform"
-    "${KRYON_DIR}/src/backend"
-    "${KRYON_DIR}/vendor/utf8proc"
-    "${KRYON_DIR}/vendor/monocypher/src"
-    "${KRYON_DIR}/vendor/monocypher/src/optional"
-    "${SRC_DIR}"
+    "${ZIRAN_DIR}/include"
+    "${MONOCYPHER_DIR}"
+    "${MONOCYPHER_DIR}/optional"
     "${SRC_DIR}/app"
-    "${SRC_DIR}/core"
-    "${SRC_DIR}/screens"
-    "${SRC_DIR}/screens/settings"
-    "${SRC_DIR}/practices"
-    "${SRC_DIR}/practices/whm"
-    "${SRC_DIR}/practices/meditation"
-    "${SRC_DIR}/practices/sun_salutation"
-    "${SRC_DIR}/storage"
-    "${SRC_DIR}/platform/android"
-    "${SRC_DIR}/third_party"
-    "${APP_KRY_GEN_DIR}"
-    "${APP_KRY_GEN_DIR}/src"
-    "${KRYON_RUNTIME_GEN_DIR}"
-    "${KRYON_RUNTIME_GEN_DIR}/runtime"
-    "${KRYON_UI_GEN_DIR}"
     "${NATIVE_APP_GLUE_DIR}"
     "${SQLITE_BUILD_DIR}"
 )
+# Generated module names such as math.h must not shadow libc's <math.h>
+# in SQLite and other native dependencies. Zi imports use quoted includes.
+foreach(directory ${APP_ZIRAN_INCLUDE_DIRS})
+    target_compile_options(main PRIVATE "-iquote${directory}")
+endforeach()
 
 target_compile_definitions(main PRIVATE
     PLATFORM_ANDROID
@@ -419,6 +314,19 @@ target_compile_options(main PRIVATE
     -fdata-sections
     -fvisibility=hidden
 )
+# The VM locates this exported entry before native methods are registered.
+foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
+    get_filename_component(source_name "${source}" NAME)
+    if(source_name STREQUAL "android_insets.c")
+        set_source_files_properties("${source}"
+            PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
+    elseif(source_name STREQUAL "main.c")
+        # Raylib invokes this shared-library entry itself; its Zi argv is
+        # byte pointers, so hosted C's spelling rule for main does not apply.
+        set_source_files_properties("${source}"
+            PROPERTIES COMPILE_OPTIONS "-ffreestanding")
+    endif()
+endforeach()
 
 target_link_options(main PRIVATE
     -Wl,--gc-sections
@@ -433,7 +341,9 @@ endif()
 target_link_libraries(main
     raylib
     oqs
+    atomic
     android
+    dl
     log
     OpenSLES
     EGL

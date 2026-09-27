@@ -1,0 +1,471 @@
+c :: #system_library "c";
+
+FrameTextCapacity :: 16384
+
+FrameTextStore :: struct {
+    bytes: [FrameTextCapacity]u8
+    used: s32
+}
+
+// Borrow text from an app-owned, bounded NUL-terminated buffer. The caller
+// keeps the buffer alive while the returned string is in use.
+app_text_from_cstring_host :: (data: *u8, capacity: s32) -> string #foreign c "app_text_from_cstring";
+app_append_text_host :: (dst: *u8, dst_size: s64, src: string) #foreign c "app_append_text";
+
+// C ABI callers still share these bounded text operations during the Ziran
+// migration. Keep the storage and truncation policy in Ziran.
+#program_export "app_copy_text"
+CopyTextToBuffer :: (dst: *u8, dst_size: s64, src: string) {
+    if dst == null || dst_size <= 0 {
+        return
+    }
+    limit: s64 = dst_size - 1
+    count: s64 = src.count
+    if count > limit {
+        count = limit
+    }
+    index: s64 = 0
+    while index < count && src[index] != cast(u8)0 {
+        dst[index] = src[index]
+        index += 1
+    }
+    dst[index] = cast(u8)0
+}
+
+#program_export "app_append_text"
+AppendTextToBuffer :: (dst: *u8, dst_size: s64, src: string) {
+    if dst == null || dst_size <= 0 {
+        return
+    }
+    index: s64 = 0
+    while index < dst_size && dst[index] != cast(u8)0 {
+        index += 1
+    }
+    if index == dst_size {
+        return
+    }
+    source_index: s64 = 0
+    while source_index < src.count && index + 1 < dst_size &&
+        src[source_index] != cast(u8)0 {
+        dst[index] = src[source_index]
+        source_index += 1
+        index += 1
+    }
+    dst[index] = cast(u8)0
+}
+
+#program_export
+AppTextFromCString :: (data: *u8, capacity: s32) -> string {
+    if data == null || capacity <= 0 {
+        return ""
+    }
+    return app_text_from_cstring_host(data, capacity)
+}
+
+// Copy borrowed text into caller-owned, NUL-terminated byte storage.
+#program_export
+AppCopyText :: (value: string, output: []u8) -> bool {
+    length: s32 = cast(s32)value.count
+    if length >= cast(s32)output.count { return false }
+    index: s32 = 0
+    while index < length {
+        byte: u8 = value[index]
+        if byte == cast(u8)0 { return false }
+        output[index] = byte
+        index += 1
+    }
+    output[length] = cast(u8)0
+    return true
+}
+
+// Apply a widget's byte range edit to a NUL-terminated, app-owned buffer.
+// The replacement must have separate storage from the destination buffer.
+#program_export
+AppReplaceText :: (output: []u8, start: s32, end: s32,
+    replacement: string) -> bool {
+    if output.count == 0 || output.count > 2147483647 ||
+        replacement.count >= output.count {
+        return false
+    }
+
+    capacity: s32 = cast(s32)output.count
+    length: s32 = 0
+    while length < capacity && output[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == capacity || start < 0 || end < start || end > length {
+        return false
+    }
+
+    added: s32 = cast(s32)replacement.count
+    new_length: s64 = cast(s64)length - cast(s64)(end - start) +
+        cast(s64)added
+    if new_length >= cast(s64)capacity {
+        return false
+    }
+    index: s32 = 0
+    while index < added {
+        if replacement[index] == cast(u8)0 { return false }
+        index += 1
+    }
+
+    shift: s32 = added - (end - start)
+    if shift > 0 {
+        index = length
+        while index >= end {
+            output[index + shift] = output[index]
+            index -= 1
+        }
+    } else if shift < 0 {
+        index = end
+        while index <= length {
+            output[index + shift] = output[index]
+            index += 1
+        }
+    }
+
+    index = 0
+    while index < added {
+        output[start + index] = replacement[index]
+        index += 1
+    }
+    return true
+}
+
+// Write a signed decimal into NUL-terminated byte storage.
+#program_export
+AppFormatS32 :: (value: s32, output: []u8) -> bool {
+    digits: [16]u8
+    length: s32 = 0
+    remaining: s32 = value
+    if remaining < 0 {
+        if cast(u32)remaining == cast(u32)2147483648 {
+            return AppCopyText("-2147483648", output)
+        }
+        remaining = -remaining
+    }
+    if remaining == 0 {
+        digits[length] = cast(u8)48
+        length += 1
+    }
+    while remaining > 0 {
+        digit: s32 = remaining % 10
+        digits[length] = cast(u8)(digit + 48)
+        length += 1
+        remaining = remaining / 10
+    }
+    if value < 0 {
+        digits[length] = cast(u8)45
+        length += 1
+    }
+    if length + 1 > cast(s32)output.count { return false }
+    index: s32 = 0
+    while index < length {
+        output[index] = digits[length - 1 - index]
+        index += 1
+    }
+    output[length] = cast(u8)0
+    return true
+}
+
+// Write a signed 64-bit decimal into NUL-terminated caller storage.
+#program_export
+AppFormatS64 :: (value: s64, output: []u8) -> bool {
+    digits: [20]u8
+    length: s32 = 0
+    negative := value < 0
+    magnitude: u64
+    if negative {
+        magnitude = cast(u64)(-(value + 1)) + 1
+    } else {
+        magnitude = cast(u64)value
+    }
+    if magnitude == 0 {
+        digits[length] = cast(u8)48
+        length += 1
+    }
+    while magnitude > 0 {
+        digits[length] = cast(u8)(magnitude % 10 + 48)
+        length += 1
+        magnitude = magnitude / 10
+    }
+    if negative {
+        digits[length] = cast(u8)45
+        length += 1
+    }
+    if cast(s64)length + 1 > cast(s64)output.count { return false }
+    index: s32 = 0
+    while index < length {
+        output[index] = digits[length - index - 1]
+        index += 1
+    }
+    output[length] = cast(u8)0
+    return true
+}
+
+// A queued Kryon text command borrows its label until the frame is flushed.
+// Reset only after the preceding frame has finished rendering.
+#program_export
+FrameTextReset :: (store: *FrameTextStore) {
+    if store != null { store.used = 0 }
+}
+
+#program_export
+FrameTextHold :: (store: *FrameTextStore, value: string) -> string {
+    if store == null || value.count == 0 { return "" }
+    if value.count >= FrameTextCapacity { return "" }
+    length := cast(s32)value.count
+    if store.used < 0  || length >= FrameTextCapacity - store.used {
+        return ""
+    }
+    start := store.used
+    index: s32 = 0
+    while index < length {
+        byte := value[index]
+        if byte == cast(u8)0 { return "" }
+        store.bytes[start + index] = byte
+        index += 1
+    }
+    store.bytes[start + length] = cast(u8)0
+    store.used += length + 1
+    return AppTextFromCString(*store.bytes[start], length + 1)
+}
+
+TextBufferAppendByte :: (output: []u8, cursor: *s32,
+    byte: u8) -> bool {
+    if cursor.* < 0 || cursor.* + 1 >= cast(s32)output.count {
+        if output.count > 0 { output[0] = cast(u8)0 }
+        return false
+    }
+    output[cursor.*] = byte
+    cursor.* += 1
+    output[cursor.*] = cast(u8)0
+    return true
+}
+
+TextBufferAppendPaddedNumber :: (output: []u8, cursor: *s32,
+    value: s32, minimum_width: s32) -> bool {
+    magnitude := cast(s64)value
+    negative := magnitude < 0
+    if negative {
+        magnitude = -magnitude
+    }
+    digits: [12]u8
+    digit_count: s32 = 0
+    if magnitude == 0 {
+        digits[0] = cast(u8)48
+        digit_count = 1
+    }
+    while magnitude > 0 {
+        digits[digit_count] = cast(u8)(48 + magnitude % 10)
+        digit_count += 1
+        magnitude /= 10
+    }
+    if negative && !TextBufferAppendByte(output, cursor, cast(u8)45) {
+        return false
+    }
+    padding := minimum_width - digit_count
+    if negative {
+        padding -= 1
+    }
+    while padding > 0 {
+        if !TextBufferAppendByte(output, cursor, cast(u8)48) {
+            return false
+        }
+        padding -= 1
+    }
+    while digit_count > 0 {
+        digit_count -= 1
+        if !TextBufferAppendByte(output, cursor,
+            digits[digit_count]) {
+            return false
+        }
+    }
+    return true
+}
+
+TextBufferAppendNumber :: (output: []u8, cursor: *s32,
+    value: s32) -> bool {
+    return TextBufferAppendPaddedNumber(output, cursor, value, 0)
+}
+
+// Append text to a NUL-terminated buffer in place.
+#program_export
+AppAppendText :: (value: string, output: []u8) -> bool {
+    length: s32 = 0
+    while length < cast(s32)output.count && output[length] != cast(u8)0 {
+        length += 1
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        if length >= cast(s32)output.count - 1 { return false }
+        output[length] = value[index]
+        length += 1
+        index += 1
+    }
+    output[length] = cast(u8)0
+    return true
+}
+
+// Formats one decimal placeholder into caller-owned, NUL-terminated storage.
+// The caller keeps that storage alive until Kryon flushes its paint queue.
+#program_export
+FormatNumberTemplate :: (template: string, value: s32,
+    output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = cast(u8)0
+    cursor: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)template.count {
+        byte := template[index]
+        if byte == cast(u8)37 && index + 1 < cast(s32)template.count  && template[index + 1] == cast(u8)100 {
+            if !TextBufferAppendNumber(output, *cursor, value) {
+                return false
+            }
+            index += 2
+            continue
+        }
+        if byte == cast(u8)37 && index + 1 < cast(s32)template.count  && template[index + 1] == cast(u8)37 {
+            index += 1
+        }
+        if !TextBufferAppendByte(output, *cursor, byte) { return false }
+        index += 1
+    }
+    return true
+}
+
+// Substitute two ordered decimal placeholders in a localized label.
+#program_export
+FormatTwoNumberTemplate :: (template: string, first: s32,
+    second: s32, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    cursor: s32 = 0
+    slot: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)template.count {
+        byte := template[index]
+        if byte == cast(u8)37  && index + 1 < cast(s32)template.count {
+            next := template[index + 1]
+            if next == cast(u8)100 {
+                if slot >= 2 {
+                    output[0] = cast(u8)0
+                    return false
+                }
+                number := first
+                if slot == 1 {
+                    number = second
+                }
+                if !TextBufferAppendNumber(output, *cursor,
+                    number) {
+                    return false
+                }
+                slot += 1
+                index += 2
+                continue
+            }
+            if next == cast(u8)37 {
+                index += 1
+            }
+        }
+        if !TextBufferAppendByte(output, *cursor, byte) {
+            return false
+        }
+        index += 1
+    }
+    if slot != 2 {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+FormatArg :: struct {
+    text: string
+    number: s32
+    is_text: bool
+}
+
+// Fill a bounded buffer from ordered %s, %d, %02d, %04d, and %% placeholders.
+// This keeps locale-supplied word order without a C varargs call.
+#program_export
+FormatTemplate :: (template: string, args: []FormatArg,
+    output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    cursor: s32 = 0
+    argument: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)template.count {
+        byte := template[index]
+        if byte != cast(u8)37 {
+            if !TextBufferAppendByte(output, *cursor, byte) {
+                return false
+            }
+            index += 1
+            continue
+        }
+        if index + 1 >= cast(s32)template.count {
+            output[0] = cast(u8)0
+            return false
+        }
+        next := template[index + 1]
+        if next == cast(u8)37 {
+            if !TextBufferAppendByte(output, *cursor, cast(u8)37) {
+                return false
+            }
+            index += 2
+            continue
+        }
+        minimum_width: s32 = 0
+        consumed: s32 = 2
+        if next == cast(u8)48 && index + 3 < cast(s32)template.count &&
+        (template[index + 2] == cast(u8)50 ||
+            template[index + 2] == cast(u8)52) &&
+        template[index + 3] == cast(u8)100 {
+            minimum_width = cast(s32)(template[index + 2] - cast(u8)48)
+            next = cast(u8)100
+            consumed = 4
+        }
+        if argument >= cast(s32)args.count ||
+        (next != cast(u8)100 && next != cast(u8)115) {
+            output[0] = cast(u8)0
+            return false
+        }
+        value := args[argument]
+        if next == cast(u8)115 {
+            if !value.is_text {
+                output[0] = cast(u8)0
+                return false
+            }
+            character: s32 = 0
+            while character < cast(s32)value.text.count {
+                if !TextBufferAppendByte(output, *cursor,
+                    value.text[character]) {
+                    return false
+                }
+                character += 1
+            }
+        } else {
+            if value.is_text {
+                output[0] = cast(u8)0
+                return false
+            }
+            if !TextBufferAppendPaddedNumber(output, *cursor,
+                value.number, minimum_width) {
+                return false
+            }
+        }
+        argument += 1
+        index += consumed
+    }
+    if argument != cast(s32)args.count {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}

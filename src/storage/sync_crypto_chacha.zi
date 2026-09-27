@@ -1,0 +1,175 @@
+#import, file "sync_crypto_poly1305.zi";
+
+// RFC 8439 ChaCha20-Poly1305 for Inbe's encrypted sync records and key files.
+ChaChaBlockBytes :: 64
+ChaChaTagBytes :: 16
+
+ChaChaLengthValid :: (length: s64) -> bool {
+    if length < 0 {
+        return false
+    }
+    full_blocks := length / ChaChaBlockBytes
+    if full_blocks > cast(s64)4294967295 {
+        return false
+    }
+    if full_blocks == cast(s64)4294967295 &&
+        length % ChaChaBlockBytes != 0 {
+        return false
+    }
+    return true
+}
+
+ChaChaRotateLeft :: (value: u32, bits: u32) -> u32 {
+    return (value << bits) | (value >> (cast(u32)32 - bits))
+}
+
+ChaChaQuarterRound :: (state: *u32, a: s32, b: s32, c: s32, d: s32) {
+    state[a] += state[b]
+    state[d] ^= state[a]
+    state[d] = ChaChaRotateLeft(state[d], 16)
+    state[c] += state[d]
+    state[b] ^= state[c]
+    state[b] = ChaChaRotateLeft(state[b], 12)
+    state[a] += state[b]
+    state[d] ^= state[a]
+    state[d] = ChaChaRotateLeft(state[d], 8)
+    state[c] += state[d]
+    state[b] ^= state[c]
+    state[b] = ChaChaRotateLeft(state[b], 7)
+}
+
+ChaChaBlock :: (key: *u8, nonce: *u8, counter: u32, output: *u8) {
+    initial: [16]u32
+    working: [16]u32
+    initial[0] = 0x61707865
+    initial[1] = 0x3320646e
+    initial[2] = 0x79622d32
+    initial[3] = 0x6b206574
+    index: s32 = 0
+    while index < 8 {
+        initial[4 + index] = Poly1305Load32(*key[index * 4])
+        index += 1
+    }
+    initial[12] = counter
+    initial[13] = Poly1305Load32(nonce)
+    initial[14] = Poly1305Load32(*nonce[4])
+    initial[15] = Poly1305Load32(*nonce[8])
+    index = 0
+    while index < 16 {
+        working[index] = initial[index]
+        index += 1
+    }
+
+    round: s32 = 0
+    while round < 10 {
+        ChaChaQuarterRound(*working[0], 0, 4, 8, 12)
+        ChaChaQuarterRound(*working[0], 1, 5, 9, 13)
+        ChaChaQuarterRound(*working[0], 2, 6, 10, 14)
+        ChaChaQuarterRound(*working[0], 3, 7, 11, 15)
+        ChaChaQuarterRound(*working[0], 0, 5, 10, 15)
+        ChaChaQuarterRound(*working[0], 1, 6, 11, 12)
+        ChaChaQuarterRound(*working[0], 2, 7, 8, 13)
+        ChaChaQuarterRound(*working[0], 3, 4, 9, 14)
+        round += 1
+    }
+    index = 0
+    while index < 16 {
+        Poly1305Store32(*output[index * 4], working[index] + initial[index])
+        index += 1
+    }
+}
+
+ChaChaXor :: (key: *u8, nonce: *u8, input: *u8,
+    length: s64, output: *u8) {
+    offset: s64 = 0
+    counter: u32 = 1
+    while offset < length {
+        block: [ChaChaBlockBytes]u8
+        ChaChaBlock(key, nonce, counter, *block[0])
+        count: s64 = length - offset
+        if count > ChaChaBlockBytes {
+            count = ChaChaBlockBytes
+        }
+        index: s64 = 0
+        while index < count {
+            output[offset + index] = input[offset + index] ^ block[index]
+            index += 1
+        }
+        offset += count
+        counter += 1
+    }
+}
+
+ChaChaMacKey :: (key: *u8, nonce: *u8, output: *u8) {
+    block: [ChaChaBlockBytes]u8
+    ChaChaBlock(key, nonce, 0, *block[0])
+    index: s32 = 0
+    while index < 32 {
+        output[index] = block[index]
+        index += 1
+    }
+}
+
+#program_export
+SyncCryptoChaCha20Poly1305Seal :: (key: *u8, nonce: *u8,
+    plain: *u8, plain_length: s64, aad: *u8, aad_length: s64,
+    output: *u8, output_capacity: s64) -> s32 {
+    if key == null || nonce == null || output == null ||
+        !ChaChaLengthValid(plain_length) ||
+        aad_length < 0 ||
+        (plain == null && plain_length > 0) ||
+        (aad == null && aad_length > 0) ||
+        output_capacity < ChaChaTagBytes ||
+        plain_length > output_capacity - ChaChaTagBytes {
+        return 0
+    }
+
+    mac_key: [32]u8
+    tag: [ChaChaTagBytes]u8
+    ChaChaMacKey(key, nonce, *mac_key[0])
+    if plain_length > 0 {
+        ChaChaXor(key, nonce, plain, plain_length, output)
+    }
+    Poly1305AeadTag(*mac_key[0], aad, aad_length,
+        output, plain_length, *tag[0])
+    index: s32 = 0
+    while index < ChaChaTagBytes {
+        output[plain_length + cast(s64)index] = tag[index]
+        index += 1
+    }
+    return 1
+}
+
+#program_export
+SyncCryptoChaCha20Poly1305Open :: (key: *u8, nonce: *u8,
+    sealed: *u8, sealed_length: s64, aad: *u8, aad_length: s64,
+    plain: *u8, plain_capacity: s64) -> s32 {
+    if key == null || nonce == null || sealed == null ||
+        sealed_length < ChaChaTagBytes ||
+        !ChaChaLengthValid(sealed_length - ChaChaTagBytes) ||
+        aad_length < 0 || (aad == null && aad_length > 0) ||
+        plain_capacity < sealed_length - ChaChaTagBytes ||
+        (plain == null && sealed_length > ChaChaTagBytes) {
+        return 0
+    }
+
+    plain_length := sealed_length - ChaChaTagBytes
+    mac_key: [32]u8
+    tag: [ChaChaTagBytes]u8
+    ChaChaMacKey(key, nonce, *mac_key[0])
+    Poly1305AeadTag(*mac_key[0], aad, aad_length,
+        sealed, plain_length, *tag[0])
+    difference: u8 = 0
+    index: s32 = 0
+    while index < ChaChaTagBytes {
+        difference |= tag[index] ^ sealed[plain_length + cast(s64)index]
+        index += 1
+    }
+    if difference != 0 {
+        return 0
+    }
+    if plain_length > 0 {
+        ChaChaXor(key, nonce, sealed, plain_length, plain)
+    }
+    return 1
+}

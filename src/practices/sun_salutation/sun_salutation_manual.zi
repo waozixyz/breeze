@@ -1,0 +1,268 @@
+#import "drawing_props"
+#import "geometry"
+#import "guide_pager"
+#import "image_props"
+#import "image_widget"
+#import "layout"
+#import "paint_queue"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "session"
+#import "style"
+#import "surface"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/manual_seen_actions.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../core/types.zi";
+#import, file "../../platform/scroll_input.zi";
+#import, file "../../screens/manual_screen.zi";
+#import, file "../../screens/practice_manual_layout.zi";
+#import, file "sun_salutation_assets.zi";
+#import, file "sun_salutation_entry.zi";
+#import, file "sun_salutation_rules.zi";
+
+using ExerciseType;
+using ImageFit;
+using ModalType;
+using TextWrap;
+
+SUN_MANUAL_PAGES :: 3
+
+SunManualBodyKey :: (step: s32) -> string {
+    if step == 0 { return "sun_manual_move_text" }
+    if step == 1 { return "sun_manual_guide_text" }
+    return "sun_manual_customize_text"
+}
+
+SunManualTitleKey :: (step: s32) -> string {
+    if step == 0 { return "exercise_sun_salutation" }
+    if step == 1 { return "sun_salutation_tempo_preview_label" }
+    return "practice_configure_button"
+}
+
+#program_export
+sun_manual_close :: (app: *InnerBreeze, mark_seen: s32) {
+    if app == null { return }
+    if mark_seen != 0 {
+        mark_exercise_manual_seen(app, EXERCISE_SUN_SALUTATION)
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalPracticeManual {
+        app_close_modal(app)
+        return
+    }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app_switch_screen(app, ScreenStart)
+}
+
+#program_export
+sun_manual_start :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    sun_salutation_practice_start(app)
+}
+
+SunManualParagraph :: (step: s32,
+    width: s32) -> ManualParagraphSpec {
+    return manual_screen_tutorial_paragraph(
+        LocaleText(SunManualBodyKey(step)), width)
+}
+
+SunManualContentHeight :: (step: s32, width: s32) -> s32 {
+    paragraph := SunManualParagraph(step, width)
+    return AppScale(178 + 18) + manual_screen_guide_header_height() +         AppParagraphHeight(paragraph.text, paragraph.width,
+            paragraph.font, paragraph.line_gap)
+}
+
+SunManualPose :: (app: *InnerBreeze, pose: s32,
+    bounds: Rectangle) {
+    source := Rectangle.{
+        cast(float32)((pose % SUN_SALUTATION_POSE_SHEET_COLS) *
+            SUN_SALUTATION_POSE_FRAME_W),
+        cast(float32)((pose / SUN_SALUTATION_POSE_SHEET_COLS) *
+            SUN_SALUTATION_POSE_FRAME_H),
+        cast(float32)SUN_SALUTATION_POSE_FRAME_W,
+        cast(float32)SUN_SALUTATION_POSE_FRAME_H
+}
+    picture: ImageProps
+    picture.asset_path = sun_salutation_pose_asset(
+        app.sun_salutation.figure)
+    picture.alt_text = LocaleText("exercise_sun_salutation")
+    picture.source = source
+    picture.bounds = bounds
+    picture.fit = cast(ImageFit)ImageFitContain
+    Image(app.ui.session, picture)
+}
+
+SunManualNumber :: (app: *InnerBreeze, value: s32,
+    pattern: string) -> string {
+    buffer: [32]u8
+    if !FormatNumberTemplate(pattern, value, buffer[:]) { return "" }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], 32))
+}
+
+SunManualStat :: (app: *InnerBreeze, label: string,
+    value: string, x: s32, y: s32, width: s32) {
+    left: TextProps
+    left.text = label
+    left.font = AppFontSize()
+    left.wrap = cast(TextWrap)TextWrapNone
+    left.bounds = Rectangle.{cast(float32)(x + AppScale(18)),
+        cast(float32)y, cast(float32)(width - AppScale(100)),
+        cast(float32)AppScale(32)
+}
+    Text(app.ui.session, left)
+    right: TextProps
+    right.text = value
+    right.font = AppFontSize()
+    right.wrap = cast(TextWrap)TextWrapNone
+    right.bounds = Rectangle.{cast(float32)(x + width - AppScale(70)),
+        cast(float32)y, cast(float32)AppScale(54),
+        cast(float32)AppScale(32)
+}
+    Text(app.ui.session, right)
+}
+
+SunManualVisual :: (app: *InnerBreeze, x: s32, width: s32,
+    step: s32, y: *s32) {
+    height := AppScale(178)
+    bounds := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    face := GuideFace(2)
+    PaintRoundedFill(app.ui.session, -1, bounds,
+        cast(float32)AppScale(16), 10,
+        ColorFromPacked(face.value.background))
+    if step < 2 {
+        pose_width := (width - AppScale(36)) / 3
+        index: s32 = 0
+        while index < 3 {
+            pose: s32 = 0
+            if index == 1 { pose = ifx step == 0 then 5 else 3 }
+            if index == 2 { pose = ifx step == 0 then 11 else 7 }
+            pose_bounds := Rectangle.{
+                cast(float32)(x + AppScale(10) +                     index * (pose_width + AppScale(8))),
+                cast(float32)(y.* + AppScale(24)),
+                cast(float32)pose_width,
+                cast(float32)AppScale(112)
+}
+            SunManualPose(app, pose, pose_bounds)
+            radius := AppScale(4)
+            dot := Rectangle.{
+                pose_bounds.x + pose_bounds.width / 2.0 -                     cast(float32)radius,
+                cast(float32)(y.* + AppScale(151) - radius),
+                cast(float32)(radius * 2),
+                cast(float32)(radius * 2)
+}
+            color := ColorFromPacked(face.value.border)
+            if index == 1 {
+                color = ColorFromPacked(face.value.foreground)
+            }
+            PaintRoundedFill(app.ui.session, -1, dot,
+                cast(float32)radius, 8, color)
+            index += 1
+        }
+    } else {
+        row_y := y.* + AppScale(24)
+        SunManualStat(app,
+            LocaleText("sun_salutation_repetitions_label"),
+            SunManualNumber(app, app.sun_salutation.repetitions,
+                "%dx"), x, row_y, width)
+        row_y += AppScale(45)
+        SunManualStat(app,
+            LocaleText("sun_salutation_start_speed_label"),
+            SunManualNumber(app, app.sun_salutation.start_seconds,
+                "%d s"), x, row_y, width)
+        row_y += AppScale(45)
+        SunManualStat(app,
+            LocaleText("sun_salutation_end_speed_label"),
+            SunManualNumber(app, app.sun_salutation.end_seconds,
+                "%d s"), x, row_y, width)
+    }
+    y.* += height + AppScale(18)
+}
+
+#program_export
+sun_manual_draw :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) { return }
+    step := app.tutorial_step
+    if step < 0 { step = 0 }
+    if step >= SUN_MANUAL_PAGES { step = SUN_MANUAL_PAGES - 1 }
+    app.tutorial_step = step
+    max_width := cast(s32)(cast(float32)app.ui.view_width * 0.96)
+    if max_width > manual_screen_tutorial_max_width() {
+        max_width = manual_screen_tutorial_max_width()
+    }
+    if max_width < AppScale(200) { max_width = AppScale(200) }
+    layout := practice_screen_manual_layout(app,
+        cast(ModalType)ModalPracticeManual, SUN_MANUAL_PAGES,
+        manual_screen_tutorial_top_gap(), 0, AppScale(120))
+    if manual_screen_draw_title_bar(app,
+        LocaleText("exercise_sun_salutation"),
+        layout.title_h) != 0 {
+        sun_manual_close(app, 0)
+        return
+    }
+    column := CenteredColumnFor(app.ui.view_width,
+        max_width, manual_screen_tutorial_side_padding())
+    bounds := Rectangle.{0.0, cast(float32)layout.content_y,
+        cast(float32)app.ui.view_width,
+        cast(float32)layout.content_h
+}
+    key := KeyHash("sun/manual/scroll")
+    props: ScrollProps
+    props.key = key
+    props.bounds = bounds
+    props.content_height = SunManualContentHeight(step, column.width)
+    props.scroll_offset = app.manual_scroll
+    props.scale = MetricsScale()
+    props.input = ScrollObservationFor(key, bounds)
+    result := Scroll(app.ui.session, props)
+    app.manual_scroll = result.scroll_offset
+    CommitScroll(key, result.frame)
+    if result.opened {
+        y := cast(s32)result.content.y
+        hero := manual_screen_hero_bounds(column.x, column.width,
+            y, AppScale(178))
+        SunManualVisual(app, cast(s32)hero.x,
+            cast(s32)hero.width, step, *y)
+        manual_screen_draw_hero_progress(hero, step,
+            SUN_MANUAL_PAGES)
+        manual_screen_draw_guide_header(
+            LocaleText(SunManualTitleKey(step)), step,
+            SUN_MANUAL_PAGES, column.x, *y, column.width)
+        ManualParagraph(app, SunManualParagraph(step, column.width),
+            column.x, *y)
+        unused End(app.ui.session)
+    }
+    nav: ManualGuideNav
+    nav.page = step
+    nav.page_count = SUN_MANUAL_PAGES
+    nav.y = layout.nav_y
+    nav.h = layout.nav_h
+    nav.content_y = layout.content_y
+    nav.content_h = layout.content_h
+    nav.focus_id = 440
+    decision := manual_screen_guide_controls(app, nav)
+    if decision.closed {
+        sun_manual_close(app, 0)
+    } else if decision.finished {
+        sun_manual_start(app)
+    }
+}

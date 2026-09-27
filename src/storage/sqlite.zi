@@ -1,0 +1,213 @@
+// Direct SQLite ABI shared by Inbe's Ziran storage modules. Handles and
+// statements are opaque; the bundled SQLite implementation owns both.
+SQLITE_OK :: 0;
+SQLITE_ROW :: 100;
+SQLITE_DONE :: 101;
+SQLITE_BUSY :: 5;
+SQLITE_TRANSIENT :: -1;
+SQLITE_LOCKED :: 6;
+SQLITE_NOMEM :: 7;
+SQLITE_TOOBIG :: 18;
+SQLITE_MISUSE :: 21;
+SQLITE_OPEN_READWRITE :: 0x2;
+SQLITE_OPEN_CREATE :: 0x4;
+SQLITE_OPEN_FULLMUTEX :: 0x10000;
+
+#scope_file
+sqlite :: #system_library "sqlite3";
+c :: #system_library "c";
+malloc :: (size: u64) -> *void #foreign c;
+free :: (pointer: *void) #foreign c;
+
+PrepareRaw :: (db: *void, sql: *u8, length: s32,
+    statement: **void, tail: **u8) -> s32 #foreign sqlite "sqlite3_prepare_v2";
+StepRaw :: (statement: *void) -> s32 #foreign sqlite "sqlite3_step";
+FinalizeRaw :: (statement: *void) -> s32 #foreign sqlite "sqlite3_finalize";
+ColumnTextRaw :: (statement: *void, column: s32) -> *u8 #foreign sqlite "sqlite3_column_text";
+ColumnInt64Raw :: (statement: *void, column: s32) -> s64 #foreign sqlite "sqlite3_column_int64";
+BindTextRaw :: (statement: *void, index: s32, value: *u8,
+    length: s32, destructor: *void) -> s32 #foreign sqlite "sqlite3_bind_text";
+BindInt64Raw :: (statement: *void, index: s32, value: s64) -> s32 #foreign sqlite "sqlite3_bind_int64";
+BindIntRaw :: (statement: *void, index: s32, value: s32) -> s32 #foreign sqlite "sqlite3_bind_int";
+ColumnIntRaw :: (statement: *void, column: s32) -> s32 #foreign sqlite "sqlite3_column_int";
+ResetRaw :: (statement: *void) -> s32 #foreign sqlite "sqlite3_reset";
+ClearBindingsRaw :: (statement: *void) -> s32 #foreign sqlite "sqlite3_clear_bindings";
+OpenRaw :: (path: *u8, database: **void, flags: s32,
+    vfs: *u8) -> s32 #foreign sqlite "sqlite3_open_v2";
+CloseRaw :: (database: *void) -> s32 #foreign sqlite "sqlite3_close";
+BackupInitRaw :: (destination: *void, destination_name: *u8,
+    source: *void, source_name: *u8) -> *void #foreign sqlite "sqlite3_backup_init";
+BackupStepRaw :: (backup: *void, pages: s32) -> s32 #foreign sqlite "sqlite3_backup_step";
+BackupFinishRaw :: (backup: *void) -> s32 #foreign sqlite "sqlite3_backup_finish";
+ExecRaw :: (database: *void, sql: *u8, callback: *void,
+    argument: *void, error: **u8) -> s32 #foreign sqlite "sqlite3_exec";
+
+CopyStringBytes :: (source: string, destination: *u8) {
+    index: s32 = 0
+    while index < cast(s32)source.count {
+        destination[index] = source[index]
+        index += 1
+    }
+    destination[index] = cast(u8)0
+}
+
+#scope_export
+#program_export
+SqlitePrepare :: (db: *void, sql: *u8, length: s32,
+    statement: **void, tail: **u8) -> s32 {
+    return PrepareRaw(db, sql, length, statement, tail)
+}
+
+#scope_export
+#program_export
+SqlitePrepareText :: (db: *void, sql: string, length: s32,
+    statement: **void, tail: **u8) -> s32 {
+    if tail != null || sql.count > 2147483647 || length < -1 ||
+    (length >= 0 && cast(s64)length > cast(s64)sql.count) {
+        return SQLITE_MISUSE
+    }
+    if sql.count < 512 {
+        short_sql: [512]u8
+        CopyStringBytes(sql, *short_sql[0])
+        return PrepareRaw(db, *short_sql[0], length, statement, null)
+    }
+    buffer: *u8 = cast(*u8)malloc(cast(u64)sql.count + 1)
+    if buffer == null {
+        return SQLITE_NOMEM
+    }
+    CopyStringBytes(sql, buffer)
+    result := PrepareRaw(db, buffer, length, statement, null)
+    free(cast(*void)buffer)
+    return result
+}
+
+#scope_export
+#program_export
+SqliteBindTextString :: (statement: *void, index: s32, value: string, length: s32) -> s32 {
+    if value.count > 2147483647 || length < -1 ||
+    (length >= 0 && cast(s64)length > cast(s64)value.count) {
+        return SQLITE_MISUSE
+    }
+    if value.count < 256 {
+        short_value: [256]u8
+        CopyStringBytes(value, *short_value[0])
+        return BindTextRaw(statement, index, *short_value[0], length,
+            cast(*void)cast(s64)SQLITE_TRANSIENT)
+    }
+    buffer: *u8 = cast(*u8)malloc(cast(u64)value.count + 1)
+    if buffer == null {
+        return SQLITE_NOMEM
+    }
+    CopyStringBytes(value, buffer)
+    result := BindTextRaw(statement, index, buffer, length,
+        cast(*void)cast(s64)SQLITE_TRANSIENT)
+    free(cast(*void)buffer)
+    return result
+}
+
+#program_export
+SqliteStep :: (statement: *void) -> s32 {
+    return StepRaw(statement)
+}
+
+#program_export
+SqliteFinalize :: (statement: *void) -> s32 {
+    return FinalizeRaw(statement)
+}
+
+#program_export
+SqliteColumnText :: (statement: *void, column: s32) -> *u8 {
+    return ColumnTextRaw(statement, column)
+}
+
+#program_export
+SqliteColumnInt64 :: (statement: *void, column: s32) -> s64 {
+    return ColumnInt64Raw(statement, column)
+}
+
+#program_export
+SqliteBindText :: (statement: *void, index: s32, value: *u8,
+    length: s32, destructor: *void) -> s32 {
+    return BindTextRaw(statement, index, value, length, destructor)
+}
+
+#program_export
+SqliteBindInt64 :: (statement: *void, index: s32, value: s64) -> s32 {
+    return BindInt64Raw(statement, index, value)
+}
+
+#program_export
+SqliteBindInt :: (statement: *void, index: s32, value: s32) -> s32 {
+    return BindIntRaw(statement, index, value)
+}
+
+#program_export
+SqliteColumnInt :: (statement: *void, column: s32) -> s32 {
+    return ColumnIntRaw(statement, column)
+}
+
+#program_export
+SqliteReset :: (statement: *void) -> s32 {
+    return ResetRaw(statement)
+}
+
+#program_export
+SqliteClearBindings :: (statement: *void) -> s32 {
+    return ClearBindingsRaw(statement)
+}
+
+#program_export
+SqliteOpen :: (path: *u8, database: **void, flags: s32) -> s32 {
+    return OpenRaw(path, database, flags, null)
+}
+
+#program_export
+SqliteClose :: (database: *void) -> s32 {
+    return CloseRaw(database)
+}
+
+#program_export
+SqliteBackupInit :: (destination: *void, source: *void) -> *void {
+    name: [5]u8
+    name[0] = cast(u8)109
+    name[1] = cast(u8)97
+    name[2] = cast(u8)105
+    name[3] = cast(u8)110
+    name[4] = cast(u8)0
+    return BackupInitRaw(destination, *name[0], source, *name[0])
+}
+
+#program_export
+SqliteBackupStep :: (backup: *void, pages: s32) -> s32 {
+    return BackupStepRaw(backup, pages)
+}
+
+#program_export
+SqliteBackupFinish :: (backup: *void) -> s32 {
+    return BackupFinishRaw(backup)
+}
+
+#program_export
+SqliteExec :: (database: *void, sql: *u8) -> s32 {
+    return ExecRaw(database, sql, null, null, null)
+}
+
+#program_export
+SqliteExecText :: (database: *void, sql: string) -> s32 {
+    if sql.count > 2147483647 {
+        return SQLITE_TOOBIG
+    }
+    if sql.count < 256 {
+        short_sql: [256]u8
+        CopyStringBytes(sql, *short_sql[0])
+        return ExecRaw(database, *short_sql[0], null, null, null)
+    }
+    buffer: *u8 = cast(*u8)malloc(cast(u64)sql.count + 1)
+    if buffer == null {
+        return SQLITE_NOMEM
+    }
+    CopyStringBytes(sql, buffer)
+    result := ExecRaw(database, buffer, null, null, null)
+    free(cast(*void)buffer)
+    return result
+}

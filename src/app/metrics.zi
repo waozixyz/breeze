@@ -1,0 +1,133 @@
+#import "dpi"
+#import "font_metrics"
+#import "text_layout"
+#import "text_props"
+#import, file "current_app.zi";
+#import, file "app_types.zi";
+
+using TextWrap;
+
+metrics_scale: float32 = 1.0;
+
+#program_export
+AppMetricsConfigure :: (scale: float32) {
+    if !(scale > 0.0) || scale > 8.0 {
+        metrics_scale = 1.0
+        return
+    }
+    metrics_scale = scale
+}
+
+#program_export
+AppScale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, metrics_scale)
+}
+
+#program_export
+MetricsScale :: () -> float32 {
+    return metrics_scale
+}
+
+#program_export
+AppFontSize :: () -> s32 {
+    return AppScale(Text16)
+}
+
+#program_export
+AppSmallFontSize :: () -> s32 {
+    return AppScale(Text14)
+}
+
+#program_export
+AppTextWidth :: (text: string, font: s32) -> s32 {
+    return GlyphWidth(text, font, "ui")
+}
+
+#program_export
+AppTextLineHeight :: (font: s32) -> s32 {
+    if font > 0 {
+        return font
+    }
+    return AppFontSize()
+}
+
+#program_export
+AppTitleBarHeight :: () -> s32 {
+    return AppScale(48)
+}
+
+#program_export
+AppTitleFontSize :: (title: string, max_width: s32) -> s32 {
+    large: s32 = AppScale(Text24)
+    medium: s32 = AppScale(Text16)
+    small: s32 = AppScale(Text14)
+    if max_width <= 0 || AppTextWidth(title, large) <= max_width {
+        return large
+    }
+    if AppTextWidth(title, medium) <= max_width {
+        return medium
+    }
+    return small
+}
+
+#program_export
+AppFitFontSize :: (text: string, max_width: s32,
+    preferred: s32, minimum: s32) -> s32 {
+    font: s32 = preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && AppTextWidth(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+#program_export
+AppControlTextY :: (text: string, box_y: s32,
+    box_h: s32, font: s32) -> s32 {
+    unused text
+    line_height: s32 = AppTextLineHeight(font)
+    return box_y + (box_h - line_height) / 2 + line_height * 3 / 4
+}
+
+#program_export
+AppParagraphHeight :: (text: string, width: s32,
+    font: s32, line_gap: s32) -> s32 {
+    line_height: s32 = AppTextLineHeight(font)
+    if width <= 0 || text.count == 0 {
+        return line_height
+    }
+    lines: s32 = 0
+    start: s32 = 0
+    while start <= cast(s32)text.count {
+        line := NextTextLine(text, start, cast(float32)width,
+            cast(TextWrap)TextWrapAuto, font, "ui")
+        lines += 1
+        if line.next <= start || line.next > cast(s32)text.count {
+            break
+        }
+        start = line.next
+    }
+    return TextLayoutTotalHeight(lines, line_height, line_gap)
+}
+
+#program_export
+GetPageSidePadding :: () -> s32 {
+    return AppScale(16)
+}
+
+#program_export
+GetCenteredColumn :: (max_w: s32, side_padding: s32, x_out: *s32, w_out: *s32) {
+    app := CurrentApp()
+    view_w: s32 = 320
+    if app != null {
+        view_w = app.ui.view_width
+    }
+    x_out.* = side_padding
+    w_out.* = view_w - side_padding * 2
+    if w_out.* > max_w {
+        x_out.* += (w_out.* - max_w) / 2
+        w_out.* = max_w
+    }
+}

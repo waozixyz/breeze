@@ -1,0 +1,53 @@
+#import "frame_pacing"
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "frame_activity.zi";
+#import, file "../platform/environment.zi";
+
+FrameActivitySample :: struct {
+    mouse_x: s32
+    mouse_y: s32
+    pointer_active: bool
+    keyboard_active: bool
+    text_input_active: bool
+}
+
+frame_activity_state: FrameActivityState;
+frame_pacing_state: FramePacing;
+
+ACTIVE_GRACE_FRAMES :: 12
+
+#program_export
+FramePacingReset :: () {
+    frame_activity_state = FrameActivityState.{}
+    frame_pacing_state = FramePacing.{}
+}
+
+PracticeFrameActive :: (screen: s32) -> bool {
+    return screen == ScreenSession || screen == ScreenMeditation  || screen == ScreenSunSalutation || screen == ScreenPatterns
+}
+
+#program_export
+app_update_frame_pacing :: (app: *InnerBreeze,
+    sample: FrameActivitySample) -> FramePacingDecision {
+    engaged: bool = false
+    if app != null {
+        engaged = PracticeFrameActive(app.breathing.screen)  || app.modal.active != 0  || (app.breathing.screen == ScreenStart  && app.practice_tab == PRACTICE_TAB_CONFIG)  || app.file_dialog_active != 0 || sample.pointer_active  || sample.keyboard_active || sample.text_input_active
+    }
+
+    activity := FrameActivityStep(frame_activity_state, sample.mouse_x,
+        sample.mouse_y, engaged, app != null, ACTIVE_GRACE_FRAMES)
+    frame_activity_state = activity.state
+
+    frame_pacing_state.enabled = true
+    frame_pacing_state.idle_fps = 30
+    if AndroidPlatform() != 0 {
+        frame_pacing_state.idle_fps = 15
+    }
+    frame_pacing_state.active_fps = 60
+    frame_pacing_state = SetFramePacingActive(frame_pacing_state, activity.active)
+    decision := UpdateFramePacing(frame_pacing_state)
+    frame_pacing_state = decision.state
+    return decision
+}

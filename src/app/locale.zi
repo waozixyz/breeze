@@ -1,0 +1,372 @@
+#import "locale_parser"
+#import "locale_policy"
+#import, file "assets.zi";
+#import, file "text_buffers.zi";
+c_locale :: #system_library "c";
+app_copy_text_host :: (dst: *u8, dst_size: s64, src: string) #foreign c_locale "app_copy_text";
+locale_append_text_host :: (dst: *u8, dst_size: s64, src: string) #foreign c_locale "app_append_text";
+
+active_locale_index: s32;
+
+// The embedded catalog bytes live for the process lifetime. Index entries
+// borrow slices of those bytes, so text lookup never copies a translation.
+LocaleCatalogCapacity :: 768
+LocaleCatalogSlots :: 2048
+
+LocaleCatalog :: struct {
+    entries: [LocaleCatalogCapacity]LocaleEntry
+    slots: [LocaleCatalogSlots]s32
+    count: s32
+    complete: bool
+}
+
+english_catalog: LocaleCatalog;
+active_catalog: LocaleCatalog;
+english_catalog_asset: AssetView;
+active_catalog_asset: AssetView;
+locale_index_asset: AssetView;
+active_language: LocaleLanguage;
+preferred_languages: [64]LocaleLanguage;
+locale_lookup: LocaleTextResult;
+english_catalog_ready: bool;
+active_catalog_ready: bool;
+active_catalog_language_index: s32;
+
+LocaleCatalogSlot :: (key: string) -> s32 {
+    hash: u32 = 2166136261
+    index: s32 = 0
+    while index < cast(s32)key.count {
+        hash = (hash ^ cast(u32)key[index]) * cast(u32)16777619
+        index += 1
+    }
+    return cast(s32)(hash % cast(u32)LocaleCatalogSlots)
+}
+
+LocaleCatalogPut :: (catalog: *LocaleCatalog, key: string, value: string) {
+    slot := LocaleCatalogSlot(key)
+    probes: s32 = 0
+    while probes < LocaleCatalogSlots {
+        stored := catalog.slots[slot]
+        if stored == 0 {
+            if catalog.count >= LocaleCatalogCapacity {
+                catalog.complete = false
+                return
+            }
+            catalog.entries[catalog.count] = LocaleEntry.{key, value }
+            catalog.count += 1
+            catalog.slots[slot] = catalog.count
+            return
+        }
+        if catalog.entries[stored - 1].key == key {
+            catalog.entries[stored - 1].value = value
+            return
+        }
+        slot = (slot + 1) % LocaleCatalogSlots
+        probes += 1
+    }
+    catalog.complete = false
+}
+
+LocaleCatalogBuild :: (catalog: *LocaleCatalog, source: string) {
+    catalog.count = 0
+    catalog.complete = true
+    slot: s32 = 0
+    while slot < LocaleCatalogSlots {
+        catalog.slots[slot] = 0
+        slot += 1
+    }
+
+    cursor: s32 = 0
+    key: string = ""
+    value_start: s32 = -1
+    value_end: s32 = 0
+    while cursor < cast(s32)source.count {
+        line := LocaleNextLine(source, cursor)
+        cursor = line.next
+        if line.end - line.start > 2  && source[line.start] == cast(u8)91  && source[line.end - 1] == cast(u8)93 {
+            key = source[line.start + 1:line.end - 1]
+            value_start = -1
+            continue
+        }
+        if line.end - line.start == 3  && source[line.start] == cast(u8)45  && source[line.start + 1] == cast(u8)45  && source[line.start + 2] == cast(u8)45 {
+            if key.count > 0 {
+                value: string = source[0:0]
+                if value_start >= 0 {
+                    value = source[value_start:value_end]
+                }
+                LocaleCatalogPut(catalog, key, value)
+                if !catalog.complete {
+                    return
+                }
+                key = ""
+            }
+            continue
+        }
+        if key.count > 0 {
+            if value_start < 0 {
+                value_start = line.start
+            }
+            value_end = line.end
+        }
+    }
+    if key.count > 0 {
+        value: string = source[0:0]
+        if value_start >= 0 {
+            value = source[value_start:value_end]
+        }
+        LocaleCatalogPut(catalog, key, value)
+    }
+}
+
+LocaleCatalogFind :: (entries: []LocaleEntry, slots: []s32,
+    key: string) -> LocaleTextResult {
+    result: LocaleTextResult
+    if key.count == 0 {
+        return result
+    }
+    slot := LocaleCatalogSlot(key)
+    probes: s32 = 0
+    while probes < LocaleCatalogSlots {
+        stored := slots[slot]
+        if stored == 0 {
+            return result
+        }
+        if entries[stored - 1].key == key {
+            result.text = entries[stored - 1].value
+            result.found = true
+            return result
+        }
+        slot = (slot + 1) % LocaleCatalogSlots
+        probes += 1
+    }
+    return result
+}
+
+LocaleCatalogEnsure :: () {
+    if !english_catalog_ready {
+        english_catalog_asset = AssetRead("locales/en.txt")
+        LocaleCatalogBuild(*english_catalog, english_catalog_asset.data)
+        english_catalog_ready = true
+    }
+    if !active_catalog_ready  || active_catalog_language_index != active_locale_index {
+        active_catalog_asset = LocaleAssetForCode(LocaleActiveCode())
+        LocaleCatalogBuild(*active_catalog, active_catalog_asset.data)
+        active_catalog_language_index = active_locale_index
+        active_catalog_ready = true
+    }
+}
+
+LocaleIndexText :: () -> string {
+    locale_index_asset = AssetRead("locales/index.txt")
+    if !locale_index_asset.found {
+        return ""
+    }
+    return locale_index_asset.data
+}
+
+#program_export
+LocaleLanguageCount :: () -> s32 {
+    text := LocaleIndexText()
+    cursor: s32 = 0
+    count: s32 = 0
+    while cursor < cast(s32)text.count {
+        line := LocaleNextLine(text, cursor)
+        cursor = line.next
+        if line.end <= line.start || text[line.start] == cast(u8)35 {
+            continue
+        }
+        separator := line.start
+        while separator < line.end && text[separator] != cast(u8)124 {
+            separator += 1
+        }
+        if separator > line.start && separator < line.end - 1 {
+            count += 1
+        }
+    }
+    return count
+}
+
+#program_export
+LocaleLanguageAt :: (index: s32) -> LocaleLanguage {
+    result: LocaleLanguage
+    if index < 0 {
+        return result
+    }
+    text := LocaleIndexText()
+    cursor: s32 = 0
+    ordinal: s32 = 0
+    while cursor < cast(s32)text.count {
+        line := LocaleNextLine(text, cursor)
+        cursor = line.next
+        if line.end <= line.start || text[line.start] == cast(u8)35 {
+            continue
+        }
+        separator := line.start
+        while separator < line.end && text[separator] != cast(u8)124 {
+            separator += 1
+        }
+        if separator <= line.start || separator >= line.end - 1 {
+            continue
+        }
+        if ordinal == index {
+            result.code = text[line.start:separator]
+            result.label = text[separator + 1:line.end]
+            return result
+        }
+        ordinal += 1
+    }
+    return result
+}
+
+#program_export
+LocaleUse :: (code: string) -> bool {
+    index: s32 = 0
+    count := LocaleLanguageCount()
+    while index < count {
+        language := LocaleLanguageAt(index)
+        if language.code == code {
+            active_locale_index = index
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// The host supplies its preferred locale list. The app selects only codes
+// present in its embedded language index.
+#program_export
+LocalePreferred :: (preferences: string) -> string {
+    count := LocaleLanguageCount()
+    if count > 64 {
+        count = 64
+    }
+    index: s32 = 0
+    while index < count {
+        preferred_languages[index] = LocaleLanguageAt(index)
+        index += 1
+    }
+    return LocalePreferredCode(preferred_languages[0:count], preferences)
+}
+
+#program_export
+LocaleActiveCode :: () -> string {
+    active_language = LocaleLanguageAt(active_locale_index)
+    if active_language.code.count > 0 {
+        return active_language.code
+    }
+    return "en"
+}
+
+#program_export
+LocaleActiveIndex :: () -> s32 {
+    return active_locale_index
+}
+
+LocaleCodeByte :: (byte: u8) -> bool {
+    return (byte >= cast(u8)65 && byte <= cast(u8)90)  || (byte >= cast(u8)97 && byte <= cast(u8)122)  || (byte >= cast(u8)48 && byte <= cast(u8)57)  || byte == cast(u8)45 || byte == cast(u8)95
+}
+
+LocaleAssetForCode :: (code: string) -> AssetView {
+    result: AssetView
+    if code.count == 0 || code.count > 16 {
+        return result
+    }
+    path: [32]u8
+    prefix: string = "locales/"
+    suffix: string = ".txt"
+    count: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)prefix.count {
+        path[count] = prefix[index]
+        count += 1
+        index += 1
+    }
+    index = 0
+    while index < cast(s32)code.count {
+        if !LocaleCodeByte(code[index]) {
+            return result
+        }
+        path[count] = code[index]
+        count += 1
+        index += 1
+    }
+    index = 0
+    while index < cast(s32)suffix.count {
+        path[count] = suffix[index]
+        count += 1
+        index += 1
+    }
+    return AssetReadBytes(path[0:count])
+}
+
+#program_export
+LocaleText :: (key: string) -> string {
+    LocaleCatalogEnsure()
+    if !active_catalog.complete || !english_catalog.complete {
+        return LocaleResolveCatalog(active_catalog_asset.data,
+            english_catalog_asset.data, key)
+    }
+    locale_lookup = LocaleCatalogFind(active_catalog.entries[:],
+        active_catalog.slots[:], key)
+    if locale_lookup.found {
+        return locale_lookup.text
+    }
+    locale_lookup = LocaleCatalogFind(english_catalog.entries[:],
+        english_catalog.slots[:], key)
+    if locale_lookup.found {
+        return locale_lookup.text
+    }
+    return key
+}
+
+// Localized template with one decimal value. The catalog spells the value
+// placeholder %d; catalogs without a placeholder append the number.
+#program_export
+FormatLocaleCount :: (out: *u8, out_size: s64, key: string, value: s32) {
+    value_text: [24] u8
+    translated := LocaleText(key)
+    if out == null || out_size <= 0 {
+        return
+    }
+    if !AppFormatS32(value, value_text[:]) {
+        app_copy_text_host(out, out_size, translated)
+        return
+    }
+    value_span := AppTextFromCString(*value_text[0], 24)
+    used: s64 = 0
+    index: s32 = 0
+    placeholder_at: s32 = -1
+    while index < cast(s32)translated.count {
+        if translated[index] == #char "%" && index + 1 < cast(s32)translated.count &&
+           translated[index + 1] == #char "d" {
+            placeholder_at = index
+            break
+        }
+        index += 1
+    }
+    if placeholder_at < 0 {
+        app_copy_text_host(out, out_size, translated)
+        locale_append_text_host(out, out_size, value_span)
+        return
+    }
+    {
+        i: s32 = 0
+        while i < cast(s32)translated.count && used < out_size - cast(s64) 1 {
+            if i == placeholder_at {
+                v: s32 = 0
+                while v < cast(s32)value_span.count && used < out_size - cast(s64) 1 {
+                    out[used] = value_span[v]
+                    used += 1
+                    v += 1
+                }
+                i += 2
+                continue
+            }
+            out[used] = translated[i]
+            used += 1
+            i += 1
+        }
+        out[used] = cast(u8)0
+    }
+}

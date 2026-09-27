@@ -1,0 +1,139 @@
+// Inbe's persisted Ed25519 device key for Daochi protocol v6. Monocypher is
+// an external cryptographic dependency; all application behavior stays here.
+#import "byte_text_linux"
+#import "auth"
+#import "sync"
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
+
+c :: #system_library "c";
+Ed25519KeyPair :: (private_key: *u8, public_key: *u8,
+    seed: *u8) #foreign c "crypto_ed25519_key_pair";
+Ed25519Sign :: (signature: *u8, private_key: *u8,
+    message: *u8, message_length: u64) #foreign c "crypto_ed25519_sign";
+
+DeviceKeyMaterial :: struct {
+    private_key: [64]u8
+    public_key: [32]u8
+    public_hex: [65]u8
+    key_id: [65]u8
+}
+
+EqualBytes :: (left: *u8, right: *u8, length: s64) -> bool {
+    equal: u8 = 0
+    index: s64 = 0
+    while index < length {
+        equal |= left[index] ^ right[index]
+        index += 1
+    }
+    return equal == cast(u8)0
+}
+
+#scope_export
+#program_export
+GenerateDeviceKey :: (material: *DeviceKeyMaterial) -> bool {
+    if material == null { return false }
+    material.* = DeviceKeyMaterial.{}
+    seed: [32]u8
+    if SyncCryptoRandom(*seed[0], 32) == 0 { return false }
+    Ed25519KeyPair(*material.private_key[0],
+        *material.public_key[0], *seed[0])
+    SyncCryptoWipe(*seed[0], 32)
+    if SyncCryptoBytesToHex(*material.public_key[0], 32,
+        *material.public_hex[0], 65) == 0 {
+        return false
+    }
+    SyncCryptoSha256Hex(*material.public_key[0], 32,
+        *material.key_id[0])
+    return material.key_id[0] != cast(u8)0
+}
+
+#scope_export
+#program_export
+LoadDeviceKey :: (private_hex: string, public_hex: string,
+    key_id: string, material: *DeviceKeyMaterial) -> bool {
+    if material == null { return false }
+    material.* = DeviceKeyMaterial.{}
+    if SyncCryptoHexToBytes(private_hex,
+        *material.private_key[0], 64) == 0 ||
+        SyncCryptoHexToBytes(public_hex,
+            *material.public_key[0], 32) == 0 {
+        return false
+    }
+    seed: [32]u8
+    index: s64 = 0
+    while index < 32 {
+        seed[index] = material.private_key[index]
+        index += 1
+    }
+    derived_private: [64]u8
+    derived_public: [32]u8
+    Ed25519KeyPair(*derived_private[0], *derived_public[0],
+        *seed[0])
+    valid := EqualBytes(*derived_private[0],
+        *material.private_key[0], 64) &&
+        EqualBytes(*derived_public[0], *material.public_key[0], 32)
+    SyncCryptoWipe(*seed[0], 32)
+    SyncCryptoWipe(*derived_private[0], 64)
+    if !valid { return false }
+    if SyncCryptoBytesToHex(*material.public_key[0], 32,
+        *material.public_hex[0], 65) == 0 { return false }
+    SyncCryptoSha256Hex(*material.public_key[0], 32,
+        *material.key_id[0])
+    expected := TextFromCString(*material.key_id[0])
+    if key_id.count != 64 { return false }
+    index = 0
+    while index < 64 {
+        if key_id[index] != expected[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+#scope_export
+#program_export
+DevicePrivateHex :: (material: *DeviceKeyMaterial,
+    output: []u8) -> bool {
+    if material == null || output.count < 129 { return false }
+    return SyncCryptoBytesToHex(*material.private_key[0], 64,
+        *output[0], cast(s64)output.count) != 0
+}
+
+#scope_export
+#program_export
+SignDeviceMessage :: (context: *void, message: string,
+    output: []u8) -> bool {
+    if context == null || message.count == 0 ||
+        message.count > 9223372036854775807 ||
+        output.count < 129 { return false }
+    material := cast(*DeviceKeyMaterial)context
+    descriptor := cast(*TextDescriptor)(*message)
+    signature: [64]u8
+    Ed25519Sign(*signature[0], *material.private_key[0],
+        descriptor.data, cast(u64)message.count)
+    result := SyncCryptoBytesToHex(*signature[0], 64,
+        *output[0], cast(s64)output.count) != 0
+    SyncCryptoWipe(*signature[0], 64)
+    return result
+}
+
+#scope_export
+#program_export
+DeviceFromKey :: (material: *DeviceKeyMaterial) -> Device {
+    device: Device
+    if material == null { return device }
+    device.key_id = TextFromCString(*material.key_id[0])
+    device.public_key_hex = TextFromCString(*material.public_hex[0])
+    device.signing_context = cast(*void)material
+    device.signer = SignDeviceMessage
+    return device
+}
+
+#scope_export
+#program_export
+WipeDeviceKey :: (material: *DeviceKeyMaterial) {
+    if material != null {
+        SyncCryptoWipe(*material.private_key[0], 64)
+        material.* = DeviceKeyMaterial.{}
+    }
+}

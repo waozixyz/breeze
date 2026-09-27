@@ -1,0 +1,110 @@
+#import, file "activity_jni.zi";
+#import "c_string"
+
+#if #defined(ANDROID_BUILD) {
+    ShareHelperClass :: (session: *ActivityJniSession) -> *void {
+        env := session.env
+        get_loader := JniMethod(session, "getClassLoader",
+            "()Ljava/lang/ClassLoader;")
+        if get_loader == null {
+            return null
+        }
+        loader := env.functions.CallObjectMethodA(env, session.activity,
+            get_loader, null)
+        if loader == null {
+            return null
+        }
+        loader_class := env.functions.GetObjectClass(env, loader)
+        if loader_class == null {
+            return null
+        }
+        method_name: [16]u8
+        signature: [64]u8
+        class_name: [64]u8
+        CopyCString("loadClass", method_name[:])
+        CopyCString("(Ljava/lang/String;)Ljava/lang/Class;", signature[:])
+        CopyCString("xyz.waozi.inbe.ShareHelper", class_name[:])
+        load_class := env.functions.GetMethodID(env, loader_class,
+            *method_name[0], *signature[0])
+        if load_class == null {
+            return null
+        }
+        arguments: [1]JniValue
+        arguments[0].reference = JniString(env, *class_name[0])
+        if arguments[0].reference == null {
+            return null
+        }
+        return env.functions.CallObjectMethodA(env, loader, load_class,
+            *arguments[0])
+    }
+
+    ShareBytes :: (session: *ActivityJniSession, data: *u8,
+        data_size: s32, filename: *u8, mime_type: *u8,
+        title: *u8) -> s32 {
+        env := session.env
+        helper := ShareHelperClass(session)
+        if helper == null {
+            return 0
+        }
+        method_name: [16]u8
+        signature: [128]u8
+        CopyCString("shareFile", method_name[:])
+        CopyCString("(Landroid/app/Activity;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            signature[:])
+        method := env.functions.GetStaticMethodID(env, helper,
+            *method_name[0], *signature[0])
+        if method == null {
+            return 0
+        }
+        arguments: [5]JniValue
+        arguments[0].reference = session.activity
+        arguments[1].reference = env.functions.NewByteArray(env, data_size)
+        if arguments[1].reference == null {
+            return 0
+        }
+        env.functions.SetByteArrayRegion(env, arguments[1].reference,
+            0, data_size, data)
+        default_mime: [32]u8
+        if mime_type == null {
+            CopyCString("application/octet-stream", default_mime[:])
+            mime_type = *default_mime[0]
+        }
+        arguments[2].reference = JniString(env, filename)
+        arguments[3].reference = JniString(env, mime_type)
+        arguments[4].reference = JniString(env, title)
+        if arguments[2].reference == null || arguments[3].reference == null ||
+            arguments[4].reference == null || env.functions.ExceptionCheck(env) != 0 {
+            return 0
+        }
+        env.functions.CallStaticVoidMethodA(env, helper, method, *arguments[0])
+        if env.functions.ExceptionCheck(env) != 0 {
+            return 0
+        }
+        return 1
+    }
+}
+
+#program_export
+android_share_bytes :: (data: *u8, data_size: usize, filename: *u8,
+    mime_type: *u8, title: *u8) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        if data == null || data_size == 0 || data_size > cast(usize)2147483647 ||
+            filename == null || filename[0] == 0 {
+            return 0
+        }
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return 0
+        }
+        shared := ShareBytes(*session, data, cast(s32)data_size,
+            filename, mime_type, title)
+        activity_jni_detach(*session)
+        return shared
+    }
+    unused data
+    unused data_size
+    unused filename
+    unused mime_type
+    unused title
+    return 0
+}

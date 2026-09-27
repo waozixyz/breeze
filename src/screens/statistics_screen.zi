@@ -1,0 +1,752 @@
+c3 :: #system_library "c";
+app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
+habit_cached_linked_entries :: (app: *InnerBreeze,
+    habit_index: s32, day_filter: s32) -> *HabitLinkedContext #foreign c3;
+#import, file "../habits/habit_linked_rules.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "statistics_date_rules.zi";
+#import "date_time"
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/session_mood.zi";
+#import, file "../storage/storage_sessions.zi";
+#import, file "../app/locale.zi";
+#import "geometry"
+#import "layout"
+#import, file "../platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../habits/habit_model.zi";
+
+
+
+
+
+
+using ExerciseType;
+using HabitSyncMode;
+#import "text_props"
+#import, file "../app/exercise_types.zi";
+#import, file "../app/text_buffers.zi";
+using TextWrap;
+#import "control_props"
+#import, file "../app/metrics.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/current_app.zi";
+#import "button_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "session"
+#import "button_props"
+using ButtonTone;
+using ButtonEmphasis;
+
+STATISTICS_MAX_GRAPH_DAYS :: 31
+STATISTICS_MAX_GRAPH_POINTS :: 256
+
+StatisticsGraphPoint :: struct {
+    time_key: s32
+    round_index: s32
+    day_slot: s32
+    hold_seconds: s32
+    x: s32
+    y: s32
+}
+
+StatisticsScrollPageContext :: struct {
+    linked_count: s32
+    mood_count: s32
+}
+
+statistics_mood_cache: StorageMoodStats = StorageMoodStats.{};
+statistics_mood_cache_clock: s64 = 0;
+statistics_mood_cache_activity: s32 = 0;
+statistics_mood_cache_days: s32 = -1;
+statistics_mood_cache_count: s32 = 0;
+statistics_mood_cache_valid: s32 = 0;
+
+statistics_cached_mood_stats :: (activity_mask: s32, days: s32,
+    stats: *StorageMoodStats) -> s32 {
+    session_clock := storage_session_change_clock()
+
+    if stats == null || activity_mask == 0 {
+        return 0
+    }
+    if statistics_mood_cache_valid != 0  && statistics_mood_cache_clock == session_clock  && statistics_mood_cache_activity == activity_mask  && statistics_mood_cache_days == days {
+        stats.* = statistics_mood_cache
+        return statistics_mood_cache_count
+    }
+
+    statistics_mood_cache_count = storage_mood_stats(activity_mask, days,
+        *statistics_mood_cache)
+    statistics_mood_cache_clock = session_clock
+    statistics_mood_cache_activity = activity_mask
+    statistics_mood_cache_days = days
+    statistics_mood_cache_valid = 1
+    stats.* = statistics_mood_cache
+    return statistics_mood_cache_count
+}
+
+statistics_day_count :: (habit: *Habit, linked_ctx: *HabitLinkedContext, day_index: s32) -> s32 {
+    count := HabitEffectiveDayCount(habit, day_index, linked_ctx)
+
+    if count > 0 {
+        return count
+    }
+    return ifx (habit_completed_day(habit, day_index) != 0 || HabitLinkedHasDay(linked_ctx, day_index)) then (1) else (0)
+}
+
+statistics_day_of_week :: (day_index: s32) -> s32 {
+    weekday := habit_weekday_bit(day_index)
+    if weekday < 0 { return -1 }
+    return (weekday + 1) % 7
+}
+
+statistics_format_day_count :: (out: *u8, out_size: s64, count: s32) {
+    FormatLocaleCount(out, out_size, ifx (count == 1) then ("habit_stats_day_singular") else ("habit_stats_day_plural"), count)
+}
+
+statistics_entry_matches_filter :: (entry: *HabitLinkedEntry, filter: s32) -> s32 {
+    if entry == null {
+        return 0
+    }
+    return ifx (entry.activity == filter) then (1) else (0)
+}
+
+statistics_has_wim_hof_rounds :: (linked_ctx: *HabitLinkedContext) -> s32 {
+    if linked_ctx == null {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < linked_ctx.count {
+            if linked_ctx.entries[i].activity == EXERCISE_WIM_HOF && linked_ctx.entries[i].round_count > 0 {
+                return 1
+            }
+            i += 1
+        }
+
+    }
+    return 0
+}
+
+statistics_draw_metric :: (x: s32, y: s32, w: s32, h: s32, label: string, value: string, accent: Color) {
+    value_font: s32 = Text24
+    value_w: s32 = 0
+
+    DrawRectangle(x, y, w, h, DarkenColor(StyleTokenColor("canvas"), 8))
+    DrawRectangle(x, y, AppScale(4), h, accent)
+    DrawLine(x, y + h - 1, x + w, y + h - 1, DarkenColor(StyleTokenColor("canvas"), 30))
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y + AppScale(8)), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    value_w = AppTextWidth(value, value_font)
+    if value_w > w - AppScale(24) {
+        value_font = 20
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y + AppScale(30)), 0, 0},
+            .text = (value),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+}
+
+statistics_draw_section_title :: (title: string, x: s32, y: s32, w: s32) -> s32 {
+    paragraph := ParagraphSpec.{.text = title, .width = w, .font = Text16, .line_gap = AppScale(3) }
+    height := AppParagraphHeight(paragraph.text, paragraph.width, paragraph.font, paragraph.line_gap)
+
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)w, cast(float32)height},
+        .text = title,
+        .font = Text16,
+        .wrap = cast(TextWrap)TextWrapAuto
+    })
+    return height
+}
+
+statistics_mood_color :: (mood: s32) -> Color {
+    if mood <= 1 {
+        return Color.{.r = 226, .g = 83, .b = 78, .a = 255}
+    } else if mood == 2 {
+        return Color.{.r = 238, .g = 139, .b = 70, .a = 255}
+    } else if mood == 3 {
+        return Color.{.r = 235, .g = 202, .b = 77, .a = 255}
+    } else if mood == 4 {
+        return Color.{.r = 108, .g = 199, .b = 104, .a = 255}
+    }
+    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
+}
+
+statistics_format_average :: (out: []u8, value_x100: s32,
+    suffix: string) -> bool {
+    sign: string = ""
+    value := value_x100
+
+    if value < 0 {
+        sign = "-"
+        value = -value
+    }
+    args: [4]FormatArg = .[
+        FormatArg.{.text = sign, .is_text = true},
+        FormatArg.{.number = value / 100},
+        FormatArg.{.number = value % 100},
+        FormatArg.{.text = suffix, .is_text = true}
+    ]
+    return FormatTemplate("%s%d.%02d%s", args[:], out)
+}
+
+statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
+    stats: *StorageMoodStats,
+    accent: Color) -> s32 {
+    panel_h := AppScale(156)
+    metrics_gap := AppScale(8)
+    metric_h := AppScale(58)
+    metric_w := (content_w - metrics_gap) / 2
+    bars_y := y + AppScale(78)
+    bars_h := AppScale(54)
+    slot_w := content_w / 5
+    value: [32] u8
+
+    if stats == null || stats.total <= 0 {
+        return 0
+    }
+
+    y += statistics_draw_section_title(LocaleText("habit_stats_mood_title"),
+        content_x, y, content_w) + AppScale(10)
+    statistics_format_average(value[:], cast(s32)(stats.average * 100.0f),
+        "/5")
+    statistics_draw_metric(content_x, y, metric_w, metric_h,
+        LocaleText("habit_stats_mood_average"),
+        AppTextFromCString(*value[0], 32),
+        accent)
+    AppFormatS32(stats.total, value[:])
+    statistics_draw_metric(content_x + metric_w + metrics_gap, y,
+        content_w - metric_w - metrics_gap, metric_h,
+        LocaleText("habit_stats_mood_checkins"),
+        AppTextFromCString(*value[0], 32),
+        LightenColor(accent, 20))
+
+    DrawRectangle(content_x, bars_y, content_w, bars_h,
+        DarkenColor(StyleTokenColor("canvas"), 7))
+    {
+        i: s32 = 0
+        while i < 5 {
+            count := stats.counts[i]
+            bar_h := AppScale(3)
+            if count > 0 {
+                bar_h = (count * (bars_h - AppScale(24))) / stats.total
+            }
+            x := content_x + i * slot_w + AppScale(7)
+            w := slot_w - AppScale(14)
+            bar_y := bars_y + bars_h - bar_h - AppScale(18)
+            label: [4]u8
+
+            if w < AppScale(4) {
+                w = AppScale(4)
+            }
+            bar_color := statistics_mood_color(i + 1)
+            if count <= 0 {
+                bar_color = DarkenColor(StyleTokenColor("canvas"), 24)
+            }
+            DrawRectangle(x, bar_y, w, bar_h, bar_color)
+            AppFormatS32(i + 1, label[:])
+            label_text := AppTextFromCString(*label[0], 4)
+            Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{
+                    cast(float32)(x + (w - AppTextWidth(label_text, Text12)) / 2),
+                    cast(float32)(bars_y + bars_h - AppScale(16)), 0, 0},
+                .text = label_text,
+                .font = Text12,
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+            i += 1
+        }
+
+    }
+
+    return panel_h
+}
+
+statistics_draw_hold_range_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s32) -> s32 {
+    labels: [2] string = .["1W", "1M"]
+    values: [2] s32 = .[7, 31]
+    selected: s32 = ifx (app.habits.hold_stats_range_days == 31) then (1) else (0)
+    h := AppScale(34)
+    segment_w := w / 2
+    clicked: s32 = 0
+
+    {
+        i: s32 = 0
+        while i < 2 {
+
+            segment_x := x + i * segment_w
+            current_w := ifx (i == 1) then (x + w - segment_x) else (segment_w)
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)segment_x, cast(float32)y, cast(float32)current_w, cast(float32)h},
+                    .id = cast(s32)24700 + i, .label = labels[i],
+                    .tone = cast(ButtonTone)(ifx (i == selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = i == selected,
+                    .disabled = app.modal.active != 0
+                }) != 0 && selected != i {
+                app.habits.hold_stats_range_days = values[i]
+                clicked = 1
+            }
+
+            i += 1
+        }
+    }
+    return clicked
+}
+
+statistics_content_height :: (linked_count: s32, mood_count: s32) -> s32 {
+    return AppScale(ifx (linked_count > 0) then (710) else (420)) +            (ifx (mood_count > 0) then (AppScale(188)) else (0))
+}
+
+statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContext,
+    content_x: s32, y: s32, content_w: s32, today_index: s32,
+    filter: s32, accent: Color) {
+    points: [STATISTICS_MAX_GRAPH_POINTS] StatisticsGraphPoint
+    point_count: s32 = 0
+    graph_days: s32 = ifx (app.habits.hold_stats_range_days == 31) then (31) else (7)
+    day_points: [STATISTICS_MAX_GRAPH_DAYS]s32
+    day_totals: [STATISTICS_MAX_GRAPH_DAYS]s32
+    max_hold: s32 = 1
+    graph_h := AppScale(170)
+    axis_w := AppScale(48)
+    plot_x := content_x + axis_w
+    plot_y := y + AppScale(8)
+    plot_w := content_w - axis_w - AppScale(10)
+    plot_h := graph_h - AppScale(36)
+    axis_label: [32] u8
+
+    DrawRectangle(content_x, y, content_w, graph_h, DarkenColor(StyleTokenColor("canvas"), 7))
+    {
+        i: s32 = 0
+        while linked_ctx != null && i < linked_ctx.count {
+            entry: *HabitLinkedEntry = *linked_ctx.entries[i]
+            day_index: s32 = 0
+            day_offset: s32 = 0
+
+            if statistics_entry_matches_filter(entry, filter) == 0 {
+                i += 1; continue
+            }
+            day_index = entry.year * 10000 + entry.month * 100 + entry.day
+            day_offset = statistics_day_offset_from_today(day_index,
+                today_index)
+            if day_offset < 0 || day_offset >= graph_days {
+                i += 1; continue
+            }
+            {
+                r: s32 = 0
+                while r < entry.round_count && point_count < STATISTICS_MAX_GRAPH_POINTS {
+                    day_slot := graph_days - 1 - day_offset
+                    if entry.rounds[r] > max_hold {
+                        max_hold = entry.rounds[r]
+                    }
+                    day_points[day_slot] += 1
+                    day_totals[day_slot] += entry.rounds[r]
+                    points[point_count] = StatisticsGraphPoint.{day_index * 86400 + entry.hour * 3600 + entry.minute * 60 + entry.second, r, day_slot, entry.rounds[r], 0, 0 }
+                    point_count += 1
+                    r += 1
+                }
+            }
+            i += 1
+        }
+
+    }
+
+    {
+        i: s32 = 1
+        while i < point_count {
+            point: StatisticsGraphPoint = points[i]
+            j := i - 1
+            while j >= 0 && (points[j].time_key > point.time_key || (points[j].time_key == point.time_key && points[j].round_index > point.round_index)) {
+                points[j + 1] = points[j]
+                j -= 1
+            }
+            points[j + 1] = point
+            i += 1
+        }
+
+    }
+
+    {
+        i: s32 = 1
+        while i < graph_days {
+            if graph_days == 7 || i % 5 == 0 {
+                x := plot_x + (plot_w * i) / graph_days
+                DrawLine(x, plot_y, x, plot_y + plot_h, DarkenColor(StyleTokenColor("canvas"), 22))
+            }
+            i += 1
+        }
+
+    }
+    {
+        i: s32 = 0
+        while i <= 2 {
+            line_y := plot_y + (plot_h * i) / 2
+            seconds := max_hold - (max_hold * i) / 2
+            axis_args: [1]FormatArg = .[FormatArg.{.number = seconds}]
+            FormatTemplate("%ds", axis_args[:], axis_label[:])
+            DrawLine(plot_x, line_y, plot_x + plot_w, line_y, DarkenColor(StyleTokenColor("canvas"), 20))
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(content_x + AppScale(4)), cast(float32)(line_y - AppScale(8)), 0, 0},
+                    .text = AppTextFromCString(*axis_label[0], 32),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            i += 1
+        }
+
+    }
+    DrawLine(plot_x, plot_y + plot_h, plot_x + plot_w, plot_y + plot_h, DarkenColor(StyleTokenColor("text"), 42))
+    {
+        day_seen: [STATISTICS_MAX_GRAPH_DAYS] s32
+        day_first_x: [STATISTICS_MAX_GRAPH_DAYS] s32
+        day_last_x: [STATISTICS_MAX_GRAPH_DAYS] s32
+
+        {
+            i: s32 = 0
+            while i < graph_days {
+                day_first_x[i] = -1
+                day_last_x[i] = -1
+                i += 1
+            }
+
+        }
+        {
+            i: s32 = 0
+            while i < point_count {
+                day_slot := points[i].day_slot
+                count := ifx (day_points[day_slot] > 0) then (day_points[day_slot]) else (1)
+                ordinal := day_seen[day_slot]
+                day_seen[day_slot] += 1
+                x0 := plot_x + (plot_w * day_slot) / graph_days
+                x1 := plot_x + (plot_w * (day_slot + 1)) / graph_days
+                points[i].x = x0 + ((ordinal + 1) * (x1 - x0)) / (count + 1)
+                points[i].y = plot_y + plot_h - (points[i].hold_seconds * (plot_h - AppScale(10))) / max_hold
+                if day_first_x[day_slot] < 0 || points[i].x < day_first_x[day_slot] {
+                    day_first_x[day_slot] = points[i].x
+                }
+                if day_last_x[day_slot] < 0 || points[i].x > day_last_x[day_slot] {
+                    day_last_x[day_slot] = points[i].x
+                }
+                i += 1
+            }
+
+        }
+
+        {
+            prev_x: s32 = 0
+            prev_y: s32 = 0
+            has_prev: s32 = 0
+
+            {
+                i: s32 = 0
+                while i < graph_days {
+                    avg_seconds: s32 = 0
+                    avg_y: s32 = 0
+
+                    if day_points[i] <= 0 {
+                        i += 1; continue
+                    }
+                    avg_seconds = day_totals[i] / day_points[i]
+                    avg_y = plot_y + plot_h - (avg_seconds * (plot_h - AppScale(10))) / max_hold
+                    if has_prev != 0 {
+                        DrawLine(prev_x, prev_y, day_first_x[i], avg_y, accent)
+                    }
+                    DrawLine(day_first_x[i], avg_y, day_last_x[i], avg_y, accent)
+                    prev_x = day_last_x[i]
+                    prev_y = avg_y
+                    has_prev = 1
+                    i += 1
+                }
+
+            }
+        }
+    }
+
+    {
+        i: s32 = 0
+        while i < point_count {
+            DrawCircle(points[i].x, points[i].y,
+                cast(float32)AppScale(3), accent)
+            i += 1
+        }
+
+    }
+    if point_count <= 0 {
+        empty := LocaleText(ifx (graph_days == 31) then ("habit_stats_no_rounds_month") else ("habit_stats_no_rounds_week"))
+        text_w := AppTextWidth(empty, Text12)
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(content_x + (content_w - text_w) / 2), cast(float32)(y + graph_h / 2 - AppScale(8)), 0, 0},
+                .text = (empty),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+    }
+    {
+        i: s32 = 0
+        while i < graph_days {
+            day_offset := graph_days - 1 - i
+            show_label := graph_days == 7 || day_offset == 0 || day_offset % 5 == 0
+            label: [8] u8
+            day_x: s32 = 0
+
+            if !show_label {
+                i += 1; continue
+            }
+            if day_offset == 0 {
+                AppCopyText(LocaleText("statistics_now_label"), label[:])
+            } else {
+                FormatLocaleCount(*label[0], size_of(type_of(label)),
+                    "statistics_day_offset_label", day_offset)
+            }
+            day_x = plot_x + (plot_w * i) / graph_days
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(day_x + AppScale(2)), cast(float32)(y + graph_h - AppScale(20)), 0, 0},
+                    .text = AppTextFromCString(*label[0], 8),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            i += 1
+        }
+
+    }
+}
+
+statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLinkedContext, content_x: s32, content_w: s32, y: s32) {
+    local := LocalNow()
+    current_streak: s32 = 0
+    best_streak: s32 = 0
+    running_streak: s32 = 0
+    last_30_done: s32 = 0
+    last_30_total: s32 = 30
+    weekday_counts: [7] s32
+    max_weekday: s32 = 1
+    chart_h := AppScale(128)
+    metrics_gap := AppScale(8)
+    metric_h := AppScale(66)
+    metric_w: s32 = 0
+    value: [64] u8
+    has_wim_hof_rounds := statistics_has_wim_hof_rounds(linked_ctx)
+    mood_stats: StorageMoodStats = .{}
+    mood_count: s32 = 0
+
+    if active != null && active.sync_mode == HABIT_SYNC_ACTIVITIES  && active.sync_activity != 0 {
+        mood_count = statistics_cached_mood_stats(active.sync_activity, 0,
+            *mood_stats)
+    }
+
+    if !local.valid { return }
+    year := local.year
+    month := local.month
+    day := local.day
+    today_index := year * 10000 + month * 100 + day
+    {
+        i: s32 = 0
+        while i < 365 {
+            day_index := year * 10000 + month * 100 + day
+            count: s32 = 0
+
+            count = statistics_day_count(active, linked_ctx, day_index)
+            scheduled := active == null ||
+                habit_scheduled_day(active, day_index) != 0
+            if i < 30 && count > 0 {
+                last_30_done += 1
+            }
+            if i < 56 && count > 0 {
+                weekday := statistics_day_of_week(day_index)
+                if weekday >= 0 && weekday < 7 {
+                    weekday_counts[weekday] += 1
+                    if weekday_counts[weekday] > max_weekday {
+                        max_weekday = weekday_counts[weekday]
+                    }
+                }
+            }
+            if count > 0 {
+                running_streak += 1
+                if running_streak > best_streak {
+                    best_streak = running_streak
+                }
+                if i == current_streak {
+                    current_streak += 1
+                }
+            } else if !scheduled {
+                // off-schedule days neither extend nor break a streak
+                if i == current_streak {
+                    current_streak += 1
+                }
+            } else {
+                running_streak = 0
+            }
+            day -= 1
+            if day == 0 {
+                month -= 1
+                if month == 0 {
+                    year -= 1
+                    month = 12
+                }
+                day = habit_days_in_month(year, month)
+            }
+            i += 1
+        }
+
+    }
+
+    metric_w = (content_w - metrics_gap) / 2
+    statistics_format_day_count(*value[0], size_of(type_of(value)), current_streak)
+    statistics_draw_metric(content_x, y, metric_w, metric_h,
+        LocaleText("habit_stats_current_streak"),
+        AppTextFromCString(*value[0], 64), active.color)
+    days_args: [2]FormatArg = .[
+        FormatArg.{.number = last_30_done},
+        FormatArg.{.number = last_30_total}
+    ]
+    FormatTemplate("%d/%d", days_args[:], value[:])
+    statistics_draw_metric(content_x + metric_w + metrics_gap, y,
+        content_w - metric_w - metrics_gap, metric_h,
+        LocaleText("habit_stats_last_30_days"),
+        AppTextFromCString(*value[0], 64), LightenColor(active.color, 24))
+    y += metric_h + AppScale(22)
+
+    if mood_count > 0 {
+        y += statistics_draw_mood_panel(content_x, y, content_w, *mood_stats,
+            active.color) + AppScale(22)
+    }
+
+    if has_wim_hof_rounds != 0 {
+        y += statistics_draw_section_title(LocaleText("habit_stats_wim_hof_hold_rounds"), content_x, y, content_w) + AppScale(10)
+        statistics_draw_hold_range_selector(app, content_x, y, AppScale(118))
+        y += AppScale(42)
+        statistics_draw_hold_graph(app, linked_ctx, content_x, y,
+            content_w, today_index, EXERCISE_WIM_HOF, active.color)
+        y += AppScale(194)
+    }
+
+    y += statistics_draw_section_title(LocaleText("habit_stats_weekday_pattern"), content_x, y, content_w) + AppScale(10)
+    DrawRectangle(content_x, y, content_w, chart_h, DarkenColor(StyleTokenColor("canvas"), 7))
+    {
+        labels: [7] string = .["S", "M", "T", "W", "T", "F", "S"]
+        slot_w := content_w / 7
+        {
+            i: s32 = 0
+            while i < 7 {
+
+                h := AppScale(3)
+                if weekday_counts[i] > 0 {
+                    h = (weekday_counts[i] * (chart_h - AppScale(34))) /
+                        max_weekday
+                }
+                x := content_x + i * slot_w + AppScale(5)
+                w := slot_w - AppScale(10)
+                bar_y := y + chart_h - h - AppScale(22)
+
+                if w < AppScale(4) { w = AppScale(4) }
+                DrawRectangle(x, bar_y, w, h,
+                    ifx (weekday_counts[i] > 0) then
+                    (LightenColor(active.color, 12)) else
+                    (DarkenColor(StyleTokenColor("canvas"), 24)))
+                Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{
+                        cast(float32)(x + (w - AppTextWidth(labels[i], Text12)) / 2),
+                        cast(float32)(y + chart_h - AppScale(18)), 0, 0},
+                    .text = labels[i],
+                    .font = Text12,
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+
+                i += 1
+            }
+        }
+    }
+    y += chart_h + AppScale(24)
+
+    if linked_ctx != null && linked_ctx.count > 0 {
+        best: [32] u8
+        total: [32] u8
+        y += statistics_draw_section_title(LocaleText("habit_stats_practice_time"), content_x, y, content_w) + AppScale(10)
+        habit_format_duration(linked_ctx.best_seconds, *best[0], size_of(type_of(best)))
+        habit_format_duration(linked_ctx.total_seconds, *total[0], size_of(type_of(total)))
+        statistics_draw_metric(content_x, y, metric_w, metric_h,
+            LocaleText("habit_stats_best_hold"),
+            AppTextFromCString(*best[0], 32), active.color)
+        statistics_draw_metric(content_x + metric_w + metrics_gap, y,
+            content_w - metric_w - metrics_gap, metric_h,
+            LocaleText("habit_stats_total_hold"),
+            AppTextFromCString(*total[0], 32), LightenColor(active.color, 20))
+    } else {
+        statistics_format_day_count(*value[0], size_of(type_of(value)), best_streak)
+        statistics_draw_metric(content_x, y, content_w, metric_h,
+            LocaleText("habit_stats_best_streak"),
+            AppTextFromCString(*value[0], 64), active.color)
+    }
+}
+
+draw_statistics_content :: (app: *InnerBreeze, content_top: s32) {
+    if app == null {
+        return
+    }
+
+    content_bottom := app_content_bottom_reserved(app)
+    viewport_h := app.ui.view_height - content_top - content_bottom
+    scroll_y := content_top + AppScale(4)
+    scroll_h := viewport_h - AppScale(4)
+    max_w := AppScale(CONTENT_MAX_W)
+    active: *Habit = null
+    linked_ctx: *HabitLinkedContext = null
+    stats_index := app.habits.selected
+    page_ctx := StatisticsScrollPageContext.{}
+    page_mood_stats: StorageMoodStats = .{}
+    page_mood_count: s32 = 0
+    content_x: s32 = 0
+    content_w: s32 = 0
+    content_h: s32 = 0
+
+    if app.habits.count <= 0 {
+        return
+    }
+    if stats_index < 0 || stats_index >= app.habits.count {
+        stats_index = 0
+    }
+
+    active = *app.habits.items[stats_index]
+    linked_ctx = habit_cached_linked_entries(app, stats_index, 0)
+
+    if scroll_h < 0 {
+        scroll_h = 0
+    }
+    if active != null && active.sync_mode == HABIT_SYNC_ACTIVITIES  && active.sync_activity != 0 {
+        page_mood_count = statistics_cached_mood_stats(active.sync_activity, 0,
+            *page_mood_stats)
+    }
+    page_ctx.linked_count = ifx (linked_ctx != null) then (linked_ctx.count) else (0)
+    page_ctx.mood_count = page_mood_count
+    GetCenteredColumn(max_w, GetPageSidePadding(), *content_x, *content_w)
+    content_h = statistics_content_height(page_ctx.linked_count,
+        page_ctx.mood_count)
+    {
+        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0,
+            cast(float32)scroll_y, cast(float32)app.ui.view_width,
+            cast(float32)scroll_h }
+        scroll_1_key: u64 = KeyHash("inbe/screens/statistics_screen/scroll/1")
+        scroll_1_props: ScrollProps
+        scroll_1_props.key = scroll_1_key
+        scroll_1_props.bounds = scroll_1_bounds
+        scroll_1_props.content_height = content_h
+        scroll_1_props.scroll_offset = app.habits.scroll
+        scroll_1_props.input = ScrollObservationFor(scroll_1_key, scroll_1_bounds)
+        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
+        app.habits.scroll = scroll_1_result.scroll_offset
+        CommitScroll(scroll_1_key, scroll_1_result.frame)
+        page: Rectangle = scroll_1_result.content
+
+        statistics_draw_view(app, active, linked_ctx, content_x, content_w,
+            cast(s32)page.y + AppScale(8))
+        unused End(app.ui.session)
+    }
+}

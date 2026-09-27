@@ -1,0 +1,560 @@
+#import, file "break_types.zi";
+
+// Break decisions operate on values, so native targets and portable bundles
+// can agree on the same state without a UI or operating-system host.
+BreakDayChange :: struct {
+    engine: BreakEngine
+    changed: s32
+}
+
+BreakEventTake :: struct {
+    engine: BreakEngine
+    event: s32
+    break_type: s32
+}
+
+BreakIdleSample :: struct {
+    engine: BreakEngine
+    took: s32
+}
+
+BreakDurationText :: struct {
+    bytes: [16]u8
+    count: s32
+}
+
+BreakAppendDigit :: (text: BreakDurationText,
+    digit: s32) -> BreakDurationText {
+    text.bytes[text.count] = cast(u8)(48 + digit)
+    text.count += 1
+    return text
+}
+
+BreakAppendNumber :: (text: BreakDurationText,
+    value: s32) -> BreakDurationText {
+    divisor: s32 = 1
+    while value / divisor >= 10 {
+        divisor *= 10
+    }
+    while divisor > 0 {
+        text = BreakAppendDigit(text, value / divisor)
+        value = value % divisor
+        divisor = divisor / 10
+    }
+    return text
+}
+
+BreakAppendTwoDigits :: (text: BreakDurationText,
+    value: s32) -> BreakDurationText {
+    text = BreakAppendDigit(text, value / 10)
+    return BreakAppendDigit(text, value % 10)
+}
+
+#program_export
+BreakFormatDuration :: (seconds: s32) -> BreakDurationText {
+    text: BreakDurationText
+    if seconds < 0 {
+        seconds = 0
+    }
+    if seconds >= 3600 {
+        text = BreakAppendNumber(text, seconds / 3600)
+        text.bytes[text.count] = cast(u8)58
+        text.count += 1
+        text = BreakAppendTwoDigits(text, (seconds / 60) % 60)
+    } else {
+        text = BreakAppendNumber(text, seconds / 60)
+    }
+    text.bytes[text.count] = cast(u8)58
+    text.count += 1
+    text = BreakAppendTwoDigits(text, seconds % 60)
+    text.bytes[text.count] = cast(u8)0
+    return text
+}
+
+#program_export
+BreakInit :: () -> BreakEngine {
+    engine: BreakEngine
+    index: s32 = 0
+    while index < BREAK_TYPE_COUNT {
+        engine.timers[index].enabled = 1
+        engine.timers[index].limit_s = 0
+        engine.timers[index].duration_s = 0
+        engine.timers[index].postpone_s = 0
+        engine.timers[index].max_prompts = 3
+        engine.timers[index].show_skip = 1
+        engine.timers[index].show_postpone = 1
+        engine.timers[index].active_s = 0
+        engine.timers[index].idle_s = 0
+        engine.timers[index].idle_latched = 0
+        engine.timers[index].snooze_s = 0
+        engine.timers[index].prompt_s = 0
+        engine.timers[index].prompt_count = 0
+        engine.timers[index].lock_buttons_s = 0
+        engine.timers[index].skipped_today = 0
+        engine.timers[index].state = BreakStateRunning
+
+        engine.stats[index].prompts = 0
+        engine.stats[index].repeated_prompts = 0
+        engine.stats[index].taken = 0
+        engine.stats[index].natural = 0
+        engine.stats[index].skipped = 0
+        engine.stats[index].postponed = 0
+        engine.stats[index].overdue_s = 0
+        index += 1
+    }
+
+    engine.timers[BREAK_MICRO].limit_s = 180
+    engine.timers[BREAK_MICRO].duration_s = 30
+    engine.timers[BREAK_MICRO].postpone_s = 150
+    // Micro breaks open their window immediately when due.
+    engine.timers[BREAK_MICRO].max_prompts = 0
+
+    engine.timers[BREAK_REST].limit_s = 2700
+    engine.timers[BREAK_REST].duration_s = 600
+    engine.timers[BREAK_REST].postpone_s = 180
+
+    engine.timers[BREAK_DAILY].limit_s = 14400
+    engine.timers[BREAK_DAILY].postpone_s = 1200
+
+    engine.usage_today_s = 0
+    engine.mode = BreakModeNormal
+    engine.mode_until_s = 0
+    engine.reading_mode = 0
+    engine.reading_active = 0
+    engine.micro_counts_as_activity = 0
+    engine.day_key = 0
+    engine.sectick = 0
+    engine.event = BreakEventNone
+    engine.event_break = BREAK_MICRO
+    return engine
+}
+
+#program_export
+BreakActive :: (engine: BreakEngine) -> s32 {
+    index: s32 = 0
+    active: s32 = -1
+    while index < BREAK_TYPE_COUNT {
+        if engine.timers[index].enabled != 0  && engine.timers[index].state == BreakStateBreaking {
+            active = index
+        }
+        index += 1
+    }
+    return active
+}
+
+#program_export
+BreakNextDueSeconds :: (engine: BreakEngine, break_type: s32) -> s32 {
+    if break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+        return -1
+    }
+    if engine.timers[break_type].enabled == 0 {
+        return -1
+    }
+    if engine.timers[break_type].state != BreakStateRunning {
+        return 0
+    }
+    remaining: s32 = engine.timers[break_type].limit_s -     engine.timers[break_type].active_s
+    if remaining < 0 {
+        return 0
+    }
+    return remaining
+}
+
+BreakRaise :: (engine: BreakEngine, event: s32,
+    break_type: s32) -> BreakEngine {
+    if event < engine.event {
+        return engine
+    }
+    engine.event = event
+    engine.event_break = break_type
+    return engine
+}
+
+BreakBegin :: (engine: BreakEngine,
+    break_type: s32) -> BreakEngine {
+    index: s32 = 0
+    while index < BREAK_TYPE_COUNT {
+        if index != break_type  && engine.timers[index].enabled != 0  && engine.timers[index].state == BreakStateBreaking {
+            engine.timers[index].state = BreakStateRunning
+            engine.timers[index].active_s = 0
+            engine.timers[index].idle_s = 0
+            engine.timers[index].idle_latched = 0
+            engine.timers[index].prompt_s = 0
+            engine.timers[index].prompt_count = 0
+            engine.timers[index].lock_buttons_s = 0
+        }
+        index += 1
+    }
+    engine.timers[break_type].state = BreakStateBreaking
+    engine.timers[break_type].idle_s = 0
+    engine.timers[break_type].idle_latched = 0
+    engine.timers[break_type].prompt_s = 0
+    engine.timers[break_type].prompt_count = 0
+    if break_type == BREAK_REST {
+        engine.reading_active = 0
+    }
+    return BreakRaise(engine, BreakEventStart, break_type)
+}
+
+#program_export
+BreakTake :: (engine: BreakEngine, break_type: s32,
+    natural: s32) -> BreakEngine {
+    if break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+        return engine
+    }
+    engine.timers[break_type].state = BreakStateRunning
+    engine.timers[break_type].active_s = 0
+    engine.timers[break_type].idle_s = 0
+    // A continuous idle period can take a break only once until input resumes.
+    engine.timers[break_type].idle_latched = natural
+    engine.timers[break_type].prompt_s = 0
+    engine.timers[break_type].prompt_count = 0
+    engine.timers[break_type].lock_buttons_s = 0
+    if natural != 0 {
+        engine.stats[break_type].natural += 1
+        engine = BreakRaise(engine, BreakEventNatural, break_type)
+    } else {
+        engine.stats[break_type].taken += 1
+        engine = BreakRaise(engine, BreakEventTaken, break_type)
+    }
+
+    if break_type == BREAK_REST {
+        if engine.timers[BREAK_MICRO].enabled != 0  && engine.timers[BREAK_MICRO].state != BreakStateBreaking {
+            engine.timers[BREAK_MICRO].active_s = 0
+            engine.timers[BREAK_MICRO].idle_s = 0
+            engine.timers[BREAK_MICRO].snooze_s = 0
+            engine.timers[BREAK_MICRO].prompt_s = 0
+            engine.timers[BREAK_MICRO].prompt_count = 0
+            if engine.timers[BREAK_MICRO].state == BreakStatePrompting {
+                engine.timers[BREAK_MICRO].state = BreakStateRunning
+            }
+        }
+    }
+    if break_type == BREAK_MICRO && engine.micro_counts_as_activity != 0 {
+        if engine.timers[BREAK_DAILY].enabled != 0  && engine.timers[BREAK_DAILY].skipped_today == 0  && engine.timers[BREAK_DAILY].limit_s > 0 {
+            engine.timers[BREAK_DAILY].active_s +=
+            engine.timers[BREAK_MICRO].duration_s
+        }
+    }
+    return engine
+}
+
+#program_export
+BreakForce :: (engine: BreakEngine,
+    break_type: s32) -> BreakEngine {
+    if break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+        return engine
+    }
+    if engine.timers[break_type].enabled == 0  || engine.timers[break_type].state == BreakStateBreaking {
+        return engine
+    }
+    if engine.timers[break_type].active_s <
+    engine.timers[break_type].limit_s {
+        engine.timers[break_type].active_s =
+        engine.timers[break_type].limit_s
+    }
+    return BreakBegin(engine, break_type)
+}
+
+BreakDue :: (engine: BreakEngine,
+    break_type: s32) -> BreakEngine {
+    if engine.mode == BreakModeQuiet {
+        engine.stats[break_type].overdue_s += 1
+        return engine
+    }
+    if break_type == BREAK_MICRO {
+        if engine.timers[BREAK_REST].enabled != 0  && engine.timers[BREAK_REST].limit_s > 0  && engine.timers[BREAK_REST].active_s >=
+        engine.timers[BREAK_REST].limit_s - BreakPromotionWindowS {
+            engine.timers[BREAK_MICRO].active_s = 0
+            engine.timers[BREAK_MICRO].idle_s = 0
+            engine.timers[BREAK_MICRO].state = BreakStateRunning
+            if engine.timers[BREAK_MICRO].max_prompts == 0 {
+                engine.timers[BREAK_REST].lock_buttons_s =
+                engine.timers[BREAK_REST].duration_s
+            }
+            return BreakBegin(engine, BREAK_REST)
+        }
+    }
+    if engine.timers[break_type].max_prompts == 0 {
+        return BreakBegin(engine, break_type)
+    }
+    engine.timers[break_type].state = BreakStatePrompting
+    engine.timers[break_type].prompt_count = 1
+    engine.timers[break_type].prompt_s = 0
+    engine.timers[break_type].idle_s = 0
+    engine.stats[break_type].prompts += 1
+    return BreakRaise(engine, BreakEventPrompt, break_type)
+}
+
+BreakStep :: (engine: BreakEngine, break_type: s32,
+    is_active: s32, owner: s32) -> BreakEngine {
+    if engine.timers[break_type].enabled == 0 {
+        return engine
+    }
+    if break_type == BREAK_DAILY  && engine.timers[break_type].skipped_today != 0 {
+        return engine
+    }
+
+    if owner >= 0 && owner != break_type {
+        if is_active != 0 {
+            engine.timers[break_type].idle_s = 0
+            engine.timers[break_type].idle_latched = 0
+        } else if engine.timers[break_type].idle_latched == 0  && engine.timers[break_type].duration_s > 0 {
+            engine.timers[break_type].idle_s += 1
+            if engine.timers[break_type].idle_s >=
+            engine.timers[break_type].duration_s {
+                engine = BreakTake(engine, break_type, 1)
+            }
+        }
+        return engine
+    }
+
+    if engine.timers[break_type].state == BreakStateRunning {
+        if is_active != 0 {
+            engine.timers[break_type].active_s += 1
+            engine.timers[break_type].idle_s = 0
+            engine.timers[break_type].idle_latched = 0
+            if engine.timers[break_type].limit_s > 0  && engine.timers[break_type].active_s >=
+            engine.timers[break_type].limit_s {
+                engine = BreakDue(engine, break_type)
+            }
+        } else if engine.timers[break_type].idle_latched == 0 {
+            engine.timers[break_type].idle_s += 1
+            if engine.timers[break_type].duration_s > 0  && engine.timers[break_type].idle_s >=
+            engine.timers[break_type].duration_s {
+                engine = BreakTake(engine, break_type, 1)
+            }
+        }
+        return engine
+    }
+
+    if engine.timers[break_type].state == BreakStatePrompting {
+        engine.stats[break_type].overdue_s += 1
+        if is_active != 0 {
+            engine.timers[break_type].idle_s = 0
+            engine.timers[break_type].idle_latched = 0
+        } else if engine.timers[break_type].idle_latched == 0 {
+            engine.timers[break_type].idle_s += 1
+            if engine.timers[break_type].duration_s > 0  && engine.timers[break_type].idle_s >=
+            engine.timers[break_type].duration_s {
+                return BreakTake(engine, break_type, 1)
+            }
+        }
+        engine.timers[break_type].prompt_s += 1
+        if engine.timers[break_type].prompt_s >= BreakPreludeRepeatS {
+            engine.timers[break_type].prompt_s = 0
+            engine.timers[break_type].prompt_count += 1
+            engine.stats[break_type].repeated_prompts += 1
+            if engine.timers[break_type].max_prompts > 0  && engine.timers[break_type].prompt_count >=
+            engine.timers[break_type].max_prompts {
+                engine = BreakBegin(engine, break_type)
+            } else {
+                engine = BreakRaise(engine, BreakEventPrompt, break_type)
+            }
+        }
+        return engine
+    }
+
+    if engine.timers[break_type].state == BreakStateSnoozed {
+        engine.timers[break_type].snooze_s -= 1
+        if engine.timers[break_type].snooze_s <= 0 {
+            engine.timers[break_type].snooze_s = 0
+            engine.timers[break_type].prompt_count = 0
+            engine.timers[break_type].prompt_s = 0
+            if engine.timers[break_type].max_prompts == 0 {
+                engine = BreakBegin(engine, break_type)
+            } else {
+                engine.timers[break_type].state = BreakStatePrompting
+                engine.stats[break_type].prompts += 1
+                engine = BreakRaise(engine, BreakEventPrompt, break_type)
+            }
+        }
+        return engine
+    }
+
+    // A new break cannot consume its first second in the same timer step.
+    if owner != break_type {
+        return engine
+    }
+    if engine.timers[break_type].lock_buttons_s > 0 {
+        engine.timers[break_type].lock_buttons_s -= 1
+    }
+    if break_type == BREAK_DAILY {
+        return engine
+    }
+    if is_active == 0 {
+        engine.timers[break_type].idle_s += 1
+        if engine.timers[break_type].idle_s >=
+        engine.timers[break_type].duration_s {
+            engine = BreakTake(engine, break_type, 0)
+        }
+    }
+    return engine
+}
+
+#program_export
+BreakTick :: (engine: BreakEngine, active: s32) -> BreakEngine {
+    engine.sectick += 1
+    if engine.sectick < BreakTicksPerSecond {
+        return engine
+    }
+    engine.sectick = 0
+
+    if engine.mode != BreakModeNormal && engine.mode_until_s > 0 {
+        engine.mode_until_s -= 1
+        if engine.mode_until_s <= 0 {
+            engine.mode = BreakModeNormal
+            engine = BreakRaise(engine, BreakEventModeExpired, BREAK_MICRO)
+        }
+    }
+    if engine.mode == BreakModeSuspended {
+        return engine
+    }
+
+    reading: s32 = 0
+    if engine.reading_mode != 0 {
+        if active != 0 {
+            engine.reading_active = 1
+        }
+        reading = engine.reading_active
+    }
+    is_active: s32 = 0
+    if active != 0 || reading != 0 {
+        is_active = 1
+        engine.usage_today_s += 1
+    }
+
+    owner: s32 = -1
+    index: s32 = 0
+    while index < BREAK_TYPE_COUNT {
+        if engine.timers[index].enabled != 0  && engine.timers[index].state == BreakStateBreaking {
+            owner = index
+        }
+        index += 1
+    }
+    index = 0
+    while index < BREAK_TYPE_COUNT {
+        engine = BreakStep(engine, index, is_active, owner)
+        index += 1
+    }
+    return engine
+}
+
+#program_export
+BreakNoteIdle :: (engine: BreakEngine,
+    idle_s: s32) -> BreakIdleSample {
+    result: BreakIdleSample
+    result.engine = engine
+    if idle_s < 0 || engine.mode == BreakModeSuspended  || (engine.reading_mode != 0 && engine.reading_active != 0) {
+        return result
+    }
+    index: s32 = 0
+    while index < BREAK_TYPE_COUNT {
+        if result.engine.timers[index].enabled != 0  && result.engine.timers[index].duration_s > 0  && result.engine.timers[index].idle_latched == 0  && (result.engine.timers[index].state == BreakStateRunning  || result.engine.timers[index].state == BreakStatePrompting)  && idle_s >= result.engine.timers[index].duration_s {
+            result.engine = BreakTake(result.engine, index, 1)
+            result.took = 1
+        }
+        index += 1
+    }
+    return result
+}
+
+#program_export
+BreakSkip :: (engine: BreakEngine, break_type: s32) -> BreakEngine {
+    if break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+        return engine
+    }
+    if engine.timers[break_type].state != BreakStateBreaking  && engine.timers[break_type].state != BreakStatePrompting {
+        return engine
+    }
+    if break_type == BREAK_DAILY {
+        engine.timers[break_type].skipped_today = 1
+    }
+    engine.timers[break_type].state = BreakStateRunning
+    engine.timers[break_type].active_s = 0
+    engine.timers[break_type].idle_s = 0
+    engine.timers[break_type].idle_latched = 0
+    engine.timers[break_type].prompt_s = 0
+    engine.timers[break_type].prompt_count = 0
+    engine.timers[break_type].lock_buttons_s = 0
+    engine.stats[break_type].skipped += 1
+    return BreakRaise(engine, BreakEventSkipped, break_type)
+}
+
+#program_export
+BreakPostpone :: (engine: BreakEngine,
+    break_type: s32) -> BreakEngine {
+    if break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+        return engine
+    }
+    if engine.timers[break_type].state != BreakStateBreaking  && engine.timers[break_type].state != BreakStatePrompting {
+        return engine
+    }
+    engine.timers[break_type].state = BreakStateSnoozed
+    engine.timers[break_type].snooze_s = engine.timers[break_type].postpone_s
+    engine.timers[break_type].idle_s = 0
+    engine.timers[break_type].idle_latched = 0
+    engine.timers[break_type].prompt_s = 0
+    engine.stats[break_type].postponed += 1
+    return BreakRaise(engine, BreakEventPostponed, break_type)
+}
+
+#program_export
+BreakSetMode :: (engine: BreakEngine, mode: s32,
+    duration_s: s32) -> BreakEngine {
+    engine.mode = mode
+    engine.mode_until_s = duration_s
+    return engine
+}
+
+#program_export
+BreakResetDayStats :: (engine: BreakEngine) -> BreakEngine {
+    index: s32 = 0
+    while index < BREAK_TYPE_COUNT {
+        engine.stats[index].prompts = 0
+        engine.stats[index].repeated_prompts = 0
+        engine.stats[index].taken = 0
+        engine.stats[index].natural = 0
+        engine.stats[index].skipped = 0
+        engine.stats[index].postponed = 0
+        engine.stats[index].overdue_s = 0
+        index += 1
+    }
+    engine.usage_today_s = 0
+    return engine
+}
+
+#program_export
+BreakSetDay :: (engine: BreakEngine,
+    day_key: s32) -> BreakDayChange {
+    result: BreakDayChange
+    result.engine = engine
+    if day_key == engine.day_key {
+        return result
+    }
+    result.engine.day_key = day_key
+    result.engine.timers[BREAK_DAILY].active_s = 0
+    result.engine.timers[BREAK_DAILY].idle_s = 0
+    result.engine.timers[BREAK_DAILY].idle_latched = 0
+    result.engine.timers[BREAK_DAILY].skipped_today = 0
+    result.engine.timers[BREAK_DAILY].prompt_s = 0
+    result.engine.timers[BREAK_DAILY].prompt_count = 0
+    if result.engine.timers[BREAK_DAILY].state == BreakStateBreaking {
+        result.engine.timers[BREAK_DAILY].state = BreakStateRunning
+        result.engine = BreakRaise(result.engine, BreakEventTaken, BREAK_DAILY)
+    } else {
+        result.engine.timers[BREAK_DAILY].state = BreakStateRunning
+    }
+    result.changed = 1
+    return result
+}
+
+#program_export
+BreakTakeEvent :: (engine: BreakEngine) -> BreakEventTake {
+    result: BreakEventTake
+    result.engine = engine
+    result.event = engine.event
+    result.break_type = engine.event_break
+    result.engine.event = BreakEventNone
+    return result
+}

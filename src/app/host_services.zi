@@ -1,0 +1,252 @@
+// App process services, with typed native calls at the operating system boundary.
+#import "byte_text_linux"
+#import "c_string"
+
+c :: #system_library "c";
+HostGetEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+
+#if #defined(_WIN32) {
+    kernel32 :: #system_library "kernel32";
+    HostLocaleName :: (name: *u16, capacity: s32) -> s32 #foreign kernel32 "GetUserDefaultLocaleName";
+    HostLocaleUtf8 :: (page: u32, flags: u32, source: *u16,
+        source_count: s32, output: *u8, capacity: s32,
+        fallback: *u8, used_fallback: *s32) -> s32 #foreign kernel32 "WideCharToMultiByte";
+    HostCounter :: (value: *s64) -> s32 #foreign kernel32 "QueryPerformanceCounter";
+    HostCounterFrequency :: (value: *s64) -> s32 #foreign kernel32 "QueryPerformanceFrequency";
+    HostWrite :: (descriptor: s32, bytes: *u8, count: u32) -> s32 #foreign c "_write";
+} else {
+    HostWrite :: (descriptor: s32, bytes: *u8, count: usize) -> isize #foreign c "write";
+}
+
+#if #defined(ANDROID_BUILD) {
+    #import, file "../platform/android/activity_jni.zi";
+}
+
+#if #defined(PLATFORM_WEB) {
+    HostBrowserText :: (script: *u8) -> *u8 #foreign c "emscripten_run_script_string";
+    HostBrowserNow :: () -> float64 #foreign c "emscripten_get_now";
+}
+
+#if #defined(KRYON_PLATFORM_PLAN9) {
+    HostNanoseconds :: () -> s64 #foreign c "nsec";
+}
+
+#if !#defined(_WIN32) && !#defined(PLATFORM_WEB) && !#defined(KRYON_PLATFORM_PLAN9) {
+    HostTimespec :: struct {
+        #if #defined(__FreeBSD__) {
+            seconds: s64
+        } else {
+            seconds: isize
+        }
+        nanoseconds: isize
+    }
+    HostClockGetTime :: (clock_id: s32, value: *HostTimespec) -> s32 #foreign c "clock_gettime";
+}
+
+host_locale_preferences: [256]u8;
+
+HostEnvironmentValue :: (name: string) -> *u8 {
+    bytes: [64]u8
+    if !CopyCString(name, bytes[:]) {
+        return null
+    }
+    return HostGetEnvironment(*bytes[0])
+}
+
+HostAppendLocale :: (value: *u8, used: s32) -> s32 {
+    at := used
+    if value == null {
+        return at
+    }
+    index: s32 = 0
+    while value[index] != cast(u8)0 && at < 255 {
+        host_locale_preferences[at] = value[index]
+        index += 1
+        at += 1
+    }
+    host_locale_preferences[at] = cast(u8)0
+    return at
+}
+
+#program_export
+app_text_from_cstring :: (data: *u8, capacity: s32) -> string {
+    if data == null || capacity <= 0 {
+        return ""
+    }
+    length: s32 = 0
+    while length < capacity && data[length] != cast(u8)0 {
+        length += 1
+    }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+
+#program_export
+app_getenv_bytes :: (name: *u8) -> *u8 {
+    if name == null {
+        return null
+    }
+    return HostGetEnvironment(name)
+}
+
+#program_export
+app_locale_preferences :: () -> string {
+    #if #defined(PLATFORM_WEB) {
+        script: [192]u8
+        CopyCString("typeof navigator === 'undefined' ? '' : (navigator.languages || [navigator.language || 'en']).join(';')", script[:])
+        host_locale_preferences[0] = cast(u8)0
+        HostAppendLocale(HostBrowserText(*script[0]), 0)
+        return app_text_from_cstring(*host_locale_preferences[0], 256)
+    }
+    #if #defined(ANDROID_BUILD) {
+        host_locale_preferences[0] = cast(u8)0
+        session: ActivityJniSession
+        if activity_jni_attach(*session) != 0 {
+            method := JniMethod(*session, "localePreferences", "()Ljava/lang/String;")
+            env := session.env
+            if method != null {
+                result := env.functions.CallObjectMethodA(env, session.activity,
+                    method, null)
+                if result != null && env.functions.ExceptionCheck(env) == 0 {
+                    text := env.functions.GetStringUTFChars(env, result, null)
+                    if text != null {
+                        unused HostAppendLocale(text, 0)
+                        env.functions.ReleaseStringUTFChars(env, result, text)
+                    }
+                }
+            }
+            activity_jni_detach(*session)
+        }
+        return app_text_from_cstring(*host_locale_preferences[0], 256)
+    }
+    #if #defined(_WIN32) {
+        name: [85]u16
+        host_locale_preferences[0] = cast(u8)0
+        if HostLocaleName(*name[0], 85) != 0 {
+            HostLocaleUtf8(65001, 0, *name[0], -1,
+                *host_locale_preferences[0], 256, null, null)
+        }
+        return app_text_from_cstring(*host_locale_preferences[0], 256)
+    }
+    preferences := HostEnvironmentValue("LANGUAGE")
+    if preferences == null || preferences[0] == cast(u8)0 {
+        preferences = HostEnvironmentValue("LC_ALL")
+    }
+    if preferences == null || preferences[0] == cast(u8)0 {
+        preferences = HostEnvironmentValue("LC_MESSAGES")
+    }
+    if preferences == null || preferences[0] == cast(u8)0 {
+        preferences = HostEnvironmentValue("LANG")
+    }
+    if preferences == null {
+        return "en"
+    }
+    return TextFromCString(preferences)
+}
+
+#program_export
+app_force_dark_mode :: () -> bool {
+    return HostEnvironmentValue("APP_FORCE_DARK_MODE") != null
+}
+
+#program_export
+app_monotonic_seconds :: () -> float64 {
+    #if #defined(_WIN32) {
+        frequency: s64 = 0
+        counter: s64 = 0
+        if HostCounterFrequency(*frequency) == 0 ||
+            HostCounter(*counter) == 0 || frequency <= 0 {
+            return 0.0
+        }
+        return cast(float64)counter / cast(float64)frequency
+    }
+    #if #defined(PLATFORM_WEB) {
+        return HostBrowserNow() / 1000.0
+    }
+    #if #defined(KRYON_PLATFORM_PLAN9) {
+        return cast(float64)HostNanoseconds() / 1000000000.0
+    }
+    #if !#defined(_WIN32) && !#defined(PLATFORM_WEB) && !#defined(KRYON_PLATFORM_PLAN9) {
+        clock_id: s32 = 1
+        #if #defined(__APPLE__) {
+            clock_id = 6
+        }
+        #if #defined(__FreeBSD__) {
+            clock_id = 4
+        }
+        now: HostTimespec
+        if HostClockGetTime(clock_id, *now) != 0 {
+            return 0.0
+        }
+        return cast(float64)now.seconds +
+            cast(float64)now.nanoseconds / 1000000000.0
+    }
+    return 0.0
+}
+
+#program_export
+app_log_line :: (line: *u8) {
+    if line == null {
+        return
+    }
+    prefix: [6]u8 = .[73, 78, 70, 79, 58, 32]
+    newline: [1]u8 = .[10]
+    value := TextFromCString(line)
+    #if #defined(_WIN32) {
+        HostWrite(2, *prefix[0], cast(u32)6)
+        HostWrite(2, line, cast(u32)value.count)
+        HostWrite(2, *newline[0], cast(u32)1)
+    } else {
+        HostWrite(2, *prefix[0], cast(usize)6)
+        HostWrite(2, line, cast(usize)value.count)
+        HostWrite(2, *newline[0], cast(usize)1)
+    }
+}
+
+#program_export
+app_desktop_platform :: () -> s32 {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        return 0
+    }
+    return 1
+}
+
+#program_export
+app_web_platform :: () -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+app_android_platform :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+app_windows_platform :: () -> s32 {
+    #if #defined(_WIN32) {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+app_plan9_platform :: () -> s32 {
+    #if #defined(KRYON_PLATFORM_PLAN9) {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+app_preview_mode :: () -> s32 {
+    value := HostEnvironmentValue("KRYON_INSPECT")
+    if value == null || value[0] == cast(u8)0 {
+        return 0
+    }
+    return ifx TextFromCString(value) != "0" then 1 else 0
+}

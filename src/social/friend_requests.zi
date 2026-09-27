@@ -1,0 +1,33 @@
+#import "json_scan"
+#import, file "../app/text_buffers.zi";
+
+#scope_file
+c :: #system_library "c";
+storage_get_social_cache_json :: (kind: string, out: *u8, out_size: s64) -> s32 #foreign c;
+request_cache: [8192]u8;
+
+#scope_export
+// The borrowed text is consumed before another storage read replaces it.
+RequestCache :: () -> string {
+    if storage_get_social_cache_json("friends.requests", *request_cache[0],
+        size_of(type_of(request_cache))) == 0 {
+        return "{\"incoming\":[],\"outgoing\":[]}"
+    }
+    request_cache[8191] = cast(u8)0
+    return AppTextFromCString(*request_cache[0], 8192)
+}
+
+#program_export
+PendingRequestCount :: (json: string) -> s32 {
+    incoming_at: s32 = FieldAt(json, 0, "incoming")
+    count: s32 = ArrayCount(json, incoming_at)
+    if count < 0 {
+        return 0
+    }
+    return count
+}
+
+#program_export
+PendingRequestCountNow :: () -> s32 {
+    return PendingRequestCount(RequestCache())
+}

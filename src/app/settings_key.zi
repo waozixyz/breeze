@@ -1,0 +1,108 @@
+// Setting names are persisted data. A key always has room for a trailing NUL
+// so the same value can cross Inbe's native storage boundary.
+#import, file "../breaks/break_types.zi";
+#import, file "exercise_types.zi";
+
+using ExerciseType;
+
+SettingsKey :: struct {
+    bytes: [48]u8
+    count: s32
+    valid: bool
+}
+
+SettingsKeyValid :: (key: SettingsKey) -> bool {
+    if !key.valid || key.count <= 0 || key.count >= 48 ||
+    key.bytes[key.count] != cast(u8)0 {
+        return false
+    }
+    index: s32 = 0
+    while index < key.count {
+        if key.bytes[index] == cast(u8)0 {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+SettingsKeyAppend :: (key: SettingsKey, text: string) -> SettingsKey {
+    if !key.valid || text.count > cast(s64)(47 - key.count) {
+        key.valid = false
+        return key
+    }
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        key.bytes[key.count] = text[index]
+        key.count += 1
+        index += 1
+    }
+    key.bytes[key.count] = 0
+    return key
+}
+
+SettingsKeyText :: (text: string) -> SettingsKey {
+    key: SettingsKey
+    key.valid = true
+    return SettingsKeyAppend(key, text)
+}
+
+SettingsKeyIndexed :: (prefix: string, index: s32,
+    suffix: string) -> SettingsKey {
+    key: SettingsKey = SettingsKeyText(prefix)
+    if !key.valid || index < 0 {
+        key.valid = false
+        return key
+    }
+    digits: [10]u8
+    digit_count: s32 = 0
+    number: s32 = index
+    while number > 0 {
+        digits[digit_count] = cast(u8)(48 + number % 10)
+        digit_count += 1
+        number /= 10
+    }
+    if digit_count == 0 {
+        digits[0] = 48
+        digit_count = 1
+    }
+    if digit_count > 47 - key.count {
+        key.valid = false
+        return key
+    }
+    while digit_count > 0 {
+        digit_count -= 1
+        key.bytes[key.count] = digits[digit_count]
+        key.count += 1
+    }
+    key.bytes[key.count] = 0
+    return SettingsKeyAppend(key, suffix)
+}
+
+SettingsKeyReminder :: (index: s32, field: string) -> SettingsKey {
+    key: SettingsKey = SettingsKeyIndexed("reminder_", index, "_")
+    return SettingsKeyAppend(key, field)
+}
+
+SettingsKeyBreak :: (timer: s32, field: string) -> SettingsKey {
+    if timer == BREAK_REST {
+        return SettingsKeyAppend(SettingsKeyText("break_rest_"), field)
+    }
+    if timer == BREAK_DAILY {
+        return SettingsKeyAppend(SettingsKeyText("break_daily_"), field)
+    }
+    return SettingsKeyAppend(SettingsKeyText("break_micro_"), field)
+}
+
+SettingsKeyMusicTrack :: (index: s32) -> SettingsKey {
+    if index == EXERCISE_WIM_HOF {
+        return SettingsKeyText("practice_music_track_wim_hof")
+    }
+    if index == EXERCISE_MEDITATION {
+        return SettingsKeyText("practice_music_track_meditation")
+    }
+    if index == EXERCISE_SUN_SALUTATION {
+        return SettingsKeyText("practice_music_track_sun_salutation")
+    }
+    return SettingsKeyIndexed("practice_music_track_", index, "")
+}

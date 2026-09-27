@@ -1,0 +1,235 @@
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+// Inbe's data and settings adapter for the portable Daochi client.
+#import "auth"
+#import "client"
+#import "account"
+#import "social"
+#import "sync"
+#import "events"
+#import "net_ws_curl_linux"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "account_types.zi";
+#import, file "daochi_native.zi";
+#import, file "daochi_account.zi";
+#import, file "sync_session.zi";
+#import, file "device_key.zi";
+#import, file "device_key_store.zi";
+#import, file "sync_account.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+
+c :: #system_library "c";
+malloc :: (size: u64) -> *void #foreign c;
+free :: (pointer: *void) #foreign c;
+time :: (out: *s64) -> s64 #foreign c;
+
+SyncResponseCapacity :: 16777216;
+SocialSend :: 1;
+SocialAccept :: 2;
+SocialDecline :: 3;
+SocialRemove :: 4;
+SocialRequests :: 5;
+SocialFriends :: 6;
+SocialStats :: 7;
+SocialAlias :: 8;
+
+#scope_export
+#program_export
+WaitStoredRemoteEvent :: (base_url: string) -> s32 {
+    account: SyncAccount
+    if sync_account_load(*account) == 0 {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client: Client
+    if !OpenAccountClient(base_url, *account,
+        storage_sync_client_id(), *client) {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    now := time(null)
+    session: Session
+    LoadSavedSession(*session, now)
+    event: RemoteEvent
+    result := WaitForEvent(client, *session, now, null,
+        ReceiveWebSocketCurl, *event)
+    SaveSession(*session)
+    return cast(s32)result
+}
+
+#scope_export
+#program_export
+SyncStoredAccount :: (base_url: string) -> s32 {
+    if base_url.count == 0 { return cast(s32)AuthResult.AUTH_INVALID_URL }
+    account: SyncAccount
+    if sync_account_load(*account) == 0 {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    material: DeviceKeyMaterial
+    if !LoadOrCreateDeviceKey(*material) {
+        return cast(s32)AuthResult.AUTH_SIGN_FAILED
+    }
+    client_id := storage_sync_client_id()
+    account_id := AccountField(*account.public_id[0],
+        SYNC_PUBLIC_ID_HEX_SIZE)
+    public_key := AccountField(*account.public_key_hex[0],
+        SYNC_PUBLIC_KEY_HEX_SIZE)
+    payload := storage_build_sync_payload_json(account_id, public_key)
+    if payload == null {
+        WipeDeviceKey(*material)
+        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    response := cast(*u8)malloc(SyncResponseCapacity)
+    if response == null {
+        storage_free_sync_payload_json(payload)
+        WipeDeviceKey(*material)
+        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    now := time(null)
+    session: Session
+    LoadSavedSession(*session, now)
+    status: s32 = 0
+    result := SyncAccountPayload(base_url, *account, client_id,
+        *session, DeviceFromKey(*material), now,
+        TextFromCString(payload),
+        BytesFromPointer(response, SyncResponseCapacity), *status)
+    SaveSession(*session)
+    storage_free_sync_payload_json(payload)
+    WipeDeviceKey(*material)
+    if result == cast(AuthResult)AuthResult.AUTH_OK {
+        if storage_apply_sync_response_json(TextUntilNul(
+            BytesFromPointer(response, SyncResponseCapacity))) == 0 {
+            result = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+        } else {
+            storage_purge_synced_deleted_data()
+        }
+    }
+    free(cast(*void)response)
+    return cast(s32)result
+}
+
+SocialOperation :: (base_url: string, operation: s32,
+    value: string, metric: string, output: []u8) -> s32 {
+    account: SyncAccount
+    if sync_account_load(*account) == 0 {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client: Client
+    if !OpenAccountClient(base_url, *account,
+        storage_sync_client_id(), *client) {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    now := time(null)
+    session: Session
+    LoadSavedSession(*session, now)
+    scratch: [4096]u8
+    response := output
+    if response.count == 0 { response = scratch[:] }
+    status: s32 = 0
+    result: AuthResult = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    if operation == SocialSend {
+        result = SendFriendRequest(client, *session, now,
+            value, response, *status)
+    } else if operation == SocialAccept {
+        result = FriendAction(client, *session, now,
+            value, "accept", response, *status)
+    } else if operation == SocialDecline {
+        result = FriendAction(client, *session, now,
+            value, "decline", response, *status)
+    } else if operation == SocialRemove {
+        result = RemoveFriend(client, *session, now,
+            value, response, *status)
+    } else if operation == SocialRequests {
+        result = FriendRequests(client, *session, now,
+            response, *status)
+    } else if operation == SocialFriends {
+        result = Friends(client, *session, now,
+            response, *status)
+    } else if operation == SocialStats {
+        result = FriendStats(client, *session, now,
+            value, metric, response, *status)
+    } else if operation == SocialAlias {
+        result = RegisterAlias(client, *session, now,
+            value, response, *status)
+    }
+    SaveSession(*session)
+    return cast(s32)result
+}
+
+#scope_export
+#program_export
+SendFriendRequestStored :: (base_url: string, target: string) -> s32 {
+    empty: [1]u8
+    return SocialOperation(base_url, SocialSend, target, "", empty[0:0])
+}
+
+#scope_export
+#program_export
+AcceptFriendRequestStored :: (base_url: string,
+    request_id: string) -> s32 {
+    empty: [1]u8
+    return SocialOperation(base_url, SocialAccept,
+        request_id, "", empty[0:0])
+}
+
+#scope_export
+#program_export
+DeclineFriendRequestStored :: (base_url: string,
+    request_id: string) -> s32 {
+    empty: [1]u8
+    return SocialOperation(base_url, SocialDecline,
+        request_id, "", empty[0:0])
+}
+
+#scope_export
+#program_export
+RemoveFriendStored :: (base_url: string, friend_id: string) -> s32 {
+    empty: [1]u8
+    return SocialOperation(base_url, SocialRemove,
+        friend_id, "", empty[0:0])
+}
+
+#scope_export
+#program_export
+FetchFriendRequests :: (base_url: string, output: []u8) -> s32 {
+    return SocialOperation(base_url, SocialRequests, "", "", output)
+}
+
+#scope_export
+#program_export
+FetchFriends :: (base_url: string, output: []u8) -> s32 {
+    return SocialOperation(base_url, SocialFriends, "", "", output)
+}
+
+#scope_export
+#program_export
+FetchFriendStats :: (base_url: string, practice: string,
+    metric: string, output: []u8) -> s32 {
+    return SocialOperation(base_url, SocialStats, practice, metric, output)
+}
+
+#scope_export
+#program_export
+RegisterAliasStored :: (base_url: string, alias: string) -> s32 {
+    empty: [1]u8
+    return SocialOperation(base_url, SocialAlias, alias, "", empty[0:0])
+}
+
+#scope_export
+#program_export
+DeleteStoredAccount :: (base_url: string) -> s32 {
+    account: SyncAccount
+    if sync_account_load(*account) == 0 {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client: Client
+    if !OpenAccountClient(base_url, *account,
+        storage_sync_client_id(), *client) {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    return cast(s32)DeleteAccount(client)
+}
+
+}

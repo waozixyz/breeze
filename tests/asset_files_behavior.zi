@@ -1,0 +1,76 @@
+#import "asset_files"
+#import "assets"
+#import "c_string"
+
+test_raylib :: #system_library "raylib";
+TestReadFile :: (path: *u8, size: *s32) -> *u8 #foreign test_raylib "LoadFileData";
+TestFreeFile :: (bytes: *u8) #foreign test_raylib "UnloadFileData";
+
+entry: EmbeddedAssetEntry;
+path_bytes: [32]u8;
+mime_bytes: [32]u8;
+embedded_bytes: [4]u8;
+
+#program_export
+asset_entry_total :: () -> usize {
+    return 1
+}
+
+#program_export
+asset_entry_at :: (index: usize) -> *EmbeddedAssetEntry {
+    if index == 0 {
+        return *entry
+    }
+    return null
+}
+
+#program_export
+main :: () -> s32 {
+    CopyCString("icons/ui.png", path_bytes[:])
+    CopyCString("application/octet-stream", mime_bytes[:])
+    embedded_bytes[0] = 10
+    embedded_bytes[1] = 0
+    embedded_bytes[2] = 20
+    embedded_bytes[3] = 255
+    entry.path = *path_bytes[0]
+    entry.mime = *mime_bytes[0]
+    entry.data = *embedded_bytes[0]
+    entry.size = 4
+    InstallAssetFiles()
+    length: s32 = -1
+    loaded := TestReadFile(*path_bytes[0], *length)
+    if loaded == null || length != 4 || loaded[0] != 10 ||
+        loaded[1] != 0 || loaded[2] != 20 || loaded[3] != 255 {
+        return 1
+    }
+    loaded[0] = 99
+    TestFreeFile(loaded)
+    if embedded_bytes[0] != 10 {
+        return 2
+    }
+    loaded = TestReadFile(*path_bytes[0], *length)
+    if loaded == null || loaded[0] != 10 {
+        return 3
+    }
+    TestFreeFile(loaded)
+    CopyCString("disk.bin", path_bytes[:])
+    // Keep the catalog's asset path stable while checking the disk fallback.
+    stored_path: [32]u8
+    CopyCString("icons/ui.png", stored_path[:])
+    entry.path = *stored_path[0]
+    loaded = TestReadFile(*path_bytes[0], *length)
+    if loaded == null || length != 4 || loaded[0] != 30 ||
+        loaded[1] != 0 || loaded[2] != 40 || loaded[3] != 254 {
+        return 4
+    }
+    TestFreeFile(loaded)
+    CopyCString("missing.bin", path_bytes[:])
+    loaded = ReadAssetFile(*path_bytes[0], *length)
+    if loaded != null || length != 0 {
+        return 5
+    }
+    if ReadAssetFile(null, *length) != null || length != 0 {
+        return 6
+    }
+    return 0
+}

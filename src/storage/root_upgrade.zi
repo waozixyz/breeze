@@ -1,0 +1,125 @@
+// Select the persistent data root without overwriting an existing directory.
+// Native filesystem operations are imported through the platform boundary.
+c :: #system_library "c";
+RootDirectoryExists :: (path: *u8) -> s32 #foreign c "storage_directory_exists";
+RootPathExists :: (path: *u8) -> s32 #foreign c "path_exists";
+RootRename :: (source: *u8, destination: *u8) -> s32 #foreign c "storage_rename_path";
+
+RootPathCapacity :: 512
+
+RootCopy :: (source: *u8, output: *u8, capacity: u64) -> bool {
+    if source == null || output == null || capacity == 0 {
+        return false
+    }
+    index: u64 = 0
+    while index + 1 < capacity && index < RootPathCapacity  && source[index] != cast(u8)0 {
+        output[index] = source[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return source[index] == cast(u8)0 && index > 0
+}
+
+RootAppend :: (source: *u8, output: *u8, cursor: *u64,
+    capacity: u64) -> bool {
+    if source == null || output == null {
+        return false
+    }
+    index: u64 = 0
+    while source[index] != cast(u8)0 {
+        if cursor.* + 1 >= capacity || index >= RootPathCapacity {
+            return false
+        }
+        output[cursor.*] = source[index]
+        cursor.* += 1
+        index += 1
+    }
+    output[cursor.*] = cast(u8)0
+    return true
+}
+
+RootArchiveName :: (current: *u8, suffix: *u8,
+    ordinal: s32, output: *u8) -> bool {
+    if ordinal < 1 || ordinal > 16  || !RootCopy(current, output, RootPathCapacity) {
+        return false
+    }
+    cursor: u64 = 0
+    while output[cursor] != cast(u8)0 {
+        cursor += 1
+    }
+    if !RootAppend(suffix, output, *cursor, RootPathCapacity) {
+        return false
+    }
+    if ordinal >= 10 {
+        if cursor + 3 > RootPathCapacity {
+            return false
+        }
+        output[cursor] = cast(u8)49
+        cursor += 1
+        ordinal -= 10
+    }
+    if cursor + 2 > RootPathCapacity {
+        return false
+    }
+    output[cursor] = cast(u8)(48 + ordinal)
+    output[cursor + 1] = cast(u8)0
+    return true
+}
+
+RootSelect :: (source: *u8, output: *u8, capacity: u64) -> s32 {
+    if RootCopy(source, output, capacity) {
+        return 1
+    }
+    output[0] = cast(u8)0
+    return 0
+}
+
+// Returns 1 when the selected root is copied, 0 on invalid or long paths.
+// Rename failure keeps the older root selected so startup can retry later.
+#program_export
+migrate_data_root :: (legacy: *u8, current: *u8,
+    archive_suffix: *u8, output: *u8, output_capacity: u64) -> s32 {
+    if output == null || output_capacity == 0 {
+        return 0
+    }
+    output[0] = cast(u8)0
+    if legacy == null || current == null || archive_suffix == null  || !RootCopy(current, output, output_capacity)  || !RootCopy(legacy, output, output_capacity) {
+        output[0] = cast(u8)0
+        return 0
+    }
+    old_present := RootDirectoryExists(legacy) != 0
+    new_present := RootDirectoryExists(current) != 0
+
+    if old_present && new_present {
+        archive: [RootPathCapacity]u8
+        archived := false
+        ordinal: s32 = 1
+        while ordinal <= 16 {
+            if !RootArchiveName(current, archive_suffix, ordinal, *archive[0]) {
+                output[0] = cast(u8)0
+                return 0
+            }
+            if RootPathExists(*archive[0]) != 0 {
+                ordinal += 1
+                continue
+            }
+            if RootRename(current, *archive[0]) != 0 {
+                archived = true
+            }
+            break
+        }
+        if archived {
+            new_present = false
+        }
+    }
+    if old_present && !new_present {
+        if RootRename(legacy, current) != 0 {
+            return RootSelect(current, output, output_capacity)
+        }
+        return 1
+    }
+    if !old_present {
+        return RootSelect(current, output, output_capacity)
+    }
+    return 1
+}

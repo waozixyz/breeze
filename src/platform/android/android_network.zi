@@ -1,0 +1,242 @@
+// Android owns TLS/socket effects; request policy and Daochi state remain Zi.
+#import "activity_jni"
+#import "net_http"
+#import "byte_text_linux"
+#import "async_client"
+#import "c_string"
+#import "text_buffer"
+
+AndroidTransfer :: struct {
+    handle: s32
+    output: []u8
+}
+
+NetworkBytes :: (session: *ActivityJniSession, value: string) -> *void {
+    env := session.env
+    bytes := env.functions.NewByteArray(env, cast(s32)value.count)
+    if bytes == null {
+        return null
+    }
+    if value.count > 0 {
+        descriptor := cast(*TextDescriptor)(*value)
+        env.functions.SetByteArrayRegion(env, bytes, 0,
+            cast(s32)value.count, descriptor.data)
+    }
+    if env.functions.ExceptionCheck(env) != 0 {
+        return null
+    }
+    return bytes
+}
+
+CancelAndroidHandle :: (session: *ActivityJniSession, handle: s32) {
+    method := JniMethod(session, "httpCancel", "(I)V")
+    if method != null {
+        arguments: [1]JniValue
+        arguments[0].integer = handle
+        session.env.functions.CallVoidMethodA(session.env, session.activity,
+            method, *arguments[0])
+    }
+}
+
+AndroidAddHeader :: (session: *ActivityJniSession, handle: s32,
+    name: string, value: string) -> bool {
+    if name.count == 0 || name.count > 128 || value.count > 8192 {
+        return false
+    }
+    method := JniMethod(session, "httpHeader", "(I[B[B)Z")
+    if method == null {
+        return false
+    }
+    env := session.env
+    arguments: [3]JniValue
+    arguments[0].integer = handle
+    arguments[1].reference = NetworkBytes(session, name)
+    arguments[2].reference = NetworkBytes(session, value)
+    if arguments[1].reference == null || arguments[2].reference == null {
+        return false
+    }
+    ok := env.functions.CallBooleanMethodA(env, session.activity, method,
+        *arguments[0]) != 0 && env.functions.ExceptionCheck(env) == 0
+    env.functions.DeleteLocalRef(env, arguments[1].reference)
+    env.functions.DeleteLocalRef(env, arguments[2].reference)
+    return ok
+}
+
+ConfigureAndroidTransfer :: (session: *ActivityJniSession, handle: s32,
+    request: HttpRequest) -> bool {
+    if request.accept.count > 0 &&
+        !AndroidAddHeader(session, handle, "Accept", request.accept) {
+        return false
+    }
+    if request.content_type.count > 0 &&
+        !AndroidAddHeader(session, handle, "Content-Type", request.content_type) {
+        return false
+    }
+    if request.token.count > 0 {
+        authorization: [8192]u8
+        if request.token.count + 7 >= authorization.count {
+            return false
+        }
+        unused CopyCString("Bearer ", authorization[:])
+        index: s64 = 0
+        while index < cast(s64)request.token.count {
+            authorization[index + 7] = request.token[index]
+            index += 1
+        }
+        authorization[index + 7] = cast(u8)0
+        if !AndroidAddHeader(session, handle, "Authorization",
+            TextUntilNul(authorization[:])) {
+            return false
+        }
+    }
+    index: s64 = 0
+    while index < cast(s64)request.headers.count {
+        header := request.headers[index]
+        if !AndroidAddHeader(session, handle, header.name, header.value) {
+            return false
+        }
+        index += 1
+    }
+    method := JniMethod(session, "httpSend", "(I[B)Z")
+    if method == null {
+        return false
+    }
+    arguments: [2]JniValue
+    arguments[0].integer = handle
+    arguments[1].reference = NetworkBytes(session, request.body)
+    if arguments[1].reference == null {
+        return false
+    }
+    env := session.env
+    return env.functions.CallBooleanMethodA(env, session.activity, method,
+        *arguments[0]) != 0 && env.functions.ExceptionCheck(env) == 0
+}
+
+StartAndroidTransfer :: (context: *void, request: HttpRequest,
+    output: []u8) -> bool {
+    transfer := cast(*AndroidTransfer)context
+    if transfer == null || transfer.handle != 0 || output.count == 0 ||
+        output.count > 16777216 || request.body.count > 16777216 ||
+        request.method.count == 0 || request.method.count >= 32 ||
+        request.url.count == 0 || request.url.count >= 2048 ||
+        request.headers.count > 32 {
+        return false
+    }
+    output[0] = cast(u8)0
+    session: ActivityJniSession
+    if activity_jni_attach(*session) == 0 {
+        return false
+    }
+    defer activity_jni_detach(*session)
+    method := JniMethod(*session, "httpCreate", "([B[BII)I")
+    if method == null {
+        return false
+    }
+    arguments: [4]JniValue
+    arguments[0].reference = NetworkBytes(*session, request.method)
+    arguments[1].reference = NetworkBytes(*session, request.url)
+    arguments[2].integer = cast(s32)output.count
+    arguments[3].integer = 20000
+    if arguments[0].reference == null || arguments[1].reference == null {
+        return false
+    }
+    env := session.env
+    handle := env.functions.CallIntMethodA(env, session.activity, method,
+        *arguments[0])
+    if env.functions.ExceptionCheck(env) != 0 || handle <= 0 {
+        return false
+    }
+    if !ConfigureAndroidTransfer(*session, handle, request) {
+        if env.functions.ExceptionCheck(env) != 0 {
+            env.functions.ExceptionClear(env)
+        }
+        CancelAndroidHandle(*session, handle)
+        return false
+    }
+    transfer.handle = handle
+    transfer.output = output
+    return true
+}
+
+PollAndroidTransfer :: (context: *void, status: *s32) -> s32 {
+    transfer := cast(*AndroidTransfer)context
+    if transfer == null || transfer.handle == 0 || status == null {
+        return 0
+    }
+    status.* = 0
+    session: ActivityJniSession
+    if activity_jni_attach(*session) == 0 {
+        transfer.output[0] = cast(u8)0
+        transfer.* = AndroidTransfer.{}
+        return 0
+    }
+    defer activity_jni_detach(*session)
+    env := session.env
+    method := JniMethod(*session, "httpPoll", "(I)I")
+    state: s32 = 0
+    arguments: [1]JniValue
+    arguments[0].integer = transfer.handle
+    if method != null {
+        state = env.functions.CallIntMethodA(env, session.activity, method,
+            *arguments[0])
+    }
+    if env.functions.ExceptionCheck(env) != 0 {
+        env.functions.ExceptionClear(env)
+        state = 0
+    }
+    if state < 0 {
+        return -1
+    }
+    result: s32 = 0
+    if state > 0 {
+        method = JniMethod(*session, "httpResponse", "(I)[B")
+        if method != null {
+            bytes := env.functions.CallObjectMethodA(env, session.activity,
+                method, *arguments[0])
+            if bytes != null && env.functions.ExceptionCheck(env) == 0 {
+                length := env.functions.GetArrayLength(env, bytes)
+                if length >= 0 && cast(s64)length < transfer.output.count {
+                    env.functions.GetByteArrayRegion(env, bytes, 0, length,
+                        *transfer.output[0])
+                    if env.functions.ExceptionCheck(env) == 0 {
+                        transfer.output[length] = cast(u8)0
+                        status.* = state
+                        result = 1
+                    }
+                }
+            }
+        }
+    }
+    if result == 0 {
+        transfer.output[0] = cast(u8)0
+    }
+    if env.functions.ExceptionCheck(env) != 0 {
+        env.functions.ExceptionClear(env)
+    }
+    CancelAndroidHandle(*session, transfer.handle)
+    transfer.* = AndroidTransfer.{}
+    return result
+}
+
+CancelAndroidTransfer :: (context: *void) {
+    transfer := cast(*AndroidTransfer)context
+    if transfer == null || transfer.handle == 0 {
+        return
+    }
+    session: ActivityJniSession
+    if activity_jni_attach(*session) != 0 {
+        CancelAndroidHandle(*session, transfer.handle)
+        activity_jni_detach(*session)
+    }
+    // Java owns copied arrays and never retains this native output address.
+    transfer.* = AndroidTransfer.{}
+}
+
+AndroidTransport :: (transfer: *AndroidTransfer) -> AsyncTransport {
+    transport: AsyncTransport
+    transport.context = cast(*void)transfer
+    transport.start = StartAndroidTransfer
+    transport.poll = PollAndroidTransfer
+    transport.cancel = CancelAndroidTransfer
+    return transport
+}

@@ -1,0 +1,988 @@
+c3 :: #system_library "c";
+#import, file "../app/modal_rules.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/route_types.zi";
+#import "layout"
+#import "geometry"
+#import, file "../platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "layout_widget"
+#import "tree"
+#import, file "../app/app.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/app_sync.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "settings/settings_status.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/navigation_routes.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/app_route_state.zi";
+
+#import, file "practice_screen.zi";
+#import, file "profile_social.zi";
+#import, file "settings/settings_data_ui.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/sync_account.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_sessions.zi";
+#import, file "../storage/storage_habits.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "settings/settings_sync_account_impl.zi";
+#import, file "../app/text_buffers.zi";
+#import "control_props"
+#import "text_props"
+#import, file "../app/metrics.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/current_app.zi";
+#import "button_widget"
+#import "box_props"
+#import "box_widget"
+#import "icon"
+#import "image_props"
+#import "image_widget"
+#import "text_field_widget"
+#import "text_widget"
+#import "title_bar_widget"
+#import "drawing_props"
+#import "dropdown_props"
+#import "session"
+#import "button_props"
+#import "card_props"
+#import "modal_props"
+#import "modal_widget"
+#import "text_input_props"
+#import "title_bar_props"
+
+
+
+
+
+
+using ModalType;
+using AppNavRoute;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+using IconType;
+
+ANDROID :: #defined(ANDROID_BUILD)
+WEB :: #defined(PLATFORM_WEB)
+
+profile_format_size :: (output: []u8, bytes: s64) -> bool {
+    amount: s64 = bytes
+    unit: string = " B"
+    if bytes >= 1024LL * 1024LL {
+        amount = (bytes + 1024LL * 1024LL / 2) / (1024LL * 1024LL)
+        unit = " MB"
+    } else if bytes >= 1024 {
+        amount = (bytes + 1024 / 2) / 1024
+        unit = " KB"
+    }
+    return AppFormatS64(amount, output) && AppAppendText(unit, output)
+}
+
+profile_data_content_height :: (content_w: s32) -> s32 {
+    height := settings_data_content_height(content_w) + AppScale(64)
+
+    account: SyncAccount
+    if sync_account_load(*account) != 0 {
+        height += AppScale(86)
+    }
+
+    return height
+}
+
+profile_sync_content_height :: (content_w: s32) -> s32 {
+    return settings_sync_account_config_content_height(content_w)
+}
+
+profile_habits_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    row_h := ifx (content_w < AppScale(260)) then (AppScale(78)) else (AppScale(48))
+    count := ifx (app != null) then (app.habits.count) else (0)
+
+    return AppScale(16) + (ifx (count > 0) then (count * row_h) else (AppScale(24)))
+}
+
+profile_content_height :: (content_w: s32, user_data: *void) -> s32 {
+    app := cast(*InnerBreeze)user_data
+
+    if app != null && app.profile_view == PROFILE_VIEW_HABITS {
+        return AppScale(12) + profile_habits_content_height(app, content_w)
+    }
+    if app != null && app.profile_view == PROFILE_VIEW_DATA {
+        return AppScale(12) + profile_data_content_height(content_w)
+    }
+    if app != null && app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT {
+        return AppScale(12) + profile_sync_content_height(content_w)
+    }
+    if app != null && app.profile_tab == PROFILE_TAB_OVERVIEW {
+        return AppScale(680)
+    }
+    if app != null && app.profile_tab == PROFILE_TAB_DATA {
+        return AppScale(12) + profile_data_content_height(content_w)
+    }
+    if app != null && app.profile_tab == PROFILE_TAB_FRIENDS {
+        return AppScale(12) + friends_content_height(app, content_w)
+    }
+    if app != null && app.profile_tab == PROFILE_TAB_LEADERBOARD {
+        return AppScale(12) + leaderboard_content_height(app, content_w)
+    }
+
+    return AppScale(12) + profile_sync_content_height(content_w)
+}
+
+profile_save_identity :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    save_settings(app)
+}
+
+profile_compact_public_id :: (public_id: string, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if public_id.count <= 12 {
+        return AppCopyText(public_id, output)
+    }
+    if output.count < 12 {
+        return false
+    }
+    index: s64 = 0
+    while index < 4 {
+        output[index] = public_id[index]
+        output[7 + index] = public_id[public_id.count - 4 + index]
+        index += 1
+    }
+    output[4] = cast(u8)46
+    output[5] = cast(u8)46
+    output[6] = cast(u8)46
+    output[11] = cast(u8)0
+    return true
+}
+
+profile_alias_label :: (alias: string, output: []u8) -> bool {
+    if output.count < 2 || alias.count >= output.count - 1 {
+        return false
+    }
+    output[0] = cast(u8)64
+    index: s64 = 0
+    while index < cast(s64)alias.count {
+        output[index + 1] = alias[index]
+        index += 1
+    }
+    output[index + 1] = cast(u8)0
+    return true
+}
+
+profile_draw_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    account: SyncAccount
+    account_text: [80] u8
+    icon_size := AppScale(54)
+    gap := AppScale(12)
+    field_x := x + icon_size + gap
+    field_w := w - icon_size - gap
+    field_h := AppScale(36)
+    name_commit: bool = false
+    intention_commit: bool = false
+    name_was_focused := app.profile_name_focused != 0
+    intention_was_focused := app.profile_intention_focused != 0
+
+    if sync_account_load(*account) != 0 {
+        alias := storage_get_setting_text("sync_account_alias")
+        if alias.count == 0 ||
+        !profile_alias_label(alias, account_text[:]) {
+            unused profile_compact_public_id(
+                AppTextFromCString(*account.public_id[0],
+                SYNC_PUBLIC_ID_HEX_SIZE), account_text[:])
+        }
+    } else {
+        AppCopyText(LocaleText("profile_no_account"), account_text[:])
+    }
+
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.* + AppScale(18)),
+                cast(float32)icon_size, cast(float32)icon_size},
+            .icon_type = app.profile_picture_icon,
+            .icon_only = true, .circle = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+        app.profile_picture_picker_scroll = 0
+        app_open_modal(app, cast(ModalType)ModalProfilePicturePicker)
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
+                cast(float32)field_w, cast(float32)AppScale(22)},
+            .text = AppTextFromCString(*account_text[0], 80),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(22)
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
+                cast(float32)field_w, cast(float32)AppScale(18)},
+            .text = LocaleText("profile_name_label"),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    typed_name: [64]u8
+    name_field := TextField(app.ui.session, TextFieldProps.{
+            .bounds = Rectangle.{cast(float32)field_x,
+                cast(float32)(y.* + AppScale(18)), cast(float32)field_w,
+                cast(float32)field_h},
+            .value = AppTextFromCString(*app.profile_display_name[0], 64),
+            .cursor = app.profile_name_cursor,
+            .focused = app.profile_name_focused != 0,
+            .max_bytes = 63,
+            .max_codepoints = 40,
+            .focus_id = 813,
+            .input = SampleTextFieldInput(app.profile_name_focused != 0,
+            typed_name[:])
+        })
+    if name_field.edit.changed {
+        unused AppReplaceText(app.profile_display_name[:],
+            name_field.edit.start, name_field.edit.end,
+            name_field.edit.replacement)
+    }
+    app.profile_name_cursor = name_field.cursor
+    app.profile_name_focused = ifx (name_field.focused) then (1) else (0)
+    name_commit = name_field.committed
+    if name_field.clipboard_write {
+        unused TextInputWriteClipboard(name_field.clipboard_text)
+    }
+    y.* += AppScale(64)
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
+                cast(float32)field_w, cast(float32)AppScale(18)},
+            .text = LocaleText("profile_intention_label"),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    typed_intention: [128]u8
+    intention_field := TextField(app.ui.session, TextFieldProps.{
+            .bounds = Rectangle.{cast(float32)field_x,
+                cast(float32)(y.* + AppScale(18)), cast(float32)field_w,
+                cast(float32)field_h},
+            .value = AppTextFromCString(*app.profile_intention[0], 128),
+            .cursor = app.profile_intention_cursor,
+            .focused = app.profile_intention_focused != 0,
+            .max_bytes = 127,
+            .max_codepoints = 90,
+            .focus_id = 814,
+            .input = SampleTextFieldInput(app.profile_intention_focused != 0,
+            typed_intention[:])
+        })
+    if intention_field.edit.changed {
+        unused AppReplaceText(app.profile_intention[:],
+            intention_field.edit.start, intention_field.edit.end,
+            intention_field.edit.replacement)
+    }
+    app.profile_intention_cursor = intention_field.cursor
+    app.profile_intention_focused = ifx (intention_field.focused) then (1) else (0)
+    intention_commit = intention_field.committed
+    if intention_field.clipboard_write {
+        unused TextInputWriteClipboard(intention_field.clipboard_text)
+    }
+    y.* += AppScale(58)
+
+    if name_commit || intention_commit ||
+    (name_was_focused && app.profile_name_focused == 0) ||
+    (intention_was_focused && app.profile_intention_focused == 0) {
+        profile_save_identity(app)
+    }
+}
+
+profile_draw_metric_card :: (x: s32, w: s32, y: *s32, label: string,
+    value: string) {
+    h := AppScale(58)
+    value_w := AppTextWidth(value, AppFontSize())
+
+    DrawRectangleRounded(Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h},
+        0.12f, 8, DarkenColor(StyleTokenColor("canvas"), 7))
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y.* + AppScale(20)), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + w - value_w - AppScale(12)), cast(float32)(y.* + AppScale(17)), 0, 0},
+            .text = (value),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += h + AppScale(8)
+}
+
+profile_open_tab_card :: (app: *InnerBreeze, tab: s32) {
+    if app == null {
+        return
+    }
+    if app.profile_tab == PROFILE_TAB_OVERVIEW {
+        profile_save_identity(app)
+    }
+    app.profile_view = PROFILE_VIEW_MAIN
+    app.profile_tab = clampi(tab, PROFILE_TAB_OVERVIEW,
+        PROFILE_TAB_COUNT - 1)
+    app.profile_scroll = 0
+    app.sync_server_url_focused = 0
+    if tab == PROFILE_TAB_FRIENDS || tab == PROFILE_TAB_LEADERBOARD {
+        app.profile_leaderboard_loaded = 0
+        app_request_social_refresh(app)
+    }
+}
+
+profile_draw_hub_section_label :: (x: s32, y: *s32, label: string) {
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(32)
+}
+
+profile_draw_hub_stat_card :: (x: s32, y: s32, w: s32, h: s32,
+    icon_type: IconType, label: string,
+    value: string, icon_color: Color) {
+    icon_box := AppScale(34)
+    icon_size := AppScale(18)
+    center_x := x + w / 2
+    icon_x := center_x - icon_box / 2
+    value_font := AppScale(22)
+    label_font := AppSmallFontSize()
+    value_w := AppTextWidth(value, value_font)
+    label_w := AppTextWidth(label, label_font)
+
+    Box(CurrentApp().ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)w, cast(float32)h},
+            .fill = DarkenColor(StyleTokenColor("canvas"), 7),
+            .radius = cast(float32)AppScale(8)})
+    Box(CurrentApp().ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)icon_x,
+                cast(float32)(y + AppScale(26) - icon_box / 2),
+                cast(float32)icon_box, cast(float32)icon_box},
+            .fill = LightenColor(icon_color, 12),
+            .radius = cast(float32)icon_box / 2.0})
+    Image(CurrentApp().ui.session, ImageForIcon(cast(s32)icon_type,
+        Rectangle.{cast(float32)(icon_x + (icon_box - icon_size) / 2),
+            cast(float32)(y + AppScale(26) - icon_size / 2),
+            cast(float32)icon_size, cast(float32)icon_size}, ""))
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(center_x - label_w / 2), cast(float32)(y + AppScale(54)), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(center_x - value_w / 2), cast(float32)(y + AppScale(78)), 0, 0},
+            .text = (value),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+}
+
+profile_draw_hub_route_card :: (app: *InnerBreeze, x: s32, y: *s32, w: s32,
+    h: s32, icon_type: IconType, title: string,
+    subtitle: string, value: string,
+    tab: s32) {
+    bounds := Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h }
+    icon_box := AppScale(40)
+    icon_size := AppScale(22)
+    icon_x := x + AppScale(14)
+    text_x := icon_x + icon_box + AppScale(12)
+    arrow := "›"
+    arrow_w := AppTextWidth(arrow, AppScale(Text24))
+    value_w := ifx (value.count > 0) then (AppTextWidth(value, AppSmallFontSize())) else (0)
+    text_w := w - (text_x - x) - AppScale(48)
+
+    if value_w > 0 {
+        text_w -= value_w + AppScale(12)
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = bounds,
+            .label = "",
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+        profile_open_tab_card(app, tab)
+    }
+    Box(CurrentApp().ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)icon_x,
+                cast(float32)(y.* + h / 2 - icon_box / 2),
+                cast(float32)icon_box, cast(float32)icon_box},
+            .fill = DarkenColor(StyleTokenColor("accent"), 12),
+            .radius = cast(float32)icon_box / 2.0})
+    Image(CurrentApp().ui.session, ImageForIcon(cast(s32)icon_type,
+        Rectangle.{cast(float32)(icon_x + (icon_box - icon_size) / 2),
+            cast(float32)(y.* + h / 2 - icon_size / 2),
+            cast(float32)icon_size, cast(float32)icon_size}, ""))
+    profile_draw_fitted_text(title, text_x, y.* + AppScale(16), text_w,
+        AppFontSize())
+    profile_draw_fitted_text(subtitle, text_x, y.* + AppScale(42), text_w,
+        AppSmallFontSize())
+    if value_w > 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(x + w - AppScale(42) - value_w),
+                    cast(float32)(y.* + h / 2 - AppScale(9)), 0.0, 0.0},
+                .text = (value),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + w - AppScale(24) - arrow_w / 2),
+                cast(float32)(y.* + h / 2 - AppScale(18)), 0.0, 0.0},
+            .text = (arrow),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += h + AppScale(10)
+}
+
+profile_draw_hub_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    account: SyncAccount
+    has_account := sync_account_load(*account) != 0
+    card_h := AppScale(158)
+    bounds := Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)card_h }
+    avatar := AppScale(78)
+    avatar_x := x + AppScale(18)
+    avatar_y := y.* + AppScale(28)
+    text_x := avatar_x + avatar + AppScale(18)
+    title: [96] u8
+    subtitle: [160] u8
+
+    if has_account {
+        alias := storage_get_setting_text("sync_account_alias")
+        if alias.count == 0 || !profile_alias_label(alias, title[:]) {
+            unused profile_compact_public_id(
+                AppTextFromCString(*account.public_id[0],
+                SYNC_PUBLIC_ID_HEX_SIZE), title[:])
+        }
+        unused AppCopyText(LocaleText("profile_sync_ready_body"), subtitle[:])
+    } else {
+        name := AppTextFromCString(*app.profile_display_name[0], 64)
+        unused AppCopyText(ifx (name.count > 0) then (name) else
+            (LocaleText("profile_no_account")), title[:])
+        unused AppCopyText(LocaleText("profile_sync_prompt_body"),
+            subtitle[:])
+    }
+
+    DrawRectangleRounded(bounds, 0.14f, 12, DarkenColor(StyleTokenColor("canvas"), 8))
+    DrawRectangleGradientV(x, y.*, w, card_h,
+        Fade(StyleTokenColor("accent"), 0.32f),
+        Fade(StyleTokenColor("canvas"), 0.0f))
+    DrawRectangleRoundedLinesEx(bounds, 0.14f, 12, 1.0f,
+        DarkenColor(StyleTokenColor("accent"), 18))
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)avatar_x, cast(float32)avatar_y,
+                cast(float32)avatar, cast(float32)avatar},
+            .icon_type = app.profile_picture_icon,
+            .icon_only = true, .circle = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+        app.profile_picture_picker_scroll = 0
+        app_open_modal(app, cast(ModalType)ModalProfilePicturePicker)
+    }
+    profile_draw_fitted_text(AppTextFromCString(*title[0], 96),
+        text_x, y.* + AppScale(34),
+        w - (text_x - x) - AppScale(18),
+        AppScale(Text18))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)text_x,
+                cast(float32)(y.* + AppScale(64)),
+                cast(float32)(w - (text_x - x) - AppScale(18)),
+                cast(float32)AppScale(42)},
+            .text = AppTextFromCString(*subtitle[0], 160),
+            .font = AppSmallFontSize(),
+            .wrap = cast(TextWrap)TextWrapAuto
+        })
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(text_x), cast(float32)(y.* + AppScale(108)), cast(float32)(w - (text_x - x) - AppScale(18)), cast(float32)(AppScale(38))},
+            .label = LocaleText(ifx (has_account) then
+            ("sync_account_title") else ("sync_connect_account_button")),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = false
+        }) != 0 {
+        profile_open_tab_card(app, PROFILE_TAB_SYNC)
+    }
+    y.* += card_h + AppScale(18)
+}
+
+profile_draw_overview :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    account: SyncAccount
+    today := habits_today_index()
+    due: s32 = 0
+    done: s32 = 0
+    active_days: s32 = 0
+    practice_sessions: s32 = 0
+    value: [64] u8
+    insight: [160] u8
+    friends_value: [64] u8
+    storage_value: [64] u8
+    loading := app_sync_loading() != 0
+    stat_gap := AppScale(8)
+    stat_w := (w - stat_gap * 2) / 3
+    stat_h := AppScale(112)
+    friend_count := friends_count(app)
+    pending_friends := pending_count(app)
+
+    profile_draw_hub_identity(app, x, w, y)
+    {
+        i: s32 = 0
+        while i < app.habits.count {
+            if habit_scheduled_day(*app.habits.items[i], today) != 0 {
+                due += 1
+                if habit_completed_day(*app.habits.items[i], today) != 0 {
+                    done += 1
+                }
+            }
+            i += 1
+        }
+
+    }
+    storage_profile_week_stats(today, *active_days, *practice_sessions)
+
+    profile_draw_hub_section_label(x, y, LocaleText("profile_progress_title"))
+    if loading {
+        unused AppCopyText("…", value[:])
+    } else {
+        unused FormatTwoNumberTemplate("%d/%d", done, due, value[:])
+    }
+    profile_draw_hub_stat_card(x, y.*, stat_w, stat_h,
+        cast(IconType)IconCalendar,
+        LocaleText("profile_today_short"),
+        FrameTextHold(*app.ui.frame_text, AppTextFromCString(*value[0], 64)),
+        StyleTokenColor("accent"))
+    if loading {
+        unused AppCopyText("…", value[:])
+    } else {
+        unused AppFormatS32(active_days, value[:])
+    }
+    profile_draw_hub_stat_card(x + stat_w + stat_gap, y.*, stat_w, stat_h,
+        cast(IconType)IconActivity,
+        LocaleText("profile_active_days_short"),
+        FrameTextHold(*app.ui.frame_text, AppTextFromCString(*value[0], 64)),
+        StyleTokenColor("accent"))
+    if loading {
+        unused AppCopyText("…", value[:])
+    } else {
+        unused AppFormatS32(practice_sessions, value[:])
+    }
+    profile_draw_hub_stat_card(x + (stat_w + stat_gap) * 2, y.*,
+        w - (stat_w + stat_gap) * 2, stat_h,
+        cast(IconType)IconStat,
+        LocaleText("profile_sessions_short"),
+        FrameTextHold(*app.ui.frame_text, AppTextFromCString(*value[0], 64)),
+        StyleTokenColor("link"))
+    y.* += stat_h + AppScale(14)
+
+    if loading {
+        unused AppCopyText(LocaleText("profile_updating_status"), insight[:])
+        unused AppAppendText("…", insight[:])
+    } else {
+        unused FormatNumberTemplate(LocaleText("profile_weekly_insight"),
+            active_days, insight[:])
+    }
+
+    profile_draw_hub_route_card(app, x, y, w, AppScale(76),
+        cast(IconType)IconProfile,
+        LocaleText("profile_friends_title"),
+        FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*insight[0], 160)), "", PROFILE_TAB_FRIENDS)
+    if pending_friends > 0 {
+        unused FormatTwoNumberTemplate(
+            LocaleText("profile_friends_pending_summary"),
+            friend_count, pending_friends, friends_value[:])
+    } else {
+        unused FormatNumberTemplate(LocaleText("profile_friends_summary"),
+            friend_count, friends_value[:])
+    }
+    profile_draw_hub_route_card(app, x, y, w, AppScale(76),
+        cast(IconType)IconStat,
+        LocaleText("profile_leaderboard_title"),
+        LocaleText("profile_leaderboard_preview_body"),
+        LocaleText("profile_no_rank_short"),
+        PROFILE_TAB_LEADERBOARD)
+    unused profile_format_size(storage_value[:], storage_total_size())
+    profile_draw_hub_route_card(app, x, y, w, AppScale(68),
+        cast(IconType)IconSave,
+        LocaleText("profile_data_management_title"),
+        LocaleText("profile_data_management_body"),
+        FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*storage_value[0], 64)), PROFILE_TAB_DATA)
+    profile_draw_hub_route_card(app, x, y, w, AppScale(68),
+        cast(IconType)IconGlobe,
+        LocaleText("profile_account_sync_title"),
+        LocaleText(ifx (sync_account_load(*account) != 0) then
+        ("profile_account_connected_body") else
+        ("profile_account_sync_body")),
+        FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*friends_value[0], 64)), PROFILE_TAB_SYNC)
+}
+
+profile_draw_stat_row :: (x: s32, w: s32, y: *s32, label: string,
+    value: string) {
+    font := AppFontSize()
+    value_w: s32 = 0
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    value_w = AppTextWidth(value, font)
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + w - value_w), cast(float32)(y.* - AppScale(2)), 0, 0},
+            .text = (value),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(28)
+}
+
+profile_draw_data_summary :: (x: s32, w: s32, y: *s32) {
+    value: [64] u8
+
+    unused AppFormatS32(storage_habit_count(), value[:])
+    profile_draw_stat_row(x, w, y, LocaleText("profile_habits_label"),
+        FrameTextHold(*CurrentApp().ui.frame_text,
+        AppTextFromCString(*value[0], 64)))
+    unused AppFormatS32(storage_session_count(), value[:])
+    profile_draw_stat_row(x, w, y, LocaleText("profile_sessions_label"),
+        FrameTextHold(*CurrentApp().ui.frame_text,
+        AppTextFromCString(*value[0], 64)))
+    unused profile_format_size(value[:], storage_total_size())
+    profile_draw_stat_row(x, w, y, LocaleText("profile_storage_label"),
+        FrameTextHold(*CurrentApp().ui.frame_text,
+        AppTextFromCString(*value[0], 64)))
+}
+
+profile_draw_divider :: (x: s32, w: s32, y: s32) {
+    DrawLine(x, y, x + w, y, DarkenColor(StyleTokenColor("canvas"), 28))
+}
+
+profile_tab_title :: (tab: s32) -> string {
+    if tab == PROFILE_TAB_OVERVIEW {
+        return LocaleText("tab_profile")
+    }
+    if tab == PROFILE_TAB_SYNC {
+        return LocaleText("profile_sync_tab")
+    }
+    if tab == PROFILE_TAB_DATA {
+        return LocaleText("profile_data")
+    }
+    if tab == PROFILE_TAB_FRIENDS {
+        return LocaleText("profile_friends_title")
+    }
+    if tab == PROFILE_TAB_LEADERBOARD {
+        return LocaleText("profile_leaderboard_title")
+    }
+
+    return LocaleText("tab_profile")
+}
+
+profile_draw_tabs :: (app: *InnerBreeze, y: s32, h: s32) -> s32 {
+    clicked: s32 = -1
+    view_width: s32 = app.ui.view_width
+    tab_w := view_width / PROFILE_TAB_COUNT
+
+    DrawRectangle(0, y, view_width, h, DarkenColor(StyleTokenColor("canvas"), 6))
+    DrawLine(0, y + h - 1, view_width, y + h - 1,
+        DarkenColor(StyleTokenColor("canvas"), 24))
+    {
+        i: s32 = 0
+        while i < PROFILE_TAB_COUNT {
+
+            x := i * tab_w
+            w := ifx (i == PROFILE_TAB_COUNT - 1) then (view_width - x) else (tab_w)
+            selected := i == app.profile_tab
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
+                    .label = profile_tab_title(i),
+                    .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+                    .emphasis = cast(ButtonEmphasis)(ifx (selected) then (ButtonEmphasisSoft) else (ButtonEmphasisGhost)), .selected = selected
+                }) != 0 {
+                clicked = i
+            }
+            if selected {
+                line_w := w - AppScale(24)
+                if line_w < AppScale(24) {
+                    line_w = AppScale(24)
+                }
+                DrawRectangle(x + (w - line_w) / 2, y + h - AppScale(2),
+                    line_w, AppScale(2), StyleTokenColor("text"))
+            }
+
+            i += 1
+        }
+    }
+    return clicked
+}
+
+profile_draw_fitted_text :: (text: string, x: s32, y: s32, max_w: s32,
+    font: s32) {
+
+    if text.count == 0 || max_w <= 0 {
+        return
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)max_w, 0.0},
+            .font = font,
+            .text = text,
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+}
+
+profile_draw_data :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    profile_draw_data_summary(x, w, y)
+    settings_data_draw_sync_status(x, w, y)
+    y.* += AppScale(10)
+    settings_data_draw_actions(app, x, w, y)
+}
+
+profile_draw_habits :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    font := AppFontSize()
+    btn_h := AppScale(32)
+    btn_w := AppScale(74)
+    gap := AppScale(8)
+    stack_rows := w < AppScale(260)
+
+    y.* += AppScale(16)
+
+    {
+        i: s32 = 0
+        while i < app.habits.count {
+
+            row_y := y.*
+
+
+            controls_w := btn_w * 2 + gap
+            name_w := ifx (stack_rows) then (w) else (w - controls_w - gap)
+
+            profile_draw_fitted_text(AppTextFromCString(
+                *app.habits.items[i].name[0], HABIT_NAME_SIZE), x,
+                row_y + AppScale(7), name_w, font)
+            if stack_rows {
+                row_y += AppScale(36)
+            }
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)(ifx (stack_rows) then (x) else (x + w - btn_w * 2 - gap)), cast(float32)(row_y), cast(float32)(btn_w), cast(float32)(btn_h)},
+                    .label = LocaleText("move_up_button"),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = i == 0
+                }) != 0 {
+                if habits_move(*app.habits, i, i - 1) != 0 {
+                    unused app_auto_sync(app)
+                }
+                return
+            }
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)(ifx (stack_rows) then (x + btn_w + gap) else (x + w - btn_w)), cast(float32)(row_y), cast(float32)(btn_w), cast(float32)(btn_h)},
+                    .label = LocaleText("move_down_button"),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = i == app.habits.count - 1
+                }) != 0 {
+                if habits_move(*app.habits, i, i + 1) != 0 {
+                    unused app_auto_sync(app)
+                }
+                return
+            }
+            y.* += ifx (stack_rows) then (AppScale(78)) else (AppScale(46))
+            profile_draw_divider(x, w, y.* - AppScale(6))
+
+            i += 1
+        }
+    }
+
+    if app.habits.count <= 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+                .text = (LocaleText("habit_empty_title")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+    }
+}
+
+profile_screen_draw_remove_friend_modal :: (app: *InnerBreeze) {
+    message: [384] u8
+
+    if app == null || app.modal.active == 0 ||
+    app.modal.type != cast(ModalType)ModalConfirmRemoveFriend {
+        return
+    }
+
+    unused AppCopyText("this friend", message[:])
+    if app.profile_pending_friend_remove_name[0] != cast(u8)0 {
+        unused AppCopyText(AppTextFromCString(
+            *app.profile_pending_friend_remove_name[0], 96), message[:])
+    }
+    actions: [2] ActionModalAction = .[
+    ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+    ActionModalAction.{.label = LocaleText("delete_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+    ]
+    modal_result := ActionModal(app.ui.session, ActionModalProps.{
+            .title = LocaleText("profile_friend_remove_title"),
+            .message = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*message[0], 384))}, actions[:2]).action
+    if modal_result == 1 {
+        app.profile_pending_friend_remove_id[0] = cast(u8)0
+        app.profile_pending_friend_remove_name[0] = cast(u8)0
+        app_close_modal(app)
+    } else if modal_result == 2 {
+        url: [256] u8
+
+        if sync_url(*url[0], cast(s64)url.count) != 0 {
+            app_request_friend_remove(app,
+                AppTextFromCString(*app.profile_pending_friend_remove_id[0],
+                80))
+            settings_screen_set_status_success(
+                LocaleText("profile_updating_status"), "")
+        } else {
+            settings_screen_set_status_error(LocaleText("sync_server_url_invalid"))
+        }
+        app.profile_pending_friend_remove_id[0] = cast(u8)0
+        app.profile_pending_friend_remove_name[0] = cast(u8)0
+        app_close_modal(app)
+    }
+}
+
+profile_screen_handle_platform_import :: (app: *InnerBreeze) {
+    settings_data_handle_import(app)
+}
+
+profile_screen_draw :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+
+    header_h := AppTitleBarHeight()
+    content_y := header_h + AppScale(8)
+    view_width: s32 = app.ui.view_width
+    content_h := app.ui.view_height - content_y -
+    app_content_bottom_reserved(app)
+    content_x: s32 = 0
+    content_w: s32 = 0
+    page_content_h: s32 = 0
+    max_w := AppScale(CONTENT_MAX_W)
+    y: s32 = 0
+    title := LocaleText("tab_profile")
+
+    profile_screen_handle_platform_import(app)
+
+    if app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT  || (app.profile_view == PROFILE_VIEW_MAIN && app.profile_tab == PROFILE_TAB_SYNC) {
+        settings_data_register_sync_key_dialogs()
+    }
+
+    if app.profile_tab < 0 || app.profile_tab >= PROFILE_TAB_COUNT {
+        app.profile_tab = PROFILE_TAB_OVERVIEW
+    }
+    if app.profile_view == PROFILE_VIEW_DATA {
+        title = LocaleText("profile_data")
+    } else if app.profile_view == PROFILE_VIEW_HABITS {
+        title = LocaleText("profile_my_habits_title")
+    } else if app.profile_view == PROFILE_VIEW_MAIN  && app.profile_tab != PROFILE_TAB_OVERVIEW {
+        title = profile_tab_title(app.profile_tab)
+    }
+
+    bar: TitleBarProps
+    bar.title = title
+    bar.height = header_h
+    bar.bounds = Rectangle.{0.0, 0.0, cast(float32)view_width,
+        cast(float32)header_h}
+    bar.has_leading_action = true
+    bar.leading_label = LocaleText("back_button")
+    options: [1]DropdownOption
+    title_result := TitleBar(app.ui.session, bar, options[0:0])
+    if title_result.clicked_leading {
+        app_block_current_click(app)
+        profile_screen_back(app)
+        return 1
+    }
+
+    if content_h < 0 {
+        content_h = 0
+    }
+    if max_w > view_width - GetPageSidePadding() * 2 {
+        max_w = view_width - GetPageSidePadding() * 2
+    }
+    if max_w < AppScale(320) {
+        max_w = AppScale(320)
+    }
+    column := CenteredColumnFor(view_width, max_w,
+        GetPageSidePadding())
+    content_x = column.x
+    content_w = column.width
+    page_content_h = profile_content_height(content_w, cast(*void)app)
+    {
+        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)content_y, cast(float32)view_width, cast(float32)content_h }
+        scroll_1_key: u64 = KeyHash("inbe/screens/profile_screen/scroll/1")
+        scroll_1_props: ScrollProps
+        scroll_1_props.key = scroll_1_key
+        scroll_1_props.bounds = scroll_1_bounds
+        scroll_1_props.content_height = page_content_h
+        scroll_1_props.scroll_offset = app.profile_scroll
+        scroll_1_props.input = ScrollObservationFor(scroll_1_key, scroll_1_bounds)
+        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
+        app.profile_scroll = scroll_1_result.scroll_offset
+        CommitScroll(scroll_1_key, scroll_1_result.frame)
+        page: Rectangle = scroll_1_result.content
+
+        y := cast(s32)page.y + AppScale(12)
+
+        if app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT {
+            settings_sync_account_draw_config(app, content_x, content_w, *y)
+        } else if app.profile_view == PROFILE_VIEW_DATA {
+            profile_draw_data(app, content_x, content_w, *y)
+        } else if app.profile_view == PROFILE_VIEW_HABITS {
+            profile_draw_habits(app, content_x, content_w, *y)
+        } else if app.profile_tab == PROFILE_TAB_OVERVIEW {
+            profile_draw_overview(app, content_x, content_w, *y)
+        } else if app.profile_tab == PROFILE_TAB_DATA {
+            profile_draw_data(app, content_x, content_w, *y)
+        } else if app.profile_tab == PROFILE_TAB_FRIENDS {
+            draw_friends(app, content_x, content_w, *y)
+        } else if app.profile_tab == PROFILE_TAB_LEADERBOARD {
+            draw_leaderboard(app, content_x, content_w, *y)
+        } else {
+            settings_sync_account_draw_config(app, content_x, content_w, *y)
+        }
+        unused End(app.ui.session)
+    }
+
+    return 0
+}
+
+profile :: (app: *InnerBreeze) {
+    root: ColumnProps
+    root.key = KeyHash("profile/root")
+    unused Screen(app.ui.session, root)
+    unused profile_screen_draw(app)
+    unused End(app.ui.session)
+}
+
+#program_export
+profile_screen_back :: (app: *InnerBreeze) {
+    if app.profile_view == PROFILE_VIEW_MAIN  && app.profile_tab != PROFILE_TAB_OVERVIEW {
+        app.profile_tab = PROFILE_TAB_OVERVIEW
+        app.profile_scroll = 0
+        app.sync_server_url_focused = 0
+        return
+    }
+    if app.profile_tab == PROFILE_TAB_OVERVIEW {
+        profile_save_identity(app)
+    }
+    app.profile_scroll = 0
+    app.sync_server_url_focused = 0
+    if app.profile_return_to_settings != 0 {
+        app.profile_return_to_settings = 0
+        app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
+    } else {
+        app_switch_screen(app, app_screen_for_main_tab(app.main_tab))
+    }
+}

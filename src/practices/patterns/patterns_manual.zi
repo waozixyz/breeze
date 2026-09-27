@@ -1,0 +1,398 @@
+#import "drawing_props"
+#import "geometry"
+#import "guide_pager"
+#import "layout"
+#import "paint_queue"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "session"
+#import "style"
+#import "style_sheet"
+#import "surface"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/manual_seen_actions.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../core/types.zi";
+#import, file "../../platform/scroll_input.zi";
+#import, file "../../screens/manual_screen.zi";
+#import, file "../../screens/practice_manual_layout.zi";
+#import, file "patterns_entry.zi";
+#import, file "patterns_rules.zi";
+
+using ExerciseType;
+using ModalType;
+using TextAlign;
+using TextWrap;
+
+PATTERNS_MANUAL_PAGES :: 3
+
+PatternsManualBodyKey :: (step: s32) -> string {
+    if step == 0 { return "patterns_manual_choose_text" }
+    if step == 1 { return "patterns_manual_phases_text" }
+    return "patterns_manual_customize_text"
+}
+
+PatternsManualTitleKey :: (step: s32) -> string {
+    if step == 0 { return "patterns_preset_label" }
+    if step == 1 { return "patterns_cycle_label" }
+    return "patterns_ready_label"
+}
+
+#program_export
+patterns_manual_close :: (app: *InnerBreeze, mark_seen: s32) {
+    if app == null { return }
+    if mark_seen != 0 {
+        mark_exercise_manual_seen(app, EXERCISE_PATTERNS)
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalPracticeManual {
+        app_close_modal(app)
+        return
+    }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app_switch_screen(app, ScreenStart)
+}
+
+#program_export
+patterns_manual_start :: (app: *InnerBreeze) {
+    if app == null { return }
+    mark_exercise_manual_seen(app, EXERCISE_PATTERNS)
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    patterns_practice_start(app)
+}
+
+PatternsManualParagraph :: (step: s32,
+    width: s32) -> ManualParagraphSpec {
+    return manual_screen_tutorial_paragraph(
+        LocaleText(PatternsManualBodyKey(step)), width)
+}
+
+PatternsManualVisualHeight :: (step: s32) -> s32 {
+    if step == 0 { return AppScale(330) }
+    if step == 1 { return AppScale(300) }
+    return AppScale(248)
+}
+
+PatternsManualContentHeight :: (step: s32, width: s32) -> s32 {
+    paragraph := PatternsManualParagraph(step, width)
+    return PatternsManualVisualHeight(step) + AppScale(18) +         manual_screen_guide_header_height() +         AppParagraphHeight(paragraph.text, paragraph.width,
+            paragraph.font, paragraph.line_gap)
+}
+
+PatternsManualPhaseCount :: (app: *InnerBreeze, phase: s32) -> s32 {
+    if phase < 0 || phase >= 4 { return 0 }
+    if app.patterns.preset == PATTERNS_PRESET_CUSTOM {
+        return app.patterns.custom[phase]
+    }
+    return patterns_preset_ratio(app.patterns.preset, phase)
+}
+
+PatternsManualRatio :: (app: *InnerBreeze, preset: s32) -> string {
+    buffer: [32]u8
+    buffer[0] = cast(u8)0
+    cursor: s32 = 0
+    phase: s32 = 0
+    while phase < 4 {
+        value := patterns_preset_ratio(preset, phase)
+        if preset == PATTERNS_PRESET_CUSTOM {
+            value = app.patterns.custom[phase]
+        }
+        if !TextBufferAppendNumber(buffer[:], *cursor, value) {
+            return ""
+        }
+        if phase < 3  && !TextBufferAppendByte(buffer[:], *cursor, cast(u8)45) {
+            return ""
+        }
+        phase += 1
+    }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], 32))
+}
+
+PatternsManualNumber :: (app: *InnerBreeze, value: s32,
+    pattern: string) -> string {
+    buffer: [32]u8
+    if !FormatNumberTemplate(pattern, value, buffer[:]) { return "" }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], 32))
+}
+
+PatternsManualText :: (app: *InnerBreeze, label: string,
+    bounds: Rectangle, font: s32, centered: bool) {
+    props: TextProps
+    props.text = label
+    props.bounds = bounds
+    props.font = font
+    props.wrap = cast(TextWrap)TextWrapNone
+    props.vertical_align = cast(TextAlign)TextAlignCenter
+    if centered { props.align = cast(TextAlign)TextAlignCenter }
+    Text(app.ui.session, props)
+}
+
+PatternsManualPanel :: (app: *InnerBreeze, bounds: Rectangle,
+    radius: s32, selected: bool) {
+    face := GuideFace(2)
+    PaintRoundedFill(app.ui.session, -1, bounds,
+        cast(float32)radius, 10,
+        ColorFromPacked(face.value.background))
+    border := ColorFromPacked(face.value.border)
+    if selected { border = ColorFromPacked(face.value.foreground) }
+    PaintRoundedOutline(app.ui.session, -1, bounds,
+        cast(float32)radius, 10, 1.0, border)
+}
+
+PatternsManualPresetCard :: (app: *InnerBreeze,
+    preset: s32, bounds: Rectangle) {
+    selected := app.patterns.preset == preset
+    PatternsManualPanel(app, bounds, AppScale(12), selected)
+    label := LocaleText(patterns_preset_label_key(preset))
+    label_font := AppFitFontSize(label,
+        cast(s32)bounds.width - AppScale(22),
+        AppFontSize(), AppSmallFontSize())
+    title := Rectangle.{bounds.x + cast(float32)AppScale(8),
+        bounds.y + cast(float32)AppScale(5),
+        bounds.width - cast(float32)AppScale(16),
+        cast(float32)AppScale(24)
+}
+    PatternsManualText(app, label, title, label_font, true)
+    ratio := PatternsManualRatio(app, preset)
+    value := Rectangle.{bounds.x + cast(float32)AppScale(8),
+        bounds.y + cast(float32)AppScale(30),
+        bounds.width - cast(float32)AppScale(16),
+        cast(float32)AppScale(22)
+}
+    PatternsManualText(app, ratio, value, AppSmallFontSize(), true)
+}
+
+PatternsManualPresetSelector :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    height := PatternsManualVisualHeight(0)
+    panel := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    PatternsManualPanel(app, panel, AppScale(16), false)
+    pad := AppScale(16)
+    gap := AppScale(12)
+    card_height := AppScale(58)
+    card_width := (width - pad * 2 - gap) / 2
+    heading := Rectangle.{cast(float32)(x + pad),
+        cast(float32)(y.* + AppScale(18)),
+        cast(float32)(width - pad * 2),
+        cast(float32)AppScale(24)
+}
+    PatternsManualText(app, LocaleText("patterns_preset_label"),
+        heading, AppFontSize(), false)
+    current := Rectangle.{cast(float32)(x + pad),
+        cast(float32)(y.* + AppScale(44)),
+        cast(float32)(width - pad * 2),
+        cast(float32)AppScale(22)
+}
+    PatternsManualText(app,
+        PatternsManualRatio(app, app.patterns.preset),
+        current, AppSmallFontSize(), false)
+    index: s32 = 0
+    while index < patterns_preset_count() {
+        row := index / 2
+        col := index % 2
+        card_x := x + pad + col * (card_width + gap)
+        card_y := y.* + AppScale(74) +             row * (card_height + gap)
+        card_w := card_width
+        if index == patterns_preset_count() - 1 {
+            card_x = x + pad
+            card_w = width - pad * 2
+        }
+        card := Rectangle.{cast(float32)card_x,
+            cast(float32)card_y, cast(float32)card_w,
+            cast(float32)card_height
+}
+        PatternsManualPresetCard(app, index, card)
+        index += 1
+    }
+    y.* += height + AppScale(18)
+}
+
+PatternsManualPhaseCard :: (app: *InnerBreeze, phase: s32,
+    bounds: Rectangle) {
+    PatternsManualPanel(app, bounds, AppScale(11), phase == 0)
+    label_key := "patterns_phase_inhale"
+    if phase == 1 { label_key = "patterns_phase_hold_in" }
+    if phase == 2 { label_key = "patterns_phase_exhale" }
+    if phase == 3 { label_key = "patterns_phase_hold_out" }
+    left := Rectangle.{bounds.x + cast(float32)AppScale(54),
+        bounds.y, bounds.width - cast(float32)AppScale(120),
+        bounds.height
+}
+    PatternsManualText(app, LocaleText(label_key), left,
+        AppFontSize(), false)
+    badge_size := AppScale(28)
+    badge := Rectangle.{bounds.x + cast(float32)AppScale(12),
+        bounds.y + (bounds.height - cast(float32)badge_size) / 2.0,
+        cast(float32)badge_size, cast(float32)badge_size
+}
+    face := GuideFace(2)
+    PaintRoundedFill(app.ui.session, -1, badge,
+        cast(float32)(badge_size / 2), 8,
+        ColorFromPacked(face.value.background))
+    PatternsManualText(app,
+        PatternsManualNumber(app, phase + 1, "%d"), badge,
+        AppSmallFontSize(), true)
+    right := Rectangle.{bounds.x + bounds.width -         cast(float32)AppScale(62), bounds.y,
+        cast(float32)AppScale(48), bounds.height
+}
+    PatternsManualText(app,
+        PatternsManualNumber(app,
+            PatternsManualPhaseCount(app, phase), "%d"),
+        right, AppFontSize(), true)
+}
+
+PatternsManualVisual :: (app: *InnerBreeze, x: s32,
+    width: s32, step: s32, y: *s32) {
+    if step == 0 {
+        PatternsManualPresetSelector(app, x, width, y)
+        return
+    }
+    height := PatternsManualVisualHeight(step)
+    panel := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    PatternsManualPanel(app, panel, AppScale(16), false)
+    card_x := x + AppScale(16)
+    card_w := width - AppScale(32)
+    if step == 1 {
+        card_y := y.* + AppScale(18)
+        phase: s32 = 0
+        while phase < 4 {
+            card := Rectangle.{cast(float32)card_x,
+                cast(float32)card_y, cast(float32)card_w,
+                cast(float32)AppScale(54)
+}
+            PatternsManualPhaseCard(app, phase, card)
+            card_y += AppScale(64)
+            phase += 1
+        }
+    } else {
+        card_y := y.* + AppScale(24)
+        first := Rectangle.{cast(float32)card_x,
+            cast(float32)card_y, cast(float32)card_w,
+            cast(float32)AppScale(76)
+}
+        PatternsManualPanel(app, first, AppScale(12), false)
+        label := Rectangle.{first.x + cast(float32)AppScale(18),
+            first.y + cast(float32)AppScale(10),
+            first.width - cast(float32)AppScale(36),
+            cast(float32)AppScale(24)
+}
+        PatternsManualText(app, LocaleText("patterns_preset_label"),
+            label, AppFontSize(), false)
+        label.y += cast(float32)AppScale(28)
+        PatternsManualText(app,
+            PatternsManualRatio(app, app.patterns.preset),
+            label, AppSmallFontSize(), false)
+        card_y += AppScale(88)
+        second := Rectangle.{cast(float32)card_x,
+            cast(float32)card_y, cast(float32)card_w,
+            cast(float32)AppScale(76)
+}
+        PatternsManualPanel(app, second, AppScale(12), false)
+        label.y = second.y + cast(float32)AppScale(10)
+        PatternsManualText(app, LocaleText("patterns_duration_label"),
+            label, AppFontSize(), false)
+        duration := LocaleText("patterns_duration_open")
+        if app.patterns.duration_minutes != 0 {
+            duration = PatternsManualNumber(app,
+                app.patterns.duration_minutes, "%d min")
+        }
+        label.y += cast(float32)AppScale(28)
+        PatternsManualText(app, duration, label,
+            AppSmallFontSize(), false)
+    }
+    y.* += height + AppScale(18)
+}
+
+#program_export
+patterns_manual_draw :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) { return }
+    step := app.tutorial_step
+    if step < 0 { step = 0 }
+    if step >= PATTERNS_MANUAL_PAGES {
+        step = PATTERNS_MANUAL_PAGES - 1
+    }
+    app.tutorial_step = step
+    max_width := cast(s32)(cast(float32)app.ui.view_width * 0.96)
+    if max_width > manual_screen_tutorial_max_width() {
+        max_width = manual_screen_tutorial_max_width()
+    }
+    if max_width < AppScale(200) { max_width = AppScale(200) }
+    layout := practice_screen_manual_layout(app,
+        cast(ModalType)ModalPracticeManual, PATTERNS_MANUAL_PAGES,
+        manual_screen_tutorial_top_gap(), 0, AppScale(120))
+    if manual_screen_draw_title_bar(app,
+        LocaleText("patterns_title"), layout.title_h) != 0 {
+        patterns_manual_close(app, 0)
+        return
+    }
+    column := CenteredColumnFor(app.ui.view_width,
+        max_width, manual_screen_tutorial_side_padding())
+    bounds := Rectangle.{0.0, cast(float32)layout.content_y,
+        cast(float32)app.ui.view_width,
+        cast(float32)layout.content_h
+}
+    key := KeyHash("patterns/manual/scroll")
+    props: ScrollProps
+    props.key = key
+    props.bounds = bounds
+    props.content_height =
+        PatternsManualContentHeight(step, column.width)
+    props.scroll_offset = app.manual_scroll
+    props.scale = MetricsScale()
+    props.input = ScrollObservationFor(key, bounds)
+    result := Scroll(app.ui.session, props)
+    app.manual_scroll = result.scroll_offset
+    CommitScroll(key, result.frame)
+    if result.opened {
+        y := cast(s32)result.content.y
+        hero := manual_screen_hero_bounds(column.x, column.width,
+            y, PatternsManualVisualHeight(step))
+        PatternsManualVisual(app, cast(s32)hero.x,
+            cast(s32)hero.width, step, *y)
+        manual_screen_draw_hero_progress(hero, step,
+            PATTERNS_MANUAL_PAGES)
+        manual_screen_draw_guide_header(
+            LocaleText(PatternsManualTitleKey(step)), step,
+            PATTERNS_MANUAL_PAGES, column.x, *y, column.width)
+        ManualParagraph(app,
+            PatternsManualParagraph(step, column.width),
+            column.x, *y)
+        unused End(app.ui.session)
+    }
+    nav: ManualGuideNav
+    nav.page = step
+    nav.page_count = PATTERNS_MANUAL_PAGES
+    nav.y = layout.nav_y
+    nav.h = layout.nav_h
+    nav.content_y = layout.content_y
+    nav.content_h = layout.content_h
+    nav.focus_id = 460
+    decision := manual_screen_guide_controls(app, nav)
+    if decision.closed {
+        patterns_manual_close(app, 0)
+    } else if decision.finished {
+        patterns_manual_start(app)
+    }
+}

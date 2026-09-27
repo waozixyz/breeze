@@ -1,0 +1,86 @@
+#import, file "../src/platform/desktop_tray.zi";
+#import, file "../src/platform/desktop_tray_data.zi";
+#import "c_string"
+c :: #system_library "c";
+TestGetEnv :: (name: *u8) -> *u8 #foreign c "getenv";
+
+#program_export
+main :: () -> s32 {
+    label: [16]u8
+    CopyCString("Quit", label[:])
+    child: DesktopTrayMenuItem
+    child.kind = DESKTOP_TRAY_MENU_ITEM_ACTION
+    child.label = *label[0]
+    child.action = 7
+    child.enabled = 1
+    parent: DesktopTrayMenuItem
+    parent.kind = DESKTOP_TRAY_MENU_ITEM_SUBMENU
+    parent.label = *label[0]
+    parent.children = *child
+    parent.child_count = 1
+    parent.enabled = 1
+    copy := TrayCopyItems(*parent, 1)
+    if copy == null || copy.children == null {
+        return 2
+    }
+    label[0] = #char "X"
+    child.action = 9
+    valid_copy := copy.label[0] == #char "Q" &&
+    copy.children.label[0] == #char "Q" && copy.children.action == 7
+    TrayFreeItems(copy, 1)
+    if !valid_copy {
+        return 3
+    }
+    CopyCString("Quit", label[:])
+    id: [32]u8
+    title: [32]u8
+    icon_name: [16]u8
+    CopyCString("inbe-tray-test", id[:])
+    CopyCString("Inbe tray test", title[:])
+    CopyCString("inbe", icon_name[:])
+    spec: DesktopTraySpec
+    spec.id = *id[0]
+    spec.title = *title[0]
+    spec.icon_name = *icon_name[0]
+    spec.menu_items = *parent
+    spec.menu_item_count = 1
+    mode: [32]u8
+    CopyCString("INBE_TRAY_TEST_PRESENT", mode[:])
+    present := TestGetEnv(*mode[0]) != null
+    ready := DesktopTrayInit(*spec)
+    if !present {
+        visible := DesktopTrayVisible()
+        DesktopTrayShutdown()
+        if ready != 0 || visible != 0 {
+            return 4
+        }
+        return 0
+    }
+    if ready != 1 {
+        return 5
+    }
+    // No tray host runs in the private Xvfb server. Inbe must keep its own
+    // window available instead of treating an unembedded icon as visible.
+    if DesktopTrayVisible() != 0 {
+        DesktopTrayShutdown()
+        return 6
+    }
+    CopyCString("Testing", title[:])
+    DesktopTraySetStatus(*title[0])
+    DesktopTraySetMenu(*child, 1)
+    DesktopTraySetIcon(null)
+    DesktopTraySetActivateAction(11)
+    if DesktopTrayPollAction() != 0 {
+        DesktopTrayShutdown()
+        return 7
+    }
+    DesktopTrayShutdown()
+    if DesktopTrayVisible() != 0 {
+        return 8
+    }
+    if DesktopTrayInit(*spec) != 1 {
+        return 9
+    }
+    DesktopTrayShutdown()
+    return 0
+}

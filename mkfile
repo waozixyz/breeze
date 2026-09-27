@@ -1,7 +1,7 @@
 < /$objtype/mkfile
 
 # Native Plan 9 build of Inbe (Kryon libdraw backend). build/plan9 is
-# prepared on the host by: make kry-c-plan9
+# prepared on the host by: make zi-c-plan9
 #
 # sqlite stays stubbed here: 8c panics the kernel compiling the
 # amalgamation, so habit data is not persisted on Plan 9 yet (the VFS
@@ -13,11 +13,7 @@ ROOT=/sys/src/inbe
 
 list=$ROOT/build/plan9/generated-c-files.txt
 gensrc=`{cat $list | grep -v -e 'storage/import.c' -e 'meditation/meditation_music.c' -e '/src/main.c' -e '/platform/app_host.c'}
-appsrc=src/platform/plan9/entry.c \
-	src/platform/plan9/sqlite3_stub.c \
-	src/platform/plan9/storage_import_stub.c \
-	src/app/app_web_bridge.c \
-	src/storage/storage_json_builder.c
+appsrc=
 hostsrc=build/plan9/app_embedded_assets.c
 APPCPPFLAGS=-I$ROOT/src -I$ROOT/src/app -I$ROOT/src/core -I$ROOT/src/screens \
 	-I$ROOT/src/screens/settings -I$ROOT/src/practices -I$ROOT/src/practices/whm \

@@ -1,0 +1,833 @@
+
+
+
+
+
+#import, file "../habits/habit_types.zi";
+c :: #system_library "c";
+StorageImportInfo :: struct {
+    valid: s32
+    has_sessions: s32
+    has_habits: s32
+    has_settings: s32
+    session_count: s32
+    habit_count: s32
+    setting_count: s32
+}
+IMPORT_ID_SIZE :: 37;
+sqlite3_bind_int :: (stmt: *void, index: s32, value: s32) -> s32 #foreign c;
+sqlite3_changes :: (db: *void) -> s32 #foreign c;
+sqlite3_clear_bindings :: (stmt: *void) -> s32 #foreign c;
+sqlite3_reset :: (stmt: *void) -> s32 #foreign c;
+sqlite3_column_int :: (stmt: *void, col: s32) -> s32 #foreign c;
+#import, file "../core/types.zi";
+#import, file "archive_file_linux.zi";
+#import, file "sqlite.zi";
+#import, file "../app/text_buffers.zi";
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "db.zi";
+#import, file "state.zi";
+#import, file "storage_sessions.zi";
+#import, file "session_mood.zi";
+#import, file "storage_habit_materialize.zi";
+#import, file "storage_core.zi";
+StorageImportMode :: enum {
+    STORAGE_IMPORT_DATA_ONLY :: 0
+    STORAGE_IMPORT_DATA_AND_SETTINGS
+}
+using StorageImportMode;
+
+
+
+
+
+
+
+
+using HabitSyncMode;
+
+import_habit_id_counter: u32 = 0;
+
+ImportOpenSource :: (path: string, database: **void) -> s32 {
+    path_buffer: [1024]u8
+    if database == null || !AppCopyText(path, path_buffer[:]) { return -1 }
+    // Opening a source archive never creates or modifies that database.
+    return SqliteOpen(*path_buffer[0], database, 1)
+}
+
+ImportCopyText :: (output: *u8, capacity: s64, value: string) -> bool {
+    if output == null || capacity <= 0 { return false }
+    return AppCopyText(value, BytesFromPointer(output, cast(u64)capacity))
+}
+
+ImportFormatTrackId :: (track_id: s32, output: []u8) -> bool {
+    digits: [16]u8
+    if !AppFormatS32(track_id, digits[:]) ||
+        !AppCopyText("tickmate-", output) { return false }
+    return AppAppendText(AppTextFromCString(*digits[0], 16), output)
+}
+
+tickmate_color_fallback: [6] Color = .[
+Color.{.r = 99, .g = 196, .b = 165, .a = 255},
+Color.{.r = 94, .g = 166, .b = 232, .a = 255},
+Color.{.r = 210, .g = 180, .b = 72, .a = 255},
+Color.{.r = 224, .g = 124, .b = 104, .a = 255},
+Color.{.r = 180, .g = 132, .b = 220, .a = 255},
+Color.{.r = 216, .g = 116, .b = 164, .a = 255},
+];
+
+source_table_has_column :: (db: *void, table: string, column: string) -> s32 {
+    stmt: *void = null
+    sql: [128] u8
+    found: s32 = 0
+
+    if db == null || table.count == 0 || column.count == 0 {
+        return 0
+    }
+    if !AppCopyText("PRAGMA table_info(", sql[:]) ||
+        !AppAppendText(table, sql[:]) ||
+        !AppAppendText(")", sql[:]) { return 0 }
+    if SqlitePrepareText(cast(*void)db,
+        AppTextFromCString(*sql[0], 128), -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    while SqliteStep(stmt) == SQLITE_ROW {
+        name: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+        if name.count > 0 && name == column {
+            found = 1
+            break
+        }
+    }
+    SqliteFinalize(stmt)
+    return found
+}
+
+source_table_exists :: (db: *void, table: string) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+
+    if db == null || table.count == 0 {
+        return 0
+    }
+    if SqlitePrepareText(cast(*void)db,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
+        -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    SqliteBindTextString(stmt, 1, table, -1)
+    found = ifx (SqliteStep(stmt) == SQLITE_ROW) then (1) else (0)
+    SqliteFinalize(stmt)
+    return found
+}
+
+source_count_rows :: (db: *void, sql: string) -> s32 {
+    stmt: *void = null
+    count: s32 = 0
+
+    if db == null || sql.count == 0 {
+        return 0
+    }
+    if SqlitePrepareText(cast(*void)db, sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    if SqliteStep(stmt) == SQLITE_ROW {
+        count = sqlite3_column_int(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return count
+}
+
+import_key_equal :: (actual: string, expected: string) -> bool {
+    if actual.count != expected.count { return false }
+    index: s32 = 0
+    while index < cast(s32)actual.count {
+        if actual[index] != expected[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+import_custom_audio_key :: (key: string, prefix: string) -> bool {
+    if key.count <= prefix.count { return false }
+    index: s32 = 0
+    while index < cast(s32)prefix.count {
+        if key[index] != prefix[index] { return false }
+        index += 1
+    }
+    if key[index] < cast(u8)48 || key[index] > cast(u8)57 {
+        return false
+    }
+    while index < cast(s32)key.count &&
+        key[index] >= cast(u8)48 && key[index] <= cast(u8)57 {
+        index += 1
+    }
+    suffix := key[index:key.count]
+    return import_key_equal(suffix, "_title") ||
+        import_key_equal(suffix, "_path")
+}
+
+setting_key_importable :: (key: string) -> s32 {
+    if key.count == 0 { return 0 }
+    if import_custom_audio_key(key, "audio_custom_sound_") ||
+        import_custom_audio_key(key, "audio_custom_music_") {
+        return 1
+    }
+    keys: [88]string = .[
+        "speed", "max_rounds", "max_breaths", "pause_seconds",
+        "sound_volume", "music_volume", "audio_cue_breath_in",
+        "audio_cue_breath_out", "audio_cue_bell", "audio_custom_sound_count",
+        "audio_custom_music_count", "retention_marker_enabled", "tutorial_seen",
+        "exercise_manual_seen_mask", "theme", "theme_source", "dark_mode",
+        "theme_mode", "glow_effects", "style_lightfield_glow",
+        "orientation_mode", "ui_scale", "main_tab", "fullscreen",
+        "on_screen_keyboard", "notification_habit_reminders",
+        "progressive_speed", "progressive_start_speed", "breath_animation",
+        "double_tap_to_breathe", "advanced_session_controls", "exercise_type",
+        "sun_salutation_repetitions", "sun_salutation_start_seconds",
+        "sun_salutation_end_seconds", "sun_salutation_figure",
+        "meditation_duration_mode", "meditation_custom_minutes",
+        "meditation_show_extend_controls", "meditation_interval_bell",
+        "meditation_music_track", "practice_music_mask",
+        "practice_music_track_wim_hof", "practice_music_track_meditation",
+        "practice_music_track_sun_salutation", "play_in_background",
+        "play_in_background_default_migrated", "language",
+        "language_setup_done", "practice_category_tab", "patterns_preset",
+        "patterns_custom_in", "patterns_custom_hold_in", "patterns_custom_exhale",
+        "patterns_custom_hold_out", "patterns_duration_minutes",
+        "breaks_enabled", "desktop_startup_mode", "desktop_close_action",
+        "break_block_mode", "break_sounds_enabled", "break_hud_x",
+        "break_hud_y", "break_reading_mode", "break_micro_counts_as_activity",
+        "break_micro_enabled", "break_micro_limit", "break_micro_duration",
+        "break_micro_postpone", "break_micro_max_prompts",
+        "break_micro_show_skip", "break_micro_show_postpone",
+        "break_rest_enabled", "break_rest_limit", "break_rest_duration",
+        "break_rest_postpone", "break_rest_max_prompts",
+        "break_rest_show_skip", "break_rest_show_postpone",
+        "break_daily_enabled", "break_daily_limit", "break_daily_postpone",
+        "break_daily_max_prompts", "break_daily_show_skip",
+        "break_daily_show_postpone", "break_daily_state_day",
+        "break_daily_state_active", "break_daily_state_skipped"
+    ]
+    index: s32 = 0
+    while index < 88 {
+        if import_key_equal(key, keys[index]) { return 1 }
+        index += 1
+    }
+    return 0
+}
+
+source_count_importable_settings :: (db: *void) -> s32 {
+    stmt: *void = null
+    count: s32 = 0
+
+    if db == null || source_table_exists(db, "settings") == 0 {
+        return 0
+    }
+    if SqlitePrepareText(cast(*void)db, "SELECT DISTINCT key FROM settings", -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    while SqliteStep(stmt) == SQLITE_ROW {
+        key: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+        if setting_key_importable(key) != 0 {
+            count += 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return count
+}
+
+local_habit_id_by_name :: (name: string, out: *u8, out_size: s64) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+
+    if name.count == 0 || name[0] == #char "\0" || out == null || out_size == 0  || storage_db_handle() == null {
+        return 0
+    }
+
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT id FROM habits WHERE name=?1 COLLATE NOCASE AND deleted_at=0 ORDER BY sort_order,id LIMIT 1",
+        -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, name)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+        if id.count > 0 && id[0] != #char "\0" {
+            ImportCopyText(out, out_size, id)
+            found = ifx (out[0] != #char "\0") then (1) else (0)
+        }
+    }
+    SqliteFinalize(stmt)
+    return found
+}
+
+local_habit_id_exists :: (id: string) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+
+    if id.count == 0 || id[0] == #char "\0" || storage_db_handle() == null {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM habits WHERE id=?1 LIMIT 1",
+        -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, id)
+    found = ifx (SqliteStep(stmt) == SQLITE_ROW) then (1) else (0)
+    SqliteFinalize(stmt)
+    return found
+}
+
+make_import_habit_id :: (out: *u8, out_size: s64) {
+    if out == null || out_size <= 0 {
+        return
+    }
+    while true {
+        seconds: [24]u8
+        counter: [16]u8
+        if !AppFormatS64(now_seconds(), seconds[:]) ||
+            !AppFormatS64(cast(s64)import_habit_id_counter, counter[:]) ||
+            !ImportCopyText(out, out_size, "import-") ||
+            !AppAppendText(AppTextFromCString(*seconds[0], 24),
+                BytesFromPointer(out, cast(u64)out_size)) ||
+            !AppAppendText("-", BytesFromPointer(out, cast(u64)out_size)) ||
+            !AppAppendText(AppTextFromCString(*counter[0], 16),
+                BytesFromPointer(out, cast(u64)out_size)) {
+            out[0] = cast(u8)0
+            return
+        }
+        import_habit_id_counter += 1
+        if local_habit_id_exists(AppTextFromCString(*out[0], 64)) == 0 {
+            break
+        }
+    }
+}
+
+resolve_import_habit_id :: (import_id: string, name: string,
+    out: *u8, out_size: s64) -> s32 {
+    if out == null || out_size == 0 {
+        return 0
+    }
+    out[0] = cast(u8)0
+
+    if local_habit_id_by_name(name, out, out_size) != 0 {
+        return 1
+    }
+
+    if import_id.count > 0 && import_id[0] != #char "\0" && local_habit_id_exists(import_id) == 0 {
+        ImportCopyText(out, out_size, import_id)
+        return ifx (out[0] != #char "\0") then (1) else (0)
+    }
+
+    make_import_habit_id(out, out_size)
+    return ifx (out[0] != #char "\0") then (1) else (0)
+}
+
+import_prepare_habit_upsert :: (stmt: **void) -> s32 {
+    if stmt == null || storage_db_handle() == null {
+        return 0
+    }
+    return ifx (SqlitePrepareText(storage_db_handle(),
+        "INSERT OR REPLACE INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at) VALUES(?1,?2,COALESCE((SELECT name FROM habits WHERE id=?1),?3),?4,?5,?6,?7,?8,CASE WHEN ?9!=0 THEN 1 ELSE COALESCE((SELECT counter_enabled FROM habits WHERE id=?1),0) END,CASE WHEN ?10>0 THEN ?10 ELSE COALESCE((SELECT counter_target FROM habits WHERE id=?1),1) END,?11,0,?12)",
+        -1, stmt, null) == SQLITE_OK) then (1) else (0)
+}
+
+import_upsert_habit :: (stmt: *void, id: string, name: string,
+    color: Color, sync_mode: s32, sync_activity: s32,
+    counter_enabled: s32, counter_target: s32,
+    sort_order: s32, updated_at: s64) -> s32 {
+    rc: s32
+
+    if stmt == null || id.count == 0 || id[0] == #char "\0"  || name.count == 0 || name[0] == #char "\0" {
+        return 0
+    }
+    sqlite3_reset(stmt)
+    sqlite3_clear_bindings(stmt)
+    bind_text(stmt, 1, id)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    bind_text(stmt, 3, name)
+    sqlite3_bind_int(stmt, 4, cast(s32)color.r)
+    sqlite3_bind_int(stmt, 5, cast(s32)color.g)
+    sqlite3_bind_int(stmt, 6, cast(s32)color.b)
+    sqlite3_bind_int(stmt, 7, sync_mode)
+    sqlite3_bind_int(stmt, 8, sync_activity)
+    sqlite3_bind_int(stmt, 9, ifx (counter_enabled != 0) then (1) else (0))
+    sqlite3_bind_int(stmt, 10, ifx (counter_target > 0) then (counter_target) else (1))
+    sqlite3_bind_int(stmt, 11, sort_order)
+    SqliteBindInt64(stmt, 12, updated_at)
+    rc = SqliteStep(stmt)
+    return ifx (rc == SQLITE_DONE) then (1) else (0)
+}
+
+import_prepare_habit_day_upsert :: (stmt: **void) -> s32 {
+    if stmt == null || storage_db_handle() == null {
+        return 0
+    }
+    return ifx (SqlitePrepareText(storage_db_handle(),
+        "INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(habit_id,local_date) DO UPDATE SET count=CASE WHEN habit_days.count>excluded.count THEN habit_days.count ELSE excluded.count END,completed=CASE WHEN habit_days.count>0 OR excluded.count>0 OR habit_days.completed!=0 OR excluded.completed!=0 THEN 1 ELSE 0 END,updated_at=CASE WHEN excluded.count>habit_days.count THEN excluded.updated_at ELSE habit_days.updated_at END",
+        -1, stmt, null) == SQLITE_OK) then (1) else (0)
+}
+
+import_upsert_habit_day :: (stmt: *void, habit_id: string, local_date: s32,
+    completed: s32, count: s32, updated_at: s64) -> s32 {
+    rc: s32
+
+    if stmt == null || habit_id.count == 0 || habit_id[0] == #char "\0" || local_date <= 0 {
+        return 0
+    }
+    sqlite3_reset(stmt)
+    sqlite3_clear_bindings(stmt)
+    bind_text(stmt, 1, habit_id)
+    sqlite3_bind_int(stmt, 2, local_date)
+    sqlite3_bind_int(stmt, 3, ifx (completed != 0) then (1) else (0))
+    sqlite3_bind_int(stmt, 4, count)
+    SqliteBindInt64(stmt, 5, updated_at)
+    rc = SqliteStep(stmt)
+    return ifx (rc == SQLITE_DONE) then (1) else (0)
+}
+
+#program_export
+storage_export_zip :: (path: string) -> s32 {
+    return ArchiveExportFile(path)
+}
+
+tickmate_color_from_int :: (value: s32, index: s32) -> Color {
+    color: Color = tickmate_color_fallback[index % cast(s32)(size_of(type_of(tickmate_color_fallback)) / size_of(type_of(tickmate_color_fallback[0])))]
+
+    if value != 0 {
+        color.r = cast(u8)((value >> 16) & 0xff)
+        color.g = cast(u8)((value >> 8) & 0xff)
+        color.b = cast(u8)(value & 0xff)
+        color.a = 255
+        if color.r == 0 && color.g == 0 && color.b == 0 {
+            color = tickmate_color_fallback[index % cast(s32)(size_of(type_of(tickmate_color_fallback)) / size_of(type_of(tickmate_color_fallback[0])))]
+        }
+    }
+    return color
+}
+
+import_tickmate_db :: (src: *void) -> s32 {
+    stmt: *void = null
+    write_stmt: *void = null
+    ok: s32 = 0
+    has_multiple_entries: s32
+    track_sql: string
+    imported_at: s64 = now_seconds()
+
+    if src == null || storage_db_handle() == null {
+        return 0
+    }
+    if source_table_has_column(src, "tracks", "name") == 0  || source_table_has_column(src, "ticks", "_track_id") == 0 {
+        return 0
+    }
+
+    has_multiple_entries = source_table_has_column(src, "tracks", "multiple_entries_per_day")
+    if has_multiple_entries != 0 {
+        track_sql = "SELECT _id,name,color,\"order\",multiple_entries_per_day,EXISTS(SELECT 1 FROM ticks WHERE ticks._track_id=tracks._id GROUP BY year,month,day HAVING COUNT(*)>1 LIMIT 1) FROM tracks WHERE enabled!=0 ORDER BY \"order\",_id"
+    } else {
+        track_sql = "SELECT _id,name,color,\"order\",0,EXISTS(SELECT 1 FROM ticks WHERE ticks._track_id=tracks._id GROUP BY year,month,day HAVING COUNT(*)>1 LIMIT 1) FROM tracks WHERE enabled!=0 ORDER BY \"order\",_id"
+    }
+
+    if SqlitePrepareText(cast(*void)src, track_sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    if import_prepare_habit_upsert(*write_stmt) == 0 {
+        SqliteFinalize(stmt)
+        return 0
+    }
+
+    exec_sql("BEGIN IMMEDIATE")
+    while SqliteStep(stmt) == SQLITE_ROW {
+        import_habit_id: [64] u8
+        local_habit_id: [IMPORT_ID_SIZE] u8
+        name: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+        track_id: s32 = sqlite3_column_int(stmt, 0)
+        sort_order: s32 = sqlite3_column_int(stmt, 3)
+        counter_enabled: s32 = ifx (sqlite3_column_int(stmt, 4) != 0  || sqlite3_column_int(stmt, 5) != 0) then (1) else (0)
+        color: Color = tickmate_color_from_int(sqlite3_column_int(stmt, 2), track_id)
+
+        if name.count == 0 {
+            continue
+        }
+        if !ImportFormatTrackId(track_id, import_habit_id[:]) { continue }
+        if resolve_import_habit_id(AppTextFromCString(*import_habit_id[0], 64), name, *local_habit_id[0],
+            size_of(type_of(local_habit_id))) == 0 {
+            continue
+        }
+        if import_upsert_habit(write_stmt, AppTextFromCString(*local_habit_id[0], 37), name, color,
+            HABIT_SYNC_NONE, 0, counter_enabled,
+            1, sort_order, imported_at) != 0 {
+            ok = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    stmt = null
+    SqliteFinalize(write_stmt)
+    write_stmt = null
+
+    if SqlitePrepareText(cast(*void)src,
+        "SELECT ticks._track_id,tracks.name,ticks.year,ticks.month,ticks.day,COUNT(*) FROM ticks JOIN tracks ON tracks._id=ticks._track_id WHERE tracks.enabled!=0 GROUP BY ticks._track_id,ticks.year,ticks.month,ticks.day",
+        -1, *stmt, null) == SQLITE_OK {
+        if import_prepare_habit_day_upsert(*write_stmt) == 0 {
+            SqliteFinalize(stmt)
+            stmt = null
+        } else {
+            while SqliteStep(stmt) == SQLITE_ROW {
+                import_habit_id: [64] u8
+                local_habit_id: [IMPORT_ID_SIZE] u8
+                track_id: s32 = sqlite3_column_int(stmt, 0)
+                name: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+                year: s32 = sqlite3_column_int(stmt, 2)
+                month: s32 = sqlite3_column_int(stmt, 3)
+                day: s32 = sqlite3_column_int(stmt, 4)
+                count: s32 = sqlite3_column_int(stmt, 5)
+                local_date: s32
+
+                if name.count == 0 {
+                    continue
+                }
+                if year <= 0 || month < 0 || month > 11 || day <= 0 || day > 31 {
+                    continue
+                }
+                local_date = year * 10000 + (month + 1) * 100 + day
+                if !ImportFormatTrackId(track_id, import_habit_id[:]) { continue }
+                if resolve_import_habit_id(AppTextFromCString(*import_habit_id[0], 64), name, *local_habit_id[0],
+                    size_of(type_of(local_habit_id))) == 0 {
+                    continue
+                }
+                if import_upsert_habit_day(write_stmt, AppTextFromCString(*local_habit_id[0], 37), local_date,
+                    1, ifx (count > 0) then (count) else (1), imported_at) != 0 {
+                    ok = 1
+                }
+            }
+        }
+    }
+    SqliteFinalize(stmt)
+    SqliteFinalize(write_stmt)
+    exec_sql("COMMIT")
+    return ok
+}
+
+import_settings_from_source :: (src: *void) -> s32 {
+    stmt: *void = null
+    write_stmt: *void = null
+    imported: s32 = 0
+    imported_at: s64 = now_seconds()
+
+    if src == null || storage_db_handle() == null || source_table_exists(src, "settings") == 0 {
+        return 0
+    }
+    if SqlitePrepareText(cast(*void)src, "SELECT key,value FROM settings", -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+
+    if SqlitePrepareText(storage_db_handle(),
+        "INSERT INTO settings(user_id,key,value,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,key) DO UPDATE SET value=CASE WHEN excluded.value!='' OR settings.value='' THEN excluded.value ELSE settings.value END,updated_at=CASE WHEN excluded.value!='' OR settings.value='' THEN excluded.updated_at ELSE settings.updated_at END",
+        -1, *write_stmt, null) != SQLITE_OK {
+        SqliteFinalize(stmt)
+        return 0
+    }
+
+    exec_sql("BEGIN IMMEDIATE")
+    while SqliteStep(stmt) == SQLITE_ROW {
+        key: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+        value: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+
+        if setting_key_importable(key) == 0 {
+            continue
+        }
+        sqlite3_reset(write_stmt)
+        sqlite3_clear_bindings(write_stmt)
+        bind_text(write_stmt, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+        bind_text(write_stmt, 2, key)
+        bind_text(write_stmt, 3, ifx (value.count > 0) then (value) else (""))
+        SqliteBindInt64(write_stmt, 4, imported_at)
+        if SqliteStep(write_stmt) == SQLITE_DONE {
+            imported += 1
+        }
+    }
+    SqliteFinalize(stmt)
+    SqliteFinalize(write_stmt)
+    exec_sql("COMMIT")
+    return imported
+}
+
+#program_export
+inspect_sqlite_db_file :: (db_path: string, info: *StorageImportInfo) -> s32 {
+    src: *void = null
+    ok: s32 = 0
+
+    if info != null {
+        info.* = StorageImportInfo.{}
+    }
+    if db_path.count == 0 || db_path[0] == #char "\0" || info == null {
+        return 0
+    }
+    if ImportOpenSource(db_path, *src) != SQLITE_OK {
+        if src != null {
+            SqliteClose(src)
+        }
+        return ok
+    }
+
+    if source_table_exists(src, "sessions") != 0 && source_table_exists(src, "session_rounds") != 0 {
+        info.session_count = source_count_rows(src, "SELECT COUNT(*) FROM sessions WHERE deleted_at=0")
+        info.habit_count = ifx (source_table_exists(src, "habits") != 0) then (source_count_rows(src, "SELECT COUNT(*) FROM habits WHERE deleted_at=0")) else (0)
+        info.setting_count = source_count_importable_settings(src)
+        info.has_sessions = ifx (info.session_count > 0) then (1) else (0)
+        info.has_habits = ifx (info.habit_count > 0) then (1) else (0)
+        info.has_settings = ifx (info.setting_count > 0) then (1) else (0)
+        info.valid = ifx (info.has_sessions != 0 || info.has_habits != 0 || info.has_settings != 0) then (1) else (0)
+        ok = info.valid
+    } else if source_table_has_column(src, "tracks", "name") != 0  && source_table_has_column(src, "ticks", "_track_id") != 0 {
+        info.habit_count = source_count_rows(src, "SELECT COUNT(*) FROM tracks WHERE enabled!=0")
+        info.has_habits = ifx (info.habit_count > 0) then (1) else (0)
+        info.valid = info.has_habits
+        ok = info.valid
+    }
+
+    if src != null {
+        SqliteClose(src)
+    }
+    return ok
+}
+
+import_session_checkin :: (src: *void, source_id: string, target_id: string) -> s32 {
+    fields: [6] string = .["mood_before", "mood_after", "energy", "stress", "note", "tags"]
+    sql: [512] u8
+    sql[0] = #char "\0"
+    stmt: *void = null
+    checkin: SessionMoodCheckin
+    {
+        i: s32 = 0
+        while i < 6 {
+
+            if i > 0 && !AppAppendText(",", sql[:]) { return 0 }
+            field: string = ifx (source_table_has_column(src, "sessions", fields[i]) != 0) then (fields[i]) else (ifx (i < 4) then ("0") else ("''"))
+            if !AppAppendText(field, sql[:]) { return 0 }
+
+            i += 1
+        }
+    }
+    if !AppAppendText(" FROM sessions WHERE id=?1", sql[:]) { return 0 }
+    if SqlitePrepare(cast(*void)src, *sql[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, source_id)
+    if SqliteStep(stmt) != SQLITE_ROW {
+        SqliteFinalize(stmt)
+        return 0
+    }
+    checkin.mood_before = sqlite3_column_int(stmt, 0)
+    checkin.mood_after = sqlite3_column_int(stmt, 1)
+    checkin.energy = sqlite3_column_int(stmt, 2)
+    checkin.stress = sqlite3_column_int(stmt, 3)
+    note := AppTextFromCString(SqliteColumnText(stmt, 4), 4096)
+    tags := AppTextFromCString(SqliteColumnText(stmt, 5), 4096)
+    AppCopyText(ifx (note.count > 0) then (note) else (""), checkin.note[:])
+    AppCopyText(ifx (tags.count > 0) then (tags) else (""), checkin.tags[:])
+    SqliteFinalize(stmt)
+    return storage_save_session_checkin(target_id, *checkin)
+}
+
+#program_export
+import_sqlite_db_file :: (db_path: string, mode: StorageImportMode) -> s32 {
+    src: *void = null
+    stmt: *void = null
+    hstmt: *void = null
+    habit_write_stmt: *void = null
+    day_write_stmt: *void = null
+    ok: s32 = 0
+    imported_settings: s32 = 0
+    deferred_materialize: s32 = 0
+    imported_at: s64 = now_seconds()
+
+    if db_path.count == 0 {
+        return 0
+    }
+    if ImportOpenSource(db_path, *src) != SQLITE_OK {
+        LogStorageText(LOG_WARNING, "DATA: sqlite import could not open ", db_path)
+    } else {
+        storage_state_handle().materialize_defer += 1
+        deferred_materialize = 1
+        if SqlitePrepareText(cast(*void)src,
+            "SELECT id,started_at,local_date,topic,activity,source FROM sessions WHERE deleted_at=0",
+            -1, *stmt, null) != SQLITE_OK {
+            SqliteFinalize(stmt)
+            stmt = null
+            ok = import_tickmate_db(src)
+            if ok == 0 {
+                LogStorage(LOG_WARNING, "DATA: unsupported SQLite import schema")
+            }
+        } else {
+            failed: s32 = 0
+            while failed == 0 && SqliteStep(stmt) == SQLITE_ROW {
+                rstmt: *void = null
+                rounds: [MaxRounds] s32
+                count: s32 = 0
+                sid: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+                started_at: s64 = SqliteColumnInt64(stmt, 1)
+                local_date: s32 = sqlite3_column_int(stmt, 2)
+                topic: s32 = sqlite3_column_int(stmt, 3)
+                activity: s32 = sqlite3_column_int(stmt, 4)
+
+                if SqlitePrepareText(cast(*void)src,
+                    "SELECT seconds FROM session_rounds WHERE session_id=?1 ORDER BY round_index",
+                    -1, *rstmt, null) == SQLITE_OK {
+                    SqliteBindTextString(rstmt, 1, ifx (sid.count > 0) then (sid) else (""), -1)
+                    while count < MaxRounds && SqliteStep(rstmt) == SQLITE_ROW {
+                        rounds[count] = sqlite3_column_int(rstmt, 0)
+                        count += 1
+                    }
+                }
+                SqliteFinalize(rstmt)
+                if count > 0 {
+                    imported_id: [IMPORT_ID_SIZE] u8
+                    inserted: s32 = 0
+                    if insert_session_at_ex(started_at, local_date, *rounds[0], count,
+                        topic, activity, "sqlite-import", *imported_id[0], size_of(type_of(imported_id)), *inserted) == 0 {
+                        ok = 0
+                        failed = 1
+                    } else {
+                        // Preserve existing local check-ins when a backup contains a duplicate.
+                        if inserted != 0 && import_session_checkin(src, sid, AppTextFromCString(*imported_id[0], 37)) == 0 {
+                            ok = 0
+                            failed = 1
+                        } else {
+                            ok = 1
+                        }
+                    }
+                }
+            }
+            SqliteFinalize(stmt)
+            stmt = null
+
+            if failed == 0 && source_table_exists(src, "habits") != 0 {
+                has_sync_activity: s32 = source_table_has_column(src, "habits", "sync_activity")
+                has_counter_enabled: s32 = source_table_has_column(src, "habits", "counter_enabled")
+                has_counter_target: s32 = source_table_has_column(src, "habits", "counter_target")
+                has_day_count: s32 = source_table_has_column(src, "habit_days", "count")
+                day_sql: string
+                habit_sql: string
+                if has_day_count != 0 {
+                    day_sql = "SELECT local_date,completed,count FROM habit_days WHERE habit_id=?1"
+                } else {
+                    day_sql = "SELECT local_date,completed,CASE WHEN completed!=0 THEN 1 ELSE 0 END FROM habit_days WHERE habit_id=?1"
+                }
+                if has_sync_activity != 0 && has_counter_enabled != 0 && has_counter_target != 0 {
+                    habit_sql = "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order FROM habits WHERE deleted_at=0 ORDER BY sort_order,id"
+                } else if has_sync_activity != 0 && has_counter_enabled != 0 {
+                    habit_sql = "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,1,sort_order FROM habits WHERE deleted_at=0 ORDER BY sort_order,id"
+                } else if has_sync_activity != 0 {
+                    habit_sql = "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,0,1,sort_order FROM habits WHERE deleted_at=0 ORDER BY sort_order,id"
+                } else if has_counter_enabled != 0 {
+                    habit_sql = "SELECT id,name,color_r,color_g,color_b,sync_mode,0,counter_enabled,1,sort_order FROM habits WHERE deleted_at=0 ORDER BY sort_order,id"
+                } else {
+                    habit_sql = "SELECT id,name,color_r,color_g,color_b,sync_mode,0,0,1,sort_order FROM habits WHERE deleted_at=0 ORDER BY sort_order,id"
+                }
+                if SqlitePrepareText(cast(*void)src, habit_sql, -1, *stmt, null) == SQLITE_OK &&
+                import_prepare_habit_upsert(*habit_write_stmt) != 0 &&
+                import_prepare_habit_day_upsert(*day_write_stmt) != 0 {
+                    SqlitePrepareText(cast(*void)src, day_sql, -1, *hstmt, null)
+                    exec_sql("BEGIN IMMEDIATE")
+                    while SqliteStep(stmt) == SQLITE_ROW {
+                        import_habit_id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+                        name: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+                        local_habit_id: [IMPORT_ID_SIZE] u8
+                        color: Color = Color.{.r = cast(u8)sqlite3_column_int(stmt, 2),
+                            .g = cast(u8)sqlite3_column_int(stmt, 3),
+                            .b = cast(u8)sqlite3_column_int(stmt, 4), .a = 255}
+                        sync_activity: s32 = sqlite3_column_int(stmt, 6)
+                        counter_enabled: s32 = ifx (sqlite3_column_int(stmt, 7) != 0) then (1) else (0)
+                        counter_target: s32 = sqlite3_column_int(stmt, 8)
+                        sort_order: s32 = sqlite3_column_int(stmt, 9)
+
+                        if import_habit_id.count == 0 || import_habit_id[0] == #char "\0"  || name.count == 0 || name[0] == #char "\0" {
+                            continue
+                        }
+                        if resolve_import_habit_id(import_habit_id, name, *local_habit_id[0],
+                            size_of(type_of(local_habit_id))) == 0 {
+                            continue
+                        }
+                        if import_upsert_habit(habit_write_stmt, AppTextFromCString(*local_habit_id[0], 37), name, color,
+                            sqlite3_column_int(stmt, 5), sync_activity,
+                            counter_enabled, counter_target,
+                            sort_order, imported_at) != 0 {
+                            ok = 1
+                        }
+
+                        if hstmt != null {
+                            sqlite3_reset(hstmt)
+                            sqlite3_clear_bindings(hstmt)
+                            SqliteBindTextString(hstmt, 1, import_habit_id, -1)
+                            while SqliteStep(hstmt) == SQLITE_ROW {
+                                import_upsert_habit_day(day_write_stmt, AppTextFromCString(*local_habit_id[0], 37),
+                                    sqlite3_column_int(hstmt, 0),
+                                    ifx (sqlite3_column_int(hstmt, 1) != 0) then (1) else (0),
+                                    sqlite3_column_int(hstmt, 2),
+                                    imported_at)
+                            }
+                        }
+                    }
+                    exec_sql("COMMIT")
+                }
+                SqliteFinalize(hstmt)
+                hstmt = null
+                SqliteFinalize(habit_write_stmt)
+                habit_write_stmt = null
+                SqliteFinalize(day_write_stmt)
+                day_write_stmt = null
+            }
+
+            if failed == 0 && mode == cast(StorageImportMode)STORAGE_IMPORT_DATA_AND_SETTINGS {
+                imported_settings = import_settings_from_source(src)
+            }
+            if imported_settings > 0 {
+                ok = 1
+            }
+        }
+    }
+    SqliteFinalize(hstmt)
+    hstmt = null
+    SqliteFinalize(habit_write_stmt)
+    habit_write_stmt = null
+    SqliteFinalize(day_write_stmt)
+    day_write_stmt = null
+    if deferred_materialize != 0 && storage_state_handle().materialize_defer > 0 {
+        storage_state_handle().materialize_defer -= 1
+        if storage_state_handle().materialize_defer == 0 && storage_state_handle().materialize_needed != 0 {
+            storage_state_handle().materialize_needed = 0
+            storage_materialize_session_habit_days()
+        }
+    }
+    SqliteFinalize(stmt)
+    if src != null {
+        SqliteClose(src)
+    }
+    if ok != 0 {
+        storage_enqueue_all_sync_state()
+        storage_schedule_persist()
+    }
+    return ok
+}
+
+#program_export
+storage_import_zip :: (path: string) -> s32 {
+    return storage_import_zip_ex(path, cast(StorageImportMode)STORAGE_IMPORT_DATA_ONLY)
+}
+
+#program_export
+storage_import_zip_ex :: (path: string, mode: StorageImportMode) -> s32 {
+    imported: s32 = ArchiveImportFile(path, cast(s32)mode)
+    if imported != 0 {
+        storage_enqueue_all_sync_state()
+    }
+    return imported
+}
+
+#program_export
+storage_inspect_import :: (path: string, info: *StorageImportInfo) -> s32 {
+    return ArchiveInspectFile(path, cast(*ArchiveInfo)info)
+}

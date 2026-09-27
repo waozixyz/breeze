@@ -1,0 +1,340 @@
+// Settings navigation. Each panel owns its own controls and persistence.
+#import, file "../../app/app.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../practices/meditation/meditation_music.zi";
+#import, file "../../platform/scroll_input.zi";
+#import, file "settings_types.zi";
+#import, file "settings_theme.zi";
+#import, file "settings_device.zi";
+#import, file "settings_audio.zi";
+#import, file "settings_breaks.zi";
+#import, file "settings_notifications.zi";
+#import, file "settings_about.zi";
+#import "geometry"
+#import "drawing_props"
+#import "session"
+#import "layout"
+#import "tree"
+#import "button_props"
+#import "button_widget"
+#import "text_props"
+#import "text_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "dropdown_props"
+#import "scroll_props"
+#import "scroll"
+#import "scroll_widget"
+#import "layout_widget"
+#import "control_props"
+
+#import, file "settings_data_ui.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+using AppNavRoute;
+
+SETTINGS_ANDROID :: #defined(ANDROID_BUILD);
+SETTINGS_WEB :: #defined(PLATFORM_WEB);
+SETTINGS_DESKTOP :: !SETTINGS_ANDROID && !SETTINGS_WEB;
+
+SettingsScreenRect :: (x: s32, y: s32, width: s32,
+    height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+settings_screen_tab_label :: (tab: s32) -> string {
+    if tab == SETTINGS_TAB_DEVICE { return LocaleText("settings_tab_device") }
+    if tab == SETTINGS_TAB_AUDIO { return LocaleText("settings_tab_audio") }
+    if tab == SETTINGS_TAB_BREAKS { return LocaleText("settings_tab_breaks") }
+    if tab == SETTINGS_TAB_NOTIFICATIONS {
+        return LocaleText("settings_tab_notifications")
+    }
+    if tab == SETTINGS_TAB_THEME {
+        return LocaleText("settings_section_appearance")
+    }
+    if tab == SETTINGS_TAB_ABOUT { return LocaleText("settings_tab_about") }
+    return LocaleText("settings_title")
+}
+
+settings_tab_content_height :: (app: *InnerBreeze,
+    tab: s32, width: s32) -> s32 {
+    if tab == SETTINGS_TAB_DEVICE {
+        return settings_device_content_height(width)
+    }
+    if tab == SETTINGS_TAB_AUDIO {
+        return settings_audio_content_height(app, width)
+    }
+    if tab == SETTINGS_TAB_BREAKS {
+        #if SETTINGS_DESKTOP {
+            return settings_breaks_content_height(app, width)
+        }
+    }
+    if tab == SETTINGS_TAB_NOTIFICATIONS {
+        return settings_notifications_content_height(app, width)
+    }
+    if tab == SETTINGS_TAB_THEME {
+        return settings_theme_content_height(app, width)
+    }
+    return settings_about_content_height(width)
+}
+
+settings_screen_normalize :: (app: *InnerBreeze) {
+    if app == null { return }
+    if app.settings_tab < 0 || app.settings_tab >= SETTINGS_TAB_COUNT {
+        app.settings_tab = SETTINGS_TAB_DEVICE
+    }
+    #if !SETTINGS_DESKTOP {
+        if app.settings_tab == SETTINGS_TAB_BREAKS {
+            app.settings_tab = SETTINGS_TAB_DEVICE
+        }
+    }
+}
+
+settings_screen_prepare :: (app: *InnerBreeze) {
+    if app == null { return }
+    settings_data_handle_import(app)
+    settings_audio_handle_import(app)
+    if app.settings_tab == SETTINGS_TAB_AUDIO {
+        meditation_music_update(app)
+    }
+}
+
+SettingsScreenTabAt :: (position: s32) -> s32 {
+    #if SETTINGS_DESKTOP {
+        tabs: [6]s32 = .{SETTINGS_TAB_DEVICE,
+            SETTINGS_TAB_AUDIO, SETTINGS_TAB_BREAKS,
+            SETTINGS_TAB_NOTIFICATIONS, SETTINGS_TAB_THEME,
+            SETTINGS_TAB_ABOUT}
+    } else {
+        tabs: [5]s32 = .{SETTINGS_TAB_DEVICE,
+            SETTINGS_TAB_AUDIO, SETTINGS_TAB_NOTIFICATIONS,
+            SETTINGS_TAB_THEME, SETTINGS_TAB_ABOUT}
+    }
+    if position < 0 || position >= cast(s32)tabs.count {
+        return SETTINGS_TAB_DEVICE
+    }
+    return tabs[position]
+}
+
+SettingsScreenTabCount :: () -> s32 {
+    #if SETTINGS_DESKTOP {
+        return 6
+    } else {
+        return 5
+    }
+}
+
+SettingsScreenTabProps :: (app: *InnerBreeze,
+    tab: s32, x: s32, y: s32, width: s32,
+    height: s32, id: s32) -> ButtonProps {
+    props: ButtonProps
+    props.bounds = SettingsScreenRect(x, y, width, height)
+    props.id = id
+    props.label = settings_screen_tab_label(tab)
+    props.selected = app.settings_tab == tab && app.settings_overview == 0
+    props.tone = cast(ButtonTone)(ifx (props.selected) then
+        (ButtonToneAccent) else (ButtonToneNeutral))
+    props.emphasis = cast(ButtonEmphasis)(ifx (props.selected) then
+        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+    props.disabled = app.modal.active != 0
+    return props
+}
+
+SettingsScreenPanel :: (app: *InnerBreeze,
+    tab: s32, bounds: Rectangle) {
+    if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
+    column := CenteredColumnFor(cast(s32)bounds.width,
+        AppScale(760), AppScale(16))
+    x := cast(s32)bounds.x + column.x
+    width := column.width
+    content_height := settings_tab_content_height(app, tab, width) + AppScale(24)
+    key := KeyHash("inbe/settings/panel")
+    props: ScrollProps
+    props.key = key
+    props.bounds = bounds
+    props.content_height = content_height
+    props.scroll_offset = app.settings_scroll
+    props.input = ScrollObservationFor(key, bounds)
+    scrolled := Scroll(app.ui.session, props)
+    app.settings_scroll = scrolled.scroll_offset
+    CommitScroll(key, scrolled.frame)
+    if !scrolled.opened { return }
+    y := cast(s32)scrolled.content.y + AppScale(12)
+    device_state: SettingsDeviceState
+    if tab == SETTINGS_TAB_DEVICE {
+        settings_device_draw(app, x, width, *y, *device_state)
+    } else if tab == SETTINGS_TAB_AUDIO {
+        settings_audio_draw(app, x, width, *y)
+    } else if tab == SETTINGS_TAB_BREAKS {
+        #if SETTINGS_DESKTOP {
+            settings_breaks_draw(app, x, width, *y)
+        }
+    } else if tab == SETTINGS_TAB_NOTIFICATIONS {
+        settings_notifications_draw(app, x, width, *y)
+    } else if tab == SETTINGS_TAB_THEME {
+        settings_theme_draw(app, x, width, *y, *app.theme_state)
+    } else {
+        settings_about_draw(app, x, width, *y)
+    }
+    End(app.ui.session)
+    if tab == SETTINGS_TAB_DEVICE {
+        settings_device_handle_overlays(app, *device_state)
+    } else if tab == SETTINGS_TAB_NOTIFICATIONS {
+        settings_notifications_handle_overlays(app)
+    }
+}
+
+SettingsScreenMobileHub :: (app: *InnerBreeze) {
+    width := app.ui.view_width
+    height := app.ui.view_height - app_content_bottom_reserved(app)
+    column := CenteredColumnFor(width, AppScale(560), AppScale(16))
+    heading_y := AppScale(20)
+    heading: TextProps
+    heading.bounds = SettingsScreenRect(column.x, heading_y,
+        column.width, AppScale(48))
+    heading.text = LocaleText("settings_title")
+    heading.font = AppTitleFontSize(heading.text, column.width)
+    heading.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, heading)
+    top := heading_y + AppScale(58)
+    row_h := AppScale(52)
+    gap := AppScale(8)
+    row_count := SettingsScreenTabCount() + 2
+    content_height := row_count * (row_h + gap) + AppScale(12)
+    viewport := SettingsScreenRect(column.x, top, column.width,
+        height - top - AppScale(12))
+    key := KeyHash("inbe/settings/mobile-hub")
+    props: ScrollProps
+    props.key = key
+    props.bounds = viewport
+    props.content_height = content_height
+    props.scroll_offset = app.settings_scroll
+    props.input = ScrollObservationFor(key, viewport)
+    scrolled := Scroll(app.ui.session, props)
+    app.settings_scroll = scrolled.scroll_offset
+    CommitScroll(key, scrolled.frame)
+    if !scrolled.opened { return }
+    y := cast(s32)scrolled.content.y
+    profile: ButtonProps
+    profile.bounds = SettingsScreenRect(column.x, y, column.width, row_h)
+    profile.id = 7500
+    profile.label = LocaleText("tab_profile")
+    profile.disabled = app.modal.active != 0
+    if Button(app.ui.session, profile) != 0 {
+        app_apply_nav_route(app, cast(s32)APP_NAV_ROUTE_PROFILE)
+    }
+    y += row_h + gap
+    data: ButtonProps
+    data.bounds = SettingsScreenRect(column.x, y, column.width, row_h)
+    data.id = 7501
+    data.label = LocaleText("profile_data")
+    data.disabled = app.modal.active != 0
+    if Button(app.ui.session, data) != 0 {
+        app_apply_nav_route(app, cast(s32)APP_NAV_ROUTE_DATA)
+    }
+    y += row_h + gap
+    position: s32 = 0
+    while position < SettingsScreenTabCount() {
+        tab := SettingsScreenTabAt(position)
+        if Button(app.ui.session, SettingsScreenTabProps(app, tab,
+            column.x, y, column.width, row_h,
+            7510 + position)) != 0 {
+            app.settings_tab = tab
+            app.settings_overview = 0
+            app.settings_scroll = 0
+        }
+        y += row_h + gap
+        position += 1
+    }
+    End(app.ui.session)
+}
+
+SettingsScreenDesktop :: (app: *InnerBreeze) {
+    width := app.ui.view_width
+    height := app.ui.view_height - app_content_bottom_reserved(app)
+    outer := AppScale(20)
+    heading_h := AppScale(58)
+    nav_width := AppScale(220)
+    gap := AppScale(20)
+    if width < AppScale(780) {
+        nav_width = AppScale(170)
+        gap = AppScale(12)
+    }
+    heading: TextProps
+    heading.bounds = SettingsScreenRect(outer, outer,
+        width - outer * 2, AppScale(48))
+    heading.text = LocaleText("settings_title")
+    heading.font = AppTitleFontSize(heading.text, width - outer * 2)
+    heading.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, heading)
+    top := outer + heading_h
+    nav_y := top
+    position: s32 = 0
+    while position < SettingsScreenTabCount() {
+        tab := SettingsScreenTabAt(position)
+        if Button(app.ui.session, SettingsScreenTabProps(app, tab,
+            outer, nav_y, nav_width, AppScale(48),
+            7600 + position)) != 0 {
+            app.settings_tab = tab
+            app.settings_scroll = 0
+        }
+        nav_y += AppScale(56)
+        position += 1
+    }
+    panel_x := outer + nav_width + gap
+    panel := SettingsScreenRect(panel_x, top,
+        width - panel_x - outer, height - top - outer)
+    SettingsScreenPanel(app, app.settings_tab, panel)
+}
+
+SettingsScreenMobileDetail :: (app: *InnerBreeze) {
+    title := settings_screen_tab_label(app.settings_tab)
+    title_height := AppTitleBarHeight()
+    bar: TitleBarProps
+    bar.bounds = SettingsScreenRect(0, 0,
+        app.ui.view_width, title_height)
+    bar.title = title
+    bar.height = title_height
+    bar.has_leading_action = app.modal.active == 0
+    bar.leading_label = LocaleText("back_button")
+    options: [1]DropdownOption
+    result := TitleBar(app.ui.session, bar, options[0:0])
+    if result.clicked_leading {
+        app_block_current_click(app)
+        app_settings_back(app)
+        return
+    }
+    top := title_height + AppScale(8)
+    height := app.ui.view_height - top - app_content_bottom_reserved(app)
+    SettingsScreenPanel(app, app.settings_tab,
+        SettingsScreenRect(0, top, app.ui.view_width, height))
+}
+
+#program_export
+settings_screen_draw :: (app: *InnerBreeze) -> s32 {
+    if app == null { return 0 }
+    settings_screen_normalize(app)
+    settings_screen_prepare(app)
+    if app_settings_wide_layout(app) != 0 {
+        app.settings_overview = 0
+        SettingsScreenDesktop(app)
+    } else if app.settings_overview != 0 {
+        SettingsScreenMobileHub(app)
+    } else {
+        SettingsScreenMobileDetail(app)
+    }
+    return 0
+}
+
+#program_export
+settings :: (app: *InnerBreeze) {
+    unused settings_screen_draw(app)
+}

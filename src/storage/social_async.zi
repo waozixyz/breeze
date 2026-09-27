@@ -1,0 +1,142 @@
+#import "social"
+#import "auth"
+#import "async_client"
+#import "text_buffer"
+#import, file "sync_async.zi";
+#import, file "../app/text_buffers.zi";
+
+SocialRefresh :: struct {
+    operation: StoredOperation
+    transport: AsyncTransport
+    server: [512]u8
+    practice: [32]u8
+    action: [16]u8
+    value: [96]u8
+    requests: [8192]u8
+    friends: [8192]u8
+    streak: [8192]u8
+    average: [8192]u8
+    scratch: [1024]u8
+    stage: s32
+    active: bool
+    action_done: bool
+    result: s32
+}
+
+StartSocialStage :: (refresh: *SocialRefresh) -> bool {
+    method := "GET"
+    path: [768]u8
+    body: [256]u8
+    output := refresh.scratch[:]
+    valid := true
+    if refresh.stage == 1 {
+        action := TextUntilNul(refresh.action[:])
+        value := TextUntilNul(refresh.value[:])
+        method = "POST"
+        if action == "send" {
+            valid = BuildFriendRequestBody(value, body[:]) &&
+                AppCopyText("/api/v1/friends/requests", path[:])
+        } else if action == "accept" || action == "decline" {
+            valid = BuildFriendActionPath(value, action, path[:]) &&
+                AppCopyText("{}", body[:])
+        } else if action == "remove" {
+            method = "DELETE"
+            valid = BuildFriendPath(value, path[:])
+        } else {
+            valid = false
+        }
+    } else if refresh.stage == 2 {
+        valid = AppCopyText("/api/v1/friends/requests", path[:])
+        output = refresh.requests[:]
+    } else if refresh.stage == 3 {
+        valid = AppCopyText("/api/v1/friends", path[:])
+        output = refresh.friends[:]
+    } else if refresh.stage == 4 {
+        valid = BuildFriendStatsPath("inbe", TextUntilNul(refresh.practice[:]),
+            "streak", path[:])
+        output = refresh.streak[:]
+    } else if refresh.stage == 5 {
+        valid = BuildFriendStatsPath("inbe", TextUntilNul(refresh.practice[:]),
+            "avg_hold", path[:])
+        output = refresh.average[:]
+    }
+    if !valid {
+        refresh.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        return false
+    }
+    if !BeginStoredRequest(*refresh.operation, TextUntilNul(refresh.server[:]),
+        refresh.transport, method, TextUntilNul(path[:]), TextUntilNul(body[:]),
+        output, true) {
+        refresh.result = refresh.operation.result
+        return false
+    }
+    return true
+}
+
+BeginSocialRefresh :: (refresh: *SocialRefresh, server: string,
+    transport: AsyncTransport, practice: string, action: string, value: string) -> bool {
+    if refresh == null || refresh.active {
+        return false
+    }
+    refresh.* = SocialRefresh.{}
+    refresh.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    if !AppCopyText(server, refresh.server[:]) ||
+        !AppCopyText(practice, refresh.practice[:]) ||
+        !AppCopyText(action, refresh.action[:]) ||
+        !AppCopyText(value, refresh.value[:]) {
+        return false
+    }
+    refresh.transport = transport
+    unused AppCopyText("{\"rows\":[]}", refresh.average[:])
+    refresh.stage = 2
+    if action.count > 0 {
+        refresh.stage = 1
+    }
+    refresh.active = StartSocialStage(refresh)
+    return refresh.active
+}
+
+PollSocialRefresh :: (refresh: *SocialRefresh) -> bool {
+    if refresh == null || !refresh.active {
+        return true
+    }
+    if !PollStoredOperation(*refresh.operation) {
+        return false
+    }
+    result := refresh.operation.result
+    if result != cast(s32)AuthResult.AUTH_OK {
+        if refresh.stage <= 3 || !StoredIdentityCurrent(*refresh.operation) {
+            refresh.result = result
+            refresh.active = false
+            return true
+        }
+        if refresh.stage == 4 {
+            refresh.streak[0] = cast(u8)0
+        } else {
+            refresh.average[0] = cast(u8)0
+        }
+    }
+    if refresh.stage == 1 {
+        refresh.action_done = true
+    }
+    refresh.stage += 1
+    if refresh.stage > 5 ||
+        (refresh.stage == 5 && TextUntilNul(refresh.practice[:]) != "whm") {
+        refresh.result = cast(s32)AuthResult.AUTH_OK
+        refresh.active = false
+        return true
+    }
+    if !StartSocialStage(refresh) {
+        refresh.active = false
+        return true
+    }
+    return false
+}
+
+CancelSocialRefresh :: (refresh: *SocialRefresh) {
+    if refresh != null {
+        CancelStoredOperation(*refresh.operation)
+        refresh.active = false
+        refresh.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    }
+}

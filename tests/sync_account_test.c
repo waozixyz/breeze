@@ -545,12 +545,10 @@ test_disconnected_account_reports_queue_without_connection(void)
     storage_set_sync_enabled(1);
     storage_set_setting_int("sync_last_result", 6);
     storage_set_setting_int("sync_retry_attempt", 3);
-    exec_db_sql("finish migration", "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_encrypted_shadow_v4_complete_v2','1');");
     check_true("same key save succeeds", sync_account_save(&account, 0) == SYNC_ACCOUNT_SAVE_OK);
     check_true("same key preserves retry", storage_get_setting_int("sync_retry_attempt", 0) == 3);
     check_true("same key preserves enabled sync", storage_sync_enabled());
     check_true("same key status", storage_sync_status(&status));
-    check_false("same key preserves migration completion", status.secure_migration_pending);
     storage_close();
     check_true("reopen retry state", storage_init(root));
     check_true("retry survives restart", storage_get_setting_int("sync_retry_attempt", 0) == 3);

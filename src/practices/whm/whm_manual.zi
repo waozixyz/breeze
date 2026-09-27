@@ -1,0 +1,431 @@
+#import "drawing_props"
+#import "geometry"
+#import "guide_pager"
+#import "image_props"
+#import "image_widget"
+#import "layout"
+#import "paint_queue"
+#import "progress_props"
+#import "progress_widget"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "session"
+#import "style"
+#import "style_sheet"
+#import "surface"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/manual_seen_actions.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../core/breath_timing.zi";
+#import, file "../../core/types.zi";
+#import, file "../../platform/scroll_input.zi";
+#import, file "../../screens/manual_screen.zi";
+#import, file "../../screens/practice_manual_layout.zi";
+#import, file "../../screens/settings/settings_ui.zi";
+#import, file "whm_practice.zi";
+
+using ExerciseType;
+using ImageFit;
+using ModalType;
+using TextAlign;
+using TextWrap;
+
+WhmManualPages :: 4
+
+WhmManualBodyKey :: (step: s32) -> string {
+    if step == 0 { return "tutorial_step_intro" }
+    if step == 1 { return "tutorial_step_breathe" }
+    if step == 2 { return "tutorial_step_exhale_hold" }
+    return "tutorial_step_inhale_hold"
+}
+
+WhmManualTitleKey :: (step: s32) -> string {
+    if step == 0 { return "tutorial_title_before_begin" }
+    if step == 1 { return "tutorial_title_breathe" }
+    if step == 2 { return "tutorial_title_exhale_hold" }
+    return "tutorial_title_recovery_breath"
+}
+
+WhmManualParagraph :: (step: s32,
+    width: s32) -> ManualParagraphSpec {
+    return manual_screen_tutorial_paragraph(
+        LocaleText(WhmManualBodyKey(step)), width)
+}
+
+WhmManualTextHeight :: (content: string, width: s32) -> s32 {
+    return AppParagraphHeight(content, width,
+        AppFontSize(), manual_screen_tutorial_line_gap())
+}
+
+WhmManualHintHeight :: (content: string, width: s32) -> s32 {
+    text_width := width - AppScale(72)
+    if text_width < AppScale(160) {
+        text_width = width - AppScale(32)
+    }
+    height := WhmManualTextHeight(content, text_width) + AppScale(42)
+    if height < AppScale(112) { height = AppScale(112) }
+    return height
+}
+
+WhmManualVisualHeight :: (step: s32) -> s32 {
+    if step == 1 || step == 2 { return AppScale(238) }
+    return AppScale(242)
+}
+
+WhmManualContentHeight :: (step: s32, width: s32) -> s32 {
+    paragraph := WhmManualParagraph(step, width)
+    height := manual_screen_guide_header_height() +         WhmManualVisualHeight(step) +         AppParagraphHeight(paragraph.text, paragraph.width,
+            paragraph.font, paragraph.line_gap)
+    if step == 0 {
+        height += AppScale(16 + 34 + 36 + 6) +             WhmManualTextHeight(
+                LocaleText("tutorial_safety_warning"),
+                width - AppScale(84))
+    } else if step == 1 {
+        height += AppScale(18 + 24 + 86)
+    } else {
+        hint_key := "tutorial_step_exhale_hold_hint"
+        if step == 3 { hint_key = "tutorial_step_inhale_hold_hint" }
+        height += AppScale(24)
+        if step == 2 { height += AppScale(18) }
+        else { height += AppScale(16) }
+        height += WhmManualHintHeight(LocaleText(hint_key), width)
+    }
+    return height
+}
+
+#program_export
+whm_manual_close :: (app: *InnerBreeze, mark_seen: s32) {
+    if app == null { return }
+    if mark_seen != 0 {
+        mark_exercise_manual_seen(app, EXERCISE_WIM_HOF)
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalPracticeManual {
+        app_close_modal(app)
+        return
+    }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app_switch_screen(app, ScreenStart)
+}
+
+#program_export
+manual_screen_start_exercise :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    whm_practice_start(app)
+}
+
+WhmManualText :: (app: *InnerBreeze, content: string,
+    bounds: Rectangle, font: s32, centered: bool) {
+    props: TextProps
+    props.text = content
+    props.bounds = bounds
+    props.font = font
+    props.wrap = cast(TextWrap)TextWrapNone
+    props.vertical_align = cast(TextAlign)TextAlignCenter
+    if centered { props.align = cast(TextAlign)TextAlignCenter }
+    Text(app.ui.session, props)
+}
+
+WhmManualPanel :: (app: *InnerBreeze, bounds: Rectangle,
+    radius: s32, outline: bool) {
+    face := GuideFace(2)
+    PaintRoundedFill(app.ui.session, -1, bounds,
+        cast(float32)radius, 12,
+        ColorFromPacked(face.value.background))
+    if outline {
+        PaintRoundedOutline(app.ui.session, -1, bounds,
+            cast(float32)radius, 12, 1.0,
+            ColorFromPacked(face.value.foreground))
+    }
+}
+
+WhmManualCircle :: (app: *InnerBreeze, center_x: s32,
+    center_y: s32, radius: s32, label: string) {
+    face := GuideFace(2)
+    outer_radius := radius + AppScale(18)
+    outer := Rectangle.{
+        cast(float32)(center_x - outer_radius),
+        cast(float32)(center_y - outer_radius),
+        cast(float32)(outer_radius * 2),
+        cast(float32)(outer_radius * 2)
+}
+    PaintRoundedFill(app.ui.session, -1, outer,
+        cast(float32)outer_radius, 24,
+        ColorFromPacked(Opacity(face.value.foreground, 0.20)))
+    circle := Rectangle.{cast(float32)(center_x - radius),
+        cast(float32)(center_y - radius),
+        cast(float32)(radius * 2),
+        cast(float32)(radius * 2)
+}
+    PaintRoundedFill(app.ui.session, -1, circle,
+        cast(float32)radius, 24,
+        ColorFromPacked(face.value.background))
+    PaintRoundedOutline(app.ui.session, -1, circle,
+        cast(float32)radius, 24, 2.0,
+        ColorFromPacked(face.value.foreground))
+    if label.count > 0 {
+        WhmManualText(app, label, circle,
+            AppFontSize(), true)
+    }
+}
+
+WhmManualImage :: (app: *InnerBreeze, asset: string,
+    alt: string, bounds: Rectangle) {
+    picture: ImageProps
+    picture.asset_path = asset
+    picture.alt_text = alt
+    picture.bounds = bounds
+    picture.fit = cast(ImageFit)ImageFitContain
+    Image(app.ui.session, picture)
+}
+
+WhmManualSafety :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    text := LocaleText("tutorial_safety_warning")
+    text_width := width - AppScale(84)
+    height := WhmManualTextHeight(text, text_width) + AppScale(36)
+    bounds := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    WhmManualPanel(app, bounds, AppScale(16), true)
+    badge_size := AppScale(30)
+    badge := Rectangle.{cast(float32)(x + AppScale(19)),
+        cast(float32)(y.* + (height - badge_size) / 2),
+        cast(float32)badge_size, cast(float32)badge_size
+}
+    WhmManualText(app, "!", badge, AppFontSize(), true)
+    paragraph := manual_screen_tutorial_paragraph(text,
+        text_width)
+    text_y := y.* + AppScale(18)
+    ManualParagraph(app, paragraph, x + AppScale(64), *text_y)
+    y.* += height + AppScale(6)
+}
+
+WhmManualHint :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32, key: string) {
+    content := LocaleText(key)
+    height := WhmManualHintHeight(content, width)
+    bounds := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    WhmManualPanel(app, bounds, AppScale(16), true)
+    pad := AppScale(36)
+    text_width := width - pad * 2
+    if text_width < AppScale(160) {
+        pad = AppScale(16)
+        text_width = width - pad * 2
+    }
+    paragraph := manual_screen_tutorial_paragraph(content,
+        text_width)
+    paragraph.align = cast(TextAlign)TextAlignCenter
+    text_height := AppParagraphHeight(paragraph.text,
+        paragraph.width, paragraph.font, paragraph.line_gap)
+    text_y := y.* + (height - text_height) / 2
+    ManualParagraph(app, paragraph, x + pad, *text_y)
+    y.* += height
+}
+
+WhmManualBreathVisual :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    height := WhmManualVisualHeight(1)
+    hero := manual_screen_hero_bounds(x, width, y.*, height)
+    WhmManualPanel(app, hero, AppScale(16), false)
+    speed := app.breathing.speed_level
+    max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
+    apply_settings(*app.settings_preview, speed,
+        app.breathing.max_rounds, max_breaths,
+        app.breathing.pause_seconds)
+    app.settings_preview = BreathPreviewBounds(
+        app.settings_preview, width, height,
+        AppScale(60), AppScale(120), AppScale(24), AppScale(10))
+    app.settings_preview.progressive_speed = 0
+    app.settings_preview = BreathSessionStep(app.settings_preview)
+    if app.settings_preview.phase != BreathPhaseBreathe {
+        reset_settings_preview(app)
+        apply_settings(*app.settings_preview, speed,
+            app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        app.settings_preview = BreathPreviewBounds(
+            app.settings_preview, width, height,
+            AppScale(60), AppScale(120), AppScale(24),
+            AppScale(10))
+        app.settings_preview.progressive_speed = 0
+    }
+    radius := cast(s32)(BreathDrawRadius(
+        app.settings_preview) * 0.72)
+    if radius < AppScale(24) { radius = AppScale(24) }
+    WhmManualCircle(app, x + width / 2,
+        y.* + height / 2 - AppScale(8), radius, "")
+    manual_screen_draw_hero_progress(hero, 1, WhmManualPages)
+    y.* += height
+}
+
+WhmManualBreathInfo :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    height := AppScale(86)
+    bounds := Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)height
+}
+    WhmManualPanel(app, bounds, AppScale(14), false)
+    speed := app.breathing.speed_level
+    slider_y := y.* + AppScale(9)
+    changed := commit_slider_row(app, 490,
+        x + AppScale(18), width - AppScale(36), *slider_y,
+        AppScale(68), LocaleText("speed_label"),
+        SETTINGS_SPEED_MIN, SETTINGS_SPEED_MAX,
+        *speed, "", 0)
+    if changed != 0 {
+        max_breaths := BreathDigitsRead(
+            app.breathing.maxbreaths[:])
+        apply_settings(*app.breathing, speed,
+            app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        apply_settings(*app.settings_preview, speed,
+            app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        app.settings_preview.progressive_speed = 0
+    }
+    y.* += height
+}
+
+WhmManualHoldVisual :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    height := WhmManualVisualHeight(2)
+    hero := manual_screen_hero_bounds(x, width, y.*, height)
+    WhmManualPanel(app, hero, AppScale(16), false)
+    center_x := x + width / 2
+    center_y := y.* + height / 2 - AppScale(8)
+    WhmManualCircle(app, center_x, center_y,
+        AppScale(68), "0:00")
+    progress: ProgressProps
+    progress.bounds = Rectangle.{
+        cast(float32)(x + AppScale(36)),
+        cast(float32)(y.* + height - AppScale(34)),
+        cast(float32)(width - AppScale(72)),
+        cast(float32)AppScale(5)
+}
+    progress.min = 0
+    progress.max = 60
+    progress.value = app.breathing.frame % 60
+    Progress(app.ui.session, progress)
+    manual_screen_draw_hero_progress(hero, 2, WhmManualPages)
+    y.* += height
+}
+
+WhmManualDrawPage :: (app: *InnerBreeze,
+    x: s32, width: s32, step: s32, y: *s32) {
+    if step == 0 || step == 3 {
+        height := WhmManualVisualHeight(step)
+        hero := manual_screen_hero_bounds(x, width, y.*, height)
+        asset := "assets/practices/whm/1.png"
+        if step == 3 { asset = "assets/practices/whm/2.png" }
+        WhmManualImage(app, asset,
+            LocaleText(WhmManualTitleKey(step)), hero)
+        manual_screen_draw_hero_progress(hero, step,
+            WhmManualPages)
+        y.* += height + AppScale(16)
+    } else if step == 1 {
+        WhmManualBreathVisual(app, x, width, y)
+        y.* += AppScale(18)
+    } else {
+        WhmManualHoldVisual(app, x, width, y)
+        y.* += AppScale(18)
+    }
+    manual_screen_draw_guide_header(
+        LocaleText(WhmManualTitleKey(step)), step,
+        WhmManualPages, x, y, width)
+    ManualParagraph(app, WhmManualParagraph(step, width),
+        x, y)
+    if step == 0 {
+        y.* += AppScale(34)
+        WhmManualSafety(app, x, width, y)
+    } else if step == 1 {
+        y.* += AppScale(24)
+        WhmManualBreathInfo(app, x, width, y)
+    } else {
+        y.* += AppScale(24)
+        hint_key := "tutorial_step_exhale_hold_hint"
+        if step == 3 {
+            hint_key = "tutorial_step_inhale_hold_hint"
+        }
+        WhmManualHint(app, x, width, y, hint_key)
+    }
+}
+
+#program_export
+whm_manual_draw :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) { return }
+    step := app.tutorial_step
+    if step < 0 { step = 0 }
+    if step >= WhmManualPages { step = WhmManualPages - 1 }
+    app.tutorial_step = step
+    layout := practice_screen_manual_layout(app,
+        cast(ModalType)ModalPracticeManual, WhmManualPages,
+        manual_screen_tutorial_top_gap(), 0, 0)
+    if manual_screen_draw_title_bar(app,
+        LocaleText("practice_manual_button"),
+        layout.title_h) != 0 {
+        whm_manual_close(app, 0)
+        return
+    }
+    max_width := cast(s32)(cast(float32)app.ui.view_width * 0.96)
+    if max_width > manual_screen_tutorial_max_width() {
+        max_width = manual_screen_tutorial_max_width()
+    }
+    if max_width < AppScale(280) { max_width = AppScale(280) }
+    column := CenteredColumnFor(app.ui.view_width, max_width,
+        manual_screen_tutorial_side_padding())
+    bounds := Rectangle.{0.0, cast(float32)layout.content_y,
+        cast(float32)app.ui.view_width,
+        cast(float32)layout.content_h
+}
+    key := KeyHash("whm/manual/scroll")
+    props: ScrollProps
+    props.key = key
+    props.bounds = bounds
+    props.content_height =
+        WhmManualContentHeight(step, column.width)
+    props.scroll_offset = app.manual_scroll
+    props.scale = MetricsScale()
+    props.input = ScrollObservationFor(key, bounds)
+    result := Scroll(app.ui.session, props)
+    app.manual_scroll = result.scroll_offset
+    CommitScroll(key, result.frame)
+    if result.opened {
+        y := cast(s32)result.content.y
+        WhmManualDrawPage(app, column.x, column.width,
+            step, *y)
+        unused End(app.ui.session)
+    }
+    nav: ManualGuideNav
+    nav.page = step
+    nav.page_count = WhmManualPages
+    nav.y = layout.nav_y
+    nav.h = layout.nav_h
+    nav.content_y = layout.content_y
+    nav.content_h = layout.content_h
+    nav.focus_id = 400
+    decision := manual_screen_guide_controls(app, nav)
+    if decision.closed {
+        whm_manual_close(app, 0)
+    } else if decision.finished {
+        manual_screen_start_exercise(app)
+    }
+}

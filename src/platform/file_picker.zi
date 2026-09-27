@@ -1,0 +1,281 @@
+// Run the file picker as a child process, with no shell or display lookup.
+#import "c_string"
+
+#if #defined(_WIN32) {
+    dialog_library :: #system_library "comdlg32";
+    user32 :: #system_library "user32";
+    FileDialog :: struct {
+        size: u32
+        owner: *void
+        instance: *void
+        filter: *u8
+        custom_filter: *u8
+        custom_filter_capacity: u32
+        filter_index: u32
+        file: *u8
+        file_capacity: u32
+        file_title: *u8
+        file_title_capacity: u32
+        initial_directory: *u8
+        title: *u8
+        flags: u32
+        file_offset: u16
+        extension_offset: u16
+        default_extension: *u8
+        custom_data: isize
+        hook: *void
+        template_name: *u8
+        reserved: *void
+        reserved_word: u32
+        flags_extended: u32
+    }
+    OpenFileDialog :: (dialog: *FileDialog) -> s32 #foreign dialog_library "GetOpenFileNameA";
+    SaveFileDialog :: (dialog: *FileDialog) -> s32 #foreign dialog_library "GetSaveFileNameA";
+    FileDialogError :: () -> u32 #foreign dialog_library "CommDlgExtendedError";
+    ActiveWindow :: () -> *void #foreign user32 "GetActiveWindow";
+
+    PickWindowsFile :: (title: *u8, filter: *u8,
+        suggested_name: *u8, save: bool, output: *u8,
+        capacity: s32) -> s32 {
+        options: [256]u8
+        separator: s32 = 0
+        while filter[separator] != 0 && filter[separator] != #char "|" {
+            if separator >= 253 {
+                return -1
+            }
+            separator += 1
+        }
+        label_length := separator
+        while label_length > 0 && filter[label_length - 1] == #char " " {
+            label_length -= 1
+        }
+        if label_length == 0 {
+            return -1
+        }
+        index: s32 = 0
+        while index < label_length {
+            options[index] = filter[index]
+            index += 1
+        }
+        index = label_length + 1
+        if filter[separator] == 0 {
+            if index + 5 > 256 {
+                return -1
+            }
+            options[index] = #char "*"
+            options[index + 1] = #char "."
+            options[index + 2] = #char "*"
+        }
+        if filter[separator] != 0 {
+            separator += 1
+            while filter[separator] == #char " " {
+                separator += 1
+            }
+            while filter[separator] != 0 {
+                if index >= 254 {
+                    return -1
+                }
+                byte := filter[separator]
+                options[index] = ifx byte == #char " " then #char ";" else byte
+                index += 1
+                separator += 1
+            }
+        }
+        if save && suggested_name != null {
+            index = 0
+            while index + 1 < capacity && suggested_name[index] != 0 {
+                output[index] = suggested_name[index]
+                index += 1
+            }
+            output[index] = 0
+        }
+        dialog: FileDialog
+        dialog.size = cast(u32)size_of(FileDialog)
+        dialog.owner = ActiveWindow()
+        dialog.title = title
+        dialog.filter = *options[0]
+        dialog.file = output
+        dialog.file_capacity = cast(u32)capacity
+        dialog.flags = 0x800 | 8 | (ifx save then 2 else 0x1000)
+        accepted := ifx save then SaveFileDialog(*dialog) else OpenFileDialog(*dialog)
+        if accepted != 0 {
+            return 1
+        }
+        output[0] = 0
+        return ifx FileDialogError() == 0 then 0 else -1
+    }
+}
+
+#if #defined(PLATFORM_WEB) {
+    browser :: #system_library "browser";
+    PickBrowserFile :: (title: *u8, filter: *u8,
+        suggested_name: *u8, save: s32, output: *u8,
+        capacity: s32) -> s32 #foreign browser "app_pick_file_web";
+}
+
+#program_export
+app_pick_file :: (title: *u8, filter: *u8, suggested_name: *u8,
+    save: bool, output: *u8, capacity: s32) -> s32 {
+    if output != null && capacity > 0 {
+        output[0] = 0
+    }
+    if title == null || filter == null || output == null || capacity < 2 {
+        return -1
+    }
+    #if #defined(_WIN32) {
+        return PickWindowsFile(title, filter, suggested_name, save, output, capacity)
+    }
+    #if #defined(PLATFORM_WEB) {
+        return PickBrowserFile(title, filter, suggested_name,
+            ifx save then 1 else 0, output, capacity)
+    }
+    return PickPosixFile(title, filter, suggested_name, save, output, capacity)
+}
+
+PICKER_POSIX :: #defined(PLATFORM_DESKTOP) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(_WIN32) && !#defined(KRYON_PLATFORM_PLAN9)
+
+PickerArgument :: struct {
+    value: *u8
+}
+
+#if PICKER_POSIX {
+    c :: #system_library "c";
+    PickerPipe :: (descriptors: *s32) -> s32 #foreign c "pipe";
+    PickerFork :: () -> s32 #foreign c "fork";
+    PickerClose :: (descriptor: s32) -> s32 #foreign c "close";
+    PickerDup :: (old_descriptor: s32, new_descriptor: s32) -> s32 #foreign c "dup2";
+    PickerExec :: (file: *u8, arguments: **u8) -> s32 #foreign c "execvp";
+    PickerExit :: (status: s32) #foreign c "_exit";
+    PickerRead :: (descriptor: s32, buffer: *u8,
+        capacity: usize) -> s64 #foreign c "read";
+    PickerWait :: (pid: s32, status: *s32,
+        options: s32) -> s32 #foreign c "waitpid";
+    #if #defined(__FreeBSD__) || #defined(__APPLE__) {
+        PickerErrno :: () -> *s32 #foreign c "__error";
+    } else {
+        PickerErrno :: () -> *s32 #foreign c "__errno_location";
+    }
+}
+
+PickPosixFile :: (title: *u8, filter: *u8, suggested_name: *u8,
+    save: bool, output: *u8, capacity: s32) -> s32 {
+    if output != null && capacity > 0 {
+        output[0] = 0
+    }
+    #if !PICKER_POSIX {
+        unused title
+        unused filter
+        unused suggested_name
+        unused save
+        return -1
+    }
+    #if PICKER_POSIX {
+        if title == null || filter == null || output == null || capacity < 2 {
+            return -1
+        }
+        descriptors: [2]s32
+        if PickerPipe(*descriptors[0]) != 0 {
+            return -1
+        }
+        child := PickerFork()
+        if child < 0 {
+            PickerClose(descriptors[0])
+            PickerClose(descriptors[1])
+            return -1
+        }
+        if child == 0 {
+            PickerClose(descriptors[0])
+            if PickerDup(descriptors[1], 1) < 0 {
+                PickerExit(127)
+            }
+            PickerClose(descriptors[1])
+            program: [16]u8
+            selection: [24]u8
+            title_option: [16]u8
+            filter_option: [24]u8
+            save_option: [16]u8
+            overwrite_option: [24]u8
+            filename_option: [16]u8
+            empty: [1]u8
+            if !CopyCString("zenity", program[:]) ||
+                !CopyCString("--file-selection", selection[:]) ||
+                !CopyCString("--title", title_option[:]) ||
+                !CopyCString("--file-filter", filter_option[:]) ||
+                !CopyCString("--save", save_option[:]) ||
+                !CopyCString("--confirm-overwrite", overwrite_option[:]) ||
+                !CopyCString("--filename", filename_option[:]) {
+                PickerExit(127)
+            }
+            arguments: [11]PickerArgument
+            arguments[0].value = *program[0]
+            arguments[1].value = *selection[0]
+            arguments[2].value = *title_option[0]
+            arguments[3].value = title
+            arguments[4].value = *filter_option[0]
+            arguments[5].value = filter
+            if save {
+                arguments[6].value = *save_option[0]
+                arguments[7].value = *overwrite_option[0]
+                arguments[8].value = *filename_option[0]
+                arguments[9].value = ifx suggested_name != null then suggested_name else *empty[0]
+            }
+            PickerExec(*program[0], cast(**u8)(*arguments[0]))
+            PickerExit(127)
+        }
+
+        PickerClose(descriptors[1])
+        overflow := false
+        length: s32 = 0
+        chunk: [256]u8
+        while true {
+            count := PickerRead(descriptors[0], *chunk[0], 256)
+            if count == 0 {
+                break
+            }
+            if count < 0 {
+                if PickerErrno().* == 4 {
+                    continue
+                }
+                overflow = true
+                break
+            }
+            index: s64 = 0
+            while index < count {
+                if length + 1 < capacity {
+                    output[length] = chunk[index]
+                    length += 1
+                } else {
+                    overflow = true
+                }
+                index += 1
+            }
+        }
+        PickerClose(descriptors[0])
+        status: s32
+        while PickerWait(child, *status, 0) < 0 {
+            if PickerErrno().* != 4 {
+                output[0] = 0
+                return -1
+            }
+        }
+        if (status & 127) != 0 || ((status >> 8) & 255) == 127 || overflow {
+            output[0] = 0
+            return -1
+        }
+        if ((status >> 8) & 255) != 0 {
+            output[0] = 0
+            return 0
+        }
+        while length > 0 &&
+            (output[length - 1] == #char "\n" ||
+             output[length - 1] == #char "\r") {
+            length -= 1
+        }
+        output[length] = 0
+        if length == 0 {
+            return -1
+        }
+        return 1
+    }
+    return -1
+}

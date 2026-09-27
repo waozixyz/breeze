@@ -1,0 +1,218 @@
+// Platform transfer effects for an app-owned asset download state.
+#import, file "asset_download_types.zi";
+#import "c_string"
+
+using AssetDownloadStatus;
+
+ANDROID_ASSET_DOWNLOAD :: #defined(ANDROID_BUILD)
+DESKTOP_ASSET_DOWNLOAD :: #defined(PLATFORM_DESKTOP)
+WINDOWS_ASSET_DOWNLOAD :: #defined(_WIN32)
+WEB_ASSET_DOWNLOAD :: #defined(PLATFORM_WEB)
+
+#if WEB_ASSET_DOWNLOAD {
+    #import, file "browser_asset_download.zi";
+}
+
+#if ANDROID_ASSET_DOWNLOAD {
+    #import, file "android/android_runtime_assets.zi";
+}
+
+#if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
+    c :: #system_library "c";
+    HostAssetFork :: () -> s32 #foreign c "fork";
+    HostAssetExec :: (path: *u8, first: *u8,
+        args: ..any) -> s32 #foreign c "execl";
+    HostAssetExit :: (status: s32) #foreign c "_exit";
+    HostAssetWait :: (pid: s32, status: *s32,
+        options: s32) -> s32 #foreign c "waitpid";
+    HostAssetKill :: (pid: s32, signal: s32) -> s32 #foreign c "kill";
+    HostAssetRename :: (source: *u8, destination: *u8) -> s32 #foreign c "rename";
+    HostAssetRemove :: (path: *u8) -> s32 #foreign c "remove";
+    HostAssetOpen :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+    HostAssetSeek :: (file: *void, offset: s64,
+        origin: s32) -> s32 #foreign c "fseek";
+    HostAssetTell :: (file: *void) -> s64 #foreign c "ftell";
+    HostAssetClose :: (file: *void) -> s32 #foreign c "fclose";
+}
+
+asset_temp_path: [4096]u8;
+asset_destination_path: [4096]u8;
+
+AssetDownloadError :: (download: *AssetDownload, message: string) {
+    download.status = cast(AssetDownloadStatus)Error
+    if !CopyCString(message, download.error[:]) {
+        download.error[0] = cast(u8)0
+    }
+}
+
+#program_export
+DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
+    destination: string) -> s32 {
+    if download == null || url.count == 0 || destination.count == 0 {
+        return 0
+    }
+    if download.status == cast(AssetDownloadStatus)Downloading {
+        return 0
+    }
+    download.handle = cast(u64)0
+    download.bytes = cast(u64)0
+    download.total_bytes = cast(u64)0
+    download.http_status = 0
+    download.error[0] = cast(u8)0
+
+    #if WEB_ASSET_DOWNLOAD {
+        return BrowserAssetDownloadStart(download, url, destination)
+    }
+
+    #if ANDROID_ASSET_DOWNLOAD {
+        url_bytes: [4096]u8
+        destination_bytes: [4096]u8
+        if !CopyCString(url, url_bytes[:]) ||
+            !CopyCString(destination, destination_bytes[:]) {
+            AssetDownloadError(download, "invalid download path")
+            return 0
+        }
+        if AndroidAssetDownloadStart(download, *url_bytes[0],
+            *destination_bytes[0]) {
+            return 1
+        }
+        return 0
+    }
+
+    #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
+        if destination.count + 6 >= 4096 || url.count >= 4096 ||
+            !CopyCString(destination, asset_destination_path[:]) {
+            AssetDownloadError(download, "invalid download path")
+            return 0
+        }
+        url_bytes: [4096]u8
+        if !CopyCString(url, url_bytes[:]) ||
+            !CopyCString(destination, asset_temp_path[:]) {
+            AssetDownloadError(download, "invalid download URL")
+            return 0
+        }
+        path_end: s32 = cast(s32)destination.count
+        asset_temp_path[path_end] = cast(u8)46
+        asset_temp_path[path_end + 1] = cast(u8)112
+        asset_temp_path[path_end + 2] = cast(u8)97
+        asset_temp_path[path_end + 3] = cast(u8)114
+        asset_temp_path[path_end + 4] = cast(u8)116
+        asset_temp_path[path_end + 5] = cast(u8)0
+
+        executable: [32]u8
+        fail_flag: [8]u8
+        location_flag: [16]u8
+        silent_flag: [16]u8
+        show_error_flag: [16]u8
+        output_flag: [16]u8
+        if !CopyCString("/usr/bin/curl", executable[:]) ||
+            !CopyCString("--fail", fail_flag[:]) ||
+            !CopyCString("--location", location_flag[:]) ||
+            !CopyCString("--silent", silent_flag[:]) ||
+            !CopyCString("--show-error", show_error_flag[:]) ||
+            !CopyCString("--output", output_flag[:]) {
+            AssetDownloadError(download, "download service unavailable")
+            return 0
+        }
+        pid: s32 = HostAssetFork()
+        if pid < 0 {
+            AssetDownloadError(download, "failed to start download")
+            return 0
+        }
+        if pid == 0 {
+            terminator: *u8 = null
+            HostAssetExec(*executable[0], *executable[0],
+                *fail_flag[0], *location_flag[0], *silent_flag[0],
+                *show_error_flag[0], *output_flag[0],
+                *asset_temp_path[0], *url_bytes[0], terminator)
+            HostAssetExit(127)
+        }
+        download.handle = cast(u64)pid
+        download.status = cast(AssetDownloadStatus)Downloading
+        return 1
+    }
+
+    AssetDownloadError(download, "download service unavailable")
+    return 0
+}
+
+#program_export
+PollRuntimeAssetDownload :: (download: *AssetDownload) -> AssetDownloadStatus {
+    if download == null {
+        return cast(AssetDownloadStatus)Idle
+    }
+    #if WEB_ASSET_DOWNLOAD {
+        return BrowserAssetDownloadPoll(download)
+    }
+    #if ANDROID_ASSET_DOWNLOAD {
+        return AndroidAssetDownloadPoll(download)
+    }
+    #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
+        if download.status != cast(AssetDownloadStatus)Downloading ||
+            download.handle == cast(u64)0 {
+            return download.status
+        }
+        mode: [4]u8
+        if CopyCString("rb", mode[:]) {
+            file: *void = HostAssetOpen(*asset_temp_path[0], *mode[0])
+            if file != null {
+                if HostAssetSeek(file, 0, 2) == 0 {
+                    size: s64 = HostAssetTell(file)
+                    if size > 0 {
+                        download.bytes = cast(u64)size
+                    }
+                }
+                HostAssetClose(file)
+            }
+        }
+        status: s32 = 0
+        pid: s32 = cast(s32)download.handle
+        result: s32 = HostAssetWait(pid, *status, 1)
+        if result == 0 {
+            return download.status
+        }
+        download.handle = cast(u64)0
+        if result == pid && status == 0 &&
+            HostAssetRename(*asset_temp_path[0],
+                *asset_destination_path[0]) == 0 {
+            download.status = cast(AssetDownloadStatus)Ready
+            download.total_bytes = download.bytes
+            return download.status
+        }
+        HostAssetRemove(*asset_temp_path[0])
+        exit_code: s32 = (status >> 8) & 255
+        if exit_code == 6 || exit_code == 7 || exit_code == 28 {
+            AssetDownloadError(download, "NETWORK_UNAVAILABLE")
+        } else {
+            AssetDownloadError(download, "download failed")
+        }
+    }
+    return download.status
+}
+
+#program_export
+ReleaseRuntimeAssetDownload :: (download: *AssetDownload) {
+    if download == null {
+        return
+    }
+    #if WEB_ASSET_DOWNLOAD {
+        BrowserAssetDownloadRelease(download)
+        return
+    }
+    #if ANDROID_ASSET_DOWNLOAD {
+        AndroidAssetDownloadRelease(download)
+        return
+    }
+    #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
+        if download.status == cast(AssetDownloadStatus)Downloading &&
+            download.handle != cast(u64)0 {
+            pid: s32 = cast(s32)download.handle
+            HostAssetKill(pid, 15)
+            status: s32 = 0
+            HostAssetWait(pid, *status, 0)
+            HostAssetRemove(*asset_temp_path[0])
+        }
+    }
+    download.handle = cast(u64)0
+    download.status = cast(AssetDownloadStatus)Idle
+}

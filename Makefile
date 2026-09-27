@@ -26,6 +26,13 @@ ANDROID_KEYSTORE ?= $(HOME)/.android/kryon-release.keystore
 ANDROID_KEY_ALIAS ?= breathing-key
 
 BUILD_DIR := build
+ZIRAN_DIR := vendor/ziran
+ZIRAN_BUILD_DIR := $(abspath $(BUILD_DIR)/ziran-toolchain)
+KRYON_LIBRARY_BUILD_DIR := $(abspath $(BUILD_DIR)/kryon-library)
+ZI2C_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2c
+ZI2ZIR_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2zir
+ZI_CHECK_STAMP := $(BUILD_DIR)/zi-check/native.fresh
+ZIRAN_SOURCES := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-c/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-ir/*.[ch]) $(ZIRAN_DIR)/Makefile
 BUILD_OBJ_DIR := $(BUILD_DIR)/obj
 BUILD_BIN_DIR := $(BUILD_DIR)/bin
 BUILD_DIST_DIR := $(BUILD_DIR)/dist
@@ -201,25 +208,24 @@ WIN32_LIBOQS_A := $(WIN32_LIBOQS_BUILD_DIR)/lib/liboqs.a
 WIN32_LIBOQS_INCLUDE := -I$(WIN32_LIBOQS_BUILD_DIR)/include
 WIN64_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN64_ARCH)/$(APP_NAME).res
 WIN32_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN32_ARCH)/$(APP_NAME).res
-RAYLIB_SOURCES := $(shell find $(RAYLIB_DIR) -type f \( -name '*.c' -o -name '*.h' \))
+RAYLIB_SOURCES := $(if $(wildcard $(RAYLIB_DIR)),$(shell find $(RAYLIB_DIR) -type f \( -name '*.c' -o -name '*.h' \)))
 
 KRYON_ICON_DIR := icons
 KRYON_ICON_FILES := $(shell find $(KRYON_DIR)/$(KRYON_ICON_DIR) -path '*/review/*' -prune -o -type f \( -name '*.png' -o -name '*.json' \) -print 2>/dev/null | LC_ALL=C sort)
 KRYON_GENERATED_INCLUDE_DIR := $(BUILD_OBJ_DIR)/kryon/generated/include
 KRYON_GENERATED_SRC_DIR := $(BUILD_OBJ_DIR)/kryon/generated/src
-KRYON_RUNTIME_KRY := $(sort $(wildcard $(KRYON_DIR)/runtime/*.kry))
-KRYON_RUNTIME_C := $(patsubst $(KRYON_DIR)/%.kry,$(KRYON_GENERATED_SRC_DIR)/%.c,$(KRYON_RUNTIME_KRY))
-KRYON_RUNTIME_H := $(KRYON_RUNTIME_C:.c=.h)
-KRYON_RUNTIME_STAMP := $(KRYON_GENERATED_SRC_DIR)/runtime/.fresh
-# Inbe does not host a terminal paste stream, so it has no clipboard protocol callbacks.
-KRYON_UI_KRY := $(filter-out $(KRYON_DIR)/src/ui/clipboard_protocol.kry,$(sort $(wildcard $(KRYON_DIR)/src/ui/*.kry)))
-KRYON_UI_C := $(patsubst $(KRYON_DIR)/src/ui/%.kry,$(KRYON_GENERATED_SRC_DIR)/ui/%.c,$(KRYON_UI_KRY))
+KRYON_UI_ZI := $(addprefix $(KRYON_DIR)/src/ui/,$(shell cat $(KRYON_DIR)/src/ui/modules.txt))
+KRYON_UI_C := $(patsubst $(KRYON_DIR)/src/ui/%.zi,$(KRYON_GENERATED_SRC_DIR)/ui/%.c,$(KRYON_UI_ZI))
 KRYON_UI_H := $(KRYON_UI_C:.c=.h)
 KRYON_UI_STAMP := $(KRYON_GENERATED_SRC_DIR)/ui/.fresh
+KRYON_KSS_ZI := $(wildcard $(KRYON_DIR)/src/kss/*.zi)
+KRYON_KSS_C := $(patsubst $(KRYON_DIR)/src/kss/%.zi,$(KRYON_GENERATED_SRC_DIR)/kss/%.c,$(KRYON_KSS_ZI))
+KRYON_KSS_H := $(KRYON_KSS_C:.c=.h)
+KRYON_KSS_STAMP := $(KRYON_GENERATED_SRC_DIR)/kss/.fresh
 KRYON_ICON_ASSETS_C := $(KRYON_GENERATED_SRC_DIR)/ui/ui_icon_assets.c
 KRYON_ICON_NAMES_C := $(KRYON_GENERATED_SRC_DIR)/ui/ui_icon_names.c
 KRYON_ICON_TYPES_H := $(KRYON_GENERATED_INCLUDE_DIR)/ui_icon_types.h
-KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_RUNTIME_C) $(KRYON_UI_C)
+KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_UI_C) $(KRYON_KSS_C)
 KRYON_SYNC_ICONS := $(KRYON_DIR)/scripts/sync-icons.sh
 WEB_SHARED_ICON_SHEETS := platforms language tiles
 KRYON_LIBDRAW_SRCS := $(filter $(KRYON_DIR)/src/backend/libdraw_%.c,$(KRYON_SRCS))
@@ -235,6 +241,7 @@ KRYON_WEB_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(KRYON_WEB_SRCS
 KRYON_WINDOWS_SRCS := $(filter-out $(KRYON_DIR)/src/file_dialog/file_dialog.c,$(KRYON_SRCS))
 KRYON_CLICK_SRCS := $(filter-out $(KRYON_DIR)/src/file_dialog/file_dialog.c,$(KRYON_SRCS))
 KRYON_INCLUDE := -I$(KRYON_GENERATED_INCLUDE_DIR) -I$(KRYON_GENERATED_SRC_DIR) -I$(KRYON_DIR)/include -I$(KRYON_DIR)/src/ui -I$(KRYON_DIR)/src/platform -I$(KRYON_DIR)/src/backend -I$(KRYON_GENERATED_SRC_DIR)/runtime -I$(KRYON_DIR)/vendor/utf8proc -DUTF8PROC_STATIC -I$(KRYON_DIR)/vendor/monocypher/src -I$(KRYON_DIR)/vendor/monocypher/src/optional
+KRYON_INCLUDE += -I$(ZIRAN_DIR)/include
 KRYON_SYNC_ACCOUNT_C := $(KRYON_DIR)/src/sync/sync_account.c
 KRYON_SYNC_CRYPTO_C := $(KRYON_DIR)/src/sync/sync_crypto.c $(KRYON_DIR)/src/sync/monocypher.c $(KRYON_DIR)/src/sync/monocypher_ed25519.c
 KRYON_SYNC_C := $(KRYON_DIR)/src/sync/sync.c
@@ -271,7 +278,7 @@ KRYON_CURL_EXTRA_CMAKE_FLAGS := \
 # were snapshotted from KRYON_SRCS above (before this filter), so re-apply it
 # to keep the kryon physics .c files (which need box2d.h) out of every build.
 KRYON_WITH_PHYSICS := 0
-include $(KRYON_DIR)/mk/vendor.mk
+include mk/sync.mk
 KRYON_INCLUDE += $(KRYON_PHYSICS_CPPFLAGS)
 KRYON_SRCS := $(filter-out $(KRYON_PHYSICS_SRCS),$(KRYON_SRCS))
 KRYON_WEB_SRCS := $(filter-out $(KRYON_PHYSICS_SRCS),$(KRYON_WEB_SRCS))
@@ -327,28 +334,32 @@ SYNC_URL_TEST := $(TEST_BIN_DIR)/sync_url_test
 SYNC_ACCOUNT_TEST := $(TEST_BIN_DIR)/sync_account_test
 SYNC_REVIEW_TEST := $(TEST_BIN_DIR)/sync_review_test
 FONT_LOCALE_TEST := $(TEST_BIN_DIR)/font_locale_test
+FONT_ASSETS_GEN_DIR := $(BUILD_DIR)/font-assets-test/generated
 FONT_GLYPH_COVERAGE_TEST := $(TEST_BIN_DIR)/font_glyph_coverage_test
-APP_BOTTOM_NAV_TEST := $(TEST_BIN_DIR)/app_bottom_nav_test
 HABIT_MODEL_TEST := $(TEST_BIN_DIR)/habit_model_test
 HABIT_SESSIONS_TEST := $(TEST_BIN_DIR)/habit_sessions_test
 BREATH_TIMING_TEST := $(TEST_BIN_DIR)/breath_timing_test
+BREATH_TIMING_GEN_DIR := $(BUILD_DIR)/breath-timing-test/generated
 BREAK_ENGINE_TEST := $(TEST_BIN_DIR)/break_engine_test
+BREAK_RULES_GEN_DIR := $(BUILD_DIR)/break-rules-test/generated
 ACTIVITY_MONITOR_TEST := $(TEST_BIN_DIR)/activity_monitor_test
 FRAME_PACING_TEST := $(TEST_BIN_DIR)/frame_pacing_test
 SETTINGS_KEYS_TEST := $(TEST_BIN_DIR)/settings_keys_test
-TESTS := $(STORAGE_IMPORT_TEST) $(STORAGE_PATHS_TEST) $(LOCALE_KEYS_TEST) $(SYNC_URL_TEST) $(SYNC_ACCOUNT_TEST) $(SYNC_REVIEW_TEST) $(FONT_LOCALE_TEST) $(FONT_GLYPH_COVERAGE_TEST) $(APP_BOTTOM_NAV_TEST) $(HABIT_MODEL_TEST) $(HABIT_SESSIONS_TEST) $(BREATH_TIMING_TEST) $(BREAK_ENGINE_TEST) $(ACTIVITY_MONITOR_TEST) $(FRAME_PACING_TEST) $(SETTINGS_KEYS_TEST)
+TESTS := $(STORAGE_IMPORT_TEST) $(STORAGE_PATHS_TEST) $(LOCALE_KEYS_TEST) $(SYNC_URL_TEST) $(SYNC_ACCOUNT_TEST) $(SYNC_REVIEW_TEST) $(FONT_LOCALE_TEST) $(FONT_GLYPH_COVERAGE_TEST) $(HABIT_MODEL_TEST) $(HABIT_SESSIONS_TEST) $(BREATH_TIMING_TEST) $(BREAK_ENGINE_TEST) $(ACTIVITY_MONITOR_TEST) $(FRAME_PACING_TEST) $(SETTINGS_KEYS_TEST)
 TESTS += $(TEST_BIN_DIR)/session_results_test
 TESTS += $(TEST_BIN_DIR)/habit_form_test
 TESTS += $(TEST_BIN_DIR)/practice_carousel_test
 RUNTIME_ASSET_CFLAGS := -DHAS_LIBCURL=1 $(KRYON_CURL_CFLAGS)
 RUNTIME_ASSET_LDLIBS := $(KRYON_CURL_LDLIBS)
-STORAGE_CORE_SRCS = $(KRY_GEN_DIR)/src/storage/json.c $(KRY_GEN_DIR)/src/storage/storage_core.c src/storage/storage_json_builder.c $(KRY_GEN_DIR)/src/storage/storage_habits.c $(KRY_GEN_DIR)/src/storage/storage_habit_materialize.c $(KRY_GEN_DIR)/src/storage/storage_habit_sync.c
+STORAGE_CORE_SRCS = $(KRY_GEN_DIR)/src/storage/json.c $(KRY_GEN_DIR)/src/storage/storage_core.c $(KRY_GEN_DIR)/src/storage/storage_habits.c $(KRY_GEN_DIR)/src/storage/storage_habit_materialize.c $(KRY_GEN_DIR)/src/storage/storage_habit_sync.c
+
+MONOCYPHER_DIR := vendor/monocypher/src
+MONOCYPHER_SRCS := $(MONOCYPHER_DIR)/monocypher.c \
+	$(MONOCYPHER_DIR)/optional/monocypher-ed25519.c
 
 APP_SRCS := \
-	src/platform/main_host.c \
 	$(sort $(wildcard src/app/*.c)) \
-	src/storage/storage_json_builder.c \
-	src/platform/android/android_device.c
+	$(MONOCYPHER_SRCS)
 
 ifeq ($(NATIVE_PLATFORM),linux)
 # Prefer AppIndicator (visible on GNOME/KDE via StatusNotifierItem); fall back to
@@ -357,29 +368,50 @@ ifeq ($(NATIVE_PLATFORM),linux)
 # for a reliable tray icon on modern desktops.
 DESKTOP_TRAY_PKG := $(shell if pkg-config --exists ayatana-appindicator3-0.1; then printf '%s' ayatana-appindicator3-0.1; elif pkg-config --exists appindicator3-0.1; then printf '%s' appindicator3-0.1; elif pkg-config --exists gtk+-3.0; then printf '%s' gtk+-3.0; fi)
 ifeq ($(filter ayatana-appindicator3-0.1 appindicator3-0.1,$(DESKTOP_TRAY_PKG)),)
-# GTK-only tray: resolve GTK at runtime through kryon's gtk_dl shim so neither
+# GTK-only tray: resolve GTK at runtime through the app's gtk_dl shim so neither
 # libgtk-3 nor its gdk/pango/cairo chain is linked into the binary. GTK maps
 # only when the tray actually starts (unset APP_NO_TRAY to skip it entirely).
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DKRYON_DESKTOP_TRAY_GTK_STATUS_ICON -DKRYON_TRAY_GTK_DL
+DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DDESKTOP_TRAY_GTK_DL
 else ifeq ($(filter ayatana-appindicator3-0.1,$(DESKTOP_TRAY_PKG)),ayatana-appindicator3-0.1)
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_AYATANA -DKRYON_DESKTOP_TRAY_AYATANA
+DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_AYATANA
 else
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_APPINDICATOR -DKRYON_DESKTOP_TRAY_APPINDICATOR
+DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_APPINDICATOR
 endif
 endif
 ifeq ($(NATIVE_PLATFORM),freebsd)
 DESKTOP_TRAY_PKG := $(shell if pkg-config --exists gtk+-3.0; then printf '%s' gtk+-3.0; fi)
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DKRYON_DESKTOP_TRAY_GTK_STATUS_ICON -DKRYON_TRAY_GTK_DL
+DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DDESKTOP_TRAY_GTK_DL
 endif
 ifneq ($(strip $(DESKTOP_TRAY_PKG)),)
 
-DESKTOP_TRAY_CFLAGS := $(shell pkg-config --cflags $(DESKTOP_TRAY_PKG)) -DDESKTOP_TRAY_ENABLED -DKRYON_DESKTOP_TRAY_ENABLED $(DESKTOP_TRAY_DEFINE)
+DESKTOP_TRAY_CFLAGS := $(shell pkg-config --cflags $(DESKTOP_TRAY_PKG)) -DDESKTOP_TRAY_ENABLED $(DESKTOP_TRAY_DEFINE)
 ifeq ($(filter ayatana-appindicator3-0.1 appindicator3-0.1,$(DESKTOP_TRAY_PKG)),)
 # Headers only for the GTK-only tray; the gtk_dl shim owns the symbols.
 DESKTOP_TRAY_LDLIBS :=
 else
 DESKTOP_TRAY_LDLIBS := $(shell pkg-config --libs $(DESKTOP_TRAY_PKG))
 endif
+
+endif
+ZI_NATIVE_DEFINES := PLATFORM_DESKTOP $(if $(strip $(DESKTOP_TRAY_PKG)),DESKTOP_TRAY_ENABLED,)
+ZI_NATIVE_DEFINES += $(patsubst -D%,%,$(DESKTOP_TRAY_DEFINE))
+# Ziran preprocessing must see the libc choice used by the native C compiler.
+NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | rg -q '^\#define __GLIBC__ ' && printf yes)
+ifeq ($(NATIVE_GLIBC),yes)
+ZI_NATIVE_DEFINES += __GLIBC__
+endif
+ifneq ($(filter aarch64 arm64,$(ARCH)),)
+ZI_NATIVE_DEFINES += __aarch64__
+else ifneq ($(filter x86_64 amd64,$(ARCH)),)
+ZI_NATIVE_DEFINES += __x86_64__
+else ifneq ($(filter i386 i486 i586 i686 x86,$(ARCH)),)
+ZI_NATIVE_DEFINES += __i386__
+endif
+ifeq ($(NATIVE_PLATFORM),freebsd)
+ZI_NATIVE_DEFINES += __FreeBSD__
+endif
+ifeq ($(NATIVE_PLATFORM),darwin)
+ZI_NATIVE_DEFINES += __APPLE__
 endif
 
 # No in-process GTK anywhere else either: the system theme uses kryon's
@@ -405,34 +437,66 @@ STYLE_FILES := $(wildcard $(KRYON_DIR)/styles/kryon/*.kss) \
 	$(wildcard themes/catalog_*.kss)
 IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
+IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
 EMBEDDED_ASSET_FILES := $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
-KRY_SRCS := $(shell find src -type f -name '*.kry' 2>/dev/null | LC_ALL=C sort)
-KRY_GEN_SRCS := $(patsubst %.kry,$(KRY_GEN_DIR)/%.c,$(KRY_SRCS))
-KRY_GEN_HDRS := $(patsubst %.kry,$(KRY_GEN_DIR)/%.h,$(KRY_SRCS))
-KRY_PROJECT_HDR := $(KRY_GEN_DIR)/kryon_project.h
-KRY_PROJECT_C := $(KRY_GEN_DIR)/kryon_project.c
+ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort)
+GAME2D_DIR := vendor/game2d
+GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
+DAOCHI_CLIENT_MODULES := $(wildcard vendor/daochi-client/*.zi)
+ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
+KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
+KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
+KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c byte_text_linux.c \
+	c_string.c client.c date_parse.c date_time.c events.c json_scan.c net_http_curl_linux.c \
+	net_ws_curl_linux.c social.c sync.c \
+	text.c text_buffer.c transaction.c update.c url.c wire.c)
+KRY_GEN_HDRS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.h,$(ZI_SRCS))
+KRY_GEN_GAME_C := $(KRY_GEN_DIR)/Raylib.c
 KRY_GEN_STAMP := $(KRY_GEN_DIR)/.fresh
-SRC := $(APP_SRCS) $(KRY_GEN_SRCS) $(EMBEDDED_ASSETS_C)
-WINDOWS_SRC := $(SRC)
-KRYON_HOST_APP_SRCS := $(filter-out src/platform/main_host.c,$(APP_SRCS)) $(KRY_GEN_SRCS) $(KRY_PROJECT_C)
-KRYON_HOST_RUNTIME_SRCS := $(KRYON_DIR)/src/core/embedded_assets.c
-KRYON_HOST_SRC := $(KRYON_HOST_APP_SRCS) $(KRYON_HOST_RUNTIME_SRCS) $(EMBEDDED_ASSETS_C)
+WEB_GEN_DIR := $(BUILD_DIR)/kryon/generated-web
+WEB_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WEB_GEN_DIR)/%,$(KRY_GEN_SRCS))
+WEB_GEN_GAME_C := $(WEB_GEN_DIR)/Raylib.c
+WEB_GEN_STAMP := $(WEB_GEN_DIR)/.fresh
+WINDOWS_GEN_DIR := $(BUILD_DIR)/kryon/generated-windows
+WINDOWS_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WINDOWS_GEN_DIR)/%,$(KRY_GEN_SRCS))
+WINDOWS_GEN_GAME_C := $(WINDOWS_GEN_DIR)/Raylib.c
+WINDOWS_GEN_STAMP := $(WINDOWS_GEN_DIR)/.fresh
+SRC := $(APP_SRCS) $(KRY_GEN_STAMP) $(EMBEDDED_ASSETS_C)
+GENERATED_NATIVE_C = $(shell find $(KRY_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
+WINDOWS_SRC := $(APP_SRCS) $(EMBEDDED_ASSETS_C)
+GENERATED_WINDOWS_C = $(shell find $(WINDOWS_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
+KRYON_HOST_APP_SRCS := $(APP_SRCS) $(KRY_GEN_SRCS) $(KRY_GEN_GAME_C)
+KRYON_HOST_SRC := $(KRYON_HOST_APP_SRCS) $(EMBEDDED_ASSETS_C)
 WEB_APP_SRCS := $(APP_SRCS)
-WEB_SRC := $(WEB_APP_SRCS) $(KRY_GEN_SRCS) $(EMBEDDED_ASSETS_C)
+WEB_SRC := $(WEB_APP_SRCS) $(EMBEDDED_ASSETS_C)
+GENERATED_WEB_C = $(shell find $(WEB_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
 
 APP_INCLUDE := -Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/practices/sun_salutation -Isrc/storage -Isrc/platform -Isrc/platform/android -Isrc/third_party
+APP_INCLUDE += -iquote$(KRY_GEN_DIR)
+APP_INCLUDE += -I$(KRYON_DIR)/vendor/raylib/src
+APP_INCLUDE += $(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(KRY_GEN_DIR)/$(dir))
 APP_INCLUDE += $(KRYON_INCLUDE)
-APP_INCLUDE += -I$(KRY_GEN_DIR)
-APP_INCLUDE += -I$(KRY_GEN_DIR)/src
+APP_INCLUDE += -I$(MONOCYPHER_DIR) -I$(MONOCYPHER_DIR)/optional
+WEB_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
+	-iquote$(WEB_GEN_DIR) \
+	$(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(WEB_GEN_DIR)/$(dir))
+WINDOWS_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
+	-iquote$(WINDOWS_GEN_DIR) \
+	$(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(WINDOWS_GEN_DIR)/$(dir))
 PROOF_DIR := $(BUILD_DIR)/proofs
-SYNC_RETRY_HEADER := $(PROOF_DIR)/sync_retry_table.h
+SYNC_RETRY_SOURCE := src/app/sync_retry.zi
 STORAGE_LAYOUT_HEADER := $(PROOF_DIR)/storage_layout.h
+STORAGE_LAYOUT_ZIRAN := src/storage/storage_layout.zi
 APP_INCLUDE += -I$(PROOF_DIR)
 KRYON_INCLUDE += -I$(PROOF_DIR)
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
+ZI_NATIVE_DEFINES += $(if $(strip $(RAY_SDL_LDLIBS)),NATIVE_WINDOW_HAVE_SDL,)
+APP_GIO_CFLAGS ?= $(shell pkg-config --cflags gio-2.0 2>/dev/null)
+APP_GIO_LDLIBS ?= $(shell pkg-config --libs gio-2.0 2>/dev/null)
+ZI_NATIVE_DEFINES += $(if $(strip $(APP_GIO_LDLIBS)),APP_HAVE_GIO,)
 RAY_GL_CFLAGS ?= $(shell pkg-config --cflags libdrm gbm egl glesv2 2>/dev/null)
 RAY_GL_LDLIBS ?= $(shell pkg-config --libs libdrm gbm egl glesv2 2>/dev/null)
 RAY_CFLAGS ?= $(strip $(RAY_SDL_CFLAGS) $(RAY_GL_CFLAGS))
@@ -448,7 +512,7 @@ KRYON_RAYLIB_AUDIO_PERIODS_CONFIG := $(if $(strip $(KRYON_RAYLIB_AUDIO_PERIODS))
 APP_RAYLIB_CONFIG := $(filter-out -DSUPPORT_MODULE_RAUDIO=0 -DSUPPORT_FILEFORMAT_PNG=0 -DSUPPORT_FILEFORMAT_JPG=0 -DSUPPORT_FILEFORMAT_OGG=0 -DSUPPORT_FILEFORMAT_MP3=%,$(RAY_RAYLIB_CONFIG)) -DSUPPORT_MODULE_RAUDIO=1 -DSUPPORT_FILEFORMAT_JPG=1 -DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=0 $(KRYON_RAYLIB_AUDIO_PERIOD_CONFIG) $(KRYON_RAYLIB_AUDIO_PERIODS_CONFIG)
 COMMON_CFLAGS := -Wall -Wextra -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DNATIVE_WINDOW_HAVE_SDL -DKRYON_WITH_SYNC=1
 CFLAGS := $(COMMON_CFLAGS) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(DESKTOP_TRAY_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
-NATIVE_SYSTEM_LDLIBS := $(KRYON_NOTIFICATION_LDLIBS) -lz -lm -lpthread $(if $(filter linux,$(NATIVE_PLATFORM)),-ldl -lrt,) $(SYSTEM_THEME_LDLIBS)
+NATIVE_SYSTEM_LDLIBS := $(KRYON_NOTIFICATION_LDLIBS) -lz -lm -lpthread -latomic $(if $(filter linux,$(NATIVE_PLATFORM)),-ldl -lrt,) $(SYSTEM_THEME_LDLIBS)
 WINDOWS_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDESKTOP_TRAY_ENABLED -DKRYON_WITH_SYNC=1
 WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -Oz -std=gnu99
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
@@ -457,7 +521,7 @@ WINDOWS_LDFLAGS := -Wl,--gc-sections -static -static-libgcc -mwindows
 # GNU ld's i686 stdcall fixups synthesize an undecorated glReadPixels alias,
 # but its decorated import can otherwise be discarded before fixup resolution.
 WIN32_WINDOWS_LDFLAGS := -Wl,--undefined=_glReadPixels@28 -static -static-libgcc -mwindows
-WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lm
+WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lm -latomic
 ifneq ($(strip $(MCFGTHREADS)),)
 WIN64_THREAD_LDFLAGS := -L$(MCFGTHREADS)/lib
 else
@@ -489,7 +553,20 @@ WEB_EMCMAKE ?= $(if $(wildcard $(WEB_EMSDK_BIN)/emcmake),$(WEB_EMSDK_BIN)/emcmak
 ifneq ($(wildcard $(WEB_EMSDK_BIN)/emcc),)
 export PATH := $(WEB_EMSDK_BIN):$(PATH)
 endif
-include $(KRYON_DIR)/mk/raylib.mk
+$(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
+	@test -f $(RAYLIB_DIR)/raylib.h || { echo "Initialize Kryon's raylib submodule" >&2; exit 1; }
+	mkdir -p $(RAYLIB_BUILD_DIR)
+	rm -rf $(RAYLIB_BUILD_DIR)/source
+	mkdir -p $(RAYLIB_BUILD_DIR)/source
+	cp -R $(RAYLIB_DIR)/. $(RAYLIB_BUILD_DIR)/source/
+	$(MAKE) -j4 -C $(RAYLIB_BUILD_DIR)/source \
+		RAYLIB_SRC_PATH=. RAYLIB_RELEASE_PATH=.. \
+		PLATFORM=PLATFORM_DESKTOP_SDL GRAPHICS=GRAPHICS_API_OPENGL_ES2 \
+		RAYLIB_LIBTYPE=STATIC RAYLIB_MODULE_AUDIO=TRUE \
+		RAYLIB_MODULE_MODELS=TRUE \
+		SDL_INCLUDE_PATH=$(shell pkg-config --variable=includedir sdl2) \
+		CUSTOM_CFLAGS="-DUSING_SDL2_PROJECT $(RAY_CFLAGS) $(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
+	@test -f $@
 KRYON_NATIVE_BACKEND_DEPS :=
 KRYON_NATIVE_BACKEND_LIBS :=
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
@@ -517,6 +594,10 @@ DESKTOP_TRAY_LDLIBS :=
 else
 $(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib, libdraw, or termi))
 endif
+ifneq ($(strip $(APP_GIO_LDLIBS)),)
+KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
+NATIVE_SYSTEM_LDLIBS += $(APP_GIO_LDLIBS)
+endif
 KRYON_WINDOWS_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 KRYON_CLICK_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 WEB_CACHE_BUSTER ?= $(shell if git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then git rev-parse --short HEAD 2>/dev/null; else date +%s; fi)
@@ -525,6 +606,9 @@ WEB_TARGET := $(WEB_DIST_DIR)/index.html
 WEB_APP_SCRIPT := <script>window.__inbeRenderer="canvas";window.__inbeLoadApp("index.js?v=$(WEB_CACHE_BUSTER)")</script>
 WEB_JS_TARGET := $(WEB_DIST_DIR)/index.js
 WEB_BOOT_JS := src/web_boot.js
+WEB_HOST_JS := src/web_host.js scripts/browser_network.js
+WEB_CANVAS_HOST_JS := $(addprefix $(KRYON_DIR)/web/canvas_,window.js draw.js input.js texture.js text.js os.js audio.js)
+WEB_HOST_JS += $(WEB_CANVAS_HOST_JS)
 # Canvas-only web build: Kryon's HTML5 Canvas2D Tier A backend. The app and
 # support libraries are still Emscripten/WASM, including sync/liboqs for
 # sync-account parity.
@@ -569,76 +653,276 @@ MEDITATION_AUDIO_TRACKS := \
 	Elijah_K/path-of-meditation.ogg \
 	Elijah_K/truth-of-silence.ogg
 
-include $(KRYON_DIR)/mk/package-freebsd.mk
+-include $(KRYON_DIR)/mk/package-freebsd.mk
 
 .PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 windows32 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
+.PHONY: zi-check
 .PHONY: clean-text-api-check no-vendor-edits secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
-.NOTPARALLEL: dist windows windows64 windows32 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
+.NOTPARALLEL: all native test ci zi-check dist windows windows64 windows32 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
 
 all: native
 
+$(ZI2C_BIN): $(ZIRAN_SOURCES)
+	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) all
+
+zi-check: $(ZI_CHECK_STAMP) | build-laws
+
+$(ZI_CHECK_STAMP): Makefile scripts/check-zi-sources.py $(ZI2C_BIN) \
+	$(ZI_SRCS) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) \
+	$(KRYON_UI_ZI) $(KRYON_KSS_ZI) $(GAME2D_MODULES) | build-laws
+	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KRYON_DIR)/src/kss
+	@mkdir -p $(dir $@)
+	@touch $@
+
+.PHONY: kryon-library-check
+kryon-library-check: $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
+
+$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modules.txt $(KRYON_DIR)/Makefile $(ZI2C_BIN)
+	$(MAKE) -C $(KRYON_DIR) BUILD_DIR=$(KRYON_LIBRARY_BUILD_DIR) \
+		ZIRAN_DIR=../ziran ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) all
+
+.PHONY: scroll-input-test
+scroll-input-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/scroll_input_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: scroll-input-link-test
+scroll-input-link-test: kryon-library-check $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/scroll-input-link/generated
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(KRYON_DIR)/src/ui \
+		-o $(BUILD_DIR)/scroll-input-link/generated src/platform/scroll_input.zi
+	@$(CC) -std=c11 -I$(ZIRAN_DIR)/include \
+		-I$(BUILD_DIR)/scroll-input-link/generated \
+		-I$(BUILD_DIR)/scroll-input-link/generated/platform \
+		tests/scroll_input_link_test.c \
+		$(BUILD_DIR)/scroll-input-link/generated/platform/scroll_input.c \
+		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a \
+		-o $(BUILD_DIR)/scroll-input-link/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/scroll-input-link/test
+
+.PHONY: desktop-tray-host-test
+desktop-tray-host-test:
+	@sh tests/desktop_tray_host_test.sh
+
+.PHONY: uri-link-test
+uri-link-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		python3 tests/uri_host_zi_test.py $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: frame-activity-test
+frame-activity-test: $(ZI2C_BIN)
+	@sh tests/frame_activity_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: frame-pacing-zi-test
+frame-pacing-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/frame_pacing_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: frame-pacing-zi-test
+
+.PHONY: breath-timing-test
+breath-timing-test: $(ZI2C_BIN)
+	@sh tests/breath_timing_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: break-rules-test
+break-rules-test: $(ZI2C_BIN)
+	@sh tests/break_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: sun-salutation-test
+sun-salutation-test: $(ZI2C_BIN)
+	@sh tests/sun_salutation_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: break-engine-test
+break-engine-test: $(BREAK_ENGINE_TEST)
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BREAK_ENGINE_TEST)
+
+.PHONY: breath-engine-test
+breath-engine-test: $(BREATH_TIMING_TEST)
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BREATH_TIMING_TEST)
+
+.PHONY: route-host-test
+route-host-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/route-host-test/generated
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(KRYON_DIR)/src/ui \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/route-host-test/generated src/app/route_catalog.zi
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/route-host-test/generated src/app/route_log.zi
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/route-host-test/generated src/app/route_host.zi
+	@$(CC) -std=c11 -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections -I$(ZIRAN_DIR)/include \
+		-I$(BUILD_DIR)/route-host-test/generated -Isrc/app \
+		tests/route_host_test.c \
+		$(BUILD_DIR)/route-host-test/generated/c_string.c \
+		$(BUILD_DIR)/route-host-test/generated/text_buffers.c \
+		$(BUILD_DIR)/route-host-test/generated/app/route_log.c \
+		$(BUILD_DIR)/route-host-test/generated/app/route_host.c \
+		-I$(KRYON_DIR)/include \
+		-o $(BUILD_DIR)/route-host-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/route-host-test/test
+
+.PHONY: profile-host-test
+profile-host-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/profile-host-test/generated
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/profile-host-test/generated src/app/app_profile.zi
+	@$(CC) -std=c11 -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections -I$(ZIRAN_DIR)/include \
+		-I$(BUILD_DIR)/profile-host-test/generated -Isrc/app \
+		-I$(KRYON_DIR)/include \
+		tests/profile_host_test.c \
+		$(BUILD_DIR)/profile-host-test/generated/c_string.c \
+		$(BUILD_DIR)/profile-host-test/generated/app/app_profile.c \
+		-o $(BUILD_DIR)/profile-host-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/profile-host-test/test disabled
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/profile-host-test/test
+
+.PHONY: route-catalog-test
+route-catalog-test: $(ZI2C_BIN)
+	@sh tests/route_catalog_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: sync-retry-zi-test
+sync-retry-zi-test: build-laws $(ZI2C_BIN)
+	@sh tests/sync_retry_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-retry-zi-test
+
+.PHONY: sync-crypto-zi-test
+sync-crypto-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-crypto-zi-test
+
+.PHONY: sync-account-crypto-zi-test
+sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_account_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
+
+test: sync-account-crypto-zi-test
+test: route-host-test
+test: profile-host-test
+test: scroll-input-test
+test: scroll-input-link-test
+
 native: $(TARGET)
+
+.PHONY: native-screenshot-test
+native-screenshot-test: $(TARGET)
+	sh tests/native_screenshot_test.sh $(abspath $(TARGET))
+
+.PHONY: native-navigation-test
+native-navigation-test: $(TARGET)
+	sh tests/native_navigation_test.sh $(abspath $(TARGET))
 
 kryon-host: $(KRYON_HOST_TARGET)
 
-# All compiler sources, not just main.c: k2c is multi-file now, and a
-# single-file prerequisite lets a stale binary silently regenerate with
-# old behavior (mirrors kryon's own K2C_SRCS).
-K2C_SRCS := $(sort $(wildcard $(KRYON_DIR)/cmd/k2c/*.[ch]) \
-	$(wildcard $(KRYON_DIR)/cmd/kir/*.[ch]))
-$(K2C): $(K2C_SRCS)
-	$(MAKE) -C $(KRYON_DIR) k2c
-
-# Generate shared widget policies into Inbe's build tree, never vendor sources.
-$(KRYON_RUNTIME_STAMP): Makefile $(K2C) $(KRYON_RUNTIME_KRY)
+# Generate Kryon's checked Ziran modules into Inbe's build tree.
+$(KRYON_UI_STAMP): Makefile $(ZI2C_BIN) $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modules.txt
 	mkdir -p $(dir $@)
-	$(K2C) --strict --no-main --root $(abspath $(KRYON_DIR)) -o $(abspath $(KRYON_GENERATED_SRC_DIR)) $(abspath $(KRYON_RUNTIME_KRY))
-	touch $@
-
-$(KRYON_RUNTIME_C) $(KRYON_RUNTIME_H): $(KRYON_RUNTIME_STAMP)
-	@test -f $@
-
-# Kryon's .kry-backed UI modules generate the public ui/*.h headers that the
-# retained handwritten src/ui/*.c host services include, plus the generated
-# implementations for the migrated widgets. Mirror kryon's own --root src pass.
-$(KRYON_UI_STAMP): Makefile $(K2C) $(KRYON_UI_KRY) $(KRYON_RUNTIME_STAMP)
-	mkdir -p $(dir $@)
-	$(K2C) --no-main --root $(abspath $(KRYON_DIR)/src) -o $(abspath $(KRYON_GENERATED_SRC_DIR)) $(abspath $(KRYON_UI_KRY))
+	$(ZI2C_BIN) --no-main --root $(KRYON_DIR)/src/ui \
+		-o $(dir $@) $(KRYON_UI_ZI)
 	touch $@
 
 $(KRYON_UI_C) $(KRYON_UI_H): $(KRYON_UI_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): Makefile $(K2C) $(KRY_SRCS) $(SYNC_RETRY_HEADER) $(STORAGE_LAYOUT_HEADER) $(KRYON_RUNTIME_STAMP) | build-laws
+$(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/modules.txt
+	mkdir -p $(dir $@)
+	$(ZI2C_BIN) --no-main --root $(KRYON_DIR)/src/kss \
+		--module-path $(KRYON_DIR)/src/ui \
+		-o $(dir $@) $(KRYON_KSS_ZI)
+	touch $@
+
+$(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
+	@test -f $@
+
+$(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
 	rm -rf $(KRY_GEN_DIR)
 	mkdir -p $(KRY_GEN_DIR)
-	$(K2C) --root $(abspath .) -o $(KRY_GEN_DIR) $(abspath $(KRY_SRCS))
+	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
+		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
+		--module-path src --module-path $(KRYON_DIR)/src/ui \
+		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KRYON_DIR)/src/backend \
+		--module-path $(GAME2D_DIR)/src \
+		--module-path $(ZIRAN_DIR)/std \
+		--module-path vendor/daochi-client \
+		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(KRY_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
+
+$(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
+	rm -rf $(WEB_GEN_DIR)
+	mkdir -p $(WEB_GEN_DIR)
+	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
+		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
+		--module-path src --module-path $(KRYON_DIR)/src/ui \
+		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KRYON_DIR)/src/backend \
+		--module-path $(GAME2D_DIR)/src \
+		--module-path $(ZIRAN_DIR)/std \
+		--module-path vendor/daochi-client \
+		-o $(WEB_GEN_DIR) $(ZI_SRCS)
+	touch $@
+	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
+
+$(WEB_GEN_SRCS) $(WEB_GEN_GAME_C): $(WEB_GEN_STAMP)
+	@test -f $@
+
+$(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
+	rm -rf $(WINDOWS_GEN_DIR)
+	mkdir -p $(WINDOWS_GEN_DIR)
+	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
+		--define PLATFORM_DESKTOP --define _WIN32 \
+		--define DESKTOP_TRAY_ENABLED \
+		--module-path src --module-path $(KRYON_DIR)/src/ui \
+		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KRYON_DIR)/src/backend \
+		--module-path $(GAME2D_DIR)/src \
+		--module-path $(ZIRAN_DIR)/std \
+		--module-path vendor/daochi-client \
+		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
+	touch $@
+	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
+
+$(WINDOWS_GEN_SRCS) $(WINDOWS_GEN_GAME_C): $(WINDOWS_GEN_STAMP)
+	@test -f $@
 
 PLAN9_DIR := $(BUILD_DIR)/plan9
 PLAN9_GENERATED := $(PLAN9_DIR)/generated
 PLAN9_FILE_LIST := $(PLAN9_DIR)/generated-c-files.txt
 PLAN9_EMBEDDED_ASSETS_C := $(PLAN9_DIR)/app_embedded_assets.c
 
-# Native Plan 9 build inputs: k2c emits 8c-safe C directly, the embedded
+# Native Plan 9 build inputs: Ziran emits 8c-safe C directly, the embedded
 # table carries the locales, images, and subset fonts (audio stays
 # stubbed on Plan 9, so the OGG sounds are not carried), and the file
 # list feeds the mkfile.
-.PHONY: kry-c-plan9
-kry-c-plan9: $(KRY_GEN_STAMP)
+.PHONY: zi-c-plan9
+zi-c-plan9: $(KRY_GEN_STAMP)
 	rm -rf $(PLAN9_GENERATED)
-	$(K2C) --plan9 --root $(abspath .) \
+	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --plan9 --define PLAN9_BUILD \
+		--define KRYON_PLATFORM_PLAN9 --root . \
+		--module-path src --module-path $(KRYON_DIR)/src/ui \
+		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KRYON_DIR)/src/backend \
+		--module-path $(GAME2D_DIR)/src \
+		--module-path $(ZIRAN_DIR)/std \
 		--include-dir vendor/kryon/include --include-dir src \
 		--include-dir $(KRY_GEN_DIR) --include-dir vendor-builds/sqlite \
-		-o $(PLAN9_GENERATED) $(KRY_SRCS)
-	cp $(SYNC_RETRY_HEADER) $(PLAN9_GENERATED)/sync_retry_table.h
+		-o $(PLAN9_GENERATED) $(ZI_SRCS)
 	cp $(STORAGE_LAYOUT_HEADER) $(PLAN9_GENERATED)/storage_layout.h
 	find $(PLAN9_GENERATED) -type f -name '*.c' | LC_ALL=C sort > $(PLAN9_FILE_LIST)
 	sh vendor/kryon/scripts/embed-assets.sh $(PLAN9_EMBEDDED_ASSETS_C) \
 		$(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(FONT_FILES)
 
-$(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_PROJECT_HDR) $(KRY_PROJECT_C): $(KRY_GEN_STAMP)
+$(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_GEN_GAME_C): $(KRY_GEN_STAMP)
 
 dist:
 	@password="$(PASSWORD)"; \
@@ -778,7 +1062,7 @@ no-vendor-edits:
 	bash ./scripts/check-no-vendor-edits.sh
 
 clean-text-api-check:
-	python3 $(KRYON_DIR)/scripts/check-clean-text-api.py src tests
+	python3 scripts/check-clean-text-api.py src tests
 
 .PHONY: button-api-check
 button-api-check:
@@ -795,20 +1079,20 @@ version-test:
 
 test: version-check version-test
 
-# Proofs run on every invocation, even with an existing generated header.
-# The generator replaces the header only when its contents actually change.
+# Proofs run on every invocation, even with existing generated source.
+# Generators replace outputs only when their contents actually change.
 .PHONY: proofs proof-test build-laws
 proofs:
-	node scripts/generate-sync-retry.mjs $(SYNC_RETRY_HEADER)
-	node scripts/generate-storage-layout.mjs $(STORAGE_LAYOUT_HEADER)
+	node scripts/generate-sync-retry.mjs $(SYNC_RETRY_SOURCE)
+	node scripts/generate-storage-layout.mjs $(STORAGE_LAYOUT_HEADER) $(STORAGE_LAYOUT_ZIRAN)
 
 proof-test:
-	node --test tests/sync_retry_proof_test.mjs
-	node --test tests/storage_layout_proof_test.mjs
+	node tests/sync_retry_proof_test.mjs
+	node tests/storage_layout_proof_test.mjs
 
 build-laws: version-check proofs
 
-$(SYNC_RETRY_HEADER): | proofs
+$(SYNC_RETRY_SOURCE): | proofs
 	@test -f $@
 
 $(STORAGE_LAYOUT_HEADER): | proofs
@@ -904,7 +1188,7 @@ $(LOCALE_KEYS_TEST): tests/locale_keys_test.c $(LOCALE_FILES) | $(TEST_BIN_DIR)
 		-o $@ \
 		tests/locale_keys_test.c
 
-$(SETTINGS_KEYS_TEST): tests/settings_keys_test.c src/app/app_settings.kry src/app/app_setting_keys.h src/storage/import.kry | $(TEST_BIN_DIR)
+$(SETTINGS_KEYS_TEST): tests/settings_keys_test.c src/app/app_settings.zi src/app/app_setting_keys.h src/storage/import.zi | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
 		-o $@ \
 		tests/settings_keys_test.c
@@ -939,43 +1223,660 @@ $(SYNC_REVIEW_TEST): tests/sync_review_test.c tests/test_locale_stub.c $(STORAGE
 		tests/sync_review_test.c tests/test_locale_stub.c $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRYON_SYNC_CRYPTO_C) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(KRY_GEN_DIR)/src/screens/habits_screen.c $(SQLITE_SRC) \
 		-Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
 
-$(FONT_LOCALE_TEST): $(KRY_GEN_DIR)/src/app/font_assets.c tests/font_locale_test.c src/app/app_font_assets.h $(FONT_FILES) | $(TEST_BIN_DIR)
+$(FONT_ASSETS_GEN_DIR)/app/font_assets.c: src/app/font_assets.zi $(ZI2C_BIN)
+	@mkdir -p $(FONT_ASSETS_GEN_DIR)
+	$(ZI2C_BIN) --no-main --root src \
+		-o $(FONT_ASSETS_GEN_DIR) src/app/font_assets.zi
+
+$(FONT_LOCALE_TEST): $(FONT_ASSETS_GEN_DIR)/app/font_assets.c tests/font_locale_test.c $(FONT_FILES) | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
 		-DKRYON_DIR=\"$(KRYON_DIR)\" \
 		-o $@ \
-		$(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src tests/font_locale_test.c $(KRY_GEN_DIR)/src/app/font_assets.c
+		-I$(ZIRAN_DIR)/include -I$(FONT_ASSETS_GEN_DIR) \
+		tests/font_locale_test.c \
+		$(FONT_ASSETS_GEN_DIR)/app/font_assets.c
+
+.PHONY: font-assets-test
+font-assets-test: build-laws $(FONT_LOCALE_TEST) $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(FONT_LOCALE_TEST)
+	@sh tests/font_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: navigation-routes-test
+navigation-routes-test: build-laws $(ZI2C_BIN)
+	@sh tests/navigation_routes_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: exercise-types-test
+exercise-types-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/exercise_types_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: exercise-types-test
+
+.PHONY: patterns-rules-zi-test
+patterns-rules-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/patterns_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: patterns-rules-zi-test
+
+.PHONY: patterns-session-zi-test
+patterns-session-zi-test: $(ZI2C_BIN)
+	@sh tests/patterns_session_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: patterns-session-zi-test
+
+.PHONY: session-results-zi-test
+session-results-zi-test: $(ZI2C_BIN)
+	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+	@$(ZI2C_BIN) --no-main --root tests --module-path vendor/ziran/std \
+		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
+	@$(CC) -std=c11 -Isrc/storage -Ivendor/ziran/include \
+		-I$(BUILD_DIR)/session-mood-generated \
+		$(BUILD_DIR)/session-mood-generated/*.c -o $(BUILD_DIR)/session-result-host-test
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/session-result-host-test
+
+test: session-results-zi-test
+
+.PHONY: settings-cache-test
+settings-cache-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/settings_cache_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: settings-cache-test
+
+.PHONY: web-storage-bridge-test
+web-storage-bridge-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/web_storage_bridge_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: web-storage-bridge-test
+
+.PHONY: device-policy-test
+device-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/device_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: device-policy-test
+
+.PHONY: device-preferences-zi-test device-host-sdl-test
+device-preferences-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/device_preferences_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+device-host-sdl-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/device_host_sdl_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: device-preferences-zi-test device-host-sdl-test
+
+.PHONY: fonts-zi-test
+fonts-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/fonts_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: fonts-zi-test
+
+.PHONY: metrics-zi-test
+metrics-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/metrics_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: metrics-zi-test
+
+.PHONY: music-library-zi-test
+music-library-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/music_library_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: music-library-zi-test
+
+.PHONY: screenshot-request-zi-test
+screenshot-request-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/screenshot_request_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: screenshot-request-zi-test
+
+.PHONY: app-chrome-zi-test
+app-chrome-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/app_chrome_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: app-chrome-zi-test
+
+.PHONY: schema-zi-test
+schema-zi-test: $(ZI2C_BIN) $(SQLITE_SRC)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/schema_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: schema-zi-test
+
+.PHONY: root-upgrade-zi-test
+root-upgrade-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/root_upgrade_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: root-upgrade-zi-test
+
+.PHONY: database-upgrade-zi-test
+database-upgrade-zi-test: $(ZI2C_BIN) $(SQLITE_SRC)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/database_upgrade_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: database-upgrade-zi-test
+
+.PHONY: legacy-session-zi-test
+legacy-session-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/legacy_session_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: legacy-session-zi-test
+
+.PHONY: archive-file-linux-zi-test
+archive-file-linux-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) | build-laws
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/archive_file_linux_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: archive-file-linux-zi-test
+
+.PHONY: export-filename-test
+export-filename-test: $(ZI2C_BIN) | build-laws
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/export_filename_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: export-filename-test
+
+.PHONY: storage-state-zi-test
+storage-state-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: storage-state-zi-test
+
+.PHONY: storage-sql-zi-test
+storage-sql-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY $(ZI2ZIR_BIN) --check-only --root src \
+		src/storage/sync_sql.zi src/storage/export_sql.zi \
+		src/storage/habit_sync_sql.zi
+	@env -u DISPLAY -u WAYLAND_DISPLAY python3 tests/storage_sql_behavior_test.py
+
+test: storage-sql-zi-test
+
+.PHONY: storage-json-builder-zi-test
+storage-json-builder-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_json_builder_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: storage-json-builder-zi-test
+
+.PHONY: storage-thread-buffer-zi-test
+storage-thread-buffer-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_thread_buffer_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: storage-thread-buffer-zi-test
+
+.PHONY: sqlite-text-zi-test
+sqlite-text-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sqlite_text_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sqlite-text-zi-test
+
+.PHONY: sql-transaction-zi-test
+sql-transaction-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sql_transaction_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sql-transaction-zi-test
+
+.PHONY: storage-paths-zi-test
+storage-paths-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_paths_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: storage-paths-zi-test
+
+.PHONY: daochi-client-zi-test
+daochi-client-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		ZI2C_BIN=$(abspath $(ZI2C_BIN)) ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) \
+		sh vendor/daochi-client/tests/run.sh
+
+test: daochi-client-zi-test
+
+.PHONY: habit-days-memory-zi-test
+habit-days-memory-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/habit_days_memory_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: habit-days-memory-zi-test
+
+.PHONY: locale-zi-test
+.PHONY: host-services-zi-test
+host-services-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/host_services_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: host-services-zi-test
+
+.PHONY: web-bridge-wasm-test
+web-bridge-wasm-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/web_bridge_wasm_test.sh $(ZIRAN_BUILD_DIR)/bin $(WEB_CC)
+
+locale-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/locale_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: locale-zi-test
+
+.PHONY: text-buffers-zi-test
+text-buffers-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/text_buffers_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: text-buffers-zi-test
+
+.PHONY: raylib-text-input-zi-test
+raylib-text-input-zi-test: $(ZI2C_BIN)
+	@sh tests/raylib_text_input_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: raylib-text-input-zi-test
+
+.PHONY: android-text-input-zi-test
+android-text-input-zi-test: $(ZI2C_BIN)
+	sh tests/android_text_input_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
+test: android-text-input-zi-test
+
+.PHONY: window-close-host-test
+window-close-host-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/window-close-host-test/c
+	@$(ZI2C_BIN) --define PLATFORM_DESKTOP \
+		--define NATIVE_WINDOW_HAVE_SDL \
+		--entry window_close_behavior:main --root tests \
+		--module-path src -o $(BUILD_DIR)/window-close-host-test/c \
+		tests/window_close_behavior.zi
+	@$(CC) -std=c11 -O2 -I$(ZIRAN_DIR)/include \
+		-iquote $(BUILD_DIR)/window-close-host-test/c \
+		$(BUILD_DIR)/window-close-host-test/c/*.c \
+		$(RAY_SDL_LDLIBS) -o $(BUILD_DIR)/window-close-host-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		$(BUILD_DIR)/window-close-host-test/test
+
+test: window-close-host-test
+
+.PHONY: activity-host-test
+activity-host-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		DBUS_SESSION_BUS_ADDRESS=invalid: \
+		sh tests/activity_host_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: activity-host-test
+
+.PHONY: audio-picker-host-test
+audio-picker-host-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/audio-picker-host-test/c
+	@cp tests/support/audio_picker_zenity.sh \
+		$(BUILD_DIR)/audio-picker-host-test/zenity
+	@chmod +x $(BUILD_DIR)/audio-picker-host-test/zenity
+	@$(ZI2C_BIN) --no-main --define PLATFORM_DESKTOP --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/audio-picker-host-test/c \
+		src/platform/audio_picker_host.zi
+	@$(CC) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror \
+		-Wno-unused-function -I$(ZIRAN_DIR)/include \
+		-iquote $(BUILD_DIR)/audio-picker-host-test/c \
+		tests/audio_picker_host_test.c \
+		$(BUILD_DIR)/audio-picker-host-test/c/*.c \
+		$(BUILD_DIR)/audio-picker-host-test/c/platform/audio_picker_host.c \
+		$(BUILD_DIR)/audio-picker-host-test/c/platform/file_picker.c \
+		-o $(BUILD_DIR)/audio-picker-host-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		PATH="$(abspath $(BUILD_DIR)/audio-picker-host-test)" \
+		$(abspath $(BUILD_DIR)/audio-picker-host-test/test)
+
+.PHONY: file-picker-zi-test
+file-picker-zi-test: $(ZI2C_BIN)
+	@sh tests/file_picker_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
+test: audio-picker-host-test file-picker-zi-test
+
+.PHONY: main-platform-zi-test
+main-platform-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
+	@RAY_LDLIBS='$(RAY_LDLIBS)' sh tests/main_platform_zi_test.sh \
+		$(abspath $(dir $(ZI2C_BIN))) $(abspath $(RAYLIB_A))
+
+test: main-platform-zi-test
+
+.PHONY: web-window-zi-test
+web-window-zi-test: $(ZI2C_BIN)
+	@sh tests/web_window_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
+test: web-window-zi-test
+
+.PHONY: plan9-host-zi-test android-jni-zi-test update-transport-zi-test
+plan9-host-zi-test: $(ZI2C_BIN)
+	@sh tests/plan9_host_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
+android-jni-zi-test: $(ZI2C_BIN)
+	@python3 tests/android_jni_zi_test.py $(abspath $(dir $(ZI2C_BIN)))
+
+update-transport-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		python3 tests/update_fetch_host_test.py
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		python3 tests/update_flow_zi_test.py
+
+test: plan9-host-zi-test android-jni-zi-test update-transport-zi-test
+
+.PHONY: secondary-window-host-test
+secondary-window-host-test: $(ZI2C_BIN) $(RAYLIB_A)
+	@sh tests/secondary_window_host_zi_test.sh \
+		$(abspath $(dir $(ZI2C_BIN))) $(abspath $(RAYLIB_A))
+
+.PHONY: raylib-log-host-test
+raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
+	@mkdir -p $(BUILD_DIR)/raylib-log-host-test/c
+	@$(ZI2C_BIN) --define PLATFORM_DESKTOP \
+		--entry raylib_log_behavior:main --root tests \
+		--module-path src --module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/raylib-log-host-test/c tests/raylib_log_behavior.zi
+	@$(CC) -std=c11 -O2 -I$(ZIRAN_DIR)/include \
+		-iquote $(BUILD_DIR)/raylib-log-host-test/c \
+		$(BUILD_DIR)/raylib-log-host-test/c/*.c $(RAYLIB_A) \
+		$(RAY_LDLIBS) -lm -ldl -pthread \
+		-o $(BUILD_DIR)/raylib-log-host-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		$(BUILD_DIR)/raylib-log-host-test/test \
+		> $(BUILD_DIR)/raylib-log-host-test/output 2>&1
+	@rg -q 'width=320 height=560 embedded=1' \
+		$(BUILD_DIR)/raylib-log-host-test/output
+	@rg -q 'scale=1.50 layout=320x560' \
+		$(BUILD_DIR)/raylib-log-host-test/output
+	@rg -q 'track=2 practice=3' \
+		$(BUILD_DIR)/raylib-log-host-test/output
+
+test: raylib-log-host-test
+
+.PHONY: dpi-state-zi-test
+dpi-state-zi-test: $(ZI2C_BIN)
+	@sh tests/dpi_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: dpi-state-zi-test
+
+.PHONY: settings-ui-zi-test
+settings-ui-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/settings_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: settings-ui-zi-test
+
+.PHONY: break-stats-zi-test
+break-stats-zi-test: $(ZI2C_BIN) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/break_stats_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: break-stats-zi-test
+
+.PHONY: android-health-zi-test
+android-health-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_health_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-health-zi-test
+
+.PHONY: android-push-zi-test
+android-push-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_push_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-push-zi-test
+
+.PHONY: android-wakelock-zi-test
+android-wakelock-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_wakelock_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-wakelock-zi-test
+
+.PHONY: android-timer-zi-test
+android-timer-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_timer_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-timer-zi-test
+
+.PHONY: android-import-zi-test
+android-import-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_import_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-import-zi-test
+
+.PHONY: android-runtime-assets-zi-test
+android-runtime-assets-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_runtime_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-runtime-assets-zi-test
+
+.PHONY: android-lifecycle-zi-test
+android-lifecycle-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_lifecycle_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: android-lifecycle-zi-test
+
+.PHONY: language-selection-zi-test
+language-selection-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/language_selection_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: language-selection-zi-test
+
+.PHONY: audio-policy-test
+audio-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/audio_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: audio-policy-test
+
+.PHONY: audio-runtime-test
+audio-runtime-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY \
+		sh tests/audio_runtime_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: audio-runtime-test
+
+.PHONY: audio-meter-zi-test
+audio-meter-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+		sh tests/audio_meter_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: audio-meter-zi-test
+
+.PHONY: profile-picture-policy-test
+profile-picture-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/profile_picture_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: profile-picture-policy-test
+
+.PHONY: assets-zi-test
+assets-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: assets-zi-test
+
+.PHONY: asset-files-zi-test
+asset-files-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
+	@sh tests/asset_files_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_A)
+
+test: asset-files-zi-test
+
+.PHONY: settings-status-zi-test
+settings-status-zi-test: $(ZI2C_BIN)
+	@python3 tests/settings_status_test.py $(ZIRAN_BUILD_DIR)/bin
+
+test: settings-status-zi-test
+
+.PHONY: settings-mutation-zi-test
+settings-mutation-zi-test: $(ZI2C_BIN)
+	@sh tests/settings_mutation_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: settings-mutation-zi-test
+
+.PHONY: theme-catalog-zi-test
+theme-catalog-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/theme_catalog_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: theme-catalog-zi-test
+
+.PHONY: style-apply-zi-test
+style-apply-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/style_apply_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: style-apply-zi-test
+
+.PHONY: audio-settings-test
+audio-settings-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/audio_settings_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: audio-settings-test
+
+.PHONY: bottom-nav-policy-test
+bottom-nav-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/bottom_nav_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: bottom-nav-policy-test
+
+.PHONY: app-nav-state-zi-test
+app-nav-state-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/app_nav_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: app-nav-state-zi-test
+
+.PHONY: sync-safety-test
+sync-safety-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_safety_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-safety-test
+
+.PHONY: sync-status-policy-test
+sync-status-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_status_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-status-policy-test
+
+.PHONY: social-action-queue-test
+social-action-queue-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/social_action_queue_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: social-action-queue-test
+
+.PHONY: sync-worker-host-test
+sync-worker-host-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_worker_host_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-worker-host-test
+
+.PHONY: sync-status-test
+sync-status-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_status_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: sync-status-test
+
+.PHONY: route-list-test
+route-list-test: build-laws $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/route_list_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: habit-calendar-test
+habit-calendar-test: build-laws $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/habit_calendar_zi_test.sh $(ZIRAN_BUILD_DIR)/bin \
+		$(KRYON_DIR)/src/ui
+
+test: habit-calendar-test
+
+.PHONY: habit-linked-rules-zi-test
+habit-linked-rules-zi-test: build-laws $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/habit_linked_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: habit-linked-rules-zi-test
+
+.PHONY: meditation-timing-test
+meditation-timing-test: build-laws $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/meditation_timing_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: meditation-timing-test
+
+.PHONY: app-clock-test
+app-clock-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/app-clock-test/generated
+	@$(ZI2C_BIN) --no-main --root src \
+		--module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/app-clock-test/generated \
+		src/app/app_clock_host.zi
+	@$(CC) -std=c11 -Wall -Wextra -Werror \
+		-Wno-unused-function -I$(ZIRAN_DIR)/include \
+		-iquote $(BUILD_DIR)/app-clock-test/generated \
+		tests/app_clock_host_test.c \
+		$(BUILD_DIR)/app-clock-test/generated/app/app_clock_host.c \
+		$(BUILD_DIR)/app-clock-test/generated/time_parts.c \
+		$(BUILD_DIR)/app-clock-test/generated/date_time.c \
+		-o $(BUILD_DIR)/app-clock-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		$(BUILD_DIR)/app-clock-test/test
+
+test: app-clock-test
+
+.PHONY: friend-requests-test
+friend-requests-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		ZIRAN_INCLUDE=$(ZIRAN_DIR)/include \
+		sh tests/friend_requests_zi_test.sh $(ZIRAN_BUILD_DIR)/bin \
+		$(ZIRAN_DIR)/std
+
+test: friend-requests-test
+
+.PHONY: modal-rules-test
+modal-rules-test: build-laws $(ZI2C_BIN)
+	@sh tests/modal_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: modal-rules-test
 
 $(FONT_GLYPH_COVERAGE_TEST): tests/font_glyph_coverage_test.c $(FONT_FILES) $(LOCALE_FILES) assets/fonts/input_common.txt | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
 		-o $@ \
 		tests/font_glyph_coverage_test.c
 
-$(APP_BOTTOM_NAV_TEST): tests/app_bottom_nav_test.c src/app/app_nav.h src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h $(KRY_GEN_DIR)/src/app/app_nav.c $(KRY_GEN_DIR)/src/app/customize_nav.c $(KRY_GEN_DIR)/src/widgets/bottom_nav.c $(KRYON_DIR)/include/ui_tree_props.generated.h $(KRYON_GENERATED_SRC_DIR)/ui/app_shell_layout.c $(KRYON_GENERATED_SRC_DIR)/ui/app_shell_route.c $(KRYON_DIR)/include/ui_app_shell_props.generated.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/app_bottom_nav_test.c $(KRY_GEN_DIR)/src/app/metrics.c \
-		$(KRYON_GENERATED_SRC_DIR)/ui/app_shell_layout.c \
-		$(KRYON_GENERATED_SRC_DIR)/ui/app_shell_route.c \
-		$(KRY_GEN_DIR)/src/app/customize_nav.c \
-		$(KRY_GEN_DIR)/src/widgets/bottom_nav.c
-
 .PHONY: elist-screen-test
 test: elist-screen-test
-elist-screen-test: $(TEST_BIN_DIR)/elist_screen_test
-	$<
+elist-screen-test: $(ZI2C_BIN)
+	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-$(TEST_BIN_DIR)/elist_screen_test: tests/elist_screen_test.c $(KRY_GEN_DIR)/src/screens/elist_screen.c src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-Wl,--gc-sections -o $@ tests/elist_screen_test.c $(KRY_GEN_DIR)/src/app/metrics.c
-
-$(TEST_BIN_DIR)/habit_form_test: tests/habit_form_test.c $(KRY_GEN_DIR)/src/screens/habits/edit.c src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
+$(TEST_BIN_DIR)/habit_form_test: tests/habit_form_test.c $(KRY_GEN_DIR)/src/screens/habits/edit.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
 		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
 		-Wl,--gc-sections -o $@ tests/habit_form_test.c $(KRY_GEN_DIR)/src/app/metrics.c $(KRY_GEN_DIR)/src/screens/habits/edit.c
 
-$(TEST_BIN_DIR)/practice_carousel_test: tests/practice_carousel_test.c $(KRY_GEN_DIR)/src/screens/practice_screen.c src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
+$(TEST_BIN_DIR)/practice_carousel_test: tests/practice_carousel_test.c $(KRY_GEN_DIR)/src/screens/practice_screen.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
 		$(APP_INCLUDE) $(SQLITE_INCLUDE) \
 		-Wl,--gc-sections -o $@ tests/practice_carousel_test.c
@@ -995,24 +1896,34 @@ $(HABIT_SESSIONS_TEST): tests/habit_sessions_test.c $(KRY_GEN_DIR)/src/habits/ha
 		$(KRY_GEN_DIR)/src/habits/habit_sessions.c \
 		$(KRY_GEN_DIR)/src/habits/habit_model.c
 
-$(BREATH_TIMING_TEST): tests/breath_timing_test.c $(KRY_GEN_DIR)/src/core/breath_engine.c $(KRY_GEN_DIR)/src/core/types.c | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc/core $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src \
-		-o $@ \
-		tests/breath_timing_test.c \
-		$(KRY_GEN_DIR)/src/core/breath_engine.c
+$(BREATH_TIMING_GEN_DIR)/core/breath_timing.c: src/core/breath_timing.zi src/core/types.zi $(ZI2C_BIN)
+	@mkdir -p $(BREATH_TIMING_GEN_DIR)
+	$(ZI2C_BIN) --no-main --root src \
+		-o $(BREATH_TIMING_GEN_DIR) src/core/breath_timing.zi
 
-$(TEST_BIN_DIR)/session_results_test: tests/session_results_test.c $(KRY_GEN_DIR)/src/practices/session_results.c $(KRY_GEN_DIR)/src/practices/meditation/meditation_session.c src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
+$(BREATH_TIMING_TEST): tests/breath_timing_test.c $(BREATH_TIMING_GEN_DIR)/core/breath_timing.c | $(TEST_BIN_DIR)
+	$(CC) -Wall -Wextra -std=c11 -I$(ZIRAN_DIR)/include \
+		-I$(BREATH_TIMING_GEN_DIR) -o $@ \
+		tests/breath_timing_test.c \
+		$(BREATH_TIMING_GEN_DIR)/core/breath_timing.c \
+		$(BREATH_TIMING_GEN_DIR)/core/types.c
+
+$(TEST_BIN_DIR)/session_results_test: tests/session_results_test.c $(KRY_GEN_DIR)/src/practices/session_results.c $(KRY_GEN_DIR)/src/practices/meditation/meditation_session.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
 		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) $(SQLITE_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src \
 		-o $@ tests/session_results_test.c $(KRY_GEN_DIR)/src/practices/session_results.c $(KRY_GEN_DIR)/src/practices/meditation/meditation_session.c -Wl,--gc-sections
 
-$(BREAK_ENGINE_TEST): tests/break_engine_test.c $(KRY_GEN_DIR)/src/breaks/break_engine.c | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc/breaks $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src \
-		-o $@ \
+$(BREAK_RULES_GEN_DIR)/breaks/break_rules.c: src/breaks/break_rules.zi src/breaks/break_types.zi $(ZI2C_BIN)
+	@mkdir -p $(BREAK_RULES_GEN_DIR)
+	$(ZI2C_BIN) --no-main --root src \
+		-o $(BREAK_RULES_GEN_DIR) src/breaks/break_rules.zi
+
+$(BREAK_ENGINE_TEST): tests/break_engine_test.c $(BREAK_RULES_GEN_DIR)/breaks/break_rules.c | $(TEST_BIN_DIR)
+	$(CC) -Wall -Wextra -std=c11 -I$(ZIRAN_DIR)/include \
+		-I$(BREAK_RULES_GEN_DIR) -o $@ \
 		tests/break_engine_test.c \
-		$(KRY_GEN_DIR)/src/breaks/break_engine.c
+		$(BREAK_RULES_GEN_DIR)/breaks/break_rules.c \
+		$(BREAK_RULES_GEN_DIR)/breaks/break_types.c
 
 # Plain C (no generated code): dlopen-based X idle monitor with stub fallback.
 $(ACTIVITY_MONITOR_TEST): tests/activity_monitor_test.c $(KRYON_DIR)/src/platform/kry_activity_monitor.c $(KRYON_DIR)/include/kry_activity_monitor.h | $(TEST_BIN_DIR)
@@ -1023,10 +1934,10 @@ $(ACTIVITY_MONITOR_TEST): tests/activity_monitor_test.c $(KRYON_DIR)/src/platfor
 		$(KRYON_DIR)/src/platform/kry_activity_monitor.c \
 		$(if $(filter linux,$(NATIVE_PLATFORM)),-ldl,)
 
-$(FRAME_PACING_TEST): tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c src/app/app_frame_pacing.kry src/app/app.kry $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
+$(FRAME_PACING_TEST): tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c $(KRY_GEN_DIR)/src/app/frame_activity.c src/app/app_frame_pacing.zi src/app/frame_activity.zi src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) \
 		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-Wl,--gc-sections -o $@ tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c
+		-Wl,--gc-sections -o $@ tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c $(KRY_GEN_DIR)/src/app/frame_activity.c
 
 $(sort $(BUILD_OBJ_DIR) $(NATIVE_OBJ_DIR) $(NATIVE_BIN_DIR) $(NATIVE_DIST_DIR) $(LINUX_BIN_DIR) $(LINUX_DIST_DIR) $(LINUX_APPIMAGE_BUILD_DIR) $(DEB_BUILD_DIR) $(DEB_DIST_DIR) $(RPM_BUILD_DIR) $(RPM_DIST_DIR) $(SNAP_BUILD_DIR) $(SNAP_DIST_DIR) $(FLATPAK_BUILD_DIR) $(FLATPAK_DIST_DIR) $(CLICK_BIN_DIR) $(CLICK_BUILD_DIR) $(CLICK_DIST_DIR) $(WINDOWS_DIST_DIR) $(ANDROID_BUILD_DIR) $(TEST_BIN_DIR) $(WEB_OBJ_DIR) $(WEB_DIST_DIR) $(CHROME_WEB_STORE_DIR) $(FIREFOX_ADDONS_DIR)):
 	mkdir -p $@
@@ -1043,8 +1954,8 @@ theme-catalog-bundle-check:
 
 test: theme-catalog-bundle-check
 
-$(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) $(KRYON_DIR)/scripts/embed-assets.sh | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
-	sh $(KRYON_DIR)/scripts/embed-assets.sh $@ $(EMBEDDED_ASSET_FILES)
+$(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) scripts/embed-app-assets.py src/app/assets_host.h | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
+	python3 scripts/embed-app-assets.py $@ $(EMBEDDED_ASSET_FILES)
 
 $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_ICON_TYPES_H): $(KRYON_ICON_FILES) $(KRYON_DIR)/scripts/embed-icon-sheets.py  | $(BUILD_OBJ_DIR)
 	cd $(KRYON_DIR) && python3 scripts/embed-icon-sheets.py "$(KRYON_ICON_DIR)" \
@@ -1181,10 +2092,12 @@ $(WIN32_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
 		-DOQS_MINIMAL_BUILD=$(KRYON_LIBOQS_MINIMAL_BUILD)
 	$(CMAKE) --build $(WIN32_LIBOQS_BUILD_DIR) --target oqs
 
-$(TARGET): Makefile $(SRC) $(KRYON_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
+$(TARGET): Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
+$(TARGET): | zi-check
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
 		$(APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
+		-iquote$(KRYON_LIBRARY_BUILD_DIR)/c \
 		$(SQLITE_INCLUDE) \
 		$(LIBOQS_INCLUDE) \
 		$(KRYON_NATIVE_BACKEND_CFLAGS) \
@@ -1193,8 +2106,8 @@ $(TARGET): Makefile $(SRC) $(KRYON_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) 
 		-DSUPPORT_FILEFORMAT_OGG=1 \
 		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
-		$(SRC) \
-		$(KRYON_SRCS) \
+		$(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) \
+		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a \
 		$(SQLITE_SRC) \
 		$(KRYON_NATIVE_BACKEND_LIBS) \
 		$(LIBOQS_A) \
@@ -1237,14 +2150,14 @@ $(CLICK_BIN): Makefile $(SRC) $(KRYON_CLICK_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAM
 		-DSUPPORT_FILEFORMAT_OGG=1 \
 		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
-		$(SRC) \
+		$(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) \
 		$(KRYON_CLICK_SRCS) \
 		$(SQLITE_SRC) \
 		$(CLICK_RAYLIB_A) \
 		$(CLICK_LIBOQS_A) \
 		$(AARCH64_RAY_LDLIBS) \
 		$(AARCH64_KRYON_CURL_LDLIBS) \
-		-lm -lpthread -ldl -lrt \
+		-lm -lpthread -ldl -lrt -latomic \
 		$(LDFLAGS)
 	@if command -v patchelf >/dev/null; then \
 		patchelf --set-interpreter "$(CLICK_PATCHELF_INTERPRETER)" --set-rpath '$$ORIGIN/../lib' $@; \
@@ -1314,9 +2227,9 @@ $(WIN32_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
 	mkdir -p $(dir $@)
 	$(WIN32_WINDRES) -Iwindows -O coff $< $@
 
-$(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(KRYON_WINDOWS_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
+$(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
 	$(WIN64_CC) $(WINDOWS_CFLAGS) \
-		$(APP_INCLUDE) \
+		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
 		$(SQLITE_INCLUDE) \
 		$(WIN64_LIBOQS_INCLUDE) \
@@ -1325,8 +2238,7 @@ $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(KRYON_WINDOWS_SRCS) $(SQLITE_SRC) $(S
 		-DPLATFORM_DESKTOP \
 		-DCURL_STATICLIB \
 		-o $@ \
-		$(WINDOWS_SRC) \
-		$(KRYON_WINDOWS_SRCS) \
+		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) \
 		$(SQLITE_SRC) \
 		$(WIN64_RAYLIB_A) \
 		$(WIN64_CURL_A) \
@@ -1336,9 +2248,9 @@ $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(KRYON_WINDOWS_SRCS) $(SQLITE_SRC) $(S
 		$(WINDOWS_LDFLAGS)
 	$(WIN64_STRIP) $@
 
-$(WIN32_TARGET): Makefile $(WINDOWS_SRC) $(KRYON_WINDOWS_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN32_RAYLIB_A) $(WIN32_CURL_A) $(WIN32_LIBOQS_A) $(WIN32_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN32_ARCH)
+$(WIN32_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN32_RAYLIB_A) $(WIN32_CURL_A) $(WIN32_LIBOQS_A) $(WIN32_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN32_ARCH)
 	$(WIN32_CC) $(WINDOWS_CFLAGS) \
-		$(APP_INCLUDE) \
+		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
 		$(SQLITE_INCLUDE) \
 		$(WIN32_LIBOQS_INCLUDE) \
@@ -1347,8 +2259,7 @@ $(WIN32_TARGET): Makefile $(WINDOWS_SRC) $(KRYON_WINDOWS_SRCS) $(SQLITE_SRC) $(S
 		-DPLATFORM_DESKTOP \
 		-DCURL_STATICLIB \
 		-o $@ \
-		$(WINDOWS_SRC) \
-		$(KRYON_WINDOWS_SRCS) \
+		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) \
 		$(SQLITE_SRC) \
 		$(WIN32_RAYLIB_A) \
 		$(WIN32_CURL_A) \
@@ -1559,17 +2470,19 @@ $(FLATPAK_TARGET): Makefile $(FLATPAK_MANIFEST) | $(FLATPAK_BUILD_DIR) $(FLATPAK
 		sh -lc 'set -eu; sh scripts/install-build-node.sh /tmp/inbe-build-node; export PATH=/tmp/inbe-build-node/bin:$$PATH; rm -rf .flatpak-builder $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; flatpak-builder --disable-rofiles-fuse --force-clean --repo=$(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir $(FLATPAK_MANIFEST) || { rm -rf $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir vendor-builds/linux build/bin/linux; make vendor-prebuilds-native; make native; flatpak build-init $(FLATPAK_BUILD_DIR)/build-dir $(APP_ID) org.gnome.Sdk org.gnome.Platform 46; install -D -m755 "$$(find build/bin/linux -maxdepth 1 -type f -name '\''inbe-linux-*'\'' | head -n 1)" $(FLATPAK_BUILD_DIR)/build-dir/files/bin/inbe; install -D -m644 packaging/linux/appimage/inbe.desktop $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; sed -i '\''s/^Icon=.*/Icon=$(APP_ID)/'\'' $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; install -D -m644 packaging/linux/appimage/inbe.png $(FLATPAK_BUILD_DIR)/build-dir/files/share/icons/hicolor/512x512/apps/$(APP_ID).png; install -D -m644 packaging/linux/appimage/inbe.appdata.xml $(FLATPAK_BUILD_DIR)/build-dir/files/share/metainfo/$(APP_ID).metainfo.xml; flatpak build-finish --share=ipc --share=network --socket=fallback-x11 --socket=wayland --socket=pulseaudio --device=dri --filesystem=home $(FLATPAK_BUILD_DIR)/build-dir; flatpak build-export $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; }; flatpak build-bundle $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_TARGET) $(APP_ID)'
 	test -f $@
 
-$(WEB_JS_TARGET): Makefile $(WEB_SRC) $(KRYON_WEB_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRY_GEN_STAMP) $(WEB_LIBOQS_A) web-tools-check | $(WEB_DIST_DIR)
+$(WEB_JS_TARGET): Makefile $(WEB_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WEB_GEN_STAMP) $(WEB_LIBOQS_A) $(WEB_HOST_JS) web-tools-check | $(WEB_DIST_DIR)
+$(WEB_JS_TARGET): | zi-check
 	rm -f $(WEB_DIST_DIR)/index.data
 	$(WEB_CC) $(WEB_CFLAGS) \
-		$(APP_INCLUDE) -I$(KRYON_DIR)/include \
-		-I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src -I$(SQLITE_BUILD_DIR) \
+		-iquote$(WEB_GEN_DIR) -iquote$(WEB_GEN_DIR)/src $(WEB_APP_INCLUDE) \
+		-I$(SQLITE_BUILD_DIR) \
 		$(WEB_LIBOQS_INCLUDE) \
 		-DKRYON_BACKEND_CANVAS=1 \
 		-DHAS_LIBOQS=1 \
 		-DPLATFORM_WEB \
 		-o $(WEB_JS_TARGET) \
-		$(WEB_SRC) $(KRYON_WEB_SRCS) $(SQLITE_SRC) \
+		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) \
+		$(foreach library,$(WEB_HOST_JS),--js-library $(library)) \
 		$(WEB_LIBOQS_A) \
 		-sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 -fexceptions \
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
@@ -1578,12 +2491,10 @@ $(WEB_JS_TARGET): Makefile $(WEB_SRC) $(KRYON_WEB_SRCS) $(SQLITE_SRC) $(SQLITE_A
 		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_enable_extension_breaks \
 		--preload-file locales --preload-file assets
 
-$(WEB_TARGET): src/web_shell.html $(WEB_BOOT_JS) $(WEB_JS_TARGET) vendor/kryon/web/kryon-web-present.js manifest.json $(WEB_ASSET_FILES) | $(WEB_DIST_DIR)
+$(WEB_TARGET): src/web_shell.html $(WEB_BOOT_JS) $(WEB_JS_TARGET) manifest.json $(WEB_ASSET_FILES) | $(WEB_DIST_DIR)
 	perl -0pe 's#\{\{\{ APP_SCRIPT \}\}\}#$(WEB_APP_SCRIPT)#g; s/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' src/web_shell.html > $@
 	cp $(WEB_BOOT_JS) $(WEB_DIST_DIR)/index_boot.js
 	perl -0pi -e 's/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' $(WEB_DIST_DIR)/index_boot.js
-	cp vendor/kryon/web/kryon-web-present.js $(WEB_DIST_DIR)/kryon-web-present.js
-	perl -0pi -e 's/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' $(WEB_DIST_DIR)/kryon-web-present.js
 	rm -rf $(WEB_DIST_DIR)/canvas
 	rm -rf $(WEB_DIST_DIR)/web-assets $(WEB_DIST_DIR)/site-icons
 	cp -R web-assets $(WEB_DIST_DIR)/
@@ -1597,17 +2508,19 @@ web-canvas: web
 $(WEB_CANVAS_DIR):
 	mkdir -p $@
 
-$(WEB_CANVAS_TARGET): Makefile $(WEB_SRC) $(KRYON_CANVAS_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRY_GEN_STAMP) $(WEB_LIBOQS_A) src/web_shell.html $(WEB_BOOT_JS) vendor/kryon/web/kryon-web-present.js manifest.json $(WEB_ASSET_FILES) web-tools-check | $(WEB_CANVAS_DIR)
+$(WEB_CANVAS_TARGET): Makefile $(WEB_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WEB_GEN_STAMP) $(WEB_LIBOQS_A) $(WEB_HOST_JS) src/web_shell.html $(WEB_BOOT_JS) manifest.json $(WEB_ASSET_FILES) web-tools-check | $(WEB_CANVAS_DIR)
+$(WEB_CANVAS_TARGET): | zi-check
 	rm -f $(WEB_CANVAS_DIR)/index.data
 	$(WEB_CC) $(WEB_CFLAGS) \
-		$(APP_INCLUDE) -I$(KRYON_DIR)/include \
-		-I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src -I$(SQLITE_BUILD_DIR) \
+		-iquote$(WEB_GEN_DIR) -iquote$(WEB_GEN_DIR)/src $(WEB_APP_INCLUDE) \
+		-I$(SQLITE_BUILD_DIR) \
 		$(WEB_LIBOQS_INCLUDE) \
 		-DKRYON_BACKEND_CANVAS=1 \
 		-DHAS_LIBOQS=1 \
 		-DPLATFORM_WEB \
 		-o $(WEB_CANVAS_DIR)/index.js \
-		$(WEB_SRC) $(KRYON_CANVAS_SRCS) $(SQLITE_SRC) \
+		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) \
+		$(foreach library,$(WEB_HOST_JS),--js-library $(library)) \
 		$(WEB_LIBOQS_A) \
 		-sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 -fexceptions \
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
@@ -1618,8 +2531,6 @@ $(WEB_CANVAS_TARGET): Makefile $(WEB_SRC) $(KRYON_CANVAS_SRCS) $(SQLITE_SRC) $(S
 	perl -0pe 's#\{\{\{ APP_SCRIPT \}\}\}#$(WEB_CANVAS_APP_SCRIPT)#g; s/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' src/web_shell.html > $@
 	cp $(WEB_BOOT_JS) $(WEB_CANVAS_DIR)/index_boot.js
 	perl -0pi -e 's/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' $(WEB_CANVAS_DIR)/index_boot.js
-	cp vendor/kryon/web/kryon-web-present.js $(WEB_CANVAS_DIR)/kryon-web-present.js
-	perl -0pi -e 's/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' $(WEB_CANVAS_DIR)/kryon-web-present.js
 	rm -rf $(WEB_CANVAS_DIR)/web-assets $(WEB_CANVAS_DIR)/site-icons
 	cp -R web-assets $(WEB_CANVAS_DIR)/
 	rm -rf $(WEB_CANVAS_DIR)/web-assets/dl
@@ -2046,4 +2957,4 @@ $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) 
 android-release android-bundle android-copy-release-apks android-copy-bundle windows-setup site: version-check
 
 # Actual artifacts are gated too, including direct and incremental builds.
-$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WIN32_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_HEADER) $(STORAGE_LAYOUT_HEADER) | build-laws
+$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WIN32_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws

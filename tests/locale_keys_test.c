@@ -344,7 +344,7 @@ scan_used_locale_get_calls_in_dir(const LocaleKeys *english, LocaleKeys *used,
             scan_used_locale_get_calls_in_file(english, used, path);
         } else if(len > 2 && strcmp(name + len - 2, ".h") == 0) {
             scan_used_locale_get_calls_in_file(english, used, path);
-        } else if(len > 4 && strcmp(name + len - 4, ".kry") == 0) {
+        } else if(len > 4 && strcmp(name + len - 4, ".zi") == 0) {
             scan_used_locale_get_calls_in_file(english, used, path);
         }
     }
@@ -485,7 +485,7 @@ scan_locale_get_calls_in_dir(const LocaleKeys *english, const char *dir_path)
             scan_locale_get_calls_in_file(english, path);
         } else if(len > 2 && strcmp(name + len - 2, ".h") == 0) {
             scan_locale_get_calls_in_file(english, path);
-        } else if(len > 4 && strcmp(name + len - 4, ".kry") == 0) {
+        } else if(len > 4 && strcmp(name + len - 4, ".zi") == 0) {
             scan_locale_get_calls_in_file(english, path);
         }
     }

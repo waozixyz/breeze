@@ -1,0 +1,91 @@
+#import, file "../../app/app_types.zi";
+#import, file "../environment.zi";
+
+c :: #system_library "c";
+
+#import, file "android_push_types.zi";
+
+push_host_read_catalog :: (catalog: *PushCatalog) -> bool #foreign c "push_host_read_catalog";
+push_host_configure_with :: (id: *u8) -> bool #foreign c "push_host_configure_with";
+push_host_configure :: () -> bool #foreign c "push_host_configure";
+push_host_registered :: () -> s32 #foreign c "push_host_registered";
+
+push_registered_cache: s32 = -1;
+push_registered_frames: s32 = 0;
+
+#program_export
+PushRefresh :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.push_distributor_count = 0
+    if AndroidPlatform() == 0 {
+        return
+    }
+    catalog: PushCatalog
+    if !push_host_read_catalog(*catalog) {
+        return
+    }
+    count := catalog.count
+    if count < 0 {
+        count = 0
+    }
+    if count > APP_PUSH_DISTRIBUTOR_MAX {
+        count = APP_PUSH_DISTRIBUTOR_MAX
+    }
+    index: s32 = 0
+    while index < count {
+        byte: s32 = 0
+        while byte < 96 {
+            app.push_distributors[index][byte] = catalog.ids[index][byte]
+            byte += 1
+        }
+        byte = 0
+        while byte < 64 {
+            app.push_distributor_labels[index][byte] = catalog.labels[index][byte]
+            byte += 1
+        }
+        byte = 0
+        while byte < 256 {
+            app.push_distributor_icons[index][byte] = catalog.icons[index][byte]
+            byte += 1
+        }
+        index += 1
+    }
+    app.push_distributor_count = count
+}
+
+#program_export
+PushConfigureWith :: (app: *InnerBreeze, index: s32) {
+    if app == null || AndroidPlatform() == 0 || index < 0  || index >= app.push_distributor_count  || index >= APP_PUSH_DISTRIBUTOR_MAX {
+        return
+    }
+    unused push_host_configure_with(*app.push_distributors[index][0])
+}
+
+#program_export
+PushConfigure :: () {
+    if AndroidPlatform() != 0 {
+        unused push_host_configure()
+    }
+}
+
+#program_export
+PushRegistered :: () -> s32 {
+    if AndroidPlatform() == 0 {
+        return 0
+    }
+    push_registered_frames += 1
+    if push_registered_cache >= 0 && push_registered_frames < 30 {
+        return push_registered_cache
+    }
+    push_registered_frames = 0
+    status := push_host_registered()
+    if status >= 0 {
+        push_registered_cache = ifx status != 0 then 1 else 0
+    }
+    if push_registered_cache >= 0 {
+        return push_registered_cache
+    }
+    return 0
+}

@@ -1,0 +1,551 @@
+// SDL presentation for the application's own secondary windows.
+SECONDARY_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD)
+
+SecondaryColor :: struct {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+SecondaryTexture :: struct {
+    id: u32
+    width: s32
+    height: s32
+    mipmaps: s32
+    format: s32
+}
+
+SecondaryTarget :: struct {
+    id: u32
+    texture: SecondaryTexture
+    depth: SecondaryTexture
+}
+
+SecondaryImage :: struct {
+    data: *void
+    width: s32
+    height: s32
+    mipmaps: s32
+    format: s32
+}
+
+SecondaryWindowState :: struct {
+    window: *void
+    window_id: u32
+    target: SecondaryTarget
+    background: SecondaryColor
+    width: s32
+    height: s32
+    x: s32
+    y: s32
+    click_x: s32
+    click_y: s32
+    drag_anchor_x: s32
+    drag_anchor_y: s32
+    drag_motion_x: s32
+    drag_motion_y: s32
+    drag_total_x: s32
+    drag_total_y: s32
+    drag_active: bool
+    drag_pending: bool
+    release_seen: bool
+    dragged: bool
+    clicked: bool
+    right_clicked: bool
+}
+
+SecondaryWindowSlot :: struct {
+    state: *SecondaryWindowState
+}
+
+SecondaryArea :: struct {
+    x: s32
+    y: s32
+    width: s32
+    height: s32
+}
+
+SecondaryEventHeader :: struct {
+    event_type: u32
+    timestamp: u32
+    window_id: u32
+}
+
+SecondaryButtonEvent :: struct {
+    event_type: u32
+    timestamp: u32
+    window_id: u32
+    device: u32
+    button: u8
+    state: u8
+    clicks: u8
+    padding: u8
+    x: s32
+    y: s32
+}
+
+SecondaryMotionEvent :: struct {
+    event_type: u32
+    timestamp: u32
+    window_id: u32
+    device: u32
+    state: u32
+    x: s32
+    y: s32
+    relative_x: s32
+    relative_y: s32
+}
+
+secondary_windows: [2]SecondaryWindowSlot;
+secondary_window_count: s32;
+secondary_watching_events: bool;
+secondary_active_window: *SecondaryWindowState;
+secondary_render_window: *void;
+secondary_render_context: *void;
+
+#if SECONDARY_SDL {
+    c :: #system_library "c";
+    sdl :: #system_library "SDL2";
+    raylib :: #system_library "raylib";
+    SecondaryEventWatch :: #type (*void, *void) -> s32 #c_call;
+    SecondaryAllocate :: (count: usize, size: usize) -> *void #foreign c "calloc";
+    SecondaryFree :: (value: *void) #foreign c "free";
+    SecondaryWindowReady :: () -> bool #foreign raylib "IsWindowReady";
+    SecondaryLoadTarget :: (width: s32, height: s32) -> SecondaryTarget #foreign raylib "LoadRenderTexture";
+    SecondaryUnloadTarget :: (target: SecondaryTarget) #foreign raylib "UnloadRenderTexture";
+    SecondaryBeginTarget :: (target: SecondaryTarget) #foreign raylib "BeginTextureMode";
+    SecondaryEndTarget :: () #foreign raylib "EndTextureMode";
+    SecondaryClear :: (background: SecondaryColor) #foreign raylib "ClearBackground";
+    SecondaryReadTexture :: (texture: SecondaryTexture) -> SecondaryImage #foreign raylib "LoadImageFromTexture";
+    SecondaryImageFormat :: (image: *SecondaryImage, format: s32) #foreign raylib "ImageFormat";
+    SecondaryFlipImage :: (image: *SecondaryImage) #foreign raylib "ImageFlipVertical";
+    SecondaryUnloadImage :: (image: SecondaryImage) #foreign raylib "UnloadImage";
+    SecondarySDLInitialized :: (flags: u32) -> u32 #foreign sdl "SDL_WasInit";
+    SecondaryCurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
+    SecondaryCurrentContext :: () -> *void #foreign sdl "SDL_GL_GetCurrentContext";
+    SecondaryMakeCurrent :: (window: *void, context: *void) -> s32 #foreign sdl "SDL_GL_MakeCurrent";
+    SecondaryDisplayBounds :: (display: s32, area: *SecondaryArea) -> s32 #foreign sdl "SDL_GetDisplayUsableBounds";
+    SecondaryCreateWindow :: (title: *u8, x: s32, y: s32, width: s32,
+        height: s32, flags: u32) -> *void #foreign sdl "SDL_CreateWindow";
+    SecondaryDestroyWindow :: (window: *void) #foreign sdl "SDL_DestroyWindow";
+    SecondaryShowWindow :: (window: *void) #foreign sdl "SDL_ShowWindow";
+    SecondaryWindowId :: (window: *void) -> u32 #foreign sdl "SDL_GetWindowID";
+    SecondaryGetPosition :: (window: *void, x: *s32, y: *s32) #foreign sdl "SDL_GetWindowPosition";
+    SecondarySetPosition :: (window: *void, x: s32, y: s32) #foreign sdl "SDL_SetWindowPosition";
+    SecondaryAddWatch :: (watch: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_AddEventWatch";
+    SecondaryRemoveWatch :: (watch: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_DelEventWatch";
+    SecondaryWindowSurface :: (window: *void) -> *void #foreign sdl "SDL_GetWindowSurface";
+    SecondaryImageSurface :: (pixels: *void, width: s32, height: s32,
+        depth: s32, pitch: s32, format: u32) -> *void #foreign sdl "SDL_CreateRGBSurfaceWithFormatFrom";
+    SecondaryFreeSurface :: (surface: *void) #foreign sdl "SDL_FreeSurface";
+    SecondaryBlitSurface :: (source: *void, source_area: *void,
+        destination: *void, destination_area: *void) -> s32 #foreign sdl "SDL_UpperBlitScaled";
+    SecondaryUpdateSurface :: (window: *void) -> s32 #foreign sdl "SDL_UpdateWindowSurface";
+    SecondaryGetKeyboardGrab :: (window: *void) -> s32 #foreign sdl "SDL_GetWindowKeyboardGrab";
+    SecondarySetKeyboardGrab :: (window: *void, enabled: s32) #foreign sdl "SDL_SetWindowKeyboardGrab";
+
+    RestoreSecondaryRenderContext :: () {
+        if secondary_render_window != null && secondary_render_context != null &&
+            (SecondaryCurrentWindow() != secondary_render_window ||
+             SecondaryCurrentContext() != secondary_render_context) {
+            unused SecondaryMakeCurrent(secondary_render_window, secondary_render_context)
+        }
+    }
+
+    SecondaryObserveEvent :: (argument: *void, event_data: *void) -> s32 {
+        unused argument
+        if event_data == null {
+            return 1
+        }
+        event := cast(*SecondaryEventHeader)event_data
+        if event.event_type != 0x401 && event.event_type != 0x402 &&
+            event.event_type != 0x400 {
+            return 1
+        }
+        window := SecondaryWindowForId(event.window_id)
+        if window == null {
+            return 1
+        }
+        if event.event_type == 0x401 {
+            button := cast(*SecondaryButtonEvent)event_data
+            if button.button == cast(u8)1 {
+                window.drag_active = true
+                window.release_seen = false
+                window.dragged = false
+                window.clicked = false
+                window.drag_pending = false
+                window.drag_total_x = 0
+                window.drag_total_y = 0
+                window.drag_anchor_x = button.x
+                window.drag_anchor_y = button.y
+            }
+            return 1
+        }
+        if event.event_type == 0x400 && window.drag_active {
+            motion := cast(*SecondaryMotionEvent)event_data
+            if (motion.state & cast(u32)1) != 0 {
+                window.drag_motion_x = motion.x
+                window.drag_motion_y = motion.y
+                window.drag_pending = true
+                return 1
+            }
+            window.release_seen = true
+            return 1
+        }
+        if event.event_type == 0x402 {
+            button := cast(*SecondaryButtonEvent)event_data
+            window.click_x = button.x
+            window.click_y = button.y
+            if button.button == cast(u8)3 {
+                window.right_clicked = true
+            }
+            if button.button == cast(u8)1 {
+                window.release_seen = true
+            }
+        }
+        return 1
+    }
+
+    ForgetSecondaryWindow :: (window: *SecondaryWindowState) {
+        index: s32 = 0
+        while index < secondary_window_count {
+            if secondary_windows[index].state == window {
+                offset := index
+                while offset < secondary_window_count - 1 {
+                    secondary_windows[offset].state = secondary_windows[offset + 1].state
+                    offset += 1
+                }
+                secondary_window_count -= 1
+                secondary_windows[secondary_window_count].state = null
+                break
+            }
+            index += 1
+        }
+        if secondary_window_count == 0 && secondary_watching_events {
+            watch: SecondaryEventWatch = SecondaryObserveEvent
+            SecondaryRemoveWatch(watch, null)
+            secondary_watching_events = false
+        }
+    }
+}
+
+OwnedSecondaryWindow :: (handle: *void) -> *SecondaryWindowState {
+    index: s32 = 0
+    while index < secondary_window_count {
+        window := secondary_windows[index].state
+        if cast(*void)window == handle {
+            return window
+        }
+        index += 1
+    }
+    return null
+}
+
+SecondaryWindowForId :: (id: u32) -> *SecondaryWindowState {
+    if id == 0 {
+        return null
+    }
+    index: s32 = 0
+    while index < secondary_window_count {
+        window := secondary_windows[index].state
+        if window.window_id == id {
+            return window
+        }
+        index += 1
+    }
+    return null
+}
+
+SecondaryRGBAFormat :: () -> u32 {
+    // SDL_RGBA32 names byte order; SDL's packed enum names integer order.
+    native_word: u32 = 1
+    native_bytes := cast(*u8)(*native_word)
+    if native_bytes[0] == cast(u8)1 {
+        return 0x16762004
+    }
+    return 0x16462004
+}
+
+#program_export
+app_secondary_window_open :: (title: *u8, x: s32, y: s32, width: s32,
+    height: s32, flags: s32, red: u8, green: u8, blue: u8,
+    alpha: u8, scale: float32) -> *void {
+    unused scale
+    #if SECONDARY_SDL {
+        if !SecondaryWindowReady() || SecondarySDLInitialized(cast(u32)32) == 0 ||
+            title == null || width <= 0 || height <= 0 || secondary_window_count >= 2 {
+            return null
+        }
+        window_flags: u32 = 8
+        if (flags & 1) != 0 {
+            window_flags |= cast(u32)16
+        }
+        if (flags & 2) != 0 {
+            window_flags |= cast(u32)32768
+        }
+        if (flags & 4) != 0 {
+            window_flags |= cast(u32)65536
+        }
+        if (flags & 24) != 0 {
+            area: SecondaryArea
+            if SecondaryDisplayBounds(0, *area) == 0 {
+                if (flags & 16) != 0 {
+                    x = area.x + (area.width - width) / 2
+                    y = area.y + (area.height - height) / 2
+                }
+                if (flags & 16) == 0 {
+                    x = area.x + area.width - width - x
+                    y = area.y + y
+                }
+            }
+        }
+        window := cast(*SecondaryWindowState)SecondaryAllocate(cast(usize)1,
+            size_of(SecondaryWindowState))
+        if window == null {
+            return null
+        }
+        if secondary_window_count == 0 {
+            secondary_render_window = SecondaryCurrentWindow()
+            secondary_render_context = SecondaryCurrentContext()
+            if secondary_render_window == null || secondary_render_context == null {
+                SecondaryFree(cast(*void)window)
+                return null
+            }
+        }
+        RestoreSecondaryRenderContext()
+        window.target = SecondaryLoadTarget(width, height)
+        if window.target.id == 0 {
+            SecondaryFree(cast(*void)window)
+            return null
+        }
+        window.window = SecondaryCreateWindow(title, x, y, width, height, window_flags)
+        if window.window == null || SecondaryWindowSurface(window.window) == null {
+            if window.window != null {
+                SecondaryDestroyWindow(window.window)
+            }
+            RestoreSecondaryRenderContext()
+            SecondaryUnloadTarget(window.target)
+            SecondaryFree(cast(*void)window)
+            return null
+        }
+        window.window_id = SecondaryWindowId(window.window)
+        window.width = width
+        window.height = height
+        window.background = SecondaryColor.{red, green, blue, alpha}
+        SecondaryGetPosition(window.window, *window.x, *window.y)
+        secondary_windows[secondary_window_count].state = window
+        secondary_window_count += 1
+        if !secondary_watching_events {
+            watch: SecondaryEventWatch = SecondaryObserveEvent
+            SecondaryAddWatch(watch, null)
+            secondary_watching_events = true
+        }
+        SecondaryShowWindow(window.window)
+        RestoreSecondaryRenderContext()
+        return cast(*void)window
+    }
+    unused title
+    unused x
+    unused y
+    unused width
+    unused height
+    unused flags
+    unused red
+    unused green
+    unused blue
+    unused alpha
+    return null
+}
+
+#program_export
+app_secondary_window_close :: (handle: *void) {
+    #if SECONDARY_SDL {
+        window := OwnedSecondaryWindow(handle)
+        if window == null {
+            return
+        }
+        if secondary_active_window == window {
+            SecondaryEndTarget()
+            secondary_active_window = null
+        }
+        ForgetSecondaryWindow(window)
+        SecondaryDestroyWindow(window.window)
+        RestoreSecondaryRenderContext()
+        SecondaryUnloadTarget(window.target)
+        SecondaryFree(cast(*void)window)
+        if secondary_window_count == 0 {
+            secondary_render_window = null
+            secondary_render_context = null
+        }
+    }
+    unused handle
+}
+
+#program_export
+app_secondary_window_begin :: (handle: *void) -> bool {
+    #if SECONDARY_SDL {
+        window := OwnedSecondaryWindow(handle)
+        if window == null || secondary_active_window != null {
+            return false
+        }
+        RestoreSecondaryRenderContext()
+        secondary_active_window = window
+        SecondaryBeginTarget(window.target)
+        SecondaryClear(window.background)
+        return true
+    }
+    unused handle
+    return false
+}
+
+#program_export
+app_secondary_window_end :: (handle: *void) -> bool {
+    #if SECONDARY_SDL {
+        window := OwnedSecondaryWindow(handle)
+        if window == null || secondary_active_window != window {
+            return false
+        }
+        RestoreSecondaryRenderContext()
+        SecondaryEndTarget()
+        secondary_active_window = null
+        image := SecondaryReadTexture(window.target.texture)
+        if image.data == null {
+            return false
+        }
+        SecondaryImageFormat(*image, 7)
+        SecondaryFlipImage(*image)
+        source := SecondaryImageSurface(image.data, image.width,
+            image.height, 32, image.width * 4, SecondaryRGBAFormat())
+        surface := SecondaryWindowSurface(window.window)
+        if source == null || surface == null {
+            if source != null {
+                SecondaryFreeSurface(source)
+            }
+            SecondaryUnloadImage(image)
+            RestoreSecondaryRenderContext()
+            return false
+        }
+        blit_status := SecondaryBlitSurface(source, null, surface, null)
+        SecondaryFreeSurface(source)
+        SecondaryUnloadImage(image)
+        update_status: s32 = -1
+        if blit_status == 0 {
+            update_status = SecondaryUpdateSurface(window.window)
+        }
+        RestoreSecondaryRenderContext()
+        return blit_status == 0 && update_status == 0
+    }
+    unused handle
+    return false
+}
+
+#program_export
+app_secondary_window_pump :: () {
+    #if SECONDARY_SDL {
+        index: s32 = 0
+        while index < secondary_window_count {
+            window := secondary_windows[index].state
+            index += 1
+            if !window.drag_active {
+                continue
+            }
+            if window.drag_pending {
+                dx := window.drag_motion_x - window.drag_anchor_x
+                dy := window.drag_motion_y - window.drag_anchor_y
+                window.drag_pending = false
+                SecondaryGetPosition(window.window, *window.x, *window.y)
+                if dx != 0 || dy != 0 {
+                    window.x += dx
+                    window.y += dy
+                    window.drag_total_x += dx
+                    window.drag_total_y += dy
+                    SecondarySetPosition(window.window, window.x, window.y)
+                    if window.drag_total_x > 2 || window.drag_total_x < -2 ||
+                        window.drag_total_y > 2 || window.drag_total_y < -2 {
+                        window.dragged = true
+                    }
+                }
+            }
+            if window.release_seen {
+                window.drag_active = false
+                window.release_seen = false
+                if !window.dragged {
+                    window.clicked = true
+                }
+            }
+        }
+    }
+}
+
+#program_export
+app_secondary_window_clicked :: (handle: *void) -> bool {
+    window := OwnedSecondaryWindow(handle)
+    if window == null || !window.clicked {
+        return false
+    }
+    window.clicked = false
+    return true
+}
+
+#program_export
+app_secondary_window_right_clicked :: (handle: *void) -> bool {
+    window := OwnedSecondaryWindow(handle)
+    if window == null || !window.right_clicked {
+        return false
+    }
+    window.right_clicked = false
+    return true
+}
+
+#program_export
+app_secondary_window_dragged :: (handle: *void) -> bool {
+    window := OwnedSecondaryWindow(handle)
+    if window == null || !window.dragged {
+        return false
+    }
+    window.dragged = false
+    window.clicked = false
+    return true
+}
+
+#program_export
+app_secondary_window_keyboard_grab :: (handle: *void, enabled: bool) -> bool {
+    #if SECONDARY_SDL {
+        window := OwnedSecondaryWindow(handle)
+        if window == null {
+            return false
+        }
+        desired: s32 = ifx (enabled) then (1) else (0)
+        if SecondaryGetKeyboardGrab(window.window) == desired {
+            return true
+        }
+        SecondarySetKeyboardGrab(window.window, desired)
+        return SecondaryGetKeyboardGrab(window.window) == desired
+    }
+    unused handle
+    unused enabled
+    return false
+}
+
+#program_export
+app_secondary_window_position :: (handle: *void, x: *s32, y: *s32) {
+    window := OwnedSecondaryWindow(handle)
+    if x != null {
+        x[0] = ifx (window != null) then (window.x) else (0)
+    }
+    if y != null {
+        y[0] = ifx (window != null) then (window.y) else (0)
+    }
+}
+
+#program_export
+app_secondary_window_click_position :: (handle: *void, x: *s32, y: *s32) {
+    window := OwnedSecondaryWindow(handle)
+    if x != null {
+        x[0] = ifx (window != null) then (window.click_x) else (-1)
+    }
+    if y != null {
+        y[0] = ifx (window != null) then (window.click_y) else (-1)
+    }
+}

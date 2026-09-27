@@ -1,0 +1,62 @@
+// Historical Inbe archives can contain session text files rather than SQLite.
+// The source archive stays with the user. Repeating an import is safe because
+// the session insertion path derives stable IDs from the date and rounds.
+#import "zip"
+#import "zip_linux"
+#import, file "legacy_session.zi";
+
+LegacyZipMaxSessionBytes :: 65536
+
+// Returns the number of imported session entries, or -1 for a malformed
+// archive or a session that could not be decoded and stored.
+LegacyProcessZipSessions :: (archive: []u8, apply: bool) -> s32 {
+    directory: ZipDirectory = OpenZipDirectory(archive)
+    if !directory.valid { return -1 }
+    imported: s32 = 0
+    while directory.index < directory.count {
+        named: ZipNamedEntry = NextZipEntry(archive, directory)
+        if !named.valid { return -1 }
+        directory = named.directory
+        if named.name_size >= LegacyMaxPathBytes { return -1 }
+        name: [LegacyMaxPathBytes]u8
+        index: u64 = 0
+        while index < named.name_size {
+            byte := archive[named.name_start + index]
+            if byte == cast(u8)0 { return -1 }
+            name[index] = byte
+            index += 1
+        }
+        name[named.name_size] = cast(u8)0
+        if LegacyIsSessionPath(*name[0]) == 0 { continue }
+        if named.entry.size == 0 || named.entry.size > LegacyZipMaxSessionBytes {
+            return -1
+        }
+        contents: [LegacyZipMaxSessionBytes]u8
+        if !ExtractZipEntry(archive, named.entry,
+            contents[0:cast(s32)named.entry.size]) {
+            return -1
+        }
+        if apply {
+            if LegacyImportBytes(*name[0], *contents[0], named.entry.size) == 0 {
+                return -1
+            }
+        } else {
+            rounds: [LegacyMaxRounds]s32
+            if LegacyParseRounds(*contents[0], named.entry.size,
+                *rounds[0], LegacyMaxRounds) == 0 { return -1 }
+        }
+        imported += 1
+    }
+    if directory.cursor != directory.end { return -1 }
+    return imported
+}
+
+#program_export
+LegacyImportZipSessions :: (archive: []u8) -> s32 {
+    return LegacyProcessZipSessions(archive, true)
+}
+
+#program_export
+LegacyCountZipSessions :: (archive: []u8) -> s32 {
+    return LegacyProcessZipSessions(archive, false)
+}

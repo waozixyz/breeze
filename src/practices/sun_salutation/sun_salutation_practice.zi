@@ -1,0 +1,382 @@
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import "geometry"
+#import "layout"
+#import, file "../../platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../../app/app.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../meditation/meditation_music.zi";
+#import, file "sun_salutation_rules.zi";
+#import, file "sun_salutation_assets.zi";
+
+#import, file "../../screens/practice_screen_calls.zi";
+#import, file "../../screens/practice_subscreen_layout.zi";
+#import "control_props"
+#import "image_props"
+#import "input_props"
+#import "text_props"
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/draw.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "image_widget"
+#import "slider_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "session"
+#import "button_props"
+#import "slider_props"
+#import, file "../../app/app_chrome.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/app_nav_state.zi";
+#import "slider"
+
+using ModalType;
+using ExerciseType;
+using TextWrap;
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+using NumericValueKind;
+
+sun_salutation_clampi :: (value: s32, min_value: s32, max_value: s32) -> s32 {
+    if value < min_value {
+        return min_value
+    }
+    if value > max_value {
+        return max_value
+    }
+    return value
+}
+
+#program_export
+sun_salutation_step_pose_index :: (step: s32) -> s32 {
+    step = sun_salutation_clampi(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    return step
+}
+
+sun_salutation_practice_init :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    app.sun_salutation = SalutationInit(app.sun_salutation)
+}
+
+draw_preview_pose :: (figure: s32, pose_index: s32,
+x: s32, y: s32, w: s32, h: s32, active: bool) {
+    pose_index = sun_salutation_clampi(pose_index, 0, SUN_SALUTATION_POSE_COUNT - 1)
+    Image(CurrentApp().ui.session, ImageProps.{
+        .asset_path = sun_salutation_pose_asset(figure),
+        .source = {
+            cast(float32)((pose_index % SUN_SALUTATION_POSE_SHEET_COLS) * SUN_SALUTATION_POSE_FRAME_W),
+            cast(float32)((pose_index / SUN_SALUTATION_POSE_SHEET_COLS) * SUN_SALUTATION_POSE_FRAME_H),
+            cast(float32)SUN_SALUTATION_POSE_FRAME_W, cast(float32)SUN_SALUTATION_POSE_FRAME_H},
+        .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
+        .fit = cast(ImageFit)ImageFitContain,
+        .class_name = ifx (active) then (0) else (0)})
+}
+
+preview_height :: (content_w: s32) -> s32 {
+    thumb_w := (content_w - AppScale(22)) / 6
+
+    if thumb_w < AppScale(34) {
+        thumb_w = AppScale(34)
+    }
+    if thumb_w > AppScale(56) {
+        thumb_w = AppScale(56)
+    }
+    return thumb_w * 2 + AppScale(56)
+}
+
+draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
+    label_font := AppFontSize()
+    small_font := AppSmallFontSize()
+    label_w: s32
+    thumb_w := (w - AppScale(22)) / 6
+    thumb_h: s32
+    gap := AppScale(4)
+    active_step: s32
+    preview_step_ticks: s32
+    row_y: s32
+    muted := DarkenColor(StyleTokenColor("text"), 40)
+
+    if thumb_w < AppScale(34) {
+        thumb_w = AppScale(34)
+    }
+    if thumb_w > AppScale(56) {
+        thumb_w = AppScale(56)
+    }
+    thumb_h = thumb_w
+
+    label_w = AppTextWidth(LocaleText("sun_salutation_tempo_preview_label"),
+    label_font)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(x + (w - label_w) / 2), cast(float32)(y), 0, 0},
+        .text = (LocaleText("sun_salutation_tempo_preview_label")),
+        .wrap = cast(TextWrap)TextWrapNone
+    })
+    y += AppScale(28)
+
+    preview_step_ticks = app.sun_salutation.start_seconds * 60
+    if preview_step_ticks <= 0 {
+        preview_step_ticks = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
+    }
+    active_step = (app.breathing.frame / preview_step_ticks) %
+    SUN_SALUTATION_STEP_COUNT
+
+    {
+        i: s32 = 0
+        while i < SUN_SALUTATION_STEP_COUNT {
+            col := i % 6
+            row := i / 6
+            px := x + col * (thumb_w + gap) +             (w - (thumb_w * 6 + gap * 5)) / 2
+            py := y + row * (thumb_h + AppScale(18))
+            pose_index := sun_salutation_step_pose_index(i)
+
+            DrawRectangle(px, py, thumb_w, thumb_h,
+            DarkenColor(StyleTokenColor("canvas"), 6))
+            if i == active_step {
+                DrawRectangleLines(px, py, thumb_w, thumb_h, StyleTokenColor("accent-hover"))
+            }
+            draw_preview_pose(app.sun_salutation.figure,
+            pose_index,
+            px,
+            py,
+            thumb_w,
+            thumb_h,
+            i == active_step)
+            if i < SUN_SALUTATION_STEP_COUNT - 1 {
+                next_col := (i + 1) % 6
+
+                if next_col != 0 {
+                    DrawLine(px + thumb_w + AppScale(1),
+                    py + thumb_h / 2,
+                    px + thumb_w + gap - AppScale(1),
+                    py + thumb_h / 2,
+                    muted)
+                }
+            }
+            i += 1
+        }
+    }
+
+    row_y = y + thumb_h * 2 + AppScale(26)
+    if AppTextWidth(LocaleText("sun_salutation_tempo_preview_hint"),
+    small_font) <= w {
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(row_y), 0, 0},
+            .text = (LocaleText("sun_salutation_tempo_preview_hint")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    }
+}
+
+draw_figure_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s32) -> s32 {
+    label_font := AppFontSize()
+    small_font := AppSmallFontSize()
+    label_w: s32
+    row_y: s32
+    option_gap := AppScale(10)
+    option_w := (w - option_gap) / 2
+    option_h := AppScale(118)
+    image_h := AppScale(72)
+    changed: s32 = 0
+
+    if app == null || SUN_SALUTATION_ACTIVE_FIGURE_COUNT <= 1 {
+        return 0
+    }
+
+    label_w = AppTextWidth(LocaleText("sun_salutation_figure_label"),
+    label_font)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(x + (w - label_w) / 2), cast(float32)(y), 0, 0},
+        .text = (LocaleText("sun_salutation_figure_label")),
+        .wrap = cast(TextWrap)TextWrapNone
+    })
+    row_y = y + AppScale(30)
+
+    {
+        i: s32 = 0
+        while i < SUN_SALUTATION_ACTIVE_FIGURE_COUNT {
+            bounds := Rectangle.{
+                cast(float32)(x + i * (option_w + option_gap)),
+                cast(float32)row_y,
+                cast(float32)option_w,
+                cast(float32)option_h
+            }
+            image_bounds := Rectangle.{
+                bounds.x + cast(float32)AppScale(8),
+                bounds.y + cast(float32)AppScale(8),
+                bounds.width - cast(float32)AppScale(16),
+                cast(float32)image_h
+            }
+            selected := app.sun_salutation.figure == i
+            label: string
+            text_w: float32
+            pose_index := sun_salutation_step_pose_index(1)
+
+
+            if i == SUN_SALUTATION_FIGURE_MAN {
+                label = LocaleText("sun_salutation_figure_man")
+            } else {
+                label = LocaleText("sun_salutation_figure_woman")
+            }
+            text_w = cast(float32)AppTextWidth(label, small_font)
+
+            clicked := Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = bounds, .id = cast(s32)24900 + i,
+                .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected,
+                .disabled = app.modal.active != 0
+            })
+            draw_preview_pose(i,
+            pose_index,
+            cast(s32)image_bounds.x,
+            cast(s32)image_bounds.y,
+            cast(s32)image_bounds.width,
+            cast(s32)image_bounds.height,
+            true)
+            Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{bounds.x + (bounds.width - text_w) * 0.5f, bounds.y + (bounds.height - cast(float32)AppScale(28)), 0, 0},
+                .text = label,
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+
+            if clicked != 0 && selected == false {
+                app.sun_salutation.figure = i
+                changed = 1
+            }
+            i += 1
+        }
+    }
+
+    return changed
+}
+
+config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    bottom_padding: s32
+
+    if app == null {
+        return 0
+    }
+
+    bottom_padding = app_content_bottom_reserved(app) + AppScale(24)
+    app.practice_config_tab = 0
+    return (ifx (SUN_SALUTATION_ACTIVE_FIGURE_COUNT > 1) then (AppScale(148) + AppScale(16)) else (0)) +     preview_height(content_w) + AppScale(16) +     AppScale(74) * 3 +     meditation_music_measure_practice_settings(app,
+    EXERCISE_SUN_SALUTATION,
+    content_w, 0, 1) +     bottom_padding
+}
+
+sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
+    layout := PracticeSubscreenLayout.{0 }
+    repetitions: s32
+    start_seconds: s32
+    end_seconds: s32
+    side_padding := GetPageSidePadding()
+    max_content_w := AppScale(CONTENT_MAX_W)
+    content_x: s32 = 0
+    content_w: s32 = 0
+    y: s32
+
+    if app == null {
+        return
+    }
+
+    app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+    app.practice_config_tab = 0
+
+    PracticeConfigLayout(app, ModalPracticeConfig, AppScale(14),
+    *layout)
+    if PracticeConfigTitle(app,
+    LocaleText("practice_configure_button"),
+    cast(s32)ModalPracticeConfig, 0) != 0 {
+        return
+    }
+
+    if max_content_w > app.ui.view_width - side_padding * 2 {
+        max_content_w = app.ui.view_width - side_padding * 2
+    }
+    if max_content_w < AppScale(320) {
+        max_content_w = AppScale(320)
+    }
+    GetCenteredColumn(max_content_w, side_padding, *content_x, *content_w)
+    content_h := config_content_height(app, content_w)
+
+    {
+        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)layout.scroll_y,
+            cast(float32)app.ui.view_width, cast(float32)layout.scroll_h
+}
+        scroll_1_key: u64 = KeyHash("inbe/practices/sun_salutation/sun_salutation_practice/scroll/1")
+        scroll_1_props: ScrollProps
+        scroll_1_props.key = scroll_1_key
+        scroll_1_props.bounds = scroll_1_bounds
+        scroll_1_props.content_height = content_h
+        scroll_1_props.scroll_offset = app.settings_scroll
+        scroll_1_props.input = ScrollObservationFor(scroll_1_key, scroll_1_bounds)
+        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
+        app.settings_scroll = scroll_1_result.scroll_offset
+        CommitScroll(scroll_1_key, scroll_1_result.frame)
+        page: Rectangle = scroll_1_result.content
+
+        y := cast(s32)page.y
+
+        if SUN_SALUTATION_ACTIVE_FIGURE_COUNT > 1 {
+            if draw_figure_selector(app, content_x, y, content_w) != 0 {
+                save_settings(app)
+            }
+            y += AppScale(148) + AppScale(16)
+        }
+
+        draw_preview(app, content_x, y, content_w)
+        y += preview_height(content_w) + AppScale(16)
+
+        repetitions = app.sun_salutation.repetitions
+        rep_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 610,
+            .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
+            .label = LocaleText("sun_salutation_repetitions_label"),
+            .value = repetitions, .min = 2, .max = 12})
+        if rep_step.changed {
+            app.sun_salutation.repetitions = rep_step.value
+            save_settings(app)
+        }
+        y += AppScale(74)
+
+        start_seconds = app.sun_salutation.start_seconds
+        start_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 611,
+            .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
+            .label = LocaleText("sun_salutation_start_speed_label"),
+            .value = start_seconds, .min = SUN_SALUTATION_SECONDS_MIN,
+            .max = SUN_SALUTATION_SECONDS_MAX})
+        if start_step.changed {
+            app.sun_salutation.start_seconds = start_step.value
+            app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+            save_settings(app)
+        }
+        y += AppScale(74)
+
+        end_seconds = app.sun_salutation.end_seconds
+        end_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 612,
+            .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
+            .label = LocaleText("sun_salutation_end_speed_label"),
+            .value = end_seconds, .min = SUN_SALUTATION_SECONDS_MIN,
+            .max = app.sun_salutation.start_seconds})
+        if end_step.changed {
+            app.sun_salutation.end_seconds = end_step.value
+            app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+            save_settings(app)
+        }
+        y += AppScale(74)
+
+        meditation_music_draw_practice_settings(app, EXERCISE_SUN_SALUTATION,
+        content_x, content_w,
+        *y, 0, 1)
+        End(CurrentApp().ui.session)
+    }
+}

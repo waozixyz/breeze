@@ -1,0 +1,122 @@
+// Observe close requests for the app's own window only.
+WINDOW_CLOSE_WINDOWS :: #defined(_WIN32) && !#defined(ANDROID_BUILD)
+WINDOW_CLOSE_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(_WIN32) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD)
+
+#if WINDOW_CLOSE_WINDOWS {
+    user32 :: #system_library "user32";
+    kernel32 :: #system_library "kernel32";
+    atomic :: #system_library "atomic";
+    WindowProcedure :: #type (*void, u32, usize, isize) -> isize #c_call;
+    SetWindowProcedure :: (window: *void, index: s32,
+        procedure: WindowProcedure) -> isize #foreign user32 "SetWindowLongPtrW";
+    CallPreviousProcedure :: (procedure: isize,
+        window: *void, message: u32, wparam: usize,
+        lparam: isize) -> isize #foreign user32 "CallWindowProcW";
+    WindowSetLastError :: (error: u32) #foreign kernel32 "SetLastError";
+    WindowGetLastError :: () -> u32 #foreign kernel32 "GetLastError";
+    WindowAtomicExchange :: (value: *s32, replacement: s32,
+        order: s32) -> s32 #foreign atomic "__atomic_exchange_4";
+
+    app_close_window: *void;
+    app_previous_window_proc: isize;
+    app_close_pending: s32;
+
+    AppWindowCloseProcedure :: (window: *void, message: u32,
+        wparam: usize, lparam: isize) -> isize {
+        previous := app_previous_window_proc
+        if window == app_close_window && message == 0x0010 {
+            WindowAtomicExchange(*app_close_pending, 1, 4)
+            return cast(isize)0
+        }
+        if window == app_close_window && message == 0x0082 {
+            app_close_window = null
+            app_previous_window_proc = cast(isize)0
+        }
+        return CallPreviousProcedure(previous, window, message,
+            wparam, lparam)
+    }
+}
+
+#if WINDOW_CLOSE_SDL {
+    sdl :: #system_library "SDL2";
+    WindowCloseEventFilter :: #type (*void, *void) -> s32 #c_call;
+    SDLWindowId :: (window: *void) -> u32 #foreign sdl "SDL_GetWindowID";
+    SDLAddWatch :: (callback: WindowCloseEventFilter,
+        userdata: *void) #foreign sdl "SDL_AddEventWatch";
+    SDLRemoveWatch :: (callback: WindowCloseEventFilter,
+        userdata: *void) #foreign sdl "SDL_DelEventWatch";
+    SDLAtomicSet :: (value: *s32, replacement: s32) -> s32 #foreign sdl "SDL_AtomicSet";
+
+    WindowEventHeader :: struct {
+        event_type: u32
+        timestamp: u32
+        window_id: u32
+        event: u8
+    }
+    app_close_window_id: u32;
+    app_close_pending: s32;
+
+    AppWindowCloseEvent :: (userdata: *void, event_data: *void) -> s32 {
+        unused userdata
+        if event_data != null {
+            event := cast(*WindowEventHeader)event_data
+            if event.event_type == 0x200 && event.event == 14 &&
+                event.window_id == app_close_window_id {
+                SDLAtomicSet(*app_close_pending, 1)
+            }
+        }
+        return 1
+    }
+}
+
+#program_export
+app_window_close_watch :: (window: *void) {
+    #if WINDOW_CLOSE_WINDOWS {
+        if window == null || window == app_close_window {
+            return
+        }
+        WindowSetLastError(0)
+        procedure: WindowProcedure = AppWindowCloseProcedure
+        previous := SetWindowProcedure(window, -4, procedure)
+        if previous == cast(isize)0 && WindowGetLastError() != 0 {
+            return
+        }
+        app_close_window = window
+        app_previous_window_proc = previous
+        return
+    }
+    #if WINDOW_CLOSE_SDL {
+        if window == null || app_close_window_id != 0 {
+            return
+        }
+        app_close_window_id = SDLWindowId(window)
+        if app_close_window_id != 0 {
+            callback: WindowCloseEventFilter = AppWindowCloseEvent
+            SDLAddWatch(callback, null)
+        }
+        return
+    }
+    unused window
+}
+
+#program_export
+native_take_window_close :: () -> s32 {
+    #if WINDOW_CLOSE_WINDOWS {
+        return WindowAtomicExchange(*app_close_pending, 0, 4)
+    }
+    #if WINDOW_CLOSE_SDL {
+        return SDLAtomicSet(*app_close_pending, 0)
+    }
+    return 0
+}
+
+#program_export
+app_window_close_shutdown :: () {
+    #if WINDOW_CLOSE_SDL {
+        if app_close_window_id != 0 {
+            callback: WindowCloseEventFilter = AppWindowCloseEvent
+            SDLRemoveWatch(callback, null)
+            app_close_window_id = 0
+        }
+    }
+}

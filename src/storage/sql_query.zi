@@ -1,0 +1,78 @@
+#import, file "sqlite.zi";
+
+c :: #system_library "c";
+query_db_handle :: () -> *void #foreign c "storage_db_handle";
+
+#program_export
+db_select_int64_text :: (sql: string, fallback: s64) -> s64 {
+    buffer: [4096] u8
+    copied: s32 = 0
+    while copied < 4095 && copied < cast(s32)sql.count {
+        buffer[copied] = sql[copied]
+        copied += 1
+    }
+    buffer[copied] = cast(u8)0
+    return db_select_int64(*buffer[0], fallback)
+}
+
+#program_export
+db_select_int64 :: (sql: *u8, fallback: s64) -> s64 {
+    db := query_db_handle()
+    if db == null || sql == null {
+        return fallback
+    }
+    statement: *void = null
+    if SqlitePrepare(db, sql, -1, *statement, null) != 0 {
+        return fallback
+    }
+    value := fallback
+    if SqliteStep(statement) == 100 {
+        value = SqliteColumnInt64(statement, 0)
+    }
+    unused SqliteFinalize(statement)
+    return value
+}
+
+#program_export
+db_select_int_text :: (sql: string, fallback: s32) -> s32 {
+    buffer: [4096] u8
+    copied: s32 = 0
+    while copied < 4095 && copied < cast(s32)sql.count {
+        buffer[copied] = sql[copied]
+        copied += 1
+    }
+    buffer[copied] = cast(u8)0
+    return db_select_int(*buffer[0], fallback)
+}
+
+#program_export
+db_select_int :: (sql: *u8, fallback: s32) -> s32 {
+    return cast(s32)db_select_int64(sql, cast(s64)fallback)
+}
+
+#program_export
+db_exec_text :: (sql: *u8, text: *u8) -> s32 {
+    db := query_db_handle()
+    if db == null || sql == null {
+        return 0
+    }
+    statement: *void = null
+    if SqlitePrepare(db, sql, -1, *statement, null) != 0 {
+        return 0
+    }
+    empty: [1]u8
+    empty[0] = cast(u8)0
+    value := text
+    if value == null {
+        value = *empty[0]
+    }
+    ok := false
+    if SqliteBindText(statement, 1, value, -1, null) == 0 {
+        ok = SqliteStep(statement) == 101
+    }
+    unused SqliteFinalize(statement)
+    if ok {
+        return 1
+    }
+    return 0
+}

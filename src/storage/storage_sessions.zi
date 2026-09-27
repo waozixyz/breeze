@@ -1,0 +1,864 @@
+c :: #system_library "c";
+STORAGE_ID_SIZE :: 64
+time :: (t: *s64) -> s64 #foreign c;
+localtime :: (t: *s64) -> *Tm #foreign c;
+mktime :: (tm: *Tm) -> s64 #foreign c;
+#import "string_range"
+#import "byte_text_linux"
+#import "file_linux"
+#import, file "time_parts.zi";
+
+#import, file "../core/types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "session_mood.zi";
+#import, file "sql_query.zi";
+#import, file "storage_habits.zi";
+#import, file "storage_habit_materialize.zi";
+#import, file "meta.zi";
+DELETE_ROUNDS_SQL: [64] u8;
+StorageSessionRecordCallback :: #type (path: string, year: s32, month: s32, day: s32, hour: s32, minute: s32, second: s32, topic: s32, activity: s32, round_times: []s32, round_count: s32, user: s64) -> ();
+sqlite3_reset :: (statement: *void) -> s32 #foreign c "sqlite3_reset";
+sqlite3_clear_bindings :: (statement: *void) -> s32 #foreign c "sqlite3_clear_bindings";
+sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+
+
+
+
+
+
+
+
+hash_rounds :: (round_times: *s32, round_count: s32) -> u32 {
+    h: u32 = 2166136261u
+
+    {
+        i: s32 = 0
+        while i < round_count {
+            v: u32 = cast(u32)round_times[i]
+
+            h ^= v & 0xffu
+            h *= 16777619u
+            h ^= (v >> 8) & 0xffu
+            h *= 16777619u
+            i += 1
+        }
+    }
+    return h
+}
+
+make_session_id :: (started_at: s64, round_times: *s32,
+                   round_count: s32, out: *u8, out_size: s64) {
+    if out == null || out_size <= 0 {
+        return
+    }
+    out[0] = cast(u8)0
+    started: [32]u8
+    if !AppFormatS64(started_at, started[:]) {
+        return
+    }
+    index: s64 = 0
+    if index + 1 >= out_size {
+        return
+    }
+    out[index] = cast(u8)115
+    index += 1
+    if index + 1 >= out_size {
+        out[index] = cast(u8)0
+        return
+    }
+    out[index] = cast(u8)45
+    index += 1
+    started_index: s32 = 0
+    while started_index < 32 && started[started_index] != cast(u8)0 {
+        if index + 1 >= out_size {
+            out[index] = cast(u8)0
+            return
+        }
+        out[index] = started[started_index]
+        index += 1
+        started_index += 1
+    }
+    if index + 9 >= out_size {
+        out[index] = cast(u8)0
+        return
+    }
+    out[index] = cast(u8)45
+    index += 1
+    hash: u32 = hash_rounds(round_times, round_count)
+    digit: s32 = 7
+    while digit >= 0 {
+        nibble: u32 = (hash >> cast(u32)(digit * 4)) & 15u
+        if nibble < 10u {
+            out[index] = cast(u8)(48u + nibble)
+        } else {
+            out[index] = cast(u8)(87u + nibble)
+        }
+        index += 1
+        digit -= 1
+    }
+    out[index] = cast(u8)0
+}
+
+parse_db_id :: (path_or_id: string, out: *u8, out_size: s64) -> s32 {
+    if path_or_id.count == 0 || out == null || out_size <= 0 {
+        return 0
+    }
+    if Substring(path_or_id, 0, 3) == "db:" {
+        if !AppCopyText(Substring(path_or_id, 3, cast(s32)path_or_id.count - 3),
+            BytesFromPointer(out, cast(u64)out_size)) { return 0 }
+    } else {
+        if !AppCopyText(path_or_id, BytesFromPointer(out, cast(u64)out_size)) { return 0 }
+    }
+    if out[0] != #char "\0" { return 1 }
+    return 0
+}
+
+filter_positive_rounds :: (round_times: *s32, round_count: s32,
+                          out: *s32, out_max: s32) -> s32 {
+    saved_count: s32 = 0
+
+    if round_times == null || out == null || round_count < 0 || out_max <= 0 {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < round_count && i < out_max {
+            if round_times[i] > 0 {
+                out[saved_count] = round_times[i]
+                saved_count += 1
+            }
+            i += 1
+        }
+    }
+    return saved_count
+}
+
+write_session_rounds :: (session_id: string, round_times: *s32,
+                        round_count: s32, replace: s32) -> s32 {
+    stmt: *void = null
+
+    if session_id.count == 0 || round_count <= 0 {
+        return 0
+    }
+    insert_sql_buffer: [256] u8
+    if replace != 0 {
+        AppCopyText("INSERT OR REPLACE INTO session_rounds(session_id,round_index,seconds) VALUES(?1,?2,?3)", insert_sql_buffer[:])
+    } else {
+        AppCopyText("INSERT INTO session_rounds(session_id,round_index,seconds) VALUES(?1,?2,?3)", insert_sql_buffer[:])
+    }
+    if SqlitePrepare(storage_db_handle(), *insert_sql_buffer[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < round_count {
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            bind_text(stmt, 1, session_id)
+            sqlite3_bind_int(stmt, 2, i)
+            sqlite3_bind_int(stmt, 3, round_times[i])
+            if SqliteStep(stmt) != SQLITE_DONE {
+                SqliteFinalize(stmt)
+                return 0
+            }
+            i += 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return 1
+}
+
+insert_session_at_ex :: (started_at: s64, local_date: s32,
+                            round_times: *s32, round_count: s32,
+                            topic: s32, activity: s32, source: string,
+                            out_id: *u8, out_id_size: s64, out_inserted: *s32) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+    rc: s32
+    inserted: s32
+    rhash: u32
+
+    if out_inserted != null {
+        out_inserted[0] = 0
+    }
+
+    if storage_db_handle() == null || round_times == null || round_count <= 0  || round_count > MaxRounds {
+        return 0
+    }
+
+    rhash = hash_rounds(round_times, round_count)
+    make_session_id(started_at, round_times, round_count, *id[0], 64)
+
+    insert_sessions_sql: [512] u8
+    AppCopyText("INSERT OR IGNORE INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", insert_sessions_sql[:])
+    if SqlitePrepare(storage_db_handle(), *insert_sessions_sql[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    SqliteBindInt64(stmt, 3, started_at)
+    sqlite3_bind_int(stmt, 4, local_date)
+    sqlite3_bind_int(stmt, 5, topic)
+    sqlite3_bind_int(stmt, 6, activity)
+    bind_text(stmt, 7, ifx (source.count > 0) then (source) else ("app"))
+    SqliteBindInt64(stmt, 8, now_seconds())
+    SqliteBindInt64(stmt, 9, cast(s64)rhash)
+    SqliteBindInt64(stmt, 10, now_seconds())
+    rc = SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    if rc != SQLITE_DONE {
+        return 0
+    }
+
+    if sqlite3_changes(storage_db_handle()) > 0 {
+        inserted = 1
+    } else {
+        inserted = 0
+    }
+    if inserted != 0 {
+        if write_session_rounds(AppTextFromCString(*id[0], STORAGE_ID_SIZE), round_times, round_count, 1) == 0 {
+            return 0
+        }
+        storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    }
+
+    if out_id_size > 0 {
+        if out_id != null {
+            AppCopyText(AppTextFromCString(*id[0], STORAGE_ID_SIZE),
+                BytesFromPointer(out_id, cast(u64)out_id_size))
+        }
+    }
+    if inserted != 0 {
+        storage_materialize_session_habit_days()
+    }
+    storage_schedule_persist()
+    if out_inserted != null {
+        out_inserted[0] = inserted
+    }
+    return 1
+}
+
+#program_export
+storage_insert_legacy_session :: (started_at: s64, local_date: s32,
+                                  round_times: *s32, round_count: s32) -> s32 {
+    return insert_session_at_ex(started_at, local_date, round_times, round_count,
+                                0, 0, "legacy-file-import", null, 0, null)
+}
+
+storage_save_session_for_activity :: (round_times: *s32, round_count: s32,
+                                         topic: s32, activity: s32,
+                                         out_id: *u8, out_id_size: s64) -> s32 {
+    now: s64 = time(null)
+    tm: *Tm = localtime(*now)
+    saved: [MaxRounds] s32
+    saved_count: s32
+    local_date: s32
+
+    if tm == null {
+        return 0
+    }
+    saved_count = filter_positive_rounds(round_times, round_count, *saved[0], MaxRounds)
+    if saved_count <= 0 {
+        return 0
+    }
+    local_date = (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 +                  tm.tm_mday
+    return insert_session_at_ex(now, local_date, *saved[0], saved_count,
+                                topic, activity, "app", out_id, out_id_size, null)
+}
+
+storage_save_session_at_for_activity :: (local_date: s32, hour: s32,
+                                            minute: s32, second: s32,
+                                            round_times: *s32,
+                                            round_count: s32, topic: s32,
+                                            activity: s32, out_id: *u8,
+                                            out_id_size: s64) -> s32 {
+    tm: Tm = Tm.{}
+    started_at: s64
+    saved: [MaxRounds] s32
+    saved_count: s32
+
+    if local_date <= 0 {
+        return 0
+    }
+    saved_count = filter_positive_rounds(round_times, round_count, *saved[0], MaxRounds)
+    if saved_count <= 0 {
+        return 0
+    }
+
+    tm.tm_year = local_date / 10000 - 1900
+    tm.tm_mon = (local_date / 100) % 100 - 1
+    tm.tm_mday = local_date % 100
+    tm.tm_hour = hour
+    tm.tm_min = minute
+    tm.tm_sec = second
+    tm.tm_isdst = -1
+    started_at = mktime(*tm)
+    if started_at == -1 {
+        return 0
+    }
+
+    return insert_session_at_ex(started_at, local_date, *saved[0],
+                                saved_count, topic, activity, "app", out_id,
+                                out_id_size, null)
+}
+
+storage_save_session :: (round_times: *s32, round_count: s32,
+                            out_id: *u8, out_id_size: s64) -> s32 {
+    return storage_save_session_for_activity(round_times, round_count, 0, 0,
+                                             out_id, out_id_size)
+}
+
+storage_load_session :: (path_or_id: string, round_times: *s32,
+                            max_rounds: s32, year: *s32, month: *s32,
+                            day: *s32, hour: *s32, minute: *s32,
+                            second: *s32) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+    count: s32 = 0
+    started_at: s64 = 0
+    local_date: s32 = 0
+
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 || round_times == null  || max_rounds <= 0 {
+        return 0
+    }
+
+    select_session_sql: [256] u8
+    AppCopyText("SELECT started_at,local_date FROM sessions WHERE id=?1 AND deleted_at=0", select_session_sql[:])
+    if SqlitePrepare(storage_db_handle(), *select_session_sql[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    if SqliteStep(stmt) == SQLITE_ROW {
+        started_at = SqliteColumnInt64(stmt, 0)
+        local_date = sqlite3_column_int(stmt, 1)
+    }
+    SqliteFinalize(stmt)
+    if started_at == 0 {
+        return 0
+    }
+
+    if year != null {
+        year[0] = local_date / 10000
+    }
+    if month != null {
+        month[0] = (local_date / 100) % 100
+    }
+    if day != null {
+        day[0] = local_date % 100
+    }
+    {
+        t: s64 = started_at
+        tm: *Tm = localtime(*t)
+
+        if tm != null {
+            if hour != null {
+                hour[0] = tm.tm_hour
+            }
+            if minute != null {
+                minute[0] = tm.tm_min
+            }
+            if second != null {
+                second[0] = tm.tm_sec
+            }
+        }
+    }
+
+    sql_buf1: [84] u8
+    AppCopyText("SELECT seconds FROM session_rounds WHERE session_id=?1 ORDER BY round_index", sql_buf1[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf1[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    while count < max_rounds && SqliteStep(stmt) == SQLITE_ROW {
+        round_times[count] = sqlite3_column_int(stmt, 0)
+        count += 1
+    }
+    SqliteFinalize(stmt)
+    return count
+}
+
+storage_save_session_checkin :: (path_or_id: string,
+                                    checkin: *SessionMoodCheckin) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 || checkin == null {
+        return 0
+    }
+    sql_buf2: [136] u8
+    AppCopyText("UPDATE sessions SET mood_before=?2,mood_after=?3,energy=?4,stress=?5,note=?6,tags=?7,updated_at=?8 WHERE id=?1 AND deleted_at=0", sql_buf2[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf2[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    sqlite3_bind_int(stmt, 2, checkin.mood_before)
+    sqlite3_bind_int(stmt, 3, checkin.mood_after)
+    sqlite3_bind_int(stmt, 4, checkin.energy)
+    sqlite3_bind_int(stmt, 5, checkin.stress)
+    bind_text(stmt, 6, AppTextFromCString(*checkin.note[0], 64))
+    bind_text(stmt, 7, AppTextFromCString(*checkin.tags[0], 64))
+    SqliteBindInt64(stmt, 8, storage_next_change_time())
+    changed: s32 = 0
+    if SqliteStep(stmt) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        changed = 1
+    }
+    SqliteFinalize(stmt)
+    if changed != 0 {
+        storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+        storage_schedule_persist()
+    }
+    return changed
+}
+
+storage_load_session_checkin :: (path_or_id: string,
+                                    checkin: *SessionMoodCheckin) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+
+    if checkin != null {
+        checkin.* = SessionMoodCheckin.{}
+    }
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 || checkin == null {
+        return 0
+    }
+    sql_buf3: [105] u8
+    AppCopyText("SELECT mood_before,mood_after,energy,stress,note,tags FROM sessions WHERE id=?1 AND deleted_at=0", sql_buf3[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf3[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    if SqliteStep(stmt) != SQLITE_ROW {
+        SqliteFinalize(stmt)
+        return 0
+    }
+    checkin.mood_before = sqlite3_column_int(stmt, 0)
+    checkin.mood_after = sqlite3_column_int(stmt, 1)
+    checkin.energy = sqlite3_column_int(stmt, 2)
+    checkin.stress = sqlite3_column_int(stmt, 3)
+    AppCopyText(ifx (SqliteColumnText(stmt, 4) != null) then (AppTextFromCString(SqliteColumnText(stmt, 4), 64)) else (""), checkin.note[:])
+    AppCopyText(ifx (SqliteColumnText(stmt, 5) != null) then (AppTextFromCString(SqliteColumnText(stmt, 5), 64)) else (""), checkin.tags[:])
+    SqliteFinalize(stmt)
+    return 1
+}
+
+storage_mood_stats :: (activity_mask: s32, days: s32,
+                          stats: *StorageMoodStats) -> s32 {
+    stmt: *void = null
+    cutoff: s64 = 0
+    after_total: s64 = 0
+    lift_total: s64 = 0
+    energy_total: s64 = 0
+    stress_total: s64 = 0
+    lift_count: s32 = 0
+    energy_count: s32 = 0
+    stress_count: s32 = 0
+
+    if stats != null {
+        stats.* = StorageMoodStats.{}
+    }
+    if storage_db_handle() == null || stats == null {
+        return 0
+    }
+    if days > 0 {
+        cutoff = now_seconds() - cast(s64)days * 86400
+    }
+    sql_buf4: [234] u8
+    AppCopyText("SELECT mood_before,mood_after,energy,stress FROM sessions WHERE user_id=?1 AND deleted_at=0 AND mood_after BETWEEN 1 AND 5 AND (?2=0 OR (activity>=0 AND activity<30 AND ((1 << activity) & ?2)<>0)) AND (?3=0 OR started_at>=?3)", sql_buf4[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf4[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    sqlite3_bind_int(stmt, 2, activity_mask)
+    SqliteBindInt64(stmt, 3, cutoff)
+    while SqliteStep(stmt) == SQLITE_ROW {
+        before := sqlite3_column_int(stmt, 0)
+        after := sqlite3_column_int(stmt, 1)
+        energy := sqlite3_column_int(stmt, 2)
+        stress := sqlite3_column_int(stmt, 3)
+
+        if after < 1 || after > 5 {
+            continue
+        }
+        stats.counts[after - 1] += 1
+        stats.total += 1
+        after_total += cast(s64)after
+        if before >= 1 && before <= 5 {
+            lift_total += cast(s64)(after - before)
+            lift_count += 1
+        }
+        if energy >= 1 && energy <= 5 {
+            energy_total += cast(s64)energy
+            energy_count += 1
+        }
+        if stress >= 1 && stress <= 5 {
+            stress_total += cast(s64)stress
+            stress_count += 1
+        }
+    }
+    SqliteFinalize(stmt)
+    if stats.total > 0 {
+        stats.average = cast(float32)(after_total / cast(s64)stats.total)
+        stats.lift = cast(float32)(lift_total / cast(s64)lift_count)
+        stats.energy = cast(float32)(energy_total / cast(s64)energy_count)
+        stats.stress = cast(float32)(stress_total / cast(s64)stress_count)
+    }
+    return stats.total
+}
+
+storage_replace_session :: (path_or_id: string, round_times: *s32,
+                               round_count: s32) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+    saved: [MaxRounds] s32
+    saved_count: s32
+
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 || round_times == null  || round_count < 0 || round_count > MaxRounds {
+        return 0
+    }
+    saved_count = filter_positive_rounds(round_times, round_count, *saved[0], MaxRounds)
+    if saved_count <= 0 {
+        return storage_delete_session(path_or_id)
+    }
+
+    exec_sql("BEGIN IMMEDIATE")
+    AppCopyText("DELETE FROM session_rounds WHERE session_id=?1", DELETE_ROUNDS_SQL[:])
+    if db_exec_text(*DELETE_ROUNDS_SQL[0], *id[0]) == 0 {
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    if write_session_rounds(AppTextFromCString(*id[0], STORAGE_ID_SIZE), *saved[0], saved_count, 0) == 0 {
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    sql_buf5: [96] u8
+    AppCopyText("UPDATE sessions SET rounds_hash=?2,updated_at=?3 WHERE id=?1", sql_buf5[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf5[0], -1, *stmt, null) != SQLITE_OK {
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    SqliteBindInt64(stmt, 2, cast(s64)hash_rounds(*saved[0], saved_count))
+    SqliteBindInt64(stmt, 3, storage_next_change_time())
+    SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    exec_sql("COMMIT")
+    storage_materialize_session_habit_days()
+    storage_schedule_persist()
+    return 1
+}
+
+storage_rename_session_time :: (path_or_id: string, hour: s32,
+                                   minute: s32) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+    started_at: s64 = 0
+    t: s64
+    tm: *Tm
+
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 || hour < 0 || hour > 23  || minute < 0 || minute > 59 {
+        return 0
+    }
+    select_started_sql: [64] u8
+    AppCopyText("SELECT started_at FROM sessions WHERE id=?1", select_started_sql[:])
+    if SqlitePrepare(storage_db_handle(), *select_started_sql[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    if SqliteStep(stmt) == SQLITE_ROW {
+        started_at = SqliteColumnInt64(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    if started_at == 0 {
+        return 0
+    }
+    t = started_at
+    tm = localtime(*t)
+    if tm == null {
+        return 0
+    }
+    tm.tm_hour = hour
+    tm.tm_min = minute
+    t = mktime(tm)
+    if t == cast(s64)-1 {
+        return 0
+    }
+    sql_buf6: [68] u8
+    AppCopyText("UPDATE sessions SET started_at=?2,updated_at=?3 WHERE id=?1", sql_buf6[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf6[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    SqliteBindInt64(stmt, 2, cast(s64)t)
+    SqliteBindInt64(stmt, 3, storage_next_change_time())
+    SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    storage_materialize_session_habit_days()
+    storage_schedule_persist()
+    return 1
+}
+
+storage_delete_session :: (path_or_id: string) -> s32 {
+    stmt: *void = null
+    id: [STORAGE_ID_SIZE] u8
+
+    if parse_db_id(path_or_id, *id[0], STORAGE_ID_SIZE) == 0 {
+        return 0
+    }
+    sql_buf7: [68] u8
+    AppCopyText("UPDATE sessions SET deleted_at=?2,updated_at=?2 WHERE id=?1", sql_buf7[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf7[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    SqliteBindInt64(stmt, 2, storage_next_change_time())
+    changed := SqliteStep(stmt) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0
+    SqliteFinalize(stmt)
+    if !changed {
+        return 0
+    }
+    storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    storage_materialize_session_habit_days()
+    storage_schedule_persist()
+    return 1
+}
+
+storage_list_session_records :: (callback: StorageSessionRecordCallback,
+                                    user: *void) {
+    stmt: *void = null
+
+    if storage_db_handle() == null {
+        return
+    }
+    sql_buf8: [122] u8
+    AppCopyText("SELECT id,started_at,local_date,topic,activity FROM sessions WHERE deleted_at=0 ORDER BY started_at DESC LIMIT 48", sql_buf8[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf8[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    while SqliteStep(stmt) == SQLITE_ROW {
+        dbid: [STORAGE_ID_SIZE + 4] u8
+        rounds: [MaxRounds] s32
+        count: s32 = 0
+        id: string = AppTextFromCString(SqliteColumnText(stmt, 0), STORAGE_ID_SIZE)
+        started_at: s64 = SqliteColumnInt64(stmt, 1)
+        local_date: s32 = sqlite3_column_int(stmt, 2)
+        topic: s32 = sqlite3_column_int(stmt, 3)
+        activity: s32 = sqlite3_column_int(stmt, 4)
+        y: s32 = local_date / 10000
+        m: s32 = (local_date / 100) % 100
+        d: s32 = local_date % 100
+        hh: s32 = 0
+        mm: s32 = 0
+        ss: s32 = 0
+        t: s64 = started_at
+        tm: *Tm = localtime(*t)
+
+        if tm != null {
+            hh = tm.tm_hour
+            mm = tm.tm_min
+            ss = tm.tm_sec
+        }
+        dbid_text: string = ifx (id.count > 0) then (id) else ("")
+        count = storage_load_session(dbid_text, *rounds[0], MaxRounds, null, null, null,
+                                     null, null, null)
+        if count > 0 {
+            callback(dbid_text, y, m, d, hh, mm, ss, topic, activity, rounds[:], count, cast(s64)user)
+        }
+    }
+    SqliteFinalize(stmt)
+}
+
+storage_has_any :: () -> s32 {
+    count: s32 = storage_session_count()
+
+    if count > 0 {
+        return 1
+    }
+    if storage_db_handle() == null {
+        return 0
+    }
+    count = storage_habit_count()
+    if count > 0 {
+        return 1
+    }
+    habit_days_sql: [96] u8
+    AppCopyText("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0", habit_days_sql[:])
+    if db_select_int(*habit_days_sql[0], 0) > 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_session_count :: () -> s32 {
+    return db_select_int_text("SELECT COUNT(*) FROM sessions WHERE deleted_at=0", 0)
+}
+
+storage_session_change_clock :: () -> s64 {
+    return db_select_int64_text("SELECT COALESCE(MAX(updated_at),0) FROM sessions", 0)
+}
+
+storage_total_size :: () -> s64 {
+    if storage_has_any() == 0 {
+        return 0
+    }
+    path := storage_db_path()
+    if path.count == 0 { return 0 }
+    file := OpenRead(path)
+    if !file.valid { return 0 }
+    size := FileSize(file)
+    CloseFile(file)
+    return ifx (size > 0) then (size) else (0)
+}
+
+storage_delete_all_sessions :: () -> s64 {
+    stmt: *void = null
+    count: s32 = storage_session_count()
+    habit_day_count: s32 = 0
+    habit_count: s32 = storage_habit_count()
+    deleted_at: s64 = storage_next_change_time()
+    changed: s32 = 0
+
+    if storage_db_handle() == null {
+        return 0
+    }
+
+    habit_day_count =
+        db_select_int_text("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0", 0)
+    if count <= 0 && habit_day_count <= 0 && habit_count <= 0 {
+        return 0
+    }
+
+    if storage_has_sync_account() == 0 {
+        if exec_sql("BEGIN IMMEDIATE") == 0 {
+            return 0
+        }
+        if exec_sql("DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM meditation_logs WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sync_outbox;") == 0 {
+            exec_sql("ROLLBACK")
+            return 0
+        }
+        meta_key_buffer: [64] u8
+        AppCopyText("sync_last_server_version", meta_key_buffer[:])
+        set_meta_int64(*meta_key_buffer[0], 0)
+        AppCopyText("sync_last_upload_at", meta_key_buffer[:])
+        set_meta_int64(*meta_key_buffer[0], 0)
+        AppCopyText("sync_full_upload_done", meta_key_buffer[:])
+        set_meta_int64(*meta_key_buffer[0], 0)
+        AppCopyText("sync_backfill_v2_done", meta_key_buffer[:])
+        set_meta_int64(*meta_key_buffer[0], 0)
+        AppCopyText("sync_habit_name_repair_v1_done", meta_key_buffer[:])
+        set_meta_int64(*meta_key_buffer[0], 0)
+        if exec_sql("COMMIT") == 0 {
+            exec_sql("ROLLBACK")
+            return 0
+        }
+        storage_schedule_persist()
+        return cast(s64)count + cast(s64)habit_day_count + cast(s64)habit_count
+    }
+
+    if exec_sql("BEGIN IMMEDIATE") == 0 {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT id FROM sessions WHERE user_id=?1 AND deleted_at=0",
+                          -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            storage_enqueue_sync_session(AppTextFromCString(SqliteColumnText(stmt, 0), 4096))
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT habit_id,local_date FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=?1) AND (completed!=0 OR count>0 OR session_count>0)",
+                          -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            storage_enqueue_sync_habit_day(AppTextFromCString(SqliteColumnText(stmt, 0), 4096),
+                                           sqlite3_column_int(stmt, 1))
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT id FROM habits WHERE user_id=?1 AND deleted_at=0",
+                          -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            storage_enqueue_sync_habit(AppTextFromCString(SqliteColumnText(stmt, 0), 4096))
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+    }
+    sql_buf9: [90] u8
+    AppCopyText("UPDATE sessions SET deleted_at=?1,updated_at=?1 WHERE user_id=?2 AND deleted_at=0", sql_buf9[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf9[0], -1, *stmt, null) != SQLITE_OK {
+
+        exec_sql("ROLLBACK")
+
+        return 0
+
+    }
+    SqliteBindInt64(stmt, 1, deleted_at)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(stmt) != SQLITE_DONE {
+        SqliteFinalize(stmt)
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    changed += sqlite3_changes(storage_db_handle())
+    SqliteFinalize(stmt)
+    stmt = null
+
+    sql_buf10: [190] u8
+    AppCopyText("UPDATE habit_days SET completed=0,count=0,session_count=0,updated_at=?1 WHERE habit_id IN (SELECT id FROM habits WHERE user_id=?2)   AND (completed!=0 OR count>0 OR session_count>0)", sql_buf10[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf10[0], -1, *stmt, null) != SQLITE_OK {
+
+        exec_sql("ROLLBACK")
+
+        return 0
+
+    }
+    SqliteBindInt64(stmt, 1, deleted_at)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(stmt) != SQLITE_DONE {
+        SqliteFinalize(stmt)
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    changed += sqlite3_changes(storage_db_handle())
+    SqliteFinalize(stmt)
+    stmt = null
+
+    sql_buf11: [88] u8
+    AppCopyText("UPDATE habits SET deleted_at=?1,updated_at=?1 WHERE user_id=?2 AND deleted_at=0", sql_buf11[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf11[0], -1, *stmt, null) != SQLITE_OK {
+
+        exec_sql("ROLLBACK")
+
+        return 0
+
+    }
+    SqliteBindInt64(stmt, 1, deleted_at)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(stmt) != SQLITE_DONE {
+        SqliteFinalize(stmt)
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    changed += sqlite3_changes(storage_db_handle())
+    SqliteFinalize(stmt)
+    stmt = null
+
+    if exec_sql("COMMIT") == 0 {
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    storage_schedule_persist()
+    return ifx (changed > 0) then (cast(s64)count + cast(s64)habit_day_count + cast(s64)habit_count) else (0)
+
+}

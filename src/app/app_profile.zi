@@ -1,0 +1,185 @@
+c :: #system_library "c";
+#import "c_string"
+
+// Platform time and logging are native ABI calls. Toggle, measurements, and
+// the 120-frame report decision are implemented here in Ziran.
+#scope_file
+ProfileGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
+ProfileClock :: () -> float64 #foreign c "app_monotonic_seconds";
+ProfileLogInfo :: (line: *u8) #foreign c "app_log_line";
+
+#scope_export
+#program_export
+app_profile_env_enabled :: () -> bool {
+    name: [12]u8
+    if !CopyCString("APP_PROFILE", name[:]) {
+        return false
+    }
+    value: *u8 = ProfileGetEnv(*name[0])
+    return value != null && value[0] != cast(u8)0 && value[0] != cast(u8)48
+}
+
+ProfileAppend :: (output: []u8, used: *s32, text: string) -> bool {
+    if text.count > output.count - cast(s64)used.* - 1 {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        output[used.*] = text[index]
+        used.* += 1
+        index += 1
+    }
+    return true
+}
+
+ProfileAppendNumber :: (output: []u8, used: *s32, number: u64) -> bool {
+    digits: [20]u8
+    count: s32 = 0
+    value: u64 = number
+    while true {
+        digits[count] = cast(u8)(48 + value % 10)
+        count += 1
+        value /= 10
+        if value == 0 {
+            break
+        }
+    }
+    if count > cast(s32)output.count - used.* - 1 {
+        return false
+    }
+    while count > 0 {
+        count -= 1
+        output[used.*] = digits[count]
+        used.* += 1
+    }
+    return true
+}
+
+ProfileAppendTwoDecimals :: (output: []u8, used: *s32, number: float64) -> bool {
+    if number < 0.0 || number > 1000000000.0 {
+        return false
+    }
+    scaled: u64 = cast(u64)(number * 100.0 + 0.5)
+    if !ProfileAppendNumber(output, used, scaled / 100) {
+        return false
+    }
+    if output.count - cast(s64)used.* < 4 {
+        return false
+    }
+    output[used.*] = cast(u8)46
+    output[used.* + 1] = cast(u8)(48 + (scaled % 100) / 10)
+    output[used.* + 2] = cast(u8)(48 + scaled % 10)
+    used.* += 3
+    return true
+}
+
+app_profile_report :: (frame_avg: float64, frame_max: float64,
+    update_avg: float64, update_max: float64,
+    habits_avg: float64, habits_max: float64,
+    sync_avg: float64, sync_max: float64) {
+    line: [256]u8
+    used: s32 = 0
+    if !ProfileAppend(line[:], *used, "PROFILE: frame avg=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, frame_avg) ||
+    !ProfileAppend(line[:], *used, " max=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, frame_max) ||
+    !ProfileAppend(line[:], *used, " update avg=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, update_avg) ||
+    !ProfileAppend(line[:], *used, " max=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, update_max) ||
+    !ProfileAppend(line[:], *used, " habits avg=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, habits_avg) ||
+    !ProfileAppend(line[:], *used, " max=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, habits_max) ||
+    !ProfileAppend(line[:], *used, " sync avg=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, sync_avg) ||
+    !ProfileAppend(line[:], *used, " max=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, sync_max) {
+        return
+    }
+    line[used] = cast(u8)0
+    ProfileLogInfo(*line[0])
+}
+
+ProfileStats :: struct {
+    initialized: s32
+    enabled: s32
+    frames: s32
+    frame_total: float64
+    frame_max: float64
+    update_total: float64
+    update_max: float64
+    habits_total: float64
+    habits_max: float64
+    sync_total: float64
+    sync_max: float64
+}
+
+stats: ProfileStats = ProfileStats.{};
+
+ProfileUpdate :: 0
+ProfileHabits :: 1
+ProfileSync :: 2
+
+enabled :: () -> bool {
+    if stats.initialized == 0 {
+        stats.enabled = ifx app_profile_env_enabled() then 1 else 0
+        stats.initialized = 1
+    }
+    return stats.enabled != 0
+}
+
+#program_export
+app_profile_now :: () -> float64 {
+    if !enabled() { return 0.0 }
+    return ProfileClock()
+}
+
+record :: (start: float64, kind: s32) {
+    if !enabled() || start <= 0.0 { return }
+    elapsed := (ProfileClock() - start) * 1000.0
+    if kind == ProfileUpdate {
+        stats.update_total += elapsed
+        if elapsed > stats.update_max { stats.update_max = elapsed }
+    } else if kind == ProfileHabits {
+        stats.habits_total += elapsed
+        if elapsed > stats.habits_max { stats.habits_max = elapsed }
+    } else if kind == ProfileSync {
+        stats.sync_total += elapsed
+        if elapsed > stats.sync_max { stats.sync_max = elapsed }
+    }
+}
+
+#program_export
+app_profile_record_update :: (start: float64) {
+    record(start, ProfileUpdate)
+}
+
+#program_export
+app_profile_record_habits :: (start: float64) {
+    record(start, ProfileHabits)
+}
+
+#program_export
+app_profile_record_sync :: (start: float64) {
+    record(start, ProfileSync)
+}
+
+#program_export
+app_profile_frame_end :: (start: float64) {
+    if !enabled() || start <= 0.0 { return }
+    elapsed := (ProfileClock() - start) * 1000.0
+    stats.frame_total += elapsed
+    if elapsed > stats.frame_max { stats.frame_max = elapsed }
+    stats.frames += 1
+    if stats.frames < 120 { return }
+
+    count := cast(float64)stats.frames
+    app_profile_report(stats.frame_total / count, stats.frame_max,
+        stats.update_total / count, stats.update_max,
+        stats.habits_total / count, stats.habits_max,
+        stats.sync_total / count, stats.sync_max)
+    stats = ProfileStats.{0 }
+    stats.initialized = 1
+    stats.enabled = 1
+}

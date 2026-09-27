@@ -1,0 +1,71 @@
+#import "net_http"
+#import "text_buffer"
+#import, file "../src/platform/browser_network.zi";
+
+c :: #system_library "c";
+Sleep :: (milliseconds: s32) #foreign c "emscripten_sleep";
+
+WaitTransfer :: (transfer: *BrowserTransfer, status: *s32) -> s32 {
+    attempts: s32 = 0
+    while attempts < 50 {
+        result := PollBrowserTransfer(cast(*void)transfer, status)
+        if result >= 0 {
+            return result
+        }
+        Sleep(1)
+        attempts += 1
+    }
+    return -1
+}
+
+#program_export
+main :: () -> s32 {
+    transfer: BrowserTransfer
+    output: [64]u8
+    request: HttpRequest
+    request.method = "POST"
+    request.url = "https://network.test/success"
+    request.token = "secret"
+    request.content_type = "application/json"
+    request.body = "{\"test\":true}"
+    header: [1]HttpHeader
+    header[0].name = "X-Test"
+    header[0].value = "zi"
+    request.headers = header[:]
+    if !StartBrowserTransfer(cast(*void)(*transfer), request, output[:]) {
+        return 1
+    }
+    status: s32 = 0
+    if WaitTransfer(*transfer, *status) != 1 || status != 201 ||
+        TextUntilNul(output[:]) != "accepted" || transfer.handle != 0 {
+        return 2
+    }
+    request.url = "https://network.test/overflow"
+    if !StartBrowserTransfer(cast(*void)(*transfer), request, output[0:4]) ||
+        WaitTransfer(*transfer, *status) != 0 || output[0] != cast(u8)0 {
+        return 3
+    }
+    request.url = "https://network.test/cancel"
+    if !StartBrowserTransfer(cast(*void)(*transfer), request, output[:]) {
+        return 4
+    }
+    CancelBrowserTransfer(cast(*void)(*transfer))
+    output[0] = cast(u8)88
+    Sleep(5)
+    if transfer.handle != 0 || output[0] != cast(u8)88 {
+        return 5
+    }
+    socket := OpenBrowserSocket("wss://network.test/events", "daochi-sync-v1", "bearer.secret", 64)
+    if socket == 0 {
+        return 6
+    }
+    Sleep(5)
+    if PollBrowserSocket(socket, output[:]) != 5 || TextUntilNul(output[:]) != "event" {
+        return 7
+    }
+    CloseBrowserSocket(socket)
+    if PollBrowserSocket(socket, output[:]) != 0 {
+        return 8
+    }
+    return 0
+}

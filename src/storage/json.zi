@@ -1,0 +1,294 @@
+#import "byte_text_linux"
+#import "c_string"
+#import, file "time_parts.zi";
+
+c :: #system_library "c";
+JsonReallocRaw :: (memory: *u8, size: usize) -> *u8 #foreign c "realloc";
+JsonFreeRaw :: (memory: *u8) #foreign c "free";
+JsonMoveRaw :: (destination: *u8, source: *u8,
+    count: usize) -> *u8 #foreign c "memmove";
+JsonTime :: (output: *s64) -> s64 #foreign c "time";
+JsonStrftime :: (output: *u8, capacity: usize, format: *u8,
+    civil: *Tm) -> usize #foreign c "strftime";
+
+#if #defined(_WIN32) {
+    JsonGmtime :: (output: *Tm, input: *s64) -> s32 #foreign c "gmtime_s";
+} else {
+    JsonGmtime :: (input: *s64, output: *Tm) -> *Tm #foreign c "gmtime_r";
+}
+
+// This record matches the storage C ABI until its callers use Ziran slices.
+StorageJsonBuilder :: struct {
+    data: *u8
+    len: s64
+    cap: s64
+    ok: s32
+}
+
+json_realloc :: (memory: *u8, size: s64) -> *u8 {
+    if size < 0 || (size_of(usize) < 8 && size > 4294967295) {
+        return null
+    }
+    return JsonReallocRaw(memory, cast(usize)size)
+}
+
+json_free :: (memory: *u8) {
+    JsonFreeRaw(memory)
+}
+
+json_cstring_view :: (value: *u8) -> string {
+    return TextFromCString(value)
+}
+
+json_copy_raw :: (destination: *u8, destination_offset: s64,
+    source: *u8, source_offset: s64, count: s64) {
+    if count > 0 {
+        JsonMoveRaw(*destination[destination_offset],
+            *source[source_offset], cast(usize)count)
+    }
+}
+
+json_copy_text :: (destination: *u8, destination_offset: s64,
+    source: string) {
+    index: s64 = 0
+    while index < cast(s64)source.count {
+        destination[destination_offset + index] = source[index]
+        index += 1
+    }
+}
+
+json_copy_bytes :: (destination: *u8, destination_offset: s64,
+    source: []u8) {
+    index: s64 = 0
+    while index < cast(s64)source.count {
+        destination[destination_offset + index] = source[index]
+        index += 1
+    }
+}
+
+json_write_zero :: (destination: *u8, offset: s64) {
+    destination[offset] = cast(u8)0
+}
+
+json_format_epoch_utc :: (seconds: s64, output: *u8,
+    capacity: s64) -> s32 {
+    if output == null || capacity <= 0 ||
+        (size_of(usize) < 8 && capacity > 4294967295) {
+        return 0
+    }
+    output[0] = cast(u8)0
+    value := seconds
+    if value <= 0 {
+        value = JsonTime(null)
+    }
+    civil: Tm
+    #if #defined(_WIN32) {
+        if JsonGmtime(*civil, *value) != 0 {
+            return 0
+        }
+    } else {
+        if JsonGmtime(*value, *civil) == null {
+            return 0
+        }
+    }
+    format: [32]u8
+    if !CopyCString("%Y-%m-%dT%H:%M:%SZ", format[:]) {
+        return 0
+    }
+    if JsonStrftime(output, cast(usize)capacity, *format[0], *civil) == 0 {
+        return 0
+    }
+    return 1
+}
+
+// A bounded export avoids arithmetic overflow and excessive allocation.
+JsonCapacityLimit :: 2147483647
+
+#program_export
+storage_json_builder_reserve :: (json: *StorageJsonBuilder,
+    extra: s64) -> s32 {
+    if json == null || json.ok == 0 { return 0 }
+    if extra < 0 || json.len < 0 || json.cap < json.len  || extra > JsonCapacityLimit - json.len {
+        json.ok = 0
+        return 0
+    }
+    if extra <= json.cap - json.len { return 1 }
+    next_cap := json.cap
+    if next_cap < 1024 { next_cap = 1024 }
+    while extra > next_cap - json.len {
+        if next_cap > JsonCapacityLimit / 2 {
+            next_cap = JsonCapacityLimit
+        } else {
+            next_cap *= 2
+        }
+    }
+    next := json_realloc(json.data, next_cap)
+    if next == null {
+        json.ok = 0
+        return 0
+    }
+    json.data = next
+    json.cap = next_cap
+    return 1
+}
+
+JsonAppendSlice :: (json: *StorageJsonBuilder, value: string) {
+    length := cast(s64)value.count
+    if length <= 0 || json == null || json.ok == 0 { return }
+    if length >= JsonCapacityLimit  || storage_json_builder_reserve(json, length + 1) == 0 { return }
+    json_copy_text(json.data, json.len, value)
+    json.len += length
+    json_write_zero(json.data, json.len)
+}
+
+#program_export
+storage_json_builder_append_len :: (json: *StorageJsonBuilder,
+    value: *u8, length: s64) {
+    if value == null || length <= 0 || json == null || json.ok == 0 { return }
+    if length >= JsonCapacityLimit  || storage_json_builder_reserve(json, length + 1) == 0 { return }
+    json_copy_raw(json.data, json.len, value, 0, length)
+    json.len += length
+    json_write_zero(json.data, json.len)
+}
+
+#program_export
+storage_json_builder_append_text :: (json: *StorageJsonBuilder, text: string) {
+    JsonAppendSlice(json, text)
+}
+
+#program_export
+storage_json_builder_append :: (json: *StorageJsonBuilder, value: *u8) {
+    if value == null { return }
+    text: string = json_cstring_view(value)
+    storage_json_builder_append_len(json, value, cast(s64)text.count)
+}
+
+JsonEscapeLength :: (text: string) -> s64 {
+    length: s64 = 2
+    for byte: text {
+        extra: s64 = 1
+        if byte == cast(u8)34 || byte == cast(u8)92  || byte == cast(u8)8 || byte == cast(u8)12  || byte == cast(u8)10 || byte == cast(u8)13  || byte == cast(u8)9 {
+            extra = 2
+        } else if byte < cast(u8)32 {
+            extra = 6
+        }
+        if length > JsonCapacityLimit - extra - 1 { return -1 }
+        length += extra
+    }
+    return length
+}
+
+#program_export
+storage_json_builder_append_string :: (json: *StorageJsonBuilder,
+    value: *u8) {
+    if json == null || json.ok == 0 { return }
+    text: string = json_cstring_view(value)
+    length := JsonEscapeLength(text)
+    if length < 0 || storage_json_builder_reserve(json, length + 1) == 0 {
+        json.ok = 0
+        return
+    }
+    write := json.len
+    json_copy_text(json.data, write, "\"")
+    write += 1
+    run_start: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        byte := text[index]
+        replacement: u8 = cast(u8)0
+        escaped := byte < cast(u8)32 || byte == cast(u8)34  || byte == cast(u8)92
+        if escaped {
+            if index > run_start {
+                run := text[run_start:index]
+                json_copy_text(json.data, write, run)
+                write += cast(s64)run.count
+            }
+            escape: [6]u8
+            escape[0] = cast(u8)92
+            count: s32 = 2
+            if byte == cast(u8)34 || byte == cast(u8)92 {
+                replacement = byte
+            } else if byte == cast(u8)8 {
+                replacement = cast(u8)98
+            } else if byte == cast(u8)12 {
+                replacement = cast(u8)102
+            } else if byte == cast(u8)10 {
+                replacement = cast(u8)110
+            } else if byte == cast(u8)13 {
+                replacement = cast(u8)114
+            } else if byte == cast(u8)9 {
+                replacement = cast(u8)116
+            } else {
+                hex: string = "0123456789abcdef"
+                escape[1] = cast(u8)117
+                escape[2] = cast(u8)48
+                escape[3] = cast(u8)48
+                escape[4] = hex[cast(s32)byte / 16]
+                escape[5] = hex[cast(s32)byte % 16]
+                count = 6
+            }
+            if count == 2 { escape[1] = replacement }
+            json_copy_bytes(json.data, write, escape[0:count])
+            write += cast(s64)count
+            run_start = index + 1
+        }
+        index += 1
+    }
+    if run_start < cast(s32)text.count {
+        run := text[run_start:cast(s32)text.count]
+        json_copy_text(json.data, write, run)
+        write += cast(s64)run.count
+    }
+    json_copy_text(json.data, write, "\"")
+    write += 1
+    json_write_zero(json.data, write)
+    json.len = write
+}
+
+#program_export
+storage_json_builder_key_value_text :: (json: *StorageJsonBuilder, key: string, value: string) {
+    key_buf: [256] u8
+    value_buf: [4096] u8
+    if key.count >= 256 || value.count >= 4096 {
+        return
+    }
+    index: s32 = 0
+    while index < cast(s32)key.count {
+        key_buf[index] = key[index]
+        index += 1
+    }
+    key_buf[index] = cast(u8)0
+    index = 0
+    while index < cast(s32)value.count {
+        value_buf[index] = value[index]
+        index += 1
+    }
+    value_buf[index] = cast(u8)0
+    storage_json_builder_append_key_string(json, *key_buf[0], *value_buf[0])
+}
+
+#program_export
+storage_json_builder_append_key_string :: (json: *StorageJsonBuilder,
+    key: *u8, value: *u8) {
+    storage_json_builder_append_string(json, key)
+    JsonAppendSlice(json, ":")
+    storage_json_builder_append_string(json, value)
+}
+
+#program_export
+storage_json_builder_free :: (json: *StorageJsonBuilder) {
+    if json == null { return }
+    json_free(json.data)
+    json.* = StorageJsonBuilder.{}
+}
+
+#program_export
+storage_json_builder_append_epoch :: (json: *StorageJsonBuilder,
+    seconds: s64) {
+    formatted: [32]u8
+    if json_format_epoch_utc(seconds, *formatted[0], 32) == 0 {
+        storage_json_builder_append_string(json, null)
+        return
+    }
+    storage_json_builder_append_string(json, *formatted[0])
+}

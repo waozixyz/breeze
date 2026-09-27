@@ -1,0 +1,643 @@
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import "geometry"
+#import "layout"
+#import, file "../platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../app/app.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../practices/session_results.zi";
+#import, file "../practices/whm/whm_session.zi";
+#import "control_props"
+#import "text_align"
+#import "text_props"
+#import, file "../app/exercise_types.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/current_app.zi";
+#import "button_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "session"
+#import "button_props"
+
+
+
+using ExerciseType;
+using TextAlign;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+using SessionResultConstants;
+
+SessionResultConstants :: enum {
+    SESSION_RESULT_MOOD_COUNT :: 5
+}
+
+session_result_format_duration :: (seconds: s32, out: []u8) -> bool {
+    if seconds < 0 {
+        seconds = 0
+    }
+    if seconds >= 3600 {
+        args: [2]FormatArg = .[
+            FormatArg.{.number = seconds / 3600},
+            FormatArg.{.number = (seconds % 3600) / 60}
+        ]
+        return FormatTemplate("%dh %02dm", args[:], out)
+    } else if seconds >= 60 {
+        args: [2]FormatArg = .[
+            FormatArg.{.number = seconds / 60},
+            FormatArg.{.number = seconds % 60}
+        ]
+        return FormatTemplate("%dm %02ds", args[:], out)
+    } else {
+        args: [1]FormatArg = .[FormatArg.{.number = seconds}]
+        return FormatTemplate("%ds", args[:], out)
+    }
+}
+
+session_result_format_number :: (key: string, value: s32, out: []u8) -> bool {
+    args: [1]FormatArg = .[FormatArg.{.number = value}]
+    return FormatTemplate(LocaleText(key), args[:], out)
+}
+
+session_result_format_text :: (key: string, value: string, out: []u8) -> bool {
+    args: [1]FormatArg = .[FormatArg.{.text = value, .is_text = true}]
+    return FormatTemplate(LocaleText(key), args[:], out)
+}
+
+session_result_format_two_numbers :: (key: string, first: s32,
+                                      second: s32, out: []u8) -> bool {
+    args: [2]FormatArg = .[
+        FormatArg.{.number = first}, FormatArg.{.number = second}
+    ]
+    return FormatTemplate(LocaleText(key), args[:], out)
+}
+
+session_result_draw_pixel :: (x: s32, y: s32, w: s32, h: s32,
+                              color: Color) {
+    DrawRectangle(x, y, w, h, color)
+}
+
+session_result_mood_color :: (mood: s32) -> Color {
+    if mood <= 1 {
+        return Color.{.r = 226, .g = 83, .b = 78, .a = 255}
+    } else if mood == 2 {
+        return Color.{.r = 238, .g = 139, .b = 70, .a = 255}
+    } else if mood == 3 {
+        return Color.{.r = 235, .g = 202, .b = 77, .a = 255}
+    } else if mood == 4 {
+        return Color.{.r = 108, .g = 199, .b = 104, .a = 255}
+    }
+    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
+}
+
+session_result_accent :: () -> Color {
+    background := StyleTokenColor("canvas")
+    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 +
+            cast(s32)background.b * 114
+    return ifx (luma >= 128000) then (Color.{.r = 82, .g = 119, .b = 193, .a = 255}) else (Color.{.r = 190, .g = 163, .b = 250, .a = 255})
+}
+
+session_result_draw_mood_face :: (mood: s32, cx: s32, cy: s32,
+                                  size: s32, selected: s32) {
+    unit := size / 12
+    if unit < 2 {
+        unit = 2
+    }
+    face := unit * 12
+    x := cx - face / 2
+    y := cy - face / 2
+    fill := session_result_mood_color(mood)
+    stroke := DarkenColor(fill, 45)
+    detail := Color.{.r = 38, .g = 40, .b = 48, .a = 255}
+    shine := Color.{.r = 255, .g = 255, .b = 255, .a = 170}
+
+    unused selected
+
+    DrawRectangle(x + unit * 3, y, unit * 6, unit, stroke)
+    DrawRectangle(x + unit * 2, y + unit, unit * 8, unit, stroke)
+    DrawRectangle(x + unit, y + unit * 2, unit * 10, unit, stroke)
+    DrawRectangle(x, y + unit * 3, unit * 12, unit * 6, stroke)
+    DrawRectangle(x + unit, y + unit * 9, unit * 10, unit, stroke)
+    DrawRectangle(x + unit * 2, y + unit * 10, unit * 8, unit, stroke)
+    DrawRectangle(x + unit * 3, y + unit * 11, unit * 6, unit, stroke)
+
+    DrawRectangle(x + unit * 3, y + unit, unit * 6, unit, fill)
+    DrawRectangle(x + unit * 2, y + unit * 2, unit * 8, unit, fill)
+    DrawRectangle(x + unit, y + unit * 3, unit * 10, unit * 6, fill)
+    DrawRectangle(x + unit * 2, y + unit * 9, unit * 8, unit, fill)
+    DrawRectangle(x + unit * 3, y + unit * 10, unit * 6, unit, fill)
+    session_result_draw_pixel(x + unit * 3, y + unit * 2, unit * 2, unit, shine)
+
+    if mood <= 1 {
+        session_result_draw_pixel(x + unit * 2, y + unit * 3, unit * 3, unit, detail)
+        session_result_draw_pixel(x + unit * 7, y + unit * 3, unit * 3, unit, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 4, unit, unit, detail)
+        session_result_draw_pixel(x + unit * 8, y + unit * 4, unit, unit, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 8, unit, unit, detail)
+        session_result_draw_pixel(x + unit * 4, y + unit * 7, unit * 4, unit, detail)
+        session_result_draw_pixel(x + unit * 8, y + unit * 8, unit, unit, detail)
+    } else if mood == 2 {
+        session_result_draw_pixel(x + unit * 3, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 7, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 8, unit, unit, detail)
+        session_result_draw_pixel(x + unit * 4, y + unit * 7, unit * 4, unit, detail)
+        session_result_draw_pixel(x + unit * 8, y + unit * 8, unit, unit, detail)
+    } else if mood == 3 {
+        session_result_draw_pixel(x + unit * 3, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 7, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 8, unit * 6, unit, detail)
+    } else if mood == 4 {
+        session_result_draw_pixel(x + unit * 3, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 7, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 2, y + unit * 7, unit, unit, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 8, unit * 6, unit, detail)
+        session_result_draw_pixel(x + unit * 9, y + unit * 7, unit, unit, detail)
+    } else {
+        session_result_draw_pixel(x + unit * 3, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 7, y + unit * 4, unit * 2, unit * 2, detail)
+        session_result_draw_pixel(x + unit * 3, y + unit * 7, unit * 6, unit * 3, detail)
+        session_result_draw_pixel(x + unit * 4, y + unit * 7, unit * 4, unit, Color.{.r = 255, .g = 255, .b = 255, .a = 255})
+        session_result_draw_pixel(x + unit * 4, y + unit * 9, unit * 4, unit, Color.{.r = 236, .g = 108, .b = 128, .a = 255})
+    }
+}
+
+session_result_text :: (label: string, x: s32, y: s32, w: s32, h: s32,
+                       font: s32, align: TextAlign) {
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
+        .text = label, .font = font, .align = align,
+        .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone
+    })
+}
+
+session_result_card :: (x: s32, y: s32, w: s32, h: s32) {
+    bounds := Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h }
+    DrawRectangleRounded(bounds, 0.12f, 10, StyleTokenColor("surface"))
+    DrawRectangleRoundedLinesEx(bounds, 0.12f, 10, 1.0f, StyleTokenColor("border"))
+}
+
+session_result_mood_picker :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
+    pad := AppScale(14)
+    gap := AppScale(7)
+    item_w := (w - pad * 2 - gap * (SESSION_RESULT_MOOD_COUNT - 1)) /
+              SESSION_RESULT_MOOD_COUNT
+    button_y := y + AppScale(49)
+    button_h := AppScale(60)
+
+    session_result_card(x, y, w, AppScale(124))
+    session_result_text(LocaleText("results_mood_title"), x + pad,
+                        y + AppScale(10), w - pad * 2, AppScale(30),
+                        AppScale(18), cast(TextAlign)TextAlignStart)
+    {
+        i: s32 = 0
+        while i < SESSION_RESULT_MOOD_COUNT {
+
+        bx := x + pad + i * (item_w + gap)
+        bw := ifx (i == SESSION_RESULT_MOOD_COUNT - 1) then (x + w - pad - bx) else (item_w)
+        selected := app.session_result.mood == i + 1
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)bx, cast(float32)button_y, cast(float32)bw, cast(float32)button_h},
+            .id = cast(s32)24800 + i,
+            .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected
+        }) != 0 {
+            app.session_result.mood = i + 1
+        }
+        session_result_draw_mood_face(i + 1, bx + bw / 2,
+                                      button_y + button_h / 2,
+                                      AppScale(28), ifx (selected) then (1) else (0))
+
+            i += 1
+        }
+        }
+}
+
+session_result_round_stats :: (result: *SessionResult, best: *s32, avg: *s32) {
+    total: s32 = 0
+    best.* = 0
+    avg.* = 0
+    {
+        i: s32 = 0
+        while i < result.round_count {
+            seconds := result.round_values[i]
+            if seconds < 0 {
+                seconds = 0
+            }
+            total += seconds
+            if seconds > best.* {
+                best.* = seconds
+            }
+            i += 1
+        }
+
+    }
+    if result.round_count > 0 {
+        avg.* = total / result.round_count
+    }
+}
+
+session_result_metrics :: (result: *SessionResult, x: s32, y: s32,
+                           w: s32, best: s32, avg: s32) {
+    titles: [3] string = .[LocaleText("results_metric_rounds"), LocaleText("results_metric_best"), LocaleText("results_metric_average")]
+    values: [3][32] u8
+    metric_count: s32 = ifx (result.round_count <= 1) then (2) else (3)
+    gap := AppScale(8)
+    cell_w := (w - gap * (metric_count - 1)) / metric_count
+    AppFormatS32(result.round_count, values[0][:])
+    session_result_format_number("results_metric_seconds", best,
+                                 values[1][:])
+    session_result_format_number("results_metric_seconds", avg,
+                                 values[2][:])
+    {
+        i: s32 = 0
+        while i < metric_count {
+
+        cell_x := x + i * (cell_w + gap)
+        actual_w := ifx (i == metric_count - 1) then (x + w - cell_x) else (cell_w)
+        session_result_card(cell_x, y, actual_w, AppScale(78))
+        DrawLine(cell_x + AppScale(14), y + AppScale(12),
+                 cell_x + actual_w - AppScale(14), y + AppScale(12),
+                 Fade(session_result_accent(), ifx (i == 1) then (0.72f) else (0.34f)))
+        session_result_text(titles[i], cell_x + AppScale(5), y + AppScale(18),
+                            actual_w - AppScale(10), AppScale(22),
+                            AppFitFontSize(titles[i], actual_w - AppScale(12),
+                                           AppScale(17), AppScale(12)),
+                            cast(TextAlign)TextAlignCenter)
+        session_result_text(AppTextFromCString(*values[i][0], 32), cell_x + AppScale(5), y + AppScale(38),
+                            actual_w - AppScale(10), AppScale(34),
+                            AppFitFontSize(AppTextFromCString(*values[i][0], 32), actual_w - AppScale(12),
+                                           AppScale(28), AppScale(20)),
+                            cast(TextAlign)TextAlignCenter)
+
+            i += 1
+        }
+        }
+}
+
+session_result_chart_height :: (result: *SessionResult) -> s32 {
+    return ifx (result.round_count <= 1) then (AppScale(165)) else (AppScale(220))
+}
+
+session_result_chart :: (result: *SessionResult, x: s32, y: s32, w: s32,
+                         best: s32) {
+    chart_x := x + AppScale(34)
+    chart_y := y + AppScale(72)
+    chart_w := w - AppScale(68)
+    chart_h := AppScale(112)
+    baseline := chart_y + chart_h
+    scale_max := ((best + 19) / 20) * 20
+    label_step := (result.round_count + 5) / 6
+    accent := session_result_accent()
+
+    if scale_max < 20 {
+        scale_max = 20
+    }
+    if label_step < 1 {
+        label_step = 1
+    }
+    session_result_card(x, y, w, session_result_chart_height(result))
+    session_result_text(LocaleText("round_times_title"),
+                        x + AppScale(18), y + AppScale(10), w - AppScale(36),
+                        AppScale(32), AppScale(18), cast(TextAlign)TextAlignStart)
+    if result.round_count <= 1 {
+        value_label: [32] u8
+        detail_label: [64] u8
+        value := ifx (result.round_count == 1) then (result.round_values[0]) else (0)
+        if value < 0 {
+            value = 0
+        }
+        session_result_format_number("results_metric_seconds", value,
+                                     value_label[:])
+        if result.round_count == 1 {
+            session_result_format_two_numbers("round_result_label", 1,
+                                              value, detail_label[:])
+        } else {
+            session_result_format_number("results_rounds", 0,
+                                         detail_label[:])
+        }
+        DrawCircleGradient(Vector2.{cast(float32)(x + w / 2),
+                           cast(float32)(y + AppScale(91))},
+                           cast(float32)AppScale(62), Fade(accent, 0.18f),
+                           Fade(StyleTokenColor("surface"), 0.0f))
+        DrawRing(Vector2.{cast(float32)(x + w / 2),
+                  cast(float32)(y + AppScale(91))},
+                 cast(float32)AppScale(46), cast(float32)AppScale(48),
+                 0.0f, 360.0f, 72, Fade(accent, 0.70f))
+        session_result_text(AppTextFromCString(*value_label[0], 32), x + AppScale(45), y + AppScale(57),
+                            w - AppScale(90), AppScale(55), AppScale(38),
+                            cast(TextAlign)TextAlignCenter)
+        session_result_text(AppTextFromCString(*detail_label[0], 64), x + AppScale(20), y + AppScale(127),
+                            w - AppScale(40), AppScale(25), AppScale(14),
+                            cast(TextAlign)TextAlignCenter)
+        return
+}
+    {
+        row: s32 = 0
+        while row < 3 {
+            guide_y := chart_y + row * chart_h / 2
+            DrawLine(chart_x, guide_y, chart_x + chart_w, guide_y,
+                     Fade(StyleTokenColor("border"), 0.55f))
+            row += 1
+        }
+
+    }
+    {
+        i: s32 = 0
+        while i < result.round_count {
+            value := result.round_values[i]
+            point_x := chart_x + (ifx (result.round_count > 1) then (i * chart_w / (result.round_count - 1)) else (chart_w / 2))
+            point_y: s32
+            if value < 0 {
+                value = 0
+            }
+            point_y = baseline - value * chart_h / scale_max
+            DrawLine(point_x, point_y, point_x, baseline,
+                     Fade(accent, 0.18f))
+            if i > 0 {
+                previous := result.round_values[i - 1]
+                previous_x := chart_x + (ifx (result.round_count > 1) then ((i - 1) * chart_w / (result.round_count - 1)) else (chart_w / 2))
+                previous_y: s32
+                if previous < 0 {
+                    previous = 0
+                }
+                previous_y = baseline - previous * chart_h / scale_max
+                DrawTriangle(Vector2.{cast(float32)previous_x, cast(float32)baseline},
+                             Vector2.{cast(float32)previous_x, cast(float32)previous_y},
+                             Vector2.{cast(float32)point_x, cast(float32)point_y},
+                             Fade(accent, 0.08f))
+                DrawTriangle(Vector2.{cast(float32)previous_x, cast(float32)baseline},
+                             Vector2.{cast(float32)point_x, cast(float32)point_y},
+                             Vector2.{cast(float32)point_x, cast(float32)baseline},
+                             Fade(accent, 0.08f))
+                DrawLineEx(Vector2.{cast(float32)previous_x, cast(float32)previous_y},
+                           Vector2.{cast(float32)point_x, cast(float32)point_y},
+                           cast(float32)AppScale(3), accent)
+            }
+            DrawCircle(point_x, point_y, cast(float32)AppScale(5), StyleTokenColor("text"))
+            if i % label_step == 0 || i == result.round_count - 1 {
+                value_label: [24] u8
+                index_label: [16] u8
+                session_result_format_number("results_metric_seconds", value, value_label[:])
+                AppFormatS32(i + 1, index_label[:])
+                session_result_text(AppTextFromCString(*value_label[0], 24), point_x - AppScale(25),
+                                    point_y - AppScale(29), AppScale(50), AppScale(22),
+                                    AppScale(14), cast(TextAlign)TextAlignCenter)
+                session_result_text(AppTextFromCString(*index_label[0], 16), point_x - AppScale(15),
+                                    baseline + AppScale(7), AppScale(30), AppScale(20),
+                                    AppScale(12), cast(TextAlign)TextAlignCenter)
+            }
+            i += 1
+        }
+
+    }
+}
+
+session_result_round_list :: (result: *SessionResult, x: s32, y: s32,
+                              w: s32) {
+    rows := (result.round_count + 1) / 2
+    gap := AppScale(8)
+    pad := AppScale(14)
+    cell_w := (w - pad * 2 - gap) / 2
+    session_result_card(x, y, w, AppScale(50) + rows * AppScale(40))
+    session_result_text(LocaleText("round_times_title"), x + pad,
+                        y + AppScale(8), w - pad * 2, AppScale(30),
+                        AppScale(18), cast(TextAlign)TextAlignStart)
+    {
+        i: s32 = 0
+        while i < result.round_count {
+            label: [48] u8
+            col := i % 2
+            row := i / 2
+            cell_x := x + pad + col * (cell_w + gap)
+            cell_y := y + AppScale(42) + row * AppScale(40)
+            session_result_format_two_numbers("round_result_label",
+                i + 1, result.round_values[i], label[:])
+            DrawRectangleRounded(Rectangle.{cast(float32)cell_x, cast(float32)cell_y,
+                                  cast(float32)cell_w, cast(float32)AppScale(32)},
+                                 0.16f, 6, Fade(StyleTokenColor("link"), 0.08f))
+            session_result_text(AppTextFromCString(*label[0], 48), cell_x + AppScale(7), cell_y,
+                                cell_w - AppScale(14), AppScale(32),
+                                AppFitFontSize(AppTextFromCString(*label[0], 48), cell_w - AppScale(14),
+                                               AppScale(14), AppScale(10)),
+                                cast(TextAlign)TextAlignStart)
+            i += 1
+        }
+
+    }
+}
+
+session_result_other_count :: (result: *SessionResult) -> s32 {
+    if result.activity == EXERCISE_PATTERNS {
+        return 1 + (ifx (result.detail[0] != #char "\0") then (1) else (0)) +                    (ifx (result.secondary_value > 0) then (1) else (0))
+    }
+    return 1
+}
+
+session_result_other_summary :: (result: *SessionResult, x: s32, y: s32,
+                                 w: s32) {
+    labels: [3][80] u8
+    count: s32 = 0
+    if result.activity == EXERCISE_MEDITATION  || result.activity == EXERCISE_PATTERNS {
+        duration: [32] u8
+        session_result_format_duration(result.primary_value, duration[:])
+        session_result_format_text("results_duration",
+            AppTextFromCString(*duration[0], 32), labels[count][:])
+        count += 1
+        if result.activity == EXERCISE_PATTERNS && result.detail[0] != #char "\0" {
+            session_result_format_text("results_pattern",
+                AppTextFromCString(*result.detail[0], 96), labels[count][:])
+            count += 1
+        }
+        if result.activity == EXERCISE_PATTERNS && result.secondary_value > 0 {
+            session_result_format_number("results_cycles",
+                result.secondary_value, labels[count][:])
+            count += 1
+        }
+    } else {
+        session_result_format_number("results_repetitions",
+            result.primary_value, labels[count][:])
+        count += 1
+    }
+    session_result_card(x, y, w, AppScale(50) + count * AppScale(38))
+    {
+        i: s32 = 0
+        while i < count {
+            if i > 0 {
+                DrawLine(x + AppScale(16), y + AppScale(30 + i * 38),
+                         x + w - AppScale(16), y + AppScale(30 + i * 38),
+                         Fade(StyleTokenColor("border"), 0.70f))
+            }
+            session_result_text(AppTextFromCString(*labels[i][0], 80), x + AppScale(18),
+                                y + AppScale(30) + i * AppScale(38),
+                                w - AppScale(36), AppScale(38),
+                                AppScale(17), cast(TextAlign)TextAlignStart)
+            i += 1
+        }
+
+    }
+}
+
+session_result_status :: (result: *SessionResult, x: s32, y: s32,
+                          w: s32) {
+    status_key := "results_unsaved_status"
+    icon := StyleTokenColor("link")
+    if result.write_failed != 0 {
+        status_key = "results_write_failed"
+        icon = Color.{.r = 226, .g = 83, .b = 78, .a = 255}
+    } else if result.saved != 0 {
+        status_key = "results_saved_status"
+        icon = Color.{.r = 108, .g = 199, .b = 145, .a = 255}
+    }
+    status := LocaleText(status_key)
+    session_result_card(x, y, w, AppScale(50))
+    DrawRectangleRounded(Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w,
+                          cast(float32)AppScale(50)}, 0.12f, 10, Fade(icon, 0.07f))
+    DrawRectangleRoundedLinesEx(Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w,
+                                 cast(float32)AppScale(50)}, 0.12f, 10, 1.0f,
+                                Fade(icon, 0.34f))
+    DrawCircle(x + AppScale(29), y + AppScale(25), cast(float32)AppScale(12), Fade(icon, 0.25f))
+    DrawCircle(x + AppScale(29), y + AppScale(25), cast(float32)AppScale(5), icon)
+    session_result_text(status, x + AppScale(52), y + AppScale(7),
+                        w - AppScale(68), AppScale(36),
+                        AppFitFontSize(status, w - AppScale(68),
+                                       AppScale(16), AppScale(12)),
+                        cast(TextAlign)TextAlignStart)
+}
+
+session_result_content_height :: (result: *SessionResult) -> s32 {
+    h := AppScale(20 + 86 + 14)
+    if result.activity == EXERCISE_WIM_HOF {
+        h += AppScale(78 + 14 + 14) + session_result_chart_height(result)
+    } else {
+        h += AppScale(50 + session_result_other_count(result) * 38 + 14)
+    }
+    h += AppScale(50 + 14 + 124 + 14)
+    if result.activity == EXERCISE_WIM_HOF && result.round_count > 1 {
+        h += AppScale(50 + ((result.round_count + 1) / 2) * 40 + 14)
+    }
+    return h + AppScale(20)
+}
+
+session_result_draw_content :: (app: *InnerBreeze, result: *SessionResult,
+                                box_x: s32, box_w: s32, top_y: s32,
+                                center_x: s32, best: s32, avg: s32) {
+    content_y := top_y + AppScale(20)
+        DrawCircleGradient(Vector2.{cast(float32)center_x, cast(float32)(content_y + AppScale(20))},
+                       cast(float32)AppScale(170), Fade(session_result_accent(), 0.17f),
+                       Fade(StyleTokenColor("canvas"), 0.0f))
+    session_result_text(LocaleText("results_title"), box_x, content_y,
+                        box_w, AppScale(25), AppScale(14), cast(TextAlign)TextAlignStart)
+    session_result_text(practice_label(result.activity), box_x,
+                        content_y + AppScale(30), box_w, AppScale(50),
+                        AppFitFontSize(practice_label(result.activity),
+                                       box_w, AppScale(34), AppScale(20)),
+                        cast(TextAlign)TextAlignStart)
+    content_y += AppScale(86 + 14)
+
+    if result.activity == EXERCISE_WIM_HOF {
+        session_result_metrics(result, box_x, content_y, box_w, best, avg)
+        content_y += AppScale(78 + 14)
+        session_result_chart(result, box_x, content_y, box_w, best)
+        content_y += session_result_chart_height(result) + AppScale(14)
+    } else {
+        session_result_other_summary(result, box_x, content_y, box_w)
+        content_y += AppScale(50 + session_result_other_count(result) * 38 + 14)
+    }
+
+    session_result_status(result, box_x, content_y, box_w)
+    content_y += AppScale(50 + 14)
+    session_result_mood_picker(app, box_x, content_y, box_w)
+    content_y += AppScale(124 + 14)
+    if result.activity == EXERCISE_WIM_HOF && result.round_count > 1 {
+        session_result_round_list(result, box_x, content_y, box_w)
+    }
+}
+
+practice_draw_results :: (app: *InnerBreeze, center_x: s32, center_y: s32,
+                          hover: *s32) {
+    result: *SessionResult
+    box_x: s32
+    box_w: s32
+    button_y: s32
+    button_h := AppScale(48)
+    gap := AppScale(12)
+    best: s32 = 0
+    avg: s32 = 0
+
+    if app == null {
+        return
+    }
+    result = *app.session_result
+    if result.active == 0 {
+        session_draw_results_screen(app, center_x, center_y, hover)
+        return
+    }
+    unused center_y
+    unused hover
+    GetCenteredColumn(AppScale(600), GetPageSidePadding(), *box_x, *box_w)
+    button_y = app.ui.view_height - AppScale(20) - button_h
+    if button_y < AppScale(200) {
+        button_y = app.ui.view_height - button_h
+    }
+    if result.activity == EXERCISE_WIM_HOF {
+        session_result_round_stats(result, *best, *avg)
+    }
+
+    {
+        scroll_1_bounds: Rectangle = Rectangle.{0.0f, 0.0f,
+            cast(float32)app.ui.view_width,
+            cast(float32)(button_y - AppScale(12))}
+        scroll_1_key: u64 = KeyHash("inbe/screens/session_results/scroll/1")
+        scroll_1_props: ScrollProps
+        scroll_1_props.key = scroll_1_key
+        scroll_1_props.bounds = scroll_1_bounds
+        scroll_1_props.content_height = session_result_content_height(result)
+        scroll_1_props.scroll_offset = app.results_scroll
+        scroll_1_props.input = ScrollObservationFor(scroll_1_key, scroll_1_bounds)
+        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
+        app.results_scroll = scroll_1_result.scroll_offset
+        CommitScroll(scroll_1_key, scroll_1_result.frame)
+        page: Rectangle = scroll_1_result.content
+
+        session_result_draw_content(app, result, box_x, box_w,
+                                    cast(s32)page.y, center_x, best, avg)
+        unused End(CurrentApp().ui.session)
+    }
+
+    if result.saved != 0 {
+        button_w := (box_w - gap) / 2
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)box_x, cast(float32)button_y,
+                       cast(float32)button_w, cast(float32)button_h},
+            .label = LocaleText("discard_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+            session_result_discard(app)
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(box_x + button_w + gap), cast(float32)button_y,
+                       cast(float32)(box_w - button_w - gap), cast(float32)button_h},
+            .label = LocaleText("done_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+        }) != 0 {
+            session_result_done(app)
+        }
+    } else {
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)box_x, cast(float32)button_y,
+                       cast(float32)box_w, cast(float32)button_h},
+            .label = LocaleText("done_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+        }) != 0 {
+            session_result_done(app)
+        }
+    }
+}

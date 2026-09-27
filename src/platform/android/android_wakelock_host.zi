@@ -1,0 +1,83 @@
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+
+#if #defined(ANDROID_BUILD) {
+    wakelock_mutex: AndroidMutex;
+    wakelock_vm: *JniVm;
+    wakelock_activity: *void;
+}
+
+#program_export
+android_wakelock_set_jvm :: (vm: *JniVm) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*wakelock_mutex)
+        wakelock_vm = vm
+        AndroidMutexUnlock(*wakelock_mutex)
+    }
+    unused vm
+}
+
+#program_export
+android_wakelock_set_activity :: (env: *JniEnv, activity: *void) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*wakelock_mutex)
+        if wakelock_activity != null && env != null {
+            env.functions.DeleteGlobalRef(env, wakelock_activity)
+        }
+        wakelock_activity = null
+        if env != null && activity != null {
+            wakelock_activity = env.functions.NewGlobalRef(env, activity)
+            if wakelock_vm == null {
+                env.functions.GetJavaVM(env, *wakelock_vm)
+            }
+        }
+        AndroidMutexUnlock(*wakelock_mutex)
+    }
+    unused env
+    unused activity
+}
+
+WakelockCall :: (method: string, text: *u8) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*wakelock_mutex)
+        session: ActivityJniSession
+        called := false
+        if JniAttach(*session, wakelock_vm, wakelock_activity) {
+            called = JniCallVoid(*session, method, text)
+            activity_jni_detach(*session)
+        }
+        AndroidMutexUnlock(*wakelock_mutex)
+        return called
+    }
+    unused method
+    unused text
+    return false
+}
+
+#program_export
+wakelock_acquire_host :: () -> bool {
+    return WakelockCall("acquireWakeLock", null)
+}
+
+#program_export
+wakelock_release_host :: () -> bool {
+    return WakelockCall("releaseWakeLock", null)
+}
+
+#program_export
+wakelock_update_notification_host :: (text: *u8) -> bool {
+    if text == null {
+        return false
+    }
+    return WakelockCall("updateSessionNotification", text)
+}
+
+#program_export
+wakelock_keep_screen_on_host :: () -> bool {
+    return WakelockCall("keepScreenOn", null)
+}
+
+#program_export
+wakelock_allow_screen_off_host :: () -> bool {
+    return WakelockCall("allowScreenOff", null)
+}

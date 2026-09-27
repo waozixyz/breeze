@@ -1,0 +1,183 @@
+#import "c_string"
+#import, file "sqlite.zi";
+
+c :: #system_library "c";
+meta_db_handle :: () -> *void #foreign c "storage_db_handle";
+meta_text_buffer :: () -> *u8 #foreign c "storage_meta_text_buffer";
+
+MetaTextCapacity :: 8192
+
+MetaEqualCString :: (left: *u8, right: *u8) -> bool {
+    if left == null || right == null {
+        return false
+    }
+    index: s32 = 0
+    while left[index] == right[index] {
+        if left[index] == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+MetaCopyText :: (source: *u8, output: *u8) {
+    if output == null {
+        return
+    }
+    output[0] = cast(u8)0
+    if source == null {
+        return
+    }
+    index: s32 = 0
+    while index < MetaTextCapacity - 1 && source[index] != cast(u8)0 {
+        output[index] = source[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+}
+
+MetaPrepare :: (db: *void, sql: string) -> *void {
+    query: [128]u8
+    if db == null || !CopyCString(sql, query[:]) {
+        return null
+    }
+    statement: *void = null
+    if SqlitePrepare(db, *query[0], -1, *statement, null) != 0 {
+        return null
+    }
+    return statement
+}
+
+MetaRead :: (key: *u8) -> *void {
+    db := meta_db_handle()
+    if db == null || key == null {
+        return null
+    }
+    statement := MetaPrepare(db, "SELECT value FROM meta WHERE key=?1")
+    if statement == null {
+        return null
+    }
+    if SqliteBindText(statement, 1, key, -1, null) != 0 {
+        unused SqliteFinalize(statement)
+        return null
+    }
+    return statement
+}
+
+#program_export
+meta_equals :: (key: *u8, value: *u8) -> s32 {
+    if value == null {
+        return 0
+    }
+    statement := MetaRead(key)
+    if statement == null {
+        return 0
+    }
+    equal := false
+    if SqliteStep(statement) == 100 {
+        equal = MetaEqualCString(SqliteColumnText(statement, 0), value)
+    }
+    unused SqliteFinalize(statement)
+    if equal {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+get_meta_text :: (key: *u8) -> *u8 {
+    output := meta_text_buffer()
+    if output == null {
+        return null
+    }
+    output[0] = cast(u8)0
+    statement := MetaRead(key)
+    if statement == null {
+        return null
+    }
+    if SqliteStep(statement) == 100 {
+        MetaCopyText(SqliteColumnText(statement, 0), output)
+    }
+    unused SqliteFinalize(statement)
+    if output[0] != cast(u8)0 {
+        return output
+    }
+    return null
+}
+
+#program_export
+set_meta :: (key: *u8, value: *u8) {
+    db := meta_db_handle()
+    if db == null || key == null {
+        return
+    }
+    empty: [1]u8
+    empty[0] = cast(u8)0
+    content := value
+    if content == null {
+        content = *empty[0]
+    }
+    statement := MetaPrepare(db,
+        "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    if statement == null {
+        return
+    }
+    if SqliteBindText(statement, 1, key, -1, null) == 0  && SqliteBindText(statement, 2, content, -1, null) == 0 {
+        unused SqliteStep(statement)
+    }
+    unused SqliteFinalize(statement)
+}
+
+#program_export
+get_meta_int64 :: (key: *u8, fallback: s64) -> s64 {
+    statement := MetaRead(key)
+    if statement == null {
+        return fallback
+    }
+    result := fallback
+    if SqliteStep(statement) == 100 {
+        value := SqliteColumnText(statement, 0)
+        if value != null && value[0] != cast(u8)0 {
+            result = SqliteColumnInt64(statement, 0)
+        }
+    }
+    unused SqliteFinalize(statement)
+    return result
+}
+
+MetaUnsignedText :: (value: u64, output: *u8, cursor: *s32) {
+    digits: [20]u8
+    count: s32 = 0
+    if value == 0 {
+        digits[0] = cast(u8)48
+        count = 1
+    }
+    while value > 0 {
+        digits[count] = cast(u8)(48 + value % 10)
+        count += 1
+        value /= 10
+    }
+    while count > 0 {
+        count -= 1
+        output[cursor.*] = digits[count]
+        cursor.* += 1
+    }
+}
+
+#program_export
+set_meta_int64 :: (key: *u8, value: s64) {
+    output: [32]u8
+    cursor: s32 = 0
+    magnitude: u64
+    if value < 0 {
+        output[0] = cast(u8)45
+        cursor = 1
+        magnitude = cast(u64)(-(value + 1)) + 1
+    } else {
+        magnitude = cast(u64)value
+    }
+    MetaUnsignedText(magnitude, *output[0], *cursor)
+    output[cursor] = cast(u8)0
+    set_meta(key, *output[0])
+}

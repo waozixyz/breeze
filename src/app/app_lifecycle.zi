@@ -1,0 +1,95 @@
+c :: #system_library "c";
+ChangeDirectory :: (dir: *u8) -> s32 #foreign c "chdir";
+AllocZeroed :: (count: usize, size: usize) -> *void #foreign c "calloc";
+FreeAppMemory :: (value: *void) #foreign c "free";
+AppInitialize :: (value: *void) #foreign c "app_init";
+AppDestroy :: (value: *void) #foreign c "app_destroy";
+SessionStart :: (app: *InnerBreeze) #foreign c "session_start";
+
+#import, file "app.zi";
+#import "c_string"
+#import, file "app_types.zi";
+#import, file "app_route_url.zi";
+#import, file "app_route_state.zi";
+#import, file "route_types.zi";
+#import, file "text_buffers.zi";
+#import "drawing_props"
+#import "geometry"
+
+#program_export
+global_app_handle :: () -> *InnerBreeze #foreign c "app_lifecycle_global_app";
+global_app: *InnerBreeze;
+
+AppRouteInfo :: struct {
+    id: *u8
+}
+
+#program_export
+get_global_app :: () -> *InnerBreeze {
+    return global_app
+}
+
+#program_export
+set_global_app :: (app: *InnerBreeze) {
+    global_app = app
+}
+
+#program_export
+CreateApp :: (project_path: string) -> *void {
+    app: *InnerBreeze = null
+    app = cast(*InnerBreeze)AllocZeroed(cast(usize)1,
+        cast(usize)size_of(type_of(app.*)))
+    if app == null {
+        return null
+    }
+    if project_path.count > 0 && project_path[0] != #char "\0" {
+        path: [1024]u8
+        if !CopyCString(project_path, path[:]) || ChangeDirectory(*path[0]) != 0 {
+            FreeAppMemory(cast(*void)app)
+            return null
+        }
+    }
+    AppInitialize(cast(*void)app)
+    set_global_app(app)
+    return cast(*void)app
+}
+#program_export
+DestroyApp :: (value: *void) {
+    app := cast(*InnerBreeze)value
+    if app == null {
+        return
+    }
+    AppDestroy(cast(*void)app)
+    FreeAppMemory(cast(*void)app)
+    set_global_app(null)
+}
+
+#program_export
+ApplyRoute :: (value: *void, route_info: *AppRouteInfo) {
+    app := cast(*InnerBreeze)value
+    if app == null || route_info == null || route_info.id == null {
+        return
+    }
+    id := AppTextFromCString(route_info.id, 1024)
+    if id == "session" {
+        SessionStart(app)
+        return
+    }
+    screen := screen_for_route_id(id)
+    if screen < 0 {
+        return
+    }
+    route := app_current_route(app)
+    route.screen = screen
+    app_switch_route(app, route)
+}
+
+#program_export
+BeginScreenDraw :: (value: *void, viewport: Rectangle) {
+    app := cast(*InnerBreeze)value
+    if app == null {
+        return
+    }
+    app.ui.view_width = cast(s32)viewport.width
+    app.ui.view_height = cast(s32)viewport.height
+}

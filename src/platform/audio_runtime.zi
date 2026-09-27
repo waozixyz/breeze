@@ -1,0 +1,378 @@
+// The app keeps stable handles while raylib owns the decoded sound and music.
+// Slots are used on the UI thread; the mixed audio callback never reads them.
+#import, file "media_types.zi";
+#import "c_string"
+
+raylib :: #system_library "raylib";
+c :: #system_library "c";
+
+NativeWave :: struct {
+    frame_count: u32
+    sample_rate: u32
+    sample_size: u32
+    channels: u32
+    data: *void
+}
+
+NativeAudioStream :: struct {
+    buffer: *void
+    processor: *void
+    sample_rate: u32
+    sample_size: u32
+    channels: u32
+}
+
+NativeSound :: struct {
+    stream: NativeAudioStream
+    frame_count: u32
+}
+
+NativeMusic :: struct {
+    stream: NativeAudioStream
+    frame_count: u32
+    looping: bool
+    ctx_type: s32
+    ctx_data: *void
+}
+
+MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
+
+HostLoadWave :: (path: *u8) -> NativeWave #foreign raylib "LoadWave";
+HostLoadWaveFromMemory :: (extension: *u8, data: *u8,
+    size: s32) -> NativeWave #foreign raylib "LoadWaveFromMemory";
+HostWaveFormat :: (wave: *NativeWave, sample_rate: s32,
+    sample_size: s32, channels: s32) #foreign raylib "WaveFormat";
+HostUnloadWave :: (wave: NativeWave) #foreign raylib "UnloadWave";
+HostLoadSoundFromWave :: (wave: NativeWave) -> NativeSound #foreign raylib "LoadSoundFromWave";
+HostLoadSound :: (path: *u8) -> NativeSound #foreign raylib "LoadSound";
+HostIsSoundValid :: (sound: NativeSound) -> bool #foreign raylib "IsSoundValid";
+HostUnloadSound :: (sound: NativeSound) #foreign raylib "UnloadSound";
+HostPlaySound :: (sound: NativeSound) #foreign raylib "PlaySound";
+HostStopSound :: (sound: NativeSound) #foreign raylib "StopSound";
+HostPauseSound :: (sound: NativeSound) #foreign raylib "PauseSound";
+HostIsSoundPlaying :: (sound: NativeSound) -> bool #foreign raylib "IsSoundPlaying";
+HostSetSoundVolume :: (sound: NativeSound, volume: float32) #foreign raylib "SetSoundVolume";
+HostSetSoundPitch :: (sound: NativeSound, pitch: float32) #foreign raylib "SetSoundPitch";
+HostLoadMusicStream :: (path: *u8) -> NativeMusic #foreign raylib "LoadMusicStream";
+HostIsMusicValid :: (music: NativeMusic) -> bool #foreign raylib "IsMusicValid";
+HostUnloadMusicStream :: (music: NativeMusic) #foreign raylib "UnloadMusicStream";
+HostPlayMusicStream :: (music: NativeMusic) #foreign raylib "PlayMusicStream";
+HostStopMusicStream :: (music: NativeMusic) #foreign raylib "StopMusicStream";
+HostPauseMusicStream :: (music: NativeMusic) #foreign raylib "PauseMusicStream";
+HostResumeMusicStream :: (music: NativeMusic) #foreign raylib "ResumeMusicStream";
+HostIsMusicStreamPlaying :: (music: NativeMusic) -> bool #foreign raylib "IsMusicStreamPlaying";
+HostUpdateMusicStream :: (music: NativeMusic) #foreign raylib "UpdateMusicStream";
+HostSetMusicVolume :: (music: NativeMusic, volume: float32) #foreign raylib "SetMusicVolume";
+HostInitAudioDevice :: () #foreign raylib "InitAudioDevice";
+HostIsAudioDeviceReady :: () -> bool #foreign raylib "IsAudioDeviceReady";
+HostCloseAudioDevice :: () #foreign raylib "CloseAudioDevice";
+NativeMixedAudioCallback :: #type (buffer: *void, frames: u32) -> void #c_call;
+HostAttachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign raylib "AttachAudioMixedProcessor";
+HostDetachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign raylib "DetachAudioMixedProcessor";
+
+mixed_audio_callback: MixedAudioCallback;
+mixed_audio_attached: bool;
+
+AudioMixedBridge :: (buffer: *void, frames: u32) {
+    if mixed_audio_callback != null {
+        mixed_audio_callback(buffer, frames)
+    }
+}
+
+AudioMixedNoop :: (buffer: *void, frames: u32) {}
+
+AudioMixAttachHost :: (callback: MixedAudioCallback) {
+    bridge: NativeMixedAudioCallback = AudioMixedBridge
+    if mixed_audio_attached {
+        HostDetachAudioMixedProcessor(bridge)
+        mixed_audio_attached = false
+    }
+    mixed_audio_callback = callback
+    if callback != null {
+        HostAttachAudioMixedProcessor(bridge)
+        mixed_audio_attached = true
+    }
+}
+
+AudioMixDetachHost :: (callback: MixedAudioCallback) {
+    if !mixed_audio_attached || mixed_audio_callback != callback {
+        return
+    }
+    bridge: NativeMixedAudioCallback = AudioMixedBridge
+    HostDetachAudioMixedProcessor(bridge)
+    mixed_audio_attached = false
+    mixed_audio_callback = AudioMixedNoop
+}
+
+AUDIO_SOUND_SLOTS :: 64
+AUDIO_MUSIC_SLOTS :: 16
+
+SoundSlot :: struct {
+    id: u64
+    value: NativeSound
+}
+MusicSlot :: struct {
+    id: u64
+    value: NativeMusic
+}
+
+sound_slots: [AUDIO_SOUND_SLOTS]SoundSlot;
+music_slots: [AUDIO_MUSIC_SLOTS]MusicSlot;
+next_audio_id: u64 = 1;
+
+audio_next_id :: () -> u64 {
+    id := next_audio_id
+    next_audio_id += 1
+    if next_audio_id == 0 {
+        next_audio_id = 1
+    }
+    return id
+}
+
+audio_sound_slot :: (handle: SoundHandle) -> *SoundSlot {
+    if handle.id == 0 {
+        return null
+    }
+    i: s32 = 0
+    while i < AUDIO_SOUND_SLOTS {
+        if sound_slots[i].id == handle.id {
+            return *sound_slots[i]
+        }
+        i += 1
+    }
+    return null
+}
+
+audio_music_slot :: (handle: MusicHandle) -> *MusicSlot {
+    if handle.id == 0 {
+        return null
+    }
+    i: s32 = 0
+    while i < AUDIO_MUSIC_SLOTS {
+        if music_slots[i].id == handle.id {
+            return *music_slots[i]
+        }
+        i += 1
+    }
+    return null
+}
+
+audio_store_sound :: (sound: NativeSound) -> SoundHandle {
+    empty: SoundHandle = .{}
+    if !HostIsSoundValid(sound) {
+        return empty
+    }
+    i: s32 = 0
+    while i < AUDIO_SOUND_SLOTS {
+        if sound_slots[i].id == 0 {
+            id := audio_next_id()
+            sound_slots[i].id = id
+            sound_slots[i].value = sound
+            return SoundHandle.{.id = id, .frame_count = cast(u64)sound.frame_count}
+        }
+        i += 1
+    }
+    HostUnloadSound(sound)
+    return empty
+}
+
+audio_load_sound_file :: (path: string) -> SoundHandle {
+    empty: SoundHandle = .{}
+    path_bytes: [4096]u8
+    if !CopyCString(path, path_bytes[:]) {
+        return empty
+    }
+    wave := HostLoadWave(*path_bytes[0])
+    if wave.data == null {
+        return empty
+    }
+    HostWaveFormat(*wave, 44100, 16, 2)
+    sound := HostLoadSoundFromWave(wave)
+    HostUnloadWave(wave)
+    return audio_store_sound(sound)
+}
+
+audio_load_sound_memory :: (extension: string, data: *u8, size: s32) -> SoundHandle {
+    empty: SoundHandle = .{}
+    extension_bytes: [32]u8
+    if !CopyCString(extension, extension_bytes[:]) {
+        return empty
+    }
+    wave := HostLoadWaveFromMemory(*extension_bytes[0], data, size)
+    if wave.data == null {
+        return empty
+    }
+    HostWaveFormat(*wave, 44100, 16, 2)
+    sound := HostLoadSoundFromWave(wave)
+    HostUnloadWave(wave)
+    return audio_store_sound(sound)
+}
+
+audio_load_sound :: (path: string) -> SoundHandle {
+    path_bytes: [4096]u8
+    if !CopyCString(path, path_bytes[:]) {
+        return SoundHandle.{}
+    }
+    return audio_store_sound(HostLoadSound(*path_bytes[0]))
+}
+
+audio_unload_sound :: (handle: SoundHandle) {
+    slot := audio_sound_slot(handle)
+    if slot == null {
+        return
+    }
+    HostUnloadSound(slot.value)
+    slot.id = 0
+    slot.value = NativeSound.{}
+}
+
+audio_play_sound :: (handle: SoundHandle) {
+    slot := audio_sound_slot(handle)
+    if slot != null {
+        HostPlaySound(slot.value)
+    }
+}
+
+audio_stop_sound :: (handle: SoundHandle) {
+    slot := audio_sound_slot(handle)
+    if slot != null {
+        HostStopSound(slot.value)
+    }
+}
+
+audio_pause_sound :: (handle: SoundHandle) {
+    slot := audio_sound_slot(handle)
+    if slot != null {
+        HostPauseSound(slot.value)
+    }
+}
+
+audio_sound_playing :: (handle: SoundHandle) -> bool {
+    slot := audio_sound_slot(handle)
+    if slot == null {
+        return false
+    }
+    return HostIsSoundPlaying(slot.value)
+}
+
+audio_set_sound_volume :: (handle: SoundHandle, volume: float32) {
+    slot := audio_sound_slot(handle)
+    if slot != null {
+        HostSetSoundVolume(slot.value, volume)
+    }
+}
+
+audio_set_sound_pitch :: (handle: SoundHandle, pitch: float32) {
+    slot := audio_sound_slot(handle)
+    if slot != null {
+        HostSetSoundPitch(slot.value, pitch)
+    }
+}
+
+audio_store_music :: (music: NativeMusic) -> MusicHandle {
+    empty: MusicHandle = .{}
+    if !HostIsMusicValid(music) {
+        return empty
+    }
+    i: s32 = 0
+    while i < AUDIO_MUSIC_SLOTS {
+        if music_slots[i].id == 0 {
+            id := audio_next_id()
+            music_slots[i].id = id
+            music_slots[i].value = music
+            return MusicHandle.{.id = id}
+        }
+        i += 1
+    }
+    HostUnloadMusicStream(music)
+    return empty
+}
+
+audio_load_music :: (path: string) -> MusicHandle {
+    path_bytes: [4096]u8
+    if !CopyCString(path, path_bytes[:]) {
+        return MusicHandle.{}
+    }
+    return audio_store_music(HostLoadMusicStream(*path_bytes[0]))
+}
+
+audio_music_valid :: (handle: MusicHandle) -> bool {
+    return audio_music_slot(handle) != null
+}
+
+audio_unload_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot == null {
+        return
+    }
+    HostUnloadMusicStream(slot.value)
+    slot.id = 0
+    slot.value = NativeMusic.{}
+}
+
+audio_play_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostPlayMusicStream(slot.value)
+    }
+}
+
+audio_stop_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostStopMusicStream(slot.value)
+    }
+}
+
+audio_pause_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostPauseMusicStream(slot.value)
+    }
+}
+
+audio_resume_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostResumeMusicStream(slot.value)
+    }
+}
+
+audio_music_playing :: (handle: MusicHandle) -> bool {
+    slot := audio_music_slot(handle)
+    if slot == null {
+        return false
+    }
+    return HostIsMusicStreamPlaying(slot.value)
+}
+
+audio_update_music :: (handle: MusicHandle) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostUpdateMusicStream(slot.value)
+    }
+}
+
+audio_set_music_volume :: (handle: MusicHandle, volume: float32) {
+    slot := audio_music_slot(handle)
+    if slot != null {
+        HostSetMusicVolume(slot.value, volume)
+    }
+}
+
+audio_init :: () -> bool {
+    HostInitAudioDevice()
+    return HostIsAudioDeviceReady()
+}
+
+audio_close :: () {
+    HostCloseAudioDevice()
+}
+
+audio_attach_mixed_processor :: (callback: MixedAudioCallback) {
+    AudioMixAttachHost(callback)
+}
+
+audio_detach_mixed_processor :: (callback: MixedAudioCallback) {
+    AudioMixDetachHost(callback)
+}

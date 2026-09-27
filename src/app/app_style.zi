@@ -1,0 +1,233 @@
+#import "kss_parser"
+#import "style_parse"
+#import "style_sheet"
+#import "theme"
+#import, file "app_types.zi";
+#import, file "assets.zi";
+#import, file "theme_catalog.zi";
+
+using KssStatus;
+
+style_pack_id :: (index: s32) -> string {
+    if index == 2 { return "classic" }
+    if index == 3 { return "lightfield" }
+    return "material"
+}
+
+style_pack_label :: (index: s32) -> string {
+    if index == 2 { return "Classic" }
+    if index == 3 { return "Lightfield" }
+    return "Material"
+}
+
+style_pack_has_glow :: (index: s32) -> s32 {
+    return ifx index == 3 then 1 else 0
+}
+
+StyleMixChannel :: (from: u32, to: u32, amount: float32) -> u32 {
+    value := cast(float32)from +         (cast(float32)to - cast(float32)from) * amount
+    if value < 0.0 { return 0 }
+    if value > 255.0 { return 255 }
+    return cast(u32)(value + 0.5)
+}
+
+StyleMixColor :: (from: u32, to: u32, amount: float32) -> u32 {
+    if amount < 0.0 { amount = 0.0 }
+    if amount > 1.0 { amount = 1.0 }
+    red := StyleMixChannel((from >> cast(u32)24) & cast(u32)255,
+        (to >> cast(u32)24) & cast(u32)255, amount)
+    green := StyleMixChannel((from >> cast(u32)16) & cast(u32)255,
+        (to >> cast(u32)16) & cast(u32)255, amount)
+    blue := StyleMixChannel((from >> cast(u32)8) & cast(u32)255,
+        (to >> cast(u32)8) & cast(u32)255, amount)
+    alpha := StyleMixChannel(from & cast(u32)255,
+        to & cast(u32)255, amount)
+    return (red << cast(u32)24) | (green << cast(u32)16) |
+        (blue << cast(u32)8) | alpha
+}
+
+StyleFade :: (color: u32, opacity: float32) -> u32 {
+    if opacity < 0.0 { opacity = 0.0 }
+    if opacity > 1.0 { opacity = 1.0 }
+    alpha := cast(u32)(cast(float32)(color & cast(u32)255) * opacity + 0.5)
+    return (color & ~cast(u32)255) | alpha
+}
+
+StyleLightfieldColor :: (index: s32, color: u32,
+    opacity: float32) -> u32 {
+    if index == 3 { return StyleFade(color, opacity) }
+    return color
+}
+
+StyleColors :: struct {
+    background: u32
+    surface: u32
+    surface_raised: u32
+    surface_sunken: u32
+    text: u32
+    text_muted: u32
+    border: u32
+    border_strong: u32
+    divider: u32
+    focus: u32
+    accent: u32
+    accent_hover: u32
+    accent_pressed: u32
+    on_accent: u32
+    danger: u32
+    on_danger: u32
+    link: u32
+    icon: u32
+}
+
+StyleColorsFor :: (catalog: ThemeCatalog, dark: bool) -> StyleColors {
+    colors: StyleColors
+    scheme := SchemeFor(catalog.background, catalog.surface, catalog.text,
+        catalog.circle, catalog.button, dark, cast(u8)128)
+    colors.background = catalog.background
+    colors.surface = catalog.surface
+    colors.surface_raised = StyleMixColor(catalog.surface,
+        catalog.background, ifx dark then 0.20 else 0.42)
+    colors.surface_sunken = scheme.surface_container
+    colors.text = catalog.text
+    colors.text_muted = StyleMixColor(catalog.text, catalog.surface,
+        ifx dark then 0.36 else 0.48)
+    colors.border = StyleMixColor(catalog.text, catalog.surface,
+        ifx dark then 0.70 else 0.80)
+    colors.border_strong = scheme.outline
+    colors.divider = colors.border
+    colors.focus = catalog.button
+    colors.accent = catalog.button
+    colors.accent_hover = catalog.button_hover
+    colors.accent_pressed = StyleMixColor(catalog.button,
+        catalog.text, 0.12)
+    colors.on_accent = OnColor(catalog.button)
+    colors.danger = scheme.error
+    colors.on_danger = OnColor(scheme.error)
+    colors.link = catalog.link
+    colors.icon = catalog.icon
+    return colors
+}
+
+StyleOverrides :: (parser: KssParser, colors: StyleColors,
+    index: s32) -> KssParser {
+    parser = KssAddColorOverride(parser, "canvas", colors.background)
+    parser = KssAddColorOverride(parser, "text", colors.text)
+    parser = KssAddColorOverride(parser, "muted", colors.text_muted)
+    parser = KssAddColorOverride(parser, "surface",
+        StyleLightfieldColor(index, colors.surface, 0.87))
+    parser = KssAddColorOverride(parser, "surface-end",
+        StyleLightfieldColor(index, colors.surface_raised, 0.93))
+    parser = KssAddColorOverride(parser, "card",
+        StyleLightfieldColor(index, colors.surface_raised, 0.87))
+    parser = KssAddColorOverride(parser, "card-end",
+        StyleLightfieldColor(index, colors.surface, 0.93))
+    parser = KssAddColorOverride(parser, "panel", colors.surface_raised)
+    parser = KssAddColorOverride(parser, "panel-hover", colors.surface)
+    parser = KssAddColorOverride(parser, "panel-pressed", colors.surface_sunken)
+    parser = KssAddColorOverride(parser, "button",
+        StyleLightfieldColor(index, colors.surface_raised, 0.87))
+    parser = KssAddColorOverride(parser, "button-end",
+        StyleLightfieldColor(index, colors.surface, 0.93))
+    parser = KssAddColorOverride(parser, "button-hover",
+        StyleLightfieldColor(index, colors.surface, 0.93))
+    parser = KssAddColorOverride(parser, "button-hover-end",
+        StyleLightfieldColor(index, colors.surface_raised, 0.93))
+    parser = KssAddColorOverride(parser, "button-pressed",
+        StyleLightfieldColor(index, colors.surface_sunken, 0.93))
+    parser = KssAddColorOverride(parser, "button-pressed-end",
+        StyleLightfieldColor(index, colors.surface, 0.93))
+    parser = KssAddColorOverride(parser, "button-disabled", colors.surface)
+    parser = KssAddColorOverride(parser, "dropdown-end",
+        StyleLightfieldColor(index, colors.surface_raised, 0.93))
+    parser = KssAddColorOverride(parser, "border", colors.border)
+    parser = KssAddColorOverride(parser, "border-soft", colors.divider)
+    parser = KssAddColorOverride(parser, "border-hover", colors.border_strong)
+    parser = KssAddColorOverride(parser, "border-hover-strong", colors.border_strong)
+    parser = KssAddColorOverride(parser, "border-disabled", colors.divider)
+    parser = KssAddColorOverride(parser, "card-border", colors.border)
+    parser = KssAddColorOverride(parser, "outline-border", colors.border_strong)
+    parser = KssAddColorOverride(parser, "focus", colors.focus)
+    parser = KssAddColorOverride(parser, "accent", colors.accent)
+    parser = KssAddColorOverride(parser, "accent-end", colors.accent_pressed)
+    parser = KssAddColorOverride(parser, "accent-hover", colors.accent_hover)
+    parser = KssAddColorOverride(parser, "accent-hover-end", colors.accent)
+    parser = KssAddColorOverride(parser, "accent-border", colors.accent_pressed)
+    parser = KssAddColorOverride(parser, "accent-ink", colors.on_accent)
+    parser = KssAddColorOverride(parser, "danger", colors.danger)
+    parser = KssAddColorOverride(parser, "danger-hover", colors.danger)
+    parser = KssAddColorOverride(parser, "danger-ink", colors.on_danger)
+    parser = KssAddColorOverride(parser, "danger-border", colors.danger)
+    parser = KssAddColorOverride(parser, "row",
+        StyleLightfieldColor(index, colors.surface, 0.67))
+    parser = KssAddColorOverride(parser, "thumb-ink", colors.on_accent)
+    parser = KssAddColorOverride(parser, "divider", colors.divider)
+    parser = KssAddColorOverride(parser, "track", colors.surface_sunken)
+    parser = KssAddColorOverride(parser, "track-hover", colors.surface_raised)
+    parser = KssAddColorOverride(parser, "field", colors.surface_sunken)
+    parser = KssAddColorOverride(parser, "field-border", colors.border)
+    parser = KssAddColorOverride(parser, "scroll-thumb", colors.text_muted)
+    parser = KssAddColorOverride(parser, "scroll-border", colors.border_strong)
+    parser = KssAddColorOverride(parser, "link", colors.link)
+    parser = KssAddColorOverride(parser, "icon", colors.icon)
+    return parser
+}
+
+StyleRootFor :: (index: s32) -> string {
+    if index == 2 {
+        return "@import <classic>; @import <inbe>;"
+    }
+    if index == 3 {
+        return "@import <lightfield>; @import <inbe>;"
+    }
+    return "@import <material>; @import <inbe>;"
+}
+
+StyleImport :: (name: KssName) -> AssetView {
+    if KssNameEquals(name, "classic") {
+        return AssetRead("styles/kryon/classic.kss")
+    }
+    if KssNameEquals(name, "lightfield") {
+        return AssetRead("styles/kryon/lightfield.kss")
+    }
+    if KssNameEquals(name, "material") {
+        return AssetRead("styles/kryon/material.kss")
+    }
+    if KssNameEquals(name, "inbe") {
+        return AssetRead("assets/styles/inbe.kss")
+    }
+    return AssetView.{}
+}
+
+#program_export
+StyleInstall :: (theme_id: s32, dark: bool, style_index: s32) -> bool {
+    catalog := ThemeCatalogLoad(theme_id, dark)
+    if !catalog.complete { return false }
+    env := KssEnvironmentWithNames(KssDefaultEnvironment(),
+        ifx dark then "dark" else "light", "", "", "", "", "")
+    parsed := BeginStyleRules(StyleRootFor(style_index),
+        "styles/inbe-root.kss", env)
+    parsed.parser = StyleOverrides(parsed.parser,
+        StyleColorsFor(catalog, dark), style_index)
+    imports: s32 = 0
+    while imports < 4 {
+        parsed = ParseStyleRules(parsed)
+        if parsed.parser.status != cast(s32)KssStatusNeedImport { break }
+        asset := StyleImport(parsed.parser.pending_import)
+        if !asset.found { return false }
+        parsed = ProvideStyleRulesImport(parsed, asset.data,
+            ifx KssNameEquals(parsed.parser.pending_import, "inbe") then
+                "inbe" else style_pack_id(style_index))
+        imports += 1
+    }
+    if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone {
+        return false
+    }
+    return InstallParsedStyleRules(parsed)
+}
+
+#program_export
+app_apply_style :: (app: *InnerBreeze) -> bool {
+    if app == null { return false }
+    return StyleInstall(app.theme_id, app.dark_mode != 0, app.style_index)
+}

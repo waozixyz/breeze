@@ -1,0 +1,80 @@
+c :: #system_library "c";
+#import, file "../habits/habit_types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+
+#import, file "app.zi";
+#import, file "app_route_state.zi";
+#import, file "navigation_routes.zi";
+#import, file "route_catalog.zi";
+#import, file "route_host.zi";
+#import, file "../core/types.zi";
+#import "geometry"
+#import "layout"
+#import "router"
+#import "router_props"
+#import "session"
+#import "drawing_props"
+
+#program_export
+screen_for_route_id :: (id: string) -> s32 {
+    return ScreenForPath(id)
+}
+
+app_router_props :: (app: *InnerBreeze) -> RouterProps {
+    props: RouterProps
+    props.bounds = Rectangle.{.x = 0, .y = 0, .width = 0, .height = 0}
+    props.key = KeyHash("inbe-router")
+    props.initial_route = ScreenStart
+    if app != null { props.initial_route = app.breathing.screen }
+    props.sync_url = true
+    props.replace_on_init = true
+    return props
+}
+
+app_apply_router_result :: (app: *InnerBreeze, result: RouterResult) {
+    app.ui.route_router = result.state
+    if !result.write_url { return }
+    url: [2048]u8
+    length: s32 = RouterFormatUrl(result, url[:])
+    if length >= 0 { app_route_write(url[:], length, result.push_url) }
+}
+
+#program_export
+app_sync_route_from_url :: (app: *InnerBreeze) {
+    if app == null { return }
+    routes: [RouteCount]RouterRoute
+    FillRoutes(routes[:])
+    props: RouterProps = app_router_props(app)
+    result: RouterResult = Router(app.ui.session, props, app.ui.route_router, routes[:],
+        app_route_hash(), app_route_base(), app_route_version())
+    if result.route == ScreenLanguage && app.language_selected != 0 {
+        result = RouterSetRoute(props, result.state, routes[:],
+            app.breathing.screen, false, app_route_base(),
+            app_route_version())
+        app_apply_router_result(app, result)
+        return
+    }
+    if result.route != app.breathing.screen {
+        route: AppRoute = app_current_route(app)
+        route.screen = result.route
+        app_switch_route(app, route)
+    }
+    app_apply_router_result(app, result)
+}
+
+#program_export
+app_observe_direct_route_change :: (app: *InnerBreeze, before: AppRoute) {
+    if app == null { return }
+    current: AppRoute = app_current_route(app)
+    if RoutesEqual(before, current) { return }
+    if app.breathing.screen == ScreenHabits && before.screen != ScreenHabits {
+        app.habits.focus_selected_tab = 1
+    }
+    routes: [RouteCount]RouterRoute
+    FillRoutes(routes[:])
+    result: RouterResult = RouterSetRoute(app_router_props(app),
+        app.ui.route_router, routes[:], app.breathing.screen, true,
+        app_route_base(), app_route_version())
+    app_apply_router_result(app, result)
+}

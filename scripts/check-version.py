@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 
 VERSION_PATTERN = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 HEADER = "src/core/version.h"
+ZIRAN_VERSION = "src/core/version.zi"
 METAINFO = (
     "packaging/click/inbe.metainfo.xml",
     "packaging/linux/appimage/inbe.appdata.xml",
@@ -57,6 +58,20 @@ def validate(root, structure_only=False):
             raise ValueError(f"{HEADER}: malformed {name}")
         check(name, value, expected)
 
+    ziran_path = root / ZIRAN_VERSION
+    if ziran_path.is_file():
+        ziran = read(ZIRAN_VERSION)
+        for part, expected in zip(("Major", "Minor", "Patch", "String"),
+                                  (*version.split("."), f'"{version}"')):
+            value = unique(ziran, rf"^Version{part} :: ([^\n]+)$",
+                           f"{ZIRAN_VERSION}: Version{part}")
+            pattern = rf'"{VERSION_PATTERN}"' if part == "String" else r"(?:0|[1-9][0-9]*)"
+            if not re.fullmatch(pattern, value):
+                raise ValueError(f"{ZIRAN_VERSION}: malformed Version{part}")
+            check(f"{ZIRAN_VERSION}: Version{part}", value, expected)
+    elif not structure_only:
+        raise ValueError(f"{ZIRAN_VERSION}: missing; run ./update_version.sh")
+
     gradle = read("droid/app/build.gradle")
     android_name = unique(gradle, r'^\s*versionName "([^"\n]+)"$', "Android versionName")
     if not re.fullmatch(VERSION_PATTERN, android_name):
@@ -100,7 +115,7 @@ def validate(root, structure_only=False):
     sources = [root / path for path in ("Makefile", "mkfile", "update_version.sh", "site/build.sh")]
     for directory in ("src", "scripts", ".github"):
         sources.extend(path for path in (root / directory).rglob("*")
-                       if path.suffix in (".c", ".h", ".kry", ".sh", ".py", ".yml", ".yaml", ".mjs"))
+                       if path.suffix in (".c", ".h", ".zi", ".sh", ".py", ".yml", ".yaml", ".mjs"))
     for path in sources:
         for macro in re.findall(r"\b[A-Z][A-Z0-9_]*_VERSION_(?:STRING|MAJOR|MINOR|PATCH)\b",
                                 path.read_text(encoding="utf-8")):

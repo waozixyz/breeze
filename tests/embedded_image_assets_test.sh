@@ -23,7 +23,7 @@ if command -v rg >/dev/null 2>&1; then
 else
   mapfile -t image_paths < <(
     find "$ROOT_DIR/src" "$ROOT_DIR/tests" -type f \
-      \( -name '*.kry' -o -name '*.c' -o -name '*.h' -o -name '*.sh' \) -print0 |
+      \( -name '*.zi' -o -name '*.c' -o -name '*.h' -o -name '*.sh' \) -print0 |
       xargs -0 grep -Eho '"(assets/)?(practices|easteregg|pet)/[^"]+\.(png|jpg|jpeg)"' |
       sed -E 's/^"([^"]+)"$/\1/' |
       sort -u
@@ -64,5 +64,14 @@ for required in \
   grep -Fq "{\"$required\"" "$EMBEDDED_C" ||
     fail "required practice banner is not embedded: $required"
 done
+
+[[ -f "$ROOT_DIR/vendor/kryon/icons/ui.png" ]] ||
+  fail "Kryon UI icon atlas missing"
+grep -Fq '{"icons/ui.png"' "$EMBEDDED_C" ||
+  fail "Kryon UI icon atlas is not embedded as icons/ui.png"
+[[ -f "$ROOT_DIR/vendor/kryon/icons/pfp.png" ]] ||
+  fail "profile picture icon atlas missing"
+grep -Fq '{"icons/pfp.png"' "$EMBEDDED_C" ||
+  fail "profile picture icon atlas is not embedded as icons/pfp.png"
 
 echo "PASS embedded image asset contract"

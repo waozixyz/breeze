@@ -1,0 +1,382 @@
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+#import "session"
+#import "text_input_platform"
+
+#if #defined(ANDROID_BUILD) {
+    c :: #system_library "c";
+    device_mutex: AndroidMutex;
+    current_system_dark: s32;
+    current_orientation: s32;
+    device_text_owner: Session;
+    device_text_accepts_input: bool;
+    device_text_frame_kind: s32;
+    device_text_frame_key: s32;
+
+    DeviceTextInputSend :: (event: TextInputEvent) {
+        AndroidMutexLock(*device_mutex)
+        if device_text_accepts_input {
+            TextInputQueueSend(device_text_owner, event)
+        }
+        AndroidMutexUnlock(*device_mutex)
+    }
+
+
+    DeviceCallInteger :: (name: string, signature: string, value: s32) {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return
+        }
+        method := JniMethod(*session, name, signature)
+        if method != null {
+            arguments: [1]JniValue
+            arguments[0].integer = value
+            session.env.functions.CallVoidMethodA(session.env,
+                session.activity, method, *arguments[0])
+        }
+        activity_jni_detach(*session)
+    }
+
+    DeviceCopyText :: (session: *ActivityJniSession, text: *u8,
+        toast: *u8) -> s32 {
+        method := JniMethod(session, "copyTextAndShowToast",
+            "(Ljava/lang/String;Ljava/lang/String;)V")
+        if method == null {
+            return 0
+        }
+        env := session.env
+        arguments: [2]JniValue
+        arguments[0].reference = JniString(env, text)
+        arguments[1].reference = JniString(env, toast)
+        if arguments[0].reference == null || arguments[1].reference == null {
+            return 0
+        }
+        env.functions.CallVoidMethodA(env, session.activity, method,
+            *arguments[0])
+        if env.functions.ExceptionCheck(env) != 0 {
+            return 0
+        }
+        return 1
+    }
+
+    DeviceAppIcon :: (icon: s32, change: bool) -> s32 {
+        result: s32 = -1
+        if change {
+            result = 0
+        }
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return result
+        }
+        name := "getAppIcon"
+        signature := "()I"
+        if change {
+            name = "setAppIcon"
+            signature = "(I)Z"
+        }
+        method := JniMethod(*session, name, signature)
+        if method != null {
+            env := session.env
+            if change {
+                arguments: [1]JniValue
+                arguments[0].integer = icon
+                result = cast(s32)env.functions.CallBooleanMethodA(env,
+                    session.activity, method, *arguments[0])
+            } else {
+                result = env.functions.CallIntMethodA(env,
+                    session.activity, method, null)
+            }
+            if env.functions.ExceptionCheck(env) != 0 {
+                result = -1
+                if change {
+                    result = 0
+                }
+            }
+        }
+        activity_jni_detach(*session)
+        return result
+    }
+}
+
+#program_export
+android_device_native_set_system_dark :: (dark: s32) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        current_system_dark = 0
+        if dark != 0 {
+            current_system_dark = 1
+        }
+        AndroidMutexUnlock(*device_mutex)
+    }
+    unused dark
+}
+
+#program_export
+android_device_native_set_orientation :: (orientation: s32) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        current_orientation = orientation
+        AndroidMutexUnlock(*device_mutex)
+    }
+    unused orientation
+}
+
+#program_export
+android_device_init :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        current_system_dark = 0
+        current_orientation = 0
+        AndroidMutexUnlock(*device_mutex)
+    }
+}
+
+#program_export
+android_device_system_dark :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        dark := current_system_dark
+        AndroidMutexUnlock(*device_mutex)
+        return dark
+    }
+    return 0
+}
+
+#program_export
+android_device_orientation :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        orientation := current_orientation
+        AndroidMutexUnlock(*device_mutex)
+        return orientation
+    }
+    return 0
+}
+
+#program_export
+android_device_set_orientation_mode :: (mode: s32) {
+    #if #defined(ANDROID_BUILD) {
+        DeviceCallInteger("applyOrientationMode", "(I)V", mode)
+    }
+    unused mode
+}
+
+#program_export
+android_device_set_soft_keyboard_visible :: (visible: s32) {
+    #if #defined(ANDROID_BUILD) {
+        boolean: s32 = 0
+        if visible != 0 {
+            boolean = 1
+        }
+        DeviceCallInteger("setSoftKeyboardVisible", "(Z)V", boolean)
+    }
+    unused visible
+}
+
+#program_export
+android_device_copy_text_and_toast :: (text: *u8, toast: *u8) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return 0
+        }
+        copied := DeviceCopyText(*session, text, toast)
+        activity_jni_detach(*session)
+        return copied
+    }
+    unused text
+    unused toast
+    return 0
+}
+
+#program_export
+android_device_app_icon :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return DeviceAppIcon(0, false)
+    }
+    return 0
+}
+
+#program_export
+android_device_set_app_icon :: (icon: s32) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return DeviceAppIcon(icon, true)
+    }
+    unused icon
+    return 0
+}
+
+#program_export
+android_device_native_text_input_commit :: (env: *JniEnv,
+    activity: *void, codepoint: s32) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        event: TextInputEvent
+        event.kind = TextInputCodepoint
+        event.codepoint = codepoint
+        DeviceTextInputSend(event)
+    }
+    unused codepoint
+}
+
+#program_export
+android_device_native_text_input_backspace :: (env: *JniEnv,
+    activity: *void) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        event: TextInputEvent
+        event.kind = TextInputBackspace
+        DeviceTextInputSend(event)
+    }
+}
+
+#program_export
+android_device_native_text_input_enter :: (env: *JniEnv,
+    activity: *void) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        event: TextInputEvent
+        event.kind = TextInputEnter
+        DeviceTextInputSend(event)
+    }
+}
+
+// Lifecycle and visibility run on the render thread. JNI only writes the
+// queue while holding device_mutex; teardown releases the owner before its
+// Session closes, so a delayed OS callback cannot target a recycled slot.
+#program_export
+android_text_input_open :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        previous := device_text_owner
+        AndroidMutexUnlock(*device_mutex)
+        if previous.slot != 0 {
+            android_text_input_close(previous)
+        }
+        AndroidMutexLock(*device_mutex)
+        if TextInputQueueBind(session) {
+            device_text_owner = session
+            device_text_accepts_input = false
+            device_text_frame_kind = 0
+            device_text_frame_key = 0
+        }
+        AndroidMutexUnlock(*device_mutex)
+        TextKeyboardBind(session)
+    }
+    unused session
+}
+
+#program_export
+android_text_input_close :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        // Hide while the callback can still validate its native owner.
+        TextKeyboardRelease(session)
+        AndroidMutexLock(*device_mutex)
+        if device_text_owner.slot == session.slot &&
+        device_text_owner.epoch == session.epoch {
+            TextInputQueueRelease(session)
+            device_text_owner = .{}
+            device_text_accepts_input = false
+            device_text_frame_kind = 0
+            device_text_frame_key = 0
+        }
+        AndroidMutexUnlock(*device_mutex)
+    }
+    unused session
+}
+
+#program_export
+SetPlatformTextKeyboardVisible :: (session: Session, visible: bool) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        owned := TextInputOwnerMatches(device_text_owner, session)
+        AndroidMutexUnlock(*device_mutex)
+        if owned {
+            value: s32 = 0
+            if visible {
+                value = 1
+            }
+            android_device_set_soft_keyboard_visible(value)
+        }
+    }
+    unused session
+    unused visible
+}
+
+#program_export
+android_text_input_begin_frame :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        device_text_frame_kind = 0
+        device_text_frame_key = 0
+        if TextInputOwnerMatches(device_text_owner, session) && device_text_accepts_input {
+            event := TextInputQueuePeek(session)
+            device_text_frame_kind = event.kind
+            if event.kind == TextInputBackspace {
+                TextInputQueueTake(session)
+                device_text_frame_key = 259
+            }
+            if event.kind == TextInputEnter {
+                TextInputQueueTake(session)
+                device_text_frame_key = 257
+            }
+        }
+        AndroidMutexUnlock(*device_mutex)
+    }
+    unused session
+}
+
+#program_export
+android_text_input_frame :: (session: Session, active: bool) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        owned := TextInputOwnerMatches(device_text_owner, session)
+        if owned {
+            device_text_accepts_input = active
+            if !active {
+                TextInputQueueReset(session)
+                device_text_frame_kind = 0
+                device_text_frame_key = 0
+            }
+        }
+        AndroidMutexUnlock(*device_mutex)
+        if owned {
+            TextKeyboardSetVisible(session, active)
+        }
+    }
+    unused session
+    unused active
+}
+
+#program_export
+android_text_input_character :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        codepoint: s32 = 0
+        AndroidMutexLock(*device_mutex)
+        if device_text_frame_kind == TextInputCodepoint && device_text_accepts_input {
+            event := TextInputQueuePeek(device_text_owner)
+            if event.kind == TextInputCodepoint {
+                event = TextInputQueueTake(device_text_owner)
+                codepoint = event.codepoint
+            }
+        }
+        AndroidMutexUnlock(*device_mutex)
+        return codepoint
+    }
+    return 0
+}
+
+#program_export
+android_text_input_key_pressed :: (key: s32) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*device_mutex)
+        pressed := device_text_accepts_input && device_text_frame_key == key
+        AndroidMutexUnlock(*device_mutex)
+        return pressed
+    }
+    unused key
+    return false
+}

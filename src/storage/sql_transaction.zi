@@ -1,0 +1,54 @@
+// All transaction statements on the main storage connection pass through
+// this function. SQLite's recursive connection mutex remains held from the
+// first statement that disables autocommit until autocommit is restored.
+// A single exec may contain a complete transaction; that needs one release.
+#import, file "sqlite.zi";
+
+sqlite :: #system_library "sqlite3";
+c :: #system_library "c";
+sqlite3_db_mutex :: (database: *void) -> *void #foreign sqlite "sqlite3_db_mutex";
+sqlite3_mutex_enter :: (mutex: *void) #foreign sqlite "sqlite3_mutex_enter";
+sqlite3_mutex_leave :: (mutex: *void) #foreign sqlite "sqlite3_mutex_leave";
+sqlite3_get_autocommit :: (database: *void) -> s32 #foreign sqlite "sqlite3_get_autocommit";
+usleep :: (microseconds: u32) -> s32 #foreign c;
+WEB :: #defined(__EMSCRIPTEN__);
+
+#scope_export
+#program_export
+SqliteExecTransaction :: (database: *void, sql: string) -> s32 {
+    if database == null || sql.count == 0 {
+        return 0
+    }
+
+    mutex := sqlite3_db_mutex(database)
+    if mutex != null {
+        sqlite3_mutex_enter(mutex)
+    }
+    was_autocommit := sqlite3_get_autocommit(database) != 0
+
+    rc: s32 = SQLITE_OK
+    attempt: s32 = 0
+    while attempt < 20 {
+        rc = SqliteExecText(database, sql)
+        if rc == SQLITE_OK || (rc != SQLITE_BUSY && rc != SQLITE_LOCKED) {
+            break
+        }
+        #if !WEB {
+            usleep(50000)
+        }
+        attempt += 1
+    }
+
+    is_autocommit := sqlite3_get_autocommit(database) != 0
+    if mutex != null {
+        if was_autocommit == is_autocommit {
+            sqlite3_mutex_leave(mutex)
+        } else if !was_autocommit {
+            // This call ended the transaction: release this recursive enter
+            // and the one kept by the call that began the transaction.
+            sqlite3_mutex_leave(mutex)
+            sqlite3_mutex_leave(mutex)
+        }
+    }
+    return ifx (rc == SQLITE_OK) then (1) else (0)
+}

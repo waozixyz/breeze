@@ -1,0 +1,111 @@
+c :: #system_library "c";
+#import, file "modal_rules.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+
+#import, file "app.zi";
+#import, file "app_modal_state.zi";
+#import, file "donation_threshold.zi";
+
+using ModalType;
+using AppMainTab;
+
+// app_settings and storage_sessions own these effects. Importing either full
+// implementation here would pull unrelated native UI and database code into
+// the reminder decision module.
+save_settings :: (app: *InnerBreeze) #foreign c;
+storage_session_count :: () -> s32 #foreign c;
+
+save_reminder :: (app: *InnerBreeze) {
+    if app != null { save_settings(app) }
+}
+
+#program_export
+app_record_donation_reminder_seen :: (app: *InnerBreeze) {
+    if app == null { return }
+    practice_count := storage_session_count()
+    if practice_count < DONATION_REMINDER_PRACTICE_INTERVAL {
+        practice_count = DONATION_REMINDER_PRACTICE_INTERVAL
+    }
+    app.donation_reminder_last_prompt_practice_count = practice_count
+    app.donation_reminder_next_prompt_practice_count =
+        practice_count + DONATION_REMINDER_PRACTICE_INTERVAL
+    save_reminder(app)
+}
+
+practice_home :: (app: *InnerBreeze) -> bool {
+    return app != null && app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_PRACTICE  && app.practice_tab == PRACTICE_TAB_PLAY
+}
+
+#program_export
+app_init_donation_reminder_observed_practice_count :: (app: *InnerBreeze) {
+    if app == null || app.donation_reminder_observed_practice_count_initialized != 0 {
+        return
+    }
+    app.donation_reminder_observed_practice_count = storage_session_count()
+    app.donation_reminder_observed_practice_count_initialized = 1
+}
+
+#program_export
+app_handle_donation_reminder_action :: (app: *InnerBreeze, action: s32) {
+    if app == null { return }
+    if action == 1 {
+        app_record_donation_reminder_seen(app)
+        app_open_modal(app, cast(ModalType)ModalAboutDonation)
+    } else if action == 2 {
+        app_record_donation_reminder_seen(app)
+        app_close_modal(app)
+    } else if action == 3 {
+        app.donation_reminder_dismissed = 1
+        app_record_donation_reminder_seen(app)
+        app_close_modal(app)
+    }
+}
+
+reminder_safe :: (app: *InnerBreeze, first_run_guide_active: s32,
+                  habits_guide_active: s32) -> bool {
+    if app == null || app.donation_reminder_dismissed != 0 { return false }
+    if app.modal.active != 0 || app.close_prompt_open != 0 { return false }
+    if first_run_guide_active != 0 || habits_guide_active != 0 { return false }
+    if app.file_dialog_active != 0 || app.backgrounded != 0 { return false }
+    if app.habit_edit.active != 0 || app.habit_session_edit.active != 0 { return false }
+    if app.sync_server_url_focused != 0 || app.sync_alias_focused != 0  || app.profile_friend_input_focused != 0 || app.profile_name_focused != 0  || app.profile_intention_focused != 0 { return false }
+
+    screen := app.breathing.screen
+    if screen == ScreenSession || screen == ScreenMeditation  || screen == ScreenSunSalutation || screen == ScreenPatterns  || screen == ScreenResults || screen == ScreenBreak  || screen == ScreenHabitEdit || screen == ScreenHabitSessionEdit {
+        return false
+    }
+    return true
+}
+
+#program_export
+app_maybe_open_donation_reminder :: (app: *InnerBreeze,
+                                     first_run_guide_active: s32,
+                                     habits_guide_active: s32) {
+    if !reminder_safe(app, first_run_guide_active, habits_guide_active) { return }
+    practice_count := storage_session_count()
+    if app.donation_reminder_observed_practice_count_initialized == 0 {
+        app.donation_reminder_observed_practice_count = practice_count
+        app.donation_reminder_observed_practice_count_initialized = 1
+        return
+    }
+    observed := app.donation_reminder_observed_practice_count
+    if practice_count < observed {
+        app.donation_reminder_observed_practice_count = practice_count
+        return
+    }
+    if practice_count <= observed || !practice_home(app) { return }
+    next := donation_next_threshold(app.donation_reminder_last_prompt_practice_count,
+                                     observed)
+    if app.donation_reminder_next_prompt_practice_count != next {
+        app.donation_reminder_next_prompt_practice_count = next
+        save_reminder(app)
+    }
+    if practice_count < next {
+        app.donation_reminder_observed_practice_count = practice_count
+        return
+    }
+    app.donation_reminder_observed_practice_count = practice_count
+    app_open_modal(app, cast(ModalType)ModalDonationReminder)
+}

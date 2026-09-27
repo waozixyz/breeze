@@ -1,0 +1,1292 @@
+#import, file "../app/locale.zi";
+ICON_TRASH :: 20;
+#import, file "../app/modal_rules.zi";
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+
+#import, file "../app/app.zi";
+#import, file "../app/exercise_types.zi";
+
+using ModalType;
+using ExerciseType;
+#import "text_props"
+#import "text_widget"
+#import, file "../app/text_buffers.zi";
+using TextWrap;
+#import "control_props"
+#import, file "../storage/storage_core.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/current_app.zi";
+#import "button_widget"
+#import "dropdown_widget"
+#import "text_field_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "dropdown_props"
+#import "text_input_props"
+#import, file "settings/settings_status.zi";
+#import, file "../storage/account_types.zi";
+#import "url"
+#import "social"
+#import "byte_text_linux"
+#import "date_time"
+#import, file "../app/app_nav_state.zi";
+c2 :: #system_library "c";
+app_request_friend_decline :: (app: *InnerBreeze, friend_id: string) #foreign c2;
+app_request_friend_accept :: (app: *InnerBreeze, friend_id: string) #foreign c2;
+app_request_friend_send :: (app: *InnerBreeze, target: string) #foreign c2;
+sync_account_load :: (account: *SyncAccount) -> s32 #foreign c2;
+app_social_refresh_loading :: () -> s32 #foreign c2;
+app_request_social_refresh :: (app: *InnerBreeze) #foreign c2;
+app_open_modal :: (app: *InnerBreeze, modal_type: ModalType) #foreign c2 "app_open_modal";
+using ButtonTone;
+using ButtonEmphasis;
+
+SocialCopyText :: (dst: *u8, capacity: s64, value: string) -> bool {
+    if dst == null || capacity <= 0 { return false }
+    output := BytesFromPointer(dst, cast(u64)capacity)
+    if !AppCopyText(value, output) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+SocialAppendText :: (dst: *u8, capacity: s64, value: string) -> bool {
+    if dst == null || capacity <= 0 { return false }
+    return AppAppendText(value, BytesFromPointer(dst, cast(u64)capacity))
+}
+
+SocialCompareText :: (left: string, right: string) -> s32 {
+    limit := left.count
+    if right.count < limit { limit = right.count }
+    index: s64 = 0
+    while index < limit {
+        if left[index] != right[index] {
+            return cast(s32)left[index] - cast(s32)right[index]
+        }
+        index += 1
+    }
+    if left.count < right.count { return -1 }
+    if left.count > right.count { return 1 }
+    return 0
+}
+
+SocialFormatNumber :: (out: *u8, size: s64, value: s64) -> bool {
+    if out == null || size <= 0 { return false }
+    return AppFormatS64(value, BytesFromPointer(out, cast(u64)size))
+}
+
+SocialFormatRounded :: (out: *u8, size: s64, value: float64) -> bool {
+    // Leaderboard values are counts and durations. Keep the conversion in
+    // Ziran so their display does not depend on a C formatting adapter.
+    if value < -1000000000000000000.0 || value > 1000000000000000000.0 {
+        return false
+    }
+    rounded := cast(s64)value
+    fraction := value - cast(float64)rounded
+    if fraction > 0.5 || (fraction == 0.5 && rounded % 2 != 0) {
+        rounded += 1
+    } else if fraction < -0.5 || (fraction == -0.5 && rounded % 2 != 0) {
+        rounded -= 1
+    }
+    return SocialFormatNumber(out, size, rounded)
+}
+
+SocialFormatRank :: (out: *u8, size: s64, rank: s32,
+    name: string) -> bool {
+    if out == null || size <= 0 { return false }
+    args: [2]FormatArg = .[
+    FormatArg.{.number = rank},
+    FormatArg.{.text = name, .is_text = true},
+    ]
+    return FormatTemplate("%d. %s", args[:],
+        BytesFromPointer(out, cast(u64)size))
+}
+
+ProfileLeaderboardMetric :: enum {
+    STREAK :: 0
+    AVG_HOLD :: 1
+    METRIC_COUNT :: 2
+}
+
+ProfileLeaderboardDrawRow :: struct {
+    user_id: [80] u8
+    alias: [48] u8
+    streak: [48] u8
+    average: [48] u8
+    streak_sort: float64
+    average_sort: float64
+    value: [48] u8
+    sort_value: float64
+}
+
+PROFILE_LEADERBOARD_STREAK :: 0
+PROFILE_LEADERBOARD_AVG_HOLD :: 1
+PROFILE_LEADERBOARD_METRIC_COUNT :: 2
+g_leaderboard_sort_metric: s32 = PROFILE_LEADERBOARD_STREAK;
+
+sync_server_url_key: string = "sync_server_url";
+
+sync_url :: (out: *u8, out_size: s64) -> s32 {
+    saved := storage_get_setting_text(sync_server_url_key)
+
+    if storage_sync_enabled() == 0 {
+        return 0
+    }
+    if saved.count == 0 {
+        return 0
+    }
+    return ifx (NormalizeUrl(saved,
+        BytesFromPointer(out, cast(u64)out_size))) then (1) else (0)
+}
+
+practice_id :: (index: s32) -> string {
+    if index == EXERCISE_MEDITATION {
+        return "meditation"
+    }
+    if index == EXERCISE_SUN_SALUTATION {
+        return "sun_salutation"
+    }
+    if index == EXERCISE_PATTERNS {
+        return "patterns"
+    }
+    return "whm"
+}
+
+practice_label :: (index: s32) -> string {
+    if index == EXERCISE_MEDITATION {
+        return LocaleText("exercise_meditation")
+    }
+    if index == EXERCISE_SUN_SALUTATION {
+        return LocaleText("exercise_sun_salutation")
+    }
+    if index == EXERCISE_PATTERNS {
+        return LocaleText("exercise_patterns")
+    }
+    return LocaleText("exercise_wim_hof")
+}
+
+metric_id_for_practice :: (practice: s32, metric: s32) -> string {
+    if metric != PROFILE_LEADERBOARD_AVG_HOLD {
+        return "streak"
+    }
+    if practice == EXERCISE_MEDITATION {
+        return "avg_time"
+    }
+    return "avg_hold"
+}
+
+metric_count :: (practice: s32) -> s32 {
+    return ifx (practice == EXERCISE_WIM_HOF) then (PROFILE_LEADERBOARD_METRIC_COUNT) else (1)
+}
+
+format_leaderboard_time :: (seconds: s64, out: *u8, out_size: s64) {
+    if out == null || out_size <= 0 { return }
+    if seconds < 0 { seconds = 0 }
+    hours_text: [24]u8
+    if !AppFormatS64(seconds / 3600, hours_text[:]) { return }
+    args: [2]FormatArg = .[
+    FormatArg.{.text = AppTextFromCString(*hours_text[0], 24), .is_text = true},
+    FormatArg.{.number = cast(s32)((seconds % 3600) / 60)},
+    ]
+    unused FormatTemplate("%s:%02d", args[:],
+        BytesFromPointer(out, cast(u64)out_size))
+}
+
+metric_label :: (practice: s32, metric: s32) -> string {
+    if metric != PROFILE_LEADERBOARD_AVG_HOLD {
+        return LocaleText("profile_metric_streak")
+    }
+    result: string = LocaleText("profile_metric_avg_hold")
+    if practice == EXERCISE_MEDITATION {
+        result = LocaleText("profile_metric_avg_time")
+    }
+    return result
+}
+
+cache_key :: (out: *u8, out_size: s64, practice: s32, metric: s32) {
+    if out_size == 0 {
+        return
+    }
+    SocialCopyText(out, out_size, "leaderboard.breathing.")
+    SocialAppendText(out, out_size, practice_id(practice))
+    SocialAppendText(out, out_size, ".")
+    SocialAppendText(out, out_size, metric_id_for_practice(practice, metric))
+}
+
+load_friends_cache :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if storage_get_social_cache_json("friends.requests",
+        *app.profile_friend_requests_json[0],
+        size_of(type_of(app.profile_friend_requests_json))) == 0 {
+        SocialCopyText(*app.profile_friend_requests_json[0],
+            size_of(type_of(app.profile_friend_requests_json)),
+            "{\"incoming\":[],\"outgoing\":[]}")
+    }
+    if storage_get_social_cache_json("friends.list",
+        *app.profile_friends_json[0],
+        size_of(type_of(app.profile_friends_json))) == 0 {
+        SocialCopyText(*app.profile_friends_json[0],
+            size_of(type_of(app.profile_friends_json)),
+            "{\"friends\":[]}")
+    }
+    app.profile_friends_loaded = 1
+}
+
+load_leaderboard_cache :: (app: *InnerBreeze) {
+    key: [96] u8
+
+    if app == null {
+        return
+    }
+    cache_key(*key[0], 96,
+        app.profile_leaderboard_practice,
+        PROFILE_LEADERBOARD_STREAK)
+    if storage_get_social_cache_json(AppTextFromCString(*key[0], 96),
+        *app.profile_leaderboard_json[0],
+        size_of(type_of(app.profile_leaderboard_json))) == 0 {
+        SocialCopyText(*app.profile_leaderboard_json[0],
+            size_of(type_of(app.profile_leaderboard_json)),
+            "{\"rows\":[]}")
+    }
+    cache_key(*key[0], 96, app.profile_leaderboard_practice,
+        PROFILE_LEADERBOARD_AVG_HOLD)
+    if storage_get_social_cache_json(AppTextFromCString(*key[0], 96),
+        *app.profile_leaderboard_avg_json[0],
+        size_of(type_of(app.profile_leaderboard_avg_json))) == 0 {
+        SocialCopyText(*app.profile_leaderboard_avg_json[0],
+            size_of(type_of(app.profile_leaderboard_avg_json)),
+            "{\"rows\":[]}")
+    }
+    app.profile_leaderboard_loaded = 1
+}
+
+json_array_count :: (json: string, array_key: string) -> s32 {
+    path: [48] u8
+
+    if array_key.count == 0 {
+        return 0
+    }
+    SocialCopyText(*path[0], 48, "$.")
+    SocialAppendText(*path[0], 48, array_key)
+    return storage_json_array_count_path(json, AppTextFromCString(*path[0], 48))
+}
+
+friends_count :: (app: *InnerBreeze) -> s32 {
+    if app != null && app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+    source: string = ""
+    if app != null {
+        source = AppTextFromCString(*app.profile_friends_json[0], 8192)
+    }
+    return json_array_count(source, "friends")
+}
+
+pending_count :: (app: *InnerBreeze) -> s32 {
+    if app != null && app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+    source: string = ""
+    if app != null {
+        source = AppTextFromCString(*app.profile_friend_requests_json[0], 8192)
+    }
+    return json_array_count(source, "incoming")
+}
+
+public_id_short :: (out: *u8, out_size: s64, user_id: string) {
+    if out_size == 0 {
+        return
+    }
+    if user_id.count == 0 {
+        SocialCopyText(out, out_size, "----")
+    } else {
+        short: string = user_id[0:4]
+        SocialCopyText(out, out_size, short)
+    }
+}
+
+display_name :: (out: *u8, out_size: s64, alias: string,
+    user_id: string) {
+    short_id: [8] u8
+
+    if out == null || out_size == 0 {
+        return
+    }
+    if alias.count > 0 {
+        SocialCopyText(out, out_size, "@")
+        SocialAppendText(out, out_size, alias)
+    } else if user_id.count > 0 {
+        public_id_short(*short_id[0], size_of(type_of(short_id)), user_id)
+        SocialCopyText(out, out_size, AppTextFromCString(*short_id[0], 8))
+        SocialAppendText(out, out_size, "...")
+    } else {
+        SocialCopyText(out, out_size, "----...")
+    }
+}
+
+prompt_remove_friend :: (app: *InnerBreeze, friend_user_id: string,
+    friend_name: string) {
+    if app == null || friend_user_id.count == 0 {
+        return
+    }
+    SocialCopyText(*app.profile_pending_friend_remove_id[0], 64, friend_user_id)
+    if friend_name.count > 0 {
+        SocialCopyText(*app.profile_pending_friend_remove_name[0], 64, friend_name)
+    } else {
+        SocialCopyText(*app.profile_pending_friend_remove_name[0], 64, friend_user_id)
+    }
+    app_open_modal(app, cast(ModalType)ModalConfirmRemoveFriend)
+}
+
+draw_json_people :: (json: string, array_key: string,
+    x: s32, w: s32, y: *s32, with_actions: s32,
+    app: *InnerBreeze) {
+    array_path: [48] u8
+    count: s32 = 0
+    with_remove: s32 = 0
+    if with_actions == 0 && SocialCompareText(array_key, "friends") == 0 {
+        with_remove = 1
+    }
+    with_cancel: s32 = 0
+    if with_actions == 0 && SocialCompareText(array_key, "outgoing") == 0 {
+        with_cancel = 1
+    }
+    SocialCopyText(*array_path[0], 48, "$.")
+    SocialAppendText(*array_path[0], 48, array_key)
+    count = storage_json_array_count_path(json, AppTextFromCString(*array_path[0], 48))
+    if count == 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                .text = LocaleText("profile_none_label"),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(24)
+        return
+    }
+
+    {
+        rows: s32 = 0
+        while rows < count {
+
+            id: [80] u8
+            alias: [48] u8
+            display_id: [80] u8
+            title: [96] u8
+            url: [256] u8
+            row_h: s32 = ifx (with_actions != 0) then (AppScale(42)) else (AppScale(30))
+
+
+
+
+
+            if storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows, "id", *id[0], size_of(type_of(id))) == 0 {
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "user_id_hash", *id[0], size_of(type_of(id)))
+            }
+            if id[0] == #char "\0" {
+                rows += 1
+                continue
+            }
+
+            if SocialCompareText(array_key, "incoming") == 0 {
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "requester_alias", *alias[0],
+                    size_of(type_of(alias)))
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "requester_user_id_hash", *display_id[0], size_of(type_of(display_id)))
+            } else if SocialCompareText(array_key, "outgoing") == 0 {
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "target_alias", *alias[0],
+                    size_of(type_of(alias)))
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "target_user_id_hash", *display_id[0], size_of(type_of(display_id)))
+            } else {
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "alias", *alias[0], size_of(type_of(alias)))
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "user_id_hash", *display_id[0],
+                    size_of(type_of(display_id)))
+            }
+
+            if alias[0] == #char "\0" {
+                storage_json_array_object_text(json, AppTextFromCString(*array_path[0], 48), rows,
+                    "alias", *alias[0], size_of(type_of(alias)))
+            }
+            if display_id[0] == #char "\0" {
+                AppCopyText(AppTextFromCString(*id[0], 80), display_id[:])
+            }
+
+            display_name(*title[0], size_of(type_of(title)), AppTextFromCString(*alias[0], 48), AppTextFromCString(*display_id[0], 80))
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                    .text = AppTextFromCString(*title[0], 96),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+
+            if with_remove != 0 {
+                icon_size := AppScale(18)
+                icon_padding := AppScale(6)
+                button_w := icon_size + icon_padding * 2
+
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                        .id = 0,
+                        .bounds = Rectangle.{cast(float32)(x + w - button_w), cast(float32)(y.* - AppScale(6)),
+                            cast(float32)((icon_size) + (icon_padding) * 2),
+                            cast(float32)((icon_size) + (icon_padding) * 2)},
+                        .icon_type = ICON_TRASH, .icon_only = true,
+                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                    }) != 0 {
+                    prompt_remove_friend(app, AppTextFromCString(*display_id[0], 80), AppTextFromCString(*title[0], 96))
+                }
+            } else if with_cancel != 0 {
+                icon_size := AppScale(18)
+                icon_padding := AppScale(6)
+                button_w := icon_size + icon_padding * 2
+
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                        .id = 0,
+                        .bounds = Rectangle.{cast(float32)(x + w - button_w), cast(float32)(y.* - AppScale(6)),
+                            cast(float32)((icon_size) + (icon_padding) * 2),
+                            cast(float32)((icon_size) + (icon_padding) * 2)},
+                        .icon_type = ICON_TRASH, .icon_only = true,
+                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                    }) != 0  && sync_url(*url[0], size_of(type_of(url))) != 0 {
+                    app_request_friend_decline(app, AppTextFromCString(*id[0], 80))
+                    settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+                }
+            }
+
+            if with_actions != 0 {
+                btn_w := (w - AppScale(8)) / 2
+
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                        .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.* + AppScale(22)), cast(float32)(btn_w), cast(float32)(AppScale(30))},
+                        .label = LocaleText("profile_friend_accept_button"),
+                        .tone = cast(ButtonTone)ButtonToneAccent,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                        .disabled = false
+                    }) != 0  && sync_url(*url[0], size_of(type_of(url))) != 0 {
+                    app_request_friend_accept(app, AppTextFromCString(*id[0], 80))
+                    settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+                }
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                        .bounds = Rectangle.{cast(float32)(x + btn_w + AppScale(8)), cast(float32)(y.* + AppScale(22)), cast(float32)(btn_w), cast(float32)(AppScale(30))},
+                        .label = LocaleText("profile_friend_decline_button"),
+                        .tone = cast(ButtonTone)ButtonToneNeutral,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                        .disabled = false
+                    }) != 0  && sync_url(*url[0], size_of(type_of(url))) != 0 {
+                    app_request_friend_decline(app, AppTextFromCString(*id[0], 80))
+                    settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+                }
+            }
+
+            y.* += row_h
+
+            rows += 1
+        }
+    }
+}
+
+draw_friends :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    btn_h := AppScale(34)
+
+    commit: s32 = 0
+    url: [256] u8
+    incoming_count: s32 = 0
+    outgoing_count: s32 = 0
+
+    if app == null {
+        return
+    }
+    if app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+
+    incoming_count = json_array_count(AppTextFromCString(*app.profile_friend_requests_json[0], 8192),
+        "incoming")
+    outgoing_count = json_array_count(AppTextFromCString(*app.profile_friend_requests_json[0], 8192),
+        "outgoing")
+
+    y.* += AppScale(16)
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+            .text = (LocaleText("profile_friends_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(30)
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+            .text = (LocaleText("profile_friend_input_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(22)
+
+    field_result := TextField(CurrentApp().ui.session, TextFieldProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)w, cast(float32)AppScale(38)},
+            .value = AppTextFromCString(*app.profile_friend_input[0], 80),
+            .cursor = app.profile_friend_input_cursor,
+            .focused = app.profile_friend_input_focused != 0,
+            .max_codepoints = 79,
+            .focus_id = 810
+        })
+    app.profile_friend_input_cursor = field_result.cursor
+    app.profile_friend_input_focused = ifx (field_result.focused) then (1) else (0)
+    if field_result.committed {
+        commit = 1
+    }
+    y.* += AppScale(46)
+
+    if (Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)w, cast(float32)btn_h},
+            .label = LocaleText("profile_add_friend_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = app.profile_friend_input[0] == #char "\0"
+        }) != 0 || commit != 0)  && app.profile_friend_input[0] != #char "\0" {
+        if sync_url(*url[0], size_of(type_of(url))) != 0 {
+            target: [80] u8
+
+            if NormalizeFriendTarget(AppTextFromCString(
+                *app.profile_friend_input[0], 80), target[:]) {
+                app_request_friend_send(app, AppTextFromCString(*target[0], 80))
+                settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+                load_friends_cache(app)
+                app.profile_friend_input[0] = cast(u8)0
+                app.profile_friend_input_cursor = 0
+            } else {
+                settings_screen_set_status_error(
+                    LocaleText("profile_friend_invalid"))
+            }
+        } else {
+            settings_screen_set_status_error(
+                LocaleText("sync_server_url_invalid"))
+        }
+    }
+    y.* += btn_h + AppScale(22)
+
+    if incoming_count > 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                .text = (LocaleText("profile_incoming_title")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(28)
+        draw_json_people(AppTextFromCString(*app.profile_friend_requests_json[0], 8192), "incoming",
+            x, w, y, 1, app)
+        y.* += AppScale(16)
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+            .text = (LocaleText("profile_friends_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(28)
+    draw_json_people(AppTextFromCString(*app.profile_friends_json[0], 8192), "friends", x, w, y, 0, app)
+
+    if outgoing_count > 0 {
+        y.* += AppScale(16)
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                .text = (LocaleText("profile_outgoing_title")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(28)
+        draw_json_people(AppTextFromCString(*app.profile_friend_requests_json[0], 8192), "outgoing",
+            x, w, y, 0, app)
+    }
+}
+
+friends_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    h := AppScale(16) + AppScale(30) + AppScale(22) + AppScale(46) +          AppScale(34) + AppScale(22)
+    incoming_count: s32 = 0
+    outgoing_count: s32 = 0
+    friends: s32 = 0
+
+    unused content_w
+    if app == null {
+        return h
+    }
+
+    incoming_count = json_array_count(AppTextFromCString(*app.profile_friend_requests_json[0], 8192),
+        "incoming")
+    outgoing_count = json_array_count(AppTextFromCString(*app.profile_friend_requests_json[0], 8192),
+        "outgoing")
+    friends = json_array_count(AppTextFromCString(*app.profile_friends_json[0], 8192), "friends")
+
+    if incoming_count > 0 {
+        h += AppScale(28) +              incoming_count * AppScale(42) +              AppScale(16)
+    }
+    h += AppScale(28) +          (ifx (friends > 0) then (friends * AppScale(30)) else (AppScale(24)))
+    if outgoing_count > 0 {
+        h += AppScale(16) + AppScale(28) +              outgoing_count * AppScale(30)
+    }
+    return h + AppScale(16)
+}
+
+draw_leaderboard_value :: (x: s32, w: s32, y: s32, value: string,
+    font: s32) {
+    rank_w := AppTextWidth(value, font)
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + w - rank_w), cast(float32)(y), 0, 0},
+            .text = (value),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+}
+
+leaderboard_zero_value :: (app: *InnerBreeze, metric: s32, out: *u8,
+    out_size: s64) {
+    if out == null || out_size == 0 {
+        return
+    }
+    if app != null  && app.profile_leaderboard_practice == EXERCISE_MEDITATION  && metric == PROFILE_LEADERBOARD_AVG_HOLD {
+        format_leaderboard_time(0, out, out_size)
+        return
+    }
+    SocialCopyText(out, out_size, "0")
+}
+
+today_index :: () -> s32 {
+    local := LocalNow()
+    if !local.valid { return 0 }
+    return local.year * 10000 + local.month * 100 + local.day
+}
+
+local_leaderboard_value :: (app: *InnerBreeze, metric: s32, out: *u8,
+    out_size: s64) -> float64 {
+    streak: s32 = 0
+    avg: s64 = 0
+
+    if out == null || out_size == 0 {
+        return 0.0
+    }
+    out[0] = cast(u8)0
+    if app == null {
+        return 0.0
+    }
+
+    storage_profile_activity_stats(app.profile_leaderboard_practice,
+        today_index(), *streak, *avg)
+
+    if metric != PROFILE_LEADERBOARD_AVG_HOLD {
+        SocialFormatNumber(*out[0], out_size, cast(s64)streak)
+        return cast(float64)streak
+    }
+    if app.profile_leaderboard_practice == EXERCISE_MEDITATION {
+        format_leaderboard_time(avg, *out[0], out_size)
+        return cast(float64)avg
+    }
+
+    SocialFormatNumber(out, out_size, avg)
+    return cast(float64)avg
+}
+
+row_seen :: (rows: *ProfileLeaderboardDrawRow, count: s32,
+    user_id: string) -> s32 {
+    if user_id.count == 0 {
+        return 1
+    }
+    {
+        i: s32 = 0
+        while i < count {
+            if SocialCompareText(AppTextFromCString(*rows[i].user_id[0], 80), user_id) == 0 {
+                return 1
+            }
+            i += 1
+        }
+    }
+    return 0
+}
+
+append_missing_friend_rows :: (app: *InnerBreeze, rows: *ProfileLeaderboardDrawRow,
+    count: *s32) {
+    friend_count: s32 = 0
+
+    if app == null || rows == null || count == null {
+        return
+    }
+    if app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+
+    friend_count = storage_json_array_count_path(AppTextFromCString(*app.profile_friends_json[0], 8192),
+        "$.friends")
+    {
+        i: s32 = 0
+        while i < friend_count && count.* < 24 {
+            user_id: [80] u8
+            alias: [48] u8
+
+            if storage_json_array_object_text(AppTextFromCString(*app.profile_friends_json[0], 8192),
+                "$.friends", i, "user_id_hash", *user_id[0], size_of(type_of(user_id))) == 0 {
+                storage_json_array_object_text(AppTextFromCString(*app.profile_friends_json[0], 8192),
+                    "$.friends", i, "id", *user_id[0], size_of(type_of(user_id)))
+            }
+            if user_id[0] == #char "\0" || row_seen(rows, count.*, AppTextFromCString(*user_id[0], 80)) != 0 {
+                i += 1; continue
+            }
+
+            storage_json_array_object_text(AppTextFromCString(*app.profile_friends_json[0], 8192),
+                "$.friends", i, "alias", *alias[0], size_of(type_of(alias)))
+            AppCopyText(AppTextFromCString(*user_id[0], 80), rows[count.*].user_id[:])
+            AppCopyText(AppTextFromCString(*alias[0], 48), rows[count.*].alias[:])
+            leaderboard_zero_value(app, PROFILE_LEADERBOARD_STREAK,
+                *rows[count.*].streak[0],
+                size_of(type_of(rows[count.*].streak)))
+            leaderboard_zero_value(app, PROFILE_LEADERBOARD_AVG_HOLD,
+                *rows[count.*].average[0],
+                size_of(type_of(rows[count.*].average)))
+            leaderboard_zero_value(app, app.profile_leaderboard_metric,
+                *rows[count.*].value[0],
+                size_of(type_of(rows[count.*].value)))
+            rows[count.*].streak_sort = 0.0
+            rows[count.*].average_sort = 0.0
+            rows[count.*].sort_value = 0.0
+            count.* += 1
+            i += 1
+        }
+    }
+}
+
+profile_social_row_compare :: (left: *ProfileLeaderboardDrawRow,
+    right: *ProfileLeaderboardDrawRow) -> s32 {
+    left_name: string = ifx (left.alias[0] != #char "\0") then (AppTextFromCString(*left.alias[0], 48)) else (AppTextFromCString(*left.user_id[0], 80))
+    right_name: string = ifx (right.alias[0] != #char "\0") then (AppTextFromCString(*right.alias[0], 48)) else (AppTextFromCString(*right.user_id[0], 80))
+
+    left_value := ifx (g_leaderboard_sort_metric == PROFILE_LEADERBOARD_AVG_HOLD) then (left.average_sort) else (left.streak_sort)
+    right_value := ifx (g_leaderboard_sort_metric == PROFILE_LEADERBOARD_AVG_HOLD) then (right.average_sort) else (right.streak_sort)
+    left_secondary := ifx (g_leaderboard_sort_metric == PROFILE_LEADERBOARD_AVG_HOLD) then (left.streak_sort) else (left.average_sort)
+    right_secondary := ifx (g_leaderboard_sort_metric == PROFILE_LEADERBOARD_AVG_HOLD) then (right.streak_sort) else (right.average_sort)
+    if left_value < right_value {
+        return 1
+    }
+    if left_value > right_value {
+        return -1
+    }
+    if left_secondary < right_secondary {
+        return 1
+    }
+    if left_secondary > right_secondary {
+        return -1
+    }
+    return SocialCompareText(left_name, right_name)
+}
+
+// At most 24 rows are visible. Keep equal rows in their original order.
+SocialSortRows :: (rows: *ProfileLeaderboardDrawRow, count: s32) {
+    i: s32 = 1
+    while i < count {
+        current := rows[i]
+        j := i
+        while j > 0 && profile_social_row_compare(*current, *rows[j - 1]) < 0 {
+            rows[j] = rows[j - 1]
+            j -= 1
+        }
+        rows[j] = current
+        i += 1
+    }
+}
+
+draw_leaderboard_rows :: (app: *InnerBreeze, json: string,
+    x: s32, w: s32, y: *s32) {
+    rows: s32 = 0
+    cache_rows: s32 = 0
+    font := AppFontSize()
+    draw_rows: [24] ProfileLeaderboardDrawRow
+    account: SyncAccount
+    has_account: s32 = ifx (sync_account_load(*account) != 0 && account.public_id[0] != #char "\0") then (1) else (0)
+    self_seen: s32 = 0
+    self_value: [48] u8
+    self_sort_value := local_leaderboard_value(app,
+        app.profile_leaderboard_metric,
+        *self_value[0],
+        size_of(type_of(self_value)))
+    friend_count: s32 = ifx (app != null) then (json_array_count(AppTextFromCString(*app.profile_friends_json[0], 8192),
+        "friends")) else (0)
+
+    cache_rows = storage_json_array_count_path(json, "$.rows")
+    has_visible_rows: s32 = ifx (cache_rows > 0 || friend_count > 0 || has_account != 0) then (1) else (0)
+    if app_social_refresh_loading() != 0 && has_visible_rows == 0 {
+        spinner_x := x + AppScale(10)
+        spinner_y := y.* + AppScale(9)
+        angle := ifx (app != null) then (cast(float32)((app.breathing.frame * 5) % 360)) else (0.0f)
+
+        DrawRing(Vector2.{cast(float32)spinner_x, cast(float32)spinner_y},
+            cast(float32)AppScale(5), cast(float32)AppScale(7),
+            angle, angle + 270.0f, 24, StyleTokenColor("text"))
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(x + AppScale(24)), cast(float32)y.*, 0, 0},
+                .text = (LocaleText("profile_updating_status")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(30)
+        return
+    }
+    {
+        i: s32 = 0
+        while i < cache_rows && rows < 24 {
+            alias: [48] u8
+            user_id: [80] u8
+            value: [48] u8
+            label: [48] u8
+            number: float64 = 0.0
+
+            if storage_json_array_object_text(json, "$.rows", i,
+                "user_id_hash", *user_id[0],
+                size_of(type_of(user_id))) == 0 {
+                i += 1; continue
+            }
+            storage_json_array_object_text(json, "$.rows", i, "alias", *alias[0], size_of(type_of(alias)))
+            storage_json_array_object_text(json, "$.rows", i, "label", *label[0], size_of(type_of(label)))
+            number = storage_json_array_object_number(json, "$.rows", i, "value")
+
+            if has_account != 0 && SocialCompareText(AppTextFromCString(*user_id[0], 80), AppTextFromCString(*account.public_id[0], 65)) == 0 {
+                AppCopyText(AppTextFromCString(*self_value[0], 48), value[:])
+                number = self_sort_value
+                self_seen = 1
+            } else if app != null  && app.profile_leaderboard_practice == EXERCISE_MEDITATION  && app.profile_leaderboard_metric == PROFILE_LEADERBOARD_AVG_HOLD  && label[0] != #char "\0" {
+                AppCopyText(AppTextFromCString(*label[0], 48), value[:])
+            } else {
+                SocialFormatRounded(*value[0], size_of(type_of(value)), number)
+            }
+
+            AppCopyText(AppTextFromCString(*user_id[0], 80), draw_rows[rows].user_id[:])
+            AppCopyText(AppTextFromCString(*alias[0], 48), draw_rows[rows].alias[:])
+            AppCopyText(AppTextFromCString(*value[0], 48), draw_rows[rows].value[:])
+            draw_rows[rows].sort_value = number
+            draw_rows[rows].streak_sort = number
+            draw_rows[rows].average_sort = number
+            rows += 1
+            i += 1
+        }
+    }
+
+    append_missing_friend_rows(app, *draw_rows[0], *rows)
+
+    if has_account != 0 && self_seen == 0 && rows < 24 {
+        alias_text := storage_get_setting_text("sync_account_alias")
+
+        AppCopyText(AppTextFromCString(*account.public_id[0], 65), draw_rows[rows].user_id[:])
+        SocialCopyText(*draw_rows[rows].alias[0],
+            size_of(type_of(draw_rows[rows].alias)),
+            ifx (alias_text.count > 0) then (alias_text) else (""))
+        SocialCopyText(*draw_rows[rows].value[0],
+            size_of(type_of(draw_rows[rows].value)), AppTextFromCString(*self_value[0], 48))
+        draw_rows[rows].sort_value = self_sort_value
+        draw_rows[rows].streak_sort = self_sort_value
+        draw_rows[rows].average_sort = self_sort_value
+        rows += 1
+    }
+
+    SocialSortRows(*draw_rows[0], rows)
+    {
+        i: s32 = 0
+        while i < rows && i < 12 {
+            display: [96] u8
+            name: [128] u8
+
+            display_name(*display[0], size_of(type_of(display)),
+                AppTextFromCString(*draw_rows[i].alias[0], 48), AppTextFromCString(*draw_rows[i].user_id[0], 80))
+            SocialFormatRank(*name[0], size_of(type_of(name)), i + 1,
+                AppTextFromCString(*display[0], 96))
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                    .text = AppTextFromCString(*name[0], 128),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            draw_leaderboard_value(x, w, y.*, AppTextFromCString(*draw_rows[i].value[0], 48), font)
+            y.* += AppScale(30)
+            i += 1
+        }
+    }
+
+    if rows == 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                .text = (LocaleText("profile_no_leaderboard_data")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(24)
+    }
+}
+
+leaderboard_row_count :: (app: *InnerBreeze, json: string) -> s32 {
+    draw_rows: [24] ProfileLeaderboardDrawRow
+    account: SyncAccount
+    has_account: s32 = ifx (sync_account_load(*account) != 0 && account.public_id[0] != #char "\0") then (1) else (0)
+    self_seen: s32 = 0
+    rows: s32 = 0
+    cache_rows := storage_json_array_count_path(json, "$.rows")
+
+    {
+        i: s32 = 0
+        while i < cache_rows && rows < 24 {
+            user_id: [80] u8
+
+            if storage_json_array_object_text(json, "$.rows", i,
+                "user_id_hash", *user_id[0],
+                size_of(type_of(user_id))) == 0 {
+                i += 1; continue
+            }
+            if has_account != 0 && SocialCompareText(AppTextFromCString(*user_id[0], 80), AppTextFromCString(*account.public_id[0], 65)) == 0 {
+                self_seen = 1
+            }
+            SocialCopyText(*draw_rows[rows].user_id[0],
+                size_of(type_of(draw_rows[rows].user_id)), AppTextFromCString(*user_id[0], 80))
+            draw_rows[rows].alias[0] = #char "\0"
+            rows += 1
+            i += 1
+        }
+    }
+
+    append_missing_friend_rows(app, *draw_rows[0], *rows)
+
+    if has_account != 0 && self_seen == 0 && rows < 24 {
+        SocialCopyText(*draw_rows[rows].user_id[0],
+            size_of(type_of(draw_rows[rows].user_id)),
+            AppTextFromCString(*account.public_id[0], 65))
+        rows += 1
+    }
+
+    return ifx (rows > 12) then (12) else (rows)
+}
+
+find_metric_row :: (json: string, user_id: string,
+    label: *u8, label_size: s64,
+    value: *float64) -> s32 {
+    count := storage_json_array_count_path(json, "$.rows")
+    {
+        i: s32 = 0
+        while i < count {
+            candidate: [80] u8
+            if storage_json_array_object_text(json, "$.rows", i, "user_id_hash", *candidate[0], size_of(type_of(candidate))) != 0  && SocialCompareText(AppTextFromCString(*candidate[0], 80), user_id) == 0 {
+                if label != null && label_size > 0 {
+                    storage_json_array_object_text(json, "$.rows", i, "label",
+                        label, label_size)
+                }
+                if value != null {
+                    value.* = storage_json_array_object_number(json, "$.rows", i,
+                        "value")
+                }
+                return 1
+            }
+            i += 1
+        }
+    }
+    return 0
+}
+
+draw_combined_leaderboard :: (app: *InnerBreeze, x: s32, w: s32,
+    y: *s32) {
+    rows: [24] ProfileLeaderboardDrawRow
+    names: [24][96] u8
+    rank_names: [24][112] u8
+    count: s32 = 0
+    streak_count := storage_json_array_count_path(AppTextFromCString(*app.profile_leaderboard_json[0], 8192),
+        "$.rows")
+    avg_count := storage_json_array_count_path(AppTextFromCString(*app.profile_leaderboard_avg_json[0], 8192),
+        "$.rows")
+    account: SyncAccount
+    has_account: s32 = ifx (sync_account_load(*account) != 0 && account.public_id[0] != #char "\0") then (1) else (0)
+    self_seen: s32 = 0
+    friend_count: s32 = ifx (app != null) then (json_array_count(AppTextFromCString(*app.profile_friends_json[0], 8192),
+        "friends")) else (0)
+    columns: [3] string = .[
+    LocaleText("profile_friends_title"),
+    LocaleText("profile_metric_streak"),
+    metric_label(app.profile_leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD),
+    ]
+    header_h := AppScale(34)
+    row_h := AppScale(32)
+    show_average: s32 = ifx (app.profile_leaderboard_practice == EXERCISE_WIM_HOF) then (1) else (0)
+    column_count: s32 = ifx (show_average != 0) then (3) else (2)
+    name_w: s32 = ifx (show_average != 0) then (w / 2) else ((w * 2) / 3)
+    value_w: s32 = ifx (show_average != 0) then ((w - name_w) / 2) else (w - name_w)
+
+    has_visible_rows: s32 = ifx (streak_count > 0 || avg_count > 0  || friend_count > 0 || has_account != 0) then (1) else (0)
+    if app_social_refresh_loading() != 0 && has_visible_rows == 0 {
+        angle := cast(float32)((app.breathing.frame * 5) % 360)
+        DrawRing(Vector2.{cast(float32)(x + AppScale(10)),
+                cast(float32)(y.* + AppScale(9))},
+            cast(float32)AppScale(5), cast(float32)AppScale(7), angle,
+            angle + 270.0f, 24, StyleTokenColor("text"))
+        y.* += AppScale(20)
+        return
+    }
+
+    {
+        i: s32 = 0
+        while i < streak_count && count < 24 {
+            value: float64 = 0.0
+            avg: float64 = 0.0
+            avg_label: [48] u8
+            if storage_json_array_object_text(AppTextFromCString(*app.profile_leaderboard_json[0], 8192),
+                "$.rows", i, "user_id_hash",
+                *rows[count].user_id[0],
+                size_of(type_of(rows[count].user_id))) == 0 {
+                i += 1; continue
+            }
+            storage_json_array_object_text(AppTextFromCString(*app.profile_leaderboard_json[0], 8192),
+                "$.rows", i, "alias",
+                *rows[count].alias[0],
+                size_of(type_of(rows[count].alias)))
+            value = storage_json_array_object_number(AppTextFromCString(*app.profile_leaderboard_json[0], 8192),
+                "$.rows", i, "value")
+            rows[count].streak_sort = value
+            SocialFormatRounded(*rows[count].streak[0],
+                size_of(type_of(rows[count].streak)), value)
+            if find_metric_row(AppTextFromCString(*app.profile_leaderboard_avg_json[0], 8192),
+                AppTextFromCString(*rows[count].user_id[0], 80), *avg_label[0],
+                size_of(type_of(avg_label)), *avg) != 0 {
+                rows[count].average_sort = avg
+                if app.profile_leaderboard_practice == EXERCISE_MEDITATION  && avg_label[0] != #char "\0" {
+                    SocialCopyText(*rows[count].average[0],
+                        size_of(type_of(rows[count].average)), AppTextFromCString(*avg_label[0], 48))
+                } else {
+                    SocialFormatRounded(*rows[count].average[0],
+                        size_of(type_of(rows[count].average)), avg)
+                }
+            } else {
+                SocialCopyText(*rows[count].average[0],
+                    size_of(type_of(rows[count].average)), "—")
+            }
+            if has_account != 0 && SocialCompareText(AppTextFromCString(*rows[count].user_id[0], 80), AppTextFromCString(*account.public_id[0], 65)) == 0 {
+                rows[count].streak_sort = local_leaderboard_value(
+                    app, PROFILE_LEADERBOARD_STREAK, *rows[count].streak[0],
+                    size_of(type_of(rows[count].streak)))
+                rows[count].average_sort = local_leaderboard_value(
+                    app, PROFILE_LEADERBOARD_AVG_HOLD, *rows[count].average[0],
+                    size_of(type_of(rows[count].average)))
+                self_seen = 1
+            }
+            count += 1
+            i += 1
+        }
+    }
+
+    append_missing_friend_rows(app, *rows[0], *count)
+
+    if has_account != 0 && self_seen == 0 && count < 24 {
+        alias_text := storage_get_setting_text("sync_account_alias")
+        SocialCopyText(*rows[count].user_id[0], size_of(type_of(rows[count].user_id)),
+            AppTextFromCString(*account.public_id[0], 65))
+        SocialCopyText(*rows[count].alias[0], size_of(type_of(rows[count].alias)),
+            ifx (alias_text.count > 0) then (alias_text) else (""))
+        rows[count].streak_sort = local_leaderboard_value(
+            app, PROFILE_LEADERBOARD_STREAK, *rows[count].streak[0],
+            size_of(type_of(rows[count].streak)))
+        rows[count].average_sort = local_leaderboard_value(
+            app, PROFILE_LEADERBOARD_AVG_HOLD, *rows[count].average[0],
+            size_of(type_of(rows[count].average)))
+        count += 1
+    }
+
+    g_leaderboard_sort_metric = app.profile_leaderboard_metric
+    SocialSortRows(*rows[0], count)
+
+    widths: [3] s32 = .[name_w, value_w, w - name_w - value_w]
+    hx := x
+    {
+        c: s32 = 0
+        while c < column_count {
+            selected := c > 0 && app.profile_leaderboard_metric == c - 1
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)hx, cast(float32)(y.*), cast(float32)widths[c], cast(float32)header_h},
+                    .label = columns[c],
+                    .disabled = c == 0,
+                    .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected
+                }) != 0 && c > 0 {
+                app.profile_leaderboard_metric = c - 1
+            }
+            hx += widths[c]
+            c += 1
+        }
+
+    }
+    y.* += header_h
+
+    {
+        i: s32 = 0
+        while i < count && i < 12 {
+            display_name(*names[i][0], size_of(type_of(names[i])), AppTextFromCString(*rows[i].alias[0], 48), AppTextFromCString(*rows[i].user_id[0], 80))
+            SocialFormatRank(*rank_names[i][0], size_of(type_of(rank_names[i])), i + 1,
+                AppTextFromCString(*names[i][0], 96))
+            if i % 2 == 1 {
+                DrawRectangle(x, y.*, w, row_h,
+                    DarkenColor(StyleTokenColor("canvas"), 5))
+            }
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x + AppScale(6)), cast(float32)(y.* + AppScale(8)), 0, 0},
+                    .text = AppTextFromCString(*rank_names[i][0], 112),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x + name_w + AppScale(6)), cast(float32)(y.* + AppScale(8)), 0, 0},
+                    .text = AppTextFromCString(*rows[i].streak[0], 48),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            if show_average != 0 {
+                Text(CurrentApp().ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)(x + name_w + value_w + AppScale(6)), cast(float32)(y.* + AppScale(8)), 0, 0},
+                        .text = AppTextFromCString(*rows[i].average[0], 48),
+                        .wrap = cast(TextWrap)TextWrapNone
+                    })
+            }
+            y.* += row_h
+            i += 1
+        }
+    }
+    if count == 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+                .text = (LocaleText("profile_no_leaderboard_data")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(24)
+    }
+}
+
+leaderboard_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    rows: s32 = 0
+
+    unused content_w
+    if app == null {
+        return AppScale(160)
+    }
+
+    rows = leaderboard_row_count(app, AppTextFromCString(*app.profile_leaderboard_json[0], 8192))
+    return AppScale(16) + AppScale(22) + AppScale(46) +            AppScale(34) + AppScale(10) +            AppScale(22) +            (ifx (rows > 0) then (rows * AppScale(30)) else (AppScale(24))) +            AppScale(16)
+}
+
+refresh_leaderboard :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    load_leaderboard_cache(app)
+    app_request_social_refresh(app)
+    settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+}
+
+refresh_cache :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    load_friends_cache(app)
+    load_leaderboard_cache(app)
+    app_request_social_refresh(app)
+    settings_screen_set_status_success(LocaleText("profile_updating_status"), "")
+}
+
+draw_choice_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32, value: *s32,
+    labels: []string, count: s32) {
+    gap := AppScale(8)
+    btn_h := AppScale(34)
+    btn_w: s32 = 0
+
+    if count <= 0 {
+        return
+    }
+    btn_w = (w - gap * (count - 1)) / count
+    {
+        i: s32 = 0
+        while i < count {
+            bx := x + i * (btn_w + gap)
+            bw := ifx (i == count - 1) then (x + w - bx) else (btn_w)
+            selected := value.* == i
+
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)bx, cast(float32)(y.*), cast(float32)bw, cast(float32)btn_h},
+                    .label = labels[i],
+                    .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected
+                }) != 0 && selected == false {
+                value.* = i
+                load_leaderboard_cache(app)
+            }
+            i += 1
+        }
+    }
+    y.* += btn_h + AppScale(10)
+}
+
+draw_leaderboard :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    practice_options: [EXERCISE_COUNT] DropdownOption
+    current_metric_count: s32 = 0
+    before_practice: s32 = 0
+
+    if app == null {
+        return
+    }
+
+    {
+        i: s32 = 0
+        while i < EXERCISE_COUNT {
+            practice_options[i] = DropdownOption.{.label = practice_label(practice_ordered_id(i))}
+            i += 1
+        }
+    }
+
+    if app.profile_leaderboard_practice < 0  || app.profile_leaderboard_practice >= EXERCISE_COUNT {
+        app.profile_leaderboard_practice = EXERCISE_WIM_HOF
+    }
+    if app.profile_leaderboard_metric < 0  || app.profile_leaderboard_metric >= PROFILE_LEADERBOARD_METRIC_COUNT {
+        app.profile_leaderboard_metric = PROFILE_LEADERBOARD_STREAK
+    }
+
+    current_metric_count = metric_count(app.profile_leaderboard_practice)
+    if app.profile_leaderboard_metric >= current_metric_count {
+        app.profile_leaderboard_metric = PROFILE_LEADERBOARD_STREAK
+    }
+    if app.profile_leaderboard_loaded == 0 {
+        load_leaderboard_cache(app)
+    }
+
+    y.* += AppScale(16)
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
+            .text = (LocaleText("profile_practice_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(22)
+
+    before_practice = app.profile_leaderboard_practice
+    practice_selection: s32 = 0
+    {
+        i: s32 = 0
+        while i < EXERCISE_COUNT {
+            if practice_ordered_id(i) == app.profile_leaderboard_practice {
+                practice_selection = i
+            }
+            i += 1
+        }
+    }
+    dropdown_result := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = 811, .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)w, cast(float32)AppScale(36)},
+            .selected_index = practice_selection}, practice_options[:EXERCISE_COUNT])
+    if dropdown_result.node > 0 {
+        app.profile_leaderboard_practice = practice_ordered_id(practice_selection)
+    }
+    if app.profile_leaderboard_practice != before_practice {
+        current_metric_count = metric_count(app.profile_leaderboard_practice)
+        if app.profile_leaderboard_metric >= current_metric_count {
+            app.profile_leaderboard_metric = PROFILE_LEADERBOARD_STREAK
+        }
+        refresh_leaderboard(app)
+    }
+
+    y.* += AppScale(54)
+    if app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+    draw_combined_leaderboard(app, x, w, y)
+}

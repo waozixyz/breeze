@@ -1,0 +1,391 @@
+c :: #system_library "c";
+#import "drawing_props"
+
+
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_memory.zi";
+#import, file "../habits/habit_days.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "sql_query.zi";
+#import, file "meta.zi";
+STORAGE_ID_SIZE :: 64
+storage_next_change_time :: () -> s64 #foreign c "storage_next_change_time";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+sqlite3_reset :: (statement: *void) -> s32 #foreign c "sqlite3_reset";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
+sqlite3_clear_bindings :: (statement: *void) -> s32 #foreign c "sqlite3_clear_bindings";
+
+copy_sqlite_text :: (destination: *u8, capacity: s32, value: *u8) {
+    if destination == null || capacity <= 0 {
+        return
+    }
+    index: s32 = 0
+    if value != null {
+        while index + 1 < capacity && value[index] != 0 {
+            destination[index] = value[index]
+            index += 1
+        }
+    }
+    destination[index] = 0
+}
+set_meta_buf :: (key: string, value: string) {
+    key_buf: [64] u8
+    value_buf: [64] u8
+    AppCopyText(key, key_buf[:])
+    AppCopyText(value, value_buf[:])
+    set_meta(*key_buf[0], *value_buf[0])
+}
+
+meta_equals_buf :: (key: string, value: string) -> s32 {
+    key_buf: [64] u8
+    value_buf: [64] u8
+    AppCopyText(key, key_buf[:])
+    AppCopyText(value, value_buf[:])
+    return meta_equals(*key_buf[0], *value_buf[0])
+}
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "storage_habit_materialize.zi";
+
+
+
+
+#program_export
+storage_habits_empty :: () -> s32 {
+    if storage_habit_count() == 0 { return 1 }
+    return 0
+}
+
+#program_export
+storage_habit_count :: () -> s32 {
+    habits_count_sql: [64] u8
+    AppCopyText("SELECT COUNT(*) FROM habits WHERE deleted_at=0", habits_count_sql[:])
+    return db_select_int(*habits_count_sql[0], 0)
+}
+
+#program_export
+storage_habit_day_count :: () -> s32 {
+    habit_days_sql: [96] u8
+    AppCopyText("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0 OR session_count>0", habit_days_sql[:])
+    return db_select_int(*habit_days_sql[0], 0)
+}
+
+#program_export
+storage_habits_load :: (habits_ptr: *void) -> s32 {
+    habits: *Habits = cast(*Habits)habits_ptr
+    stmt: *void = null
+    index: s32 = 0
+    if habits == null || storage_db_handle() == null {
+        return 0
+    }
+    habits_free(habits)
+    habits.* = Habits.{}
+    sql_hb1: [200] u8
+    AppCopyText("SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour FROM habits WHERE deleted_at=0 ORDER BY sort_order,id LIMIT 32", sql_hb1[:])
+    if SqlitePrepare(storage_db_handle(), *sql_hb1[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    while index < HABIT_MAX && SqliteStep(stmt) == SQLITE_ROW {
+        habit: *Habit = *habits.items[index]
+        copy_sqlite_text(*habit.id[0], HABIT_ID_SIZE, SqliteColumnText(stmt, 0))
+        copy_sqlite_text(*habits.loaded_ids[index][0], HABIT_ID_SIZE,
+            *habit.id[0])
+        copy_sqlite_text(*habit.name[0], HABIT_NAME_SIZE, SqliteColumnText(stmt, 1))
+        copy_sqlite_text(*habit.description[0], HABIT_DESCRIPTION_SIZE,
+            SqliteColumnText(stmt, 2))
+        habit.color = Color.{cast(u8)sqlite3_column_int(stmt, 3), cast(u8)sqlite3_column_int(stmt, 4), cast(u8)sqlite3_column_int(stmt, 5), 255}
+        habit.sync_mode = sqlite3_column_int(stmt, 6)
+        habit.sync_activity = sqlite3_column_int(stmt, 7)
+        if sqlite3_column_int(stmt, 8) != 0 {
+            habit.counter_enabled = 1
+        } else {
+            habit.counter_enabled = 0
+        }
+        habit.counter_target = sqlite3_column_int(stmt, 9)
+        if habit.counter_target < 1 {
+            habit.counter_target = 1
+        }
+        habit.weekdays = sqlite3_column_int(stmt, 10)
+        habit.reminder_hour = sqlite3_column_int(stmt, 11)
+        if habit.reminder_hour > 23 {
+            habit.reminder_hour = -1
+        }
+        index += 1
+    }
+    SqliteFinalize(stmt)
+    stmt = null
+    habits.count = index
+    habits.loaded_count = index
+    sql_hb3: [128] u8
+    AppCopyText("SELECT local_date,completed,count,session_count FROM habit_days WHERE habit_id=?1 ORDER BY local_date", sql_hb3[:])
+    if SqlitePrepare(storage_db_handle(), *sql_hb3[0], -1, *stmt, null) == SQLITE_OK {
+        {
+            i: s32 = 0
+            while i < habits.count {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                bind_text(stmt, 1, AppTextFromCString(*habits.items[i].id[0], 40))
+                while SqliteStep(stmt) == SQLITE_ROW {
+                    d: s32 = habits.items[i].day_count
+                    if habit_reserve_days(*habits.items[i], habits.items[i].day_count + 1) == 0 {
+                        break
+                    }
+                    habits.items[i].day_count += 1
+                    habits.items[i].days[d].day_index = sqlite3_column_int(stmt, 0)
+                    habits.items[i].days[d].completed = sqlite3_column_int(stmt, 1)
+                    habits.items[i].days[d].count = sqlite3_column_int(stmt, 2)
+                    habits.items[i].days[d].session_count = sqlite3_column_int(stmt, 3)
+                    if habits.items[i].days[d].count <= 0 && habits.items[i].days[d].completed != 0 {
+                        habits.items[i].days[d].count = 1
+                    }
+                }
+                i += 1
+            }
+        }
+        SqliteFinalize(stmt)
+    }
+    habits.loaded = 1
+    if habits.count > 0 {
+        return 1
+    }
+    if meta_equals_buf("habits_initialized", "true") != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_habits_initialized :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    if meta_equals_buf("habits_initialized", "true") != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_mark_habits_initialized :: () {
+    if storage_db_handle() != null {
+        set_meta_buf("habits_initialized", "true")
+    }
+}
+
+#program_export
+storage_habits_save :: (habits_ptr: *void) {
+    habits: *Habits = cast(*Habits)habits_ptr
+    stmt: *void = null
+    loaded_stmt: *void = null
+    habit_stmt: *void = null
+    desc_stmt: *void = null
+    seen_stmt: *void = null
+    day_stmt: *void = null
+    changed_at: s64 = storage_next_change_time()
+    if habits == null || storage_db_handle() == null {
+        return
+    }
+    storage_mark_habits_initialized()
+    exec_sql("BEGIN IMMEDIATE")
+    exec_sql("CREATE TEMP TABLE IF NOT EXISTS sync_seen_habits(id TEXT PRIMARY KEY);CREATE TEMP TABLE IF NOT EXISTS sync_loaded_habits(id TEXT PRIMARY KEY);DELETE FROM sync_seen_habits;DELETE FROM sync_loaded_habits;")
+    sql_hbp1: [64] u8
+    AppCopyText("INSERT OR IGNORE INTO sync_loaded_habits(id) VALUES(?1)", sql_hbp1[:])
+    SqlitePrepare(storage_db_handle(), *sql_hbp1[0], -1, *loaded_stmt, null)
+    sql_hbq1: [1237] u8
+    AppCopyText("INSERT INTO habits(id,user_id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15) ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,name=excluded.name,description=excluded.description,color_r=excluded.color_r,color_g=excluded.color_g,color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=0,updated_at=excluded.updated_at,weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour WHERE habits.user_id<>excluded.user_id OR habits.name<>excluded.name OR habits.color_r<>excluded.color_r OR habits.color_g<>excluded.color_g OR habits.color_b<>excluded.color_b OR habits.sync_mode<>excluded.sync_mode OR habits.sync_activity<>excluded.sync_activity OR habits.counter_enabled<>excluded.counter_enabled OR habits.counter_target<>excluded.counter_target OR habits.sort_order<>excluded.sort_order OR habits.deleted_at<>0 OR habits.weekdays<>excluded.weekdays OR habits.reminder_hour<>excluded.reminder_hour", sql_hbq1[:])
+    SqlitePrepare(storage_db_handle(), *sql_hbq1[0], -1, *habit_stmt, null)
+    sql_hbq2: [72] u8
+    AppCopyText("UPDATE habits SET description=?2 WHERE id=?1 AND description<>?2", sql_hbq2[:])
+    SqlitePrepare(storage_db_handle(), *sql_hbq2[0], -1, *desc_stmt, null)
+    sql_hbp2: [64] u8
+    AppCopyText("INSERT OR IGNORE INTO sync_seen_habits(id) VALUES(?1)", sql_hbp2[:])
+    SqlitePrepare(storage_db_handle(), *sql_hbp2[0], -1, *seen_stmt, null)
+    sql_hbq3: [352] u8
+    AppCopyText("INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(habit_id,local_date) DO UPDATE SET completed=excluded.completed,count=excluded.count,updated_at=CASE WHEN habit_days.completed<>excluded.completed OR habit_days.count<>excluded.count THEN excluded.updated_at ELSE habit_days.updated_at END", sql_hbq3[:])
+    SqlitePrepare(storage_db_handle(), *sql_hbq3[0], -1, *day_stmt, null)
+    {
+        i: s32 = 0
+        while i < habits.loaded_count && i < HABIT_MAX {
+            if habits.loaded_ids[i][0] == #char "\0" {
+                i += 1; continue
+            }
+            if loaded_stmt == null {
+                i += 1; continue
+            }
+            sqlite3_reset(loaded_stmt)
+            sqlite3_clear_bindings(loaded_stmt)
+            bind_text(loaded_stmt, 1, AppTextFromCString(*habits.loaded_ids[i][0], 40))
+            SqliteStep(loaded_stmt)
+            i += 1
+        }
+    }
+    {
+        i: s32 = 0
+        while i < habits.count {
+            habit: *Habit = *habits.items[i]
+            if habit_stmt == null {
+                i += 1; continue
+            }
+            sqlite3_reset(habit_stmt)
+            sqlite3_clear_bindings(habit_stmt)
+            bind_text(habit_stmt, 1, AppTextFromCString(*habit.id[0], 40))
+            bind_text(habit_stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+            bind_text(habit_stmt, 3, AppTextFromCString(*habit.name[0], 64))
+            bind_text(habit_stmt, 4, AppTextFromCString(*habit.description[0], 128))
+            sqlite3_bind_int(habit_stmt, 5, cast(s32)habit.color.r)
+            sqlite3_bind_int(habit_stmt, 6, cast(s32)habit.color.g)
+            sqlite3_bind_int(habit_stmt, 7, cast(s32)habit.color.b)
+            sqlite3_bind_int(habit_stmt, 8, habit.sync_mode)
+            sqlite3_bind_int(habit_stmt, 9, habit.sync_activity)
+            sqlite3_bind_int(habit_stmt, 10, ifx (habit.counter_enabled != 0) then (1) else (0))
+            sqlite3_bind_int(habit_stmt, 11, ifx (habit.counter_target > 0) then (habit.counter_target) else (1))
+            sqlite3_bind_int(habit_stmt, 12, i)
+            SqliteBindInt64(habit_stmt, 13, changed_at)
+            sqlite3_bind_int(habit_stmt, 14, habit.weekdays & 0xff)
+            sqlite3_bind_int(habit_stmt, 15, ifx (habit.reminder_hour >= 0  && habit.reminder_hour <= 23) then (habit.reminder_hour) else (-1))
+            if SqliteStep(habit_stmt) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+                storage_enqueue_sync_habit(AppTextFromCString(*habit.id[0], 40))
+            }
+            if desc_stmt != null {
+                sqlite3_reset(desc_stmt)
+                sqlite3_clear_bindings(desc_stmt)
+                bind_text(desc_stmt, 1, AppTextFromCString(*habit.id[0], 40))
+                bind_text(desc_stmt, 2, AppTextFromCString(*habit.description[0], 128))
+                SqliteStep(desc_stmt)
+            }
+            if seen_stmt != null {
+                sqlite3_reset(seen_stmt)
+                sqlite3_clear_bindings(seen_stmt)
+                bind_text(seen_stmt, 1, AppTextFromCString(*habit.id[0], 40))
+                SqliteStep(seen_stmt)
+            }
+            {
+                d: s32 = 0
+                while d < habit.day_count {
+                    if day_stmt == null {
+                        d += 1; continue
+                    }
+                    sqlite3_reset(day_stmt)
+                    sqlite3_clear_bindings(day_stmt)
+                    bind_text(day_stmt, 1, AppTextFromCString(*habit.id[0], 40))
+                    sqlite3_bind_int(day_stmt, 2, habit.days[d].day_index)
+                    sqlite3_bind_int(day_stmt, 3,
+                        ifx (habit.days[d].count > 0 || habit.days[d].completed != 0) then (1) else (0))
+                    sqlite3_bind_int(day_stmt, 4,
+                        ifx (habit.days[d].count > 0) then (habit.days[d].count) else ((ifx (habit.days[d].completed != 0) then (1) else (0))))
+                    SqliteBindInt64(day_stmt, 5, changed_at)
+                    SqliteStep(day_stmt)
+                    storage_enqueue_sync_habit_day(AppTextFromCString(*habit.id[0], 40), habit.days[d].day_index)
+                    d += 1
+                }
+            }
+            i += 1
+        }
+    }
+    SqliteFinalize(loaded_stmt)
+    SqliteFinalize(habit_stmt)
+    SqliteFinalize(desc_stmt)
+    SqliteFinalize(seen_stmt)
+    SqliteFinalize(day_stmt)
+    sql_hbq4: [256] u8
+    AppCopyText("SELECT id FROM habits WHERE user_id=?1 AND deleted_at=0 AND id IN (SELECT id FROM sync_loaded_habits) AND id NOT IN (SELECT id FROM sync_seen_habits)", sql_hbq4[:])
+    if SqlitePrepare(storage_db_handle(), *sql_hbq4[0], -1, *stmt, null) == SQLITE_OK {
+        deleted_ids: [32] [STORAGE_ID_SIZE] u8
+        deleted_count: s32 = 0
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while deleted_count < HABIT_MAX && SqliteStep(stmt) == SQLITE_ROW {
+            copy_sqlite_text(*deleted_ids[deleted_count][0], STORAGE_ID_SIZE,
+                SqliteColumnText(stmt, 0))
+            deleted_count += 1
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+        {
+            i: s32 = 0
+            while i < deleted_count {
+                sql_hbq5: [128] u8
+                AppCopyText("SELECT local_date FROM habit_days WHERE habit_id=?1 AND (completed!=0 OR count>0 OR session_count>0)", sql_hbq5[:])
+                if SqlitePrepare(storage_db_handle(), *sql_hbq5[0], -1, *stmt, null) == SQLITE_OK {
+                    bind_text(stmt, 1, AppTextFromCString(*deleted_ids[i][0], STORAGE_ID_SIZE))
+                    while SqliteStep(stmt) == SQLITE_ROW {
+                        storage_enqueue_sync_habit_day(AppTextFromCString(*deleted_ids[i][0], STORAGE_ID_SIZE), sqlite3_column_int(stmt, 0))
+                    }
+                    SqliteFinalize(stmt)
+                    stmt = null
+                }
+                sql_hbq6: [139] u8
+                AppCopyText("UPDATE habit_days SET completed=0,count=0,session_count=0,updated_at=?2 WHERE habit_id=?1 AND (completed!=0 OR count>0 OR session_count>0)", sql_hbq6[:])
+                if SqlitePrepare(storage_db_handle(), *sql_hbq6[0], -1, *stmt, null) == SQLITE_OK {
+                    bind_text(stmt, 1, AppTextFromCString(*deleted_ids[i][0], STORAGE_ID_SIZE))
+                    SqliteBindInt64(stmt, 2, changed_at)
+                    SqliteStep(stmt)
+                    SqliteFinalize(stmt)
+                    stmt = null
+                }
+                sql_hbq7: [64] u8
+                AppCopyText("UPDATE habits SET deleted_at=?2,updated_at=?2 WHERE id=?1", sql_hbq7[:])
+                if SqlitePrepare(storage_db_handle(), *sql_hbq7[0], -1, *stmt, null) != SQLITE_OK {
+                    i += 1; continue
+                }
+                bind_text(stmt, 1, AppTextFromCString(*deleted_ids[i][0], STORAGE_ID_SIZE))
+                SqliteBindInt64(stmt, 2, changed_at)
+                SqliteStep(stmt)
+                SqliteFinalize(stmt)
+                stmt = null
+                storage_enqueue_sync_habit(AppTextFromCString(*deleted_ids[i][0], STORAGE_ID_SIZE))
+                i += 1
+            }
+        }
+    }
+    exec_sql("DELETE FROM sync_seen_habits;")
+    exec_sql("DELETE FROM sync_loaded_habits;")
+    exec_sql("COMMIT")
+    storage_materialize_session_habit_days()
+    storage_schedule_persist()
+}
+
+#program_export
+storage_habit_day_save :: (habit_id: string, local_date: s32, completed: s32, count: s32) -> s32 {
+    stmt: *void = null
+    changed_at: s64
+    rc: s32
+    changed: s32
+    if storage_db_handle() == null || habit_id.count == 0 || local_date <= 0 {
+        return 0
+    }
+    if count < 0 {
+        count = 0
+    }
+    if count > 0 {
+        completed = 1
+    }
+    changed_at = storage_next_change_time()
+    storage_mark_habits_initialized()
+    sql_hb2: [369] u8
+    AppCopyText("INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES(?1,?2,?3,?4,0,?5) ON CONFLICT(habit_id,local_date) DO UPDATE SET completed=excluded.completed,count=excluded.count,updated_at=CASE WHEN habit_days.completed<>excluded.completed OR habit_days.count<>excluded.count THEN excluded.updated_at ELSE habit_days.updated_at END", sql_hb2[:])
+    if SqlitePrepare(storage_db_handle(), *sql_hb2[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, habit_id)
+    sqlite3_bind_int(stmt, 2, local_date)
+    sqlite3_bind_int(stmt, 3, ifx (completed != 0) then (1) else (0))
+    sqlite3_bind_int(stmt, 4, count)
+    SqliteBindInt64(stmt, 5, changed_at)
+    rc = SqliteStep(stmt)
+    changed = 0
+    if sqlite3_changes(storage_db_handle()) > 0 {
+        changed = 1
+    }
+    SqliteFinalize(stmt)
+    if rc != SQLITE_DONE {
+        return 0
+    }
+    if changed != 0 {
+        storage_enqueue_sync_habit_day(habit_id, local_date)
+    }
+    storage_schedule_persist()
+    return 1
+}

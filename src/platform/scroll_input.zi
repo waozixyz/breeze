@@ -1,0 +1,73 @@
+#import "geometry"
+#import "scroll"
+#import "scroll_props"
+#import "session"
+#import "tree_input"
+#import "drawing_props"
+
+// One pointer can own a scrollbar drag. Device samples enter once per frame;
+// each Scroll widget receives values and returns consumption decisions.
+ScrollDevice :: struct {
+    session: Session
+    mouse: Vector2
+    pressed: bool
+    down: bool
+    released: bool
+    wheel: float32
+    wheel_consumed: bool
+    owner: u64
+    grab: float32
+}
+
+scroll_device: ScrollDevice;
+
+#program_export
+BeginScrollFrame :: (session: Session, mouse: Vector2, pressed: bool, down: bool,
+    released: bool, wheel: float32) {
+    scroll_device.session = session
+    scroll_device.mouse = mouse
+    scroll_device.pressed = pressed
+    scroll_device.down = down
+    scroll_device.released = released
+    scroll_device.wheel = wheel
+    scroll_device.wheel_consumed = false
+    if !down && !released {
+        scroll_device.owner = cast(u64)0
+        scroll_device.grab = 0.0
+    }
+}
+
+#program_export
+ScrollObservationFor :: (key: u64, bounds: Rectangle) -> ScrollInput {
+    input: ScrollInput
+    input.enabled = true
+    input.mouse = scroll_device.mouse
+    input.pressed = scroll_device.pressed
+    input.down = scroll_device.down
+    input.released = scroll_device.released
+    input.owns_drag = key != cast(u64)0 && scroll_device.owner == key
+    input.owner_captured = scroll_device.owner != cast(u64)0  && !input.owns_drag
+    input.grab = scroll_device.grab
+    inside: bool = ScrollPointInside(input.mouse, bounds)
+    target: u64 = TreeScrollAt(scroll_device.session,
+        input.mouse.x, input.mouse.y)
+    targeted: bool = target == cast(u64)0 || target == key
+    input.pointer_allowed = ((inside && targeted) || input.owns_drag)  && !input.owner_captured
+    if inside && targeted && !scroll_device.wheel_consumed  && !input.owner_captured {
+        input.wheel = scroll_device.wheel
+    }
+    return input
+}
+
+#program_export
+CommitScroll :: (key: u64, frame: ScrollFrame) {
+    if frame.consume_wheel { scroll_device.wheel_consumed = true }
+    if key != cast(u64)0 && frame.start_drag {
+        scroll_device.owner = key
+        scroll_device.grab = frame.grab
+    }
+    if key != cast(u64)0 && frame.clear_drag && scroll_device.owner == key {
+        scroll_device.owner = cast(u64)0
+        scroll_device.grab = 0.0
+    }
+}

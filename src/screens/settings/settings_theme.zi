@@ -1,0 +1,545 @@
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/app_types.zi";
+#import, file "settings_types.zi";
+#import "geometry"
+#import "text_props"
+#import "image_props"
+#import "control_props"
+#import "layout"
+#import, file "../../platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+
+#import, file "../../app/app.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_style.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../app/theme_catalog.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/device_preferences.zi";
+#import, file "../../app/locale.zi";
+
+
+
+#import, file "settings_ui.zi";
+#import "input_props"
+#import, file "../../app/metrics.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "dropdown_widget"
+#import "image_widget"
+#import "segmented_control_widget"
+#import "slider_widget"
+#import "slider"
+#import "text_widget"
+#import "drawing_props"
+#import "session"
+#import "button_props"
+#import "dropdown_props"
+#import "segmented_control_props"
+#import "slider_props"
+
+using AppThemeMode;
+using AppThemeSource;
+using ModalType;
+using TextWrap;
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+ANDROID :: #defined(ANDROID_BUILD)
+WEB :: #defined(PLATFORM_WEB)
+#if ANDROID {
+    c :: #system_library "c";
+    android_device_app_icon :: () -> s32 #foreign c;
+    android_device_set_app_icon :: (icon: s32) -> s32 #foreign c;
+}
+
+theme_dropdown_section_height :: () -> s32 {
+    return AppScale(28) + AppScale(56)
+}
+
+theme_value_dropdown_rows_height :: () -> s32 {
+    font := AppFontSize()
+    row_label_gap := AppScale(8)
+    row_gap := AppScale(14)
+    row_h := AppScale(40)
+    return (font + row_label_gap + row_h + row_gap) * 2
+}
+
+scale_slider_content_height :: (content_w: s32) -> s32 {
+    label_h := AppParagraphHeight(LocaleText("appearance_scale_label"),
+        content_w, AppFontSize(), 0)
+    if label_h < AppScale(24) { label_h = AppScale(24) }
+    return label_h + AppScale(72)
+}
+
+settings_theme_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    sidebar_h: s32 = 0
+    glow_h: s32 = 0
+    total: s32 = 0
+    if style_pack_has_glow(app.style_index) != 0 {
+        glow_h = toggle_row_height(LocaleText("appearance_glow_effects_label"),
+            content_w) + AppScale(6)
+    }
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        options: [2] SegmentOption = .[
+        SegmentOption.{.label = LocaleText("navigation_sidebar_expanded")},
+        SegmentOption.{.label = LocaleText("navigation_sidebar_compact")}
+        ]
+        sidebar_props: SegmentedControlProps
+        sidebar_props.bounds = Rectangle.{0.0, 0.0,
+            cast(float32)content_w, cast(float32)AppScale(40)}
+        sidebar_props.height = AppScale(40)
+        sidebar_props.wrap = true
+        sidebar_h = AppScale(44) + SegmentedControlHeight(app.ui.session,
+            sidebar_props, options[:])
+    }
+
+    total += theme_dropdown_section_height()
+    total += glow_h
+    total += scale_slider_content_height(content_w)
+    total += theme_dropdown_section_height()
+    total += sidebar_h
+    total += theme_value_dropdown_rows_height()
+    total += AppScale(24)
+    total += AppScale(58)
+    #if ANDROID {
+        total += AppScale(80)
+    }
+    return total
+}
+
+settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
+    y: *s32, state: *SettingsThemeState) {
+    if app == null || y == null || state == null {
+        return
+    }
+
+    #if ANDROID {
+        if state.app_icon_loaded == 0 {
+            state.app_icon = android_device_app_icon()
+            state.app_icon_loaded = 1
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .id = 152,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)w, cast(float32)AppScale(64)},
+                .label = LocaleText("app_icon_label"),
+                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = app.modal.active != 0
+            }) != 0 {
+            state.app_icon = android_device_app_icon()
+            state.app_icon_error = 0
+            app_open_modal(app, cast(ModalType)ModalAppIconPicker)
+        }
+        Image(CurrentApp().ui.session, ImageProps.{
+                .asset_path = ifx (state.app_icon == 1) then ("assets/app/icon-ink-and-air.png") else ("assets/app/icon-sky-cradle.png"),
+                .bounds = Rectangle.{cast(float32)(x + AppScale(8)),
+                    cast(float32)(y.* + AppScale(4)),
+                    cast(float32)AppScale(56), cast(float32)AppScale(56)},
+                .fit = cast(ImageFit)ImageFitContain
+            })
+        y.* += AppScale(80)
+    }
+
+    styles: [3]DropdownOption
+    styles[0].label = style_pack_label(1)
+    styles[1].label = style_pack_label(2)
+    styles[2].label = style_pack_label(3)
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)w, cast(float32)AppScale(24)},
+            .text = LocaleText("appearance_style_label")
+        })
+    y.* += AppScale(28)
+    style_props: DropdownProps
+    style_props.id = 150
+    style_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)w, cast(float32)AppScale(40)}
+    style_props.selected_index = app.style_index - 1
+    style_props.open = state.style_menu.open
+    style_props.highlight_index = state.style_menu.highlight_index
+    style_props.scroll_offset = state.style_menu.scroll_offset
+    state.style_menu = Dropdown(app.ui.session, style_props, styles[:])
+    if state.style_menu.changed {
+        app.style_index = state.style_menu.selected_index + 1
+        app_apply_style(app)
+        app.settings_scroll = 0
+        app_block_current_click(app)
+        save_settings(app)
+    }
+    y.* += AppScale(56)
+    if style_pack_has_glow(app.style_index) != 0 {
+        if commit_toggle_row(app, x, w, y,
+            LocaleText("appearance_glow_effects_label"),
+            *app.lightfield_glow_enabled, 1) != 0 {
+            app_apply_style(app)
+        }
+        y.* += AppScale(6)
+    }
+    draw_scale_row(app, x, w, y)
+
+    placements: [5]DropdownOption
+    placements[0].label = LocaleText("navigation_automatic")
+    placements[1].label = LocaleText("navigation_left")
+    placements[2].label = LocaleText("navigation_bottom")
+    placements[3].label = LocaleText("navigation_right")
+    placements[4].label = LocaleText("navigation_top")
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)AppScale(24)},
+            .text = LocaleText("navigation_placement")
+        })
+    y.* += AppScale(28)
+    placement_props: DropdownProps
+    placement_props.id = 149
+    placement_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)w, cast(float32)AppScale(40)}
+    placement_props.selected_index = app.navigation_placement
+    placement_props.open = state.placement_menu.open
+    placement_props.highlight_index = state.placement_menu.highlight_index
+    placement_props.scroll_offset = state.placement_menu.scroll_offset
+    state.placement_menu = Dropdown(app.ui.session, placement_props, placements[:])
+    if state.placement_menu.changed {
+        app.navigation_placement = state.placement_menu.selected_index
+        app.settings_scroll = 0
+        app_block_current_click(app)
+        save_settings(app)
+    }
+    y.* += AppScale(56)
+
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        sidebar_options: [2] SegmentOption = .[
+        SegmentOption.{.label = LocaleText("navigation_sidebar_expanded")},
+        SegmentOption.{.label = LocaleText("navigation_sidebar_compact")}
+        ]
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)w, cast(float32)AppScale(24)},
+                .text = LocaleText("navigation_sidebar")
+            })
+        y.* += AppScale(28)
+        sidebar_props: SegmentedControlProps
+        sidebar_props.id = 151
+        sidebar_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)w, cast(float32)AppScale(40)}
+        sidebar_props.selected_index = app.nav_rail_collapsed
+        sidebar_props.has_selection = true
+        sidebar_props.height = AppScale(40)
+        sidebar_props.wrap = true
+        sidebar := SegmentedControl(app.ui.session, sidebar_props,
+            sidebar_options[:])
+        if sidebar.changed {
+            app.nav_rail_collapsed = sidebar.selected_index
+            app_block_current_click(app)
+            save_settings(app)
+        }
+        y.* += sidebar.height + AppScale(16)
+    }
+
+    if draw_theme_settings(app, x, w, y, state) != 0 {
+        app_refresh_theme(app)
+        app.settings_dirty = 1
+        app.settings_save_delay_ticks = 18
+    }
+    y.* += AppScale(24)
+
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)w, cast(float32)AppScale(44)},
+            .label = LocaleText("customize_nav_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = app.modal.active != 0
+        }) != 0 {
+        app_open_customize_nav(app)
+    }
+    y.* += AppScale(58)
+}
+
+#program_export
+settings_screen_draw_app_icon_modal :: (app: *InnerBreeze) {
+    #if ANDROID {
+        state := *app.theme_state
+        frame := ModalPanel(AppScale(360), AppScale(300),
+            LocaleText("app_icon_label"), true)
+        if frame.closed {
+            app_close_modal(app)
+            return
+        }
+        names: [2]string = .[
+        LocaleText("app_icon_sky_cradle"),
+        LocaleText("app_icon_ink_and_air")]
+        previews: [2]string = .[
+        "assets/app/icon-sky-cradle.png",
+        "assets/app/icon-ink-and-air.png"]
+        gap := AppScale(12)
+        choice_w := (frame.content_w - gap) / 2
+        {
+            i: s32 = 0
+            while i < 2 {
+                choice_x := frame.content_x + i * (choice_w + gap)
+                selected := state.app_icon == i
+                Image(CurrentApp().ui.session, ImageProps.{
+                        .asset_path = previews[i], .alt_text = names[i],
+                        .bounds = Rectangle.{cast(float32)choice_x,
+                            cast(float32)frame.content_y, cast(float32)choice_w,
+                            cast(float32)AppScale(120)},
+                        .fit = cast(ImageFit)ImageFitContain
+                    })
+                if Button(CurrentApp().ui.session, ButtonProps.{
+                        .id = cast(s32)153 + i,
+                        .bounds = Rectangle.{cast(float32)choice_x,
+                            cast(float32)(frame.content_y + AppScale(128)),
+                            cast(float32)choice_w, cast(float32)AppScale(44)},
+                        .label = names[i],
+                        .tone = ifx selected then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                    }) != 0 {
+                    state.app_icon_error = ifx android_device_set_app_icon(i) == 0 then 1 else 0
+                    state.app_icon = android_device_app_icon()
+                    app_block_current_click(app)
+                    if state.app_icon_error == 0 {
+                        app_close_modal(app)
+                        return
+                    }
+                }
+                i += 1
+            }
+        }
+        message := LocaleText(ifx state.app_icon_error != 0 then "app_icon_error" else "app_icon_hint")
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)frame.content_x,
+                    cast(float32)(frame.content_y + AppScale(184)),
+                    cast(float32)frame.content_w, cast(float32)AppScale(30)},
+                .text = message, .wrap = cast(TextWrap)TextWrapNone,
+                .font = AppFitFontSize(message, frame.content_w,
+                AppSmallFontSize(), AppScale(8))
+            })
+    } else {
+        unused app
+    }
+}
+
+ThemeLabel :: (id: s32) -> string {
+    if id == 0 { return LocaleText("theme_sky") }
+    if id == 1 { return LocaleText("theme_ocean") }
+    if id == 2 { return LocaleText("theme_forest") }
+    if id == 3 { return LocaleText("theme_sunset") }
+    if id == 4 { return LocaleText("theme_lavender") }
+    if id == 5 { return LocaleText("theme_cherry") }
+    if id == 6 { return LocaleText("theme_dawn") }
+    if id == 7 { return LocaleText("theme_sage") }
+    if id == 8 { return LocaleText("theme_sepia") }
+    if id == 9 { return LocaleText("theme_mono") }
+    if id == 10 { return LocaleText("theme_mint") }
+    if id == 11 { return LocaleText("theme_cobalt") }
+    if id == 12 { return "Sweet" }
+    return LocaleText("theme_mono")
+}
+
+draw_theme_settings :: (app: *InnerBreeze, x: s32, w: s32,
+    y: *s32, state: *SettingsThemeState) -> s32 {
+    changed: s32 = 0
+    row_label_gap := AppScale(8)
+    row_gap := AppScale(14)
+    row_h := AppScale(40)
+    font := AppFontSize()
+    follow_device_label: [128]u8
+    follow_args: [2]FormatArg = .[
+    FormatArg.{.text = LocaleText("theme_follow_device"), .is_text = true},
+    FormatArg.{.text = LocaleText(ifx app.dark_mode != 0 then "theme_dark" else "theme_light"), .is_text = true}
+    ]
+    FormatTemplate("%s (%s)", follow_args[:], follow_device_label[:])
+    mode_options: [3]DropdownOption
+    mode_options[0].label = AppTextFromCString(*follow_device_label[0],
+        size_of(type_of(follow_device_label)))
+    mode_options[1].label = LocaleText("theme_light")
+    mode_options[2].label = LocaleText("theme_dark")
+    mode_index := app.theme_mode
+
+    if mode_index < APP_THEME_SYSTEM || mode_index > APP_THEME_DARK {
+        mode_index = APP_THEME_SYSTEM
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0.0, 0.0},
+            .text = (LocaleText("theme_mode_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    mode_props: DropdownProps
+    mode_props.id = 102
+    mode_props.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + font + row_label_gap),
+        cast(float32)w, cast(float32)row_h}
+    mode_props.selected_index = mode_index
+    mode_props.open = state.mode_menu.open
+    mode_props.highlight_index = state.mode_menu.highlight_index
+    mode_props.scroll_offset = state.mode_menu.scroll_offset
+    mode_props.disabled = app.theme_source == APP_THEME_SOURCE_SYSTEM
+    state.mode_menu = Dropdown(app.ui.session, mode_props, mode_options[:])
+    if state.mode_menu.changed {
+        app.theme_mode = state.mode_menu.selected_index
+        changed = 1
+    }
+    y.* += font + row_label_gap + row_h + row_gap
+
+    theme_options: [ThemeCount + 1]DropdownOption
+    theme_options[0].label = LocaleText("theme_system")
+    {
+        i: s32 = 0
+        while i < ThemeCount {
+            theme_options[i + 1].label = ThemeLabel(i)
+            i += 1
+        }
+    }
+    theme_index := ifx (app.theme_source == APP_THEME_SOURCE_SYSTEM) then (0) else (app.theme_id + 1)
+    if theme_index < 0 || theme_index > ThemeCount {
+        theme_index = 1
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0.0, 0.0},
+            .text = (LocaleText("theme_color_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    color_props: DropdownProps
+    color_props.id = 103
+    color_props.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + font + row_label_gap),
+        cast(float32)w, cast(float32)row_h}
+    color_props.selected_index = theme_index
+    color_props.open = state.color_menu.open
+    color_props.highlight_index = state.color_menu.highlight_index
+    color_props.scroll_offset = state.color_menu.scroll_offset
+    state.color_menu = Dropdown(app.ui.session, color_props, theme_options[:])
+    if state.color_menu.changed {
+        if state.color_menu.selected_index == 0 {
+            app.theme_source = APP_THEME_SOURCE_SYSTEM
+            app.theme_mode = APP_THEME_SYSTEM
+        } else {
+            app.theme_source = APP_THEME_SOURCE_APP
+            app.theme_id = state.color_menu.selected_index - 1
+        }
+        changed = 1
+    }
+    y.* += font + row_label_gap + row_h + row_gap
+    return changed
+}
+
+draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    label := LocaleText("appearance_scale_label")
+    label_h := AppParagraphHeight(label, w, AppFontSize(), 0)
+    if label_h < AppScale(24) { label_h = AppScale(24) }
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)w, cast(float32)label_h},
+            .text = label
+        })
+    slider: DiscreteSliderProps
+    slider.id = 140
+    slider.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + label_h + AppScale(4)), cast(float32)w,
+        cast(float32)AppScale(40)}
+    slider.semantic_label = label
+    slider.value = app.ui_scale_tenths
+    slider.min = 5
+    slider.max = 25
+    result := DiscreteSlider(app.ui.session, slider)
+    if result.changed {
+        app.ui_scale_tenths = result.value
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    percentage: [24]u8
+    percentage_args: [1]FormatArg = .[
+    FormatArg.{.number = app.ui_scale_tenths * 10}
+    ]
+    FormatTemplate("%d%%", percentage_args[:], percentage[:])
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x,
+                cast(float32)(y.* + label_h + AppScale(48)),
+                cast(float32)w, cast(float32)AppScale(20)},
+            .text = AppTextFromCString(*percentage[0],
+            size_of(type_of(percentage)))
+        })
+    y.* += label_h + AppScale(72)
+}
+
+#program_export
+settings_screen_draw_theme_picker_modal :: (app: *InnerBreeze) {
+    modal_w := AppScale(320)
+    modal_h := AppScale(360)
+    title := LocaleText("theme_picker_title")
+    frame := ModalPanelResult.{}
+    picker_h: s32 = 0
+
+    frame = ModalPanel(modal_w, modal_h, title, true)
+    if frame.closed {
+        app_close_modal(app)
+        return
+    }
+
+    picker_h = theme_picker_content_height(frame.content_w)
+
+    {
+        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)frame.content_x, cast(float32)frame.content_y,
+            cast(float32)frame.content_w, cast(float32)frame.content_h
+        }
+        scroll_1_key: u64 = KeyHash("inbe/screens/settings/settings_theme/scroll/1")
+        scroll_1_props: ScrollProps
+        scroll_1_props.key = scroll_1_key
+        scroll_1_props.bounds = scroll_1_bounds
+        scroll_1_props.content_height = picker_h
+        scroll_1_props.scroll_offset = app.theme_state.theme_picker_scroll
+        scroll_1_props.input = ScrollObservationFor(scroll_1_key, scroll_1_bounds)
+        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
+        app.theme_state.theme_picker_scroll = scroll_1_result.scroll_offset
+        CommitScroll(scroll_1_key, scroll_1_result.frame)
+        picker: Rectangle = scroll_1_result.content
+        if draw_theme_picker(cast(s32)picker.x, cast(s32)picker.y,
+            cast(s32)picker.width, app.dark_mode, *app.theme_id) != 0 {
+            if app.theme_id < 0 { app.theme_id = 0 }
+            if app.theme_id >= ThemeCount { app.theme_id = ThemeCount - 1 }
+            app.theme_source = APP_THEME_SOURCE_APP
+            app_refresh_theme(app)
+            app.settings_dirty = 1
+            save_settings(app)
+            app_close_modal(app)
+        }
+        unused End(app.ui.session)
+    }
+}
+
+theme_picker_content_height :: (w: s32) -> s32 {
+    unused w
+    return ThemeCount * AppScale(46)
+}
+
+draw_theme_picker :: (x: s32, y: s32, w: s32, dark_mode: s32, theme_id: *s32) -> s32 {
+    unused dark_mode
+    selected: s32 = 0
+    if theme_id != null { selected = theme_id.* }
+    changed: s32 = 0
+
+    {
+        i: s32 = 0
+        while i < ThemeCount {
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .id = cast(s32)51000 + i,
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)(y + i * AppScale(46)),
+                        cast(float32)w, cast(float32)AppScale(40)},
+                    .label = ThemeLabel(i),
+                    .tone = ifx (selected == i) then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = ifx (selected == i) then cast(ButtonEmphasis)ButtonEmphasisFilled else cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                if theme_id != null {
+                    theme_id.* = i
+                }
+                changed = 1
+            }
+            i += 1
+        }
+    }
+    return changed
+}

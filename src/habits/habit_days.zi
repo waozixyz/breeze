@@ -1,0 +1,93 @@
+c :: #system_library "c";
+realloc :: (ptr: *void, size: u64) -> *void #foreign c;
+free :: (ptr: *void) #foreign c;
+#import, file "habit_types.zi";
+#import, file "habit_calendar.zi";
+
+#program_export
+HabitCompletedFor :: (habit: *Habit, day_index: s32) -> bool {
+    if habit == null || habit.days == null || habit.day_count <= 0 {
+        return false
+    }
+    count := habit.day_count
+    if count > habit.day_capacity {
+        count = habit.day_capacity
+    }
+    if count > HABIT_WEEKLY_MAX_DAYS {
+        count = HABIT_WEEKLY_MAX_DAYS
+    }
+    index: s32 = 0
+    while index < count {
+        day := habit.days[index]
+        if day.day_index == day_index {
+            return HabitDayComplete(day, habit.counter_enabled != 0,
+                habit.counter_target)
+        }
+        index += 1
+    }
+    return false
+}
+
+#program_export
+HabitDayCount :: (habit: *Habit, day_index: s32) -> s32 {
+    if habit == null || habit.days == null || habit.day_count <= 0 {
+        return 0
+    }
+    count: s32 = habit.day_count
+    if count > habit.day_capacity {
+        count = habit.day_capacity
+    }
+    if count > HABIT_WEEKLY_MAX_DAYS {
+        count = HABIT_WEEKLY_MAX_DAYS
+    }
+    index: s32 = 0
+    while index < count {
+        day: HabitDay = habit.days[index]
+        if day.day_index == day_index {
+            if day.count > 0 {
+                return day.count
+            }
+            if day.completed != 0 {
+                return 1
+            }
+            return 0
+        }
+        index += 1
+    }
+    return 0
+}
+
+habit_reserve_days :: (habit: *Habit, capacity: s32) -> s32 {
+    days: *HabitDay
+    new_capacity: s32
+
+    if habit == null {
+        return 0
+    }
+    if capacity <= habit.day_capacity {
+        return 1
+    }
+    new_capacity = ifx (habit.day_capacity > 0) then (habit.day_capacity) else (16)
+    while new_capacity < capacity {
+        if new_capacity > 1073741823 / 2 {
+            return 0
+        }
+        new_capacity *= 2
+    }
+    days = cast(*HabitDay)realloc(cast(*void)habit.days,
+        cast(u64)new_capacity * cast(u64)size_of(type_of(<<days)))
+    if days == null {
+        return 0
+    }
+    zero_index: s32 = habit.day_capacity
+    while zero_index < new_capacity {
+        days[zero_index].day_index = 0
+        days[zero_index].count = 0
+        days[zero_index].completed = 0
+        days[zero_index].session_count = 0
+        zero_index += 1
+    }
+    habit.days = days
+    habit.day_capacity = new_capacity
+    return 1
+}

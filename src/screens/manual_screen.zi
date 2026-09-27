@@ -1,0 +1,293 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "dropdown_props"
+#import "geometry"
+#import "guide_pager"
+#import "paint_queue"
+#import "session"
+#import "style"
+#import "style_sheet"
+#import "swipe"
+#import "swipe_props"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import, file "../app/app_modal_state.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/current_app.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/widgets.zi";
+
+using ButtonEmphasis;
+using ButtonTone;
+using SwipeDirection;
+using TextAlign;
+using TextWrap;
+
+ManualGuideNav :: struct {
+    page: s32
+    page_count: s32
+    y: s32
+    h: s32
+    content_y: s32
+    content_h: s32
+    focus_id: s32
+}
+
+ManualParagraphSpec :: struct {
+    text: string
+    width: s32
+    font: s32
+    line_gap: s32
+    align: TextAlign
+}
+
+#program_export
+manual_screen_reset_layouts :: (app: *InnerBreeze) {
+    if app != null { app.manual_scroll = 0 }
+}
+
+#program_export
+manual_screen_tutorial_line_gap :: () -> s32 { return AppScale(6) }
+
+#program_export
+manual_screen_tutorial_side_padding :: () -> s32 { return AppScale(24) }
+
+#program_export
+manual_screen_tutorial_top_gap :: () -> s32 { return AppScale(24) }
+
+#program_export
+manual_screen_guide_header_height :: () -> s32 {
+    return AppScale(42) + AppScale(10) + AppScale(24) + AppScale(16)
+}
+
+#program_export
+manual_screen_tutorial_max_width :: () -> s32 { return AppScale(640) }
+
+#program_export
+manual_screen_hero_bounds :: (content_x: s32, content_w: s32,
+    y: s32, h: s32) -> Rectangle {
+    app := CurrentApp()
+    view_width: s32 = 0
+    if app != null { view_width = app.ui.view_width }
+    x := content_x
+    w := content_w
+    if x < 0 { w += x; x = 0 }
+    if x + w > view_width { w = view_width - x }
+    if w < 0 { w = 0 }
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)w, cast(float32)h
+}
+}
+
+#program_export
+manual_screen_tutorial_paragraph :: (content: string,
+    content_w: s32) -> ManualParagraphSpec {
+    paragraph: ManualParagraphSpec
+    paragraph.text = content
+    paragraph.width = content_w
+    paragraph.font = AppFontSize()
+    paragraph.line_gap = manual_screen_tutorial_line_gap()
+    return paragraph
+}
+
+// A manual paragraph measures its content and advances the page cursor.
+#program_export
+ManualParagraph :: (app: *InnerBreeze, paragraph: ManualParagraphSpec,
+    x: s32, y: *s32) {
+    if app == null || y == null || paragraph.width <= 0 { return }
+    font := paragraph.font
+    if font <= 0 { font = AppFontSize() }
+    height := AppParagraphHeight(paragraph.text, paragraph.width,
+        font, paragraph.line_gap)
+    current_y := y.*
+    props: TextProps
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)current_y,
+        cast(float32)paragraph.width, cast(float32)height
+}
+    props.text = paragraph.text
+    props.font = font
+    props.wrap = cast(TextWrap)TextWrapAuto
+    props.align = paragraph.align
+    Text(app.ui.session, props)
+    y.* += height
+}
+
+#program_export
+manual_screen_draw_guide_header :: (title: string, page: s32,
+    page_count: s32, content_x: s32, y: *s32, content_w: s32) {
+    app := CurrentApp()
+    if app == null || y == null || page_count <= 0 { return }
+    page = GuidePagerPageFor(page, page_count)
+    progress: [96]u8
+    if !FormatTwoNumberTemplate(LocaleText("tutorial_step_progress"),
+        page + 1, page_count, progress[:]) { return }
+    progress_text := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*progress[0], 96))
+    title_h := AppScale(42)
+    title_step_gap := AppScale(10)
+    step_h := AppScale(24)
+    current_y := y.*
+    heading: TextProps
+    heading.bounds = Rectangle.{cast(float32)content_x,
+        cast(float32)current_y, cast(float32)content_w,
+        cast(float32)title_h
+}
+    heading.text = title
+    heading.wrap = cast(TextWrap)TextWrapNone
+    heading.vertical_align = cast(TextAlign)TextAlignCenter
+    Text(app.ui.session, heading)
+    label: TextProps
+    label.bounds = Rectangle.{cast(float32)content_x,
+        cast(float32)(current_y + title_h + title_step_gap),
+        cast(float32)content_w, cast(float32)step_h
+}
+    label.text = progress_text
+    label.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, label)
+    y.* += title_h + title_step_gap + step_h + AppScale(16)
+}
+
+#program_export
+manual_screen_draw_hero_progress :: (bounds: Rectangle, page: s32,
+    page_count: s32) {
+    app := CurrentApp()
+    if app == null || page_count <= 0  || bounds.width <= 0.0 || bounds.height <= 0.0 { return }
+    page = GuidePagerPageFor(page, page_count)
+    gap := AppScale(18)
+    dots_w := (page_count - 1) * gap
+    center_x := cast(s32)(bounds.x + bounds.width / 2.0)
+    dots_y := cast(s32)(bounds.y + bounds.height -         cast(float32)AppScale(15))
+    face := GuideFace(2)
+    active := ColorFromPacked(face.value.foreground)
+    muted := ColorFromPacked(face.value.border)
+    i: s32 = 0
+    while i < page_count {
+        radius := AppScale(3)
+        color := muted
+        if i == page { radius = AppScale(4); color = active }
+        dot := Rectangle.{cast(float32)(center_x - dots_w / 2 +             i * gap - radius), cast(float32)(dots_y - radius),
+            cast(float32)(radius * 2), cast(float32)(radius * 2)
+}
+        PaintRoundedFill(app.ui.session, -1, dot,
+            cast(float32)radius, 8, color)
+        i += 1
+    }
+}
+
+#program_export
+manual_screen_draw_title_bar :: (app: *InnerBreeze, title: string,
+    title_h: s32) -> s32 {
+    if app == null || app_nav_desktop_rail_enabled(app) != 0 {
+        return 0
+    }
+    bar: TitleBarProps
+    bar.title = title
+    bar.height = title_h
+    bar.bounds = Rectangle.{0.0, 0.0,
+        cast(float32)app.ui.view_width, cast(float32)title_h
+}
+    bar.has_leading_action = true
+    bar.leading_label = LocaleText("back_button")
+    options: [1]DropdownOption
+    result := TitleBar(app.ui.session, bar, options[0:0])
+    if !result.clicked_leading { return 0 }
+    app_block_current_click(app)
+    return 1
+}
+
+#program_export
+manual_screen_guide_nav_height :: () -> s32 { return AppScale(68) }
+
+#program_export
+manual_screen_guide_controls :: (app: *InnerBreeze,
+    nav: ManualGuideNav) -> GuidePagerPolicy {
+    empty: GuidePagerPolicy
+    if app == null || nav.page_count < 1 { return empty }
+    page := GuidePagerPageFor(nav.page, nav.page_count)
+    swipe_spec: SwipeSpec
+    swipe_spec.bounds = Rectangle.{0.0, cast(float32)nav.content_y,
+        cast(float32)app.ui.view_width, cast(float32)nav.content_h
+}
+    swipe_spec.directions = cast(u32)SwipeHorizontal
+    swipe_spec.min_distance = cast(float32)AppScale(48)
+    swipe_spec.axis_bias = 1.25
+    swipe_spec.max_duration = 0.8
+    swipe := Swipe(swipe_spec, app.manual_swipe,
+        app.ui.manual_swipe_frame)
+    app.manual_swipe = swipe.gesture
+    if swipe.claim_pointer { app.ui.manual_swipe_owner = true }
+    if swipe.release_pointer { app.ui.manual_swipe_owner = false }
+    if swipe.capture_input || swipe.consume_release {
+        app_block_current_click(app)
+    }
+    previous := app.ui.manual_previous  || swipe.direction == cast(SwipeDirection)SwipeRight
+    next := app.ui.manual_next  || swipe.direction == cast(SwipeDirection)SwipeLeft
+    finish := app.ui.manual_finish
+    close_requested := app.ui.manual_close
+    pad := AppScale(12)
+    content_w := app.ui.view_width -         manual_screen_tutorial_side_padding() * 2
+    if content_w > manual_screen_tutorial_max_width() {
+        content_w = manual_screen_tutorial_max_width()
+    }
+    content_x := (app.ui.view_width - content_w) / 2
+    width := (content_w - pad) / 2
+    height := nav.h - pad * 2
+    if height > AppScale(48) { height = AppScale(48) }
+    if !close_requested && width > 0 && height > 0 {
+        footer := Rectangle.{0.0, cast(float32)nav.y,
+            cast(float32)app.ui.view_width, cast(float32)nav.h
+}
+        face := GuideFace(2)
+        PaintRoundedFill(app.ui.session, -1, footer, 0.0, 4,
+            ColorFromPacked(face.value.background))
+        button_y := nav.y + (nav.h - height) / 2
+        back: ButtonProps
+        back.id = nav.focus_id
+        back.bounds = Rectangle.{cast(float32)content_x,
+            cast(float32)button_y, cast(float32)width,
+            cast(float32)height
+}
+        back.label = LocaleText("back_button")
+        back.tone = cast(ButtonTone)ButtonToneNeutral
+        back.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        if Button(app.ui.session, back) != 0 {
+            if page == 0 { close_requested = true }
+            else { previous = true }
+        }
+        forward: ButtonProps
+        forward.id = nav.focus_id + 1
+        forward.bounds = Rectangle.{cast(float32)(content_x + pad + width),
+            cast(float32)button_y, cast(float32)width,
+            cast(float32)height
+}
+        forward.label = LocaleText("next_button")
+        if page == nav.page_count - 1 {
+            forward.label = LocaleText("practice_start_button")
+        }
+        forward.tone = cast(ButtonTone)ButtonToneAccent
+        forward.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+        if Button(app.ui.session, forward) != 0 { finish = true }
+    }
+    if finish && page < nav.page_count - 1 { next = true; finish = false }
+    policy := GuidePagerPolicyFor(page, nav.page_count,
+        previous, next, close_requested, finish, true)
+    if policy.closed {
+        app_block_current_click(app)
+        return policy
+    }
+    if policy.finished {
+        app_block_current_click(app)
+        return policy
+    }
+    if policy.changed { app.manual_scroll = 0 }
+    app.tutorial_step = policy.page
+    return policy
+}

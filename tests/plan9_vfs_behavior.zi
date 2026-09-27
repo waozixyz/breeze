@@ -1,0 +1,80 @@
+// Exercise the VFS's file semantics on a disposable file. Only the seek name
+// needs adapting for this host test; no display, SQLite engine, or user DB is used.
+#import, file "../src/platform/plan9/sqlite_plan9_vfs.zi";
+#import "c_string"
+c :: #system_library "c";
+VfsTestTemporary :: () -> *void #foreign c "tmpfile";
+VfsTestDescriptor :: (stream: *void) -> s32 #foreign c "fileno";
+VfsTestClose :: (stream: *void) -> s32 #foreign c "fclose";
+VfsTestSeek :: (descriptor: s32, offset: s64, origin: s32) -> s64 #foreign c "lseek";
+
+#program_export
+seek :: (descriptor: s32, offset: s64, origin: s32) -> s64 {
+    return VfsTestSeek(descriptor, offset, origin)
+}
+
+#program_export
+main :: () -> s32 {
+    stream := VfsTestTemporary()
+    if stream == null {
+        return 1
+    }
+    file: Plan9File
+    file.descriptor = VfsTestDescriptor(stream)
+    if seek(file.descriptor, 0, 0) < 0 {
+        VfsTestClose(stream)
+        return 10
+    }
+    text: [8]u8
+    CopyCString("abc", text[:])
+    if Plan9SqliteWrite(*file, *text[0], 3, 0) != 0 {
+        VfsTestClose(stream)
+        return 2
+    }
+    length: s64
+    if Plan9SqliteFileSize(*file, *length) != 0 || length != 3 {
+        VfsTestClose(stream)
+        return 3
+    }
+    CopyCString("xxxxxxx", text[:])
+    if Plan9SqliteRead(*file, *text[0], 7, 0) != 522 ||
+    text[0] != #char "a" || text[1] != #char "b" || text[2] != #char "c" ||
+    text[3] != 0 || text[4] != 0 || text[5] != 0 || text[6] != 0 {
+        VfsTestClose(stream)
+        return 4
+    }
+    if Plan9SqliteRead(*file, *text[0], 2, 1) != 0 ||
+    text[0] != #char "b" || text[1] != #char "c" {
+        VfsTestClose(stream)
+        return 5
+    }
+    if Plan9SqliteRead(*file, *text[0], 1, -1) != 266 ||
+    Plan9SqliteWrite(*file, *text[0], 1, -1) != 778 {
+        VfsTestClose(stream)
+        return 6
+    }
+    state: s32 = -1
+    Plan9SqliteLock(*file, 3)
+    if Plan9SqliteFileControl(*file, 1, cast(*void)*state) != 0 || state != 3 ||
+    Plan9SqliteFileControl(*file, 999, null) != 12 {
+        VfsTestClose(stream)
+        return 7
+    }
+    Plan9SqliteUnlock(*file, 0)
+    Plan9SqliteReserved(*file, *state)
+    if state != 0 || Plan9SqliteSector(*file) != 512 || Plan9SqliteDevice(*file) != 0 {
+        VfsTestClose(stream)
+        return 8
+    }
+    path: [16]u8
+    output: [4]u8
+    CopyCString("/tmp/example", path[:])
+    if Plan9SqliteFullPath(null, *path[0], 4, *output[0]) != 0 ||
+    output[0] != #char "/" || output[1] != #char "t" ||
+    output[2] != #char "m" || output[3] != 0 {
+        VfsTestClose(stream)
+        return 9
+    }
+    VfsTestClose(stream)
+    return 0
+}

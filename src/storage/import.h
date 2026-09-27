@@ -7,6 +7,5 @@ int storage_export_zip(const char *path);
 int storage_import_zip(const char *path);
 int storage_import_zip_ex(const char *path, StorageImportMode mode);
 int storage_inspect_import(const char *path, StorageImportInfo *info);
-void migrate_legacy_file_sessions_once(void);
 
 #endif

@@ -1,0 +1,165 @@
+c :: #system_library "c";
+free :: (ptr: *void) #foreign c;
+calloc :: (count: usize, size: usize) -> *void #foreign c;
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../storage/data.zi";
+#import, file "../storage/storage_sessions.zi";
+#import, file "habit_types.zi";
+#import, file "habit_memory.zi";
+#import, file "habit_model.zi";
+#import, file "habit_days.zi";
+#import, file "habit_linked_rules.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/app_modal_state.zi";
+
+
+
+
+
+
+using ExerciseType;
+using HabitSyncMode;
+
+habit_linked_session_callback :: (path: string, year: s32, month: s32,
+    day: s32, hour: s32, minute: s32, second: s32,
+    topic: s32, activity: s32,
+    round_times: []s32, round_count: s32,
+    user: s64) {
+    unused topic
+    ctx: *HabitLinkedContext = cast(*HabitLinkedContext)user
+    path_bytes: [512] u8
+    AppCopyText(path, path_bytes[:])
+    times: *s32 = *round_times[0]
+    unused HabitLinkedAppend(ctx, *path_bytes[0], year, month, day, hour, minute,
+        second, activity, times, round_count)
+}
+
+habit_collect_linked_entries :: (habit: *Habit, day_filter: s32,
+    ctx: *HabitLinkedContext) {
+    if ctx == null {
+        return
+    }
+    ctx.count = 0
+    ctx.total_seconds = 0
+    ctx.best_seconds = 0
+    ctx.day_filter = day_filter
+    ctx.sync_mode = ifx (habit != null) then (habit.sync_mode) else (HABIT_SYNC_NONE)
+    ctx.sync_activity = ifx (habit != null) then (habit.sync_activity) else (EXERCISE_WIM_HOF)
+    data_list_session_records(habit_linked_session_callback, cast(*void)ctx)
+}
+
+#program_export
+habit_cached_linked_entries :: (app: *InnerBreeze, habit_index: s32,
+    day_filter: s32) -> *HabitLinkedContext {
+    habits: *Habits
+    habit: *Habit
+    session_clock: s64
+
+    if app == null || habit_index < 0  || habit_index >= app.habits.count {
+        return null
+    }
+    habits = *app.habits
+    habit = *habits.items[habit_index]
+    if habit_is_linked(habit) == 0 {
+        return null
+    }
+    if habits.linked_cache == null {
+        habits.linked_cache = cast(*HabitLinkedContext)calloc(1,
+            cast(usize)size_of(type_of(<<habits.linked_cache)))
+        if habits.linked_cache == null {
+            return null
+        }
+    }
+
+    session_clock = storage_session_change_clock()
+    if habits.linked_cache_valid != 0  && habits.linked_cache_index == habit_index  && habits.linked_cache_day_filter == day_filter  && habits.linked_cache_session_clock == session_clock  && habits.linked_cache_sync_mode == habit.sync_mode  && habits.linked_cache_sync_activity == habit.sync_activity  && AppTextFromCString(*habits.linked_cache_habit_id[0], 40) == AppTextFromCString(*habit.id[0], 40) {
+        return habits.linked_cache
+    }
+
+    habit_collect_linked_entries(habit, day_filter, habits.linked_cache)
+    habits.linked_cache_index = habit_index
+    habits.linked_cache_day_filter = day_filter
+    habits.linked_cache_session_clock = session_clock
+    habits.linked_cache_sync_mode = habit.sync_mode
+    habits.linked_cache_sync_activity = habit.sync_activity
+    id_text := AppTextFromCString(*habit.id[0], 40)
+    id_index: s32 = 0
+    while id_index < cast(s32)id_text.count && id_index < HABIT_ID_SIZE - 1 {
+        habits.linked_cache_habit_id[id_index] = id_text[id_index]
+        id_index += 1
+    }
+    habits.linked_cache_habit_id[id_index] = cast(u8)0
+    habits.linked_cache_valid = 1
+    return habits.linked_cache
+}
+
+habit_session_cancel_edit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.habit_session_edit = HabitSessionEditState.{.round = -1 }
+}
+
+habit_session_changed :: (app: *InnerBreeze, old_session_count: s32) {
+    ctx: HabitLinkedContext
+    habit: *Habit
+
+    if app == null || app.habit_detail_index < 0  || app.habit_detail_index >= app.habits.count  || app.habit_detail_day <= 0 {
+        return
+    }
+
+    habit = *app.habits.items[app.habit_detail_index]
+    if old_session_count < 0 {
+        app_auto_sync(app)
+        return
+    }
+
+    manual_count := HabitDayCount(habit, app.habit_detail_day)
+    extra_count := manual_count - old_session_count
+    if extra_count < 0 {
+        extra_count = 0
+    }
+
+    habit_collect_linked_entries(habit, app.habit_detail_day, *ctx)
+    new_count := ctx.count + extra_count
+    if new_count != manual_count {
+        habit_set_day_count(*app.habits,
+            app.habit_detail_index,
+            app.habit_detail_day,
+            new_count)
+    }
+    app_auto_sync(app)
+}
+
+habit_apply_count_action :: (app: *InnerBreeze, index: s32, day_index: s32,
+    delta: s32, minimum_count: s32) {
+    if app == null {
+        return
+    }
+    habits: *Habits = *app.habits
+    if habits == null || index < 0 || index >= habits.count || day_index <= 0 {
+        return
+    }
+    count := HabitDayCount(*habits.items[index], day_index) + delta
+    if count < minimum_count {
+        count = minimum_count
+    }
+    habit_set_day_count(habits, index, day_index, count)
+}
+
+habit_open_linked_edit_page :: (app: *InnerBreeze, habit_index: s32, day_index: s32) {
+    if app == null {
+        return
+    }
+    app.habit_detail_index = habit_index
+    app.habit_detail_day = day_index
+    app.habit_detail_session_path[0] = cast(u8)0
+    app.habit_session_edit = HabitSessionEditState.{.round = -1 }
+    app_close_modal(app)
+    app_switch_screen(app, ScreenHabitSessionEdit)
+}

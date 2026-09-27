@@ -1,0 +1,138 @@
+// Habit synchronization queries preserve newer local edits and pending outbox entries.
+
+SyncRemoteHabitMapSQL :: #string SQL
+INSERT OR IGNORE INTO sync_remote_habit_map(old_id,new_id) SELECT
+h.id,COALESCE(json_extract(r.value,'$.id'),'') FROM (SELECT value FROM
+json_each(?1,'$.changes.habits')       UNION ALL SELECT value FROM
+json_each(?1,'$.data.habits')) AS r JOIN habits h ON
+h.name=COALESCE(json_extract(r.value,'$.name'),'') WHERE h.deleted_at=0   AND
+CAST(COALESCE(json_extract(r.value,'$.deleted_at'),0) AS INTEGER)=0   AND
+COALESCE(json_extract(r.value,'$.id'),'')<>''   AND
+h.id<>COALESCE(json_extract(r.value,'$.id'),'')
+SQL
+
+MergeRemoteHabitDaysSQL :: #string SQL
+UPDATE habit_days
+SET completed = MAX(completed, COALESCE((
+        SELECT d.completed FROM habit_days d
+        JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
+        WHERE m.new_id = habit_days.habit_id
+          AND d.local_date = habit_days.local_date
+    ), 0)),
+    count = MAX(count, COALESCE((
+        SELECT d.count FROM habit_days d
+        JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
+        WHERE m.new_id = habit_days.habit_id
+          AND d.local_date = habit_days.local_date
+    ), 0)),
+    session_count = MAX(session_count, COALESCE((
+        SELECT d.session_count FROM habit_days d
+        JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
+        WHERE m.new_id = habit_days.habit_id
+          AND d.local_date = habit_days.local_date
+    ), 0)),
+    updated_at = MAX(updated_at, COALESCE((
+        SELECT d.updated_at FROM habit_days d
+        JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
+        WHERE m.new_id = habit_days.habit_id
+          AND d.local_date = habit_days.local_date
+    ), 0))
+WHERE EXISTS (
+    SELECT 1 FROM sync_remote_habit_map m
+    WHERE m.new_id = habit_days.habit_id
+)
+SQL
+
+InsertRemoteHabitDaysSQL :: #string SQL
+INSERT INTO habit_days(
+    habit_id, local_date, completed, count, session_count, updated_at
+)
+SELECT m.new_id, d.local_date, d.completed, d.count,
+       d.session_count, d.updated_at
+FROM habit_days d
+JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM habit_days k
+    WHERE k.habit_id = m.new_id AND k.local_date = d.local_date
+)
+SQL
+
+FinishRemoteHabitIDsSQL :: #string SQL
+UPDATE OR IGNORE sync_outbox
+SET entity_id = (
+    SELECT m.new_id FROM sync_remote_habit_map m
+    WHERE m.old_id = sync_outbox.entity_id
+)
+WHERE entity_type IN ('habit', 'habit_day')
+  AND EXISTS (
+      SELECT 1 FROM sync_remote_habit_map m
+      WHERE m.old_id = sync_outbox.entity_id
+  );
+DELETE FROM sync_outbox
+WHERE entity_type IN ('habit', 'habit_day')
+  AND EXISTS (
+      SELECT 1 FROM sync_remote_habit_map m
+      WHERE m.old_id = sync_outbox.entity_id
+  );
+DELETE FROM habit_days
+WHERE EXISTS (
+    SELECT 1 FROM sync_remote_habit_map m
+    WHERE m.old_id = habit_days.habit_id
+);
+DELETE FROM habits
+WHERE EXISTS (
+    SELECT 1 FROM sync_remote_habit_map m
+    WHERE m.old_id = habits.id
+);
+SQL
+
+SyncHabitsSQL :: #string SQL
+INSERT INTO
+habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+COALESCE(json_extract(value,'$.name'),''),
+CAST(COALESCE(json_extract(value,'$.color_r'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.color_g'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.color_b'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.sync_mode'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.sync_activity'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.counter_enabled'),                     (SELECT
+counter_enabled FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),
+0) AS INTEGER),       CAST(COALESCE(json_extract(value,'$.counter_target'),
+(SELECT counter_target FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),
+1) AS INTEGER),       CAST(COALESCE(json_extract(value,'$.sort_order'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.weekdays'),                     (SELECT weekdays FROM habits
+WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.reminder_hour'),                     (SELECT reminder_hour
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),-1) AS INTEGER) FROM (SELECT value
+FROM json_each(?1,'$.changes.habits')       UNION ALL SELECT value FROM
+json_each(?1,'$.data.habits')) WHERE COALESCE(json_extract(value,'$.id'),'')<>'' ON CONFLICT(id)
+DO UPDATE SET
+user_id=excluded.user_id,name=excluded.name,color_r=excluded.color_r,color_g=excluded.color_g,
+color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,
+counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=excluded.deleted_at,
+updated_at=excluded.updated_at, weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour
+WHERE excluded.updated_at > habits.updated_at OR (excluded.updated_at = habits.updated_at AND
+NOT EXISTS ( SELECT 1 FROM sync_outbox  WHERE entity_type='habit' AND entity_id=habits.id AND
+local_date=0))
+SQL
+
+SyncHabitDaysSQL :: #string SQL
+INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) SELECT
+COALESCE(json_extract(value,'$.habit_id'),''),
+CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER),       CASE WHEN
+json_extract(value,'$.completed') THEN 1 ELSE 0 END,
+CAST(COALESCE(json_extract(value,'$.count'),CASE WHEN json_extract(value,'$.completed') THEN 1
+ELSE 0 END) AS INTEGER),
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER) FROM (SELECT
+value FROM json_each(?1,'$.changes.habit_days')       UNION ALL SELECT value FROM
+json_each(?1,'$.data.habit_days')) WHERE COALESCE(json_extract(value,'$.habit_id'),'')<>''   AND
+CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER)>0 ON
+CONFLICT(habit_id,local_date) DO UPDATE SET
+completed=excluded.completed,count=excluded.count,updated_at=excluded.updated_at WHERE
+excluded.updated_at > habit_days.updated_at OR (excluded.updated_at = habit_days.updated_at AND
+NOT EXISTS (     SELECT 1 FROM sync_outbox      WHERE entity_type='habit_day' AND
+entity_id=habit_days.habit_id        AND local_date=habit_days.local_date    ))
+SQL

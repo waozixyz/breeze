@@ -1,0 +1,172 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "image_props"
+#import "image_widget"
+#import "modal"
+#import "modal_frame_widget"
+#import "modal_props"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "session"
+#import "tree"
+#import, file "../platform/scroll_input.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "profile_picture_policy.zi";
+#import "drawing_props"
+
+using ButtonTone;
+using ButtonEmphasis;
+
+ProfileImagePickerProps :: struct {
+    title: string
+    selected_icon_type: s32
+    max_width: s32
+    scroll_offset: s32
+    view_width: s32
+    view_height: s32
+}
+
+ProfileImagePickerResult :: struct {
+    changed: bool
+    closed: bool
+    selected_index: s32
+    selected_icon_type: s32
+    scroll_offset: s32
+}
+
+ProfilePictureImage :: (icon_type: s32, label: string) -> ImageProps {
+    image: ImageProps
+    index := icon_type - 41
+    if icon_type >= 124 && icon_type <= 126 {
+        index = 25 + icon_type - 124
+    }
+    if index < 0 || index >= 28 {
+        index = 0
+    }
+    image.asset_path = "icons/pfp.png"
+    image.alt_text = label
+    image.source = Rectangle.{cast(float32)((index % 5) * 64),
+        cast(float32)((index / 5) * 64), 64.0, 64.0
+}
+    return image
+}
+
+#program_export
+ProfileImagePicker :: (session: Session,
+    props: ProfileImagePickerProps) -> ProfileImagePickerResult {
+    result: ProfileImagePickerResult
+    result.selected_index = -1
+    result.selected_icon_type = props.selected_icon_type
+    result.scroll_offset = props.scroll_offset
+
+    width := ifx props.max_width > 0 then AppScale(props.max_width) else AppScale(440)
+    if width > props.view_width - AppScale(24) {
+        width = props.view_width - AppScale(24)
+    }
+    if width <= 0 || props.view_height <= 0 {
+        return result
+    }
+    gap := AppScale(8)
+    content_width := width - AppScale(36)
+    columns := (content_width + gap) / (AppScale(64) + gap)
+    if columns < 1 {
+        columns = 1
+    }
+    cell := (content_width - (columns - 1) * gap) / columns
+    if cell > AppScale(64) {
+        cell = AppScale(64)
+    }
+    rows := (ProfilePictureCount + columns - 1) / columns
+    content_height := rows * cell + (rows - 1) * gap
+    height := AppScale(74) + content_height + AppScale(18)
+    if height > props.view_height - AppScale(24) {
+        height = props.view_height - AppScale(24)
+    }
+
+    frame_props: ModalFrameProps
+    frame_props.key = cast(u64)7800
+    frame_props.title = props.title
+    frame_props.width = width
+    frame_props.height = height
+    frame_props.scale = MetricsScale()
+    frame_props.has_right_action = true
+    frame_props.right_label = LocaleText("close_button")
+    frame_props.right_image.asset_path = "icons/ui.png"
+    frame_props.right_image.alt_text = frame_props.right_label
+    frame_props.right_image.source = Rectangle.{.x = 448.0, .y = 384.0, .width = 64.0, .height = 64.0}
+    frame := ModalFrame(session, frame_props)
+    if frame.dismissed || frame.right_clicked {
+        result.closed = true
+        return result
+    }
+    layout := frame.layout
+    content := layout.content
+    if frame.panel_node < 0 || content.width <= 0.0  || content.height <= 0.0 || !TreePushScope(session, frame.panel_node) {
+        return result
+    }
+    content_width = cast(s32)content.width
+    columns = (content_width + gap) / (AppScale(64) + gap)
+    if columns < 1 {
+        columns = 1
+    }
+    cell = (content_width - (columns - 1) * gap) / columns
+    if cell > AppScale(64) {
+        cell = AppScale(64)
+    }
+    rows = (ProfilePictureCount + columns - 1) / columns
+    content_height = rows * cell + (rows - 1) * gap
+
+    scroll_key: u64 = cast(u64)7801
+    scroll_props: ScrollProps
+    scroll_props.key = scroll_key
+    scroll_props.bounds = content
+    scroll_props.content_height = content_height
+    scroll_props.scroll_offset = result.scroll_offset
+    scroll_props.input = ScrollObservationFor(scroll_key, scroll_props.bounds)
+    scrolled := Scroll(session, scroll_props)
+    result.scroll_offset = scrolled.scroll_offset
+    CommitScroll(scroll_key, scrolled.frame)
+    if scrolled.opened {
+        grid_width := columns * cell + (columns - 1) * gap
+        index: s32 = 0
+        while index < ProfilePictureCount {
+            row := index / columns
+            column := index % columns
+            x := cast(s32)scrolled.content.x +                 (cast(s32)scrolled.content.width - grid_width) / 2 +                 column * (cell + gap)
+            y := cast(s32)scrolled.content.y + row * (cell + gap)
+            icon_type := ProfilePictureAt(index)
+            button: ButtonProps
+            button.id = cast(s32)7800 + index
+            button.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)cell, cast(float32)cell
+}
+            button.label = props.title
+            button.selected = props.selected_icon_type == icon_type
+            button.tone = cast(ButtonTone)ButtonToneNeutral
+            button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+            button.icon_only = true
+            if Button(session, button) != 0 {
+                result.changed = true
+                result.closed = true
+                result.selected_index = index
+                result.selected_icon_type = icon_type
+            }
+            inset := AppScale(6)
+            picture := ProfilePictureImage(icon_type, props.title)
+            picture.key = cast(u64)(8800 + index)
+            picture.bounds = Rectangle.{cast(float32)(x + inset),
+                cast(float32)(y + inset), cast(float32)(cell - inset * 2),
+                cast(float32)(cell - inset * 2)
+}
+            Image(session, picture)
+            index += 1
+        }
+        unused End(session)
+    }
+    unused End(session)
+    return result
+}

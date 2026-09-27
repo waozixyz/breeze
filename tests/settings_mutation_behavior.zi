@@ -1,0 +1,258 @@
+#import, file "../src/screens/settings/settings_notifications.zi";
+#import, file "../src/screens/settings/settings_breaks.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/metrics.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/breaks/break_types.zi";
+#import, file "../src/platform/android/android_push_types.zi";
+#import "geometry"
+#import "drawing_props"
+#import "notification"
+#import "session"
+#import "tree"
+#import "tree_input"
+#import "dropdown_props"
+#import "dropdown_widget"
+
+c :: #system_library "c";
+TestFail :: (code: s32) #foreign c "exit";
+
+test_app: InnerBreeze;
+test_mode: s32;
+test_saves: s32;
+saved_hour: s32;
+saved_enabled: s32;
+saved_practice: s32;
+
+Require :: (condition: bool, code: s32) {
+    if !condition {
+        TestFail(code)
+    }
+}
+
+// Keep the real settings widgets and event routing. Observe persistence at
+// its effect boundary so this test never opens a database or a display.
+#program_export "__wrap_save_settings"
+TestSaveSettings :: (app: *InnerBreeze) {
+    test_saves += 1
+    saved_hour = app.reminders[0].hour
+    saved_enabled = app.reminders[0].enabled
+    saved_practice = app.reminders[0].practice
+}
+
+#program_export "__wrap_LocaleText"
+TestLocaleText :: (key: string) -> string {
+    unused key
+    return "Setting"
+}
+
+#program_export
+MeasureGlyphWidth :: (value: string, font: s32, typeface: string) -> s32 {
+    unused typeface
+    return cast(s32)value.count * font / 2
+}
+
+#program_export
+MeasureGlyphLineHeight :: (font: s32, typeface: string) -> s32 {
+    unused typeface
+    return font
+}
+
+#program_export
+RasterRoundedRectangle :: (bounds: Rectangle, radius: float32,
+    segments: s32, color: Color) {
+    unused bounds
+    unused radius
+    unused segments
+    unused color
+    TestFail(80)
+}
+
+#program_export
+RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,
+    segments: s32, width: float32, color: Color) {
+    unused bounds
+    unused radius
+    unused segments
+    unused width
+    unused color
+    TestFail(81)
+}
+
+#program_export
+RasterText :: (value: string, x: s32, y: s32, font: s32, color: Color) {
+    unused value
+    unused x
+    unused y
+    unused font
+    unused color
+    TestFail(82)
+}
+
+#program_export
+RasterTextClipped :: (value: string, x: s32, y: s32, font: s32,
+    color: Color, clip: Rectangle) {
+    unused value
+    unused x
+    unused y
+    unused font
+    unused color
+    unused clip
+    TestFail(83)
+}
+
+#program_export
+RasterImage :: (asset: string, texture: u32, source: Rectangle,
+    destination: Rectangle, clip: Rectangle, origin: Vector2,
+    rotation: float32, radius: float32, tint: Color) {
+    unused asset
+    unused texture
+    unused source
+    unused destination
+    unused clip
+    unused origin
+    unused rotation
+    unused radius
+    unused tint
+    TestFail(84)
+}
+
+#program_export
+ImageWidth :: (path: string) -> s32 {
+    unused path
+    return 0
+}
+
+#program_export
+ImageHeight :: (path: string) -> s32 {
+    unused path
+    return 0
+}
+
+#program_export "app_android_platform"
+TestAndroidPlatform :: () -> s32 { return 0 }
+
+#program_export "app_web_platform"
+TestWebPlatform :: () -> s32 { return 0 }
+
+#program_export "push_host_read_catalog"
+TestPushCatalog :: (catalog: *PushCatalog) -> bool {
+    unused catalog
+    TestFail(85)
+    return false
+}
+
+#program_export "push_host_configure"
+TestPushConfigure :: () -> bool {
+    TestFail(86)
+    return false
+}
+
+#program_export "push_host_registered"
+TestPushRegistered :: () -> s32 {
+    TestFail(87)
+    return 0
+}
+
+#program_export
+NotificationAllowedHost :: () -> bool { return false }
+
+#program_export
+NotificationRequestHost :: () -> bool {
+    TestFail(88)
+    return false
+}
+
+#program_export
+NotificationWindowFocusedHost :: () -> bool { return false }
+
+#program_export
+NotificationSendHost :: (props: NotificationProps) -> bool {
+    unused props
+    TestFail(89)
+    return false
+}
+
+DrawSettings :: () {
+    FrameTextReset(*test_app.ui.frame_text)
+    TreeStart(test_app.ui.session, cast(u64)1, Rectangle.{0.0, 0.0, 900.0, 1800.0})
+    y: s32 = 10
+    if test_mode == 0 {
+        unused settings_notifications_draw_entry(*test_app, 0, 10, 600, *y)
+    } else if test_mode == 1 {
+        settings_breaks_draw_timer(*test_app, BREAK_MICRO, 10, 600, *y)
+    } else {
+        settings_notifications_draw(*test_app, 10, 600, *y)
+    }
+    Require(TreeFinish(test_app.ui.session), 70)
+}
+
+ClickControl :: (key: u64, parent_key: u64, fraction: float32) {
+    found: bool = false
+    bounds: Rectangle
+    index: s32 = 1
+    while index < TreeCount(test_app.ui.session) {
+        node := TreeNodeAt(test_app.ui.session, index)
+        if node.key == key && (parent_key == cast(u64)0 || node.parent_key == parent_key) {
+            bounds = node.bounds
+            found = true
+            break
+        }
+        index += 1
+    }
+    Require(found, 71)
+    x := bounds.x + bounds.width * fraction
+    y := bounds.y + bounds.height * 0.5
+    TreePointerUpdate(test_app.ui.session, PointerFrame.{x, y, true, true, false})
+    DrawSettings()
+    TreePointerUpdate(test_app.ui.session, PointerFrame.{x, y, false, false, true})
+    DrawSettings()
+    TreePointerUpdate(test_app.ui.session, PointerFrame.{850.0, 1700.0, false, false, false})
+}
+
+#program_export
+main :: () -> s32 {
+    test_app.ui.session = SessionOpen()
+    Require(SessionValid(test_app.ui.session), 1)
+    AppMetricsConfigure(1.0)
+    test_app.reminder_count = 1
+    test_app.reminders[0].hour = 8
+    test_app.reminders[0].enabled = 1
+    DrawSettings()
+    ClickControl(cast(u64)2, cast(u64)401, 0.5)
+    Require(test_app.reminders[0].hour == 9 && saved_hour == 9 && test_saves > 0, 2)
+    ClickControl(cast(u64)4010, cast(u64)0, 0.5)
+    Require(test_app.reminders[0].enabled == 0 && saved_enabled == 0, 3)
+    ClickControl(cast(u64)400, cast(u64)0, 0.5)
+    Require(test_app.ui.reminder_menus[0].open, 4)
+    option: DropdownOption
+    option_key := DropdownOptionKey(cast(u64)400, option, 2)
+    ClickControl(option_key, cast(u64)0, 0.5)
+    Require(test_app.reminders[0].practice == 2 && saved_practice == 2, 5)
+
+    test_mode = 2
+    test_app.reminders[1].hour = 22
+    test_app.reminders[1].practice = 3
+    test_app.reminders[1].last_day = 20260925
+    DrawSettings()
+    ClickControl(cast(u64)750, cast(u64)0, 0.5)
+    Require(test_app.reminder_count == 2 && test_app.reminders[1].hour == 8 &&
+        test_app.reminders[1].practice == 0 && test_app.reminders[1].enabled == 1 &&
+        test_app.reminders[1].last_day == 0, 6)
+
+    test_mode = 1
+    test_app.breaks.timers[BREAK_MICRO].enabled = 1
+    test_app.breaks.timers[BREAK_MICRO].limit_s = 180
+    test_app.breaks.timers[BREAK_MICRO].active_s = 5000
+    test_app.breaks.timers[BREAK_MICRO].duration_s = 30
+    test_app.breaks.timers[BREAK_MICRO].postpone_s = 150
+    test_app.settings_dirty = 0
+    DrawSettings()
+    ClickControl(cast(u64)62044, cast(u64)0, 0.5)
+    Require(test_app.breaks.timers[BREAK_MICRO].enabled == 0 && test_app.settings_dirty == 1, 7)
+    ClickControl(cast(u64)500, cast(u64)0, 0.99)
+    Require(test_app.breaks.timers[BREAK_MICRO].limit_s > 180 &&
+        test_app.breaks.timers[BREAK_MICRO].active_s <= test_app.breaks.timers[BREAK_MICRO].limit_s, 8)
+    Require(SessionClose(test_app.ui.session), 9)
+    return 0
+}

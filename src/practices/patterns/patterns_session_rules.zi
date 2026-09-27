@@ -1,0 +1,131 @@
+#import, file "../../app/app_types.zi";
+#import, file "patterns_rules.zi";
+#import, file "../../app/text_buffers.zi";
+#import "byte_text_linux"
+
+// The clock and phase decisions are app state, independent of the UI and
+// native audio/storage boundaries.
+PatternsSecond :: struct {
+    cue: s32 // 0: none, 1: inhale, 2: exhale
+    completed: bool
+}
+
+#program_export
+patterns_ratio_part :: (state: Patterns, part: s32) -> s32 {
+    if part < 0 || part >= 4 {
+        return 0
+    }
+    preset: s32 = state.preset
+    if preset < 0 || preset >= PATTERNS_PRESET_COUNT {
+        preset = PATTERNS_PRESET_BOX
+    }
+    value: s32 = patterns_preset_ratio(preset, part)
+    if preset == PATTERNS_PRESET_CUSTOM {
+        value = state.custom[part]
+    }
+    if value < 0 {
+        return 0
+    }
+    if value > PATTERNS_MAX_SECONDS {
+        return PATTERNS_MAX_SECONDS
+    }
+    return value
+}
+
+#program_export
+pattern_ratio :: (app: *InnerBreeze, out: *s32) {
+    if out == null {
+        return
+    }
+    state: Patterns
+    if app != null {
+        state = app.patterns
+    }
+    index: s32 = 0
+    while index < 4 {
+        out[index] = patterns_ratio_part(state, index)
+        index += 1
+    }
+}
+
+#program_export
+patterns_ratio_text :: (app: *InnerBreeze, out: *u8, out_size: s64) {
+    if out == null || out_size <= 0 { return }
+    ratio: [4]s32
+    pattern_ratio(app, *ratio[0])
+    args: [4]FormatArg = .[
+        FormatArg.{.number = ratio[0]}, FormatArg.{.number = ratio[1]},
+        FormatArg.{.number = ratio[2]}, FormatArg.{.number = ratio[3]}
+    ]
+    FormatTemplate("%d-%d-%d-%d", args[:],
+        BytesFromPointer(out, cast(u64)out_size))
+}
+
+#program_export
+patterns_phase_remaining :: (state: Patterns) -> s32 {
+    phase: s32 = state.phase
+    if phase < PATTERNS_PHASE_INHALE || phase > PATTERNS_PHASE_HOLD_OUT {
+        phase = PATTERNS_PHASE_INHALE
+    }
+    left: s32 = patterns_ratio_part(state, phase) - state.phase_second
+    if left < 1 {
+        return 1
+    }
+    return left
+}
+
+#program_export
+patterns_phase_remaining_seconds :: (app: *InnerBreeze) -> s32 {
+    state: Patterns
+    if app != null {
+        state = app.patterns
+    }
+    return patterns_phase_remaining(state)
+}
+
+#program_export
+patterns_advance_second :: (state: *Patterns) -> PatternsSecond {
+    result: PatternsSecond
+    if state == null || state.active == 0 {
+        return result
+    }
+    total: s32 = 0
+    index: s32 = 0
+    while index < 4 {
+        total += patterns_ratio_part(state.*, index)
+        index += 1
+    }
+    if total <= 0 {
+        return result
+    }
+
+    if state.phase < PATTERNS_PHASE_INHALE  || state.phase > PATTERNS_PHASE_HOLD_OUT {
+        state.phase = PATTERNS_PHASE_INHALE
+        state.phase_second = 0
+    }
+    state.elapsed_seconds += 1
+    state.phase_second += 1
+    if state.phase_second >= patterns_ratio_part(state.*, state.phase) {
+        state.phase_second = 0
+        state.phase = (state.phase + 1) % 4
+        if state.phase == PATTERNS_PHASE_INHALE {
+            state.cycle += 1
+        }
+        if patterns_ratio_part(state.*, state.phase) == 0 {
+            // Preserve the existing one-phase skip per elapsed second.
+            state.phase = (state.phase + 1) % 4
+            if state.phase == PATTERNS_PHASE_INHALE {
+                state.cycle += 1
+            }
+        }
+        if state.phase == PATTERNS_PHASE_EXHALE {
+            result.cue = 2
+        } else if state.phase == PATTERNS_PHASE_INHALE {
+            result.cue = 1
+        }
+    }
+    if state.duration_minutes > 0  && state.elapsed_seconds >= state.duration_minutes * 60 {
+        result.completed = true
+    }
+    return result
+}

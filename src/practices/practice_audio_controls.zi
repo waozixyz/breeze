@@ -1,0 +1,183 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "image_props"
+#import "overlay_props"
+#import "overlay_widget"
+#import "session"
+#import "slider"
+#import "slider_props"
+#import "slider_widget"
+#import "tree"
+#import, file "../app/app_settings.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/practice_title_bar.zi";
+#import "drawing_props"
+
+using ButtonEmphasis;
+using ButtonTone;
+
+PRACTICE_AUDIO_SOUND_POPUP_ID :: 15000
+PRACTICE_AUDIO_MUSIC_POPUP_ID :: 15001
+
+PracticeAudioImage :: (music: bool, muted: bool,
+    label: string) -> ImageProps {
+    image: ImageProps
+    image.asset_path = "icons/ui.png"
+    image.alt_text = label
+    x: s32 = 320
+    y: s32 = 256
+    if music {
+        x = 448
+        y = 128
+    } else if muted {
+        x = 0
+        y = 192
+    }
+    image.source = Rectangle.{cast(float32)x,
+        cast(float32)y, 64.0, 64.0
+}
+    return image
+}
+
+PracticeAudioTrigger :: (app: *InnerBreeze,
+    id: s32, x: s32, y: s32, music: bool) -> bool {
+    label := LocaleText("cue_volume_label")
+    if music {
+        label = LocaleText("music_volume_label")
+    }
+    button: ButtonProps
+    button.id = id
+    button.bounds = Rectangle.{cast(float32)x,
+        cast(float32)y, cast(float32)AppScale(44),
+        cast(float32)AppScale(44)
+}
+    button.label = label
+    button.image = PracticeAudioImage(music,
+        !music && app.sound_volume <= 0, label)
+    button.icon_only = true
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    return Button(app.ui.session, button) != 0
+}
+
+PracticeAudioPopup :: (app: *InnerBreeze,
+    id: s32, x: s32, y: s32, music: bool) -> bool {
+    popup_width := AppScale(52)
+    popup_height := AppScale(176)
+    popup_x := x + (AppScale(44) - popup_width) / 2
+    popup_y := y + AppScale(48)
+    if popup_x < 0 {
+        popup_x = 0
+    }
+    if popup_x + popup_width > app.ui.view_width {
+        popup_x = app.ui.view_width - popup_width
+    }
+    if popup_x < 0 {
+        popup_x = 0
+    }
+    if popup_y + popup_height > app.ui.view_height {
+        popup_y = y - popup_height - AppScale(4)
+    }
+    if popup_y < 0 {
+        popup_y = 0
+    }
+    bounds := Rectangle.{cast(float32)popup_x,
+        cast(float32)popup_y, cast(float32)popup_width,
+        cast(float32)popup_height
+}
+    overlay_props: DismissibleOverlayProps
+    overlay_props.key = cast(u64)(id + 100)
+    overlay_props.bounds = bounds
+    overlay_props.view_width = app.ui.view_width
+    overlay_props.view_height = app.ui.view_height
+    overlay := DismissibleOverlay(app.ui.session,
+        overlay_props)
+    if overlay.closed {
+        return true
+    }
+    if overlay.panel_node < 0  || !TreePushScope(app.ui.session, overlay.panel_node) {
+        return false
+    }
+    panel: ButtonProps
+    panel.id = id + 200
+    panel.bounds = bounds
+    panel.disabled = true
+    panel.tone = cast(ButtonTone)ButtonToneNeutral
+    panel.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    unused Button(app.ui.session, panel)
+
+    label := LocaleText("cue_volume_label")
+    value := app.sound_volume
+    if music {
+        label = LocaleText("music_volume_label")
+        value = app.music_volume
+    }
+    slider: DiscreteSliderProps
+    slider.id = id + 1
+    slider.semantic_label = label
+    slider.bounds = Rectangle.{
+        cast(float32)(popup_x + (popup_width - AppScale(20)) / 2),
+        cast(float32)(popup_y + AppScale(14)),
+        cast(float32)AppScale(20),
+        cast(float32)(popup_height - AppScale(28))
+}
+    slider.value = value
+    slider.min = SETTINGS_VOLUME_MIN
+    slider.max = SETTINGS_VOLUME_MAX
+    slider.vertical = true
+    result: SliderDiscreteStep = DiscreteSlider(app.ui.session,
+        slider)
+    unused End(app.ui.session)
+    if !result.changed {
+        return false
+    }
+    if music {
+        app.music_volume = result.value
+    } else {
+        app.sound_volume = result.value
+    }
+    app.settings_dirty = 1
+    save_settings(app)
+    return false
+}
+
+#program_export
+practice_draw_audio_controls :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) {
+        return
+    }
+    target := AppScale(44)
+    y := (PracticeTitleBarHeight() - target) / 2
+    if y < 0 {
+        y = 0
+    }
+    sound_x := AppScale(8)
+    music_x := AppScale(60)
+    if PracticeAudioTrigger(app,
+        PRACTICE_AUDIO_SOUND_POPUP_ID, sound_x, y, false) {
+        app.volume_popup_active =
+            ifx app.volume_popup_active != 0 then 0 else 1
+        app.music_volume_popup_active = 0
+    }
+    if PracticeAudioTrigger(app,
+        PRACTICE_AUDIO_MUSIC_POPUP_ID, music_x, y, true) {
+        app.music_volume_popup_active =
+            ifx app.music_volume_popup_active != 0 then 0 else 1
+        app.volume_popup_active = 0
+    }
+    if app.volume_popup_active != 0 {
+        if PracticeAudioPopup(app, PRACTICE_AUDIO_SOUND_POPUP_ID,
+            sound_x, y, false) {
+            app.volume_popup_active = 0
+        }
+    } else if app.music_volume_popup_active != 0 {
+        if PracticeAudioPopup(app, PRACTICE_AUDIO_MUSIC_POPUP_ID,
+            music_x, y, true) {
+            app.music_volume_popup_active = 0
+        }
+    }
+}

@@ -1,0 +1,828 @@
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/app.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_modal_state.zi";
+#import "file_linux"
+
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/audio_selection.zi";
+
+
+#import, file "../../storage/data.zi";
+#import, file "../../platform/asset_download_types.zi";
+#import, file "../../platform/asset_download.zi";
+#import, file "../../platform/media_types.zi";
+#import, file "../../platform/audio_runtime.zi";
+
+
+
+
+
+using AssetDownloadStatus;
+using ModalType;
+#import "text_props"
+using TextWrap;
+#import "control_props"
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/draw.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "dropdown_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "dropdown_props"
+#import, file "../../app/locale.zi";
+#import, file "../../storage/path_join.zi";
+#import, file "../../storage/paths.zi";
+#import, file "meditation_audio_archive.zi";
+#import "c_string"
+#import, file "../../app/music_library.zi";
+c :: #system_library "c";
+save_settings :: (app: *InnerBreeze) #foreign c;
+LOG_ERROR :: 5;
+LOG_INFO :: 3;
+LOG_WARNING :: 4;
+TraceLog :: (level: s32, message: *u8, args: ..any) #foreign c "TraceLog";
+app_audio_ensure_ready :: (app: *InnerBreeze) #foreign c;
+data_root_host_buffer :: () -> *u8 {
+    if !AppCopyText(data_root(), data_root_text[:]) {
+        return null
+    }
+    return *data_root_text[0]
+}
+data_root_text: [1024] u8;
+
+using ButtonTone;
+using ButtonEmphasis;
+
+WEB :: #defined(PLATFORM_WEB)
+HAS_DEBUG_LOCAL_ASSETS :: #defined(DEBUG_LOCAL_ASSETS)
+
+MEDITATION_MUSIC_TRACK_COUNT :: 3
+
+MeditationTrack :: struct {
+    title: string
+    file: string
+}
+
+MeditationTrackFile :: (index: s32) -> string {
+    if index == 0 { return "Elijah_K/deep-meditation.ogg" }
+    if index == 1 { return "Elijah_K/path-of-meditation.ogg" }
+    if index == 2 { return "Elijah_K/truth-of-silence.ogg" }
+    return ""
+}
+
+practice_mask_all :: () -> s32 {
+    return (1 << EXERCISE_COUNT) - 1
+}
+
+sanitize_practice_music :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    app_audio_music_sanitize_selection(app)
+}
+
+audio_file_looks_valid :: (path: string) -> s32 {
+    magic: [4] u8
+
+    if path.count == 0 {
+        return 0
+    }
+
+    file := OpenRead(path)
+    if !file.valid {
+        return 0
+    }
+
+    got := ReadAt(file, magic[:], 0)
+    CloseFile(file)
+    if got != 4 {
+        return 0
+    }
+    if magic[0] != #char "O" || magic[1] != #char "g" {
+        return 0
+    }
+    if magic[2] != #char "g" || magic[3] != #char "S" {
+        return 0
+    }
+    return 1
+}
+
+music_contains :: (value: string, needle: string) -> bool {
+    if needle.count == 0 { return true }
+    if needle.count > value.count { return false }
+    start: s64 = 0
+    while start <= value.count - needle.count {
+        index: s64 = 0
+        while index < needle.count && value[start + index] == needle[index] {
+            index += 1
+        }
+        if index == needle.count { return true }
+        start += 1
+    }
+    return false
+}
+
+copy_text_checked :: (out: *u8, out_size: s64, input: string) -> s32 {
+    len: s64
+
+    if out == null || out_size == 0 {
+        return 0
+    }
+    if input.count == 0 {
+        input = ""
+    }
+
+    len = input.count
+    if len >= out_size {
+        out[0] = cast(u8)0
+        return 0
+    }
+
+    {
+        i: s64 = 0
+        while i < len {
+            out[i] = input[cast(s32)i]
+            i += 1
+        }
+    }
+    out[len] = cast(u8)0
+    return 1
+}
+
+log_music :: (level: s32, message: string, detail: string) {
+    format: [3]u8 = .[37, 115, 0]
+    buffer: [1024]u8
+    if !AppCopyText(message, buffer[:]) { return }
+    if !AppAppendText(detail, buffer[:]) { return }
+    TraceLog(level, *format[0], *buffer[0])
+}
+
+set_status :: (app: *InnerBreeze, message: string) {
+    if app == null {
+        return
+    }
+    copy_text_checked(*app.meditation.music_status[0],
+        size_of(type_of(app.meditation.music_status)),
+        message)
+}
+
+missing_audio_message :: () -> string {
+    return LocaleText("meditation_music_missing_audio")
+}
+
+is_network_download_error :: (download: *AssetDownload) -> s32 {
+
+    if download == null {
+        return 0
+    }
+    error := AppTextFromCString(*download.error[0], 256)
+    if error.count == 0 {
+        return 0
+    }
+
+    if error == "NETWORK_UNAVAILABLE" {
+        return 1
+    }
+    if music_contains(error, "Unable to resolve host") ||
+       music_contains(error, "No address associated with hostname") ||
+       music_contains(error, "Could not resolve host") ||
+       music_contains(error, "Couldn't resolve host") ||
+       music_contains(error, "Name or service not known") ||
+       music_contains(error, "Temporary failure in name resolution") {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+meditation_music_format_download_status :: (out: *u8, out_size: s64,
+    download: *AssetDownload) {
+    percent: s32
+
+    if out == null || out_size == 0 || download == null {
+        return
+    }
+
+    if download.status == AssetDownloadStatus.Downloading  && download.total_bytes > 0 {
+        percent = cast(s32)((download.bytes * 100u) / download.total_bytes)
+        if percent < 0 {
+            percent = 0
+        }
+        if percent > 100 {
+            percent = 100
+        }
+        FormatLocaleCount(out, out_size, "meditation_music_downloading_progress", percent)
+        return
+    }
+
+    copy_text_checked(out, out_size, LocaleText("meditation_music_downloading"))
+}
+
+#program_export
+meditation_music_draw_download_progress :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
+    download: *AssetDownload
+    bar_h := AppScale(10)
+    fill_w: s32 = 0
+    bg := StyleTokenColor("canvas")
+    button := StyleTokenColor("accent")
+
+    if app == null || w <= 0 {
+        return
+    }
+
+    download = *app.meditation.music_download
+    if download.status != AssetDownloadStatus.Downloading {
+        return
+    }
+
+    if download.total_bytes > 0 {
+        fill_w = cast(s32)((cast(s64)download.bytes * cast(s64)w) / cast(s64)download.total_bytes)
+    }
+    if fill_w < 0 {
+        fill_w = 0
+    }
+    if fill_w > w {
+        fill_w = w
+    }
+
+    DrawRectangle(x, y, w, bar_h, DarkenColor(bg, 28))
+    dark := DarkenColor(bg, 55)
+    light := LightenColor(bg, 35)
+    DrawLine(x, y, x + w - 1, y, light)
+    DrawLine(x, y, x, y + bar_h - 1, light)
+    DrawLine(x, y + bar_h - 1, x + w - 1, y + bar_h - 1, dark)
+    DrawLine(x + w - 1, y, x + w - 1, y + bar_h - 1, dark)
+    if fill_w > 0 {
+        inner_w := fill_w - AppScale(4)
+
+        if inner_w < AppScale(2) {
+            inner_w = AppScale(2)
+        }
+        DrawRectangle(x + AppScale(2),
+            y + AppScale(2),
+            inner_w,
+            bar_h - AppScale(4),
+            button)
+    }
+}
+
+attribution_paragraph :: (content_w: s32) -> ParagraphSpec {
+    return ParagraphSpec.{
+        .text = LocaleText("meditation_music_attribution"),
+        .width = content_w,
+        .font = Text12,
+    }
+}
+
+attribution_height :: (content_w: s32) -> s32 {
+    paragraph: ParagraphSpec
+
+    if content_w <= 0 {
+        return 0
+    }
+    paragraph = attribution_paragraph(content_w)
+    return AppParagraphHeight(paragraph.text, paragraph.width,
+        paragraph.font, paragraph.line_gap)
+}
+
+draw_attribution :: (content_x: s32, content_w: s32, y: *s32) {
+    if y == null || content_w <= 0 {
+        return
+    }
+    paragraph := attribution_paragraph(content_w)
+    height := AppParagraphHeight(paragraph.text, paragraph.width,
+        paragraph.font, paragraph.line_gap)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*,
+            cast(float32)content_w, cast(float32)height},
+        .text = paragraph.text, .font = paragraph.font,
+        .wrap = cast(TextWrap)TextWrapAuto
+    })
+    y.* += height
+}
+
+archive_path :: (app: *InnerBreeze, out: *u8, out_size: s64) {
+    name: [40]u8
+    if out == null || out_size <= 0 ||
+        !CopyCString("breathing-meditation-audio-v1.zip", name[:]) ||
+        storage_join_path(out, cast(u64)out_size,
+            *app.meditation.music_cache_dir[0], *name[0]) == 0 {
+        set_status(app, LocaleText("meditation_music_cache_path_too_long"))
+    }
+}
+
+track_path :: (app: *InnerBreeze, track: s32, out: *u8, out_size: s64) {
+    name: [96]u8
+    audio_name: [6]u8
+    cache_audio_dir: [FS_PATH_MAX]u8
+    fallback_dir: [32]u8
+    if track < 0 || track >= MEDITATION_MUSIC_TRACK_COUNT {
+        track = 0
+    }
+    if out == null || out_size <= 0 ||
+        !CopyCString(MeditationTrackFile(track), name[:]) ||
+        !CopyCString("audio", audio_name[:]) {
+        return
+    }
+    if storage_join_path(*cache_audio_dir[0],
+        cast(u64)cache_audio_dir.count,
+        *app.meditation.music_cache_dir[0], *audio_name[0]) != 0 &&
+        storage_join_path(out, cast(u64)out_size,
+            *cache_audio_dir[0], *name[0]) != 0 &&
+        audio_file_looks_valid(AppTextFromCString(out, cast(s32)out_size)) != 0 {
+        return
+    }
+    if CopyCString("unpackaged_assets/audio", fallback_dir[:]) {
+        if storage_join_path(out, cast(u64)out_size,
+            *fallback_dir[0], *name[0]) != 0 {
+            return
+        }
+    }
+    out[0] = 0
+}
+
+extract_audio_archive :: (app: *InnerBreeze, archive_file_path: string) -> s32 {
+    if app == null { return 0 }
+    cache_directory := AppTextFromCString(
+        *app.meditation.music_cache_dir[0],
+        size_of(type_of(app.meditation.music_cache_dir)))
+    extracted := InstallMeditationAudioArchive(archive_file_path, cache_directory)
+    if extracted != MEDITATION_MUSIC_TRACK_COUNT {
+        set_status(app, LocaleText("meditation_music_archive_invalid"))
+        return 0
+    }
+    FormatLocaleCount(*app.meditation.music_status[0],
+        size_of(type_of(app.meditation.music_status)),
+        "meditation_music_installed_count", extracted)
+    return 1
+}
+
+meditation_music_available :: (app: *InnerBreeze) -> s32 {
+    path: [FS_PATH_MAX] u8
+
+    if app == null {
+        return 0
+    }
+
+    {
+        i: s32 = 0
+        while i < MEDITATION_MUSIC_TRACK_COUNT {
+            track_path(app, i, *path[0], size_of(type_of(path)))
+            if audio_file_looks_valid(AppTextFromCString(*path[0], size_of(type_of(path)))) == 0 {
+                return 0
+            }
+            i += 1
+        }
+    }
+    return 1
+}
+
+meditation_music_selected_label :: (app: *InnerBreeze) -> string {
+    track: s32
+
+    if app == null {
+        return ""
+    }
+    track = app.meditation.music_track
+    if track < 0 || track >= app_audio_music_count(app) {
+        track = 0
+    }
+    return app_audio_music_label(app, track)
+}
+
+#program_export
+meditation_music_init :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    runtime_assets_buffer: [20]u8
+    unused AppCopyText("runtime-assets", runtime_assets_buffer[:])
+    if storage_join_path(*app.meditation.music_cache_dir[0],
+        cast(u64)size_of(type_of(app.meditation.music_cache_dir)),
+        data_root_host_buffer(), *runtime_assets_buffer[0]) == 0 ||
+        storage_ensure_dir(AppTextFromCString(*app.meditation.music_cache_dir[0],
+            size_of(type_of(app.meditation.music_cache_dir)))) == 0 {
+        app.meditation.music_cache_dir[0] = cast(u8)0
+    }
+
+    app_audio_music_sanitize_selection(app)
+
+    if app.meditation.music_status[0] == #char "\0" {
+        if meditation_music_available(app) != 0 {
+            set_status(app, LocaleText("meditation_music_installed"))
+        } else {
+            set_status(app, LocaleText("meditation_music_not_installed"))
+        }
+    }
+}
+
+#program_export
+meditation_music_unload :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.meditation.music_loaded != 0 {
+        audio_stop_music(app.meditation.music)
+        audio_unload_music(app.meditation.music)
+        app.meditation.music_loaded = 0
+    }
+    app.meditation.music_playing = 0
+    app.meditation.music_test_playing = 0
+    app.meditation.music_fade_out_ticks = 0
+    app.meditation.music_fade_out_total_ticks = 0
+}
+
+meditation_music_stop :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.meditation.music_loaded != 0 {
+        audio_stop_music(app.meditation.music)
+    }
+    app.meditation.music_playing = 0
+    app.meditation.music_test_playing = 0
+    app.meditation.music_fade_out_ticks = 0
+    app.meditation.music_fade_out_total_ticks = 0
+}
+
+meditation_music_fade_out :: (app: *InnerBreeze) {
+    fade_ticks: s32 = 180
+
+    if app == null || app.meditation.music_loaded == 0  || app.meditation.music_playing == 0 {
+        return
+    }
+    if app.meditation.music_fade_out_ticks > 0 {
+        return
+    }
+
+    app.meditation.music_fade_out_ticks = fade_ticks
+    app.meditation.music_fade_out_total_ticks = fade_ticks
+}
+
+load_track :: (app: *InnerBreeze, track: s32) -> s32 {
+    path: [FS_PATH_MAX] u8
+
+    if app == null {
+        return 0
+    }
+    app_audio_ensure_ready(app)
+    if app.audio_ready == 0 {
+        log_music(LOG_ERROR,
+            "AUDIO: Cannot load meditation music because audio device is not ready", "")
+        set_status(app, LocaleText("meditation_music_device_not_ready"))
+        return 0
+    }
+
+    if track < 0 || track >= app_audio_music_count(app) {
+        track = 0
+    }
+
+    meditation_music_unload(app)
+    if app_audio_music_path(app, track, path[:]) == false || app_audio_music_file_valid(AppTextFromCString(*path[0], size_of(type_of(path)))) == false {
+        set_status(app, LocaleText("meditation_music_track_not_installed"))
+        return 0
+    }
+
+    app.meditation.music = audio_load_music(AppTextFromCString(*path[0], FS_PATH_MAX))
+    if !audio_music_valid(app.meditation.music) {
+        log_music(LOG_ERROR, "AUDIO: Could not load meditation track: ",
+            AppTextFromCString(*path[0], size_of(type_of(path))))
+        set_status(app, LocaleText("meditation_music_track_load_failed"))
+        app.meditation.music_loaded = 0
+        return 0
+    }
+
+    app.meditation.music_loaded = 1
+    app.meditation.music_track = track
+    app.meditation.music_fade_out_ticks = 0
+    app.meditation.music_fade_out_total_ticks = 0
+    audio_set_music_volume(app.meditation.music, cast(float32)app.music_volume / 100.0f)
+    log_music(LOG_INFO, "AUDIO: Loaded meditation track: ",
+        AppTextFromCString(*path[0], size_of(type_of(path))))
+    return 1
+}
+
+test_track :: (app: *InnerBreeze) {
+    track: s32
+
+    if app == null {
+        return
+    }
+    if app.meditation.music_playing != 0 {
+        meditation_music_unload(app)
+        set_status(app, LocaleText("meditation_music_test_stopped"))
+        return
+    }
+    track = app.meditation.music_track
+    if track < 0 || track >= app_audio_music_count(app) {
+        track = 0
+    }
+    if load_track(app, track) == 0 {
+        return
+    }
+
+    audio_play_music(app.meditation.music)
+    app.meditation.music_playing = 1
+    app.meditation.music_test_playing = 1
+    set_status(app, LocaleText("meditation_music_test_playing"))
+}
+
+#program_export
+meditation_music_start_session :: (app: *InnerBreeze) {
+    track: s32
+    practice: s32
+
+    if app == null {
+        return
+    }
+
+    sanitize_practice_music(app)
+    practice = practice_clamp_id(app.exercise_type)
+    track = app.meditation.music_practice_tracks[practice]
+    if track == AUDIO_MUSIC_NONE {
+        return
+    }
+    if load_track(app, track) == 0 {
+        return
+    }
+    audio_play_music(app.meditation.music)
+    app.meditation.music_playing = 1
+    app.meditation.music_test_playing = 0
+}
+
+#program_export
+meditation_music_update :: (app: *InnerBreeze) {
+    archive_file_path: [FS_PATH_MAX] u8
+
+    if app == null {
+        return
+    }
+    PollRuntimeAssetDownload(*app.meditation.music_download)
+    if app.meditation.music_test_playing != 0  && ((app.breathing.screen == ScreenStart  && app.practice_tab == PRACTICE_TAB_CONFIG)  || app.breathing.screen == ScreenPracticeConfig  || app.breathing.screen == ScreenManual  || app.breathing.screen == ScreenSettings) == false {
+        meditation_music_stop(app)
+        return
+    }
+
+    if app.meditation.music_download.status == AssetDownloadStatus.Ready  && app.meditation.music_archive_extracted == 0 {
+        archive_path(app, *archive_file_path[0], size_of(type_of(archive_file_path)))
+        app.meditation.music_archive_extracted = 1
+        if extract_audio_archive(app, AppTextFromCString(*archive_file_path[0], size_of(type_of(archive_file_path)))) == 0 {
+            AppCopyText(AppTextFromCString(*app.meditation.music_download.error[0], 256), app.meditation.music_status[:])
+            app.meditation.music_download.status = AssetDownloadStatus.Error
+        }
+    } else if app.meditation.music_download.status == AssetDownloadStatus.Error {
+        if is_network_download_error(*app.meditation.music_download) != 0 {
+            set_status(app, LocaleText("meditation_music_network_error_title"))
+            if app.meditation.music_network_error_notified == 0 && app.modal.active == 0 {
+                log_music(LOG_INFO,
+                    "AUDIO: Showing network error dialog with Cancel and Retry", "")
+                app_open_modal(app, cast(ModalType)ModalMeditationNetworkError)
+                app.meditation.music_network_error_notified = 1
+            }
+        } else if app.meditation.music_download.error[0] != #char "\0" {
+            set_status(app, LocaleText("meditation_music_download_failed"))
+        }
+    }
+
+    if app.meditation.music_loaded != 0 {
+        volume := cast(float32)app.music_volume / 100.0f
+
+        if app.meditation.music_fade_out_ticks > 0  && app.meditation.music_fade_out_total_ticks > 0 {
+            volume *= cast(float32)app.meditation.music_fade_out_ticks /
+            cast(float32)app.meditation.music_fade_out_total_ticks
+            app.meditation.music_fade_out_ticks -= 1
+            if app.meditation.music_fade_out_ticks <= 0 {
+                meditation_music_stop(app)
+                return
+            }
+        }
+        audio_set_music_volume(app.meditation.music, volume)
+        audio_update_music(app.meditation.music)
+    }
+}
+
+#program_export
+meditation_music_start_download :: (app: *InnerBreeze) {
+    archive_file_path: [FS_PATH_MAX] u8
+    audio_url: string
+
+    if app == null {
+        return
+    }
+
+    audio_url = "https://breathing.waozi.xyz/web-assets/dl/breathing-meditation-audio-v1.zip"
+
+    archive_path(app, *archive_file_path[0], size_of(type_of(archive_file_path)))
+    app.meditation.music_archive_extracted = 0
+    app.meditation.music_network_error_notified = 0
+    set_status(app, LocaleText("meditation_music_downloading"))
+    DownloadRuntimeAsset(*app.meditation.music_download,
+        audio_url,
+        AppTextFromCString(*archive_file_path[0], size_of(type_of(archive_file_path))))
+}
+
+meditation_music_draw_practice_settings :: (app: *InnerBreeze,
+    practice: s32,
+    content_x: s32,
+    content_w: s32,
+    y: *s32,
+    show_installed_download: s32,
+    show_status: s32) {
+    button_h := AppScale(48)
+    button_w: s32
+
+    installed: s32
+    selected_track: s32
+    selection: s32
+    test_label: string
+    download_status: [96] u8
+    track_options: [AUDIO_MUSIC_COUNT_MAX + 1] DropdownOption
+    track_count: s32
+
+    if app == null || y == null {
+        return
+    }
+
+    sanitize_practice_music(app)
+    practice = practice_clamp_id(practice)
+    selected_track = app.meditation.music_practice_tracks[practice]
+    if selected_track < 0 {
+        selected_track = AUDIO_MUSIC_NONE
+        app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE
+        app.meditation.music_practice_mask &= ~(1 << practice)
+    } else {
+        app.meditation.music_practice_mask |= 1 << practice
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*, 0, 0},
+            .text = (LocaleText("practice_background_music_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+
+    track_count = app_audio_music_count(app)
+    if track_count > AUDIO_MUSIC_COUNT_MAX {
+        track_count = AUDIO_MUSIC_COUNT_MAX
+    }
+    track_options[0] = DropdownOption.{.label = LocaleText("audio_music_none_option")}
+    {
+        i: s32 = 0
+        while i < track_count {
+            track_options[i + 1] = DropdownOption.{.label = app_audio_music_label(app, i)}
+            i += 1
+        }
+    }
+
+    selection = ifx (selected_track == AUDIO_MUSIC_NONE) then (0) else (selected_track + 1)
+    if selection < 0 || selection > track_count {
+        selection = 0
+    }
+    dropdown_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = cast(s32)451 + practice,
+            .bounds = Rectangle.{cast(float32)content_x, cast(float32)(y.* + AppScale(26)), cast(float32)content_w, cast(float32)AppScale(48)},
+            .selected_index = selection}, track_options[:track_count + 1])
+    if dropdown_pick.node > 0 {
+        if selection <= 0 {
+            app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE
+            app.meditation.music_practice_mask &= ~(1 << practice)
+        } else {
+            app.meditation.music_practice_tracks[practice] = selection - 1
+            app.meditation.music_practice_mask |= 1 << practice
+            app.meditation.music_track =
+            app.meditation.music_practice_tracks[practice]
+        }
+        app.settings_dirty = 1
+        meditation_music_unload(app)
+        save_settings(app)
+    }
+    y.* += AppScale(90)
+
+    selected_track = app.meditation.music_practice_tracks[practice]
+    if selected_track == AUDIO_MUSIC_NONE {
+        return
+    }
+
+    installed = meditation_music_available(app)
+    if installed != 0 {
+        if app.meditation.music_playing != 0 {
+            test_label = LocaleText("meditation_music_stop_test_button")
+        } else {
+            test_label = LocaleText("meditation_music_test_button")
+        }
+        button_w = AppTextWidth(test_label, AppFontSize()) + AppScale(24)
+        if button_w > content_w {
+            button_w = content_w
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*, cast(float32)button_w, cast(float32)button_h},
+                .label = test_label,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = false
+            }) != 0 {
+            app.meditation.music_track =
+            app.meditation.music_practice_tracks[practice]
+            test_track(app)
+        }
+        y.* += button_h + AppScale(12)
+    }
+
+    if installed == 0 || show_installed_download != 0 {
+        download_label: string
+
+        if installed != 0 {
+            download_label = LocaleText("meditation_music_redownload_button")
+        } else {
+            download_label = LocaleText("meditation_music_download_button")
+        }
+        button_w = AppTextWidth(download_label, AppFontSize()) + AppScale(24)
+        if button_w > content_w {
+            button_w = content_w
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*, cast(float32)button_w, cast(float32)button_h},
+                .label = download_label,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                .disabled = false
+            }) != 0 {
+            meditation_music_start_download(app)
+        }
+        y.* += button_h + AppScale(12)
+    }
+
+    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != AssetDownloadStatus.Idle) {
+        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+            meditation_music_format_download_status(*download_status[0],
+                size_of(type_of(download_status)),
+                *app.meditation.music_download)
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*, 0, 0},
+                    .text = AppTextFromCString(*download_status[0], size_of(type_of(download_status))),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            y.* += AppScale(28)
+            meditation_music_draw_download_progress(app, content_x, y.*, content_w)
+            y.* += AppScale(22)
+        } else {
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)content_x, cast(float32)y.*, 0, 0},
+                    .text = AppTextFromCString(*app.meditation.music_status[0], size_of(type_of(app.meditation.music_status))),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            y.* += AppScale(34)
+        }
+    }
+
+    draw_attribution(content_x, content_w, y)
+    y.* += AppScale(10)
+}
+
+meditation_music_measure_practice_settings :: (app: *InnerBreeze,
+    practice: s32,
+    content_w: s32,
+    show_installed_download: s32,
+    show_status: s32) -> s32 {
+    installed: s32
+    h := AppScale(90)
+    selected_track: s32
+
+    if app == null {
+        return 0
+    }
+
+    sanitize_practice_music(app)
+    practice = practice_clamp_id(practice)
+    selected_track = app.meditation.music_practice_tracks[practice]
+    if selected_track == AUDIO_MUSIC_NONE {
+        return h
+    }
+
+    installed = meditation_music_available(app)
+    if installed != 0 {
+        h += AppScale(60)
+    }
+    if installed == 0 || show_installed_download != 0 {
+        h += AppScale(60)
+    }
+
+    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != AssetDownloadStatus.Idle) {
+        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+            h += AppScale(50)
+        } else {
+            h += AppScale(34)
+        }
+    }
+
+    h += attribution_height(content_w) + AppScale(10)
+    return h
+}

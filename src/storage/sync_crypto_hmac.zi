@@ -1,0 +1,185 @@
+#import, file "sync_crypto.zi";
+
+// HMAC-SHA-256 retains the existing account key derivation wire format.
+// Historical PBKDF2 exports included at most 32 salt bytes.
+SyncCryptoHmacBlockBytes :: 64
+SyncCryptoDigestBytes :: 32
+
+Sha256UpdateText :: (context: *Sha256Context, value: string) {
+    index: s64 = 0
+    while index < value.count {
+        context.block[context.block_length] = value[index]
+        context.block_length += 1
+        if context.block_length == 64 {
+            Sha256Transform(context)
+            context.bit_length += 512
+            context.block_length = 0
+        }
+        index += 1
+    }
+}
+
+HmacSha256Input :: (key: *u8, key_length: s64,
+    key_text: string, use_key_text: bool,
+    data: *u8, data_length: s64, text: string,
+    use_text: bool, output: *u8) -> s32 {
+    if output == null {
+        return 0
+    }
+    if key_length < 0 || data_length < 0 ||
+        (!use_key_text && key == null && key_length > 0) ||
+        (!use_text && data == null && data_length > 0) {
+        return 0
+    }
+
+    block: [SyncCryptoHmacBlockBytes]u8 = .[0]
+    pad: [SyncCryptoHmacBlockBytes]u8
+    inner: [SyncCryptoDigestBytes]u8
+    context: Sha256Context
+
+    if key_length > SyncCryptoHmacBlockBytes {
+        if use_key_text {
+            Sha256Initialize(*context)
+            Sha256UpdateText(*context, key_text)
+            Sha256Finish(*context, *block[0])
+        } else {
+            SyncCryptoSha256(key, key_length, *block[0])
+        }
+    } else {
+        index: s64 = 0
+        while index < key_length {
+            if use_key_text {
+                block[index] = key_text[index]
+            } else {
+                block[index] = key[index]
+            }
+            index += 1
+        }
+    }
+
+    index: s32 = 0
+    while index < SyncCryptoHmacBlockBytes {
+        pad[index] = block[index] ^ cast(u8)0x36
+        index += 1
+    }
+    Sha256Initialize(*context)
+    Sha256Update(*context, *pad[0], SyncCryptoHmacBlockBytes)
+    if use_text {
+        Sha256UpdateText(*context, text)
+    } else if data_length > 0 {
+        Sha256Update(*context, data, data_length)
+    }
+    Sha256Finish(*context, *inner[0])
+
+    index = 0
+    while index < SyncCryptoHmacBlockBytes {
+        pad[index] = block[index] ^ cast(u8)0x5c
+        index += 1
+    }
+    Sha256Initialize(*context)
+    Sha256Update(*context, *pad[0], SyncCryptoHmacBlockBytes)
+    Sha256Update(*context, *inner[0], SyncCryptoDigestBytes)
+    Sha256Finish(*context, output)
+    return 1
+}
+
+#program_export
+SyncCryptoHmacSha256 :: (key: *u8, key_length: s64,
+    data: *u8, data_length: s64, output: *u8) -> s32 {
+    return HmacSha256Input(key, key_length, "", false,
+        data, data_length,
+        "", false, output)
+}
+
+#program_export
+SyncCryptoHmacSha256Text :: (key: *u8, key_length: s64,
+    data: string, output: *u8) -> s32 {
+    return HmacSha256Input(key, key_length, "", false,
+        null, data.count,
+        data, true, output)
+}
+
+HmacSha256TextKey :: (key: string, data: *u8,
+    data_length: s64, output: *u8) -> s32 {
+    return HmacSha256Input(null, key.count, key, true,
+        data, data_length, "", false, output)
+}
+
+Pbkdf2Hmac :: (password: *u8, password_length: s64,
+    password_text: string, use_text: bool, data: *u8,
+    data_length: s64, output: *u8) -> s32 {
+    if use_text {
+        return HmacSha256TextKey(password_text, data, data_length, output)
+    }
+    return SyncCryptoHmacSha256(password, password_length,
+        data, data_length, output)
+}
+
+Pbkdf2Input :: (password: *u8, password_length: s64,
+    password_text: string, use_text: bool,
+    salt: *u8, salt_length: s64, iterations: u64, output: *u8) -> s32 {
+    if output == null || iterations == 0 || iterations > 100000000 ||
+        password_length < 0 || salt_length < 0 ||
+        (!use_text && password == null && password_length > 0) ||
+        (salt == null && salt_length > 0) {
+        return 0
+    }
+
+    salt_block: [36]u8 = .[0]
+    used: s64 = salt_length
+    if used > 32 {
+        used = 32
+    }
+    index: s64 = 0
+    while index < used {
+        salt_block[index] = salt[index]
+        index += 1
+    }
+    salt_block[used + 3] = 1
+
+    current: [SyncCryptoDigestBytes]u8
+    aggregate: [SyncCryptoDigestBytes]u8
+    if Pbkdf2Hmac(password, password_length, password_text, use_text,
+        *salt_block[0], used + 4, *current[0]) == 0 {
+        return 0
+    }
+    index = 0
+    while index < SyncCryptoDigestBytes {
+        aggregate[index] = current[index]
+        index += 1
+    }
+
+    round: u64 = 1
+    while round < iterations {
+        if Pbkdf2Hmac(password, password_length, password_text, use_text,
+            *current[0], SyncCryptoDigestBytes, *current[0]) == 0 {
+            return 0
+        }
+        index = 0
+        while index < SyncCryptoDigestBytes {
+            aggregate[index] ^= current[index]
+            index += 1
+        }
+        round += 1
+    }
+    index = 0
+    while index < SyncCryptoDigestBytes {
+        output[index] = aggregate[index]
+        index += 1
+    }
+    return 1
+}
+
+#program_export
+SyncCryptoPbkdf2Sha256 :: (password: *u8, password_length: s64,
+    salt: *u8, salt_length: s64, iterations: u64, output: *u8) -> s32 {
+    return Pbkdf2Input(password, password_length, "", false,
+        salt, salt_length, iterations, output)
+}
+
+#program_export
+SyncCryptoPbkdf2Sha256Text :: (password: string, salt: *u8,
+    salt_length: s64, iterations: u64, output: *u8) -> s32 {
+    return Pbkdf2Input(null, password.count, password, true,
+        salt, salt_length, iterations, output)
+}

@@ -1,0 +1,141 @@
+#import, file "activity_jni.zi";
+#import, file "android_push_types.zi";
+
+#if #defined(ANDROID_BUILD) {
+    PushReadStrings :: (session: *ActivityJniSession, method_name: string,
+        rows: *u8, stride: s32, limit: s32, row_count: *s32) -> bool {
+        env := session.env
+        method := JniMethod(session, method_name, "()[Ljava/lang/String;")
+        if method == null {
+            return false
+        }
+        array := env.functions.CallObjectMethodA(env, session.activity,
+            method, null)
+        if array == null || env.functions.ExceptionCheck(env) != 0 {
+            return false
+        }
+        length := env.functions.GetArrayLength(env, array)
+        if length > limit {
+            length = limit
+        }
+        if row_count != null {
+            row_count[0] = length
+        }
+        index: s32 = 0
+        while index < length {
+            item := env.functions.GetObjectArrayElement(env, array, index)
+            if item != null {
+                text := env.functions.GetStringUTFChars(env, item, null)
+                if text != null {
+                    count: s32 = 0
+                    while count < stride - 1 && text[count] != 0 {
+                        rows[index * stride + count] = text[count]
+                        count += 1
+                    }
+                    rows[index * stride + count] = 0
+                    env.functions.ReleaseStringUTFChars(env, item, text)
+                }
+                env.functions.DeleteLocalRef(env, item)
+            }
+            if env.functions.ExceptionCheck(env) != 0 {
+                return false
+            }
+            index += 1
+        }
+        return true
+    }
+
+    PushCall :: (method: string, argument: *u8) -> bool {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return false
+        }
+        called := JniCallVoid(*session, method, argument)
+        activity_jni_detach(*session)
+        return called
+    }
+}
+
+#program_export
+push_host_read_catalog :: (catalog: *PushCatalog) -> bool {
+    if catalog == null {
+        return false
+    }
+    empty: PushCatalog
+    catalog[0] = empty
+    #if #defined(ANDROID_BUILD) {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return false
+        }
+        count: s32 = 0
+        found := PushReadStrings(*session, "getUnifiedPushDistributors",
+            *catalog.ids[0][0], 96, 4, *count)
+        if found && count > 0 {
+            PushReadStrings(*session, "getUnifiedPushDistributorLabels",
+                *catalog.labels[0][0], 64, count, null)
+            if session.env.functions.ExceptionCheck(session.env) != 0 {
+                session.env.functions.ExceptionClear(session.env)
+            }
+            PushReadStrings(*session, "getUnifiedPushDistributorIcons",
+                *catalog.icons[0][0], 256, count, null)
+        }
+        catalog.count = count
+        activity_jni_detach(*session)
+        return found
+    }
+    return false
+}
+
+#program_export
+push_host_configure_with :: (id: *u8) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        if id == null || id[0] == 0 {
+            return false
+        }
+        length: s32 = 0
+        while length < 96 && id[length] != 0 {
+            length += 1
+        }
+        if length == 96 {
+            return false
+        }
+        return PushCall("configureUnifiedPushWith", id)
+    }
+    unused id
+    return false
+}
+
+#program_export
+push_host_configure :: () -> bool {
+    #if #defined(ANDROID_BUILD) {
+        return PushCall("configureUnifiedPush", null)
+    }
+    return false
+}
+
+#program_export
+push_host_registered :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return -1
+        }
+        registered: s32 = -1
+        method := JniMethod(*session, "isUnifiedPushRegistered", "()Z")
+        if method != null {
+            env := session.env
+            result := env.functions.CallBooleanMethodA(env,
+                session.activity, method, null)
+            if env.functions.ExceptionCheck(env) == 0 {
+                registered = 0
+                if result != 0 {
+                    registered = 1
+                }
+            }
+        }
+        activity_jni_detach(*session)
+        return registered
+    }
+    return -1
+}

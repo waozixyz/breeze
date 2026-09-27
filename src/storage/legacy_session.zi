@@ -1,0 +1,174 @@
+c :: #system_library "c";
+LegacyLocalTimestamp :: (year: s32, month: s32, day: s32,
+    hour: s32, minute: s32, second: s32) -> s64 #foreign c "storage_local_timestamp";
+LegacyInsertSession :: (started_at: s64, local_date: s32,
+    rounds: *s32, round_count: s32) -> s32 #foreign c "storage_insert_legacy_session";
+
+LegacyMaxRounds :: 12
+LegacyMaxPathBytes :: 4096
+
+LegacySessionDate :: struct {
+    year: s32
+    month: s32
+    day: s32
+    hour: s32
+    minute: s32
+    second: s32
+}
+
+LegacyDigit :: (byte: u8) -> bool {
+    return byte >= cast(u8)48 && byte <= cast(u8)57
+}
+
+LegacyTwoDigits :: (text: *u8, index: u64) -> s32 {
+    if !LegacyDigit(text[index]) || !LegacyDigit(text[index + 1]) {
+        return -1
+    }
+    return cast(s32)(text[index] - cast(u8)48) * 10 +         cast(s32)(text[index + 1] - cast(u8)48)
+}
+
+LegacyLeapYear :: (year: s32) -> bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+LegacyValidDate :: (date: LegacySessionDate) -> bool {
+    if date.year < 1970 || date.month < 1 || date.month > 12  || date.hour < 0 || date.hour > 23 || date.minute < 0  || date.minute > 59 || date.second < 0 || date.second > 59 {
+        return false
+    }
+    days: s32 = 31
+    if date.month == 4 || date.month == 6 || date.month == 9  || date.month == 11 {
+        days = 30
+    }
+    if date.month == 2 {
+        days = 28
+        if LegacyLeapYear(date.year) {
+            days = 29
+        }
+    }
+    return date.day >= 1 && date.day <= days
+}
+
+LegacyMatchPath :: (name: *u8, length: u64,
+    index: u64, date: *LegacySessionDate) -> bool {
+    if index + 27 > length  || (index > 0 && name[index - 1] != cast(u8)47) {
+        return false
+    }
+    year_head := LegacyTwoDigits(name, index)
+    year_tail := LegacyTwoDigits(name, index + 2)
+    if year_head < 0 || year_tail < 0  || name[index + 4] != cast(u8)47  || name[index + 7] != cast(u8)47  || name[index + 10] != cast(u8)47 {
+        return false
+    }
+    prefix := "breathing-"
+    offset: u64 = 0
+    while offset < cast(u64)prefix.count {
+        if name[index + 11 + offset] != prefix[offset] {
+            return false
+        }
+        offset += 1
+    }
+    parsed: LegacySessionDate
+    parsed.year = year_head * 100 + year_tail
+    parsed.month = LegacyTwoDigits(name, index + 5)
+    parsed.day = LegacyTwoDigits(name, index + 8)
+    parsed.hour = LegacyTwoDigits(name, index + 21)
+    parsed.minute = LegacyTwoDigits(name, index + 23)
+    parsed.second = LegacyTwoDigits(name, index + 25)
+    if !LegacyValidDate(parsed) {
+        return false
+    }
+    // The old file has no extension; permit a conventional text suffix.
+    tail := name[index + 27]
+    if tail != cast(u8)0 && tail != cast(u8)46 {
+        return false
+    }
+    date.* = parsed
+    return true
+}
+
+#program_export
+LegacyParsePath :: (name: *u8, date: *LegacySessionDate) -> s32 {
+    if name == null || date == null {
+        return 0
+    }
+    length: u64 = 0
+    while length < LegacyMaxPathBytes && name[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == LegacyMaxPathBytes {
+        return 0
+    }
+    index: u64 = 0
+    while index < length {
+        if LegacyMatchPath(name, length, index, date) {
+            return 1
+        }
+        index += 1
+    }
+    return 0
+}
+
+#program_export
+LegacyIsSessionPath :: (name: *u8) -> s32 {
+    date: LegacySessionDate
+    return LegacyParsePath(name, *date)
+}
+
+#program_export
+LegacyParseRounds :: (bytes: *u8, length: u64,
+    rounds: *s32, capacity: s32) -> s32 {
+    if bytes == null || rounds == null || capacity <= 0 {
+        return 0
+    }
+    if capacity > LegacyMaxRounds {
+        capacity = LegacyMaxRounds
+    }
+    count: s32 = 0
+    position: u64 = 0
+    while position < length && count < capacity {
+        while position < length && (bytes[position] == cast(u8)32  || bytes[position] == cast(u8)9 || bytes[position] == cast(u8)13  || bytes[position] == cast(u8)10) {
+            position += 1
+        }
+        value: s32 = 0
+        valid := true
+        seen := false
+        while position < length && LegacyDigit(bytes[position]) {
+            digit := cast(s32)(bytes[position] - cast(u8)48)
+            if value > (2147483647 - digit) / 10 {
+                valid = false
+            }
+            if valid {
+                value = value * 10 + digit
+            }
+            seen = true
+            position += 1
+        }
+        if seen && valid && value > 0 {
+            rounds[count] = value
+            count += 1
+        }
+        while position < length && bytes[position] != cast(u8)10 {
+            position += 1
+        }
+    }
+    return count
+}
+
+#program_export
+LegacyImportBytes :: (name: *u8, bytes: *u8, length: u64) -> s32 {
+    date: LegacySessionDate
+    if LegacyParsePath(name, *date) == 0 {
+        return 0
+    }
+    rounds: [LegacyMaxRounds]s32
+    count := LegacyParseRounds(bytes, length, *rounds[0], LegacyMaxRounds)
+    if count == 0 {
+        return 0
+    }
+    started_at := LegacyLocalTimestamp(date.year, date.month, date.day,
+        date.hour, date.minute, date.second)
+    if started_at <= 0 {
+        return 0
+    }
+    local_date := date.year * 10000 + date.month * 100 + date.day
+    return LegacyInsertSession(started_at, local_date, *rounds[0], count)
+}

@@ -1,0 +1,743 @@
+// Account storage and its Kryon controls. The private key is never drawn.
+#import, file "../../app/app.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_sync.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../platform/raylib_text_input.zi";
+#import, file "../../storage/account_types.zi";
+#import, file "../../storage/sync_account.zi";
+#if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+    #import, file "../../storage/sync_async.zi";
+    #import, file "../../platform/network_transport.zi";
+    #import "social"
+    #import "async_client"
+    #import "text_buffer"
+} else {
+    #import, file "../../storage/sync_runtime.zi";
+}
+#import, file "../../storage/sync_result.zi";
+#import, file "../../storage/storage_core.zi";
+#import, file "../../storage/storage_habits.zi";
+#import, file "../../storage/storage_sessions.zi";
+#import, file "../../storage/storage_elist.zi";
+#import, file "../../screens/profile_social.zi";
+#import, file "settings_status.zi";
+#import, file "settings_status_view.zi";
+#import "url"
+#import "geometry"
+#import "session"
+#import "layout"
+#import "tree"
+#import "drawing_props"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "text_props"
+#import "text_widget"
+#import "text_input_props"
+#import "text_field_widget"
+#import "modal_props"
+#import "modal"
+#import "modal_frame_widget"
+
+using SyncAccountSaveResult;
+using SyncAccountLocalDataChoice;
+using SyncResult;
+using PendingSyncAccountAction;
+using ModalType;
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+
+SettingsSyncKeySaveDialog :: #type (app: *InnerBreeze, value: string) -> s32;
+SettingsSyncKeyImportDialog :: #type (app: *InnerBreeze) -> s32;
+
+sync_server_url_key: string = "sync_server_url";
+sync_server_url_default: string = "https://api.waozi.xyz";
+sync_account_alias_key: string = "sync_account_alias";
+save_dialog_callback: SettingsSyncKeySaveDialog;
+import_dialog_callback: SettingsSyncKeyImportDialog;
+server_anchor: s32;
+server_scroll_x: s32;
+alias_anchor: s32;
+alias_scroll_x: s32;
+
+#if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+    SettingsAccountRequest :: struct {
+        operation: StoredOperation
+        transfer: NetworkTransfer
+        output: [4096]u8
+        owner: *InnerBreeze
+        deleting: bool
+        alias_result: s32
+    }
+    settings_account_request: SettingsAccountRequest;
+}
+
+#program_export
+settings_sync_account_cancel :: (app: *InnerBreeze) {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        if settings_account_request.owner == app {
+            CancelStoredOperation(*settings_account_request.operation)
+            settings_account_request = SettingsAccountRequest.{}
+        }
+    }
+    unused app
+}
+
+#program_export
+settings_sync_account_pump :: (app: *InnerBreeze) {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        request := *settings_account_request
+        if request.owner != app {
+            return
+        }
+        if !request.deleting &&
+            (app.modal.active == 0 || app.modal.type != cast(ModalType)ModalSyncAlias) {
+            settings_sync_account_cancel(app)
+            return
+        }
+        if !request.operation.active || !PollStoredOperation(*request.operation) {
+            return
+        }
+        succeeded := request.operation.result == cast(s32)SyncResult.SYNC_OK
+        if request.deleting {
+            request.owner = null
+            if succeeded {
+                unused sync_account_clear()
+                settings_screen_set_status_success(LocaleText("sync_remote_data_cleared"), "")
+            } else {
+                settings_screen_set_status_error(LocaleText("sync_failed"))
+            }
+        } else {
+            request.alias_result = ifx (succeeded) then (1) else (2)
+        }
+    }
+    unused app
+}
+
+#if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+    SettingsBeginAlias :: (app: *InnerBreeze, server: string,
+        alias: string) -> bool {
+        request := *settings_account_request
+        if request.operation.active {
+            return false
+        }
+        request.* = SettingsAccountRequest.{}
+        body: [512]u8
+        if !BuildAliasBody(storage_get_setting_text("sync_public_id"),
+            alias, body[:]) {
+            return false
+        }
+        request.owner = app
+        return BeginStoredRequest(*request.operation, server,
+            NetworkTransport(*request.transfer), "POST", "/api/v1/account/alias",
+            TextUntilNul(body[:]), settings_account_request.output[:], true)
+    }
+}
+
+SettingsSyncRect :: (x: s32, y: s32, width: s32,
+    height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+SettingsSyncTextProps :: (value: string,
+    x: s32, y: s32, width: s32, height: s32,
+    small: bool) -> TextProps {
+    props: TextProps
+    props.bounds = SettingsSyncRect(x, y, width, height)
+    props.text = value
+    props.font = ifx (small) then (AppSmallFontSize()) else (AppFontSize())
+    props.wrap = cast(TextWrap)TextWrapNone
+    return props
+}
+
+SettingsSyncButtonProps :: (label: string, x: s32, y: s32,
+    width: s32, height: s32, id: s32, accent: bool) -> ButtonProps {
+    props: ButtonProps
+    props.bounds = SettingsSyncRect(x, y, width, height)
+    props.id = id
+    props.label = label
+    props.tone = cast(ButtonTone)(ifx (accent) then
+        (ButtonToneAccent) else (ButtonToneNeutral))
+    props.emphasis = cast(ButtonEmphasis)(ifx (accent) then
+        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+    return props
+}
+
+#program_export
+settings_sync_account_set_save_dialog :: (callback: SettingsSyncKeySaveDialog) {
+    save_dialog_callback = callback
+}
+
+#program_export
+settings_sync_account_set_import_dialog :: (callback: SettingsSyncKeyImportDialog) {
+    import_dialog_callback = callback
+}
+
+SettingsSyncAccountId :: (account: *SyncAccount) -> string {
+    if account == null {
+        return ""
+    }
+    return AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+}
+
+SettingsSyncNormalizeAlias :: (app: *InnerBreeze) {
+    output: [40]u8
+    value := AppTextFromCString(*app.sync_alias_input[0], 40)
+    index: s32 = 0
+    written: s32 = 0
+    if value.count > 0 && value[0] == #char "@" {
+        index = 1
+    }
+    while index < cast(s32)value.count && written < 32 {
+        byte := value[index]
+        if byte >= #char "A" && byte <= #char "Z" {
+            byte = cast(u8)(byte - #char "A" + #char "a")
+        }
+        if (byte >= #char "a" && byte <= #char "z") ||
+        (byte >= #char "0" && byte <= #char "9") ||
+        byte == #char "_" {
+            output[written] = byte
+            written += 1
+        }
+        index += 1
+    }
+    output[written] = cast(u8)0
+    unused AppCopyText(AppTextFromCString(*output[0], 40),
+        app.sync_alias_input[:])
+    app.sync_alias_cursor = written
+}
+
+SettingsSyncAliasValid :: (value: string) -> bool {
+    if value.count < 4 || value.count > 32 {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        byte := value[index]
+        if !((byte >= #char "a" && byte <= #char "z") ||
+            (byte >= #char "0" && byte <= #char "9") ||
+            byte == #char "_") { return false }
+        index += 1
+    }
+    return true
+}
+
+SettingsSyncServerNormalize :: (app: *InnerBreeze,
+    output: []u8) -> bool {
+    value := AppTextFromCString(*app.sync_server_url[0], 256)
+    if !NormalizeUrl(value, output) {
+        return false
+    }
+    normalized := AppTextFromCString(*output[0], cast(s32)output.count)
+    if !AppCopyText(normalized, app.sync_server_url[:]) {
+        return false
+    }
+    app.sync_server_url_cursor = cast(s32)normalized.count
+    return true
+}
+
+SettingsSyncServerSave :: (app: *InnerBreeze) {
+    normalized: [256]u8
+    if !SettingsSyncServerNormalize(app, normalized[:]) {
+        settings_screen_set_status_error(LocaleText("sync_server_url_invalid"))
+        return
+    }
+    url := AppTextFromCString(*normalized[0], 256)
+    storage_set_setting_text(sync_server_url_key, url)
+    storage_set_sync_enabled(0)
+    settings_screen_set_status_success(LocaleText("sync_server_saved"), "")
+}
+
+SettingsSyncOpenAlias :: (app: *InnerBreeze, then_backup: s32) {
+    alias := storage_get_setting_text(sync_account_alias_key)
+    unused AppCopyText(alias, app.sync_alias_input[:])
+    SettingsSyncNormalizeAlias(app)
+    app.sync_alias_focused = 1
+    app.sync_alias_then_backup = then_backup
+    app_open_modal(app, cast(ModalType)ModalSyncAlias)
+}
+
+SettingsSyncRunConnect :: (app: *InnerBreeze) {
+    account: SyncAccount
+    normalized: [256]u8
+    if sync_account_load(*account) == 0 {
+        storage_set_sync_enabled(0)
+        settings_screen_set_status_error(LocaleText("sync_no_account"))
+        return
+    }
+    if !SettingsSyncServerNormalize(app, normalized[:]) {
+        storage_set_sync_enabled(0)
+        settings_screen_set_status_error(LocaleText("sync_server_url_invalid"))
+        return
+    }
+    storage_set_setting_text(sync_server_url_key,
+        AppTextFromCString(*normalized[0], 256))
+    storage_set_sync_enabled(1)
+    settings_screen_clear_status()
+    unused app_auto_sync(app)
+}
+
+#program_export
+settings_sync_account_save_prepared :: (app: *InnerBreeze,
+    account: *SyncAccount, action: PendingSyncAccountAction,
+    choice: SyncAccountLocalDataChoice) -> s32 {
+    if app == null || account == null {
+        return 0
+    }
+    result := sync_account_save(account, choice)
+    if result == cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_NEEDS_CLEAR {
+        app.pending_sync_account = account.*
+        app.pending_sync_account_action = cast(s32)action
+        app_open_modal(app, cast(ModalType)ModalConfirmSyncAccountSwitch)
+        return 0
+    }
+    if result != cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK {
+        return 0
+    }
+    app.pending_sync_account = SyncAccount.{}
+    app.pending_sync_account_action = cast(s32)PendingSyncAccountNone
+    if action == cast(PendingSyncAccountAction)PendingSyncAccountCreate {
+        settings_screen_set_status_success(LocaleText("sync_account_created"), "")
+    } else {
+        if app.sync_server_url[0] == cast(u8)0 {
+            saved := storage_get_setting_text(sync_server_url_key)
+            if saved.count == 0 {
+                saved = sync_server_url_default
+            }
+            unused AppCopyText(saved, app.sync_server_url[:])
+        }
+        SettingsSyncRunConnect(app)
+    }
+    return 1
+}
+
+SettingsSyncCreate :: (app: *InnerBreeze) -> s32 {
+    account: SyncAccount
+    if sync_account_generate(*account) == 0 {
+        settings_screen_set_status_error(LocaleText("sync_account_create_failed"))
+        return 0
+    }
+    saved := settings_sync_account_save_prepared(app, *account,
+        cast(PendingSyncAccountAction)PendingSyncAccountCreate,
+        cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK)
+    if saved == 0 && app.modal.type != cast(ModalType)ModalConfirmSyncAccountSwitch {
+        settings_screen_set_status_error(LocaleText("sync_account_create_failed"))
+    }
+    return saved
+}
+
+SettingsSyncConnected :: (app: *InnerBreeze) -> bool {
+    account: SyncAccount
+    current: [256]u8
+    saved: [256]u8
+    if sync_account_load(*account) == 0 || storage_sync_enabled() == 0 {
+        return false
+    }
+    if !NormalizeUrl(AppTextFromCString(*app.sync_server_url[0], 256),
+        current[:]) { return false }
+    if !NormalizeUrl(storage_get_setting_text(sync_server_url_key),
+        saved[:]) { return false }
+    return AppTextFromCString(*current[0], 256) ==
+    AppTextFromCString(*saved[0], 256)
+}
+
+#program_export
+settings_sync_account_clear_remote_confirmed :: (app: *InnerBreeze) {
+    normalized: [256]u8
+    if app == null || !SettingsSyncConnected(app) ||
+    !NormalizeUrl(storage_get_setting_text(sync_server_url_key),
+        normalized[:]) {
+        settings_screen_set_status_error(LocaleText("sync_server_url_invalid"))
+        return
+    }
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        request := *settings_account_request
+        if request.operation.active {
+            return
+        }
+        request.* = SettingsAccountRequest.{}
+        request.owner = app
+        request.deleting = true
+        if !BeginStoredDelete(*request.operation,
+            AppTextFromCString(*normalized[0], 256), NetworkTransport(*request.transfer)) {
+            request.owner = null
+            settings_screen_set_status_error(LocaleText("sync_failed"))
+        }
+    } else {
+        result := DeleteStoredAccount(AppTextFromCString(*normalized[0], 256))
+        if result != cast(s32)SyncResult.SYNC_OK {
+            settings_screen_set_status_error(LocaleText("sync_failed"))
+            return
+        }
+        unused sync_account_clear()
+        settings_screen_set_status_success(LocaleText("sync_remote_data_cleared"), "")
+    }
+}
+
+SettingsSyncField :: (app: *InnerBreeze, value: []u8,
+    cursor: *s32, focused: *s32, anchor: *s32, scroll_x: *s32,
+    x: s32, y: s32, width: s32, id: s32,
+    max_codepoints: s32) -> bool {
+    typed: [128]u8
+    field: TextFieldProps
+    field.key = cast(u64)id
+    field.bounds = SettingsSyncRect(x, y, width, AppScale(38))
+    field.value = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*value[0], cast(s32)value.count))
+    field.cursor = cursor.*
+    field.anchor = anchor.*
+    field.scroll_x = scroll_x.*
+    field.focused = focused.* != 0
+    field.focus_id = id
+    field.max_bytes = cast(s32)value.count - 1
+    field.max_codepoints = max_codepoints
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed {
+        unused AppReplaceText(value, result.edit.start,
+            result.edit.end, result.edit.replacement)
+    }
+    cursor.* = result.cursor
+    anchor.* = result.anchor
+    scroll_x.* = result.scroll_x
+    focused.* = ifx (result.focused) then (1) else (0)
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result.committed
+}
+
+#program_export
+settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
+    unused content_w
+    account: SyncAccount
+    if sync_account_load(*account) == 0 {
+        return AppScale(176)
+    }
+    return AppScale(680)
+}
+
+#program_export
+settings_sync_account_draw_config :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    if app == null || y == null {
+        return
+    }
+    if app.sync_server_url[0] == cast(u8)0 {
+        saved := storage_get_setting_text(sync_server_url_key)
+        if saved.count == 0 {
+            saved = sync_server_url_default
+        }
+        unused AppCopyText(saved, app.sync_server_url[:])
+        app.sync_server_url_cursor = cast(s32)saved.count
+    }
+    account: SyncAccount
+    has_account := sync_account_load(*account) != 0
+    button_h := AppScale(38)
+    gap := AppScale(10)
+    if !has_account {
+        create := SettingsSyncButtonProps(LocaleText("sync_create_account_button"),
+            x, y.*, width, button_h, 5201, true)
+        if Button(app.ui.session, create) != 0 {
+            has_account = SettingsSyncCreate(app) != 0
+        }
+        y.* += button_h + gap
+        import_button := SettingsSyncButtonProps(LocaleText("sync_import_key_button"),
+            x, y.*, width, button_h, 5202, false)
+        if Button(app.ui.session, import_button) != 0 {
+            if import_dialog_callback == null || import_dialog_callback(app) == 0 {
+                settings_screen_set_status_error(LocaleText("sync_private_key_import_failed"))
+            }
+        }
+        y.* += button_h + gap
+        if !has_account {
+            settings_screen_draw_status_reserved(x, y, AppScale(42))
+            return
+        }
+    }
+    account_id := SettingsSyncAccountId(*account)
+    alias := storage_get_setting_text(sync_account_alias_key)
+    display_id := account_id
+    alias_label: [96]u8
+    if alias.count > 0 {
+        alias_label[0] = #char "@"
+        unused AppCopyText(alias, alias_label[1:])
+        display_id = AppTextFromCString(*alias_label[0], 96)
+    }
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_account_title"),
+        x, y.*, width, AppScale(28), false))
+    y.* += AppScale(30)
+    Text(app.ui.session, SettingsSyncTextProps(display_id,
+        x, y.*, width, AppScale(32), false))
+    y.* += AppScale(36)
+    sync_status: StorageSyncStatus
+    unused storage_sync_status(*sync_status)
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_step_account_connected"),
+        x, y.*, width, AppScale(24), true))
+    y.* += AppScale(27)
+    step: string = "sync_step_automatic_on"
+    if sync_status.server_version > 0 {
+        step = "sync_step_data_restored"
+    }
+    Text(app.ui.session, SettingsSyncTextProps(LocaleText(step),
+        x, y.*, width, AppScale(24), true))
+    y.* += AppScale(32)
+    backup := SettingsSyncButtonProps(LocaleText("sync_backup_key_button"),
+        x, y.*, width, button_h, 5203, false)
+    if Button(app.ui.session, backup) != 0 {
+        app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+    }
+    y.* += button_h + gap
+    sync_now := SettingsSyncButtonProps(LocaleText("sync_now_button"),
+        x, y.*, width, button_h, 5204, true)
+    if Button(app.ui.session, sync_now) != 0 {
+        SettingsSyncRunConnect(app)
+    }
+    y.* += button_h + gap
+    copy_id := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
+        x, y.*, width, button_h, 5205, false)
+    if Button(app.ui.session, copy_id) != 0 {
+        unused TextInputWriteClipboard(account_id)
+        settings_screen_set_status_success(LocaleText("sync_public_id_copied"), "")
+    }
+    y.* += button_h + gap
+    alias_button := SettingsSyncButtonProps(LocaleText("sync_alias_button"),
+        x, y.*, width, button_h, 5206, false)
+    if Button(app.ui.session, alias_button) != 0 {
+        SettingsSyncOpenAlias(app, 0)
+    }
+    y.* += button_h + gap
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_remote_label"),
+        x, y.*, width, AppScale(24), true))
+    y.* += AppScale(25)
+    if SettingsSyncField(app, app.sync_server_url[:],
+        *app.sync_server_url_cursor, *app.sync_server_url_focused,
+        *server_anchor, *server_scroll_x,
+        x, y.*, width, 5207, 255) { SettingsSyncServerSave(app) }
+    y.* += AppScale(38) + gap
+    save := SettingsSyncButtonProps(LocaleText("save_button"),
+        x, y.*, width, button_h, 5208, false)
+    if Button(app.ui.session, save) != 0 {
+        SettingsSyncServerSave(app)
+    }
+    y.* += button_h + gap
+    logout := SettingsSyncButtonProps(LocaleText("sync_logout_button"),
+        x, y.*, width, button_h, 5209, false)
+    if Button(app.ui.session, logout) != 0 {
+        unused sync_account_clear()
+        settings_screen_set_status_success(
+            LocaleText("sync_logged_out_local_data_kept"), "")
+    }
+    y.* += button_h + gap
+    clear_remote := SettingsSyncButtonProps(
+        LocaleText("sync_clear_remote_data_button"),
+        x, y.*, width, button_h, 5210, false)
+    if Button(app.ui.session, clear_remote) != 0 {
+        app_open_modal(app, cast(ModalType)ModalConfirmDeleteSyncAccount)
+    }
+    y.* += button_h + gap
+    settings_screen_draw_status_reserved(x, y, AppScale(42))
+}
+
+SettingsSyncModal :: (app: *InnerBreeze,
+    key: string, title: string, height: s32) -> ModalFrameResult {
+    width := app.ui.view_width - AppScale(32)
+    if width > AppScale(400) {
+        width = AppScale(400)
+    }
+    return ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash(key), .title = title,
+            .width = width, .height = height})
+}
+
+#program_export
+settings_sync_account_draw_backup_modal :: (app: *InnerBreeze) -> s32 {
+    account: SyncAccount
+    if app == null || sync_account_load(*account) == 0 {
+        return 1
+    }
+    frame := SettingsSyncModal(app, "inbe/account/backup",
+        LocaleText("sync_backup_title"), AppScale(260))
+    if frame.dismissed {
+        return 1
+    }
+    if frame.panel_node < 0 || !TreePushScope(app.ui.session, frame.panel_node) {
+        return 0
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width := cast(s32)content.width
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_backup_warning"),
+        x, y, width, AppScale(96), false))
+    y += AppScale(112)
+    save := SettingsSyncButtonProps(LocaleText("sync_save_key_file_button"),
+        x, y, width, AppScale(38), 5230, true)
+    result: s32 = 0
+    if Button(app.ui.session, save) != 0 {
+        if save_dialog_callback != null {
+            result = save_dialog_callback(app, "account.key")
+        } else {
+            filename: [32]u8
+            unused AppCopyText("account.key", filename[:])
+            if sync_account_export_private_key(*account, *filename[0]) != 0 {
+                result = 2
+            } else {
+                result = 3
+            }
+        }
+    }
+    y += AppScale(48)
+    close := SettingsSyncButtonProps(LocaleText("close_button"),
+        x, y, width, AppScale(38), 5231, false)
+    if Button(app.ui.session, close) != 0 {
+        result = 1
+    }
+    unused End(app.ui.session)
+    return result
+}
+
+#program_export
+settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 3
+    }
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        request := *settings_account_request
+        if request.owner == app && request.alias_result != 0 {
+            result := request.alias_result
+            request.alias_result = 0
+            request.owner = null
+            return result
+        }
+    }
+    stored := storage_get_setting_text(sync_account_alias_key)
+    has_alias := stored.count != 0
+    title := LocaleText("sync_alias_title")
+    message := LocaleText("sync_alias_message")
+    if has_alias {
+        title = LocaleText("sync_alias_change_title")
+        message = LocaleText("sync_alias_change_message")
+    }
+    frame := SettingsSyncModal(app, "inbe/account/alias", title, AppScale(280))
+    if frame.dismissed {
+        return 3
+    }
+    if frame.panel_node < 0 || !TreePushScope(app.ui.session, frame.panel_node) {
+        return 0
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width := cast(s32)content.width
+    Text(app.ui.session, SettingsSyncTextProps(
+        message, x, y, width, AppScale(48), false))
+    y += AppScale(54)
+    committed := SettingsSyncField(app, app.sync_alias_input[:],
+        *app.sync_alias_cursor, *app.sync_alias_focused,
+        *alias_anchor, *alias_scroll_x,
+        x, y, width, 5240, 32)
+    SettingsSyncNormalizeAlias(app)
+    y += AppScale(45)
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_alias_rule"),
+        x, y, width, AppScale(36), true))
+    y += AppScale(46)
+    close_label := LocaleText("close_button")
+    if app.sync_alias_then_backup != 0 {
+        close_label = LocaleText("skip_button")
+    }
+    close := SettingsSyncButtonProps(close_label,
+        x, y, width, AppScale(38), 5241, false)
+    result: s32 = 0
+    if Button(app.ui.session, close) != 0 {
+        result = 3
+    }
+    y += AppScale(47)
+    save_label := LocaleText("sync_alias_register_button")
+    if has_alias {
+        save_label = LocaleText("sync_alias_save_button")
+    }
+    save := SettingsSyncButtonProps(save_label,
+        x, y, width, AppScale(38), 5242, true)
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        save.disabled = settings_account_request.operation.active
+        if save.disabled {
+            committed = false
+        }
+    }
+    alias := AppTextFromCString(*app.sync_alias_input[0], 40)
+    if (Button(app.ui.session, save) != 0 || committed) &&
+    SettingsSyncAliasValid(alias) && alias != stored {
+        url: [256]u8
+        if !SettingsSyncConnected(app) ||
+            !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
+            result = 2
+        } else {
+            #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+                if !SettingsBeginAlias(app, AppTextFromCString(*url[0], 256), alias) {
+                    result = 2
+                }
+            } else {
+                result = ifx (RegisterAliasStored(AppTextFromCString(*url[0], 256), alias) ==
+                    cast(s32)SyncResult.SYNC_OK) then (1) else (2)
+            }
+        }
+    }
+    unused End(app.ui.session)
+    return result
+}
+
+#program_export
+settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze) -> s32 {
+    account: SyncAccount
+    if app == null || sync_account_load(*account) == 0 {
+        return 1
+    }
+    frame := SettingsSyncModal(app, "inbe/account/public-id",
+        LocaleText("sync_public_id_full_title"), AppScale(245))
+    if frame.dismissed {
+        return 1
+    }
+    if frame.panel_node < 0 || !TreePushScope(app.ui.session, frame.panel_node) {
+        return 0
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width := cast(s32)content.width
+    Text(app.ui.session, SettingsSyncTextProps(
+        LocaleText("sync_public_id_full_message"),
+        x, y, width, AppScale(48), false))
+    y += AppScale(55)
+    account_id := SettingsSyncAccountId(*account)
+    Text(app.ui.session, SettingsSyncTextProps(
+        account_id, x, y, width, AppScale(50), true))
+    y += AppScale(60)
+    copy := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
+        x, y, width, AppScale(38), 5250, false)
+    if Button(app.ui.session, copy) != 0 {
+        unused TextInputWriteClipboard(account_id)
+        settings_screen_set_status_success(LocaleText("sync_public_id_copied"), "")
+    }
+    y += AppScale(47)
+    close := SettingsSyncButtonProps(LocaleText("close_button"),
+        x, y, width, AppScale(38), 5251, false)
+    result: s32 = 0
+    if Button(app.ui.session, close) != 0 {
+        result = 1
+    }
+    unused End(app.ui.session)
+    return result
+}

@@ -1,0 +1,110 @@
+#import, file "../src/platform/android/android_device.zi";
+#import, file "../src/platform/android/activity_jni.zi";
+#import, file "../src/platform/raylib_text_input.zi";
+#import, file "../src/app/host_services.zi";
+#import "session"
+#import "text_input_props"
+#import "text_input_platform"
+
+// No Java activity or display is used by this transport test.
+#program_export
+GetAndroidApp :: () -> *NativeAndroidApp {
+    return null
+}
+#program_export
+GetCharPressed :: () -> s32 {
+    // Android must consume the Java queue, even if raylib saw the same key.
+    return 65
+}
+#program_export
+IsKeyPressed :: (key: s32) -> bool {
+    unused key
+    return false
+}
+#program_export
+IsKeyDown :: (key: s32) -> bool {
+    unused key
+    return false
+}
+#program_export
+GetClipboardText :: () -> *u8 {
+    return null
+}
+#program_export
+SetClipboardText :: (text: *u8) {
+    unused text
+}
+
+#program_export
+main :: () -> s32 {
+    session := SessionOpen()
+    android_text_input_open(session)
+    // A callback before any field owns text focus must be ignored.
+    android_device_native_text_input_commit(null, null, 65)
+    android_text_input_begin_frame(session)
+    if android_text_input_character() != 0 {
+        return 1
+    }
+    android_text_input_frame(session, true)
+    android_device_native_text_input_commit(null, null, 233)
+    android_device_native_text_input_commit(null, null, 128512)
+    android_device_native_text_input_commit(null, null, 55296)
+    android_device_native_text_input_backspace(null, null)
+    android_device_native_text_input_backspace(null, null)
+    android_device_native_text_input_enter(null, null)
+    android_device_native_text_input_commit(null, null, 90)
+    typed: [32]u8
+    android_text_input_begin_frame(session)
+    first := SampleTextFieldInput(true, typed[:])
+    if first.text != "é😀" || first.backspace || first.commit {
+        return 2
+    }
+    android_text_input_begin_frame(session)
+    second := SampleTextFieldInput(true, typed[:])
+    if second.text.count != 0 || !second.backspace || second.commit {
+        return 3
+    }
+    android_text_input_begin_frame(session)
+    third := SampleTextFieldInput(true, typed[:])
+    if third.text.count != 0 || !third.backspace || third.commit {
+        return 4
+    }
+    android_text_input_begin_frame(session)
+    fourth := SampleTextAreaInput(true, typed[:])
+    if fourth.text.count != 0 || fourth.backspace || !fourth.enter || fourth.commit {
+        return 5
+    }
+    android_text_input_begin_frame(session)
+    fifth := SampleTextFieldInput(true, typed[:])
+    if fifth.text != "Z" || fifth.backspace || fifth.commit {
+        return 6
+    }
+    android_device_native_text_input_commit(null, null, 66)
+    android_text_input_frame(session, false)
+    android_text_input_begin_frame(session)
+    if android_text_input_character() != 0 {
+        return 7
+    }
+    android_text_input_close(session)
+    SessionClose(session)
+    replacement := SessionOpen()
+    if replacement.slot != session.slot || replacement.epoch == session.epoch {
+        return 8
+    }
+    android_device_native_text_input_commit(null, null, 67)
+    android_text_input_open(replacement)
+    android_text_input_frame(replacement, true)
+    android_text_input_begin_frame(replacement)
+    if android_text_input_character() != 0 {
+        return 9
+    }
+    android_text_input_close(session)
+    android_device_native_text_input_commit(null, null, 68)
+    android_text_input_begin_frame(replacement)
+    if android_text_input_character() != 68 {
+        return 10
+    }
+    android_text_input_close(replacement)
+    SessionClose(replacement)
+    return 0
+}

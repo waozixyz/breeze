@@ -1,0 +1,375 @@
+// Process setup and effects on the application's own window.
+#import "c_string"
+#import "byte_text_linux"
+#import "trace_log"
+#import "trace_sink"
+#import "device_host"
+#import "window_close_host"
+#import "asset_files"
+#import, file "../app/assets.zi";
+
+c :: #system_library "c";
+raylib :: #system_library "raylib";
+HostTraceLog :: (level: s32, format: *u8, arguments: ..any) #foreign raylib "TraceLog";
+update_apply_at_exit :: () -> s32 #foreign c;
+WindowReady :: () -> bool #foreign raylib "IsWindowReady";
+WindowHandle :: () -> *void #foreign raylib "GetWindowHandle";
+WindowIconImage :: struct {
+    data: *void
+    width: s32
+    height: s32
+    mipmaps: s32
+    format: s32
+}
+ReadWindowIcon :: (extension: *u8, bytes: *u8,
+    size: s32) -> WindowIconImage #foreign raylib "LoadImageFromMemory";
+FormatWindowIcon :: (image: *WindowIconImage, format: s32) #foreign raylib "ImageFormat";
+SetWindowIconImage :: (image: WindowIconImage) #foreign raylib "SetWindowIcon";
+FreeWindowIcon :: (image: WindowIconImage) #foreign raylib "UnloadImage";
+ChangeDirectory :: (path: *u8) -> bool #foreign raylib;
+FormatText :: (output: *u8, capacity: usize, format: *u8,
+    arguments: ..any) -> s32 #foreign c "snprintf";
+FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
+
+#if #defined(_WIN32) {
+    SetEnvironmentBytes :: (name: *u8, value: *u8) -> s32 #foreign c "_putenv_s";
+    ProcessId :: () -> s32 #foreign c "_getpid";
+    kernel32 :: #system_library "kernel32";
+    user32 :: #system_library "user32";
+    ModuleHandle :: (name: *u16) -> *void #foreign kernel32 "GetModuleHandleW";
+    LoadResourceImage :: (instance: *void, name: *u16, kind: u32,
+        width: s32, height: s32, flags: u32) -> *void #foreign user32 "LoadImageW";
+    SystemMetric :: (metric: s32) -> s32 #foreign user32 "GetSystemMetrics";
+    SendWindowMessage :: (window: *void, message: u32,
+        wparam: usize, lparam: isize) -> isize #foreign user32 "SendMessageW";
+    ErrorMessage :: (owner: *void, text: *u8,
+        title: *u8, flags: u32) -> s32 #foreign user32 "MessageBoxA";
+} else {
+    SetEnvironmentBytes :: (name: *u8, value: *u8,
+        overwrite: s32) -> s32 #foreign c "setenv";
+    ProcessId :: () -> s32 #foreign c "getpid";
+}
+#if #defined(__GLIBC__) {
+    LimitAllocator :: (parameter: s32, value: s32) -> s32 #foreign c "mallopt";
+}
+
+MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(ANDROID_BUILD)
+#if MAIN_SDL {
+    sdl :: #system_library "SDL2";
+    CurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
+    GrabWindow :: (window: *void, grab: s32) #foreign sdl "SDL_SetWindowGrab";
+}
+
+#if #defined(ANDROID_BUILD) {
+    #import "android_surface"
+    AndroidInsetsInit :: () #foreign c "android_insets_init";
+    AndroidDeviceInit :: () #foreign c "android_device_init";
+    AndroidWakelockInit :: () #foreign c "android_wakelock_init";
+    android_log :: #system_library "log";
+    AndroidWrite :: (priority: s32, tag: *u8,
+        message: *u8) -> s32 #foreign android_log "__android_log_write";
+    last_viewport: AndroidViewport = .{-1, -1, -1, -1, .{-1, -1, -1, -1}, -1};
+}
+
+#if #defined(PLATFORM_WEB) {
+    WebFrameCallback :: #type () -> void #c_call;
+    WebMainLoop :: (callback: WebFrameCallback, fps: s32,
+        simulate_infinite_loop: s32) #foreign c "emscripten_set_main_loop";
+    DrawAppFrame :: (app: *void) #foreign c "app_frame";
+    web_loop_app: *void;
+}
+#if !#defined(PLATFORM_WEB) {
+    atomic :: #system_library "atomic";
+    ShutdownStore :: (value: *s32, replacement: s32,
+        order: s32) #foreign atomic "__atomic_store_4";
+    ShutdownLoad :: (value: *s32, order: s32) -> s32 #foreign atomic "__atomic_load_4";
+    SignalCallback :: #type (s32) -> void #c_call;
+    InstallSignal :: (signal_number: s32,
+        callback: SignalCallback) -> SignalCallback #foreign c "signal";
+    shutdown_requested: s32;
+}
+
+SetProcessEnvironment :: (name: string, value: string) {
+    name_bytes: [64]u8
+    value_bytes: [512]u8
+    if !CopyCString(name, name_bytes[:]) ||
+        !CopyCString(value, value_bytes[:]) {
+        return
+    }
+    #if #defined(_WIN32) {
+        SetEnvironmentBytes(*name_bytes[0], *value_bytes[0])
+    } else {
+        SetEnvironmentBytes(*name_bytes[0], *value_bytes[0], 1)
+    }
+}
+
+#program_export
+native_apply_desktop_identity :: (app_id: *u8, display_name: *u8) {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        if app_id == null || display_name == null {
+            return
+        }
+        SetProcessEnvironment("SDL_APP_NAME", TextFromCString(display_name))
+        #if !#defined(_WIN32) {
+            SetProcessEnvironment("SDL_VIDEO_X11_WMCLASS", TextFromCString(app_id))
+            SetProcessEnvironment("SDL_VIDEO_WAYLAND_WMCLASS", TextFromCString(app_id))
+            SetProcessEnvironment("SDL_VIDEO_WAYLAND_APP_ID", TextFromCString(app_id))
+        }
+    }
+    unused app_id
+    unused display_name
+}
+
+SetDesktopWindowIcon :: (path: *u8) {
+    #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
+        window := WindowHandle()
+        instance := ModuleHandle(null)
+        resource := cast(*u16)cast(usize)101
+        large := LoadResourceImage(instance, resource, 1,
+            SystemMetric(11), SystemMetric(12), 0)
+        small := LoadResourceImage(instance, resource, 1,
+            SystemMetric(49), SystemMetric(50), 0)
+        if window != null {
+            if large != null {
+                SendWindowMessage(window, 0x80, 1, cast(isize)large)
+            }
+            if small != null {
+                SendWindowMessage(window, 0x80, 0, cast(isize)small)
+            }
+        }
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if path == null || path[0] == 0 {
+            return
+        }
+        asset := asset_lookup(path)
+        if !asset.found || asset.data == null || asset.size == 0 ||
+            asset.size > cast(usize)2147483647 {
+            TraceLog(4, "APP: Missing window icon asset")
+            return
+        }
+        default_extension: [8]u8
+        if !CopyCString(".png", default_extension[:]) {
+            return
+        }
+        extension := *default_extension[0]
+        index: usize = 0
+        while path[index] != 0 {
+            if path[index] == #char "." {
+                extension = *path[index]
+            }
+            index += 1
+        }
+        icon := ReadWindowIcon(extension, asset.data, cast(s32)asset.size)
+        if icon.data == null {
+            TraceLog(4, "APP: Failed to decode window icon asset")
+            return
+        }
+        FormatWindowIcon(*icon, 7)
+        SetWindowIconImage(icon)
+        FreeWindowIcon(icon)
+    }
+    unused path
+}
+
+StartupErrorMessage :: (detail: string, output: []u8) -> bool {
+    actual := detail
+    if actual.count == 0 {
+        actual = "No detailed startup error was reported."
+    }
+    graphics_error := false
+    index: s64 = 0
+    while index < actual.count {
+        if actual[index:actual.count].count >= 3 {
+            remaining := actual[index:actual.count]
+            if (remaining.count >= 6 && remaining[0:6] == "OpenGL") ||
+                remaining[0:3] == "WGL" ||
+                (remaining.count >= 4 && remaining[0:4] == "GLFW") {
+                graphics_error = true
+            }
+        }
+        index += 1
+    }
+    hint: string = ""
+    if graphics_error {
+        hint = "\nThis is usually a graphics driver or virtual GPU problem. Update the GPU driver, enable VM 3D acceleration, or install the VM guest graphics driver.\n"
+    }
+    parts: [5]string = .[
+        "Inner Breeze could not create a window.\n\n", actual, hint,
+        "\nA full log was written to inbe.log next to the executable.", ""]
+    used: s64 = 0
+    part: s32 = 0
+    while part < 4 {
+        index = 0
+        while index < parts[part].count && used + 1 < output.count {
+            output[used] = parts[part][index]
+            used += 1
+            index += 1
+        }
+        part += 1
+    }
+    if output.count == 0 {
+        return false
+    }
+    output[used] = 0
+    return true
+}
+
+#program_export
+native_limit_allocators :: () {
+    #if #defined(__GLIBC__) {
+        LimitAllocator(-8, 4)
+    }
+}
+
+#program_export
+native_screenshot_data_root :: () {
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        format: [64]u8
+        output: [256]u8
+        template := "/tmp/inbe-screenshot-%d"
+        #if #defined(_WIN32) {
+            template = "build/screenshot-data-%d"
+        }
+        if CopyCString(template, format[:]) &&
+            FormatText(*output[0], 256, *format[0], ProcessId()) > 0 {
+            SetProcessEnvironment("APP_DATA_ROOT", TextFromCString(*output[0]))
+        }
+    }
+}
+
+#program_export
+native_window_environment :: () {
+    #if #defined(ANDROID_BUILD) {
+        tag: [16]u8
+        message: [32]u8
+        if CopyCString("APP_MAIN", tag[:]) &&
+            CopyCString("=== MAIN START ===", message[:]) {
+            AndroidWrite(4, *tag[0], *message[0])
+        }
+    }
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        // Preserve the desktop idle counter used by break reminders.
+        SetProcessEnvironment("SDL_VIDEO_ALLOW_SCREENSAVER", "1")
+        #if #defined(_WIN32) {
+            InstallWindowsLogger()
+            TraceLog(3, "APP: Windows startup")
+        }
+    }
+}
+
+#program_export
+native_before_window :: () {
+    InstallAssetFiles()
+    #if #defined(ANDROID_BUILD) {
+        AndroidInsetsInit()
+        AndroidDeviceInit()
+        AndroidWakelockInit()
+        path: [64]u8
+        if CopyCString("/data/user/0/xyz.waozi.inbe/files", path[:]) &&
+            !ChangeDirectory(*path[0]) {
+            TraceLog(4, "APP: failed to switch to Android files directory")
+        }
+    }
+}
+
+#program_export
+native_after_window :: (icon_path: *u8) -> s32 {
+    if !WindowReady() {
+        TraceLog(5, "APP: InitWindow failed")
+        #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
+            dialog: [3072]u8
+            title: [32]u8
+            if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
+                CopyCString("Inner Breeze", title[:]) {
+                ErrorMessage(null, *dialog[0], *title[0], 0x10)
+            }
+            CloseTraceStreams()
+        }
+        return 0
+    }
+    #if MAIN_SDL {
+        window := CurrentWindow()
+        if window != null {
+            GrabWindow(window, 0)
+            app_device_attach_window(window)
+            app_window_close_watch(window)
+        }
+    }
+    #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
+        app_window_close_watch(WindowHandle())
+    }
+    SetDesktopWindowIcon(icon_path)
+    return 1
+}
+
+#if #defined(PLATFORM_WEB) {
+    WebFrame :: () {
+        if web_loop_app != null {
+            DrawAppFrame(web_loop_app)
+        }
+    }
+    #program_export
+    native_start_web_loop :: (app: *void) {
+        web_loop_app = app
+        callback: WebFrameCallback = WebFrame
+        WebMainLoop(callback, 0, 1)
+    }
+}
+
+#if !#defined(PLATFORM_WEB) {
+    RequestShutdown :: (signal_number: s32) {
+        unused signal_number
+        ShutdownStore(*shutdown_requested, 1, 0)
+    }
+    #program_export
+    native_install_shutdown_handlers :: () {
+        callback: SignalCallback = RequestShutdown
+        InstallSignal(2, callback)
+        InstallSignal(15, callback)
+    }
+    #program_export
+    native_shutdown_requested :: () -> s32 {
+        return ShutdownLoad(*shutdown_requested, 0)
+    }
+}
+
+#program_export
+native_platform_shutdown :: () {
+    app_window_close_shutdown()
+    CloseTraceStreams()
+}
+
+#program_export
+native_update_apply_at_exit :: () -> s32 {
+    return update_apply_at_exit()
+}
+
+#if #defined(ANDROID_BUILD) {
+    ViewportEqual :: (a: AndroidViewport, b: AndroidViewport) -> bool {
+        return a.x == b.x && a.y == b.y && a.width == b.width &&
+            a.height == b.height && a.insets.left == b.insets.left &&
+            a.insets.top == b.insets.top && a.insets.right == b.insets.right &&
+            a.insets.bottom == b.insets.bottom && a.ready == b.ready
+    }
+    #program_export
+    native_android_frame_viewport :: (viewport: *AndroidViewport) -> s32 {
+        if SyncAndroidViewport(viewport) == 0 {
+            return 0
+        }
+        if !ViewportEqual(viewport.*, last_viewport) {
+            width: s32
+            height: s32
+            GetAndroidSurfaceSize(*width, *height)
+            format: [160]u8
+            if CopyCString("ANDROID_VIEWPORT: surface=%dx%d viewport=%d,%d %dx%d insets l=%d t=%d r=%d b=%d", format[:]) {
+                HostTraceLog(3, *format[0], width, height, viewport.x,
+                    viewport.y, viewport.width, viewport.height,
+                    viewport.insets.left, viewport.insets.top,
+                    viewport.insets.right, viewport.insets.bottom)
+            }
+            last_viewport = viewport.*
+        }
+        return 1
+    }
+}

@@ -1,0 +1,532 @@
+#import "c_string"
+#import, file "app_types.zi";
+#import, file "audio_selection.zi";
+#import, file "audio_settings.zi";
+#import, file "exercise_types.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/audio_runtime.zi";
+#import, file "../platform/media_types.zi";
+#import, file "../storage/data.zi";
+#import, file "text_buffers.zi";
+
+c :: #system_library "c";
+
+audio_cstring_view_host :: (bytes: []u8) -> string #foreign c "app_audio_cstring_view";
+audio_cstring_pointer_host :: (bytes: *u8, capacity: s32) -> string #foreign c "app_audio_cstring_pointer";
+audio_file_readable_host :: (path: []u8) -> bool #foreign c "app_audio_file_readable";
+audio_file_exists_host :: (path: []u8) -> bool #foreign c "app_audio_file_exists";
+audio_ensure_directory_host :: (path: []u8) -> bool #foreign c "app_audio_ensure_directory";
+audio_copy_file_host :: (source: []u8, destination: []u8) -> bool #foreign c "app_audio_copy_file";
+audio_delete_file_host :: (path: []u8) -> bool #foreign c "app_audio_delete_file";
+audio_local_assets_host :: () -> bool #foreign c "app_audio_local_assets";
+audio_reload_cues :: (app: *InnerBreeze) #foreign c "app_audio_reload_cue_sounds";
+audio_unload_meditation :: (app: *InnerBreeze) #foreign c "meditation_music_unload";
+
+AudioPath :: struct {
+    bytes: [FS_PATH_MAX * 2]u8
+    count: s32
+    valid: bool
+}
+
+ProbeMusicFile :: (path: []u8) -> bool {
+    if path.count == 0 {
+        return false
+    }
+    handle := audio_load_music(AppTextFromCString(*path[0],
+        cast(s32)path.count))
+    if !audio_music_valid(handle) {
+        return false
+    }
+    audio_unload_music(handle)
+    return true
+}
+
+AudioPathStart :: () -> AudioPath {
+    path: AudioPath
+    path.valid = true
+    return path
+}
+
+AudioPathAppend :: (path: *AudioPath, value: string) -> bool {
+    if path == null || !path.valid || value.count >= FS_PATH_MAX * 2  || path.count + cast(s32)value.count >= FS_PATH_MAX * 2 {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        if value[index] == 0 {
+            path.valid = false
+            return false
+        }
+        path.bytes[path.count] = value[index]
+        path.count += 1
+        index += 1
+    }
+    path.bytes[path.count] = 0
+    return true
+}
+
+AudioPathAppendIndex :: (path: *AudioPath, index: s32) -> bool {
+    if path == null || !path.valid || index < 1 || index > 99  || path.count + 2 >= FS_PATH_MAX * 2 {
+        return false
+    }
+    path.bytes[path.count] = cast(u8)(48 + index / 10)
+    path.bytes[path.count + 1] = cast(u8)(48 + index % 10)
+    path.count += 2
+    path.bytes[path.count] = 0
+    return true
+}
+
+AudioPathCopy :: (path: AudioPath, output: []u8) -> bool {
+    if output.count == 0 || !path.valid || path.count <= 0  || path.count >= cast(s32)output.count {
+        return false
+    }
+    index: s32 = 0
+    while index < path.count {
+        output[index] = path.bytes[index]
+        index += 1
+    }
+    output[path.count] = 0
+    return true
+}
+
+AudioCStringView :: (bytes: []u8) -> string {
+    return audio_cstring_view_host(bytes)
+}
+
+AudioExtension :: (path: string) -> string {
+    index: s32 = cast(s32)path.count - 1
+    while index >= 0 {
+        if path[index] == cast(u8)47 || path[index] == cast(u8)92 {
+            break
+        }
+        if path[index] == cast(u8)46 {
+            return path[index:cast(s32)path.count]
+        }
+        index -= 1
+    }
+    return ""
+}
+
+AudioExtensionEquals :: (value: string, expected: string) -> bool {
+    if value.count != expected.count {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        actual: u8 = value[index]
+        if actual >= cast(u8)65 && actual <= cast(u8)90 {
+            actual += cast(u8)32
+        }
+        if actual != expected[index] {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+AudioExtensionAllowed :: (path: string, music: bool) -> bool {
+    extension := AudioExtension(path)
+    if AudioExtensionEquals(extension, ".wav") {
+        return true
+    }
+    if Plan9Platform() != 0 {
+        return false
+    }
+    if AudioExtensionEquals(extension, ".ogg")  || AudioExtensionEquals(extension, ".qoa")  || AudioExtensionEquals(extension, ".mp3")  || AudioExtensionEquals(extension, ".flac")  || AudioExtensionEquals(extension, ".m4a")  || AudioExtensionEquals(extension, ".opus") {
+        return true
+    }
+    return music && (AudioExtensionEquals(extension, ".xm")  || AudioExtensionEquals(extension, ".mod"))
+}
+
+AudioFileValid :: (path: string, music: bool) -> bool {
+    if path.count == 0 || path.count >= FS_PATH_MAX * 2  || !AudioExtensionAllowed(path, music) {
+        return false
+    }
+    bytes: [FS_PATH_MAX * 2]u8
+    if !CopyCString(path, bytes[:]) {
+        return false
+    }
+    return audio_file_readable_host(bytes[:])
+}
+
+#program_export
+app_audio_music_file_valid :: (path: string) -> bool {
+    return AudioFileValid(path, true)
+}
+
+#program_export
+app_audio_sound_file_valid :: (path: string) -> bool {
+    return AudioFileValid(path, false)
+}
+
+AudioTitleFromPath :: (source: string, output: []u8) {
+    if output.count == 0 {
+        return
+    }
+    start: s32 = 0
+    end: s32 = cast(s32)source.count
+    index: s32 = 0
+    while index < cast(s32)source.count {
+        if source[index] == cast(u8)47 || source[index] == cast(u8)92 {
+            start = index + 1
+        }
+        index += 1
+    }
+    index = start
+    while index < cast(s32)source.count {
+        if source[index] == cast(u8)46 {
+            end = index
+        }
+        index += 1
+    }
+    if end <= start {
+        source = "Custom audio"
+        start = 0
+        end = cast(s32)source.count
+    }
+    index = 0
+    while start + index < end && index + 1 < cast(s32)output.count {
+        output[index] = source[start + index]
+        index += 1
+    }
+    output[index] = 0
+    if index > 0 && output[0] >= cast(u8)97 && output[0] <= cast(u8)122 {
+        output[0] -= cast(u8)32
+    }
+}
+
+AudioBuiltInFile :: (index: s32) -> string {
+    if index == 0 {
+        if Plan9Platform() != 0 {
+            return "Elijah_K/deep-meditation.wav"
+        }
+        return "Elijah_K/deep-meditation.ogg"
+    }
+    if index == 1 {
+        if Plan9Platform() != 0 {
+            return "Elijah_K/path-of-meditation.wav"
+        }
+        return "Elijah_K/path-of-meditation.ogg"
+    }
+    if index == 2 {
+        if Plan9Platform() != 0 {
+            return "Elijah_K/truth-of-silence.wav"
+        }
+        return "Elijah_K/truth-of-silence.ogg"
+    }
+    return ""
+}
+
+AudioImportOutcome :: struct {
+    index: s32
+    error: s32
+    item: AudioLibraryItem
+}
+
+AudioImportItem :: (count: s32, capacity: s32,
+    kind: string, source: string, music: bool) -> AudioImportOutcome {
+    result: AudioImportOutcome
+    result.index = -1
+    result.error = AUDIO_IMPORT_ERROR_UNKNOWN
+    if count < 0 || count >= capacity {
+        return result
+    }
+    if source.count == 0 || source.count >= FS_PATH_MAX * 2 {
+        result.error = AUDIO_IMPORT_ERROR_INVALID_PATH
+        return result
+    }
+    if !AudioExtensionAllowed(source, music) {
+        result.error = AUDIO_IMPORT_ERROR_INVALID_FORMAT
+        return result
+    }
+    source_bytes: [FS_PATH_MAX * 2]u8
+    if !CopyCString(source, source_bytes[:]) {
+        result.error = AUDIO_IMPORT_ERROR_INVALID_PATH
+        return result
+    }
+    if !audio_file_readable_host(source_bytes[:]) {
+        result.error = AUDIO_IMPORT_ERROR_FILE_NOT_FOUND
+        return result
+    }
+
+    root := data_root()
+    directory := AudioPathStart()
+    if root.count == 0 || !AudioPathAppend(*directory, root)  || !AudioPathAppend(*directory, "/audio")  || !audio_ensure_directory_host(directory.bytes[:])  || !AudioPathAppend(*directory, "/")  || !AudioPathAppend(*directory, kind)  || !audio_ensure_directory_host(directory.bytes[:]) {
+        result.error = AUDIO_IMPORT_ERROR_COPY_FAILED
+        return result
+    }
+
+    index: s32 = count
+    destination := AudioPathStart()
+    ordinal: s32 = 1
+    while ordinal <= 99 {
+        destination = directory
+        if !AudioPathAppend(*destination, "/custom-")  || !AudioPathAppendIndex(*destination, ordinal)  || !AudioPathAppend(*destination, AudioExtension(source))  || destination.count >= FS_PATH_MAX {
+            result.error = AUDIO_IMPORT_ERROR_COPY_FAILED
+            return result
+        }
+        if !audio_file_exists_host(destination.bytes[:]) {
+            break
+        }
+        ordinal += 1
+    }
+    if ordinal > 99  || !audio_copy_file_host(source_bytes[:], destination.bytes[:])  || !audio_file_readable_host(destination.bytes[:]) {
+        result.error = AUDIO_IMPORT_ERROR_COPY_FAILED
+        return result
+    }
+
+    item: AudioLibraryItem
+    AudioTitleFromPath(source, item.title[:])
+    if !AudioPathCopy(destination, item.path[:]) {
+        audio_delete_file_host(destination.bytes[:])
+        result.error = AUDIO_IMPORT_ERROR_COPY_FAILED
+        return result
+    }
+    result.item = item
+    result.index = index
+    result.error = AUDIO_IMPORT_SUCCESS
+    return result
+}
+
+#program_export
+app_audio_import_custom_sound :: (app: *InnerBreeze,
+    cue: s32, path: string) -> bool {
+    error_code: s32
+    return app_audio_import_custom_sound_ex(app, cue, path, *error_code)
+}
+
+#program_export
+app_audio_import_custom_sound_ex :: (app: *InnerBreeze,
+    cue: s32, path: string, error_code: *s32) -> bool {
+    if app == null {
+        if error_code != null {
+            error_code.* = AUDIO_IMPORT_ERROR_UNKNOWN
+        }
+        return false
+    }
+    outcome := AudioImportItem(app.audio_custom_sound_count,
+        AUDIO_CUSTOM_SOUND_MAX, "sounds", path, false)
+    if error_code != null {
+        error_code.* = outcome.error
+    }
+    if outcome.index < 0 {
+        return false
+    }
+    app.audio_custom_sounds[outcome.index] = outcome.item
+    app.audio_custom_sound_count = outcome.index + 1
+    if cue >= 0 && cue < AUDIO_CUE_COUNT {
+        app.audio_cue_selected[cue] = outcome.index + 1
+    }
+    AudioSettingsSave(app)
+    audio_reload_cues(app)
+    return true
+}
+
+#program_export
+app_audio_import_custom_music :: (app: *InnerBreeze,
+    path: string) -> bool {
+    error_code: s32
+    return app_audio_import_custom_music_ex(app, path, *error_code)
+}
+
+#program_export
+app_audio_import_custom_music_ex :: (app: *InnerBreeze,
+    path: string, error_code: *s32) -> bool {
+    if app == null {
+        if error_code != null {
+            error_code.* = AUDIO_IMPORT_ERROR_UNKNOWN
+        }
+        return false
+    }
+    outcome := AudioImportItem(app.audio_custom_music_count,
+        AUDIO_CUSTOM_MUSIC_MAX, "music", path, true)
+    if error_code != null {
+        error_code.* = outcome.error
+    }
+    if outcome.index < 0 {
+        return false
+    }
+    app.audio_custom_music[outcome.index] = outcome.item
+    app.audio_custom_music_count = outcome.index + 1
+    if !ProbeMusicFile(outcome.item.path[:]) {
+        audio_delete_file_host(outcome.item.path[:])
+        app.audio_custom_music[outcome.index] = AudioLibraryItem.{}
+        app.audio_custom_music_count = outcome.index
+        if error_code != null {
+            error_code.* = AUDIO_IMPORT_ERROR_INVALID_FORMAT
+        }
+        return false
+    }
+    app.meditation.music_track = AUDIO_BUILTIN_MUSIC_COUNT + outcome.index
+    app_audio_music_sanitize_selection(app)
+    AudioSettingsSave(app)
+    return true
+}
+
+#program_export
+app_audio_remove_custom_sound :: (app: *InnerBreeze, index: s32) -> bool {
+    if app == null || index < 0 || index >= app.audio_custom_sound_count {
+        return false
+    }
+    current: s32 = index
+    while current + 1 < app.audio_custom_sound_count {
+        app.audio_custom_sounds[current] = app.audio_custom_sounds[current + 1]
+        current += 1
+    }
+    app.audio_custom_sound_count -= 1
+    app.audio_custom_sounds[app.audio_custom_sound_count] = AudioLibraryItem.{}
+    cue: s32 = 0
+    while cue < AUDIO_CUE_COUNT {
+        if app.audio_cue_selected[cue] == index + 1 {
+            app.audio_cue_selected[cue] = 0
+        } else if app.audio_cue_selected[cue] > index + 1 {
+            app.audio_cue_selected[cue] -= 1
+        }
+        cue += 1
+    }
+    AudioSettingsSave(app)
+    audio_reload_cues(app)
+    return true
+}
+
+#program_export
+app_audio_remove_custom_music :: (app: *InnerBreeze, index: s32) -> bool {
+    if app == null || index < 0 || index >= app.audio_custom_music_count {
+        return false
+    }
+    audio_unload_meditation(app)
+    current: s32 = index
+    while current + 1 < app.audio_custom_music_count {
+        app.audio_custom_music[current] = app.audio_custom_music[current + 1]
+        current += 1
+    }
+    app.audio_custom_music_count -= 1
+    app.audio_custom_music[app.audio_custom_music_count] = AudioLibraryItem.{}
+    removed_track: s32 = AUDIO_BUILTIN_MUSIC_COUNT + index
+    if app.meditation.music_track == removed_track {
+        app.meditation.music_track = 0
+    } else if app.meditation.music_track > removed_track {
+        app.meditation.music_track -= 1
+    }
+    current = 0
+    while current < EXERCISE_COUNT {
+        if app.meditation.music_practice_tracks[current] == removed_track {
+            app.meditation.music_practice_tracks[current] = 0
+        } else if app.meditation.music_practice_tracks[current] > removed_track {
+            app.meditation.music_practice_tracks[current] -= 1
+        }
+        current += 1
+    }
+    app_audio_music_sanitize_selection(app)
+    AudioSettingsSave(app)
+    return true
+}
+
+#program_export
+app_audio_music_label :: (app: *InnerBreeze, index: s32) -> string {
+    if index == 0 {
+        return "Deep Meditation"
+    }
+    if index == 1 {
+        return "Path Of Meditation"
+    }
+    if index == 2 {
+        return "Truth Of Silence"
+    }
+    custom: s32 = index - AUDIO_BUILTIN_MUSIC_COUNT
+    if app != null && custom >= 0 && custom < app.audio_custom_music_count {
+        return audio_cstring_pointer_host(*app.audio_custom_music[custom].title[0], 64)
+    }
+    return ""
+}
+
+#program_export
+app_audio_cue_default_asset :: (cue: s32) -> string {
+    if cue == AUDIO_CUE_BREATH_IN {
+        if Plan9Platform() != 0 {
+            return "breath-in.wav"
+        }
+        return "breath-in.ogg"
+    }
+    if cue == AUDIO_CUE_BREATH_OUT {
+        if Plan9Platform() != 0 {
+            return "breath-out.wav"
+        }
+        return "breath-out.ogg"
+    }
+    if cue == AUDIO_CUE_BELL {
+        if Plan9Platform() != 0 {
+            return "bell.wav"
+        }
+        return "bell.ogg"
+    }
+    return ""
+}
+
+#program_export
+app_audio_cue_path :: (app: *InnerBreeze,
+    cue: s32, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = 0
+    if app == null || cue < 0 || cue >= AUDIO_CUE_COUNT {
+        return false
+    }
+    selected: s32 = app.audio_cue_selected[cue]
+    if selected <= 0 || selected > app.audio_custom_sound_count {
+        return false
+    }
+    path := audio_cstring_pointer_host(
+        *app.audio_custom_sounds[selected - 1].path[0], FS_PATH_MAX)
+    if !app_audio_sound_file_valid(path) {
+        app.audio_cue_selected[cue] = 0
+        return false
+    }
+    return CopyCString(path, output)
+}
+
+AudioBuiltinCandidate :: (prefix: string, name: string,
+    output: []u8) -> bool {
+    candidate := AudioPathStart()
+    if !AudioPathAppend(*candidate, prefix)  || !AudioPathAppend(*candidate, name)  || !AudioFileValid(AudioCStringView(candidate.bytes[:]), true) {
+        return false
+    }
+    return AudioPathCopy(candidate, output)
+}
+
+#program_export
+app_audio_music_path :: (app: *InnerBreeze,
+    index: s32, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = 0
+    if index >= 0 && index < AUDIO_BUILTIN_MUSIC_COUNT {
+        name := AudioBuiltInFile(index)
+        if (Plan9Platform() != 0 || audio_local_assets_host())  && AudioBuiltinCandidate("unpackaged_assets/audio/", name, output) {
+            return true
+        }
+        if app != null && app.meditation.music_cache_dir[0] != 0 {
+            prefix := AudioPathStart()
+            if AudioPathAppend(*prefix,
+                audio_cstring_pointer_host(
+                    *app.meditation.music_cache_dir[0], FS_PATH_MAX))  && AudioPathAppend(*prefix, "/audio/")  && AudioBuiltinCandidate(AudioCStringView(prefix.bytes[:]),
+                    name, output) {
+                return true
+            }
+        }
+        return AudioBuiltinCandidate("audio/", name, output)
+    }
+    custom: s32 = index - AUDIO_BUILTIN_MUSIC_COUNT
+    if app == null || custom < 0 || custom >= app.audio_custom_music_count {
+        return false
+    }
+    path := audio_cstring_pointer_host(
+        *app.audio_custom_music[custom].path[0], FS_PATH_MAX)
+    if !app_audio_music_file_valid(path) {
+        return false
+    }
+    return CopyCString(path, output)
+}

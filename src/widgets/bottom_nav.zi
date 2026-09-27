@@ -1,0 +1,315 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "geometry"
+#import "image_props"
+#import "image_widget"
+#import "layout"
+#import "navigation_bar_props"
+#import "navigation_bar_widget"
+#import "paint_queue"
+#import "session"
+#import "style"
+#import "text_props"
+#import "text_widget"
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/profile_image_picker.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../core/types.zi";
+#import, file "../app/modal_rules.zi";
+
+using AppMainTab;
+using AppNavRoute;
+using ButtonEmphasis;
+using ButtonTone;
+using ModalType;
+using NavigationPlacement;
+using TextWrap;
+
+DesktopRailLayout :: struct {
+    x: s32
+    width: s32
+    route_y: s32
+    gap: s32
+    item_height: s32
+    footer_y: s32
+}
+
+bottom_nav_route_image :: (route: s32) -> ImageProps {
+    image: ImageProps
+    image.asset_path = "icons/ui.png"
+    image.alt_text = app_nav_route_label(route)
+    x: s32 = 384
+    y: s32 = 192
+    if route == APP_NAV_ROUTE_ELIST {
+        x = 64
+        y = 448
+    } else if route == APP_NAV_ROUTE_HABITS {
+        x = 128
+        y = 448
+    } else if route == APP_NAV_ROUTE_PRACTICE {
+        x = 192
+        y = 448
+    } else if route == APP_NAV_ROUTE_SETTINGS {
+        x = 256
+        y = 448
+    } else if route == APP_NAV_ROUTE_DATA {
+        x = 256
+        y = 256
+    } else if route == APP_NAV_ROUTE_LEADERBOARD {
+        x = 192
+        y = 320
+    }
+    image.source = Rectangle.{cast(float32)x, cast(float32)y, 64.0, 64.0 }
+    return image
+}
+
+bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
+    if app == null {
+        return false
+    }
+    if route == APP_NAV_ROUTE_PROFILE {
+        return app.breathing.screen == ScreenProfile  && app.profile_view == PROFILE_VIEW_MAIN  && app.profile_tab == PROFILE_TAB_OVERVIEW
+    }
+    if route == APP_NAV_ROUTE_ACCOUNT {
+        return app.breathing.screen == ScreenProfile  && app.profile_view == PROFILE_VIEW_MAIN  && app.profile_tab == PROFILE_TAB_SYNC
+    }
+    if route == APP_NAV_ROUTE_DATA {
+        return app.breathing.screen == ScreenProfile  && (app.profile_view == PROFILE_VIEW_DATA  || app.profile_tab == PROFILE_TAB_DATA)
+    }
+    if route == APP_NAV_ROUTE_FRIENDS {
+        return app.breathing.screen == ScreenProfile  && app.profile_tab == PROFILE_TAB_FRIENDS
+    }
+    if route == APP_NAV_ROUTE_LEADERBOARD {
+        return app.breathing.screen == ScreenProfile  && app.profile_tab == PROFILE_TAB_LEADERBOARD
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        return app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_PRACTICE
+    }
+    if route == APP_NAV_ROUTE_HABITS {
+        return app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenHabitSessionEdit
+    }
+    if route == APP_NAV_ROUTE_SETTINGS {
+        return app.breathing.screen == ScreenSettings
+    }
+    return route == APP_NAV_ROUTE_ELIST  && app.breathing.screen == ScreenEList
+}
+
+bottom_nav_should_draw :: (app: *InnerBreeze) -> bool {
+    if app == null || app_nav_desktop_rail_enabled(app) != 0  || app.breathing.screen == ScreenHabitEdit  || app.file_dialog_active != 0 {
+        return false
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
+        return false
+    }
+    return app_current_nav_route(app) != APP_NAV_ROUTE_NONE  || (app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_NONE)
+}
+
+desktop_rail_layout :: (app: *InnerBreeze) -> DesktopRailLayout {
+    layout: DesktopRailLayout
+    if app == null || app_nav_desktop_rail_enabled(app) == 0 {
+        return layout
+    }
+    layout.width = app_nav_desktop_rail_width(app)
+    layout.x = -layout.width
+    if app_navigation_placement(app) == NAVIGATION_RIGHT {
+        layout.x = app.ui.view_width
+    }
+    layout.route_y = AppScale(120)
+    layout.gap = AppScale(12)
+    layout.item_height = AppScale(52)
+    layout.footer_y = app.ui.view_height - AppScale(24) -         layout.item_height
+    minimum := layout.route_y +         3 * (layout.item_height + layout.gap) + AppScale(16)
+    if layout.footer_y < minimum {
+        layout.footer_y = minimum
+    }
+    return layout
+}
+
+desktop_rail_button :: (app: *InnerBreeze, route: s32,
+    layout: DesktopRailLayout, y: s32) -> bool {
+    margin := AppScale(16)
+    button: ButtonProps
+    button.id = cast(s32)6600 + route
+    button.bounds = Rectangle.{cast(float32)(layout.x + margin),
+        cast(float32)y, cast(float32)(layout.width - margin * 2),
+        cast(float32)layout.item_height
+}
+    button.label = app_nav_route_label(route)
+    button.image = bottom_nav_route_image(route)
+    button.icon_only = app.nav_rail_collapsed != 0
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    if bottom_nav_route_active(app, route) {
+        button.tone = cast(ButtonTone)ButtonToneAccent
+    }
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    button.selected = bottom_nav_route_active(app, route)
+    button.disabled = app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
+    if Button(app.ui.session, button) == 0 {
+        return false
+    }
+    app_apply_nav_route(app, route)
+    return true
+}
+
+desktop_rail_profile_button :: (app: *InnerBreeze,
+    layout: DesktopRailLayout) -> bool {
+    label_bytes: [96]u8
+    subtitle_bytes: [96]u8
+    app_nav_profile_identity(app, label_bytes[:], 96,
+        subtitle_bytes[:], 96)
+    label := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*label_bytes[0], 96))
+    subtitle := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*subtitle_bytes[0], 96))
+    margin := AppScale(16)
+    y := AppScale(16)
+    height := AppScale(76)
+    button: ButtonProps
+    button.id = 6690
+    button.bounds = Rectangle.{cast(float32)(layout.x + margin),
+        cast(float32)y, cast(float32)(layout.width - margin * 2),
+        cast(float32)height
+}
+    button.icon_only = app.nav_rail_collapsed != 0
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    if app.breathing.screen == ScreenProfile {
+        button.tone = cast(ButtonTone)ButtonToneAccent
+    }
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    button.invisible = true
+    button.selected = app.breathing.screen == ScreenProfile
+    button.disabled = app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
+    clicked := Button(app.ui.session, button) != 0
+
+    avatar_size := AppScale(40)
+    avatar_x := layout.x + margin + AppScale(12)
+    if app.nav_rail_collapsed != 0 {
+        avatar_x = layout.x + (layout.width - avatar_size) / 2
+    }
+    avatar_y := y + (height - avatar_size) / 2
+    avatar_background := LightenColor(StyleTokenColor("accent"), 30)
+    DrawCircle(avatar_x + avatar_size / 2,
+        avatar_y + avatar_size / 2, cast(float32)(avatar_size / 2),
+        avatar_background)
+    avatar_image := ProfilePictureImage(app.profile_picture_icon, label)
+    avatar_image.bounds = Rectangle.{cast(float32)avatar_x,
+        cast(float32)avatar_y, cast(float32)avatar_size,
+        cast(float32)avatar_size
+}
+    Image(app.ui.session, avatar_image)
+
+    if app.nav_rail_collapsed == 0 {
+        text_x := avatar_x + avatar_size + AppScale(12)
+        text_width := layout.x + layout.width - margin - AppScale(12) - text_x
+        label_props: TextProps
+        label_props.text = label
+        label_props.font = AppScale(Text14)
+        label_props.bounds = Rectangle.{cast(float32)text_x,
+            cast(float32)(y + AppScale(16)), cast(float32)text_width,
+            cast(float32)AppScale(18)
+}
+        label_props.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, label_props)
+        text_props: TextProps
+        text_props.text = subtitle
+        text_props.font = AppScale(Text12)
+        text_props.bounds = Rectangle.{
+            cast(float32)text_x,
+            cast(float32)(y + AppScale(40)),
+            cast(float32)text_width,
+            cast(float32)AppScale(16)
+}
+        text_props.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, text_props)
+    }
+    if clicked {
+        app_apply_nav_route(app, APP_NAV_ROUTE_PROFILE)
+    }
+    return clicked
+}
+
+app_draw_desktop_nav_rail :: (app: *InnerBreeze) {
+    layout := desktop_rail_layout(app)
+    if layout.width <= 0 {
+        return
+    }
+    background := Rectangle.{cast(float32)layout.x, 0.0,
+        cast(float32)layout.width, cast(float32)app.ui.view_height
+}
+    rail_background := DarkenColor(StyleTokenColor("canvas"), 9)
+    DrawRectangle(cast(s32)background.x, 0,
+        cast(s32)background.width, cast(s32)background.height,
+        rail_background)
+    divider_color := Fade(StyleTokenColor("text"), 0.12)
+    divider_x := cast(s32)(background.x + background.width - 1)
+    if app_navigation_placement(app) == NAVIGATION_RIGHT {
+        divider_x = cast(s32)background.x
+    }
+    DrawLine(divider_x, 0, divider_x, app.ui.view_height, divider_color)
+    app_sanitize_bottom_nav_routes(app)
+    if desktop_rail_profile_button(app, layout) {
+        return
+    }
+    route_y := layout.route_y
+    for i: 0..(cast(int)app.bottom_nav_route_count - 1) {
+        route := app.bottom_nav_routes[i]
+        if route == APP_NAV_ROUTE_SETTINGS  || route == APP_NAV_ROUTE_PROFILE {
+            continue
+        }
+        if desktop_rail_button(app, route, layout, route_y) {
+            return
+        }
+        route_y += layout.item_height + layout.gap
+    }
+    unused desktop_rail_button(app, APP_NAV_ROUTE_SETTINGS,
+        layout, layout.footer_y)
+}
+
+#program_export
+app_draw_bottom_nav :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) {
+        return
+    }
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        app_draw_desktop_nav_rail(app)
+        return
+    }
+    if !bottom_nav_should_draw(app) {
+        return
+    }
+    app_sanitize_bottom_nav_routes(app)
+    count := app.bottom_nav_route_count
+    if count <= 0 {
+        return
+    }
+    items: [APP_BOTTOM_NAV_CONTENT_MAX]NavigationBarItem
+    blocked := app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
+    for i: 0..(cast(int)count - 1) {
+        route := app.bottom_nav_routes[i]
+        items[i].key = cast(u64)(6600 + route)
+        items[i].route = route
+        items[i].label = app_nav_route_label(route)
+        items[i].image = bottom_nav_route_image(route)
+        items[i].active = bottom_nav_route_active(app, route)
+        items[i].disabled = blocked
+    }
+    props: NavigationBarProps
+    props.key = KeyHash("inbe/navigation")
+    props.id = 6500
+    props.view_width = app.ui.view_width
+    props.view_height = app.ui.view_height
+    if app_navigation_placement(app) == NAVIGATION_TOP {
+        props.view_height = 1
+    }
+    props.height = AppScale(86)
+    result := NavigationBar(app.ui.session, props, items[0:count])
+    if !blocked && result.clicked_route != APP_NAV_ROUTE_NONE {
+        app_apply_nav_route(app, result.clicked_route)
+    }
+}

@@ -1,0 +1,114 @@
+// Logging and the shared peak sample for the app's audio meter.
+#import "byte_text_linux"
+#import "c_string"
+
+raylib :: #system_library "raylib";
+HostAudioTrace :: (level: s32, format: *u8,
+    args: ..any) #foreign raylib "TraceLog";
+
+AUDIO_ATOMIC_METER :: #defined(PLATFORM_DESKTOP) || #defined(ANDROID_BUILD)
+#if AUDIO_ATOMIC_METER {
+    atomic :: #system_library "atomic";
+    AudioAtomicLoad :: (value: *s32, order: s32) -> s32 #foreign atomic "__atomic_load_4";
+    AudioAtomicCompare :: (value: *s32, expected: *s32,
+        desired: s32, weak: bool, success_order: s32,
+        failure_order: s32) -> bool #foreign atomic "__atomic_compare_exchange_4";
+    AudioAtomicExchange :: (value: *s32, replacement: s32,
+        order: s32) -> s32 #foreign atomic "__atomic_exchange_4";
+    AudioAtomicStore :: (value: *s32, replacement: s32,
+        order: s32) #foreign atomic "__atomic_store_4";
+}
+
+audio_meter_peak_milli: s32;
+
+AudioTraceBytes :: (message: string) -> *u8 {
+    if message.count == 0 {
+        return null
+    }
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*message)
+    return descriptor.data
+}
+
+AudioTraceLength :: (message: string) -> s32 {
+    if message.count > 2147483647 {
+        return 2147483647
+    }
+    return cast(s32)message.count
+}
+
+#program_export
+app_audio_trace :: (level: s32, message: string) {
+    format: [8]u8
+    empty: [1]u8 = .[0]
+    if !CopyCString("%.*s", format[:]) {
+        return
+    }
+    data := AudioTraceBytes(message)
+    if data == null {
+        data = *empty[0]
+    }
+    HostAudioTrace(level, *format[0], AudioTraceLength(message), data)
+}
+
+#program_export
+app_audio_trace_frames :: (level: s32, message: string,
+    frames: s32) {
+    format: [24]u8
+    empty: [1]u8 = .[0]
+    if !CopyCString("%.*s (%d frames)", format[:]) {
+        return
+    }
+    data := AudioTraceBytes(message)
+    if data == null {
+        data = *empty[0]
+    }
+    HostAudioTrace(level, *format[0], AudioTraceLength(message),
+        data, frames)
+}
+
+#program_export
+app_audio_decoder_data :: (data: string) -> *u8 {
+    if data.count == 0 {
+        return null
+    }
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*data)
+    return descriptor.data
+}
+
+#program_export
+app_audio_meter_raise :: (peak_milli: s32) {
+    #if AUDIO_ATOMIC_METER {
+        current := AudioAtomicLoad(*audio_meter_peak_milli, 0)
+        while current < peak_milli {
+            expected := current
+            if AudioAtomicCompare(*audio_meter_peak_milli, *expected,
+                peak_milli, true, 0, 0) {
+                return
+            }
+            current = expected
+        }
+        return
+    }
+    if audio_meter_peak_milli < peak_milli {
+        audio_meter_peak_milli = peak_milli
+    }
+}
+
+#program_export
+app_audio_meter_take :: () -> s32 {
+    #if AUDIO_ATOMIC_METER {
+        return AudioAtomicExchange(*audio_meter_peak_milli, 0, 4)
+    }
+    value := audio_meter_peak_milli
+    audio_meter_peak_milli = 0
+    return value
+}
+
+#program_export
+app_audio_meter_clear :: () {
+    #if AUDIO_ATOMIC_METER {
+        AudioAtomicStore(*audio_meter_peak_milli, 0, 3)
+        return
+    }
+    audio_meter_peak_milli = 0
+}

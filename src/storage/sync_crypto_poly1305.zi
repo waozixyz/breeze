@@ -1,0 +1,191 @@
+// Poly1305 over 26-bit limbs for Inbe's RFC 8439 encrypted records.
+
+Poly1305State :: struct {
+    r: [5]u64
+    scaled: [4]u64
+    h: [5]u64
+}
+
+Poly1305Load32 :: (bytes: *u8) -> u32 {
+    return cast(u32)bytes[0] |
+        (cast(u32)bytes[1] << cast(u32)8) |
+        (cast(u32)bytes[2] << cast(u32)16) |
+        (cast(u32)bytes[3] << cast(u32)24)
+}
+
+Poly1305Store32 :: (bytes: *u8, value: u32) {
+    bytes[0] = cast(u8)value
+    bytes[1] = cast(u8)(value >> cast(u32)8)
+    bytes[2] = cast(u8)(value >> cast(u32)16)
+    bytes[3] = cast(u8)(value >> cast(u32)24)
+}
+
+Poly1305Initialize :: (state: *Poly1305State, key: *u8) {
+    state.* = Poly1305State.{}
+    state.r[0] = cast(u64)Poly1305Load32(key) & cast(u64)0x3ffffff
+    state.r[1] = cast(u64)(Poly1305Load32(*key[3]) >> cast(u32)2) & cast(u64)0x3ffff03
+    state.r[2] = cast(u64)(Poly1305Load32(*key[6]) >> cast(u32)4) & cast(u64)0x3ffc0ff
+    state.r[3] = cast(u64)(Poly1305Load32(*key[9]) >> cast(u32)6) & cast(u64)0x3f03fff
+    state.r[4] = cast(u64)(Poly1305Load32(*key[12]) >> cast(u32)8) & cast(u64)0x00fffff
+    state.scaled[0] = state.r[1] * 5
+    state.scaled[1] = state.r[2] * 5
+    state.scaled[2] = state.r[3] * 5
+    state.scaled[3] = state.r[4] * 5
+}
+
+Poly1305Block :: (state: *Poly1305State, message: *u8, length: s32) {
+    block: [17]u8 = .[0]
+    index: s32 = 0
+    while index < length {
+        block[index] = message[index]
+        index += 1
+    }
+    if length < 16 {
+        block[length] = 1
+    }
+
+    input: [5]u64
+    input[0] = cast(u64)Poly1305Load32(*block[0]) & cast(u64)0x3ffffff
+    input[1] = cast(u64)(Poly1305Load32(*block[3]) >> cast(u32)2) & cast(u64)0x3ffffff
+    input[2] = cast(u64)(Poly1305Load32(*block[6]) >> cast(u32)4) & cast(u64)0x3ffffff
+    input[3] = cast(u64)(Poly1305Load32(*block[9]) >> cast(u32)6) & cast(u64)0x3ffffff
+    input[4] = cast(u64)(Poly1305Load32(*block[12]) >> cast(u32)8)
+    if length == 16 {
+        input[4] |= cast(u64)1 << cast(u64)24
+    }
+
+    index = 0
+    while index < 5 {
+        state.h[index] += input[index]
+        index += 1
+    }
+
+    d0 := state.h[0] * state.r[0] + state.h[1] * state.scaled[3] +
+        state.h[2] * state.scaled[2] + state.h[3] * state.scaled[1] +
+        state.h[4] * state.scaled[0]
+    d1 := state.h[1] * state.r[0] + state.h[2] * state.scaled[3] +
+        state.h[3] * state.scaled[2] + state.h[4] * state.scaled[1] +
+        state.h[0] * state.r[1]
+    d2 := state.h[2] * state.r[0] + state.h[3] * state.scaled[3] +
+        state.h[4] * state.scaled[2] + state.h[0] * state.r[2] +
+        state.h[1] * state.r[1]
+    d3 := state.h[3] * state.r[0] + state.h[4] * state.scaled[3] +
+        state.h[0] * state.r[3] + state.h[1] * state.r[2] +
+        state.h[2] * state.r[1]
+    d4 := state.h[4] * state.r[0] + state.h[0] * state.r[4] +
+        state.h[1] * state.r[3] + state.h[2] * state.r[2] +
+        state.h[3] * state.r[1]
+
+    carry := d0 >> cast(u64)26
+    state.h[0] = d0 & cast(u64)0x3ffffff
+    d1 += carry
+    carry = d1 >> cast(u64)26
+    state.h[1] = d1 & cast(u64)0x3ffffff
+    d2 += carry
+    carry = d2 >> cast(u64)26
+    state.h[2] = d2 & cast(u64)0x3ffffff
+    d3 += carry
+    carry = d3 >> cast(u64)26
+    state.h[3] = d3 & cast(u64)0x3ffffff
+    d4 += carry
+    carry = d4 >> cast(u64)26
+    state.h[4] = d4 & cast(u64)0x3ffffff
+    state.h[0] += carry * 5
+    carry = state.h[0] >> cast(u64)26
+    state.h[0] &= cast(u64)0x3ffffff
+    state.h[1] += carry
+}
+
+Poly1305AeadPadded :: (state: *Poly1305State, data: *u8, length: s64) {
+    offset: s64 = 0
+    while length - offset >= 16 {
+        Poly1305Block(state, *data[offset], 16)
+        offset += 16
+    }
+    if offset < length {
+        padded: [16]u8 = .[0]
+        index: s32 = 0
+        while cast(s64)index < length - offset {
+            padded[index] = data[offset + cast(s64)index]
+            index += 1
+        }
+        Poly1305Block(state, *padded[0], 16)
+    }
+}
+
+Poly1305Finish :: (state: *Poly1305State, key: *u8, tag: *u8) {
+    carry := state.h[1] >> cast(u64)26
+    state.h[1] &= cast(u64)0x3ffffff
+    state.h[2] += carry
+    carry = state.h[2] >> cast(u64)26
+    state.h[2] &= cast(u64)0x3ffffff
+    state.h[3] += carry
+    carry = state.h[3] >> cast(u64)26
+    state.h[3] &= cast(u64)0x3ffffff
+    state.h[4] += carry
+    carry = state.h[4] >> cast(u64)26
+    state.h[4] &= cast(u64)0x3ffffff
+    state.h[0] += carry * 5
+    carry = state.h[0] >> cast(u64)26
+    state.h[0] &= cast(u64)0x3ffffff
+    state.h[1] += carry
+
+    reduced: [5]u64
+    reduced[0] = state.h[0] + 5
+    carry = reduced[0] >> cast(u64)26
+    reduced[0] &= cast(u64)0x3ffffff
+    reduced[1] = state.h[1] + carry
+    carry = reduced[1] >> cast(u64)26
+    reduced[1] &= cast(u64)0x3ffffff
+    reduced[2] = state.h[2] + carry
+    carry = reduced[2] >> cast(u64)26
+    reduced[2] &= cast(u64)0x3ffffff
+    reduced[3] = state.h[3] + carry
+    carry = reduced[3] >> cast(u64)26
+    reduced[3] &= cast(u64)0x3ffffff
+    reduced[4] = state.h[4] + carry - (cast(u64)1 << cast(u64)26)
+
+    use_reduced := (reduced[4] >> cast(u64)63) - 1
+    index: s32 = 0
+    while index < 5 {
+        state.h[index] = (state.h[index] & ~use_reduced) |
+            (reduced[index] & use_reduced)
+        index += 1
+    }
+
+    low := state.h[0] | (state.h[1] << cast(u64)26) |
+        ((state.h[2] & cast(u64)0xfff) << cast(u64)52)
+    high := (state.h[2] >> cast(u64)12) |
+        (state.h[3] << cast(u64)14) | (state.h[4] << cast(u64)40)
+
+    word := (low & cast(u64)0xffffffff) + cast(u64)Poly1305Load32(*key[16])
+    Poly1305Store32(tag, cast(u32)word)
+    word = (low >> cast(u64)32) + cast(u64)Poly1305Load32(*key[20]) +
+        (word >> cast(u64)32)
+    Poly1305Store32(*tag[4], cast(u32)word)
+    word = (high & cast(u64)0xffffffff) + cast(u64)Poly1305Load32(*key[24]) +
+        (word >> cast(u64)32)
+    Poly1305Store32(*tag[8], cast(u32)word)
+    word = (high >> cast(u64)32) + cast(u64)Poly1305Load32(*key[28]) +
+        (word >> cast(u64)32)
+    Poly1305Store32(*tag[12], cast(u32)word)
+}
+
+Poly1305AeadTag :: (key: *u8, aad: *u8, aad_length: s64,
+    ciphertext: *u8, ciphertext_length: s64, tag: *u8) {
+    state: Poly1305State
+    Poly1305Initialize(*state, key)
+    if aad_length > 0 {
+        Poly1305AeadPadded(*state, aad, aad_length)
+    }
+    if ciphertext_length > 0 {
+        Poly1305AeadPadded(*state, ciphertext, ciphertext_length)
+    }
+    lengths: [16]u8
+    Poly1305Store32(*lengths[0], cast(u32)aad_length)
+    Poly1305Store32(*lengths[4], cast(u32)(cast(u64)aad_length >> cast(u64)32))
+    Poly1305Store32(*lengths[8], cast(u32)ciphertext_length)
+    Poly1305Store32(*lengths[12], cast(u32)(cast(u64)ciphertext_length >> cast(u64)32))
+    Poly1305Block(*state, *lengths[0], 16)
+    Poly1305Finish(*state, key, tag)
+}

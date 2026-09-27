@@ -1,0 +1,91 @@
+c :: #system_library "c";
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../storage/session_mood.zi";
+#import, file "../app/text_buffers.zi";
+
+// The storage implementation is a separate Ziran translation unit.
+data_discard_session :: (path: string) -> s32 #foreign c;
+
+SessionResultCopyText :: (destination: []u8, source: *u8) {
+    if destination.count == 0 {
+        return
+    }
+    index: s32 = 0
+    limit: s32 = cast(s32)destination.count - 1
+    if source != null {
+        while index < limit && source[index] != 0 {
+            destination[index] = source[index]
+            index += 1
+        }
+    }
+    destination[index] = 0
+}
+
+#program_export
+app_prepare_session_results :: (app: *InnerBreeze, activity: s32,
+    primary_value: s32, secondary_value: s32, detail: *u8,
+    round_values: *s32, round_count: s32, saved_path: *u8) {
+    if app == null {
+        return
+    }
+    result: SessionResult
+    result.active = 1
+    result.activity = practice_clamp_id(activity)
+    result.primary_value = primary_value
+    result.secondary_value = secondary_value
+    SessionResultCopyText(result.detail[:], detail)
+    if round_values != null && round_count > 0 {
+        if round_count > MaxRounds {
+            round_count = MaxRounds
+        }
+        result.round_count = round_count
+        index: s32 = 0
+        while index < round_count {
+            result.round_values[index] = round_values[index]
+            index += 1
+        }
+    }
+    if saved_path != null && saved_path[0] != 0 {
+        result.saved = 1
+        SessionResultCopyText(result.path[:], saved_path)
+    }
+    app.session_result = result
+    app.results_scroll = 0
+}
+
+#program_export
+session_result_discard :: (app: *InnerBreeze) {
+    if app == null || app.session_result.active == 0 {
+        return
+    }
+    if app.session_result.saved != 0 && app.session_result.path[0] != 0 {
+        if data_discard_session(AppTextFromCString(*app.session_result.path[0],
+            size_of(type_of(app.session_result.path)))) == 0 {
+            app.session_result.write_failed = 1
+            return
+        }
+        app.ui.sync_requested = true
+    }
+    app.session_result = SessionResult.{}
+    app_switch_screen(app, ScreenStart)
+}
+
+#program_export
+session_result_done :: (app: *InnerBreeze) {
+    if app == null || app.session_result.active == 0 {
+        return
+    }
+    if app.session_result.saved != 0 && app.session_result.path[0] != 0  && app.session_result.mood > 0 {
+        if SaveSessionMood(*app.session_result.path[0],
+            app.session_result.mood) == 0 {
+            app.session_result.write_failed = 1
+            return
+        }
+        app.ui.sync_requested = true
+    }
+    app.session_result = SessionResult.{}
+    app_switch_screen(app, ScreenStart)
+}

@@ -1,0 +1,106 @@
+// Inbe's setting keys and values are bounded before reaching storage.
+c :: #system_library "c";
+#import, file "settings_key.zi";
+#import, file "text_buffers.zi";
+#import, file "settings_cache.zi";
+#import, file "../storage/setting_visitor.zi";
+
+storage_set_setting_int :: (key: string, value: s32) #foreign c;
+storage_set_setting_text :: (key: string, value: string) #foreign c;
+storage_get_setting_int :: (key: string, fallback: s32) -> s32 #foreign c;
+storage_list_settings :: (callback: SettingVisitor, user: *void) -> s32 #foreign c;
+storage_settings_empty :: () -> s32 #foreign c;
+storage_settings_begin_write :: () #foreign c;
+storage_settings_end_write :: () #foreign c;
+storage_session_count :: () -> s32 #foreign c;
+
+SettingsCollect :: (key: string, value: string, user: s64) {
+    if key.count == 0 {
+        return
+    }
+    if !SettingsCacheAdd(key, value) {
+        ok: *bool = cast(*bool)user
+        if ok != null {
+            ok.* = false
+        }
+    }
+}
+
+SettingsCacheLoadFromStorage :: () -> bool {
+    SettingsCacheFree()
+    ok: bool = true
+    if storage_list_settings(SettingsCollect, cast(*void)(*ok)) == 0 || !ok {
+        SettingsCacheFree()
+        return false
+    }
+    return true
+}
+
+#program_export
+SettingsBeginWrite :: () { storage_settings_begin_write() }
+
+#program_export
+SettingsEndWrite :: () { storage_settings_end_write() }
+
+#program_export
+SettingsEmpty :: () -> s32 { return storage_settings_empty() }
+
+#program_export
+SettingsSessionCount :: () -> s32 { return storage_session_count() }
+
+#program_export
+SettingsCacheLoad :: () -> bool { return SettingsCacheLoadFromStorage() }
+
+#program_export
+SettingsStoreKeyInt :: (key: SettingsKey, value: s32) -> bool {
+    if !SettingsKeyValid(key) {
+        return false
+    }
+    storage_set_setting_int(AppTextFromCString(*key.bytes[0], key.count + 1), value)
+    return true
+}
+
+#program_export
+SettingsStoreKeyText :: (key: SettingsKey, value: []u8) -> bool {
+    if !SettingsKeyValid(key) || value.count < 0 || value.count > 512 {
+        return false
+    }
+    if value.count > 0 && *value[0] == null {
+        return false
+    }
+    length: s32 = 0
+    while length < cast(s32)value.count && value[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == cast(s32)value.count && length > 0 {
+        return false
+    }
+    text: string = ""
+    if length > 0 {
+        text = AppTextFromCString(*value[0], length + 1)
+    }
+    storage_set_setting_text(AppTextFromCString(*key.bytes[0], key.count + 1), text)
+    return true
+}
+
+SettingsStoreInt :: (key: string, value: s32) -> bool {
+    return SettingsStoreKeyInt(SettingsKeyText(key), value)
+}
+
+SettingsStoreText :: (key: string, value: []u8) -> bool {
+    return SettingsStoreKeyText(SettingsKeyText(key), value)
+}
+
+// Validate a constructed key before reading persisted data.
+#program_export
+SettingsReadKeyInt :: (setting_key: SettingsKey, fallback: s32) -> s32 {
+    if !SettingsKeyValid(setting_key) {
+        return fallback
+    }
+    return storage_get_setting_int(
+        AppTextFromCString(*setting_key.bytes[0], setting_key.count + 1), fallback)
+}
+
+SettingsReadInt :: (key: string, fallback: s32) -> s32 {
+    return SettingsReadKeyInt(SettingsKeyText(key), fallback)
+}

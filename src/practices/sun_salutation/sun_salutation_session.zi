@@ -1,0 +1,315 @@
+c3 :: #system_library "c";
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
+sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
+sun_salutation_step_pose_index :: (step: s32) -> s32 #foreign c3;
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import "layout"
+#import "layout_widget"
+#import "tree"
+#import, file "../../app/app_notifications.zi";
+#import, file "../../app/app.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/practice_title_bar.zi";
+#import, file "sun_salutation_labels.zi";
+
+#import, file "../meditation/meditation_music.zi";
+#import, file "../practice_audio_controls.zi";
+#import, file "../session_results.zi";
+#import, file "../../storage/data.zi";
+#import, file "sun_salutation_rules.zi";
+#import, file "sun_salutation_assets.zi";
+#import, file "sun_salutation_entry.zi";
+#import "control_props"
+#import "image_props"
+#import "text_props"
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/draw.zi";
+#import, file "../../app/current_app.zi";
+#import "image_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "modal_props"
+#import "modal_widget"
+#import "toolbar_props"
+
+
+
+using ModalType;
+using ExerciseType;
+using TextWrap;
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+
+exit_to_start :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    app.sun_salutation = SalutationReset(app.sun_salutation)
+    app.session_paused = 0
+    meditation_music_stop(app)
+    app_close_modal(app)
+    app_switch_screen(app, ScreenStart)
+}
+
+finish :: (app: *InnerBreeze) {
+    repetitions: s32 = 0
+    result_path: [FS_PATH_MAX] u8
+
+    if app == null {
+        return
+    }
+    result_path[0] = cast(u8)0
+    send_session_complete(app)
+
+    repetitions = app.sun_salutation.repetitions
+    if repetitions < 1 {
+        repetitions = 1
+    }
+    if data_save_session_path_for_activity(*repetitions, 1, 0,
+        EXERCISE_SUN_SALUTATION,
+        *result_path[0], size_of(type_of(result_path))) != 0 {
+        sync_habits_for_activity(app, EXERCISE_SUN_SALUTATION)
+        app_auto_sync(app)
+    }
+    app.sun_salutation = SalutationReset(app.sun_salutation)
+    app.session_paused = 0
+    meditation_music_stop(app)
+    app_close_modal(app)
+    app_prepare_session_results(app, EXERCISE_SUN_SALUTATION, repetitions, 0,
+        null, null, 0, *result_path[0])
+    app_switch_screen(app, ScreenResults)
+}
+
+sun_salutation_request_exit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+}
+
+step_forward :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    next := SalutationForward(app.sun_salutation)
+    app.sun_salutation = next.state
+    if next.completed != 0 {
+        finish(app)
+    }
+}
+
+update_timer :: (app: *InnerBreeze) {
+    if app == null || app.breathing.screen != ScreenSunSalutation ||
+        app.session_paused != 0 {
+        return
+    }
+    next := SalutationTick(app.sun_salutation)
+    app.sun_salutation = next.state
+    if next.completed != 0 {
+        finish(app)
+    }
+}
+
+draw_pose_frame :: (app: *InnerBreeze, asset_path: string,
+    frame_index: s32, columns: s32,
+top_y: s32, bottom_y: s32) {
+    if app == null || asset_path.count == 0 || bottom_y <= top_y {
+        return
+    }
+    Image(CurrentApp().ui.session, ImageProps.{
+        .asset_path = asset_path,
+        .source = Rectangle.{
+            cast(float32)((frame_index % columns) * SUN_SALUTATION_POSE_FRAME_W),
+            cast(float32)((frame_index / columns) * SUN_SALUTATION_POSE_FRAME_H),
+            cast(float32)SUN_SALUTATION_POSE_FRAME_W, cast(float32)SUN_SALUTATION_POSE_FRAME_H},
+        .bounds = Rectangle.{cast(float32)AppScale(24), cast(float32)top_y,
+            cast(float32)(app.ui.view_width - AppScale(48)),
+            cast(float32)(bottom_y - top_y)},
+        .fit = cast(ImageFit)ImageFitContain
+    })
+}
+
+draw_pose_timer :: (app: *InnerBreeze, seconds: s32, top_y: s32, bottom_y: s32) {
+    timer_text: [32] u8
+    seconds_text: [16] u8
+    elapsed_seconds: s32
+    text_w: s32
+    x: s32
+    y: s32
+    w: s32
+    h := AppScale(5)
+    fill_w: s32
+    font := AppSmallFontSize()
+
+    if app == null || seconds <= 0 || bottom_y <= top_y {
+        return
+    }
+
+    elapsed_seconds = app.sun_salutation.step_ticks / 60
+    if elapsed_seconds > seconds {
+        elapsed_seconds = seconds
+    }
+    AppFormatS32(elapsed_seconds, timer_text[:])
+    AppAppendText("s / ", timer_text[:])
+    AppFormatS32(seconds, seconds_text[:])
+    AppAppendText(AppTextFromCString(*seconds_text[0], 16), timer_text[:])
+    AppAppendText("s", timer_text[:])
+    timer_label := AppTextFromCString(*timer_text[0], 32)
+
+    text_w = AppTextWidth(timer_label, font)
+    x = (app.ui.view_width - text_w) / 2
+    y = top_y + AppScale(4)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
+        .text = FrameTextHold(*app.ui.frame_text, timer_label),
+        .wrap = cast(TextWrap)TextWrapNone
+    })
+
+    w = app.ui.view_width / 3
+    if w < AppScale(96) {
+        w = AppScale(96)
+    }
+    if w > AppScale(220) {
+        w = AppScale(220)
+    }
+    x = (app.ui.view_width - w) / 2
+    y += font + AppScale(6)
+    fill_w = (w * app.sun_salutation.step_ticks) / (seconds * 60)
+    if fill_w < 0 {
+        fill_w = 0
+    }
+    if fill_w > w {
+        fill_w = w
+    }
+    DrawRectangle(x, y, w, h, DarkenColor(StyleTokenColor("canvas"), 12))
+    DrawRectangle(x, y, fill_w, h, StyleTokenColor("accent-hover"))
+}
+
+sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    controls: [3] IconRowAction
+    row: IconRowResult
+    step_label: string
+    step: s32
+    repetition: s32
+    repetitions: s32
+    figure: s32
+    pose_index: s32
+    transition_index: s32
+    transition_frame: s32
+    current_step_seconds: s32
+    ticks_per_step: s32
+    pause_icon: ActionIcon
+    title_h := PracticeTitleBarHeight()
+    content_top := title_h + AppScale(8)
+    image_bottom: s32
+
+    if app == null {
+        return
+    }
+
+    if app.modal.active != 0 &&
+        app.modal.type == cast(ModalType)ModalConfirmExitSession {
+        actions: [2] ActionModalAction = .[
+            ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+            ActionModalAction.{.label = LocaleText("exit_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ]
+        modal_result := ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = LocaleText("all_progress_lost_message")}, actions[:2]).action
+        if modal_result == 1 {
+            app_close_modal(app)
+        } else if modal_result == 2 {
+            exit_to_start(app)
+        }
+        return
+    }
+
+    app.sun_salutation = SalutationNormalizeDraw(app.sun_salutation)
+    step = app.sun_salutation.step
+    repetition = app.sun_salutation.repetition
+    repetitions = app.sun_salutation.repetitions
+    figure = app.sun_salutation.figure
+
+    pose_index = sun_salutation_step_pose_index(step)
+    current_step_seconds = SalutationStepSeconds(app.sun_salutation)
+    ticks_per_step = current_step_seconds * 60
+    if ticks_per_step <= 0 {
+        ticks_per_step = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
+    }
+
+    step_label = SunSalutationStepTitle(step)
+    if PracticeTitleBar(app, step_label, title_h) {
+        sun_salutation_request_exit(app)
+        return
+    }
+    practice_draw_audio_controls(app)
+
+    controls[0] = IconRowAction.{
+        .icon = ActionIcon.IconBack,
+        .disabled = step <= 0 && repetition <= 0
+    }
+    pause_icon = ActionIcon.IconPause
+    if app.session_paused != 0 {
+        pause_icon = ActionIcon.IconPlay
+    }
+    controls[1] = IconRowAction.{
+        .icon = pause_icon
+    }
+    controls[2] = IconRowAction.{
+        .icon = ActionIcon.IconNext
+    }
+    row = PracticeControlRow(IconRowRequest.{
+        .center_x = center_x,
+        .view_width = app.ui.view_width,
+        .view_height = app.ui.view_height,
+        .count = 3,
+        .items = *controls[0]
+    })
+
+    image_bottom = row.y - AppScale(18)
+    draw_pose_timer(app, current_step_seconds, content_top, image_bottom)
+    transition_index = SalutationTransitionIndex(step)
+    transition_asset := sun_salutation_transition_asset(figure, transition_index)
+    if transition_asset.count > 0 {
+        transition_frame =
+        SalutationTransitionFrame(app.sun_salutation.step_ticks,
+        ticks_per_step)
+        draw_pose_frame(app, transition_asset, transition_frame,
+        SUN_SALUTATION_TRANSITION_SHEET_COLS,
+        content_top + AppScale(28), image_bottom)
+    } else {
+        draw_pose_frame(app, sun_salutation_pose_asset(figure), pose_index,
+        SUN_SALUTATION_POSE_SHEET_COLS,
+        content_top + AppScale(28), image_bottom)
+    }
+
+    if row.clicked_index == 0 {
+        app.sun_salutation = SalutationBack(app.sun_salutation)
+    } else if row.clicked_index == 1 {
+        app.session_paused = ifx (app.session_paused != 0) then (0) else (1)
+    } else if row.clicked_index == 2 {
+        step_forward(app)
+    }
+
+    update_timer(app)
+    unused center_y
+}
+
+sun_salutation :: (app: *InnerBreeze) {
+    root: ColumnProps
+    root.key = KeyHash("sun_salutation/root")
+    Screen(CurrentApp().ui.session, root)
+    sun_salutation_draw_screen(app, app.ui.view_width / 2,
+        app.ui.view_height / 2)
+    End(CurrentApp().ui.session)
+}

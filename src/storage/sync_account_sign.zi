@@ -1,0 +1,75 @@
+#import, file "account_types.zi";
+#import, file "sync_crypto.zi";
+#import "byte_text_linux"
+
+AccountSignatureBytes :: 2420
+AccountSigningKeyBytes :: 2560
+
+c :: #system_library "c";
+// The Ziran host converts fixed-width values to the target's size_t.
+OqsAccountSign :: (signature: *u8, signature_length: *u64,
+    message: *u8, message_length: u64, private_key: *u8) -> s32 #foreign c "inbe_oqs_ml_dsa_44_sign";
+
+SigningKeyText :: (data: *u8, capacity: s64) -> string {
+    if data == null || capacity <= 0 { return "" }
+    length: s64 = 0
+    while length < capacity && data[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == capacity { return "" }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+
+CopySigningText :: (value: string, output: []u8) -> bool {
+    if value.count >= output.count { return false }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if byte == cast(u8)0 { return false }
+        output[index] = byte
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return true
+}
+
+#program_export
+SignSyncAccountHex :: (account: *SyncAccount, message: *u8,
+    message_length: s64, output: *u8, output_size: s64) -> s32 {
+    if output == null || output_size <= 0 {
+        return 0
+    }
+    output[0] = 0
+    if output_size < SYNC_SIGNATURE_HEX_SIZE { return 0 }
+    if account == null || account.public_id[0] == 0 ||
+    account.public_key_hex[0] == 0 || account.private_key_hex[0] == 0 ||
+    message_length < 0 || (message == null && message_length > 0) {
+        return 0
+    }
+    private_key: [AccountSigningKeyBytes]u8
+    private_text := SigningKeyText(*account.private_key_hex[0],
+        SYNC_PRIVATE_KEY_HEX_SIZE)
+    if SyncCryptoHexToBytes(private_text, *private_key[0], AccountSigningKeyBytes) == 0 {
+        return 0
+    }
+    signature: [AccountSignatureBytes]u8
+    signature_length: u64 = 0
+    if OqsAccountSign(*signature[0], *signature_length, message,
+        cast(u64)message_length, *private_key[0]) != 0 ||
+    signature_length != AccountSignatureBytes { return 0 }
+    return SyncCryptoBytesToHex(*signature[0], AccountSignatureBytes,
+        output, output_size)
+}
+
+// Signs the exact login, registration, or transaction message bytes.
+#scope_export
+#program_export
+SignAccountMessage :: (context: *void, message: string,
+    output: []u8) -> bool {
+    if context == null || message.count == 0 ||
+    message.count > 9223372036854775807 ||
+    output.count < SYNC_SIGNATURE_HEX_SIZE { return false }
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*message)
+    return SignSyncAccountHex(cast(*SyncAccount)context, descriptor.data,
+        cast(s64)message.count, *output[0], cast(s64)output.count) != 0
+}

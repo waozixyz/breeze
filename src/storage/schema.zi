@@ -1,0 +1,215 @@
+#import "c_string"
+#import "byte_text_linux"
+#import, file "schema_sql.zi";
+#import, file "sqlite.zi";
+#import, file "sql_transaction.zi";
+
+c :: #system_library "c";
+
+schema_db_handle :: () -> *void #foreign c "storage_db_handle";
+schema_now_seconds :: () -> s64 #foreign c "now_seconds";
+schema_web_platform :: () -> s32 #foreign c "app_web_platform";
+
+SchemaCStringEqual :: (value: *u8, expected: string) -> bool {
+    if value == null {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)expected.count {
+        if value[index] != expected[index] {
+            return false
+        }
+        index += 1
+    }
+    return value[index] == cast(u8)0
+}
+
+SchemaExec :: (sql: string) -> bool {
+    return SqliteExecTransaction(schema_db_handle(), sql) != 0
+}
+
+SchemaHasColumn :: (table: string, column: string) -> bool {
+    db := schema_db_handle()
+    if db == null || table.count == 0 || table.count > 63 {
+        return false
+    }
+    query: [96]u8
+    prefix := "PRAGMA table_info("
+    index: s32 = 0
+    while index < cast(s32)prefix.count {
+        query[index] = prefix[index]
+        index += 1
+    }
+    offset: s32 = 0
+    while offset < cast(s32)table.count {
+        query[index] = table[offset]
+        index += 1
+        offset += 1
+    }
+    query[index] = cast(u8)41
+    query[index + 1] = cast(u8)0
+
+    statement: *void = null
+    if SqlitePrepare(db, *query[0], -1, *statement, null) != 0 {
+        return false
+    }
+    found := false
+    while SqliteStep(statement) == 100 {
+        if SchemaCStringEqual(SqliteColumnText(statement, 1), column) {
+            found = true
+            break
+        }
+    }
+    unused SqliteFinalize(statement)
+    return found
+}
+
+SchemaTableExists :: (table: string) -> bool {
+    db := schema_db_handle()
+    table_name: [64]u8
+    query: [96]u8
+    if db == null || !CopyCString(table, table_name[:])  || !CopyCString("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
+        query[:]) {
+        return false
+    }
+    statement: *void = null
+    if SqlitePrepare(db, *query[0], -1, *statement, null) != 0 {
+        return false
+    }
+    found := false
+    if SqliteBindText(statement, 1, *table_name[0], -1, null) == 0 {
+        found = SqliteStep(statement) == 100
+    }
+    unused SqliteFinalize(statement)
+    return found
+}
+
+// SQLite requires a literal integer as the default of an added column. Keep
+// the creation time of upgraded rows rather than resetting it to zero.
+SchemaAddEpochColumn :: (table: string, epoch: s64) -> bool {
+    statement: [160]u8
+    digits: [20]u8
+    prefix := "ALTER TABLE habits ADD COLUMN updated_at INTEGER NOT NULL DEFAULT "
+    if table == "sessions" {
+        prefix = "ALTER TABLE sessions ADD COLUMN updated_at INTEGER NOT NULL DEFAULT "
+    } else if table != "habits" {
+        return false
+    }
+    if epoch < 0 || !CopyCString(prefix, statement[:]) {
+        return false
+    }
+
+    count: s32 = 0
+    value := epoch
+    while value > 0 {
+        digits[count] = cast(u8)(value % 10) + cast(u8)48
+        count += 1
+        value /= 10
+    }
+    if count == 0 {
+        digits[0] = cast(u8)48
+        count = 1
+    }
+    length := cast(s32)prefix.count
+    while count > 0 {
+        count -= 1
+        statement[length] = digits[count]
+        length += 1
+    }
+    statement[length] = cast(u8)0
+    return SchemaExec(TextFromBytes(statement[:length]))
+}
+
+#program_export
+schema_create :: () -> s32 {
+    if schema_web_platform() != 0 {
+        if !SchemaExec(SchemaWebPragma) {
+            return 0
+        }
+    } else {
+        if !SchemaExec(SchemaNativePragma) {
+            return 0
+        }
+    }
+    if !SchemaExec(SchemaMeta)  || !SchemaExec(SchemaUsers)  || !SchemaExec(SchemaSettings)  || !SchemaExec(SchemaSocial)  || !SchemaExec(SchemaSessions)  || !SchemaExec(SchemaHabits)  || !SchemaExec(SchemaImports) {
+        return 0
+    }
+    return 1
+}
+
+SchemaUpgradeFailed :: () -> s32 {
+    unused SchemaExec("ROLLBACK TO inbe_schema_upgrade")
+    unused SchemaExec("RELEASE inbe_schema_upgrade")
+    return 0
+}
+
+#program_export
+migrate_schema :: () -> s32 {
+    epoch := schema_now_seconds()
+    had_outbox := SchemaTableExists("sync_outbox")
+    if !SchemaExec("SAVEPOINT inbe_schema_upgrade") {
+        return 0
+    }
+
+    if SchemaHasColumn("habits", "sync_topic")  && !SchemaExec(SchemaOldSyncTopic) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "description")  && !SchemaExec(SchemaHabitDescription) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "counter_enabled")  && !SchemaExec(SchemaHabitCounterEnabled) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "counter_target")  && !SchemaExec(SchemaHabitCounterTarget) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habit_days", "count")  && !SchemaExec(SchemaDayCount) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habit_days", "session_count")  && !SchemaExec(SchemaDaySessionCount) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "weekdays")  && !SchemaExec(SchemaHabitWeekdays) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "reminder_hour")  && !SchemaExec(SchemaHabitReminderHour) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("habits", "updated_at")  && !SchemaAddEpochColumn("habits", epoch) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "updated_at")  && !SchemaAddEpochColumn("sessions", epoch) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "mood_before")  && !SchemaExec(SchemaSessionMoodBefore) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "mood_after")  && !SchemaExec(SchemaSessionMoodAfter) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "energy")  && !SchemaExec(SchemaSessionEnergy) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "stress")  && !SchemaExec(SchemaSessionStress) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "note")  && !SchemaExec(SchemaSessionNote) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaHasColumn("sessions", "tags")  && !SchemaExec(SchemaSessionTags) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaExec(SchemaUpgradeTables) {
+        return SchemaUpgradeFailed()
+    }
+    if SchemaTableExists("social_cache")  && !SchemaExec(SchemaOldSocialCache) {
+        return SchemaUpgradeFailed()
+    }
+    if !had_outbox && !SchemaExec(SchemaBackfillOutbox) {
+        return SchemaUpgradeFailed()
+    }
+    if !SchemaExec("RELEASE inbe_schema_upgrade") {
+        return SchemaUpgradeFailed()
+    }
+    return 1
+}

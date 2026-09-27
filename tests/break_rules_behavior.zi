@@ -1,0 +1,261 @@
+#import, file "../src/breaks/break_rules.zi";
+#import, file "../src/breaks/break_types.zi";
+
+#program_export
+Answer :: () -> s32 {
+    defaults: BreakEngine = BreakInit()
+    if defaults.timers[BREAK_MICRO].limit_s != 180 ||
+    defaults.timers[BREAK_MICRO].duration_s != 30 ||
+    defaults.timers[BREAK_MICRO].postpone_s != 150 ||
+    defaults.timers[BREAK_MICRO].max_prompts != 0 ||
+    defaults.timers[BREAK_REST].limit_s != 2700 ||
+    defaults.timers[BREAK_REST].duration_s != 600 ||
+    defaults.timers[BREAK_REST].postpone_s != 180 ||
+    defaults.timers[BREAK_DAILY].limit_s != 14400 ||
+    defaults.timers[BREAK_DAILY].postpone_s != 1200 ||
+    defaults.mode != BreakModeNormal ||
+    defaults.event != BreakEventNone ||
+    defaults.event_break != BREAK_MICRO {
+        return 21
+    }
+    short_time: BreakDurationText = BreakFormatDuration(59)
+    if short_time.count != 4 ||
+    short_time.bytes[0] != cast(u8)48 ||
+    short_time.bytes[1] != cast(u8)58 ||
+    short_time.bytes[2] != cast(u8)53 ||
+    short_time.bytes[3] != cast(u8)57 ||
+    short_time.bytes[4] != cast(u8)0 {
+        return 25
+    }
+    long_time: BreakDurationText = BreakFormatDuration(3600)
+    if long_time.count != 7 ||
+    long_time.bytes[0] != cast(u8)49 ||
+    long_time.bytes[1] != cast(u8)58 ||
+    long_time.bytes[2] != cast(u8)48 ||
+    long_time.bytes[3] != cast(u8)48 ||
+    long_time.bytes[4] != cast(u8)58 ||
+    long_time.bytes[5] != cast(u8)48 ||
+    long_time.bytes[6] != cast(u8)48 ||
+    long_time.bytes[7] != cast(u8)0 {
+        return 26
+    }
+    forced: BreakEngine = BreakInit()
+    forced.timers[BREAK_MICRO].state = BreakStateBreaking
+    forced.timers[BREAK_MICRO].active_s = 25
+    forced.reading_active = 1
+    forced = BreakForce(forced, BREAK_REST)
+    if forced.timers[BREAK_MICRO].state != BreakStateRunning ||
+    forced.timers[BREAK_MICRO].active_s != 0 ||
+    forced.timers[BREAK_REST].state != BreakStateBreaking ||
+    forced.timers[BREAK_REST].active_s != 2700 ||
+    forced.reading_active != 0 ||
+    forced.event != BreakEventStart ||
+    forced.event_break != BREAK_REST {
+        return 22
+    }
+    forced.event = BreakEventNone
+    forced.timers[BREAK_MICRO].state = BreakStatePrompting
+    forced.timers[BREAK_MICRO].active_s = 33
+    forced = BreakTake(forced, BREAK_REST, 1)
+    if forced.timers[BREAK_REST].state != BreakStateRunning ||
+    forced.timers[BREAK_REST].idle_latched != 1 ||
+    forced.stats[BREAK_REST].natural != 1 ||
+    forced.timers[BREAK_MICRO].state != BreakStateRunning ||
+    forced.timers[BREAK_MICRO].active_s != 0 ||
+    forced.event != BreakEventNatural {
+        return 23
+    }
+    forced.event = BreakEventNone
+    forced.micro_counts_as_activity = 1
+    forced.timers[BREAK_DAILY].active_s = 10
+    forced = BreakTake(forced, BREAK_MICRO, 0)
+    if forced.timers[BREAK_DAILY].active_s != 40 ||
+    forced.stats[BREAK_MICRO].taken != 1 ||
+    forced.event != BreakEventTaken {
+        return 24
+    }
+
+    ticked: BreakEngine = BreakInit()
+    ticked.timers[BREAK_REST].enabled = 0
+    ticked.timers[BREAK_DAILY].enabled = 0
+    ticked.timers[BREAK_MICRO].limit_s = 2
+    tick_count: s32 = 0
+    while tick_count < 120 {
+        ticked = BreakTick(ticked, 1)
+        tick_count += 1
+    }
+    if ticked.sectick != 0 || ticked.usage_today_s != 2 ||
+    ticked.timers[BREAK_MICRO].state != BreakStateBreaking ||
+    ticked.event != BreakEventStart || BreakActive(ticked) != BREAK_MICRO {
+        return 27
+    }
+    idle: BreakEngine = BreakInit()
+    idle.timers[BREAK_REST].enabled = 0
+    idle.timers[BREAK_DAILY].enabled = 0
+    idle_sample: BreakIdleSample = BreakNoteIdle(idle, 30)
+    if idle_sample.took != 1 ||
+    idle_sample.engine.stats[BREAK_MICRO].natural != 1 ||
+    idle_sample.engine.timers[BREAK_MICRO].idle_latched != 1 {
+        return 28
+    }
+    idle_sample = BreakNoteIdle(idle_sample.engine, 30)
+    if idle_sample.took != 0 ||
+    idle_sample.engine.stats[BREAK_MICRO].natural != 1 {
+        return 29
+    }
+
+    engine: BreakEngine
+    engine.timers[BREAK_MICRO].enabled = 1
+    engine.timers[BREAK_MICRO].state = BreakStateRunning
+    engine.timers[BREAK_MICRO].limit_s = 180
+    engine.timers[BREAK_MICRO].active_s = 75
+
+    if BreakNextDueSeconds(engine, BREAK_MICRO) != 105 {
+        return 1
+    }
+    if BreakNextDueSeconds(engine, BREAK_REST) != -1 {
+        return 2
+    }
+    if BreakNextDueSeconds(engine, -1) != -1 ||
+    BreakNextDueSeconds(engine, BREAK_TYPE_COUNT) != -1 {
+        return 3
+    }
+    engine.timers[BREAK_MICRO].active_s = 190
+    if BreakNextDueSeconds(engine, BREAK_MICRO) != 0 {
+        return 4
+    }
+    engine.timers[BREAK_MICRO].state = BreakStatePrompting
+    if BreakNextDueSeconds(engine, BREAK_MICRO) != 0 {
+        return 5
+    }
+
+    engine.timers[BREAK_MICRO].state = BreakStateBreaking
+    if BreakActive(engine) != BREAK_MICRO {
+        return 6
+    }
+    engine.timers[BREAK_REST].enabled = 1
+    engine.timers[BREAK_REST].state = BreakStateBreaking
+    if BreakActive(engine) != BREAK_REST {
+        return 7
+    }
+    engine.timers[BREAK_REST].enabled = 0
+    if BreakActive(engine) != BREAK_MICRO {
+        return 8
+    }
+    engine.timers[BREAK_MICRO].enabled = 0
+    if BreakActive(engine) != -1 {
+        return 9
+    }
+
+    engine.timers[BREAK_MICRO].enabled = 1
+    engine.timers[BREAK_MICRO].state = BreakStatePrompting
+    engine.timers[BREAK_MICRO].active_s = 190
+    engine.timers[BREAK_MICRO].idle_s = 8
+    engine.timers[BREAK_MICRO].idle_latched = 1
+    engine.timers[BREAK_MICRO].prompt_s = 12
+    engine.timers[BREAK_MICRO].prompt_count = 2
+    engine.timers[BREAK_MICRO].lock_buttons_s = 4
+    engine = BreakSkip(engine, BREAK_MICRO)
+    if engine.timers[BREAK_MICRO].state != BreakStateRunning ||
+    engine.timers[BREAK_MICRO].active_s != 0 ||
+    engine.timers[BREAK_MICRO].idle_s != 0 ||
+    engine.timers[BREAK_MICRO].idle_latched != 0 ||
+    engine.timers[BREAK_MICRO].prompt_s != 0 ||
+    engine.timers[BREAK_MICRO].prompt_count != 0 ||
+    engine.timers[BREAK_MICRO].lock_buttons_s != 0 ||
+    engine.stats[BREAK_MICRO].skipped != 1 ||
+    engine.event != BreakEventSkipped ||
+    engine.event_break != BREAK_MICRO {
+        return 10
+    }
+    engine = BreakSkip(engine, BREAK_MICRO)
+    if engine.stats[BREAK_MICRO].skipped != 1 {
+        return 11
+    }
+
+    engine.timers[BREAK_REST].state = BreakStateBreaking
+    engine.timers[BREAK_REST].postpone_s = 180
+    engine.timers[BREAK_REST].idle_s = 9
+    engine.timers[BREAK_REST].idle_latched = 1
+    engine.timers[BREAK_REST].prompt_s = 7
+    engine.event = BreakEventStart
+    engine = BreakPostpone(engine, BREAK_REST)
+    if engine.timers[BREAK_REST].state != BreakStateSnoozed ||
+    engine.timers[BREAK_REST].snooze_s != 180 ||
+    engine.timers[BREAK_REST].idle_s != 0 ||
+    engine.timers[BREAK_REST].idle_latched != 0 ||
+    engine.timers[BREAK_REST].prompt_s != 0 ||
+    engine.stats[BREAK_REST].postponed != 1 ||
+    engine.event != BreakEventStart {
+        return 12
+    }
+    engine.event = BreakEventNone
+    engine.timers[BREAK_REST].state = BreakStatePrompting
+    engine = BreakPostpone(engine, BREAK_REST)
+    if engine.event != BreakEventPostponed ||
+    engine.event_break != BREAK_REST ||
+    engine.stats[BREAK_REST].postponed != 2 {
+        return 13
+    }
+    engine.timers[BREAK_DAILY].state = BreakStateBreaking
+    engine = BreakSkip(engine, BREAK_DAILY)
+    if engine.timers[BREAK_DAILY].skipped_today != 1 ||
+    engine.event != BreakEventSkipped ||
+    engine.event_break != BREAK_DAILY {
+        return 14
+    }
+
+    engine = BreakSetMode(engine, BreakModeQuiet, 120)
+    if engine.mode != BreakModeQuiet || engine.mode_until_s != 120 {
+        return 15
+    }
+    engine.stats[BREAK_MICRO].overdue_s = 19
+    engine.usage_today_s = 200
+    engine = BreakResetDayStats(engine)
+    if engine.stats[BREAK_MICRO].skipped != 0 ||
+    engine.stats[BREAK_MICRO].overdue_s != 0 ||
+    engine.stats[BREAK_REST].postponed != 0 ||
+    engine.usage_today_s != 0 ||
+    engine.mode != BreakModeQuiet ||
+    engine.timers[BREAK_DAILY].skipped_today != 1 {
+        return 16
+    }
+
+    engine.timers[BREAK_DAILY].state = BreakStateBreaking
+    engine.timers[BREAK_DAILY].active_s = 900
+    engine.timers[BREAK_DAILY].idle_s = 8
+    engine.timers[BREAK_DAILY].idle_latched = 1
+    engine.timers[BREAK_DAILY].prompt_s = 9
+    engine.timers[BREAK_DAILY].prompt_count = 2
+    engine.event = BreakEventNone
+    day_change: BreakDayChange = BreakSetDay(engine, 20260924)
+    if day_change.changed != 1 ||
+    day_change.engine.day_key != 20260924 ||
+    day_change.engine.timers[BREAK_DAILY].state != BreakStateRunning ||
+    day_change.engine.timers[BREAK_DAILY].active_s != 0 ||
+    day_change.engine.timers[BREAK_DAILY].idle_s != 0 ||
+    day_change.engine.timers[BREAK_DAILY].idle_latched != 0 ||
+    day_change.engine.timers[BREAK_DAILY].skipped_today != 0 ||
+    day_change.engine.timers[BREAK_DAILY].prompt_s != 0 ||
+    day_change.engine.timers[BREAK_DAILY].prompt_count != 0 ||
+    day_change.engine.event != BreakEventTaken ||
+    day_change.engine.event_break != BREAK_DAILY {
+        return 17
+    }
+    day_change = BreakSetDay(day_change.engine, 20260924)
+    if day_change.changed != 0 ||
+    day_change.engine.event != BreakEventTaken {
+        return 18
+    }
+    event_take: BreakEventTake = BreakTakeEvent(day_change.engine)
+    if event_take.event != BreakEventTaken ||
+    event_take.break_type != BREAK_DAILY ||
+    event_take.engine.event != BreakEventNone {
+        return 19
+    }
+    event_take = BreakTakeEvent(event_take.engine)
+    if event_take.event != BreakEventNone {
+        return 20
+    }
+    return 42
+}

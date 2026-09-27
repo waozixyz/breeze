@@ -1,0 +1,103 @@
+#import, file "app_types.zi";
+#import, file "device_policy.zi";
+#import, file "app_style.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/device_host.zi";
+
+using AppDeviceOrientation;
+
+#program_export
+refresh_theme_colors :: (theme_id: s32, dark_mode: s32) {
+    StyleInstall(theme_id, dark_mode != 0, 1)
+}
+
+#program_export
+app_desktop_set_fullscreen :: (enabled: s32) {
+    if DesktopPlatform() == 0 {
+        return
+    }
+    DeviceFullscreen(enabled)
+}
+
+#program_export
+app_effective_dark_mode :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+    dark := ThemeDarkFor(cast(AppThemeMode)app.theme_mode,
+        DeviceSystemDark() != 0)
+    return ifx dark then 1 else 0
+}
+
+#program_export
+app_refresh_theme :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    app.theme_mode = cast(s32)ThemeModeForSource(
+        cast(AppThemeMode)app.theme_mode,
+        cast(AppThemeSource)app.theme_source)
+    app.dark_mode = app_effective_dark_mode(app)
+    app_apply_style(app)
+}
+
+#program_export
+app_apply_orientation_preference :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if AndroidPlatform() != 0 {
+        DeviceSetOrientation(app.orientation_mode)
+        return
+    }
+    if WebPlatform() != 0 {
+        DeviceWebOrientation(app.orientation_mode)
+        DeviceWebResize()
+        return
+    }
+
+    size := WindowSizeForOrientation(
+        cast(AppOrientationMode)app.orientation_mode,
+        DeviceWidth(), DeviceHeight())
+    if size.change {
+        DeviceResize(size.width, size.height)
+    }
+}
+
+#program_export
+app_device_preferences_init :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.android_orientation = cast(s32)APP_DEVICE_ORIENTATION_UNKNOWN
+    if AndroidPlatform() != 0 {
+        app.android_orientation = DeviceOrientation()
+    }
+
+    app_refresh_theme(app)
+    if DesktopPlatform() != 0 {
+        app_desktop_set_fullscreen(app.fullscreen_enabled)
+    }
+    app_apply_orientation_preference(app)
+}
+
+#program_export
+app_device_preferences_update :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    orientation: s32 = cast(s32)APP_DEVICE_ORIENTATION_UNKNOWN
+    if AndroidPlatform() != 0 {
+        orientation = DeviceOrientation()
+    }
+    if app.android_orientation != orientation {
+        app.android_orientation = orientation
+    }
+
+    effective_dark := app_effective_dark_mode(app)
+    if app.dark_mode != effective_dark {
+        app.dark_mode = effective_dark
+        app_refresh_theme(app)
+    }
+}

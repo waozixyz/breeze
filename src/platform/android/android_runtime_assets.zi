@@ -1,0 +1,123 @@
+#import, file "../asset_download_types.zi";
+#import, file "../environment.zi";
+
+c :: #system_library "c";
+
+using AssetDownloadStatus;
+
+AndroidDownloadEvent :: struct {
+    status: s32
+    http_status: s32
+    bytes: u64
+    total_bytes: u64
+    error: [256]u8
+}
+
+android_asset_start_host :: (url: *u8, path: *u8,
+    error: *u8, error_capacity: s32) -> u64 #foreign c;
+android_asset_poll_host :: (handle: u64, status: *s32,
+    http_status: *s32, bytes: *u64, total_bytes: *u64,
+    error: *u8, error_capacity: s32) -> bool #foreign c;
+android_asset_release_host :: (handle: u64) #foreign c;
+
+android_asset_copy_error :: (download: *AssetDownload,
+    source: []u8) {
+    index: s32 = 0
+    while index < 255 && index < cast(s32)source.count  && source[index] != cast(u8)0 {
+        download.error[index] = source[index]
+        index += 1
+    }
+    download.error[index] = cast(u8)0
+}
+
+android_asset_set_error :: (download: *AssetDownload,
+    message: string) {
+    index: s32 = 0
+    while index < 255 && index < cast(s32)message.count {
+        download.error[index] = message[index]
+        index += 1
+    }
+    download.error[index] = cast(u8)0
+}
+
+#program_export
+AndroidAssetDownloadStart :: (download: *AssetDownload, url: *u8,
+    path: *u8) -> bool {
+    if download == null || url == null || path == null  || AndroidPlatform() == 0 {
+        return false
+    }
+    if download.handle != cast(u64)0 {
+        if download.status == cast(AssetDownloadStatus)Downloading {
+            return false
+        }
+        android_asset_release_host(download.handle)
+        download.handle = cast(u64)0
+    }
+    start_error: [256]u8
+    handle := android_asset_start_host(url, path, *start_error[0], 256)
+    download.bytes = cast(u64)0
+    download.total_bytes = cast(u64)0
+    download.http_status = 0
+    if handle == cast(u64)0 {
+        download.status = cast(AssetDownloadStatus)Error
+        if start_error[0] != cast(u8)0 {
+            android_asset_copy_error(download, start_error[:])
+        } else {
+            android_asset_set_error(download, "Android download failed to start")
+        }
+        return false
+    }
+    download.handle = handle
+    download.status = cast(AssetDownloadStatus)Downloading
+    download.error[0] = cast(u8)0
+    return true
+}
+
+#program_export
+AndroidAssetDownloadPoll :: (download: *AssetDownload) -> AssetDownloadStatus {
+    if download == null {
+        return cast(AssetDownloadStatus)Idle
+    }
+    if download.handle == cast(u64)0 {
+        return download.status
+    }
+    event: AndroidDownloadEvent
+    if !android_asset_poll_host(download.handle, *event.status,
+        *event.http_status, *event.bytes, *event.total_bytes,
+        *event.error[0], 256) {
+        download.status = cast(AssetDownloadStatus)Error
+        android_asset_set_error(download, "Android download state lost")
+        android_asset_release_host(download.handle)
+        download.handle = cast(u64)0
+        return download.status
+    }
+    download.http_status = event.http_status
+    download.bytes = event.bytes
+    download.total_bytes = event.total_bytes
+    if event.status == cast(s32)Ready {
+        download.status = cast(AssetDownloadStatus)Ready
+    } else if event.status == cast(s32)Error {
+        download.status = cast(AssetDownloadStatus)Error
+    } else {
+        download.status = cast(AssetDownloadStatus)Downloading
+    }
+    android_asset_copy_error(download, event.error[:])
+    if download.status == cast(AssetDownloadStatus)Ready  || download.status == cast(AssetDownloadStatus)Error {
+        android_asset_release_host(download.handle)
+        download.handle = cast(u64)0
+    }
+    return download.status
+}
+
+#program_export
+AndroidAssetDownloadRelease :: (download: *AssetDownload) {
+    if download == null {
+        return
+    }
+    if download.handle != cast(u64)0 {
+        android_asset_release_host(download.handle)
+        download.handle = cast(u64)0
+    }
+    download.status = cast(AssetDownloadStatus)Idle
+    download.error[0] = cast(u8)0
+}

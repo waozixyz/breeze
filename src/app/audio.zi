@@ -1,0 +1,320 @@
+c3 :: #system_library "c";
+AudioTrace :: (level: s32, message: string) #foreign c3 "app_audio_trace";
+AudioTraceFrames :: (level: s32, message: string, frames: s32) #foreign c3 "app_audio_trace_frames";
+AudioDecoderData :: (data: string) -> *u8 #foreign c3 "app_audio_decoder_data";
+MeditationMusicUnload :: (app: *InnerBreeze) #foreign c3 "meditation_music_unload";
+LOG_INFO :: 3;
+LOG_ERROR :: 5;
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "app.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "audio_policy.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/audio_runtime.zi";
+#import, file "../platform/media_types.zi";
+#import, file "music_library.zi";
+#import, file "assets.zi";
+#import, file "text_buffers.zi";
+
+AudioMeterRaise :: (peak_milli: s32) #foreign c3 "app_audio_meter_raise";
+AudioMeterTake :: () -> s32 #foreign c3 "app_audio_meter_take";
+AudioMeterClear :: () #foreign c3 "app_audio_meter_clear";
+
+load_sound_file_asset :: (path: string) -> SoundHandle {
+    sound := audio_load_sound_file(path)
+    if sound.frame_count == 0 {
+        AudioTrace(LOG_ERROR, "AUDIO: Failed to create sound from file asset")
+    } else {
+        AudioTraceFrames(LOG_INFO, "AUDIO: Loaded sound file asset",
+            cast(s32)sound.frame_count)
+    }
+    return sound
+}
+
+load_sound_asset :: (name: string) -> SoundHandle {
+    path: [96] u8
+    sound: SoundHandle = .{0 }
+    prefix := "assets/sounds/"
+    total: s32 = cast(s32)(prefix.count + name.count)
+    if name.count == 0 || total >= cast(s32)path.count {
+        return sound
+    }
+    i: s32 = 0
+    while i < cast(s32)prefix.count {
+        path[i] = prefix[i]
+        i += 1
+    }
+    j: s32 = 0
+    while j < cast(s32)name.count {
+        path[i] = name[j]
+        i += 1
+        j += 1
+    }
+    path[total] = 0
+    path_text := AudioCStringView(path[:])
+    asset := AssetReadBytes(path[0:total])
+    if !asset.found || asset.data.count == 0 {
+        if Plan9Platform() != 0 {
+            return load_sound_file_asset(path_text)
+        }
+        AudioTrace(LOG_ERROR, "AUDIO: Missing embedded sound asset")
+        return sound
+    }
+    sound = audio_load_sound_memory(AudioExtension(name),
+        AudioDecoderData(asset.data), cast(s32)asset.data.count)
+    if sound.frame_count == 0 {
+        if Plan9Platform() != 0 {
+            return load_sound_file_asset(path_text)
+        }
+        AudioTrace(LOG_ERROR, "AUDIO: Failed to decode embedded sound asset")
+        return sound
+    }
+    AudioTraceFrames(LOG_INFO, "AUDIO: Loaded embedded sound asset",
+        cast(s32)sound.frame_count)
+    return sound
+}
+
+app_sound_volume_scale :: (app: *InnerBreeze, scale: float32) -> float32 {
+    if app == null {
+        return 0.0
+    }
+    return SoundVolumeFor(app.sound_volume, scale)
+}
+
+#program_export
+audio_mixed_meter :: (bufferData: *void, frames: u32) {
+    samples: *float32 = cast(*float32)bufferData
+    peak: float32 = 0.0f
+    peak_milli: s32
+    count: u32
+    if samples == null || frames == 0 {
+        return
+    }
+    count = frames * 2
+    i: u32 = 0
+    while i < count {
+        sample: float32 = samples[i]
+        if sample < 0.0 {
+            sample = -sample
+        }
+        if sample > peak {
+            peak = sample
+        }
+        i += 1
+    }
+    if peak > 1.0f {
+        peak = 1.0f
+    }
+    peak_milli = cast(s32)(peak * 1000.0f)
+    AudioMeterRaise(peak_milli)
+}
+
+app_breath_cue_pitch :: (app: *InnerBreeze) -> float32 {
+    default_ticks: s32 = BreathHalfTicksForSpeed(DefaultSpeedLevel)
+    if app == null {
+        return 1.0
+    }
+    return BreathCuePitchFor(default_ticks, app.breathing.breath_half_ticks,
+        BreathHalfTicksForSpeed(app.breathing.speed_level))
+}
+
+app_play_sound_pitch :: (app: *InnerBreeze, sound: SoundHandle, scale: float32, pitch: float32) {
+    volume: float32
+    if app == null {
+        return
+    }
+    if app.audio_ready == 0 {
+        app_audio_ensure_ready(app)
+    }
+    if app.audio_ready == 0 {
+        return
+    }
+    if sound.frame_count == 0 {
+        AudioTrace(LOG_ERROR, "AUDIO: Cannot play sound because sound is not loaded")
+        return
+    }
+    volume = app_sound_volume_scale(app, scale)
+    if volume <= 0.0f {
+        return
+    }
+    if pitch < 0.75f {
+        pitch = 0.75f
+    }
+    if pitch > 1.45f {
+        pitch = 1.45f
+    }
+    audio_stop_sound(sound)
+    audio_set_sound_volume(sound, volume)
+    audio_set_sound_pitch(sound, pitch)
+    audio_play_sound(sound)
+    if !audio_sound_playing(sound) {
+        AudioTrace(LOG_ERROR, "AUDIO: PlaySound returned but sound is not playing")
+    }
+}
+
+#program_export
+app_play_sound :: (app: *InnerBreeze, sound: SoundHandle, scale: float32) {
+    app_play_sound_pitch(app, sound, scale, 1.0f)
+}
+
+#program_export
+app_play_breath_cue :: (app: *InnerBreeze, dir: s32) {
+    sound: SoundHandle
+    scale: float32 = 1.25f
+    if app == null {
+        return
+    }
+    sound = app.breath_out_sound
+    if dir == 0 {
+        sound = app.breath_in_sound
+    }
+    app_play_sound_pitch(app, sound, scale, app_breath_cue_pitch(app))
+}
+
+#program_export
+app_play_bell_cue :: (app: *InnerBreeze, scale: float32) {
+    if app == null {
+        return
+    }
+    app_play_sound(app, app.bell_sound, scale)
+}
+
+#program_export
+app_bell_cue_playing :: (app: *InnerBreeze) -> s32 {
+    if app == null || app.audio_ready == 0 || app.bell_sound.frame_count == 0 {
+        return 0
+    }
+    playing: s32 = 0
+    if audio_sound_playing(app.bell_sound) {
+        playing = 1
+    }
+    return playing
+}
+
+#program_export
+app_audio_output_level :: (app: *InnerBreeze) -> float32 {
+    if app == null || app.audio_ready == 0 {
+        return 0.0f
+    }
+    app.audio_meter_level = MeterLevelFor(AudioMeterTake(),
+        app.audio_meter_level)
+    return app.audio_meter_level
+}
+
+#program_export
+unload_cue_sounds :: (app: *InnerBreeze) {
+    empty: SoundHandle
+    if app == null {
+        return
+    }
+    SafeUnloadSound(app.breath_in_sound)
+    SafeUnloadSound(app.breath_out_sound)
+    SafeUnloadSound(app.bell_sound)
+    empty = SoundHandle.{}
+    app.breath_in_sound = empty
+    app.breath_out_sound = empty
+    app.bell_sound = empty
+}
+
+load_cue_sound :: (app: *InnerBreeze, cue: s32) -> SoundHandle {
+    path: [FS_PATH_MAX] u8
+    sound: SoundHandle = .{0 }
+    if app == null {
+        return sound
+    }
+    if app_audio_cue_path(app, cue, path[:]) {
+        sound = audio_load_sound_file(AppTextFromCString(*path[0], FS_PATH_MAX))
+        if sound.frame_count != 0 {
+            return sound
+        }
+    }
+    return load_sound_asset(app_audio_cue_default_asset(cue))
+}
+
+#program_export
+app_audio_reload_cue_sounds :: (app: *InnerBreeze) {
+    if app == null || app.audio_ready == 0 {
+        return
+    }
+    unload_cue_sounds(app)
+    app.breath_in_sound = load_cue_sound(app, AUDIO_CUE_BREATH_IN)
+    app.breath_out_sound = load_cue_sound(app, AUDIO_CUE_BREATH_OUT)
+    app.bell_sound = load_cue_sound(app, AUDIO_CUE_BELL)
+}
+
+#program_export
+init_audio :: (app: *InnerBreeze) {
+    if app == null || app.audio_ready != 0 {
+        return
+    }
+    if audio_init() {
+        app.audio_ready = 1
+    }
+    if app.audio_ready == 0 {
+        AudioTrace(LOG_ERROR, "AUDIO: Audio device failed to initialize")
+        return
+    }
+    AudioTrace(LOG_INFO, "AUDIO: Audio device initialized")
+    app_audio_reload_cue_sounds(app)
+    audio_attach_mixed_processor(audio_mixed_meter)
+    app.audio_meter_attached = 1
+}
+
+#program_export
+app_audio_ensure_ready :: (app: *InnerBreeze) {
+    if app == null || app.audio_ready != 0 {
+        return
+    }
+    if PreviewMode() != 0 {
+        return
+    }
+    init_audio(app)
+}
+
+#program_export
+app_audio_shutdown :: (app: *InnerBreeze) {
+    if app == null { return }
+    if app.audio_ready != 0 && app.audio_meter_attached != 0 {
+        audio_detach_mixed_processor(audio_mixed_meter)
+        app.audio_meter_attached = 0
+    }
+    unload_cue_sounds(app)
+    if app.audio_ready != 0 {
+        audio_close()
+        app.audio_ready = 0
+    }
+}
+
+#program_export
+app_audio_reinitialize :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+    MeditationMusicUnload(app)
+    if app.audio_ready != 0 && app.audio_meter_attached != 0 {
+        audio_detach_mixed_processor(audio_mixed_meter)
+        app.audio_meter_attached = 0
+    }
+    unload_cue_sounds(app)
+    if app.audio_ready != 0 {
+        audio_close()
+        app.audio_ready = 0
+    }
+    app.audio_meter_level = 0.0f
+    AudioMeterClear()
+    if PreviewMode() == 0 {
+        init_audio(app)
+    }
+    ready: s32 = 0
+    if app.audio_ready != 0 {
+        ready = 1
+    }
+    return ready
+}
+
+SafeUnloadSound :: (sound: SoundHandle) {
+    if sound.frame_count != 0 {
+        audio_unload_sound(sound)
+    }
+}

@@ -1,0 +1,69 @@
+// Preserve the device key format used by earlier Inbe sync releases.
+#import "byte_text_linux"
+#import, file "device_key.zi";
+#import, file "sync_crypto_random.zi";
+#import, file "storage_core.zi";
+
+DevicePrivateSetting :: "sync_device_private_key";
+DevicePublicSetting :: "sync_device_public_key";
+DeviceIdSetting :: "sync_device_key_id";
+
+CopyDeviceSetting :: (value: string, output: []u8) -> bool {
+    if value.count >= output.count { return false }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        if value[index] == cast(u8)0 { return false }
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+    return true
+}
+
+#scope_export
+#program_export
+LoadOrCreateDeviceKey :: (material: *DeviceKeyMaterial) -> bool {
+    if material == null { return false }
+    material.* = DeviceKeyMaterial.{}
+    private_hex: [129]u8
+    public_hex: [65]u8
+    key_id: [65]u8
+    if !CopyDeviceSetting(storage_get_setting_text(DevicePrivateSetting),
+        private_hex[:]) ||
+        !CopyDeviceSetting(storage_get_setting_text(DevicePublicSetting),
+            public_hex[:]) ||
+        !CopyDeviceSetting(storage_get_setting_text(DeviceIdSetting),
+            key_id[:]) {
+        return false
+    }
+    if private_hex[0] != cast(u8)0 || public_hex[0] != cast(u8)0 ||
+        key_id[0] != cast(u8)0 {
+        result := LoadDeviceKey(TextFromCString(*private_hex[0]),
+            TextFromCString(*public_hex[0]),
+            TextFromCString(*key_id[0]), material)
+        SyncCryptoWipe(*private_hex[0], 129)
+        if !result { WipeDeviceKey(material) }
+        return result
+    }
+    if !GenerateDeviceKey(material) ||
+        !DevicePrivateHex(material, private_hex[:]) {
+        WipeDeviceKey(material)
+        return false
+    }
+    private_text := TextFromCString(*private_hex[0])
+    public_text := TextFromCString(*material.public_hex[0])
+    id_text := TextFromCString(*material.key_id[0])
+    storage_settings_begin_write()
+    storage_set_setting_text(DevicePrivateSetting, private_text)
+    storage_set_setting_text(DevicePublicSetting, public_text)
+    storage_set_setting_text(DeviceIdSetting, id_text)
+    storage_settings_end_write()
+    result := storage_setting_text_equals(DevicePrivateSetting,
+        private_text) != 0 &&
+        storage_setting_text_equals(DevicePublicSetting,
+            public_text) != 0 &&
+        storage_setting_text_equals(DeviceIdSetting, id_text) != 0
+    SyncCryptoWipe(*private_hex[0], 129)
+    if !result { WipeDeviceKey(material) }
+    return result
+}

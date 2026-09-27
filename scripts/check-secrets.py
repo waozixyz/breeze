@@ -113,6 +113,7 @@ ALLOWED_FINDINGS = {
     # heuristic but are not committed credentials.
     ("droid/app/build.gradle", "credential-assignment", "dd9958e19a3251bf"),
     ("src/storage/sync_account.c", "credential-assignment", "cb92a7d64e014e24"),
+    ("src/storage/sync_account.zi", "credential-assignment", "c08d2d4080bf45d1"),
 }
 
 

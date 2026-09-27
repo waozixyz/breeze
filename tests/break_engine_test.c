@@ -1,4 +1,4 @@
-#include "breaks/break_engine.h"
+#include "breaks/break_rules.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -6,13 +6,10 @@
 /*
  * Workrave-style break engine test.
  *
- * Drives break_engine_tick() tick by tick (60 ticks == 1 second) and asserts
+ * Drives the checked Ziran BreakTick() value function tick by tick and asserts
  * the Workrave semantics: activity-based timers, natural breaks, the prompt
  * escalation loop, skip/postpone, micro->rest promotion, the daily limit,
- * operation modes, and reading mode. Pure engine: no raylib. The k2c
- * transpiler emits PushInspectSource / PopInspectSource debug markers into
- * every generated function, so we provide no-op stubs (same pattern as
- * breath_timing_test.c).
+ * operation modes, and reading mode. Pure engine: no raylib.
  */
 
 static int failures = 0;
@@ -26,17 +23,58 @@ expect(int condition, const char *message)
     }
 }
 
-/* k2c-emitted debug-source markers. */
-void
-PushInspectSource(const char *path, int line)
+/* Keep the existing scenario driver while it moves to value-based Ziran. */
+static void break_engine_init(BreakEngine *e) { *e = BreakInit(); }
+static void break_engine_tick(BreakEngine *e, int active)
 {
-    (void)path;
-    (void)line;
+    *e = BreakTick(*e, active);
+}
+static void break_engine_skip(BreakEngine *e, int t) { *e = BreakSkip(*e, t); }
+static void break_engine_postpone(BreakEngine *e, int t)
+{
+    *e = BreakPostpone(*e, t);
+}
+static void break_engine_force_break(BreakEngine *e, int t)
+{
+    *e = BreakForce(*e, t);
+}
+static void break_engine_set_mode(BreakEngine *e, int mode, int duration_s)
+{
+    *e = BreakSetMode(*e, mode, duration_s);
+}
+static int break_engine_set_day(BreakEngine *e, int day_key)
+{
+    BreakDayChange result = BreakSetDay(*e, day_key);
+    *e = result.engine;
+    return result.changed;
+}
+static int break_engine_take_event(BreakEngine *e, int *break_out)
+{
+    BreakEventTake result = BreakTakeEvent(*e);
+    *e = result.engine;
+    if (break_out != NULL) *break_out = result.break_type;
+    return result.event;
+}
+static int break_engine_active_break(const BreakEngine *e)
+{
+    return BreakActive(*e);
+}
+static int break_timer_next_due_s(const BreakEngine *e, int t)
+{
+    return BreakNextDueSeconds(*e, t);
+}
+static int break_engine_note_idle(BreakEngine *e, int idle_s)
+{
+    BreakIdleSample result = BreakNoteIdle(*e, idle_s);
+    *e = result.engine;
+    return result.took;
 }
 
-void
-PopInspectSource(void)
+static void break_format_duration(char *dst, size_t size, int seconds)
 {
+    if (dst == NULL || size == 0) return;
+    BreakDurationText text = BreakFormatDuration(seconds);
+    snprintf(dst, size, "%s", text.bytes);
 }
 
 /* Advance one full second and return the event raised during it. */
@@ -544,6 +582,9 @@ test_format_duration_formats_hours(void)
     expect(strcmp(buf, "1:00:00") == 0, "hour boundary switches to H:MM:SS");
     break_format_duration(buf, sizeof(buf), 14400);
     expect(strcmp(buf, "4:00:00") == 0, "daily limit renders as H:MM:SS");
+    break_format_duration(buf, sizeof(buf), 2147483647);
+    expect(strcmp(buf, "596523:14:07") == 0,
+           "maximum signed seconds fits the duration buffer");
     break_format_duration(buf, sizeof(buf), -5);
     expect(strcmp(buf, "0:00") == 0, "negative clamps to zero");
 }

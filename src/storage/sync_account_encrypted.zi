@@ -1,0 +1,200 @@
+#import, file "account_types.zi";
+#import, file "sync_account_text.zi";
+#import, file "sync_account_parse.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_hmac.zi";
+#import, file "sync_crypto_chacha.zi";
+#import, file "sync_crypto_random.zi";
+#import, file "../app/text_buffers.zi";
+
+AccountEncryptedHeader :: "ksync-account-key-v2"
+AccountEncryptedSaltBytes :: 16
+AccountEncryptedNonceBytes :: 12
+AccountEncryptedTagBytes :: 16
+
+#program_export
+AccountDerivePassphraseKey :: (passphrase: string,
+    salt: *u8, output: *u8, iterations: u64) -> bool {
+    if salt == null || output == null {
+        return false
+    }
+    salted: [64]u8 = .[0]
+    context: string = AccountEncryptedHeader
+    if context.count != 20 {
+        return false
+    }
+    index: s32 = 0
+    while index < 20 {
+        salted[index] = context[index]
+        index += 1
+    }
+    salt_index: s32 = 0
+    while salt_index < AccountEncryptedSaltBytes {
+        salted[20 + salt_index] = salt[salt_index]
+        salt_index += 1
+    }
+    return SyncCryptoPbkdf2Sha256Text(passphrase, *salted[0],
+        36, iterations, output) != 0
+}
+
+AccountAppendHex :: (output: *u8, capacity: s64,
+    cursor: *s64, bytes: *u8, byte_length: s64) -> bool {
+    if output == null || cursor == null || bytes == null ||
+        capacity <= 0 || cursor.* < 0 || cursor.* >= capacity ||
+        byte_length < 0 || byte_length > (capacity - cursor.* - 1) / 2 {
+        return false
+    }
+    if SyncCryptoBytesToHex(bytes, byte_length,
+        *output[cursor.*], capacity - cursor.*) == 0 {
+        return false
+    }
+    cursor.* += byte_length * 2
+    return true
+}
+
+AccountEncryptedLineValue :: (body: string, prefix: string) -> string {
+    cursor: s64 = 0
+    while cursor < body.count {
+        finish := cursor
+        while finish < body.count && body[finish] != cast(u8)10 {
+            finish += 1
+        }
+        line := body[cursor:finish]
+        if AccountStartsWith(line, prefix) {
+            return AccountTrimValue(line[prefix.count:line.count])
+        }
+        cursor = finish + 1
+    }
+    return ""
+}
+
+AccountParseIterations :: (text: string) -> u64 {
+    if text.count == 0 {
+        return 0
+    }
+    value: u64 = 0
+    index: s64 = 0
+    while index < text.count {
+        byte := text[index]
+        if byte < cast(u8)48 || byte > cast(u8)57 {
+            return 0
+        }
+        digit := cast(u64)(byte - cast(u8)48)
+        if value > (cast(u64)100000000 - digit) / 10 {
+            return 0
+        }
+        value = value * 10 + digit
+        index += 1
+    }
+    return value
+}
+
+#program_export
+ExportSyncAccountTextEncrypted :: (account: *SyncAccount,
+    passphrase: string, output: *u8, output_capacity: s64) -> s32 {
+    if output == null || output_capacity <= 0 {
+        return 0
+    }
+    output[0] = 0
+    if account == null || passphrase.count == 0 ||
+        account.public_id[0] == 0 || account.public_key_hex[0] == 0 ||
+        account.private_key_hex[0] == 0 {
+        return 0
+    }
+
+    plaintext: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE]u8
+    salt: [AccountEncryptedSaltBytes]u8
+    nonce: [AccountEncryptedNonceBytes]u8
+    key: [32]u8
+    sealed: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE + AccountEncryptedTagBytes]u8
+    if ExportSyncAccountText(account, *plaintext[0],
+        SYNC_ACCOUNT_EXPORT_TEXT_SIZE) == 0 {
+        return 0
+    }
+    plain_length := AppTextFromCString(*plaintext[0],
+        SYNC_ACCOUNT_EXPORT_TEXT_SIZE).count
+    if SyncCryptoRandom(*salt[0], AccountEncryptedSaltBytes) == 0 ||
+        SyncCryptoRandom(*nonce[0], AccountEncryptedNonceBytes) == 0 ||
+        !AccountDerivePassphraseKey(passphrase, *salt[0], *key[0],
+            SYNC_ACCOUNT_PASSPHRASE_ITERATIONS) ||
+        SyncCryptoChaCha20Poly1305Seal(*key[0], *nonce[0],
+            *plaintext[0], plain_length, null, 0, *sealed[0],
+            size_of(type_of(sealed))) == 0 {
+        return 0
+    }
+
+    sealed_length := plain_length + AccountEncryptedTagBytes
+    cursor: s64 = 0
+    if !AccountTextAppend(output, output_capacity, *cursor,
+        "ksync-account-key-v2\nalgorithm=ML-DSA-44\nkdf=PBKDF2-SHA256\niterations=600000\nsalt=") ||
+        !AccountAppendHex(output, output_capacity, *cursor,
+            *salt[0], AccountEncryptedSaltBytes) ||
+        !AccountTextAppend(output, output_capacity, *cursor, "\nnonce=") ||
+        !AccountAppendHex(output, output_capacity, *cursor,
+            *nonce[0], AccountEncryptedNonceBytes) ||
+        !AccountTextAppend(output, output_capacity, *cursor, "\nciphertext=") ||
+        !AccountAppendHex(output, output_capacity, *cursor,
+            *sealed[0], sealed_length) {
+        output[0] = 0
+        return 0
+    }
+    return 1
+}
+
+#program_export
+ParseSyncAccountTextEncrypted :: (body: string,
+    passphrase: string, account: *SyncAccount) -> s32 {
+    if account == null {
+        return 0
+    }
+    account.* = SyncAccount.{}
+    if body.count == 0 || body.count >= SYNC_ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE ||
+        passphrase.count == 0 {
+        return 0
+    }
+    if body.count >= 3 && body[0] == cast(u8)239 &&
+        body[1] == cast(u8)187 && body[2] == cast(u8)191 {
+        body = body[3:body.count]
+    }
+    if !AccountStartsWith(body, AccountEncryptedHeader) {
+        return 0
+    }
+
+    iterations := AccountParseIterations(AccountEncryptedLineValue(body,
+        "iterations="))
+    salt_text := AccountEncryptedLineValue(body, "salt=")
+    nonce_text := AccountEncryptedLineValue(body, "nonce=")
+    sealed_text := AccountEncryptedLineValue(body, "ciphertext=")
+    if iterations == 0 || salt_text.count != AccountEncryptedSaltBytes * 2 ||
+        nonce_text.count != AccountEncryptedNonceBytes * 2 ||
+        sealed_text.count <= AccountEncryptedTagBytes * 2 ||
+        sealed_text.count % 2 != 0 ||
+        sealed_text.count / 2 > SYNC_ACCOUNT_EXPORT_TEXT_SIZE {
+        return 0
+    }
+
+    salt: [AccountEncryptedSaltBytes]u8
+    nonce: [AccountEncryptedNonceBytes]u8
+    key: [32]u8
+    sealed: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE]u8
+    plaintext: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE]u8
+    sealed_length := sealed_text.count / 2
+    plain_length := sealed_length - AccountEncryptedTagBytes
+    if SyncCryptoHexToBytes(salt_text, *salt[0], AccountEncryptedSaltBytes) == 0 ||
+        SyncCryptoHexToBytes(nonce_text, *nonce[0], AccountEncryptedNonceBytes) == 0 ||
+        SyncCryptoHexToBytes(sealed_text, *sealed[0], sealed_length) == 0 ||
+        !AccountDerivePassphraseKey(passphrase, *salt[0], *key[0], iterations) ||
+        SyncCryptoChaCha20Poly1305Open(*key[0], *nonce[0],
+            *sealed[0], sealed_length, null, 0,
+            *plaintext[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE) == 0 {
+        return 0
+    }
+    plaintext[plain_length] = 0
+    text := AppTextFromCString(*plaintext[0],
+        cast(s32)(plain_length + 1))
+    if text.count != plain_length || ParseSyncAccountText(text, account) == 0 {
+        account.* = SyncAccount.{}
+        return 0
+    }
+    return 1
+}

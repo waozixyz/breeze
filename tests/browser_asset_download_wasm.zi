@@ -1,0 +1,104 @@
+#import, file "../src/platform/asset_download.zi";
+#import, file "../src/platform/asset_download_types.zi";
+#import "c_string"
+
+c :: #system_library "c";
+Sleep :: (milliseconds: s32) #foreign c "emscripten_sleep";
+OpenFile :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+CloseFile :: (file: *void) -> s32 #foreign c "fclose";
+ReadFile :: (output: *u8, size: usize, count: usize, file: *void) -> usize #foreign c "fread";
+WriteFile :: (input: *u8, size: usize, count: usize, file: *void) -> usize #foreign c "fwrite";
+AccessFile :: (path: *u8, mode: s32) -> s32 #foreign c "access";
+SeekFile :: (file: *void, offset: s32, origin: s32) -> s32 #foreign c "fseek";
+
+Exists :: (path: string) -> bool {
+    bytes: [128]u8
+    unused CopyCString(path, bytes[:])
+    return AccessFile(*bytes[0], 0) == 0
+}
+
+FileByte :: (path: string, offset: s32) -> s32 {
+    bytes: [128]u8
+    mode: [4]u8
+    unused CopyCString(path, bytes[:])
+    unused CopyCString("rb", mode[:])
+    file := OpenFile(*bytes[0], *mode[0])
+    if file == null {
+        return -1
+    }
+    result: s32 = -1
+    output: [1]u8
+    if SeekFile(file, offset, 0) == 0 && ReadFile(*output[0], 1, 1, file) == 1 {
+        result = cast(s32)output[0]
+    }
+    CloseFile(file)
+    return result
+}
+
+WaitDownload :: (download: *AssetDownload) -> AssetDownloadStatus {
+    index: s32 = 0
+    while index < 100 {
+        status := PollRuntimeAssetDownload(download)
+        if status != cast(AssetDownloadStatus)AssetDownloadStatus.Downloading {
+            return status
+        }
+        Sleep(1)
+        index += 1
+    }
+    return download.status
+}
+
+#program_export
+main :: () -> s32 {
+    download: AssetDownload
+    if DownloadRuntimeAsset(*download, "https://assets.test/success", "/tmp/asset.bin") != 1 ||
+        !Exists("/tmp/asset.bin.part") || Exists("/tmp/asset.bin") {
+        return 1
+    }
+    borrowed := download
+    ReleaseRuntimeAssetDownload(*borrowed)
+    if WaitDownload(*download) != cast(AssetDownloadStatus)AssetDownloadStatus.Ready ||
+        download.bytes != cast(u64)70000 || download.total_bytes != cast(u64)70000 ||
+        download.http_status != 200 || download.handle != cast(u64)0 ||
+        Exists("/tmp/asset.bin.part") || FileByte("/tmp/asset.bin", 0) != 42 ||
+        FileByte("/tmp/asset.bin", 69999) != 79 {
+        return 2
+    }
+    ReleaseRuntimeAssetDownload(*download)
+    if !Exists("/tmp/asset.bin") {
+        return 3
+    }
+    if DownloadRuntimeAsset(*download, "https://assets.test/missing", "/tmp/asset.bin") != 1 ||
+        WaitDownload(*download) != cast(AssetDownloadStatus)AssetDownloadStatus.Error ||
+        download.http_status != 404 || Exists("/tmp/asset.bin.part") ||
+        FileByte("/tmp/asset.bin", 69999) != 79 {
+        return 4
+    }
+    if DownloadRuntimeAsset(*download, "https://assets.test/empty", "/tmp/empty.bin") != 1 ||
+        WaitDownload(*download) != cast(AssetDownloadStatus)AssetDownloadStatus.Error ||
+        Exists("/tmp/empty.bin.part") || Exists("/tmp/empty.bin") {
+        return 5
+    }
+    if DownloadRuntimeAsset(*download, "https://assets.test/cancel", "/tmp/cancel.bin") != 1 {
+        return 6
+    }
+    ReleaseRuntimeAssetDownload(*download)
+    Sleep(5)
+    if Exists("/tmp/cancel.bin.part") || Exists("/tmp/cancel.bin") ||
+        download.handle != cast(u64)0 {
+        return 7
+    }
+    if DownloadRuntimeAsset(*download, "https://assets.test/success", "/absent/asset.bin") != 0 {
+        return 8
+    }
+    if DownloadRuntimeAsset(*download, "file:///etc/passwd", "/tmp/invalid.bin") != 0 ||
+        Exists("/tmp/invalid.bin.part") {
+        return 9
+    }
+    if DownloadRuntimeAsset(*download, "https://assets.test/oversized", "/tmp/oversized.bin") != 1 ||
+        WaitDownload(*download) != cast(AssetDownloadStatus)AssetDownloadStatus.Error ||
+        Exists("/tmp/oversized.bin") || Exists("/tmp/oversized.bin.part") {
+        return 10
+    }
+    return 0
+}

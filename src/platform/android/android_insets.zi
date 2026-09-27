@@ -1,0 +1,315 @@
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+#import, file "android_device.zi";
+#import, file "android_import_host.zi";
+#import, file "android_runtime_assets_host.zi";
+#import, file "android_wakelock_host.zi";
+#import "c_string"
+
+#if #defined(ANDROID_BUILD) {
+    c :: #system_library "c";
+    InsetsLifecycleReset :: () #foreign c "android_lifecycle_reset";
+    InsetsSyncLifecycle :: (paused: s32, visible: s32) -> s32 #foreign c "android_sync_lifecycle";
+    InsetsInvalidateGraphics :: () #foreign c "android_invalidate_graphics_resources";
+    InsetsPracticeToStart :: (practice: s32) -> s32 #foreign c "android_practice_to_start";
+    InsetsImportMusic :: (path: *u8, practice: s32) -> s32 #foreign c "android_debug_import_music_for_practice";
+    InsetsStartMusicDownload :: () -> s32 #foreign c "android_debug_start_music_download";
+    InsetsCanOpenDonation :: () -> s32 #foreign c "android_can_open_donation_reminder";
+    InsetsSetWindow :: (left: s32, top: s32, right: s32, bottom: s32,
+        ime: s32, cutout_left: s32, cutout_top: s32, cutout_right: s32,
+        cutout_bottom: s32) #foreign c "SetAndroidWindowInsets";
+    InsetsSetDensity :: (density: float32) #foreign c "SetDeviceDensity";
+
+    NativeVoidFn :: #type (*JniEnv, *void) -> void #c_call;
+    NativeIntegerFn :: #type (*JniEnv, *void, s32) -> void #c_call;
+    NativeInsetsFn :: #type (*JniEnv, *void, s32, s32, s32, s32,
+        s32, s32, s32, s32, s32) -> void #c_call;
+    NativeDensityFn :: #type (*JniEnv, *void, float32) -> void #c_call;
+    NativeLifecycleFn :: #type (*JniEnv, *void, u8, u8) -> s32 #c_call;
+    NativeSelectedFn :: #type (*JniEnv, *void, s32, *void) -> void #c_call;
+    NativeSucceededFn :: #type (*JniEnv, *void, s64, s64, s32) -> void #c_call;
+    NativeProgressFn :: #type (*JniEnv, *void, s64, s64, s64) -> void #c_call;
+    NativeFailedFn :: #type (*JniEnv, *void, s64, s32, *void) -> void #c_call;
+    NativePracticeFn :: #type (*JniEnv, *void, s32) -> u8 #c_call;
+    NativeImportMusicFn :: #type (*JniEnv, *void, *void, s32) -> u8 #c_call;
+    NativeBooleanFn :: #type (*JniEnv, *void) -> u8 #c_call;
+    NativeProcedure :: union {
+        nothing: NativeVoidFn
+        integer: NativeIntegerFn
+        insets: NativeInsetsFn
+        density: NativeDensityFn
+        lifecycle: NativeLifecycleFn
+        selected: NativeSelectedFn
+        succeeded: NativeSucceededFn
+        progress: NativeProgressFn
+        failed: NativeFailedFn
+        practice: NativePracticeFn
+        import_music: NativeImportMusicFn
+        boolean: NativeBooleanFn
+    }
+    NativeMethod :: struct {
+        name: *u8
+        signature: *u8
+        procedure: NativeProcedure
+    }
+    insets_mutex: AndroidMutex;
+    pending_practice_start: s32 = -1;
+    pending_donation_reminder: s32;
+
+    NativeSetInsets :: (env: *JniEnv, activity: *void,
+        left: s32, top: s32, right: s32, bottom: s32, ime: s32,
+        cutout_left: s32, cutout_top: s32, cutout_right: s32,
+        cutout_bottom: s32) {
+        unused env
+        unused activity
+        InsetsSetWindow(left, top, right, bottom, ime, cutout_left,
+            cutout_top, cutout_right, cutout_bottom)
+    }
+
+    NativeSetDensity :: (env: *JniEnv, activity: *void, density: float32) {
+        unused env
+        unused activity
+        InsetsSetDensity(density)
+    }
+
+    NativeWakeLockReady :: (env: *JniEnv, activity: *void) {
+        android_wakelock_set_activity(env, activity)
+    }
+
+    NativeSyncLifecycle :: (env: *JniEnv, activity: *void,
+        paused: u8, visible: u8) -> s32 {
+        unused env
+        unused activity
+        return InsetsSyncLifecycle(cast(s32)paused, cast(s32)visible)
+    }
+
+    NativeSetSystemDark :: (env: *JniEnv, activity: *void, dark: s32) {
+        unused env
+        unused activity
+        android_device_native_set_system_dark(dark)
+    }
+
+    NativeSetOrientation :: (env: *JniEnv, activity: *void, orientation: s32) {
+        unused env
+        unused activity
+        android_device_native_set_orientation(orientation)
+    }
+
+    NativeInvalidateGraphics :: (env: *JniEnv, activity: *void) {
+        unused env
+        unused activity
+        InsetsInvalidateGraphics()
+    }
+
+    NativeStartPractice :: (env: *JniEnv, activity: *void,
+        practice: s32) -> u8 {
+        unused env
+        unused activity
+        AndroidMutexLock(*insets_mutex)
+        selected := InsetsPracticeToStart(practice)
+        if selected >= 0 {
+            pending_practice_start = selected
+        }
+        AndroidMutexUnlock(*insets_mutex)
+        if selected >= 0 {
+            return 1
+        }
+        return 0
+    }
+
+    NativeImportMusic :: (env: *JniEnv, activity: *void,
+        path: *void, practice: s32) -> u8 {
+        unused activity
+        if path == null {
+            return 0
+        }
+        native_path := env.functions.GetStringUTFChars(env, path, null)
+        if native_path == null {
+            return 0
+        }
+        imported := InsetsImportMusic(native_path, practice)
+        env.functions.ReleaseStringUTFChars(env, path, native_path)
+        if imported != 0 {
+            return 1
+        }
+        return 0
+    }
+
+    NativeStartMusicDownload :: (env: *JniEnv, activity: *void) -> u8 {
+        unused env
+        unused activity
+        if InsetsStartMusicDownload() != 0 {
+            return 1
+        }
+        return 0
+    }
+
+    NativeOpenDonation :: (env: *JniEnv, activity: *void) -> u8 {
+        unused env
+        unused activity
+        if InsetsCanOpenDonation() == 0 {
+            return 0
+        }
+        AndroidMutexLock(*insets_mutex)
+        pending_donation_reminder = 1
+        AndroidMutexUnlock(*insets_mutex)
+        return 1
+    }
+
+    #program_export
+    JNI_OnLoad :: (vm: *JniVm, reserved: *void) -> s32 {
+        unused reserved
+        android_wakelock_set_jvm(vm)
+        env: *JniEnv
+        result := vm.functions.GetEnv(vm, *env, JniVersion)
+        if result != 0 || env == null {
+            return -1
+        }
+        class_name: [64]u8
+        CopyCString("xyz/waozi/inbe/MainActivity", class_name[:])
+        klass := env.functions.FindClass(env, *class_name[0])
+        if klass == null {
+            return -1
+        }
+        methods: [19]NativeMethod
+        names: [19][64]u8
+        signatures: [19][128]u8
+        CopyCString("nativeSetInsets", names[0][:])
+        CopyCString("(IIIIIIIII)V", signatures[0][:])
+        methods[0].name = *names[0][0]
+        methods[0].signature = *signatures[0][0]
+        methods[0].procedure.insets = NativeSetInsets
+        CopyCString("nativeSetDeviceDensity", names[1][:])
+        CopyCString("(F)V", signatures[1][:])
+        methods[1].name = *names[1][0]
+        methods[1].signature = *signatures[1][0]
+        methods[1].procedure.density = NativeSetDensity
+        CopyCString("nativeWakeLockReady", names[2][:])
+        CopyCString("()V", signatures[2][:])
+        methods[2].name = *names[2][0]
+        methods[2].signature = *signatures[2][0]
+        methods[2].procedure.nothing = NativeWakeLockReady
+        CopyCString("nativeSyncLifecycleState", names[3][:])
+        CopyCString("(ZZ)I", signatures[3][:])
+        methods[3].name = *names[3][0]
+        methods[3].signature = *signatures[3][0]
+        methods[3].procedure.lifecycle = NativeSyncLifecycle
+        CopyCString("nativeSetSystemDark", names[4][:])
+        CopyCString("(I)V", signatures[4][:])
+        methods[4].name = *names[4][0]
+        methods[4].signature = *signatures[4][0]
+        methods[4].procedure.integer = NativeSetSystemDark
+        CopyCString("nativeSetOrientation", names[5][:])
+        CopyCString("(I)V", signatures[5][:])
+        methods[5].name = *names[5][0]
+        methods[5].signature = *signatures[5][0]
+        methods[5].procedure.integer = NativeSetOrientation
+        CopyCString("nativeImportSelectedFile", names[6][:])
+        CopyCString("(ILjava/lang/String;)V", signatures[6][:])
+        methods[6].name = *names[6][0]
+        methods[6].signature = *signatures[6][0]
+        methods[6].procedure.selected = android_import_native_selected
+        CopyCString("nativeImportCancelled", names[7][:])
+        CopyCString("(I)V", signatures[7][:])
+        methods[7].name = *names[7][0]
+        methods[7].signature = *signatures[7][0]
+        methods[7].procedure.integer = android_import_native_cancelled
+        CopyCString("nativeRuntimeAssetDownloadSucceeded", names[8][:])
+        CopyCString("(JJI)V", signatures[8][:])
+        methods[8].name = *names[8][0]
+        methods[8].signature = *signatures[8][0]
+        methods[8].procedure.succeeded = android_runtime_asset_native_succeeded
+        CopyCString("nativeRuntimeAssetDownloadProgress", names[9][:])
+        CopyCString("(JJJ)V", signatures[9][:])
+        methods[9].name = *names[9][0]
+        methods[9].signature = *signatures[9][0]
+        methods[9].procedure.progress = android_runtime_asset_native_progress
+        CopyCString("nativeRuntimeAssetDownloadFailed", names[10][:])
+        CopyCString("(JILjava/lang/String;)V", signatures[10][:])
+        methods[10].name = *names[10][0]
+        methods[10].signature = *signatures[10][0]
+        methods[10].procedure.failed = android_runtime_asset_native_failed
+        CopyCString("nativeTextInputCommit", names[11][:])
+        CopyCString("(I)V", signatures[11][:])
+        methods[11].name = *names[11][0]
+        methods[11].signature = *signatures[11][0]
+        methods[11].procedure.integer = android_device_native_text_input_commit
+        CopyCString("nativeTextInputBackspace", names[12][:])
+        CopyCString("()V", signatures[12][:])
+        methods[12].name = *names[12][0]
+        methods[12].signature = *signatures[12][0]
+        methods[12].procedure.nothing = android_device_native_text_input_backspace
+        CopyCString("nativeTextInputEnter", names[13][:])
+        CopyCString("()V", signatures[13][:])
+        methods[13].name = *names[13][0]
+        methods[13].signature = *signatures[13][0]
+        methods[13].procedure.nothing = android_device_native_text_input_enter
+        CopyCString("nativeInvalidateGraphicsResources", names[14][:])
+        CopyCString("()V", signatures[14][:])
+        methods[14].name = *names[14][0]
+        methods[14].signature = *signatures[14][0]
+        methods[14].procedure.nothing = NativeInvalidateGraphics
+        CopyCString("nativeStartPractice", names[15][:])
+        CopyCString("(I)Z", signatures[15][:])
+        methods[15].name = *names[15][0]
+        methods[15].signature = *signatures[15][0]
+        methods[15].procedure.practice = NativeStartPractice
+        CopyCString("nativeDebugImportMusicForPractice", names[16][:])
+        CopyCString("(Ljava/lang/String;I)Z", signatures[16][:])
+        methods[16].name = *names[16][0]
+        methods[16].signature = *signatures[16][0]
+        methods[16].procedure.import_music = NativeImportMusic
+        CopyCString("nativeDebugStartMusicDownload", names[17][:])
+        CopyCString("()Z", signatures[17][:])
+        methods[17].name = *names[17][0]
+        methods[17].signature = *signatures[17][0]
+        methods[17].procedure.boolean = NativeStartMusicDownload
+        CopyCString("nativeDebugOpenDonationReminder", names[18][:])
+        CopyCString("()Z", signatures[18][:])
+        methods[18].name = *names[18][0]
+        methods[18].signature = *signatures[18][0]
+        methods[18].procedure.boolean = NativeOpenDonation
+        result = env.functions.RegisterNatives(env, klass,
+            cast(*void)*methods[0], 19)
+        env.functions.DeleteLocalRef(env, klass)
+        if result != 0 {
+            return result
+        }
+        return JniVersion
+    }
+}
+
+#program_export
+android_take_pending_practice_start :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*insets_mutex)
+        practice := pending_practice_start
+        pending_practice_start = -1
+        AndroidMutexUnlock(*insets_mutex)
+        return practice
+    }
+    return -1
+}
+
+#program_export
+android_take_pending_donation_reminder :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*insets_mutex)
+        pending := pending_donation_reminder
+        pending_donation_reminder = 0
+        AndroidMutexUnlock(*insets_mutex)
+        return pending
+    }
+    return 0
+}
+
+#program_export
+android_insets_init :: () {
+    #if #defined(ANDROID_BUILD) {
+        InsetsLifecycleReset()
+        AndroidMutexLock(*insets_mutex)
+        pending_practice_start = -1
+        pending_donation_reminder = 0
+        AndroidMutexUnlock(*insets_mutex)
+    }
+}

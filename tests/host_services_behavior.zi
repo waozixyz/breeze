@@ -1,0 +1,80 @@
+#import, file "../src/app/host_services.zi";
+#import "c_string"
+
+c :: #system_library "c";
+SetEnvironment :: (name: *u8, value: *u8, replace: s32) -> s32 #foreign c "setenv";
+UnsetEnvironment :: (name: *u8) -> s32 #foreign c "unsetenv";
+SleepMicroseconds :: (duration: u32) -> s32 #foreign c "usleep";
+
+SetVariable :: (name: string, value: string) -> bool {
+    key: [64]u8
+    bytes: [128]u8
+    if !CopyCString(name, key[:]) || !CopyCString(value, bytes[:]) {
+        return false
+    }
+    return SetEnvironment(*key[0], *bytes[0], 1) == 0
+}
+
+ClearVariable :: (name: string) {
+    key: [64]u8
+    if CopyCString(name, key[:]) {
+        UnsetEnvironment(*key[0])
+    }
+}
+
+#program_export
+main :: () -> s32 {
+    bytes: [4]u8 = .[97, 98, 0, 99]
+    if app_text_from_cstring(null, 4) != "" ||
+        app_text_from_cstring(*bytes[0], 0) != "" ||
+        app_text_from_cstring(*bytes[0], 1) != "a" ||
+        app_text_from_cstring(*bytes[0], 4) != "ab" {
+        return 1
+    }
+    ClearVariable("LANGUAGE")
+    ClearVariable("LC_ALL")
+    ClearVariable("LC_MESSAGES")
+    ClearVariable("LANG")
+    if app_locale_preferences() != "en" {
+        return 2
+    }
+    if !SetVariable("LANG", "de_DE.UTF-8") ||
+        app_locale_preferences() != "de_DE.UTF-8" ||
+        !SetVariable("LC_MESSAGES", "ja_JP") ||
+        app_locale_preferences() != "ja_JP" ||
+        !SetVariable("LC_ALL", "ru_RU") ||
+        app_locale_preferences() != "ru_RU" ||
+        !SetVariable("LANGUAGE", "es_AR:en") ||
+        app_locale_preferences() != "es_AR:en" ||
+        !SetVariable("LANGUAGE", "") ||
+        app_locale_preferences() != "ru_RU" {
+        return 3
+    }
+    ClearVariable("APP_FORCE_DARK_MODE")
+    if app_force_dark_mode() || !SetVariable("APP_FORCE_DARK_MODE", "") ||
+        !app_force_dark_mode() {
+        return 4
+    }
+    ClearVariable("KRYON_INSPECT")
+    if app_preview_mode() != 0 || !SetVariable("KRYON_INSPECT", "0") ||
+        app_preview_mode() != 0 || !SetVariable("KRYON_INSPECT", "1") ||
+        app_preview_mode() != 1 || !SetVariable("KRYON_INSPECT", "") ||
+        app_preview_mode() != 0 {
+        return 5
+    }
+    before := app_monotonic_seconds()
+    SleepMicroseconds(cast(u32)10000)
+    after := app_monotonic_seconds()
+    if before <= 0.0 || after <= before || after - before > 10.0 {
+        return 6
+    }
+    if app_desktop_platform() != 1 || app_web_platform() != 0 ||
+        app_android_platform() != 0 || app_windows_platform() != 0 ||
+        app_plan9_platform() != 0 {
+        return 7
+    }
+    message: [16]u8
+    CopyCString("host test", message[:])
+    app_log_line(*message[0])
+    return 0
+}

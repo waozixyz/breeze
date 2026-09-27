@@ -1,0 +1,74 @@
+#import, file "../app/assets.zi";
+
+asset_file_host :: #system_library "c";
+asset_file_raylib :: #system_library "raylib";
+
+AssetFileCallback :: #type (*u8, *s32) -> *u8 #c_call;
+InstallAssetFileCallback :: (callback: AssetFileCallback) #foreign asset_file_raylib "SetLoadFileDataCallback";
+AssetFileAllocate :: (size: u32) -> *u8 #foreign asset_file_raylib "MemAlloc";
+AssetFileFree :: (bytes: *u8) #foreign asset_file_raylib "MemFree";
+AssetFileCopy :: (output: *u8, source: *u8,
+    count: usize) -> *u8 #foreign asset_file_host "memcpy";
+AssetFileOpen :: (path: *u8, mode: *u8) -> *void #foreign asset_file_host "fopen";
+AssetFileRead :: (output: *u8, size: usize, count: usize,
+    file: *void) -> usize #foreign asset_file_host "fread";
+AssetFileClose :: (file: *void) -> s32 #foreign asset_file_host "fclose";
+AssetFileLength :: (path: *u8) -> s32 #foreign asset_file_raylib "GetFileLength";
+
+// raylib owns and frees the returned allocation. Embedded bytes remain
+// immutable, so each successful read returns a separate owned copy.
+#scope_export
+ReadAssetFile :: (path: *u8, size: *s32) -> *u8 {
+    if size == null {
+        return null
+    }
+    size.* = 0
+    if path == null || path[0] == 0 {
+        return null
+    }
+    embedded := asset_lookup(path)
+    if embedded.found {
+        if embedded.data == null || embedded.size == 0 ||
+            embedded.size > cast(usize)2147483647 {
+            return null
+        }
+        bytes := AssetFileAllocate(cast(u32)embedded.size)
+        if bytes == null {
+            return null
+        }
+        AssetFileCopy(bytes, embedded.data, embedded.size)
+        size.* = cast(s32)embedded.size
+        return bytes
+    }
+
+    length := AssetFileLength(path)
+    if length <= 0 {
+        return null
+    }
+    mode: [3]u8
+    mode[0] = #char "r"
+    mode[1] = #char "b"
+    file := AssetFileOpen(path, *mode[0])
+    if file == null {
+        return null
+    }
+    bytes := AssetFileAllocate(cast(u32)length)
+    if bytes == null {
+        AssetFileClose(file)
+        return null
+    }
+    read := AssetFileRead(bytes, 1, cast(usize)length, file)
+    AssetFileClose(file)
+    if read != cast(usize)length {
+        AssetFileFree(bytes)
+        return null
+    }
+    size.* = length
+    return bytes
+}
+
+#scope_export
+InstallAssetFiles :: () {
+    callback: AssetFileCallback = ReadAssetFile
+    InstallAssetFileCallback(callback)
+}

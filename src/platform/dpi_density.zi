@@ -1,0 +1,62 @@
+// Android's density callback and the render thread share this value.
+// SDL spin locks provide the required ordering where those threads coexist.
+SDL_DENSITY_THREADS :: #defined(PLATFORM_DESKTOP)
+ANDROID_DENSITY_THREADS :: #defined(ANDROID_BUILD)
+
+#if SDL_DENSITY_THREADS {
+    sdl :: #system_library "SDL2";
+    DensityLock :: (lock: *s32) #foreign sdl "SDL_AtomicLock";
+    DensityUnlock :: (lock: *s32) #foreign sdl "SDL_AtomicUnlock";
+}
+
+#if ANDROID_DENSITY_THREADS {
+    c :: #system_library "c";
+    atomic :: #system_library "atomic";
+    DensityCopyBits :: (destination: *void, source: *void,
+        count: usize) -> *void #foreign c "memcpy";
+    DensityAtomicStore :: (destination: *u32, value: u32,
+        order: s32) #foreign atomic "__atomic_store_4";
+    DensityAtomicLoad :: (source: *u32,
+        order: s32) -> u32 #foreign atomic "__atomic_load_4";
+}
+
+density_lock: s32;
+density_value: float32;
+density_bits: u32;
+
+#program_export
+SetDeviceDensity :: (density: float32) {
+    #if ANDROID_DENSITY_THREADS {
+        bits: u32
+        DensityCopyBits(cast(*void)(*bits), cast(*void)(*density),
+            cast(usize)4)
+        DensityAtomicStore(*density_bits, bits, 3)
+        return
+    }
+    #if SDL_DENSITY_THREADS {
+        DensityLock(*density_lock)
+    }
+    density_value = density
+    #if SDL_DENSITY_THREADS {
+        DensityUnlock(*density_lock)
+    }
+}
+
+#program_export
+app_device_density :: () -> float32 {
+    #if ANDROID_DENSITY_THREADS {
+        bits := DensityAtomicLoad(*density_bits, 2)
+        atomic_value: float32
+        DensityCopyBits(cast(*void)(*atomic_value), cast(*void)(*bits),
+            cast(usize)4)
+        return atomic_value
+    }
+    #if SDL_DENSITY_THREADS {
+        DensityLock(*density_lock)
+    }
+    value := density_value
+    #if SDL_DENSITY_THREADS {
+        DensityUnlock(*density_lock)
+    }
+    return value
+}

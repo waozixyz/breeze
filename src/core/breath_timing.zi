@@ -1,0 +1,497 @@
+#import, file "types.zi";
+
+using BreathAnimation;
+
+// Breath cadence and animation are values so the same decisions can run in
+// native targets and a portable bundle without an application or UI host.
+#program_export
+BreathHalfTicksForSpeed :: (speed: s32) -> s32 {
+    half_ticks: [8]s32 = .[180, 160, 144, 132, 120, 108, 93, 74]
+    if speed < 1 {
+        speed = 1
+    }
+    if speed > 8 {
+        speed = 8
+    }
+    return half_ticks[speed - 1]
+}
+
+BreathCountDigit :: (value: u8) -> s32 {
+    if value < cast(u8)48 || value > cast(u8)57 {
+        return 0
+    }
+    return cast(s32)value - 48
+}
+
+#program_export
+BreathDigitsRead :: (digits: []u8) -> s32 {
+    if digits.count < 3 {
+        return 0
+    }
+    return BreathCountDigit(digits[0]) * 100 +         BreathCountDigit(digits[1]) * 10 +         BreathCountDigit(digits[2])
+}
+
+#program_export
+BreathDigitsWrite :: (digits: []u8, value: s32) -> bool {
+    if digits.count < CountSize {
+        return false
+    }
+    if value < 0 {
+        value = 0
+    }
+    if value > 999 {
+        value = 999
+    }
+    digits[0] = cast(u8)(48 + (value / 100) % 10)
+    digits[1] = cast(u8)(48 + (value / 10) % 10)
+    digits[2] = cast(u8)(48 + value % 10)
+    digits[3] = 0
+    return true
+}
+
+#program_export
+BreathCountValue :: (session: BreathSession) -> s32 {
+    return BreathDigitsRead(session.count[:])
+}
+
+BreathLerpInt :: (start: s32, end: s32,
+    numerator: s32, denominator: s32) -> s32 {
+    delta: s32 = end - start
+    scaled: s32 = delta * numerator
+    if scaled >= 0 {
+        scaled += denominator / 2
+    } else {
+        scaled -= denominator / 2
+    }
+    return start + scaled / denominator
+}
+
+#program_export
+BreathEffectiveHalfTicks :: (session: BreathSession) -> s32 {
+    target: s32 = BreathHalfTicksForSpeed(session.speed_level)
+    if session.progressive_speed == 0 || session.round != 0 {
+        return target
+    }
+    start_speed: s32 = session.progressive_start_speed
+    if start_speed < 1 {
+        start_speed = 1
+    }
+    if start_speed > session.speed_level {
+        start_speed = session.speed_level
+    }
+    completed: s32 = BreathCountValue(session)
+    if completed < 5 {
+        return BreathHalfTicksForSpeed(start_speed)
+    }
+    if completed >= 10 {
+        return target
+    }
+    return BreathLerpInt(BreathHalfTicksForSpeed(start_speed),
+        target, completed - 4, 5)
+}
+
+#program_export
+BreathProgress :: (session: BreathSession) -> float32 {
+    if session.phase != BreathPhaseBreathe {
+        return 0.0
+    }
+    half_ticks: s32 = BreathEffectiveHalfTicks(session)
+    if half_ticks <= 0 {
+        return 0.0
+    }
+    amount: float32 = cast(float32)session.breath_frame / cast(float32)half_ticks
+    if amount < 0.0 {
+        amount = 0.0
+    }
+    if amount > 1.0 {
+        amount = 1.0
+    }
+    if session.dir == 0 {
+        return amount * 0.5
+    }
+    return 0.5 + amount * 0.5
+}
+
+#program_export
+BreathPauseSeconds :: (session: BreathSession) -> s32 {
+    if session.round == 0 {
+        return 3
+    }
+    return session.pause_seconds
+}
+
+BreathSmoothstep :: (value: float32) -> float32 {
+    if value < 0.0 {
+        value = 0.0
+    }
+    if value > 1.0 {
+        value = 1.0
+    }
+    return value * value * (3.0 - 2.0 * value)
+}
+
+BreathEasedSpan :: (span: s32, frame: s32,
+    half_ticks: s32) -> s32 {
+    if span <= 0 || half_ticks <= 0 {
+        return 0
+    }
+    ratio: float32 = cast(float32)frame / cast(float32)half_ticks
+    return cast(s32)(cast(float32)span * BreathSmoothstep(ratio) + 0.5)
+}
+
+#program_export
+BreathAnimatedSpan :: (session: BreathSession, span: s32,
+    frame: s32, half_ticks: s32) -> s32 {
+    if span <= 0 || half_ticks <= 0 {
+        return 0
+    }
+    if session.breath_animation == BreathAnimationLinear {
+        return BreathLerpInt(0, span, frame, half_ticks)
+    }
+    return BreathEasedSpan(span, frame, half_ticks)
+}
+
+#program_export
+BreathDrawRadius :: (session: BreathSession) -> float32 {
+    return cast(float32)session.r
+}
+
+#program_export
+BreathCircleBounds :: (session: BreathSession, minimum: s32,
+    maximum: s32) -> BreathSession {
+    if minimum < 8 {
+        minimum = 8
+    }
+    if maximum < minimum + 8 {
+        maximum = minimum + 8
+    }
+    old_span := session.rmax - session.rmin
+    new_span := maximum - minimum
+    if old_span > 0 {
+        position := cast(float32)(session.r - session.rmin) /
+            cast(float32)old_span
+        if position < 0.0 {
+            position = 0.0
+        }
+        if position > 1.0 {
+            position = 1.0
+        }
+        session.r = minimum + cast(s32)(position * cast(float32)new_span)
+    } else {
+        session.r = minimum
+    }
+    session.rmin = minimum
+    session.rmax = maximum
+    if session.r < minimum {
+        session.r = minimum
+    }
+    if session.r > maximum {
+        session.r = maximum
+    }
+    return session
+}
+
+#program_export
+BreathPreviewBounds :: (session: BreathSession, content_width: s32,
+    content_height: s32, minimum_outer: s32, maximum_outer: s32,
+    minimum_inner: s32, inner_gap: s32) -> BreathSession {
+    span := content_width
+    if content_height > 0 && content_height < span {
+        span = content_height
+    }
+    maximum := span / 2
+    if maximum < minimum_outer {
+        maximum = minimum_outer
+    }
+    if maximum > maximum_outer {
+        maximum = maximum_outer
+    }
+    minimum := maximum / 2
+    if minimum < minimum_inner {
+        minimum = minimum_inner
+    }
+    if minimum > maximum - inner_gap {
+        minimum = maximum - inner_gap
+    }
+    return BreathCircleBounds(session, minimum, maximum)
+}
+
+#program_export
+BreathResetRoundBreathe :: (session: BreathSession) -> BreathSession {
+    session.phase = BreathPhaseBreathe
+    session.dir = 0
+    session.r = session.rmin
+    session.breath_frame = 0
+    session.breathtick = 0
+    session.sectick = 0
+    session.halftick = 0
+    return BreathResetCount(session)
+}
+
+#program_export
+BreathResetCount :: (session: BreathSession) -> BreathSession {
+    session.count[0] = cast(u8)48
+    session.count[1] = cast(u8)48
+    session.count[2] = cast(u8)48
+    session.count[3] = cast(u8)0
+    return session
+}
+
+#program_export
+BreathClearResultsFrom :: (session: BreathSession,
+    first_round: s32) -> BreathSession {
+    if first_round < 0 {
+        first_round = 0
+    }
+    if first_round >= MaxRounds {
+        return session
+    }
+    index: s32 = first_round
+    while index < MaxRounds {
+        session.results[index][0] = cast(u8)48
+        session.results[index][1] = cast(u8)48
+        session.results[index][2] = cast(u8)48
+        session.results[index][3] = cast(u8)0
+        index += 1
+    }
+    return session
+}
+
+#program_export
+BreathRestoreCount :: (session: BreathSession,
+    round: s32) -> BreathSession {
+    if round < 0 || round >= MaxRounds {
+        return session
+    }
+    session.count[0] = session.results[round][0]
+    session.count[1] = session.results[round][1]
+    session.count[2] = session.results[round][2]
+    session.count[3] = cast(u8)0
+    return session
+}
+
+BreathIncrementCount :: (session: BreathSession) -> BreathSession {
+    if session.count[2] < cast(u8)57 {
+        session.count[2] = cast(u8)(cast(s32)session.count[2] + 1)
+        return session
+    }
+    session.count[2] = cast(u8)48
+    if session.count[1] < cast(u8)57 {
+        session.count[1] = cast(u8)(cast(s32)session.count[1] + 1)
+        return session
+    }
+    session.count[1] = cast(u8)48
+    if session.count[0] < cast(u8)57 {
+        session.count[0] = cast(u8)(cast(s32)session.count[0] + 1)
+        return session
+    }
+    session.count[0] = cast(u8)48
+    return session
+}
+
+#program_export
+BreathSessionInit :: () -> BreathSession {
+    session: BreathSession
+    session.screen = ScreenStart
+    session.phase = BreathPhaseStarting
+    session.r = 25
+    session.rmin = 25
+    session.rmax = 50
+    session.speed_level = DefaultSpeedLevel
+    session.breath_half_ticks = 120
+    session.max_rounds = DefaultMaxRounds
+    session.pause_seconds = DefaultPauseSeconds
+    session.progressive_speed = 1
+    session.progressive_start_speed = DefaultProgressiveStartSpeed
+    session.breath_animation = BreathAnimationLinear
+    session = BreathResetCount(session)
+    session.maxbreaths[0] = cast(u8)48
+    session.maxbreaths[1] = cast(u8)51
+    session.maxbreaths[2] = cast(u8)48
+    session.maxbreaths[3] = cast(u8)0
+    index: s32 = 0
+    while index < MaxRounds {
+        session.results[index][0] = cast(u8)48
+        session.results[index][1] = cast(u8)48
+        session.results[index][2] = cast(u8)48
+        session.results[index][3] = cast(u8)0
+        index += 1
+    }
+    return session
+}
+
+BreathStart :: (session: BreathSession) -> BreathSession {
+    pause_ticks: s32 = BreathPauseSeconds(session) * 60
+    if pause_ticks <= 0 {
+        session.sectick = 0
+        session.phase = BreathPhaseBreathe
+        return session
+    }
+    session.sectick += 1
+    if session.sectick < pause_ticks {
+        return session
+    }
+    session.sectick = 0
+    session.phase = BreathPhaseBreathe
+    return session
+}
+
+BreathBreathe :: (session: BreathSession) -> BreathSession {
+    span: s32 = session.rmax - session.rmin
+    half_ticks: s32 = BreathEffectiveHalfTicks(session)
+    if span <= 0 || half_ticks <= 0 {
+        return session
+    }
+    session.breath_frame += 1
+    if session.breath_frame > half_ticks {
+        session.breath_frame = half_ticks
+    }
+    eased: s32 = BreathAnimatedSpan(session, span,
+        session.breath_frame, half_ticks)
+    if session.dir == 0 {
+        session.r = session.rmin + eased
+    } else {
+        session.r = session.rmax - eased
+    }
+    if session.breath_frame >= half_ticks {
+        session.breath_frame = 0
+        if session.dir == 0 {
+            session.dir = 1
+            session.r = session.rmax
+        } else {
+            session.dir = 0
+            session.r = session.rmin
+            session = BreathIncrementCount(session)
+        }
+    }
+    max_breaths: s32 = BreathCountDigit(session.maxbreaths[0]) * 100 +     BreathCountDigit(session.maxbreaths[1]) * 10 +     BreathCountDigit(session.maxbreaths[2])
+    if BreathCountValue(session) >= max_breaths {
+        session = BreathResetCount(session)
+        session.phase = BreathPhaseHold
+    }
+    return session
+}
+
+BreathHold :: (session: BreathSession) -> BreathSession {
+    session.sectick += 1
+    if session.sectick < 60 {
+        return session
+    }
+    session.sectick = 0
+    return BreathIncrementCount(session)
+}
+
+BreathRecover :: (session: BreathSession) -> BreathSession {
+    span: s32 = session.rmax - session.rmin
+    if span <= 0 || session.breath_half_ticks <= 0 {
+        return session
+    }
+    if session.r < session.rmax {
+        session.breath_frame += 1
+        if session.breath_frame > session.breath_half_ticks {
+            session.breath_frame = session.breath_half_ticks
+        }
+        eased: s32 = BreathAnimatedSpan(session, span,
+            session.breath_frame, session.breath_half_ticks)
+        session.r = session.rmin + eased
+        if session.breath_frame >= session.breath_half_ticks {
+            session.breath_frame = 0
+            session.sectick = 0
+            session.r = session.rmax
+        }
+        return session
+    }
+    if session.count[0] != cast(u8)48  || session.count[1] != cast(u8)48  || session.count[2] != cast(u8)48 {
+        session.sectick += 1
+        if session.sectick < 60 {
+            return session
+        }
+        session.sectick = 0
+        session = BreathIncrementCount(session)
+        if BreathCountValue(session) == 15 {
+            session = BreathResetCount(session)
+            session.breath_frame = 0
+            session.phase = BreathPhaseNext
+        }
+        return session
+    }
+    session.sectick += 1
+    if session.sectick < 60 {
+        return session
+    }
+    session.sectick = 0
+    return BreathIncrementCount(session)
+}
+
+BreathNext :: (session: BreathSession) -> BreathSession {
+    span: s32 = session.rmax - session.rmin
+    if span <= 0 || session.breath_half_ticks <= 0 {
+        return session
+    }
+    session.breath_frame += 1
+    if session.breath_frame > session.breath_half_ticks {
+        session.breath_frame = session.breath_half_ticks
+    }
+    eased: s32 = BreathAnimatedSpan(session, span,
+        session.breath_frame, session.breath_half_ticks)
+    session.r = session.rmax - eased
+    if session.breath_frame >= session.breath_half_ticks {
+        session.breath_frame = 0
+        session.r = session.rmin
+        session = BreathResetCount(session)
+        if session.round < session.max_rounds - 1 {
+            session.round += 1
+            session.phase = BreathPhaseStarting
+        } else {
+            session.completed = 1
+            session.phase = BreathPhaseStarting
+        }
+    }
+    return session
+}
+
+#program_export
+BreathSessionStep :: (session: BreathSession) -> BreathSession {
+    if session.completed != 0 {
+        return session
+    }
+    if session.phase == BreathPhaseStarting {
+        return BreathStart(session)
+    }
+    if session.phase == BreathPhaseBreathe {
+        return BreathBreathe(session)
+    }
+    if session.phase == BreathPhaseHold {
+        return BreathHold(session)
+    }
+    if session.phase == BreathPhaseRecover {
+        return BreathRecover(session)
+    }
+    if session.phase == BreathPhaseNext {
+        return BreathNext(session)
+    }
+    return session
+}
+
+#program_export
+BreathEndHold :: (session: BreathSession) -> BreathSession {
+    if session.round >= 0 && session.round < MaxRounds {
+        session.results[session.round][0] = session.count[0]
+        session.results[session.round][1] = session.count[1]
+        session.results[session.round][2] = session.count[2]
+        session.results[session.round][3] = cast(u8)0
+    }
+    session = BreathResetCount(session)
+    session.phase = BreathPhaseRecover
+    session.r = session.rmin
+    session.breath_frame = 0
+    session.breathtick = 0
+    session.sectick = 0
+    return session
+}
+
+#program_export
+BreathClearCompleted :: (session: BreathSession) -> BreathSession {
+    session.completed = 0
+    return session
+}

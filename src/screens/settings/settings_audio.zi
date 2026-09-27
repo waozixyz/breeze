@@ -1,0 +1,1024 @@
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app.zi";
+#import, file "../../app/audio.zi";
+#import, file "../../app/music_library.zi";
+#import, file "../../app/audio_selection.zi";
+#import, file "../../platform/android/android_import.zi";
+#import, file "../../platform/environment.zi";
+#import, file "../../platform/media_types.zi";
+#import, file "../../platform/audio_runtime.zi";
+#import, file "../../app/app_settings.zi";
+
+
+#import, file "../../practices/meditation/meditation_music.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "settings_ui.zi";
+#import, file "settings_status.zi";
+#import, file "settings_status_view.zi";
+#import, file "../../app/text_buffers.zi";
+#import "control_props"
+#import "text_props"
+#import, file "../../platform/asset_download_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "dropdown_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "dropdown_props"
+
+using AssetDownloadStatus;
+using ExerciseType;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+using AndroidImportKind;
+using AndroidImportResult;
+
+settings_audio_log :: #system_library "c";
+SETTINGS_AUDIO_LOG_INFO :: 3
+#import, file "../../platform/trace_log.zi";
+settings_audio_pick_file :: (title: *u8, music: bool,
+    output: *u8, capacity: s32) -> s32 #foreign settings_audio_log "app_audio_pick_file";
+
+SettingsAudioDialogOrigin :: struct {
+    active: s32
+    screen: s32
+    settings_tab: s32
+    settings_scroll: s32
+}
+
+SETTINGS_AUDIO_ACTION_NONE :: 0
+SETTINGS_AUDIO_ACTION_SOUND_IN :: 1
+SETTINGS_AUDIO_ACTION_SOUND_OUT :: 2
+SETTINGS_AUDIO_ACTION_SOUND_BELL :: 3
+SETTINGS_AUDIO_ACTION_MUSIC :: 4
+
+SETTINGS_AUDIO_PREVIEW_NONE :: 0
+SETTINGS_AUDIO_PREVIEW_CUE :: 1
+SETTINGS_AUDIO_PREVIEW_CUSTOM_SOUND :: 2
+SETTINGS_AUDIO_PREVIEW_MUSIC :: 3
+
+audio_preview_kind: s32 = SETTINGS_AUDIO_PREVIEW_NONE;
+audio_preview_index: s32 = -1;
+
+settings_audio_practice_label :: (id: s32) -> string {
+    if id == cast(s32)EXERCISE_WIM_HOF {
+        return LocaleText("exercise_wim_hof")
+    }
+    if id == cast(s32)EXERCISE_MEDITATION {
+        return LocaleText("exercise_meditation")
+    }
+    if id == cast(s32)EXERCISE_SUN_SALUTATION {
+        return LocaleText("exercise_sun_salutation")
+    }
+    return LocaleText("exercise_patterns")
+}
+audio_preview_sound: SoundHandle = SoundHandle.{};
+audio_preview_music: MusicHandle = MusicHandle.{};
+audio_preview_music_loaded: s32 = 0;
+audio_status_action: s32 = SETTINGS_AUDIO_ACTION_NONE;
+audio_status_practice: s32 = -1;
+audio_status_type: s32 = 0;
+audio_status: [256] u8;
+
+audio_import_action: s32 = SETTINGS_AUDIO_ACTION_NONE;
+audio_import_practice: s32 = -1;
+audio_dialog_origin: SettingsAudioDialogOrigin;
+android_audio_mime_types :: "audio/*,audio/ogg,application/ogg,audio/mpeg,audio/mp3,audio/flac,audio/mp4,audio/x-m4a,audio/opus,application/octet-stream"
+
+settings_audio_set_status :: (action: s32, message: string, status_type: s32) {
+    audio_status_action = action
+    audio_status_type = status_type
+    if !AppCopyText(message, audio_status[:]) {
+        audio_status[0] = cast(u8)0
+    }
+    settings_screen_clear_status()
+}
+
+settings_audio_set_status_success :: (action: s32, message: string) {
+    settings_audio_set_status(action, message, 1)
+}
+
+settings_audio_set_status_error :: (action: s32, message: string) {
+    settings_audio_set_status(action, message, 2)
+}
+
+settings_audio_draw_status :: (x: s32, y: *s32, action: s32) {
+    if audio_status_action != action || audio_status[0] == cast(u8)0 {
+        return
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = AppTextFromCString(*audio_status[0], 256),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(24)
+}
+
+settings_audio_dialog_begin :: (app: *InnerBreeze, action: s32, practice: s32) {
+    if app == null {
+        return
+    }
+    audio_import_action = action
+    audio_import_practice = practice
+    app.file_dialog_active = 1
+    audio_dialog_origin.active = 1
+    audio_dialog_origin.screen = app.breathing.screen
+    audio_dialog_origin.settings_tab = app.settings_tab
+    audio_dialog_origin.settings_scroll = app.settings_scroll
+}
+
+settings_audio_dialog_finish :: (app: *InnerBreeze) -> s32 {
+    action := audio_import_action
+    if app != null && audio_dialog_origin.active != 0 {
+        app.breathing.screen = audio_dialog_origin.screen
+        app.settings_tab = audio_dialog_origin.settings_tab
+        app.settings_scroll = audio_dialog_origin.settings_scroll
+        app.file_dialog_active = 0
+    }
+    audio_dialog_origin.active = 0
+    audio_import_action = SETTINGS_AUDIO_ACTION_NONE
+    audio_import_practice = -1
+    return action
+}
+
+settings_audio_cue_sound :: (app: *InnerBreeze, cue: s32) -> SoundHandle {
+    empty: SoundHandle = .{0 }
+
+    if app == null {
+        return empty
+    }
+    if cue == AUDIO_CUE_BREATH_IN {
+        return app.breath_in_sound
+    }
+    if cue == AUDIO_CUE_BREATH_OUT {
+        return app.breath_out_sound
+    }
+    if cue == AUDIO_CUE_BELL {
+        return app.bell_sound
+    }
+    return empty
+}
+
+settings_audio_stop_preview :: (app: *InnerBreeze) {
+    if app != null {
+        if app.breath_in_sound.frame_count != 0 {
+            audio_stop_sound(app.breath_in_sound)
+        }
+        if app.breath_out_sound.frame_count != 0 {
+            audio_stop_sound(app.breath_out_sound)
+        }
+        if app.bell_sound.frame_count != 0 {
+            audio_stop_sound(app.bell_sound)
+        }
+    }
+    if audio_preview_sound.frame_count != 0 {
+        audio_stop_sound(audio_preview_sound)
+        audio_unload_sound(audio_preview_sound)
+        audio_preview_sound = SoundHandle.{0 }
+    }
+    if audio_preview_music_loaded != 0 {
+        audio_stop_music(audio_preview_music)
+        audio_unload_music(audio_preview_music)
+        audio_preview_music = MusicHandle.{0 }
+        audio_preview_music_loaded = 0
+    }
+    audio_preview_kind = SETTINGS_AUDIO_PREVIEW_NONE
+    audio_preview_index = -1
+}
+
+settings_audio_update_preview :: () {
+    if audio_preview_music_loaded != 0 {
+        audio_update_music(audio_preview_music)
+    }
+}
+
+settings_audio_sound_volume :: (app: *InnerBreeze) -> float32 {
+    if app == null || app.sound_volume <= 0 {
+        return 0.0f
+    }
+    return cast(float32)app.sound_volume / 100.0f
+}
+
+settings_audio_music_volume :: (app: *InnerBreeze) -> float32 {
+    if app == null || app.music_volume <= 0 {
+        return 0.0f
+    }
+    return cast(float32)app.music_volume / 100.0f
+}
+
+settings_audio_preview_cue_playing :: (app: *InnerBreeze, cue: s32) -> s32 {
+    sound := settings_audio_cue_sound(app, cue)
+    if app == null || app.audio_ready == 0 || sound.frame_count == 0 {
+        return 0
+    }
+    return ifx (audio_sound_playing(sound)) then (1) else (0)
+}
+
+settings_audio_preview_custom_sound_playing :: (index: s32) -> s32 {
+    if audio_preview_kind != SETTINGS_AUDIO_PREVIEW_CUSTOM_SOUND  || audio_preview_index != index  || audio_preview_sound.frame_count == 0 {
+        return 0
+    }
+    return ifx (audio_sound_playing(audio_preview_sound)) then (1) else (0)
+}
+
+settings_audio_preview_music_playing :: (index: s32) -> s32 {
+    if audio_preview_kind != SETTINGS_AUDIO_PREVIEW_MUSIC  || audio_preview_index != index  || audio_preview_music_loaded == 0 {
+        return 0
+    }
+    return ifx (audio_music_playing(audio_preview_music)) then (1) else (0)
+}
+
+settings_audio_toggle_cue_preview :: (app: *InnerBreeze, cue: s32) {
+    sound := settings_audio_cue_sound(app, cue)
+
+    if app == null || app.audio_ready == 0 || sound.frame_count == 0 {
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    if audio_sound_playing(sound) {
+        audio_pause_sound(sound)
+        return
+    }
+    settings_audio_stop_preview(app)
+    audio_preview_kind = SETTINGS_AUDIO_PREVIEW_CUE
+    audio_preview_index = cue
+    app_play_sound(app, sound, 1.0f)
+}
+
+settings_audio_toggle_custom_sound_preview :: (app: *InnerBreeze, index: s32) {
+    if app == null || app.audio_ready == 0 || index < 0 || index >= app.audio_custom_sound_count {
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    if settings_audio_preview_custom_sound_playing(index) != 0 {
+        audio_pause_sound(audio_preview_sound)
+        return
+    }
+    settings_audio_stop_preview(app)
+    audio_preview_sound = audio_load_sound(AppTextFromCString(*app.audio_custom_sounds[index].path[0], FS_PATH_MAX))
+    if audio_preview_sound.frame_count == 0 {
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    audio_preview_kind = SETTINGS_AUDIO_PREVIEW_CUSTOM_SOUND
+    audio_preview_index = index
+    audio_set_sound_volume(audio_preview_sound, settings_audio_sound_volume(app))
+    audio_play_sound(audio_preview_sound)
+}
+
+settings_audio_toggle_music_preview :: (app: *InnerBreeze, index: s32) {
+    path: [FS_PATH_MAX] u8
+
+    if app == null || app.audio_ready == 0 {
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    if settings_audio_preview_music_playing(index) != 0 {
+        audio_pause_music(audio_preview_music)
+        return
+    }
+    if audio_preview_kind == SETTINGS_AUDIO_PREVIEW_MUSIC  && audio_preview_index == index  && audio_preview_music_loaded != 0 {
+        audio_resume_music(audio_preview_music)
+        return
+    }
+    if !app_audio_music_path(app, index, path[:]) {
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    settings_audio_stop_preview(app)
+    audio_preview_music = audio_load_music(AppTextFromCString(*path[0], FS_PATH_MAX))
+    if !audio_music_valid(audio_preview_music) {
+        audio_preview_music = MusicHandle.{0 }
+        settings_screen_set_status_error(LocaleText("audio_preview_failed"))
+        return
+    }
+    audio_preview_kind = SETTINGS_AUDIO_PREVIEW_MUSIC
+    audio_preview_index = index
+    audio_preview_music_loaded = 1
+    audio_set_music_volume(audio_preview_music, settings_audio_music_volume(app))
+    audio_play_music(audio_preview_music)
+}
+
+audio_action_to_cue :: (action: s32) -> s32 {
+    if action == SETTINGS_AUDIO_ACTION_SOUND_IN {
+        return AUDIO_CUE_BREATH_IN
+    }
+    if action == SETTINGS_AUDIO_ACTION_SOUND_OUT {
+        return AUDIO_CUE_BREATH_OUT
+    }
+    if action == SETTINGS_AUDIO_ACTION_SOUND_BELL {
+        return AUDIO_CUE_BELL
+    }
+    return -1
+}
+
+audio_android_kind :: (action: s32) -> s32 {
+    return ifx (action == SETTINGS_AUDIO_ACTION_MUSIC) then (ANDROID_IMPORT_KIND_AUDIO_MUSIC) else (ANDROID_IMPORT_KIND_AUDIO_SOUND)
+}
+
+audio_import_path :: (app: *InnerBreeze, action: s32, path: string) -> s32 {
+    cue := audio_action_to_cue(action)
+    error_code: s32 = 0
+    error_message: string = LocaleText("audio_import_failed")
+
+    if app == null || path.count == 0 || path[0] == #char "\0" {
+        settings_audio_set_status_error(action, LocaleText("audio_import_error_invalid_path"))
+        return 0
+    }
+    if action == SETTINGS_AUDIO_ACTION_MUSIC {
+        if app_audio_import_custom_music_ex(app, path, *error_code) {
+            app.settings_dirty = 1
+            save_settings(app)
+            settings_audio_set_status_success(action, LocaleText("audio_imported"))
+            return 1
+        }
+    } else if cue >= 0 {
+        if app_audio_import_custom_sound_ex(app, cue, path, *error_code) {
+            app.settings_dirty = 1
+            save_settings(app)
+            settings_audio_set_status_success(action, LocaleText("audio_imported"))
+            return 1
+        }
+    }
+    if error_code == -1 {
+        error_message = LocaleText("audio_import_error_invalid_path")
+    } else if error_code == -2 {
+        error_message = LocaleText("audio_import_error_invalid_format")
+    } else if error_code == -3 {
+        error_message = LocaleText("audio_import_error_file_not_found")
+    } else if error_code == -4 {
+        error_message = LocaleText("audio_import_error_copy_failed")
+    }
+    settings_audio_set_status_error(action, error_message)
+    return 0
+}
+
+settings_audio_select_imported_music :: (app: *InnerBreeze, action: s32,
+    practice: s32) {
+    if app == null || action != SETTINGS_AUDIO_ACTION_MUSIC  || app.audio_custom_music_count <= 0 {
+        return
+    }
+    track := AUDIO_BUILTIN_MUSIC_COUNT + app.audio_custom_music_count - 1
+    if practice < 0 || practice >= practice_count() {
+        app.meditation.music_track = track
+        app_audio_music_sanitize_selection(app)
+        save_settings(app)
+        settings_audio_set_status_success(action, LocaleText("audio_imported"))
+        TraceLogResult(SETTINGS_AUDIO_LOG_INFO,
+            "AUDIO: Imported custom music track %d", track)
+        return
+    }
+    app.meditation.music_practice_tracks[practice] = track
+    app.meditation.music_practice_mask |= 1 << practice
+    app.meditation.music_track = track
+    app_audio_music_sanitize_selection(app)
+    save_settings(app)
+    settings_audio_set_status_success(action,
+        LocaleText("audio_imported_and_selected"))
+    TraceLogTwoInts(SETTINGS_AUDIO_LOG_INFO,
+            "AUDIO: Imported custom music and selected track %d for practice %d",
+        track, practice)
+}
+
+settings_audio_start_import :: (app: *InnerBreeze, action: s32, practice: s32) {
+    if app == null {
+        return
+    }
+    settings_audio_stop_preview(app)
+    audio_status_practice = practice
+    if AndroidPlatform() != 0 {
+        mime_types: [192]u8
+        if !AppCopyText(android_audio_mime_types, mime_types[:]) {
+            settings_audio_set_status_error(action,
+                LocaleText("audio_import_failed"))
+            return
+        }
+        settings_audio_dialog_begin(app, action, practice)
+        if android_import_open_picker_for(audio_android_kind(action),
+            *mime_types[0]) != 0 {
+            settings_audio_set_status_success(action, LocaleText("audio_import_title"))
+        } else {
+            unused settings_audio_dialog_finish(app)
+            settings_audio_set_status_error(action, LocaleText("audio_import_failed"))
+        }
+        return
+    }
+    title: [128]u8
+    path: [FS_PATH_MAX]u8
+    if !AppCopyText(LocaleText("audio_import_title"), title[:]) {
+        settings_audio_set_status_error(action,
+            LocaleText("audio_import_failed"))
+        return
+    }
+    settings_audio_dialog_begin(app, action, practice)
+    selected := settings_audio_pick_file(*title[0],
+        action == SETTINGS_AUDIO_ACTION_MUSIC,
+        *path[0], FS_PATH_MAX)
+    unused settings_audio_dialog_finish(app)
+    if selected == 1 {
+        if audio_import_path(app, action,
+            AppTextFromCString(*path[0], FS_PATH_MAX)) != 0 {
+            settings_audio_select_imported_music(app, action, practice)
+        }
+    } else if selected == 0 {
+        settings_audio_set_status_error(action, LocaleText("audio_import_cancelled"))
+    } else {
+        settings_audio_set_status_error(action, LocaleText("audio_import_failed"))
+    }
+}
+
+settings_audio_handle_import :: (app: *InnerBreeze) {
+    if AndroidPlatform() == 0 {
+        return
+    }
+    path: [FS_PATH_MAX]u8
+    action := audio_import_action
+    practice := audio_import_practice
+    if action == SETTINGS_AUDIO_ACTION_NONE {
+        return
+    }
+    result := android_import_poll_result_for(audio_android_kind(action),
+        *path[0], cast(s32)path.count)
+    if result == cast(s32)ANDROID_IMPORT_RESULT_NONE {
+        return
+    }
+    action = settings_audio_dialog_finish(app)
+    if result == cast(s32)ANDROID_IMPORT_RESULT_CANCELLED {
+        settings_audio_set_status_error(action, LocaleText("audio_import_cancelled"))
+        return
+    }
+    if audio_import_path(app, action,
+        AppTextFromCString(*path[0], FS_PATH_MAX)) != 0 {
+        settings_audio_select_imported_music(app, action, practice)
+    }
+}
+
+settings_audio_draw_output :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    status_label := ifx (app.audio_ready != 0) then (LocaleText("audio_status_ready")) else (LocaleText("audio_status_unavailable"))
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (LocaleText("audio_output_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.* + AppScale(26)), 0, 0},
+            .text = (LocaleText("audio_system_default_label")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.* + AppScale(46)), 0, 0},
+            .text = (status_label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+        y.* += AppScale(70)
+
+        button_gap := AppScale(8)
+        button_w := (w - button_gap) / 2
+        clicked: s32 = 0
+
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .id = 3401,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)button_w, cast(float32)AppScale(36)},
+            .label = LocaleText("audio_test_output_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+            clicked = 1
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+            .id = 3402,
+            .bounds = Rectangle.{cast(float32)(x + button_w + button_gap), cast(float32)(y.*),
+                cast(float32)(w - button_w - button_gap), cast(float32)AppScale(36)},
+            .label = LocaleText("audio_reinitialize_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+            clicked = 2
+        }
+        y.* += AppScale(36)
+
+        if clicked == 1 {
+            app_play_bell_cue(app, 1.0f)
+        }
+        if clicked == 2 {
+            app_audio_reinitialize(app)
+        }
+        y.* += draw_audio_meter(app, app_audio_output_level(app), x, y.*, w,
+        LocaleText("audio_output_level_label"))
+        y.* += AppScale(18)
+}
+
+settings_audio_import_button_height :: (action: s32) -> s32 {
+    height := AppScale(48)
+
+    if audio_status_action == action && audio_status[0] != #char "\0" {
+        height += AppScale(24)
+    }
+    return height
+}
+
+settings_audio_output_height :: (content_w: s32) -> s32 {
+    unused content_w
+
+    return AppScale(70) + AppScale(36) +     audio_meter_height() + AppScale(18)
+}
+
+settings_audio_music_assignment_count :: (app: *InnerBreeze) -> s32 {
+    count: s32 = 0
+
+    if app == null {
+        return 0
+    }
+    {
+        p: s32 = 0
+        while p < practice_count() {
+            if app.meditation.music_practice_tracks[p] != AUDIO_MUSIC_NONE {
+                count += 1
+            }
+            p += 1
+        }
+    }
+    return count
+}
+
+settings_audio_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
+    custom_sound_count: s32 = 0
+    custom_music_count: s32 = 0
+    music_assignment_count: s32 = 0
+    height := settings_audio_output_height(content_w)
+
+    height += AppScale(66) * 2
+    height += AppScale(76) +     settings_audio_import_button_height(SETTINGS_AUDIO_ACTION_SOUND_IN)
+    height += AppScale(76) +     settings_audio_import_button_height(SETTINGS_AUDIO_ACTION_SOUND_OUT)
+    height += AppScale(76) +     settings_audio_import_button_height(SETTINGS_AUDIO_ACTION_SOUND_BELL)
+
+    if app != null {
+        custom_sound_count = app.audio_custom_sound_count
+        custom_music_count = app.audio_custom_music_count
+    }
+    if custom_sound_count < 0 {
+        custom_sound_count = 0
+    }
+    if custom_sound_count > AUDIO_CUSTOM_SOUND_MAX {
+        custom_sound_count = AUDIO_CUSTOM_SOUND_MAX
+    }
+    if custom_music_count < 0 {
+        custom_music_count = 0
+    }
+    if custom_music_count > AUDIO_CUSTOM_MUSIC_MAX {
+        custom_music_count = AUDIO_CUSTOM_MUSIC_MAX
+    }
+
+    if custom_sound_count > 0 {
+        height += AppScale(30) + AppScale(42) * custom_sound_count +         AppScale(8)
+    }
+
+    height += AppScale(30)
+    height += AppScale(36) + AppScale(12)
+    height += settings_audio_import_button_height(SETTINGS_AUDIO_ACTION_MUSIC)
+    if app != null {
+        status := app.meditation.music_download.status
+        music_assignment_count = settings_audio_music_assignment_count(app)
+        if meditation_music_available(app) == 0 || status != AssetDownloadStatus.Idle {
+            if status == AssetDownloadStatus.Downloading {
+                height += AppScale(28) + AppScale(22)
+            } else if status == AssetDownloadStatus.Error {
+                height += AppScale(34)
+            }
+        }
+    }
+    height += AppScale(30)
+    height += ifx (music_assignment_count > 0) then (AppScale(42) * music_assignment_count) else (AppScale(24))
+    height += AppScale(12)
+
+    if custom_music_count > 0 {
+        height += AppScale(30) + AppScale(42) * custom_music_count
+    }
+
+    height += AppScale(42)
+    return height
+}
+
+draw_import_button :: (app: *InnerBreeze, x: s32, w: s32, y: *s32, label: string, action: s32, practice: s32) {
+
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), cast(float32)(w), cast(float32)(AppScale(36))},
+            .label = label,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+            .disabled = false
+        }) != 0 {
+        settings_audio_start_import(app, action, practice)
+    }
+    y.* += AppScale(42)
+    if action != SETTINGS_AUDIO_ACTION_MUSIC || practice == audio_status_practice {
+        settings_audio_draw_status(x, y, action)
+    }
+    y.* += AppScale(6)
+}
+
+draw_cue_selector :: (app: *InnerBreeze, x: s32, w: s32, y: *s32, cue: s32,
+    label: string, action: s32) {
+    options: [AUDIO_CUSTOM_SOUND_MAX + 1]DropdownOption
+    count := app.audio_custom_sound_count + 1
+    preview_w := AppScale(82)
+    control_gap := AppScale(8)
+    dropdown_w := w - preview_w - control_gap
+
+    if dropdown_w < AppScale(140) {
+        dropdown_w = w
+        preview_w = w
+    }
+
+    options[0].label = LocaleText("audio_builtin_label")
+    if count > AUDIO_CUSTOM_SOUND_MAX + 1 {
+        count = AUDIO_CUSTOM_SOUND_MAX + 1
+    }
+    {
+        i: s32 = 0
+        while i < app.audio_custom_sound_count {
+            options[i + 1].label = AppTextFromCString(
+                *app.audio_custom_sounds[i].title[0], AUDIO_LABEL_SIZE)
+            i += 1
+        }
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (label),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    menu := app.ui.audio_cue_menus[cue]
+    menu = Dropdown(CurrentApp().ui.session,
+        DropdownProps.{.id = cast(s32)820 + cue,
+            .bounds = Rectangle.{cast(float32)x,
+                cast(float32)(y.* + AppScale(26)),
+                cast(float32)dropdown_w, cast(float32)AppScale(36)},
+            .selected_index = app.audio_cue_selected[cue],
+            .open = menu.open,
+            .highlight_index = menu.highlight_index,
+            .scroll_offset = menu.scroll_offset}, options[0:count])
+    app.ui.audio_cue_menus[cue] = menu
+    if menu.changed {
+        app.audio_cue_selected[cue] = menu.selected_index
+        settings_audio_stop_preview(app)
+        app_audio_reload_cue_sounds(app)
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    if preview_w < w {
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)((x + dropdown_w + control_gap)), cast(float32)((y.* + AppScale(28))), cast(float32)(preview_w), cast(float32)(AppScale(32))},
+                .label = ifx (settings_audio_preview_cue_playing(app, cue) != 0) then (LocaleText("pause_button")) else (LocaleText("play_button")),
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = (app == null || app.audio_ready == 0)
+            }) != 0 {
+            settings_audio_toggle_cue_preview(app, cue)
+        }
+    }
+    y.* += AppScale(76)
+    draw_import_button(app, x, w, y, LocaleText("audio_import_sound_button"),
+        action, -1)
+}
+
+draw_custom_sound_list :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    button_w := AppScale(96)
+    preview_w := AppScale(82)
+    gap := AppScale(8)
+    row_h := AppScale(42)
+
+    if app.audio_custom_sound_count <= 0 {
+        return
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (LocaleText("audio_custom_sounds_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(30)
+    {
+        i: s32 = 0
+        while i < app.audio_custom_sound_count {
+
+            label_w := w - button_w - preview_w - gap * 2
+            if label_w < AppScale(80) {
+                label_w = w - button_w - gap
+            }
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.* + AppScale(8)), 0, 0},
+                    .text = AppTextFromCString(
+                        *app.audio_custom_sounds[i].title[0], AUDIO_LABEL_SIZE),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)((x + w - button_w - preview_w - gap)), cast(float32)((y.*)), cast(float32)(preview_w), cast(float32)(AppScale(32))},
+                    .label = ifx (settings_audio_preview_custom_sound_playing(i) != 0) then (LocaleText("pause_button")) else (LocaleText("play_button")),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = (app == null || app.audio_ready == 0)
+                }) != 0 {
+                settings_audio_toggle_custom_sound_preview(app, i)
+            }
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)(x + w - button_w), cast(float32)(y.*), cast(float32)(button_w), cast(float32)(AppScale(32))},
+                    .label = LocaleText("remove_button"),
+                    .tone = cast(ButtonTone)ButtonToneDanger,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                    .disabled = false
+                }) != 0 {
+                settings_audio_stop_preview(app)
+                app_audio_remove_custom_sound(app, i)
+                app.settings_dirty = 1
+                save_settings(app)
+                return
+            }
+            y.* += row_h
+            i += 1
+        }
+    }
+    y.* += AppScale(8)
+}
+
+draw_music_list :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    count := app_audio_music_count(app)
+    button_w := AppScale(96)
+    preview_w := AppScale(82)
+    gap := AppScale(8)
+
+    app_audio_music_sanitize_selection(app)
+    if count > AUDIO_MUSIC_COUNT_MAX {
+        count = AUDIO_MUSIC_COUNT_MAX
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (LocaleText("audio_music_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(30)
+
+    draw_music_download(app, x, w, y)
+    draw_import_button(app, x, w, y, LocaleText("audio_import_music_button"),
+        SETTINGS_AUDIO_ACTION_MUSIC, -1)
+
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (LocaleText("audio_music_applied_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(30)
+    practice_total := practice_count()
+    assigned: s32 = 0
+    {
+        p: s32 = 0
+        while p < practice_total {
+            current := app.meditation.music_practice_tracks[p]
+            label_w := w - button_w - preview_w - gap * 2
+
+            if current == AUDIO_MUSIC_NONE {
+                p += 1; continue
+            }
+            if current < 0 || current >= count {
+                p += 1; continue
+            }
+            assigned += 1
+            if label_w < AppScale(80) {
+                label_w = w - button_w - gap
+            }
+            if label_w < AppScale(40) {
+                label_w = AppScale(40)
+            }
+            practice_text: [96] u8
+            AppCopyText(settings_audio_practice_label(p), practice_text[:])
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.* + AppScale(2)), 0, 0},
+                    .text = AppTextFromCString(*practice_text[0], 96),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x,
+                        cast(float32)(y.* + AppScale(20)),
+                        cast(float32)label_w, 0.0},
+                    .font = Text12,
+                    .text = app_audio_music_label(app, current),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)((x + w - button_w - preview_w - gap)), cast(float32)((y.*)), cast(float32)(preview_w), cast(float32)(AppScale(32))},
+                    .label = ifx (settings_audio_preview_music_playing(current) != 0) then (LocaleText("pause_button")) else (LocaleText("play_button")),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = (app == null || app.audio_ready == 0)
+                }) != 0 {
+                settings_audio_toggle_music_preview(app, current)
+            }
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)(x + w - button_w), cast(float32)(y.*), cast(float32)(button_w), cast(float32)(AppScale(32))},
+                    .label = LocaleText("remove_button"),
+                    .tone = cast(ButtonTone)ButtonToneDanger,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                    .disabled = false
+                }) != 0 {
+                settings_audio_stop_preview(app)
+                app.meditation.music_practice_tracks[p] = AUDIO_MUSIC_NONE
+                app.meditation.music_practice_mask &= ~(1 << p)
+                meditation_music_unload(app)
+                app.settings_dirty = 1
+                save_settings(app)
+                return
+            }
+            y.* += AppScale(42)
+            p += 1
+        }
+    }
+    if assigned == 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+                .text = (LocaleText("audio_music_no_practices")),
+                .wrap = cast(TextWrap)TextWrapNone
+            })
+        y.* += AppScale(24)
+    }
+    y.* += AppScale(12)
+
+    if app.audio_custom_music_count <= 0 {
+        return
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+            .text = (LocaleText("audio_custom_music_title")),
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    y.* += AppScale(30)
+    {
+        i: s32 = 0
+        while i < app.audio_custom_music_count {
+            track_index := AUDIO_BUILTIN_MUSIC_COUNT + i
+            label_w := w - button_w - preview_w - gap * 2
+            if label_w < AppScale(80) {
+                label_w = w - button_w - gap
+            }
+            if label_w < AppScale(40) {
+                label_w = AppScale(40)
+            }
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x,
+                        cast(float32)(y.* + AppScale(8)),
+                        cast(float32)label_w, 0.0},
+                    .font = Text12,
+                    .text = AppTextFromCString(
+                        *app.audio_custom_music[i].title[0], AUDIO_LABEL_SIZE),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)((x + w - button_w - preview_w - gap)), cast(float32)((y.*)), cast(float32)(preview_w), cast(float32)(AppScale(32))},
+                    .label = ifx (settings_audio_preview_music_playing(track_index) != 0) then (LocaleText("pause_button")) else (LocaleText("play_button")),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = (app == null || app.audio_ready == 0)
+                }) != 0 {
+                settings_audio_toggle_music_preview(app, track_index)
+            }
+            if Button(CurrentApp().ui.session, ButtonProps.{
+                    .bounds = Rectangle.{cast(float32)(x + w - button_w), cast(float32)(y.*), cast(float32)(button_w), cast(float32)(AppScale(32))},
+                    .label = LocaleText("remove_button"),
+                    .tone = cast(ButtonTone)ButtonToneDanger,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                    .disabled = false
+                }) != 0 {
+                settings_audio_stop_preview(app)
+                app_audio_remove_custom_music(app, i)
+                app.settings_dirty = 1
+                save_settings(app)
+                return
+            }
+            y.* += AppScale(42)
+            i += 1
+        }
+    }
+}
+
+draw_music_download :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    button_h := AppScale(36)
+
+    installed := meditation_music_available(app)
+    download_label: string
+
+    if app == null {
+        return
+    }
+    if installed != 0 {
+        download_label = LocaleText("meditation_music_redownload_button")
+    } else {
+        download_label = LocaleText("meditation_music_download_button")
+    }
+    button_w := AppTextWidth(download_label, AppFontSize()) + AppScale(24)
+    if button_w > w {
+        button_w = w
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), cast(float32)(button_w), cast(float32)(button_h)},
+            .label = download_label,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = false
+        }) != 0 {
+        meditation_music_start_download(app)
+    }
+    y.* += button_h + AppScale(12)
+
+    if installed == 0 || app.meditation.music_download.status != AssetDownloadStatus.Idle {
+        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+            download_status: [96] u8
+            meditation_music_format_download_status(*download_status[0],
+                size_of(type_of(download_status)),
+                *app.meditation.music_download)
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+                    .text = AppTextFromCString(*download_status[0], 96),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            y.* += AppScale(28)
+            meditation_music_draw_download_progress(app, x, y.*, w)
+            y.* += AppScale(22)
+        } else if app.meditation.music_download.status == AssetDownloadStatus.Error {
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
+                    .text = AppTextFromCString(
+                        *app.meditation.music_status[0],
+                        size_of(type_of(app.meditation.music_status))),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            y.* += AppScale(34)
+        }
+    }
+}
+
+draw_music_attribution :: (x: s32, w: s32, track: s32, y: *s32) {
+    if y == null || w <= 0 {
+        return
+    }
+    if track < 0 || track >= AUDIO_BUILTIN_MUSIC_COUNT {
+        return
+    }
+    attribution := LocaleText("meditation_music_attribution")
+    attribution_h := AppParagraphHeight(attribution, w, Text12, 0)
+    Text(CurrentApp().ui.session, TextProps.{
+        .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)w, cast(float32)attribution_h},
+        .text = attribution,
+        .font = Text12,
+        .wrap = cast(TextWrap)TextWrapAuto
+    })
+    y.* += attribution_h + AppScale(10)
+}
+
+settings_audio_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    sound_volume := app.sound_volume
+    music_volume := app.music_volume
+
+    app_audio_ensure_ready(app)
+    settings_audio_update_preview()
+
+    settings_audio_draw_output(app, x, w, y)
+
+    if commit_slider_row(app, 871, x, w, y, AppScale(66),
+        LocaleText("cue_volume_label"),
+        SETTINGS_VOLUME_MIN, SETTINGS_VOLUME_MAX,
+        *sound_volume, "", 0) != 0 {
+        app.sound_volume = sound_volume
+        if audio_preview_sound.frame_count != 0 {
+            audio_set_sound_volume(audio_preview_sound, settings_audio_sound_volume(app))
+        }
+    }
+    if commit_slider_row(app, 872, x, w, y, AppScale(66),
+        LocaleText("music_volume_label"),
+        SETTINGS_VOLUME_MIN, SETTINGS_VOLUME_MAX,
+        *music_volume, "", 0) != 0 {
+        app.music_volume = music_volume
+        if audio_preview_music_loaded != 0 {
+            audio_set_music_volume(audio_preview_music, settings_audio_music_volume(app))
+        }
+    }
+
+    draw_cue_selector(app, x, w, y, AUDIO_CUE_BREATH_IN,
+        LocaleText("audio_breath_in_label"),
+        SETTINGS_AUDIO_ACTION_SOUND_IN)
+    draw_cue_selector(app, x, w, y, AUDIO_CUE_BREATH_OUT,
+        LocaleText("audio_breath_out_label"),
+        SETTINGS_AUDIO_ACTION_SOUND_OUT)
+    draw_cue_selector(app, x, w, y, AUDIO_CUE_BELL,
+        LocaleText("audio_bell_label"),
+        SETTINGS_AUDIO_ACTION_SOUND_BELL)
+    draw_custom_sound_list(app, x, w, y)
+    draw_music_list(app, x, w, y)
+    settings_screen_draw_status_reserved(x, y, AppScale(42))
+}

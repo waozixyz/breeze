@@ -1,0 +1,224 @@
+// Device controls operate only on the window supplied by the app runtime.
+#import "c_string"
+#if #defined(PLATFORM_WEB) {
+    #import "web_window"
+}
+
+DEVICE_DESKTOP_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB)
+
+#if DEVICE_DESKTOP_SDL {
+    sdl :: #system_library "SDL2";
+    DeviceGetWindowSize :: (window: *void, width: *s32,
+        height: *s32) #foreign sdl "SDL_GetWindowSize";
+    DeviceSetWindowSize :: (window: *void, width: s32,
+        height: s32) #foreign sdl "SDL_SetWindowSize";
+    DeviceGetWindowFlags :: (window: *void) -> u32 #foreign sdl "SDL_GetWindowFlags";
+    DeviceSetWindowFullscreen :: (window: *void, flags: u32) -> s32 #foreign sdl "SDL_SetWindowFullscreen";
+
+    device_window: *void;
+    device_windowed_width: s32;
+    device_windowed_height: s32;
+}
+
+#if #defined(ANDROID_BUILD) {
+    c :: #system_library "c";
+    AndroidDeviceSystemDark :: () -> s32 #foreign c "android_device_system_dark";
+    AndroidDeviceOrientation :: () -> s32 #foreign c "android_device_orientation";
+    AndroidDeviceSetOrientation :: (mode: s32) #foreign c "android_device_set_orientation_mode";
+}
+
+#if #defined(PLATFORM_WEB) {
+    c :: #system_library "c";
+    BrowserScriptInt :: (script: *u8) -> s32 #foreign c "emscripten_run_script_int";
+    BrowserScript :: (script: *u8) #foreign c "emscripten_run_script";
+    BrowserCanvasSize :: (selector: *u8, width: *float64,
+        height: *float64) -> s32 #foreign c "emscripten_get_element_css_size";
+    BrowserSetCanvasSize :: (selector: *u8, width: s32,
+        height: s32) -> s32 #foreign c "emscripten_set_canvas_element_size";
+
+    DeviceRunScript :: (script: string) {
+        bytes: [768]u8
+        if CopyCString(script, bytes[:]) {
+            BrowserScript(*bytes[0])
+        }
+    }
+}
+
+#program_export
+app_device_attach_window :: (window: *void) {
+    #if DEVICE_DESKTOP_SDL {
+        device_window = window
+        device_windowed_width = 0
+        device_windowed_height = 0
+    }
+    unused window
+}
+
+#program_export
+app_device_system_dark :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return AndroidDeviceSystemDark()
+    }
+    #if #defined(PLATFORM_WEB) {
+        script: [192]u8
+        if CopyCString("window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 1 : 0", script[:]) {
+            return BrowserScriptInt(*script[0])
+        }
+    }
+    return 0
+}
+
+#program_export
+app_device_orientation :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return AndroidDeviceOrientation()
+    }
+    return 0
+}
+
+#program_export
+app_device_set_orientation :: (mode: s32) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidDeviceSetOrientation(mode)
+    }
+    unused mode
+}
+
+#program_export
+app_device_width :: () -> s32 {
+    #if DEVICE_DESKTOP_SDL {
+        if device_window != null {
+            width: s32 = 0
+            height: s32 = 0
+            DeviceGetWindowSize(device_window, *width, *height)
+            return width
+        }
+    }
+    return 0
+}
+
+#program_export
+app_device_height :: () -> s32 {
+    #if DEVICE_DESKTOP_SDL {
+        if device_window != null {
+            width: s32 = 0
+            height: s32 = 0
+            DeviceGetWindowSize(device_window, *width, *height)
+            return height
+        }
+    }
+    return 0
+}
+
+#program_export
+app_device_resize :: (width: s32, height: s32) {
+    #if DEVICE_DESKTOP_SDL {
+        if device_window != null && width > 0 && height > 0 {
+            DeviceSetWindowSize(device_window, width, height)
+        }
+    }
+    unused width
+    unused height
+}
+
+#program_export
+app_device_fullscreen :: (enabled: s32) {
+    #if DEVICE_DESKTOP_SDL {
+        if device_window == null {
+            return
+        }
+        flags := DeviceGetWindowFlags(device_window)
+        if enabled != 0 {
+            if (flags & cast(u32)0x1001) == cast(u32)0x1001 {
+                return
+            }
+            DeviceGetWindowSize(device_window, *device_windowed_width,
+                *device_windowed_height)
+            DeviceSetWindowFullscreen(device_window, cast(u32)0x1001)
+        } else if (flags & cast(u32)1) != 0 {
+            DeviceSetWindowFullscreen(device_window, cast(u32)0)
+            if device_windowed_width > 0 && device_windowed_height > 0 {
+                DeviceSetWindowSize(device_window, device_windowed_width,
+                    device_windowed_height)
+            }
+        }
+    }
+    unused enabled
+}
+
+#program_export
+app_device_web_orientation :: (mode: s32) {
+    #if #defined(PLATFORM_WEB) {
+        SetBrowserOrientation(mode)
+        if mode == 1 {
+            DeviceRunScript("(function(){var o=window.screen&&window.screen.orientation;if(o&&o.lock){var p=o.lock('portrait');if(p&&p.catch)p.catch(function(){});}})()")
+        } else if mode == 2 {
+            DeviceRunScript("(function(){var o=window.screen&&window.screen.orientation;if(o&&o.lock){var p=o.lock('landscape');if(p&&p.catch)p.catch(function(){});}})()")
+        } else {
+            DeviceRunScript("(function(){var o=window.screen&&window.screen.orientation;if(o&&o.unlock)o.unlock();})()")
+        }
+    }
+    unused mode
+}
+
+#program_export
+app_device_web_resize :: () {
+    #if #defined(PLATFORM_WEB) {
+        selector: [16]u8
+        if !CopyCString("#canvas", selector[:]) {
+            return
+        }
+        width: float64 = 0.0
+        height: float64 = 0.0
+        if BrowserCanvasSize(*selector[0], *width, *height) == 0 &&
+            width > 0.0 && height > 0.0 {
+            BrowserSetCanvasSize(*selector[0], cast(s32)width,
+                cast(s32)height)
+        }
+    }
+}
+
+#program_export
+DeviceSystemDark :: () -> s32 {
+    return app_device_system_dark()
+}
+
+#program_export
+DeviceOrientation :: () -> s32 {
+    return app_device_orientation()
+}
+
+#program_export
+DeviceSetOrientation :: (mode: s32) {
+    app_device_set_orientation(mode)
+}
+
+#program_export
+DeviceWidth :: () -> s32 {
+    return app_device_width()
+}
+
+#program_export
+DeviceHeight :: () -> s32 {
+    return app_device_height()
+}
+
+#program_export
+DeviceResize :: (width: s32, height: s32) {
+    app_device_resize(width, height)
+}
+
+#program_export
+DeviceFullscreen :: (enabled: s32) {
+    app_device_fullscreen(enabled)
+}
+
+#program_export
+DeviceWebOrientation :: (mode: s32) {
+    app_device_web_orientation(mode)
+}
+
+#program_export
+DeviceWebResize :: () {
+    app_device_web_resize()
+}

@@ -1,0 +1,62 @@
+c :: #system_library "c";
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "modal_rules.zi";
+
+#import, file "app.zi";
+
+using ModalType;
+
+// application.zi imports this module; this native effect closes that cycle.
+app_leave_practice_config :: (app: *InnerBreeze) #foreign c;
+
+#program_export
+app_block_current_click :: (app: *InnerBreeze) {
+    if app != null { app.blocked_input_frame = app.breathing.frame }
+}
+
+#program_export
+app_open_modal :: (app: *InnerBreeze, modal_type: ModalType) {
+    if app == null { return }
+    app.modal.active = 1
+    app.modal.type = modal_type
+    app_block_current_click(app)
+}
+
+clear_modal_state :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.modal.active = 0
+    app.modal.type = cast(ModalType)ModalNone
+    app_block_current_click(app)
+}
+
+#program_export
+app_close_modal :: (app: *InnerBreeze) {
+    if app == null { return }
+    modal_type := app.modal.type
+    if modal_type == cast(ModalType)ModalEditProgressiveStartSpeed  && app.breathing.screen == ScreenStart  && app.practice_tab == PRACTICE_TAB_CONFIG {
+        app.modal.type = cast(ModalType)ModalPracticeConfig
+        app_block_current_click(app)
+        return
+    }
+    if modal_type == cast(ModalType)ModalPracticeConfig {
+        app_leave_practice_config(app)
+        app.settings_scroll = 0
+        app.practice_tab = PRACTICE_TAB_PLAY
+    } else if modal_type == cast(ModalType)ModalPracticeManual {
+        app.manual_scroll = 0
+        app.tutorial_step = 0
+        app.practice_tab = PRACTICE_TAB_PLAY
+    }
+    clear_modal_state(app)
+}
+
+#program_export
+app_clear_invalid_screen_local_modal :: (app: *InnerBreeze) {
+    if app == null || app.modal.active == 0 { return }
+    if ModalValidOnScreen(app.modal.type, app.breathing.screen,
+                          app.habits.tab == HABIT_TAB_EDIT) { return }
+    clear_modal_state(app)
+}

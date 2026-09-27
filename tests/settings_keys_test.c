@@ -1,10 +1,11 @@
 /*
  * settings_keys_test - guards the settings save/load/import key lists
- * against drift. Scans src/app/app_settings.kry and src/app/app_setting_keys.h:
- * every save_setting_int / storage_set_setting_text literal forms the saved
- * set; every load_bool_setting / load_clamped_setting / settings_cache_get_int
- * / settings_cache_get literal forms the loaded set; the
- * IMPORTABLE_SETTING_KEYS registry forms the import set. Every saved key
+ * against drift. Scans src/app/app_settings.zi, src/storage/import.zi,
+ * and the legacy key table in src/app/app_setting_keys.h:
+ * every save_setting_int / SettingsStoreInt / SettingsStoreText literal forms
+ * the saved set; every load_bool_setting / load_clamped_setting /
+ * SettingsCacheInt / SettingsCacheCopyText literal forms the loaded set; the
+ * Ziran's keys array forms the import set. Every saved key
  * must be loaded (modulo derived keys) and every importable key must be
  * saved (modulo keys written through helpers).
  */
@@ -151,6 +152,33 @@ scan_first_literal_per_call(KeySet *set, const char *text, const char *fn)
     }
 }
 
+/* Direct settings APIs take a literal key as their first argument. Ignore
+ * variable-key calls instead of reading a later unrelated string literal. */
+static void
+scan_literal_first_arg(KeySet *set, const char *text, const char *fn)
+{
+    size_t fn_len = strlen(fn);
+    const char *cursor = text;
+
+    while((cursor = strstr(cursor, fn)) != NULL) {
+        const char *walk = cursor + fn_len;
+        char key[MAX_KEY_LEN];
+        size_t n = 0;
+
+        cursor = walk;
+        while(*walk == ' ' || *walk == '\t' || *walk == '\n')
+            walk++;
+        if(*walk++ != '"')
+            continue;
+        while(*walk != '"' && *walk != '\0' && n + 1 < sizeof(key))
+            key[n++] = *walk++;
+        if(*walk != '"')
+            continue;
+        key[n] = '\0';
+        keyset_add(set, key);
+    }
+}
+
 static void
 scan_macro_x_literals(KeySet *set, const char *text, const char *marker)
 {
@@ -179,13 +207,52 @@ scan_macro_x_literals(KeySet *set, const char *text, const char *marker)
     }
 }
 
+static void
+scan_ziran_import_literals(KeySet *set, const char *text)
+{
+    const char *cursor = strstr(text, "keys: [88]string = .[");
+    const char *end;
+
+    if(cursor == NULL) {
+        fprintf(stderr, "FAIL Ziran import key table not found\n");
+        failures++;
+        return;
+    }
+    cursor = strstr(cursor, "= .[");
+    if(cursor == NULL) {
+        fprintf(stderr, "FAIL Ziran import key table has no values\n");
+        failures++;
+        return;
+    }
+    cursor += 4;
+    end = strchr(cursor, ']');
+    if(end == NULL) {
+        fprintf(stderr, "FAIL Ziran import key table is unterminated\n");
+        failures++;
+        return;
+    }
+    while((cursor = strchr(cursor, '"')) != NULL && cursor < end) {
+        char key[MAX_KEY_LEN];
+        size_t n = 0;
+        const char *walk = cursor + 1;
+
+        while(*walk != '"' && *walk != '\0' && n + 1 < sizeof(key))
+            key[n++] = *walk++;
+        if(*walk != '"' || walk >= end)
+            break;
+        key[n] = '\0';
+        keyset_add(set, key);
+        cursor = walk + 1;
+    }
+}
+
 int
 main(void)
 {
-    char *settings_src = read_whole_file("src/app/app_settings.kry");
-    char *import_src = read_whole_file("src/storage/import.kry");
+    char *settings_src = read_whole_file("src/app/app_settings.zi");
+    char *import_src = read_whole_file("src/storage/import.zi");
     char *setting_keys_src = read_whole_file("src/app/app_setting_keys.h");
-    KeySet saved, loaded, imported;
+    KeySet saved, loaded, imported, legacy_imported;
 
     if(settings_src == NULL || import_src == NULL || setting_keys_src == NULL) {
         fprintf(stderr, "FAIL cannot read settings/import key sources\n");
@@ -194,28 +261,50 @@ main(void)
     memset(&saved, 0, sizeof(saved));
     memset(&loaded, 0, sizeof(loaded));
     memset(&imported, 0, sizeof(imported));
+    memset(&legacy_imported, 0, sizeof(legacy_imported));
 
     scan_first_literal_per_call(&saved, settings_src, "save_setting_int(");
     scan_first_literal_per_call(&saved, settings_src, "storage_set_setting_text(");
+    scan_literal_first_arg(&saved, settings_src, "SettingsStoreInt(");
+    scan_literal_first_arg(&saved, settings_src, "SettingsStoreText(");
     scan_first_literal_per_call(&loaded, settings_src, "load_bool_setting(");
     scan_first_literal_per_call(&loaded, settings_src, "load_clamped_setting(");
     scan_first_literal_per_call(&loaded, settings_src, "settings_cache_get_int(");
     scan_first_literal_per_call(&loaded, settings_src, "settings_cache_get(");
+    scan_literal_first_arg(&loaded, settings_src, "SettingsCacheInt(");
+    scan_literal_first_arg(&loaded, settings_src, "SettingsCacheCopyText(");
+    scan_literal_first_arg(&loaded, settings_src, "SettingsCacheContains(");
     {
-        char *app_src = read_whole_file("src/app/application.kry");
+        char *app_src = read_whole_file("src/app/application.zi");
         if(app_src == NULL) {
-            fprintf(stderr, "FAIL cannot read src/app/application.kry\n");
+            fprintf(stderr, "FAIL cannot read src/app/application.zi\n");
             return 1;
         }
         scan_first_literal_per_call(&loaded, app_src, "storage_get_setting_text(");
         free(app_src);
     }
-    if(strstr(import_src, "app_setting_key_importable(") == NULL) {
-        fprintf(stderr, "FAIL import path does not use app_setting_key_importable\n");
+    if(strstr(import_src, "setting_key_importable ::") == NULL ||
+       strstr(import_src, "return setting_key_importable(key)") != NULL) {
+        fprintf(stderr, "FAIL Ziran import key policy is missing or recursive\n");
         failures++;
     }
-    scan_macro_x_literals(&imported, setting_keys_src,
+    scan_ziran_import_literals(&imported, import_src);
+    scan_macro_x_literals(&legacy_imported, setting_keys_src,
                           "IMPORTABLE_SETTING_KEYS");
+    for(int i = 0; i < imported.count; i++) {
+        if(!keyset_contains(&legacy_imported, imported.keys[i])) {
+            fprintf(stderr, "FAIL Ziran imports unknown key [%s]\n",
+                    imported.keys[i]);
+            failures++;
+        }
+    }
+    for(int i = 0; i < legacy_imported.count; i++) {
+        if(!keyset_contains(&imported, legacy_imported.keys[i])) {
+            fprintf(stderr, "FAIL Ziran omits import key [%s]\n",
+                    legacy_imported.keys[i]);
+            failures++;
+        }
+    }
     if(!app_setting_key_importable("audio_custom_sound_0_title") ||
        !app_setting_key_importable("audio_custom_sound_0_path") ||
        !app_setting_key_importable("audio_custom_music_12_title") ||

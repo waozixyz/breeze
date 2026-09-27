@@ -1,0 +1,90 @@
+// Persistent paths shared by startup and the database upgrade. These are
+// native Linux operations; the database migration never replaces an existing
+// destination, and the app's data directories are created with mode 0700.
+#import "byte_text_linux"
+#import "c_string"
+#import "file_linux"
+
+StoragePathCapacity :: 1024
+
+BorrowPath :: (path: *u8) -> string {
+    if path == null { return "" }
+    length: u64 = 0
+    while length < StoragePathCapacity && path[length] != cast(u8)0 {
+        length += 1
+    }
+    if length == 0 || length == StoragePathCapacity { return "" }
+    return TextFromBytes(BytesFromPointer(path, length))
+}
+
+#program_export
+path_exists :: (path: *u8) -> s32 {
+    text := BorrowPath(path)
+    return ifx (text.count > 0 && PathExists(text)) then (1) else (0)
+}
+
+#program_export
+storage_directory_exists :: (path: *u8) -> s32 {
+    text := BorrowPath(path)
+    return ifx (text.count > 0 && DirectoryExists(text)) then (1) else (0)
+}
+
+#program_export
+storage_rename_path :: (source: *u8, destination: *u8) -> s32 {
+    old_name := BorrowPath(source)
+    new_name := BorrowPath(destination)
+    if old_name.count == 0 || new_name.count == 0 { return 0 }
+    return ifx (RenameNoReplace(old_name, new_name)) then (1) else (0)
+}
+
+#program_export
+storage_remove_path :: (path: *u8) -> s32 {
+    text := BorrowPath(path)
+    return ifx (text.count > 0 && RemoveFile(text)) then (1) else (0)
+}
+
+#program_export
+storage_write_migration_marker :: (path: *u8, name: *u8) -> s32 {
+    marker := BorrowPath(path)
+    database_name := BorrowPath(name)
+    if marker.count == 0 || database_name.count == 0 { return 0 }
+
+    file := OpenReplace(marker)
+    if !file.valid { return 0 }
+    newline: [1]u8 = .[10]
+    length := cast(s64)database_name.count
+    written := WriteAt(file, BytesFromPointer(name, cast(u64)length), 0) == length &&
+    WriteAt(file, newline[:], length) == 1 && SyncFile(file)
+    closed := CloseFile(file)
+    return ifx (written && closed) then (1) else (0)
+}
+
+storage_dir_exists :: (path: string) -> s32 {
+    return ifx (path.count > 0 && DirectoryExists(path)) then (1) else (0)
+}
+
+storage_make_dir :: (path: string) -> s32 {
+    return ifx (path.count > 0 && CreatePrivateDirectory(path)) then (1) else (0)
+}
+
+// All persisted paths use the same bounded recursive directory creator.
+#program_export
+storage_ensure_dir :: (path: string) -> s32 {
+    if path.count == 0 || path.count >= StoragePathCapacity { return 0 }
+    if storage_dir_exists(path) != 0 { return 1 }
+
+    buffer: [StoragePathCapacity]u8
+    if !CopyCString(path, buffer[:]) { return 0 }
+    index: s64 = 1
+    while index < cast(s64)path.count {
+        if buffer[index] == cast(u8)47 {
+            prefix := TextFromBytes(buffer[0:index])
+            if prefix.count > 0 && storage_dir_exists(prefix) == 0 &&
+            storage_make_dir(prefix) == 0 {
+                return 0
+            }
+        }
+        index += 1
+    }
+    return storage_make_dir(path)
+}

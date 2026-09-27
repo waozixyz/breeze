@@ -1,0 +1,137 @@
+// Install only the three bundled meditation tracks from a verified ZIP.
+#import "c_string"
+#import "byte_text_linux"
+#import "file_linux"
+#import "mapped_file_linux"
+#import "zip"
+#import "zip_linux"
+#import, file "../../storage/path_join.zi";
+#import, file "../../storage/paths.zi";
+
+MeditationAudioArchiveLimit :: 536870912
+MeditationAudioTrackLimit :: 134217728
+MeditationAudioPathCapacity :: 1024
+
+MeditationAudioMember :: struct {
+    archive_name: string
+    leaf: string
+    temporary_leaf: string
+}
+
+meditation_audio_members: [3]MeditationAudioMember = .[
+    MeditationAudioMember.{.archive_name = "Elijah_K/deep-meditation.ogg",
+        .leaf = "deep-meditation.ogg", .temporary_leaf = "deep-meditation.ogg.part"},
+    MeditationAudioMember.{.archive_name = "Elijah_K/path-of-meditation.ogg",
+        .leaf = "path-of-meditation.ogg", .temporary_leaf = "path-of-meditation.ogg.part"},
+    MeditationAudioMember.{.archive_name = "Elijah_K/truth-of-silence.ogg",
+        .leaf = "truth-of-silence.ogg", .temporary_leaf = "truth-of-silence.ogg.part"}
+];
+
+meditation_audio_join :: (base: *u8, leaf: string, output: []u8) -> bool {
+    name: [128]u8
+    if !CopyCString(leaf, name[:]) { return false }
+    return storage_join_path(*output[0], cast(u64)output.count,
+        base, *name[0]) != 0
+}
+
+meditation_audio_ogg_file :: (path: string) -> bool {
+    file := OpenRead(path)
+    if !file.valid { return false }
+    magic: [4]u8
+    count := ReadAt(file, magic[:], 0)
+    CloseFile(file)
+    return count == 4 && magic[0] == cast(u8)79 &&
+        magic[1] == cast(u8)103 && magic[2] == cast(u8)103 &&
+        magic[3] == cast(u8)83
+}
+
+meditation_audio_clear_temporary :: (paths: *u8) {
+    index: s32 = 0
+    while index < 3 {
+        start := index * MeditationAudioPathCapacity
+        if paths[start] != cast(u8)0 {
+            RemoveFile(TextFromCString(*paths[start]))
+        }
+        index += 1
+    }
+}
+
+// Returns three only after every expected member has passed ZIP CRC and Ogg
+// validation and has been installed. Unknown archive entries are ignored.
+#program_export
+InstallMeditationAudioArchive :: (archive_path: string,
+                                  cache_directory: string) -> s32 {
+    if archive_path.count == 0 || cache_directory.count == 0 ||
+       storage_ensure_dir(cache_directory) == 0 { return -1 }
+    mapped := MapPrivate(archive_path)
+    if !mapped.valid { return -2 }
+    defer { UnmapFile(mapped) }
+    archive := MappedBytes(mapped)
+    if archive.count < 22 || archive.count > MeditationAudioArchiveLimit {
+        return -3
+    }
+
+    base: [MeditationAudioPathCapacity]u8
+    audio_directory: [MeditationAudioPathCapacity]u8
+    track_directory: [MeditationAudioPathCapacity]u8
+    if !CopyCString(cache_directory, base[:]) ||
+       !meditation_audio_join(*base[0], "audio", audio_directory[:]) ||
+       !meditation_audio_join(*audio_directory[0], "Elijah_K",
+                              track_directory[:]) ||
+       storage_ensure_dir(TextFromCString(*track_directory[0])) == 0 {
+        return -4
+    }
+
+    temporary: [3][MeditationAudioPathCapacity]u8
+    final_path: [3][MeditationAudioPathCapacity]u8
+    index: s32 = 0
+    while index < 3 {
+        member := meditation_audio_members[index]
+        entry := FindZipEntry(archive, member.archive_name)
+        if !entry.found || entry.size < 4 ||
+           entry.size > MeditationAudioTrackLimit ||
+           !meditation_audio_join(*track_directory[0], member.leaf,
+                                  final_path[index][:]) ||
+           !meditation_audio_join(*track_directory[0],
+                                  member.temporary_leaf,
+                                  temporary[index][:]) {
+            meditation_audio_clear_temporary(*temporary[0][0])
+            return -5
+        }
+        path := TextFromCString(*temporary[index][0])
+        file := OpenReplace(path)
+        if !file.valid {
+            meditation_audio_clear_temporary(*temporary[0][0])
+            return -6
+        }
+        extracted := ExtractZipEntryToFile(archive, entry, file)
+        synced := SyncFile(file)
+        closed := CloseFile(file)
+        if !extracted || !synced || !closed ||
+           !meditation_audio_ogg_file(path) {
+            meditation_audio_clear_temporary(*temporary[0][0])
+            if !extracted { return -71 }
+            if !synced { return -72 }
+            if !closed { return -73 }
+            return -74
+        }
+        index += 1
+    }
+
+    index = 0
+    while index < 3 {
+        if !RenamePath(TextFromCString(*temporary[index][0]),
+                       TextFromCString(*final_path[index][0])) {
+            meditation_audio_clear_temporary(*temporary[0][0])
+            return -8
+        }
+        temporary[index][0] = cast(u8)0
+        index += 1
+    }
+    directory := OpenRead(TextFromCString(*track_directory[0]))
+    if directory.valid {
+        SyncFile(directory)
+        CloseFile(directory)
+    }
+    return 3
+}

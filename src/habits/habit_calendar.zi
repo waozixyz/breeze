@@ -1,0 +1,69 @@
+#import, file "habit_types.zi";
+
+habit_counting_enabled :: (habit: *Habit) -> s32 {
+    if habit != null && habit.counter_enabled != 0 { return 1 }
+    return 0
+}
+
+habit_counter_target :: (habit: *Habit) -> s32 {
+    if habit == null || habit.counter_target < 1 { return 1 }
+    return habit.counter_target
+}
+
+HabitDayComplete :: (day: HabitDay, counter_enabled: bool,
+    counter_target: s32) -> bool {
+    if counter_enabled {
+        count := day.count
+        if count <= 0 && day.completed != 0 {
+            count = 1
+        }
+        target := ifx counter_target > 0 then counter_target else 1
+        return count >= target
+    }
+    return day.completed != 0 || day.count > 0
+}
+
+HabitCompletedOnDay :: (days: []HabitDay, day_index: s32,
+    counter_enabled: bool, counter_target: s32) -> bool {
+    index: s32 = 0
+    while index < cast(s32)days.count {
+        day := days[index]
+        if day.day_index == day_index {
+            return HabitDayComplete(day, counter_enabled, counter_target)
+        }
+        index += 1
+    }
+    return false
+}
+
+habit_leap_year :: (year: s32) -> bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+habit_days_in_month :: (year: s32, month: s32) -> s32 {
+    if month == 2 { return ifx habit_leap_year(year) then 29 else 28 }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30 }
+    if month >= 1 && month <= 12 { return 31 }
+    return 0
+}
+
+// Monday is bit 0 and Sunday is bit 6. Dates use the app's YYYYMMDD key.
+habit_weekday_bit :: (day_index: s32) -> s32 {
+    year: s32 = day_index / 10000
+    month: s32 = (day_index / 100) % 100
+    day: s32 = day_index % 100
+    if year < 1 || year > 9999 || day < 1  || day > habit_days_in_month(year, month) { return -1 }
+    offsets: [12]s32 = .{0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 }
+    if month < 3 { year -= 1 }
+    sunday: s32 = (year + year / 4 - year / 100 + year / 400 +                    offsets[month - 1] + day) % 7
+    return (sunday + 6) % 7
+}
+
+habit_scheduled_day :: (habit: *Habit, day_index: s32) -> s32 {
+    if habit != null && (habit.weekdays & HABIT_SCHEDULE_OFF) != 0 { return 0 }
+    if habit == null || habit.weekdays == 0 { return 1 }
+    weekday: s32 = habit_weekday_bit(day_index)
+    if weekday < 0 { return 0 }
+    if (habit.weekdays & (1 << weekday)) != 0 { return 1 }
+    return 0
+}

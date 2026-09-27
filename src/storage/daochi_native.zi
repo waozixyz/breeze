@@ -1,0 +1,62 @@
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+#import "client"
+#import "auth"
+#import "sync"
+#import "net_http"
+#import "net_http_curl_linux"
+#import, file "account_types.zi";
+#import, file "daochi_account.zi";
+
+SendNative :: (context: *void, request: HttpRequest,
+    output: []u8, status: *s32) -> bool {
+    unused context
+    if status == null {
+        return false
+    }
+    result := SendCurl(request, output)
+    status.* = result.status
+    return result.code == 0 && !result.truncated
+}
+
+#scope_export
+#program_export
+LoginAccount :: (base_url: string, account: *SyncAccount,
+    client_id: string, session: *Session) -> AuthResult {
+    client: Client
+    if !OpenAccountClient(base_url, account, client_id, *client) {
+        return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    return Login(client, session)
+}
+
+#scope_export
+#program_export
+RequestAccount :: (base_url: string, account: *SyncAccount,
+    client_id: string, session: *Session, now: s64, method: string,
+    path: string, body: string, output: []u8,
+    status: *s32) -> AuthResult {
+    client: Client
+    if !OpenAccountClient(base_url, account, client_id, *client) {
+        return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    return BearerRequest(client, session, now, method, path, body,
+        output, status)
+}
+
+#scope_export
+#program_export
+SyncAccountPayload :: (base_url: string, account: *SyncAccount,
+    client_id: string, session: *Session, device: Device,
+    now: s64, body: string, output: []u8, status: *s32) -> AuthResult {
+    client: Client
+    if !OpenAccountClient(base_url, account, client_id, *client) {
+        return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    return Sync(client, session, device, now, null, NativeNonce,
+        body, output, status)
+}
+
+}

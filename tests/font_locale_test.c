@@ -1,13 +1,12 @@
 /*
  * Locale -> font asset mapping + font file presence.
  *
- * Links the REAL selector (ui_font_asset_for_locale from
- * src/app/app_font_assets.h) instead of a hand copy, so a change in the app
+ * Links the real Ziran FontAssetForLocale selector, so a change in the app
  * is actually what gets tested. Glyph coverage of the files themselves is
  * asserted separately by font_glyph_coverage_test.
  */
 
-#include "../src/app/app_font_assets.h"
+#include "app/font_assets.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -55,12 +54,14 @@ main(void)
     int failures = 0;
 
     for(size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        const char *actual = ui_font_asset_for_locale(cases[i].locale);
+        const char *locale = cases[i].locale ? cases[i].locale : "";
+        String actual = FontAssetForLocale(StringView(locale, strlen(locale)));
 
-        if(actual == NULL || strcmp(actual, cases[i].font) != 0) {
+        if(actual.data == NULL || actual.length != strlen(cases[i].font) ||
+           memcmp(actual.data, cases[i].font, actual.length) != 0) {
             fprintf(stderr, "FAIL locale %s mapped to %s, expected %s\n",
                     cases[i].locale ? cases[i].locale : "(null)",
-                    actual ? actual : "(null)", cases[i].font);
+                    actual.data ? actual.data : "(null)", cases[i].font);
             failures++;
         }
         if(!file_exists(cases[i].font)) {

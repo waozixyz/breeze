@@ -1,0 +1,1247 @@
+c :: #system_library "c";
+raylib_log :: #system_library "raylib";
+LOG_INFO :: 3
+LOG_WARNING :: 4
+LOG_ERROR :: 5
+#import, file "../platform/trace_log.zi";
+GetTime :: () -> float64 #foreign c;
+#import, file "modal_rules.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "exercise_types.zi";
+#import, file "../platform/web_storage.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/asset_download.zi";
+#import, file "../platform/asset_download_types.zi";
+#import, file "../platform/android/android_device.zi";
+#if #defined(DESKTOP_TRAY_ENABLED) {
+    #import, file "../platform/tray.zi";
+}
+#import, file "../platform/uri.zi";
+#import "text_align"
+#import "text_props"
+#import "image_props"
+#import "control_props"
+#import "layout"
+#import, file "app.zi";
+#import, file "fonts.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "manual_seen.zi";
+#import, file "manual_seen_actions.zi";
+#import, file "navigation_routes.zi";
+#import, file "app_nav_state.zi";
+#import, file "../widgets/bottom_nav.zi";
+#import, file "profile_image_picker.zi";
+#import, file "../breaks/break_rules.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_sessions.zi";
+#import, file "../storage/data.zi";
+#import, file "audio.zi";
+#import, file "app_nav.zi";
+#import, file "../screens/habits/edit.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../screens/elist_screen.zi";
+#import, file "../screens/settings/settings_status.zi";
+
+#import, file "app_sync.zi";
+#import, file "app_route_state.zi";
+#import, file "app_route_url.zi";
+#import, file "app_donation.zi";
+#import, file "donation_modal.zi";
+#import, file "app_donation_reminder.zi";
+#import, file "app_profile.zi";
+#import, file "app_frame_pacing.zi";
+#import, file "app_persistence.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_chrome.zi";
+#import, file "app_settings.zi";
+#import, file "language_selection.zi";
+#import, file "../habits/view_settings.zi";
+#import, file "locale.zi";
+#import, file "update_check.zi";
+#import, file "text_buffers.zi";
+#import "c_string"
+#import, file "app_notifications.zi";
+#import, file "../screens/language_screen.zi";
+#import, file "app_style.zi";
+#import, file "../screens/manual_screen.zi";
+#import, file "../screens/manual_dispatch.zi";
+#import, file "../screens/break_overlay.zi";
+#import, file "../breaks/app_breaks.zi";
+#import, file "../screens/profile_screen.zi";
+#import, file "../screens/profile_social.zi";
+#import, file "../screens/settings/settings_screen.zi";
+#import, file "../screens/settings/settings_data_ui.zi";
+#import, file "../screens/settings/settings_sync_account_impl.zi";
+#import, file "../screens/settings/settings_theme.zi";
+#import, file "../screens/practice_screen.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../screens/session_results_screen.zi";
+#import, file "../screens/habits/habit_session_screen.zi";
+#import, file "device_preferences.zi";
+#import, file "../practices/meditation/meditation_music.zi";
+#import, file "metrics.zi";
+#import, file "dpi_state.zi";
+#import, file "draw.zi";
+#import, file "current_app.zi";
+#import "button_widget"
+#import "image_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "modal_props"
+#import "modal_widget"
+#import "toast_props"
+#import "tree_draw"
+#import "tree"
+#import "frame_pacing"
+
+using SessionExitModalResult;
+using AppClosePromptResult;
+using NavigationMode;
+using NavigationPlacement;
+using ModalType;
+using AppMainTab;
+using ExerciseType;
+using HabitSyncMode;
+using TextAlign;
+using TextWrap;
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+
+KEY_Q :: 81;
+KEY_LEFT_CONTROL :: 341;
+KEY_RIGHT_CONTROL :: 345;
+KEY_BACKSPACE :: 259;
+APP_KEY_BACK :: 4;
+APP_KEY_ESCAPE :: 256;
+IsKeyPressed :: (key: s32) -> bool #foreign raylib_log "IsKeyPressed";
+IsKeyDown :: (key: s32) -> bool #foreign raylib_log "IsKeyDown";
+BeginMode2D :: (camera: Camera) #foreign raylib_log "BeginMode2D";
+EndMode2D :: () #foreign raylib_log "EndMode2D";
+BeginScissorMode :: (x: s32, y: s32, width: s32, height: s32) #foreign raylib_log "BeginScissorMode";
+EndScissorMode :: () #foreign raylib_log "EndScissorMode";
+
+#if #defined(PLATFORM_WEB) {
+
+}
+
+#if #defined(ANDROID_BUILD) {
+    #import, file "../platform/android/android_wakelock.zi";
+    #import, file "../platform/android/android_insets.zi";
+}
+
+#if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+    APP_DEFAULT_WIDTH :: 320
+    APP_DEFAULT_HEIGHT :: 560
+} else {
+    APP_DEFAULT_WIDTH :: 900
+    APP_DEFAULT_HEIGHT :: 720
+}
+
+config: AppConfig = AppConfig.{.width = APP_DEFAULT_WIDTH, .height = APP_DEFAULT_HEIGHT};
+
+view_width: s32 = APP_DEFAULT_WIDTH;
+
+view_height: s32 = APP_DEFAULT_HEIGHT;
+
+app_full_view_width: s32 = APP_DEFAULT_WIDTH;
+
+// Theme colors are now accessed via theme accessor functions
+
+#program_export
+app_leave_practice_config :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.settings_dirty != 0 {
+        save_settings(app)
+    }
+    {
+        practice: *PracticeDefinition = practice_get(app.exercise_type)
+        if practice.leave_config != null {
+            practice.leave_config(app)
+        }
+    }
+    app.settings_scroll = 0
+}
+
+#program_export
+app_request_desktop_close :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // Configured close behaviour overrides the ask prompt (desktop only).
+    if app.desktop_close_action == CLOSE_QUIT {
+        app.request_quit = 1
+        return
+    }
+    #if #defined(DESKTOP_TRAY_ENABLED) {
+        if desktop_tray_ready() == 0 {
+            app.request_quit = 1
+            return
+        }
+    }
+    if app.desktop_close_action == CLOSE_KEEP_RUNNING {
+        #if #defined(DESKTOP_TRAY_ENABLED) {
+            if desktop_tray_keep_running() == 0 {
+                app.request_quit = 1
+            }
+        } else {
+            app.request_quit = 1
+        }
+        return
+    }
+    app.close_prompt_open = 1
+    app_block_current_click(app)
+    app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptNone
+}
+
+//
+// Desktop quit request from an explicit command such as Ctrl+Q. Window-close
+// requests may still ask whether to keep running, but a quit command should
+// always terminate the app.
+//
+
+#program_export
+app_request_desktop_quit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.request_quit = 1
+}
+
+#program_export
+app_consume_close_prompt_result :: (app: *InnerBreeze) -> AppClosePromptResult {
+    result: AppClosePromptResult
+    if app == null {
+        return cast(AppClosePromptResult)AppClosePromptNone
+    }
+    result = app.close_prompt_result
+    app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptNone
+    return result
+}
+
+#program_export
+app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32, save_message: string, discard_message: string) -> SessionExitModalResult {
+    modal_result: s32
+    if can_save != 0 {
+        actions: [3] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("save_button"), .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("discard_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ]
+        modal_result := ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = save_message}, actions[:3]).action
+        if modal_result == 2 {
+            return cast(SessionExitModalResult)SessionExitModalSave
+        }
+        if modal_result == 3 {
+            return cast(SessionExitModalResult)SessionExitModalDiscard
+        }
+    } else {
+        actions: [2] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("exit_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ]
+        modal_result := ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = discard_message}, actions[:2]).action
+        if modal_result == 2 {
+            return cast(SessionExitModalResult)SessionExitModalDiscard
+        }
+    }
+    return ifx (modal_result == 1) then (cast(SessionExitModalResult)SessionExitModalCancel) else (cast(SessionExitModalResult)SessionExitModalNone)
+}
+
+app_draw_close_prompt :: (app: *InnerBreeze) {
+    modal_result: s32
+    actions: [2] ActionModalAction = .[ActionModalAction.{}, ActionModalAction.{}]
+    props: ActionModalProps = .{}
+    if app == null || app.close_prompt_open == 0 {
+        return
+    }
+    if app.blocked_input_frame == app.breathing.frame {
+        return
+    }
+    actions[0].label = LocaleText("desktop_close_keep_running_button")
+    actions[0].tone = cast(ButtonTone)ButtonToneAccent
+    actions[0].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    actions[1].label = LocaleText("desktop_close_quit_button")
+    actions[1].tone = cast(ButtonTone)ButtonToneDanger
+    actions[1].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    props.title = LocaleText("desktop_close_prompt_title")
+    props.message = LocaleText("desktop_close_prompt_message")
+    props.max_width = 420
+    modal_result = ActionModal(app.ui.session, props, actions[:2]).action
+    if modal_result == -1 {
+        app.close_prompt_open = 0
+    } else if modal_result == 1 {
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptKeepRunning
+    } else if modal_result == 2 {
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptQuit
+    }
+}
+
+app_reload_graphics_resources :: (app: *InnerBreeze) {
+    if app == null || app.graphics_reload_requested == 0 {
+        return
+    }
+    app.graphics_reload_requested = 0
+    if PreviewMode() != 0 {
+        return
+    }
+    TraceLog(LOG_INFO, "ANDROID: Reloading graphics resources")
+    if !LoadLocaleFont(app) {
+        TraceLog(LOG_WARNING, "FONT: Failed to reload Noto UI font")
+    }
+}
+
+#program_export
+refresh_locale_dependent_text :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if config.title_custom == 0 {
+        CopyCString(LocaleText("app_title"), config.title[:])
+    }
+    manual_screen_reset_layouts(app)
+    app.language_index = LocaleActiveIndex()
+    if app.language_index < 0 {
+        app.language_index = 0
+    }
+}
+
+load_config :: () {
+    if config.loaded != 0 {
+        return
+    }
+    if config.title[0] == #char "\0" {
+        AppCopyText(LocaleText("app_title"), config.title[:])
+        config.title_custom = 0
+    }
+    #if #defined(PLATFORM_WEB) {
+        refresh_theme_colors(0, 1)
+    } else {
+        refresh_theme_colors(0, 0)
+    }
+    config.loaded = 1
+}
+
+#program_export
+clampi :: (value: s32, min: s32, max: s32) -> s32 {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    return value
+}
+
+#program_export
+app_reload_after_import :: (app: *InnerBreeze, reload_settings: s32) {
+    detail_habit_id: [HABIT_ID_SIZE] u8 = .[0]
+    detail_index: s32 = -1
+    view_mode: s32 = HABIT_VIEW_CALENDAR
+    habit_tab: s32 = HABIT_TAB_WEEKLY
+    month_offset: s32 = 0
+    scroll: s32 = 0
+    weekly_days: s32 = 0
+    hold_stats_range_days: s32 = 0
+    i: s32
+    if app == null {
+        return
+    }
+    if reload_settings == 0 {
+        if app.habit_detail_index >= 0 && app.habit_detail_index < app.habits.count {
+            AppCopyText(AppTextFromCString(
+                *app.habits.items[app.habit_detail_index].id[0],
+                HABIT_ID_SIZE), detail_habit_id[:])
+        }
+        detail_index = app.habit_detail_index
+        view_mode = app.habits.view_mode
+        habit_tab = app.habits.tab
+        month_offset = app.habits.month_offset
+        scroll = app.habits.scroll
+        weekly_days = app.habits.weekly_days
+        hold_stats_range_days = app.habits.hold_stats_range_days
+    }
+    if reload_settings != 0 {
+        settings_missing := app_load_settings(app)
+        refresh_locale_dependent_text(app)
+        app_device_preferences_init(app)
+        if settings_missing != 0 {
+            save_settings(app)
+        }
+        app_apply_style(app)
+        reset_settings_preview(app)
+        practice_update_session_sounds(app)
+    }
+    habits_init_with_defaults(*app.habits, app.language_selected)
+    if reload_settings != 0 {
+        app_restore_habits_view_settings(app)
+    }
+    if reload_settings == 0 {
+        app.habits.selected = -1
+        app.habit_detail_index = -1
+        {
+            i: s32 = 0
+            while i < app.habits.count {
+                if detail_habit_id[0] != cast(u8)0 &&
+                    AppTextFromCString(*app.habits.items[i].id[0], HABIT_ID_SIZE) ==
+                    AppTextFromCString(*detail_habit_id[0], HABIT_ID_SIZE) {
+                    app.habit_detail_index = i
+                    break
+                }
+                i += 1
+            }
+        }
+        if app.habit_detail_index < 0 && detail_index >= 0 && detail_index < app.habits.count {
+            app.habit_detail_index = detail_index
+        }
+        app.habits.view_mode = view_mode
+        app.habits.tab = habit_tab
+        app.habits.month_offset = month_offset
+        app.habits.scroll = scroll
+        app.habits.weekly_days = weekly_days
+        app.habits.hold_stats_range_days = ifx (hold_stats_range_days == 31) then (31) else (7)
+    }
+    if app.habit_detail_index >= app.habits.count {
+        app.habit_detail_index = -1
+    }
+    if app.habits.selected >= app.habits.count {
+        app.habits.selected = -1
+    }
+    app.habit_session_edit.active = 0
+    app.habit_edit.active = 0
+}
+
+#if #defined(ANDROID_BUILD) {
+    #program_export
+    app_request_graphics_reload :: (app: *InnerBreeze) {
+        if app != null {
+            app.graphics_reload_requested = 1
+        }
+    }
+}
+
+app_draw_blank_home_easteregg :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    available_h := view_height - app_content_bottom_reserved(app)
+    if available_h < AppScale(120) {
+        available_h = view_height
+    }
+    Image(CurrentApp().ui.session, ImageProps.{
+            .asset_path = "assets/easteregg/art.png",
+            .bounds = Rectangle.{0, 0, cast(float32)view_width, cast(float32)available_h},
+            .fit = cast(ImageFit)ImageFitCover
+        })
+    logo_size := cast(float32)view_width * 0.58f
+    if logo_size > cast(float32)available_h * 0.58f {
+        logo_size = cast(float32)available_h * 0.58f
+    }
+    if logo_size > cast(float32)AppScale(320) {
+        logo_size = cast(float32)AppScale(320)
+    }
+    bounds := Rectangle.{(cast(float32)view_width - logo_size) / 2,
+        (cast(float32)available_h - logo_size) / 2, logo_size, logo_size
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = bounds,
+            .image = ImageProps.{
+                .asset_path = "assets/easteregg/waozi.png",
+                .bounds = bounds, .fit = cast(ImageFit)ImageFitContain
+            },
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        }) != 0 {
+        OpenUri("https://waozi.xyz")
+    }
+}
+
+app_apply_initial_screen :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.language_selected == 0 {
+        app.breathing.screen = ScreenLanguage
+        app.habits.focus_selected_tab = 0
+        return
+    }
+    app.breathing.screen = app_screen_for_main_tab(app.main_tab)
+    app.habits.focus_selected_tab = ifx (app.breathing.screen == ScreenHabits) then (1) else (0)
+}
+
+#program_export
+app_init :: (vapp: *void) {
+    app: *InnerBreeze = cast(*InnerBreeze)vapp
+    i: s32
+    if app == null {
+        return
+    }
+    FramePacingReset()
+    app.ui.session = SessionOpen()
+    if !SessionValid(app.ui.session) { return }
+    android_text_input_open(app.ui.session)
+    #if #defined(ANDROID_BUILD) {
+        if practice_active(app) != null {
+            android_allow_screen_off()
+        }
+        practice_active_background_stop(app)
+    }
+    InitDPI()
+    TraceLogInit(LOG_INFO, "APP: app init width=%d height=%d embedded=%d",
+        config.width, config.height, config.loaded)
+    load_config()
+    app_notifications_init(app)
+    view_width = ifx (config.width > 0) then (config.width) else (APP_DEFAULT_WIDTH)
+    view_height = ifx (config.height > 0) then (config.height) else (APP_DEFAULT_HEIGHT)
+    UpdateDPI(view_width, view_height)
+    view_width = GetLayoutWidth()
+    view_height = GetLayoutHeight()
+    TraceLogScale(LOG_INFO, "APP: render scale=%.2f layout=%dx%d",
+        GetRenderScale(), view_width, view_height)
+    app.ui.view_width = view_width
+    app.ui.view_height = view_height
+    app.breathing = BreathSessionInit()
+    app.breaks = BreakInit()
+    app.breaks_enabled = 0
+    app.desktop_startup_mode = STARTUP_SHOW
+    app.desktop_close_action = CLOSE_ASK
+    app.break_hud_x = -1
+    app.break_hud_y = -1
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        app.break_sounds_enabled = 1
+    } else {
+        app.break_sounds_enabled = 0
+    }
+    data_init()
+    TraceLog(LOG_INFO, "APP PROBE: data initialized")
+    settings_missing := app_load_settings(app)
+    refresh_locale_dependent_text(app)
+    app_device_preferences_init(app)
+    if settings_missing != 0 {
+        save_settings(app)
+    }
+    app_apply_style(app)
+    app_init_donation_reminder_observed_practice_count(app)
+    if !LoadLocaleFont(app) {
+        TraceLog(LOG_WARNING, "FONT: Failed to load Noto UI font -> using built-in default")
+    }
+    TraceLog(LOG_INFO, "APP PROBE: locale font initialized")
+    update_check_start()
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app.practice_config_tab = 0
+    app.session_result = SessionResult.{}
+    if app.language_needs_save != 0 {
+        save_settings(app)
+        app.language_needs_save = 0
+    }
+    habits_init_with_defaults(*app.habits, app.language_selected)
+    app_restore_habits_view_settings(app)
+    app.habit_detail_index = -1
+    elist_state: *EListState = *app.elist
+    elist_state.editing_item = -1
+    app.habit_session_edit = HabitSessionEditState.{}
+    app.habit_session_edit.round = -1
+    app_apply_initial_screen(app)
+    practice_update_circle_bounds(app, app_content_top_reserved(app),
+        app_content_bottom_reserved(app))
+    #if !#defined(PLATFORM_WEB) {
+        if PreviewMode() == 0 {
+            init_audio(app)
+        }
+    }
+    TraceLog(LOG_INFO, "APP PROBE: audio initialized")
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice: *PracticeDefinition = practice_get(i)
+            if practice.init != null {
+                practice.init(app)
+            }
+            i += 1
+        }
+    }
+    app.camera = Camera.{}
+    app.camera.zoom = 1.0
+    app.play_circle_hover = 0
+    app.play_circle_scale = 1.0f
+    app.settings_tab = SETTINGS_TAB_DEVICE
+    app.settings_overview = 1
+    app.habit_edit = HabitEditState.{}
+    app.habit_edit.index = -1
+    app.habit_edit.color.r = 99
+    app.habit_edit.color.g = 196
+    app.habit_edit.color.b = 165
+    app.habit_edit.color.a = 255
+    app.habit_edit.sync_mode = HABIT_SYNC_NONE
+    practice_update_session_sounds(app)
+    reset_settings_preview(app)
+    app.start_speed_preview = BreathSessionInit()
+    // Icons resolve from Kryon's embedded sheets; no app-side textures.
+    app.modal = AppModal.{}
+    app.meditation.duration_seconds = 0
+    app.meditation.remaining_seconds = 0
+    app.meditation.frame_ticks = 0
+    app_auto_sync(app)
+    TraceLog(LOG_INFO, "APP PROBE: app init complete")
+}
+
+handle_back_button :: (app: *InnerBreeze) {
+    // If modal is active, let modal drawing handle it
+    if app.modal.active != 0 {
+        return
+    }
+    screen := app.breathing.screen
+    if screen == ScreenStart {
+        if app.practice_tab == PRACTICE_TAB_CONFIG {
+            app_leave_practice_config(app)
+        }
+        if app.practice_tab != PRACTICE_TAB_PLAY {
+            route: AppRoute = app_current_route(app)
+            route.practice_tab = PRACTICE_TAB_PLAY
+            app.manual_scroll = 0
+            app.settings_scroll = 0
+            app.tutorial_step = 0
+            app_switch_route(app, route)
+        }
+    } else if screen == ScreenSettings {
+        app_settings_back(app)
+    } else if screen == ScreenProfile {
+        profile_screen_back(app)
+    } else if screen == ScreenCustomizeNav {
+        app_switch_screen(app, ifx (app.main_tab == APP_MAIN_TAB_HABITS) then (ScreenHabits) else (ScreenStart))
+    } else if screen == ScreenPracticeConfig {
+        app_leave_practice_config(app)
+        app_switch_screen(app, ScreenStart)
+    } else if screen == ScreenHabits {
+        if app.habits.screen_mode == HABITS_SCREEN_HISTORY  || app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
+            app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+            app.habits.selected = -1
+            app.habits.tab = HABIT_TAB_WEEKLY
+            app.habits.view_mode = HABIT_VIEW_WEEKLY
+            app.habits.scroll = 0
+            save_settings(app)
+        } else if app.habits.tab == HABIT_TAB_EDIT && app.habit_edit.active != 0 {
+            habit_edit_cancel(app)
+        } else {
+            app_switch_screen(app, ScreenStart)
+        }
+    } else if screen == ScreenEList {
+        app_switch_screen(app, app_screen_for_main_tab(APP_MAIN_TAB_PRACTICE))
+    } else if screen == ScreenHabitEdit {
+        habit_edit_cancel(app)
+        app_switch_screen(app, ScreenHabits)
+    } else if screen == ScreenHabitSessionEdit {
+        habit_session_cancel_edit(app)
+        app_switch_screen(app, ScreenHabits)
+    } else if screen == ScreenLanguage || screen == ScreenManual {
+        manual_screen_close_tutorial(app, 0)
+    } else if screen == ScreenResults {
+        practice_ensure_results_saved(app)
+        #if #defined(ANDROID_BUILD) {
+            android_allow_screen_off()
+            android_wakelock_release()
+        }
+        app_init(cast(*void)app)
+    } else if screen == ScreenSession {
+        // When paused, exit immediately
+        if app.session_paused != 0 {
+            practice_active_background_stop(app)
+            app_init(cast(*void)app)
+        } else {
+            // Show confirmation modal
+            app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+        }
+    } else if screen == ScreenMeditation {
+        {
+            practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+            if practice.request_exit != null {
+                practice.request_exit(app)
+            }
+        }
+    } else if screen == ScreenPatterns {
+        {
+            practice: *PracticeDefinition = practice_get(EXERCISE_PATTERNS)
+            if practice.request_exit != null {
+                practice.request_exit(app)
+            }
+        }
+    }
+}
+
+draw_profile_picture_picker_modal :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    props: ProfileImagePickerProps
+    props.title = "Profile picture"
+    props.selected_icon_type = app.profile_picture_icon
+    props.max_width = 520
+    props.scroll_offset = app.profile_picture_picker_scroll
+    props.view_width = app.ui.view_width
+    props.view_height = app.ui.view_height
+    result := ProfileImagePicker(app.ui.session, props)
+    app.profile_picture_picker_scroll = result.scroll_offset
+    if result.changed {
+        app.profile_picture_icon = result.selected_icon_type
+        save_settings(app)
+    }
+    if result.closed {
+        app_close_modal(app)
+    }
+}
+
+draw_donation_reminder_modal :: (app: *InnerBreeze) {
+    modal_result: s32
+    actions: [3] ActionModalAction = .[
+        ActionModalAction.{}, ActionModalAction.{}, ActionModalAction.{}
+    ]
+    props: ActionModalProps = .{}
+    if app == null {
+        return
+    }
+    actions[0].label = LocaleText("donation_reminder_donate_button")
+    actions[0].tone = cast(ButtonTone)ButtonToneAccent
+    actions[0].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    actions[1].label = LocaleText("donation_reminder_skip_button")
+    actions[1].tone = cast(ButtonTone)ButtonToneNeutral
+    actions[1].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    actions[2].label = LocaleText("donation_reminder_dismiss_button")
+    actions[2].tone = cast(ButtonTone)ButtonToneDanger
+    actions[2].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    props.title = LocaleText("donation_reminder_title")
+    props.message = LocaleText("donation_reminder_message")
+    props.max_width = 420
+    modal_result = ActionModal(app.ui.session, props, actions[:3]).action
+    if modal_result == -1 {
+        app_record_donation_reminder_seen(app)
+        app_close_modal(app)
+    } else if modal_result > 0 {
+        app_handle_donation_reminder_action(app, modal_result)
+    }
+}
+
+draw_global_modal :: (app: *InnerBreeze) {
+    modal_result: s32
+    if app == null || app.modal.active == 0 {
+        return
+    }
+    if app.blocked_input_frame == app.breathing.frame {
+        return
+    }
+    if settings_data_draw_modals(app) != 0 {
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalDonationReminder {
+        draw_donation_reminder_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalAboutDonation {
+        draw_about_donation_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalMeditationNetworkError {
+        actions: [2] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("retry_button"), .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ]
+        modal_result := ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("meditation_music_network_error_title"), .message = LocaleText("meditation_music_network_error_message")}, actions[:2]).action
+        if modal_result == 1 {
+            TraceLog(LOG_INFO, "AUDIO: Network error download cancelled")
+            app_close_modal(app)
+        } else if modal_result == 2 {
+            TraceLog(LOG_INFO, "AUDIO: Network error download retry requested")
+            app_close_modal(app)
+            meditation_music_start_download(app)
+        }
+    }
+    if app.modal.type == cast(ModalType)ModalAppIconPicker {
+        settings_screen_draw_app_icon_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalThemePicker {
+        settings_screen_draw_theme_picker_modal(app)
+    }
+    if app.modal.type == cast(ModalType)ModalProfilePicturePicker {
+        draw_profile_picture_picker_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalConfirmRemoveFriend {
+        profile_screen_draw_remove_friend_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalPracticeManual  || app.modal.type == cast(ModalType)ModalPracticeConfig  || app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
+        practice_screen_draw_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalSyncAlias {
+        modal_result = settings_sync_account_draw_alias_modal(app)
+        if modal_result == 1 {
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            settings_screen_set_status_success(LocaleText("sync_alias_saved"), "")
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
+        } else if modal_result == 2 {
+            settings_screen_set_status_error(LocaleText("sync_alias_failed"))
+        } else if modal_result == 3 {
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
+        }
+    }
+    if app.modal.type == cast(ModalType)ModalSyncPublicId {
+        modal_result = settings_sync_account_draw_public_id_modal(app)
+        if modal_result != 0 {
+            app_close_modal(app)
+        }
+    }
+}
+
+updateapp :: (app: *InnerBreeze) {
+    hover: s32 = 0
+    center_x: s32 = view_width / 2
+    frame_view_height: s32 = view_height
+    center_y: s32
+    i: s32
+    frame_route: AppRoute
+    first_run_guide_active: s32 = 0
+    habits_guide_active: s32 = 0
+    practice_fullscreen_modal: bool = false
+    global_modal_drawn: bool = false
+    app_sync_route_from_url(app)
+    frame_route = app_current_route(app)
+    #if #defined(ANDROID_BUILD) {
+        {
+            if android_take_pending_donation_reminder() != 0 {
+                if app.modal.active != 0 {
+                    app_close_modal(app)
+                }
+                app_open_modal(app, cast(ModalType)ModalDonationReminder)
+            }
+        }
+        {
+            practice_id: s32 = android_take_pending_practice_start()
+            if practice_id >= 0 {
+                active_break: s32
+                practice: *PracticeDefinition
+                app.exercise_type = practice_clamp_id(practice_id)
+                if app.modal.active != 0 {
+                    app_close_modal(app)
+                }
+                active_break = BreakActive(app.breaks)
+                if active_break >= 0 {
+                    app_breaks_start_practice(app, active_break, app.exercise_type)
+                } else {
+                    app.main_tab = APP_MAIN_TAB_PRACTICE
+                    app.practice_tab = PRACTICE_TAB_PLAY
+                    practice = practice_get(app.exercise_type)
+                    if practice != null && practice.start != null {
+                        practice.start(app)
+                    }
+                }
+            }
+        }
+    }
+    app_breaks_update(app)
+    if app_notifications_tick(app) {
+        save_settings(app)
+    }
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice: *PracticeDefinition = practice_get(i)
+            if practice.update != null {
+                practice.update(app)
+            }
+            i += 1
+        }
+    }
+    if app.practice_coming_soon_ticks > 0 {
+        app.practice_coming_soon_ticks -= 1
+    }
+    practice_screen_prepare_first_run_guide(app)
+    habits_screen_prepare_first_run_guide(app)
+    first_run_guide_active = practice_screen_first_run_guide_active(app)
+    habits_guide_active = habits_screen_first_run_guide_active(app)
+    app_clear_invalid_screen_local_modal(app)
+    app_maybe_open_donation_reminder(app, first_run_guide_active,
+        habits_guide_active)
+    practice_fullscreen_modal = app.modal.active != 0 &&
+        app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed
+    view_height = app_page_height(app, view_height)
+    center_y = view_height / 2
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        app_draw_bottom_nav(app)
+    }
+    back_requested := IsKeyPressed(APP_KEY_BACK)
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if IsKeyPressed(KEY_BACKSPACE)  && ((app.breathing.screen == ScreenStart && app.practice_tab != PRACTICE_TAB_PLAY)  || app.breathing.screen == ScreenSession || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation || app.breathing.screen == ScreenPatterns) {
+            back_requested = true
+        }
+    }
+    if back_requested {
+        if app.close_prompt_open != 0 {
+            app.close_prompt_open = 0
+        } else if first_run_guide_active != 0 || habits_guide_active != 0 {
+            if first_run_guide_active != 0 {
+                practice_screen_dismiss_first_run_guide(app)
+            }
+            if habits_guide_active != 0 {
+                habits_screen_dismiss_first_run_guide(app)
+            }
+        } else if app.modal.active != 0 {
+            app_close_modal(app)
+        } else {
+            handle_back_button(app)
+        }
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        // Ctrl+Q quits from any screen; Esc quits only from idle home.
+        if IsKeyPressed(KEY_Q)  && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
+            app_request_desktop_quit(app)
+        } else if IsKeyPressed(APP_KEY_ESCAPE) &&
+            app.breathing.screen == ScreenStart &&
+            app.practice_tab == PRACTICE_TAB_PLAY &&
+            app.modal.active == 0 && first_run_guide_active == 0 &&
+            habits_guide_active == 0 {
+            app_request_desktop_quit(app)
+        }
+    }
+    handled_screen: s32 = 0
+    if app.breathing.screen == ScreenSettings {
+        settings_screen_draw(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenProfile {
+        profile_screen_draw(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenCustomizeNav {
+        app_draw_customize_nav_page(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenLanguage {
+        language_screen_draw(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenHabits {
+        draw_habits_screen(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenEList {
+        draw_elist_screen(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenHabitEdit {
+        habit_edit_draw(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenHabitSessionEdit {
+        habit_session_draw_edit_screen(app)
+        handled_screen = 1
+    } else if app.breathing.screen == ScreenBreak {
+        break_overlay_draw(app)
+        handled_screen = 1
+    }
+    if handled_screen == 0 {
+        if app.breathing.screen == ScreenStart {
+            practice_update_circle_bounds(app, app_content_top_reserved(app),
+                app_content_bottom_reserved(app))
+        } else if app.breathing.screen == ScreenSession {
+            practice_update_circle_bounds(app, AppTitleBarHeight(), 84)
+        }
+        if app.breathing.screen == ScreenSession {
+            practice_draw_active_breathing(app, center_x, center_y)
+        }
+        if app.breathing.screen == ScreenStart {
+            {
+                if !practice_fullscreen_modal  && app.main_tab == APP_MAIN_TAB_NONE {
+                    app_draw_blank_home_easteregg(app)
+                } else if !practice_fullscreen_modal  && app.main_tab != APP_MAIN_TAB_NONE {
+                    if app.practice_tab == PRACTICE_TAB_MANUAL {
+                        manual_screen_draw(app)
+                    } else if app.practice_tab == PRACTICE_TAB_CONFIG {
+                        practice: *PracticeDefinition = practice_get(app.exercise_type)
+                        if practice.draw_config != null {
+                            practice.draw_config(app)
+                        }
+                    } else {
+                        practice_screen_draw_home(app)
+                    }
+                }
+            }
+            // Skip drawing on the same frame modal opens to prevent click propagation
+            if app.modal.active != 0 &&
+                app.modal.type == cast(ModalType)ModalMeditationSetup &&
+                app.blocked_input_frame != app.breathing.frame {
+                practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+                if practice.draw_setup_modal != null {
+                    practice.draw_setup_modal(app)
+                }
+            }
+        } else if app.breathing.screen == ScreenSession {
+            practice_update_active_breathing(app, center_x, center_y, *hover)
+        } else if app.breathing.screen == ScreenMeditation {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenSunSalutation {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_SUN_SALUTATION)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenPatterns {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_PATTERNS)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenResults {
+            practice_draw_results(app, center_x, center_y, *hover)
+        }
+    }
+    if practice_fullscreen_modal {
+        draw_global_modal(app)
+        global_modal_drawn = true
+    }
+    view_height = frame_view_height
+    // The desktop rail has already submitted its widgets before the page.
+    if app_nav_desktop_rail_enabled(app) == 0 {
+        app_draw_bottom_nav(app)
+    }
+    practice_screen_draw_first_run_guide(app)
+    habits_screen_draw_first_run_guide(app)
+    if !global_modal_drawn {
+        draw_global_modal(app)
+    }
+    app_draw_close_prompt(app)
+    app_flush_deferred_settings(app)
+    app_observe_direct_route_change(app, frame_route)
+    app.breathing.frame += 1
+}
+
+app_update_draw_last_full_w: s32 = -1;
+
+app_update_draw_last_full_h: s32 = -1;
+
+app_update_draw_last_content_x: s32 = -1;
+
+app_update_draw_last_content_w: s32 = -1;
+
+app_update_draw_last_log_time: float64 = -1.0;
+
+app_last_frame_status: s32;
+
+app_finish_frame :: (app: *InnerBreeze) {
+    status := cast(s32)EndFrame(app.ui.session)
+    if status != 0 && status != app_last_frame_status {
+        TraceLogResult(LOG_WARNING, "APP: frame rejected with status %d", status)
+    }
+    app_last_frame_status = status
+}
+
+#program_export
+app_update_draw :: (vapp: *void, viewport: Rectangle) {
+    app: *InnerBreeze = cast(*InnerBreeze)vapp
+    profile_frame_start: float64
+    profile_update_start: float64
+    profile_habits_start: float64
+    profile_sync_start: float64
+    full_width: s32
+    full_height: s32
+    content_x: s32 = 0
+    rail_width: s32 = 0
+    top_height: s32 = 0
+    content_w: s32
+    layout_width: s32
+    layout_height: s32
+    layout_content_x: s32
+    layout_content_w: s32
+    render_scale: float32
+    if app == null { return }
+    if viewport.width <= 0 || viewport.height <= 0 {
+        return
+    }
+    profile_frame_start = app_profile_now()
+    FrameTextReset(*app.ui.frame_text)
+    frame_sample: FrameActivitySample
+    frame_sample.mouse_x = app.ui.mouse_x
+    frame_sample.mouse_y = app.ui.mouse_y
+    frame_sample.pointer_active = app.ui.pointer_active
+    frame_sample.keyboard_active = app.ui.keyboard_active
+    frame_sample.text_input_active = app.ui.text_input_active
+    frame_decision := app_update_frame_pacing(app, frame_sample)
+    app.ui.frame_target_fps = frame_decision.state.target_fps
+    app.ui.frame_target_changed = frame_decision.apply_target
+    app_reload_graphics_resources(app)
+    full_width = cast(s32)viewport.width
+    full_height = cast(s32)viewport.height
+    view_width = full_width
+    view_height = full_height
+    // Update DPI cache
+    UpdateDPI(view_width, view_height)
+    if !(GetDPIScale() > 0.0f) || GetDPIScale() > 8.0f {
+        TraceLogScale(LOG_WARNING, "APP_EMBED: repairing invalid dpi %.2f for %dx%d",
+            GetDPIScale(), view_width, view_height)
+        InitDPI()
+        UpdateDPI(view_width, view_height)
+    }
+    AppMetricsConfigure(GetDPIScale())
+    layout_width = GetLayoutWidth()
+    layout_height = GetLayoutHeight()
+    render_scale = GetRenderScale()
+    if !(render_scale > 0.0f) {
+        render_scale = 1.0f
+    }
+    app_full_view_width = layout_width
+    view_width = layout_width
+    view_height = layout_height
+    app.ui.view_width = view_width
+    app.ui.view_height = view_height
+    // Freeze responsive navigation from the full viewport before narrowing content.
+    app_capture_navigation_viewport(app, view_width, view_height)
+    rail_width = ifx (app_nav_desktop_rail_enabled(app) != 0) then (app_nav_desktop_rail_width(app)) else (0)
+    layout_content_x = ifx (app_navigation_placement(app) == NAVIGATION_LEFT) then (rail_width) else (0)
+    layout_content_w = layout_width - rail_width
+    if layout_content_w < 1 {
+        layout_content_w = 1
+    }
+    content_x = cast(s32)(cast(float32)layout_content_x * render_scale + 0.5f)
+    rail_width = cast(s32)(cast(float32)rail_width * render_scale + 0.5f)
+    top_height = ifx (app_navigation_placement(app) == NAVIGATION_TOP) then (cast(s32)(cast(float32)app_navigation_height(app) * render_scale + 0.5f)) else (0)
+    practice_update_circle_bounds(app, app_content_top_reserved(app),
+        app_content_bottom_reserved(app))
+    app_device_preferences_update(app)
+    update_check_poll()
+    app_refresh_theme(app)
+    DrawRectangleRec(viewport, StyleTokenColor("canvas"))
+    content_w = full_width - rail_width
+    if content_w < 1 {
+        content_w = 1
+    }
+    {
+        now: float64 = GetTime()
+        changed := full_width != app_update_draw_last_full_w ||
+            full_height != app_update_draw_last_full_h ||
+            content_x != app_update_draw_last_content_x ||
+            content_w != app_update_draw_last_content_w
+        if changed && (app_update_draw_last_log_time < 0.0 || now - app_update_draw_last_log_time >= 0.25) {
+            TraceLogGeometry(LOG_INFO, "APP_EMBED: geometry viewport=%dx%d layout=%dx%d content_x=%d content=%dx%d render_scale=%.2f",
+                full_width, full_height, layout_width, layout_height,
+                layout_content_x, layout_content_w, layout_height,
+                GetRenderScale())
+            app_update_draw_last_log_time = now
+        }
+        if changed {
+            app_update_draw_last_full_w = full_width
+            app_update_draw_last_full_h = full_height
+            app_update_draw_last_content_x = content_x
+            app_update_draw_last_content_w = content_w
+        }
+    }
+    view_width = layout_content_w
+    view_height = layout_height - cast(s32)(cast(float32)top_height / render_scale + 0.5f)
+    app.ui.view_width = view_width
+    app.ui.view_height = view_height
+    app.camera = Camera.{}
+    app.camera.zoom = render_scale
+    app.camera.offset.x = ifx (PreviewMode() != 0) then (0.0f) else (viewport.x + cast(float32)content_x)
+    app.camera.offset.y = ifx (PreviewMode() != 0) then (0.0f) else (viewport.y + cast(float32)top_height)
+    // Retained hit testing and widget bounds use the same logical coordinates
+    // as the camera. A left navigation rail occupies negative content x.
+    frame_origin := Vector2.{0.0, 0.0}
+    if PreviewMode() == 0 {
+        frame_origin = ScreenToWorld(Vector2.{viewport.x, viewport.y}, app.camera)
+    }
+    logical_frame := Rectangle.{frame_origin.x, frame_origin.y,
+        viewport.width / render_scale, viewport.height / render_scale}
+    if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/frame"),
+        logical_frame) != 0 {
+        return
+    }
+    if PreviewMode() != 0 {
+        DrawRectangle(0, 0, view_width, view_height, StyleTokenColor("canvas"))
+        profile_update_start = app_profile_now()
+        updateapp(app)
+        app_profile_record_update(profile_update_start)
+        app_breaks_draw_toast(app,
+            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
+        app_finish_frame(app)
+    } else {
+        BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
+            full_width, full_height)
+        BeginMode2D(app.camera)
+        DrawRectangle(0, 0, view_width, view_height, StyleTokenColor("canvas"))
+        profile_update_start = app_profile_now()
+        updateapp(app)
+        app_profile_record_update(profile_update_start)
+        app_breaks_draw_toast(app,
+            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
+        app_finish_frame(app)
+        EndMode2D()
+        EndScissorMode()
+    }
+    profile_habits_start = app_profile_now()
+    app_flush_habits_after_frame(app)
+    app_profile_record_habits(profile_habits_start)
+    profile_sync_start = app_profile_now()
+    settings_sync_account_pump(app)
+    app_sync_pump(app)
+    app_profile_record_sync(profile_sync_start)
+    app_profile_frame_end(profile_frame_start)
+}
+
+#program_export
+app_destroy :: (vapp: *void) {
+    app: *InnerBreeze = cast(*InnerBreeze)vapp
+    i: s32
+    if app == null {
+        return
+    }
+    CloseBreakWindows()
+    ReleaseRuntimeAssetDownload(*app.meditation.music_download)
+    save_settings(app)
+    settings_sync_account_cancel(app)
+    app_clear_disconnected_sync_work()
+    android_text_input_close(app.ui.session)
+    SessionClose(app.ui.session)
+    habits_flush_save(app)
+    if PreviewMode() == 0 {
+        ReleaseLocaleFont(app)
+    }
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice: *PracticeDefinition = practice_get(i)
+            if practice.destroy != null {
+                practice.destroy(app)
+            }
+            i += 1
+        }
+    }
+    app_audio_shutdown(app)
+    app.* = InnerBreeze.{}
+}
+
+#program_export
+app_should_use_tab_bar :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+    return ifx (app.navigation_mode == NAV_MODE_TABBAR) then (1) else (0)
+}

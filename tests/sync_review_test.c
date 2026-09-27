@@ -298,8 +298,19 @@ mark_local_session_only_pending(const char *root)
 }
 
 static void
+seed_test_private_record_key(void)
+{
+    char private_key[5121];
+    for(size_t i = 0; i < sizeof(private_key) - 1; i++)
+        private_key[i] = (i % 2) == 0 ? '4' : '2';
+    private_key[sizeof(private_key) - 1] = '\0';
+    storage_set_setting_text("sync_private_key", private_key);
+}
+
+static void
 mark_pending_payload_in_flight(void)
 {
+    seed_test_private_record_key();
     char *payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
     check_true("pending payload builds", payload != NULL);
     storage_free_sync_payload_json(payload);
@@ -456,6 +467,7 @@ test_full_snapshot_with_pending_local_edits_syncs_without_review(void)
     check_true("init pending db", storage_init(root));
     seed_local_data(root);
     mark_local_data_pending(root);
+    seed_test_private_record_key();
     mark_pending_payload_in_flight();
 
     check_true("apply review response",
@@ -741,36 +753,29 @@ test_remote_snapshot_keeps_review_for_pending_yoga_delete(void)
 }
 
 static void
-test_sync_payload_includes_v2_ops(void)
+test_sync_payload_uses_encrypted_records(void)
 {
     char root[1024];
     char *payload;
 
-    make_clean_root(root, sizeof(root), "v2-payload");
-    check_true("init v2 payload db", storage_init(root));
+    make_clean_root(root, sizeof(root), "encrypted-payload");
+    check_true("init encrypted payload db", storage_init(root));
     seed_local_data(root);
     mark_local_data_pending(root);
-    check_int("sync ops migration table exists",
+    check_int("obsolete sync ops table removed",
               read_db_count(root, "SELECT COUNT(*) FROM sqlite_master WHERE "
                                   "type='table' AND name='sync_ops'"),
-              1);
+              0);
 
+    seed_test_private_record_key();
     payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
     check_contains("v6 payload protocol", payload, "\"protocol_version\":6");
     check_contains("v6 payload app id", payload, "\"app_id\":\"inbe\"");
     check_contains("v6 payload capabilities", payload, "\"client_capabilities\"");
-    check_contains("v6 payload legacy data opt-in", payload, "\"include_legacy_data\":true");
-    check_contains("v2 payload client clock", payload, "\"client_clock\":0");
-    check_contains("v2 payload ops array", payload, "\"ops\":[");
-    check_contains("v2 payload habit op", payload, "\"entity_type\":\"habit\"");
-    check_contains("v2 payload habit day op", payload, "\"entity_type\":\"habit_day\"");
-    check_contains("v2 payload session op", payload, "\"entity_type\":\"session\"");
-    check_contains("v2 payload deterministic op id", payload, "\"op_id\":");
-    check_contains("v2 payload op client id", payload, "\"client_id\":");
-    check_contains("v2 payload op sequence", payload, "\"seq\":");
-    check_contains("v2 payload session payload", payload, "\"payload\":{\"id\":\"local-session\"");
-    check_contains("v2 payload keeps legacy habits", payload, "\"habits\":[");
-    check_contains("v2 payload keeps legacy sessions", payload, "\"sessions\":[");
+    check_not_contains("v6 payload has no legacy data opt-in", payload, "include_legacy_data");
+    check_contains("v6 payload client clock", payload, "\"client_clock\":0");
+    check_not_contains("v6 payload has no plaintext operations", payload, "\"ops\":");
+    check_contains("v6 payload includes encrypted records", payload, "\"encrypted_records\":[");
     storage_free_sync_payload_json(payload);
 
     storage_close();
@@ -784,13 +789,12 @@ test_normal_response_records_server_hash(void)
     char *payload;
     StorageSyncStatus status;
     const char *response = "{"
+                           "\"protocol_version\":6,"
                            "\"server_version\":5,"
                            "\"server_clock\":77,"
-                           "\"latest_protocol\":6,"
                            "\"server_state_hash\":\"normal-hash-001\","
                            "\"account_alias\":\"waozi\","
-                           "\"changes\":{\"habits\":[],\"habit_days\":[],"
-                           "\"sessions\":[],\"meditation_logs\":[]}"
+                           "\"changes\":{\"encrypted_records\":[]}"
                            "}";
 
     make_clean_root(root, sizeof(root), "normal");
@@ -800,46 +804,16 @@ test_normal_response_records_server_hash(void)
     check_contains("normal response saves alias", storage_get_setting_text("sync_account_alias"),
                    "waozi");
     check_true("normal response loads status", storage_sync_status(&status));
-    check_int("normal response latest protocol", status.latest_protocol,
-              SYNC_PROTOCOL_VERSION);
-    check_false("normal response no protocol upgrade", status.protocol_upgrade_available);
+    check_int("normal response server version", status.server_version, 5);
+    check_int("normal response server clock", status.server_clock, 77);
 
+    seed_test_private_record_key();
     payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
     check_contains("normal response hash in next payload", payload,
                    "\"last_server_state_hash\":\"normal-hash-001\"");
     check_contains("normal response clock in next payload", payload, "\"client_clock\":77");
     check_not_contains("normal response no full replace", payload, "full_sync_requested");
     storage_free_sync_payload_json(payload);
-
-    storage_close();
-    remove_tree(root);
-}
-
-static void
-test_latest_protocol_does_not_advertise_app_release(void)
-{
-    char root[1024];
-    StorageSyncStatus status;
-    const char *response = "{"
-                           "\"server_version\":7,"
-                           "\"server_clock\":78,"
-                           "\"latest_protocol\":7,"
-                           "\"changes\":{\"habits\":[],\"habit_days\":[],"
-                           "\"sessions\":[],\"meditation_logs\":[]}"
-                           "}";
-
-    make_clean_root(root, sizeof(root), "latest-protocol");
-    check_true("init latest protocol db", storage_init(root));
-    check_true("apply newer protocol response", storage_apply_sync_response_json(response));
-    check_true("newer protocol loads status", storage_sync_status(&status));
-    check_int("newer protocol recorded", status.latest_protocol, 7);
-    check_false("protocol changes are not app releases", status.protocol_upgrade_available);
-
-    storage_close();
-    check_true("reopen cached newer protocol", storage_init(root));
-    check_true("cached newer protocol loads status", storage_sync_status(&status));
-    check_int("cached protocol retained for diagnostics", status.latest_protocol, 7);
-    check_false("cached protocol cannot advertise an update", status.protocol_upgrade_available);
 
     storage_close();
     remove_tree(root);
@@ -870,6 +844,7 @@ test_social_cache_is_server_authored_sync_state(void)
                                              "{\"friends\":[{\"user_id_hash\":\"local-edit\"}]}"));
     check_false("social cache alone is not local syncable data",
                 storage_has_local_syncable_data());
+    seed_test_private_record_key();
     payload = storage_build_sync_payload_json("test-public-id", "test-public-key");
     check_not_contains("social cache not uploaded as typed data", payload, "social_cache");
     check_not_contains("social cache not uploaded as op", payload, "friends.list");
@@ -902,9 +877,8 @@ main(void)
     test_uuid_habit_ids_load_days_into_memory();
     test_remote_snapshot_removes_absent_local_yoga_without_pending_edits();
     test_remote_snapshot_keeps_review_for_pending_yoga_delete();
-    test_sync_payload_includes_v2_ops();
+    test_sync_payload_uses_encrypted_records();
     test_normal_response_records_server_hash();
-    test_latest_protocol_does_not_advertise_app_release();
     test_social_cache_is_server_authored_sync_state();
 
     if(g_failures != 0) {

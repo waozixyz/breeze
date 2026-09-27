@@ -1,0 +1,431 @@
+c :: #system_library "c";
+sqlite3_column_int :: (stmt: *void, col: s32) -> s32 #foreign c;
+
+
+#import, file "../habits/habit_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "sqlite.zi";
+#import, file "meta.zi";
+#import, file "habit_sync_sql.zi";
+
+
+
+
+STORAGE_DEFAULT_HABIT_ID_MIGRATION_KEY :: "default_habit_id_migration_v1_done"
+
+STORAGE_HABIT_UUID_MIGRATION_KEY :: "habit_uuid_migration_v1_done"
+
+STORAGE_ACTIVITY_SUN_SALUTATION_MASK :: 4;
+
+storage_is_uuid :: (id: string) -> s32 {
+    if id.count == 0 {
+        return 0
+    }
+    if cast(s64)id.count != 36 {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < 36 {
+            ch: u8 = id[i]
+            if i == 8 || i == 13 || i == 18 || i == 23 {
+                if ch != #char "-" {
+                    return 0
+                }
+            } else if !((ch >= #char "0" && ch <= #char "9") || (ch >= #char "a" && ch <= #char "f")  || (ch >= #char "A" && ch <= #char "F")) {
+                return 0
+            }
+            i += 1
+        }
+    }
+    return 1
+}
+
+storage_ascii_equal_ci :: (a: string, b: string) -> s32 {
+    ca: u8
+    cb: u8
+    if a.count == 0 || b.count == 0 {
+        return 0
+    }
+    ia: s32 = 0
+    ib: s32 = 0
+    while ia < cast(s32)a.count && ib < cast(s32)b.count {
+        ca = a[ia]
+        ia += 1
+        cb = b[ib]
+        ib += 1
+        if ca >= #char "A" && ca <= #char "Z" {
+            ca = cast(u8)(ca - #char "A" + #char "a")
+        }
+        if cb >= #char "A" && cb <= #char "Z" {
+            cb = cast(u8)(cb - #char "A" + #char "a")
+        }
+        if ca != cb {
+            return 0
+        }
+    }
+    if ia != cast(s32)a.count || ib != cast(s32)b.count {
+        return 0
+    }
+    return 1
+}
+
+storage_same_habit_id :: (a: string, b: string) -> bool {
+    if a.count != b.count { return false }
+    index: s64 = 0
+    while index < cast(s64)a.count {
+        if a[index] != b[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+storage_merge_habit_into_sqls: [4] string = .["UPDATE habit_days SET completed=MAX(completed,COALESCE((SELECT d.completed FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), count=MAX(count,COALESCE((SELECT d.count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), session_count=MAX(session_count,COALESCE((SELECT d.session_count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), updated_at=MAX(updated_at,COALESCE((SELECT d.updated_at FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)) WHERE habit_id=?1 AND EXISTS (SELECT 1 FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date)", "INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) SELECT ?1,d.local_date,d.completed,d.count,d.session_count,d.updated_at FROM habit_days d WHERE d.habit_id=?2 AND NOT EXISTS (SELECT 1 FROM habit_days k     WHERE k.habit_id=?1 AND k.local_date=d.local_date)", "DELETE FROM habit_days WHERE habit_id=?2", "DELETE FROM habits WHERE id=?2"];
+
+storage_merge_habit_into :: (keeper_id: string, duplicate_id: string) -> s32 {
+    stmt: *void = null
+    ok: s32 = 1
+    if keeper_id.count == 0 || duplicate_id.count == 0 ||
+    storage_same_habit_id(keeper_id, duplicate_id) {
+        return 1
+    }
+    {
+        i: s64 = 0
+        while i < size_of(type_of(storage_merge_habit_into_sqls)) / size_of(type_of(storage_merge_habit_into_sqls[0])) {
+            sql_buffer: [1024] u8
+            if !AppCopyText(storage_merge_habit_into_sqls[i], sql_buffer[:]) {
+                return 0
+            }
+            if SqlitePrepare(storage_db_handle(), *sql_buffer[0], -1, *stmt, null) != SQLITE_OK {
+                return 0
+            }
+            bind_text(stmt, 1, keeper_id)
+            bind_text(stmt, 2, duplicate_id)
+            if SqliteStep(stmt) == SQLITE_DONE {
+            ok = 1
+        } else {
+            ok = 0
+        }
+            SqliteFinalize(stmt)
+            stmt = null
+            if ok == 0 {
+                return 0
+            }
+            i += 1
+        }
+    }
+    return ok
+}
+
+
+#program_export
+storage_reconcile_remote_habit_ids :: (response_json: string) -> s32 {
+    if response_json.count == 0 {
+        return 0
+    }
+    if exec_sql("DELETE FROM sync_remote_habit_map") == 0 {
+        return 0
+    }
+    if storage_exec_json_user_sql(SyncRemoteHabitMapSQL, response_json) == 0 {
+        return 0
+    }
+    if exec_sql(MergeRemoteHabitDaysSQL) == 0 {
+        return 0
+    }
+    if exec_sql(InsertRemoteHabitDaysSQL) == 0 {
+        return 0
+    }
+    if exec_sql(FinishRemoteHabitIDsSQL) == 0 {
+        return 0
+    }
+    return exec_sql("DELETE FROM sync_remote_habit_map")
+}
+
+storage_habit_exists :: (habit_id: string) -> s32 {
+    stmt: *void = null
+    exists: s32 = 0
+    if habit_id.count == 0 {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT 1 FROM habits WHERE id=?1 LIMIT 1",
+    -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, habit_id)
+    exists = ifx (SqliteStep(stmt) == SQLITE_ROW) then (1) else (0)
+    SqliteFinalize(stmt)
+    return exists
+}
+
+storage_enqueue_habit_days_for_sync :: (habit_id: string) -> s32 {
+    stmt: *void = null
+    ok: s32 = 1
+    if habit_id.count == 0 {
+        return 1
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT local_date FROM habit_days WHERE habit_id=?1 AND (completed!=0 OR count>0 OR session_count>0)",
+    -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, habit_id)
+    while SqliteStep(stmt) == SQLITE_ROW {
+        if storage_enqueue_sync_habit_day(habit_id, ifx (sqlite3_column_int(stmt, 0) == 0) then (1) else (0)) != 0 {
+            ok = 0
+        }
+    }
+    SqliteFinalize(stmt)
+    return ok
+}
+
+#program_export
+storage_migrate_default_habit_ids :: () -> s32 {
+    stmt: *void = null
+    sync_activity: s32 = 0
+    deleted_at: s32 = 0
+    should_migrate: s32
+    has_canonical: s32
+    ok: s32 = 1
+    if storage_db_handle() == null {
+        return 0
+    }
+    {
+        meta_key_buffer: [64] u8
+        AppCopyText(STORAGE_DEFAULT_HABIT_ID_MIGRATION_KEY, meta_key_buffer[:])
+        if get_meta_int64(*meta_key_buffer[0], cast(s64)0) != 0 {
+            return 1
+        }
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT sync_activity,deleted_at FROM habits WHERE id='yoga' LIMIT 1",
+    -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    if SqliteStep(stmt) != SQLITE_ROW {
+        SqliteFinalize(stmt)
+            {
+            meta_key_buffer2: [64] u8
+            AppCopyText(STORAGE_DEFAULT_HABIT_ID_MIGRATION_KEY, meta_key_buffer2[:])
+            set_meta_int64(*meta_key_buffer2[0], 1)
+        }
+        return 1
+    }
+    sync_activity = sqlite3_column_int(stmt, 0)
+    deleted_at = sqlite3_column_int(stmt, 1)
+    SqliteFinalize(stmt)
+    should_migrate = ifx (deleted_at == 0  && (sync_activity & STORAGE_ACTIVITY_SUN_SALUTATION_MASK) != 0) then (1) else (0)
+    if should_migrate == 0 {
+            {
+            meta_key_buffer2: [64] u8
+            AppCopyText(STORAGE_DEFAULT_HABIT_ID_MIGRATION_KEY, meta_key_buffer2[:])
+            set_meta_int64(*meta_key_buffer2[0], 1)
+        }
+        return 1
+    }
+    has_canonical = storage_habit_exists("sun-salutation")
+    if exec_sql("BEGIN IMMEDIATE") == 0 {
+        return 0
+    }
+    if has_canonical != 0 {
+        ok = storage_merge_habit_into("sun-salutation", "yoga")
+    } else {
+        ok = exec_sql("UPDATE habits SET id='sun-salutation' WHERE id='yoga';UPDATE habit_days SET habit_id='sun-salutation' WHERE habit_id='yoga';")
+    }
+    if ok != 0 {
+        exec_sql("UPDATE OR IGNORE sync_outbox SET entity_id='sun-salutation' WHERE entity_id='yoga' AND entity_type IN ('habit','habit_day');DELETE FROM sync_outbox WHERE entity_id='yoga' AND entity_type IN ('habit','habit_day');")
+            {
+            meta_key_buffer2: [64] u8
+            AppCopyText(STORAGE_DEFAULT_HABIT_ID_MIGRATION_KEY, meta_key_buffer2[:])
+            set_meta_int64(*meta_key_buffer2[0], 1)
+        }
+        ok = exec_sql("COMMIT")
+    } else {
+        exec_sql("ROLLBACK")
+        return 0
+    }
+    if ok == 0 {
+        return 0
+    }
+    storage_enqueue_sync_habit("sun-salutation")
+    storage_enqueue_habit_days_for_sync("sun-salutation")
+    return 1
+}
+
+storage_migrate_default_meditation_activity_mask_sql: string = "BEGIN IMMEDIATE;UPDATE habits SET sync_activity=11,updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE deleted_at=0 AND sync_mode=1 AND lower(name)='meditation' AND color_r=126 AND color_g=183 AND color_b=230 AND sync_activity IN (2,3);INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,CAST(strftime('%s','now') AS INTEGER) FROM habits WHERE deleted_at=0 AND sync_mode=1 AND lower(name)='meditation' AND color_r=126 AND color_g=183 AND color_b=230 AND sync_activity=11 AND changes()>0 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at;COMMIT;";
+
+#program_export
+storage_migrate_default_meditation_activity_mask :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    return exec_sql(storage_migrate_default_meditation_activity_mask_sql)
+}
+
+STORAGE_ID_SIZE :: 64
+
+StorageMigrateHabitIdsToUuidRows :: struct {
+    old_id: [STORAGE_ID_SIZE] u8
+    new_id: [37] u8
+}
+
+#program_export
+storage_migrate_habit_ids_to_uuid :: () -> s32 {
+    stmt: *void = null
+    rows: [HABIT_MAX] StorageMigrateHabitIdsToUuidRows
+    count: s32 = 0
+    ok: s32 = 1
+    if storage_db_handle() == null {
+        return 0
+    }
+    {
+        uuid_key_buffer: [64] u8
+        AppCopyText(STORAGE_HABIT_UUID_MIGRATION_KEY, uuid_key_buffer[:])
+        if get_meta_int64(*uuid_key_buffer[0], cast(s64)0) != 0 {
+            return 1
+        }
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT id FROM habits WHERE id<>'' ORDER BY sort_order,id",
+    -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    while SqliteStep(stmt) == SQLITE_ROW && count < HABIT_MAX {
+        id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+        if id.count > 0 && storage_is_uuid(id) == 0 {
+            AppCopyText(id, rows[count].old_id[:])
+            storage_make_uuid(*rows[count].new_id[0])
+            if rows[count].new_id[0] == cast(u8)0 {
+                SqliteFinalize(stmt)
+                return 0
+            }
+            count += 1
+        }
+    }
+    SqliteFinalize(stmt)
+    if count <= 0 {
+        uuid_key_buffer2: [64] u8
+        AppCopyText(STORAGE_HABIT_UUID_MIGRATION_KEY, uuid_key_buffer2[:])
+        set_meta_int64(*uuid_key_buffer2[0], 1)
+        return 1
+    }
+    if exec_sql("BEGIN IMMEDIATE") == 0 {
+        return 0
+    }
+    {
+        i: s32 = 0
+        while i < count {
+            sqls: [4] string = .[
+        "UPDATE habits SET id=?2, updated_at=?3 WHERE id=?1",
+        "UPDATE habit_days SET habit_id=?2 WHERE habit_id=?1",
+        "UPDATE OR IGNORE sync_outbox SET entity_id=?2 WHERE entity_id=?1 AND entity_type IN ('habit', 'habit_day')",
+        "DELETE FROM sync_outbox WHERE entity_id=?1 AND entity_type IN ('habit', 'habit_day')",
+    ]
+            changed_at: s64 = storage_next_change_time()
+            {
+                j: s64 = 0
+                while j < size_of(type_of(sqls)) / size_of(type_of(sqls[0])) {
+                    if SqlitePrepareText(storage_db_handle(), sqls[j], -1, *stmt, null) != SQLITE_OK {
+                        ok = 0
+                        break
+                    }
+                    bind_text(stmt, 1, AppTextFromCString(*rows[i].old_id[0], 64))
+                    bind_text(stmt, 2, AppTextFromCString(*rows[i].new_id[0], 37))
+                    SqliteBindInt64(stmt, 3, changed_at)
+                    ok = ifx (SqliteStep(stmt) == SQLITE_DONE) then (1) else (0)
+                    SqliteFinalize(stmt)
+                    stmt = null
+                    if ok == 0 {
+                        break
+                    }
+                    j += 1
+                }
+            }
+            if ok == 0 {
+                break
+            }
+            storage_enqueue_sync_habit(AppTextFromCString(*rows[i].new_id[0], 37))
+            storage_enqueue_habit_days_for_sync(AppTextFromCString(*rows[i].new_id[0], 37))
+            i += 1
+        }
+    }
+    if ok != 0 {
+        uuid_key_buffer3: [64] u8
+        AppCopyText(STORAGE_HABIT_UUID_MIGRATION_KEY, uuid_key_buffer3[:])
+        set_meta_int64(*uuid_key_buffer3[0], 1)
+        ok = exec_sql("COMMIT")
+    } else {
+        SqliteFinalize(stmt)
+        exec_sql("ROLLBACK")
+    }
+    return ok
+}
+
+StorageMergeDuplicateHabitNamesRows :: struct {
+    id: [STORAGE_ID_SIZE] u8
+    name: [HABIT_NAME_SIZE] u8
+    merged: s32
+}
+
+#program_export
+storage_merge_duplicate_habit_names :: () -> s32 {
+    stmt: *void = null
+    rows: [64] StorageMergeDuplicateHabitNamesRows
+    count: s32 = 0
+    ok: s32 = 1
+    if storage_db_handle() == null {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "SELECT id,name FROM habits WHERE user_id=?1 AND deleted_at=0 ORDER BY sort_order,id",
+    -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    while count < cast(s32)(size_of(type_of(rows)) / size_of(type_of(rows[0]))) && SqliteStep(stmt) == SQLITE_ROW {
+        id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+        name: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+        AppCopyText(ifx (id.count > 0) then (id) else (""), rows[count].id[:])
+        AppCopyText(ifx (name.count > 0) then (name) else (""), rows[count].name[:])
+        rows[count].merged = 0
+        count += 1
+    }
+    SqliteFinalize(stmt)
+    {
+        i: s32 = 0
+        while i < count && ok != 0 {
+            if rows[i].merged != 0 || rows[i].name[0] == #char "\0" {
+                i += 1; continue
+            }
+            {
+                j: s32 = i + 1
+                while j < count {
+                    if rows[j].merged != 0 {
+                        j += 1; continue
+                    }
+                    if storage_ascii_equal_ci(AppTextFromCString(*rows[i].name[0], 64), AppTextFromCString(*rows[j].name[0], 64)) == 0 {
+                        j += 1; continue
+                    }
+                    ok = storage_merge_habit_into(AppTextFromCString(*rows[i].id[0], 64), AppTextFromCString(*rows[j].id[0], 64))
+                    rows[j].merged = 1
+                    if ok == 0 {
+                        break
+                    }
+                    j += 1
+                }
+            }
+            i += 1
+        }
+    }
+    return ok
+}
+
+
+#program_export
+storage_apply_sync_habits_json :: (response_json: string) -> s32 {
+    return storage_exec_json_user_sql(SyncHabitsSQL, response_json)
+}
+
+
+#program_export
+storage_apply_sync_habit_days_json :: (response_json: string) -> s32 {
+    return storage_exec_json_user_sql(SyncHabitDaysSQL, response_json)
+}

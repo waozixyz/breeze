@@ -1,0 +1,673 @@
+#import, file "modal_rules.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "metrics.zi";
+#import, file "route_types.zi";
+#import "geometry"
+#import "layout"
+#import "drawing_props"
+#import, file "../platform/environment.zi";
+#import, file "route_list.zi";
+#import, file "bottom_nav_policy.zi";
+#import, file "app_route_state.zi";
+#import, file "locale.zi";
+#import, file "text_buffers.zi";
+#import, file "../storage/account_types.zi";
+#import, file "navigation_routes.zi";
+#import, file "../screens/settings/settings_status.zi";
+
+using NavigationPlacement;
+using ModalType;
+using AppMainTab;
+using AppNavRoute;
+using HabitSyncMode;
+
+c :: #system_library "c";
+app_leave_practice_config :: (app: *InnerBreeze) #foreign c;
+save_settings :: (app: *InnerBreeze) #foreign c;
+sync_account_load :: (account: *SyncAccount) -> s32 #foreign c;
+storage_get_setting_text :: (key: string) -> string #foreign c;
+
+APP_BOTTOM_NAV_CONFIGURABLE_COUNT :: 5
+APP_NAV_CONFIG_ACTION_NONE :: 0
+APP_NAV_CONFIG_ACTION_MOVE :: 1
+APP_NAV_CONFIG_ACTION_REMOVE :: 2
+APP_NAV_CONFIG_ACTION_ADD :: 3
+APP_NAV_CONFIG_ACTION_SET :: 4
+
+#program_export
+app_nav_desktop_rail_width :: (app: *InnerBreeze) -> s32 {
+    return AppScale(ifx app != null && app.nav_rail_collapsed != 0 then 88 else 224)
+}
+
+#program_export
+app_capture_navigation_viewport :: (app: *InnerBreeze, width: s32,
+                                   height: s32) {
+    if app == null {
+        return
+    }
+    app.ui.view_width = width
+    app.ui.view_height = height
+    scale := cast(float32)app.ui_scale_tenths / 10.0
+    app.ui.desktop_mode = cast(s32)IsDesktopWidth(width, scale)
+}
+
+app_navigation_desktop_mode :: (app: *InnerBreeze) -> s32 {
+    if app != null && app.ui.view_height > 0 {
+        return app.ui.desktop_mode
+    }
+    scale := ifx app != null then cast(float32)app.ui_scale_tenths / 10.0 else 1.0
+    return cast(s32)IsDesktopWidth(ifx app != null then app.ui.view_width else 0, scale)
+}
+
+#program_export
+app_navigation_placement :: (app: *InnerBreeze) -> s32 {
+    if app != null && app.navigation_placement >= NAVIGATION_LEFT  && app.navigation_placement <= NAVIGATION_TOP {
+        return app.navigation_placement
+    }
+    if DesktopPlatform() != 0 {
+        return ifx app_navigation_desktop_mode(app) != 0 then NAVIGATION_LEFT else NAVIGATION_BOTTOM
+    }
+    return NAVIGATION_BOTTOM
+}
+
+#program_export
+app_nav_desktop_rail_enabled :: (app: *InnerBreeze) -> s32 {
+    placement := app_navigation_placement(app)
+    full_height := ifx app != null then app.ui.view_height else 0
+    if app == null || (placement != NAVIGATION_LEFT && placement != NAVIGATION_RIGHT)  || full_height < AppScale(476) {
+        return 0
+    }
+    if app.file_dialog_active != 0 {
+        return 0
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
+        return 0
+    }
+    if app.breathing.screen == ScreenHabitSessionEdit  || app.breathing.screen == ScreenSession  || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation  || app.breathing.screen == ScreenPatterns  || app.breathing.screen == ScreenResults {
+        return 0
+    }
+    return cast(s32)(app.breathing.screen == ScreenStart  || app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenEList  || app.breathing.screen == ScreenProfile  || app.breathing.screen == ScreenSettings)
+}
+
+app_bottom_nav_configurable_route :: (route: s32) -> s32 {
+    return cast(s32)(route == APP_NAV_ROUTE_HABITS  || route == APP_NAV_ROUTE_ELIST  || route == APP_NAV_ROUTE_PRACTICE  || route == APP_NAV_ROUTE_PROFILE  || route == APP_NAV_ROUTE_SETTINGS)
+}
+
+#program_export
+app_nav_bottom_profile_enabled :: (app: *InnerBreeze) -> s32 {
+    if DesktopPlatform() != 0 {
+        return app_navigation_desktop_mode(app)
+    }
+    return 0
+}
+
+app_bottom_nav_has_route :: (app: *InnerBreeze, route: s32) -> s32 {
+    if app == null || route == APP_NAV_ROUTE_NONE {
+        return 0
+    }
+    for i: 0..(cast(int)app.bottom_nav_route_count - 1) {
+        if app.bottom_nav_routes[i] == route {
+            return 1
+        }
+    }
+    return 0
+}
+
+#program_export
+app_reset_bottom_nav_routes :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.bottom_nav_route_count = BottomNavDefaults(app.bottom_nav_routes[:])
+}
+
+#program_export
+app_sanitize_bottom_nav_routes :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.bottom_nav_route_count = BottomNavSanitize(
+        app.bottom_nav_routes[:], app.bottom_nav_route_count,
+        app_nav_bottom_profile_enabled(app) != 0)
+}
+
+app_reconcile_bottom_nav_selection :: (app: *InnerBreeze) {
+    selected_route: s32
+
+    if app == null {
+        return
+    }
+    app_sanitize_bottom_nav_routes(app)
+    if app.bottom_nav_route_count <= 0 {
+        app.main_tab = APP_MAIN_TAB_NONE
+        return
+    }
+
+    selected_route = app_main_tab_route(app.main_tab)
+    if app_bottom_nav_has_route(app, selected_route) == 0 {
+        app.main_tab = app_main_tab_for_route(app.bottom_nav_routes[0])
+    }
+}
+
+app_leave_habit_child_route :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.habit_edit.active != 0 || app.breathing.screen == ScreenHabitEdit {
+        app.habit_edit = HabitEditState.{
+            .index = -1,
+            .color = Color.{.r = 99, .g = 196, .b = 165, .a = 255},
+            .sync_mode = HABIT_SYNC_NONE
+        }
+    }
+    if app.habit_session_edit.active != 0  || app.breathing.screen == ScreenHabitSessionEdit {
+        app.habit_session_edit = HabitSessionEditState.{.round = -1 }
+    }
+    app.habit_detail_index = -1
+    app.habit_detail_day = 0
+    app.habit_detail_session_path[0] = 0
+    app.habit_counter_press_day = 0
+    app.habit_counter_press_index = -1
+    app.habit_counter_press_frames = 0
+    app.habit_counter_press_long_done = 0
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.selected = -1
+    app.habits.tab = HABIT_TAB_WEEKLY
+    app.habits.view_mode = HABIT_VIEW_WEEKLY
+    app.habits.scroll = 0
+}
+
+#program_export
+app_open_main_tab :: (app: *InnerBreeze, main_tab: s32, persist: s32) {
+    if app == null {
+        return
+    }
+
+    if app.practice_tab == PRACTICE_TAB_CONFIG {
+        app_leave_practice_config(app)
+    }
+    app_leave_habit_child_route(app)
+    if main_tab == APP_MAIN_TAB_NONE {
+        route := app_current_route(app)
+        app.main_tab = APP_MAIN_TAB_NONE
+        route.screen = ScreenStart
+        app_request_route(app, route)
+        if persist != 0 {
+            save_settings(app)
+        }
+        return
+    }
+
+    app.main_tab = Clamp(main_tab, APP_MAIN_TAB_HABITS, APP_MAIN_TAB_ELIST)
+    if app.main_tab == APP_MAIN_TAB_PRACTICE {
+        app.practice_tab = PRACTICE_TAB_PLAY
+    }
+    route := app_current_route(app)
+    route.screen = app_screen_for_main_tab(app.main_tab)
+    app_request_route(app, route)
+    if persist != 0 {
+        save_settings(app)
+    }
+}
+
+app_open_profile_tab :: (app: *InnerBreeze, tab: s32) {
+    route: AppRoute
+
+    if app == null {
+        return
+    }
+    if app.practice_tab == PRACTICE_TAB_CONFIG {
+        app_leave_practice_config(app)
+    }
+    app_leave_habit_child_route(app)
+    app.profile_return_to_settings = cast(s32)(app.breathing.screen == ScreenSettings)
+    app.profile_view = PROFILE_VIEW_MAIN
+    app.profile_scroll = 0
+    app.sync_server_url_focused = 0
+    settings_screen_clear_status()
+    route = app_current_route(app)
+    route.screen = ScreenProfile
+    route.profile_view = PROFILE_VIEW_MAIN
+    route.profile_tab = Clamp(tab, PROFILE_TAB_OVERVIEW, PROFILE_TAB_COUNT - 1)
+    app_request_route(app, route)
+}
+
+#program_export
+app_apply_nav_route :: (app: *InnerBreeze, route: s32) {
+
+    if app == null {
+        return
+    }
+
+    if route == APP_NAV_ROUTE_PROFILE {
+        app_open_profile_tab(app, PROFILE_TAB_OVERVIEW)
+    } else if route == APP_NAV_ROUTE_ACCOUNT {
+        app_open_profile_tab(app, PROFILE_TAB_SYNC)
+    } else if route == APP_NAV_ROUTE_DATA {
+        app_open_profile_tab(app, PROFILE_TAB_DATA)
+    } else if route == APP_NAV_ROUTE_FRIENDS {
+        app_open_profile_tab(app, PROFILE_TAB_FRIENDS)
+    } else if route == APP_NAV_ROUTE_LEADERBOARD {
+        app_open_profile_tab(app, PROFILE_TAB_LEADERBOARD)
+    } else if route == APP_NAV_ROUTE_PRACTICE {
+        app_open_main_tab(app, APP_MAIN_TAB_PRACTICE, 1)
+    } else if route == APP_NAV_ROUTE_HABITS {
+        app_open_main_tab(app, APP_MAIN_TAB_HABITS, 1)
+    } else if route == APP_NAV_ROUTE_ELIST {
+        app_open_main_tab(app, APP_MAIN_TAB_ELIST, 1)
+    } else if route == APP_NAV_ROUTE_SETTINGS {
+        app_open_settings(app)
+    }
+}
+
+app_is_practice_fullscreen_subview :: (app: *InnerBreeze) -> s32 {
+    return cast(s32)(app != null  && app.breathing.screen == ScreenStart  && (app.practice_tab == PRACTICE_TAB_MANUAL  || app.practice_tab == PRACTICE_TAB_CONFIG))
+}
+
+app_is_blank_home :: (app: *InnerBreeze) -> s32 {
+    return cast(s32)(app != null  && app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_NONE)
+}
+
+#program_export
+app_navigation_height :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        return 0
+    }
+    if app.breathing.screen == ScreenHabitEdit {
+        return 0
+    }
+    if app_is_practice_fullscreen_subview(app) != 0 {
+        return 0
+    }
+    if app_current_nav_route(app) == APP_NAV_ROUTE_NONE  && app_is_blank_home(app) == 0 {
+        return 0
+    }
+    // Matches the Material NavigationBar height drawn by app_draw_bottom_nav.
+    return AppScale(86)
+}
+
+#program_export
+app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 {
+    return ifx app_navigation_placement(app) == NAVIGATION_TOP then 0 else app_navigation_height(app)
+}
+
+#program_export
+app_content_left_reserved :: (app: *InnerBreeze) -> s32 {
+    unused app
+    return 0
+}
+
+#program_export
+app_page_height :: (app: *InnerBreeze, full_height: s32) -> s32 {
+    bottom_reserved: s32
+
+    if full_height <= 0 {
+        return 0
+    }
+    bottom_reserved = app_fullscreen_bottom_reserved(app)
+    if bottom_reserved > 0 && bottom_reserved < full_height {
+        return full_height - bottom_reserved
+    }
+    return full_height
+}
+
+#program_export
+app_nav_route_label :: (route: s32) -> string {
+    if route == APP_NAV_ROUTE_PROFILE {
+        return LocaleText("tab_profile")
+    }
+    if route == APP_NAV_ROUTE_ACCOUNT {
+        return LocaleText("sync_account_title")
+    }
+    if route == APP_NAV_ROUTE_DATA {
+        return LocaleText("profile_data")
+    }
+    if route == APP_NAV_ROUTE_FRIENDS {
+        return LocaleText("profile_friends_title")
+    }
+    if route == APP_NAV_ROUTE_LEADERBOARD {
+        return LocaleText("profile_leaderboard_title")
+    }
+    if route == APP_NAV_ROUTE_HABITS {
+        return LocaleText("tab_habits")
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        return LocaleText("tab_practice")
+    }
+    if route == APP_NAV_ROUTE_ELIST {
+        return LocaleText("tab_elist")
+    }
+    if route == APP_NAV_ROUTE_SETTINGS {
+        return LocaleText("settings_title")
+    }
+    return ""
+}
+
+#program_export
+app_current_nav_route :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return APP_NAV_ROUTE_NONE
+    }
+    if app.breathing.screen == ScreenProfile {
+        return APP_NAV_ROUTE_PROFILE
+    }
+    if app.breathing.screen == ScreenSettings {
+        return APP_NAV_ROUTE_SETTINGS
+    }
+    if app.breathing.screen == ScreenStart {
+        if app_is_practice_fullscreen_subview(app) != 0 {
+            return APP_NAV_ROUTE_NONE
+        }
+        if app.main_tab == APP_MAIN_TAB_NONE {
+            return APP_NAV_ROUTE_NONE
+        }
+        return APP_NAV_ROUTE_PRACTICE
+    }
+    if app.breathing.screen == ScreenHabits {
+        return APP_NAV_ROUTE_HABITS
+    }
+    if app.breathing.screen == ScreenEList {
+        return APP_NAV_ROUTE_ELIST
+    }
+    return APP_NAV_ROUTE_NONE
+}
+
+#program_export
+app_fullscreen_bottom_reserved :: (app: *InnerBreeze) -> s32 {
+    unused app
+    return 0
+}
+
+app_open_settings :: (app: *InnerBreeze) {
+    route: AppRoute
+
+    if app == null {
+        return
+    }
+    if app.practice_tab == PRACTICE_TAB_CONFIG {
+        app_leave_practice_config(app)
+    }
+    app_leave_habit_child_route(app)
+    app.settings_scroll = 0
+    settings_screen_clear_status()
+    route = app_current_route(app)
+    route.screen = ScreenSettings
+    route.settings_overview = cast(s32)(app_settings_wide_layout(app) == 0)
+    app_request_route(app, route)
+}
+
+app_compact_public_id :: (public_id: string, out: []u8, out_size: s64) {
+    if out.count == 0 || out_size <= 0 {
+        return
+    }
+    capacity := cast(s32)out.count
+    if out_size < cast(s64)capacity {
+        capacity = cast(s32)out_size
+    }
+    length := cast(s32)public_id.count
+    compact := length > 12
+    target := ifx compact then 11 else length
+    index: s32 = 0
+    while index < target && index + 1 < capacity {
+        if !compact || index < 4 {
+            out[index] = public_id[index]
+        } else if index < 7 {
+            out[index] = cast(u8)#char "."
+        } else {
+            out[index] = public_id[length - 4 + index - 7]
+        }
+        index += 1
+    }
+    out[index] = cast(u8)0
+}
+
+app_alias_display_name :: (alias: string, out: []u8, out_size: s64) {
+    if out.count == 0 || out_size <= 0 {
+        return
+    }
+    capacity := cast(s32)out.count
+    if out_size < cast(s64)capacity {
+        capacity = cast(s32)out_size
+    }
+    index: s32 = 0
+    while index < cast(s32)alias.count && index + 1 < capacity {
+        out[index] = alias[index]
+        index += 1
+    }
+    out[index] = cast(u8)0
+    if index > 0 && out[0] >= cast(u8)#char "a"  && out[0] <= cast(u8)#char "z" {
+        out[0] = out[0] - cast(u8)#char "a" + cast(u8)#char "A"
+    }
+}
+
+app_nav_copy_text :: (value: string, output: []u8, output_size: s64) {
+    if output.count == 0 || output_size <= 0 {
+        return
+    }
+    capacity := cast(s32)output.count
+    if output_size < cast(s64)capacity {
+        capacity = cast(s32)output_size
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count && index + 1 < capacity {
+        output[index] = value[index]
+        index += 1
+    }
+    output[index] = cast(u8)0
+}
+
+app_nav_alias_subtitle :: (alias: string, subtitle: []u8,
+    subtitle_size: s64) {
+    if alias.count == 0 || subtitle.count == 0 || subtitle_size <= 0 {
+        return
+    }
+    capacity := cast(s32)subtitle.count
+    if subtitle_size < cast(s64)capacity {
+        capacity = cast(s32)subtitle_size
+    }
+    if capacity <= 1 {
+        return
+    }
+    subtitle[0] = cast(u8)#char "@"
+    app_nav_copy_text(alias, subtitle[1:capacity], cast(s64)(capacity - 1))
+}
+
+#program_export
+app_nav_profile_identity :: (app: *InnerBreeze, out: []u8, out_size: s64,
+                             subtitle: []u8, subtitle_size: s64) {
+    if out.count == 0 || out_size <= 0 {
+        return
+    }
+    out[0] = cast(u8)0
+    if subtitle_size > 0 {
+        subtitle[0] = cast(u8)0
+    }
+
+    account: SyncAccount
+    has_account := sync_account_load(*account) != 0
+    alias: string = ""
+    if has_account {
+        alias = storage_get_setting_text("sync_account_alias")
+    }
+
+    if app != null && app.profile_display_name[0] != cast(u8)0 {
+        app_nav_copy_text(AppTextFromCString(*app.profile_display_name[0], 64),
+                          out, out_size)
+        if has_account {
+            app_nav_alias_subtitle(alias, subtitle, subtitle_size)
+        }
+        return
+    }
+    if !has_account {
+        app_nav_copy_text(LocaleText("tab_profile"), out, out_size)
+        return
+    }
+    if alias.count > 0 {
+        app_alias_display_name(alias, out, out_size)
+        app_nav_alias_subtitle(alias, subtitle, subtitle_size)
+        return
+    }
+    app_compact_public_id(
+        AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE),
+        out, out_size)
+    app_nav_copy_text(LocaleText("tab_profile"), subtitle, subtitle_size)
+}
+
+#program_export
+app_open_customize_nav :: (app: *InnerBreeze) {
+
+    if app == null {
+        return
+    }
+    app_sanitize_bottom_nav_routes(app)
+    for i: 0..(cast(int)app.bottom_nav_route_count - 1) {
+        app.bottom_nav_config_routes[i] = app.bottom_nav_routes[i]
+    }
+    app.bottom_nav_config_route_count = app.bottom_nav_route_count
+    route := app_current_route(app)
+    route.screen = ScreenCustomizeNav
+    app_request_route(app, route)
+}
+
+#program_export
+app_nav_option_index :: (app: *InnerBreeze, route: s32) -> s32 {
+    if route == APP_NAV_ROUTE_ELIST {
+        return 0
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        return 2
+    }
+    if route == APP_NAV_ROUTE_HABITS {
+        return 1
+    }
+    if route == APP_NAV_ROUTE_SETTINGS {
+        if app_nav_bottom_profile_enabled(app) != 0 {
+            return 4
+        }
+        return 3
+    }
+    if app_nav_bottom_profile_enabled(app) != 0  && route == APP_NAV_ROUTE_PROFILE {
+        return 3
+    }
+    return 0
+}
+
+#program_export
+app_nav_config_option_count :: (app: *InnerBreeze) -> s32 {
+    if app_nav_bottom_profile_enabled(app) != 0 {
+        return APP_BOTTOM_NAV_CONFIGURABLE_COUNT
+    }
+        return 4
+}
+
+#program_export
+app_nav_route_for_option :: (app: *InnerBreeze, option: s32) -> s32 {
+    routes: [APP_BOTTOM_NAV_CONFIGURABLE_COUNT] s32
+    count := app_nav_config_option_count(app)
+
+    routes[0] = APP_NAV_ROUTE_ELIST
+    routes[1] = APP_NAV_ROUTE_HABITS
+    routes[2] = APP_NAV_ROUTE_PRACTICE
+    if app_nav_bottom_profile_enabled(app) != 0 {
+        routes[3] = APP_NAV_ROUTE_PROFILE
+        routes[4] = APP_NAV_ROUTE_SETTINGS
+    } else {
+        routes[3] = APP_NAV_ROUTE_SETTINGS
+    }
+
+    if option < 0 || option >= count {
+        return APP_NAV_ROUTE_HABITS
+    }
+    return routes[option]
+}
+
+#program_export
+app_save_bottom_nav_config :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.bottom_nav_route_count = app.bottom_nav_config_route_count
+    for i: 0..(APP_BOTTOM_NAV_CONTENT_MAX - 1) {
+        if cast(s32)i < app.bottom_nav_route_count {
+            app.bottom_nav_routes[i] = app.bottom_nav_config_routes[i]
+        } else {
+            app.bottom_nav_routes[i] = APP_NAV_ROUTE_NONE
+        }
+    }
+    app_reconcile_bottom_nav_selection(app)
+    save_settings(app)
+}
+
+#program_export
+app_move_bottom_nav_config_route :: (app: *InnerBreeze, from_index: s32,
+                                    to_index: s32) -> s32 {
+    if app == null {
+        return 0
+    }
+    if RouteListMove(app.bottom_nav_config_routes[:],
+                     app.bottom_nav_config_route_count,
+                     from_index, to_index) {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+app_first_unused_bottom_nav_route :: (app: *InnerBreeze) -> s32 {
+    routes: [APP_BOTTOM_NAV_CONFIGURABLE_COUNT] s32
+    count := app_nav_config_option_count(app)
+
+    routes[0] = APP_NAV_ROUTE_ELIST
+    routes[1] = APP_NAV_ROUTE_HABITS
+    routes[2] = APP_NAV_ROUTE_PRACTICE
+    if app_nav_bottom_profile_enabled(app) != 0 {
+        routes[3] = APP_NAV_ROUTE_PROFILE
+        routes[4] = APP_NAV_ROUTE_SETTINGS
+    } else {
+        routes[3] = APP_NAV_ROUTE_SETTINGS
+    }
+
+    if app == null {
+        return routes[0]
+    }
+    return RouteListFirstUnused(app.bottom_nav_config_routes[:],
+                                app.bottom_nav_config_route_count,
+                                routes[0:count], APP_NAV_ROUTE_HABITS)
+}
+
+#program_export
+app_settings_back :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.settings_dirty != 0 {
+        save_settings(app)
+    }
+    settings_screen_clear_status()
+    app.settings_scroll = 0
+    route := app_current_route(app)
+    if app_settings_wide_layout(app) == 0 && app.settings_overview == 0 {
+        route.settings_overview = 1
+    } else {
+        route.screen = app_screen_for_main_tab(app.main_tab)
+    }
+    app_switch_route(app, route)
+}
+
+#program_export
+app_settings_wide_layout :: (app: *InnerBreeze) -> s32 {
+    if DesktopPlatform() == 0 {
+        return 0
+    }
+    width := ifx app != null then app.ui.view_width else 0
+    height := ifx app != null then app.ui.view_height else 0
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        width -= app_nav_desktop_rail_width(app)
+    }
+    return cast(s32)(width >= AppScale(688) && height >= AppScale(476))
+}

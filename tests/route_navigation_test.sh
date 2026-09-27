@@ -2,9 +2,9 @@
 set -euo pipefail
 
 root="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
-state="$root/src/app/app_route_state.kry"
-app_h="$root/src/app/app_types.kry"
-app_c="$root/src/app/application.kry"
+state="$root/src/app/app_route_state.zi"
+app_h="$root/src/app/app_types.zi"
+app_c="$root/src/app/application.zi"
 
 [[ -f "$state" && -f "$app_h" && -f "$app_c" ]] || {
   echo "FAIL route navigation test: missing app route files" >&2
@@ -30,7 +30,7 @@ request_body="$(
 )"
 
 switch_line="$(printf '%s\n' "$request_body" | grep -n "app_switch_route(app, route)" | cut -d: -f1 || true)"
-router_line="$(printf '%s\n' "$request_body" | grep -n "RouterNavigate(&app->route_router, route.screen)" | cut -d: -f1 || true)"
+router_line="$(printf '%s\n' "$request_body" | grep -n "app->route_router = RouterNavigate(app->route_router, route.screen)" | cut -d: -f1 || true)"
 
 if [[ -z "$switch_line" || -z "$router_line" ]]; then
   echo "FAIL route navigation test: app_request_route must switch then notify Router" >&2

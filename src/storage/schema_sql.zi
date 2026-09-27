@@ -1,0 +1,306 @@
+// SQL for current database creation and data-preserving upgrades.
+// The upgrade queries retain the older layouts used by installed versions.
+
+SchemaWebPragma :: #string SQL
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=OFF;
+PRAGMA foreign_keys=ON;
+SQL
+
+SchemaNativePragma :: #string SQL
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA foreign_keys=ON;
+SQL
+
+SchemaMeta :: #string SQL
+CREATE TABLE IF NOT EXISTS meta( key TEXT PRIMARY KEY,
+ value TEXT NOT NULL);
+SQL
+
+SchemaUsers :: #string SQL
+CREATE TABLE IF NOT EXISTS users( id TEXT PRIMARY KEY,
+ created_at INTEGER NOT NULL,
+ kind TEXT NOT NULL);
+SQL
+
+SchemaSettings :: #string SQL
+CREATE TABLE IF NOT EXISTS settings( user_id TEXT NOT NULL,
+ key TEXT NOT NULL,
+ value TEXT NOT NULL,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,
+key));
+SQL
+
+SchemaSocial :: #string SQL
+CREATE TABLE IF NOT EXISTS social_snapshots( user_id TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ json TEXT NOT NULL,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,
+kind));
+SQL
+
+SchemaSessions :: #string SQL
+CREATE TABLE IF NOT EXISTS sessions( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ started_at INTEGER NOT NULL,
+ local_date INTEGER NOT NULL,
+ topic INTEGER NOT NULL DEFAULT 0,
+ activity INTEGER NOT NULL DEFAULT 0,
+ source TEXT NOT NULL,
+ imported_at INTEGER NOT NULL,
+ rounds_hash INTEGER NOT NULL,
+ mood_before INTEGER NOT NULL DEFAULT 0,
+ mood_after INTEGER NOT NULL DEFAULT 0,
+ energy INTEGER NOT NULL DEFAULT 0,
+ stress INTEGER NOT NULL DEFAULT 0,
+ note TEXT NOT NULL DEFAULT '',
+ tags TEXT NOT NULL DEFAULT '',
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(user_id,
+started_at,
+rounds_hash));
+CREATE TABLE IF NOT EXISTS session_rounds( session_id TEXT NOT NULL,
+ round_index INTEGER NOT NULL,
+ seconds INTEGER NOT NULL,
+ PRIMARY KEY(session_id,
+round_index));
+CREATE TABLE IF NOT EXISTS meditation_logs( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ session_id TEXT NOT NULL,
+ duration_seconds INTEGER NOT NULL,
+ completed_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL DEFAULT 0);
+SQL
+
+SchemaHabits :: #string SQL
+CREATE TABLE IF NOT EXISTS habits( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '',
+ color_r INTEGER NOT NULL,
+ color_g INTEGER NOT NULL,
+ color_b INTEGER NOT NULL,
+ sync_mode INTEGER NOT NULL,
+ sync_activity INTEGER NOT NULL,
+ counter_enabled INTEGER NOT NULL DEFAULT 0,
+ counter_target INTEGER NOT NULL DEFAULT 1,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS habit_days( habit_id TEXT NOT NULL,
+ local_date INTEGER NOT NULL,
+ completed INTEGER NOT NULL,
+ count INTEGER NOT NULL DEFAULT 0,
+ session_count INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(habit_id,
+local_date));
+CREATE TABLE IF NOT EXISTS sync_remote_habit_map( old_id TEXT PRIMARY KEY,
+ new_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS break_days( user_id TEXT NOT NULL,
+ local_date INTEGER NOT NULL,
+ break_type INTEGER NOT NULL,
+ prompts INTEGER NOT NULL DEFAULT 0,
+ repeated_prompts INTEGER NOT NULL DEFAULT 0,
+ taken INTEGER NOT NULL DEFAULT 0,
+ natural INTEGER NOT NULL DEFAULT 0,
+ skipped INTEGER NOT NULL DEFAULT 0,
+ postponed INTEGER NOT NULL DEFAULT 0,
+ overdue_s INTEGER NOT NULL DEFAULT 0,
+ usage_s INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,
+local_date,
+break_type));
+CREATE TABLE IF NOT EXISTS elist_lists( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ title TEXT NOT NULL,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS elist_items( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ list_id TEXT NOT NULL,
+ title TEXT NOT NULL,
+ comment TEXT NOT NULL DEFAULT '',
+ done INTEGER NOT NULL DEFAULT 0,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL);
+SQL
+
+SchemaImports :: #string SQL
+CREATE TABLE IF NOT EXISTS imports( id TEXT PRIMARY KEY,
+ imported_at INTEGER NOT NULL,
+ format TEXT NOT NULL,
+ source_name TEXT NOT NULL,
+ session_count INTEGER NOT NULL,
+ habit_count INTEGER NOT NULL);
+INSERT OR IGNORE INTO meta(key,
+value) VALUES('schema_version',
+'1');
+SQL
+
+SchemaOldSyncTopic :: #string SQL
+ALTER TABLE habits RENAME TO habits_with_sync_topic;
+CREATE TABLE habits( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '',
+ color_r INTEGER NOT NULL,
+ color_g INTEGER NOT NULL,
+ color_b INTEGER NOT NULL,
+ sync_mode INTEGER NOT NULL,
+ sync_activity INTEGER NOT NULL,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL DEFAULT 0);
+INSERT INTO habits(id,
+user_id,
+name,
+description,
+color_r,
+color_g,
+color_b,
+sync_mode,
+sync_activity,
+sort_order,
+deleted_at,
+updated_at) SELECT id,
+user_id,
+name,
+'',
+color_r,
+color_g,
+color_b,
+sync_mode,
+sync_activity,
+sort_order,
+deleted_at,
+0 FROM habits_with_sync_topic;
+DROP TABLE habits_with_sync_topic;
+SQL
+
+SchemaHabitDescription :: #string SQL
+ALTER TABLE habits ADD COLUMN description TEXT NOT NULL DEFAULT ''
+SQL
+
+SchemaHabitCounterEnabled :: #string SQL
+ALTER TABLE habits ADD COLUMN counter_enabled INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaHabitCounterTarget :: #string SQL
+ALTER TABLE habits ADD COLUMN counter_target INTEGER NOT NULL DEFAULT 1
+SQL
+
+SchemaDayCount :: #string SQL
+ALTER TABLE habit_days ADD COLUMN count INTEGER NOT NULL DEFAULT 0;
+UPDATE habit_days SET count=CASE WHEN completed!=0 THEN 1 ELSE 0 END WHERE count=0
+SQL
+
+SchemaDaySessionCount :: #string SQL
+ALTER TABLE habit_days ADD COLUMN session_count INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaHabitWeekdays :: #string SQL
+ALTER TABLE habits ADD COLUMN weekdays INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaHabitReminderHour :: #string SQL
+ALTER TABLE habits ADD COLUMN reminder_hour INTEGER NOT NULL DEFAULT -1
+SQL
+
+SchemaSessionMoodBefore :: #string SQL
+ALTER TABLE sessions ADD COLUMN mood_before INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaSessionMoodAfter :: #string SQL
+ALTER TABLE sessions ADD COLUMN mood_after INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaSessionEnergy :: #string SQL
+ALTER TABLE sessions ADD COLUMN energy INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaSessionStress :: #string SQL
+ALTER TABLE sessions ADD COLUMN stress INTEGER NOT NULL DEFAULT 0
+SQL
+
+SchemaSessionNote :: #string SQL
+ALTER TABLE sessions ADD COLUMN note TEXT NOT NULL DEFAULT ''
+SQL
+
+SchemaSessionTags :: #string SQL
+ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT ''
+SQL
+
+SchemaUpgradeTables :: #string SQL
+CREATE TABLE IF NOT EXISTS sync_outbox( seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ entity_type TEXT NOT NULL,
+ entity_id TEXT NOT NULL,
+ local_date INTEGER NOT NULL DEFAULT 0,
+ queued_at INTEGER NOT NULL,
+ UNIQUE(entity_type,
+entity_id,
+local_date));
+CREATE TABLE IF NOT EXISTS social_snapshots( user_id TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ json TEXT NOT NULL,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,
+kind));
+CREATE TABLE IF NOT EXISTS elist_lists( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ title TEXT NOT NULL,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS elist_items( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ list_id TEXT NOT NULL,
+ title TEXT NOT NULL,
+ comment TEXT NOT NULL DEFAULT '',
+ done INTEGER NOT NULL DEFAULT 0,
+ sort_order INTEGER NOT NULL,
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL);
+SQL
+
+SchemaOldSocialCache :: #string SQL
+INSERT OR REPLACE INTO social_snapshots(user_id,
+kind,
+json,
+updated_at) SELECT user_id,
+kind,
+json,
+updated_at FROM social_cache;
+DROP TABLE social_cache;
+SQL
+
+SchemaBackfillOutbox :: #string SQL
+INSERT OR IGNORE INTO sync_outbox(entity_type,
+entity_id,
+local_date,
+queued_at) SELECT 'habit',
+id,
+0,
+updated_at FROM habits;
+INSERT OR IGNORE INTO sync_outbox(entity_type,
+entity_id,
+local_date,
+queued_at) SELECT 'habit_day',
+habit_id,
+local_date,
+updated_at FROM habit_days;
+INSERT OR IGNORE INTO sync_outbox(entity_type,
+entity_id,
+local_date,
+queued_at) SELECT 'session',
+id,
+0,
+updated_at FROM sessions;
+SQL

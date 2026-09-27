@@ -1,0 +1,99 @@
+// Browser viewport sizing and stable resize decisions, in CSS pixels.
+BrowserSize :: struct {
+    width: s32
+    height: s32
+}
+browser_orientation_mode: s32;
+browser_pending_size: BrowserSize;
+browser_stable_frames: s32;
+
+#if #defined(PLATFORM_WEB) {
+    browser :: #system_library "browser";
+    raylib :: #system_library "raylib";
+    c :: #system_library "c";
+    MeasureBrowserViewport :: (fallback_width: s32,
+        fallback_height: s32, size: *BrowserSize) #foreign browser "browser_viewport_size";
+    BrowserStorageBusy :: () -> s32 #foreign browser "browser_storage_busy";
+    BrowserScreenWidth :: () -> s32 #foreign raylib "GetScreenWidth";
+    BrowserScreenHeight :: () -> s32 #foreign raylib "GetScreenHeight";
+    BrowserPointerDown :: (button: s32) -> bool #foreign raylib "IsMouseButtonDown";
+    BrowserSetWindowSize :: (width: s32, height: s32) #foreign raylib "SetWindowSize";
+    BrowserUpdateDPI :: (width: s32, height: s32) #foreign c "UpdateDPI";
+}
+
+SetBrowserOrientation :: (mode: s32) {
+    browser_orientation_mode = ifx mode >= 0 && mode <= 2 then mode else 0
+}
+
+BrowserOrientationSize :: (size: BrowserSize, mode: s32) -> BrowserSize {
+    result := size
+    if mode == 1 && size.width > size.height {
+        result.width = cast(s32)(cast(s64)size.height * 9 / 16)
+        if result.width < 1 {
+            result.width = size.height
+        }
+    }
+    if mode == 2 && size.height > size.width {
+        result.height = cast(s32)(cast(s64)size.width * 9 / 16)
+        if result.height < 1 {
+            result.height = size.width
+        }
+    }
+    return result
+}
+
+BrowserViewportSize :: (fallback_width: s32,
+    fallback_height: s32) -> BrowserSize {
+    size := BrowserSize.{fallback_width, fallback_height}
+    #if #defined(PLATFORM_WEB) {
+        MeasureBrowserViewport(fallback_width, fallback_height, *size)
+    }
+    return BrowserOrientationSize(size, browser_orientation_mode)
+}
+
+BrowserResizeReady :: (current: BrowserSize, size: BrowserSize,
+    storage_busy: bool, pointer_down: bool) -> bool {
+    if storage_busy {
+        return false
+    }
+    if size.width == current.width && size.height == current.height {
+        browser_pending_size = BrowserSize.{}
+        browser_stable_frames = 0
+        return false
+    }
+    delta_width := size.width - current.width
+    delta_height := size.height - current.height
+    if delta_width >= -1 && delta_width <= 1 &&
+        delta_height >= -1 && delta_height <= 1 {
+        return false
+    }
+    if size.width != browser_pending_size.width ||
+        size.height != browser_pending_size.height {
+        browser_pending_size = size
+        browser_stable_frames = 1
+        return false
+    }
+    browser_stable_frames += 1
+    if browser_stable_frames < 2 || pointer_down {
+        return false
+    }
+    browser_pending_size = BrowserSize.{}
+    browser_stable_frames = 0
+    return true
+}
+
+ResizeBrowserWindow :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        current := BrowserSize.{BrowserScreenWidth(), BrowserScreenHeight()}
+        if BrowserStorageBusy() != 0 {
+            return false
+        }
+        measured := BrowserViewportSize(current.width, current.height)
+        if BrowserResizeReady(current, measured, false, BrowserPointerDown(0)) {
+            BrowserSetWindowSize(measured.width, measured.height)
+            BrowserUpdateDPI(measured.width, measured.height)
+            return true
+        }
+    }
+    return false
+}

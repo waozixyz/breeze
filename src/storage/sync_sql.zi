@@ -1,0 +1,146 @@
+// Sync response queries. Keep conflict and timestamp conditions intact so
+// applying a server response preserves newer local edits.
+
+SyncSessionsSQL :: #string SQL
+INSERT INTO
+sessions(id,user_id,started_at,local_date,topic,activity,source,
+imported_at,rounds_hash,mood_before,mood_after,energy,stress,note,tags,
+deleted_at,updated_at)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+
+CAST(COALESCE(strftime('%s',json_extract(value,'$.started_at')),'0') AS
+INTEGER),
+       CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.topic'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.activity'),0) AS INTEGER),
+       COALESCE(json_extract(value,'$.source'),''),
+
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),
+strftime('%s',json_extract(value,'$.started_at')),'0') AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.rounds_hash'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.mood_before'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.mood_after'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.energy'),0) AS INTEGER),
+       CAST(COALESCE(json_extract(value,'$.stress'),0) AS INTEGER),
+       COALESCE(json_extract(value,'$.note'),''),
+       COALESCE(json_extract(value,'$.tags'),''),
+       CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
+
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),
+strftime('%s',json_extract(value,'$.started_at')),'0') AS INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.sessions')
+      UNION ALL SELECT value FROM json_each(?1,'$.data.sessions'))
+WHERE COALESCE(json_extract(value,'$.id'),'')<>''
+ON CONFLICT(id) DO UPDATE SET
+ user_id=excluded.user_id,started_at=excluded.started_at,local_date=
+excluded.local_date,
+ topic=excluded.topic,activity=excluded.activity,source=excluded.source,
+ imported_at=excluded.imported_at,rounds_hash=excluded.rounds_hash,
+ mood_before=excluded.mood_before,mood_after=excluded.mood_after,
+ energy=excluded.energy,stress=excluded.stress,note=excluded.note,
+ tags=excluded.tags,
+deleted_at=excluded.deleted_at,
+ updated_at=excluded.updated_at
+WHERE excluded.updated_at > sessions.updated_at
+OR (excluded.updated_at = sessions.updated_at AND NOT EXISTS (
+ SELECT 1 FROM sync_outbox
+ WHERE entity_type='session' AND entity_id=sessions.id AND local_date=0
+))
+SQL
+
+SyncSessionRoundDeleteSQL :: #string SQL
+DELETE FROM session_rounds WHERE session_id IN (
+ SELECT COALESCE(json_extract(value,'$.id'),'')
+ FROM (SELECT value FROM json_each(?1,'$.changes.sessions')
+       UNION ALL SELECT value FROM json_each(?1,'$.data.sessions'))
+ WHERE COALESCE(json_extract(value,'$.id'),'')<>''
+ AND (
+       NOT EXISTS (SELECT 1 FROM sessions WHERE
+id=COALESCE(json_extract(value,'$.id'),''))
+       OR
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),
+strftime('%s',json_extract(value,'$.started_at')),'0') AS INTEGER)
+          > COALESCE((SELECT updated_at FROM sessions WHERE
+id=COALESCE(json_extract(value,'$.id'),'')),0)
+       OR
+(CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),
+strftime('%s',json_extract(value,'$.started_at')),'0') AS INTEGER)
+           = COALESCE((SELECT updated_at FROM sessions WHERE
+id=COALESCE(json_extract(value,'$.id'),'')),0)
+           AND NOT EXISTS (SELECT 1 FROM sync_outbox
+               WHERE entity_type='session' AND
+entity_id=COALESCE(json_extract(value,'$.id'),'') AND local_date=0))
+ )
+)
+SQL
+
+SyncSessionRoundsSQL :: #string SQL
+INSERT OR REPLACE INTO session_rounds(session_id,round_index,seconds)
+SELECT COALESCE(json_extract(s.value,'$.id'),''),
+       CAST(COALESCE(json_extract(r.value,'$.round_index'),0) AS
+INTEGER),
+       CAST(COALESCE(json_extract(r.value,'$.hold_seconds'),0) AS
+INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.sessions')
+      UNION ALL SELECT value FROM json_each(?1,'$.data.sessions')) AS s,
+json_each(s.value,'$.rounds') AS r
+WHERE COALESCE(json_extract(s.value,'$.id'),'')<>''
+AND
+(CAST(COALESCE(strftime('%s',json_extract(s.value,'$.updated_at')),
+strftime('%s',json_extract(s.value,'$.started_at')),'0') AS INTEGER)
+       > COALESCE((SELECT updated_at FROM sessions WHERE
+id=COALESCE(json_extract(s.value,'$.id'),'')),0)
+OR
+(CAST(COALESCE(strftime('%s',json_extract(s.value,'$.updated_at')),
+strftime('%s',json_extract(s.value,'$.started_at')),'0') AS INTEGER)
+       = COALESCE((SELECT updated_at FROM sessions WHERE
+id=COALESCE(json_extract(s.value,'$.id'),'')),0)
+    AND NOT EXISTS (SELECT 1 FROM sync_outbox
+        WHERE entity_type='session' AND
+entity_id=COALESCE(json_extract(s.value,'$.id'),'') AND local_date=0)))
+SQL
+
+SyncMeditationLogsSQL :: #string SQL
+INSERT INTO
+meditation_logs(id,user_id,session_id,duration_seconds,completed_at,updated_at)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+       COALESCE(json_extract(value,'$.session_id'),''),
+       CAST(COALESCE(json_extract(value,'$.duration_seconds'),
+                     json_extract(value,'$.duration'),0) AS INTEGER),
+       CAST(COALESCE(strftime('%s',json_extract(value,'$.completed_at')),
+                     strftime('%s',json_extract(value,'$.timestamp')),'0') AS INTEGER),
+       CAST(COALESCE(strftime('%s',json_extract(value,'$.completed_at')),
+                     strftime('%s',json_extract(value,'$.timestamp')),'0') AS INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.meditation_logs')
+      UNION ALL SELECT value FROM json_each(?1,'$.data.meditation_logs'))
+WHERE COALESCE(json_extract(value,'$.id'),'')<>''
+ON CONFLICT(id) DO UPDATE SET
+ user_id=excluded.user_id,session_id=excluded.session_id,
+ duration_seconds=excluded.duration_seconds,
+ completed_at=excluded.completed_at,updated_at=excluded.updated_at
+WHERE excluded.updated_at > meditation_logs.updated_at
+SQL
+
+SyncSocialCacheSQL :: #string SQL
+INSERT INTO social_snapshots(user_id,kind,json,updated_at)
+SELECT ?2,
+       COALESCE(json_extract(value,'$.kind'),''),
+       json(COALESCE(json_extract(value,'$.json'),'{}')),
+       CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER)
+FROM json_each(?1,'$.changes.social_cache')
+WHERE COALESCE(json_extract(value,'$.kind'),'')<>''
+ON CONFLICT(user_id,kind) DO UPDATE SET
+ json=excluded.json,updated_at=excluded.updated_at
+SQL
+
+SyncSocialSQL :: #string SQL
+INSERT INTO social_snapshots(user_id,kind,json,updated_at)
+SELECT ?2,
+       COALESCE(json_extract(value,'$.kind'),''),
+       json(COALESCE(json_extract(value,'$.json'),'{}')),
+       CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER)
+FROM json_each(?1,'$.data.social')
+WHERE COALESCE(json_extract(value,'$.kind'),'')<>''
+ON CONFLICT(user_id,kind) DO UPDATE SET
+ json=excluded.json,updated_at=excluded.updated_at
+SQL

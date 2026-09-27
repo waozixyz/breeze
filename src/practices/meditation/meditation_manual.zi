@@ -1,0 +1,206 @@
+#import "geometry"
+#import "guide_pager"
+#import "drawing_props"
+#import "image_props"
+#import "image_widget"
+#import "layout"
+#import "paint_queue"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "session"
+#import "style"
+#import "style_sheet"
+#import "surface"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/manual_seen_actions.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../core/types.zi";
+#import, file "../../platform/scroll_input.zi";
+#import, file "../../screens/manual_screen.zi";
+#import, file "../../screens/practice_manual_layout.zi";
+#import, file "meditation_practice.zi";
+
+using ImageFit;
+using ExerciseType;
+using ModalType;
+using TextAlign;
+using TextWrap;
+
+MEDITATION_MANUAL_PAGES :: 2
+
+#program_export
+meditation_manual_start :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    meditation_practice_start(app)
+}
+
+#program_export
+meditation_manual_close :: (app: *InnerBreeze, mark_seen: s32) {
+    if app == null { return }
+    if mark_seen != 0 {
+        mark_exercise_manual_seen(app, EXERCISE_MEDITATION)
+    }
+    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalPracticeManual {
+        app_close_modal(app)
+        return
+    }
+    app.tutorial_step = 0
+    app.manual_scroll = 0
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app_switch_screen(app, ScreenStart)
+}
+
+meditation_manual_paragraph :: (key: string,
+    content_w: s32) -> ManualParagraphSpec {
+    return manual_screen_tutorial_paragraph(LocaleText(key), content_w)
+}
+
+meditation_manual_content_height :: (step: s32, content_w: s32) -> s32 {
+    key := "meditation_manual_intro_text"
+    if step != 0 { key = "meditation_manual_customize_text" }
+    paragraph := meditation_manual_paragraph(key, content_w)
+    return content_w * 222 / 394 + AppScale(24) +         manual_screen_guide_header_height() +         AppParagraphHeight(paragraph.text, paragraph.width,
+            paragraph.font, paragraph.line_gap)
+}
+
+meditation_manual_draw_page :: (app: *InnerBreeze, content_x: s32,
+    content_w: s32, step: s32, y: *s32) {
+    title_key := "meditation_title"
+    paragraph_key := "meditation_manual_intro_text"
+    if step != 0 {
+        title_key = "practice_configure_button"
+        paragraph_key = "meditation_manual_customize_text"
+    }
+    hero_y := y.*
+    hero_h := content_w * 222 / 394
+    hero := manual_screen_hero_bounds(content_x, content_w,
+        hero_y, hero_h)
+    if step == 0 {
+        picture: ImageProps
+        picture.asset_path = "assets/practices/meditation/1.png"
+        picture.alt_text = LocaleText("meditation_title")
+        picture.bounds = hero
+        picture.fit = cast(ImageFit)ImageFitContain
+        Image(app.ui.session, picture)
+    } else {
+        center_x := content_x + content_w / 2
+        center_y := hero_y + hero_h / 2
+        face := GuideFace(2)
+        PaintRoundedFill(app.ui.session, -1, hero,
+            cast(float32)AppScale(14), 10,
+            ColorFromPacked(face.value.background))
+        outer_radius := AppScale(68)
+        inner_radius := AppScale(48)
+        outer := Rectangle.{cast(float32)(center_x - outer_radius),
+            cast(float32)(center_y - outer_radius),
+            cast(float32)(outer_radius * 2),
+            cast(float32)(outer_radius * 2)
+}
+        inner := Rectangle.{cast(float32)(center_x - inner_radius),
+            cast(float32)(center_y - inner_radius),
+            cast(float32)(inner_radius * 2),
+            cast(float32)(inner_radius * 2)
+}
+        PaintRoundedFill(app.ui.session, -1, outer,
+            cast(float32)outer_radius, 16,
+            ColorFromPacked(Opacity(face.value.foreground, 0.24)))
+        PaintRoundedFill(app.ui.session, -1, inner,
+            cast(float32)inner_radius, 16,
+            ColorFromPacked(face.value.background))
+        title: TextProps
+        title.bounds = inner
+        title.text = LocaleText("meditation_title")
+        title.wrap = cast(TextWrap)TextWrapNone
+        title.align = cast(TextAlign)TextAlignCenter
+        title.vertical_align = cast(TextAlign)TextAlignCenter
+        Text(app.ui.session, title)
+    }
+    manual_screen_draw_hero_progress(hero, step, MEDITATION_MANUAL_PAGES)
+    y.* += hero_h + AppScale(24)
+    manual_screen_draw_guide_header(LocaleText(title_key), step,
+        MEDITATION_MANUAL_PAGES, content_x, y, content_w)
+    ManualParagraph(app,
+        meditation_manual_paragraph(paragraph_key, content_w),
+        content_x, y)
+}
+
+#program_export
+meditation_manual_draw :: (app: *InnerBreeze) {
+    if app == null || !SessionValid(app.ui.session) { return }
+    step := app.tutorial_step
+    if step < 0 { step = 0 }
+    if step >= MEDITATION_MANUAL_PAGES {
+        step = MEDITATION_MANUAL_PAGES - 1
+    }
+    app.tutorial_step = step
+    responsive_max_w := cast(s32)(cast(float32)app.ui.view_width * 0.96)
+    if responsive_max_w > manual_screen_tutorial_max_width() {
+        responsive_max_w = manual_screen_tutorial_max_width()
+    }
+    if responsive_max_w < AppScale(200) {
+        responsive_max_w = AppScale(200)
+    }
+    layout := practice_screen_manual_layout(app,
+        cast(ModalType)ModalPracticeManual,
+        MEDITATION_MANUAL_PAGES, manual_screen_tutorial_top_gap(),
+        0, AppScale(120))
+    if manual_screen_draw_title_bar(app,
+        LocaleText("meditation_manual_title"),
+        layout.title_h) != 0 {
+        meditation_manual_close(app, 0)
+        return
+    }
+    column := CenteredColumnFor(app.ui.view_width,
+        responsive_max_w, manual_screen_tutorial_side_padding())
+    content_h := meditation_manual_content_height(step, column.width)
+    bounds := Rectangle.{0.0, cast(float32)layout.content_y,
+        cast(float32)app.ui.view_width,
+        cast(float32)layout.content_h
+}
+    key := KeyHash("meditation/manual/scroll")
+    props: ScrollProps
+    props.key = key
+    props.bounds = bounds
+    props.content_height = content_h
+    props.scroll_offset = app.manual_scroll
+    props.scale = MetricsScale()
+    props.input = ScrollObservationFor(key, bounds)
+    result := Scroll(app.ui.session, props)
+    app.manual_scroll = result.scroll_offset
+    CommitScroll(key, result.frame)
+    if result.opened {
+        y := cast(s32)result.content.y
+        meditation_manual_draw_page(app, column.x, column.width,
+            step, *y)
+        unused End(app.ui.session)
+    }
+    nav: ManualGuideNav
+    nav.page = step
+    nav.page_count = MEDITATION_MANUAL_PAGES
+    nav.y = layout.nav_y
+    nav.h = layout.nav_h
+    nav.content_y = layout.content_y
+    nav.content_h = layout.content_h
+    nav.focus_id = 420
+    decision := manual_screen_guide_controls(app, nav)
+    if decision.closed {
+        meditation_manual_close(app, 0)
+    } else if decision.finished {
+        meditation_manual_start(app)
+    }
+}

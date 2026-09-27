@@ -1,0 +1,584 @@
+c :: #system_library "c";
+#import, file "current_app.zi";
+#import, file "app_settings.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_sessions.zi";
+#import, file "../storage/session_mood.zi";
+#import, file "../storage/sync_account_parse.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "../storage/data.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../guide.zi";
+
+app_close_modal :: (app: *InnerBreeze) #foreign c;
+app_switch_screen :: (app: *InnerBreeze, screen: s32) #foreign c;
+
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "../platform/web_storage.zi";
+#if #defined(PLATFORM_WEB) {
+    web_extension_host_js :: () -> s32 #foreign c;
+    web_extension_break_now_js :: (break_type: s32) #foreign c;
+}
+#import, file "app.zi";
+#import, file "widgets.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../practices/session_results.zi";
+#import, file "../screens/practice_screen.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "exercise_types.zi";
+#import "byte_text_linux"
+#import "drawing_props"
+#import "geometry"
+
+using AppMainTab;
+using ExerciseType;
+
+#if #defined(PLATFORM_WEB) {
+    web_test_source_account: SyncAccount;
+    web_test_public_key: [1312] u8;
+    web_test_private_key: [2560] u8;
+    web_test_sync_key_import_status: s32;
+    web_test_completed_session: [FS_PATH_MAX] u8;
+    web_test_completion_stage: s32;
+    #program_export
+    app_web_test_complete_practice :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return 0
+        }
+        web_test_completion_stage = 1
+        app.meditation.duration_mode = 5
+        app.meditation.custom_minutes = 1
+        app.meditation.show_extend_controls = 0
+        app.breathing.play_in_background = 1
+        app_web_launch_practice(EXERCISE_MEDITATION)
+        web_test_completion_stage = 2
+        practice_active_advance_elapsed(app, 1000)
+        app.session_paused = 1
+        practice_active_advance_elapsed(app, 30000)
+        if app.meditation.remaining_seconds != 59 {
+            return 0
+        }
+        web_test_completion_stage = 3
+        app.session_paused = 0
+        practice_active_advance_elapsed(app, 59000)
+        if app.session_result.active == 0 || app.session_result.saved == 0 {
+            return 0
+        }
+        web_test_completion_stage = 4
+        AppCopyText(AppTextFromCString(*app.session_result.path[0], FS_PATH_MAX),
+            web_test_completed_session[:])
+        storage_set_setting_text("test_completed_session",
+            AppTextFromCString(*web_test_completed_session[0], FS_PATH_MAX))
+        app.session_result.mood = 4
+        session_result_done(app)
+        web_test_completion_stage = ifx (app.session_result.active != 0) then (5) else (6)
+        sync_web_storage_critical()
+        return cast(s32)(app.session_result.active == 0)
+    }
+    #program_export
+    app_web_test_completion_stage :: () -> s32 {
+        return web_test_completion_stage
+    }
+    #program_export
+    app_web_test_completed_practice_persisted :: () -> s32 {
+        checkin: SessionMoodCheckin
+        path: string = storage_get_setting_text("test_completed_session")
+        return cast(s32)(path.count > 0 &&
+            storage_load_session_checkin(path, *checkin) != 0 &&
+            checkin.mood_after == 4)
+    }
+    web_test_make_sync_account :: (account: *SyncAccount) {
+        if account == null {
+            return
+        }
+        {
+            i: s64 = 0
+            while i < size_of(type_of(web_test_public_key)) {
+                web_test_public_key[i] = cast(u8)(i * 31 + 7)
+                i += 1
+            }
+        }
+        {
+            i: s64 = 0
+            while i < size_of(type_of(web_test_private_key)) {
+                web_test_private_key[i] = cast(u8)(i * 17 + 3)
+                i += 1
+            }
+        }
+        SyncCryptoSha256Hex(*web_test_public_key[0], size_of(type_of(web_test_public_key)),
+            *account.public_id[0])
+        unused SyncCryptoBytesToHex(*web_test_public_key[0], size_of(type_of(web_test_public_key)),
+            *account.public_key_hex[0],
+            size_of(type_of(account.public_key_hex)))
+        unused SyncCryptoBytesToHex(*web_test_private_key[0], size_of(type_of(web_test_private_key)),
+            *account.private_key_hex[0],
+            size_of(type_of(account.private_key_hex)))
+    }
+    web_test_first_run_guide_expected :: (app: *InnerBreeze) -> bool {
+        return app != null  && app.tutorial_seen == 0  && app.modal.active == 0  && app.exercise_type != EXERCISE_SUN_SALUTATION  && app.breathing.screen == ScreenStart  && app.main_tab != APP_MAIN_TAB_NONE
+    }
+    web_test_save_onboarding_settings :: (app: *InnerBreeze) {
+        if app == null {
+            return
+        }
+        storage_settings_begin_write()
+        storage_set_setting_text("language",
+            ifx (app.language_selected != 0 && app.language_system == 0  && app.language[0] != #char "\0") then (AppTextFromCString(*app.language[0], 16)) else (""))
+        storage_set_setting_int("language_setup_done",
+            ifx (app.language_selected != 0) then (1) else (0))
+        storage_set_setting_int("tutorial_seen",
+            ifx (app.tutorial_seen != 0) then (1) else (0))
+        storage_set_setting_int("tutorial_step", app.tutorial_step)
+        storage_set_setting_int("habits_guide_seen",
+            ifx (app.habits_guide_seen != 0) then (1) else (0))
+        storage_set_setting_int("main_tab", app.main_tab)
+        storage_settings_end_write()
+    }
+    #program_export
+    app_web_get_play_in_background :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        return cast(s32)(app != null && app.breathing.play_in_background != 0)
+    }
+    #program_export
+    app_web_set_backgrounded :: (active: s32) {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        app.backgrounded = ifx (active != 0) then (1) else (0)
+    }
+    #program_export
+    app_web_background_tick :: (elapsed_ms: s32) {
+        app: *InnerBreeze = CurrentApp()
+        if app == null || elapsed_ms <= 0 {
+            return
+        }
+        app.backgrounded = 1
+        practice_active_advance_elapsed(app, elapsed_ms)
+    }
+    #program_export
+    app_web_launch_practice :: (practice_id: s32) {
+        app: *InnerBreeze = CurrentApp()
+        practice: *PracticeDefinition
+        if app == null {
+            return
+        }
+        app.exercise_type = practice_clamp_id(practice_id)
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.practice_tab = PRACTICE_TAB_PLAY
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        practice = practice_get(app.exercise_type)
+        if practice.start != null {
+            practice.start(app)
+        }
+    }
+    #program_export
+    app_web_extension_host :: () -> s32 {
+        return web_extension_host_js()
+    }
+    #program_export
+    app_web_extension_break_now :: (break_type: s32) {
+        if app_web_extension_host() == 0 {
+            return
+        }
+        web_extension_break_now_js(break_type)
+    }
+    #program_export
+    app_web_extension_breaks_enabled :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        if app == null || app_web_extension_host() == 0 {
+            return 0
+        }
+        return ifx (app.breaks_enabled != 0) then (1) else (0)
+    }
+    web_extension_break_timer :: (app: *InnerBreeze, break_type: s32) -> *BreakTimer {
+        if app == null || break_type < 0 || break_type >= BREAK_TYPE_COUNT {
+            return null
+        }
+        return *app.breaks.timers[break_type]
+    }
+    #program_export
+    app_web_extension_break_timer_enabled :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null && timer.enabled != 0) then (1) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_limit_s :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null) then (timer.limit_s) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_duration_s :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null) then (timer.duration_s) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_postpone_s :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null) then (timer.postpone_s) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_max_prompts :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null) then (timer.max_prompts) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_show_skip :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null && timer.show_skip != 0) then (1) else (0)
+    }
+    #program_export
+    app_web_extension_break_timer_show_postpone :: (break_type: s32) -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer = web_extension_break_timer(app, break_type)
+        return ifx (timer != null && timer.show_postpone != 0) then (1) else (0)
+    }
+    #program_export
+    app_web_extension_open_break_settings :: () {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        app.settings_tab = SETTINGS_TAB_BREAKS
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        app_switch_screen(app, ScreenSettings)
+    }
+    #program_export
+    app_web_extension_open_habits :: () {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+        app.habits.scroll = 0
+        app.habits.focus_selected_tab = 1
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        app_switch_screen(app, ScreenHabits)
+    }
+    #program_export
+    app_web_test_save_onboarding_state :: () {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        AppCopyText("es", BytesFromPointer(*app.language[0], 16))
+        app.language_system = 0
+        app.language_selected = 1
+        app.tutorial_seen = 1
+        app.habits_guide_seen = 1
+        web_test_save_onboarding_settings(app)
+    }
+    #program_export
+    app_web_test_onboarding_state :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return 0
+        }
+        return cast(s32)(app.language_selected != 0 &&
+            AppTextFromCString(*app.language[0], 16) == "es" &&
+            app.tutorial_seen != 0 && app.habits_guide_seen != 0)
+    }
+    #program_export
+    app_web_test_show_first_run_guide :: () {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        AppCopyText("es", BytesFromPointer(*app.language[0], 16))
+        app.language_system = 0
+        app.language_selected = 1
+        app.tutorial_seen = 0
+        app.tutorial_step = 0
+        app.habits_guide_seen = 1
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.practice_tab = PRACTICE_TAB_PLAY
+        app.exercise_type = EXERCISE_WIM_HOF
+        storage_settings_begin_write()
+        storage_set_setting_text("sync_public_id", "")
+        storage_set_setting_text("sync_public_key", "")
+        storage_set_setting_text("sync_private_key", "")
+        storage_set_setting_text("sync_account_alias", "")
+        storage_set_setting_text("sync_auth_token", "")
+        storage_set_setting_text("sync_auth_token_expires_at", "")
+        storage_set_sync_enabled(0)
+        storage_settings_end_write()
+        web_test_sync_key_import_status = 0
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        app.breathing.screen = ScreenStart
+        web_test_save_onboarding_settings(app)
+    }
+    #program_export
+    app_web_test_first_run_guide_active :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        return cast(s32)web_test_first_run_guide_expected(app)
+    }
+    #program_export
+    app_web_test_first_run_guide_step :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        return ifx (app != null) then (app.tutorial_step) else (-1)
+    }
+    #program_export
+    app_web_test_first_run_guide_text_clipped :: () -> s32 {
+        debug: GuideLayout = guide_layout
+        if debug.tip.width <= 0 {
+            return ifx (web_test_first_run_guide_expected(CurrentApp())) then (0) else (-1)
+        }
+        return cast(s32)debug.text_clipped
+    }
+    #program_export
+    app_web_test_first_run_guide_next_x :: () -> s32 {
+        debug: GuideLayout = guide_layout
+        app: *InnerBreeze = CurrentApp()
+        if debug.tip.width <= 0 || app == null {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{debug.next_button.x +
+            debug.next_button.width * 0.5f, 0}, app.camera)
+        return cast(s32)target.x
+    }
+    #program_export
+    app_web_test_first_run_guide_next_y :: () -> s32 {
+        debug: GuideLayout = guide_layout
+        app: *InnerBreeze = CurrentApp()
+        if debug.tip.width <= 0 || app == null {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{0, debug.next_button.y +
+            debug.next_button.height * 0.5f}, app.camera)
+        return cast(s32)target.y
+    }
+    #program_export
+    app_web_test_first_run_guide_close_x :: () -> s32 {
+        debug: GuideLayout = guide_layout
+        app: *InnerBreeze = CurrentApp()
+        if debug.tip.width <= 0 || app == null {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{debug.close_button.x +
+            debug.close_button.width * 0.5f, 0}, app.camera)
+        return cast(s32)target.x
+    }
+    #program_export
+    app_web_test_first_run_guide_close_y :: () -> s32 {
+        debug: GuideLayout = guide_layout
+        app: *InnerBreeze = CurrentApp()
+        if debug.tip.width <= 0 || app == null {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{0, debug.close_button.y +
+            debug.close_button.height * 0.5f}, app.camera)
+        return cast(s32)target.y
+    }
+    web_test_rect_valid :: (rect: Rectangle) -> bool {
+        return rect.width > 0.0f && rect.height > 0.0f
+    }
+    web_test_first_run_guide_action_anchor_zero_rect: Rectangle;
+
+    web_test_first_run_guide_action_anchor :: (app: *InnerBreeze) -> Rectangle {
+        manual: Rectangle
+        config: Rectangle
+        anchor: Rectangle
+        manual_valid: bool
+        config_valid: bool
+        right: float32
+        bottom: float32
+        config_right: float32
+        config_bottom: float32
+        if app == null {
+            return web_test_first_run_guide_action_anchor_zero_rect
+        }
+        manual = app.practice_home_bounds_manual
+        config = app.practice_home_bounds_config
+        manual_valid = web_test_rect_valid(manual)
+        config_valid = web_test_rect_valid(config)
+        if !manual_valid {
+            return ifx (config_valid) then (config) else (web_test_first_run_guide_action_anchor_zero_rect)
+        }
+        if !config_valid {
+            return manual
+        }
+        anchor = manual
+        if config.x < anchor.x {
+            anchor.x = config.x
+        }
+        if config.y < anchor.y {
+            anchor.y = config.y
+        }
+        right = manual.x + manual.width
+        bottom = manual.y + manual.height
+        config_right = config.x + config.width
+        config_bottom = config.y + config.height
+        if config_right > right {
+            right = config_right
+        }
+        if config_bottom > bottom {
+            bottom = config_bottom
+        }
+        anchor.width = right - anchor.x
+        anchor.height = bottom - anchor.y
+        return anchor
+    }
+    #program_export
+    app_web_test_first_run_guide_anchor_x :: () -> s32 {
+        anchor: Rectangle = web_test_first_run_guide_action_anchor(CurrentApp())
+        return cast(s32)anchor.x
+    }
+    #program_export
+    app_web_test_first_run_guide_anchor_y :: () -> s32 {
+        anchor: Rectangle = web_test_first_run_guide_action_anchor(CurrentApp())
+        return cast(s32)anchor.y
+    }
+    #program_export
+    app_web_test_first_run_guide_anchor_w :: () -> s32 {
+        anchor: Rectangle = web_test_first_run_guide_action_anchor(CurrentApp())
+        return cast(s32)anchor.width
+    }
+    #program_export
+    app_web_test_first_run_guide_anchor_h :: () -> s32 {
+        anchor: Rectangle = web_test_first_run_guide_action_anchor(CurrentApp())
+        return cast(s32)anchor.height
+    }
+    #program_export
+    app_web_test_sync_key_state :: () -> s32 {
+        source: *SyncAccount = *web_test_source_account
+        if web_test_sync_key_import_status != 1 {
+            return web_test_sync_key_import_status
+        }
+        if ValidateSyncAccount(source) == 0 {
+            return -10
+        }
+        return 1
+    }
+    #program_export
+    app_web_test_import_sync_key :: () {
+        source: *SyncAccount = *web_test_source_account
+        web_test_sync_key_import_status = 0
+        data_init()
+        web_test_make_sync_account(source)
+        if ValidateSyncAccount(source) == 0 {
+            web_test_sync_key_import_status = -1
+            return
+        }
+        storage_settings_begin_write()
+        storage_set_setting_text("sync_public_id",
+            AppTextFromCString(*source.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE))
+        storage_set_setting_text("sync_public_key",
+            AppTextFromCString(*source.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE))
+        storage_set_setting_text("sync_private_key",
+            AppTextFromCString(*source.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE))
+        storage_set_setting_text("sync_account_alias", "")
+        storage_set_sync_enabled(0)
+        storage_settings_end_write()
+        web_test_sync_key_import_status = 1
+    }
+    web_test_habits_click_target :: () -> Vector2 {
+        app := CurrentApp()
+        if app == null || app.breathing.screen != ScreenHabits {
+            return Vector2.{-1, -1 }
+        }
+        bounds := app.habits_guide_anchors[5]
+        if !web_test_rect_valid(bounds) {
+            return Vector2.{-1, -1 }
+        }
+        return WorldToScreen(Vector2.{bounds.x + bounds.width / 2,
+            bounds.y + bounds.height / 2}, app.camera)
+    }
+    #program_export
+    app_web_test_habits_click_x :: () -> s32 {
+        target := web_test_habits_click_target()
+        return cast(s32)target.x
+    }
+    #program_export
+    app_web_test_habits_click_y :: () -> s32 {
+        target := web_test_habits_click_target()
+        return cast(s32)target.y
+    }
+    #program_export
+    app_web_test_show_practice_home :: () {
+        app: *InnerBreeze = CurrentApp()
+        if app == null {
+            return
+        }
+        AppCopyText("es", BytesFromPointer(*app.language[0], 16))
+        app.language_system = 0
+        app.language_selected = 1
+        app.tutorial_seen = 1
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.practice_tab = PRACTICE_TAB_PLAY
+        app.exercise_type = EXERCISE_WIM_HOF
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        app.breathing.screen = ScreenStart
+    }
+    #program_export
+    app_web_test_practice_selected :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        return ifx (app != null) then (app.exercise_type) else (-1)
+    }
+    #program_export
+    app_web_test_screen :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        return ifx (app != null) then (cast(s32)app.breathing.screen) else (-1)
+    }
+    #program_export
+    app_web_test_practice_start_click_x :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        if app == null || !web_test_rect_valid(app.practice_home_bounds_start) {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{app.practice_home_bounds_start.x +
+            app.practice_home_bounds_start.width * 0.5f, 0}, app.camera)
+        return cast(s32)target.x
+    }
+    #program_export
+    app_web_test_practice_start_click_y :: () -> s32 {
+        app: *InnerBreeze = CurrentApp()
+        if app == null || !web_test_rect_valid(app.practice_home_bounds_start) {
+            return -1
+        }
+        target := WorldToScreen(Vector2.{0, app.practice_home_bounds_start.y +
+            app.practice_home_bounds_start.height * 0.5f}, app.camera)
+        return cast(s32)target.y
+    }
+    #program_export
+    app_web_test_enable_extension_breaks :: (limit_s: s32) {
+        app: *InnerBreeze = CurrentApp()
+        timer: *BreakTimer
+        if app == null || app_web_extension_host() == 0 {
+            return
+        }
+        app.breaks_enabled = 1
+        timer = *app.breaks.timers[BREAK_REST]
+        timer.enabled = 1
+        timer.limit_s = ifx (limit_s > 0) then (limit_s) else (60)
+        timer.duration_s = 60
+        timer.postpone_s = 300
+        timer.max_prompts = 1
+        timer.show_skip = 1
+        timer.show_postpone = 1
+        save_settings(app)
+    }
+}

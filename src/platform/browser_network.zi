@@ -1,0 +1,178 @@
+// Typed request and bounded event effects for the browser host.
+#import "net_http"
+#import "byte_text_linux"
+#import "c_string"
+#import "text_buffer"
+#import "async_client"
+
+BrowserTransfer :: struct {
+    handle: s32
+}
+
+#if #defined(PLATFORM_WEB) {
+    browser :: #system_library "browser";
+    HttpCreate :: (method: *u8, method_length: s32, url: *u8, url_length: s32,
+        output: *u8, capacity: s32, timeout: s32) -> s32 #foreign browser "browser_http_create";
+    HttpHeaderAdd :: (handle: s32, name: *u8, name_length: s32,
+        value: *u8, value_length: s32) -> s32 #foreign browser "browser_http_header";
+    HttpSend :: (handle: s32, body: *u8, body_length: s32) -> s32 #foreign browser "browser_http_send";
+    HttpPoll :: (handle: s32, status: *s32) -> s32 #foreign browser "browser_http_poll";
+    HttpCancel :: (handle: s32) #foreign browser "browser_http_cancel";
+    SocketOpen :: (url: *u8, url_length: s32, protocol: *u8,
+        protocol_length: s32, authorization: *u8, authorization_length: s32,
+        capacity: s32) -> s32 #foreign browser "browser_ws_open";
+    SocketPoll :: (handle: s32, output: *u8, capacity: s32) -> s32 #foreign browser "browser_ws_poll";
+    SocketClose :: (handle: s32) #foreign browser "browser_ws_close";
+}
+
+BrowserBytes :: (text: string) -> *u8 {
+    if text.count == 0 {
+        return null
+    }
+    descriptor := cast(*TextDescriptor)(*text)
+    return descriptor.data
+}
+
+BrowserAddHeader :: (handle: s32, name: string, value: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        if name.count == 0 || name.count > 128 || value.count > 8192 {
+            return false
+        }
+        return HttpHeaderAdd(handle, BrowserBytes(name), cast(s32)name.count,
+            BrowserBytes(value), cast(s32)value.count) != 0
+    }
+    unused handle
+    unused name
+    unused value
+    return false
+}
+
+StartBrowserTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        transfer := cast(*BrowserTransfer)context
+        if transfer == null || transfer.handle != 0 || output.count == 0 ||
+            output.count > 16777216 || request.body.count > 16777216 ||
+            request.method.count >= 32 || request.url.count >= 2048 ||
+            request.headers.count > 32 {
+            return false
+        }
+        handle := HttpCreate(BrowserBytes(request.method), cast(s32)request.method.count,
+            BrowserBytes(request.url), cast(s32)request.url.count,
+            *output[0], cast(s32)output.count, 20000)
+        if handle == 0 {
+            return false
+        }
+        configured := true
+        if request.accept.count > 0 {
+            configured = BrowserAddHeader(handle, "Accept", request.accept)
+        }
+        if configured && request.content_type.count > 0 {
+            configured = BrowserAddHeader(handle, "Content-Type", request.content_type)
+        }
+        if configured && request.token.count > 0 {
+            authorization: [8192]u8
+            if request.token.count + 7 >= authorization.count {
+                configured = false
+            } else {
+                unused CopyCString("Bearer ", authorization[:])
+                index: s64 = 0
+                while index < cast(s64)request.token.count {
+                    authorization[index + 7] = request.token[index]
+                    index += 1
+                }
+                authorization[index + 7] = cast(u8)0
+                configured = BrowserAddHeader(handle, "Authorization", TextUntilNul(authorization[:]))
+            }
+        }
+        index: s64 = 0
+        while configured && index < cast(s64)request.headers.count {
+            header := request.headers[index]
+            configured = BrowserAddHeader(handle, header.name, header.value)
+            index += 1
+        }
+        if !configured || HttpSend(handle, BrowserBytes(request.body), cast(s32)request.body.count) == 0 {
+            HttpCancel(handle)
+            return false
+        }
+        transfer.handle = handle
+        return true
+    }
+    unused context
+    unused request
+    unused output
+    return false
+}
+
+PollBrowserTransfer :: (context: *void, status: *s32) -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        transfer := cast(*BrowserTransfer)context
+        if transfer == null || transfer.handle == 0 || status == null {
+            return 0
+        }
+        result := HttpPoll(transfer.handle, status)
+        if result >= 0 {
+            transfer.handle = 0
+        }
+        return result
+    }
+    unused context
+    unused status
+    return 0
+}
+
+CancelBrowserTransfer :: (context: *void) {
+    #if #defined(PLATFORM_WEB) {
+        transfer := cast(*BrowserTransfer)context
+        if transfer != null && transfer.handle != 0 {
+            HttpCancel(transfer.handle)
+            transfer.handle = 0
+        }
+    }
+    unused context
+}
+
+BrowserTransport :: (transfer: *BrowserTransfer) -> AsyncTransport {
+    transport: AsyncTransport
+    transport.context = cast(*void)transfer
+    transport.start = StartBrowserTransfer
+    transport.poll = PollBrowserTransfer
+    transport.cancel = CancelBrowserTransfer
+    return transport
+}
+
+OpenBrowserSocket :: (url: string, protocol: string,
+    authorization_protocol: string, capacity: s32) -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        if url.count >= 2048 || protocol.count > 128 || authorization_protocol.count > 8192 {
+            return 0
+        }
+        return SocketOpen(BrowserBytes(url), cast(s32)url.count,
+            BrowserBytes(protocol), cast(s32)protocol.count,
+            BrowserBytes(authorization_protocol), cast(s32)authorization_protocol.count,
+            capacity)
+    }
+    unused url
+    unused protocol
+    unused authorization_protocol
+    unused capacity
+    return 0
+}
+
+PollBrowserSocket :: (handle: s32, output: []u8) -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        if output.count < 2 || output.count > 65536 {
+            return 0
+        }
+        return SocketPoll(handle, *output[0], cast(s32)output.count)
+    }
+    unused handle
+    unused output
+    return 0
+}
+
+CloseBrowserSocket :: (handle: s32) {
+    #if #defined(PLATFORM_WEB) {
+        SocketClose(handle)
+    }
+    unused handle
+}

@@ -1,0 +1,60 @@
+#import "dpi"
+#import "geometry"
+#import, file "../platform/environment.zi";
+#import, file "../platform/raylib_host.zi";
+raylib :: #system_library "raylib";
+IsWindowReady :: () -> bool #foreign raylib;
+GetWindowScaleDPI :: () -> Vector2 #foreign raylib;
+
+using DPIPlatform;
+
+c :: #system_library "c";
+device_density :: () -> float32 #foreign c "app_device_density";
+
+dpi_state: DPIState;
+last_density: float32;
+last_window_scale: Vector2;
+
+#program_export
+InitDPI :: () {
+    dpi_state = InitialDPI()
+    last_density = 0.0
+    last_window_scale = Vector2.{1.0, 1.0}
+}
+
+#program_export
+UpdateDPI :: (view_width: s32, view_height: s32) {
+    platform: DPIPlatform = cast(DPIPlatform)DPIPlatformDesktop
+    window_scale := Vector2.{1.0, 1.0}
+    if AndroidPlatform() != 0 {
+        platform = cast(DPIPlatform)DPIPlatformAndroid
+    } else if WebPlatform() != 0 {
+        platform = cast(DPIPlatform)DPIPlatformWeb
+    } else if IsWindowReady() {
+        window_scale = GetWindowScaleDPI()
+    }
+    density := device_density()
+    if dpi_state.base_height == 0 {
+        dpi_state = InitialDPI()
+    }
+    if density != last_density || window_scale.x != last_window_scale.x ||
+        window_scale.y != last_window_scale.y {
+        dpi_state = InvalidateDPI(dpi_state)
+    }
+    last_density = density
+    last_window_scale = window_scale
+    dpi_state = ResolveDPI(dpi_state, view_width, view_height, platform,
+        density, window_scale.x, window_scale.y)
+}
+
+#program_export
+GetDPIScale :: () -> float32 { return dpi_state.ui_scale_clamped }
+
+#program_export
+GetLayoutWidth :: () -> s32 { return dpi_state.layout_width }
+
+#program_export
+GetLayoutHeight :: () -> s32 { return dpi_state.layout_height }
+
+#program_export
+GetRenderScale :: () -> float32 { return dpi_state.render_scale }

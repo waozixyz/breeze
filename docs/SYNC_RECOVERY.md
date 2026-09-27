@@ -28,8 +28,11 @@ decryption. Transactions hold the connection mutex through commit or rollback,
 and habit ID reconciliation reuses a schema-created mapping table instead of
 dropping and recreating a temporary table while another thread is reading.
 
-Validation: `make sync-recovery-test`, the sync account/review and locale tests,
-and `DAOCHI_BIN=/path/to/daochi make sync-server-test`. The server test creates two
+Validation: `make sync-retry-zi-test` checks the proved retry policy across
+Ziran backends. `make sync-recovery-test` covers the native coordinator once
+the app source migration gate passes. The sync account/review and locale tests
+cover their respective boundaries. Run
+`DAOCHI_BIN=/path/to/daochi make sync-server-test` for the server flow. That test creates two
 accounts with separate aliases, accepts a friendship, restores the first account's
 exported key on fresh clients with and without pre-seeded default habits, and checks
 that the alias, friend, custom habit, completed habit day, session, and check-in return.

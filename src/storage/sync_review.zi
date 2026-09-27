@@ -1,0 +1,806 @@
+c3 :: #system_library "c";
+malloc :: (size: u64) -> *void #foreign c3;
+free :: (ptr: *void) #foreign c3;
+realloc :: (ptr: *void, size: u64) -> *void #foreign c3;
+sqlite3_column_int :: (stmt: *void, col: s32) -> s32 #foreign c3;
+#import, file "state.zi";
+#import, file "path_join.zi";
+#import, file "meta.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/locale.zi";
+#import "string_range"
+#import "byte_text_linux"
+#import "file_linux"
+#import, file "db.zi";
+#import, file "sqlite.zi";
+
+
+
+
+
+
+
+
+storage_sync_pending_review_key: string = "sync_pending_review_pending";
+storage_sync_apply_review_key: string = "sync_apply_pending_review";
+storage_sync_full_replace_key: string = "sync_full_replace_requested";
+storage_sync_auto_apply_visible_change_limit: s32 = 2;
+
+ReviewText :: struct {
+    data: *u8
+    len: s64
+    cap: s64
+    ok: s32
+}
+
+review_empty_text :: () -> *u8 {
+    value := cast(*u8)malloc(1)
+    if value != null { value[0] = cast(u8)0 }
+    return value
+}
+
+review_sql_bool :: (sql: string, text_arg: string, fallback: s32) -> s32 {
+    stmt: *void = null
+    result: s32 = fallback
+
+    if storage_db_handle() == null || sql.count == 0 {
+        return fallback
+    }
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return fallback
+    }
+    if text_arg.count > 0 {
+        bind_text(stmt, 1, text_arg)
+    }
+    if SqliteStep(stmt) == SQLITE_ROW {
+        result = ifx (sqlite3_column_int(stmt, 0) != 0) then (1) else (0)
+    }
+    SqliteFinalize(stmt)
+    return result
+}
+
+review_reserve :: (text: *ReviewText, extra: s64) -> s32 {
+    next: *u8
+    next_cap: s64
+
+    if text == null || text.ok == 0 {
+        return 0
+    }
+    if extra <= text.cap - text.len {
+        return 1
+    }
+    next_cap = ifx (text.cap > 0) then (text.cap) else (2048)
+    while extra > next_cap - text.len {
+        next_cap *= 2
+    }
+    next = cast(*u8)realloc(cast(*void)text.data, cast(u64)next_cap)
+    if next == null {
+        text.ok = 0
+        return 0
+    }
+    text.data = next
+    text.cap = next_cap
+    return 1
+}
+
+review_append :: (text: *ReviewText, value: string) {
+    len: s64
+
+    if text == null || value.count == 0 {
+        return
+    }
+    len = cast(s64)value.count
+    if review_reserve(text, len + 1) == 0 {
+        return
+    }
+    {
+        i: s64 = 0
+        while i < len {
+            text.data[text.len + i] = value[cast(s32)i]
+            i += 1
+        }
+    }
+    text.len += len
+    text.data[text.len] = cast(u8)0
+}
+
+review_append_number :: (out: *ReviewText, value: s32, width: s32) {
+    buffer: [16] u8
+    if !AppFormatS32(value, buffer[:]) { return }
+    digits := AppTextFromCString(*buffer[0], 16)
+    if value >= 0 {
+        padding: s32 = width - cast(s32)digits.count
+        while padding > 0 {
+            review_append(out, "0")
+            padding -= 1
+        }
+    }
+    review_append(out, digits)
+}
+
+review_append_date :: (out: *ReviewText, local_date: s32) {
+    review_append_number(out, local_date / 10000, 4)
+    review_append(out, "-")
+    review_append_number(out, (local_date / 100) % 100, 2)
+    review_append(out, "-")
+    review_append_number(out, local_date % 100, 2)
+}
+
+review_append_date_time :: (out: *ReviewText, local_date: s32, time_text: string) {
+    review_append_date(out, local_date)
+    review_append(out, " ")
+    review_append(out, ifx (time_text.count > 0) then (time_text) else ("--:--"))
+    review_append(out, "\n")
+}
+
+review_append_count :: (out: *ReviewText, count: s32) {
+    review_append(out, " count ")
+    review_append_number(out, count, 0)
+}
+
+review_append_seconds :: (out: *ReviewText, seconds: s32) {
+    review_append_number(out, seconds, 0)
+    review_append(out, "s")
+}
+
+review_append_duration :: (out: *ReviewText, seconds: s32) {
+    review_append(out, "duration ")
+    review_append_seconds(out, seconds)
+}
+
+review_append_rounds :: (out: *ReviewText, rounds: string) {
+    review_append(out, "rounds ")
+    review_append(out, ifx (rounds.count > 0) then (rounds) else ("none"))
+}
+
+storage_sync_review_path :: (out: *u8, out_size: s64) {
+    name_buffer: [24] u8
+    AppCopyText("sync-review.json", name_buffer[:])
+    if storage_join_path(out, cast(u64)out_size, storage_root_buffer(), *name_buffer[0]) == 0  && out != null && out_size > 0 {
+        out[0] = #char "\0"
+    }
+}
+
+storage_sync_review_write_json :: (json: string) -> s32 {
+    path: [STORAGE_PATH_SIZE] u8
+
+    if json.count == 0 {
+        return 0
+    }
+    storage_sync_review_path(*path[0], size_of(type_of(path)))
+    if path[0] == #char "\0" {
+        return 0
+    }
+    file := OpenReplace(AppTextFromCString(*path[0], STORAGE_PATH_SIZE))
+    if !file.valid { return 0 }
+    written := WriteTextAt(file, json, 0)
+    closed := CloseFile(file)
+    return ifx (written == cast(s64)json.count && closed) then (1) else (0)
+}
+
+storage_sync_review_read_json :: () -> *u8 {
+    path: [STORAGE_PATH_SIZE] u8
+    size: s64
+    data: *u8
+
+    storage_sync_review_path(*path[0], size_of(type_of(path)))
+    if path[0] == #char "\0" {
+        return null
+    }
+    file := OpenRead(AppTextFromCString(*path[0], STORAGE_PATH_SIZE))
+    if !file.valid { return null }
+    size = FileSize(file)
+    if size < 0 || size > 8 * 1024 * 1024 {
+        CloseFile(file)
+        return null
+    }
+    data = cast(*u8)malloc(cast(u64)size + 1)
+    if data == null {
+        CloseFile(file)
+        return null
+    }
+    if ReadAt(file, BytesFromPointer(data, cast(u64)size), 0) != size {
+        free(cast(*void)data)
+        CloseFile(file)
+        return null
+    }
+    data[size] = cast(u8)0
+    CloseFile(file)
+    return data
+}
+
+storage_sync_review_delete_json :: () {
+    path: [STORAGE_PATH_SIZE] u8
+
+    storage_sync_review_path(*path[0], size_of(type_of(path)))
+    if path[0] != #char "\0" {
+        RemoveFile(AppTextFromCString(*path[0], STORAGE_PATH_SIZE))
+    }
+}
+
+#program_export
+storage_sync_review_pending :: () -> s32 {
+    {
+        key_buffer: [64] u8
+        AppCopyText(storage_sync_pending_review_key, key_buffer[:])
+        return ifx (get_meta_int64(*key_buffer[0], 0) != 0) then (1) else (0)
+    }
+}
+
+review_activity_name :: (activity: s32) -> string {
+    if activity == 0 {
+        return LocaleText("exercise_wim_hof")
+    } else if activity == 1 {
+        return LocaleText("exercise_meditation")
+    } else if activity == 2 {
+        return LocaleText("exercise_patterns")
+    } else if activity == 3 {
+        return LocaleText("exercise_sun_salutation")
+    }
+    return LocaleText("exercise_wim_hof")
+}
+
+review_activity_uses_duration :: (activity: s32) -> s32 {
+    return ifx (activity == 1) then (1) else (0)
+}
+
+review_append_activity_heading :: (out: *ReviewText, activity: s32) {
+    name: string = review_activity_name(activity)
+
+    if name.count == 0 {
+        return
+    }
+    review_append(out, name)
+    review_append(out, "\n")
+}
+
+review_append_habit_day :: (out: *ReviewText, last_name: *u8, last_name_size: s64,
+    rows: *s32, name: string, local_date: s32, count: s32) {
+    safe_name: string = ifx (name.count > 0 && name[0] != #char "\0") then (name) else ("(unnamed)")
+
+    if AppTextFromCString(last_name, cast(s32)last_name_size) != safe_name {
+        if rows.* > 0 {
+            review_append(out, "\n")
+        }
+        review_append(out, safe_name)
+        review_append(out, "\n")
+        AppCopyText(safe_name, BytesFromPointer(last_name, cast(u64)last_name_size))
+    }
+    review_append_date(out, local_date)
+    if count > 0 {
+        review_append_count(out, count)
+    }
+    review_append(out, "\n")
+    rows.* += 1
+}
+
+review_append_local_rounds :: (out: *ReviewText, session_id: string) {
+    stmt: *void = null
+    first: s32 = 1
+
+    if storage_db_handle() == null || session_id.count == 0 {
+        return
+    }
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT seconds FROM session_rounds WHERE session_id=?1 ORDER BY round_index",
+        -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, session_id)
+    while SqliteStep(stmt) == SQLITE_ROW {
+        if first == 0 {
+            review_append(out, ",")
+        }
+        first = 0
+        review_append_seconds(out, sqlite3_column_int(stmt, 0))
+    }
+    SqliteFinalize(stmt)
+    if first != 0 {
+        review_append(out, "none")
+    }
+}
+
+review_append_local_duration :: (out: *ReviewText, session_id: string) {
+    stmt: *void = null
+    total: s32 = 0
+
+    if storage_db_handle() == null || session_id.count == 0 {
+        return
+    }
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT COALESCE(SUM(seconds),0) FROM session_rounds WHERE session_id=?1",
+        -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, session_id)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        total = sqlite3_column_int(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    review_append_duration(out, total)
+}
+
+review_append_local :: (out: *ReviewText) {
+    stmt: *void = null
+    rows: s32 = 0
+    last_activity: s32 = -1000000
+
+    review_append(out, "Sessions\n")
+    if storage_db_handle() != null  && SqlitePrepareText(storage_db_handle(),
+        "SELECT id,local_date,strftime('%H:%M',started_at,'unixepoch','localtime'),activity,deleted_at FROM sessions WHERE user_id=?1 AND deleted_at=0 ORDER BY activity,local_date DESC,started_at DESC,id",
+        -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+            local_date: s32 = sqlite3_column_int(stmt, 1)
+            time_text: string = AppTextFromCString(SqliteColumnText(stmt, 2), 4096)
+            activity: s32 = sqlite3_column_int(stmt, 3)
+
+            if review_activity_name(activity).count == 0 {
+                continue
+            }
+            if activity != last_activity {
+                if rows > 0 {
+                    review_append(out, "\n")
+                }
+                review_append_activity_heading(out, activity)
+                last_activity = activity
+            }
+            review_append_date_time(out, local_date, time_text)
+            if activity == 2 {
+                review_append(out, "session 1")
+            } else if review_activity_uses_duration(activity) != 0 {
+                review_append_local_duration(out, id)
+            } else {
+                review_append(out, "rounds ")
+                review_append_local_rounds(out, id)
+            }
+            if SqliteColumnInt64(stmt, 4) != 0 {
+                review_append(out, " deleted")
+            }
+            review_append(out, "\n")
+            rows += 1
+        }
+        SqliteFinalize(stmt)
+    }
+    if rows == 0 {
+        review_append(out, "No sessions\n")
+    }
+
+    rows = 0
+    review_append(out, "\nHabit days\n")
+    if storage_db_handle() != null  && SqlitePrepareText(storage_db_handle(),
+        "SELECT h.name,hd.local_date,hd.count FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=?1 AND (hd.completed!=0 OR hd.count>0 OR hd.session_count>0) ORDER BY h.name,hd.local_date DESC",
+        -1, *stmt, null) == SQLITE_OK {
+        last_name: [256] u8
+
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            local_date: s32 = sqlite3_column_int(stmt, 1)
+            name: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+
+            review_append_habit_day(out, *last_name[0], size_of(type_of(last_name)), *rows,
+                name, local_date, sqlite3_column_int(stmt, 2))
+        }
+        SqliteFinalize(stmt)
+    }
+    if rows == 0 {
+        review_append(out, "No habit days\n")
+    }
+}
+
+review_append_remote :: (out: *ReviewText, json: string) {
+    stmt: *void = null
+    rows: s32 = 0
+    last_activity: s32 = -1000000
+
+    review_append(out, "Sessions\n")
+    if storage_db_handle() != null && json.count > 0  && SqlitePrepareText(storage_db_handle(),
+        "SELECT CAST(COALESCE(json_extract(s.value,'$.local_date'),0) AS INTEGER),       COALESCE(strftime('%H:%M',json_extract(s.value,'$.started_at'),'localtime'),'--:--'),       CAST(COALESCE(json_extract(s.value,'$.activity'),0) AS INTEGER),       CAST(COALESCE(json_extract(s.value,'$.deleted_at'),0) AS INTEGER),       COALESCE((SELECT group_concat(CAST(COALESCE(json_extract(r.value,'$.hold_seconds'),0) AS INTEGER) || 's', ',') FROM json_each(s.value,'$.rounds') AS r),'none'),       CAST(COALESCE((SELECT SUM(CAST(COALESCE(json_extract(r.value,'$.hold_seconds'),0) AS INTEGER)) FROM json_each(s.value,'$.rounds') AS r),0) AS INTEGER) FROM json_each(?1,'$.changes.sessions') AS s WHERE CAST(COALESCE(json_extract(s.value,'$.deleted_at'),0) AS INTEGER)=0 ORDER BY 3,1 DESC,2 DESC",
+        -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, json)
+        while SqliteStep(stmt) == SQLITE_ROW {
+            local_date: s32 = sqlite3_column_int(stmt, 0)
+            time_text: string = AppTextFromCString(SqliteColumnText(stmt, 1), 4096)
+            activity: s32 = sqlite3_column_int(stmt, 2)
+            rounds: string = AppTextFromCString(SqliteColumnText(stmt, 4), 4096)
+            duration: s32 = sqlite3_column_int(stmt, 5)
+
+            if review_activity_name(activity).count == 0 {
+                continue
+            }
+            if activity != last_activity {
+                if rows > 0 {
+                    review_append(out, "\n")
+                }
+                review_append_activity_heading(out, activity)
+                last_activity = activity
+            }
+            review_append_date_time(out, local_date, time_text)
+            if activity == 2 {
+                review_append(out, "session 1")
+            } else if review_activity_uses_duration(activity) != 0 {
+                review_append_duration(out, duration)
+            } else {
+                review_append_rounds(out, rounds)
+            }
+            if SqliteColumnInt64(stmt, 3) != 0 {
+                review_append(out, " deleted")
+            }
+            review_append(out, "\n")
+            rows += 1
+        }
+        SqliteFinalize(stmt)
+    }
+    if rows == 0 {
+        review_append(out, "No sessions\n")
+    }
+
+    rows = 0
+    review_append(out, "\nHabit days\n")
+    if storage_db_handle() != null && json.count > 0  && SqlitePrepareText(storage_db_handle(),
+        "SELECT COALESCE((SELECT COALESCE(json_extract(h.value,'$.name'),'') FROM json_each(?1,'$.changes.habits') AS h WHERE COALESCE(json_extract(h.value,'$.id'),'')=COALESCE(json_extract(d.value,'$.habit_id'),'')),                (SELECT name FROM habits WHERE id=COALESCE(json_extract(d.value,'$.habit_id'),'') LIMIT 1),                ''),       CAST(COALESCE(json_extract(d.value,'$.local_date'),0) AS INTEGER),       CAST(COALESCE(json_extract(d.value,'$.count'),0) AS INTEGER) FROM json_each(?1,'$.changes.habit_days') AS d WHERE json_extract(d.value,'$.completed') OR CAST(COALESCE(json_extract(d.value,'$.count'),0) AS INTEGER)>0 ORDER BY 1,2 DESC",
+        -1, *stmt, null) == SQLITE_OK {
+        last_name: [256] u8
+
+        bind_text(stmt, 1, json)
+        while SqliteStep(stmt) == SQLITE_ROW {
+            local_date: s32 = sqlite3_column_int(stmt, 1)
+            name: string = AppTextFromCString(SqliteColumnText(stmt, 0), 4096)
+
+            if name.count == 0 {
+                continue
+            }
+            review_append_habit_day(out, *last_name[0], size_of(type_of(last_name)), *rows,
+                name, local_date, sqlite3_column_int(stmt, 2))
+        }
+        SqliteFinalize(stmt)
+    }
+    if rows == 0 {
+        review_append(out, "No habit days\n")
+    }
+}
+
+storage_sync_review_details :: (local_out: **u8, remote_out: **u8) -> s32 {
+    json: *u8 = storage_sync_review_read_json()
+    local: ReviewText = ReviewText.{}
+    remote: ReviewText = ReviewText.{}
+
+    if local_out != null {
+        local_out.* = null
+    }
+    if remote_out != null {
+        remote_out.* = null
+    }
+    local.ok = 1
+    remote.ok = 1
+    review_append_local(*local)
+    review_append_remote(*remote, AppTextFromCString(json, 65536))
+    free(cast(*void)json)
+    if local.ok == 0 || remote.ok == 0 {
+        free(cast(*void)local.data)
+        free(cast(*void)remote.data)
+        return 0
+    }
+    if local_out != null {
+        local_out.* = ifx (local.data != null) then (local.data) else (review_empty_text())
+    } else {
+        free(cast(*void)local.data)
+    }
+    if remote_out != null {
+        remote_out.* = ifx (remote.data != null) then (remote.data) else (review_empty_text())
+    } else {
+        free(cast(*void)remote.data)
+    }
+    return ifx ((local_out == null || local_out.* != null)  && (remote_out == null || remote_out.* != null)) then (1) else (0)
+}
+
+review_line_equal :: (line: string, line_len: s64, other: string) -> s32 {
+    offset: s32 = 0
+
+    if line.count == 0 || other.count == 0 {
+        return 0
+    }
+    while offset < cast(s32)other.count {
+        scan: s32 = offset
+        while scan < cast(s32)other.count && other[scan] != #char "\n" {
+            scan += 1
+        }
+        if cast(s64)(scan - offset) == line_len {
+            match: s32 = 1
+            i: s32 = 0
+            while i < cast(s32)line.count && offset + i < cast(s32)other.count {
+                if other[offset + i] != line[i] {
+                    match = 0
+                    break
+                }
+                i += 1
+            }
+            if match != 0 {
+                return 1
+            }
+        }
+        offset = scan + 1
+    }
+    return 0
+}
+
+review_append_unique_lines :: (out: *ReviewText, prefix: string,
+    lines: string, other: string) {
+    offset: s32 = 0
+
+    if out == null || prefix.count == 0 || lines.count == 0 {
+        return
+    }
+    while offset < cast(s32)lines.count {
+        scan: s32 = offset
+        while scan < cast(s32)lines.count && lines[scan] != #char "\n" {
+            scan += 1
+        }
+        len := scan - offset
+        line := Substring(lines, offset, len)
+        if len > 0 && review_line_equal(line, cast(s64)len, other) == 0 {
+            review_append(out, prefix)
+            if review_reserve(out, cast(s64)len + 2) == 0 {
+                return
+            }
+            i: s32 = 0
+            while i < len {
+                out.data[out.len] = lines[offset + i]
+                out.len += 1
+                i += 1
+            }
+            out.data[out.len] = #char "\n"
+            out.len += 1
+            out.data[out.len] = #char "\0"
+        }
+        offset = scan + 1
+    }
+}
+
+storage_sync_review_diff_for_json :: (json: string, include_empty_message: s32,
+    diff_out: **u8) -> s32 {
+    local: ReviewText = ReviewText.{}
+    remote: ReviewText = ReviewText.{}
+    diff: ReviewText = ReviewText.{}
+
+    if diff_out == null {
+        return 0
+    }
+    diff_out.* = null
+    if diff_out == null {
+        return 0
+    }
+    local.ok = 1
+    remote.ok = 1
+    diff.ok = 1
+    review_append_local(*local)
+    review_append_remote(*remote, json)
+    if local.ok == 0 || remote.ok == 0 {
+        free(cast(*void)local.data)
+        free(cast(*void)remote.data)
+        return 0
+    }
+    review_append_unique_lines(*diff, "- ", ifx (local.data != null) then (AppTextFromCString(local.data, 65536)) else (""),
+        ifx (remote.data != null) then (AppTextFromCString(remote.data, 65536)) else (""))
+    review_append_unique_lines(*diff, "+ ", ifx (remote.data != null) then (AppTextFromCString(remote.data, 65536)) else (""),
+        ifx (local.data != null) then (AppTextFromCString(local.data, 65536)) else (""))
+    if diff.len == 0 && include_empty_message != 0 {
+        review_append(*diff, "No visible differences.\n")
+    }
+    free(cast(*void)local.data)
+    free(cast(*void)remote.data)
+    if diff.ok == 0 {
+        free(cast(*void)diff.data)
+        return 0
+    }
+    diff_out.* = ifx (diff.data != null) then (diff.data) else (review_empty_text())
+    return ifx (diff_out.* != null) then (1) else (0)
+}
+
+storage_sync_review_diff :: (diff_out: **u8) -> s32 {
+    json: *u8 = storage_sync_review_read_json()
+    ok: s32 = storage_sync_review_diff_for_json(AppTextFromCString(json, 65536), 1, diff_out)
+
+    free(cast(*void)json)
+    return ok
+}
+
+storage_sync_review_has_visible_diff :: () -> s32 {
+    json: *u8 = storage_sync_review_read_json()
+    result: s32 = storage_sync_review_json_has_visible_diff(AppTextFromCString(json, 65536))
+
+    free(cast(*void)json)
+    return result
+}
+
+empty_meta: [2] u8 = .[0, 0];
+
+#program_export
+storage_sync_review_clear_if_no_visible_diff :: () -> s32 {
+    if storage_sync_review_pending() == 0 {
+        return 0
+    }
+    if storage_sync_review_has_visible_diff() != 0 {
+        return 0
+    }
+    key_buffer: [64] u8
+    AppCopyText(storage_sync_pending_review_key, key_buffer[:])
+    set_meta(*key_buffer[0], *empty_meta[0])
+    storage_sync_review_delete_json()
+    AppCopyText(storage_sync_apply_review_key, key_buffer[:])
+    set_meta_int64(*key_buffer[0], 0)
+    storage_schedule_persist()
+    return 1
+}
+
+storage_sync_review_apply_remote_if_local_empty :: () -> s32 {
+    if storage_sync_review_pending() == 0 {
+        return 0
+    }
+    if review_has_local_activity() != 0 {
+        return 0
+    }
+    return storage_apply_pending_sync_review(1)
+}
+
+storage_sync_review_json_has_visible_diff :: (json: string) -> s32 {
+    diff: *u8 = null
+    has_diff: s32
+
+    if storage_sync_review_diff_for_json(json, 0, *diff) == 0 {
+        free(cast(*void)diff)
+        return 1
+    }
+    has_diff = ifx (diff != null && diff[0] != #char "\0"  && (review_has_pending_outbox() != 0 || review_has_unknown_activity(json) != 0)) then (1) else (0)
+    free(cast(*void)diff)
+    return has_diff
+}
+
+storage_sync_review_json_should_auto_apply_remote :: (json: string) -> s32 {
+    diff: *u8 = null
+    result: s32
+
+    if review_has_unknown_activity(json) != 0 {
+        return 0
+    }
+    if storage_sync_review_diff_for_json(json, 0, *diff) == 0 {
+        free(cast(*void)diff)
+        return 0
+    }
+    if diff == null {
+        free(cast(*void)diff)
+        return 1
+    }
+    if review_has_local_activity() == 0 {
+        free(cast(*void)diff)
+        return 1
+    }
+    if review_has_pending_outbox() == 0 {
+        free(cast(*void)diff)
+        return 1
+    }
+    result = review_small_session_only_change(AppTextFromCString(diff, 65536))
+    free(cast(*void)diff)
+    return result
+}
+
+review_has_local_activity :: () -> s32 {
+    return review_sql_bool("SELECT EXISTS( SELECT 1 FROM sessions WHERE deleted_at=0 UNION ALL SELECT 1 FROM habit_days  WHERE completed!=0 OR count>0 OR session_count>0 LIMIT 1)",
+        "", 1)
+}
+
+review_has_pending_outbox :: () -> s32 {
+    return review_sql_bool("SELECT EXISTS(SELECT 1 FROM sync_outbox LIMIT 1)",
+        "", 1)
+}
+
+review_pending_outbox_sessions_only :: () -> s32 {
+    return review_sql_bool(
+        "SELECT EXISTS(SELECT 1 FROM sync_outbox LIMIT 1) AND NOT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type<>'session')",
+        "", 0)
+}
+
+review_has_unknown_activity :: (json: string) -> s32 {
+    if review_sql_bool("SELECT EXISTS(SELECT 1 FROM sessions WHERE deleted_at=0 AND activity NOT IN (0,1,2))",
+        "", 1) != 0 {
+        return 1
+    }
+
+    if json.count == 0 {
+        return 0
+    }
+    return review_sql_bool(
+        "SELECT EXISTS( SELECT 1 FROM json_each(?1,'$.changes.sessions') AS s  WHERE CAST(COALESCE(json_extract(s.value,'$.deleted_at'),0) AS INTEGER)=0  AND CAST(COALESCE(json_extract(s.value,'$.activity'),0) AS INTEGER) NOT IN (0,1,2))",
+        json, 1)
+}
+
+review_small_session_only_change :: (diff: string) -> s32 {
+    count: s32
+
+    if review_pending_outbox_sessions_only() == 0 {
+        return 0
+    }
+    count = review_visible_change_count(diff)
+    return ifx (count > 0 && count <= storage_sync_auto_apply_visible_change_limit) then (1) else (0)
+}
+
+review_line_starts_with_date :: (line: string, len: s64) -> s32 {
+    if line.count == 0 || len < 10 {
+        return 0
+    }
+    return ifx (line[0] >= #char "0" && line[0] <= #char "9"  && line[1] >= #char "0" && line[1] <= #char "9"  && line[2] >= #char "0" && line[2] <= #char "9"  && line[3] >= #char "0" && line[3] <= #char "9"  && line[4] == #char "-"  && line[5] >= #char "0" && line[5] <= #char "9"  && line[6] >= #char "0" && line[6] <= #char "9"  && line[7] == #char "-"  && line[8] >= #char "0" && line[8] <= #char "9"  && line[9] >= #char "0" && line[9] <= #char "9") then (1) else (0)
+}
+
+review_line_equals_literal :: (line: string, len: s64, literal: string) -> s32 {
+    if line.count == 0 || literal.count == 0 || len < 0 ||
+    len > cast(s64)line.count || len != cast(s64)literal.count {
+        return 0
+    }
+    index: s64 = 0
+    while index < len {
+        if line[index] != literal[index] { return 0 }
+        index += 1
+    }
+    return 1
+}
+
+review_visible_change_count :: (diff: string) -> s32 {
+    p: string = diff
+    diff_line: string
+    end: string
+    len: s64
+    date_lines: s32 = 0
+    changed_lines: s32 = 0
+
+    if diff.count == 0 {
+        return 0
+    }
+    offset: s32 = 0
+    while offset < cast(s32)diff.count {
+        scan: s32 = offset
+        while scan < cast(s32)diff.count && diff[scan] != #char "\n" {
+            scan += 1
+        }
+        len := scan - offset
+        if len > 2 && (diff[offset] == #char "-" || diff[offset] == #char "+") && diff[offset + 1] == #char " " {
+            diff_line := Substring(diff, offset + 2, len - 2)
+            line_len: s64 = cast(s64)(len - 2)
+            if review_line_starts_with_date(diff_line, line_len) != 0 {
+                date_lines += 1
+            } else if review_line_equals_literal(diff_line, line_len, "Sessions") == 0  && review_line_equals_literal(diff_line, line_len, "Habit days") == 0 {
+                changed_lines += 1
+            }
+        }
+        offset = scan + 1
+    }
+    return ifx (date_lines > 0) then (date_lines) else (changed_lines)
+}
+
+storage_apply_pending_sync_review :: (use_remote: s32) -> s32 {
+    json: *u8 = storage_sync_review_read_json()
+    ok: s32
+
+    if json == null {
+        return 0
+    }
+    if use_remote == 0 {
+        apply_key_buffer: [64] u8
+        AppCopyText(storage_sync_pending_review_key, apply_key_buffer[:])
+        set_meta(*apply_key_buffer[0], *empty_meta[0])
+        storage_sync_review_delete_json()
+        AppCopyText(storage_sync_apply_review_key, apply_key_buffer[:])
+        set_meta_int64(*apply_key_buffer[0], 0)
+        AppCopyText(storage_sync_full_replace_key, apply_key_buffer[:])
+        set_meta_int64(*apply_key_buffer[0], 0)
+        exec_sql("DELETE FROM sync_outbox")
+        storage_state_handle().pending_sync_outbox_seq = 0
+        storage_schedule_persist()
+        free(cast(*void)json)
+        return 1
+    }
+    ok = storage_apply_remote_full_snapshot(AppTextFromCString(json, 2147483647))
+    free(cast(*void)json)
+    return ok
+}

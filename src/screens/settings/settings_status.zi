@@ -1,0 +1,65 @@
+// Settings messages belong to Inbe. The screen reads this state when it draws.
+SettingsStatus :: struct {
+    message: string
+    detail: string
+    kind: s32
+}
+
+current: SettingsStatus;
+StatusTextCapacity :: 4096
+StatusBytes :: struct {
+    message: [StatusTextCapacity]u8
+    detail: [StatusTextCapacity]u8
+}
+status_bytes: [2]StatusBytes;
+status_slot: s32;
+
+StatusCopy :: (text: string, output: []u8) -> s64 {
+    count := text.count
+    if count >= output.count {
+        count = output.count - 1
+        // End before a partial UTF-8 sequence when bounding a long detail.
+        while count > 0 && (text[count] & cast(u8)192) == cast(u8)128 {
+            count -= 1
+        }
+    }
+    index: s64 = 0
+    while index < count {
+        output[index] = text[index]
+        index += 1
+    }
+    output[count] = 0
+    return count
+}
+
+StatusStore :: (message: string, detail: string, kind: s32) {
+    // Copy both inputs before publishing the next slot. Inputs may borrow
+    // temporary caller storage or the previous status, including swapped fields.
+    next := 1 - status_slot
+    message_length := StatusCopy(message, status_bytes[next].message[:])
+    detail_length := StatusCopy(detail, status_bytes[next].detail[:])
+    current.message = TextView(status_bytes[next].message[0:message_length])
+    current.detail = TextView(status_bytes[next].detail[0:detail_length])
+    current.kind = kind
+    status_slot = next
+}
+
+#program_export
+settings_screen_set_status_success :: (message: string, detail: string) {
+    StatusStore(message, detail, 1)
+}
+
+#program_export
+settings_screen_set_status_error :: (message: string) {
+    StatusStore(message, "", 2)
+}
+
+#program_export
+settings_screen_clear_status :: () {
+    current = SettingsStatus.{}
+}
+
+#program_export
+settings_screen_status :: () -> SettingsStatus {
+    return current
+}

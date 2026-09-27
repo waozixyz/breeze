@@ -1,0 +1,30 @@
+c :: #system_library "c";
+#import, file "app_types.zi";
+
+#import, file "app.zi";
+#import, file "../habits/habit_types.zi";
+
+// These implementations live in Inbe's settings and habits modules. Keeping
+// their declarations here avoids importing unrelated UI and storage bodies.
+save_settings :: (app: *InnerBreeze) #foreign c;
+habits_flush_save :: (app: *InnerBreeze) #foreign c;
+
+#program_export
+app_flush_deferred_settings :: (app: *InnerBreeze) {
+    if app == null || app.settings_save_delay_ticks <= 0 { return }
+    app.settings_save_delay_ticks -= 1
+    if app.settings_save_delay_ticks <= 0 && app.settings_dirty != 0 {
+        save_settings(app)
+    }
+}
+
+habits_save_pending :: (app: *InnerBreeze) -> bool {
+    return app != null  && (app.habits.dirty != 0 || app.habits.pending_day_save_count > 0)
+}
+
+#program_export
+app_flush_habits_after_frame :: (app: *InnerBreeze) {
+    if !habits_save_pending(app) { return }
+    // The caller reaches this point after ending the interface frame.
+    habits_flush_save(app)
+}

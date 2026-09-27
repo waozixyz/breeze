@@ -1,0 +1,259 @@
+// Consume raylib's native va_list once, preserving its target ABI.
+#import "c_string"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+raylib :: #system_library "raylib";
+TRACE_STRUCT_ARGUMENTS :: #defined(__aarch64__) && !#defined(_WIN32) && !#defined(__APPLE__)
+#if TRACE_STRUCT_ARGUMENTS {
+    TraceArguments :: struct {
+        stack: *void
+        general_top: *void
+        vector_top: *void
+        general_offset: s32
+        vector_offset: s32
+    }
+} else {
+    TraceArguments :: struct {
+        cursor: *void
+    }
+}
+#if TRACE_STRUCT_ARGUMENTS {
+    TraceCallback :: #type (s32, *u8, TraceArguments) -> void #c_call;
+} else {
+    TraceCallback :: #type (s32, *u8, *void) -> void #c_call;
+}
+SetCallback :: (callback: TraceCallback) #foreign raylib "SetTraceLogCallback";
+SetLogLevel :: (level: s32) #foreign raylib "SetTraceLogLevel";
+GetEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+CloseStream :: (stream: *void) -> s32 #foreign c "fclose";
+FlushStream :: (stream: *void) -> s32 #foreign c "fflush";
+#if TRACE_STRUCT_ARGUMENTS {
+    NativePrintArguments :: (stream: *void, format: *u8,
+        arguments: TraceArguments) -> s32 #foreign c "vfprintf";
+    NativeFormatArguments :: (output: *u8, capacity: usize, format: *u8,
+        arguments: TraceArguments) -> s32 #foreign c "vsnprintf";
+} else {
+    NativePrintArguments :: (stream: *void, format: *u8,
+        arguments: *void) -> s32 #foreign c "vfprintf";
+    NativeFormatArguments :: (output: *u8, capacity: usize, format: *u8,
+        arguments: *void) -> s32 #foreign c "vsnprintf";
+}
+PrintArguments :: (stream: *void, format: *u8, arguments: TraceArguments) {
+    #if TRACE_STRUCT_ARGUMENTS {
+        NativePrintArguments(stream, format, arguments)
+    } else {
+        NativePrintArguments(stream, format, arguments.cursor)
+    }
+}
+FormatArguments :: (output: *u8, capacity: usize, format: *u8,
+    arguments: TraceArguments) {
+    #if TRACE_STRUCT_ARGUMENTS {
+        NativeFormatArguments(output, capacity, format, arguments)
+    } else {
+        NativeFormatArguments(output, capacity, format, arguments.cursor)
+    }
+}
+PrintBytes :: (bytes: *u8, size: usize, count: usize,
+    stream: *void) -> usize #foreign c "fwrite";
+PrintCharacter :: (character: s32, stream: *void) -> s32 #foreign c "fputc";
+OpenStream :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+#if #defined(_WIN32) {
+    DuplicateDescriptor :: (descriptor: s32) -> s32 #foreign c "_dup";
+    DescriptorStream :: (descriptor: s32, mode: *u8) -> *void #foreign c "_fdopen";
+    CloseDescriptor :: (descriptor: s32) -> s32 #foreign c "_close";
+} else {
+    DuplicateDescriptor :: (descriptor: s32) -> s32 #foreign c "dup";
+    DescriptorStream :: (descriptor: s32, mode: *u8) -> *void #foreign c "fdopen";
+    CloseDescriptor :: (descriptor: s32) -> s32 #foreign c "close";
+}
+#if #defined(ANDROID_BUILD) {
+    android_log :: #system_library "log";
+    #if TRACE_STRUCT_ARGUMENTS {
+        AndroidPrint :: (priority: s32, tag: *u8, format: *u8,
+            arguments: TraceArguments) -> s32 #foreign android_log "__android_log_vprint";
+    } else {
+        AndroidPrint :: (priority: s32, tag: *u8, format: *u8,
+            arguments: *void) -> s32 #foreign android_log "__android_log_vprint";
+    }
+}
+
+trace_stream: *void;
+trace_file: *void;
+trace_errors: [2048]u8;
+trace_errors_length: s32;
+
+TraceLevelName :: (level: s32) -> string {
+    if level == 1 {
+        return "TRACE"
+    }
+    if level == 2 {
+        return "DEBUG"
+    }
+    if level == 4 {
+        return "WARNING"
+    }
+    if level == 5 {
+        return "ERROR"
+    }
+    if level == 6 {
+        return "FATAL"
+    }
+    return "INFO"
+}
+
+TraceStartsWith :: (text: *u8, prefix: string) -> bool {
+    if text == null {
+        return false
+    }
+    index: s64 = 0
+    while index < prefix.count {
+        if text[index] != prefix[index] {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+TraceWriteText :: (stream: *void, value: string) {
+    if stream == null || value.count == 0 {
+        return
+    }
+    bytes := cast(*TextDescriptor)(*value)
+    PrintBytes(bytes.data, 1, cast(usize)value.count, stream)
+}
+
+FilteredTrace :: (level: s32, format: *u8, arguments: TraceArguments) {
+    if level < 4 && (TraceStartsWith(format, "IMAGE:") ||
+        TraceStartsWith(format, "TEXTURE:") ||
+        TraceStartsWith(format, "TIMER: Target time per frame")) {
+        return
+    }
+    #if #defined(ANDROID_BUILD) {
+        if level >= 4 {
+            tag: [16]u8
+            if CopyCString("InnerBreeze", tag[:]) {
+                #if TRACE_STRUCT_ARGUMENTS {
+                    AndroidPrint(5, *tag[0], format, arguments)
+                } else {
+                    AndroidPrint(5, *tag[0], format, arguments.cursor)
+                }
+            }
+        }
+        return
+    }
+    if trace_stream == null {
+        return
+    }
+    TraceWriteText(trace_stream, TraceLevelName(level))
+    TraceWriteText(trace_stream, ": ")
+    PrintArguments(trace_stream, format, arguments)
+    PrintCharacter(10, trace_stream)
+    FlushStream(trace_stream)
+}
+
+AppendTraceError :: (text: string) {
+    index: s64 = 0
+    while index < text.count && trace_errors_length < 2047 {
+        trace_errors[trace_errors_length] = text[index]
+        trace_errors_length += 1
+        index += 1
+    }
+    trace_errors[trace_errors_length] = 0
+}
+
+WindowsTrace :: (level: s32, format: *u8, arguments: TraceArguments) {
+    bytes: [1024]u8
+    FormatArguments(*bytes[0], 1024, format, arguments)
+    bytes[1023] = 0
+    text := TextFromCString(*bytes[0])
+    name := TraceLevelName(level)
+    if level >= 4 && text.count > 0 {
+        AppendTraceError("[")
+        AppendTraceError(name)
+        AppendTraceError("] ")
+        AppendTraceError(text)
+        AppendTraceError("\n")
+    }
+    if trace_file != null {
+        TraceWriteText(trace_file, "[")
+        TraceWriteText(trace_file, name)
+        TraceWriteText(trace_file, "] ")
+        TraceWriteText(trace_file, text)
+        TraceWriteText(trace_file, "\n")
+        FlushStream(trace_file)
+    }
+}
+
+TraceRecentErrors :: () -> string {
+    return TextFromCString(*trace_errors[0])
+}
+
+InstallWindowsLogger :: () {
+    path: [16]u8
+    mode: [4]u8
+    if !CopyCString("inbe.log", path[:]) || !CopyCString("ab", mode[:]) {
+        return
+    }
+    trace_file = OpenStream(*path[0], *mode[0])
+    if trace_file != null {
+        callback: TraceCallback = WindowsTraceCallback
+        SetCallback(callback)
+    }
+}
+
+#program_export
+native_install_trace_log_filter :: () {
+    #if #defined(KRYON_BACKEND_TERMI) {
+        name: [32]u8
+        if CopyCString("APP_TERMI_LOG", name[:]) &&
+            GetEnvironment(*name[0]) == null {
+            SetLogLevel(7)
+            return
+        }
+    }
+    #if !#defined(ANDROID_BUILD) {
+        if trace_stream == null {
+            mode: [4]u8
+            if CopyCString("w", mode[:]) {
+                descriptor := DuplicateDescriptor(2)
+                if descriptor >= 0 {
+                    trace_stream = DescriptorStream(descriptor, *mode[0])
+                    if trace_stream == null {
+                        CloseDescriptor(descriptor)
+                    }
+                }
+            }
+        }
+    }
+    callback: TraceCallback = FilteredTraceCallback
+    SetCallback(callback)
+}
+
+CloseTraceStreams :: () {
+    if trace_file != null {
+        CloseStream(trace_file)
+        trace_file = null
+    }
+    if trace_stream != null {
+        CloseStream(trace_stream)
+        trace_stream = null
+    }
+}
+
+#if TRACE_STRUCT_ARGUMENTS {
+    FilteredTraceCallback :: (level: s32, format: *u8, arguments: TraceArguments) {
+        FilteredTrace(level, format, arguments)
+    }
+    WindowsTraceCallback :: (level: s32, format: *u8, arguments: TraceArguments) {
+        WindowsTrace(level, format, arguments)
+    }
+} else {
+    FilteredTraceCallback :: (level: s32, format: *u8, arguments: *void) {
+        FilteredTrace(level, format, TraceArguments.{arguments})
+    }
+    WindowsTraceCallback :: (level: s32, format: *u8, arguments: *void) {
+        WindowsTrace(level, format, TraceArguments.{arguments})
+    }
+}

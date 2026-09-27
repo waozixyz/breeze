@@ -1,0 +1,120 @@
+c :: #system_library "c";
+
+DESKTOP_TRAY_MENU_ITEM_ACTION :: 0;
+DESKTOP_TRAY_MENU_ITEM_SUBMENU :: 1;
+DESKTOP_TRAY_MENU_ITEM_SEPARATOR :: 2;
+
+DesktopTrayMenuItem :: struct {
+    kind: s32
+    label: *u8
+    action: s32
+    enabled: s32
+    children: *DesktopTrayMenuItem
+    child_count: s32
+}
+
+DesktopTraySpec :: struct {
+    id: *u8
+    title: *u8
+    icon_name: *u8
+    icon_paths: **u8
+    close_action: s32
+    activate_action: s32
+    menu_items: *DesktopTrayMenuItem
+    menu_item_count: s32
+}
+
+// Platform tray behavior is owned by this module; GTK and Win32 are native FFI.
+#import "c_string"
+
+TrayMalloc :: (bytes: usize) -> *void #foreign c "malloc";
+TrayCalloc :: (count: usize, bytes: usize) -> *void #foreign c "calloc";
+TrayFree :: (memory: *void) #foreign c "free";
+TrayMemcpy :: (destination: *void, source: *void, bytes: usize) -> *void #foreign c "memcpy";
+TrayStrlen :: (text: *u8) -> usize #foreign c "strlen";
+TrayGetEnv :: (name: *u8) -> *u8 #foreign c "getenv";
+TrayMemcmp :: (left: *void, right: *void, count: usize) -> s32 #foreign c "memcmp";
+
+#program_export
+DesktopTrayGetEnv :: (name: *u8) -> *u8 {
+    if name == null {
+        return null
+    }
+    return TrayGetEnv(name)
+}
+
+#program_export
+DesktopTrayCompareBytes :: (left: *void, right: *void, count: s64) -> s32 {
+    if left == null || right == null || count < 0 ||
+    (size_of(usize) < 8 && count > 4294967295) {
+        return 1
+    }
+    return TrayMemcmp(left, right, cast(usize)count)
+}
+
+TrayCopyText :: (source: *u8, output: []u8) {
+    index: s32 = 0
+    if output.count == 0 {
+        return
+    }
+    if source != null {
+        while index + 1 < cast(s32)output.count && source[index] != 0 {
+            output[index] = source[index]
+            index += 1
+        }
+    }
+    output[index] = 0
+}
+
+TrayCopyString :: (text: *u8) -> *u8 {
+    length: usize = 0
+    if text != null {
+        length = TrayStrlen(text)
+    }
+    copy := cast(*u8)TrayMalloc(length + 1)
+    if copy != null {
+        if length > 0 {
+            TrayMemcpy(cast(*void)copy, cast(*void)text, length)
+        }
+        copy[length] = 0
+    }
+    return copy
+}
+
+TrayFreeItems :: (items: *DesktopTrayMenuItem, count: s32) {
+    if items == null {
+        return
+    }
+    index: s32 = 0
+    while index < count {
+        TrayFree(cast(*void)items[index].label)
+        TrayFreeItems(items[index].children, items[index].child_count)
+        index += 1
+    }
+    TrayFree(cast(*void)items)
+}
+
+TrayCopyItems :: (items: *DesktopTrayMenuItem, count: s32) -> *DesktopTrayMenuItem {
+    if items == null || count <= 0 {
+        return null
+    }
+    copy := cast(*DesktopTrayMenuItem)TrayCalloc(cast(usize)count,
+        size_of(DesktopTrayMenuItem))
+    if copy == null {
+        return null
+    }
+    index: s32 = 0
+    while index < count {
+        copy[index] = items[index]
+        copy[index].label = TrayCopyString(items[index].label)
+        copy[index].children = TrayCopyItems(items[index].children,
+            items[index].child_count)
+        if copy[index].label == null ||
+        (items[index].child_count > 0 && copy[index].children == null) {
+            TrayFreeItems(copy, count)
+            return null
+        }
+        index += 1
+    }
+    return copy
+}

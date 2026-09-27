@@ -1,0 +1,520 @@
+#import "date_time"
+#import, file "modal_rules.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "screenshot_request.zi";
+#import, file "app.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_nav_state.zi";
+#import, file "app_sync.zi";
+#import, file "theme_catalog.zi";
+#import, file "../practices/meditation/meditation_practice.zi";
+#import, file "../practices/sun_salutation/sun_salutation_entry.zi";
+#import, file "../practices/patterns/patterns_entry.zi";
+#import, file "../practices/session_results.zi";
+#import, file "device_preferences.zi";
+#import, file "../platform/environment.zi";
+#import, file "../breaks/break_calendar.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "../storage/session_mood.zi";
+#import, file "../storage/storage_sessions.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_account.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/sync_result.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../screens/habits/edit.zi";
+#import, file "text_buffers.zi";
+#import, file "../app/exercise_types.zi";
+#import "drawing_props"
+
+using AppClosePromptResult;
+using AppThemeMode;
+using AppThemeSource;
+using NavigationPlacement;
+using ModalType;
+using AppMainTab;
+using AppNavRoute;
+using ExerciseType;
+using HabitSyncMode;
+using SyncResult;
+using SyncAccountLocalDataChoice;
+
+screenshot_request: ScreenshotRequest;
+
+#program_export
+current_screenshot_request :: () -> *ScreenshotRequest {
+    return *screenshot_request
+}
+
+#program_export
+screenshot_warmup_frames :: (request: *ScreenshotRequest) -> s32 {
+    if request == null {
+        return 4
+    }
+    return ScreenshotWarmupFrames(request.*)
+}
+
+#program_export
+screenshot_after_warmup :: (app: *InnerBreeze,
+    request: *ScreenshotRequest) {
+    if app == null || request == null {
+        return
+    }
+    if AppTextFromCString(*request.scene[0], 64) == "tutorial_whm_step2" {
+        app.tutorial_step = 2
+    } else if AppTextFromCString(*request.scene[0], 64) == "tutorial_whm_step0"  || AppTextFromCString(*request.scene[0], 64) == "tutorial_meditation" {
+        app.tutorial_step = 0
+    }
+}
+
+screenshot_day_index_offset :: (offset_days: s32) -> s32 {
+    local := LocalNow()
+    date := BreakDateFromLocal(local)
+    remaining := offset_days
+    while remaining > 0 && date != 0 {
+        date = BreakPreviousDate(date)
+        remaining -= 1
+    }
+    return date
+}
+
+screenshot_seed_habits_offsets: [18]s32 = .[0, 1, 2, 4, 5, 7, 8, 10, 12, 13,
+15, 17, 18, 20, 21, 24, 25, 27];
+
+screenshot_seed_habits_counts: [18]s32 = .[2, 1, 1, 3, 1, 1, 2, 1, 1, 2,
+1, 1, 2, 1, 3, 1, 1, 2];
+
+screenshot_seed_habits :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.habits.count <= 0 {
+        habits_add_default_set(*app.habits)
+    }
+    if app.habits.count <= 0 {
+        return
+    }
+    // Deterministic preview fixtures, only in the isolated screenshot store.
+    if app.habits.count == 2 {
+        habits_add_custom(*app.habits, "Sit ups", Color.{.r = 180, .g = 130, .b = 220, .a = 255}, HABIT_SYNC_NONE, 0)
+        habits_add_custom(*app.habits, "Push ups", Color.{.r = 100, .g = 190, .b = 155, .a = 255}, HABIT_SYNC_NONE, 0)
+        habits_add_custom(*app.habits, "Cold Shower", Color.{.r = 75, .g = 170, .b = 155, .a = 255}, HABIT_SYNC_NONE, 0)
+        habits_add_custom(*app.habits, "Jumping Rope", Color.{.r = 195, .g = 90, .b = 130, .a = 255}, HABIT_SYNC_NONE, 0)
+    }
+    app.habits.selected = -1
+    app.habits.items[0].sync_mode = HABIT_SYNC_ACTIVITIES
+    app.habits.items[0].sync_activity = habit_activity_mask_for(EXERCISE_WIM_HOF) |
+    habit_activity_mask_for(EXERCISE_MEDITATION)
+    app.habits.items[0].counter_enabled = 0
+    // A counter fixture for UI tests only; never added to a normal install.
+    if app.habits.count > 2 {
+        app.habits.items[2].counter_enabled = 1
+        AppCopyText("Counter test fixture", app.habits.items[2].description[:])
+    }
+    habits_clear_days(*app.habits)
+    i: s32 = 0
+    while i < cast(s32)(size_of(type_of(screenshot_seed_habits_offsets)) / size_of(type_of(screenshot_seed_habits_offsets[0]))) {
+        habit_set_day_count(*app.habits, 0, screenshot_day_index_offset(screenshot_seed_habits_offsets[i]), screenshot_seed_habits_counts[i])
+        i += 1
+    }
+    day: s32 = 6
+    while day >= 0 {
+        progress: s32 = 6 - day
+        local_date: s32 = screenshot_day_index_offset(day)
+        session_path: [FS_PATH_MAX] u8
+        checkin: SessionMoodCheckin = .{}
+        rounds: [3] s32 = .[32 + progress * 4, 37 + progress * 4, 41 + progress * 5]
+        if storage_save_session_at_for_activity(local_date, 7, 15 + progress, 0,
+            *rounds[0], 3, 0, EXERCISE_WIM_HOF,
+            *session_path[0],
+            size_of(type_of(session_path))) != 0 {
+            checkin.mood_after = 3 + (progress % 3)
+            storage_save_session_checkin(AppTextFromCString(*session_path[0], FS_PATH_MAX), *checkin)
+        }
+        day -= 1
+    }
+}
+
+screenshot_apply_theme :: (app: *InnerBreeze, theme_id: s32, dark_mode: s32) {
+    if app == null {
+        return
+    }
+    if theme_id == SCREENSHOT_THEME_CURRENT {
+        app.theme_source = APP_THEME_SOURCE_SYSTEM
+        app.theme_mode = APP_THEME_SYSTEM
+        app_refresh_theme(app)
+        return
+    }
+    app.theme_source = APP_THEME_SOURCE_APP
+    app.theme_id = theme_id
+    if dark_mode != 0 {
+        app.theme_mode = APP_THEME_DARK
+    } else {
+        app.theme_mode = APP_THEME_LIGHT
+    }
+    app.dark_mode = ifx dark_mode != 0 then 1 else 0
+    app_refresh_theme(app)
+}
+
+screenshot_setup_result_scene :: (app: *InnerBreeze, activity: s32) {
+    if app == null {
+        return
+    }
+    app.main_tab = APP_MAIN_TAB_PRACTICE
+    app.exercise_type = activity
+    app.breathing.screen = ScreenResults
+    if activity == EXERCISE_WIM_HOF {
+        rounds: [4] s32 = .[48, 61, 74, 69]
+        saved_path: [32]u8
+        AppCopyText("db:screenshot-whm", saved_path[:])
+        app_prepare_session_results(app, EXERCISE_WIM_HOF, 0, 0, null,
+            *rounds[0], 4, *saved_path[0])
+        app.session_result.mood = 4
+    } else if activity == EXERCISE_MEDITATION {
+        saved_path: [32]u8
+        AppCopyText("db:screenshot-meditation", saved_path[:])
+        app_prepare_session_results(app, EXERCISE_MEDITATION, 15 * 60, 0,
+            null, null, 0,
+            *saved_path[0])
+        app.session_result.mood = 5
+    } else if activity == EXERCISE_SUN_SALUTATION {
+        saved_path: [40]u8
+        AppCopyText("db:screenshot-sun-salutation", saved_path[:])
+        app_prepare_session_results(app, EXERCISE_SUN_SALUTATION, 6, 0,
+            null, null, 0,
+            *saved_path[0])
+        app.session_result.mood = 4
+    } else if activity == EXERCISE_PATTERNS {
+        saved_path: [32]u8
+        detail: [8]u8
+        AppCopyText("db:screenshot-patterns", saved_path[:])
+        AppCopyText("4-7-8", detail[:])
+        app_prepare_session_results(app, EXERCISE_PATTERNS, 8 * 60, 48,
+            *detail[0], null, 0,
+            *saved_path[0])
+        app.session_result.mood = 5
+    }
+}
+
+#program_export
+setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
+    if app == null || request == null {
+        return
+    }
+    scene_text: string = AppTextFromCString(*request.scene[0], 64)
+    app.language_selected = 1
+    app_close_modal(app)
+    app.settings_scroll = 0
+    app.settings_overview = 0
+    app.manual_scroll = 0
+    app.tutorial_step = 0
+    app.habits_guide_seen = 1
+    app.tutorial_seen = 1
+    // Sync screenshots must show only data already present in their isolated
+    // storage root. Seeding defaults here can turn a visual check into an
+    // upload as soon as an account is connected.
+    if scene_text.count < 5 || scene_text[:5] != "sync_" {
+        screenshot_seed_habits(app)
+    }
+    screenshot_apply_theme(app, request.theme_id, request.dark_mode)
+    if AppTextFromCString(*request.scene[0], 64) == "lists" || AppTextFromCString(*request.scene[0], 64) == "lists_completed" {
+        list_id: [37] u8
+        completed_id: [37] u8
+        app.main_tab = APP_MAIN_TAB_ELIST
+        app.breathing.screen = ScreenEList
+        if storage_elist_create_list("Shopping", *list_id[0]) != 0 {
+            storage_elist_create_item(AppTextFromCString(*list_id[0], 37), "Fresh fruit", "For breakfast", null)
+            if storage_elist_create_item(AppTextFromCString(*list_id[0], 37), "Buy tea", "", *completed_id[0]) != 0 {
+                storage_elist_update_item(AppTextFromCString(*completed_id[0], 37), "Buy tea", "", 1, 1)
+            }
+        }
+        storage_elist_create_list("Home", null)
+        storage_elist_create_list("Weekend", null)
+        storage_elist_load(cast(*void)(*app.elist))
+        i: s32 = 0
+        while i < app.elist.list_count {
+            if AppTextFromCString(*app.elist.lists[i].id[0], 37) ==
+            AppTextFromCString(*list_id[0], 37) {
+                app.elist.selected_list = i
+            }
+            i += 1
+        }
+        app.elist.loaded = 1
+        if AppTextFromCString(*request.scene[0], 64) == "lists_completed" {
+            app.elist.show_completed = 1
+        } else {
+            app.elist.show_completed = 0
+        }
+    } else if scene_text.count >= 13 && scene_text[:13] == "habits_guide_" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.breathing.screen = ScreenHabits
+        app.habits_guide_seen = 0
+        app.habits_guide_step = ScreenshotParseInt(scene_text[13:], 0)
+        if app.habits_guide_step < 0 { app.habits_guide_step = 0 }
+        if app.habits_guide_step > 5 { app.habits_guide_step = 5 }
+        if AppTextFromCString(*request.scene[13], 51) == "empty" {
+            app.habits.count = 0
+        }
+    } else if AppTextFromCString(*request.scene[0], 64) == "statistics" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.tab = HABIT_TAB_STATISTICS
+        app.breathing.screen = ScreenHabits
+    } else if AppTextFromCString(*request.scene[0], 64) == "profile" {
+        app.main_tab = APP_MAIN_TAB_NONE
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "habit_edit" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.breathing.screen = ScreenHabitEdit
+        habit_edit_begin_new(app)
+    } else if AppTextFromCString(*request.scene[0], 64) == "language" {
+        app.main_tab = APP_MAIN_TAB_NONE
+        app.breathing.screen = ScreenLanguage
+    } else if AppTextFromCString(*request.scene[0], 64) == "first_run_guide" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.tutorial_seen = 0
+        app.tutorial_step = 0
+        app.breathing.screen = ScreenStart
+    } else if AppTextFromCString(*request.scene[0], 64) == "first_run_guide_blank" {
+        app.main_tab = APP_MAIN_TAB_NONE
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.tutorial_seen = 0
+        app.tutorial_step = 0
+        app.breathing.screen = ScreenStart
+    } else if AppTextFromCString(*request.scene[0], 64) == "background_music" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_MEDITATION
+        app.practice_tab = PRACTICE_TAB_CONFIG
+        app.practice_config_tab = 1
+        app.breathing.screen = ScreenStart
+        app_open_modal(app, cast(ModalType)ModalPracticeConfig)
+    } else if scene_text.count >= 16 && scene_text[:16] == "practice_config_" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        if AppTextFromCString(*request.scene[0], 64) == "practice_config_meditation" {
+            app.exercise_type = EXERCISE_MEDITATION
+        } else if AppTextFromCString(*request.scene[0], 64) == "practice_config_sun_salutation" {
+            app.exercise_type = EXERCISE_SUN_SALUTATION
+        } else if AppTextFromCString(*request.scene[0], 64) == "practice_config_patterns" {
+            app.exercise_type = EXERCISE_PATTERNS
+        } else {
+            app.exercise_type = EXERCISE_WIM_HOF
+        }
+        app.practice_tab = PRACTICE_TAB_CONFIG
+        app.breathing.screen = ScreenStart
+        app_open_modal(app, cast(ModalType)ModalPracticeConfig)
+    } else if AppTextFromCString(*request.scene[0], 64) == "practice_manual_whm"  || AppTextFromCString(*request.scene[0], 64) == "practice_manual_meditation" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = ifx (AppTextFromCString(*request.scene[0], 64) == "practice_manual_meditation") then (EXERCISE_MEDITATION) else (EXERCISE_WIM_HOF)
+        app.practice_tab = PRACTICE_TAB_MANUAL
+        app.breathing.screen = ScreenStart
+        app_open_modal(app, cast(ModalType)ModalPracticeManual)
+    } else if scene_text.count >= 11 && scene_text[:11] == "navigation_" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.breathing.screen = ScreenStart
+        app.navigation_placement = NAVIGATION_LEFT
+        if AppTextFromCString(*request.scene[0], 64) == "navigation_right" {
+            app.navigation_placement = NAVIGATION_RIGHT
+        } else if AppTextFromCString(*request.scene[0], 64) == "navigation_top" {
+            app.navigation_placement = NAVIGATION_TOP
+        } else if AppTextFromCString(*request.scene[0], 64) == "navigation_bottom" {
+            app.navigation_placement = NAVIGATION_BOTTOM
+        }
+        app.nav_rail_collapsed = ifx AppTextFromCString(*request.scene[0], 64) == "navigation_collapsed" then 1 else 0
+    } else if AppTextFromCString(*request.scene[0], 64) == "wim_hof_session" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.breathing.screen = ScreenSession
+    } else if AppTextFromCString(*request.scene[0], 64) == "wim_hof_results" {
+        screenshot_setup_result_scene(app, EXERCISE_WIM_HOF)
+    } else if AppTextFromCString(*request.scene[0], 64) == "meditation_session" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_MEDITATION
+        app.meditation.music_practice_tracks[EXERCISE_MEDITATION] =
+        AUDIO_MUSIC_NONE
+        meditation_practice_start(app)
+    } else if AppTextFromCString(*request.scene[0], 64) == "meditation_results" {
+        screenshot_setup_result_scene(app, EXERCISE_MEDITATION)
+    } else if AppTextFromCString(*request.scene[0], 64) == "sun_salutation_session" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_SUN_SALUTATION
+        sun_salutation_practice_start(app)
+    } else if AppTextFromCString(*request.scene[0], 64) == "sun_salutation_results" {
+        screenshot_setup_result_scene(app, EXERCISE_SUN_SALUTATION)
+    } else if AppTextFromCString(*request.scene[0], 64) == "calendar_meditation" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_HISTORY
+        app.habits.selected = -1
+        app.habits.tab = HABIT_TAB_MONTHLY
+        app.breathing.screen = ScreenHabits
+        app.habits.view_mode = HABIT_VIEW_CALENDAR
+    } else if AppTextFromCString(*request.scene[0], 64) == "habits_overview" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+        app.habits.selected = -1
+        app.habits.tab = HABIT_TAB_WEEKLY
+        app.habits.view_mode = HABIT_VIEW_WEEKLY
+        app.breathing.screen = ScreenHabits
+    } else if AppTextFromCString(*request.scene[0], 64) == "habits_stats" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_STATISTICS
+        app.habits.selected = -1
+        app.habits.tab = HABIT_TAB_STATISTICS
+        app.breathing.screen = ScreenHabits
+    } else if AppTextFromCString(*request.scene[0], 64) == "theme_selection" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.settings_tab = SETTINGS_TAB_THEME
+        app.breathing.screen = ScreenSettings
+    } else if AppTextFromCString(*request.scene[0], 64) == "settings_overview" {
+        app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
+    } else if AppTextFromCString(*request.scene[0], 64) == "settings_session" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.settings_tab = SETTINGS_TAB_DEVICE
+        app.breathing.screen = ScreenSettings
+    } else if AppTextFromCString(*request.scene[0], 64) == "settings_notifications" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.settings_tab = SETTINGS_TAB_NOTIFICATIONS
+        app.breathing.screen = ScreenSettings
+    } else if AppTextFromCString(*request.scene[0], 64) == "settings_about" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.settings_tab = SETTINGS_TAB_ABOUT
+        app.breathing.screen = ScreenSettings
+    } else if AppTextFromCString(*request.scene[0], 64) == "about_donation" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.settings_tab = SETTINGS_TAB_ABOUT
+        app.breathing.screen = ScreenSettings
+        app_open_modal(app, cast(ModalType)ModalAboutDonation)
+    } else if AppTextFromCString(*request.scene[0], 64) == "customize_nav" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.breathing.screen = ScreenCustomizeNav
+        app.bottom_nav_config_route_count = 4
+        app.bottom_nav_config_routes[0] = APP_NAV_ROUTE_ELIST
+        app.bottom_nav_config_routes[1] = APP_NAV_ROUTE_HABITS
+        app.bottom_nav_config_routes[2] = APP_NAV_ROUTE_PRACTICE
+        app.bottom_nav_config_routes[3] = APP_NAV_ROUTE_SETTINGS
+    } else if AppTextFromCString(*request.scene[0], 64) == "close_prompt" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.breathing.screen = ScreenStart
+        app.close_prompt_open = 1
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptNone
+    } else if AppTextFromCString(*request.scene[0], 64) == "data"  || AppTextFromCString(*request.scene[0], 64) == "profile_data" {
+        app.profile_view = PROFILE_VIEW_MAIN
+        app.profile_tab = PROFILE_TAB_DATA
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "my_practices"  || AppTextFromCString(*request.scene[0], 64) == "profile_practices" {
+        app.profile_view = PROFILE_VIEW_PRACTICES
+        app.profile_tab = PROFILE_TAB_OVERVIEW
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "sync_disconnected"  || AppTextFromCString(*request.scene[0], 64) == "sync_retry" {
+        account: SyncAccount = .{}
+        if sync_account_generate(*account) != 0 {
+            sync_account_save(*account, cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK)
+        }
+        storage_set_setting_text("sync_server_url", "http://127.0.0.1:1")
+        storage_set_sync_enabled(ifx AppTextFromCString(*request.scene[0], 64) == "sync_retry" then 1 else 0)
+        if storage_sync_enabled() != 0 {
+            app_sync_record_result(cast(s32)SYNC_REQUEST_FAILED)
+        }
+        app.profile_view = PROFILE_VIEW_MAIN
+        if storage_sync_enabled() != 0 {
+            app.profile_tab = PROFILE_TAB_SYNC
+        } else {
+            app.profile_tab = PROFILE_TAB_DATA
+        }
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "sync_connected" {
+        account: SyncAccount = .{}
+        payload: *u8 = null
+        if sync_account_generate(*account) != 0 {
+            sync_account_save(*account, cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK)
+        }
+        storage_set_setting_text("sync_account_alias", "waozi")
+        storage_set_setting_text("sync_server_url", "https://api.waozi.xyz")
+        storage_set_sync_enabled(1)
+        screenshot_seed_habits(app)
+        storage_set_social_cache_json(
+            "friends.list",
+            "{\"friends\":[{\"id\":\"friend-1\"},{\"id\":\"friend-2\"}]}")
+        sync_pass: s32 = 0
+        while sync_pass < 4 {
+            payload = storage_build_sync_payload_json(
+                AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE),
+                AppTextFromCString(*account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE))
+            storage_free_sync_payload_json(payload)
+            storage_apply_sync_response_json(
+                "{\"protocol_version\":6,\"server_version\":1,\"changes\":{\"encrypted_records\":[]}}")
+            sync_pass += 1
+        }
+        app_sync_record_result(cast(s32)SYNC_OK)
+        app.profile_view = PROFILE_VIEW_MAIN
+        app.profile_tab = PROFILE_TAB_SYNC
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "configure_account"  || AppTextFromCString(*request.scene[0], 64) == "profile_sync_account" {
+        app.profile_view = PROFILE_VIEW_MAIN
+        app.profile_tab = PROFILE_TAB_OVERVIEW
+        app.breathing.screen = ScreenProfile
+    } else if AppTextFromCString(*request.scene[0], 64) == "cobalt_dark" {
+        screenshot_apply_theme(app, ThemeCobaltId, 1)
+        app.exercise_type = EXERCISE_PATTERNS
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.practice_tab = PRACTICE_TAB_PLAY
+        app.breathing.screen = ScreenStart
+    } else if AppTextFromCString(*request.scene[0], 64) == "patterns" {
+        app.exercise_type = EXERCISE_PATTERNS
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        patterns_practice_start(app)
+    } else if AppTextFromCString(*request.scene[0], 64) == "patterns_results" {
+        screenshot_setup_result_scene(app, EXERCISE_PATTERNS)
+    } else if AppTextFromCString(*request.scene[0], 64) == "patterns_config" {
+        app.exercise_type = EXERCISE_PATTERNS
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.practice_tab = PRACTICE_TAB_CONFIG
+        app.breathing.screen = ScreenStart
+    } else if AppTextFromCString(*request.scene[0], 64) == "break_settings" {
+        if DesktopPlatform() != 0 {
+            app.main_tab = APP_MAIN_TAB_PRACTICE
+            app.settings_tab = SETTINGS_TAB_BREAKS
+            app.breaks_enabled = 1
+            app.breathing.screen = ScreenSettings
+        }
+    } else if AppTextFromCString(*request.scene[0], 64) == "break_micro"  || AppTextFromCString(*request.scene[0], 64) == "break_rest"  || AppTextFromCString(*request.scene[0], 64) == "break_daily" {
+        if DesktopPlatform() != 0 {
+            t: s32 = BREAK_MICRO
+            if AppTextFromCString(*request.scene[0], 64) == "break_rest" {
+                t = BREAK_REST
+            } else if AppTextFromCString(*request.scene[0], 64) == "break_daily" {
+                t = BREAK_DAILY
+            }
+            app.breaks_enabled = 1
+            app.break_block_mode = 0
+            app.breaks.timers[t].active_s = app.breaks.timers[t].limit_s
+            app.breaks.timers[t].state = BreakStateBreaking
+            app.breaks.timers[t].idle_s = ifx (app.breaks.timers[t].duration_s > 0) then (app.breaks.timers[t].duration_s / 3) else (0)
+            app.breathing.screen = ScreenBreak
+        }
+    } else if AppTextFromCString(*request.scene[0], 64) == "tutorial_whm_step0" {
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.practice_tab = PRACTICE_TAB_MANUAL
+        app.breathing.screen = ScreenStart
+        app.tutorial_step = 0
+    } else if AppTextFromCString(*request.scene[0], 64) == "tutorial_whm_step2" {
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.practice_tab = PRACTICE_TAB_MANUAL
+        app.breathing.screen = ScreenStart
+        app.tutorial_step = 2
+    } else if AppTextFromCString(*request.scene[0], 64) == "tutorial_meditation" {
+        app.exercise_type = EXERCISE_MEDITATION
+        app.practice_tab = PRACTICE_TAB_MANUAL
+        app.breathing.screen = ScreenStart
+        app.tutorial_step = 0
+    } else {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_WIM_HOF
+        app.practice_tab = PRACTICE_TAB_PLAY
+        app.breathing.screen = ScreenStart
+    }
+}

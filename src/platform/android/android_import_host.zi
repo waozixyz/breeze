@@ -1,0 +1,120 @@
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+
+#if #defined(ANDROID_BUILD) {
+    import_mutex: AndroidMutex;
+    pending_result: s32;
+    pending_kind: s32;
+    pending_path: [512]u8;
+
+    ImportStoreResult :: (kind: s32, result: s32, path: *u8) {
+        AndroidMutexLock(*import_mutex)
+        pending_kind = kind
+        pending_result = result
+        length: s32 = 0
+        if path != null {
+            while length < 511 && path[length] != 0 {
+                pending_path[length] = path[length]
+                length += 1
+            }
+        }
+        pending_path[length] = 0
+        AndroidMutexUnlock(*import_mutex)
+    }
+
+    ImportOpenPicker :: (session: *ActivityJniSession, kind: s32,
+        mime_types: *u8) -> bool {
+        method := JniMethod(session, "openImportPicker",
+            "(Ljava/lang/String;I)V")
+        if method == null {
+            return false
+        }
+        env := session.env
+        arguments: [2]JniValue
+        arguments[0].reference = JniString(env, mime_types)
+        arguments[1].integer = kind
+        if arguments[0].reference == null {
+            return false
+        }
+        env.functions.CallVoidMethodA(env, session.activity, method,
+            *arguments[0])
+        return env.functions.ExceptionCheck(env) == 0
+    }
+}
+
+#program_export
+import_open_picker_host :: (kind: s32, mime_types: *u8) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        ImportStoreResult(kind, 0, null)
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return false
+        }
+        opened := ImportOpenPicker(*session, kind, mime_types)
+        activity_jni_detach(*session)
+        return opened
+    }
+    unused kind
+    unused mime_types
+    return false
+}
+
+#program_export
+import_poll_result_host :: (kind: s32, path: *u8,
+    capacity: s32) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        result: s32 = 0
+        AndroidMutexLock(*import_mutex)
+        if pending_result != 0 && pending_kind == kind {
+            result = pending_result
+            if path != null && capacity > 0 {
+                length: s32 = 0
+                while length < capacity - 1 && length < 511 &&
+                    pending_path[length] != 0 {
+                    path[length] = pending_path[length]
+                    length += 1
+                }
+                path[length] = 0
+            }
+            pending_result = 0
+            pending_path[0] = 0
+        }
+        AndroidMutexUnlock(*import_mutex)
+        return result
+    }
+    unused kind
+    if path != null && capacity > 0 {
+        path[0] = 0
+    }
+    return 0
+}
+
+#program_export
+android_import_native_selected :: (env: *JniEnv, activity: *void,
+    kind: s32, path: *void) {
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        selected: *u8
+        if path != null {
+            selected = env.functions.GetStringUTFChars(env, path, null)
+        }
+        ImportStoreResult(kind, 1, selected)
+        if selected != null {
+            env.functions.ReleaseStringUTFChars(env, path, selected)
+        }
+    }
+    unused env
+    unused kind
+    unused path
+}
+
+#program_export
+android_import_native_cancelled :: (env: *JniEnv, activity: *void,
+    kind: s32) {
+    unused env
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        ImportStoreResult(kind, 2, null)
+    }
+    unused kind
+}

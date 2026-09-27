@@ -1,0 +1,458 @@
+c3 :: #system_library "c";
+sqlite3_bind_int :: (stmt: *void, index: s32, value: s32) -> s32 #foreign c3;
+sqlite3_changes :: (db: *void) -> s32 #foreign c3;
+
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "storage_core.zi";
+
+
+#import, file "../screens/elist_types.zi";
+#import, file "sqlite.zi";
+#import, file "sql_transaction.zi";
+#import "byte_text_linux"
+#import "mapped_file_linux"
+#import, file "../app/locale.zi";
+elist_exec_sql :: (sql: string) -> s32 {
+    return SqliteExecTransaction(storage_db_handle(), sql)
+}
+
+elist_bind_text :: (stmt: *void, index: s32, text: string) -> s32 {
+    if text.count > 2147483647 {
+        return 0
+    }
+    return SqliteBindTextString(stmt, index, text, cast(s32)text.count)
+}
+
+
+
+
+
+storage_elist_initialized :: () -> s32 {
+    if storage_get_setting_int("elist_initialized", 0) != 0 {
+        return 1
+    }
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(), "SELECT 1 FROM elist_lists WHERE user_id=?1 LIMIT 1",
+        -1, *statement, null) != SQLITE_OK {
+        return 1
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    result := SqliteStep(statement)
+    SqliteFinalize(statement)
+    if result == SQLITE_ROW {
+        // Existing and deleted lists both mean setup has already happened.
+        storage_set_setting_int("elist_initialized", 1)
+    }
+    return ifx (result != SQLITE_DONE) then (1) else (0)
+}
+
+#program_export
+storage_elist_load :: (value: *void) -> s32 {
+    state := cast(*EListState)value
+    statement: *void = null
+
+    if storage_db_handle() == null || state == null {
+        return 0
+    }
+    state.list_count = 0
+    state.item_count = 0
+    if SqlitePrepareText(storage_db_handle(), "SELECT id,title,sort_order,deleted_at,updated_at FROM elist_lists WHERE user_id=?1 AND deleted_at=0 ORDER BY sort_order,updated_at,id",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    while state.list_count < ELIST_LIST_MAX  && SqliteStep(statement) == SQLITE_ROW {
+        list := *state.lists[state.list_count]
+        state.list_count += 1
+
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), 4096), list.id[:])
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 1), 4096), list.title[:])
+        list.sort_order = SqliteColumnInt(statement, 2)
+        list.deleted_at = SqliteColumnInt64(statement, 3)
+        list.updated_at = SqliteColumnInt64(statement, 4)
+    }
+    SqliteFinalize(statement)
+    if storage_elist_initialized() == 0 {
+        created_id: [37]u8 = .[0]
+        if storage_elist_create_list(LocaleText("elist_default_list"), *created_id[0]) != 0 {
+            storage_set_setting_int("elist_initialized", 1)
+            storage_elist_create_item(AppTextFromCString(*created_id[0], 37), LocaleText("elist_default_item_breathe"), "", null)
+            storage_elist_create_item(AppTextFromCString(*created_id[0], 37), LocaleText("elist_default_item_walk"), "", null)
+            storage_elist_create_item(AppTextFromCString(*created_id[0], 37), LocaleText("elist_default_item_water"), "", null)
+            return storage_elist_load(value)
+        }
+    }
+
+    if SqlitePrepareText(storage_db_handle(), "SELECT i.id,i.list_id,i.title,i.comment,i.done,i.sort_order,i.deleted_at,i.updated_at FROM elist_items i JOIN elist_lists l ON l.id=i.list_id WHERE l.user_id=?1 AND l.deleted_at=0 AND i.deleted_at=0 ORDER BY i.list_id,i.sort_order,i.updated_at,i.id",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    while state.item_count < ELIST_ITEM_MAX  && SqliteStep(statement) == SQLITE_ROW {
+        item := *state.items[state.item_count]
+        state.item_count += 1
+
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), 4096), item.id[:])
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 1), 4096), item.list_id[:])
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 2), 4096), item.title[:])
+        AppCopyText(AppTextFromCString(SqliteColumnText(statement, 3), 4096), item.comment[:])
+        item.done = ifx (SqliteColumnInt(statement, 4) != 0) then (1) else (0)
+        item.sort_order = SqliteColumnInt(statement, 5)
+        item.deleted_at = SqliteColumnInt64(statement, 6)
+        item.updated_at = SqliteColumnInt64(statement, 7)
+    }
+    SqliteFinalize(statement)
+    if state.selected_list >= state.list_count {
+        state.selected_list = state.list_count - 1
+    }
+    if state.selected_list < 0 && state.list_count > 0 {
+        state.selected_list = 0
+    }
+    return 1
+}
+
+#program_export
+storage_elist_counts :: (lists: *s32, items: *s32) {
+    statement: *void = null
+    if lists != null { lists.* = 0 }
+    if items != null { items.* = 0 }
+    if storage_db_handle() == null { return }
+    if SqlitePrepareText(storage_db_handle(), "SELECT (SELECT COUNT(*) FROM elist_lists WHERE user_id=?1 AND deleted_at=0), (SELECT COUNT(*) FROM elist_items i JOIN elist_lists l ON l.id=i.list_id WHERE l.user_id=?1 AND l.deleted_at=0 AND i.deleted_at=0)",
+        -1, *statement, null) != SQLITE_OK { return }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    if SqliteStep(statement) == SQLITE_ROW {
+        if lists != null { lists.* = SqliteColumnInt(statement, 0) }
+        if items != null { items.* = SqliteColumnInt(statement, 1) }
+    }
+    SqliteFinalize(statement)
+}
+
+#program_export
+storage_elist_create_list :: (title: string, out_id: *u8) -> s32 {
+    statement: *void = null
+    id: [37]u8
+    changed_at := storage_next_change_time()
+    result: s32
+
+    if storage_db_handle() == null || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    storage_make_uuid(*id[0])
+    if id[0] == cast(u8)0 { return 0 }
+    if SqlitePrepareText(storage_db_handle(), "INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?1,?2,?3,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM elist_lists WHERE user_id=?2),0,?4)",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(*id[0], 37))
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 3, title)
+    SqliteBindInt64(statement, 4, changed_at)
+    result = ifx (SqliteStep(statement) == SQLITE_DONE) then (1) else (0)
+    SqliteFinalize(statement)
+    if result != 0 {
+        result = storage_enqueue_sync_elist_list(AppTextFromCString(*id[0], 37))
+    }
+    if result != 0 && out_id != null {
+        AppCopyText(AppTextFromCString(*id[0], 37), BytesFromPointer(out_id, 37))
+    }
+    return result
+}
+
+#program_export
+storage_elist_update_list :: (id: string, title: string,
+    sort_order: s32) -> s32 {
+    statement: *void = null
+    result: s32
+
+    if storage_db_handle() == null || id.count == 0 || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "UPDATE elist_lists SET title=?3,sort_order=?4,updated_at=?5 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 3, title)
+    sqlite3_bind_int(statement, 4, sort_order)
+    SqliteBindInt64(statement, 5, storage_next_change_time())
+    result = ifx (SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0) then (1) else (0)
+    SqliteFinalize(statement)
+    return ifx (result != 0 && storage_enqueue_sync_elist_list(id) != 0) then (1) else (0)
+}
+
+elist_delete_list_transaction :: (id: string, changed_at: s64) -> s32 {
+    statement: *void = null
+    result: s32
+
+    if SqlitePrepareText(storage_db_handle(), "UPDATE elist_lists SET deleted_at=?3,updated_at=?3 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    SqliteBindInt64(statement, 3, changed_at)
+    result = ifx (SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0) then (1) else (0)
+    SqliteFinalize(statement)
+    if result == 0 {
+        return 0
+    }
+
+    if SqlitePrepareText(storage_db_handle(), "SELECT id FROM elist_items WHERE user_id=?1 AND list_id=?2 AND deleted_at=0", -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 2, id)
+    while SqliteStep(statement) == SQLITE_ROW {
+        item_id := AppTextFromCString(SqliteColumnText(statement, 0), 4096)
+        if storage_enqueue_sync_elist_item(item_id) == 0 {
+            SqliteFinalize(statement)
+            return 0
+        }
+    }
+    SqliteFinalize(statement)
+
+    if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET deleted_at=?3,updated_at=?3 WHERE user_id=?1 AND list_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 2, id)
+    SqliteBindInt64(statement, 3, changed_at)
+    result = ifx (SqliteStep(statement) == SQLITE_DONE) then (1) else (0)
+    SqliteFinalize(statement)
+    return ifx (result != 0 && storage_enqueue_sync_elist_list(id) != 0) then (1) else (0)
+}
+
+#program_export
+storage_elist_delete_list :: (id: string) -> s32 {
+    if storage_db_handle() == null || id.count == 0 || elist_exec_sql("BEGIN IMMEDIATE") == 0 {
+        return 0
+    }
+    if elist_delete_list_transaction(id, storage_next_change_time()) == 0 {
+        elist_exec_sql("ROLLBACK")
+        return 0
+    }
+    if elist_exec_sql("COMMIT") == 0 {
+        elist_exec_sql("ROLLBACK")
+        return 0
+    }
+    return 1
+}
+
+#program_export
+storage_elist_create_item :: (list_id: string, title: string,
+    comment: string, out_id: *u8) -> s32 {
+    statement: *void = null
+    id: [37]u8
+    result: s32
+
+    if storage_db_handle() == null || list_id.count == 0 || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    storage_make_uuid(*id[0])
+    if id[0] == cast(u8)0 { return 0 }
+    if SqlitePrepareText(storage_db_handle(), "INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) VALUES(?1,?2,?3,?4,?5,0,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM elist_items WHERE list_id=?3),0,?6)",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, AppTextFromCString(*id[0], 37))
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 3, list_id)
+    elist_bind_text(statement, 4, title)
+    elist_bind_text(statement, 5, ifx (comment.count > 0) then (comment) else (""))
+    SqliteBindInt64(statement, 6, storage_next_change_time())
+    result = ifx (SqliteStep(statement) == SQLITE_DONE) then (1) else (0)
+    SqliteFinalize(statement)
+    if result != 0 {
+        result = storage_enqueue_sync_elist_item(AppTextFromCString(*id[0], 37))
+    }
+    if result != 0 && out_id != null {
+        AppCopyText(AppTextFromCString(*id[0], 37), BytesFromPointer(out_id, 37))
+    }
+    return result
+}
+
+#program_export
+storage_elist_update_item :: (id: string, title: string,
+    comment: string, done: s32,
+    sort_order: s32) -> s32 {
+    statement: *void = null
+    result: s32
+
+    if storage_db_handle() == null || id.count == 0 || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET title=?3,comment=?4,done=?5,sort_order=?6,updated_at=?7 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    elist_bind_text(statement, 3, title)
+    elist_bind_text(statement, 4, ifx (comment.count > 0) then (comment) else (""))
+    sqlite3_bind_int(statement, 5, ifx (done != 0) then (1) else (0))
+    sqlite3_bind_int(statement, 6, sort_order)
+    SqliteBindInt64(statement, 7, storage_next_change_time())
+    result = ifx (SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0) then (1) else (0)
+    SqliteFinalize(statement)
+    return ifx (result != 0 && storage_enqueue_sync_elist_item(id) != 0) then (1) else (0)
+}
+
+#program_export
+storage_elist_delete_item :: (id: string) -> s32 {
+    statement: *void = null
+    result: s32
+
+    if storage_db_handle() == null || id.count == 0 {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET deleted_at=?3,updated_at=?3 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    SqliteBindInt64(statement, 3, storage_next_change_time())
+    result = ifx (SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0) then (1) else (0)
+    SqliteFinalize(statement)
+    return ifx (result != 0 && storage_enqueue_sync_elist_item(id) != 0) then (1) else (0)
+}
+
+elist_expand_sql :: (template: string, array_name: string, output: []u8) -> bool {
+    index: s64 = 0
+    used: s64 = 0
+    while index < cast(s64)template.count {
+        byte: u8 = template[index]
+        if byte == #char "%" && index + 1 < cast(s64)template.count {
+            index += 1
+            byte = template[index]
+            if byte == #char "s" {
+                name_index: s64 = 0
+                while name_index < cast(s64)array_name.count {
+                    if used + 1 >= cast(s64)output.count { return false }
+                    output[used] = array_name[name_index]
+                    used += 1
+                    name_index += 1
+                }
+                index += 1
+                continue
+            }
+            if byte != #char "%" { return false }
+        }
+        if used + 1 >= cast(s64)output.count { return false }
+        output[used] = byte
+        used += 1
+        index += 1
+    }
+    output[used] = cast(u8)0
+    return true
+}
+
+elist_apply_json :: (response_json: string, array_name: string,
+    sql: string) -> s32 {
+    wrapped_sql: [4096]u8
+
+    if response_json.count == 0 || array_name.count == 0 || sql.count == 0 {
+        return 0
+    }
+    if !elist_expand_sql(sql, array_name, wrapped_sql[:]) { return 0 }
+    return storage_exec_json_user_sql(AppTextFromCString(*wrapped_sql[0], 4096), response_json)
+}
+
+#program_export
+storage_apply_sync_elist_lists_json :: (response_json: string) -> s32 {
+    sql := "INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT json_extract(value,'$.id'),?2,COALESCE(json_extract(value,'$.title'),''),CAST(COALESCE(json_extract(value,'$.sort_order'),0) AS INTEGER),CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),CASE WHEN json_type(value,'$.updated_at')='text' THEN COALESCE(CAST(strftime('%%s',json_extract(value,'$.updated_at')) AS INTEGER),0) ELSE CAST(COALESCE(json_extract(value,'$.updated_at'),0) AS INTEGER) END FROM (SELECT value FROM json_each(?1,'$.changes.%s') UNION ALL SELECT value FROM json_each(?1,'$.data.%s')) WHERE json_extract(value,'$.id')<>'' ON CONFLICT(id) DO UPDATE SET title=excluded.title,sort_order=excluded.sort_order,deleted_at=excluded.deleted_at,updated_at=excluded.updated_at WHERE excluded.updated_at>=elist_lists.updated_at"
+
+    return elist_apply_json(response_json, "elist_lists", sql)
+}
+
+#program_export
+storage_apply_sync_elist_items_json :: (response_json: string) -> s32 {
+    sql := "INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT json_extract(value,'$.id'),?2,COALESCE(json_extract(value,'$.list_id'),''),COALESCE(json_extract(value,'$.title'),''),COALESCE(json_extract(value,'$.comment'),''),CAST(COALESCE(json_extract(value,'$.done'),0) AS INTEGER),CAST(COALESCE(json_extract(value,'$.sort_order'),0) AS INTEGER),CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),CASE WHEN json_type(value,'$.updated_at')='text' THEN COALESCE(CAST(strftime('%%s',json_extract(value,'$.updated_at')) AS INTEGER),0) ELSE CAST(COALESCE(json_extract(value,'$.updated_at'),0) AS INTEGER) END FROM (SELECT value FROM json_each(?1,'$.changes.%s') UNION ALL SELECT value FROM json_each(?1,'$.data.%s')) WHERE json_extract(value,'$.id')<>'' ON CONFLICT(id) DO UPDATE SET list_id=excluded.list_id,title=excluded.title,comment=excluded.comment,done=excluded.done,sort_order=excluded.sort_order,deleted_at=excluded.deleted_at,updated_at=excluded.updated_at WHERE excluded.updated_at>=elist_items.updated_at"
+
+    return elist_apply_json(response_json, "elist_items", sql)
+}
+
+elist_import_items :: (json: string, list_id: string) -> s32 {
+    statement: *void = null
+    item_order: s32 = 0
+
+    if SqlitePrepareText(storage_db_handle(), "SELECT COALESCE(json_extract(value,'$.title'),''),COALESCE(json_extract(value,'$.comment'),''),CAST(COALESCE(json_extract(value,'$.done'),0) AS INTEGER) FROM json_each(?1,'$.items') ORDER BY key",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    elist_bind_text(statement, 1, json)
+    while SqliteStep(statement) == SQLITE_ROW {
+        title := AppTextFromCString(SqliteColumnText(statement, 0), 4096)
+        comment := AppTextFromCString(SqliteColumnText(statement, 1), 4096)
+        item_id: [37]u8
+
+        if title[0] == #char "\0" {
+            continue
+        }
+        if storage_elist_create_item(list_id, title, comment, *item_id[0]) == 0  || (SqliteColumnInt(statement, 2) != 0  && storage_elist_update_item(AppTextFromCString(*item_id[0], 37), title, comment, 1, item_order) == 0) {
+            SqliteFinalize(statement)
+            return 0
+        }
+        item_order += 1
+    }
+    SqliteFinalize(statement)
+    return 1
+}
+
+#program_export
+storage_elist_import_onelist :: (path: string) -> s32 {
+    statement: *void = null
+    list_id: [37]u8
+    file: MappedFile
+    title: string
+    result: s32 = 0
+
+    if storage_db_handle() == null || path.count == 0 {
+        return 0
+    }
+    file = MapPrivate(path)
+    if !file.valid || file.length == 0 || file.length > 4 * 1024 * 1024 {
+        if file.valid { UnmapFile(file) }
+        return 0
+    }
+    json_text := TextFromBytes(MappedBytes(file))
+    if SqlitePrepareText(storage_db_handle(), "SELECT COALESCE(json_extract(?1,'$.title'),''),json_valid(?1)", -1, *statement, null) != SQLITE_OK {
+        UnmapFile(file)
+        return 0
+    }
+    elist_bind_text(statement, 1, json_text)
+    if SqliteStep(statement) != SQLITE_ROW  || SqliteColumnInt(statement, 1) == 0 {
+        SqliteFinalize(statement)
+        UnmapFile(file)
+        return 0
+    }
+    title = AppTextFromCString(SqliteColumnText(statement, 0), 4096)
+    if title.count == 0 {
+        SqliteFinalize(statement)
+        UnmapFile(file)
+        return 0
+    }
+    if elist_exec_sql("BEGIN IMMEDIATE") == 0 {
+        SqliteFinalize(statement)
+        UnmapFile(file)
+        return 0
+    }
+    if storage_elist_create_list(title, *list_id[0]) == 0 {
+        SqliteFinalize(statement)
+        UnmapFile(file)
+        elist_exec_sql("ROLLBACK")
+        return 0
+    }
+    SqliteFinalize(statement)
+    if elist_import_items(json_text, AppTextFromCString(*list_id[0], 37)) != 0 {
+        result = elist_exec_sql("COMMIT")
+    }
+    if result == 0 {
+        elist_exec_sql("ROLLBACK")
+    }
+    UnmapFile(file)
+    return result
+}

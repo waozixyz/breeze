@@ -1,0 +1,62 @@
+#import "auth"
+#import "text_buffer"
+#import, file "storage_core.zi";
+#import, file "device_key_store.zi";
+#import, file "../app/text_buffers.zi";
+
+TokenSetting :: "sync_auth_token";
+TokenExpiresSetting :: "sync_auth_token_expires_at";
+TokenServerTimeSetting :: "sync_auth_server_time";
+TokenLoginTimeSetting :: "sync_auth_login_local_time";
+ParsePositiveSeconds :: (value: string) -> s64 {
+    if value.count == 0 || value.count > 18 { return 0 }
+    result: s64 = 0
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        byte := value[index]
+        if byte < cast(u8)48 || byte > cast(u8)57 { return 0 }
+        digit := cast(s64)(byte - cast(u8)48)
+        if result > (9223372036854775807 - digit) / 10 { return 0 }
+        result = result * 10 + digit
+        index += 1
+    }
+    return result
+}
+
+LoadSavedSession :: (session: *Session, now: s64) {
+    session.* = Session.{}
+    if !CopyDeviceSetting(storage_get_setting_text(TokenSetting),
+        session.token[:]) { return }
+    session.expires_at_local = ParsePositiveSeconds(
+        storage_get_setting_text(TokenExpiresSetting))
+    session.server_time = ParsePositiveSeconds(
+        storage_get_setting_text(TokenServerTimeSetting))
+    session.login_local_time = ParsePositiveSeconds(
+        storage_get_setting_text(TokenLoginTimeSetting))
+    if session.expires_at_local <= now || session.server_time == 0 ||
+        session.login_local_time == 0 {
+        session.* = Session.{}
+    }
+}
+
+SaveSession :: (session: *Session) {
+    expires: [24]u8
+    server: [24]u8
+    login: [24]u8
+    if !AppFormatS64(session.expires_at_local, expires[:]) ||
+        !AppFormatS64(session.server_time, server[:]) ||
+        !AppFormatS64(session.login_local_time, login[:]) {
+        return
+    }
+    storage_settings_begin_write()
+    storage_set_setting_text(TokenSetting,
+        TextUntilNul(session.token[:]))
+    storage_set_setting_text(TokenExpiresSetting,
+        TextUntilNul(expires[:]))
+    storage_set_setting_text(TokenServerTimeSetting,
+        TextUntilNul(server[:]))
+    storage_set_setting_text(TokenLoginTimeSetting,
+        TextUntilNul(login[:]))
+    storage_settings_end_write()
+}
+

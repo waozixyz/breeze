@@ -44,6 +44,39 @@ import java.net.URL;
 import java.util.Arrays;
 
 public class MainActivity extends NativeActivity {
+    private final HttpTransport httpTransport = new HttpTransport();
+
+    public int httpCreate(byte[] method, byte[] url, int capacity, int timeout) {
+        return httpTransport.create(method, url, capacity, timeout);
+    }
+
+    public boolean httpHeader(int handle, byte[] name, byte[] value) {
+        return httpTransport.header(handle, name, value);
+    }
+
+    public boolean httpSend(int handle, byte[] body) {
+        return httpTransport.send(handle, body);
+    }
+
+    public int httpPoll(int handle) {
+        return httpTransport.poll(handle);
+    }
+
+    public byte[] httpResponse(int handle) {
+        return httpTransport.response(handle);
+    }
+
+    public void httpCancel(int handle) {
+        httpTransport.cancel(handle);
+    }
+
+    public String localePreferences() {
+        if (android.os.Build.VERSION.SDK_INT >= 24) {
+            return android.os.LocaleList.getDefault().toLanguageTags().replace(',', ';');
+        }
+        return java.util.Locale.getDefault().toLanguageTag();
+    }
+
     private static final String TAG = "MainActivity";
     private static final int REQUEST_IMPORT_ZIP = 1001;
     private static final int REQUEST_POST_NOTIFICATIONS = 1002;
@@ -1060,6 +1093,7 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        httpTransport.close();
         NotificationPresence.setActivityVisible(false);
         mainHandler.removeCallbacks(checkSessionIndicator);
         super.onDestroy();

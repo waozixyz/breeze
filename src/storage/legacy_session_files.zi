@@ -1,0 +1,80 @@
+// Imports historical text sessions found under the active Inbe data root.
+// Directory enumeration and byte loading are native filesystem operations;
+// path recognition and session insertion are checked Ziran rules.
+#import "c_string"
+#import, file "legacy_session.zi";
+
+c :: #system_library "c";
+
+LegacyPaths :: struct {
+    count: u32
+    paths: **u8
+}
+
+LegacyDirectoryFiles :: (root: *u8, filter: *u8,
+    recursive: bool) -> LegacyPaths #foreign c "LoadDirectoryFilesEx";
+LegacyUnloadDirectoryFiles :: (paths: LegacyPaths) #foreign c "UnloadDirectoryFiles";
+LegacyIsRegularFile :: (path: *u8) -> bool #foreign c "IsPathFile";
+LegacyLoadFileData :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
+LegacyUnloadFileData :: (bytes: *u8) #foreign c "UnloadFileData";
+LegacyMetaEquals :: (key: *u8, value: *u8) -> s32 #foreign c "meta_equals";
+LegacyDbExecText :: (sql: *u8, value: *u8) -> s32 #foreign c "db_exec_text";
+LegacyStoragePersist :: () #foreign c "storage_schedule_persist";
+
+#program_export
+migrate_legacy_file_sessions_once :: (root: *u8) -> s32 {
+    if root == null || root[0] == cast(u8)0 {
+        return 0
+    }
+    marker: [40]u8
+    completed: [2]u8
+    if !CopyCString("legacy_file_sessions_migrated", marker[:])  || !CopyCString("1", completed[:]) {
+        return 0
+    }
+    if LegacyMetaEquals(*marker[0], *completed[0]) != 0 {
+        return 1
+    }
+    paths := LegacyDirectoryFiles(root, null, true)
+    imported: u32 = 0
+    ok := true
+    index: u32 = 0
+    while index < paths.count {
+        path := paths.paths[index]
+        if path != null && LegacyIsRegularFile(path)  && LegacyIsSessionPath(path) != 0 {
+            size: s32 = 0
+            bytes := LegacyLoadFileData(path, *size)
+            if bytes == null || size <= 0 {
+                ok = false
+            } else {
+                if LegacyImportBytes(path, bytes, cast(u64)size) == 0 {
+                    ok = false
+                } else {
+                    imported += 1
+                }
+            }
+            if bytes != null {
+                LegacyUnloadFileData(bytes)
+            }
+        }
+        index += 1
+    }
+    LegacyUnloadDirectoryFiles(paths)
+    if !ok {
+        return 0
+    }
+    // An empty or unreadable scan gets retried at the next startup. Source
+    // files remain on disk even after a successful import.
+    if imported == 0 {
+        return 1
+    }
+    sql: [128]u8
+    if !CopyCString("INSERT INTO meta(key,value) VALUES('legacy_file_sessions_migrated',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        sql[:]) {
+        return 0
+    }
+    if LegacyDbExecText(*sql[0], *completed[0]) == 0 {
+        return 0
+    }
+    LegacyStoragePersist()
+    return 1
+}

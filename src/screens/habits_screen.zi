@@ -1,0 +1,1129 @@
+// Habit navigation and presentation. Habit persistence and counting rules live
+// in the habit modules; this screen composes them with Kryon's current widgets.
+raylib_input :: #system_library "raylib";
+IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
+
+#import, file "../app/app.zi";
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/app_sync.zi";
+#import, file "../app/widgets.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../habits/habit_sessions.zi";
+#import, file "../habits/habit_linked_rules.zi";
+#import, file "../habits/habit_date.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../platform/scroll_input.zi";
+#import, file "../platform/web_storage.zi";
+#import, file "habits/edit.zi";
+#import, file "statistics_screen.zi";
+#import "date_parse"
+#import "date_time"
+#import "geometry"
+#import "drawing_props"
+#import "session"
+#import "layout"
+#import "tree"
+#import "scroll_props"
+#import "scroll_widget"
+#import "layout_widget"
+#import "grid"
+#import "grid_props"
+#import "box_props"
+#import "box_widget"
+#import "style_sheet"
+#import "button_props"
+#import "button_widget"
+#import "text_props"
+#import "text_widget"
+#import "control_props"
+#import "paint_queue"
+#import "text_align"
+
+using ButtonTone;
+using ArrowDirection;
+using ButtonEmphasis;
+using TextWrap;
+using TextAlign;
+
+HABITS_GUIDE_STEPS :: 6;
+HABITS_MOUSE_RIGHT :: 1;
+HABITS_CARD_HEIGHT :: 140;
+HABITS_SELECTED_CARD_HEIGHT :: 400;
+HABITS_CARD_MARKER_SIZE :: 34;
+
+HabitScreenGeometry :: struct {
+    x: s32
+    y: s32
+    width: s32
+    height: s32
+}
+
+HabitScreenRect :: (x: s32, y: s32, width: s32,
+    height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+HabitScreenButtonProps :: (app: *InnerBreeze, label: string, id: s32,
+    x: s32, y: s32, width: s32, height: s32,
+    selected: bool, disabled: bool) -> ButtonProps {
+    props: ButtonProps
+    props.bounds = HabitScreenRect(x, y, width, height)
+    props.id = id
+    props.label = label
+    props.tone = cast(ButtonTone)(ifx (selected) then
+        (ButtonToneAccent) else (ButtonToneNeutral))
+    props.emphasis = cast(ButtonEmphasis)(ifx (selected) then
+        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+    props.selected = selected
+    props.disabled = disabled || app.modal.active != 0
+    return props
+}
+
+HabitScreenNumber :: (app: *InnerBreeze, value: s32) -> string {
+    buffer: [24]u8
+    if !FormatNumberTemplate("%d", value, buffer[:]) { return "" }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+}
+
+HabitScreenDate :: (app: *InnerBreeze, day_index: s32) -> string {
+    buffer: [24]u8
+    args: [3]FormatArg
+    args[0].number = day_index / 10000
+    args[1].number = (day_index / 100) % 100
+    args[2].number = day_index % 100
+    if !FormatTemplate("%04d-%02d-%02d", args[:], buffer[:]) { return "" }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+}
+
+HabitScreenMonth :: (app: *InnerBreeze, year: s32, month: s32) -> string {
+    buffer: [24]u8
+    args: [2]FormatArg
+    args[0].number = year
+    args[1].number = month
+    if !FormatTemplate("%04d-%02d", args[:], buffer[:]) { return "" }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+}
+
+HabitScreenLayout :: (app: *InnerBreeze) -> HabitScreenGeometry {
+    layout: HabitScreenGeometry
+    if app == null { return layout }
+    column := CenteredColumnFor(app.ui.view_width,
+        AppScale(1120), AppScale(16))
+    layout.x = column.x
+    layout.width = column.width
+    layout.y = AppScale(20)
+    layout.height = app.ui.view_height - layout.y -
+    app_content_bottom_reserved(app) - AppScale(12)
+    if layout.height < 0 { layout.height = 0 }
+    return layout
+}
+
+HabitScreenScroll :: (app: *InnerBreeze, key: string,
+    bounds: Rectangle, content_height: s32) -> ScrollResult {
+    scroll_key := KeyHash(key)
+    props: ScrollProps
+    props.key = scroll_key
+    props.bounds = bounds
+    props.content_height = content_height
+    props.scroll_offset = app.habits.scroll
+    props.input = ScrollObservationFor(scroll_key, bounds)
+    result := Scroll(app.ui.session, props)
+    app.habits.scroll = result.scroll_offset
+    return result
+}
+
+HabitScreenSave :: (app: *InnerBreeze) {
+    save_settings(app)
+    sync_web_storage_critical()
+}
+
+habits_expand_card :: (app: *InnerBreeze, index: s32) {
+    if app == null || index < 0 || index >= app.habits.count { return }
+    app.habits.selected = index
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.tab = HABIT_TAB_WEEKLY
+    app.habits.view_mode = HABIT_VIEW_WEEKLY
+    app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_return_to_focus :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.tab = HABIT_TAB_WEEKLY
+    app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_open_history :: (app: *InnerBreeze) {
+    if app == null || app.habits.selected < 0 ||
+    app.habits.selected >= app.habits.count { return }
+    app.habits.screen_mode = HABITS_SCREEN_HISTORY
+    app.habits.view_mode = HABIT_VIEW_CALENDAR
+    app.habits.tab = HABIT_TAB_MONTHLY
+    app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_open_statistics :: (app: *InnerBreeze) {
+    if app == null || app.habits.selected < 0 ||
+    app.habits.selected >= app.habits.count { return }
+    app.habits.screen_mode = HABITS_SCREEN_STATISTICS
+    app.habits.tab = HABIT_TAB_STATISTICS
+    app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_return_to_overview :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.habits.selected = -1
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.tab = HABIT_TAB_WEEKLY
+    app.habits.view_mode = HABIT_VIEW_WEEKLY
+    app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_day_index :: (days_ago: s32) -> s32 {
+    local := LocalNow()
+    if !local.valid || days_ago < 0 || days_ago > HABIT_WEEKLY_MAX_DAYS {
+        return habits_today_index()
+    }
+    result := HabitDayIndexAgo(local.year, local.month, local.day, days_ago)
+    return ifx (result > 0) then (result) else (habits_today_index())
+}
+
+#program_export
+habits_screen_dismiss_first_run_guide :: (app: *InnerBreeze) {
+    if app == null { return }
+    app.habits_guide_seen = 1
+    app.habits_guide_step = 0
+    HabitScreenSave(app)
+}
+
+#program_export
+habits_screen_first_run_guide_active :: (app: *InnerBreeze) -> s32 {
+    if app == null || app.habits_guide_seen != 0 ||
+    app.habits.count <= 0 || app.modal.active != 0 ||
+    app.breathing.screen != ScreenHabits ||
+    storage_has_sync_account() != 0 { return 0 }
+    return 1
+}
+
+#program_export
+habits_screen_prepare_first_run_guide :: (app: *InnerBreeze) {
+    if habits_screen_first_run_guide_active(app) == 0 { return }
+    if app.habits_guide_step < 0 { app.habits_guide_step = 0 }
+    if app.habits_guide_step >= HABITS_GUIDE_STEPS {
+        app.habits_guide_step = HABITS_GUIDE_STEPS - 1
+    }
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.selected = ifx (app.habits_guide_step >= 2) then (0) else (-1)
+    app.habits.tab = HABIT_TAB_WEEKLY
+    app.habits.view_mode = HABIT_VIEW_WEEKLY
+}
+
+#program_export
+habits_screen_draw_first_run_guide :: (app: *InnerBreeze) {
+    if habits_screen_first_run_guide_active(app) == 0 { return }
+    steps: [HABITS_GUIDE_STEPS]GuideOverlayStep
+    steps[0] = GuideOverlayStep.{app.habits_guide_anchors[0],
+        LocaleText("habits_guide_overview_progress")}
+    steps[1] = GuideOverlayStep.{app.habits_guide_anchors[1],
+        LocaleText("habits_guide_overview_grid")}
+    steps[2] = GuideOverlayStep.{app.habits_guide_anchors[2],
+        LocaleText("habits_guide_meditation_views")}
+    steps[3] = GuideOverlayStep.{app.habits_guide_anchors[3],
+        LocaleText("habits_guide_meditation_statistics")}
+    steps[4] = GuideOverlayStep.{app.habits_guide_anchors[4],
+        LocaleText("habits_guide_meditation_edit")}
+    steps[5] = GuideOverlayStep.{app.habits_guide_anchors[5],
+        LocaleText("habits_guide_meditation_session_data")}
+    props: GuideOverlayProps
+    props.steps = *steps[0]
+    props.count = HABITS_GUIDE_STEPS
+    props.step = *app.habits_guide_step
+    props.view_width = app.ui.view_width
+    props.view_height = app.ui.view_height
+    props.reserved_bottom = app_content_bottom_reserved(app)
+    props.max_width = AppScale(300)
+    props.paragraph_font = AppSmallFontSize()
+    props.previous_requested = app.ui.manual_previous
+    props.next_requested = app.ui.manual_next
+    props.close_requested = app.ui.manual_close
+    result := GuideOverlay(props)
+    if result.changed != 0 { HabitScreenSave(app) }
+    if result.finished != 0 || result.closed != 0 {
+        habits_screen_dismiss_first_run_guide(app)
+    }
+}
+
+HabitScreenCompletion :: (app: *InnerBreeze, index: s32,
+    day_index: s32) -> bool {
+    habit := *app.habits.items[index]
+    if habit_completed_day(habit, day_index) != 0 { return true }
+    if habit_is_linked(habit) == 0 { return false }
+    linked := habit_cached_linked_entries(app, index, day_index)
+    if linked == null { return false }
+    if habit_counting_enabled(habit) != 0 {
+        return HabitEffectiveDayCount(habit, day_index, linked) >=
+        habit_counter_target(habit)
+    }
+    return HabitLinkedHasDay(linked, day_index)
+}
+
+HabitScreenDueToday :: (app: *InnerBreeze) -> s32 {
+    due: s32 = 0
+    today := habits_today_index()
+    index: s32 = 0
+    while index < app.habits.count {
+        if habit_scheduled_day(*app.habits.items[index], today) != 0 {
+            due += 1
+        }
+        index += 1
+    }
+    return due
+}
+
+HabitScreenDoneToday :: (app: *InnerBreeze) -> s32 {
+    done: s32 = 0
+    today := habits_today_index()
+    index: s32 = 0
+    while index < app.habits.count {
+        if habit_scheduled_day(*app.habits.items[index], today) != 0 &&
+        HabitScreenCompletion(app, index, today) { done += 1 }
+        index += 1
+    }
+    return done
+}
+
+HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
+    day_index: s32, decrement: bool) {
+    if app.modal.active != 0 || index < 0 || index >= app.habits.count {
+        return
+    }
+    habit := *app.habits.items[index]
+    if habit_scheduled_day(habit, day_index) == 0 &&
+    !HabitScreenCompletion(app, index, day_index) { return }
+    linked := habit_cached_linked_entries(app, index, day_index)
+    linked_count: s32 = 0
+    if linked != null {
+        linked_count = HabitLinkedSessionCountForDay(linked, day_index)
+    }
+    if habit_counting_enabled(habit) != 0 {
+        if linked_count > 0 && !decrement {
+            habit_open_linked_edit_page(app, index, day_index)
+            app_block_current_click(app)
+            return
+        }
+        action: s32 = ifx (decrement) then (-1) else (1)
+        habit_apply_count_action(app, index, day_index, action, linked_count)
+        unused app_auto_sync(app)
+    } else if linked_count > 0 {
+        habit_open_linked_edit_page(app, index, day_index)
+    } else {
+        habit_toggle_day(*app.habits, index, day_index)
+        unused app_auto_sync(app)
+    }
+    app_block_current_click(app)
+}
+
+HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
+    day_index: s32, label: string, id: s32, bounds: Rectangle) {
+    habit := *app.habits.items[index]
+    scheduled := habit_scheduled_day(habit, day_index) != 0
+    complete := HabitScreenCompletion(app, index, day_index)
+    disabled := !scheduled && !complete
+    props: ButtonProps
+    props.bounds = bounds
+    props.id = id
+    props.label = label
+    props.tone = cast(ButtonTone)(ifx (complete) then
+        (ButtonToneAccent) else (ButtonToneNeutral))
+    props.emphasis = cast(ButtonEmphasis)(ifx (complete) then
+        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+    props.selected = complete
+    props.disabled = disabled || app.modal.active != 0
+    if Button(app.ui.session, props) != 0 {
+        HabitScreenDayAction(app, index, day_index, false)
+    }
+    if !disabled && IsMouseButtonReleased(HABITS_MOUSE_RIGHT) &&
+    app.ui.mouse_x >= cast(s32)bounds.x &&
+    app.ui.mouse_y >= cast(s32)bounds.y &&
+    app.ui.mouse_x < cast(s32)(bounds.x + bounds.width) &&
+    app.ui.mouse_y < cast(s32)(bounds.y + bounds.height) {
+        HabitScreenDayAction(app, index, day_index, true)
+    }
+}
+
+HabitScreenWeekdayLabel :: (day_index: s32, column: s32) -> string {
+    if column == 0 {
+        return LocaleText("habits_today")
+    }
+    weekday := habit_weekday_bit(day_index)
+    if weekday == 0 {
+        return LocaleText("habit_day_mon")
+    }
+    if weekday == 1 {
+        return LocaleText("habit_day_tue")
+    }
+    if weekday == 2 {
+        return LocaleText("habit_day_wed")
+    }
+    if weekday == 3 {
+        return LocaleText("habit_day_thu")
+    }
+    if weekday == 4 {
+        return LocaleText("habit_day_fri")
+    }
+    if weekday == 5 {
+        return LocaleText("habit_day_sat")
+    }
+    return LocaleText("habit_day_sun")
+}
+
+HabitScreenTextColor :: (background: Color) -> Color {
+    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 +
+        cast(s32)background.b * 114
+    if luma >= 128000 {
+        return Color.{0, 0, 0, 255}
+    }
+    return Color.{255, 255, 255, 255}
+}
+
+HabitScreenCircle :: (app: *InnerBreeze, x: s32, y: s32,
+    radius: s32, color: Color) {
+    bounds := HabitScreenRect(x - radius, y - radius, radius * 2,
+        radius * 2)
+    PaintRoundedFill(app.ui.session, -1, bounds,
+        cast(float32)radius, 12, color)
+}
+
+HabitScreenLine :: (app: *InnerBreeze, x1: s32, y1: s32,
+    x2: s32, y2: s32, color: Color) {
+    PaintLine(app.ui.session, -1, Rectangle.{
+        cast(float32)x1, cast(float32)y1,
+        cast(float32)(x2 - x1), cast(float32)(y2 - y1)
+}, color)
+}
+
+HabitScreenMarker :: (app: *InnerBreeze, habit_index: s32,
+    day_index: s32, column: s32, x: s32, y: s32,
+    width: s32) {
+    habit := *app.habits.items[habit_index]
+    linked := habit_cached_linked_entries(app, habit_index, day_index)
+    linked_count: s32 = 0
+    if linked != null {
+        linked_count = HabitLinkedSessionCountForDay(linked, day_index)
+    }
+    count := HabitEffectiveDayCount(habit, day_index, linked)
+    complete := HabitScreenCompletion(app, habit_index, day_index)
+    scheduled := habit_scheduled_day(habit, day_index) != 0
+    disabled := !scheduled && !complete
+
+    label := HabitScreenWeekdayLabel(day_index, column)
+    label_font := AppFitFontSize(label, width - AppScale(4),
+        AppSmallFontSize(), AppScale(10))
+    label_props: TextProps
+    label_props.bounds = HabitScreenRect(x, y, width, AppScale(15))
+    label_props.text = label
+    label_props.font = label_font
+    label_props.align = cast(TextAlign)TextAlignCenter
+    label_props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, label_props)
+
+    marker: ButtonProps
+    marker.id = cast(s32)5200000 + habit_index * 16 + column
+    marker.bounds = HabitScreenRect(x, y, width, AppScale(62))
+    marker.invisible = true
+    marker.disabled = disabled || app.modal.active != 0
+    marker_clicked := Button(app.ui.session, marker) != 0
+
+    surface := StyleTokenColor("surface")
+    foreground := StyleTokenColor("text")
+    accent := habit.color
+    center_x := x + width / 2
+    center_y := y + AppScale(42)
+    radius := AppScale(ifx column == 0 then 10 else 9)
+    mouse_over := !marker.disabled &&
+        app.ui.mouse_x >= x && app.ui.mouse_x < x + width &&
+        app.ui.mouse_y >= y && app.ui.mouse_y < y + AppScale(62)
+    if mouse_over {
+        HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
+            Fade(accent, 0.24))
+    }
+    HabitScreenCircle(app, center_x, center_y + AppScale(1),
+        radius + AppScale(2), Fade(Color.{0, 0, 0, 255}, 0.16))
+    if complete {
+        HabitScreenCircle(app, center_x, center_y,
+            radius + AppScale(1), LightenColor(accent, 16))
+        HabitScreenCircle(app, center_x, center_y, radius, accent)
+        check := HabitScreenTextColor(accent)
+        HabitScreenLine(app, center_x - radius / 2, center_y,
+            center_x - radius / 8, center_y + radius / 3, check)
+        HabitScreenLine(app, center_x - radius / 8,
+            center_y + radius / 3, center_x + radius / 2,
+            center_y - radius / 3, check)
+    } else {
+        HabitScreenCircle(app, center_x, center_y,
+            radius + AppScale(1), Fade(foreground, 0.54))
+        HabitScreenCircle(app, center_x, center_y,
+            radius - AppScale(2), surface)
+        HabitScreenCircle(app, center_x - AppScale(2),
+            center_y - AppScale(3), ifx radius / 3 > AppScale(2) then
+            (radius / 3) else (AppScale(2)), Fade(Color.{255, 255, 255, 255}, 0.16))
+    }
+
+    if habit_counting_enabled(habit) != 0 && count > 0 {
+        count_text := HabitScreenNumber(app, count)
+        count_props: TextProps
+        count_props.bounds = HabitScreenRect(x, center_y - AppScale(10),
+            width, AppScale(20))
+        count_props.text = count_text
+        count_props.font = AppScale(Text12)
+        count_props.align = cast(TextAlign)TextAlignCenter
+        count_props.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, count_props)
+    }
+    if marker_clicked {
+        HabitScreenDayAction(app, habit_index, day_index, false)
+    }
+}
+
+HabitScreenChevron :: (app: *InnerBreeze, habit_index: s32,
+    card: Rectangle, expanded: bool) -> bool {
+    size := AppScale(40)
+    button: ButtonProps
+    button.id = 5300000 + habit_index
+    button.bounds = HabitScreenRect(
+        cast(s32)(card.x + card.width) - AppScale(54),
+        cast(s32)card.y + AppScale(11), size, size)
+    button.style_kind = StyleKindCard()
+    button.arrow = true
+    button.direction = cast(ArrowDirection)(ifx expanded then
+        (ArrowUp) else (ArrowDown))
+    button.icon_only = true
+    button.circle = true
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    button.disabled = app.modal.active != 0
+    return Button(app.ui.session, button) != 0
+}
+
+HabitScreenStreak :: (app: *InnerBreeze, index: s32) -> s32 {
+    streak: s32 = 0
+    ago: s32 = 0
+    while ago < 370 {
+        day := habits_day_index(ago)
+        habit := *app.habits.items[index]
+        if habit_scheduled_day(habit, day) == 0 {
+            ago += 1
+            continue
+        }
+        if !HabitScreenCompletion(app, index, day) { break }
+        streak += 1
+        ago += 1
+    }
+    return streak
+}
+
+HabitScreenWeekProgress :: (app: *InnerBreeze, index: s32,
+    scheduled: *s32) -> s32 {
+    completed: s32 = 0
+    due: s32 = 0
+    ago: s32 = 0
+    while ago < 7 {
+        day := habits_day_index(ago)
+        habit := *app.habits.items[index]
+        if habit_scheduled_day(habit, day) != 0 {
+            due += 1
+            if HabitScreenCompletion(app, index, day) { completed += 1 }
+        }
+        ago += 1
+    }
+    scheduled.* = due
+    return completed
+}
+
+HabitScreenMetric :: (app: *InnerBreeze, x: s32, y: s32,
+    width: s32, height: s32, label: string, value: string,
+    accent: Color) {
+    surface := StyleTokenColor("surface")
+    panel: BoxProps
+    panel.bounds = HabitScreenRect(x, y, width, height)
+    panel.fill = DarkenColor(surface, 3)
+    panel.radius = cast(float32)AppScale(8)
+    Box(app.ui.session, panel)
+    bar: BoxProps
+    bar.bounds = HabitScreenRect(x, y, AppScale(4), height)
+    bar.fill = accent
+    Box(app.ui.session, bar)
+    label_props: TextProps
+    label_props.bounds = HabitScreenRect(x + AppScale(14), y + AppScale(8),
+        width - AppScale(18), AppScale(18))
+    label_props.text = label
+    label_props.font = AppSmallFontSize()
+    label_props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, label_props)
+    value_props: TextProps
+    value_props.bounds = HabitScreenRect(x + AppScale(14), y + AppScale(32),
+        width - AppScale(18), AppScale(24))
+    value_props.text = value
+    value_props.font = AppFontSize()
+    value_props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, value_props)
+}
+
+HabitScreenSelectedWeek :: (app: *InnerBreeze, index: s32,
+    x: s32, y: s32, width: s32) {
+    habit := *app.habits.items[index]
+    today := habits_today_index()
+    counting := habit_counting_enabled(habit) != 0
+    today_count := HabitEffectiveDayCount(habit, today,
+        habit_cached_linked_entries(app, index, today))
+    today_complete := HabitScreenCompletion(app, index, today)
+    today_label: [96]u8
+    today_text := LocaleText("habit_complete_today_button")
+    if today_complete {
+        today_text = LocaleText("habit_day_completed")
+    }
+    if counting {
+        today_args: [2]FormatArg
+        today_args[0].text = LocaleText("habits_today")
+        today_args[0].is_text = true
+        today_args[1].number = today_count
+        if FormatTemplate("%s  %d", today_args[:], today_label[:]) {
+            today_text = FrameTextHold(*app.ui.frame_text,
+                AppTextFromCString(*today_label[0], cast(s32)today_label.count))
+        }
+    }
+    action: ButtonProps
+    action.id = 5700000 + index
+    action.bounds = HabitScreenRect(x, y, width, AppScale(42))
+    action.label = today_text
+    action.tone = cast(ButtonTone)ButtonToneAccent
+    action.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    action.disabled = app.modal.active != 0 ||
+        (habit_scheduled_day(habit, today) == 0 && !today_complete)
+    if Button(app.ui.session, action) != 0 {
+        HabitScreenDayAction(app, index, today, false)
+    }
+
+    row_y := y + AppScale(56)
+    row_h := AppScale(62)
+    marker_width := width / 7
+    column: s32 = 0
+    while column < 7 {
+        day := habits_day_index(column)
+        HabitScreenMarker(app, index, day, column,
+            x + column * marker_width, row_y, marker_width)
+        column += 1
+    }
+    app.habits_guide_anchors[5] = HabitScreenRect(x, row_y, width, row_h)
+
+    scheduled: s32 = 0
+    done := HabitScreenWeekProgress(app, index, *scheduled)
+    streak := HabitScreenStreak(app, index)
+    streak_value: [64]u8
+    statistics_format_day_count(*streak_value[0], 64, streak)
+    streak_text := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*streak_value[0], 64))
+    week_value: [32]u8
+    week_args: [2]FormatArg
+    week_args[0].number = done
+    week_args[1].number = scheduled
+    unused FormatTemplate("%d / %d", week_args[:], week_value[:])
+    week_text := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*week_value[0], 32))
+    metric_y := row_y + row_h + AppScale(14)
+    metric_gap := AppScale(10)
+    metric_width := (width - metric_gap) / 2
+    HabitScreenMetric(app, x, metric_y, metric_width, AppScale(64),
+        LocaleText("habit_stats_current_streak"), streak_text,
+        habit.color)
+    HabitScreenMetric(app, x + metric_width + metric_gap, metric_y,
+        width - metric_width - metric_gap, AppScale(64),
+        LocaleText("profile_progress_title"), week_text,
+        LightenColor(habit.color, 18))
+}
+
+HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
+    card: Rectangle) -> bool {
+    habit := *app.habits.items[index]
+    name := AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+    card_button: ButtonProps
+    card_button.id = 4200 + index
+    card_button.bounds = card
+    card_button.style_kind = StyleKindCard()
+    card_button.icon_only = true
+    card_button.disabled = app.modal.active != 0
+    unused Button(app.ui.session, card_button)
+
+    dot: BoxProps
+    dot.bounds = HabitScreenRect(cast(s32)card.x + AppScale(16),
+        cast(s32)card.y + AppScale(20), AppScale(10), AppScale(10))
+    dot.fill = habit.color
+    dot.radius = cast(float32)AppScale(5)
+    Box(app.ui.session, dot)
+    name_props: TextProps
+    name_props.bounds = HabitScreenRect(cast(s32)card.x + AppScale(36),
+        cast(s32)card.y + AppScale(12), cast(s32)card.width - AppScale(54),
+        AppScale(28))
+    name_props.text = name
+    name_props.font = AppFitFontSize(name,
+        cast(s32)card.width - AppScale(54), AppFontSize(), AppScale(Text12))
+    name_props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, name_props)
+    description := AppTextFromCString(*habit.description[0],
+        HABIT_DESCRIPTION_SIZE)
+    if description.count > 0 {
+        description_props: TextProps
+        description_props.bounds = HabitScreenRect(
+            cast(s32)card.x + AppScale(36), cast(s32)card.y + AppScale(46),
+            cast(s32)card.width - AppScale(54), AppScale(24))
+        description_props.text = description
+        description_props.font = AppSmallFontSize()
+        description_props.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, description_props)
+    }
+
+    action_size := AppScale(52)
+    action_gap := (cast(s32)card.width - AppScale(28) - action_size * 3) / 2
+    action_y := cast(s32)card.y + AppScale(78)
+    actions: [3]ButtonProps
+    action_ids: [3]s32 = .[5600000 + index * 3,
+        5600001 + index * 3, 5600002 + index * 3]
+    action_icons: [3]s32 = .[5, 106, 7]
+    column: s32 = 0
+    while column < 3 {
+        action: ButtonProps
+        action.id = action_ids[column]
+        action.bounds = HabitScreenRect(cast(s32)card.x + AppScale(14) +
+            column * (action_size + action_gap), action_y, action_size,
+            action_size)
+        action.icon_type = action_icons[column]
+        action.icon_only = true
+        action.tone = cast(ButtonTone)ButtonToneNeutral
+        action.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        action.disabled = app.modal.active != 0
+        clicked := Button(app.ui.session, action) != 0
+        if clicked {
+            if column == 0 {
+                habits_open_history(app)
+            } else if column == 1 {
+                habits_open_statistics(app)
+            } else {
+                habit_edit_begin(app, index)
+            }
+        }
+        if index == 0 {
+            app.habits_guide_anchors[2 + column] = action.bounds
+        }
+        column += 1
+    }
+
+    section: TextProps
+    section.bounds = HabitScreenRect(cast(s32)card.x + AppScale(14),
+        cast(s32)card.y + AppScale(144), cast(s32)card.width - AppScale(28),
+        AppScale(20))
+    section.text = LocaleText("habit_focus_week")
+    section.font = AppSmallFontSize()
+    section.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, section)
+    body_y := cast(s32)card.y + AppScale(174)
+    HabitScreenSelectedWeek(app, index, cast(s32)card.x + AppScale(14),
+        body_y, cast(s32)card.width - AppScale(28))
+    return HabitScreenChevron(app, index, card, true)
+}
+
+HabitScreenOverview :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry) {
+    heading_h := AppScale(34)
+    button_h := AppScale(42)
+    gap := AppScale(12)
+    heading: TextProps
+    heading.bounds = HabitScreenRect(geometry.x, geometry.y,
+        geometry.width - button_h - gap, heading_h)
+    heading.text = LocaleText("tab_habits")
+    heading.font = AppTitleFontSize(heading.text, geometry.width)
+    heading.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, heading)
+    add_bounds := HabitScreenRect(geometry.x + geometry.width - button_h,
+        geometry.y, button_h, button_h)
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_new_button"), 4100,
+        cast(s32)add_bounds.x, cast(s32)add_bounds.y,
+        cast(s32)add_bounds.width, cast(s32)add_bounds.height,
+        false, app.habits.count >= HABIT_MAX)) != 0 {
+        habit_edit_begin_new(app)
+        return
+    }
+    summary_y := geometry.y + heading_h + gap
+    due := HabitScreenDueToday(app)
+    done := HabitScreenDoneToday(app)
+    progress: [96]u8
+    progress_args: [2]FormatArg
+    progress_args[0].number = done
+    progress_args[1].number = due
+    unused FormatTemplate("%d / %d", progress_args[:], progress[:])
+    progress_text := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*progress[0], cast(s32)progress.count))
+    summary: TextProps
+    summary.bounds = HabitScreenRect(geometry.x, summary_y,
+        geometry.width / 2, AppScale(24))
+    summary.text = LocaleText("habits_done_count_label")
+    summary.font = AppSmallFontSize()
+    summary.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, summary)
+    progress_props: TextProps
+    progress_props.bounds = HabitScreenRect(
+        geometry.x + geometry.width / 2, summary_y,
+        geometry.width / 2, AppScale(24))
+    progress_props.text = progress_text
+    progress_props.font = AppSmallFontSize()
+    progress_props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, progress_props)
+    app.habits_guide_anchors[0] = HabitScreenRect(geometry.x, summary_y,
+        geometry.width, AppScale(24))
+    list_y := summary_y + AppScale(38)
+    card_h := AppScale(HABITS_CARD_HEIGHT)
+    viewport := HabitScreenRect(geometry.x, list_y, geometry.width,
+        geometry.height - (list_y - geometry.y))
+    measure_grid: GridProps
+    measure_grid.bounds = viewport
+    measure_grid.min_item_width = AppScale(300)
+    measure_grid.gap = gap
+    measure_cursor := BeginGridCursor(measure_grid)
+    index: s32 = 0
+    while index < app.habits.count {
+        item_h := AppScale(ifx index == app.habits.selected then
+            (HABITS_SELECTED_CARD_HEIGHT) else (HABITS_CARD_HEIGHT))
+        measure_cursor = GridStep(measure_cursor, item_h, 1)
+        index += 1
+    }
+    content_h := GridCursorHeight(measure_cursor) + AppScale(8)
+    if app.habits.count == 0 { content_h = AppScale(80) }
+    scrolled := HabitScreenScroll(app, "inbe/habits/overview", viewport,
+        content_h)
+    if !scrolled.opened { return }
+    if app.habits.count == 0 {
+        empty: TextProps
+        empty.bounds = HabitScreenRect(geometry.x,
+            cast(s32)scrolled.content.y + AppScale(10),
+            geometry.width, AppScale(48))
+        empty.text = LocaleText("habit_empty_title")
+        empty.font = AppFontSize()
+        empty.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, empty)
+    }
+    grid: GridProps
+    grid.bounds = HabitScreenRect(0, 0,
+        cast(s32)scrolled.content.width, content_h)
+    grid.min_item_width = AppScale(300)
+    grid.gap = gap
+    cursor := BeginGridCursor(grid)
+    cursor.x = cast(s32)scrolled.content.x
+    cursor.y = cast(s32)scrolled.content.y
+    index = 0
+    while index < app.habits.count {
+        habit := *app.habits.items[index]
+        item_h := AppScale(ifx index == app.habits.selected then
+            (HABITS_SELECTED_CARD_HEIGHT) else (HABITS_CARD_HEIGHT))
+        cursor = GridStep(cursor, item_h, 1)
+        card := cursor.item
+        if index == app.habits.selected {
+            if HabitScreenSelectedCard(app, index, card) {
+                End(app.ui.session)
+                habits_return_to_overview(app)
+                return
+            }
+            index += 1
+            continue
+        }
+        name := AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+        card_button: ButtonProps
+        card_button.id = 4200 + index
+        card_button.bounds = card
+        card_button.style_kind = StyleKindCard()
+        card_button.icon_only = false
+        card_button.disabled = app.modal.active != 0
+        card_clicked := Button(app.ui.session, card_button) != 0
+
+        dot: BoxProps
+        dot.bounds = HabitScreenRect(cast(s32)card.x + AppScale(16),
+            cast(s32)card.y + AppScale(20), AppScale(10), AppScale(10))
+        dot.fill = habit.color
+        dot.radius = cast(float32)AppScale(5)
+        Box(app.ui.session, dot)
+
+        name_props: TextProps
+        name_props.bounds = HabitScreenRect(cast(s32)card.x + AppScale(36),
+            cast(s32)card.y + AppScale(10),
+            cast(s32)card.width - AppScale(76), AppScale(28))
+        name_props.text = name
+        name_props.font = AppFontSize()
+        name_props.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, name_props)
+
+        description := AppTextFromCString(*habit.description[0],
+            HABIT_DESCRIPTION_SIZE)
+        if description.count > 0 {
+            description_props: TextProps
+            description_props.bounds = HabitScreenRect(
+                cast(s32)card.x + AppScale(36), cast(s32)card.y + AppScale(39),
+                cast(s32)card.width - AppScale(76), AppScale(30))
+            description_props.text = description
+            description_props.font = AppSmallFontSize()
+            description_props.wrap = cast(TextWrap)TextWrapAuto
+            Text(app.ui.session, description_props)
+        }
+
+        marker_y := cast(s32)card.y + AppScale(78)
+        marker_width := (cast(s32)card.width - AppScale(24)) / 7
+        column: s32 = 0
+        while column < 7 {
+            day := habits_day_index(column)
+            HabitScreenMarker(app, index, day, column,
+                cast(s32)card.x + AppScale(12) + column * marker_width,
+                marker_y, marker_width)
+            column += 1
+        }
+
+        if HabitScreenChevron(app, index, card, false) {
+            card_clicked = true
+        }
+        if index == 0 {
+            app.habits_guide_anchors[1] = card
+        }
+        if card_clicked {
+            End(app.ui.session)
+            habits_expand_card(app, index)
+            return
+        }
+        index += 1
+    }
+    End(app.ui.session)
+}
+
+HabitScreenSelectedHeader :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry, index: s32) -> s32 {
+    y := geometry.y
+    habit := *app.habits.items[index]
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("back_button"), 4300,
+        geometry.x, y, AppScale(72), AppScale(40), false, false)) != 0 {
+        habits_return_to_overview(app)
+        return -1
+    }
+    name := AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+    title: TextProps
+    title.bounds = HabitScreenRect(geometry.x + AppScale(82), y,
+        geometry.width - AppScale(82), AppScale(40))
+    title.text = name
+    title.font = AppTitleFontSize(name, geometry.width - AppScale(82))
+    title.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, title)
+    y += AppScale(52)
+    tab_w := (geometry.width - AppScale(16)) / 3
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_focus_week"), 4301,
+        geometry.x, y, tab_w, AppScale(42),
+        app.habits.tab == HABIT_TAB_WEEKLY, false)) != 0 {
+        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+        app.habits.tab = HABIT_TAB_WEEKLY
+        app.habits.scroll = 0
+        HabitScreenSave(app)
+    }
+    app.habits_guide_anchors[2] = HabitScreenRect(geometry.x, y,
+        tab_w, AppScale(42))
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_focus_calendar"), 4302,
+        geometry.x + tab_w + AppScale(8), y, tab_w, AppScale(42),
+        app.habits.tab == HABIT_TAB_MONTHLY, false)) != 0 {
+        habits_open_history(app)
+    }
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_stats_current_streak"), 4303,
+        geometry.x + (tab_w + AppScale(8)) * 2, y,
+        tab_w, AppScale(42),
+        app.habits.tab == HABIT_TAB_STATISTICS, false)) != 0 {
+        habits_open_statistics(app)
+    }
+    app.habits_guide_anchors[3] = HabitScreenRect(
+        geometry.x + (tab_w + AppScale(8)) * 2, y,
+        tab_w, AppScale(42))
+    y += AppScale(54)
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_new_button"), 4304,
+        geometry.x, y, (geometry.width - AppScale(8)) / 2,
+        AppScale(38), false, false)) != 0 {
+        habit_edit_begin_new(app)
+        return -1
+    }
+    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_edit_button"), 4305,
+        geometry.x + (geometry.width + AppScale(8)) / 2, y,
+        (geometry.width - AppScale(8)) / 2, AppScale(38),
+        false, false)) != 0 {
+        habit_edit_begin(app, index)
+        return -1
+    }
+    app.habits_guide_anchors[4] = HabitScreenRect(
+        geometry.x + (geometry.width + AppScale(8)) / 2, y,
+        (geometry.width - AppScale(8)) / 2, AppScale(38))
+    y += AppScale(50)
+    return y
+}
+
+HabitScreenWeekly :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry, index: s32, top: s32) {
+    row_h := AppScale(46)
+    gap := AppScale(8)
+    count := app.habits.weekly_days
+    if count < HABIT_WEEKLY_INITIAL_DAYS { count = HABIT_WEEKLY_INITIAL_DAYS }
+    if count > HABIT_WEEKLY_MAX_DAYS { count = HABIT_WEEKLY_MAX_DAYS }
+    app.habits.weekly_days = count
+    content_h := count * (row_h + gap) + AppScale(52)
+    viewport := HabitScreenRect(geometry.x, top, geometry.width,
+        geometry.height - (top - geometry.y))
+    scrolled := HabitScreenScroll(app, "inbe/habits/week", viewport, content_h)
+    if !scrolled.opened { return }
+    first_row := (scrolled.scroll_offset - row_h) / (row_h + gap)
+    if first_row < 0 { first_row = 0 }
+    last_row := (scrolled.scroll_offset + cast(s32)viewport.height +
+        row_h) / (row_h + gap)
+    if last_row >= count { last_row = count - 1 }
+    row := first_row
+    while row <= last_row {
+        row_y := cast(s32)scrolled.content.y + row * (row_h + gap)
+        day := habits_day_index(row)
+        label := HabitScreenDate(app, day)
+        habit := *app.habits.items[index]
+        if habit_counting_enabled(habit) != 0 {
+            linked := habit_cached_linked_entries(app, index, day)
+            count_today := HabitEffectiveDayCount(habit, day, linked)
+            count_text: [64]u8
+            count_args: [5]FormatArg
+            count_args[0].number = day / 10000
+            count_args[1].number = (day / 100) % 100
+            count_args[2].number = day % 100
+            count_args[3].number = count_today
+            count_args[4].number = habit_counter_target(habit)
+            unused FormatTemplate("%04d-%02d-%02d  %d/%d",
+                count_args[:], count_text[:])
+            label = FrameTextHold(*app.ui.frame_text,
+                AppTextFromCString(*count_text[0], cast(s32)count_text.count))
+        }
+        HabitScreenDayButton(app, index, day, label, 4400 + row,
+            HabitScreenRect(geometry.x, row_y, geometry.width, row_h))
+        row += 1
+    }
+    if count < HABIT_WEEKLY_MAX_DAYS {
+        button_y := cast(s32)scrolled.content.y + count * (row_h + gap)
+        if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_load_more_button"),
+            4500, geometry.x, button_y, geometry.width,
+            AppScale(42), false, false)) != 0 {
+            app.habits.weekly_days += HABIT_WEEKLY_LOAD_DAYS
+            if app.habits.weekly_days > HABIT_WEEKLY_MAX_DAYS {
+                app.habits.weekly_days = HABIT_WEEKLY_MAX_DAYS
+            }
+        }
+    }
+    app.habits_guide_anchors[5] = HabitScreenRect(
+        geometry.x, top, geometry.width, row_h)
+    End(app.ui.session)
+}
+
+HabitScreenMonthParts :: (app: *InnerBreeze, year: *s32,
+    month: *s32) {
+    local := LocalNow()
+    year.* = local.year
+    month.* = local.month + app.habits.month_offset
+    while month.* < 1 { month.* += 12; year.* -= 1 }
+    while month.* > 12 { month.* -= 12; year.* += 1 }
+}
+
+HabitScreenCalendar :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry, index: s32, top: s32) {
+    year: s32
+    month: s32
+    HabitScreenMonthParts(app, *year, *month)
+    if !DateValid(year, month, 1) { return }
+    header_h := AppScale(42)
+    gap := AppScale(6)
+    arrow_w := AppScale(48)
+    if Button(app.ui.session, HabitScreenButtonProps(app, "<", 4600, geometry.x, top,
+        arrow_w, header_h, false, false)) != 0 {
+        app.habits.month_offset -= 1
+    }
+    if Button(app.ui.session, HabitScreenButtonProps(app, ">", 4601,
+        geometry.x + geometry.width - arrow_w, top,
+        arrow_w, header_h, false,
+        app.habits.month_offset >= 0)) != 0 {
+        app.habits.month_offset += 1
+    }
+    title := HabitScreenMonth(app, year, month)
+    month_title: TextProps
+    month_title.bounds = HabitScreenRect(geometry.x + arrow_w + gap,
+        top, geometry.width - (arrow_w + gap) * 2, header_h)
+    month_title.text = title
+    month_title.font = AppFontSize()
+    month_title.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, month_title)
+    first := DaysFromCivil(year, month, 1)
+    weekday := cast(s32)((first + 3) % 7)
+    cell_w := (geometry.width - gap * 6) / 7
+    cell_h := AppScale(50)
+    today := habits_today_index()
+    day: s32 = 1
+    while DateValid(year, month, day) {
+        slot := weekday + day - 1
+        column := slot % 7
+        row := slot / 7
+        x := geometry.x + column * (cell_w + gap)
+        y := top + header_h + gap + row * (cell_h + gap)
+        day_index := year * 10000 + month * 100 + day
+        if day_index <= today {
+            label := HabitScreenNumber(app, day)
+            HabitScreenDayButton(app, index, day_index, label,
+                4700 + slot, HabitScreenRect(x, y, cell_w, cell_h))
+        }
+        day += 1
+    }
+}
+
+#program_export
+draw_habits_screen :: (app: *InnerBreeze) {
+    if app == null { return }
+    geometry := HabitScreenLayout(app)
+    if geometry.width <= 0 || geometry.height <= 0 { return }
+    if app.habits.count <= 0 || app.habits.selected < 0 ||
+    app.habits.selected >= app.habits.count {
+        HabitScreenOverview(app, geometry)
+        return
+    }
+    selected := app.habits.selected
+    top := HabitScreenSelectedHeader(app, geometry, selected)
+    if top < 0 { return }
+    if app.habits.screen_mode == HABITS_SCREEN_STATISTICS ||
+    app.habits.tab == HABIT_TAB_STATISTICS {
+        draw_statistics_content(app, top)
+    } else if app.habits.screen_mode == HABITS_SCREEN_HISTORY ||
+    app.habits.tab == HABIT_TAB_MONTHLY {
+        HabitScreenCalendar(app, geometry, selected, top)
+    } else {
+        HabitScreenWeekly(app, geometry, selected, top)
+    }
+}
+
+#program_export
+habits :: (app: *InnerBreeze) { draw_habits_screen(app) }

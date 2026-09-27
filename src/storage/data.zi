@@ -1,0 +1,439 @@
+#import, file "../app/text_buffers.zi";
+#import, file "path_join.zi";
+#import, file "paths.zi";
+#import, file "root_upgrade.zi";
+#import, file "storage_layout.zi";
+#import, file "export_filename.zi";
+#import, file "db.zi";
+#import, file "storage_sessions.zi";
+#import, file "time_parts.zi";
+#import, file "import.zi";
+#import, file "../platform/environment.zi";
+#import, file "storage_elist.zi";
+#import "file_linux"
+using StorageImportMode;
+c :: #system_library "c";
+DataGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
+
+ANDROID :: #defined(ANDROID_BUILD)
+WEB :: #defined(PLATFORM_WEB)
+WIN32 :: #defined(_WIN32)
+
+#if ANDROID {
+    #import, file "../platform/android/activity_jni.zi";
+    DataWorkingDirectory :: (output: *u8, capacity: usize) -> *u8 #foreign c "getcwd";
+}
+
+time :: (t: *s64) -> s64 #foreign c;
+LOG_INFO :: 3
+LOG_ERROR :: 5
+localtime :: (t: *s64) -> *Tm #foreign c;
+
+DATA_PATH_MAX :: 512
+
+g_data_root: [DATA_PATH_MAX] u8;
+g_today_dir: [DATA_PATH_MAX] u8;
+g_data_ready: s32 = 0;
+
+DataEnvironment :: (name: string) -> *u8 {
+    buffer: [64]u8
+    if !AppCopyText(name, buffer[:]) { return null }
+    return DataGetEnv(*buffer[0])
+}
+
+DataHasSuffix :: (path: string, suffix: string) -> bool {
+    if suffix.count > path.count { return false }
+    start := cast(s32)(path.count - suffix.count)
+    index: s32 = 0
+    while index < cast(s32)suffix.count {
+        if path[start + index] != suffix[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+DataAppendPadded :: (output: []u8, value: s32, width: s32) -> bool {
+    digits: [16]u8
+    if !AppFormatS32(value, digits[:]) { return false }
+    text := AppTextFromCString(*digits[0], 16)
+    if value >= 0 {
+        padding := width - cast(s32)text.count
+        while padding > 0 {
+            if !AppAppendText("0", output) { return false }
+            padding -= 1
+        }
+    }
+    return AppAppendText(text, output)
+}
+
+DataMigrateRoots :: (legacy: string, current: string) -> bool {
+    legacy_path: [DATA_PATH_MAX]u8
+    current_path: [DATA_PATH_MAX]u8
+    archive_suffix: [32]u8
+    if !AppCopyText(legacy, legacy_path[:]) ||
+        !AppCopyText(current, current_path[:]) ||
+        !AppCopyText(ArchiveDirectorySuffix, archive_suffix[:]) {
+        return false
+    }
+    return migrate_data_root(*legacy_path[0], *current_path[0],
+        *archive_suffix[0], *g_data_root[0], cast(u64)DATA_PATH_MAX) != 0
+}
+
+DataMigrateBase :: (base: string, legacy_name: string) -> bool {
+    base_path: [DATA_PATH_MAX]u8
+    legacy_path: [DATA_PATH_MAX]u8
+    current_path: [DATA_PATH_MAX]u8
+    legacy_directory: [64]u8
+    current_directory: [64]u8
+    if !AppCopyText(base, base_path[:]) ||
+        !AppCopyText(legacy_name, legacy_directory[:]) ||
+        !AppCopyText(CurrentDirectoryName, current_directory[:]) {
+        return false
+    }
+    if storage_join_path(*legacy_path[0], cast(u64)DATA_PATH_MAX,
+        *base_path[0], *legacy_directory[0]) == 0 ||
+        storage_join_path(*current_path[0], cast(u64)DATA_PATH_MAX,
+            *base_path[0], *current_directory[0]) == 0 {
+        return false
+    }
+    return DataMigrateRoots(AppTextFromCString(*legacy_path[0], DATA_PATH_MAX),
+        AppTextFromCString(*current_path[0], DATA_PATH_MAX))
+}
+
+data_root :: () -> string {
+    if g_data_root[0] != cast(u8)0 {
+        return AppTextFromCString(*g_data_root[0], DATA_PATH_MAX)
+    }
+
+    // Desktop screenshot and test runs must never seed the user's database.
+    #if !WEB && !ANDROID {
+        override_root := DataEnvironment("APP_DATA_ROOT")
+        if override_root != null && override_root[0] != cast(u8)0 {
+            if !AppCopyText(AppTextFromCString(override_root, DATA_PATH_MAX),
+                g_data_root[:]) {
+                return ""
+            }
+            unused storage_ensure_dir(AppTextFromCString(*g_data_root[0], DATA_PATH_MAX))
+            return AppTextFromCString(*g_data_root[0], DATA_PATH_MAX)
+        }
+    }
+
+    #if WEB {
+        if !DataMigrateRoots(PreviousWebHome, CurrentWebHome) {
+            return ""
+        }
+    } else #if ANDROID {
+        internal_path := ActivityInternalDataPath()
+        directory: [DATA_PATH_MAX]u8
+        if internal_path == null || internal_path[0] == cast(u8)0 {
+            if DataWorkingDirectory(*directory[0], cast(usize)DATA_PATH_MAX) == null {
+                unused AppCopyText(".", directory[:])
+            }
+            internal_path = *directory[0]
+        }
+        if !DataMigrateBase(AppTextFromCString(internal_path, DATA_PATH_MAX),
+            PreviousDirectoryAndroid) {
+            return ""
+        }
+    } else #if WIN32 {
+        local := DataEnvironment("LOCALAPPDATA")
+        roaming := DataEnvironment("APPDATA")
+        base_path := local
+        if base_path == null || base_path[0] == cast(u8)0 {
+            base_path = roaming
+        }
+        if base_path != null && base_path[0] != cast(u8)0 {
+            if !DataMigrateBase(AppTextFromCString(base_path, DATA_PATH_MAX),
+                PreviousDirectoryWindows) {
+                return ""
+            }
+        } else {
+            if !DataMigrateRoots(PreviousDirectoryWindows, CurrentDirectoryName) {
+                return ""
+            }
+        }
+    } else {
+        xdg := DataEnvironment("XDG_DATA_HOME")
+        home := DataEnvironment("HOME")
+        plan9_home := DataEnvironment("home")
+        base_path: [DATA_PATH_MAX]u8
+        if xdg != null && xdg[0] != cast(u8)0 {
+            if !AppCopyText(AppTextFromCString(xdg, DATA_PATH_MAX), base_path[:]) {
+                return ""
+            }
+        } else if home != null && home[0] != cast(u8)0 {
+            if !AppCopyText(AppTextFromCString(home, DATA_PATH_MAX), base_path[:]) ||
+                !AppAppendText("/.local/share", base_path[:]) {
+                return ""
+            }
+        } else if plan9_home != null && plan9_home[0] != cast(u8)0 {
+            if !AppCopyText(AppTextFromCString(plan9_home, DATA_PATH_MAX), base_path[:]) ||
+                !AppAppendText("/.local/share", base_path[:]) {
+                return ""
+            }
+        } else {
+            unused AppCopyText(".local", base_path[:])
+        }
+        if !DataMigrateBase(AppTextFromCString(*base_path[0], DATA_PATH_MAX),
+            PreviousDirectoryPosix) {
+            return ""
+        }
+    }
+
+    root_text := AppTextFromCString(*g_data_root[0], DATA_PATH_MAX)
+    if storage_ensure_dir(root_text) == 0 {
+        LogStorage(LOG_ERROR, "DATA: failed to create root directory")
+    }
+    LogStorage(LOG_INFO, "DATA: root directory ready")
+    return root_text
+}
+
+data_init :: () {
+    if g_data_ready != 0 {
+        return
+    }
+    g_data_ready = storage_init(data_root())
+}
+
+data_today_dir :: () -> string {
+    now: s64 = time(null)
+    tm: *Tm = localtime(*now)
+
+    if tm == null {
+        return ""
+    }
+    year_text: [8] u8
+    month_text: [8] u8
+    day_text: [8] u8
+    AppFormatS32(tm.tm_year + 1900, year_text[:])
+    AppFormatS32(tm.tm_mon + 1, month_text[:])
+    AppFormatS32(tm.tm_mday, day_text[:])
+    AppCopyText(data_root(), g_today_dir[:])
+    AppAppendText("/", g_today_dir[:])
+    AppAppendText(AppTextFromCString(*year_text[0], 8), g_today_dir[:])
+    AppAppendText("/", g_today_dir[:])
+    AppAppendText(AppTextFromCString(*month_text[0], 8), g_today_dir[:])
+    AppAppendText("/", g_today_dir[:])
+    AppAppendText(AppTextFromCString(*day_text[0], 8), g_today_dir[:])
+    return AppTextFromCString(*g_today_dir[0], DATA_PATH_MAX)
+}
+
+data_save_session_path :: (round_times: *s32, round_count: s32,
+                              out_path: *u8, out_path_size: s64) -> s32 {
+    data_init()
+    return storage_save_session(round_times, round_count, out_path, out_path_size)
+}
+
+#program_export
+data_save_session_path_for_activity :: (round_times: *s32, round_count: s32,
+                                           topic: s32, activity: s32,
+                                           out_path: *u8,
+                                           out_path_size: s64) -> s32 {
+    data_init()
+    return storage_save_session_for_activity(round_times, round_count, topic, activity,
+                                             out_path, out_path_size)
+}
+
+data_replace_session :: (path: string, round_times: *s32,
+                            round_count: s32) -> s32 {
+    data_init()
+    return storage_replace_session(path, round_times, round_count)
+}
+
+data_delete_session :: (path: string) -> s32 {
+    data_init()
+    return storage_delete_session(path)
+}
+
+#program_export
+data_discard_session :: (path: string) -> s32 {
+    data_init()
+    return storage_delete_session(path)
+}
+
+data_save_session_checkin :: (path: string,
+                                 checkin: *SessionMoodCheckin) -> s32 {
+    data_init()
+    return storage_save_session_checkin(path, checkin)
+}
+
+#program_export "data_save_session_checkin"
+DataSaveSessionCheckinRaw :: (path: *u8,
+    checkin: *SessionMoodCheckin) -> s32 {
+    if path == null {
+        return 0
+    }
+    return data_save_session_checkin(AppTextFromCString(path, DATA_PATH_MAX),
+        checkin)
+}
+
+data_has_any :: () -> s32 {
+    data_init()
+    return storage_has_any()
+}
+
+data_get_total_size :: () -> s64 {
+    data_init()
+    return storage_total_size()
+}
+
+data_get_session_count :: () -> s32 {
+    data_init()
+    return storage_session_count()
+}
+
+data_delete_all :: () -> s64 {
+    data_init()
+    return storage_delete_all_sessions()
+}
+
+data_default_export_filename :: (out: *u8, out_size: s64) {
+    ExportFilenameAt(time(null), out, out_size)
+}
+
+data_export :: (path: string) -> s32 {
+    data_init()
+    return storage_export_zip(path)
+}
+
+data_validate_import_file :: (path: string) -> s32 {
+    if path.count == 0 || path[0] == #char "\0" { return 0 }
+    file := OpenRead(path)
+    if !file.valid { return 0 }
+    probe: [1]u8
+    read_result := ReadAt(file, probe[:], 0)
+    closed := CloseFile(file)
+    return ifx (read_result >= 0 && closed) then (1) else (0)
+}
+
+data_import :: (path: string) -> s32 {
+    return data_import_with_mode(path, cast(StorageImportMode)STORAGE_IMPORT_DATA_ONLY)
+}
+
+data_import_with_mode :: (path: string, mode: StorageImportMode) -> s32 {
+    data_init()
+    if path.count > 0 {
+        if DataHasSuffix(path, ".1list") {
+            return storage_elist_import_onelist(path)
+        }
+    }
+    return storage_import_zip_ex(
+        path,
+        mode)
+}
+
+DataImportInfo :: struct {
+    valid: s32
+    has_sessions: s32
+    has_habits: s32
+    has_settings: s32
+    session_count: s32
+    habit_count: s32
+    setting_count: s32
+}
+
+#program_export
+data_inspect_import :: (path: string, info: *DataImportInfo) -> s32 {
+    storage_info: StorageImportInfo
+    data_init()
+    if info != null {
+        info.* = DataImportInfo.{}
+    }
+    if DataHasSuffix(path, ".1list") {
+        if data_validate_import_file(path) == 0 {
+            return 0
+        }
+        if info != null {
+            info.valid = 1
+        }
+        return 1
+    }
+    if storage_inspect_import(path, *storage_info) == 0 {
+        return 0
+    }
+    if info != null {
+        info.valid = storage_info.valid
+        info.has_sessions = storage_info.has_sessions
+        info.has_habits = storage_info.has_habits
+        info.has_settings = storage_info.has_settings
+        info.session_count = storage_info.session_count
+        info.habit_count = storage_info.habit_count
+        info.setting_count = storage_info.setting_count
+    }
+    return 1
+}
+
+DataSessionCallback :: #type (date: string, time_text: string, round_count: s32, best: s32, user: s64) -> ();
+
+DbListSessionContext :: struct {
+    callback: DataSessionCallback
+    user: s64
+}
+
+db_list_session_callback :: (path: string, year: s32, month: s32, day: s32,
+                            hour: s32, minute: s32, second: s32,
+                            topic: s32, activity: s32,
+                            round_times: []s32, round_count: s32,
+                            user: s64) {
+    ctx := cast(*DbListSessionContext)user
+    date: [16] u8
+    time_text: [16] u8
+    best: s32 = 0
+
+    unused path
+    unused topic
+    unused activity
+    {
+        i: s32 = 0
+        while i < round_count {
+            if round_times[i] > best {
+                best = round_times[i]
+            }
+            i += 1
+        }
+    }
+    date[0] = cast(u8)0
+    time_text[0] = cast(u8)0
+    if !DataAppendPadded(date[:], year, 4) ||
+        !AppAppendText("-", date[:]) ||
+        !DataAppendPadded(date[:], month, 2) ||
+        !AppAppendText("-", date[:]) ||
+        !DataAppendPadded(date[:], day, 2) ||
+        !DataAppendPadded(time_text[:], hour, 2) ||
+        !AppAppendText(":", time_text[:]) ||
+        !DataAppendPadded(time_text[:], minute, 2) ||
+        !AppAppendText(":", time_text[:]) ||
+        !DataAppendPadded(time_text[:], second, 2) {
+        return
+    }
+    ctx.callback(AppTextFromCString(*date[0], 16), AppTextFromCString(*time_text[0], 16), round_count, best, ctx.user)
+}
+
+data_list_sessions :: (callback: DataSessionCallback, user: *void) {
+    ctx: DbListSessionContext
+    ctx.callback = callback
+    ctx.user = cast(s64)user
+
+    if ctx.callback == null {
+        return
+    }
+    data_list_session_records(db_list_session_callback, cast(*void)*ctx)
+}
+
+
+
+data_list_session_records :: (callback: StorageSessionRecordCallback,
+                                 user: *void) {
+    data_init()
+    if callback != null {
+        storage_list_session_records(callback, user)
+    }
+}
+
+data_load_session :: (path: string, round_times: *s32, max_rounds: s32,
+                         year: *s32, month: *s32, day: *s32,
+                         hour: *s32, minute: *s32, second: *s32) -> s32 {
+    data_init()
+    return storage_load_session(path, round_times, max_rounds,
+                                year, month, day, hour, minute, second)
+}

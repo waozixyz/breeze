@@ -5,20 +5,7 @@
 
 #include <sqlite3.h>
 #include <stddef.h>
-
-#define STORAGE_SETTING_TEXT_BUFFER_SIZE 8192
-
-/* Settings are read by the UI and sync worker on separate threads. */
-static inline char *storage_setting_text_buffer(void) {
-#if defined(_MSC_VER)
-    static __declspec(thread) char value[STORAGE_SETTING_TEXT_BUFFER_SIZE];
-#elif defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
-    static char value[STORAGE_SETTING_TEXT_BUFFER_SIZE];
-#else
-    static __thread char value[STORAGE_SETTING_TEXT_BUFFER_SIZE];
-#endif
-    return value;
-}
+#include <stdint.h>
 
 static inline int *storage_sql_transaction_lock_held(void) {
 #if defined(_MSC_VER)
@@ -46,17 +33,30 @@ typedef struct StorageState {
 extern StorageState g_storage;
 
 long long now_seconds(void);
+long long storage_local_timestamp(int year, int month, int day,
+                                  int hour, int minute, int second);
+int migrate_legacy_file_sessions_once(const char *root);
 long long storage_next_change_time(void);
 int bind_text(sqlite3_stmt *stmt, int index, const char *text);
 long long db_select_int64(const char *sql, long long fallback);
 int db_select_int(const char *sql, int fallback);
 int db_exec_text(const char *sql, const char *text);
-int storage_join_path(char *out, size_t out_size, const char *root, const char *name);
+int storage_join_path(char *out, uint64_t out_size, const char *root, const char *name);
 int path_exists(const char *path);
+int migrate_data_root(const char *legacy, const char *current,
+                      const char *archive_suffix, char *output,
+                      uint64_t output_capacity);
+int select_database_path(const char *legacy, const char *current,
+                         const char *marker, const char *temporary,
+                         const char *database_name, char *output,
+                         uint64_t output_capacity);
 int storage_ensure_dir(const char *path);
 int exec_sql(const char *sql);
-int table_has_column(const char *table, const char *column);
-int table_exists(const char *table);
+void *storage_db_handle(void);
+char *storage_user_id_buffer(void);
+void *storage_state_handle(void);
+uint64_t storage_state_size(void);
+char *storage_meta_text_buffer(void);
 int schema_create(void);
 int migrate_schema(void);
 int load_or_create_user(void);
@@ -91,5 +91,7 @@ void storage_sync_review_delete_json(void);
 int insert_session_at_ex(long long started_at, int local_date, const int *round_times,
                          int round_count, int topic, int activity, const char *source,
                          char *out_id, size_t out_id_size, int *out_inserted);
+int storage_insert_legacy_session(long long started_at, int local_date,
+                                  const int *round_times, int round_count);
 
 #endif

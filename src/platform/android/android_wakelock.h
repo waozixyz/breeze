@@ -1,9 +1,16 @@
 #ifndef APP_ANDROID_WAKELOCK_H
 #define APP_ANDROID_WAKELOCK_H
 
-#include "platform.h"
+#include <stdbool.h>
+#include <stdint.h>
 
-#if ANDROID_BUILD
+bool wakelock_acquire_host(void);
+bool wakelock_release_host(void);
+bool wakelock_update_notification_host(uint8_t *text);
+bool wakelock_keep_screen_on_host(void);
+bool wakelock_allow_screen_off_host(void);
+
+#if defined(ANDROID_BUILD) && ANDROID_BUILD
 #include <jni.h>
 void android_wakelock_init(void);
 void android_wakelock_acquire(void);

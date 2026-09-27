@@ -1,0 +1,128 @@
+#import "date_time"
+#import, file "../breaks/break_calendar.zi";
+#import, file "../breaks/break_types.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import "c_string"
+
+BreakDayRow :: struct {
+    local_date: s32
+    break_type: s32
+    prompts: s32
+    repeated_prompts: s32
+    taken: s32
+    natural: s32
+    skipped: s32
+    postponed: s32
+    overdue_s: s32
+    usage_s: s32
+}
+
+BreakWriteSQL :: #string SQL
+INSERT OR REPLACE INTO break_days
+(user_id,local_date,break_type,prompts,repeated_prompts,taken,
+natural,skipped,postponed,overdue_s,usage_s,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+SQL
+
+BreakReadSQL :: #string SQL
+SELECT local_date,break_type,prompts,repeated_prompts,
+taken,natural,skipped,postponed,overdue_s,usage_s FROM break_days
+WHERE user_id = ? AND local_date >= ?
+ORDER BY local_date DESC,break_type
+SQL
+
+BreakPrepare :: (database: *void, query: string) -> *void {
+    sql: [512]u8
+    if !CopyCString(query, sql[:]) { return null }
+    statement: *void = null
+    if SqlitePrepare(database, *sql[0], -1, *statement, null) != 0 {
+        return null
+    }
+    return statement
+}
+
+BreakWrite :: (date: s32, now: s64, engine: *BreakEngine) -> bool {
+    state: *StorageState = storage_state_handle()
+    if engine == null || date <= 0 || state.db == null { return false }
+    statement: *void = BreakPrepare(state.db, BreakWriteSQL)
+    if statement == null { return false }
+    complete: bool = true
+    kind: s32 = 0
+    while kind < BREAK_TYPE_COUNT {
+        if SqliteReset(statement) != 0 || SqliteClearBindings(statement) != 0 || SqliteBindText(statement, 1, *state.user_id[0], -1, null) != 0 || SqliteBindInt(statement, 2, date) != 0 || SqliteBindInt(statement, 3, kind) != 0 || SqliteBindInt(statement, 4, engine.stats[kind].prompts) != 0 || SqliteBindInt(statement, 5, engine.stats[kind].repeated_prompts) != 0 || SqliteBindInt(statement, 6, engine.stats[kind].taken) != 0 || SqliteBindInt(statement, 7, engine.stats[kind].natural) != 0 || SqliteBindInt(statement, 8, engine.stats[kind].skipped) != 0 || SqliteBindInt(statement, 9, engine.stats[kind].postponed) != 0 || SqliteBindInt(statement, 10, engine.stats[kind].overdue_s) != 0 || SqliteBindInt(statement, 11, engine.usage_today_s) != 0 || SqliteBindInt64(statement, 12, now) != 0 || SqliteStep(statement) != 101 {
+            complete = false
+            break
+        }
+        kind += 1
+    }
+    finalized: s32 = SqliteFinalize(statement)
+    return complete && finalized == 0
+}
+
+BreakRead :: (cutoff: s32, rows: *BreakDayRow, max_rows: s32) -> s32 {
+    state: *StorageState = storage_state_handle()
+    if state.db == null || rows == null || max_rows <= 0 || cutoff <= 0 {
+        return 0
+    }
+    statement: *void = BreakPrepare(state.db, BreakReadSQL)
+    if statement == null { return 0 }
+    if SqliteBindText(statement, 1, *state.user_id[0], -1, null) != 0 || SqliteBindInt(statement, 2, cutoff) != 0 {
+        SqliteFinalize(statement)
+        return 0
+    }
+    count: s32 = 0
+    while count < max_rows && SqliteStep(statement) == 100 {
+        rows[count].local_date = SqliteColumnInt(statement, 0)
+        rows[count].break_type = SqliteColumnInt(statement, 1)
+        rows[count].prompts = SqliteColumnInt(statement, 2)
+        rows[count].repeated_prompts = SqliteColumnInt(statement, 3)
+        rows[count].taken = SqliteColumnInt(statement, 4)
+        rows[count].natural = SqliteColumnInt(statement, 5)
+        rows[count].skipped = SqliteColumnInt(statement, 6)
+        rows[count].postponed = SqliteColumnInt(statement, 7)
+        rows[count].overdue_s = SqliteColumnInt(statement, 8)
+        rows[count].usage_s = SqliteColumnInt(statement, 9)
+        count += 1
+    }
+    SqliteFinalize(statement)
+    return count
+}
+
+#program_export
+storage_break_today :: () -> s32 {
+    return BreakDateFromLocal(LocalNow())
+}
+
+#program_export
+storage_break_flush_day_at :: (engine: *BreakEngine, date: s32) {
+    if engine == null || !BreakDateValid(date) {
+        return
+    }
+    unused BreakWrite(date, UnixNow(), engine)
+}
+
+#program_export
+storage_break_flush_day :: (engine: *BreakEngine) {
+    storage_break_flush_day_at(engine, BreakServiceDate(LocalNow()))
+}
+
+#program_export
+storage_break_history :: (days: s32, rows: *BreakDayRow,
+    max_rows: s32) -> s32 {
+    if rows == null || max_rows <= 0 || days < 0 {
+        return 0
+    }
+    cutoff := BreakHistoryCutoff(storage_break_today(), days)
+    if cutoff == 0 {
+        return 0
+    }
+    count := BreakRead(cutoff, rows, max_rows)
+    if count < 0 {
+        return 0
+    }
+    if count > max_rows {
+        return max_rows
+    }
+    return count
+}

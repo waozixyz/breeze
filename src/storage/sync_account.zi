@@ -1,0 +1,257 @@
+#import, file "account_types.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_account_crypto.zi";
+#import, file "sync_account_text.zi";
+#import, file "sync_account_parse.zi";
+#import, file "sync_account_sign.zi";
+#import, file "data.zi";
+#import, file "storage_core.zi";
+#import, file "path_join.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/locale.zi";
+using SyncAccountSaveResult;
+using SyncAccountLocalDataChoice;
+c :: #system_library "c";
+LoadFileText :: (path: *u8) -> *u8 #foreign c;
+UnloadFileText :: (body: *u8) #foreign c;
+SaveFileData :: (path: *u8, body: *u8, length: s32) -> bool #foreign c;
+
+
+
+
+
+
+
+
+
+
+AccountExportPlatform :: () -> s32 #foreign c "inbe_account_export_platform";
+AccountShareBytes :: (data: *u8, data_size: u64, filename: *u8,
+    mime: *u8, title: *u8) -> s32 #foreign c "inbe_account_share_bytes";
+AccountDownloadFile :: (path: *u8, filename: *u8,
+    mime: *u8) -> s32 #foreign c "inbe_account_download_file";
+
+sync_public_id_key: string = "sync_public_id";
+sync_public_key_key: string = "sync_public_key";
+sync_private_key_key: string = "sync_private_key";
+sync_account_alias_key: string = "sync_account_alias";
+sync_auth_token_key: string = "sync_auth_token";
+sync_auth_token_expires_key: string = "sync_auth_token_expires_at";
+AccountPathCapacity :: 512
+
+account_has_values :: (account: *SyncAccount) -> s32 {
+    if account == null {
+        return 0
+    }
+    if account.public_id[0] == 0 || account.public_key_hex[0] == 0 ||
+       account.private_key_hex[0] == 0 {
+        return 0
+    }
+    return 1
+}
+
+sync_account_write_and_reset :: (account: *SyncAccount) {
+    public_id: string = ""
+    public_key: string = ""
+    private_key: string = ""
+    if account != null {
+        public_id = AppTextFromCString(*account.public_id[0],
+            SYNC_PUBLIC_ID_HEX_SIZE)
+        public_key = AppTextFromCString(*account.public_key_hex[0],
+            SYNC_PUBLIC_KEY_HEX_SIZE)
+        private_key = AppTextFromCString(*account.private_key_hex[0],
+            SYNC_PRIVATE_KEY_HEX_SIZE)
+    }
+    storage_settings_begin_write()
+    storage_set_setting_text(sync_public_id_key, public_id)
+    storage_set_setting_text(sync_public_key_key, public_key)
+    storage_set_setting_text(sync_private_key_key, private_key)
+    storage_set_setting_text(sync_account_alias_key, "")
+    storage_set_sync_enabled(0)
+    storage_set_setting_text(sync_auth_token_key, "")
+    storage_set_setting_text(sync_auth_token_expires_key, "")
+    storage_reset_sync_state()
+    storage_settings_end_write()
+}
+
+sync_account_same_owner :: (owner: string, account: *SyncAccount) -> s32 {
+    if owner.count == 0 || account == null { return 0 }
+    id := AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+    if owner.count != id.count { return 0 }
+    index: s64 = 0
+    while index < owner.count {
+        if owner[index] != id[index] { return 0 }
+        index += 1
+    }
+    return 1
+}
+
+sync_sha256_hex :: (data: *u8, len: s64, out_hex: *u8) {
+    SyncCryptoSha256Hex(data, len, out_hex)
+}
+
+sync_account_available :: () -> s32 {
+    return 1
+}
+
+#program_export
+sync_account_load :: (account: *SyncAccount) -> s32 {
+    public_id: string
+    public_key: string
+    private_key: string
+
+    data_init()
+    if account == null {
+        return 0
+    }
+    account.* = SyncAccount.{}
+
+    public_id = storage_get_setting_text(sync_public_id_key)
+    if public_id.count > 0 {
+        if !AppCopyText(public_id, account.public_id[:]) {
+            return 0
+        }
+    }
+    public_key = storage_get_setting_text(sync_public_key_key)
+    if public_key.count > 0 {
+        if !AppCopyText(public_key, account.public_key_hex[:]) {
+            return 0
+        }
+    }
+    private_key = storage_get_setting_text(sync_private_key_key)
+    if private_key.count > 0 {
+        if !AppCopyText(private_key, account.private_key_hex[:]) {
+            return 0
+        }
+    }
+    return account_has_values(account)
+}
+
+sync_account_generate :: (account: *SyncAccount) -> s32 {
+    data_init()
+    if account == null {
+        return 0
+    }
+    account.* = SyncAccount.{}
+    return CreateSyncAccount(account)
+}
+
+sync_account_import_private_key_preview :: (account: *SyncAccount,
+                                               filename: *u8) -> s32 {
+    data_init()
+    if account == null || filename == null || filename[0] == 0 {
+        return 0
+    }
+    account.* = SyncAccount.{}
+    body := LoadFileText(filename)
+    if body == null { return 0 }
+    text := AppTextFromCString(body, SYNC_ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE)
+    result := ParseSyncAccountText(text, account)
+    UnloadFileText(body)
+    return result
+}
+
+sync_account_save :: (account: *SyncAccount,
+                         local_data_choice: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
+    owner: string
+
+    data_init()
+    if account_has_values(account) == 0 {
+        return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_FAILED
+    }
+
+    current: SyncAccount
+    if sync_account_load(*current) != 0 && AccountValuesEqual(*current, account) {
+        return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK
+    }
+
+    owner = storage_sync_data_owner_public_id()
+    if owner.count > 0 && sync_account_same_owner(owner, account) == 0 &&
+        storage_has_local_syncable_data() != 0 {
+        if local_data_choice == cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK {
+            return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_NEEDS_CLEAR
+        }
+        if local_data_choice == cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_REPLACE &&
+            storage_clear_local_syncable_data() == 0 {
+            return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_FAILED
+        }
+    }
+
+    storage_set_sync_data_owner_public_id(
+        AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE))
+    sync_account_write_and_reset(account)
+    return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK
+}
+
+sync_account_clear :: () -> s32 {
+    data_init()
+    sync_account_write_and_reset(null)
+    return 1
+}
+
+sync_account_export_private_key :: (account: *SyncAccount,
+                                       filename: *u8) -> s32 {
+    body: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE] u8
+
+    if account_has_values(account) == 0 || filename == null || filename[0] == 0 {
+        return 0
+    }
+    if ExportSyncAccountText(account, *body[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE) == 0 {
+        return 0
+    }
+    len := cast(s32)AppTextFromCString(*body[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE).count
+
+    platform := AccountExportPlatform()
+    if platform == 1 {
+        title: [128]u8
+        mime: [32]u8
+        if !AppCopyText(LocaleText("share_sheet_title"), title[:]) ||
+            !AppCopyText("application/octet-stream", mime[:]) { return 0 }
+        return AccountShareBytes(*body[0], cast(u64)len, filename,
+            *mime[0], *title[0])
+    } else if platform == 2 {
+        path: [AccountPathCapacity]u8
+        root: [AccountPathCapacity]u8
+        mime: [32]u8
+        if !AppCopyText(data_root(), root[:]) ||
+            !AppCopyText("application/octet-stream", mime[:]) ||
+            storage_join_path(*path[0], AccountPathCapacity,
+                *root[0], filename) == 0 {
+            return 0
+        }
+        if !SaveFileData(*path[0], *body[0], len) { return 0 }
+        return AccountDownloadFile(*path[0], filename, *mime[0])
+    } else {
+        index: s32 = 0
+        full_path: bool = false
+        while index < AccountPathCapacity && filename[index] != 0 {
+            if filename[index] == cast(u8)47 || filename[index] == cast(u8)92 {
+                full_path = true
+            }
+            index += 1
+        }
+        if index == AccountPathCapacity { return 0 }
+        if full_path {
+            return ifx (SaveFileData(filename, *body[0], len)) then (1) else (0)
+        }
+        path: [AccountPathCapacity] u8
+        root: [AccountPathCapacity]u8
+        if !AppCopyText(data_root(), root[:]) ||
+            storage_join_path(*path[0], AccountPathCapacity,
+                *root[0], filename) == 0 {
+            return 0
+        }
+        return ifx (SaveFileData(*path[0], *body[0], len)) then (1) else (0)
+    }
+}
+
+sync_account_sign_hex :: (message: *u8, message_len: s64,
+                             out_signature_hex: *u8, out_size: s64) -> s32 {
+    account: SyncAccount
+
+    if sync_account_load(*account) == 0 {
+        return 0
+    }
+    return SignSyncAccountHex(*account, message, message_len, out_signature_hex,
+                              out_size)
+}

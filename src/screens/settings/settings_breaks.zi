@@ -1,0 +1,374 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "dropdown"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "geometry"
+#import "image_props"
+#import "progress_props"
+#import "progress_widget"
+#import "session"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../breaks/break_rules.zi";
+#import, file "../../breaks/break_types.zi";
+#import, file "../../storage/break_stats.zi";
+#import, file "settings_ui.zi";
+
+using TextAlign;
+
+settings_breaks_slider_height :: () -> s32 {
+    return AppScale(66)
+}
+
+#program_export
+settings_breaks_content_height :: (app: *InnerBreeze,
+    content_width: s32) -> s32 {
+    unused app
+    label_width := content_width
+    if label_width <= 0 {
+        label_width = AppScale(240)
+    }
+    height := AppScale(120)
+    height += toggle_row_height(LocaleText("settings_breaks_enabled"), label_width)
+    height += AppScale(76)
+    height += toggle_row_height(LocaleText("settings_breaks_sounds"), label_width)
+    height += toggle_row_height(LocaleText("settings_breaks_reading_mode"), label_width)
+    height += toggle_row_height(LocaleText("settings_breaks_micro_counts"), label_width)
+    timer_keys: [3]string
+    timer_keys[0] = "settings_breaks_micro_header"
+    timer_keys[1] = "settings_breaks_rest_header"
+    timer_keys[2] = "settings_breaks_daily_header"
+    for index: 0..2 {
+        header := LocaleText(timer_keys[index])
+        height += AppScale(44) + AppParagraphHeight(header, label_width, 0, 0)
+        height += toggle_row_height(LocaleText("settings_breaks_timer_enabled"), label_width)
+        height += settings_breaks_slider_height() * 4
+        height += toggle_row_height(LocaleText("settings_breaks_show_skip"), label_width)
+        height += toggle_row_height(LocaleText("settings_breaks_show_postpone"), label_width)
+    }
+    return height + AppScale(200)
+}
+
+settings_breaks_draw_status :: (app: *InnerBreeze, x: s32,
+    width: s32, y: *s32) {
+    title: TextProps
+    title.text = LocaleText("settings_breaks_status")
+    title.font = AppFontSize()
+    title.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(24)
+}
+    Text(app.ui.session, title)
+    y.* += AppScale(30)
+
+    names: [3]string
+    names[0] = LocaleText("break_micro_title")
+    names[1] = LocaleText("break_rest_title")
+    names[2] = LocaleText("break_daily_title")
+    bar_x := x + width / 2
+    bar_width := width / 2 - AppScale(8)
+    if bar_width < AppScale(80) {
+        bar_width = AppScale(80)
+    }
+    for index: 0..(BREAK_TYPE_COUNT - 1) {
+        timer := app.*.breaks.timers[index]
+        next := BreakNextDueSeconds(app.breaks, cast(s32)index)
+        due: string = ""
+        if timer.enabled == 0 || next < 0 {
+            due = LocaleText("settings_breaks_timer_off")
+        } else if next == 0 {
+            due = LocaleText("settings_breaks_due_now")
+        } else {
+            duration := BreakFormatDuration(next)
+            due = FrameTextHold(*app.ui.frame_text,
+                AppTextFromCString(*duration.bytes[0], 16))
+        }
+        name_props: TextProps
+        name_props.text = names[index]
+        name_props.font = AppSmallFontSize()
+        name_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)(bar_x - x), cast(float32)AppScale(20)
+}
+        Text(app.ui.session, name_props)
+        due_props: TextProps
+        due_props.text = due
+        due_props.font = AppSmallFontSize()
+        due_props.align = cast(TextAlign)TextAlignEnd
+        due_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)(bar_x - x - AppScale(8)), cast(float32)AppScale(20)
+}
+        Text(app.ui.session, due_props)
+        if timer.limit_s > 0 {
+            progress: ProgressProps
+            progress.bounds = Rectangle.{cast(float32)bar_x,
+                cast(float32)(y.* + AppScale(3)), cast(float32)bar_width,
+                cast(float32)AppScale(10)
+}
+            progress.min = 0
+            progress.max = timer.limit_s
+            progress.value = timer.active_s
+            Progress(app.ui.session, progress)
+        }
+        y.* += AppScale(22)
+    }
+    y.* += AppScale(12)
+}
+
+settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
+    x: s32, width: s32, y: *s32) {
+    timer := *app.breaks.timers[index]
+    limit_minutes := timer.limit_s / 60
+    duration := timer.duration_s
+    postpone := timer.postpone_s
+    prompts := timer.max_prompts
+    enabled := timer.enabled
+    show_skip := timer.show_skip
+    show_postpone := timer.show_postpone
+    changed := false
+    header: string = LocaleText("settings_breaks_micro_header")
+    if index == BREAK_REST {
+        header = LocaleText("settings_breaks_rest_header")
+    } else if index == BREAK_DAILY {
+        header = LocaleText("settings_breaks_daily_header")
+    }
+    text: TextProps
+    text.text = header
+    text.font = AppFontSize()
+    text.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(30)
+}
+    Text(app.ui.session, text)
+    y.* += AppScale(34)
+
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_timer_enabled"), *enabled, 0) != 0 {
+        changed = true
+    }
+    minimum: s32 = 1
+    maximum: s32 = 30
+    if index == BREAK_REST {
+        minimum = 10
+        maximum = 240
+    } else if index == BREAK_DAILY {
+        minimum = 60
+        maximum = 1440
+    }
+    if commit_slider_row(app, 500 + index * 10, x, width, y,
+        settings_breaks_slider_height(), LocaleText("settings_breaks_limit"),
+        minimum, maximum, *limit_minutes, "", 0) != 0 {
+        changed = true
+    }
+    if index != BREAK_DAILY {
+        duration_min: s32 = 5
+        duration_max: s32 = 120
+        if index == BREAK_REST {
+            duration_min = 60
+            duration_max = 1800
+        }
+        if commit_slider_row(app, 501 + index * 10, x, width, y,
+            settings_breaks_slider_height(), LocaleText("settings_breaks_duration"),
+            duration_min, duration_max, *duration, "", 0) != 0 {
+            changed = true
+        }
+    }
+    if commit_slider_row(app, 502 + index * 10, x, width, y,
+        settings_breaks_slider_height(), LocaleText("settings_breaks_postpone"),
+        60, 1800, *postpone, "", 0) != 0 {
+        changed = true
+    }
+    if commit_slider_row(app, 503 + index * 10, x, width, y,
+        settings_breaks_slider_height(), LocaleText("settings_breaks_prompts"),
+        0, 10, *prompts, "", 0) != 0 {
+        changed = true
+    }
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_show_skip"), *show_skip, 0) != 0 {
+        changed = true
+    }
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_show_postpone"), *show_postpone, 0) != 0 {
+        changed = true
+    }
+    if changed {
+        timer.enabled = enabled
+        timer.limit_s = limit_minutes * 60
+        timer.duration_s = duration
+        timer.postpone_s = postpone
+        timer.max_prompts = prompts
+        timer.show_skip = show_skip
+        timer.show_postpone = show_postpone
+        if timer.active_s > timer.limit_s {
+            timer.active_s = timer.limit_s
+        }
+        app.settings_dirty = 1
+    }
+    y.* += AppScale(10)
+}
+
+settings_breaks_draw_week :: (app: *InnerBreeze, x: s32,
+    width: s32, y: *s32) {
+    rows: [42]BreakDayRow
+    count := storage_break_history(7, *rows[0], 42)
+    heading: TextProps
+    heading.text = LocaleText("settings_breaks_week_stats")
+    heading.font = AppFontSize()
+    heading.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(24)
+}
+    Text(app.ui.session, heading)
+    y.* += AppScale(30)
+    if count <= 0 {
+        empty: TextProps
+        empty.text = LocaleText("settings_breaks_no_data")
+        empty.font = AppSmallFontSize()
+        empty.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)width, cast(float32)AppScale(20)
+}
+        Text(app.ui.session, empty)
+        y.* += AppScale(24)
+        return
+    }
+    taken: [3]s32
+    skipped: [3]s32
+    postponed: [3]s32
+    index: s32 = 0
+    while index < count {
+        kind := rows[index].break_type
+        if kind >= 0 && kind < BREAK_TYPE_COUNT {
+            taken[kind] += rows[index].taken + rows[index].natural
+            skipped[kind] += rows[index].skipped
+            postponed[kind] += rows[index].postponed
+        }
+        index += 1
+    }
+    for kind: 0..(BREAK_TYPE_COUNT - 1) {
+        name: string = LocaleText("break_micro_title")
+        if kind == BREAK_REST {
+            name = LocaleText("break_rest_title")
+        }
+        if kind == BREAK_DAILY {
+            name = LocaleText("break_daily_title")
+        }
+        first: [16]u8
+        second: [16]u8
+        third: [16]u8
+        unused FormatNumberTemplate("%d", taken[kind], first[:])
+        unused FormatNumberTemplate("%d", skipped[kind], second[:])
+        unused FormatNumberTemplate("%d", postponed[kind], third[:])
+        values: [3]string
+        values[0] = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*first[0], 16))
+        values[1] = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*second[0], 16))
+        values[2] = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*third[0], 16))
+        cursor := x
+        line: TextProps
+        line.font = AppSmallFontSize()
+        line.bounds = Rectangle.{cast(float32)cursor, cast(float32)y.*,
+            cast(float32)width, cast(float32)AppScale(20)
+}
+        line.text = name
+        Text(app.ui.session, line)
+        cursor += AppTextWidth(name, line.font) + AppScale(8)
+        for item: 0..2 {
+            line.text = values[item]
+            line.bounds.x = cast(float32)cursor
+            Text(app.ui.session, line)
+            cursor += AppTextWidth(values[item], line.font)
+            if item < 2 {
+                line.text = "/"
+                line.bounds.x = cast(float32)(cursor + AppScale(4))
+                Text(app.ui.session, line)
+                cursor += AppScale(4) + AppTextWidth("/", line.font) + AppScale(4)
+            }
+        }
+        y.* += AppScale(20)
+    }
+    y.* += AppScale(12)
+}
+
+#program_export
+settings_breaks_draw :: (app: *InnerBreeze, x: s32,
+    width: s32, y: *s32) {
+    if app == null || y == null {
+        return
+    }
+    enabled := app.breaks_enabled
+    sounds := app.break_sounds_enabled
+    reading := app.breaks.reading_mode
+    micro_counts := app.breaks.micro_counts_as_activity
+    settings_breaks_draw_status(app, x, width, y)
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_enabled"), *enabled, 0) != 0 {
+        app.breaks_enabled = enabled
+        if enabled == 0 {
+            app.breaks = BreakSetMode(app.breaks, BreakModeNormal, 0)
+        }
+    }
+    block_options: [3]DropdownOption
+    block_options[0].label = LocaleText("settings_breaks_block_off")
+    block_options[1].label = LocaleText("settings_breaks_block_input")
+    block_options[2].label = LocaleText("settings_breaks_block_screen")
+    block_label: TextProps
+    block_label.text = LocaleText("settings_breaks_block_mode")
+    block_label.font = AppFontSize()
+    block_label.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(24)
+}
+    Text(app.ui.session, block_label)
+    block: DropdownProps
+    block.id = 540
+    block.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + AppScale(26)), cast(float32)width,
+        cast(float32)AppScale(36)
+}
+    block.selected_index = app.break_block_mode
+    block.open = app.ui.break_mode_settings_menu.open
+    block.highlight_index = app.ui.break_mode_settings_menu.highlight_index
+    block.scroll_offset = app.ui.break_mode_settings_menu.scroll_offset
+    app.ui.break_mode_settings_menu = Dropdown(app.ui.session, block,
+        block_options[:])
+    if app.ui.break_mode_settings_menu.changed {
+        app.break_block_mode = app.ui.break_mode_settings_menu.selected_index
+        app.settings_dirty = 1
+    }
+    y.* += AppScale(76)
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_sounds"), *sounds, 0) != 0 {
+        app.break_sounds_enabled = sounds
+    }
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_reading_mode"), *reading, 0) != 0 {
+        app.breaks.reading_mode = reading
+    }
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("settings_breaks_micro_counts"), *micro_counts, 0) != 0 {
+        app.breaks.micro_counts_as_activity = micro_counts
+    }
+    button_width := (width - AppScale(12)) / 2
+    if button_width > AppScale(200) {
+        button_width = AppScale(200)
+    }
+    rest: ButtonProps
+    rest.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)button_width, cast(float32)AppScale(40)
+}
+    rest.label = LocaleText("settings_breaks_rest_now")
+    if Button(app.ui.session, rest) != 0 {
+        app.ui.rest_break_requested = true
+    }
+    y.* += AppScale(60)
+    for index: 0..(BREAK_TYPE_COUNT - 1) {
+        settings_breaks_draw_timer(app, cast(s32)index, x, width, y)
+    }
+    settings_breaks_draw_week(app, x, width, y)
+}

@@ -1,0 +1,219 @@
+#import "geometry"
+#import "progress_props"
+#import "progress_widget"
+#import "session"
+#import "slider"
+#import "slider_props"
+#import "slider_widget"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "toggle_props"
+#import "toggle"
+#import "toggle_widget"
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/text_buffers.zi";
+#import "drawing_props"
+
+using TextAlign;
+using TextWrap;
+
+#program_export
+toggle_switch_width :: () -> s32 {
+    return AppScale(54)
+}
+
+#program_export
+toggle_row_height :: (label: string, width: s32) -> s32 {
+    if width <= 0 {
+        width = AppScale(160)
+    }
+    toggle_width := toggle_switch_width()
+    toggle_height := AppScale(34)
+    gap := AppScale(18)
+    label_width := width - toggle_width - gap
+    if label_width < AppScale(120) {
+        label_width = width
+    }
+    label_height := AppParagraphHeight(label, label_width, 0, 0)
+    if label_width < width {
+        row_height := label_height
+        if row_height < toggle_height {
+            row_height = toggle_height
+        }
+        row_height += AppScale(16)
+        if row_height < AppScale(52) {
+            row_height = AppScale(52)
+        }
+        return row_height
+    }
+    row_height := label_height + AppScale(8) + toggle_height + AppScale(18)
+    if row_height < AppScale(70) {
+        row_height = AppScale(70)
+    }
+    return row_height
+}
+
+draw_toggle_row :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, label: string, value: *s32) -> bool {
+    if app == null || y == null || value == null  || !SessionValid(app.ui.session) {
+        return false
+    }
+    row_height := toggle_row_height(label, width)
+    toggle_width := toggle_switch_width()
+    toggle_height := AppScale(34)
+    gap := AppScale(18)
+    label_width := width - toggle_width - gap
+    if label_width < AppScale(120) {
+        label_width = width
+    }
+    label_height := AppParagraphHeight(label, label_width, 0, 0)
+    toggle_x := x
+    toggle_y := y.* + (row_height - toggle_height) / 2
+    label_y: s32
+    if label_width < width {
+        label_y = y.* + (row_height - label_height) / 2
+        toggle_x = x + width - toggle_width
+    } else {
+        label_y = y.* + AppScale(8)
+        toggle_y = label_y + label_height + AppScale(8)
+    }
+
+    text: TextProps
+    text.text = label
+    text.font = AppFontSize()
+    text.wrap = cast(TextWrap)TextWrapAuto
+    text.bounds = Rectangle.{cast(float32)x, cast(float32)label_y,
+        cast(float32)label_width, cast(float32)label_height
+}
+    Text(app.ui.session, text)
+
+    props: ToggleProps
+    props.id = cast(s32)62000 + y.*
+    props.bounds = Rectangle.{cast(float32)toggle_x,
+        cast(float32)toggle_y, cast(float32)toggle_width,
+        cast(float32)toggle_height
+}
+    props.value = value.* != 0
+    props.label = label
+    result := Toggle(app.ui.session, props)
+    y.* += row_height
+    if result.changed {
+        value.* = ifx result.value then 1 else 0
+    }
+    return result.changed
+}
+
+#program_export
+commit_toggle_row :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, label: string, value: *s32, save_now: s32) -> s32 {
+    if !draw_toggle_row(app, x, width, y, label, value) {
+        return 0
+    }
+    app.settings_dirty = 1
+    if save_now != 0 {
+        save_settings(app)
+    }
+    return 1
+}
+
+#program_export
+commit_slider_row :: (app: *InnerBreeze, id: s32, x: s32,
+    width: s32, y: *s32, row_height: s32, label: string,
+    minimum: s32, maximum: s32, value: *s32, suffix: string,
+    save_now: s32) -> s32 {
+    if app == null || y == null || value == null  || !SessionValid(app.ui.session) {
+        return 0
+    }
+    template: string = "%d"
+    if suffix == "s" {
+        template = "%ds"
+    }
+    if suffix == "x" {
+        template = "%dx"
+    }
+    number_buffer: [32]u8
+    unused FormatNumberTemplate(template, value.*, number_buffer[:])
+    number := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*number_buffer[0], 32))
+
+    label_props: TextProps
+    label_props.text = label
+    label_props.font = AppSmallFontSize()
+    label_props.wrap = cast(TextWrap)TextWrapNone
+    label_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)(width - AppScale(64)), cast(float32)AppScale(20)
+}
+    Text(app.ui.session, label_props)
+    number_props: TextProps
+    number_props.text = number
+    number_props.font = AppSmallFontSize()
+    number_props.wrap = cast(TextWrap)TextWrapNone
+    number_props.align = cast(TextAlign)TextAlignEnd
+    number_props.bounds = Rectangle.{cast(float32)(x + width - AppScale(64)),
+        cast(float32)y.*, cast(float32)AppScale(64),
+        cast(float32)AppScale(20)
+}
+    Text(app.ui.session, number_props)
+
+    slider: DiscreteSliderProps
+    slider.id = id
+    slider.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + AppScale(20)), cast(float32)width,
+        cast(float32)AppScale(36)
+}
+    slider.semantic_label = label
+    slider.value = value.*
+    slider.min = minimum
+    slider.max = maximum
+    result := DiscreteSlider(app.ui.session, slider)
+    y.* += row_height
+    if !result.changed {
+        return 0
+    }
+    value.* = result.value
+    app.settings_dirty = 1
+    if save_now != 0 {
+        save_settings(app)
+    }
+    return 1
+}
+
+#program_export
+audio_meter_height :: () -> s32 {
+    return AppScale(18) + AppScale(10) + AppScale(8)
+}
+
+#program_export
+draw_audio_meter :: (app: *InnerBreeze, level: float32,
+    x: s32, y: s32, width: s32, label: string) -> s32 {
+    if app == null || width <= 0 || !SessionValid(app.ui.session) {
+        return audio_meter_height()
+    }
+    if level < 0.0 {
+        level = 0.0
+    }
+    if level > 1.0 {
+        level = 1.0
+    }
+    text: TextProps
+    text.text = label
+    text.font = AppSmallFontSize()
+    text.wrap = cast(TextWrap)TextWrapNone
+    text.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)AppScale(18)
+}
+    Text(app.ui.session, text)
+    progress: ProgressProps
+    progress.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y + AppScale(18)), cast(float32)width,
+        cast(float32)AppScale(10)
+}
+    progress.min = 0
+    progress.max = 1000
+    progress.value = cast(s32)(level * 1000.0)
+    Progress(app.ui.session, progress)
+    return audio_meter_height()
+}

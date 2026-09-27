@@ -23,18 +23,18 @@ function boot(syncfs) {
 
 // IDBFS can complete synchronously when there is nothing to write.
 const immediate = boot((populate, done) => done(null));
-assert.equal(await immediate.__kryonFlushStorageSync(false), true);
-assert.equal(immediate.__kryonStorageSyncLastOk, true);
-assert.equal(await immediate.__kryonFlushStorageSync(false), true);
+assert.equal(await immediate.__inbeFlushStorageSync(false), true);
+assert.equal(immediate.__inbeStorageSyncLastOk, true);
+assert.equal(await immediate.__inbeFlushStorageSync(false), true);
 
 const failed = boot((populate, done) => done(new Error('write failed')));
-assert.equal(await failed.__kryonFlushStorageSync(false), false);
-assert.equal(failed.__kryonStorageSyncLastError, 'write failed');
+assert.equal(await failed.__inbeFlushStorageSync(false), false);
+assert.equal(failed.__inbeStorageSyncLastError, 'write failed');
 
 const callbacks = [];
 const queued = boot((populate, done) => callbacks.push(done));
-const first = queued.__kryonFlushStorageSync(false);
-const second = queued.__kryonFlushStorageSync(false);
+const first = queued.__inbeFlushStorageSync(false);
+const second = queued.__inbeFlushStorageSync(false);
 assert.equal(first, second);
 let resolved = false;
 first.then(() => { resolved = true; });
@@ -45,5 +45,5 @@ assert.equal(callbacks.length, 1);
 callbacks.shift()(null);
 assert.equal(await first, true);
 assert.equal(await second, true);
-assert.equal(queued.__kryonStorageSyncPending, false);
+assert.equal(queued.__inbeStorageSyncPending, false);
 console.log('web storage tests passed');

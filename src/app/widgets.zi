@@ -1,0 +1,395 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "geometry"
+#import "guide"
+#import "image_props"
+#import "modal"
+#import "modal_frame_widget"
+#import "modal_props"
+#import "overlay_props"
+#import "overlay_widget"
+#import "paint_queue"
+#import "session"
+#import "style"
+#import "style_sheet"
+#import "surface"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "toolbar"
+#import "toolbar_props"
+#import "tree"
+#import, file "app_types.zi";
+#import, file "current_app.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "text_buffers.zi";
+
+using ButtonEmphasis;
+using ButtonState;
+using ButtonTone;
+using ControlSize;
+using StyleField;
+using TextAlign;
+using TextWrap;
+
+guide_layout: GuideLayout;
+
+// Inbe's active modal and guide actions use the shared icon atlas.
+ActionImage :: (icon: ActionIcon, label: string) -> ImageProps {
+    image: ImageProps
+    image.asset_path = "icons/ui.png"
+    image.alt_text = label
+    x: s32 = 0
+    y: s32 = 0
+    if icon == ActionIcon.IconBack {
+        x = 128
+    } else if icon == ActionIcon.IconCheck {
+        x = 320
+    } else if icon == ActionIcon.IconNext {
+        x = 128
+        y = 64
+    } else if icon == ActionIcon.IconPause {
+        x = 64
+        y = 192
+    } else if icon == ActionIcon.IconPlay {
+        x = 256
+        y = 192
+    } else if icon == ActionIcon.IconClose {
+        x = 448
+        y = 384
+    } else {
+        image.asset_path = ""
+        return image
+    }
+    image.source = Rectangle.{cast(float32)x, cast(float32)y,
+        64.0, 64.0
+}
+    return image
+}
+
+ActionLabel :: (icon: ActionIcon) -> string {
+    if icon == ActionIcon.IconBack {
+        return LocaleText("back_button")
+    }
+    if icon == ActionIcon.IconNext {
+        return LocaleText("next_button")
+    }
+    if icon == ActionIcon.IconPause {
+        return LocaleText("pause_button")
+    }
+    if icon == ActionIcon.IconPlay {
+        return LocaleText("play_button")
+    }
+    if icon == ActionIcon.IconClose {
+        return LocaleText("close_button")
+    }
+    return LocaleText("practice_start_button")
+}
+
+#program_export
+ModalPanel :: (width: s32, height: s32, title: string,
+    close_action: bool) -> ModalPanelResult {
+    frame: ModalPanelResult
+    app := CurrentApp()
+    if app == null || !SessionValid(app.ui.session) {
+        return frame
+    }
+    props: ModalFrameProps
+    props.title = title
+    props.width = width
+    props.height = height
+    props.scale = MetricsScale()
+    props.has_right_action = close_action
+    if props.has_right_action {
+        props.right_label = ActionLabel(ActionIcon.IconClose)
+        props.right_image = ActionImage(ActionIcon.IconClose,
+            props.right_label)
+    }
+    result := ModalFrame(app.ui.session, props)
+    frame.x = cast(s32)result.layout.panel.x
+    frame.y = cast(s32)result.layout.panel.y
+    frame.w = cast(s32)result.layout.panel.width
+    frame.h = cast(s32)result.layout.panel.height
+    frame.content_x = cast(s32)result.layout.content.x
+    frame.content_y = cast(s32)result.layout.content.y
+    frame.content_w = cast(s32)result.layout.content.width
+    frame.content_h = cast(s32)result.layout.content.height
+    if result.dismissed || result.right_clicked {
+        frame.closed = true
+    }
+    return frame
+}
+
+GuideFace :: (role: s32) -> StyleFrame {
+    face: StyleData = ModalFrameDefaultFace(ModalPanelRole())
+    if role == 19 {
+        face = ModalFrameDefaultFace(ModalScrimRole())
+    }
+    facts := StyleControlRoleFacts(StyleKindGuide(), 0, 0, role,
+        cast(s32)ButtonToneNeutral, cast(s32)ButtonEmphasisSoft,
+        cast(s32)ControlSizeMedium, cast(s32)ButtonStateNormal)
+    frame: StyleFrame
+    frame.value = ResolveStyleRules(ActiveStyleRules(), face, facts,
+        cast(s32)ButtonStateNormal)
+    return frame
+}
+
+GuidePageLabel :: (app: *InnerBreeze, step: s32,
+    count: s32) -> string {
+    first: [16]u8
+    last: [16]u8
+    page: [36]u8
+    if !FormatNumberTemplate("%d", step + 1, first[:])  || !FormatNumberTemplate("%d", count, last[:]) {
+        return ""
+    }
+    used: s32 = 0
+    index: s32 = 0
+    while index < 15 && first[index] != cast(u8)0 {
+        page[used] = first[index]
+        used += 1
+        index += 1
+    }
+    page[used] = cast(u8)47
+    used += 1
+    index = 0
+    while index < 15 && last[index] != cast(u8)0 {
+        page[used] = last[index]
+        used += 1
+        index += 1
+    }
+    page[used] = cast(u8)0
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*page[0], used + 1))
+}
+
+GuidePaintLine :: (session: Session, node: s32,
+    start: Vector2, finish: Vector2, color: Color) {
+    bounds := Rectangle.{start.x, start.y,
+        finish.x - start.x, finish.y - start.y
+}
+    PaintLine(session, node, bounds, color)
+}
+
+#program_export
+GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
+    result: GuideOverlayResult
+    app := CurrentApp()
+    if app == null || !SessionValid(app.ui.session)  || guide.steps == null || guide.count <= 0 || guide.step == null {
+        return result
+    }
+    session := app.ui.session
+    width := guide.view_width
+    height := guide.view_height
+    if width <= 0 {
+        width = app.ui.view_width
+    }
+    if height <= 0 {
+        height = app.ui.view_height
+    }
+    step := GuideStepFor(guide.step.*, guide.count)
+    anchor := guide.steps[step].anchor
+    if anchor.width <= 0.0 || anchor.height <= 0.0 {
+        return result
+    }
+    panel := GuideFace(2)
+    metrics := GuideMetricsFor(MetricsScale(), panel,
+        GuideFace(24), GuideFace(6), GuideFace(17),
+        GuideFace(15))
+    if metrics.button_size < AppScale(44) {
+        metrics.button_size = AppScale(44)
+    }
+    if metrics.close_size < AppScale(44) {
+        metrics.close_size = AppScale(44)
+    }
+    tip_width := GuideTipWidth(width, guide.max_width, metrics)
+    maximum_height := GuideMaxTipHeight(height,
+        guide.reserved_top, guide.reserved_bottom, metrics)
+    font := GuideParagraphFontFor(guide.paragraph_font, 0,
+        AppFontSize())
+    text_width := tip_width - metrics.pad * 2
+    text := guide.steps[step].text
+    text_height := AppParagraphHeight(text, text_width, font,
+        metrics.default_line_gap)
+    while GuideShouldShrinkParagraphFont(text_height,
+        GuideParagraphHeightLimit(maximum_height, metrics),
+        font, AppSmallFontSize()) {
+        font -= 1
+        text_height = AppParagraphHeight(text, text_width, font,
+            metrics.default_line_gap)
+    }
+    tip := GuideTipBounds(anchor, tip_width,
+        GuideTipHeight(text_height, maximum_height, metrics),
+        width, height, guide.reserved_top, guide.reserved_bottom,
+        metrics)
+    layout := GuideLayoutFor(tip, text_width, text_height,
+        step, guide.count, metrics)
+    guide_layout = layout
+    overlay_props: DismissibleOverlayProps
+    overlay_props.key = cast(u64)83100
+    overlay_props.bounds = tip
+    overlay_props.view_width = width
+    overlay_props.view_height = height
+    overlay := DismissibleOverlay(session, overlay_props)
+    if overlay.closed {
+        result.closed = 1
+        result.step = step
+        return result
+    }
+    if overlay.node < 0 || overlay.panel_node < 0 {
+        return result
+    }
+    scrim := GuideScrimFor(width, height, anchor, metrics)
+    scrim_face := GuideFace(19)
+    scrim_color := ColorFromPacked(Opacity(
+        scrim_face.value.background, scrim_face.value.opacity))
+    PaintRoundedFill(session, overlay.node, scrim.top, 0.0, 4,
+        scrim_color)
+    PaintRoundedFill(session, overlay.node, scrim.bottom, 0.0, 4,
+        scrim_color)
+    PaintRoundedFill(session, overlay.node, scrim.left, 0.0, 4,
+        scrim_color)
+    PaintRoundedFill(session, overlay.node, scrim.right, 0.0, 4,
+        scrim_color)
+    ink := ColorFromPacked(panel.value.foreground)
+    PaintRoundedOutline(session, overlay.node, anchor, 0.0, 4,
+        cast(float32)metrics.anchor_stroke, ink)
+    arrow := GuideArrowFor(tip, anchor, metrics)
+    GuidePaintLine(session, overlay.node, arrow.line_start,
+        arrow.line_end, ink)
+    GuidePaintLine(session, overlay.node, arrow.tip0,
+        arrow.tip1, ink)
+    GuidePaintLine(session, overlay.node, arrow.tip0,
+        arrow.tip2, ink)
+    panel_color := ColorFromPacked(Opacity(panel.value.background,
+        panel.value.opacity))
+    PaintRoundedFill(session, overlay.panel_node, tip,
+        panel.value.radius, 12, panel_color)
+    if panel.value.border_width > 0.0 {
+        PaintRoundedOutline(session, overlay.panel_node, tip,
+            panel.value.radius, 12, panel.value.border_width,
+            ColorFromPacked(panel.value.border))
+    }
+    if !TreePushScope(session, overlay.panel_node) {
+        return result
+    }
+    title := LocaleText("guide_title")
+    title_width := tip.width -         cast(float32)(metrics.pad * 2 + metrics.close_size +         metrics.nav_gap)
+    title_props: TextProps
+    title_props.text = title
+    title_props.bounds = Rectangle.{tip.x + cast(float32)metrics.pad,
+        tip.y + cast(float32)metrics.pad, title_width,
+        cast(float32)metrics.close_size
+}
+    title_props.font = AppFitFontSize(title, cast(s32)title_width,
+        AppScale(Text20), AppFontSize())
+    title_props.wrap = cast(TextWrap)TextWrapNone
+    title_props.vertical_align = cast(TextAlign)TextAlignCenter
+    title_props.style_kind = StyleKindGuide()
+    Text(session, title_props)
+
+    paragraph: TextProps
+    paragraph.text = text
+    paragraph.bounds = layout.text
+    paragraph.font = font
+    paragraph.wrap = cast(TextWrap)TextWrapAuto
+    paragraph.style_kind = StyleKindGuide()
+    Text(session, paragraph)
+
+    page_props: TextProps
+    page_props.text = GuidePageLabel(app, step, guide.count)
+    page_props.font = AppSmallFontSize()
+    page_props.bounds = Rectangle.{tip.x + cast(float32)metrics.pad,
+        cast(float32)layout.controls_y, cast(float32)AppScale(80),
+        cast(float32)metrics.button_size
+}
+    page_props.wrap = cast(TextWrap)TextWrapNone
+    Text(session, page_props)
+
+    previous := guide.previous_requested
+    next := guide.next_requested
+    close := guide.close_requested
+    button: ButtonProps
+    button.id = 83110
+    button.bounds = layout.close_button
+    button.label = LocaleText("close_button")
+    button.image = ActionImage(ActionIcon.IconClose,
+        button.label)
+    button.icon_only = true
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(session, button) != 0 {
+        close = true
+    }
+    if step > 0 {
+        button.id = 83111
+        button.bounds = layout.back_button
+        button.label = LocaleText("back_button")
+        button.image = ActionImage(ActionIcon.IconBack,
+            button.label)
+        if Button(session, button) != 0 {
+            previous = true
+        }
+    }
+    button.id = 83112
+    button.bounds = layout.next_button
+    button.label = LocaleText("next_button")
+    next_icon := ActionIcon.IconNext
+    if layout.finish {
+        button.label = LocaleText("practice_start_button")
+        next_icon = ActionIcon.IconCheck
+    }
+    button.image = ActionImage(next_icon, button.label)
+    if Button(session, button) != 0 {
+        next = true
+    }
+    unused End(session)
+    policy := GuidePolicyFor(step, guide.count, previous,
+        next, close)
+    guide.step.* = policy.step
+    result.step = policy.step
+    result.changed = ifx policy.changed then 1 else 0
+    result.closed = ifx policy.closed then 1 else 0
+    result.finished = ifx policy.finished then 1 else 0
+    return result
+}
+
+#program_export
+PracticeControlRow :: (row: IconRowRequest) -> IconRowResult {
+    result: IconRowResult
+    result.clicked_index = -1
+    app := CurrentApp()
+    if app == null || !SessionValid(app.ui.session)  || row.items == null || row.count <= 0 {
+        return result
+    }
+    props: BottomIconRowProps
+    props.center_x = row.center_x
+    props.view_width = row.view_width
+    props.view_height = row.view_height
+    props.count = row.count
+    layout := BottomIconRowLayoutFor(props, MetricsScale())
+    result.y = layout.y
+    result.button_width = layout.button_width
+    index: s32 = 0
+    while index < row.count {
+        action := row.items[index]
+        button: ButtonProps
+        button.id = cast(s32)83000 + index
+        button.bounds = BottomIconRowButtonBoundsFor(layout,
+            index)
+        button.label = ActionLabel(action.icon)
+        button.image = ActionImage(action.icon,
+            button.label)
+        button.icon_only = true
+        button.tone = cast(ButtonTone)ButtonToneNeutral
+        button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        button.disabled = action.disabled
+        if Button(app.ui.session, button) != 0 {
+            result.clicked_index = index
+        }
+        index += 1
+    }
+    return result
+}

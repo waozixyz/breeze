@@ -1,0 +1,91 @@
+c :: #system_library "c";
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+
+#import, file "app.zi";
+#import, file "navigation_routes.zi";
+#import, file "route_log.zi";
+#import "router"
+#import "router_props"
+// The social screen owns these native cache effects. Declaring the calls here
+// keeps its screen drawing and storage implementation out of route checking.
+profile_social_load_friends_cache :: (app: *InnerBreeze) #foreign c;
+profile_social_load_leaderboard_cache :: (app: *InnerBreeze) #foreign c;
+app_request_social_refresh :: (app: *InnerBreeze) #foreign c;
+
+
+#program_export
+app_current_route :: (app: *InnerBreeze) -> AppRoute {
+    route := AppRoute.{0 }
+    if app == null { return route }
+    route.screen = app.breathing.screen
+    route.exercise_type = app.exercise_type
+    route.practice_tab = app.practice_tab
+    route.practice_config_tab = app.practice_config_tab
+    route.settings_overview = app.settings_overview
+    route.settings_tab = app.settings_tab
+    route.profile_view = app.profile_view
+    route.profile_tab = app.profile_tab
+    route.habits_screen_mode = app.habits.screen_mode
+    route.habits_tab = app.habits.tab
+    return route
+}
+
+enter_route :: (app: *InnerBreeze, route: AppRoute) {
+    if route.screen != ScreenProfile { return }
+    if route.profile_tab == PROFILE_TAB_FRIENDS {
+        profile_social_load_friends_cache(app)
+        app_request_social_refresh(app)
+    } else if route.profile_tab == PROFILE_TAB_LEADERBOARD {
+        profile_social_load_leaderboard_cache(app)
+        app_request_social_refresh(app)
+    }
+}
+
+apply_route :: (app: *InnerBreeze, route: AppRoute) {
+    app.breathing.screen = route.screen
+    app.exercise_type = route.exercise_type
+    app.practice_tab = route.practice_tab
+    app.practice_config_tab = route.practice_config_tab
+    app.settings_overview = route.settings_overview
+    app.settings_tab = route.settings_tab
+    app.profile_view = route.profile_view
+    app.profile_tab = route.profile_tab
+    app.habits.screen_mode = route.habits_screen_mode
+    app.habits.tab = route.habits_tab
+}
+
+#program_export
+app_switch_route :: (app: *InnerBreeze, route: AppRoute) {
+    if app == null || RoutesEqual(app_current_route(app), route) { return }
+    before := app_current_route(app)
+    if route.screen == ScreenHabits && app.breathing.screen != ScreenHabits {
+        app.habits.focus_selected_tab = 1
+    }
+    apply_route(app, route)
+    enter_route(app, app_current_route(app))
+    app_route_log(0, app.breathing.frame, before.screen, route.screen)
+}
+
+#program_export
+app_request_route :: (app: *InnerBreeze, route: AppRoute) {
+    if app == null { return }
+    current := app_current_route(app)
+    app_route_log(1, app.breathing.frame, current.screen, route.screen)
+    app_switch_route(app, route)
+    next: RouterState = RouterNavigate(app.ui.route_router, route.screen)
+    app.ui.route_router = next
+}
+
+#program_export
+app_switch_screen :: (app: *InnerBreeze, screen: s32) {
+    if app == null { return }
+    route := app_current_route(app)
+    route.screen = screen
+    if screen == ScreenSettings {
+        route.settings_overview = 0
+    }
+    app_switch_route(app, route)
+}

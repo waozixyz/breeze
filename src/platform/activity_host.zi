@@ -1,0 +1,152 @@
+// Desktop session information. This module does not open or manage a display.
+#import "c_string"
+
+c :: #system_library "c";
+ActivityGetEnv :: (name: *u8) -> *u8 #foreign c "getenv";
+ActivityCompare :: (left: *u8, right: *u8) -> s32 #foreign c "strcmp";
+
+ACTIVITY_GIO :: #defined(APP_HAVE_GIO) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD)
+
+#if ACTIVITY_GIO {
+    gio :: #system_library "gio-2.0";
+    glib :: #system_library "glib-2.0";
+    ActivityBusGet :: (bus_type: s32, cancellable: *void,
+        error: **void) -> *void #foreign gio "g_bus_get_sync";
+    ActivityBusCall :: (connection: *void, bus_name: *u8,
+        object_path: *u8, interface_name: *u8, method_name: *u8,
+        parameters: *void, reply_type: *void, flags: s32,
+        timeout_msec: s32, cancellable: *void,
+        error: **void) -> *void #foreign gio "g_dbus_connection_call_sync";
+    ActivityErrorFree :: (error: *void) #foreign glib "g_error_free";
+    ActivityVariantUnref :: (value: *void) #foreign glib "g_variant_unref";
+    ActivityVariantChildren :: (value: *void) -> usize #foreign glib "g_variant_n_children";
+    ActivityVariantChild :: (value: *void, index: usize) -> *void #foreign glib "g_variant_get_child_value";
+    ActivityVariantType :: (value: *void) -> *u8 #foreign glib "g_variant_get_type_string";
+    ActivityVariantUint64 :: (value: *void) -> u64 #foreign glib "g_variant_get_uint64";
+    ActivityVariantUint32 :: (value: *void) -> u32 #foreign glib "g_variant_get_uint32";
+    ActivityMonotonicTime :: () -> s64 #foreign glib "g_get_monotonic_time";
+
+    activity_bus: *void;
+    activity_backend: s32;
+    activity_initialized: bool;
+    activity_last_query: s64;
+    activity_cached: s64 = -1;
+}
+
+#program_export
+app_is_wayland :: () -> bool {
+    session_name: [24]u8
+    display_name: [24]u8
+    wayland_name: [16]u8
+    if !CopyCString("XDG_SESSION_TYPE", session_name[:]) ||
+        !CopyCString("WAYLAND_DISPLAY", display_name[:]) ||
+        !CopyCString("wayland", wayland_name[:]) {
+        return false
+    }
+    session := ActivityGetEnv(*session_name[0])
+    display := ActivityGetEnv(*display_name[0])
+    return (session != null &&
+        ActivityCompare(session, *wayland_name[0]) == 0) ||
+        (display != null && display[0] != 0)
+}
+
+#if ACTIVITY_GIO {
+    ActivityIdleCall :: (name: string, path: string,
+        interface_name: string, method: string) -> s64 {
+        if activity_bus == null {
+            return -1
+        }
+        bus_name: [96]u8
+        object_path: [96]u8
+        interface_bytes: [96]u8
+        method_name: [40]u8
+        if !CopyCString(name, bus_name[:]) ||
+            !CopyCString(path, object_path[:]) ||
+            !CopyCString(interface_name, interface_bytes[:]) ||
+            !CopyCString(method, method_name[:]) {
+            return -1
+        }
+        error: *void
+        reply := ActivityBusCall(activity_bus, *bus_name[0],
+            *object_path[0], *interface_bytes[0], *method_name[0],
+            null, null, 0, 500, null, *error)
+        if reply == null {
+            if error != null {
+                ActivityErrorFree(error)
+            }
+            return -1
+        }
+        if ActivityVariantChildren(reply) != 1 {
+            ActivityVariantUnref(reply)
+            return -1
+        }
+        value := ActivityVariantChild(reply, 0)
+        idle: u64 = cast(u64)9223372036854775808
+        value_type := ActivityVariantType(value)
+        if value_type != null {
+            if value_type[0] == #char "t" && value_type[1] == 0 {
+                idle = ActivityVariantUint64(value)
+            } else if value_type[0] == #char "u" && value_type[1] == 0 {
+                idle = cast(u64)ActivityVariantUint32(value)
+            } else {
+                idle = cast(u64)9223372036854775808
+            }
+        }
+        ActivityVariantUnref(value)
+        ActivityVariantUnref(reply)
+        if idle > cast(u64)9223372036854775807 {
+            return -1
+        }
+        return cast(s64)idle
+    }
+
+    ActivityIdleInit :: () {
+        if activity_initialized {
+            return
+        }
+        activity_initialized = true
+        error: *void
+        activity_bus = ActivityBusGet(2, null, *error)
+        if activity_bus == null {
+            if error != null {
+                ActivityErrorFree(error)
+            }
+            return
+        }
+        if ActivityIdleCall("org.gnome.Mutter.IdleMonitor",
+            "/org/gnome/Mutter/IdleMonitor/Core",
+            "org.gnome.Mutter.IdleMonitor", "GetIdletime") >= 0 {
+            activity_backend = 1
+            return
+        }
+        if ActivityIdleCall("org.freedesktop.ScreenSaver", "/ScreenSaver",
+            "org.freedesktop.ScreenSaver", "GetSessionIdleTime") >= 0 {
+            activity_backend = 2
+        }
+    }
+}
+
+#program_export
+app_idle_milliseconds :: () -> s64 {
+    #if ACTIVITY_GIO {
+        now := ActivityMonotonicTime()
+        if activity_last_query != 0 && now - activity_last_query < 500000 {
+            return activity_cached
+        }
+        activity_last_query = now
+        ActivityIdleInit()
+        if activity_backend == 1 {
+            activity_cached = ActivityIdleCall("org.gnome.Mutter.IdleMonitor",
+                "/org/gnome/Mutter/IdleMonitor/Core",
+                "org.gnome.Mutter.IdleMonitor", "GetIdletime")
+        } else if activity_backend == 2 {
+            activity_cached = ActivityIdleCall("org.freedesktop.ScreenSaver",
+                "/ScreenSaver", "org.freedesktop.ScreenSaver",
+                "GetSessionIdleTime")
+        } else {
+            activity_cached = -1
+        }
+        return activity_cached
+    }
+    return -1
+}

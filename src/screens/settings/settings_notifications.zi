@@ -1,0 +1,333 @@
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "geometry"
+#import "modal_props"
+#import "modal_widget"
+#import "session"
+#import "spinbox"
+#import "spinbox_props"
+#import "spinbox_widget"
+#import "text_props"
+#import "text_widget"
+#import "toggle"
+#import "toggle_props"
+#import "toggle_widget"
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_notifications.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../platform/environment.zi";
+#import, file "../../platform/android/android_push.zi";
+#import, file "settings_ui.zi";
+#import "drawing_props"
+
+using ButtonTone;
+using ButtonEmphasis;
+
+settings_notifications_entry_height :: () -> s32 {
+    return AppScale(36) + AppScale(8) + AppScale(34) + AppScale(14)
+}
+
+#program_export
+settings_notifications_content_height :: (app: *InnerBreeze,
+    content_width: s32) -> s32 {
+    height := AppScale(30)
+    if app == null {
+        return height
+    }
+    if AndroidPlatform() != 0 {
+        height += AppScale(30) + AppScale(44) + AppScale(50)
+    }
+    height += AppScale(34)
+    height += toggle_row_height(
+        LocaleText("notifications_friend_request_label"), content_width)
+    height += toggle_row_height(
+        LocaleText("notifications_habit_reminders_label"), content_width)
+    height += AppScale(16) + AppScale(50) + AppScale(34)
+    count := app.reminder_count
+    if count < 0 {
+        count = 0
+    }
+    if count > APP_REMINDER_MAX {
+        count = APP_REMINDER_MAX
+    }
+    height += count * settings_notifications_entry_height()
+    if count < APP_REMINDER_MAX {
+        height += AppScale(42)
+    }
+    return height
+}
+
+settings_notifications_remove_reminder :: (app: *InnerBreeze,
+    index: s32) {
+    if app == null || index < 0 || index >= app.reminder_count  || index >= APP_REMINDER_MAX {
+        return
+    }
+    cursor := index
+    while cursor + 1 < app.reminder_count  && cursor + 1 < APP_REMINDER_MAX {
+        app.reminders[cursor] = app.reminders[cursor + 1]
+        app.ui.reminder_menus[cursor] = app.ui.reminder_menus[cursor + 1]
+        cursor += 1
+    }
+    app.reminder_count -= 1
+    app.ui.reminder_menus[app.reminder_count].open = false
+    app.settings_dirty = 1
+    save_settings(app)
+}
+
+settings_notifications_draw_entry :: (app: *InnerBreeze, index: s32,
+    x: s32, width: s32, y: *s32) -> bool {
+    reminder := *app.reminders[index]
+    row_height := AppScale(36)
+    button_height := AppScale(34)
+    remove_width := AppScale(88)
+    gap := AppScale(10)
+    options: [APP_REMINDER_PRACTICE_COUNT]DropdownOption
+    for practice: 0..(APP_REMINDER_PRACTICE_COUNT - 1) {
+        options[practice].label = practice_label(cast(s32)practice)
+    }
+    menu: DropdownProps
+    menu.id = cast(s32)400 + index * 4
+    menu.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)(width - remove_width - gap), cast(float32)row_height
+}
+    menu.selected_index = reminder.practice
+    menu.open = app.ui.reminder_menus[index].open
+    menu.highlight_index = app.ui.reminder_menus[index].highlight_index
+    menu.scroll_offset = app.ui.reminder_menus[index].scroll_offset
+    app.ui.reminder_menus[index] = Dropdown(app.ui.session, menu, options[:])
+    if app.ui.reminder_menus[index].changed {
+        reminder.practice = app.ui.reminder_menus[index].selected_index
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    remove: ButtonProps
+    remove.id = cast(s32)440 + index
+    remove.bounds = Rectangle.{cast(float32)(x + width - remove_width),
+        cast(float32)(y.* + (row_height - button_height) / 2),
+        cast(float32)remove_width, cast(float32)button_height
+}
+    remove.label = LocaleText("remove_button")
+    remove.tone = cast(ButtonTone)ButtonToneNeutral
+    remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(app.ui.session, remove) != 0 {
+        settings_notifications_remove_reminder(app, index)
+        return true
+    }
+    y.* += row_height + AppScale(8)
+
+    time_bytes: [6]u8
+    hour := reminder.hour
+    if hour < 0 {
+        hour = 0
+    }
+    if hour > 23 {
+        hour = 23
+    }
+    time_bytes[0] = cast(u8)(48 + hour / 10)
+    time_bytes[1] = cast(u8)(48 + hour % 10)
+    time_bytes[2] = cast(u8)58
+    time_bytes[3] = cast(u8)48
+    time_bytes[4] = cast(u8)48
+    time_bytes[5] = cast(u8)0
+    time_text := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*time_bytes[0], 6))
+    stepper_width := button_height * 2 +         AppTextWidth(time_text, AppFontSize()) + AppScale(24)
+    enabled: ToggleProps
+    enabled.id = cast(s32)4010 + index
+    enabled.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + (button_height - AppScale(34)) / 2),
+        cast(float32)toggle_switch_width(), cast(float32)AppScale(34)
+}
+    enabled.label = practice_label(reminder.practice)
+    enabled.value = reminder.enabled != 0
+    toggle_result := Toggle(app.ui.session, enabled)
+    if toggle_result.changed {
+        reminder.enabled = ifx toggle_result.value then 1 else 0
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    time: SpinboxProps
+    time.id = cast(s32)401 + index * 2
+    time.bounds = Rectangle.{cast(float32)(x + width - stepper_width),
+        cast(float32)y.*, cast(float32)stepper_width,
+        cast(float32)button_height
+}
+    time.label = practice_label(reminder.practice)
+    time.min = 0
+    time.max = 23
+    time.value = reminder.hour
+    time.value_text = time_text
+    time.wrap = true
+    time_result := Spinbox(app.ui.session, time)
+    if time_result.changed {
+        reminder.hour = time_result.value
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y.* += button_height + AppScale(14)
+    return false
+}
+
+settings_notifications_close_picker :: (app: *InnerBreeze) {
+    if app != null {
+        app.push_picker_open = 0
+    }
+}
+
+#program_export
+settings_notifications_handle_overlays :: (app: *InnerBreeze) {
+    if app == null || AndroidPlatform() == 0  || app.push_picker_open == 0 {
+        return
+    }
+    count := app.push_distributor_count
+    if count < 0 {
+        count = 0
+    }
+    if count > APP_PUSH_DISTRIBUTOR_MAX {
+        count = APP_PUSH_DISTRIBUTOR_MAX
+    }
+    actions: [APP_PUSH_DISTRIBUTOR_MAX + 1]ActionModalAction
+    index: s32 = 0
+    while index < count {
+        actions[index].label = AppTextFromCString(
+            *app.push_distributor_labels[index][0], 64)
+        actions[index].tone = cast(ButtonTone)ButtonToneNeutral
+        actions[index].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        index += 1
+    }
+    actions[count].label = LocaleText("close_button")
+    actions[count].tone = cast(ButtonTone)ButtonToneNeutral
+    actions[count].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    props: ActionModalProps
+    props.id = 720
+    props.title = LocaleText("notifications_push_picker_title")
+    props.max_width = AppScale(440)
+    result := ActionModal(app.ui.session, props, actions[:count + 1])
+    if result.action > 0 && result.action <= count {
+        PushConfigureWith(app, result.action - 1)
+        settings_notifications_close_picker(app)
+    } else if result.action != 0 {
+        settings_notifications_close_picker(app)
+    }
+}
+
+settings_notifications_draw_push :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    if AndroidPlatform() == 0 {
+        return
+    }
+    text: TextProps
+    text.text = LocaleText("notifications_push_section")
+    text.font = AppFontSize()
+    text.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(26)
+}
+    Text(app.ui.session, text)
+    y.* += AppScale(30)
+    text.text = LocaleText("notifications_push_status_off")
+    if PushRegistered() != 0 {
+        text.text = LocaleText("notifications_push_status_on")
+    }
+    text.bounds.y = cast(float32)y.*
+    Text(app.ui.session, text)
+    y.* += AppScale(44)
+    setup: ButtonProps
+    setup.id = 730
+    setup.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(34)
+}
+    setup.label = LocaleText("notifications_push_setup")
+    setup.tone = cast(ButtonTone)ButtonToneNeutral
+    setup.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(app.ui.session, setup) != 0 {
+        PushRefresh(app)
+        if app.push_distributor_count > 0 {
+            app.push_picker_open = 1
+        } else {
+            PushConfigure()
+        }
+    }
+    y.* += AppScale(50)
+}
+
+#program_export
+settings_notifications_draw :: (app: *InnerBreeze, x: s32,
+    width: s32, y: *s32) {
+    if app == null || y == null {
+        return
+    }
+    settings_notifications_draw_push(app, x, width, y)
+    section: TextProps
+    section.text = LocaleText("notifications_section")
+    section.font = AppFontSize()
+    section.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(28)
+}
+    Text(app.ui.session, section)
+    y.* += AppScale(34)
+    friend := app.notification_friend_request
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("notifications_friend_request_label"), *friend, 0) != 0 {
+        app.notification_friend_request = friend
+        save_settings(app)
+    }
+    habit := app.notification_habit_reminders
+    if commit_toggle_row(app, x, width, y,
+        LocaleText("notifications_habit_reminders_label"), *habit, 0) != 0 {
+        app.notification_habit_reminders = habit
+        save_settings(app)
+    }
+    y.* += AppScale(16)
+
+    test_notification: ButtonProps
+    test_notification.id = 740
+    test_notification.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(34)
+}
+    test_notification.label = LocaleText("notifications_test")
+    test_notification.tone = cast(ButtonTone)ButtonToneNeutral
+    test_notification.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(app.ui.session, test_notification) != 0 {
+        unused send_test_notification(app)
+    }
+    y.* += AppScale(50)
+
+    section.text = LocaleText("notifications_reminders_section")
+    section.bounds.y = cast(float32)y.*
+    Text(app.ui.session, section)
+    y.* += AppScale(34)
+    index: s32 = 0
+    while index < app.reminder_count && index < APP_REMINDER_MAX {
+        if !settings_notifications_draw_entry(app, index, x, width, y) {
+            index += 1
+        }
+    }
+    if app.reminder_count < APP_REMINDER_MAX {
+        add: ButtonProps
+        add.id = 750
+        add.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)width, cast(float32)AppScale(34)
+}
+        add.label = LocaleText("reminder_add")
+        add.tone = cast(ButtonTone)ButtonToneNeutral
+        add.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        if Button(app.ui.session, add) != 0 {
+            reminder := *app.reminders[app.reminder_count]
+            reminder.practice = 0
+            reminder.hour = 8
+            reminder.enabled = 1
+            reminder.last_day = 0
+            app.ui.reminder_menus[app.reminder_count].open = false
+            app.reminder_count += 1
+            app.settings_dirty = 1
+            save_settings(app)
+        }
+        y.* += AppScale(42)
+    }
+}

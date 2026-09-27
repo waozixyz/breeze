@@ -1,0 +1,81 @@
+c :: #system_library "c";
+#import "c_string"
+#import "locale_policy"
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/view_settings.zi";
+#import, file "app_types.zi";
+#import, file "app_settings.zi";
+#import, file "fonts.zi";
+#import, file "locale.zi";
+#import, file "locale_preferences.zi";
+#import, file "settings_store.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/web_storage.zi";
+
+// The application still owns its title and manual layout state.
+refresh_locale_dependent_text :: (app: *InnerBreeze) #foreign c;
+habits_seed_default_set_if_needed :: (habits: *Habits) -> s32 #foreign c;
+
+UseLanguageCode :: (app: *InnerBreeze, code: string) {
+    if !LocaleUse(code) {
+        unused LocaleUse("en")
+    }
+    if !CopyCString(LocaleActiveCode(), app.language[:]) {
+        unused LocaleUse("en")
+        unused CopyCString("en", app.language[:])
+    }
+    app.language_index = LocaleActiveIndex()
+    unused LoadLocaleFont(app)
+    refresh_locale_dependent_text(app)
+}
+
+#program_export
+apply_system_language_selection :: (app: *InnerBreeze, save_now: s32) {
+    if app == null {
+        return
+    }
+    app.language_system = 1
+    app.language_selected = 1
+    UseLanguageCode(app, LocalePreferred(LocaleSystemPreferences()))
+    if save_now != 0 {
+        save_settings(app)
+    }
+}
+
+#program_export
+apply_language_selection :: (app: *InnerBreeze,
+    language_index: s32, save_now: s32) {
+    if app == null {
+        return
+    }
+    if language_index < 0 || language_index >= LocaleLanguageCount() {
+        language_index = 0
+    }
+    language := LocaleLanguageAt(language_index)
+    code := language.code
+    app.language_system = 0
+    app.language_selected = 1
+    UseLanguageCode(app, code)
+    if save_now != 0 {
+        save_settings(app)
+    }
+}
+
+#program_export
+app_accept_language_selection :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    first_setup := SettingsReadInt("language_setup_done", 0) == 0
+    if app.language_system != 0 || app.language_selected == 0 {
+        apply_system_language_selection(app, 1)
+    } else {
+        save_settings(app)
+    }
+    if WebPlatform() != 0 {
+        unused sync_web_storage_critical()
+    }
+    if first_setup && habits_seed_default_set_if_needed(*app.habits) != 0 {
+        app_restore_habits_view_settings(app)
+    }
+}

@@ -1,0 +1,76 @@
+// Target-sized liboqs lengths and platform export effects for account files.
+c :: #system_library "c";
+
+NativeAccountSign :: (signature: *u8, signature_length: *usize,
+    message: *u8, message_length: usize,
+    private_key: *u8) -> s32 #foreign c "OQS_SIG_ml_dsa_44_sign";
+
+#if #defined(ANDROID_BUILD) {
+    NativeAccountShare :: (data: *u8, length: usize, filename: *u8,
+        mime: *u8, title: *u8) -> s32 #foreign c "android_share_bytes";
+}
+
+#if #defined(PLATFORM_WEB) {
+    NativeAccountDownload :: (path: *u8, filename: *u8,
+        mime: *u8) -> s32 #foreign c "web_download_file";
+}
+
+#program_export
+inbe_account_export_platform :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return 1
+    }
+    #if #defined(PLATFORM_WEB) {
+        return 2
+    }
+    return 0
+}
+
+#program_export
+inbe_account_share_bytes :: (data: *u8, length: u64, filename: *u8,
+    mime: *u8, title: *u8) -> s32 {
+    unused data
+    unused length
+    unused filename
+    unused mime
+    unused title
+    #if #defined(ANDROID_BUILD) {
+        if size_of(usize) < 8 && length > 4294967295 {
+            return 0
+        }
+        return NativeAccountShare(data, cast(usize)length,
+            filename, mime, title)
+    }
+    return 0
+}
+
+#program_export
+inbe_account_download_file :: (path: *u8, filename: *u8,
+    mime: *u8) -> s32 {
+    unused path
+    unused filename
+    unused mime
+    #if #defined(PLATFORM_WEB) {
+        return NativeAccountDownload(path, filename, mime)
+    }
+    return 0
+}
+
+#program_export
+inbe_oqs_ml_dsa_44_sign :: (signature: *u8,
+    signature_length: *u64, message: *u8,
+    message_length: u64, private_key: *u8) -> s32 {
+    if signature == null || signature_length == null || private_key == null ||
+        (message == null && message_length > 0) {
+        return -1
+    }
+    if size_of(usize) < 8 && message_length > 4294967295 {
+        return -1
+    }
+    signature_length.* = 0
+    native_length: usize = 0
+    result := NativeAccountSign(signature, *native_length, message,
+        cast(usize)message_length, private_key)
+    signature_length.* = cast(u64)native_length
+    return result
+}

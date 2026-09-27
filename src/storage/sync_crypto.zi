@@ -1,0 +1,242 @@
+// Inbe's sync wire encoding. The digest and hex routines are kept here so
+// account IDs and encrypted record hashes use the same bounded implementation.
+
+Sha256Context :: struct {
+    state: [8]u32
+    bit_length: u64
+    block: [64]u8
+    block_length: s32
+}
+
+Sha256RoundConstants: [64]u32 = .[
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+];
+
+Sha256RotateRight :: (value: u32, bits: u32) -> u32 {
+    return (value >> bits) | (value << (cast(u32)32 - bits))
+}
+
+Sha256Transform :: (context: *Sha256Context) {
+    words: [64]u32
+    index: s32 = 0
+    while index < 16 {
+        byte_index := index * 4
+        words[index] =
+            (cast(u32)context.block[byte_index] << cast(u32)24) |
+            (cast(u32)context.block[byte_index + 1] << cast(u32)16) |
+            (cast(u32)context.block[byte_index + 2] << cast(u32)8) |
+            cast(u32)context.block[byte_index + 3]
+        index += 1
+    }
+    while index < 64 {
+        prior_15 := words[index - 15]
+        prior_2 := words[index - 2]
+        sigma_0 := (Sha256RotateRight(prior_15, 7) ^
+            Sha256RotateRight(prior_15, 18) ^ (prior_15 >> cast(u32)3))
+        sigma_1 := (Sha256RotateRight(prior_2, 17) ^
+            Sha256RotateRight(prior_2, 19) ^ (prior_2 >> cast(u32)10))
+        words[index] = (words[index - 16] + sigma_0 +
+            words[index - 7] + sigma_1)
+        index += 1
+    }
+
+    a := context.state[0]
+    b := context.state[1]
+    c := context.state[2]
+    d := context.state[3]
+    e := context.state[4]
+    f := context.state[5]
+    g := context.state[6]
+    h := context.state[7]
+    index = 0
+    while index < 64 {
+        sigma_1 := (Sha256RotateRight(e, 6) ^
+            Sha256RotateRight(e, 11) ^ Sha256RotateRight(e, 25))
+        choose := (e & f) ^ ((~e) & g)
+        temp_1 := (h + sigma_1 + choose + Sha256RoundConstants[index] + words[index])
+        sigma_0 := (Sha256RotateRight(a, 2) ^
+            Sha256RotateRight(a, 13) ^ Sha256RotateRight(a, 22))
+        majority := (a & b) ^ (a & c) ^ (b & c)
+        temp_2 := sigma_0 + majority
+        h = g
+        g = f
+        f = e
+        e = d + temp_1
+        d = c
+        c = b
+        b = a
+        a = temp_1 + temp_2
+        index += 1
+    }
+    context.state[0] += a
+    context.state[1] += b
+    context.state[2] += c
+    context.state[3] += d
+    context.state[4] += e
+    context.state[5] += f
+    context.state[6] += g
+    context.state[7] += h
+}
+
+Sha256Initialize :: (context: *Sha256Context) {
+    context.state[0] = 0x6a09e667
+    context.state[1] = 0xbb67ae85
+    context.state[2] = 0x3c6ef372
+    context.state[3] = 0xa54ff53a
+    context.state[4] = 0x510e527f
+    context.state[5] = 0x9b05688c
+    context.state[6] = 0x1f83d9ab
+    context.state[7] = 0x5be0cd19
+    context.bit_length = 0
+    context.block_length = 0
+}
+
+Sha256Update :: (context: *Sha256Context, data: *u8, length: s64) {
+    index: s64 = 0
+    while index < length {
+        context.block[context.block_length] = data[index]
+        context.block_length += 1
+        if context.block_length == 64 {
+            Sha256Transform(context)
+            context.bit_length += 512
+            context.block_length = 0
+        }
+        index += 1
+    }
+}
+
+Sha256Finish :: (context: *Sha256Context, output: *u8) {
+    tail_length := context.block_length
+    index := tail_length
+    context.block[index] = cast(u8)0x80
+    index += 1
+    if index > 56 {
+        while index < 64 {
+            context.block[index] = 0
+            index += 1
+        }
+        Sha256Transform(context)
+        index = 0
+    }
+    while index < 56 {
+        context.block[index] = 0
+        index += 1
+    }
+    context.bit_length += cast(u64)tail_length * cast(u64)8
+    index = 0
+    while index < 8 {
+        context.block[63 - index] = cast(u8)(context.bit_length >> cast(u64)(index * 8))
+        index += 1
+    }
+    Sha256Transform(context)
+
+    byte_index: s32 = 0
+    while byte_index < 4 {
+        state_index: s32 = 0
+        while state_index < 8 {
+            output[state_index * 4 + byte_index] =
+                cast(u8)(context.state[state_index] >>
+                    cast(u32)(24 - byte_index * 8))
+            state_index += 1
+        }
+        byte_index += 1
+    }
+}
+
+#program_export
+SyncCryptoSha256 :: (data: *u8, length: s64, output: *u8) {
+    if output == null || length < 0 || (data == null && length > 0) {
+        return
+    }
+    context: Sha256Context
+    Sha256Initialize(*context)
+    if length > 0 {
+        Sha256Update(*context, data, length)
+    }
+    Sha256Finish(*context, output)
+}
+
+HexDigit :: (value: u8) -> u8 {
+    if value < 10 {
+        return cast(u8)48 + value
+    }
+    return cast(u8)87 + value
+}
+
+HexValue :: (value: u8) -> s32 {
+    if value >= cast(u8)48 && value <= cast(u8)57 {
+        return cast(s32)(value - cast(u8)48)
+    }
+    if value >= cast(u8)97 && value <= cast(u8)102 {
+        return cast(s32)(value - cast(u8)97) + 10
+    }
+    if value >= cast(u8)65 && value <= cast(u8)70 {
+        return cast(s32)(value - cast(u8)65) + 10
+    }
+    return -1
+}
+
+#program_export
+SyncCryptoBytesToHex :: (bytes: *u8, length: s64,
+    output: *u8, output_size: s64) -> s32 {
+    if output == null || output_size <= 0 {
+        return 0
+    }
+    output[0] = 0
+    if bytes == null || length < 0 || length > (output_size - 1) / 2 {
+        return 0
+    }
+    index: s64 = 0
+    while index < length {
+        byte := bytes[index]
+        output[index * 2] = HexDigit(byte >> cast(u8)4)
+        output[index * 2 + 1] = HexDigit(byte & cast(u8)15)
+        index += 1
+    }
+    output[length * 2] = 0
+    return 1
+}
+
+#program_export
+SyncCryptoHexToBytes :: (hex: string, output: *u8, output_size: s64) -> s32 {
+    if output == null || output_size < 0 ||
+        output_size > 4611686018427387903 ||
+        cast(s64)hex.count != output_size * 2 {
+        return 0
+    }
+    index: s64 = 0
+    while index < output_size {
+        high := HexValue(hex[index * 2])
+        low := HexValue(hex[index * 2 + 1])
+        if high < 0 || low < 0 {
+            return 0
+        }
+        output[index] = cast(u8)((high << 4) | low)
+        index += 1
+    }
+    return 1
+}
+
+#program_export
+SyncCryptoSha256Hex :: (data: *u8, length: s64, output: *u8) {
+    if output == null {
+        return
+    }
+    output[0] = 0
+    if length < 0 || (data == null && length > 0) {
+        return
+    }
+    digest: [32]u8
+    SyncCryptoSha256(data, length, *digest[0])
+    SyncCryptoBytesToHex(*digest[0], 32, output, 65)
+}

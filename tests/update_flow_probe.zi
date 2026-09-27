@@ -1,0 +1,82 @@
+#import, file "../src/app/update_check.zi";
+#import, file "../src/app/update_transport.zi";
+#import "c_string"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+ProbeEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+ProbeInteger :: (text: *u8) -> s32 #foreign c "atoi";
+ProbeSleep :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+#program_export "storage_get_setting_int"
+ProbeReadSetting :: (key: string, fallback: s32) -> s32 {
+    unused key
+    return fallback
+}
+
+#program_export "storage_set_setting_int"
+ProbeWriteSetting :: (key: string, value: s32) {
+    unused key
+    unused value
+}
+
+Environment :: (name: string) -> *u8 {
+    key: [64]u8
+    if !CopyCString(name, key[:]) {
+        return null
+    }
+    return ProbeEnvironment(*key[0])
+}
+
+#program_export
+main :: () -> s32 {
+    artifact := Environment("INBE_TEST_UPDATE_URL")
+    hash := Environment("INBE_TEST_UPDATE_HASH")
+    expected := Environment("INBE_TEST_UPDATE_EXPECTED")
+    if artifact == null || hash == null || expected == null {
+        return 90
+    }
+    update_check_start()
+    index: s32 = 0
+    while index < 1000 && update_flow() == 0 {
+        update_check_poll()
+        unused ProbeSleep(cast(u32)10000)
+        index += 1
+    }
+    if update_flow() != 1 || update_available() == 0 {
+        return 91
+    }
+    // Keep the selected digest and size, replacing only the fixture URL.
+    if !CopyCString(TextFromCString(artifact), update_artifact_url[:]) {
+        return 96
+    }
+    if TextFromCString(hash) != "-" {
+        if !CopyCString(TextFromCString(hash), update_artifact_hash[:]) {
+            return 97
+        }
+    }
+    update_artifact_present = true
+    if update_can_self_update() == 0 {
+        return 92
+    }
+    update_row_action()
+    if update_flow() != 2 {
+        return 93
+    }
+    index = 0
+    while index < 1000 && update_flow() == 2 {
+        update_check_poll()
+        unused ProbeSleep(cast(u32)10000)
+        index += 1
+    }
+    if update_flow() != ProbeInteger(expected) {
+        return 94
+    }
+    if Environment("INBE_TEST_UPDATE_APPLY") != null {
+        update_apply()
+        unused update_apply_at_exit()
+        return 95
+    }
+    app_update_discard_download()
+    return 0
+}

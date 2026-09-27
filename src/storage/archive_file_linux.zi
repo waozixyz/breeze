@@ -1,0 +1,390 @@
+// Native Linux file boundary for the proved Inbe backup formats. ZIP parsing
+// and checksums come from Ziran's standard module; SQL merging stays in Inbe.
+#import "zip"
+#import "zip_linux"
+#import "mapped_file_linux"
+#import "byte_text_linux"
+#import "file_linux"
+#import "zip_file_linux"
+#import "c_string"
+#import, file "storage_layout.zi";
+#import, file "../core/version.zi";
+#import, file "legacy_session_zip.zi";
+#import, file "state.zi";
+#import, file "path_join.zi";
+#import, file "sqlite.zi";
+
+#scope_file
+c :: #system_library "c";
+AllocRaw :: (size: usize) -> *void #foreign c "malloc";
+FreeRaw :: (data: *void) -> void #foreign c "free";
+ImportDatabaseRaw :: (path: string, mode: s32) -> s32 #foreign c "import_sqlite_db_file";
+InspectDatabaseRaw :: (path: string, info: *ArchiveInfo) -> s32 #foreign c "inspect_sqlite_db_file";
+
+ArchivePathCapacity :: 512
+ArchiveDatabaseLimit :: 2147483647
+ArchiveOutputCapacity :: 4096
+
+#scope_export
+ArchiveInfo :: struct {
+    valid: s32
+    has_sessions: s32
+    has_habits: s32
+    has_settings: s32
+    session_count: s32
+    habit_count: s32
+    setting_count: s32
+}
+
+ArchiveDatabaseEntry :: (archive: []u8) -> ZipEntry {
+    entry: ZipEntry = FindZipEntry(archive, CurrentDatabaseEntry)
+    if entry.found { return entry }
+    return FindZipEntry(archive, PreviousDatabaseEntry)
+}
+
+ArchiveLooksLikeSQLite :: (bytes: []u8) -> bool {
+    signature: string = "SQLite format 3"
+    if bytes.count < 16 { return false }
+    index: s32 = 0
+    while index < cast(s32)signature.count {
+        if bytes[index] != signature[index] { return false }
+        index += 1
+    }
+    return bytes[15] == cast(u8)0
+}
+
+ArchiveNumberedPath :: (output: []u8, base: string, ordinal: s32) -> bool {
+    if ordinal < 1 || ordinal > 32 || !CopyCString(base, output) { return false }
+    index: s32 = cast(s32)base.count
+    suffix: string = ".tmp"
+    if index + cast(s32)suffix.count + 3 >= cast(s32)output.count { return false }
+    offset: s32 = 0
+    while offset < cast(s32)suffix.count {
+        output[index + offset] = suffix[offset]
+        offset += 1
+    }
+    index += offset
+    if ordinal >= 10 {
+        output[index] = cast(u8)(48 + ordinal / 10)
+        index += 1
+    }
+    output[index] = cast(u8)(48 + ordinal % 10)
+    output[index + 1] = cast(u8)0
+    return true
+}
+
+ArchiveTemporaryPath :: (output: []u8, inspect: bool, ordinal: s32) -> bool {
+    if ordinal < 1 || ordinal > 32 { return false }
+    leaf: [64]u8
+    if inspect {
+        if !CopyCString(InspectDatabaseTemporaryName, leaf[:]) { return false }
+    } else {
+        if !CopyCString(ImportDatabaseTemporaryName, leaf[:]) { return false }
+    }
+    if output.count < ArchivePathCapacity  || storage_join_path(*output[0], cast(u64)output.count,
+           *storage_state_handle().root[0], *leaf[0]) == 0 { return false }
+    return ArchiveNumberedPath(output, TextFromCString(*output[0]), ordinal)
+}
+
+ArchiveOpenNumbered :: (base: string, output: []u8) -> FileHandle {
+    result: FileHandle
+    ordinal: s32 = 1
+    while ordinal <= 32 {
+        if !ArchiveNumberedPath(output, base, ordinal) { return result }
+        result = OpenExclusivePrivate(TextFromCString(*output[0]))
+        if result.valid { return result }
+        ordinal += 1
+    }
+    return result
+}
+
+ArchiveAppend :: (output: []u8, used: *s32, value: string) -> bool {
+    if used.* < 0 || value.count > output.count - cast(s64)used.* { return false }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[used.* + index] = value[index]
+        index += 1
+    }
+    used.* += cast(s32)value.count
+    return true
+}
+
+ArchiveAppendDecimal :: (output: []u8, used: *s32, number: s32) -> bool {
+    if number < 0 { return false }
+    digits: [10]u8
+    length: s32 = 0
+    value: s32 = number
+    while true {
+        digits[length] = cast(u8)(48 + value % 10)
+        length += 1
+        value /= 10
+        if value == 0 { break }
+    }
+    if length > cast(s32)output.count - used.* { return false }
+    while length > 0 {
+        length -= 1
+        output[used.*] = digits[length]
+        used.* += 1
+    }
+    return true
+}
+
+ArchiveAppendUserId :: (output: []u8, used: *s32) -> bool {
+    user: *u8 = *storage_state_handle().user_id[0]
+    hex: string = "0123456789abcdef"
+    index: s32 = 0
+    while index < 64 && user[index] != cast(u8)0 {
+        byte: u8 = user[index]
+        if byte == cast(u8)34 || byte == cast(u8)92 {
+            if cast(s32)output.count - used.* < 2 { return false }
+            output[used.*] = cast(u8)92
+            output[used.* + 1] = byte
+            used.* += 2
+        } else if byte < cast(u8)32 {
+            if cast(s32)output.count - used.* < 6 { return false }
+            output[used.*] = cast(u8)92
+            output[used.* + 1] = cast(u8)117
+            output[used.* + 2] = cast(u8)48
+            output[used.* + 3] = cast(u8)48
+            output[used.* + 4] = hex[byte >> 4]
+            output[used.* + 5] = hex[byte & cast(u8)15]
+            used.* += 6
+        } else {
+            if used.* >= cast(s32)output.count { return false }
+            output[used.*] = byte
+            used.* += 1
+        }
+        index += 1
+    }
+    return index < 64
+}
+
+ArchiveMetadata :: (output: []u8, sessions: s32, habits: s32) -> s32 {
+    used: s32 = 0
+    if !ArchiveAppend(output, *used, "{\n\"format\":\"") || !ArchiveAppend(output, *used, ExportMetadataFormat) || !ArchiveAppend(output, *used, "\",\n\"format_version\":1,\n\"app_version\":\"") || !ArchiveAppend(output, *used, VersionString) || !ArchiveAppend(output, *used, "\",\n\"user_id\":\"") || !ArchiveAppendUserId(output, *used) || !ArchiveAppend(output, *used, "\",\n\"session_count\":") || !ArchiveAppendDecimal(output, *used, sessions) || !ArchiveAppend(output, *used, ",\n\"habit_count\":") || !ArchiveAppendDecimal(output, *used, habits) || !ArchiveAppend(output, *used, "\n}\n") { return 0 }
+    return used
+}
+
+ArchiveCountRows :: (database: *void, query: string) -> s32 {
+    sql: [128]u8
+    if !CopyCString(query, sql[:]) { return -1 }
+    statement: *void = null
+    if SqlitePrepare(database, *sql[0], -1, *statement, null) != 0 {
+        return -1
+    }
+    count: s32 = -1
+    if SqliteStep(statement) == 100 {
+        value: s64 = SqliteColumnInt64(statement, 0)
+        if value >= 0 && value <= ArchiveDatabaseLimit { count = cast(s32)value }
+    }
+    if SqliteFinalize(statement) != 0 { return -1 }
+    return count
+}
+
+ArchiveQuickCheck :: (database: *void) -> bool {
+    query: [32]u8
+    if !CopyCString("PRAGMA quick_check", query[:]) { return false }
+    statement: *void = null
+    if SqlitePrepare(database, *query[0], -1, *statement, null) != 0 {
+        return false
+    }
+    valid: bool = false
+    if SqliteStep(statement) == 100 {
+        result: *u8 = SqliteColumnText(statement, 0)
+        valid = result != null && result[0] == cast(u8)111 && result[1] == cast(u8)107 && result[2] == cast(u8)0
+    }
+    if SqliteFinalize(statement) != 0 { return false }
+    return valid
+}
+
+ArchiveSnapshot :: (output: []u8, sessions: *s32, habits: *s32) -> bool {
+    state: *StorageState = storage_state_handle()
+    if state.db == null { return false }
+    base: [ArchivePathCapacity]u8
+    leaf: [64]u8
+    if !CopyCString(ExportDatabaseTemporaryName, leaf[:]) || storage_join_path(*base[0], cast(u64)base.count,
+           *state.root[0], *leaf[0]) == 0 { return false }
+    file: FileHandle = ArchiveOpenNumbered(TextFromCString(*base[0]), output)
+    if !file.valid { return false }
+    if !CloseFile(file) {
+        RemoveFile(TextFromCString(*output[0]))
+        return false
+    }
+    destination: *void = null
+    complete: bool = false
+    if SqliteOpen(*output[0], *destination, 6) == 0 {
+        backup: *void = SqliteBackupInit(destination, state.db)
+        if backup != null {
+            step_result: s32 = SqliteBackupStep(backup, -1)
+            finish_result: s32 = SqliteBackupFinish(backup)
+            if step_result == 101 && finish_result == 0 {
+                journal_mode: [32]u8
+                mode_ready: bool = CopyCString("PRAGMA journal_mode=DELETE",
+                    journal_mode[:])
+                sessions.* = ArchiveCountRows(destination,
+                    "SELECT COUNT(*) FROM sessions WHERE deleted_at=0")
+                habits.* = ArchiveCountRows(destination,
+                    "SELECT COUNT(*) FROM habits WHERE deleted_at=0")
+                complete = sessions.* >= 0 && habits.* >= 0 && mode_ready && SqliteExec(destination, *journal_mode[0]) == 0 && ArchiveQuickCheck(destination)
+            }
+        }
+    }
+    if destination != null && SqliteClose(destination) != 0 { complete = false }
+    if !complete { RemoveFile(TextFromCString(*output[0])) }
+    return complete
+}
+
+#program_export
+ArchiveExportFile :: (path: string) -> s32 {
+    if path.count == 0 { return 0 }
+    snapshot_path: [ArchivePathCapacity]u8
+    sessions: s32 = 0
+    habits: s32 = 0
+    if !ArchiveSnapshot(snapshot_path[:], *sessions, *habits) { return 0 }
+    snapshot: MappedFile = MapPrivate(TextFromCString(*snapshot_path[0]))
+    if !snapshot.valid || snapshot.length == 0 || snapshot.length > cast(u64)ArchiveDatabaseLimit {
+        if snapshot.valid { UnmapFile(snapshot) }
+        RemoveFile(TextFromCString(*snapshot_path[0]))
+        return 0
+    }
+    metadata: [512]u8
+    metadata_size: s32 = ArchiveMetadata(metadata[:], sessions, habits)
+    temporary: [ArchiveOutputCapacity]u8
+    file: FileHandle
+    if metadata_size > 0 {
+        file = ArchiveOpenNumbered(path, temporary[:])
+    }
+    published: bool = false
+    if metadata_size > 0 && file.valid {
+        first: ZipFileRecord = WriteStoredZipFileEntry(file, 0,
+            ExportMetadataEntry, metadata[0:metadata_size])
+        second: ZipFileRecord
+        if first.valid {
+            second = WriteStoredZipFileEntry(file, StoredZipFileNext(first),
+                CurrentDatabaseEntry, MappedBytes(snapshot))
+        }
+        if second.valid {
+            start: u64 = StoredZipFileNext(second)
+            cursor: u64 = WriteStoredZipFileDirectoryEntry(file, start,
+                ExportMetadataEntry, first)
+            if cursor != 0 {
+                cursor = WriteStoredZipFileDirectoryEntry(file, cursor,
+                    CurrentDatabaseEntry, second)
+                if cursor != 0 && FinishStoredZipFile(file, start, cursor, 2) && SyncFile(file) { published = true }
+            }
+        }
+        if !CloseFile(file) { published = false }
+        if published {
+            published = LinkFile(TextFromCString(*temporary[0]), path)
+        }
+        RemoveFile(TextFromCString(*temporary[0]))
+    }
+    UnmapFile(snapshot)
+    RemoveFile(TextFromCString(*snapshot_path[0]))
+    return ifx published then 1 else 0
+}
+
+ArchiveWriteDatabase :: (archive: []u8, entry: ZipEntry,
+    inspect: bool, temporary: []u8) -> bool {
+    if !entry.found || entry.size == 0 || entry.size > ArchiveDatabaseLimit {
+        return false
+    }
+    buffer: *u8 = cast(*u8)AllocRaw(cast(usize)entry.size)
+    if buffer == null { return false }
+    view: []u8 = BytesFromPointer(buffer, entry.size)
+    if !ExtractZipEntry(archive, entry, view) {
+        FreeRaw(cast(*void)buffer)
+        return false
+    }
+    file: FileHandle
+    ordinal: s32 = 1
+    while ordinal <= 32 {
+        if !ArchiveTemporaryPath(temporary, inspect, ordinal) { break }
+        file = OpenExclusivePrivate(TextFromCString(*temporary[0]))
+        if file.valid { break }
+        ordinal += 1
+    }
+    if !file.valid {
+        FreeRaw(cast(*void)buffer)
+        return false
+    }
+    written: u64 = 0
+    ok: bool = true
+    while written < entry.size {
+        count: s64 = WriteAt(file, view[cast(s64)written:cast(s64)entry.size],
+            cast(s64)written)
+        if count <= 0 {
+            ok = false
+            break
+        }
+        written += cast(u64)count
+    }
+    if !CloseFile(file) { ok = false }
+    FreeRaw(cast(*void)buffer)
+    if !ok { RemoveFile(TextFromCString(*temporary[0])) }
+    return ok
+}
+
+#program_export
+ArchiveImportFile :: (path: string, mode: s32) -> s32 {
+    if path.count == 0 { return 0 }
+    mapped: MappedFile = MapPrivate(path)
+    if !mapped.valid { return 0 }
+    archive: []u8 = MappedBytes(mapped)
+    directory: ZipDirectory = OpenZipDirectory(archive)
+    if !directory.valid {
+        recognized: bool = ArchiveLooksLikeSQLite(archive)
+        UnmapFile(mapped)
+        return ifx recognized then ImportDatabaseRaw(path, mode) else 0
+    }
+    entry: ZipEntry = ArchiveDatabaseEntry(archive)
+    if !entry.found {
+        imported: s32 = LegacyImportZipSessions(archive)
+        UnmapFile(mapped)
+        return ifx imported > 0 then 1 else 0
+    }
+    temporary: [ArchivePathCapacity]u8
+    extracted: bool = ArchiveWriteDatabase(archive, entry, false, temporary[:])
+    UnmapFile(mapped)
+    if !extracted { return 0 }
+    accepted: s32 = ImportDatabaseRaw(TextFromCString(*temporary[0]), mode)
+    RemoveFile(TextFromCString(*temporary[0]))
+    return ifx accepted != 0 then 1 else 0
+}
+
+#program_export
+ArchiveInspectFile :: (path: string, info: *ArchiveInfo) -> s32 {
+    if info == null { return 0 }
+    info.* = ArchiveInfo.{}
+    if path.count == 0 { return 0 }
+    mapped: MappedFile = MapPrivate(path)
+    if !mapped.valid { return 0 }
+    archive: []u8 = MappedBytes(mapped)
+    directory: ZipDirectory = OpenZipDirectory(archive)
+    if !directory.valid {
+        recognized: bool = ArchiveLooksLikeSQLite(archive)
+        UnmapFile(mapped)
+        return ifx recognized then InspectDatabaseRaw(path, info) else 0
+    }
+    entry: ZipEntry = ArchiveDatabaseEntry(archive)
+    if !entry.found {
+        count: s32 = LegacyCountZipSessions(archive)
+        UnmapFile(mapped)
+        if count <= 0 { return 0 }
+        info.valid = 1
+        info.has_sessions = 1
+        info.session_count = count
+        return 1
+    }
+    temporary: [ArchivePathCapacity]u8
+    extracted: bool = ArchiveWriteDatabase(archive, entry, true, temporary[:])
+    UnmapFile(mapped)
+    if !extracted { return 0 }
+    accepted: s32 = InspectDatabaseRaw(TextFromCString(*temporary[0]), info)
+    removed: bool = RemoveFile(TextFromCString(*temporary[0]))
+    if !removed {
+        info.* = ArchiveInfo.{}
+        return 0
+    }
+    return accepted
+}

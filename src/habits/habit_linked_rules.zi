@@ -1,0 +1,120 @@
+#import, file "habit_types.zi";
+#import, file "habit_days.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../core/types.zi";
+
+using HabitSyncMode;
+
+HabitLinkedCopyPath :: (destination: *u8, capacity: s32, source: *u8) {
+    if destination == null || capacity <= 0 {
+        return
+    }
+    index: s32 = 0
+    limit: s32 = capacity - 1
+    if source != null {
+        while index < limit && source[index] != 0 {
+            destination[index] = source[index]
+            index += 1
+        }
+    }
+    destination[index] = 0
+}
+
+// Storage enumerates records; this module owns which records belong to the
+// selected habit and day and how their rounds contribute to its summary.
+#program_export
+HabitLinkedAppend :: (ctx: *HabitLinkedContext, path: *u8,
+    year: s32, month: s32, day: s32, hour: s32, minute: s32,
+    second: s32, activity: s32, round_times: *s32,
+    round_count: s32) -> bool {
+    if ctx == null || round_times == null || round_count <= 0 {
+        return false
+    }
+    day_index: s32 = year * 10000 + month * 100 + day
+    if ctx.day_filter > 0 && ctx.day_filter != day_index {
+        return false
+    }
+    activity = practice_clamp_id(activity)
+    if ctx.sync_mode == HABIT_SYNC_ACTIVITIES  && (ctx.sync_activity & habit_activity_mask_for(activity)) == 0 {
+        return false
+    }
+    if ctx.count >= HABIT_LINKED_ENTRY_MAX {
+        return false
+    }
+
+    entry: *HabitLinkedEntry = *ctx.entries[ctx.count]
+    entry.* = HabitLinkedEntry.{}
+    HabitLinkedCopyPath(*entry.path[0], HABIT_LINKED_PATH_SIZE, path)
+    entry.year = year
+    entry.month = month
+    entry.day = day
+    entry.hour = hour
+    entry.minute = minute
+    entry.second = second
+    entry.activity = activity
+    if round_count > MaxRounds {
+        round_count = MaxRounds
+    }
+    entry.round_count = round_count
+    index: s32 = 0
+    while index < round_count {
+        value: s32 = round_times[index]
+        entry.rounds[index] = value
+        entry.total_seconds += value
+        if value > entry.best_seconds {
+            entry.best_seconds = value
+        }
+        index += 1
+    }
+    ctx.count += 1
+    ctx.total_seconds += entry.total_seconds
+    if entry.best_seconds > ctx.best_seconds {
+        ctx.best_seconds = entry.best_seconds
+    }
+    return true
+}
+
+#program_export
+HabitLinkedHasDay :: (ctx: *HabitLinkedContext, day_index: s32) -> bool {
+    if ctx == null {
+        return false
+    }
+    index: s32 = 0
+    while index < ctx.count {
+        entry: HabitLinkedEntry = ctx.entries[index]
+        if entry.year * 10000 + entry.month * 100 + entry.day == day_index {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+#program_export
+HabitLinkedSessionCountForDay :: (ctx: *HabitLinkedContext,
+    day_index: s32) -> s32 {
+    if ctx == null {
+        return 0
+    }
+    count: s32 = 0
+    index: s32 = 0
+    while index < ctx.count {
+        entry: HabitLinkedEntry = ctx.entries[index]
+        if entry.year * 10000 + entry.month * 100 + entry.day == day_index {
+            count += 1
+        }
+        index += 1
+    }
+    return count
+}
+
+#program_export
+HabitEffectiveDayCount :: (habit: *Habit, day_index: s32,
+    linked_ctx: *HabitLinkedContext) -> s32 {
+    manual_count: s32 = HabitDayCount(habit, day_index)
+    session_count: s32 = HabitLinkedSessionCountForDay(linked_ctx, day_index)
+    if manual_count > session_count {
+        return manual_count
+    }
+    return session_count
+}

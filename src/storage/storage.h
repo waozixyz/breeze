@@ -1,8 +1,10 @@
 #ifndef STORAGE_H
 #define STORAGE_H
 
-#include "kryon.h"
+#include "settings_api.h"
+#include "sync_status_api.h"
 #include <stddef.h>
+#include <stdint.h>
 
 enum {
     STORAGE_PATH_SIZE = 512,
@@ -50,39 +52,15 @@ typedef struct StorageImportInfo {
     int setting_count;
 } StorageImportInfo;
 
-typedef struct StorageSyncStatus {
-    int has_account;
-    int enabled;
-    int review_pending;
-    int repair_pending;
-    int secure_migration_pending;
-    int protocol_upgrade_available;
-    int latest_protocol;
-    int full_upload_done;
-    long long server_version;
-    long long server_clock;
-    long long queued_changes;
-    long long secure_migration_queued;
-    long long secure_migration_total;
-    long long secure_migration_done;
-} StorageSyncStatus;
-
 int storage_init(const char *root);
 void storage_close(void);
 const char *storage_db_path(void);
-int storage_join_path(char *out, size_t out_size, const char *root, const char *name);
+int storage_join_path(char *out, uint64_t out_size, const char *root, const char *name);
 int storage_ensure_dir(const char *path);
 
-int storage_get_setting_int(const char *key, int fallback);
-int storage_list_settings(void (*callback)(const char *key, const char *value, void *user), void *user);
 const char *storage_get_setting_text(const char *key);
 int storage_setting_text_equals(const char *key, const char *value);
 int storage_has_sync_account(void);
-void storage_set_setting_int(const char *key, int value);
-void storage_set_setting_text(const char *key, const char *value);
-void storage_settings_begin_write(void);
-void storage_settings_end_write(void);
-int storage_settings_empty(void);
 int storage_get_social_cache_json(const char *kind, char *out, size_t out_size);
 int storage_set_social_cache_json(const char *kind, const char *json);
 int storage_json_array_count_path(const char *json, const char *path);
@@ -102,7 +80,6 @@ int storage_save_session_at_for_activity(int local_date, int hour, int minute, i
                                          int topic, int activity,
                                          char *out_id, size_t out_id_size);
 int storage_replace_session(const char *id, const int *round_times, int round_count);
-int storage_rename_session_time(const char *id, int hour, int minute);
 int storage_delete_session(const char *id);
 int storage_load_session(const char *id, int *round_times, int max_rounds,
                               int *year, int *month, int *day,
@@ -130,7 +107,6 @@ char *storage_build_sync_payload_json(const char *user_id_hash,
 void storage_free_sync_payload_json(char *payload);
 int storage_apply_sync_response_json(const char *response_json);
 int storage_last_sync_changed(void);
-int storage_sync_status(StorageSyncStatus *status);
 int storage_sync_enabled(void);
 void storage_set_sync_enabled(int connected);
 int storage_sync_review_pending(void);

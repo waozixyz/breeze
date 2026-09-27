@@ -1,0 +1,526 @@
+// Dormant SQLite VFS for the native Plan 9 build. Enable PLAN9_SQLITE_VFS
+// only when linking the real SQLite engine; the default test build uses
+// sqlite3_stub.zi. Locking and sync retain the original limited semantics.
+#if #defined(PLAN9_BUILD) && #defined(PLAN9_SQLITE_VFS) {
+    #import "c_string"
+    c :: #system_library "c";
+    sqlite :: #system_library "sqlite3";
+    Plan9File :: struct {
+        methods: *Plan9IoMethods
+        descriptor: s32
+        lock: s32
+        delete_on_close: s32
+        path: [512]u8
+    }
+    Plan9Qid :: struct {
+        path: u64
+        version: u32
+        kind: u8
+    }
+    Plan9Directory :: struct {
+        kind: u16
+        device: u32
+        qid: Plan9Qid
+        mode: u32
+        access_time: u32
+        modify_time: u32
+        length: s64
+        name: *u8
+        uid: *u8
+        gid: *u8
+        muid: *u8
+    }
+    // SQLite reads callbacks from this stable, versioned native ABI. Raw
+    // address slots avoid storing Ziran closures in a C function table.
+    Plan9IoMethods :: struct {
+        version: s32
+        close: *void
+        read: *void
+        write: *void
+        truncate: *void
+        sync: *void
+        filesize: *void
+        lock: *void
+        unlock: *void
+        reserved: *void
+        control: *void
+        sector: *void
+        device: *void
+    }
+    Plan9Vfs :: struct {
+        version: s32
+        file_bytes: s32
+        max_path: s32
+        next: *void
+        name: *u8
+        app_data: *void
+        open: *void
+        delete: *void
+        access: *void
+        fullpath: *void
+        dlopen: *void
+        dlerror: *void
+        dlsym: *void
+        dlclose: *void
+        random: *void
+        sleep: *void
+        time: *void
+        last_error: *void
+        time64: *void
+    }
+    Plan9Seek :: (descriptor: s32, offset: s64, origin: s32) -> s64 #foreign c "seek";
+    Plan9Read :: (descriptor: s32, output: *u8, bytes: s32) -> s32 #foreign c "read";
+    Plan9Write :: (descriptor: s32, source: *u8, bytes: s32) -> s32 #foreign c "write";
+    Plan9Open :: (path: *u8, mode: s32) -> s32 #foreign c "open";
+    Plan9Create :: (path: *u8, mode: s32, permissions: u32) -> s32 #foreign c "create";
+    Plan9Close :: (descriptor: s32) -> s32 #foreign c "close";
+    Plan9Remove :: (path: *u8) -> s32 #foreign c "remove";
+    Plan9NullDirectory :: (directory: *Plan9Directory) #foreign c "nulldir";
+    Plan9WriteDirectory :: (descriptor: s32, directory: *Plan9Directory) -> s32 #foreign c "dirfwstat";
+    Plan9Stat :: (path: *u8) -> *void #foreign c "dirstat";
+    Plan9Free :: (memory: *void) #foreign c "free";
+    Plan9Time :: (result: *s32) -> s32 #foreign c "time";
+    Plan9ProcessId :: () -> s32 #foreign c "getpid";
+    Plan9Sleep :: (milliseconds: s32) -> s32 #foreign c "sleep";
+    Plan9RegisterVfs :: (vfs: *Plan9Vfs, make_default: s32) -> s32 #foreign sqlite "sqlite3_vfs_register";
+
+    plan9_io: Plan9IoMethods;
+    plan9_vfs: Plan9Vfs;
+    plan9_vfs_name: [8]u8;
+
+    Plan9SqliteClose :: (file: *Plan9File) -> s32 {
+        if file.descriptor >= 0 {
+            Plan9Close(file.descriptor)
+            file.descriptor = -1
+        }
+        if file.delete_on_close != 0 && file.path[0] != 0 {
+            Plan9Remove(*file.path[0])
+        }
+        return 0
+    }
+
+    Plan9SqliteRead :: (file: *Plan9File, output: *u8, amount: s32, offset: s64) -> s32 {
+        if Plan9Seek(file.descriptor, offset, 0) < 0 {
+            return 266
+        }
+        count := Plan9Read(file.descriptor, output, amount)
+        if count == amount {
+            return 0
+        }
+        if count < 0 {
+            return 266
+        }
+        while count < amount {
+            output[count] = 0
+            count += 1
+        }
+        return 522
+    }
+
+    Plan9SqliteWrite :: (file: *Plan9File, source: *u8, amount: s32, offset: s64) -> s32 {
+        if Plan9Seek(file.descriptor, offset, 0) < 0 {
+            return 778
+        }
+        written: s32 = 0
+        while written < amount {
+            count := Plan9Write(file.descriptor, *source[written], amount - written)
+            if count <= 0 {
+                return 778
+            }
+            written += count
+        }
+        return 0
+    }
+
+    Plan9SqliteTruncate :: (file: *Plan9File, size: s64) -> s32 {
+        directory: Plan9Directory
+        Plan9NullDirectory(*directory)
+        directory.length = size
+        if Plan9WriteDirectory(file.descriptor, *directory) < 0 {
+            return 1546
+        }
+        return 0
+    }
+
+    Plan9SqliteSync :: (file: *Plan9File, flags: s32) -> s32 {
+        unused file
+        unused flags
+        return 0
+    }
+
+    Plan9SqliteFileSize :: (file: *Plan9File, size: *s64) -> s32 {
+        end := Plan9Seek(file.descriptor, 0, 2)
+        if end < 0 {
+            return 1802
+        }
+        size.* = end
+        return 0
+    }
+
+    Plan9SqliteLock :: (file: *Plan9File, lock: s32) -> s32 {
+        file.lock = lock
+        return 0
+    }
+
+    Plan9SqliteUnlock :: (file: *Plan9File, lock: s32) -> s32 {
+        file.lock = lock
+        return 0
+    }
+
+    Plan9SqliteReserved :: (file: *Plan9File, reserved: *s32) -> s32 {
+        unused file
+        reserved.* = 0
+        return 0
+    }
+
+    Plan9SqliteFileControl :: (file: *Plan9File, operation: s32, argument: *void) -> s32 {
+        if operation == 1 {
+            value := cast(*s32)argument
+            value.* = file.lock
+            return 0
+        }
+        if operation == 5 || operation == 21 || operation == 22 {
+            return 0
+        }
+        return 12
+    }
+
+    Plan9SqliteSector :: (file: *Plan9File) -> s32 {
+        unused file
+        return 512
+    }
+
+    Plan9SqliteDevice :: (file: *Plan9File) -> s32 {
+        unused file
+        return 0
+    }
+
+    Plan9CopyPath :: (source: *u8, output: *u8, capacity: s32) {
+        if output == null || capacity <= 0 {
+            return
+        }
+        index: s32 = 0
+        if source != null {
+            while index + 1 < capacity && source[index] != 0 {
+                output[index] = source[index]
+                index += 1
+            }
+        }
+        output[index] = 0
+    }
+
+    Plan9AppendNumber :: (output: []u8, number: s32) {
+        position: s32 = 0
+        while position < cast(s32)output.count && output[position] != 0 {
+            position += 1
+        }
+        value := cast(s64)number
+        if value < 0 {
+            if position + 1 >= cast(s32)output.count {
+                return
+            }
+            output[position] = #char "-"
+            position += 1
+            value = -value
+        }
+        digits: [20]u8
+        count: s32 = 0
+        while true {
+            digits[count] = cast(u8)(value % 10 + 48)
+            count += 1
+            value = value / 10
+            if value == 0 {
+                break
+            }
+        }
+        while count > 0 && position + 1 < cast(s32)output.count {
+            count -= 1
+            output[position] = digits[count]
+            position += 1
+        }
+        output[position] = 0
+    }
+
+    Plan9SqliteTempName :: (output: []u8) {
+        CopyCString("/tmp/breathing-sqlite-", output)
+        Plan9AppendNumber(output, Plan9ProcessId())
+        position: s32 = 0
+        while position < cast(s32)output.count && output[position] != 0 {
+            position += 1
+        }
+        if position + 1 < cast(s32)output.count {
+            output[position] = #char "-"
+            output[position + 1] = 0
+        }
+        Plan9AppendNumber(output, Plan9Time(null))
+    }
+
+    Plan9SqliteOpen :: (vfs: *Plan9Vfs, name: *u8, file: *Plan9File,
+        flags: s32, output_flags: *s32) -> s32 {
+        unused vfs
+        file.* = .{}
+        file.descriptor = -1
+        temporary: [512]u8
+        path := name
+        if path == null || path[0] == 0 {
+            Plan9SqliteTempName(temporary[:])
+            path = *temporary[0]
+            flags = flags | 4 | 8
+        }
+        mode: s32 = 2
+        if (flags & 1) != 0 {
+            mode = 0
+        }
+        descriptor: s32 = -1
+        if (flags & 4) != 0 {
+            descriptor = Plan9Open(path, mode)
+        }
+        if descriptor < 0 && (flags & 4) != 0 {
+            descriptor = Plan9Create(path, mode, 438)
+        }
+        if descriptor < 0 && (flags & 1) == 0 {
+            descriptor = Plan9Open(path, 2)
+        }
+        if descriptor < 0 {
+            descriptor = Plan9Open(path, 0)
+        }
+        if descriptor < 0 {
+            return 14
+        }
+        file.descriptor = descriptor
+        if (flags & 8) != 0 {
+            file.delete_on_close = 1
+        }
+        Plan9CopyPath(path, *file.path[0], 512)
+        file.methods = *plan9_io
+        if output_flags != null {
+            output_flags.* = flags
+        }
+        return 0
+    }
+
+    Plan9SqliteDelete :: (vfs: *Plan9Vfs, name: *u8, sync_directory: s32) -> s32 {
+        unused vfs
+        unused sync_directory
+        if name == null {
+            return 0
+        }
+        directory := Plan9Stat(name)
+        if directory == null {
+            return 0
+        }
+        Plan9Free(directory)
+        if Plan9Remove(name) < 0 {
+            return 2570
+        }
+        return 0
+    }
+
+    Plan9SqliteAccess :: (vfs: *Plan9Vfs, name: *u8, flags: s32, output: *s32) -> s32 {
+        unused vfs
+        unused flags
+        directory := Plan9Stat(name)
+        output.* = 0
+        if directory != null {
+            output.* = 1
+            Plan9Free(directory)
+        }
+        return 0
+    }
+
+    Plan9SqliteFullPath :: (vfs: *Plan9Vfs, name: *u8, capacity: s32, output: *u8) -> s32 {
+        unused vfs
+        Plan9CopyPath(name, output, capacity)
+        return 0
+    }
+
+    Plan9SqliteDlOpen :: (vfs: *Plan9Vfs, name: *u8) -> *void {
+        unused vfs
+        unused name
+        return null
+    }
+
+    Plan9SqliteDlError :: (vfs: *Plan9Vfs, capacity: s32, message: *u8) {
+        unused vfs
+        if capacity > 0 && message != null {
+            message[0] = 0
+        }
+    }
+
+    Plan9SqliteDlSymbol :: (vfs: *Plan9Vfs, handle: *void, symbol: *u8) -> *void {
+        unused vfs
+        unused handle
+        unused symbol
+        return null
+    }
+
+    Plan9SqliteDlClose :: (vfs: *Plan9Vfs, handle: *void) {
+        unused vfs
+        unused handle
+    }
+
+    Plan9SqliteRandom :: (vfs: *Plan9Vfs, capacity: s32, output: *u8) -> s32 {
+        unused vfs
+        path: [16]u8
+        CopyCString("/dev/random", path[:])
+        descriptor := Plan9Open(*path[0], 0)
+        count: s32 = 0
+        if descriptor >= 0 {
+            count = Plan9Read(descriptor, output, capacity)
+            Plan9Close(descriptor)
+            if count < 0 {
+                count = 0
+            }
+        }
+        while count < capacity {
+            output[count] = cast(u8)(Plan9Time(null) + Plan9ProcessId() + count * 37)
+            count += 1
+        }
+        return capacity
+    }
+
+    Plan9SqliteSleep :: (vfs: *Plan9Vfs, microseconds: s32) -> s32 {
+        unused vfs
+        Plan9Sleep(microseconds / 1000)
+        return microseconds
+    }
+
+    Plan9SqliteTime64 :: (vfs: *Plan9Vfs, now: *s64) -> s32 {
+        unused vfs
+        now.* = cast(s64)Plan9Time(null) * 1000 + 210866760000000
+        return 0
+    }
+
+    Plan9SqliteTime :: (vfs: *Plan9Vfs, now: *float64) -> s32 {
+        milliseconds: s64
+        result := Plan9SqliteTime64(vfs, *milliseconds)
+        now.* = cast(float64)milliseconds / 86400000.0
+        return result
+    }
+
+    Plan9SqliteLastError :: (vfs: *Plan9Vfs, capacity: s32, message: *u8) -> s32 {
+        Plan9SqliteDlError(vfs, capacity, message)
+        return 0
+    }
+    Plan9SqliteCloseCallback :: #type (*Plan9File) -> s32 #c_call;
+    Plan9SqliteReadCallback :: #type (*Plan9File, *u8, s32, s64) -> s32 #c_call;
+    Plan9SqliteWriteCallback :: #type (*Plan9File, *u8, s32, s64) -> s32 #c_call;
+    Plan9SqliteTruncateCallback :: #type (*Plan9File, s64) -> s32 #c_call;
+    Plan9SqliteSyncCallback :: #type (*Plan9File, s32) -> s32 #c_call;
+    Plan9SqliteFileSizeCallback :: #type (*Plan9File, *s64) -> s32 #c_call;
+    Plan9SqliteLockCallback :: #type (*Plan9File, s32) -> s32 #c_call;
+    Plan9SqliteUnlockCallback :: #type (*Plan9File, s32) -> s32 #c_call;
+    Plan9SqliteReservedCallback :: #type (*Plan9File, *s32) -> s32 #c_call;
+    Plan9SqliteFileControlCallback :: #type (*Plan9File, s32, *void) -> s32 #c_call;
+    Plan9SqliteSectorCallback :: #type (*Plan9File) -> s32 #c_call;
+    Plan9SqliteDeviceCallback :: #type (*Plan9File) -> s32 #c_call;
+    Plan9SqliteOpenCallback :: #type (*Plan9Vfs, *u8, *Plan9File, s32, *s32) -> s32 #c_call;
+    Plan9SqliteDeleteCallback :: #type (*Plan9Vfs, *u8, s32) -> s32 #c_call;
+    Plan9SqliteAccessCallback :: #type (*Plan9Vfs, *u8, s32, *s32) -> s32 #c_call;
+    Plan9SqliteFullPathCallback :: #type (*Plan9Vfs, *u8, s32, *u8) -> s32 #c_call;
+    Plan9SqliteDlOpenCallback :: #type (*Plan9Vfs, *u8) -> *void #c_call;
+    Plan9SqliteDlErrorCallback :: #type (*Plan9Vfs, s32, *u8) -> void #c_call;
+    Plan9SqliteDlSymbolCallback :: #type (*Plan9Vfs, *void, *u8) -> *void #c_call;
+    Plan9SqliteDlCloseCallback :: #type (*Plan9Vfs, *void) -> void #c_call;
+    Plan9SqliteRandomCallback :: #type (*Plan9Vfs, s32, *u8) -> s32 #c_call;
+    Plan9SqliteSleepCallback :: #type (*Plan9Vfs, s32) -> s32 #c_call;
+    Plan9SqliteTimeCallback :: #type (*Plan9Vfs, *float64) -> s32 #c_call;
+    Plan9SqliteLastErrorCallback :: #type (*Plan9Vfs, s32, *u8) -> s32 #c_call;
+    Plan9SqliteTime64Callback :: #type (*Plan9Vfs, *s64) -> s32 #c_call;
+
+    #program_export
+    sqlite3_os_init :: () -> s32 {
+        plan9_io.version = 1
+        plan9_vfs.version = 2
+        // Compute native layout from pointer stride. size_of is resolved on
+        // the Ziran host and would otherwise bake a 64-bit size into 8c code.
+        files: [2]Plan9File
+        first := cast(usize)*files[0]
+        second := cast(usize)*files[1]
+        plan9_vfs.file_bytes = cast(s32)(second - first)
+        plan9_vfs.max_path = 512
+        CopyCString("plan9", plan9_vfs_name[:])
+        plan9_vfs.name = *plan9_vfs_name[0]
+        plan9_io_close: Plan9SqliteCloseCallback = Plan9SqliteClose
+        plan9_io_close_address := cast(**void)*plan9_io_close
+        plan9_io.close = plan9_io_close_address[0]
+        plan9_io_read: Plan9SqliteReadCallback = Plan9SqliteRead
+        plan9_io_read_address := cast(**void)*plan9_io_read
+        plan9_io.read = plan9_io_read_address[0]
+        plan9_io_write: Plan9SqliteWriteCallback = Plan9SqliteWrite
+        plan9_io_write_address := cast(**void)*plan9_io_write
+        plan9_io.write = plan9_io_write_address[0]
+        plan9_io_truncate: Plan9SqliteTruncateCallback = Plan9SqliteTruncate
+        plan9_io_truncate_address := cast(**void)*plan9_io_truncate
+        plan9_io.truncate = plan9_io_truncate_address[0]
+        plan9_io_sync: Plan9SqliteSyncCallback = Plan9SqliteSync
+        plan9_io_sync_address := cast(**void)*plan9_io_sync
+        plan9_io.sync = plan9_io_sync_address[0]
+        plan9_io_filesize: Plan9SqliteFileSizeCallback = Plan9SqliteFileSize
+        plan9_io_filesize_address := cast(**void)*plan9_io_filesize
+        plan9_io.filesize = plan9_io_filesize_address[0]
+        plan9_io_lock: Plan9SqliteLockCallback = Plan9SqliteLock
+        plan9_io_lock_address := cast(**void)*plan9_io_lock
+        plan9_io.lock = plan9_io_lock_address[0]
+        plan9_io_unlock: Plan9SqliteUnlockCallback = Plan9SqliteUnlock
+        plan9_io_unlock_address := cast(**void)*plan9_io_unlock
+        plan9_io.unlock = plan9_io_unlock_address[0]
+        plan9_io_reserved: Plan9SqliteReservedCallback = Plan9SqliteReserved
+        plan9_io_reserved_address := cast(**void)*plan9_io_reserved
+        plan9_io.reserved = plan9_io_reserved_address[0]
+        plan9_io_control: Plan9SqliteFileControlCallback = Plan9SqliteFileControl
+        plan9_io_control_address := cast(**void)*plan9_io_control
+        plan9_io.control = plan9_io_control_address[0]
+        plan9_io_sector: Plan9SqliteSectorCallback = Plan9SqliteSector
+        plan9_io_sector_address := cast(**void)*plan9_io_sector
+        plan9_io.sector = plan9_io_sector_address[0]
+        plan9_io_device: Plan9SqliteDeviceCallback = Plan9SqliteDevice
+        plan9_io_device_address := cast(**void)*plan9_io_device
+        plan9_io.device = plan9_io_device_address[0]
+        plan9_vfs_open: Plan9SqliteOpenCallback = Plan9SqliteOpen
+        plan9_vfs_open_address := cast(**void)*plan9_vfs_open
+        plan9_vfs.open = plan9_vfs_open_address[0]
+        plan9_vfs_delete: Plan9SqliteDeleteCallback = Plan9SqliteDelete
+        plan9_vfs_delete_address := cast(**void)*plan9_vfs_delete
+        plan9_vfs.delete = plan9_vfs_delete_address[0]
+        plan9_vfs_access: Plan9SqliteAccessCallback = Plan9SqliteAccess
+        plan9_vfs_access_address := cast(**void)*plan9_vfs_access
+        plan9_vfs.access = plan9_vfs_access_address[0]
+        plan9_vfs_fullpath: Plan9SqliteFullPathCallback = Plan9SqliteFullPath
+        plan9_vfs_fullpath_address := cast(**void)*plan9_vfs_fullpath
+        plan9_vfs.fullpath = plan9_vfs_fullpath_address[0]
+        plan9_vfs_dlopen: Plan9SqliteDlOpenCallback = Plan9SqliteDlOpen
+        plan9_vfs_dlopen_address := cast(**void)*plan9_vfs_dlopen
+        plan9_vfs.dlopen = plan9_vfs_dlopen_address[0]
+        plan9_vfs_dlerror: Plan9SqliteDlErrorCallback = Plan9SqliteDlError
+        plan9_vfs_dlerror_address := cast(**void)*plan9_vfs_dlerror
+        plan9_vfs.dlerror = plan9_vfs_dlerror_address[0]
+        plan9_vfs_dlsym: Plan9SqliteDlSymbolCallback = Plan9SqliteDlSymbol
+        plan9_vfs_dlsym_address := cast(**void)*plan9_vfs_dlsym
+        plan9_vfs.dlsym = plan9_vfs_dlsym_address[0]
+        plan9_vfs_dlclose: Plan9SqliteDlCloseCallback = Plan9SqliteDlClose
+        plan9_vfs_dlclose_address := cast(**void)*plan9_vfs_dlclose
+        plan9_vfs.dlclose = plan9_vfs_dlclose_address[0]
+        plan9_vfs_random: Plan9SqliteRandomCallback = Plan9SqliteRandom
+        plan9_vfs_random_address := cast(**void)*plan9_vfs_random
+        plan9_vfs.random = plan9_vfs_random_address[0]
+        plan9_vfs_sleep: Plan9SqliteSleepCallback = Plan9SqliteSleep
+        plan9_vfs_sleep_address := cast(**void)*plan9_vfs_sleep
+        plan9_vfs.sleep = plan9_vfs_sleep_address[0]
+        plan9_vfs_time: Plan9SqliteTimeCallback = Plan9SqliteTime
+        plan9_vfs_time_address := cast(**void)*plan9_vfs_time
+        plan9_vfs.time = plan9_vfs_time_address[0]
+        plan9_vfs_last_error: Plan9SqliteLastErrorCallback = Plan9SqliteLastError
+        plan9_vfs_last_error_address := cast(**void)*plan9_vfs_last_error
+        plan9_vfs.last_error = plan9_vfs_last_error_address[0]
+        plan9_vfs_time64: Plan9SqliteTime64Callback = Plan9SqliteTime64
+        plan9_vfs_time64_address := cast(**void)*plan9_vfs_time64
+        plan9_vfs.time64 = plan9_vfs_time64_address[0]
+        return Plan9RegisterVfs(*plan9_vfs, 1)
+    }
+
+    #program_export
+    sqlite3_os_end :: () -> s32 {
+        return 0
+    }
+}

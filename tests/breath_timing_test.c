@@ -1,5 +1,5 @@
 #include "core/types.h"
-#include "core/breath_engine.h"
+#include "core/breath_timing.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -7,7 +7,7 @@
 /*
  * Breath-engine timing test.
  *
- * Drives breath_session_step() tick by tick (60 ticks == 1 second) through complete Wim
+ * Drives BreathSessionStep() tick by tick (60 ticks == 1 second) through complete Wim
  * Hof sessions and asserts the between-round countdown ("3-2-1") honors the
  * round-0 special case and the user's configured pause for later rounds. This
  * is the area that regressed when the auto-play and manual round-advance paths
@@ -15,9 +15,7 @@
  * restored on the auto-play path, so every round counted down from 3 and the
  * configured "Pause after round" setting was ignored.
  *
- * Pure engine: no raylib. The k2c transpiler emits PushInspectSource /
- * PopInspectSource debug markers into every generated function, so we provide
- * no-op stubs (same pattern as app_bottom_nav_test.c).
+ * Pure engine: no raylib or platform host.
  */
 
 static int failures = 0;
@@ -29,19 +27,6 @@ expect(int condition, const char *message)
         fprintf(stderr, "FAIL %s\n", message);
         failures++;
     }
-}
-
-/* k2c-emitted debug-source markers. */
-void
-PushInspectSource(const char *path, int line)
-{
-    (void)path;
-    (void)line;
-}
-
-void
-PopInspectSource(void)
-{
 }
 
 /* count_value is #private in the engine; decode locally like the app does. */
@@ -60,7 +45,7 @@ run_while_phase(BreathSession *l, int phase, int max_steps)
 {
     int steps = 0;
     while (l->phase == phase && steps < max_steps && !l->completed) {
-        breath_session_step(l);
+        *l = BreathSessionStep(*l);
         steps++;
     }
     return steps;
@@ -72,7 +57,7 @@ measure_starting_ticks(BreathSession *l)
 {
     int ticks = 0;
     while (l->phase == BreathPhaseStarting && ticks < 4000 && !l->completed) {
-        breath_session_step(l);
+        *l = BreathSessionStep(*l);
         ticks++;
     }
     return ticks;
@@ -80,7 +65,7 @@ measure_starting_ticks(BreathSession *l)
 
 /*
  * Run one round from Starting through to the start of the next round's
- * Starting (or completion). Holds are ended immediately via end_hold so
+ * Starting (or completion). Holds are ended immediately via BreathEndHold so
  * the session progresses without a user tap.
  */
 static void
@@ -92,7 +77,7 @@ run_one_round(BreathSession *l)
     run_while_phase(l, BreathPhaseBreathe, 200000);
     /* End the hold immediately (simulates the breath tap). */
     if (l->phase == BreathPhaseHold) {
-        end_hold(l);
+        *l = BreathEndHold(*l);
     }
     /* Recover -> Next -> Starting (or completion). */
     run_while_phase(l, BreathPhaseRecover, 200000);
@@ -103,7 +88,7 @@ static void
 test_round_zero_uses_three_second_countdown(void)
 {
     BreathSession l;
-    breath_session_init(&l);
+    l = BreathSessionInit();
     l.pause_seconds = 15;          /* a configured pause that must NOT apply to round 0 */
     l.breath_half_ticks = 120;
     l.max_rounds = 3;
@@ -115,9 +100,9 @@ test_round_zero_uses_three_second_countdown(void)
     expect(l.phase == BreathPhaseBreathe,
            "round 0 should transition to Breathe after 3s");
 
-    /* effective_pause_seconds must report 3 for round 0. */
+    /* BreathPauseSeconds must report 3 for round 0. */
     l.round = 0;
-    expect(effective_pause_seconds(&l) == 3,
+    expect(BreathPauseSeconds(l) == 3,
            "effective pause for round 0 should be 3");
 }
 
@@ -125,7 +110,7 @@ static void
 test_later_rounds_use_configured_pause(void)
 {
     BreathSession l;
-    breath_session_init(&l);
+    l = BreathSessionInit();
     l.pause_seconds = 15;          /* configured "Pause after round" */
     l.breath_half_ticks = 120;
     l.max_rounds = 3;
@@ -137,7 +122,7 @@ test_later_rounds_use_configured_pause(void)
     expect(l.round == 1, "should advance to round 1 after round 0");
 
     /* The bug: round 1 used to count down from 3 (180 ticks) instead of 15. */
-    expect(effective_pause_seconds(&l) == 15,
+    expect(BreathPauseSeconds(l) == 15,
            "effective pause for round 1 should be configured (15)");
     int ticks = measure_starting_ticks(&l);
     expect(ticks == 15 * 60,
@@ -148,7 +133,7 @@ static void
 test_configured_pause_zero_skips_countdown(void)
 {
     BreathSession l;
-    breath_session_init(&l);
+    l = BreathSessionInit();
     l.pause_seconds = 0;           /* no pause between rounds configured */
     l.breath_half_ticks = 120;
     l.max_rounds = 2;
@@ -158,7 +143,7 @@ test_configured_pause_zero_skips_countdown(void)
     run_one_round(&l);
     expect(l.round == 1, "should advance to round 1");
 
-    expect(effective_pause_seconds(&l) == 0,
+    expect(BreathPauseSeconds(l) == 0,
            "effective pause for round 1 should be 0 when configured 0");
     /* With pause 0, Starting must not linger (transitions within a couple ticks). */
     int ticks = measure_starting_ticks(&l);
@@ -172,7 +157,7 @@ test_results_populated_each_round(void)
     BreathSession l;
     int i;
 
-    breath_session_init(&l);
+    l = BreathSessionInit();
     l.pause_seconds = 2;
     l.breath_half_ticks = 120;
     l.max_rounds = 3;
@@ -195,7 +180,7 @@ static void
 test_final_round_completes(void)
 {
     BreathSession l;
-    breath_session_init(&l);
+    l = BreathSessionInit();
     l.pause_seconds = 2;
     l.breath_half_ticks = 120;
     l.max_rounds = 2;
@@ -208,20 +193,20 @@ test_final_round_completes(void)
     run_one_round(&l);                 /* -> final round completes */
     expect(l.completed,
            "session should be marked complete after final round");
-    expect(just_completed(&l),
-           "just_completed should report true after final round");
+    expect(l.completed,
+           "session should report completion after final round");
 
     /* Once complete, stepping must be a no-op (no phantom round). */
     int phase_before = l.phase;
     int round_before = l.round;
-    breath_session_step(&l);
+    l = BreathSessionStep(l);
     expect(l.phase == phase_before && l.round == round_before,
            "completed engine must not advance on further steps");
 
     /* Clearing completion resets the flag (the app layer does this on save). */
-    clear_completed(&l);
-    expect(!just_completed(&l),
-           "clear_completed should clear the flag");
+    l = BreathClearCompleted(l);
+    expect(!l.completed,
+           "BreathClearCompleted should clear the flag");
 }
 
 int

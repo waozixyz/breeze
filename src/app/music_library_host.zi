@@ -1,0 +1,195 @@
+// File effects for the app's custom audio library.
+#import "byte_text_linux"
+
+c :: #system_library "c";
+HostAudioOpen :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+HostAudioClose :: (file: *void) -> s32 #foreign c "fclose";
+HostAudioRead :: (buffer: *u8, size: usize, count: usize,
+    file: *void) -> usize #foreign c "fread";
+HostAudioWrite :: (buffer: *u8, size: usize, count: usize,
+    file: *void) -> usize #foreign c "fwrite";
+HostAudioError :: (file: *void) -> s32 #foreign c "ferror";
+HostAudioFlush :: (file: *void) -> s32 #foreign c "fflush";
+HostAudioRemove :: (path: *u8) -> s32 #foreign c "remove";
+HostAudioCompare :: (left: *u8, right: *u8) -> s32 #foreign c "strcmp";
+
+#if #defined(_WIN32) {
+    HostAudioAttributes :: (path: *u8) -> u32 #foreign c "GetFileAttributesA";
+    HostAudioMkdir :: (path: *u8) -> s32 #foreign c "_mkdir";
+} else {
+    HostAudioAccess :: (path: *u8, mode: s32) -> s32 #foreign c "access";
+    HostAudioOpenDir :: (path: *u8) -> *void #foreign c "opendir";
+    HostAudioCloseDir :: (directory: *void) -> s32 #foreign c "closedir";
+    HostAudioMkdir :: (path: *u8, mode: u32) -> s32 #foreign c "mkdir";
+}
+
+AudioPath :: (value: []u8) -> *u8 {
+    if value.count < 2 || value.count > 8192 {
+        return null
+    }
+    data := *value[0]
+    if data == null {
+        return null
+    }
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        if value[index] == cast(u8)0 {
+            if index > 0 {
+                return data
+            }
+            return null
+        }
+        index += 1
+    }
+    return null
+}
+
+AudioIsDirectory :: (path: *u8) -> bool {
+    #if #defined(_WIN32) {
+        attributes := HostAudioAttributes(path)
+        return attributes != cast(u32)4294967295 &&
+            (attributes & cast(u32)16) != 0
+    }
+    #if !#defined(_WIN32) {
+        directory := HostAudioOpenDir(path)
+        if directory == null {
+            return false
+        }
+        HostAudioCloseDir(directory)
+        return true
+    }
+    return false
+}
+
+#program_export
+app_audio_cstring_pointer :: (bytes: *u8, capacity: s32) -> string {
+    if bytes == null || capacity <= 0 || capacity > 8192 {
+        return ""
+    }
+    index: s32 = 0
+    while index < capacity {
+        if bytes[index] == cast(u8)0 {
+            return TextFromBytes(BytesFromPointer(bytes, cast(u64)index))
+        }
+        index += 1
+    }
+    return ""
+}
+
+#program_export
+app_audio_cstring_view :: (bytes: []u8) -> string {
+    if bytes.count <= 0 || bytes.count > 2147483647 {
+        return ""
+    }
+    return app_audio_cstring_pointer(*bytes[0], cast(s32)bytes.count)
+}
+
+#program_export
+app_audio_file_readable :: (path: []u8) -> bool {
+    name := AudioPath(path)
+    if name == null {
+        return false
+    }
+    mode: [3]u8 = .[114, 98, 0]
+    file := HostAudioOpen(name, *mode[0])
+    if file == null {
+        return false
+    }
+    HostAudioClose(file)
+    return true
+}
+
+#program_export
+app_audio_file_exists :: (path: []u8) -> bool {
+    name := AudioPath(path)
+    if name == null {
+        return false
+    }
+    #if #defined(_WIN32) {
+        return HostAudioAttributes(name) != cast(u32)4294967295
+    }
+    #if !#defined(_WIN32) {
+        return HostAudioAccess(name, 0) == 0
+    }
+    return false
+}
+
+#program_export
+app_audio_ensure_directory :: (path: []u8) -> bool {
+    name := AudioPath(path)
+    if name == null {
+        return false
+    }
+    if AudioIsDirectory(name) {
+        return true
+    }
+    #if #defined(_WIN32) {
+        if HostAudioMkdir(name) == 0 {
+            return true
+        }
+    }
+    #if !#defined(_WIN32) {
+        if HostAudioMkdir(name, cast(u32)511) == 0 {
+            return true
+        }
+    }
+    return AudioIsDirectory(name)
+}
+
+#program_export
+app_audio_copy_file :: (source: []u8, destination: []u8) -> bool {
+    from := AudioPath(source)
+    to := AudioPath(destination)
+    if from == null || to == null || HostAudioCompare(from, to) == 0 {
+        return false
+    }
+    read_mode: [3]u8 = .[114, 98, 0]
+    write_mode: [3]u8 = .[119, 98, 0]
+    input := HostAudioOpen(from, *read_mode[0])
+    if input == null {
+        return false
+    }
+    output := HostAudioOpen(to, *write_mode[0])
+    if output == null {
+        HostAudioClose(input)
+        return false
+    }
+    buffer: [16384]u8
+    ok := true
+    while true {
+        count := HostAudioRead(*buffer[0], cast(usize)1,
+            cast(usize)16384, input)
+        if count == 0 {
+            break
+        }
+        if HostAudioWrite(*buffer[0], cast(usize)1, count, output) != count {
+            ok = false
+            break
+        }
+    }
+    if HostAudioError(input) != 0 || HostAudioFlush(output) != 0 {
+        ok = false
+    }
+    if HostAudioClose(output) != 0 {
+        ok = false
+    }
+    HostAudioClose(input)
+    if !ok {
+        HostAudioRemove(to)
+    }
+    return ok
+}
+
+#program_export
+app_audio_delete_file :: (path: []u8) -> bool {
+    name := AudioPath(path)
+    return name != null && HostAudioRemove(name) == 0
+}
+
+#program_export
+app_audio_local_assets :: () -> bool {
+    #if #defined(DEBUG_LOCAL_ASSETS) {
+        return true
+    }
+    return false
+}

@@ -1,0 +1,1330 @@
+c :: #system_library "c";
+PI :: 3.14159265358979f;
+WHM_LOG_INFO :: 3;
+WHM_LOG_WARNING :: 4;
+practice_draw_active_breathing :: (app: *InnerBreeze, cx: s32, cy: s32) #foreign c;
+practice_update_active_breathing :: (app: *InnerBreeze, cx: s32, cy: s32, hover: *s32) #foreign c;
+app_play_bell_cue :: (app: *InnerBreeze, volume: float32) #foreign c;
+app_play_breath_cue :: (app: *InnerBreeze, direction: s32) #foreign c;
+app_switch_screen :: (app: *InnerBreeze, screen: s32) #foreign c;
+app_init :: (app: *void) #foreign c;
+app_close_modal :: (app: *InnerBreeze) #foreign c;
+app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32, save_message: string, discard_message: string) -> SessionExitModalResult #foreign c;
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
+TraceLog :: (level: s32, message: *u8, args: ..any) #foreign c "TraceLog";
+sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c;
+practice_update_session_sounds :: (app: *InnerBreeze) #foreign c;
+practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c;
+practice_active_background_stop :: (app: *InnerBreeze) #foreign c;
+clampi :: (value: s32, min_value: s32, max_value: s32) -> s32 {
+    if value < min_value {
+        return min_value
+    }
+    if value > max_value {
+        return max_value
+    }
+    return value
+}
+sinf :: (v: float32) -> float32 #foreign c;
+cosf :: (v: float32) -> float32 #foreign c;
+fmaxf :: (a: float32, b: float32) -> float32 #foreign c;
+GetFrameTime :: () -> float32 #foreign c;
+IsMouseButtonReleased :: (button: s32) -> bool #foreign c;
+MOUSE_BUTTON_LEFT :: 0;
+GetTime :: () -> float64 #foreign c;
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../core/types.zi";
+#import, file "../../core/breath_timing.zi";
+#import "layout"
+#import "layout_widget"
+#import "tree"
+#import, file "../../app/app_notifications.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../storage/data.zi";
+
+
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/practice_title_bar.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/locale.zi";
+
+
+#import, file "../meditation/meditation_music.zi";
+#import, file "../practice_audio_controls.zi";
+#import, file "../session_results.zi";
+#import "control_props"
+#import "text_align"
+#import "text_props"
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/draw.zi";
+#import, file "../../app/current_app.zi";
+#import "button_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "button_props"
+#import "toolbar_props"
+
+
+
+
+using SessionExitModalResult;
+using ModalType;
+using ExerciseType;
+using TextAlign;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+ANDROID :: #defined(ANDROID_BUILD)
+#if ANDROID {
+    #import, file "../../platform/android/android_wakelock.zi";
+}
+
+whm_log :: (level: s32, message: string) {
+    format: [3]u8 = .[37, 115, 0]
+    buffer: [256]u8
+    if AppCopyText(message, buffer[:]) {
+        TraceLog(level, *format[0], *buffer[0])
+    }
+}
+
+session :: (app: *InnerBreeze) {
+    root: ColumnProps
+    root.key = KeyHash("session/root")
+    Screen(CurrentApp().ui.session, root)
+    hover: s32 = 0
+    practice_draw_active_breathing(app, app.ui.view_width / 2, app.ui.view_height / 2)
+    practice_update_active_breathing(app, app.ui.view_width / 2, app.ui.view_height / 2, *hover)
+    End(CurrentApp().ui.session)
+}
+
+whm_background_remainder_ms: s32 = 0;
+whm_last_notification_text: [96] u8;
+text_color_for_background :: (background: Color) -> Color {
+    luma: s32 = cast(s32)background.r * 299 + cast(s32)background.g * 587 + cast(s32)background.b * 114
+    if luma >= 128000 {
+        return Color.{.r = 0, .g = 0, .b = 0, .a = 255}
+    }
+    return Color.{.r = 255, .g = 255, .b = 255, .a = 255}
+}
+
+set_circle_bounds :: (breathing: *BreathSession, rmin: s32, rmax: s32) {
+    old_rmin: s32
+    old_rmax: s32
+    old_span: s32
+    new_span: s32
+
+    if breathing == null {
+        return
+    }
+
+    if rmin < 8 {
+        rmin = 8
+    }
+    if rmax < rmin + 8 {
+        rmax = rmin + 8
+    }
+
+    old_rmin = breathing.rmin
+    old_rmax = breathing.rmax
+    old_span = old_rmax - old_rmin
+    new_span = rmax - rmin
+
+    if old_span > 0 {
+        t: float32 = cast(float32)(breathing.r - old_rmin) / cast(float32)old_span
+
+        if t < 0.0f {
+            t = 0.0f
+        }
+        if t > 1.0f {
+            t = 1.0f
+        }
+
+        breathing.r = rmin + cast(s32)(t * cast(float32)new_span)
+    } else {
+        breathing.r = rmin
+    }
+
+    breathing.rmin = rmin
+    breathing.rmax = rmax
+    if breathing.r < rmin {
+        breathing.r = rmin
+    }
+    if breathing.r > rmax {
+        breathing.r = rmax
+    }
+}
+
+session_update_circle_bounds_for_view :: (app: *InnerBreeze,
+    breathing: *BreathSession, top_reserve: s32, bottom_reserve: s32) {
+    if app == null || breathing == null {
+        return
+    }
+    available_w: s32 = app.ui.view_width - CIRCLE_SIDE_PAD * 2
+    available_h: s32 = app.ui.view_height - top_reserve - bottom_reserve - CIRCLE_SIDE_PAD * 2
+    rmax: s32
+    rmin: s32
+
+    if available_w < 0 {
+        available_w = 0
+    }
+    if available_h < 0 {
+        available_h = 0
+    }
+
+    rmax = available_w / 2
+    if available_h / 2 < rmax {
+        rmax = available_h / 2
+    }
+    if rmax < 24 {
+        rmax = 24
+    }
+
+    rmin = rmax / 2
+    if rmin < 16 {
+        rmin = 16
+    }
+    if rmin > rmax - 8 {
+        rmin = rmax - 8
+    }
+    set_circle_bounds(breathing, rmin, rmax)
+}
+
+#program_export
+update_preview_bounds :: (breathing: *BreathSession, content_w: s32, content_h: s32) {
+    span: s32 = content_w
+    rmax: s32
+    rmin: s32
+
+    if content_h > 0 && content_h < span {
+        span = content_h
+    }
+
+    rmax = span / 2
+    if rmax < AppScale(60) {
+        rmax = AppScale(60)
+    }
+    if rmax > AppScale(120) {
+        rmax = AppScale(120)
+    }
+    rmin = rmax / 2
+    if rmin < AppScale(24) {
+        rmin = AppScale(24)
+    }
+    if rmin > rmax - AppScale(10) {
+        rmin = rmax - AppScale(10)
+    }
+    set_circle_bounds(breathing, rmin, rmax)
+}
+
+session_reset_round_breathe :: (breathing: *BreathSession) {
+    breathing.phase = BreathPhaseBreathe
+    breathing.dir = 0
+    breathing.r = breathing.rmin
+    breathing.breath_frame = 0
+    breathing.breathtick = 0
+    breathing.sectick = 0
+    breathing.halftick = 0
+    breathing.* = BreathResetCount(breathing.*)
+}
+
+reset_round_start :: (breathing: *BreathSession) {
+    session_reset_round_breathe(breathing)
+    if breathing.pause_seconds > 0 {
+        breathing.phase = BreathPhaseStarting
+    }
+}
+
+remember_sound_state :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    if app.breathing.screen != ScreenSession  || app.breathing.phase != BreathPhaseHold {
+        app.retention_marker_last_bucket = 0
+    }
+    app.sound_last_screen = app.breathing.screen
+    app.sound_last_phase = app.breathing.phase
+    app.sound_last_dir = app.breathing.dir
+    app.sound_last_count[0] = app.breathing.count[0]
+    app.sound_last_count[1] = app.breathing.count[1]
+    app.sound_last_count[2] = app.breathing.count[2]
+    app.sound_last_count[3] = 0
+}
+
+update_retention_marker :: (app: *InnerBreeze, phase_changed: s32) {
+    seconds: s32
+    bucket: s32
+
+    if app == null {
+        return
+    }
+    if app.retention_marker_enabled == 0  || app.breathing.phase != BreathPhaseHold {
+        app.retention_marker_last_bucket = 0
+        return
+    }
+    if phase_changed != 0 {
+        app.retention_marker_last_bucket = 0
+    }
+
+    seconds = BreathDigitsRead(app.breathing.count[:])
+    bucket = seconds / 30
+    if bucket <= 0 || bucket <= app.retention_marker_last_bucket {
+        return
+    }
+
+    app.retention_marker_last_bucket = bucket
+    app_play_bell_cue(app, 0.45f)
+}
+
+FormatLocaleCount :: (out: []u8, key: string, count: s32) {
+    FormatNumberTemplate(LocaleText(key), count, out)
+}
+
+FormatLocaleText :: (out: []u8, key: string) {
+    AppCopyText(LocaleText(key), out)
+}
+
+same_notification_text :: (left: []u8, right: []u8) -> bool {
+    index: s32 = 0
+    while index < cast(s32)left.count && index < cast(s32)right.count {
+        if left[index] != right[index] {
+            return false
+        }
+        if left[index] == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+session_update_notification :: (app: *InnerBreeze) {
+    text: [96] u8
+    count: s32
+    notification_pause: s32
+
+    if app == null {
+        return
+    }
+    text[0] = cast(u8)0
+
+    if app.breathing.screen == ScreenResults {
+        FormatLocaleText(text[:], "notification_results")
+    } else if app.breathing.screen == ScreenSession {
+        count = BreathDigitsRead(app.breathing.count[:])
+        if app.breathing.phase == BreathPhaseBreathe {
+            FormatLocaleCount(text[:], "notification_breathing_count", count)
+        } else if app.breathing.phase == BreathPhaseHold {
+            FormatLocaleCount(text[:], "notification_hold_seconds", count)
+        } else if app.breathing.phase == BreathPhaseRecover {
+            FormatLocaleCount(text[:], "notification_breath_in_seconds", count)
+        } else     if app.breathing.phase == BreathPhaseStarting {
+            notification_pause = BreathPauseSeconds(app.breathing)
+            pause_seconds: s32 = ifx (notification_pause > 0) then (notification_pause - app.breathing.sectick / 60) else (0)
+            FormatLocaleCount(text[:], "notification_starting_seconds", pause_seconds)
+        } else if app.breathing.phase == BreathPhaseNext {
+        }
+    } else {
+        return
+    }
+
+    if same_notification_text(text[:], whm_last_notification_text[:]) {
+        return
+    }
+
+    AppCopyText(AppTextFromCString(*text[0], 96),
+        whm_last_notification_text[:])
+    #if ANDROID {
+        android_wakelock_update_session_notification(*text[0])
+    }
+}
+
+update_session_sounds :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    if app.breathing.screen != ScreenSession ||
+    (app.session_paused != 0 &&
+        !(app.backgrounded != 0 && app.breathing.play_in_background != 0)) {
+        remember_sound_state(app)
+        return
+    }
+
+    screen_changed := app.sound_last_screen != ScreenSession
+    phase_changed := app.sound_last_phase != app.breathing.phase
+    dir_changed := app.sound_last_dir != app.breathing.dir
+    count_changed := !(app.sound_last_count[0] == app.breathing.count[0] &&
+        app.sound_last_count[1] == app.breathing.count[1] &&
+        app.sound_last_count[2] == app.breathing.count[2])
+
+    if app.breathing.phase == BreathPhaseBreathe {
+        if screen_changed || phase_changed || dir_changed {
+            app_play_breath_cue(app, app.breathing.dir)
+        }
+        if count_changed {
+            count_value: s32 = BreathDigitsRead(app.breathing.count[:])
+            maxbreaths_value: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
+            if count_value == maxbreaths_value - 1 {
+                app_play_bell_cue(app, 0.8f)
+            }
+        }
+    } else if phase_changed {
+        if app.breathing.phase == BreathPhaseNext && app.sound_last_phase == BreathPhaseRecover {
+            app_play_breath_cue(app, 1)
+        }
+    }
+
+    update_retention_marker(app, ifx (phase_changed) then (1) else (0))
+    remember_sound_state(app)
+}
+
+session_background_start :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    whm_background_remainder_ms = 0
+    whm_last_notification_text[0] = cast(u8)0
+    remember_sound_state(app)
+}
+
+session_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
+    elapsed_total: s32
+    frame_count: s32
+
+    if app == null || elapsed_ms <= 0 {
+        return
+    }
+    if app.breathing.screen != ScreenSession || app.session_paused != 0 {
+        return
+    }
+
+    elapsed_total = elapsed_ms + whm_background_remainder_ms
+    if elapsed_total > 5 * 60 * 1000 {
+        elapsed_total = 5 * 60 * 1000
+    }
+
+    frame_count = (elapsed_total * 60) / 1000
+    whm_background_remainder_ms = elapsed_total - (frame_count * 1000) / 60
+
+    {
+        i: s32 = 0
+        while i < frame_count && app.breathing.screen == ScreenSession {
+            app.breathing = BreathSessionStep(app.breathing)
+            if app.breathing.completed != 0 {
+                session_complete(app)
+                break
+            }
+            practice_update_session_sounds(app)
+            #if ANDROID {
+                session_update_notification(app)
+            }
+            i += 1
+        }
+    }
+}
+
+#program_export
+session_start :: (app: *InnerBreeze) {
+    speed: s32 = app.breathing.speed_level
+    max_rounds: s32 = app.breathing.max_rounds
+    max_breaths: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
+    pause_seconds: s32 = app.breathing.pause_seconds
+    progressive_speed: s32 = app.breathing.progressive_speed
+    progressive_start_speed: s32 = app.breathing.progressive_start_speed
+    play_in_background: s32 = app.breathing.play_in_background
+
+    app.breathing = BreathSessionInit()
+    app.breathing.progressive_speed = progressive_speed
+    app.breathing.progressive_start_speed = progressive_start_speed
+    app.breathing.play_in_background = play_in_background
+    apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
+    session_update_circle_bounds_for_view(app, *app.breathing,
+        AppTitleBarHeight(), AppScale(56) + 80)
+    app_switch_screen(app, ScreenSession)
+    app.session_paused = 0
+    app.results_saved = 0
+    app.results_path[0] = cast(u8)0
+    app.retention_marker_last_bucket = 0
+    remember_sound_state(app)
+
+    #if ANDROID {
+        android_keep_screen_on()
+    }
+    whm_log(WHM_LOG_INFO, "APP: Starting session")
+    meditation_music_start_session(app)
+    practice_background_start(app, EXERCISE_WIM_HOF)
+    #if ANDROID {
+        whm_last_notification_text[0] = cast(u8)0
+        session_update_notification(app)
+    }
+}
+
+collect_result_rounds :: (app: *InnerBreeze, round_times: *s32, max_rounds: s32) -> s32 {
+    rounds: s32
+    count: s32 = 0
+
+    if app == null || round_times == null || max_rounds <= 0 {
+        return 0
+    }
+
+    rounds = app.breathing.round + 1
+    if rounds < 1 {
+        rounds = 1
+    }
+    if rounds > app.breathing.max_rounds {
+        rounds = app.breathing.max_rounds
+    }
+    if rounds > max_rounds {
+        rounds = max_rounds
+    }
+
+    {
+        i: s32 = 0
+        while i < rounds {
+            seconds: s32 = BreathDigitsRead(app.breathing.results[i][:])
+            if seconds > 0 {
+                round_times[count] = seconds
+                count += 1
+            }
+            i += 1
+        }
+    }
+
+    return count
+}
+
+session_ensure_results_saved :: (app: *InnerBreeze) -> s32 {
+    round_times: [MaxRounds] s32
+    rounds: s32
+
+    if app == null {
+        return 0
+    }
+    if app.results_saved != 0 {
+        return 1
+    }
+
+    rounds = collect_result_rounds(app, *round_times[0], MaxRounds)
+    if rounds <= 0 {
+        return 0
+    }
+
+    if data_save_session_path_for_activity(*round_times[0], rounds,
+        0,
+        app.exercise_type,
+        *app.results_path[0], size_of(type_of(app.results_path))) != 0 {
+        app.results_saved = 1
+        sync_habits_for_activity(app, app.exercise_type)
+        app_auto_sync(app)
+        whm_log(WHM_LOG_INFO, "APP: session saved successfully")
+        return 1
+    }
+
+    whm_log(WHM_LOG_WARNING, "APP: session save failed")
+    return 0
+}
+
+session_discard_saved_results :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    if app.results_saved != 0 && app.results_path[0] != cast(u8)0 {
+        if data_discard_session(AppTextFromCString(*app.results_path[0],
+            FS_PATH_MAX)) != 0 {
+            app.results_saved = 0
+            app.results_path[0] = cast(u8)0
+        }
+    }
+}
+
+session_has_completed_rounds :: (app: *InnerBreeze) -> s32 {
+    round_times: [MaxRounds] s32
+    return ifx (collect_result_rounds(app, *round_times[0],
+        MaxRounds) > 0) then (1) else (0)
+}
+
+finish_hold :: (app: *InnerBreeze) {
+    app.breathing = BreathEndHold(app.breathing)
+    app_play_breath_cue(app, 0)
+}
+
+finish_round :: (app: *InnerBreeze) {
+    app.breathing.breathtick = 0
+    app.breathing.sectick = 0
+    app.breathing = BreathResetCount(app.breathing)
+
+    if app.breathing.round < app.breathing.max_rounds - 1 {
+        app.breathing.round += 1
+        reset_round_start(*app.breathing)
+    } else {
+        app.breathing = BreathClearCompleted(app.breathing)
+        session_complete(app)
+    }
+}
+
+session_complete :: (app: *InnerBreeze) {
+    if session_ensure_results_saved(app) != 0 {
+        round_times: [MaxRounds] s32
+        rounds := collect_result_rounds(app, *round_times[0], MaxRounds)
+        meditation_music_stop(app)
+        #if ANDROID {
+            android_allow_screen_off()
+            practice_active_background_stop(app)
+        }
+        send_session_complete(app)
+        app_prepare_session_results(app, EXERCISE_WIM_HOF, 0, 0, null,
+            *round_times[0], rounds, *app.results_path[0])
+        app_switch_screen(app, ScreenResults)
+    } else {
+        app_init(cast(*void)app)
+    }
+}
+
+clear_round_results_from :: (app: *InnerBreeze, first_round: s32) {
+    if app == null {
+        return
+    }
+
+    if first_round < 0 {
+        first_round = 0
+    }
+    if first_round >= MaxRounds {
+        return
+    }
+
+    app.breathing = BreathClearResultsFrom(app.breathing, first_round)
+    app.results_saved = 0
+    app.results_path[0] = cast(u8)0
+}
+
+session_round_has_starting_step :: (app: *InnerBreeze) -> s32 {
+    if app == null {
+        return 0
+    }
+
+    return ifx (app.breathing.round == 0 ||
+        app.breathing.pause_seconds > 0) then (1) else (0)
+}
+
+session_enter_starting_step :: (app: *InnerBreeze) {
+    app.breathing.phase = BreathPhaseStarting
+    app.breathing.dir = 0
+    app.breathing.r = app.breathing.rmin
+    app.breathing.breath_frame = 0
+    app.breathing.breathtick = 0
+    app.breathing.sectick = 0
+    app.breathing.halftick = 0
+    app.breathing = BreathResetCount(app.breathing)
+}
+
+session_enter_previous_round_last_step :: (app: *InnerBreeze) {
+    if app.breathing.round <= 0 {
+        return
+    }
+
+    clear_round_results_from(app, app.breathing.round)
+    app.breathing.round -= 1
+    app.breathing.phase = BreathPhaseNext
+    app.breathing.dir = 0
+    app.breathing.r = app.breathing.rmax
+    app.breathing.breath_frame = 0
+    app.breathing.breathtick = 0
+    app.breathing.sectick = 0
+    app.breathing.halftick = 0
+    app.breathing = BreathResetCount(app.breathing)
+}
+
+session_step_back :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+
+    if app.breathing.phase == BreathPhaseStarting {
+        if app.breathing.round > 0 {
+            session_enter_previous_round_last_step(app)
+        }
+        else {
+            session_enter_starting_step(app)
+        }
+    } else if app.breathing.phase == BreathPhaseBreathe {
+        clear_round_results_from(app, app.breathing.round)
+        if session_round_has_starting_step(app) != 0 {
+            session_enter_starting_step(app)
+        }
+        else if app.breathing.round > 0 {
+            session_enter_previous_round_last_step(app)
+        }
+        else {
+            session_reset_round_breathe(*app.breathing)
+        }
+    } else if app.breathing.phase == BreathPhaseHold {
+        clear_round_results_from(app, app.breathing.round)
+        session_reset_round_breathe(*app.breathing)
+    } else if app.breathing.phase == BreathPhaseRecover {
+        app.breathing.phase = BreathPhaseHold
+        app.breathing.dir = 0
+        app.breathing.r = app.breathing.rmin
+        app.breathing.breath_frame = 0
+        app.breathing.breathtick = 0
+        app.breathing.sectick = 0
+        app.breathing.halftick = 0
+        app.breathing = BreathRestoreCount(app.breathing,
+            app.breathing.round)
+        clear_round_results_from(app, app.breathing.round)
+    } else if app.breathing.phase == BreathPhaseNext {
+        app.breathing.phase = BreathPhaseRecover
+        app.breathing.dir = 0
+        app.breathing.r = app.breathing.rmax
+        app.breathing.breath_frame = 0
+        app.breathing.breathtick = 0
+        app.breathing.sectick = 0
+        app.breathing.halftick = 0
+        BreathDigitsWrite(app.breathing.count[:], 14)
+    }
+
+    remember_sound_state(app)
+}
+
+session_step_forward :: (app: *InnerBreeze) {
+    if app.breathing.phase == BreathPhaseStarting {
+        session_reset_round_breathe(*app.breathing)
+    } else if app.breathing.phase == BreathPhaseBreathe {
+        app.breathing.phase = BreathPhaseHold
+        app.breathing.r = app.breathing.rmin
+        app.breathing.breath_frame = 0
+        app.breathing.breathtick = 0
+        app.breathing.sectick = 0
+        app.breathing = BreathResetCount(app.breathing)
+    } else if app.breathing.phase == BreathPhaseHold {
+        finish_hold(app)
+    } else if app.breathing.phase == BreathPhaseRecover {
+        app.breathing.phase = BreathPhaseNext
+        app.breathing.breath_frame = 0
+        app.breathing.sectick = 0
+        app.breathing = BreathResetCount(app.breathing)
+    } else if app.breathing.phase == BreathPhaseNext {
+        finish_round(app)
+    }
+}
+
+draw_session_counter :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    text: [16] u8
+    display_count: s32 = 0
+    display_text: string
+    font: s32
+    max_w: s32
+    radius: s32
+
+    if app.breathing.phase == BreathPhaseStarting {
+        total_seconds: s32 = BreathPauseSeconds(app.breathing)
+        remaining: s32
+
+        if total_seconds <= 0 {
+            remaining = 0
+        }
+        else {
+            remaining = total_seconds - app.breathing.sectick / 60
+            if remaining < 1 {
+                remaining = 1
+            }
+        }
+        display_count = remaining
+    } else if app.breathing.phase == BreathPhaseRecover {
+        if app.breathing.r < app.breathing.rmax {
+            display_count = 0
+        } else {
+            count := BreathDigitsRead(app.breathing.count[:])
+            if count < 15 {
+                display_count = 15 - count
+            } else {
+                display_count = 0
+            }
+        }
+    } else if app.breathing.phase == BreathPhaseNext {
+        display_count = 0
+    } else {
+        display_count = BreathDigitsRead(app.breathing.count[:])
+    }
+
+    AppFormatS32(display_count, text[:])
+    display_text = AppTextFromCString(*text[0], 16)
+    radius = cast(s32)BreathDrawRadius(app.breathing)
+    max_w = cast(s32)(cast(float32)radius * 1.12f)
+    font = AppFitFontSize(display_text, max_w, Text48, Text24)
+    Text(CurrentApp().ui.session, TextProps.{
+            .text = FrameTextHold(*app.ui.frame_text, display_text),
+            .bounds = Rectangle.{cast(float32)(center_x - radius),
+                cast(float32)(center_y - radius),
+                cast(float32)(radius * 2), cast(float32)(radius * 2)},
+            .font = font,
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter
+        })
+}
+
+color_with_alpha :: (color: Color, alpha: u8) -> Color {
+    color.a = alpha
+    return color
+}
+
+session_circle_progress :: (app: *InnerBreeze, total_ticks: *s32, progress: *float32,
+    countdown: *s32) {
+    total: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
+    amount: float32 = 0.0f
+    is_countdown: s32 = 0
+    total_seconds: s32 = 0
+    total_frames: s32 = 0
+    frame_in_minute: s32 = 0
+    count: s32 = 0
+
+    if total < 1 {
+        total = 1
+    }
+
+    if total_ticks == null || progress == null || countdown == null {
+        return
+    }
+
+    if app.breathing.phase == BreathPhaseStarting {
+        total_seconds = BreathPauseSeconds(app.breathing)
+        total_frames = total_seconds * 60
+        total = ifx (total_seconds > 0) then (total_seconds) else (1)
+        if total_frames > 0 {
+            amount = cast(float32)app.breathing.sectick / cast(float32)total_frames
+        }
+        is_countdown = 1
+    } else if app.breathing.phase == BreathPhaseHold {
+        total_frames = 60 * 60
+        frame_in_minute = (BreathDigitsRead(app.breathing.count[:]) * 60 + app.breathing.sectick) %
+        total_frames
+        total = 60
+        amount = cast(float32)frame_in_minute / cast(float32)total_frames
+    } else if app.breathing.phase == BreathPhaseRecover {
+        count = BreathDigitsRead(app.breathing.count[:])
+        total = 15
+        if app.breathing.r >= app.breathing.rmax {
+            amount = (cast(float32)clampi(count, 0, total) +             cast(float32)clampi(app.breathing.sectick, 0, 59) / 60.0f) /
+            cast(float32)total
+        }
+        is_countdown = 1
+    } else if app.breathing.phase == BreathPhaseNext {
+        amount = 0.0f
+    }
+
+    if amount < 0.0f {
+        amount = 0.0f
+    }
+    if amount > 1.0f {
+        amount = 1.0f
+    }
+
+    total_ticks.* = total
+    progress.* = amount
+    countdown.* = is_countdown
+}
+
+draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32, radius: float32) {
+    total_ticks: s32 = 1
+    countdown: s32 = 0
+    progress: float32 = 0.0f
+    gap: s32 = AppScale(5)
+    band_width: s32
+    thickness: s32
+    inner_radius: float32
+    outer_radius: float32
+    circle: Color = StyleTokenColor("accent")
+    contrast: Color = text_color_for_background(circle)
+    band_bg: Color
+    band_fill: Color
+    tick_done: Color
+    tick_pending: Color
+    ring: Color
+
+    if app == null {
+        return
+    }
+
+    session_circle_progress(app, *total_ticks, *progress, *countdown)
+
+    if total_ticks <= 20 {
+        band_width = AppScale(14)
+    } else if total_ticks <= 40 {
+        band_width = AppScale(11)
+    } else {
+        band_width = AppScale(8)
+    }
+    if band_width < 5 {
+        band_width = 5
+    }
+
+    thickness = ifx (total_ticks <= 40) then (AppScale(3)) else (AppScale(2))
+    if thickness < 1 {
+        thickness = 1
+    }
+
+    outer_radius = radius - cast(float32)gap
+    inner_radius = outer_radius - cast(float32)band_width
+    if inner_radius < radius * 0.66f {
+        inner_radius = radius * 0.66f
+    }
+    if outer_radius <= inner_radius {
+        return
+    }
+
+    band_bg = color_with_alpha(contrast, 30)
+    band_fill = color_with_alpha(contrast, 72)
+    tick_pending = color_with_alpha(contrast, 96)
+    tick_done = color_with_alpha(contrast, 235)
+    ring = color_with_alpha(contrast, 175)
+
+    DrawCircleV(Vector2.{cast(float32)center_x, cast(float32)center_y}, radius, circle)
+    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius, outer_radius,
+        0.0f, 360.0f, 128, band_bg)
+    if countdown != 0 {
+        if progress < 1.0f {
+            DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius,
+                outer_radius, -450.0f, -90.0f - 360.0f * progress,
+                128, band_fill)
+        }
+    } else if progress > 0.0f {
+        DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius, outer_radius,
+            -90.0f, -90.0f + 360.0f * progress, 128, band_fill)
+    }
+    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius - 0.75f,
+        inner_radius + 0.75f, 0.0f, 360.0f, 128, ring)
+    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, outer_radius - 0.75f,
+        outer_radius + 0.75f, 0.0f, 360.0f, 128, ring)
+
+    {
+        i: s32 = 0
+        while i < total_ticks {
+            tick_progress: float32 = cast(float32)i / cast(float32)total_ticks
+            direction: float32 = ifx (countdown != 0) then (-1.0f) else (1.0f)
+            angle: float32 = -PI * 0.5f + direction * (cast(float32)i * 2.0f * PI) / cast(float32)total_ticks
+            s: float32 = sinf(angle)
+            c: float32 = cosf(angle)
+            if countdown != 0 && i == 0 {
+                tick_progress = 1.0f
+            }
+            tick_colored := tick_progress <= progress + 0.0001f
+            if countdown != 0 {
+                tick_colored = tick_progress > progress + 0.0001f
+            }
+            start: Vector2 = Vector2.{cast(float32)center_x + c * inner_radius, cast(float32)center_y + s * inner_radius}
+            end: Vector2 = Vector2.{cast(float32)center_x + c * outer_radius, cast(float32)center_y + s * outer_radius}
+
+            DrawLineEx(start, end, cast(float32)thickness,
+                ifx (tick_colored) then (tick_done) else (tick_pending))
+            i += 1
+        }
+    }
+}
+
+session_draw_inbe :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    radius: float32 = BreathDrawRadius(app.breathing)
+
+    draw_session_progress_circle(app, center_x, center_y, radius)
+    draw_session_counter(app, center_x, center_y)
+}
+
+session_draw_start_preview :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> s32 {
+    play_text: string = LocaleText("play_button")
+    practice_text: string = practice_label(app.exercise_type)
+    practice_font: s32 = AppFontSize()
+    practice_w: s32
+    practice_y: s32
+    radius: s32 = AppScale(44)
+    pointer_x := app.ui.mouse_x - center_x
+    pointer_y := app.ui.mouse_y - center_y
+    hovered := app.ui.pointer_active &&
+    pointer_x * pointer_x + pointer_y * pointer_y <= radius * radius
+    app.play_circle_hover = ifx (hovered) then (1) else (0)
+
+    target_scale: float32 = ifx (hovered) then (1.08f) else (1.0f)
+    app.play_circle_scale += (target_scale - app.play_circle_scale) * 0.2f
+    if app.play_circle_scale < 1.0f {
+        app.play_circle_scale = 1.0f
+    }
+    if app.play_circle_scale > 1.08f {
+        app.play_circle_scale = 1.08f
+    }
+
+    scaled_radius: s32 = cast(s32)(cast(float32)radius * app.play_circle_scale)
+    practice_w = AppTextWidth(practice_text, practice_font)
+    if practice_w > app.ui.view_width - AppScale(48) {
+        practice_font = AppSmallFontSize()
+    }
+    practice_w = AppTextWidth(practice_text, practice_font)
+    practice_y = center_y - scaled_radius - AppScale(42)
+    if practice_y < AppScale(8) {
+        practice_y = AppScale(8)
+    }
+    Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(center_x - practice_w / 2),
+                cast(float32)AppControlTextY(practice_text, practice_y,
+                AppScale(32), practice_font), 0.0, 0.0},
+            .text = practice_text,
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    return Button(app.ui.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(center_x - scaled_radius),
+                cast(float32)(center_y - scaled_radius),
+                cast(float32)(scaled_radius * 2),
+                cast(float32)(scaled_radius * 2)},
+            .label = play_text,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .circle = true
+        })
+}
+
+draw_session_status :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    unused app
+    unused center_x
+    unused center_y
+}
+
+session_draw_round_title_bar :: (app: *InnerBreeze, title: string, height: s32) -> s32 {
+    return ifx PracticeTitleBar(app, title, height) then 1 else 0
+}
+
+#program_export
+draw_breath_preview :: (breathing: *BreathSession, center_x: s32, center_y: s32) {
+    r: float32 = 0.0f
+    if breathing != null {
+        r = BreathDrawRadius(breathing.*) * 0.72f
+    }
+    DrawCircleV(Vector2.{cast(float32)center_x, cast(float32)center_y}, r, StyleTokenColor("accent"))
+    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, r - 0.75f, r + 0.75f,
+        0.0f, 360.0f, 96, StyleTokenColor("text"))
+}
+
+stop_android_background_session :: (app: *InnerBreeze) {
+    meditation_music_stop(app)
+    practice_active_background_stop(app)
+}
+
+session_request_exit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.session_paused != 0 {
+        practice_active_background_stop(app)
+        app_init(cast(*void)app)
+        return
+    }
+    app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+}
+
+session_handle_exit_modal :: (app: *InnerBreeze) -> s32 {
+    result: SessionExitModalResult
+
+    if app == null || app.modal.active == 0 ||
+    app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        return 0
+    }
+
+    result = app_draw_session_exit_modal(app,
+        session_has_completed_rounds(app),
+        LocaleText("save_completed_rounds_message"),
+        LocaleText("all_progress_lost_message"))
+    if result == cast(SessionExitModalResult)SessionExitModalCancel {
+        app_close_modal(app)
+    } else if result == cast(SessionExitModalResult)SessionExitModalSave ||
+    result == cast(SessionExitModalResult)SessionExitModalDiscard {
+        if result == cast(SessionExitModalResult)SessionExitModalSave {
+            session_ensure_results_saved(app)
+        }
+        practice_active_background_stop(app)
+        app_close_modal(app)
+        app_init(cast(*void)app)
+    }
+    return 1
+}
+
+session_update_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover: *s32) {
+    breath_max_y: s32 = app.ui.view_height - AppScale(44)
+    title_h: s32 = PracticeTitleBarHeight()
+    title: [32]u8
+    unused FormatNumberTemplate(LocaleText("session_round_label"),
+        app.breathing.round + 1, title[:])
+    if session_draw_round_title_bar(app,
+        FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*title[0], 32)), title_h) != 0 {
+        session_request_exit(app)
+        return
+    }
+
+    if session_handle_exit_modal(app) != 0 {
+        return
+    }
+
+    practice_draw_audio_controls(app)
+
+    if app.advanced_session_controls != 0 {
+        controls: [3]IconRowAction
+        controls[0].icon = ActionIcon.IconBack
+        controls[1].icon = ActionIcon.IconPause
+        if app.session_paused != 0 {
+            controls[1].icon = ActionIcon.IconPlay
+        }
+        controls[2].icon = ActionIcon.IconNext
+        row: IconRowResult = PracticeControlRow(IconRowRequest.{
+                .center_x = center_x,
+                .view_width = app.ui.view_width,
+                .view_height = app.ui.view_height,
+                .count = 3,
+                .items = *controls[0]
+            })
+
+        breath_max_y = row.y - AppScale(44)
+        if row.clicked_index == 0 {
+            session_step_back(app)
+        } else if row.clicked_index == 1 {
+            app.session_paused = ifx (app.session_paused != 0) then (0) else (1)
+        } else if row.clicked_index == 2 {
+            session_step_forward(app)
+        }
+    }
+
+    draw_session_status(app, center_x, center_y)
+
+    if app.session_paused == 0 && app.backgrounded == 0 {
+        elapsed_ms: s32 = cast(s32)(GetFrameTime() * 1000.0f + 0.5f)
+        if elapsed_ms < 1 {
+            elapsed_ms = 1
+        }
+        session_advance_elapsed(app, elapsed_ms)
+    }
+
+    if app.breathing.completed != 0 {
+        session_complete(app)
+        return
+    }
+
+    if app.breathing.phase != BreathPhaseHold {
+        app.breath_tap_last_time = 0.0
+    }
+
+    if app.breathing.phase == BreathPhaseHold {
+        breath_label: string = LocaleText("breath_button")
+        breath_font: s32 = Text16
+        breath_w: s32 = AppTextWidth(breath_label, breath_font) + AppScale(72)
+        breath_h: s32 = AppTextLineHeight(breath_font) + AppScale(28)
+        breath_y: s32 = center_y + app.breathing.rmax - AppScale(42)
+        breath_x: s32
+        breath_hover: s32 = 0
+
+        if app.double_tap_to_breathe != 0 {
+            hint: string = LocaleText("double_tap_to_breathe_hint")
+            hint_font: s32 = AppFontSize()
+            hint_w: s32 = AppTextWidth(hint, hint_font)
+            hint_y: s32 = center_y + app.breathing.rmax + AppScale(12)
+
+            if hint_y > breath_max_y {
+                hint_y = breath_max_y
+            }
+            Text(CurrentApp().ui.session, TextProps.{.bounds = Rectangle.{cast(float32)(center_x - hint_w / 2), cast(float32)(hint_y), 0, 0}, .text = (hint), .wrap = cast(TextWrap)TextWrapNone})
+            if IsMouseButtonReleased(MOUSE_BUTTON_LEFT) {
+                now: float64 = GetTime()
+                if app.breath_tap_last_time > 0.0  && now - app.breath_tap_last_time <= 0.35 {
+                    app.breath_tap_last_time = 0.0
+                    finish_hold(app)
+                } else {
+                    app.breath_tap_last_time = now
+                }
+            }
+            return
+        }
+
+        if breath_w < AppScale(184) {
+            breath_w = AppScale(184)
+        }
+        if breath_w > app.ui.view_width - AppScale(24) {
+            breath_w = app.ui.view_width - AppScale(24)
+        }
+        if breath_y > breath_max_y {
+            breath_y = breath_max_y
+        }
+        breath_x = center_x - breath_w / 2
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)breath_x, cast(float32)breath_y,
+                    cast(float32)breath_w, cast(float32)breath_h},
+                .label = breath_label,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                .disabled = false
+            }) != 0 {
+            finish_hold(app)
+        }
+        if hover != null {
+            hover.* = breath_hover
+        }
+    }
+}
+
+session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover: *s32) {
+    box_x: s32
+    box_y: s32 = AppScale(78)
+    box_w: s32
+    row_y: s32 = AppScale(215)
+    row_h: s32 = AppScale(32)
+    total: s32 = 0
+    best: s32 = -1
+    round_times: [MaxRounds] s32
+    rounds: s32 = collect_result_rounds(app, *round_times[0], MaxRounds)
+    action_y: s32 = app.ui.view_height - AppScale(40)
+    title_font: s32
+    title_w: s32
+
+    unused center_y
+
+    if rounds <= 0 {
+        app_init(cast(*void)app)
+        return
+    }
+
+    responsive_max_w: s32 = cast(s32)(cast(float32)app.ui.view_width * 0.96f)
+    min_content_w: s32 = AppScale(320)
+    if responsive_max_w < min_content_w {
+        responsive_max_w = min_content_w
+    }
+    GetCenteredColumn(responsive_max_w, GetPageSidePadding(), *box_x, *box_w)
+
+    title_font = AppTitleFontSize(LocaleText("results_title"), app.ui.view_width - AppScale(48))
+    title_w = AppTextWidth(LocaleText("results_title"), title_font)
+    Text(CurrentApp().ui.session, TextProps.{.bounds = Rectangle.{cast(float32)(center_x - title_w / 2), cast(float32)(AppScale(34)), 0, 0}, .text = (LocaleText("results_title")), .wrap = cast(TextWrap)TextWrapNone})
+
+    {
+        i: s32 = 0
+        while i < rounds {
+            seconds: s32 = round_times[i]
+            total += seconds
+            if best < 0 || seconds > best {
+                best = seconds
+            }
+            i += 1
+        }
+    }
+    if best < 0 {
+        best = 0
+    }
+
+    {
+        lines: [3][64] u8
+        summary_font: s32 = Text16
+
+        FormatLocaleCount(lines[0][:], "results_rounds", rounds)
+        FormatLocaleCount(lines[1][:], "results_best", best)
+        FormatLocaleCount(lines[2][:], "results_avg",
+            ifx (rounds > 0) then (total / rounds) else (0))
+        if app.ui.view_width < 420 &&
+        AppTextWidth(AppTextFromCString(*lines[2][0], 64), summary_font) >
+        box_w - AppScale(20) {
+            seconds_text: [16] u8
+            AppFormatS32(ifx (rounds > 0) then (cast(s32)(total / rounds)) else (0), seconds_text[:])
+            AppCopyText(AppTextFromCString(*seconds_text[0], 16), lines[2][:])
+        }
+        DrawRectangle(box_x, box_y, box_w, AppScale(29) * 3,
+            DarkenColor(StyleTokenColor("canvas"), 6))
+        {
+            i: s32 = 0
+            while i < 3 {
+                info_y := box_y + i * AppScale(29)
+                if i > 0 {
+                    DrawLine(box_x, info_y, box_x + box_w, info_y,
+                        DarkenColor(StyleTokenColor("canvas"), 30))
+                }
+                Text(CurrentApp().ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
+                            cast(float32)info_y,
+                            cast(float32)(box_w - AppScale(20)),
+                            cast(float32)AppScale(29)},
+                        .text = FrameTextHold(*app.ui.frame_text,
+                        AppTextFromCString(*lines[i][0], 64)),
+                        .wrap = cast(TextWrap)TextWrapNone
+                    })
+                i += 1
+            }
+        }
+    }
+
+    Text(CurrentApp().ui.session, TextProps.{.bounds = Rectangle.{cast(float32)box_x, cast(float32)AppScale(181), cast(float32)box_w, cast(float32)AppScale(28)}, .text = (LocaleText("round_times_title")), .wrap = cast(TextWrap)TextWrapNone})
+    {
+        i: s32 = 0
+        while i < rounds {
+            row: [48] u8
+            row_font: s32 = AppFontSize()
+            FormatTwoNumberTemplate(LocaleText("round_result_label"),
+                i + 1, round_times[i], row[:])
+            DrawRectangle(box_x, row_y - 1, box_w, row_h,
+                DarkenColor(StyleTokenColor("canvas"), 4))
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
+                        cast(float32)(row_y - 1), cast(float32)(box_w - AppScale(20)),
+                        cast(float32)row_h},
+                    .text = FrameTextHold(*app.ui.frame_text,
+                    AppTextFromCString(*row[0], 48)),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+            row_y += row_h
+            i += 1
+        }
+    }
+
+    discard_label := LocaleText("discard_button")
+    save_label := LocaleText("save_results_button")
+    discard_w := AppTextWidth(discard_label, AppFontSize()) + AppScale(16)
+    save_w := AppTextWidth(save_label, AppFontSize()) + AppScale(16)
+    button_h := AppTextLineHeight(AppFontSize()) + AppScale(8)
+    if discard_w < AppScale(34) {
+        discard_w = AppScale(34)
+    }
+    if save_w < AppScale(34) {
+        save_w = AppScale(34)
+    }
+    if button_h < AppScale(34) {
+        button_h = AppScale(34)
+    }
+
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .label = discard_label,
+            .bounds = Rectangle.{
+                cast(float32)(center_x - box_w / 4 - discard_w / 2),
+                cast(float32)action_y,
+                cast(float32)discard_w,
+                cast(float32)button_h
+            },
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+        session_discard_saved_results(app)
+        app_init(cast(*void)app)
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .label = save_label,
+            .bounds = Rectangle.{
+                cast(float32)(center_x + box_w / 4 - save_w / 2),
+                cast(float32)action_y,
+                cast(float32)save_w,
+                cast(float32)button_h
+            },
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        }) != 0 {
+        if session_ensure_results_saved(app) != 0 {
+            app_init(cast(*void)app)
+        }
+    }
+    unused hover
+}

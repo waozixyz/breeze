@@ -26,7 +26,8 @@
 
 ## Public UI and sync boundaries
 
-- Use `Text(TextProps)`, `Image(ImageProps)`, and `Button(ButtonProps)` directly.
+- Use current Kryon calls `Text(session, TextProps)`,
+  `Image(session, ImageProps)`, and `Button(session, ButtonProps)` directly.
   Semantic images use the same `Image` surface. No positional Text, legacy
   drawing calls, alternate widgets, or thin local forwarding wrappers.
   Keep meaningful compositions and gestures; use standard Checkbox and Toggle.
@@ -34,9 +35,17 @@
 - If a required widget capability is missing, implement the reusable primitive
   upstream first. Do not work around it in Inbe or generated code.
 - Use sync protocol v6 and the clean Kryon API; no new `Ksync` names or wrappers.
-  Keep legacy wire strings only for migration. Migrations must be automatic,
-  resumable, and non-destructive, preserving tombstones and legacy projections
-  while supported older installations can return.
+  Remove old wire projections and format fallbacks as the storage and sync
+  modules are converted to current Ziran. Keep the current protocol and data
+  model in Inbe rather than adding compatibility adapters.
+- Keep on-disk schema and user-data upgrade paths. Convert their implementation
+  to checked Ziran; do not delete a migration merely because it handles an old
+  database. An upgrade must preserve existing data, and its replacement needs
+  a test using an older database fixture before the prior path is removed.
+- A `.zi` filename is not a completed migration. All owned application
+  behavior, including storage upgrades, must compile as current Ziran. Prefer
+  direct Ziran foreign imports for native libraries; migrate owned C adapters
+  as Ziran gains the required ABI support. Never keep application policy in C.
 
 ## Product behavior and readability
 

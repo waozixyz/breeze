@@ -1,0 +1,57 @@
+#import "geometry"
+#import, file "../src/platform/scroll_input.zi";
+#import "scroll"
+#import "scroll_props"
+#import "session"
+#import "tree"
+#import "widget_kind"
+using WidgetKind;
+
+#program_export
+Answer :: () -> s32 {
+    session: Session = SessionOpen()
+    if !SessionValid(session) { return -8 }
+    bounds: Rectangle = Rectangle.{20.0, 10.0, 80.0, 40.0}
+    BeginScrollFrame(session, Vector2.{95.0, 20.0}, true, true, false, -1.0)
+    first: ScrollInput = ScrollObservationFor(cast(u64)7, bounds)
+    if !first.enabled || !first.pointer_allowed || first.owns_drag ||
+        first.owner_captured || first.wheel != -1.0 { return -1 }
+
+    frame: ScrollFrame
+    frame.start_drag = true
+    frame.grab = 3.0
+    frame.consume_wheel = true
+    CommitScroll(cast(u64)7, frame)
+    other: ScrollInput = ScrollObservationFor(cast(u64)8, bounds)
+    if other.pointer_allowed || !other.owner_captured ||
+        other.wheel != 0.0 { return -2 }
+    own: ScrollInput = ScrollObservationFor(cast(u64)7, bounds)
+    if !own.owns_drag || own.grab != 3.0 || own.wheel != 0.0 {
+        return -3
+    }
+
+    BeginScrollFrame(session, Vector2.{150.0, 70.0}, false, true, false, 0.0)
+    own = ScrollObservationFor(cast(u64)7, bounds)
+    if !own.owns_drag || !own.pointer_allowed || own.grab != 3.0 {
+        return -4
+    }
+    BeginScrollFrame(session, Vector2.{150.0, 70.0}, false, false, true, 0.0)
+    frame.start_drag = false
+    frame.clear_drag = true
+    CommitScroll(cast(u64)7, frame)
+    own = ScrollObservationFor(cast(u64)7, bounds)
+    if own.owns_drag || own.grab != 0.0 { return -5 }
+
+    TreeStart(session, cast(u64)1, Rectangle.{0.0, 0.0, 200.0, 100.0})
+    outer: s32 = TreeSubmit(session, cast(u64)7, 0, WidgetKindScroll, bounds)
+    inner_bounds: Rectangle = Rectangle.{30.0, 15.0, 30.0, 20.0}
+    unused TreeSubmit(session, cast(u64)8, outer, WidgetKindScroll, inner_bounds)
+    if !TreeFinish(session) { return -6 }
+    BeginScrollFrame(session, Vector2.{40.0, 20.0}, false, false, false, -1.0)
+    first = ScrollObservationFor(cast(u64)7, bounds)
+    other = ScrollObservationFor(cast(u64)8, inner_bounds)
+    if first.pointer_allowed || first.wheel != 0.0 ||
+        !other.pointer_allowed || other.wheel != -1.0 { return -7 }
+    if !SessionClose(session) { return -9 }
+    return 42
+}

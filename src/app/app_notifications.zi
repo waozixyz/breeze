@@ -1,0 +1,173 @@
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "app_types.zi";
+#import, file "notification_schedule.zi";
+#import, file "locale.zi";
+#import, file "text_buffers.zi";
+#import, file "../habits/habit_days.zi";
+#import "date_time"
+#import, file "../social/friend_requests.zi";
+#import, file "../platform/environment.zi";
+
+#import, file "app.zi";
+#import "notification"
+
+using NotificationPriority;
+
+app_notifications_init :: (app: *InnerBreeze) {
+    SetNotificationAppName("xyz.waozi.inbe")
+    if WebPlatform() == 0 {
+        RequestNotifications()
+    }
+    if app != null {
+        app.friend_request_last_count = -1
+    }
+}
+
+allowed :: (app: *InnerBreeze) -> bool {
+    if app == null {
+        return false
+    }
+    return NotificationsAllowed()
+}
+
+send_test_notification :: (app: *InnerBreeze) -> bool {
+    if WebPlatform() != 0 {
+        RequestNotifications()
+    }
+    if !allowed(app) {
+        return false
+    }
+    props: NotificationProps
+    props.title = LocaleText("notification_test_title")
+    props.body = LocaleText("notification_test_body")
+    props.tag = "inbe.test"
+    props.id = 2
+    props.priority = cast(NotificationPriority)NotificationPriorityDefault
+    return Notify(props)
+}
+
+send_session_complete :: (app: *InnerBreeze) {
+    if !allowed(app) {
+        return
+    }
+    props: NotificationProps
+    props.title = LocaleText("notification_session_done_title")
+    props.body = LocaleText("notification_session_done_body")
+    props.tag = "inbe.session"
+    props.id = 3
+    props.priority = cast(NotificationPriority)NotificationPriorityDefault
+    props.suppress_when_focused = WebPlatform() == 0
+    Notify(props)
+}
+
+practice_label :: (practice: s32) -> string {
+    if practice == 1 {
+        return LocaleText("exercise_meditation")
+    }
+    if practice == 2 {
+        return LocaleText("exercise_sun_salutation")
+    }
+    if practice == 3 {
+        return LocaleText("exercise_patterns")
+    }
+    return LocaleText("exercise_wim_hof")
+}
+
+app_notifications_tick :: (app: *InnerBreeze) -> bool {
+    day: s32 = 0
+    hour: s32 = 0
+    settings_changed: bool = false
+
+    if app == null {
+        return false
+    }
+    if !allowed(app) {
+        return false
+    }
+    local: LocalDateTime = LocalNow()
+    if !local.valid {
+        return false
+    }
+    day = local.year * 1000 + local.day_of_year
+    hour = local.hour
+
+    for i: 0..cast(int)app.reminder_count {
+        if i >= APP_REMINDER_MAX { break }
+        r: *AppReminder = *app.reminders[i]
+        if ReminderDue(r.enabled != 0, r.hour, r.last_day, day, hour) {
+            props: NotificationProps
+            props.title = LocaleText("reminder_title")
+            props.body = practice_label(r.practice)
+            props.tag = "inbe.reminder"
+            props.id = cast(s32)(100 + i)
+            props.priority = cast(NotificationPriority)NotificationPriorityDefault
+            if Notify(props) {
+                r.last_day = day
+                settings_changed = true
+            }
+        }
+    }
+
+    if app.notification_habit_reminders != 0 {
+        // per-habit reminders (habit edit screen); 200+ notification ids
+        if app.habit_reminder_day != day {
+            app.habit_reminder_day = day
+            app.habit_reminded_mask = 0
+        }
+        today: s32 = local.year * 10000 + local.month * 100 + local.day
+        for i: 0..cast(int)app.habits.count {
+            if i >= HABIT_MAX { break }
+            habit: *Habit = *app.habits.items[i]
+            if habit.reminder_hour < 0 || habit.reminder_hour != hour {
+                continue
+            }
+            bit: u32 = cast(u32)(1 << i)
+            if (app.habit_reminded_mask & bit) != 0 {
+                continue
+            }
+            if habit_scheduled_day(habit, today) == 0 {
+                continue
+            }
+            if HabitCompletedFor(habit, today) {
+                continue
+            }
+            props: NotificationProps
+            props.title = LocaleText("habit_reminder_title")
+            props.body = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+            props.tag = "inbe.habit_reminder"
+            props.id = cast(s32)(200 + i)
+            props.priority = cast(NotificationPriority)NotificationPriorityDefault
+            if Notify(props) {
+                app.habit_reminded_mask = app.habit_reminded_mask | bit
+            }
+        }
+    }
+    return settings_changed
+}
+
+on_friends_synced :: (app: *InnerBreeze) {
+    count: s32 = 0
+
+    if app == null {
+        return
+    }
+    if app.friend_request_last_count < 0 {
+        app.friend_request_last_count = PendingRequestCountNow()
+        return
+    }
+    count = PendingRequestCountNow()
+    if count > app.friend_request_last_count {
+        if app.notification_friend_request != 0 && allowed(app) {
+            props: NotificationProps
+            props.title = LocaleText("notifications_friend_request_title")
+            props.body = LocaleText("notifications_friend_request_body")
+            props.tag = "inbe.friend"
+            props.id = 7
+            props.priority = cast(NotificationPriority)NotificationPriorityDefault
+            props.suppress_when_focused = WebPlatform() == 0
+            Notify(props)
+        }
+    }
+    app.friend_request_last_count = count
+}

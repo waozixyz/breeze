@@ -1,0 +1,58 @@
+#import, file "account_types.zi";
+#import, file "sync_crypto.zi";
+
+// ML-DSA-44's fixed wire sizes are part of Inbe's account format.
+AccountPublicKeyBytes :: 1312
+AccountPrivateKeyBytes :: 2560
+
+AccountValuesEqual :: (left: *SyncAccount, right: *SyncAccount) -> bool {
+    if left == null || right == null {
+        return false
+    }
+    difference: u8 = 0
+    index: s32 = 0
+    while index < SYNC_PUBLIC_ID_HEX_SIZE {
+        difference |= left.public_id[index] ^ right.public_id[index]
+        index += 1
+    }
+    index = 0
+    while index < SYNC_PUBLIC_KEY_HEX_SIZE {
+        difference |= left.public_key_hex[index] ^ right.public_key_hex[index]
+        index += 1
+    }
+    index = 0
+    while index < SYNC_PRIVATE_KEY_HEX_SIZE {
+        difference |= left.private_key_hex[index] ^ right.private_key_hex[index]
+        index += 1
+    }
+    return difference == 0
+}
+
+c :: #system_library "c";
+OqsAccountKeyPair :: (public_key: *u8, private_key: *u8) -> s32 #foreign c "OQS_SIG_ml_dsa_44_keypair";
+
+#program_export
+CreateSyncAccount :: (account: *SyncAccount) -> s32 {
+    if account == null {
+        return 0
+    }
+    public_key: [AccountPublicKeyBytes]u8
+    private_key: [AccountPrivateKeyBytes]u8
+    generated: SyncAccount = .{}
+
+    if OqsAccountKeyPair(*public_key[0], *private_key[0]) != 0 {
+        return 0
+    }
+    SyncCryptoSha256Hex(*public_key[0], AccountPublicKeyBytes,
+        *generated.public_id[0])
+    if SyncCryptoBytesToHex(*public_key[0], AccountPublicKeyBytes,
+        *generated.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE) == 0 {
+        return 0
+    }
+    if SyncCryptoBytesToHex(*private_key[0], AccountPrivateKeyBytes,
+        *generated.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) == 0 {
+        return 0
+    }
+    account.* = generated
+    return 1
+}

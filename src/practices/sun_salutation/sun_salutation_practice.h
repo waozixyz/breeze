@@ -22,7 +22,6 @@
 #define SUN_SALUTATION_DEFAULT_END_SECONDS 5
 
 int sun_salutation_step_pose_index(int step);
-const char *sun_salutation_step_label(int step);
 void sun_salutation_practice_init(InnerBreeze*app);
 const char *sun_salutation_pose_asset(int figure);
 const char *sun_salutation_transition_asset(int figure, int transition);

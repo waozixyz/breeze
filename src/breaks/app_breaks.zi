@@ -1,0 +1,943 @@
+c :: #system_library "c";
+#import, file "../platform/raylib_host.zi";
+raylib :: #system_library "raylib";
+GetTime :: () -> float64 #foreign raylib;
+GetMouseWheelMove :: () -> float32 #foreign raylib;
+GetMouseDelta :: () -> Vector2 #foreign raylib;
+IsKeyPressed :: (key: s32) -> bool #foreign raylib;
+IsWindowFocused :: () -> bool #foreign raylib;
+ClearWindowState :: (flags: u32) #foreign raylib;
+RestoreWindow :: () #foreign raylib;
+SetWindowFocused :: () #foreign raylib;
+GetCurrentMonitor :: () -> s32 #foreign raylib;
+GetMonitorWidth :: (monitor: s32) -> s32 #foreign raylib;
+GetMonitorHeight :: (monitor: s32) -> s32 #foreign raylib;
+#import, file "../habits/habit_types.zi";
+WEB :: #defined(PLATFORM_WEB)
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/app.zi";
+#import, file "break_rules.zi";
+#import, file "break_calendar.zi";
+#import, file "break_types.zi";
+#import "date_time"
+
+
+#import, file "../storage/break_stats.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../app/text_buffers.zi";
+
+
+using DesktopTrayAction;
+using AppMainTab;
+using ExerciseType;
+using TextWrap;
+using NativeWindowFlags;
+#import, file "../screens/break_overlay.zi";
+#import "text_props"
+#import "window_flags"
+#import, file "../app/exercise_types.zi";
+#import, file "../platform/tray.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/dpi_state.zi";
+#import, file "../app/current_app.zi";
+#import, file "../app/audio.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "../platform/secondary_window.zi";
+#import, file "../platform/activity.zi";
+#import "text_widget"
+#import "box_widget"
+#import "box_props"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "tree_input"
+#import "toast_props"
+#import "toast_widget"
+#import "notification"
+
+save_settings :: (app: *InnerBreeze) #foreign c;
+
+DESKTOP :: #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false
+TRAY :: #defined(DESKTOP_TRAY_ENABLED)
+WIN32 :: #defined(_WIN32)
+
+#if WEB {
+    app_web_extension_host :: () -> s32 #foreign c;
+    app_web_extension_break_now :: (break_type: s32) -> void #foreign c;
+}
+
+BreakActivityThresholdMs :: 1000
+BreakPreludeToastS :: 6
+BreakEventQueueMax :: 8
+BreakStatsFlushS :: 60
+BreakFallbackInputTicks :: 90
+BreakCatchupMaxS :: 300
+
+last_window_fail_frame: s32 = -10000;
+break_window: SecondaryWindow;
+break_hud: SecondaryWindow;
+break_window_session: Session;
+break_hud_session: Session;
+break_toast_state: ToastState;
+break_toast_request: string;
+
+#program_export
+app_breaks_draw_toast :: (app: *InnerBreeze, viewport: Rectangle) {
+    if app == null || !SessionValid(app.ui.session) { return }
+    if break_toast_state.message.count == 0 &&
+    break_toast_request.count == 0 { return }
+    props: ToastProps
+    props.key = cast(u64)0x627265616b746f61
+    props.viewport = viewport
+    props.state = break_toast_state
+    props.message = break_toast_request
+    props.seconds = cast(float64)BreakPreludeToastS
+    props.now_seconds = GetTime()
+    props.scale = GetDPIScale()
+    break_toast_state = Toast(app.ui.session, props).state
+    break_toast_request = ""
+}
+
+close_break_window :: () {
+    if break_window.handle != null {
+        CloseSecondaryWindow(break_window)
+        break_window = SecondaryWindow.{}
+    }
+    if SessionValid(break_window_session) {
+        CloseSecondarySession(break_window_session)
+        break_window_session = Session.{}
+    }
+}
+
+close_break_hud :: () {
+    if break_hud.handle != null {
+        CloseSecondaryWindow(break_hud)
+        break_hud = SecondaryWindow.{}
+    }
+    if SessionValid(break_hud_session) {
+        CloseSecondarySession(break_hud_session)
+        break_hud_session = Session.{}
+    }
+}
+
+#program_export
+CloseBreakWindows :: () {
+    close_break_window()
+    close_break_hud()
+}
+
+break_day_key :: () -> s32 {
+    return BreakServiceDate(LocalNow())
+}
+
+break_persist_daily_state :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.settings_dirty = 1
+}
+
+break_fallback_input_seen :: () -> s32 {
+    wheel := cast(s32)(GetMouseWheelMove() * 1000.0f)
+    if wheel != 0 {
+        return 1
+    }
+    dx: float32 = GetMouseDelta().x
+    dy: float32 = GetMouseDelta().y
+    if dx != 0.0f || dy != 0.0f {
+        return 1
+    }
+    {
+        k: s32 = KEY_SPACE
+        while k <= KEY_KB_MENU {
+            if IsKeyPressed(k) {
+                return 1
+            }
+            k += 1
+        }
+
+    }
+    return 0
+}
+
+break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s32) -> s32 {
+    idle_ms := ActivityGetIdleMilliseconds()
+    if idle_ms_out != null {
+        idle_ms_out.* = cast(s32)idle_ms
+    }
+
+    if idle_ms >= 0 {
+        return ifx (idle_ms < BreakActivityThresholdMs) then (1) else (0)
+    }
+
+    if !IsWindowFocused() {
+        return 0
+    }
+    if break_fallback_input_seen() != 0 {
+        app.break_fallback_last_input = app.breathing.frame
+    }
+    return ifx (app.breathing.frame - app.break_fallback_last_input < BreakFallbackInputTicks) then (1) else (0)
+}
+
+break_play_cue :: (app: *InnerBreeze, scale: float32) {
+    if app.break_sounds_enabled != 0 {
+        app_play_bell_cue(app, scale)
+    }
+}
+
+break_engine_open_window :: (app: *InnerBreeze, t: s32) {
+    #if !WIN32 {
+        unused t
+    }
+    #if WIN32 {
+        title: string = LocaleText("break_micro_title")
+        if t == BREAK_REST {
+            title = LocaleText("break_rest_title")
+        } else if t == BREAK_DAILY {
+            title = LocaleText("break_daily_title")
+        }
+        notice: NotificationProps
+        notice.title = title
+        notice.body = LocaleText("break_prelude_text")
+        notice.tag = "breathing.break"
+        notice.id = 20 + t
+        notice.priority = cast(NotificationPriority)NotificationPriority.NotificationPriorityHigh
+        unused Notify(notice)
+    }
+    // The break renders only in its own centered always-on-top window
+    // (created per-frame in app_breaks_window_update). The main window -     // possibly hidden to tray - is left completely alone. Only the keyboard
+    // block for strict block modes is applied on top.
+    #if DESKTOP {
+        // Wayland intentionally does not permit a global keyboard grab, but
+        // The app-owned secondary window remains available on Wayland, where
+        // a global keyboard grab is not available.
+        if ActivityIsWayland() {
+            ClearWindowState(cast(u32)128)
+            RestoreWindow()
+            SetWindowFocused()
+        }
+    }
+    app.break_window_taken = 1
+}
+
+break_engine_close_window :: (app: *InnerBreeze) {
+    if app.break_window_taken == 0 {
+        return
+    }
+    app.break_window_taken = 0
+    close_break_window()
+}
+
+// The break overlay as its own OS window: centered, borderless, always on
+// top. Drawn with the regular break screen; clicks are hit-tested by hand
+// because widget mouse state belongs to the main window.
+app_breaks_window_update :: (app: *InnerBreeze) {
+    #if DESKTOP {
+        if app == null {
+            return
+        }
+        // Never show the break window over a running practice: a practice
+        // started from a break replaces it, and one started mid-prompt defers
+        // the prompt until the session ends.
+        if practice_active(app) != null {
+            break_engine_close_window(app)
+            return
+        }
+        t := BreakActive(app.breaks)
+        if t < 0 {
+            close_break_window()
+            return
+        }
+
+        scale := GetDPIScale()
+        if scale <= 0 || scale > 8 {
+            scale = 1
+        }
+        monitor := GetCurrentMonitor()
+        win_w := GetMonitorWidth(monitor) * 60 / 100
+        win_h := GetMonitorHeight(monitor) * 66 / 100
+        // The Windows RGFW/OpenGL 1.1 compatibility context can reject large
+        // framebuffer objects (notably on VMs and high-DPI displays). Keep the
+        // auxiliary render target inside the broadly supported 1024px range.
+        // The overlay remains DPI-aware within this physical window.
+        #if WIN32 {
+            if win_w > 960 {
+                win_w = 960
+            }
+            if win_h > 640 {
+                win_h = 640
+            }
+        }
+        if win_w < AppScale(340) {
+            win_w = AppScale(340)
+        }
+        if win_h < AppScale(320) {
+            win_h = AppScale(320)
+        }
+
+        if break_window.handle != null && (app.break_window_w != win_w  || app.break_window_h != win_h) {
+            close_break_window()
+        }
+        if break_window.handle == null {
+            if app.breathing.frame - last_window_fail_frame < 300 {
+                return
+            }
+            flags := NATIVE_WINDOW_BORDERLESS + NATIVE_WINDOW_ALWAYS_ON_TOP +                  NATIVE_WINDOW_SKIP_TASKBAR + NATIVE_WINDOW_CENTER +                  NATIVE_WINDOW_STICKY
+            break_window = OpenSecondaryWindow("Inner Breeze", 0, 0,
+                win_w, win_h, cast(s32)flags,
+                DarkenColor(StyleTokenColor("canvas"), 8),
+                scale)
+            if break_window.handle == null {
+                last_window_fail_frame = app.breathing.frame
+                return
+            }
+            break_window_session = SessionOpen()
+            if !SessionValid(break_window_session) {
+                close_break_window()
+                last_window_fail_frame = app.breathing.frame
+                return
+            }
+            app.break_window_w = win_w
+            app.break_window_h = win_h
+        }
+
+        unused SetSecondaryWindowKeyboardGrab(break_window,
+            app.break_block_mode >= 1 && !ActivityIsWayland())
+
+        if BeginSecondaryWindow(break_window) {
+            main_session := app.ui.session
+            app.ui.session = break_window_session
+            if BeginSecondaryFrame(break_window_session, win_w, win_h) {
+                break_overlay_draw_sized(app, win_w, win_h)
+                EndSecondaryFrame(break_window_session)
+            }
+            app.ui.session = main_session
+            unused EndSecondaryWindow(break_window)
+        }
+
+        click_x: s32 = 0
+        click_y: s32 = 0
+        if IsSecondaryWindowDragged(break_window) {
+            return
+        }
+        if IsSecondaryWindowRightClicked(break_window) {
+            #if TRAY {
+                win_quit: s32 = 0
+                desktop_tray_apply_action(app,
+                    cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_BREAK_SETTINGS,
+                    *win_quit)
+            } else {
+                app.settings_tab = SETTINGS_TAB_BREAKS
+                app_switch_screen(app, ScreenSettings)
+            }
+            return
+        }
+        if IsSecondaryWindowClicked(break_window) {
+            GetSecondaryWindowClickPosition(break_window, *click_x, *click_y)
+            app_breaks_window_click(app, t, click_x, click_y, win_w, win_h)
+        }
+    }
+}
+
+// Manual hit-test of the break overlay's button row (layout mirrored from
+// break_overlay_draw; the action buttons are centered on their x).
+app_breaks_window_click :: (app: *InnerBreeze, t: s32, x: s32, y: s32,
+    view_w: s32, view_h: s32) {
+    timer: *BreakTimer = *app.breaks.timers[t]
+    if timer.lock_buttons_s > 0 {
+        return
+    }
+
+    // Practice chips below the panel (geometry shared with the draw path).
+    rects: [5] Rectangle
+    ids: [5] s32 = .[0, 0, 0, 0, 0]
+    chips := break_overlay_practice_chips(app, view_w, view_h,
+        *rects[0], *ids[0])
+    {
+        i: s32 = 0
+        while i < chips {
+            point := Vector2.{cast(float32)x, cast(float32)y }
+            if PointInBounds(point.x, point.y, rects[i]) {
+                if ids[i] < 0 {
+                    app_breaks_open_habits(app, t)
+                } else {
+                    app_breaks_start_practice(app, t, ids[i])
+                }
+                return
+            }
+            i += 1
+        }
+
+    }
+
+    panel_w := view_w * 72 / 100
+    if panel_w > AppScale(560) {
+        panel_w = AppScale(560)
+    }
+    if panel_w < AppScale(280) {
+        panel_w = AppScale(280)
+    }
+    panel_h := view_h * 46 / 100
+    if panel_h > AppScale(420) {
+        panel_h = AppScale(420)
+    }
+    if panel_h < AppScale(240) {
+        panel_h = AppScale(240)
+    }
+    panel_y := view_h / 2 - panel_h / 2
+    button_y := panel_y + panel_h - AppScale(56)
+    if y < button_y - AppScale(8) || y > button_y + AppScale(40) {
+        return
+    }
+    button_w := AppScale(132)
+    gap := AppScale(12)
+    half := button_w / 2 + AppScale(10)
+    count: s32 = 0
+    if timer.show_postpone != 0 {
+        count += 1
+    }
+    if timer.show_skip != 0 {
+        count += 1
+    }
+    if t == BREAK_MICRO {
+        count += 1
+    }
+    if count == 0 {
+        return
+    }
+    row_w := count * button_w + (count - 1) * gap
+    cx := view_w / 2 - row_w / 2
+    if timer.show_postpone != 0 {
+        if x >= cx - half && x <= cx + half {
+            app.breaks = BreakPostpone(app.breaks, t)
+            return
+        }
+        cx += button_w + gap
+    }
+    if timer.show_skip != 0 {
+        if x >= cx - half && x <= cx + half {
+            app.breaks = BreakSkip(app.breaks, t)
+            return
+        }
+        cx += button_w + gap
+    }
+    if t == BREAK_MICRO {
+        if x >= cx - half && x <= cx + half {
+            app.breaks = BreakForce(app.breaks, BREAK_REST)
+        }
+    }
+}
+
+app_breaks_update :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.ui.rest_break_requested {
+        app.ui.rest_break_requested = false
+        app_breaks_rest_break_now(app)
+    }
+    // A running practice session is deliberate rest: freeze break
+    // scheduling until it ends so no prompt pops over the session. The
+    // elapsed-time base is dropped so no catch-up burst runs afterwards.
+    if practice_active(app) != null {
+        app.break_last_update_time = 0.0f
+        return
+    }
+    if app.breaks_enabled == 0 {
+        return
+    }
+
+    #if DESKTOP {
+        idle_ms: s32 = 0
+        active := break_sample_activity(app, *idle_ms)
+        now := GetTime()
+        elapsed: float32 = 0.0f
+        ticks: s32 = 0
+
+        app.break_input_active = active
+
+        // Natural breaks straight from the OS idle counter: covers absences the
+        // capped catch-up ticks cannot see (loop stalls, suspend). The engine's
+        // per-timer latch keeps one idle period from taking a break twice.
+        if idle_ms >= 0 {
+            idle_sample := BreakNoteIdle(app.breaks, idle_ms / 1000)
+            app.breaks = idle_sample.engine
+        }
+
+        if app.break_last_update_time <= 0.0f {
+            app.break_last_update_time = now
+        }
+        elapsed = cast(float32)(now - app.break_last_update_time)
+        if elapsed < 0.0f {
+            elapsed = 0.0f
+        }
+        if elapsed > cast(float32)BreakCatchupMaxS {
+            elapsed = cast(float32)BreakCatchupMaxS
+        }
+        app.break_last_update_time = now
+
+        pending := app.break_tick_pending + elapsed * cast(float32)BreakTicksPerSecond
+        ticks = cast(s32)pending
+        if ticks <= 0 {
+            app.break_tick_pending = pending
+            return
+        }
+        if ticks > BreakCatchupMaxS * BreakTicksPerSecond {
+            ticks = BreakCatchupMaxS * BreakTicksPerSecond
+        }
+        app.break_tick_pending = pending - cast(float32)ticks
+
+        // The activity sample only says whether input happened within the last
+        // BreakActivityThresholdMs - it cannot vouch for a longer stall (occluded
+            // or hidden window, system suspend, a slow frame). Credit at most one
+        // second of the batch to the live sample; older catch-up ticks run as
+        // idle so time away from the machine never counts toward the next break.
+        active_ticks: s32 = 0
+        if active != 0 {
+            active_ticks = BreakTicksPerSecond
+            if active_ticks > ticks {
+                active_ticks = ticks
+            }
+        }
+
+        day := break_day_key()
+        if day > 0 {
+            prior_day := app.breaks.day_key
+            day_change := BreakSetDay(app.breaks, day)
+            app.breaks = day_change.engine
+            if day_change.changed != 0 {
+                storage_break_flush_day_at(*app.breaks, prior_day)
+                app.breaks = BreakResetDayStats(app.breaks)
+                break_persist_daily_state(app)
+                app.break_stats_flush_s = 0
+            }
+        }
+
+        {
+            i: s32 = 0
+            while i < ticks {
+
+                sample_active := ifx (i >= ticks - active_ticks) then (active) else (0)
+                app.breaks = BreakTick(app.breaks, sample_active)
+                app.break_stats_flush_s += 1
+
+                i += 1
+            }
+        }
+        if app.break_stats_flush_s >= BreakStatsFlushS {
+            app.break_stats_flush_s = 0
+            storage_break_flush_day(*app.breaks)
+            break_persist_daily_state(app)
+        }
+
+        {
+            i: s32 = 0
+            while i < BreakEventQueueMax {
+                event_take := BreakTakeEvent(app.breaks)
+                app.breaks = event_take.engine
+                t := event_take.break_type
+                event := event_take.event
+                if event == BreakEventNone {
+                    break
+                }
+
+                if event == BreakEventPrompt {
+                    break_toast_request = LocaleText("break_prelude_text")
+                    break_play_cue(app, 0.8f)
+                } else if event == BreakEventStart {
+                    break_engine_open_window(app, t)
+                    break_play_cue(app, 1.0f)
+                } else if event == BreakEventTaken || event == BreakEventNatural {
+                    break_engine_close_window(app)
+                    break_persist_daily_state(app)
+                    if t != BREAK_DAILY {
+                        break_play_cue(app, 1.2f)
+                    }
+                } else if event == BreakEventSkipped || event == BreakEventPostponed {
+                    break_engine_close_window(app)
+                    break_persist_daily_state(app)
+                }
+                i += 1
+            }
+
+        }
+    }
+}
+
+#program_export
+app_breaks_set_mode :: (app: *InnerBreeze, mode: s32, duration_s: s32) {
+    if app == null {
+        return
+    }
+    app.breaks = BreakSetMode(app.breaks, mode, duration_s)
+}
+
+#program_export
+app_breaks_rest_break_now :: (app: *InnerBreeze) {
+    if app == null || app.breaks_enabled == 0 {
+        return
+    }
+    #if WEB {
+        if app_web_extension_host() != 0 {
+            app_web_extension_break_now(BREAK_REST)
+        }
+    }
+    app.breaks = BreakForce(app.breaks, BREAK_REST)
+    {
+        i: s32 = 0
+        while i < BreakEventQueueMax {
+            event_take := BreakTakeEvent(app.breaks)
+            app.breaks = event_take.engine
+            t := event_take.break_type
+            event := event_take.event
+            if event == BreakEventStart {
+                break_engine_open_window(app, t)
+            }
+            i += 1
+        }
+
+    }
+}
+
+#if TRAY {
+    break_practice_tray_action :: (practice_id: s32) -> DesktopTrayAction {
+        if practice_id == EXERCISE_MEDITATION {
+            return cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_START_MEDITATION
+        }
+        if practice_id == EXERCISE_SUN_SALUTATION {
+            return cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_START_SUN_SALUTATION
+        }
+        if practice_id == EXERCISE_PATTERNS {
+            return cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_START_PATTERNS
+        }
+        return cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_START_WHM
+    }
+}
+
+// Running a practice replaces the active break: the break counts as taken
+// right away (timers reset), and because app_breaks_update stays frozen
+// for the whole session the effective restart lands after the practice
+// ends - no matter how its length compares to the break duration.
+#program_export
+app_breaks_start_practice :: (app: *InnerBreeze, t: s32, practice_id: s32) {
+    if app == null {
+        return
+    }
+    if t >= BREAK_MICRO && t <= BREAK_DAILY {
+        app.breaks = BreakTake(app.breaks, t, 0)
+        {
+            i: s32 = 0
+            while i < BreakEventQueueMax {
+                event_take := BreakTakeEvent(app.breaks)
+                app.breaks = event_take.engine
+                event := event_take.event
+                if event == BreakEventNone {
+                    break
+                }
+                if event == BreakEventTaken || event == BreakEventNatural {
+                    break_engine_close_window(app)
+                }
+                i += 1
+            }
+
+        }
+    }
+    app.exercise_type = practice_clamp_id(practice_id)
+    app.main_tab = APP_MAIN_TAB_PRACTICE
+    app.practice_tab = PRACTICE_TAB_PLAY
+    if app.modal.active != 0 {
+        app_close_modal(app)
+    }
+    #if TRAY {
+        // The tray path also restores the main window when it was hidden.
+        win_quit: s32 = 0
+        desktop_tray_apply_action(app, break_practice_tray_action(practice_id),
+            *win_quit)
+    } else {
+        practice := practice_get(app.exercise_type)
+        if practice.start != null {
+            practice.start(app)
+        }
+    }
+}
+
+app_breaks_take_active :: (app: *InnerBreeze, t: s32) {
+    if app == null {
+        return
+    }
+    if t >= BREAK_MICRO && t <= BREAK_DAILY {
+        app.breaks = BreakTake(app.breaks, t, 0)
+        {
+            i: s32 = 0
+            while i < BreakEventQueueMax {
+                event_take := BreakTakeEvent(app.breaks)
+                app.breaks = event_take.engine
+                event := event_take.event
+                if event == BreakEventNone {
+                    break
+                }
+                if event == BreakEventTaken || event == BreakEventNatural {
+                    break_engine_close_window(app)
+                }
+                i += 1
+            }
+
+        }
+    } else {
+        break_engine_close_window(app)
+    }
+}
+
+#program_export
+app_breaks_open_habits :: (app: *InnerBreeze, t: s32) {
+    if app == null {
+        return
+    }
+    app_breaks_take_active(app, t)
+    if app.modal.active != 0 {
+        app_close_modal(app)
+    }
+    app.main_tab = APP_MAIN_TAB_HABITS
+    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+    app.habits.scroll = 0
+    app.habits.focus_selected_tab = 1
+    #if DESKTOP {
+        ClearWindowState(cast(u32)128)
+        RestoreWindow()
+        SetWindowFocused()
+    }
+    app_switch_screen(app, ScreenHabits)
+}
+
+app_breaks_hud_update :: (app: *InnerBreeze) {
+    #if DESKTOP {
+        if app == null {
+            return
+        }
+        if app.breaks_enabled == 0 {
+            close_break_hud()
+            return
+        }
+
+        scale := GetDPIScale()
+        if scale <= 0 || scale > 8 {
+            scale = 1
+        }
+        hud_w := cast(s32)(150 * scale + 0.5)
+        row_h := cast(s32)(17 * scale + 0.5)
+        pad := cast(s32)(7 * scale + 0.5)
+        // disabled timers are not shown at all: the hud only has rows for the
+        // enabled ones
+        visible: s32 = 0
+        {
+            t: s32 = 0
+            while t < BREAK_TYPE_COUNT {
+                if app.breaks.timers[t].enabled != 0 {
+                    visible += 1
+                }
+                t += 1
+            }
+
+        }
+        if visible == 0 {
+            close_break_hud()
+            return
+        }
+        hud_h := pad * 2 + row_h * visible
+
+        if break_hud.handle != null && (app.break_hud_w != hud_w || app.break_hud_h != hud_h) {
+            close_break_hud()
+        }
+        if break_hud.handle == null {
+            track := DarkenColor(StyleTokenColor("canvas"), 18)
+            flags := NATIVE_WINDOW_BORDERLESS + NATIVE_WINDOW_ALWAYS_ON_TOP +                  NATIVE_WINDOW_SKIP_TASKBAR + NATIVE_WINDOW_STICKY
+            hud_x := AppScale(8)
+            hud_y := AppScale(8)
+            if app.break_hud_x >= 0 && app.break_hud_y >= 0 {
+                // restore the dragged-to position instead of the default corner
+                hud_x = app.break_hud_x
+                hud_y = app.break_hud_y
+            } else {
+                flags += NATIVE_WINDOW_TOP_RIGHT
+            }
+            break_hud = OpenSecondaryWindow("Inner Breeze", hud_x, hud_y,
+                hud_w, hud_h, cast(s32)flags, track, scale)
+            if break_hud.handle == null {
+                return
+            }
+            break_hud_session = SessionOpen()
+            if !SessionValid(break_hud_session) {
+                close_break_hud()
+                return
+            }
+            app.break_hud_w = hud_w
+            app.break_hud_h = hud_h
+        }
+
+        // The HUD content changes on timer ticks, drags, and clicks. Present
+        // at about 2 Hz to avoid unnecessary texture readback and window blits.
+        now := GetTime()
+        if app.break_hud_last_present <= 0 || now - app.break_hud_last_present >= 0.45 {
+            app.break_hud_last_present = now
+            if BeginSecondaryWindow(break_hud) {
+                main_session := app.ui.session
+                app.ui.session = break_hud_session
+                if BeginSecondaryFrame(break_hud_session, hud_w, hud_h) {
+                    app_breaks_hud_draw(app, hud_w, hud_h, row_h, pad)
+                    EndSecondaryFrame(break_hud_session)
+                }
+                app.ui.session = main_session
+                unused EndSecondaryWindow(break_hud)
+            }
+        }
+
+        if IsSecondaryWindowDragged(break_hud) {
+            GetSecondaryWindowPosition(break_hud, *app.break_hud_x,
+                *app.break_hud_y)
+            app.settings_dirty = 1
+            save_settings(app)
+        } else if IsSecondaryWindowRightClicked(break_hud) {
+            #if TRAY {
+                hud_quit: s32 = 0
+                desktop_tray_apply_action(app,
+                    cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_BREAK_SETTINGS,
+                    *hud_quit)
+            } else {
+                app.settings_tab = SETTINGS_TAB_BREAKS
+                app_switch_screen(app, ScreenSettings)
+            }
+        } else if IsSecondaryWindowClicked(break_hud) {
+            app.settings_tab = SETTINGS_TAB_BREAKS
+            app_switch_screen(app, ScreenSettings)
+        }
+    }
+}
+
+app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, pad: s32) {
+    track := DarkenColor(StyleTokenColor("canvas"), 18)
+    border: Color = DarkenColor(StyleTokenColor("text"), 62)
+    fill := Color.{.r = 74, .g = 178, .b = 102, .a = 255}
+    overdue := Color.{.r = 222, .g = 140, .b = 44, .a = 255}
+    idle_col := Color.{.r = 240, .g = 200, .b = 60, .a = 255}
+    labels: [BREAK_TYPE_COUNT] string = .[LocaleText("break_hud_micro"), LocaleText("break_hud_rest"), LocaleText("break_hud_daily")]
+
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{0.0, 0.0, cast(float32)hud_w, cast(float32)hud_h},
+            .fill = track, .border = border
+        })
+
+    row: s32 = 0
+    {
+        t: s32 = 0
+        while t < BREAK_TYPE_COUNT {
+            timer: *BreakTimer = *app.breaks.timers[t]
+            if timer.enabled == 0 {
+                t += 1; continue
+            }
+            row_y := pad + row_h * row
+            row = row + 1
+            bar_x := pad
+            bar_w := hud_w - pad * 2
+            time_x := hud_w - pad
+            next := BreakNextDueSeconds(app.breaks, t)
+
+            Text(CurrentApp().ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)(bar_x), cast(float32)(row_y + AppScale(2)), 0, 0},
+                    .text = (labels[t]),
+                    .wrap = cast(TextWrap)TextWrapNone
+                })
+
+            if next < 0 {
+                line := "off"
+                Text(CurrentApp().ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
+                        .text = (line),
+                        .wrap = cast(TextWrap)TextWrapNone
+                    })
+            } else if timer.state == BreakStateBreaking {
+                // active break: count down the remaining rest time (this is the
+                    // wait that resets the timer once it completes)
+                left: s32 = timer.duration_s - timer.idle_s
+                if left < 0 {
+                    left = 0
+                }
+                line := BreakFormatDuration(left)
+                line_text := AppTextFromCString(*line.bytes[0], 16)
+                Text(CurrentApp().ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line_text, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
+                        .text = line_text,
+                        .wrap = cast(TextWrap)TextWrapNone
+                    })
+                if timer.duration_s > 0 {
+                    fraction := timer.idle_s * (bar_w - 2) / timer.duration_s
+                    if fraction > bar_w - 2 {
+                        fraction = bar_w - 2
+                    }
+                    Box(app.ui.session, BoxProps.{
+                            .bounds = Rectangle.{cast(float32)bar_x, cast(float32)(row_y + row_h - AppScale(4)), cast(float32)bar_w, cast(float32)AppScale(3)},
+                            .fill = DarkenColor(StyleTokenColor("canvas"), 30),
+                            .border = DarkenColor(StyleTokenColor("canvas"), 30)
+                        })
+                    if fraction > 0 {
+                        Box(app.ui.session, BoxProps.{
+                                .bounds = Rectangle.{cast(float32)(bar_x + 1), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)fraction, cast(float32)AppScale(3)},
+                                .fill = fill, .border = fill
+                            })
+                    }
+                }
+            } else {
+                line: [64] u8
+                if next == 0 {
+                    AppCopyText(LocaleText("settings_breaks_due_now"), line[:])
+                } else {
+                    duration := BreakFormatDuration(next)
+                    AppCopyText(AppTextFromCString(*duration.bytes[0], 16), line[:])
+                }
+                line_text := AppTextFromCString(*line[0], 64)
+                Text(CurrentApp().ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line_text, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
+                        .text = line_text,
+                        .wrap = cast(TextWrap)TextWrapNone
+                    })
+
+                if timer.limit_s > 0 {
+                    fraction := timer.active_s * (bar_w - 2) / timer.limit_s
+                    if fraction > bar_w - 2 {
+                        fraction = bar_w - 2
+                    }
+                    Box(app.ui.session, BoxProps.{
+                            .bounds = Rectangle.{cast(float32)bar_x, cast(float32)(row_y + row_h - AppScale(4)), cast(float32)bar_w, cast(float32)AppScale(3)},
+                            .fill = DarkenColor(StyleTokenColor("canvas"), 30),
+                            .border = DarkenColor(StyleTokenColor("canvas"), 30)
+                        })
+                    if fraction > 0 {
+                        bar_color := ifx (next == 0) then (overdue) else (fill)
+                        Box(app.ui.session, BoxProps.{
+                                .bounds = Rectangle.{cast(float32)(bar_x + 1), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)fraction, cast(float32)AppScale(3)},
+                                .fill = bar_color, .border = bar_color
+                            })
+                    }
+                    // Idle progress toward a natural break: a yellow tip grows on
+                    // top of the green fill toward the end of the bar. Full yellow
+                    // means the idle duration is reached - the break is taken
+                    // naturally and the timer resets.
+                    if timer.state == BreakStateRunning && timer.duration_s > 0  && timer.idle_s > 0 && timer.idle_latched == 0 {
+                        tip := (bar_w - 2 - fraction) * timer.idle_s / timer.duration_s
+                        if tip > 0 {
+                            Box(app.ui.session, BoxProps.{
+                                    .bounds = Rectangle.{cast(float32)(bar_x + 1 + fraction), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)tip, cast(float32)AppScale(3)},
+                                    .fill = idle_col, .border = idle_col
+                                })
+                        }
+                    }
+                }
+            }
+            t += 1
+        }
+
+    }
+}

@@ -1,0 +1,111 @@
+// A separate borrowed settings buffer for each thread that reads storage.
+c :: #system_library "c";
+ThreadBufferCalloc :: (count: usize, size: usize) -> *void #foreign c "calloc";
+ThreadBufferFree :: (value: *void) #foreign c "free";
+
+STORAGE_TEXT_CAPACITY :: 8192
+POSIX_THREAD_BUFFER :: #defined(PLATFORM_DESKTOP) || #defined(ANDROID_BUILD)
+WINDOWS_THREAD_BUFFER :: #defined(_WIN32)
+
+ThreadBufferDestructor :: #type (*void) -> void #c_call;
+ThreadBufferOnceRoutine :: #type () -> void #c_call;
+
+#if POSIX_THREAD_BUFFER && !WINDOWS_THREAD_BUFFER {
+    PosixKeyCreate :: (key: *u32, destructor: ThreadBufferDestructor) -> s32 #foreign c "pthread_key_create";
+    PosixGetSpecific :: (key: u32) -> *void #foreign c "pthread_getspecific";
+    PosixSetSpecific :: (key: u32, value: *void) -> s32 #foreign c "pthread_setspecific";
+    PosixOnce :: (state: *s32, routine: ThreadBufferOnceRoutine) -> s32 #foreign c "pthread_once";
+    storage_text_key: u32;
+    storage_text_once: s32;
+    storage_text_ready: bool;
+}
+
+#if WINDOWS_THREAD_BUFFER {
+    WindowsOnceRoutine :: #type (*void, *void, **void) -> s32 #c_call;
+    WindowsOnce :: (state: *usize, routine: WindowsOnceRoutine,
+        parameter: *void, context: **void) -> s32 #foreign c "InitOnceExecuteOnce";
+    WindowsFlsAlloc :: (destructor: ThreadBufferDestructor) -> u32 #foreign c "FlsAlloc";
+    WindowsFlsGet :: (key: u32) -> *void #foreign c "FlsGetValue";
+    WindowsFlsSet :: (key: u32, value: *void) -> s32 #foreign c "FlsSetValue";
+    storage_text_windows_once: usize;
+    storage_text_windows_key: u32 = cast(u32)4294967295;
+}
+
+storage_text_single_thread: [STORAGE_TEXT_CAPACITY]u8;
+
+FreeThreadBuffer :: (value: *void) {
+    ThreadBufferFree(value)
+}
+
+#if POSIX_THREAD_BUFFER && !WINDOWS_THREAD_BUFFER {
+    InitializePosixKey :: () {
+        destructor: ThreadBufferDestructor = FreeThreadBuffer
+        storage_text_ready = PosixKeyCreate(*storage_text_key,
+            destructor) == 0
+    }
+}
+
+#if WINDOWS_THREAD_BUFFER {
+    InitializeWindowsKey :: (state: *void, parameter: *void,
+        context: **void) -> s32 {
+        unused state
+        unused parameter
+        unused context
+        destructor: ThreadBufferDestructor = FreeThreadBuffer
+        storage_text_windows_key = WindowsFlsAlloc(destructor)
+        if storage_text_windows_key == cast(u32)4294967295 {
+            return 0
+        }
+        return 1
+    }
+}
+
+#program_export
+storage_setting_text_buffer_host :: () -> *u8 {
+    #if POSIX_THREAD_BUFFER && !WINDOWS_THREAD_BUFFER {
+        routine: ThreadBufferOnceRoutine = InitializePosixKey
+        if PosixOnce(*storage_text_once, routine) != 0 ||
+            !storage_text_ready {
+            return null
+        }
+        existing := PosixGetSpecific(storage_text_key)
+        if existing != null {
+            return cast(*u8)existing
+        }
+        memory := ThreadBufferCalloc(cast(usize)STORAGE_TEXT_CAPACITY,
+            cast(usize)1)
+        if memory == null {
+            return null
+        }
+        if PosixSetSpecific(storage_text_key, memory) != 0 {
+            ThreadBufferFree(memory)
+            return null
+        }
+        return cast(*u8)memory
+    }
+
+    #if WINDOWS_THREAD_BUFFER {
+        callback: WindowsOnceRoutine = InitializeWindowsKey
+        if WindowsOnce(*storage_text_windows_once, callback, null,
+            null) == 0 ||
+            storage_text_windows_key == cast(u32)4294967295 {
+            return null
+        }
+        existing := WindowsFlsGet(storage_text_windows_key)
+        if existing != null {
+            return cast(*u8)existing
+        }
+        memory := ThreadBufferCalloc(cast(usize)STORAGE_TEXT_CAPACITY,
+            cast(usize)1)
+        if memory == null {
+            return null
+        }
+        if WindowsFlsSet(storage_text_windows_key, memory) == 0 {
+            ThreadBufferFree(memory)
+            return null
+        }
+        return cast(*u8)memory
+    }
+
+    return *storage_text_single_thread[0]
+}

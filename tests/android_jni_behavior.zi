@@ -1,0 +1,548 @@
+#import, file "../src/platform/android/activity_jni.zi";
+#import, file "../src/platform/android/android_health_host.zi";
+#import, file "../src/platform/android/android_wakelock_host.zi";
+#import, file "../src/platform/android/android_share.zi";
+#import, file "../src/platform/android/android_import_host.zi";
+#import, file "../src/platform/android/android_push_host.zi";
+#import, file "../src/platform/android/android_push_types.zi";
+#import, file "../src/platform/android/android_device.zi";
+#import, file "../src/platform/android/android_runtime_assets_host.zi";
+#import, file "../src/platform/android/android_insets.zi";
+#import, file "../src/platform/android/android_network.zi";
+#import, file "../src/app/host_services.zi";
+#import "net_http"
+#import "async_client"
+#import, file "../src/platform/uri_host.zi";
+#import "c_string"
+#import "session"
+
+c :: #system_library "c";
+TestExit :: (status: s32) #foreign c "exit";
+
+api: JniFunctions;
+vm_api: JniVmFunctions;
+environment: JniEnv;
+vm: JniVm;
+activity: NativeActivity;
+app: NativeAndroidApp;
+activity_ready: bool = true;
+thread_detached: bool;
+attach_count: s32;
+detach_count: s32;
+frame_count: s32;
+frame_failed: bool;
+exception_pending: u8;
+method_name: [96]u8;
+java_strings: [40][256]u8;
+string_count: s32;
+void_calls: s32;
+last_integer: s32;
+java_handle: s64;
+registered_methods: s32;
+native_dark: NativeIntegerFn;
+native_practice: NativePracticeFn;
+native_donation: NativeBooleanFn;
+resolve_available: bool = true;
+network_test: bool;
+network_state: s32 = -1;
+network_length: s32 = 3;
+network_cancelled: s32;
+network_header_failed: bool;
+locale_preferences: [64]u8;
+
+Require :: (condition: bool, code: s32) {
+    if !condition {
+        TestExit(code)
+    }
+}
+
+CStringEquals :: (text: *u8, expected: string) -> bool {
+    if text == null {
+        return false
+    }
+    index: s32 = 0
+    while cast(s64)index < expected.count {
+        if text[index] != expected[index] {
+            return false
+        }
+        index += 1
+    }
+    return text[index] == 0
+}
+
+FakeGetEnv :: (machine: *JniVm, output: **JniEnv, version: s32) -> s32 {
+    Require(machine == *vm && version == JniVersion, 11)
+    if thread_detached {
+        return -2
+    }
+    output[0] = *environment
+    return 0
+}
+FakeAttach :: (machine: *JniVm, output: **JniEnv,
+    arguments: *void) -> s32 {
+    unused machine
+    unused arguments
+    attach_count += 1
+    thread_detached = false
+    output[0] = *environment
+    return 0
+}
+FakeDetach :: (machine: *JniVm) -> s32 {
+    unused machine
+    detach_count += 1
+    thread_detached = true
+    return 0
+}
+FakePushFrame :: (env: *JniEnv, capacity: s32) -> s32 {
+    unused env
+    Require(capacity >= 16, 12)
+    if frame_failed {
+        exception_pending = 1
+        return -1
+    }
+    frame_count += 1
+    string_count = 0
+    return 0
+}
+FakePopFrame :: (env: *JniEnv, result: *void) -> *void {
+    unused env
+    frame_count -= 1
+    return result
+}
+FakeException :: (env: *JniEnv) -> u8 {
+    unused env
+    return exception_pending
+}
+FakeDescribe :: (env: *JniEnv) {
+    unused env
+}
+FakeClear :: (env: *JniEnv) {
+    unused env
+    exception_pending = 0
+}
+FakeObjectClass :: (env: *JniEnv, object: *void) -> *void {
+    unused env
+    Require(object != null, 13)
+    return object
+}
+FakeFindClass :: (env: *JniEnv, name: *u8) -> *void {
+    unused env
+    Require(CStringEquals(name, "xyz/waozi/inbe/MainActivity") ||
+        CStringEquals(name, "android/net/Uri") ||
+        CStringEquals(name, "android/content/Intent"), 14)
+    return cast(*void)*activity
+}
+FakeMethod :: (env: *JniEnv, klass: *void, name: *u8,
+    signature: *u8) -> *void {
+    unused env
+    unused klass
+    Require(signature != null && signature[0] == #char "(", 15)
+    index: s32 = 0
+    while name[index] != 0 && index < 95 {
+        method_name[index] = name[index]
+        index += 1
+    }
+    method_name[index] = 0
+    return cast(*void)*method_name[0]
+}
+FakeString :: (env: *JniEnv, text: *u8) -> *void {
+    unused env
+    Require(string_count < 40, 16)
+    index: s32 = 0
+    while index < 255 && text[index] != 0 {
+        java_strings[string_count][index] = text[index]
+        index += 1
+    }
+    java_strings[string_count][index] = 0
+    result := cast(*void)*java_strings[string_count][0]
+    string_count += 1
+    return result
+}
+FakeVoid :: (env: *JniEnv, object: *void, method: *void,
+    arguments: *JniValue) {
+    unused env
+    unused object
+    unused method
+    void_calls += 1
+    if CStringEquals(*method_name[0], "httpCancel") {
+        Require(arguments[0].integer == 71, 90)
+        network_cancelled += 1
+    }
+    if CStringEquals(*method_name[0], "healthConnectExport") {
+        Require(CStringEquals(cast(*u8)arguments[0].reference, "/tmp/export.csv"), 17)
+    }
+    if CStringEquals(*method_name[0], "openImportPicker") {
+        last_integer = arguments[1].integer
+    }
+    if CStringEquals(*method_name[0], "applyOrientationMode") ||
+    CStringEquals(*method_name[0], "setSoftKeyboardVisible") {
+        last_integer = arguments[0].integer
+    }
+    if CStringEquals(*method_name[0], "startRuntimeAssetDownload") {
+        java_handle = arguments[2].long_integer
+    }
+    if CStringEquals(*method_name[0], "shareFile") {
+        Require(CStringEquals(cast(*u8)arguments[2].reference, "export.csv"), 18)
+        Require(CStringEquals(cast(*u8)arguments[3].reference, "application/octet-stream"), 19)
+    }
+}
+FakeObject :: (env: *JniEnv, object: *void, method: *void,
+    arguments: *JniValue) -> *void {
+    unused env
+    unused method
+    unused arguments
+    if CStringEquals(*method_name[0], "localePreferences") {
+        return cast(*void)*locale_preferences[0]
+    }
+    if CStringEquals(*method_name[0], "resolveActivity") && !resolve_available {
+        return null
+    }
+    return object
+}
+FakeStaticField :: (env: *JniEnv, klass: *void, field: *void) -> *void {
+    unused env
+    unused field
+    return klass
+}
+FakeStaticInteger :: (env: *JniEnv, klass: *void, field: *void) -> s32 {
+    unused env
+    unused klass
+    unused field
+    return 0x10000000
+}
+FakeField :: (env: *JniEnv, klass: *void, name: *u8,
+    signature: *u8) -> *void {
+    unused env
+    unused name
+    unused signature
+    return klass
+}
+FakeBoolean :: (env: *JniEnv, object: *void, method: *void,
+    arguments: *JniValue) -> u8 {
+    unused env
+    unused object
+    unused method
+    unused arguments
+    if CStringEquals(*method_name[0], "httpHeader") && network_header_failed {
+        return 0
+    }
+    return 1
+}
+FakeInteger :: (env: *JniEnv, object: *void, method: *void,
+    arguments: *JniValue) -> s32 {
+    unused env
+    unused object
+    unused method
+    if CStringEquals(*method_name[0], "httpCreate") {
+        Require(arguments[2].integer == 64 && arguments[3].integer == 20000, 91)
+        return 71
+    }
+    if CStringEquals(*method_name[0], "httpPoll") {
+        return network_state
+    }
+    return 2
+}
+FakeDelete :: (env: *JniEnv, object: *void) {
+    unused env
+    unused object
+}
+FakeGlobal :: (env: *JniEnv, object: *void) -> *void {
+    unused env
+    return object
+}
+FakeVm :: (env: *JniEnv, output: **JniVm) -> s32 {
+    unused env
+    output[0] = *vm
+    return 0
+}
+FakeBytes :: (env: *JniEnv, count: s32) -> *void {
+    unused env
+    if !network_test {
+        Require(count == 3, 20)
+    }
+    return cast(*void)*activity
+}
+FakeSetBytes :: (env: *JniEnv, array: *void, start: s32,
+    count: s32, bytes: *u8) {
+    unused env
+    unused array
+    if !network_test {
+        Require(start == 0 && count == 3 && bytes[0] == 65, 21)
+    }
+}
+FakeGetBytes :: (env: *JniEnv, array: *void, start: s32,
+    count: s32, bytes: *u8) {
+    unused env
+    unused array
+    Require(start == 0 && count == 3, 92)
+    bytes[0] = 65
+    bytes[1] = 0
+    bytes[2] = 66
+}
+FakeReadText :: (env: *JniEnv, text: *void, copied: *u8) -> *u8 {
+    unused env
+    unused copied
+    return cast(*u8)text
+}
+FakeReleaseText :: (env: *JniEnv, text: *void, bytes: *u8) {
+    unused env
+    unused text
+    unused bytes
+}
+FakeArrayLength :: (env: *JniEnv, array: *void) -> s32 {
+    unused env
+    unused array
+    if network_test {
+        return network_length
+    }
+    return 0
+}
+FakeRegister :: (env: *JniEnv, klass: *void,
+    raw_methods: *void, count: s32) -> s32 {
+    unused env
+    unused klass
+    registered_methods = count
+    methods := cast(*NativeMethod)raw_methods
+    Require(count == 19, 22)
+    Require(CStringEquals(methods[4].name, "nativeSetSystemDark"), 23)
+    native_dark = methods[4].procedure.integer
+    native_practice = methods[15].procedure.practice
+    native_donation = methods[18].procedure.boolean
+    return 0
+}
+
+#program_export
+GetAndroidApp :: () -> *NativeAndroidApp {
+    if !activity_ready {
+        return null
+    }
+    return *app
+}
+#program_export
+android_lifecycle_reset :: () {
+}
+#program_export
+android_sync_lifecycle :: (paused: s32, visible: s32) -> s32 {
+    return paused + visible
+}
+#program_export
+android_invalidate_graphics_resources :: () {
+}
+#program_export
+android_practice_to_start :: (practice: s32) -> s32 {
+    return practice
+}
+#program_export
+android_debug_import_music_for_practice :: (path: *u8,
+    practice: s32) -> s32 {
+    unused path
+    unused practice
+    return 1
+}
+#program_export
+android_debug_start_music_download :: () -> s32 {
+    return 1
+}
+#program_export
+android_can_open_donation_reminder :: () -> s32 {
+    return 1
+}
+#program_export
+SetAndroidWindowInsets :: (left: s32, top: s32, right: s32,
+    bottom: s32, ime: s32, cutout_left: s32, cutout_top: s32,
+    cutout_right: s32, cutout_bottom: s32) {
+    unused left
+    unused top
+    unused right
+    unused bottom
+    unused ime
+    unused cutout_left
+    unused cutout_top
+    unused cutout_right
+    unused cutout_bottom
+}
+#program_export
+SetDeviceDensity :: (density: float32) {
+    unused density
+}
+
+#program_export
+main :: () -> s32 {
+    environment.functions = *api
+    vm.functions = *vm_api
+    activity.vm = *vm
+    activity.activity = cast(*void)*activity
+    app.activity = *activity
+    vm_api.GetEnv = FakeGetEnv
+    vm_api.AttachCurrentThread = FakeAttach
+    vm_api.DetachCurrentThread = FakeDetach
+    api.PushLocalFrame = FakePushFrame
+    api.PopLocalFrame = FakePopFrame
+    api.ExceptionCheck = FakeException
+    api.ExceptionDescribe = FakeDescribe
+    api.ExceptionClear = FakeClear
+    api.FindClass = FakeFindClass
+    api.GetObjectClass = FakeObjectClass
+    api.GetMethodID = FakeMethod
+    api.GetStaticMethodID = FakeMethod
+    api.NewObjectA = FakeObject
+    api.CallStaticObjectMethodA = FakeObject
+    api.GetStaticFieldID = FakeField
+    api.GetStaticObjectField = FakeStaticField
+    api.GetStaticIntField = FakeStaticInteger
+    api.NewStringUTF = FakeString
+    api.CallVoidMethodA = FakeVoid
+    api.CallStaticVoidMethodA = FakeVoid
+    api.CallObjectMethodA = FakeObject
+    api.CallBooleanMethodA = FakeBoolean
+    api.CallIntMethodA = FakeInteger
+    api.DeleteLocalRef = FakeDelete
+    api.DeleteGlobalRef = FakeDelete
+    api.NewGlobalRef = FakeGlobal
+    api.GetJavaVM = FakeVm
+    api.NewByteArray = FakeBytes
+    api.SetByteArrayRegion = FakeSetBytes
+    api.GetByteArrayRegion = FakeGetBytes
+    api.GetStringUTFChars = FakeReadText
+    api.ReleaseStringUTFChars = FakeReleaseText
+    api.GetArrayLength = FakeArrayLength
+    api.RegisterNatives = FakeRegister
+
+    Require(JNI_OnLoad(*vm, null) == JniVersion && registered_methods == 19, 30)
+    native_dark(*environment, cast(*void)*activity, 1)
+    Require(android_device_system_dark() == 1, 31)
+    native_dark(*environment, cast(*void)*activity, 0)
+    Require(android_device_system_dark() == 0, 32)
+    Require(native_practice(*environment, null, 3) == 1, 33)
+    Require(android_take_pending_practice_start() == 3, 34)
+    Require(android_take_pending_practice_start() == -1, 35)
+    Require(native_donation(*environment, null) == 1, 36)
+    Require(android_take_pending_donation_reminder() == 1, 37)
+    Require(android_take_pending_donation_reminder() == 0, 38)
+
+    path: [64]u8
+    CopyCString("/tmp/export.csv", path[:])
+    Require(health_connect_send_host(*path[0]), 40)
+    Require(frame_count == 0 && detach_count == 0, 41)
+    thread_detached = true
+    Require(health_connect_send_host(*path[0]), 42)
+    Require(attach_count == 1 && detach_count == 1 && frame_count == 0, 43)
+    exception_pending = 1
+    Require(!health_connect_send_host(*path[0]), 44)
+    Require(exception_pending == 0 && frame_count == 0, 45)
+    thread_detached = false
+    frame_failed = true
+    Require(!health_connect_send_host(*path[0]) && exception_pending == 0 &&
+        frame_count == 0, 49)
+    frame_failed = false
+    android_wakelock_set_activity(*environment, cast(*void)*activity)
+    Require(wakelock_acquire_host() && wakelock_release_host(), 46)
+    Require(wakelock_keep_screen_on_host() && wakelock_allow_screen_off_host(), 47)
+    Require(!wakelock_update_notification_host(null), 48)
+
+    Require(import_open_picker_host(3, *path[0]) && last_integer == 3, 50)
+    android_import_native_selected(*environment, null, 3, cast(*void)*path[0])
+    output: [64]u8
+    Require(import_poll_result_host(2, *output[0], 64) == 0, 51)
+    Require(import_poll_result_host(3, *output[0], 64) == 1, 52)
+    Require(CStringEquals(*output[0], "/tmp/export.csv"), 53)
+    Require(import_poll_result_host(3, *output[0], 64) == 0, 54)
+    android_import_native_cancelled(*environment, null, 3)
+    Require(import_poll_result_host(3, *output[0], 64) == 2, 55)
+    Require(push_host_configure() && push_host_configure_with(*path[0]), 56)
+    Require(push_host_registered() == 1, 57)
+    catalog: PushCatalog
+    Require(push_host_read_catalog(*catalog) && catalog.count == 0, 58)
+
+    android_device_set_orientation_mode(2)
+    Require(last_integer == 2, 60)
+    android_device_set_soft_keyboard_visible(8)
+    Require(last_integer == 1, 61)
+    Require(android_device_copy_text_and_toast(*path[0], null) == 1, 62)
+    Require(android_device_app_icon() == 2 && android_device_set_app_icon(1) == 1, 63)
+    input_session := SessionOpen()
+    android_text_input_open(input_session)
+    android_text_input_frame(input_session, true)
+    Require(last_integer == 1, 64)
+    android_device_native_text_input_commit(*environment, null, 0x1f642)
+    android_device_native_text_input_backspace(*environment, null)
+    android_device_native_text_input_enter(*environment, null)
+    android_text_input_begin_frame(input_session)
+    Require(android_text_input_character() == 0x1f642 &&
+        android_text_input_character() == 0, 65)
+    android_text_input_begin_frame(input_session)
+    Require(android_text_input_key_pressed(259), 66)
+    android_text_input_begin_frame(input_session)
+    Require(android_text_input_key_pressed(257), 67)
+    android_text_input_close(input_session)
+    Require(last_integer == 0, 68)
+    SessionClose(input_session)
+
+    error: [64]u8
+    handle := android_asset_start_host(*path[0], *path[0], *error[0], 64)
+    Require(handle > 0 && java_handle == cast(s64)handle, 70)
+    status: s32
+    http_status: s32
+    bytes: u64
+    total_bytes: u64
+    android_runtime_asset_native_progress(*environment, null, cast(s64)handle, 8, 10)
+    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
+        *total_bytes, *error[0], 64) && status == 1 && bytes == 8 && total_bytes == 10, 71)
+    android_runtime_asset_native_succeeded(*environment, null, cast(s64)handle, 10, 200)
+    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
+        *total_bytes, *error[0], 64) && status == 2 && bytes == 10 && http_status == 200, 72)
+    android_runtime_asset_native_failed(*environment, null, cast(s64)handle, 500, null)
+    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
+        *total_bytes, *error[0], 64) && status == 2, 73)
+    android_asset_release_host(handle)
+    Require(!android_asset_poll_host(handle, *status, *http_status, *bytes,
+        *total_bytes, *error[0], 64), 74)
+
+    payload: [3]u8
+    payload[0] = 65
+    filename: [32]u8
+    CopyCString("export.csv", filename[:])
+    Require(android_share_bytes(*payload[0], 3, *filename[0], null, null) == 1, 80)
+    Require(android_share_bytes(*payload[0], cast(usize)2147483648,
+        *filename[0], null, null) == 0, 81)
+    CopyCString("monero:84abc?tx_amount=0.1", path[:])
+    Require(CanOpenURI(*path[0]) == 1 && OpenURI(*path[0]) == 1, 84)
+    resolve_available = false
+    Require(CanOpenURI(*path[0]) == 0 && OpenURI(*path[0]) == 0, 85)
+    Require(frame_count == 0, 86)
+    unused CopyCString("zh-Hant-TW;ja-JP", locale_preferences[:])
+    Require(app_locale_preferences() == "zh-Hant-TW;ja-JP" && frame_count == 0, 89)
+    network_test = true
+    transfer: AndroidTransfer
+    transport := AndroidTransport(*transfer)
+    request: HttpRequest
+    request.method = "POST"
+    request.url = "https://example.invalid/sync"
+    request.content_type = "application/json"
+    request.body = "{}"
+    request.token = "token"
+    Require(transport.start(transport.context, request, output[:]), 93)
+    Require(!transport.start(transport.context, request, output[:]), 94)
+    Require(transport.poll(transport.context, *http_status) == -1, 95)
+    network_state = 404
+    Require(transport.poll(transport.context, *http_status) == 1 &&
+        http_status == 404 && transfer.handle == 0 && output[0] == 65 &&
+        output[1] == 0 && output[2] == 66 && output[3] == 0 &&
+        network_cancelled == 1, 96)
+    Require(transport.start(transport.context, request, output[:]), 97)
+    network_length = 64
+    Require(transport.poll(transport.context, *http_status) == 0 &&
+        output[0] == 0 && network_cancelled == 2, 98)
+    network_header_failed = true
+    Require(!transport.start(transport.context, request, output[:]) &&
+        transfer.handle == 0 && network_cancelled == 3, 99)
+    network_header_failed = false
+    Require(transport.start(transport.context, request, output[:]), 100)
+    transport.cancel(transport.context)
+    Require(transfer.handle == 0 && transfer.output.count == 0 &&
+        network_cancelled == 4 && frame_count == 0, 101)
+    activity_ready = false
+    Require(!health_connect_send_host(*path[0]), 82)
+    Require(frame_count == 0, 83)
+    return 0
+}

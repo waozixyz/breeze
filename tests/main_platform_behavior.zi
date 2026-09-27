@@ -1,0 +1,78 @@
+#import "main_platform"
+#import "trace_sink"
+#import "trace_log"
+#import "byte_text_linux"
+#import "c_string"
+
+c :: #system_library "c";
+raylib :: #system_library "raylib";
+HostTraceLog :: (level: s32, format: *u8, arguments: ..any) #foreign raylib "TraceLog";
+ReadEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+RaiseSignal :: (number: s32) -> s32 #foreign c "raise";
+
+EnvironmentValue :: (name: string) -> string {
+    bytes: [64]u8
+    if !CopyCString(name, bytes[:]) {
+        return ""
+    }
+    pointer := ReadEnvironment(*bytes[0])
+    if pointer == null {
+        return ""
+    }
+    return TextFromCString(pointer)
+}
+
+#program_export
+main :: () -> s32 {
+    app_id: [32]u8
+    name: [32]u8
+    if !CopyCString("inbe.test", app_id[:]) ||
+        !CopyCString("Inbe Test", name[:]) {
+        return 1
+    }
+    native_apply_desktop_identity(*app_id[0], *name[0])
+    if EnvironmentValue("SDL_APP_NAME") != "Inbe Test" ||
+        EnvironmentValue("SDL_VIDEO_X11_WMCLASS") != "inbe.test" ||
+        EnvironmentValue("SDL_VIDEO_WAYLAND_APP_ID") != "inbe.test" {
+        return 2
+    }
+    native_window_environment()
+    if EnvironmentValue("SDL_VIDEO_ALLOW_SCREENSAVER") != "1" {
+        return 3
+    }
+    native_screenshot_data_root()
+    root := EnvironmentValue("APP_DATA_ROOT")
+    if root.count <= 21 || root[0:21] != "/tmp/inbe-screenshot-" {
+        return 4
+    }
+    native_install_shutdown_handlers()
+    if native_shutdown_requested() != 0 || RaiseSignal(15) != 0 ||
+        native_shutdown_requested() != 1 {
+        return 5
+    }
+    message: [3072]u8
+    if !StartupErrorMessage("WGL creation failed", message[:]) {
+        return 6
+    }
+    text := TextFromCString(*message[0])
+    if text.count < 200 {
+        return 7
+    }
+    native_install_trace_log_filter()
+    quiet: [32]u8
+    CopyCString("IMAGE: hidden", quiet[:])
+    HostTraceLog(3, *quiet[0])
+    TraceLog(4, "IMAGE: retained")
+    format: [32]u8
+    if !CopyCString("values %d %.2f %s", format[:]) {
+        return 8
+    }
+    HostTraceLog(3, *format[0], 42, cast(float64)3.25, *app_id[0])
+    InstallWindowsLogger()
+    TraceLog(5, "WGL test failure")
+    if TraceRecentErrors() != "[ERROR] WGL test failure\n" {
+        return 9
+    }
+    CloseTraceStreams()
+    return 0
+}

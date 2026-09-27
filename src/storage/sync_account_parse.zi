@@ -1,0 +1,150 @@
+#import, file "account_types.zi";
+#import, file "sync_crypto.zi";
+#import, file "../app/text_buffers.zi";
+
+AccountTrimValue :: (value: string) -> string {
+    start: s64 = 0
+    finish: s64 = value.count
+    while start < finish && (value[start] == cast(u8)32 || value[start] == cast(u8)9) {
+        start += 1
+    }
+    while finish > start && (value[finish - 1] == cast(u8)32 ||
+        value[finish - 1] == cast(u8)9 || value[finish - 1] == cast(u8)13) {
+        finish -= 1
+    }
+    return value[start:finish]
+}
+
+AccountStartsWith :: (value: string, prefix: string) -> bool {
+    if value.count < prefix.count { return false }
+    index: s64 = 0
+    while index < prefix.count {
+        if value[index] != prefix[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+AccountField :: (line: string, prefix: string, output: []u8) -> bool {
+    if !AccountStartsWith(line, prefix) { return false }
+    return AppCopyText(AccountTrimValue(line[prefix.count:line.count]), output)
+}
+
+AccountJsonWhitespace :: (byte: u8) -> bool {
+    return byte == cast(u8)32 || byte == cast(u8)9 ||
+        byte == cast(u8)10 || byte == cast(u8)13
+}
+
+AccountJsonExportedKey :: (json: string, output: []u8) -> bool {
+    field: string = "\"exported_key\""
+    index: s64 = 0
+    while index + field.count < json.count {
+        if !AccountStartsWith(json[index:json.count], field) {
+            index += 1
+            continue
+        }
+        index += field.count
+        while index < json.count && AccountJsonWhitespace(json[index]) { index += 1 }
+        if index >= json.count || json[index] != cast(u8)58 { return false }
+        index += 1
+        while index < json.count && AccountJsonWhitespace(json[index]) { index += 1 }
+        if index >= json.count || json[index] != cast(u8)34 { return false }
+        index += 1
+        used: s64 = 0
+        while index < json.count && json[index] != cast(u8)34 {
+            byte := json[index]
+            if byte == cast(u8)92 {
+                index += 1
+                if index >= json.count { return false }
+                escaped := json[index]
+                if escaped == cast(u8)110 { byte = cast(u8)10 }
+                else if escaped == cast(u8)114 { byte = cast(u8)13 }
+                else if escaped == cast(u8)116 { byte = cast(u8)9 }
+                else if escaped == cast(u8)92 || escaped == cast(u8)34 { byte = escaped }
+                else { return false }
+            }
+            if byte == 0 || used >= output.count - 1 { return false }
+            output[used] = byte
+            used += 1
+            index += 1
+        }
+        if index >= json.count || used == 0 { return false }
+        output[used] = 0
+        return true
+    }
+    return false
+}
+
+ValidateSyncAccount :: (account: *SyncAccount) -> s32 {
+    if account == null { return 0 }
+    public_key: [1312]u8
+    private_key: [2560]u8
+    expected_id: [SYNC_PUBLIC_ID_HEX_SIZE]u8
+    public_text := AppTextFromCString(*account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE)
+    private_text := AppTextFromCString(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    if SyncCryptoHexToBytes(public_text, *public_key[0], 1312) == 0 ||
+        SyncCryptoHexToBytes(private_text, *private_key[0], 2560) == 0 {
+        return 0
+    }
+    SyncCryptoSha256Hex(*public_key[0], 1312, *expected_id[0])
+    id := AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+    if id.count == 0 {
+        index: s64 = 0
+        while index < SYNC_PUBLIC_ID_HEX_SIZE {
+            account.public_id[index] = expected_id[index]
+            index += 1
+        }
+        return 1
+    }
+    if id.count != 64 { return 0 }
+    index: s64 = 0
+    while index < 65 {
+        if account.public_id[index] != expected_id[index] { return 0 }
+        index += 1
+    }
+    return 1
+}
+
+#program_export
+ParseSyncAccountText :: (body: string, account: *SyncAccount) -> s32 {
+    if account == null { return 0 }
+    account.* = SyncAccount.{}
+    if body.count == 0 || body.count >= SYNC_ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE {
+        return 0
+    }
+    if body.count >= 3 && body[0] == cast(u8)239 &&
+        body[1] == cast(u8)187 && body[2] == cast(u8)191 {
+        body = body[3:body.count]
+    }
+    json_body: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE]u8
+    json_start: s64 = 0
+    while json_start < body.count && AccountJsonWhitespace(body[json_start]) {
+        json_start += 1
+    }
+    if json_start < body.count && body[json_start] == cast(u8)123 {
+        if !AccountJsonExportedKey(body, json_body[:]) { return 0 }
+        body = AppTextFromCString(*json_body[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE)
+    }
+    if AccountStartsWith(body, "ksync-account-key-v2") { return 0 }
+    cursor: s64 = 0
+    while cursor < body.count {
+        finish := cursor
+        while finish < body.count && body[finish] != cast(u8)10 { finish += 1 }
+        line := body[cursor:finish]
+        if AccountStartsWith(line, "public_id=") {
+            if !AccountField(line, "public_id=", account.public_id[:]) { return 0 }
+        } else if AccountStartsWith(line, "public_key=") {
+            if !AccountField(line, "public_key=", account.public_key_hex[:]) { return 0 }
+        } else if AccountStartsWith(line, "private_key=") {
+            if !AccountField(line, "private_key=", account.private_key_hex[:]) { return 0 }
+        } else if AccountStartsWith(line, "secret_key=") {
+            if !AccountField(line, "secret_key=", account.private_key_hex[:]) { return 0 }
+        }
+        cursor = finish + 1
+    }
+    if ValidateSyncAccount(account) == 0 {
+        account.* = SyncAccount.{}
+        return 0
+    }
+    return 1
+}

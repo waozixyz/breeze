@@ -1,0 +1,186 @@
+// The app's background sync lock and detached worker lifetime.
+c :: #system_library "c";
+
+#scope_export
+SyncWorkerFn :: #type (*void) -> void;
+SyncWorkerCall :: struct {
+    worker: SyncWorkerFn
+    userdata: *void
+}
+
+HostWorkerAllocate :: (count: usize, size: usize) -> *void #foreign c "calloc";
+HostWorkerFree :: (value: *void) #foreign c "free";
+HostWorkerAbort :: () #foreign c "abort";
+
+SYNC_WEB :: #defined(PLATFORM_WEB)
+SYNC_WINDOWS :: #defined(_WIN32)
+
+#if !SYNC_WEB && !SYNC_WINDOWS {
+    PosixOnceRoutine :: #type () -> void #c_call;
+    PosixThreadRoutine :: #type (*void) -> *void #c_call;
+    PosixOnce :: (state: *s32, routine: PosixOnceRoutine) -> s32 #foreign c "pthread_once";
+    PosixMutexInit :: (mutex: *void, attributes: *void) -> s32 #foreign c "pthread_mutex_init";
+    PosixMutexLock :: (mutex: *void) -> s32 #foreign c "pthread_mutex_lock";
+    PosixMutexUnlock :: (mutex: *void) -> s32 #foreign c "pthread_mutex_unlock";
+    PosixThreadCreate :: (thread: *usize, attributes: *void,
+        routine: PosixThreadRoutine, argument: *void) -> s32 #foreign c "pthread_create";
+    PosixThreadDetach :: (thread: usize) -> s32 #foreign c "pthread_detach";
+    PosixSleep :: (seconds: u32) -> u32 #foreign c "sleep";
+
+    sync_mutex_once: s32;
+    sync_mutex: *void;
+
+    InitSyncMutex :: () {
+        sync_mutex = HostWorkerAllocate(1, 128)
+        if sync_mutex == null {
+            HostWorkerAbort()
+        }
+        if PosixMutexInit(sync_mutex, null) != 0 {
+            HostWorkerAbort()
+        }
+    }
+
+    RunPosixSyncWorker :: (argument: *void) -> *void {
+        call := cast(*SyncWorkerCall)argument
+        worker := call.worker
+        userdata := call.userdata
+        HostWorkerFree(argument)
+        worker(userdata)
+        return null
+    }
+}
+
+#if SYNC_WINDOWS && !SYNC_WEB {
+    WindowsThreadRoutine :: #type (*void) -> u32 #c_call;
+    WindowsLock :: (lock: *usize) #foreign c "AcquireSRWLockExclusive";
+    WindowsUnlock :: (lock: *usize) #foreign c "ReleaseSRWLockExclusive";
+    WindowsCreateThread :: (attributes: *void, stack_size: usize,
+        routine: WindowsThreadRoutine, argument: *void,
+        flags: u32, thread_id: *u32) -> *void #foreign c "CreateThread";
+    WindowsCloseHandle :: (handle: *void) -> s32 #foreign c "CloseHandle";
+    WindowsSleep :: (milliseconds: u32) #foreign c "Sleep";
+    sync_windows_lock: usize;
+
+    RunWindowsSyncWorker :: (argument: *void) -> u32 {
+        call := cast(*SyncWorkerCall)argument
+        worker := call.worker
+        userdata := call.userdata
+        HostWorkerFree(argument)
+        worker(userdata)
+        return 0
+    }
+}
+
+#program_export
+sync_host_lock :: () {
+    #if SYNC_WEB {
+        return
+    }
+    #if SYNC_WINDOWS {
+        WindowsLock(*sync_windows_lock)
+        return
+    }
+    #if !SYNC_WEB && !SYNC_WINDOWS {
+        once_routine: PosixOnceRoutine = InitSyncMutex
+        if PosixOnce(*sync_mutex_once, once_routine) != 0 {
+            HostWorkerAbort()
+        }
+        if PosixMutexLock(sync_mutex) != 0 {
+            HostWorkerAbort()
+        }
+    }
+}
+
+#program_export
+sync_host_unlock :: () {
+    #if SYNC_WEB {
+        return
+    }
+    #if SYNC_WINDOWS {
+        WindowsUnlock(*sync_windows_lock)
+        return
+    }
+    #if !SYNC_WEB && !SYNC_WINDOWS {
+        if PosixMutexUnlock(sync_mutex) != 0 {
+            HostWorkerAbort()
+        }
+    }
+}
+
+#program_export
+sync_host_start :: (worker: SyncWorkerFn, userdata: *void) -> s32 {
+    #if SYNC_WEB {
+        unused worker
+        unused userdata
+        return 0
+    }
+    if worker == null {
+        return 0
+    }
+    // A Ziran callback carries context and code pointers, plus userdata.
+    call := cast(*SyncWorkerCall)HostWorkerAllocate(3,
+        size_of(*void))
+    if call == null {
+        return 0
+    }
+    call.worker = worker
+    call.userdata = userdata
+    #if SYNC_WINDOWS {
+        routine: WindowsThreadRoutine = RunWindowsSyncWorker
+        thread := WindowsCreateThread(null, 0, routine,
+            cast(*void)call, 0, null)
+        if thread == null {
+            HostWorkerFree(cast(*void)call)
+            return 0
+        }
+        WindowsCloseHandle(thread)
+        return 1
+    }
+    #if !SYNC_WEB && !SYNC_WINDOWS {
+        routine: PosixThreadRoutine = RunPosixSyncWorker
+        thread: usize
+        if PosixThreadCreate(*thread, null, routine,
+            cast(*void)call) != 0 {
+            HostWorkerFree(cast(*void)call)
+            return 0
+        }
+        if PosixThreadDetach(thread) != 0 {
+            HostWorkerAbort()
+        }
+        return 1
+    }
+    return 0
+}
+
+#program_export
+sync_host_sleep_seconds :: (seconds: s32) {
+    if seconds <= 0 {
+        return
+    }
+    #if SYNC_WEB {
+        return
+    }
+    #if SYNC_WINDOWS {
+        WindowsSleep(cast(u32)seconds * cast(u32)1000)
+        return
+    }
+    #if !SYNC_WEB && !SYNC_WINDOWS {
+        remaining := cast(u32)seconds
+        while remaining > 0 {
+            remaining = PosixSleep(remaining)
+        }
+    }
+}
+
+SyncLock :: () {
+    sync_host_lock()
+}
+SyncUnlock :: () {
+    sync_host_unlock()
+}
+SyncStart :: (worker: SyncWorkerFn, userdata: *void) -> s32 {
+    return sync_host_start(worker, userdata)
+}
+SyncSleepSeconds :: (seconds: s32) {
+    sync_host_sleep_seconds(seconds)
+}

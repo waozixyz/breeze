@@ -20,7 +20,9 @@ class VersionTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         paths = (
             "CHANGELOG.md", "Makefile", "mkfile", "update_version.sh",
-            "src/core/version.h", "droid/app/build.gradle", "windows/inbe.rc",
+            "src/core/version.h", "src/core/version.zi",
+            "src/storage/sync_result.zi",
+            "droid/app/build.gradle", "windows/inbe.rc",
             "packaging/click/manifest.json", "packaging/click/control",
             "packaging/click/inbe.metainfo.xml",
             "packaging/linux/appimage/inbe.appdata.xml",
@@ -65,9 +67,12 @@ class VersionTest(unittest.TestCase):
     def test_build_gate_rejects_mismatch_after_success(self):
         (self.root / "vendor").mkdir()
         (self.root / "vendor/kryon").symlink_to(REPO / "vendor/kryon", target_is_directory=True)
+        (self.root / "vendor/bend").symlink_to(REPO / "vendor/bend", target_is_directory=True)
         shutil.copytree(REPO / "laws", self.root / "laws")
         shutil.copy2(REPO / "scripts/generate-sync-retry.mjs", self.root / "scripts")
         shutil.copy2(REPO / "scripts/generate-storage-layout.mjs", self.root / "scripts")
+        shutil.copy2(REPO / "scripts/bend-laws.mjs", self.root / "scripts")
+        shutil.copy2(REPO / "scripts/bend-pin.json", self.root / "scripts")
 
         def build():
             return subprocess.run(["make", "build-laws"], cwd=self.root,
@@ -75,7 +80,7 @@ class VersionTest(unittest.TestCase):
 
         valid = build()
         self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
-        generated = self.root / "build/proofs/sync_retry_table.h"
+        generated = self.root / "src/app/sync_retry.zi"
         self.assertTrue(generated.exists())
         name = "droid/app/build.gradle"
         self.write(name, self.read(name).replace(self.version, "9.8.7"))
@@ -114,6 +119,15 @@ class VersionTest(unittest.TestCase):
         name = ".github/workflows/release.yml"
         self.write(name, self.read(name) + "\n# Read INBE_VERSION_STRING\n")
         self.assertIn("INBE_VERSION_STRING", self.check(success=False).stderr)
+
+    def test_ziran_version_missing_or_stale_is_rejected(self):
+        name = "src/core/version.zi"
+        original = self.read(name)
+        self.write(name, original.replace(f'VersionString :: "{self.version}"',
+                                          'VersionString :: "9.8.7"'))
+        self.assertIn(name, self.check(success=False).stderr)
+        (self.root / name).unlink()
+        self.assertIn("missing", self.check(success=False).stderr)
 
     def test_missing_package_blocks_updater_before_any_write(self):
         (self.root / "windows/inbe.rc").unlink()

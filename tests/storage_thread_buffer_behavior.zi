@@ -1,0 +1,43 @@
+#import, file "../src/storage/storage_thread_buffers.zi";
+
+c :: #system_library "c";
+WorkerRoutine :: #type (*void) -> *void #c_call;
+TestThreadCreate :: (thread: *usize, attributes: *void,
+    worker: WorkerRoutine, data: *void) -> s32 #foreign c "pthread_create";
+TestThreadJoin :: (thread: usize, result: **void) -> s32 #foreign c "pthread_join";
+
+CheckWorkerBuffer :: (data: *void) -> *void {
+    result: *s32 = cast(*s32)data
+    buffer := storage_setting_text_buffer_host()
+    if buffer == null || buffer[0] != cast(u8)0 {
+        return null
+    }
+    buffer[0] = cast(u8)66
+    if storage_setting_text_buffer_host() == buffer {
+        result.* = 1
+    }
+    return null
+}
+
+#program_export
+main :: () -> s32 {
+    buffer := storage_setting_text_buffer_host()
+    if buffer == null || storage_setting_text_buffer_host() != buffer {
+        return 1
+    }
+    buffer[0] = cast(u8)65
+    worker: WorkerRoutine = CheckWorkerBuffer
+    thread: usize = 0
+    worker_ok: s32 = 0
+    if TestThreadCreate(*thread, null, worker,
+        cast(*void)(*worker_ok)) != 0 {
+        return 2
+    }
+    if TestThreadJoin(thread, null) != 0 {
+        return 3
+    }
+    if worker_ok != 1 || buffer[0] != cast(u8)65 {
+        return 4
+    }
+    return 0
+}

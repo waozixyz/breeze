@@ -1,0 +1,77 @@
+#import "update"
+#import "text_buffer"
+
+// The standard library parses portable release metadata. Inbe requires an
+// HTTPS release page and only offers self-update for a bounded HTTPS artifact.
+AppcastSelection :: struct {
+    version: [32]u8
+    release_url: [512]u8
+    artifact_url: [512]u8
+    sha256: [65]u8
+    artifact_size: s64
+    newer: bool
+    self_update: bool
+    valid: bool
+}
+
+AppcastHttps :: (value: string) -> bool {
+    if value.count < 9 { return false }
+    return value[0] == cast(u8)104 && value[1] == cast(u8)116 &&
+        value[2] == cast(u8)116 && value[3] == cast(u8)112 &&
+        value[4] == cast(u8)115 && value[5] == cast(u8)58 &&
+        value[6] == cast(u8)47 && value[7] == cast(u8)47
+}
+
+NumericRelease :: (value: string) -> bool {
+    dots: s32 = 0
+    digits: s32 = 0
+    number: s32 = 0
+    index: s64 = 0
+    while index < cast(s64)value.count {
+        ch := value[index]
+        if ch == cast(u8)46 {
+            if digits == 0 || dots >= 2 { return false }
+            dots += 1
+            digits = 0
+            number = 0
+        } else if ch >= cast(u8)48 && ch <= cast(u8)57 {
+            digit := cast(s32)(ch - cast(u8)48)
+            if number > (2147483647 - digit) / 10 { return false }
+            number = number * 10 + digit
+            digits += 1
+        } else {
+            return false
+        }
+        index += 1
+    }
+    return dots == 2 && digits > 0
+}
+
+#program_export
+ReleaseIsNewer :: (candidate: string, installed: string) -> bool {
+    return NumericRelease(candidate) && NumericRelease(installed) &&
+        CompareVersions(candidate, installed) > 0
+}
+
+#program_export
+SelectAppcast :: (document: string, installed: string,
+    channel: string) -> AppcastSelection {
+    result: AppcastSelection
+    parsed := ParseAppcast(document, channel)
+    if !parsed.valid { return result }
+    version := TextUntilNul(parsed.version[:])
+    release := TextUntilNul(parsed.notes_url[:])
+    if !AppcastHttps(release) { return result }
+    result.version = parsed.version
+    result.release_url = parsed.notes_url
+    result.newer = ReleaseIsNewer(version, installed)
+    result.valid = true
+    if !result.newer || !parsed.artifact.available { return result }
+    result.artifact_url = parsed.artifact.url
+    result.sha256 = parsed.artifact.sha256
+    result.artifact_size = parsed.artifact.size
+    result.self_update = AppcastHttps(
+        TextUntilNul(parsed.artifact.url[:])) &&
+        result.artifact_size > 0
+    return result
+}

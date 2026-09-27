@@ -1,0 +1,200 @@
+sqlite3_lib :: #system_library "sqlite3";
+c :: #system_library "c";
+time :: (t: *s64) -> s64 #foreign c;
+LOG_INFO :: 3
+LOG_WARNING :: 4
+LOG_ERROR :: 5
+TraceLog :: (level: s32, message: *u8, args: ..any) #foreign c;
+sqlite3_open_v2 :: (path: *u8, database: **void, flags: s32, vfs: *u8) -> s32 #foreign sqlite3_lib "sqlite3_open_v2";
+sqlite3_close :: (database: *void) -> s32 #foreign sqlite3_lib "sqlite3_close";
+sqlite3_busy_timeout :: (database: *void, milliseconds: s32) -> s32 #foreign sqlite3_lib "sqlite3_busy_timeout";
+sqlite3_db_cacheflush :: (db: *void) -> s32 #foreign sqlite3_lib "sqlite3_db_cacheflush";
+STORAGE_PATH_SIZE :: 1024
+
+
+#import, file "state.zi";
+#import, file "storage_layout.zi";
+#import, file "path_join.zi";
+#import, file "paths.zi";
+#import, file "database_upgrade.zi";
+#import, file "schema.zi";
+storage_migrate_default_habit_ids :: () -> s32 #foreign c;
+storage_migrate_habit_ids_to_uuid :: () -> s32 #foreign c;
+storage_migrate_default_meditation_activity_mask :: () -> s32 #foreign c;
+storage_materialize_session_habit_days :: () -> s32 #foreign c;
+migrate_legacy_file_sessions_once :: (root: *u8) -> s32 #foreign c;
+#import, file "user.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "sqlite.zi";
+#import, file "sql_transaction.zi";
+
+LogStorage :: (level: s32, message: string) {
+    buffer: [256]u8
+    if AppCopyText(message, buffer[:]) {
+        TraceLog(level, *buffer[0])
+    }
+}
+
+LogStorageText :: (level: s32, message: string, detail: string) {
+    buffer: [256]u8
+    if !AppCopyText(message, buffer[:]) { return }
+    used: s32 = cast(s32)message.count
+    index: s32 = 0
+    while index < cast(s32)detail.count && used + 1 < 256 {
+        byte := detail[index]
+        if byte == cast(u8)0 { break }
+        buffer[used] = byte
+        used += 1
+        index += 1
+    }
+    buffer[used] = cast(u8)0
+    TraceLog(level, *buffer[0])
+}
+
+
+
+
+
+
+
+
+
+WIN32 :: #defined(_WIN32)
+ANDROID :: #defined(ANDROID_BUILD)
+EMSCRIPTEN :: #defined(__EMSCRIPTEN__)
+WEB :: #defined(PLATFORM_WEB)
+
+#program_export
+exec_sql :: (sql: string) -> s32 {
+    result := SqliteExecTransaction(storage_state_handle().db, sql)
+    if result == 0 {
+        LogStorage(LOG_ERROR, "STORAGE: SQL failed")
+    }
+    return result
+}
+
+#program_export
+storage_meta_text_buffer :: () -> *u8 {
+    return storage_user_id_buffer()
+}
+
+#program_export
+now_seconds :: () -> s64 {
+    return cast(s64)time(null)
+}
+
+#program_export
+bind_text :: (stmt: *void, index: s32, text: string) -> s32 {
+    if text.count > 2147483647 {
+        return 0
+    }
+    if SqliteBindTextString(stmt, index, text, cast(s32)text.count) == SQLITE_OK {
+        return 1
+    }
+    return 0
+}
+
+DatabaseSidecarName :: (database_name: string, suffix: string,
+    output: []u8) -> bool {
+    if database_name.count == 0 || suffix.count == 0 ||
+    database_name.count + suffix.count >= output.count {
+        return false
+    }
+    index: s64 = 0
+    while index < cast(s64)database_name.count {
+        output[index] = database_name[index]
+        index += 1
+    }
+    offset: s64 = 0
+    while offset < cast(s64)suffix.count {
+        output[index + offset] = suffix[offset]
+        offset += 1
+    }
+    output[index + offset] = cast(u8)0
+    return true
+}
+
+#program_export
+storage_init :: (root: string) -> s32 {
+    legacy_path: [STORAGE_PATH_SIZE] u8
+    current_path: [STORAGE_PATH_SIZE] u8
+    marker_path: [STORAGE_PATH_SIZE] u8
+    temporary_path: [STORAGE_PATH_SIZE] u8
+    marker_name: [64]u8
+    temporary_name: [64]u8
+
+    if root.count == 0 {
+        return 0
+    }
+    state: *StorageState = storage_state_handle()
+    state.pending_sync_outbox_seq = 0
+    state.last_sync_changed = 0
+    if !AppCopyText(root, g_storage.root[:]) { return 0 }
+    root_text: string = AppTextFromCString(*state.root[0], STORAGE_PATH_SIZE)
+    if storage_ensure_dir(root_text) == 0 {
+        LogStorage(LOG_ERROR, "STORAGE: failed to create root directory")
+        return 0
+    }
+    legacy_name: [32] u8
+    current_name: [32] u8
+    if !AppCopyText(PreviousDatabaseName, legacy_name[:]) ||
+    !AppCopyText(CurrentDatabaseName, current_name[:]) ||
+    !DatabaseSidecarName(CurrentDatabaseName, ".migrated", marker_name[:]) ||
+    !DatabaseSidecarName(CurrentDatabaseName, ".migrating", temporary_name[:]) {
+        return 0
+    }
+    if storage_join_path(*legacy_path[0], cast(u64)size_of(type_of(legacy_path)),
+        *storage_state_handle().root[0], *legacy_name[0]) == 0  || storage_join_path(*current_path[0], cast(u64)size_of(type_of(current_path)),
+        *storage_state_handle().root[0], *current_name[0]) == 0 ||
+    storage_join_path(*marker_path[0], cast(u64)size_of(type_of(marker_path)),
+        *storage_state_handle().root[0], *marker_name[0]) == 0 ||
+    storage_join_path(*temporary_path[0], cast(u64)size_of(type_of(temporary_path)),
+        *storage_state_handle().root[0], *temporary_name[0]) == 0 {
+        LogStorage(LOG_ERROR, "STORAGE: database path is too long")
+        return 0
+    }
+    if select_database_path(*legacy_path[0], *current_path[0], *marker_path[0],
+        *temporary_path[0], *current_name[0], *storage_state_handle().db_path[0],
+        cast(u64)size_of(type_of(storage_state_handle().db_path))) == 0 {
+        LogStorage(LOG_ERROR, "STORAGE: database migration could not select a safe path")
+        return 0
+    }
+    if sqlite3_open_v2(*storage_state_handle().db_path[0], *storage_state_handle().db,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+        null) != SQLITE_OK {
+        LogStorage(LOG_ERROR, "STORAGE: failed to open database")
+        sqlite3_close(storage_state_handle().db)
+        storage_state_handle().db = null
+        return 0
+    }
+    sqlite3_busy_timeout(storage_state_handle().db, 1000)
+    if schema_create() == 0 || migrate_schema() == 0 || load_or_create_user() == 0 {
+        sqlite3_close(storage_state_handle().db)
+        storage_state_handle().db = null
+        return 0
+    }
+    storage_migrate_default_habit_ids()
+    storage_migrate_habit_ids_to_uuid()
+    storage_migrate_default_meditation_activity_mask()
+    cast(s32)0
+    storage_materialize_session_habit_days()
+    if migrate_legacy_file_sessions_once(*storage_state_handle().root[0]) == 0 {
+        LogStorage(LOG_WARNING, "STORAGE: historical session import deferred; source files retained")
+    }
+    return 1
+}
+
+#program_export
+storage_close :: () {
+    if storage_state_handle().db != null {
+        sqlite3_close(storage_state_handle().db)
+        storage_state_handle().db = null
+    }
+    storage_state_handle().pending_sync_outbox_seq = 0
+    storage_state_handle().last_sync_changed = 0
+}
+
+#program_export
+storage_db_path :: () -> string {
+    return AppTextFromCString(*storage_state_handle().db_path[0], 512)
+}

@@ -1,0 +1,60 @@
+#import "c_string"
+#import, file "text_buffers.zi";
+
+#scope_file
+c :: #system_library "c";
+RouteGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
+RouteLogLine :: (line: *u8) #foreign c "app_log_line";
+
+RouteAppend :: (output: []u8, used: *s32, value: string) -> bool {
+    if value.count > output.count - cast(s64)used.* - 1 {
+        return false
+    }
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        output[used.*] = value[index]
+        used.* += 1
+        index += 1
+    }
+    return true
+}
+
+RouteAppendInt :: (output: []u8, used: *s32, value: s32) -> bool {
+    digits: [16]u8
+    if !AppFormatS32(value, digits[:]) {
+        return false
+    }
+    return RouteAppend(output, used, AppTextFromCString(*digits[0], 16))
+}
+
+#scope_export
+#program_export
+app_route_log :: (event: s32, frame: s32, from: s32, to: s32) {
+    name: [17]u8
+    if !CopyCString("INBE_DEBUG_ROUTE", name[:]) {
+        return
+    }
+    debug: *u8 = RouteGetEnv(*name[0])
+    if debug == null || debug[0] == cast(u8)0 {
+        return
+    }
+
+    line: [128]u8
+    used: s32 = 0
+    if event == 0 {
+        if !RouteAppend(line[:], *used, "ROUTE switch frame=") {
+            return
+        }
+    } else if !RouteAppend(line[:], *used, "ROUTE request frame=") {
+        return
+    }
+    if !RouteAppendInt(line[:], *used, frame) ||
+    !RouteAppend(line[:], *used, " screen=") ||
+    !RouteAppendInt(line[:], *used, from) ||
+    !RouteAppend(line[:], *used, "->") ||
+    !RouteAppendInt(line[:], *used, to) {
+        return
+    }
+    line[used] = cast(u8)0
+    RouteLogLine(*line[0])
+}
