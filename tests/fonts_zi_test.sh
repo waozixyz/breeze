@@ -7,8 +7,8 @@ work=$root/build/fonts-zi-test
 
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/vendor/ziran/std" \
-    --module-path "$root/vendor/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/fonts_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
@@ -19,7 +19,7 @@ python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/assets/fonts/subset/NotoSansSC-App-Regular.otf"
 "${CC:-cc}" -std=c11 -O1 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
-    -I"$root/vendor/ziran/include" -I"$work/c" -I"$root/src/app" \
+    -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/fonts_link_test.c" \
     "$work/assets.c" "$work/c"/*.c -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"

@@ -11,7 +11,7 @@ mkdir -p "$work/generated"
 
 "${CC:-cc}" -std=c11 -O0 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \
-    -I"$root/vendor-builds/sqlite" -I"$root/vendor/ziran/include" \
+    -I"$root/vendor-builds/sqlite" -I"$root/build/packages/ziran/include" \
     -I"$work/generated" \
     "$root/tests/sqlite_text_zi_test.c" "$work/generated/storage/sqlite.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" -ldl -lpthread -lm \

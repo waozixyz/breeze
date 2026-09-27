@@ -8,7 +8,7 @@ mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --root "$root/src" \
     -o "$work/generated" "$root/src/storage/export_filename.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
-    -I"$root/vendor/ziran/include" -I"$work/generated" \
+    -I"$root/build/packages/ziran/include" -I"$work/generated" \
     "$work/generated/storage/export_filename.c" \
     "$work/generated/layout.c" -x c - -o "$work/test" <<'EOF'
 #include "storage/export_filename.h"

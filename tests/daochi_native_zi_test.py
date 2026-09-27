@@ -113,8 +113,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
     executable = Path(temporary) / "client"
     subprocess.run([
         str(COMPILER), "--no-main", "--root", str(ROOT / "src"),
-        "--module-path", str(ROOT / "vendor/ziran/std"),
-        "--module-path", str(ROOT / "vendor/daochi-client"),
+        "--module-path", str(ROOT / "build/packages/ziran/std"),
+        "--module-path", str(ROOT / "build/packages/daochi-client"),
         "-o", str(generated), str(ROOT / "src/storage/daochi_native.zi"),
     ], check=True)
     sources = [
@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",
         "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
-        f"-I{ROOT / 'vendor/ziran/include'}", f"-I{generated}",
+        f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}",
         str(ROOT / "tests/daochi_native_zi_test.c"),
         *(str(generated / source) for source in sources),

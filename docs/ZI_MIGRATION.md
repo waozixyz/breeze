@@ -101,7 +101,7 @@ All graphical testing uses a private display, with inherited `DISPLAY`,
 PKG_CONFIG_PATH=/home/wao/.local/sdl2/lib/pkgconfig make -j1 native
 make native-screenshot-test
 make native-navigation-test
-make no-vendor-edits
+make package-check
 ```
 
 The screenshot test writes `build/native-screenshot-test/home.png` and

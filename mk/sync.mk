@@ -1,14 +1,14 @@
 # Inbe owns its account and transport dependencies. Kryon supplies UI only.
 CMAKE ?= cmake
 
-KRYON_LIBOQS_DIR := vendor/liboqs
+KRYON_LIBOQS_DIR := build/packages/liboqs
 KRYON_LIBOQS_BUILD_DIR := $(KRYON_VENDOR_BUILD_DIR)/inbe-liboqs
 KRYON_LIBOQS_A := $(KRYON_LIBOQS_BUILD_DIR)/lib/liboqs.a
 KRYON_LIBOQS_INCLUDE := -I$(KRYON_LIBOQS_BUILD_DIR)/include
 KRYON_LIBOQS_BUILD_TYPE ?= MinSizeRel
 KRYON_LIBOQS_MINIMAL_BUILD ?= SIG_ml_dsa_44
 
-KRYON_CURL_DIR := vendor/curl
+KRYON_CURL_DIR := build/packages/curl
 KRYON_CURL_BUILD_DIR := $(KRYON_VENDOR_BUILD_DIR)/inbe-curl
 ifeq ($(NATIVE_PLATFORM),freebsd)
 KRYON_CURL_INSTALL_LIBDIR := lib

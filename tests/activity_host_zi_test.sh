@@ -19,15 +19,15 @@ fi
 # shellcheck disable=SC2086
 "$bin/zi2zir" --check-only --define PLATFORM_DESKTOP $gio_define \
     --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/vendor/ziran/std" "$source"
+    --module-path "$root/build/packages/ziran/std" "$source"
 # shellcheck disable=SC2086
 "$bin/zi2c" --define PLATFORM_DESKTOP $gio_define \
     --entry activity_host_behavior:main --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$source"
 # shellcheck disable=SC2086
 "${CC:-cc}" -std=c11 -D_DEFAULT_SOURCE -O2 \
-    -I"$root/vendor/ziran/include" -iquote "$work/c" \
+    -I"$root/build/packages/ziran/include" -iquote "$work/c" \
     "$work/c"/*.c $gio_libraries -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     DBUS_SESSION_BUS_ADDRESS=invalid: "$work/test"

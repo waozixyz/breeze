@@ -2,6 +2,7 @@
 """Embed the app's files in a deterministic, borrowed asset table."""
 
 import argparse
+import os
 from pathlib import Path
 import json
 
@@ -25,11 +26,13 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
     entries = {}
     for file in files:
         resolved = file.resolve(strict=True)
-        path = resolved.relative_to(root).as_posix()
-        if path.startswith("vendor/kryon/styles/"):
-            path = path.removeprefix("vendor/kryon/")
-        if path.startswith("vendor/kryon/icons/"):
-            path = path.removeprefix("vendor/kryon/")
+        # Keep build/packages/<name> links unresolved so package assets get
+        # stable embedded names regardless of the package cache location.
+        path = Path(os.path.abspath(file)).relative_to(root).as_posix()
+        if path.startswith("build/packages/kryon/styles/"):
+            path = path.removeprefix("build/packages/kryon/")
+        if path.startswith("build/packages/kryon/icons/"):
+            path = path.removeprefix("build/packages/kryon/")
         if path in entries:
             raise ValueError(f"duplicate asset path: {path}")
         mime = MIME_TYPES.get(resolved.suffix.lower(), "application/octet-stream")

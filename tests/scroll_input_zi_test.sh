@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=${SCROLL_INPUT_TEST_BUILD_DIR:-"$root/build/scroll-input-test"}
 source=$root/tests/scroll_input_behavior.zi
-ui=${KRYON_UI_DIR:-$root/vendor/kryon/src/ui}
+ui=${KRYON_UI_DIR:-$root/build/packages/kryon/src/ui}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \

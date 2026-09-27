@@ -3,8 +3,8 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-standard=${2:-"$root/vendor/ziran/std"}
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+standard=${2:-"$root/build/packages/ziran/std"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 

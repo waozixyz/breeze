@@ -25,8 +25,8 @@ mkdir -p "$ASSETS_DIR"
 echo "Using Kryon-generated Noto font subsets..."
 
 mkdir -p build
-sh vendor/kryon/scripts/embed-assets.sh build/inbe_embedded_assets.c \
-    vendor/kryon/styles/kryon/*.kss \
+sh build/packages/kryon/scripts/embed-assets.sh build/inbe_embedded_assets.c \
+    build/packages/kryon/styles/kryon/*.kss \
     locales/*.txt \
     assets/easteregg/art.png \
     assets/easteregg/waozi.png \

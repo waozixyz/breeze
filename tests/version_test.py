@@ -66,8 +66,8 @@ class VersionTest(unittest.TestCase):
 
     def test_build_gate_rejects_mismatch_after_success(self):
         (self.root / "vendor").mkdir()
-        (self.root / "vendor/kryon").symlink_to(REPO / "vendor/kryon", target_is_directory=True)
-        (self.root / "vendor/bend").symlink_to(REPO / "vendor/bend", target_is_directory=True)
+        (self.root / "build/packages/kryon").symlink_to(REPO / "build/packages/kryon", target_is_directory=True)
+        (self.root / "build/packages/bend").symlink_to(REPO / "build/packages/bend", target_is_directory=True)
         shutil.copytree(REPO / "laws", self.root / "laws")
         shutil.copy2(REPO / "scripts/generate-sync-retry.mjs", self.root / "scripts")
         shutil.copy2(REPO / "scripts/generate-storage-layout.mjs", self.root / "scripts")

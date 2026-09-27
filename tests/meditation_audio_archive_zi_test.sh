@@ -3,14 +3,14 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-standard=${ZIRAN_STD:-"$root/vendor/ziran/std"}
+standard=${ZIRAN_STD:-"$root/build/packages/ziran/std"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$standard" -o "$work/c" \
     "$root/src/practices/meditation/meditation_audio_archive.zi"
-"${CC:-cc}" -std=c11 -I"$root/vendor/ziran/include" -I"$work/c" \
+"${CC:-cc}" -std=c11 -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$work/c"/*.c \
     "$work/c/practices/meditation/meditation_audio_archive.c" \
     "$root/tests/meditation_audio_archive_test.c" -lz -o "$work/test"

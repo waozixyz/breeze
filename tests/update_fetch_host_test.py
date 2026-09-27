@@ -125,26 +125,26 @@ def main():
             definitions += ["--define", architecture]
         subprocess.run([
             str(compiler), "--no-main", *definitions, "--root", "src",
-            "--module-path", "vendor/ziran/std", "-o", str(generated),
+            "--module-path", "build/packages/ziran/std", "-o", str(generated),
             "src/app/update_transport.zi",
         ], cwd=ROOT, check=True, env=env)
         subprocess.run([
             "cc", "-std=c11", "-shared", "-fPIC", "-Werror",
             *map(str, generated.rglob("*.c")),
-            "-I", str(ROOT / "vendor/ziran/include"), "-iquote", str(generated),
+            "-I", str(ROOT / "build/packages/ziran/include"), "-iquote", str(generated),
             "-o", str(library), *flags, f"-l:{curl_name}",
         ], check=True, env=env)
         apply_generated = Path(work) / "apply"
         subprocess.run([
             str(compiler), *definitions, "--entry", "update_apply_probe:main",
             "--root", "tests", "--module-path", "src",
-            "--module-path", "vendor/ziran/std", "-o", str(apply_generated),
+            "--module-path", "build/packages/ziran/std", "-o", str(apply_generated),
             "tests/update_apply_probe.zi",
         ], cwd=ROOT, check=True, env=env)
         apply_probe = Path(work) / "apply_probe"
         subprocess.run([
             "cc", "-std=c11", *map(str, apply_generated.rglob("*.c")),
-            "-I", str(ROOT / "vendor/ziran/include"), "-iquote", str(apply_generated),
+            "-I", str(ROOT / "build/packages/ziran/include"), "-iquote", str(apply_generated),
             "-o", str(apply_probe), *flags, f"-l:{curl_name}",
         ], check=True, env=env)
         fetch = ctypes.CDLL(str(library))

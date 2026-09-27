@@ -6,7 +6,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root_dir=$(dirname -- "$script_dir")
 out_dir="$root_dir/build/site"
 web_dir="$root_dir/build/dist/web"
-kryon_dir=${KRYON_DIR:-"$root_dir/vendor/kryon"}
+kryon_dir=${KRYON_DIR:-"$root_dir/build/packages/kryon"}
 
 require_path() {
 	if [ ! -e "$1" ]; then

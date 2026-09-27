@@ -20,7 +20,7 @@ test "$("$bin/ziran" run "$work/timer.zib")" = 42
     "$root/src/platform/android/android_mutex.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-function \
     -D_POSIX_C_SOURCE=200809L -DANDROID_BUILD=1 -pthread \
-    -I"$root/src" -I"$root/vendor/ziran/include" -I"$work/gen" \
+    -I"$root/src" -I"$root/build/packages/ziran/include" -I"$work/gen" \
     "$root/tests/android_timer_host_test.c" \
     "$work/gen/platform/android/android_timer_host.c" \
     "$work/gen/platform/android/android_timer.c" \

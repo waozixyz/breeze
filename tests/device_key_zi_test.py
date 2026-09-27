@@ -15,21 +15,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
     executable = Path(temporary) / "test"
     subprocess.run([
         str(COMPILER), "--no-main", "--root", str(ROOT / "src"),
-        "--module-path", str(ROOT / "vendor/ziran/std"),
-        "--module-path", str(ROOT / "vendor/daochi-client"),
-        "--module-path", str(ROOT / "vendor/kryon/src/ui"),
+        "--module-path", str(ROOT / "build/packages/ziran/std"),
+        "--module-path", str(ROOT / "build/packages/daochi-client"),
+        "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),
     ], check=True)
     names = {"device_key_store.c", "device_key.c", "sync_crypto.c",
              "sync_crypto_random.c", "byte_text_linux.c"}
     sources = sorted(str(path) for path in generated.rglob("*.c")
                      if path.name in names)
-    monocypher = ROOT / "vendor/monocypher/src"
+    monocypher = ROOT / "build/packages/monocypher/src"
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",
         "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
-        f"-I{ROOT / 'vendor/ziran/include'}", f"-I{generated}",
+        f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}", f"-I{monocypher}",
         f"-I{monocypher / 'optional'}",
         str(ROOT / "tests/device_key_zi_test.c"), *sources,

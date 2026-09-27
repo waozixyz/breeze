@@ -87,8 +87,8 @@ test('actual Make proof prerequisite rejects broken policy despite existing Zira
         }
         fs.cpSync(path.join(root, 'laws/storage_layout'), path.join(directory, 'laws/storage_layout'),
             { recursive: true });
-        fs.symlinkSync(path.join(root, 'vendor/kryon'), path.join(directory, 'vendor/kryon'), 'dir');
-        fs.symlinkSync(path.join(root, 'vendor/bend'), path.join(directory, 'vendor/bend'), 'dir');
+        fs.symlinkSync(path.join(root, 'build/packages/kryon'), path.join(directory, 'build/packages/kryon'), 'dir');
+        fs.symlinkSync(path.join(root, 'build/packages/bend'), path.join(directory, 'build/packages/bend'), 'dir');
         const make = () => spawnSync('make', ['src/app/sync_retry.zi'], {
             cwd: directory, encoding: 'utf8', timeout: 30000,
         });

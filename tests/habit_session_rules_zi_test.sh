@@ -21,7 +21,7 @@ cat > "$work/c/main.c" <<'C'
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/vendor/ziran/include" \
+    -Wl,--gc-sections -I"$root/build/packages/ziran/include" \
     -I"$work/c" -I"$work/c/tests" \
     "$work/c"/*.c "$work/c/tests"/*.c -o "$work/rules-test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/rules-test"

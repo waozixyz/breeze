@@ -11,13 +11,16 @@ endif()
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 set(SRC_DIR "${REPO_ROOT}/src")
-set(MONOCYPHER_DIR "${REPO_ROOT}/vendor/monocypher/src")
+if(NOT EXISTS "${REPO_ROOT}/build/packages/.complete")
+    message(FATAL_ERROR "Run sh scripts/packages.sh to fetch the dependencies pinned in ziran.lock")
+endif()
+set(MONOCYPHER_DIR "${REPO_ROOT}/build/packages/monocypher/src")
 if(NOT DEFINED KRYON_DIR)
-    set(KRYON_DIR "${REPO_ROOT}/vendor/kryon")
+    set(KRYON_DIR "${REPO_ROOT}/build/packages/kryon")
 endif()
 get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}")
 set(RAYLIB_DIR "${KRYON_DIR}/vendor/raylib/src")
-set(SQLITE_DIR "${REPO_ROOT}/vendor/sqlite")
+set(SQLITE_DIR "${REPO_ROOT}/build/packages/sqlite")
 set(SQLITE_BUILD_DIR "${CMAKE_BINARY_DIR}/sqlite")
 set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
@@ -32,11 +35,11 @@ foreach(oqs_x86_feature
         BMI1 BMI2 FMA PCLMULQDQ POPCNT SSE SSE2 SSE3 VPCLMULQDQ)
     set(OQS_USE_${oqs_x86_feature}_INSTRUCTIONS OFF CACHE BOOL "" FORCE)
 endforeach()
-add_subdirectory("${REPO_ROOT}/vendor/liboqs" "${CMAKE_BINARY_DIR}/liboqs")
+add_subdirectory("${REPO_ROOT}/build/packages/liboqs" "${CMAKE_BINARY_DIR}/liboqs")
 if(NOT TARGET oqs)
     message(FATAL_ERROR "Android builds require liboqs for sync account crypto")
 endif()
-set(ZIRAN_DIR "${REPO_ROOT}/vendor/ziran")
+set(ZIRAN_DIR "${REPO_ROOT}/build/packages/ziran")
 set(ZIRAN_BUILD_DIR "${REPO_ROOT}/build/ziran-toolchain")
 set(ZI2C_BIN "${ZIRAN_BUILD_DIR}/bin/zi2c")
 set(ZI2ZIR_BIN "${ZIRAN_BUILD_DIR}/bin/zi2zir")
@@ -72,8 +75,8 @@ set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
 file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
 file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
-    "${KRYON_DIR}/src/kss/*.zi" "${REPO_ROOT}/vendor/game2d/src/*.zi"
-    "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/vendor/daochi-client/*.zi")
+    "${KRYON_DIR}/src/kss/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
+    "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD)
 set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD")
 if(ANDROID_ABI STREQUAL "arm64-v8a")
@@ -188,8 +191,8 @@ set(APP_EMBEDDED_INPUTS
     assets/practices/whm/2.png
     assets/practices/meditation/1.png
     assets/pet/egg1.png
-    vendor/kryon/icons/ui.png
-    vendor/kryon/icons/pfp.png
+    build/packages/kryon/icons/ui.png
+    build/packages/kryon/icons/pfp.png
     ${APP_PRACTICE_BANNER_ASSETS}
     ${APP_SOCIAL_ASSETS}
     assets/practices/sunsalutation/poses_man_sheet.png

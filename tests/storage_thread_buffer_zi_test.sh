@@ -12,7 +12,7 @@ mkdir -p "$work/c"
 "$bin/zi2c" --define PLATFORM_DESKTOP \
     --entry storage_thread_buffer_behavior:main --root "$root/tests" \
     --module-path "$root/src" -o "$work/c" "$source"
-"${CC:-cc}" -std=c11 -O2 -I"$root/vendor/ziran/include" \
+"${CC:-cc}" -std=c11 -O2 -I"$root/build/packages/ziran/include" \
     -iquote "$work/c" "$work/c"/*.c -lpthread -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     "$work/test"

@@ -86,16 +86,20 @@ This uses disposable client databases and a loopback server; see
 Native binaries are written to `build/bin/<platform>/`. Release artifacts are
 written under `build/dist/`.
 
-To debug Inbe against the root Kryon checkout instead of the vendored
-submodule, override `KRYON_DIR`:
+Dependencies, including Kryon and the Ziran toolchain, are pinned in
+`ziran.lock`. `make` fetches them into the Ziran package cache and links them
+under `build/packages/`; `sh scripts/packages.sh` does the same by hand.
 
-```bash
-make run KRYON_DIR=../kryon
+To debug Inbe against the root Kryon checkout, map it in an ignored
+`ziran.local.toml`:
+
+```toml
+[overrides]
+kryon = "../kryon"
 ```
 
 Use this only for local debugging. Permanent Kryon fixes should be committed in
-the root Kryon repository and then brought into Inbe by updating
-`vendor/kryon`.
+the root Kryon repository and then brought into Inbe with `ziran update kryon`.
 
 ## Project Layout
 
@@ -104,7 +108,7 @@ the root Kryon repository and then brought into Inbe by updating
 - `locales/` - translations
 - `droid/` - Android project
 - `site/` - website
-- `vendor/kryon/` - Kryon UI/runtime submodule
+- `ziran.toml`, `ziran.lock` - pinned Ziran toolchain and dependencies
 
 ## Support
 

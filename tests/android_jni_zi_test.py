@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/ziran-toolchain/bin"
-UI = Path(os.environ.get("KRYON_UI", str(ROOT / "vendor/kryon/src/ui")))
+UI = Path(os.environ.get("KRYON_UI", str(ROOT / "build/packages/kryon/src/ui")))
 WORK = ROOT / "build/android-jni-zi-test"
 GEN = WORK / "generated"
 GEN.mkdir(parents=True, exist_ok=True)
@@ -22,14 +22,14 @@ SOURCES = [ROOT / f"src/platform/android/{name}.zi" for name in MODULES]
 SOURCES.append(ROOT / "src/platform/uri_host.zi")
 subprocess.run([
     "sh", str(ROOT / "scripts/run-ziran.sh"), str(BIN / "zi2c"), "--no-main", "--root", str(ROOT),
-    "--module-path", str(ROOT / "vendor/ziran/std"),
-    "--module-path", str(ROOT / "vendor/daochi-client"),
+    "--module-path", str(ROOT / "build/packages/ziran/std"),
+    "--module-path", str(ROOT / "build/packages/daochi-client"),
     "--module-path", str(UI), "--define", "ANDROID_BUILD",
     "-o", str(GEN), str(ROOT / "tests/android_jni_behavior.zi"),
-    *map(str, SOURCES), str(ROOT / "vendor/ziran/std/c_string.zi"),
+    *map(str, SOURCES), str(ROOT / "build/packages/ziran/std/c_string.zi"),
 ], check=True)
 files = sorted(GEN.rglob("*.c"))
-includes = ["-I" + str(ROOT / "vendor/ziran/include"), "-I" + str(GEN)]
+includes = ["-I" + str(ROOT / "build/packages/ziran/include"), "-I" + str(GEN)]
 includes += ["-I" + str(path) for path in sorted({p.parent for p in GEN.rglob("*.h")})]
 subprocess.run([
     os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",

@@ -65,11 +65,11 @@ for required in \
     fail "required practice banner is not embedded: $required"
 done
 
-[[ -f "$ROOT_DIR/vendor/kryon/icons/ui.png" ]] ||
+[[ -f "$ROOT_DIR/build/packages/kryon/icons/ui.png" ]] ||
   fail "Kryon UI icon atlas missing"
 grep -Fq '{"icons/ui.png"' "$EMBEDDED_C" ||
   fail "Kryon UI icon atlas is not embedded as icons/ui.png"
-[[ -f "$ROOT_DIR/vendor/kryon/icons/pfp.png" ]] ||
+[[ -f "$ROOT_DIR/build/packages/kryon/icons/pfp.png" ]] ||
   fail "profile picture icon atlas missing"
 grep -Fq '{"icons/pfp.png"' "$EMBEDDED_C" ||
   fail "profile picture icon atlas is not embedded as icons/pfp.png"

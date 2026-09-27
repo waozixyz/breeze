@@ -5,8 +5,8 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=${ROUTE_CATALOG_TEST_BUILD_DIR:-"$root/build/route-catalog-test"}
 source=$root/tests/route_catalog_behavior.zi
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
-ui=${KRYON_UI_DIR:-$root/vendor/kryon/src/ui}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
+ui=${KRYON_UI_DIR:-$root/build/packages/kryon/src/ui}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \

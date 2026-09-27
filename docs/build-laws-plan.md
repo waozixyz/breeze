@@ -47,7 +47,7 @@ establish filesystem or SQLite behavior. See `docs/STORAGE_LAYOUT.md`.
 ## Build behavior and verification
 
 Install Node.js **22.18 or newer** on the build host and initialize the
-`vendor/bend`, `vendor/ziran`, and `vendor/kryon` submodules. The checker runs
+`build/packages/bend`, `build/packages/ziran`, and `build/packages/kryon` submodules. The checker runs
 offline once those dependencies are present.
 CI and package builders provide Node explicitly. The container setup script
 uses pinned, checksummed official Node archives; ordinary compilation never

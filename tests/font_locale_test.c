@@ -12,7 +12,7 @@
 #include <string.h>
 
 #ifndef KRYON_DIR
-#define KRYON_DIR "vendor/kryon"
+#define KRYON_DIR "build/packages/kryon"
 #endif
 
 typedef struct LocaleFontCase {

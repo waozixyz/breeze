@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$root/build/social-action-queue-test
 source=$root/tests/social_action_queue_behavior.zi
 

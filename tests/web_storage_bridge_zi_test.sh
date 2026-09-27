@@ -14,13 +14,13 @@ for platform in desktop android; do
     fi
     "$bin/zi2c" --no-main \
         --root "$root" --module-path "$root/src" \
-        --module-path "$root/vendor/ziran/std" "$@" \
+        --module-path "$root/build/packages/ziran/std" "$@" \
         -o "$work/$platform" "$root/tests/web_storage_bridge_link.zi" \
         "$root/src/app/host_services.zi" "$root/src/platform/web_bridge.zi"
     find "$work/$platform" -type f -name '*.c' -exec \
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-function \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
-        -I"$root/vendor/ziran/include" -I"$work/$platform" \
+        -I"$root/build/packages/ziran/include" -I"$work/$platform" \
         -I"$work/$platform/src/app" -I"$work/$platform/src/platform" \
         -I"$work/$platform/tests" \
         -o "$work/$platform-test" {} +

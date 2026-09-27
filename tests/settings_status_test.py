@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='settings-status-', dir=ROOT / 'build') 
     subprocess.run(['sh', ROOT / 'scripts/run-ziran.sh', BIN / 'zi2c',
                     '--no-main', '--root', ROOT, '-o', generated,
                     ROOT / 'tests/settings_status_behavior.zi'], env=ENV, check=True)
-    includes = ['-I' + str(ROOT / 'vendor/ziran/include')]
+    includes = ['-I' + str(ROOT / 'build/packages/ziran/include')]
     includes += ['-iquote' + str(p) for p in sorted({p.parent for p in generated.rglob('*.h')})]
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                     *includes, *sorted(generated.rglob('*.c')), '-o', work / 'test'], env=ENV, check=True)

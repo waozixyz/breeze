@@ -2,9 +2,13 @@
 
 ## Ownership and releases
 
-- Never edit `vendor/`. Change Kryon in its upstream repository on `master`,
-  commit and push there, then update only Inbe's clean submodule pointer.
-  Run `make no-vendor-edits` after dependency changes.
+- Dependencies are Ziran packages pinned in `ziran.toml`/`ziran.lock` and
+  linked under `build/packages/`; there is no `vendor/`. Never edit a package
+  checkout. Change Kryon (or any dependency) in its own repository on `master`,
+  commit and push there, then run `ziran update NAME` here and commit
+  `ziran.lock`. Run `make package-check` after dependency changes. For local
+  debugging, map a package to a working repository in the ignored
+  `ziran.local.toml`; release builds use `PACKAGE_FLAGS=--locked`.
 - Add the numeric release to `CHANGELOG.md`, then run `./update_version.sh`.
   The canonical macros are `APP_VERSION_STRING`, `APP_VERSION_MAJOR`,
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.

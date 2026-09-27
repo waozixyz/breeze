@@ -8,17 +8,17 @@ work=$(mktemp -d "$root/build/app-nav-state-zi-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/vendor/kryon/src/ui" \
-    --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
     "$root/src/app/app_nav_state.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/vendor/kryon/src/ui" \
-    --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/gen" "$root/src/app/app_nav_state.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/vendor/ziran/include" -I"$work/gen" \
+    -I"$root/build/packages/ziran/include" -I"$work/gen" \
     "$root/tests/app_nav_state_link_test.c" \
     "$work/gen/app/app_nav_state.c" \
     "$work/gen/bottom_nav_policy.c" -o "$work/test"

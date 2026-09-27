@@ -7,10 +7,10 @@ work=$(mktemp -d "$root/build/asset-files-zi.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src/app" --module-path "$root/src/platform" \
-    --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/tests/asset_files_behavior.zi"
 "${CC:-cc}" -std=c11 -O2 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/vendor/ziran/include" -iquote "$work/c" \
+    -Wl,--gc-sections -I"$root/build/packages/ziran/include" -iquote "$work/c" \
     "$work/c"/*.c "$raylib" -lm -o "$work/test"
 python3 - "$work/disk.bin" <<'PY'
 from pathlib import Path

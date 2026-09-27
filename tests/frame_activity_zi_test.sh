@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=${FRAME_ACTIVITY_TEST_BUILD_DIR:-"$root/build/frame-activity-test"}
 source=$root/tests/frame_activity_behavior.zi
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \

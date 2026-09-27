@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=${BREATH_TIMING_TEST_BUILD_DIR:-"$root/build/breath-timing-zi-test"}
 source=$root/tests/breath_timing_behavior.zi
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \

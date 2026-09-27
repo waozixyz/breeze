@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const toolDir = path.dirname(fileURLToPath(import.meta.url));
-const bendDir = path.resolve(toolDir, '../vendor/bend/bend2');
+const bendDir = path.resolve(toolDir, '../build/packages/bend/bend2');
 const pin = JSON.parse(fs.readFileSync(path.join(toolDir, 'bend-pin.json'), 'utf8'));
 
 function requireLaw(condition, message) {
@@ -19,7 +19,7 @@ async function checker() {
     requireLaw(major > 22 || (major === 22 && minor >= 18), 'Node.js 22.18 or newer is required');
     for (const [name, expected] of Object.entries(pin.files)) {
         const file = path.join(bendDir, name);
-        requireLaw(fs.existsSync(file), 'initialize the pinned vendor/bend submodule');
+        requireLaw(fs.existsSync(file), 'run sh scripts/packages.sh to fetch the pinned bend package');
         const actual = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
         requireLaw(actual === expected, `${name} differs from pinned Bend ${pin.version} (${pin.commit})`);
     }

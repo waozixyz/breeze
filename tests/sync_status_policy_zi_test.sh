@@ -27,7 +27,7 @@ int main(void) { return Answer() == 42 ? 0 : 1; }
 C
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/vendor/ziran/include" -I"$work/c" \
+    -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$work/c"/*.c -o "$work/c/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/c/test"
 echo "sync status policy Ziran tests passed"

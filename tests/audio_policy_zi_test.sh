@@ -25,7 +25,7 @@ cat > "$work/c/main.c" <<'C'
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
-    -I"$root/vendor/ziran/include" -I"$work/c" \
+    -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$work/c"/*.c -o "$work/c/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/c/test"
 echo "audio policy Ziran tests passed"

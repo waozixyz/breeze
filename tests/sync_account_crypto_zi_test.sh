@@ -8,7 +8,7 @@ work="$root/build/sync-account-crypto-zi-test"
 mkdir -p "$work/generated"
 
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/generated" \
     "$root/src/storage/sync_crypto.zi" \
     "$root/src/storage/sync_account_crypto.zi" \
@@ -23,7 +23,7 @@ mkdir -p "$work/generated"
     "$root/src/storage/sync_account_encrypted.zi"
 
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function \
-    -I"$root/vendor/ziran/include" \
+    -I"$root/build/packages/ziran/include" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$work/generated" -I"$work/generated/storage" \
     "$root/tests/sync_account_crypto_zi_test.c" \

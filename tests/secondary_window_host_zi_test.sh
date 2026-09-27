@@ -9,14 +9,14 @@ mkdir -p "$work/c"
 
 export PKG_CONFIG_PATH="/home/wao/.local/sdl2/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 "$bin/zi2c" --no-main --define NATIVE_WINDOW_HAVE_SDL \
-    --root "$root/src" --module-path "$root/vendor/ziran/std" \
+    --root "$root/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/src/platform/secondary_window_host.zi"
 # The existing native probe checks rendered pixels, event ownership,
 # clicks, dragging, and restoration of the main OpenGL context.
 # shellcheck disable=SC2046
 "${CC:-cc}" -std=c11 -Wall -Wextra \
-    -I"$root/vendor/ziran/include" -iquote "$work/c" \
-    -I"$root/vendor/kryon/vendor/raylib/src" $(pkg-config --cflags sdl2) \
+    -I"$root/build/packages/ziran/include" -iquote "$work/c" \
+    -I"$root/build/packages/kryon/vendor/raylib/src" $(pkg-config --cflags sdl2) \
     "$root/tests/secondary_window_host_test.c" \
     "$work/c/platform/secondary_window_host.c" "$raylib" \
     $(pkg-config --libs sdl2) -lGL -lm -ldl -lpthread -o "$work/test"

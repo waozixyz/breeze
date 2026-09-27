@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$root/build/sync-safety-test
 source=$root/tests/sync_safety_behavior.zi
 
@@ -67,7 +67,7 @@ done
 cmp "$work/source/safety.zib" "$work/saved/safety.zib"
 
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/vendor/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" \
     -o "$work/native" "$root/src/app/sync_safety.zi"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

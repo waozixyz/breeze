@@ -3,13 +3,13 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-standard=${2:-"$root/vendor/ziran/std"}
+standard=${2:-"$root/build/packages/ziran/std"}
 work=$root/build/archive-file-linux-zi-test
 mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$standard" \
     -o "$work/generated" "$root/src/storage/archive_file_linux.zi"
-"${CC:-cc}" -std=c11 -O0 -I"$root/vendor/ziran/include" \
+"${CC:-cc}" -std=c11 -O0 -I"$root/build/packages/ziran/include" \
     -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     "$root/tests/archive_file_linux_zi_test.c" \
     "$work/generated/storage/archive_file_linux.c" \

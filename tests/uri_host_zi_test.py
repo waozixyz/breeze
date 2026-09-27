@@ -12,13 +12,13 @@ GEN = WORK / "native"
 GEN.mkdir(parents=True, exist_ok=True)
 subprocess.run([
     str(BIN / "zi2c"), "--no-main", "--root", str(ROOT),
-    "--module-path", str(ROOT / "vendor/ziran/std"), "-o", str(GEN),
+    "--module-path", str(ROOT / "build/packages/ziran/std"), "-o", str(GEN),
     str(ROOT / "src/platform/uri_host.zi"), str(ROOT / "src/platform/uri.zi"),
     str(ROOT / "src/platform/android/activity_jni.zi"),
-    str(ROOT / "vendor/ziran/std/c_string.zi"),
+    str(ROOT / "build/packages/ziran/std/c_string.zi"),
 ], check=True)
 files = sorted(GEN.rglob("*.c"))
-includes = ["-I" + str(ROOT / "src"), "-I" + str(ROOT / "vendor/ziran/include"), "-I" + str(GEN), "-I" + str(GEN / "src")]
+includes = ["-I" + str(ROOT / "src"), "-I" + str(ROOT / "build/packages/ziran/include"), "-I" + str(GEN), "-I" + str(GEN / "src")]
 includes += ["-I" + str(path) for path in sorted({p.parent for p in GEN.rglob("*.h")})]
 environment = dict(os.environ)
 for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY"):
@@ -35,7 +35,7 @@ for test in ("uri_host_test", "uri_link_test"):
 for define in ("_WIN32", "PLATFORM_WEB", "KRYON_BACKEND_LIBDRAW", "__APPLE__"):
     subprocess.run([
         str(BIN / "zi2c"), "--no-main", "--root", str(ROOT / "src"),
-        "--module-path", str(ROOT / "vendor/ziran/std"),
+        "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--define", define, "-o", str(WORK / define),
         str(ROOT / "src/platform/uri_host.zi"),
     ], check=True)

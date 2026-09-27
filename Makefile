@@ -26,7 +26,24 @@ ANDROID_KEYSTORE ?= $(HOME)/.android/kryon-release.keystore
 ANDROID_KEY_ALIAS ?= breathing-key
 
 BUILD_DIR := build
-ZIRAN_DIR := vendor/ziran
+
+# Dependencies and the Ziran toolchain are pinned in ziran.lock and linked
+# under build/packages/<name>. Make refreshes the links before reading the rest
+# of this file whenever the manifest or lock changes. PACKAGE_FLAGS=--locked
+# ignores ziran.local.toml overrides for release builds.
+PACKAGE_FLAGS ?=
+PACKAGES_MK := $(BUILD_DIR)/packages.mk
+$(PACKAGES_MK): ziran.toml ziran.lock scripts/packages.sh
+	sh scripts/packages.sh $(PACKAGE_FLAGS)
+	printf 'PACKAGES_READY := 1\n' > $@
+ifneq ($(filter-out clean distclean,$(or $(MAKECMDGOALS),all)),)
+include $(PACKAGES_MK)
+endif
+
+.PHONY: packages
+packages: $(PACKAGES_MK)
+
+ZIRAN_DIR := build/packages/ziran
 ZIRAN_BUILD_DIR := $(abspath $(BUILD_DIR)/ziran-toolchain)
 KRYON_LIBRARY_BUILD_DIR := $(abspath $(BUILD_DIR)/kryon-library)
 ZI2C_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2c
@@ -161,7 +178,7 @@ VERSION_FILE := src/core/version.h
 APP_VERSION := $(shell awk '/APP_VERSION_STRING/ { print $$3; exit }' $(VERSION_FILE) 2>/dev/null | tr -d '"')
 SOCIAL_PY ?= $(if $(wildcard .local/social-venv/bin/python),.local/social-venv/bin/python,python3)
 
-KRYON_DIR ?= vendor/kryon
+KRYON_DIR ?= build/packages/kryon
 KRYON_BACKEND ?= raylib
 ifeq ($(KRYON_BACKEND),tui)
 KRYON_BACKEND := termi
@@ -240,7 +257,7 @@ KRYON_WEB_SRCS := $(KRYON_SRCS)
 KRYON_WEB_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(KRYON_WEB_SRCS))
 KRYON_WINDOWS_SRCS := $(filter-out $(KRYON_DIR)/src/file_dialog/file_dialog.c,$(KRYON_SRCS))
 KRYON_CLICK_SRCS := $(filter-out $(KRYON_DIR)/src/file_dialog/file_dialog.c,$(KRYON_SRCS))
-KRYON_INCLUDE := -I$(KRYON_GENERATED_INCLUDE_DIR) -I$(KRYON_GENERATED_SRC_DIR) -I$(KRYON_DIR)/include -I$(KRYON_DIR)/src/ui -I$(KRYON_DIR)/src/platform -I$(KRYON_DIR)/src/backend -I$(KRYON_GENERATED_SRC_DIR)/runtime -I$(KRYON_DIR)/vendor/utf8proc -DUTF8PROC_STATIC -I$(KRYON_DIR)/vendor/monocypher/src -I$(KRYON_DIR)/vendor/monocypher/src/optional
+KRYON_INCLUDE := -I$(KRYON_GENERATED_INCLUDE_DIR) -I$(KRYON_GENERATED_SRC_DIR) -I$(KRYON_DIR)/include -I$(KRYON_DIR)/src/ui -I$(KRYON_DIR)/src/platform -I$(KRYON_DIR)/src/backend -I$(KRYON_GENERATED_SRC_DIR)/runtime -I$(KRYON_DIR)/vendor/utf8proc -DUTF8PROC_STATIC -I$(KRYON_DIR)/build/packages/monocypher/src -I$(KRYON_DIR)/build/packages/monocypher/src/optional
 KRYON_INCLUDE += -I$(ZIRAN_DIR)/include
 KRYON_SYNC_ACCOUNT_C := $(KRYON_DIR)/src/sync/sync_account.c
 KRYON_SYNC_CRYPTO_C := $(KRYON_DIR)/src/sync/sync_crypto.c $(KRYON_DIR)/src/sync/monocypher.c $(KRYON_DIR)/src/sync/monocypher_ed25519.c
@@ -313,7 +330,7 @@ KRYON_CURL_VERSION_NUM ?= $(shell printf '%b\n' '\043include <curl/curlver.h>' '
 # invocation (make clean included). The only consumer is the version guard in
 # the NEEDS_NATIVE_ENV block, which expands this only for build goals.
 KRYON_CURL_VERSION_HEX = $(patsubst 0x%,%,$(KRYON_CURL_VERSION_NUM))
-SQLITE_DIR := vendor/sqlite
+SQLITE_DIR := build/packages/sqlite
 SQLITE_BUILD_DIR := $(VENDOR_BUILD_DIR)/sqlite
 SQLITE_AMALGAMATION_C := $(SQLITE_BUILD_DIR)/sqlite3.c
 SQLITE_AMALGAMATION_H := $(SQLITE_BUILD_DIR)/sqlite3.h
@@ -353,7 +370,7 @@ RUNTIME_ASSET_CFLAGS := -DHAS_LIBCURL=1 $(KRYON_CURL_CFLAGS)
 RUNTIME_ASSET_LDLIBS := $(KRYON_CURL_LDLIBS)
 STORAGE_CORE_SRCS = $(KRY_GEN_DIR)/src/storage/json.c $(KRY_GEN_DIR)/src/storage/storage_core.c $(KRY_GEN_DIR)/src/storage/storage_habits.c $(KRY_GEN_DIR)/src/storage/storage_habit_materialize.c $(KRY_GEN_DIR)/src/storage/storage_habit_sync.c
 
-MONOCYPHER_DIR := vendor/monocypher/src
+MONOCYPHER_DIR := build/packages/monocypher/src
 MONOCYPHER_SRCS := $(MONOCYPHER_DIR)/monocypher.c \
 	$(MONOCYPHER_DIR)/optional/monocypher-ed25519.c
 
@@ -441,9 +458,9 @@ IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
 EMBEDDED_ASSET_FILES := $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort)
-GAME2D_DIR := vendor/game2d
+GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
-DAOCHI_CLIENT_MODULES := $(wildcard vendor/daochi-client/*.zi)
+DAOCHI_CLIENT_MODULES := $(wildcard build/packages/daochi-client/*.zi)
 ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
 KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
 KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
@@ -657,7 +674,7 @@ MEDITATION_AUDIO_TRACKS := \
 
 .PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 windows32 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
 .PHONY: zi-check
-.PHONY: clean-text-api-check no-vendor-edits secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
+.PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
 .NOTPARALLEL: all native test ci zi-check dist windows windows64 windows32 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
 
 all: native
@@ -679,7 +696,7 @@ kryon-library-check: $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
 
 $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modules.txt $(KRYON_DIR)/Makefile $(ZI2C_BIN)
 	$(MAKE) -C $(KRYON_DIR) BUILD_DIR=$(KRYON_LIBRARY_BUILD_DIR) \
-		ZIRAN_DIR=../ziran ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) all
+		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) all
 
 .PHONY: scroll-input-test
 scroll-input-test: $(ZI2C_BIN)
@@ -853,7 +870,7 @@ $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path vendor/daochi-client \
+		--module-path build/packages/daochi-client \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(KRY_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
@@ -868,7 +885,7 @@ $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path vendor/daochi-client \
+		--module-path build/packages/daochi-client \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
@@ -887,7 +904,7 @@ $(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path vendor/daochi-client \
+		--module-path build/packages/daochi-client \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
@@ -914,12 +931,12 @@ zi-c-plan9: $(KRY_GEN_STAMP)
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--include-dir vendor/kryon/include --include-dir src \
+		--include-dir build/packages/kryon/include --include-dir src \
 		--include-dir $(KRY_GEN_DIR) --include-dir vendor-builds/sqlite \
 		-o $(PLAN9_GENERATED) $(ZI_SRCS)
 	cp $(STORAGE_LAYOUT_HEADER) $(PLAN9_GENERATED)/storage_layout.h
 	find $(PLAN9_GENERATED) -type f -name '*.c' | LC_ALL=C sort > $(PLAN9_FILE_LIST)
-	sh vendor/kryon/scripts/embed-assets.sh $(PLAN9_EMBEDDED_ASSETS_C) \
+	sh build/packages/kryon/scripts/embed-assets.sh $(PLAN9_EMBEDDED_ASSETS_C) \
 		$(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(FONT_FILES)
 
 $(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_GEN_GAME_C): $(KRY_GEN_STAMP)
@@ -1045,7 +1062,7 @@ test-termi-screenshot-direct: $(TARGET)
 	bash ./tests/termi_screenshot_test.sh "$(TARGET)"
 
 
-.SILENT: no-vendor-edits test $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
+.SILENT: package-check test $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
 
 ## Local parity with the ci.yml gate: unit tests plus the web build (emcc).
 ## Run before pushing to catch web-only breakage -- e.g. code under
@@ -1058,8 +1075,8 @@ ci: test web
 test-desktop-windows:
 	./scripts/test-desktop-windows.sh "$(TARGET)"
 
-no-vendor-edits:
-	bash ./scripts/check-no-vendor-edits.sh
+package-check:
+	sh scripts/check-packages.sh
 
 clean-text-api-check:
 	python3 scripts/check-clean-text-api.py src tests
@@ -1124,7 +1141,7 @@ lists-ui-test: $(TARGET)
 storage-literals-check:
 	bash ./scripts/check-storage-literals.sh
 
-test: clean-text-api-check no-vendor-edits secret-check storage-literals-check $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
+test: clean-text-api-check package-check secret-check storage-literals-check $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
 	bash ./tests/screenshot_scene_test.sh
 	echo "== BreathSession tests =="; \
 	status=0; \
@@ -1268,9 +1285,9 @@ test: patterns-session-zi-test
 .PHONY: session-results-zi-test
 session-results-zi-test: $(ZI2C_BIN)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-	@$(ZI2C_BIN) --no-main --root tests --module-path vendor/ziran/std \
+	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
-	@$(CC) -std=c11 -Isrc/storage -Ivendor/ziran/include \
+	@$(CC) -std=c11 -Isrc/storage -Ibuild/packages/ziran/include \
 		-I$(BUILD_DIR)/session-mood-generated \
 		$(BUILD_DIR)/session-mood-generated/*.c -o $(BUILD_DIR)/session-result-host-test
 	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/session-result-host-test
@@ -1441,7 +1458,7 @@ test: storage-paths-zi-test
 daochi-client-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		ZI2C_BIN=$(abspath $(ZI2C_BIN)) ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) \
-		sh vendor/daochi-client/tests/run.sh
+		sh build/packages/daochi-client/tests/run.sh
 
 test: daochi-client-zi-test
 

@@ -14,7 +14,7 @@ mkdir -p "$work/generated"
     "$root/tests/sync_worker_host_link.zi"
 
 "${CC:-cc}" -std=c11 -D_DEFAULT_SOURCE -O2 -pthread \
-    -I"$root/vendor/ziran/include" -iquote "$work/generated" \
+    -I"$root/build/packages/ziran/include" -iquote "$work/generated" \
     "$work/generated"/*.c -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     "$work/test"

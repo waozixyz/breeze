@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-include=${ZIRAN_INCLUDE:-"$root/vendor/ziran/include"}
+include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 

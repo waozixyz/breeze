@@ -99,7 +99,8 @@ Makefile itself still supports its normal local fallback behavior.
 
 ## SQLite Amalgamation
 
-SQLite is vendored as the official canonical source submodule at `vendor/sqlite`.
+SQLite is pinned in `ziran.lock` as the official canonical source repository and
+fetched to `build/packages/sqlite`.
 The build generates `vendor-builds/sqlite/sqlite3.c` and `sqlite3.h` from that
 source with SQLite's recommended amalgamation flow (`configure`, then
 `make sqlite3.c sqlite3.h`). This keeps the Firefox source submission rooted in

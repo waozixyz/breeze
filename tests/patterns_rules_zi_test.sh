@@ -20,7 +20,7 @@ cat > "$work/c/main.c" <<'C'
 #include "patterns_rules_behavior.h"
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
-"${CC:-cc}" -std=c11 -I"$root/vendor/ziran/include" \
+"${CC:-cc}" -std=c11 -I"$root/build/packages/ziran/include" \
     -I"$work/c" "$work/c"/*.c -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Patterns preset Ziran test passed"

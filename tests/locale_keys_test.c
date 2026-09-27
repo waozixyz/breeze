@@ -505,9 +505,9 @@ main(void)
     check_practice_label_keys(&english, "locales/en.txt");
     memset(&used, 0, sizeof(used));
     scan_locale_get_calls_in_dir(&english, "src");
-    scan_locale_get_calls_in_dir(&english, "vendor/kryon/src");
+    scan_locale_get_calls_in_dir(&english, "build/packages/kryon/src");
     scan_used_locale_get_calls_in_dir(&english, &used, "src");
-    scan_used_locale_get_calls_in_dir(&english, &used, "vendor/kryon/src");
+    scan_used_locale_get_calls_in_dir(&english, &used, "build/packages/kryon/src");
     add_dynamic_locale_keys(&used);
     check_unused_english_keys(&english, &used);
 

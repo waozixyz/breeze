@@ -24,8 +24,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+
+      - name: Fetch Ziran packages
+        run: sh scripts/packages.sh --locked
 
       - name: Check Version Consistency
         run: |
@@ -38,32 +40,35 @@ jobs:
           python3 scripts/check-secrets.py --working-tree
           python3 scripts/check-secrets.py --history
 
-  guard-submodule-urls:
-    name: Submodule URLs are public HTTPS
+  guard-package-urls:
+    name: Package URLs are public HTTPS
     runs-on: ubuntu-latest
     steps:
       # Plain checkout on purpose: the guard must not depend on fetching
-      # the submodules it validates (an SSH URL would break that fetch).
+      # the packages it validates (an SSH URL would break that fetch).
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Reject non-HTTPS submodule URLs
+      - name: Reject submodules and non-HTTPS package URLs
         run: |
           set -eu
-          if [ ! -f .gitmodules ]; then echo "no submodules - ok"; exit 0; fi
-          bad=$(grep -nE '^[[:space:]]*url[[:space:]]*=' .gitmodules \
-              | grep -vE '^[0-9]+:[[:space:]]*url[[:space:]]*=[[:space:]]*https://' || true)
-          if [ -n "$bad" ]; then
-            echo "::error::Non-HTTPS submodule URL(s) break fresh clones and CI:$bad"
+          if [ -f .gitmodules ]; then
+            echo "::error::Dependencies are Ziran packages in ziran.toml, not submodules"
             exit 1
           fi
-          echo "all submodule URLs HTTPS - ok"
+          bad=$(grep -nE '^[[:space:]]*git[[:space:]]*=' ziran.toml \
+              | grep -vE '^[0-9]+:[[:space:]]*git[[:space:]]*=[[:space:]]*"https://' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Non-HTTPS package URL(s) break fresh clones and CI:$bad"
+            exit 1
+          fi
+          echo "all package URLs HTTPS - ok"
 
   test:
     name: Test
     runs-on: ubuntu-latest
     needs:
-      - guard-submodule-urls
+      - guard-package-urls
       - secret-scan
     timeout-minutes: 60
     env:
@@ -73,9 +78,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 1
           lfs: true
+
+      - name: Fetch Ziran packages
+        run: sh scripts/packages.sh --locked
 
       - name: Set up Node.js for Bend proofs
         uses: actions/setup-node@v4
@@ -128,9 +135,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 1
           lfs: true
+
+      - name: Fetch Ziran packages
+        run: sh scripts/packages.sh --locked
 
       - name: Set up Node.js for Bend proofs
         uses: actions/setup-node@v4
@@ -195,9 +204,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 1
           lfs: true
+
+      - name: Fetch Ziran packages
+        run: sh scripts/packages.sh --locked
 
       - name: Set up Node.js for Bend proofs
         uses: actions/setup-node@v4

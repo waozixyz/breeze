@@ -9,13 +9,13 @@ mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --define PLATFORM_DESKTOP \
     --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/vendor/ziran/std" "$source"
+    --module-path "$root/build/packages/ziran/std" "$source"
 "$bin/zi2c" --define PLATFORM_DESKTOP \
     --entry audio_meter_behavior:main --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/vendor/ziran/std" \
+    --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$source"
 "${CC:-cc}" -std=c11 -O2 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/vendor/ziran/include" \
+    -Wl,--gc-sections -I"$root/build/packages/ziran/include" \
     -iquote "$work/c" "$work/c"/*.c -latomic -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     "$work/test"

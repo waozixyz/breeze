@@ -29,7 +29,8 @@ copy_path() {
 
 for path in \
     .gitignore \
-    .gitmodules \
+    ziran.toml \
+    ziran.lock \
     .github \
     Makefile \
     README.md \
@@ -42,11 +43,17 @@ for path in \
     src \
     tests \
     unpackaged_assets \
-    vendor \
     web-assets
  do
     copy_path "$path"
  done
+
+# Dependencies are pinned in ziran.lock. Ship the resolved checkouts so the
+# reviewed source builds without fetching, but not their build output.
+[ -f build/packages/.complete ] || sh scripts/packages.sh --locked
+mkdir -p "$STAGE_DIR/build"
+cp -RL build/packages "$STAGE_DIR/build/packages"
+find "$STAGE_DIR/build/packages" -depth -type d -name build -exec rm -rf {} +
 
 rm -f "$OUT_ABS"
 (
@@ -61,21 +68,21 @@ rm -f "$OUT_ABS"
            '*/.ccache/*' \
            '*/.gradle/*' \
            '*/node_modules/*' \
-           '*/build/*' \
+           'inbe-firefox-addons-source/build/obj/*' \
            '*/vendor-builds/*' \
            '*/unpackaged_assets/audio/*' \
            '*/web-assets/dl/*' \
-           '*/vendor/sqlite/art/*' \
-           '*/vendor/sqlite/doc/*' \
-           '*/vendor/sqlite/mptest/*' \
-           '*/vendor/sqlite/test/*' \
-           '*/vendor/kryon/docs/site/*' \
-           '*/vendor/kryon/fonts/noto/*' \
-           '*/vendor/kryon/vendor/liboqs/docs/*' \
-           '*/vendor/kryon/vendor/liboqs/tests/*' \
-           '*/vendor/kryon/vendor/raylib/examples/*' \
-           '*/vendor/kryon/vendor/raylib/logo/*' \
-           '*/vendor/kryon/vendor/raylib/projects/*' \
+           '*/build/packages/sqlite/art/*' \
+           '*/build/packages/sqlite/doc/*' \
+           '*/build/packages/sqlite/mptest/*' \
+           '*/build/packages/sqlite/test/*' \
+           '*/build/packages/kryon/docs/site/*' \
+           '*/build/packages/kryon/fonts/noto/*' \
+           '*/build/packages/kryon/vendor/liboqs/docs/*' \
+           '*/build/packages/kryon/vendor/liboqs/tests/*' \
+           '*/build/packages/kryon/vendor/raylib/examples/*' \
+           '*/build/packages/kryon/vendor/raylib/logo/*' \
+           '*/build/packages/kryon/vendor/raylib/projects/*' \
            '*/tmp/*'
 )
 

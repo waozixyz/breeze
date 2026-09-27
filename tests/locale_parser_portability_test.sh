@@ -94,7 +94,7 @@ for input in source saved; do
 #include "app.h"
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
-            "${CC:-cc}" -std=c11 -I"$repo/vendor/ziran/include" \
+            "${CC:-cc}" -std=c11 -I"$repo/build/packages/ziran/include" \
                 -I"$output" "$output"/*.c -o "$output/app"
             "$output/app"
         elif test "$target" = cpp; then
@@ -102,7 +102,7 @@ C
 #include "app.hpp"
 int main() { return Answer() == 42 ? 0 : 1; }
 CPP
-            "${CXX:-c++}" -std=c++17 -I"$repo/vendor/ziran/include" \
+            "${CXX:-c++}" -std=c++17 -I"$repo/build/packages/ziran/include" \
                 -I"$output" "$output"/*.cpp -o "$output/app"
             "$output/app"
         else

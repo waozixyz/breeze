@@ -76,10 +76,10 @@ def build_probe(work, compiler, env):
     subprocess.run([
         str(compiler), "--no-main", *definitions,
         "--root", "tests", "--module-path", "src",
-        "--module-path", "vendor/kryon/src/ui",
-        "--module-path", "vendor/kryon/src/kss",
-        "--module-path", "vendor/ziran/std",
-        "--module-path", "vendor/daochi-client",
+        "--module-path", "build/packages/kryon/src/ui",
+        "--module-path", "build/packages/kryon/src/kss",
+        "--module-path", "build/packages/ziran/std",
+        "--module-path", "build/packages/daochi-client",
         "-o", str(output), "tests/update_flow_probe.zi",
     ], cwd=ROOT, check=True, env=env)
     sdl = subprocess.check_output(
@@ -99,8 +99,8 @@ def build_probe(work, compiler, env):
     subprocess.run([
         "cc", "-std=c11", "-D_GNU_SOURCE", "-DNATIVE_WINDOW_HAVE_SDL",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
-        "-I", str(ROOT / "vendor/ziran/include"), "-I", str(output),
-        "-I", str(ROOT / "vendor/curl/include"),
+        "-I", str(ROOT / "build/packages/ziran/include"), "-I", str(output),
+        "-I", str(ROOT / "build/packages/curl/include"),
         *map(str, sources), *sdl, f"-l:{curl_name}", "-o", str(executable),
     ], cwd=ROOT, check=True, env=env)
     return executable

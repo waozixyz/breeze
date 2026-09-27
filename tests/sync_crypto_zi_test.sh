@@ -14,7 +14,7 @@ mkdir -p "$work/generated"
     "$root/src/storage/sync_crypto_chacha.zi"
 
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \
-    -I"$root/vendor/ziran/include" -I"$work/generated" \
+    -I"$root/build/packages/ziran/include" -I"$work/generated" \
     "$root/tests/sync_crypto_zi_test.c" \
     "$work/generated/storage/sync_crypto.c" \
     "$work/generated/storage/sync_crypto_hmac.c" \
