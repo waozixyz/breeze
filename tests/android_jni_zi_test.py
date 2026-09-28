@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -11,6 +12,8 @@ BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/ziran-toolchain/
 UI = Path(os.environ.get("KRYON_UI", str(ROOT / "build/packages/kryon/src/ui")))
 WORK = ROOT / "build/android-jni-zi-test"
 GEN = WORK / "generated"
+# Stale generated files from an earlier layout would be compiled again.
+shutil.rmtree(GEN, ignore_errors=True)
 GEN.mkdir(parents=True, exist_ok=True)
 MODULES = [
     "activity_jni", "android_mutex", "android_health_host",
