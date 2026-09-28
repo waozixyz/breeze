@@ -5,6 +5,7 @@
 #import, file "../../app/audio_selection.zi";
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/music_library.zi";
+#import, file "../../app/practice_lifecycle.zi";
 
 c :: #system_library "c";
 
@@ -68,21 +69,27 @@ android_resume_session :: () {
 #program_export
 android_sync_lifecycle :: (activity_paused: s32,
     indicator_visible: s32) -> s32 {
-    run_in_background: s32 = 0
-    if android_play_in_background() != 0  && activity_paused != 0 && indicator_visible != 0 {
-        run_in_background = 1
+    session_paused: s32 = 0
+    app := CurrentApp()
+    if app != null {
+        session_paused = app.session_paused
     }
-    pause_for_lifecycle := activity_paused != 0 && run_in_background == 0
+    decision := practice_lifecycle_decision(1, activity_paused,
+        android_play_in_background(), indicator_visible,
+        background_execution_active, session_paused,
+        auto_paused_for_lifecycle)
 
-    if background_execution_active != run_in_background {
-        android_set_background_active(run_in_background)
-        background_execution_active = run_in_background
+    if decision.background_change != 0 {
+        android_set_background_active(decision.run_in_background)
+        background_execution_active = decision.run_in_background
     }
-    if pause_for_lifecycle && auto_paused_for_lifecycle == 0 {
-        auto_paused_for_lifecycle = android_pause_session()
-    } else if !pause_for_lifecycle && auto_paused_for_lifecycle != 0 {
-        android_resume_session()
+    auto_paused_for_lifecycle = decision.auto_paused_after
+    if decision.pause_session != 0 && android_pause_session() == 0 {
+        // Nothing was paused, so the lifecycle owns no pause.
         auto_paused_for_lifecycle = 0
+    }
+    if decision.resume_session != 0 {
+        android_resume_session()
     }
     return background_execution_active
 }

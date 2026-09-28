@@ -15,13 +15,15 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/gen" "$root/src/platform/android/android_lifecycle.zi" \
-    "$root/src/app/current_app.zi" "$root/src/app/exercise_types.zi"
+    "$root/src/app/current_app.zi" "$root/src/app/exercise_types.zi" \
+    "$root/src/app/practice_lifecycle.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-function \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/gen" -I"$work/gen/app" \
     "$root/tests/android_lifecycle_link_test.c" \
     "$work/gen/platform/android/android_lifecycle.c" \
     "$work/gen/app/current_app.c" "$work/gen/app/exercise_types.c" \
+    "$work/gen/app/practice_lifecycle.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 "$bin/zi2c" --no-main --root "$root/src" \

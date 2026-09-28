@@ -475,7 +475,8 @@ WINDOWS_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
 	$(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(WINDOWS_GEN_DIR)/$(dir))
 SYNC_RETRY_SOURCE := src/app/sync_retry.zi
 STORAGE_LAYOUT_HEADER := tests/storage_layout.h
-LAW_MODULES := src/app/sync_retry_laws.zi src/storage/storage_layout_laws.zi
+LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
+	src/storage/storage_layout_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)

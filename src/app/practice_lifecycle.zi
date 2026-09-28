@@ -1,0 +1,44 @@
+// Pure decision for how a practice session reacts to platform lifecycle
+// changes. The shell (android_lifecycle.zi) applies the decision; the laws in
+// practice_lifecycle_laws.zi fix its behavior.
+
+LifecycleDecision :: struct {
+    run_in_background: s32   // background execution wanted after this update
+    background_change: s32   // 1 when that differs from the current state
+    pause_session: s32       // pause the session because of the lifecycle
+    resume_session: s32      // resume a session the lifecycle paused
+    auto_paused_after: s32   // the lifecycle owns the pause after this update
+}
+
+// is_mobile: 1 for Android and other lifecycle-managed platforms. Desktop
+// window focus is not an input: losing focus never pauses a practice.
+practice_lifecycle_decision :: (is_mobile: s32, activity_paused: s32,
+    play_in_background: s32, indicator_visible: s32, background_active: s32,
+    session_paused: s32, auto_paused: s32) -> LifecycleDecision {
+    if is_mobile == 0 {
+        return LifecycleDecision.{background_active, 0, 0, 0, auto_paused}
+    }
+    run: s32 = 0
+    if play_in_background != 0 && activity_paused != 0 && indicator_visible != 0 {
+        run = 1
+    }
+    pause_for_lifecycle := activity_paused != 0 && run == 0
+    change: s32 = 0
+    if run != background_active {
+        change = 1
+    }
+    pause: s32 = 0
+    resume: s32 = 0
+    after: s32 = auto_paused
+    if pause_for_lifecycle {
+        // A session the user already paused stays the user's to resume.
+        if auto_paused == 0 && session_paused == 0 {
+            pause = 1
+            after = 1
+        }
+    } else if auto_paused != 0 {
+        resume = 1
+        after = 0
+    }
+    return LifecycleDecision.{run, change, pause, resume, after}
+}
