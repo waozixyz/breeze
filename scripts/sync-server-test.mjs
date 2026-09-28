@@ -57,8 +57,11 @@ try {
     http_proxy: '', https_proxy: '', all_proxy: '',
     NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
   };
-  const client = spawn(resolve('build/bin/tests/sync_server_test'), [url, root, faultUrl], {
-    stdio: 'inherit', env: clientEnv,
+  // The client is the Ziran program built by tests/sync_server_zi_test.sh.
+  const clientBinary = process.env.SYNC_SERVER_TEST_BIN || resolve('build/sync-server-zi-test/test');
+  const client = spawn(clientBinary, [], {
+    stdio: 'inherit',
+    env: { ...clientEnv, SYNC_TEST_URL: url, SYNC_TEST_FAULT_URL: faultUrl, APP_DATA_ROOT: root },
   });
   const status = await new Promise((resolve, reject) => {
     client.on('error', reject); client.on('exit', resolve);

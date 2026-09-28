@@ -1,41 +1,45 @@
 #!/bin/sh
 set -eu
 
+# Storage import/export and migration behaviour, run against a real
+# SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
-work=$(mktemp -d "$root/build/session-results-test.XXXXXX")
-trap 'rm -rf "$work"' EXIT HUP INT TERM
-source=$root/tests/session_results_behavior.zi
+ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
+work=$root/build/session-results-zi-test
+include=$root/build/packages/ziran/include
 
-"$bin/zi2zir" --check-only --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" "$source"
-"$bin/zi2c" --no-main --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" -o "$work/c" "$source"
-cat > "$work/c/main.c" <<'C'
+rm -rf "$work"
+mkdir -p "$work/generated"
+"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+    --module-path "$root/src" \
+    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/kss" \
+    --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/game2d/src" \
+    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/daochi-client" \
+    --entry session_results_behavior:Check \
+    -o "$work/generated" "$root/tests/session_results_behavior.zi" \
+    "$root/tests/app_hooks_host.zi" "$root/tests/clock_host.zi"
+cat > "$work/generated/main.c" <<'C'
 #include "session_results_behavior.h"
-int main(void) { return Answer() == 42 ? 0 : 1; }
+#include <stdio.h>
+int main(void)
+{
+    int result = Check();
+    if (result != 0) fprintf(stderr, "check failed with code %d\n", result);
+    return result == 0 ? 0 : 1;
+}
 C
-"${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/build/packages/ziran/include" \
-    -I"$work/c" "$work/c"/*.c -o "$work/test"
+"${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
+    -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
+    -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
+    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
+    -Wl,--gc-sections -ldl -lpthread -lz -lm -latomic -o "$work/test"
+# Storage must never open the real data directory.
+APP_DATA_ROOT=/tmp/inbe-session-results-zi-test/data
+export APP_DATA_ROOT
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
-
-flow=$root/tests/session_results_flow_behavior.zi
-"$bin/zi2zir" --check-only --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" "$flow"
-"$bin/zi2c" --no-main --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" -o "$work/flow" "$flow"
-cat > "$work/flow/main.c" <<'C'
-#include "session_results_flow_behavior.h"
-int main(void) { return Answer() == 42 ? 0 : 1; }
-C
-"${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/build/packages/ziran/include" \
-    -I"$work/flow" "$work/flow"/*.c \
-    "$root/tests/session_results_flow_host.c" -o "$work/flow-test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/flow-test"
-echo "Session results Ziran test passed"
+rm -rf /tmp/inbe-session-results-zi-test

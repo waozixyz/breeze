@@ -12,6 +12,7 @@
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
+#import, file "../src/storage/sync_review.zi";
 #import, file "../src/habits/habit_model.zi";
 
 c :: #system_library "c";
@@ -653,6 +654,223 @@ test_fresh_account_bootstraps_without_tombstones :: () {
     storage_close()
 }
 
+// ---- Full snapshots and the review flow ----------------------------------
+
+remote_records_text: TextBuffer;
+
+// The records a remote device would send: its own database seeded with `sql`
+// and every row queued for upload.
+remote_records :: (name: string, sql: string) {
+    root := make_root(name)
+    check_true("init remote device", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, sql)
+    raw_exec(root, "DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1782300000 FROM habits;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1782300000 FROM habit_days;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'session',id,0,1782300000 FROM sessions;")
+    check_true("reopen remote device", storage_init(root) != 0)
+    check_true("remote payload builds", build_payload())
+    remote_records_text = TextBuffer.{}
+    append(*remote_records_text, records_array())
+    storage_close()
+}
+
+snapshot_buffer: TextBuffer;
+
+// A server response asking the client to take a full snapshot.
+snapshot_response :: (version: s32, hash: string) -> string {
+    part: [24]u8
+    snapshot_buffer = TextBuffer.{}
+    append(*snapshot_buffer, "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":")
+    append(*snapshot_buffer, FormatInteger(cast(s64)version, part[:]))
+    append(*snapshot_buffer, ",\"server_state_hash\":\"")
+    append(*snapshot_buffer, hash)
+    append(*snapshot_buffer, "\",\"full_snapshot_required\":true,\"changes_complete\":false,\"changes\":{\"encrypted_records\":")
+    append(*snapshot_buffer, TextFromCString(*remote_records_text.bytes[0]))
+    append(*snapshot_buffer, "}}")
+    return TextFromCString(*snapshot_buffer.bytes[0])
+}
+
+REMOTE_SQL :: "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('remote-habit',(SELECT id FROM users LIMIT 1),'Remote Breath',90,80,70,0,0,1,1,0,1782290000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('remote-habit',20260624,1,7,0,1782290000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('remote-session',(SELECT id FROM users LIMIT 1),1782290000,20260624,2,2,'sync-test',1782290000,'202',0,1782290000);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('remote-session',0,55);"
+
+LOCAL_SQL :: "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('local-habit',(SELECT id FROM users LIMIT 1),'Local Breath',10,20,30,0,0,1,1,0,1782300000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('local-habit',20260624,1,4,0,1782300000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('local-session',(SELECT id FROM users LIMIT 1),1782300000,20260624,1,1,'test',1782300000,'101',0,1782300000);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('local-session',0,40);"
+
+LOCAL_PENDING_SQL :: "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('habit','local-habit',0,1782300000);INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('habit_day','local-habit',20260624,1782300000);INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('session','local-session',0,1782300000);"
+
+// A local device with its own data and (optionally) everything queued.
+local_device :: (name: string, seed: string, pending: string) -> string {
+    root := make_root(name)
+    check_true("init local device", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, seed)
+    if pending.count > 0 { raw_exec(root, pending) }
+    check_true("reopen local device", storage_init(root) != 0)
+    return root
+}
+
+// Starts an upload, so the pending changes are "in flight" when the server
+// answers.
+mark_pending_payload_in_flight :: () {
+    check_true("pending payload builds", build_payload())
+}
+
+count_of :: (root: string, sql: string) -> s32 {
+    return read_db_count(sql)
+}
+
+test_snapshot_with_pending_local_edits_merges :: () {
+    remote_records("review-remote-1", REMOTE_SQL)
+    root := local_device("review-pending", LOCAL_SQL, LOCAL_PENDING_SQL)
+    mark_pending_payload_in_flight()
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(12, "remote-hash-001")) != 0)
+    check_true("review is not pending for local edits", storage_sync_review_pending() == 0)
+    check_int("local session kept", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='local-session'"), 1)
+    check_int("remote session merged", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='remote-session'"), 1)
+    check_int("local habit kept", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_int("remote habit merged", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 1)
+    check_int("pending edits cleared after the accepted sync", count_of(root, "SELECT COUNT(*) FROM sync_outbox"), 0)
+    storage_close()
+}
+
+test_tiny_pending_snapshot_merges :: () {
+    remote_records("review-remote-tiny", "INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('tiny-remote-session',(SELECT id FROM users LIMIT 1),1782290300,20260624,1,1,'sync-test',1782290300,'404',0,1782290300);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('tiny-remote-session',0,55);")
+    root := local_device("review-tiny", "INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('tiny-local-session',(SELECT id FROM users LIMIT 1),1782300000,20260624,1,1,'test',1782300000,'101',0,1782300000);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('tiny-local-session',0,40);", "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('session','tiny-local-session',0,1782300000);")
+    mark_pending_payload_in_flight()
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(15, "remote-hash-tiny-session")) != 0)
+    check_true("review is not pending", storage_sync_review_pending() == 0)
+    check_int("local session kept", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='tiny-local-session'"), 1)
+    check_int("remote session merged", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='tiny-remote-session'"), 1)
+    check_int("outbox cleared", count_of(root, "SELECT COUNT(*) FROM sync_outbox"), 0)
+    storage_close()
+}
+
+test_local_habit_without_activity_does_not_force_review :: () {
+    remote_records("review-remote-2", REMOTE_SQL)
+    root := local_device("review-empty-habit", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('empty-local-habit',(SELECT id FROM users LIMIT 1),'Empty Habit',10,20,30,0,0,1,1,0,1782300000);", "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('habit','empty-local-habit',0,1782300000);")
+    mark_pending_payload_in_flight()
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(12, "remote-hash-001")) != 0)
+    check_true("review is not pending", storage_sync_review_pending() == 0)
+    check_int("remote session applied", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='remote-session'"), 1)
+    check_int("remote habit applied", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 1)
+    check_int("outbox cleared", count_of(root, "SELECT COUNT(*) FROM sync_outbox"), 0)
+    storage_close()
+}
+
+// The review works on the visible differences of a snapshot; rows the
+// server marks deleted are not among them.
+test_review_ignores_deleted_remote_rows :: () {
+    root := make_root("review-deleted")
+    check_true("init db", storage_init(root) != 0)
+    deleted: string = "{\"server_version\":13,\"server_state_hash\":\"remote-hash-deleted\",\"full_snapshot_required\":true,\"changes_complete\":false,\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[{\"id\":\"deleted-session\",\"started_at\":\"2026-06-24T10:00:00Z\",\"local_date\":20260624,\"topic\":2,\"activity\":3,\"source\":\"sync-test\",\"rounds_hash\":202,\"deleted_at\":1782300000,\"updated_at\":\"2026-06-24T10:00:00Z\",\"rounds\":[{\"round_index\":0,\"hold_seconds\":55}]}],\"meditation_logs\":[]}}"
+    check_true("no visible diff", storage_sync_review_json_has_visible_diff(deleted) == 0)
+    check_true("review not pending", storage_sync_review_pending() == 0)
+    storage_close()
+}
+
+test_remote_additions_apply_without_review :: () {
+    remote_records("review-remote-yoga", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('yoga',(SELECT id FROM users LIMIT 1),'Yoga',239,178,102,1,4,0,1,0,1782290000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('yoga',20260624,1,1,0,1782290000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('sun-session',(SELECT id FROM users LIMIT 1),1782290000,20260624,0,2,'test',1782290000,'303',0,1782290000);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('sun-session',0,1);")
+    root := make_root("review-additive")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    check_true("apply additions", storage_apply_sync_response_json(snapshot_response(14, "remote-hash-yoga")) != 0)
+    check_true("review not pending", storage_sync_review_pending() == 0)
+    check_int("sun session applied", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='sun-session'"), 1)
+    check_int("yoga habit applied", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='yoga' AND counter_enabled=0"), 1)
+    check_int("yoga day applied", count_of(root, "SELECT COUNT(*) FROM habit_days WHERE habit_id='yoga' AND count=1"), 1)
+    storage_close()
+}
+
+test_apply_inside_an_outer_transaction :: () {
+    remote_records("review-remote-clean", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('clean-habit',(SELECT id FROM users LIMIT 1),'Clean Breath',12,34,56,0,0,1,3,0,1782290000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('clean-habit',20260624,1,5,0,1782290000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('clean-session',(SELECT id FROM users LIMIT 1),1782290000,20260624,2,2,'sync-test',1782290000,'505',0,1782290000);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('clean-session',0,44);")
+    clean := TextBuffer.{}
+    append(*clean, TextFromCString(*remote_records_text.bytes[0]))
+    root := make_root("review-nested")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    check_true("begin outer transaction", exec_sql("BEGIN IMMEDIATE") != 0)
+    check_true("apply inside it", storage_apply_sync_response_json(response_with(21, TextFromCString(*clean.bytes[0]))) != 0)
+    check_true("commit outer transaction", exec_sql("COMMIT") != 0)
+    check_int("habit applied", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='clean-habit'"), 1)
+    check_int("day applied", count_of(root, "SELECT COUNT(*) FROM habit_days WHERE habit_id='clean-habit' AND count=5"), 1)
+    check_int("session applied", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='clean-session'"), 1)
+    check_int("rounds applied", count_of(root, "SELECT COUNT(*) FROM session_rounds WHERE session_id='clean-session' AND seconds=44"), 1)
+    storage_close()
+
+    // A local habit with the same name but another id is replaced by the
+    // remote one, keeping its days.
+    second := make_root("review-id-repair")
+    check_true("init repair db", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    raw_exec(second, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('local-clean-id',(SELECT id FROM users LIMIT 1),'Clean Breath',9,9,9,0,0,1,3,0,1782200000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('local-clean-id',20260623,1,2,0,1782200000);DELETE FROM sync_outbox;")
+    check_true("reopen repair db", storage_init(second) != 0)
+    check_true("apply the remote habit", storage_apply_sync_response_json(response_with(22, TextFromCString(*clean.bytes[0]))) != 0)
+    check_int("local duplicate id removed", count_of(second, "SELECT COUNT(*) FROM habits WHERE id='local-clean-id'"), 0)
+    check_int("canonical remote id present", count_of(second, "SELECT COUNT(*) FROM habits WHERE id='clean-habit'"), 1)
+    check_int("local day moved to the canonical id", count_of(second, "SELECT COUNT(*) FROM habit_days WHERE habit_id='clean-habit' AND local_date=20260623 AND count=2"), 1)
+    check_int("remote day still applied", count_of(second, "SELECT COUNT(*) FROM habit_days WHERE habit_id='clean-habit' AND local_date=20260624 AND count=5"), 1)
+    storage_close()
+}
+
+YOGA_SQL :: "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('yoga',(SELECT id FROM users LIMIT 1),'Yoga',239,178,102,1,4,0,1,0,1782300000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('yoga',20260624,1,2,0,1782300000);"
+
+test_snapshot_removes_absent_local_yoga :: () {
+    remote_records("review-remote-none", "DELETE FROM habits;")
+    root := local_device("review-removes-yoga", YOGA_SQL, "DELETE FROM sync_outbox;")
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(13, "remote-hash-deleted")) != 0)
+    check_true("review not pending", storage_sync_review_pending() == 0)
+    check_int("yoga habit removed", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='yoga'"), 0)
+    check_int("yoga day removed", count_of(root, "SELECT COUNT(*) FROM habit_days WHERE habit_id='yoga'"), 0)
+    storage_close()
+}
+
+test_snapshot_keeps_pending_yoga :: () {
+    remote_records("review-remote-none-2", "DELETE FROM habits;")
+    root := local_device("review-keeps-yoga", YOGA_SQL, "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('habit','yoga',0,1782300000);")
+    mark_pending_payload_in_flight()
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(13, "remote-hash-deleted")) != 0)
+    check_true("review not pending", storage_sync_review_pending() == 0)
+    check_int("pending yoga still local after the merge", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='yoga'"), 1)
+    storage_close()
+}
+
+test_normal_response_records_server_hash :: () {
+    root := make_root("review-normal")
+    status: StorageSyncStatus
+    check_true("init db", storage_init(root) != 0)
+    check_true("apply a normal response", storage_apply_sync_response_json(
+        "{\"protocol_version\":6,\"server_version\":5,\"server_clock\":77,\"server_state_hash\":\"normal-hash-001\",\"account_alias\":\"waozi\",\"changes\":{\"encrypted_records\":[]}}") != 0)
+    check_true("no review", storage_sync_review_pending() == 0)
+    check_true("alias saved", storage_get_setting_text("sync_account_alias") == "waozi")
+    check_true("status loads", storage_sync_status(*status) != 0)
+    check_int("server version recorded", cast(s32)status.server_version, 5)
+    check_int("server clock recorded", cast(s32)status.server_clock, 77)
+    set_account()
+    check_true("payload builds", build_payload())
+    check_true("hash in the next payload", contains(payload(), "\"last_server_state_hash\":\"normal-hash-001\""))
+    check_true("clock in the next payload", contains(payload(), "\"client_clock\":77"))
+    check_true("no full replace requested", !contains(payload(), "full_sync_requested"))
+    storage_close()
+}
+
+test_social_cache_is_server_authored :: () {
+    root := make_root("review-social")
+    cached: [512]u8
+    check_true("init db", storage_init(root) != 0)
+    check_true("store a local social cache", storage_set_social_cache_json("friends.list",
+        "{\"friends\":[{\"user_id_hash\":\"local-edit\"}]}") != 0)
+    check_true("a social cache alone is not local syncable data", storage_has_local_syncable_data() == 0)
+    set_account()
+    check_true("payload builds", build_payload())
+    check_true("social cache is not uploaded", !contains(payload(), "social_cache") && !contains(payload(), "friends.list"))
+    check_true("apply the server's social cache", storage_apply_sync_response_json(
+        "{\"protocol_version\":6,\"server_version\":9,\"server_clock\":9,\"server_state_hash\":\"social-hash-001\",\"changes\":{\"encrypted_records\":[],\"social_cache\":[{\"kind\":\"friends.list\",\"json\":{\"friends\":[{\"user_id_hash\":\"server-friend\"}]},\"updated_at\":\"2026-06-28T00:00:00Z\"}]}}") != 0)
+    check_true("load the cache", storage_get_social_cache_json("friends.list", *cached[0], 512) != 0)
+    text := TextFromCString(*cached[0])
+    check_true("the server's cache replaces the local edit", contains(text, "server-friend") && !contains(text, "local-edit"))
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -679,5 +897,15 @@ Check :: () -> s32 {
     test_session_last_write_wins()
     test_linked_session_delete_syncs()
     test_fresh_account_bootstraps_without_tombstones()
+    test_snapshot_with_pending_local_edits_merges()
+    test_tiny_pending_snapshot_merges()
+    test_local_habit_without_activity_does_not_force_review()
+    test_review_ignores_deleted_remote_rows()
+    test_remote_additions_apply_without_review()
+    test_apply_inside_an_outer_transaction()
+    test_snapshot_removes_absent_local_yoga()
+    test_snapshot_keeps_pending_yoga()
+    test_normal_response_records_server_hash()
+    test_social_cache_is_server_authored()
     return failures
 }

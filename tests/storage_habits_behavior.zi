@@ -507,6 +507,26 @@ test_meditation_logs_feed_profile_stats :: () {
     storage_close()
 }
 
+// Habit ids that are full UUIDs load intact, with their days.
+test_uuid_habit_ids_load_days :: () {
+    root := make_root("uuid-habit-load")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('940dd8b7-0d60-48ce-9c8f-433b9170b6b1',(SELECT id FROM users LIMIT 1),'Meditation',1,2,3,0,0,1,0,0,1782200000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('940dd8b7-0d60-48ce-9c8f-433b9170b6b1',20260629,1,1,0,1782200000);")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_b = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("habit count", habits_b.count, 1)
+    check_true("uuid id is not truncated",
+        TextFromCString(*habits_b.items[0].id[0]) == "940dd8b7-0d60-48ce-9c8f-433b9170b6b1")
+    check_int("habit day loaded", habits_b.items[0].day_count, 1)
+    if habits_b.items[0].day_count > 0 {
+        check_int("habit day date", habits_b.items[0].days[0].day_index, 20260629)
+    }
+    habits_free(*habits_b)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -523,5 +543,6 @@ Check :: () -> s32 {
     test_linked_counts_materialize()
     test_existing_sessions_materialize()
     test_meditation_logs_feed_profile_stats()
+    test_uuid_habit_ids_load_days()
     return failures
 }

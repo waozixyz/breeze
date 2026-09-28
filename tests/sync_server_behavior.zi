@@ -1,0 +1,355 @@
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/storage/sync_review.zi";
+#import, file "../src/storage/import.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_account_host.zi";
+#import, file "../src/storage/sync_runtime.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/screens/elist_types.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+
+// Two clients, a friend, and fresh installs syncing through a real Daochi
+// server (with a proxy that drops one response), from the first upload to
+// backup restore and deletion. The runner passes the server address in
+// SYNC_TEST_URL and the faulty proxy's in SYNC_TEST_FAULT_URL, and points
+// APP_DATA_ROOT at a disposable directory.
+
+c :: #system_library "c";
+get_environment :: (name: *u8) -> *u8 #foreign c "getenv";
+pause_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+habits_a: Habits;
+elists: EListState;
+requests_text: [8192]u8;
+friends_text: [8192]u8;
+
+environment_text :: (name: string) -> string {
+    buffer: TextBuffer
+    append(*buffer, name)
+    value := get_environment(*buffer.bytes[0])
+    if value == null { return "" }
+    return TextFromCString(value)
+}
+
+AlbumHabitId :: () -> string { return "00000000-0000-4000-8000-000000000042" }
+
+sub_root :: (root: string, name: string) -> string {
+    return make_root(join(join("sync-server-", name), ""))
+}
+
+open_client :: (root: string) {
+    storage_close()
+    check_true("open client storage", storage_init(root) != 0)
+}
+
+expect_habit :: (id: string, name: string, date: s32) {
+    habits_a = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_a) != 0)
+    found: *Habit = null
+    index: s32 = 0
+    while index < habits_a.count {
+        if TextFromCString(*habits_a.items[index].id[0]) == id { found = *habits_a.items[index] }
+        index += 1
+    }
+    check_true(join("habit exists: ", id), found != null)
+    if found != null {
+        check_true("habit name", TextFromCString(*found.name[0]) == name)
+        check_int("habit has one day", found.day_count, 1)
+        if found.day_count > 0 {
+            check_int("habit day date", found.days[0].day_index, date)
+            check_true("habit day completed", found.days[0].completed != 0)
+            check_int("habit day count", found.days[0].count, 1)
+        }
+    }
+    habits_free(*habits_a)
+}
+
+seed_default_habits :: () {
+    habits_a = Habits.{}
+    habits_a.count = 2
+    unused AppCopyText("meditation", habits_a.items[0].id[:])
+    unused AppCopyText("Meditation", habits_a.items[0].name[:])
+    unused AppCopyText("yoga", habits_a.items[1].id[:])
+    unused AppCopyText("Yoga", habits_a.items[1].name[:])
+    index: s32 = 0
+    while index < 2 {
+        habits_a.items[index].color = Color.{126, 183, 230, 255}
+        habits_a.items[index].counter_target = 1
+        habits_a.items[index].reminder_hour = -1
+        index += 1
+    }
+    storage_habits_save(cast(*void)*habits_a)
+    check_int("defaults seeded", storage_habit_count(), 2)
+    habits_free(*habits_a)
+}
+
+expect_list :: (list_id: string, item_id: string, title: string, comment: string, done: s32) {
+    elists = EListState.{}
+    check_true("load lists", storage_elist_load(cast(*void)*elists) != 0)
+    lists: s32 = 0
+    items: s32 = 0
+    storage_elist_counts(*lists, *items)
+    check_true("lists and items exist", lists > 0 && items > 0)
+    found_list: bool = false
+    found_item: bool = false
+    index: s32 = 0
+    while index < elists.list_count {
+        if TextFromCString(*elists.lists[index].id[0]) == list_id &&
+            TextFromCString(*elists.lists[index].title[0]) == title { found_list = true }
+        index += 1
+    }
+    index = 0
+    while index < elists.item_count {
+        if TextFromCString(*elists.items[index].id[0]) == item_id &&
+            TextFromCString(*elists.items[index].list_id[0]) == list_id &&
+            TextFromCString(*elists.items[index].comment[0]) == comment &&
+            elists.items[index].done == done { found_item = true }
+        index += 1
+    }
+    check_true(join("list ", title), found_list)
+    check_true(join("item in ", title), found_item)
+}
+
+// Syncs until nothing is left queued, retrying transient failures.
+synchronize :: (url: string) {
+    attempt: s32 = 0
+    while attempt < 8 {
+        result: s32 = SyncStoredAccount(url)
+        if result != 0 {
+            check_int("sync attempt result", result, 0)
+            unused pause_microseconds(2000000)
+            attempt += 1
+            continue
+        }
+        if storage_sync_review_pending() != 0 {
+            check_true("apply remote when local is empty",
+                storage_sync_review_apply_remote_if_local_empty() != 0)
+            check_true("review cleared", storage_sync_review_pending() == 0)
+        }
+        status: StorageSyncStatus
+        check_true("status", storage_sync_status(*status) != 0)
+        if status.queued_changes == 0 { return }
+        attempt += 1
+    }
+    check_true("sync drained the queued changes", false)
+}
+
+mood_is :: (id: string, want: s32) -> bool {
+    loaded: SessionMoodCheckin
+    return storage_load_session_checkin(id, *loaded) != 0 && loaded.mood_after == want
+}
+
+#program_export
+Check :: () -> s32 {
+    url := environment_text("SYNC_TEST_URL")
+    fault := environment_text("SYNC_TEST_FAULT_URL")
+    if url.count == 0 || fault.count == 0 { return 90 }
+    guard := support_begin("/tmp/inbe-sync-server-")
+    if guard != 0 { return guard }
+    // Keep the URLs, which point into the environment, across storage calls.
+    server: TextBuffer
+    append(*server, url)
+    proxy: TextBuffer
+    append(*proxy, fault)
+    url = TextFromCString(*server.bytes[0])
+    fault = TextFromCString(*proxy.bytes[0])
+
+    ask := SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK
+    ok := SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK
+    a := make_root("a")
+    b := make_root("b")
+    restored := make_root("restored")
+    friend_root := make_root("friend")
+    defaults_root := make_root("restored_defaults")
+    key_path: TextBuffer
+    append(*key_path, data_root())
+    append(*key_path, "/account.key")
+    backup: TextBuffer
+    append(*backup, data_root())
+    append(*backup, "/backup.zip")
+    alias: string = "restore_test"
+    friend_alias: string = "friend_test"
+    account: SyncAccount
+    friend_account: SyncAccount
+    restored_account: SyncAccount
+    default_account: SyncAccount
+    id: [256]u8
+    other_id: [256]u8
+    duration: [1]s32 = .[60]
+    checkin: SessionMoodCheckin
+
+    open_client(a)
+    check_true("generate account", sync_account_generate(*account) != 0)
+    check_true("save account", sync_account_save(*account, ask) == ok)
+    habit_name: string = "Recovery meditation"
+    habits_a = Habits.{}
+    habits_a.count = 1
+    unused AppCopyText(AlbumHabitId(), habits_a.items[0].id[:])
+    unused AppCopyText(habit_name, habits_a.items[0].name[:])
+    habits_a.items[0].color = Color.{82, 119, 193, 255}
+    habits_a.items[0].counter_target = 1
+    habits_a.items[0].reminder_hour = -1
+    storage_habits_save(cast(*void)*habits_a)
+    habits_free(*habits_a)
+    check_true("save habit day", storage_habit_day_save(AlbumHabitId(), 20260919, 1, 1) != 0)
+    expect_habit(AlbumHabitId(), habit_name, 20260919)
+    check_true("save session", storage_save_session_for_activity(*duration[0], 1, 0, 1, *id[0], 256) != 0)
+    checkin.mood_after = 4
+    session := TextFromCString(*id[0])
+    check_true("save check-in", storage_save_session_checkin(session, *checkin) != 0)
+    check_true("syncing offline fails", SyncStoredAccount("http://127.0.0.1:1") != 0)
+    check_int("an offline failure keeps local work", storage_session_count(), 1)
+    open_client(a)
+    check_true("check-in survives the failure", mood_is(session, 4))
+    // The server commits the upload, but the proxy drops its response.
+    check_true("interrupted upload fails", SyncStoredAccount(fault) != 0)
+    open_client(a)
+    synchronize(url)
+    storage_set_setting_text("sync_server_url", url)
+    storage_set_sync_enabled(1)
+    check_int("register alias", RegisterAliasStored(url, alias), 0)
+    list_id: [37]u8
+    item_id: [37]u8
+    check_true("create list", storage_elist_create_list("Travel", *list_id[0]) != 0)
+    list_text := TextFromCString(*list_id[0])
+    check_true("create item", storage_elist_create_item(list_text, "Pack bag", "Passport", *item_id[0]) != 0)
+    item_text := TextFromCString(*item_id[0])
+    synchronize(url)
+
+    open_client(b)
+    check_true("second device joins", sync_account_save(*account, ask) == ok)
+    synchronize(url)
+    check_true("alias reaches the second device", storage_get_setting_text("sync_account_alias") == alias)
+    check_int("session reaches the second device", storage_session_count(), 1)
+    expect_habit(AlbumHabitId(), habit_name, 20260919)
+    expect_list(list_text, item_text, "Travel", "Passport", 0)
+    check_true("complete the item", storage_elist_update_item(item_text, "Pack bag", "Passport", 1, 0) != 0)
+    synchronize(url)
+    open_client(a)
+    synchronize(url)
+    expect_list(list_text, item_text, "Travel", "Passport", 1)
+    open_client(b)
+    check_true("b sees the check-in", mood_is(session, 4))
+    checkin.mood_after = 2
+    check_true("b edits the check-in", storage_save_session_checkin(session, *checkin) != 0)
+    synchronize(url)
+    open_client(a)
+    synchronize(url)
+    check_true("a sees the edit", mood_is(session, 2))
+    synchronize(url)
+    check_int("retrying an acknowledged upload is idempotent", storage_session_count(), 1)
+
+    // Both clients edit offline; a's second edit is newer.
+    open_client(b)
+    checkin.mood_after = 1
+    check_true("b offline edit", storage_save_session_checkin(session, *checkin) != 0)
+    open_client(a)
+    checkin.mood_after = 3
+    check_true("a first offline edit", storage_save_session_checkin(session, *checkin) != 0)
+    checkin.mood_after = 4
+    check_true("a second offline edit", storage_save_session_checkin(session, *checkin) != 0)
+    open_client(b)
+    synchronize(url)
+    open_client(a)
+    synchronize(url)
+    open_client(b)
+    synchronize(url)
+    check_true("the newer edit wins", mood_is(session, 4))
+
+    // A friend, then restoring the same key on fresh installs.
+    check_true("export the account key",
+        sync_account_export_private_key(*account, *key_path.bytes[0]) != 0)
+    storage_set_setting_text("sync_server_url", url)
+    storage_set_sync_enabled(1)
+    open_client(friend_root)
+    check_true("generate the friend's account", sync_account_generate(*friend_account) != 0)
+    check_true("save the friend's account", sync_account_save(*friend_account, ask) == ok)
+    storage_set_setting_text("sync_server_url", url)
+    storage_set_sync_enabled(1)
+    synchronize(url)
+    check_int("friend registers an alias", RegisterAliasStored(url, friend_alias), 0)
+    check_int("friend sends a request",
+        SendFriendRequestStored(url, TextFromCString(*account.public_id[0])), 0)
+    open_client(b)
+    check_int("b fetches requests", FetchFriendRequests(url, requests_text[:]), 0)
+    request_id: [128]u8
+    check_true("request id", storage_json_array_object_text(TextFromCString(*requests_text[0]),
+        "$.incoming", 0, "id", *request_id[0], 128) != 0)
+    check_int("b accepts the request", AcceptFriendRequestStored(url, TextFromCString(*request_id[0])), 0)
+
+    open_client(restored)
+    check_true("read the key back", sync_account_import_private_key_preview(*restored_account,
+        *key_path.bytes[0]) != 0)
+    check_true("same account id", TextFromCString(*restored_account.public_id[0]) ==
+        TextFromCString(*account.public_id[0]))
+    check_true("restore the key", sync_account_save(*restored_account, ask) == ok)
+    storage_set_setting_text("sync_server_url", url)
+    storage_set_sync_enabled(1)
+    synchronize(url)
+    check_true("alias restored", storage_get_setting_text("sync_account_alias") == alias)
+    check_int("friends fetch", FetchFriends(url, friends_text[:]), 0)
+    check_true("friendship recovered", contains(TextFromCString(*friends_text[0]),
+        TextFromCString(*friend_account.public_id[0])))
+    check_int("session restored", storage_session_count(), 1)
+    check_true("check-in restored", mood_is(session, 4))
+    expect_habit(AlbumHabitId(), habit_name, 20260919)
+    expect_list(list_text, item_text, "Travel", "Passport", 1)
+
+    // A new install may seed the default habits before the key is restored.
+    open_client(defaults_root)
+    seed_default_habits()
+    check_true("read the key for the new install",
+        sync_account_import_private_key_preview(*default_account, *key_path.bytes[0]) != 0)
+    check_true("restore on the new install", sync_account_save(*default_account, ask) == ok)
+    storage_set_setting_text("sync_server_url", url)
+    storage_set_sync_enabled(1)
+    synchronize(url)
+    check_true("alias on the new install", storage_get_setting_text("sync_account_alias") == alias)
+    check_int("session on the new install", storage_session_count(), 1)
+    expect_habit(AlbumHabitId(), habit_name, 20260919)
+    expect_list(list_text, item_text, "Travel", "Passport", 1)
+    check_int("friends on the new install", FetchFriends(url, friends_text[:]), 0)
+    check_true("friendship on the new install", contains(TextFromCString(*friends_text[0]),
+        TextFromCString(*friend_account.public_id[0])))
+
+    // Backup and restore.
+    open_client(b)
+    check_true("export a backup", storage_export_zip(TextFromCString(*backup.bytes[0])) != 0)
+    open_client(restored)
+    check_true("import the backup", storage_import_zip(TextFromCString(*backup.bytes[0])) != 0)
+    check_int("backup session", storage_session_count(), 1)
+    check_true("backup check-in", mood_is(session, 4))
+
+    // Deleting one session leaves the unrelated upload alone.
+    open_client(b)
+    duration[0] = 90
+    check_true("save another session", storage_save_session_for_activity(*duration[0], 1, 0, 1, *other_id[0], 256) != 0)
+    check_true("delete the first session", storage_delete_session(session) != 0)
+    synchronize(url)
+    open_client(a)
+    synchronize(url)
+    check_int("deletion preserves the unrelated upload", storage_session_count(), 1)
+    other := TextFromCString(*other_id[0])
+    loaded: SessionMoodCheckin
+    check_true("the other session loads", storage_load_session_checkin(other, *loaded) != 0)
+    check_true("delete the other session", storage_delete_session(other) != 0)
+    synchronize(url)
+    open_client(b)
+    synchronize(url)
+    check_int("both deletions reached the second device", storage_session_count(), 0)
+    storage_close()
+    return failures
+}

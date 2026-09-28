@@ -1,44 +1,143 @@
+#import "byte_text_linux"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_types.zi";
-#import, file "../src/app/exercise_types.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/app/audio_meter_host.zi";
+#import, file "../src/app/music_library_host.zi";
+#import, file "../src/platform/notification_host.zi";
 #import, file "../src/practices/session_results.zi";
+#import, file "../src/practices/meditation/meditation_practice.zi";
+#import, file "../src/practices/meditation/meditation_session.zi";
 
-using ExerciseType;
+c :: #system_library "c";
+pause_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+app_state: InnerBreeze;
+
+// Effects outside the session-result rules; finishing a meditation asks for
+// a sync directly.
+#program_export "app_auto_sync"
+host_auto_sync :: (app: *InnerBreeze) -> s32 {
+    unused app
+    return 1
+}
+#program_export "save_settings"
+host_save_settings :: (app: *InnerBreeze) {
+    unused app
+}
+#program_export "app_play_bell_cue"
+host_play_bell_cue :: (app: *InnerBreeze, volume: float32) {
+    unused app
+    unused volume
+}
+#program_export "meditation_music_start_session"
+host_music_start :: (app: *InnerBreeze) {
+    unused app
+}
+#program_export "meditation_music_stop"
+host_music_stop :: (app: *InnerBreeze) {
+    unused app
+}
+#program_export "meditation_music_fade_out"
+host_music_fade :: (app: *InnerBreeze) {
+    unused app
+}
+#program_export "practice_background_start"
+host_background_start :: (app: *InnerBreeze, id: s32) {
+    unused app
+    unused id
+}
+#program_export "practice_active_background_stop"
+host_background_stop :: (app: *InnerBreeze) {
+    unused app
+}
+#program_export "app_notifications_send_session_complete"
+host_notify_complete :: (app: *InnerBreeze) {
+    unused app
+}
 
 #program_export
-Answer :: () -> s32 {
-    app: InnerBreeze
-    app.results_scroll = 81
-    detail: [4]u8 = .{97, 98, 99, 0}
-    path: [5]u8 = .{115, 97, 118, 101, 0}
-    rounds: [14]s32
-    index: s32 = 0
-    while index < 14 {
-        rounds[index] = index + 1
-        index += 1
-    }
-    app_prepare_session_results(*app, EXERCISE_PATTERNS, 72, 3,
-        *detail[0], *rounds[0], 14, *path[0])
-    if app.session_result.active != 1 ||
-        app.session_result.activity != EXERCISE_PATTERNS ||
-        app.session_result.primary_value != 72 ||
-        app.session_result.secondary_value != 3 ||
-        app.session_result.round_count != 12 ||
-        app.session_result.round_values[11] != 12 ||
-        app.session_result.detail[2] != 99 ||
-        app.session_result.saved != 1 ||
-        app.session_result.path[3] != 101 ||
-        app.results_scroll != 0 {
-        return 1
-    }
-    app.session_result.write_failed = 1
-    app_prepare_session_results(*app, 99, 0, 0, null, null, 0, null)
-    if app.session_result.activity != EXERCISE_WIM_HOF ||
-        app.session_result.saved != 0 ||
-        app.session_result.write_failed != 0 ||
-        app.session_result.round_count != 0 ||
-        app.session_result.detail[0] != 0 ||
-        app.session_result.path[0] != 0 {
-        return 2
-    }
-    return 42
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-session-results-zi-test/")
+    if guard != 0 { return guard }
+    root := make_root("session-results")
+    rounds: [1]s32 = .[60]
+    id: [64]u8
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    app := *app_state
+
+    check_true("save the session", storage_save_session_for_activity(*rounds[0], 1, 0, 1, *id[0], 64) != 0)
+    app_prepare_session_results(app, 1, 60, 0, null, null, 0, *id[0])
+    app.session_result.mood = 4
+    app_state.breathing.screen = ScreenResults
+    // With storage unavailable the write fails and the results stay open.
+    storage_close()
+    session_result_done(app)
+    check_true("a failed write keeps the results open",
+        app.session_result.active != 0 && app.session_result.write_failed != 0)
+    check_true("the mood is kept and nothing else happens",
+        app.session_result.mood == 4 && app.breathing.screen != ScreenStart && !app.ui.sync_requested)
+    check_true("reopen db", storage_init(root) != 0)
+    session_result_done(app)
+    check_true("done closes the results, leaves and asks for a sync",
+        app.session_result.active == 0 && app.breathing.screen == ScreenStart && app.ui.sync_requested)
+    app.ui.sync_requested = false
+    session_result_done(app)
+    check_true("done again does nothing", !app.ui.sync_requested)
+
+    app_prepare_session_results(app, 2, 3, 0, null, null, 0, *id[0])
+    storage_close()
+    session_result_discard(app)
+    check_true("a failed discard keeps the results open",
+        app.session_result.active != 0 && app.session_result.write_failed != 0)
+    check_true("reopen db again", storage_init(root) != 0)
+    app_state.breathing.screen = ScreenResults
+    session_result_discard(app)
+    check_true("discard closes the results, leaves and asks for a sync",
+        app.session_result.active == 0 && app.breathing.screen == ScreenStart && app.ui.sync_requested)
+    check_int("the discarded session is gone", storage_session_count(), 0)
+    app.ui.sync_requested = false
+    session_result_discard(app)
+    check_true("discard again does nothing", !app.ui.sync_requested)
+
+    app_prepare_session_results(app, 0, 60, 0, null, null, 0, null)
+    session_result_done(app)
+    check_true("results without a saved session close", app.session_result.active == 0)
+
+    // A timed meditation saves once when it ends. Session ids come from the
+    // start time and rounds, so wait out the second the discarded one used.
+    unused pause_microseconds(1100000)
+    // A timed meditation saves once when it ends.
+    app.meditation.duration_mode = 5
+    app.meditation.custom_minutes = 1
+    meditation_start_configured(app)
+    check_int("configured length", app.meditation.remaining_seconds, 60)
+    meditation_advance_elapsed(app, 1500)
+    check_int("time passes", app.meditation.remaining_seconds, 59)
+    app.session_paused = 1
+    meditation_advance_elapsed(app, 30000)
+    check_int("paused time does not count", app.meditation.remaining_seconds, 59)
+    app.session_paused = 0
+    meditation_advance_elapsed(app, 59000)
+    check_true("finishing shows the results", app.breathing.screen == ScreenResults)
+    check_int("the session was saved", storage_session_count(), 1)
+    check_true("results record the saved session",
+        app.session_result.saved != 0 && app.session_result.primary_value == 60)
+    meditation_advance_elapsed(app, 60000)
+    check_int("nothing more is saved", storage_session_count(), 1)
+    app.session_result.mood = 4
+    session_result_done(app)
+    check_true("done returns to the start", app.breathing.screen == ScreenStart && app.session_result.active == 0)
+    storage_close()
+    return failures
 }

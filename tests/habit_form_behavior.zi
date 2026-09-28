@@ -1,0 +1,110 @@
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/screens/habits/edit.zi";
+
+using HabitSyncMode;
+
+app_state: InnerBreeze;
+syncs: s32;
+
+// Application hooks the form calls when it saves.
+#program_export "app_auto_sync"
+host_auto_sync :: (app: *InnerBreeze) -> s32 {
+    unused app
+    syncs += 1
+    return 0
+}
+
+#program_export "save_settings"
+host_save_settings :: (app: *InnerBreeze) {
+    unused app
+}
+
+set_text :: (target: []u8, text: string) {
+    unused AppCopyText(text, target)
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-habit-form-zi-test/")
+    if guard != 0 { return guard }
+    root := make_root("habit-form")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    app := *app_state
+
+    habit_edit_begin_new(app)
+    check_int("new habit opens the form", app.breathing.screen, ScreenHabitEdit)
+    check_true("the name starts empty", app.habit_edit.text[0] == cast(u8)0)
+    check_int("no reminder by default", app.habit_edit.reminder_hour, -1)
+    check_int("no schedule by default", app.habit_edit.weekdays, HABIT_SCHEDULE_OFF)
+    check_true("first section open", app.habit_edit.sections[0] != 0)
+    check_true("only the routine sections are open by default",
+        app.habit_edit.sections[1] == 0 && app.habit_edit.sections[2] != 0)
+
+    habit_edit_commit(app)
+    check_true("an empty name keeps the form open", app.habit_edit.active != 0 && app.habit_edit.name_error == 1)
+    check_int("nothing was added", app.habits.count, 0)
+    check_int("nothing was stored", storage_habit_count(), 0)
+
+    set_text(app.habit_edit.text[:], "   \t ")
+    habit_edit_commit(app)
+    check_true("a blank name keeps the form open", app.habit_edit.active != 0 && app.habits.count == 0)
+
+    set_text(app.habit_edit.text[:], "Test counter")
+    set_text(app.habit_edit.description[:], "Only for testing")
+    app.habit_edit.counter_enabled = 1
+    app.habit_edit.sync_activity = 3
+    app.habit_edit.weekdays = 31
+    app.habit_edit.reminder_hour = 9
+    habit_edit_commit(app)
+    check_true("a valid habit is added and the form closes", app.habits.count == 1 && app.habit_edit.active == 0)
+    check_int("the habit is stored", storage_habit_count(), 1)
+    check_int("sync ran once", syncs, 1)
+    check_int("counter enabled", app.habits.items[0].counter_enabled, 1)
+    check_int("linked activities", app.habits.items[0].sync_activity, 3)
+    check_int("linking is independent of the counter", app.habits.items[0].sync_mode, 1)
+    check_int("weekdays", app.habits.items[0].weekdays, 31)
+    check_int("reminder", app.habits.items[0].reminder_hour, 9)
+    check_true("description", TextFromCString(*app.habits.items[0].description[0]) == "Only for testing")
+
+    habit_edit_begin_new(app)
+    set_text(app.habit_edit.text[:], "Test counter")
+    habit_edit_commit(app)
+    check_true("a duplicate name is refused", app.habit_edit.active != 0 && app.habit_edit.name_error == 2 && app.habits.count == 1)
+    habit_edit_cancel(app)
+    check_int("cancelling stores nothing", storage_habit_count(), 1)
+    check_int("cancelling returns to the overview", app.habits.screen_mode, HABITS_SCREEN_OVERVIEW)
+
+    habit_edit_begin(app, 0)
+    check_true("editing opens the form for the habit", app.breathing.screen == ScreenHabitEdit && app.habit_edit.is_new == 0)
+    check_true("the form shows the habit's settings", app.habit_edit.counter_enabled != 0 && app.habit_edit.sync_activity == 3)
+    set_text(app.habit_edit.text[:], "Unsaved edit")
+    habit_edit_cancel(app)
+    check_true("cancelling an edit keeps the habit", TextFromCString(*app.habits.items[0].name[0]) == "Test counter")
+
+    habit_edit_begin(app, 0)
+    app.habit_edit.counter_enabled = 0
+    app.habit_edit.weekdays = 0
+    app.habit_edit.reminder_hour = -1
+    habit_edit_commit(app)
+    check_true("turning the counter off leaves the linking alone",
+        app.habits.items[0].counter_enabled == 0 && app.habits.items[0].sync_activity == 3)
+    check_true("the schedule and reminder are cleared",
+        app.habits.items[0].weekdays == 0 && app.habits.items[0].reminder_hour == -1)
+    check_int("sync ran for the edit", syncs, 2)
+    habits_free(*app.habits)
+    storage_close()
+    return failures
+}
