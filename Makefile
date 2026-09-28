@@ -655,9 +655,12 @@ MEDITATION_AUDIO_TRACKS := \
 
 all: native
 
+# Tests take the whole toolchain directory, so every tool rebuilds together;
+# mixing a new zi2zir with an old ziran fails on the ZIR version.
+ZIRAN_TOOLS := $(addprefix $(ZIRAN_BUILD_DIR)/bin/,zi2c zi2zir zi2zib zi2cpp zi2go ziran)
+
 $(ZI2C_BIN): $(ZIRAN_SOURCES)
-	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) \
-		$(ZI2C_BIN) $(ZI2ZIR_BIN)
+	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $(ZIRAN_TOOLS)
 
 zi-check: $(ZI_CHECK_STAMP) | build-laws
 
