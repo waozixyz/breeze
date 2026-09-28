@@ -22,6 +22,7 @@ mkdir -p "$work/c"
     -I"$work/c/ui" -I"$work/c/app" \
     "$root/tests/raylib_text_input_link_test.c" \
     "$work/c/platform/raylib_text_input.c" "$work/c/text_buffers.c" \
+    "$work/c/byte_text_linux.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe raylib text input Ziran/native test passed"

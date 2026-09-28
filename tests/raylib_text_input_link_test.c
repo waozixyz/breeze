@@ -10,14 +10,6 @@ static bool control_down;
 static bool paste_pressed;
 static uint8_t clipboard[32] = "pasted";
 
-String
-app_text_from_cstring(uint8_t *data, int32_t capacity)
-{
-    size_t length = 0;
-    while(length < (size_t)capacity && data[length] != 0)
-        length++;
-    return StringView((const char *)data, length);
-}
 
 int32_t
 GetCharPressed(void)

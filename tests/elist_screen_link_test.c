@@ -7,14 +7,6 @@ static int save_succeeds = 1;
 static int sync_calls;
 static char saved_comment[ELIST_COMMENT_SIZE];
 
-String
-app_text_from_cstring(uint8_t *data, int32_t capacity)
-{
-    size_t length = 0;
-    while(length < (size_t)capacity && data[length] != 0)
-        length++;
-    return StringView((const char *)data, length);
-}
 
 int32_t
 AppScale(int32_t pixels)

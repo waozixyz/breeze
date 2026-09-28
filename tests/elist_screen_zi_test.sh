@@ -28,6 +28,7 @@ mkdir -p "$work/c"
     -I"$work/c/daochi-client" \
     "$root/tests/elist_screen_link_test.c" \
     "$work/c/screens/elist_screen.c" "$work/c/text_buffers.c" \
+    "$work/c/byte_text_linux.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe elist screen Ziran/native test passed"

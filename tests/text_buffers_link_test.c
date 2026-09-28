@@ -4,15 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 
-String
-app_text_from_cstring(uint8_t *data, int32_t capacity)
-{
-    size_t length = 0;
-    while(length < (size_t)capacity && data[length] != 0)
-        length++;
-    return StringView((const char *)data, length);
-}
-
 static void
 expect(const char *format, int32_t value, const char *wanted)
 {

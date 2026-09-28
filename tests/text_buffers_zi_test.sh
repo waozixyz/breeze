@@ -16,6 +16,6 @@ mkdir -p "$work/c"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$root/tests/text_buffers_link_test.c" \
-    "$work/c/app/text_buffers.c" -o "$work/test"
+    "$work/c/app/text_buffers.c" "$work/c/byte_text_linux.c" -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe text buffer Ziran/native test passed"
