@@ -41,6 +41,22 @@ laws cover, how they are enforced, and what is still to do.
   ends the refresh without clearing anything, so known friends and requests
   stay; a failed optional statistic clears only itself; stages run once, in
   order, and the average statistic exists only for `whm`.
+- **Habit merge** (`src/storage/habit_merge_model.zi`, laws in
+  `habit_merge_laws.zi`). Seven laws over every three-day sequence: the merge
+  keeps both sides, invents nothing, and is commutative, idempotent, and
+  associative, with a missing day as identity. `tests/habit_merge_sql_test.py`
+  runs the real merge SQL (both `storage_merge_habit_into` and the remote-map
+  path) on all 729 sequence pairs and requires the same behavior, so the proof
+  of the model is tied to the SQL that actually runs.
+- **Account restore** (`src/storage/sync_restore_model.zi`, laws in
+  `sync_restore_laws.zi`). Four laws: restoring queues every local entity and
+  invents none. `tests/sync_restore_sql_test.py` runs the real clear-and-requeue
+  SQL on every subset of already-queued entities, including a soft-deleted
+  habit, and requires that every local entity is queued afterward.
+- **Dialog rules** (`src/app/modal_rules.zi`, laws in `modal_rules_laws.zi`).
+  Seven laws over every dialog type and screen numbers -2 to 20: each
+  screen-specific dialog appears only where it belongs, all others appear
+  anywhere, and the habit-tab flag cannot leak a dialog onto another screen.
 - **Ziran `forall` laws** (in `~/Projects/ziran`).
   `#law NAME forall x: 0..4, k: SomeEnum => condition;` checks every
   combination of integer ranges and enum members with the compile-time
@@ -77,39 +93,34 @@ proof of application behavior.
 
 ## Toolchain pin
 
-`ziran.lock` pins Ziran commit `ff497c9` (`forall` and enum-aware `custom` laws)
-on `master`. Law identity and waiver validation landed later in `e63fcf5`; bump
-the pin with `ziran lock` when the rest of the lock is ready to move.
+`ziran.lock` pins Ziran commit `9235688` on `master`, which has `forall` laws
+over ranges, enums, and bounded sequences, enum-aware `custom` laws, and law
+identity and waiver validation.
 `ziran lock` currently also re-resolves Kryon, whose working tree needs raylib,
 so the pin was changed by hand to the toolchain commit only. Local builds use
 the `../ziran` and `../kryon` working trees through `ziran.local.toml`.
 
-## Remaining Ziran work
+## Model and implementation
 
-1. **Determinism matrix.** Law tables byte-identical across runs and between
-   source and saved IR (covered for `forall` and enum laws in Ziran's
-   `tests/laws.sh`, not yet across the whole matrix).
-2. **Mutation gate as a Ziran library.** Inbe's `tests/law_mutation_test.sh` is
-   a local script; Ziran should provide the reusable form.
-3. **Beyond finite tables.** Bounded quantification over sequences, and a stated
-   relation between the checked pure model and the lowered native code, so a
-   proof of a model is never claimed to prove a separately implemented C path.
-   Needed for collection merges and the SQL-level recovery rules below.
+A law about a model proves the model. Where the real behavior is SQL or effectful
+code, a test runs that code against the same statements (`habit-merge-sql-test`,
+`sync-restore-sql-test`), and the mutation test shows each such test rejects a
+broken implementation. What is not covered is stated next to each law; no law
+claims to prove a separately implemented path it does not check.
 
-Done in Ziran: `forall` over integer ranges and enums, counterexamples, the case
-budget, enum members and typed locals in pure procedures, and law identity and
-waiver validation (unique names; a waiver must name an existing law; only
-unknown laws can be waived).
+## Remaining work
 
-## Next migrations, in order
-
-1. **Recovery rules that live in SQL.** Restoring an account resets the sync
-   state and deletes the outbox, relying on a backfill to re-queue local data;
-   a law that restoring cannot lose queued local changes needs the sequence
-   model above, and is covered today only by storage integration tests.
-2. **Collection merges**, once Ziran supports bounded sequence quantification.
-3. **Widget behavior** in ordinary Kryon Ziran modules with tests of the
-   portable values and host boundaries. Ziran stays unaware of UI widgets.
+1. **Determinism matrix in Ziran.** Law tables byte-identical across runs and
+   between source and saved IR is tested for `forall`, enum, and sequence laws
+   in `tests/laws.sh`, not across the whole compiler matrix.
+2. **Mutation gate as a Ziran library.** `tests/law_mutation_test.sh` is local to
+   Inbe; Ziran should provide the reusable form.
+3. **Unbounded and wider domains.** Sequence laws are exhaustive up to 1,000,000
+   cases and 16 elements; larger merges are covered by the bounded model plus
+   the SQL test, not by proof.
+4. **Widget behavior beyond dialog rules.** Rendering, layout, and hover/press
+   transitions stay covered by portable value tests and host boundary tests.
+   Ziran stays unaware of UI widgets.
 
 ## Trust and use with smaller models
 

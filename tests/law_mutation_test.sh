@@ -21,6 +21,10 @@ fresh() {
         "$root"/src/storage/habit_merge_laws.zi "$work/src/storage/"
     cp "$root"/src/storage/sync_restore_model.zi \
         "$root"/src/storage/sync_restore_laws.zi "$work/src/storage/"
+    mkdir -p "$work/src/core"
+    cp "$root"/src/core/types.zi "$work/src/core/"
+    cp "$root"/src/app/modal_rules.zi "$root"/src/app/modal_rules_laws.zi \
+        "$work/src/app/"
     cp "$root"/src/storage/sync_result.zi "$root"/src/storage/storage_layout.zi \
         "$root"/src/storage/storage_layout_laws.zi "$work/src/storage/"
 }
@@ -34,6 +38,7 @@ fresh
 check app/sync_retry_laws.zi
 check app/practice_lifecycle_laws.zi
 check app/sync_recovery_policy_laws.zi
+check app/modal_rules_laws.zi
 check storage/habit_merge_laws.zi
 check storage/sync_restore_laws.zi
 check storage/storage_layout_laws.zi
@@ -146,6 +151,15 @@ if SYNC_RESTORE_ROOT="$work/restore" python3 \
     echo "restore test accepted a restore that leaves local data unqueued" >&2
     exit 1
 fi
+modal=app/modal_rules.zi
+mutate $modal app/modal_rules_laws.zi \
+    's/return screen == ScreenStart$/return screen == ScreenSettings/' \
+    MeditationSetupOnlyOnStart
+mutate $modal app/modal_rules_laws.zi \
+    's/^    return true$/    return false/' OtherDialogsAppearAnywhere
+mutate $modal app/modal_rules_laws.zi \
+    's/screen == ScreenHabitEdit  || (screen == ScreenHabits \&\& habit_edit_tab)/screen == ScreenHabitEdit  || screen == ScreenHabits/' \
+    DeleteHabitNeedsEditor
 mutate storage/sync_result.zi app/sync_retry_laws.zi \
     's/SYNC_AUTH_FAILED :: 7/SYNC_AUTH_FAILED :: 8/' WireAuthFailed
 mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
