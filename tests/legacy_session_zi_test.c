@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "storage/legacy_session.h"
 #include "storage/legacy_session_files.h"
+#include "storage/legacy_session_time.h"
 #include "storage/legacy_session_zip.h"
 #include <assert.h>
 #include <fts.h>
@@ -10,6 +11,8 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+const char *zlibVersion(void);
 
 /* The generated Ziran zlib boundary uses the same native stream ABI. */
 extern int deflateInit2_(ZStream *, int, int, int, int, int,

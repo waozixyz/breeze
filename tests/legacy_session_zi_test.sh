@@ -25,5 +25,6 @@ mkdir -p "$work/generated"
     "$work/generated/storage/legacy_session_time.c" \
     "$work/generated/storage/legacy_session_zip.c" \
     "$work/generated/zip.c" "$work/generated/zip_linux.c" \
+    "$work/generated/file_linux.c" \
     -lz -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
