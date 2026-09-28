@@ -16,6 +16,7 @@ app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
 #import, file "../app/dpi_state.zi";
 #import, file "environment.zi";
 #import, file "raylib_host.zi";
+#import, file "../../build/packages/kryon/src/backend/raylib_runtime.zi";
 raylib :: #system_library "raylib";
 SetConfigFlags :: (flags: u32) #foreign raylib;
 SetExitKey :: (key: s32) #foreign raylib;
@@ -45,9 +46,12 @@ UnloadImage :: (image: RaylibImage) #foreign raylib;
 #import "tree_input"
 #import "session"
 #import "swipe_props"
+#import "zoom"
 #import, file "scroll_input.zi";
 
 #import, file "../app/app.zi";
+#import, file "../app/app_zoom.zi";
+#import, file "../app/app_settings.zi";
 #import, file "../breaks/break_rules.zi";
 #import, file "../breaks/break_types.zi";
 #import, file "../app/current_app.zi";
@@ -277,8 +281,30 @@ app_frame :: (app: *InnerBreeze) {
     } else {
         SetMouseCursor(0)
     }
+    // Ctrl and the wheel zoom the whole app instead of scrolling a list.
+    modifiers := RaylibModifiers()
+    zoom_key: s32 = 0
+    if (modifiers & KeyModifierControl) != 0 {
+        zoom_keys := s32.[ZoomKeyEqual, ZoomKeyMinus, ZoomKeyZero,
+            ZoomKeyKeypadAdd, ZoomKeyKeypadSubtract, ZoomKeyKeypadZero]
+        zoom_index: s32 = 0
+        while zoom_index < 6 {
+            if IsKeyPressed(zoom_keys[zoom_index]) {
+                zoom_key = zoom_keys[zoom_index]
+            }
+            zoom_index += 1
+        }
+    }
+    zoomed := app_zoom_frame(app.ui.session, CurrentDPIPlatform(),
+        app.ui_scale_tenths, GetMouseWheelMove(), modifiers, zoom_key)
+    if zoomed.changed {
+        app.ui_scale_tenths = zoomed.tenths
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    SetDPIZoom(UserScale(app.ui_scale_tenths))
     BeginScrollFrame(app.ui.session, mouse, pointer.pressed, pointer.down,
-        pointer.released, GetMouseWheelMove())
+        pointer.released, zoomed.wheel)
 
     frame_bounds := Rectangle.{0.0, 0.0,
         cast(float32)width, cast(float32)height}

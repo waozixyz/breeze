@@ -1,0 +1,96 @@
+#import "dpi"
+#import "session"
+#import "zoom"
+#import, file "../src/app/app_zoom.zi";
+
+using DPIPlatform;
+
+Near :: (value: float32, expected: float32) -> bool {
+    difference := value - expected
+    if difference < 0.0 {
+        difference = -difference
+    }
+    return difference < 0.001
+}
+
+#program_export
+Answer :: () -> s32 {
+    desktop := cast(DPIPlatform)DPIPlatformDesktop
+    web := cast(DPIPlatform)DPIPlatformWeb
+    control: s32 = 2
+    session := SessionOpen()
+    tenths: s32 = 10
+
+    // The saved scale, in tenths, is the zoom the frame applies.
+    if !Near(UserScale(10), 1.0) { return 1 }
+    if !Near(UserScale(15), 1.5) { return 2 }
+    if !Near(UserScale(5), 0.5) { return 3 }
+    if !Near(UserScale(25), 2.5) { return 4 }
+    if !Near(UserScale(0), 1.0) { return 5 }
+
+    // A wheel step without Ctrl is left for scrolling and changes nothing.
+    result := app_zoom_frame(session, desktop, tenths, 1.0, 0, 0)
+    if result.wheel != 1.0 || result.changed || result.tenths != 10 {
+        return 6
+    }
+
+    // Ctrl and the wheel change the saved scale by a tenth and take the
+    // wheel away from scrolling.
+    result = app_zoom_frame(session, desktop, tenths, 1.0, control, 0)
+    if result.wheel != 0.0 || !result.changed || result.tenths != 11 {
+        return 7
+    }
+    tenths = result.tenths
+    result = app_zoom_frame(session, desktop, tenths, -3.0, control, 0)
+    if result.wheel != 0.0 || result.tenths != 8 { return 8 }
+    tenths = result.tenths
+
+    // The scale stops at the slider's limits and the wheel stays with zoom.
+    result = app_zoom_frame(session, desktop, tenths, 40.0, control, 0)
+    if result.tenths != 25 || result.wheel != 0.0 { return 9 }
+    tenths = result.tenths
+    result = app_zoom_frame(session, desktop, tenths, 1.0, control, 0)
+    if result.changed || result.tenths != 25 || result.wheel != 0.0 {
+        return 10
+    }
+    result = app_zoom_frame(session, desktop, tenths, -40.0, control, 0)
+    if result.tenths != 5 { return 11 }
+
+    // The slider edits the setting directly; the wheel continues from it.
+    tenths = 20
+    result = app_zoom_frame(session, desktop, tenths, -1.0, control, 0)
+    if result.tenths != 19 || !result.changed { return 12 }
+
+    // Ctrl with plus, minus, and zero are the keyboard forms.
+    tenths = 19
+    result = app_zoom_frame(session, desktop, tenths, 0.0, control,
+        ZoomKeyEqual)
+    if result.tenths != 20 || !result.changed { return 13 }
+    result = app_zoom_frame(session, desktop, tenths, 0.0, control,
+        ZoomKeyMinus)
+    if result.tenths != 18 { return 14 }
+    result = app_zoom_frame(session, desktop, tenths, 0.0, control,
+        ZoomKeyZero)
+    if result.tenths != 10 { return 15 }
+
+    // A touchpad's small movements add up to a step, one frame at a time.
+    tenths = 10
+    result = app_zoom_frame(session, desktop, tenths, 0.4, control, 0)
+    result = app_zoom_frame(session, desktop, tenths, 0.4, control, 0)
+    if result.tenths != 10 { return 16 }
+    result = app_zoom_frame(session, desktop, tenths, 0.4, control, 0)
+    if result.tenths != 11 { return 17 }
+
+    // A browser zooms the page itself, so the wheel scrolls as usual.
+    tenths = 10
+    result = app_zoom_frame(session, web, tenths, 1.0, control, 0)
+    if result.wheel != 1.0 || result.changed || result.tenths != 10 {
+        return 18
+    }
+
+    // Without a session there is nothing to zoom.
+    unused SessionClose(session)
+    result = app_zoom_frame(session, desktop, tenths, 1.0, control, 0)
+    if result.wheel != 1.0 || result.changed { return 19 }
+    return 42
+}

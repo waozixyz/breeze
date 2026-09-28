@@ -2,6 +2,7 @@
 #import "geometry"
 #import, file "../platform/environment.zi";
 #import, file "../platform/raylib_host.zi";
+#import, file "../../build/packages/kryon/src/backend/raylib_runtime.zi";
 raylib :: #system_library "raylib";
 IsWindowReady :: () -> bool #foreign raylib;
 GetWindowScaleDPI :: () -> Vector2 #foreign raylib;
@@ -12,6 +13,7 @@ c :: #system_library "c";
 device_density :: () -> float32 #foreign c "app_device_density";
 
 dpi_state: DPIState;
+dpi_user_zoom: float32 = 1.0;
 last_density: float32;
 last_window_scale: Vector2;
 
@@ -23,14 +25,21 @@ InitDPI :: () {
 }
 
 #program_export
-UpdateDPI :: (view_width: s32, view_height: s32) {
-    platform: DPIPlatform = cast(DPIPlatform)DPIPlatformDesktop
-    window_scale := Vector2.{1.0, 1.0}
+CurrentDPIPlatform :: () -> DPIPlatform {
     if AndroidPlatform() != 0 {
-        platform = cast(DPIPlatform)DPIPlatformAndroid
-    } else if WebPlatform() != 0 {
-        platform = cast(DPIPlatform)DPIPlatformWeb
-    } else if IsWindowReady() {
+        return cast(DPIPlatform)DPIPlatformAndroid
+    }
+    if WebPlatform() != 0 {
+        return cast(DPIPlatform)DPIPlatformWeb
+    }
+    return cast(DPIPlatform)DPIPlatformDesktop
+}
+
+#program_export
+UpdateDPI :: (view_width: s32, view_height: s32) {
+    platform: DPIPlatform = CurrentDPIPlatform()
+    window_scale := Vector2.{1.0, 1.0}
+    if platform == cast(DPIPlatform)DPIPlatformDesktop && IsWindowReady() {
         window_scale = GetWindowScaleDPI()
     }
     density := device_density()
@@ -45,6 +54,18 @@ UpdateDPI :: (view_width: s32, view_height: s32) {
     last_window_scale = window_scale
     dpi_state = ResolveDPI(dpi_state, view_width, view_height, platform,
         density, window_scale.x, window_scale.y)
+    // The user's zoom scales everything drawn and narrows or widens the
+    // layout; the text is baked at the size it ends up on screen.
+    dpi_state = ZoomDPI(dpi_state, dpi_user_zoom)
+    RaylibSetZoom(dpi_state.render_scale)
+}
+
+// The zoom for the next UpdateDPI, 1.0 for 100%.
+#program_export
+SetDPIZoom :: (zoom: float32) {
+    if zoom > 0.0 {
+        dpi_user_zoom = zoom
+    }
 }
 
 #program_export

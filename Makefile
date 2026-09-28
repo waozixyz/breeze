@@ -818,6 +818,10 @@ native-screenshot-test: $(TARGET)
 native-navigation-test: $(TARGET)
 	sh tests/native_navigation_test.sh $(abspath $(TARGET))
 
+.PHONY: native-zoom-test
+native-zoom-test: $(TARGET)
+	sh tests/native_zoom_test.sh $(abspath $(TARGET))
+
 kryon-host: $(KRYON_HOST_TARGET)
 
 # Generate Kryon's checked Ziran modules into Inbe's build tree.
@@ -1778,6 +1782,13 @@ app-nav-state-zi-test: $(ZI2C_BIN)
 		sh tests/app_nav_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: app-nav-state-zi-test
+
+.PHONY: app-zoom-test
+app-zoom-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/app_zoom_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: app-zoom-test
 
 .PHONY: sync-safety-test
 sync-safety-test: $(ZI2C_BIN)

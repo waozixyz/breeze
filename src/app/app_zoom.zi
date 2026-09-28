@@ -1,0 +1,87 @@
+#import "dpi"
+#import "session"
+#import "zoom"
+
+using DPIPlatform;
+
+// Ctrl and the mouse wheel zoom the whole app as a browser does. Kryon's
+// zoom decides when the wheel means zoom and how far one notch goes; this
+// keeps the result in the same UI scale setting the appearance slider edits,
+// so a wheel step moves the slider, persists, and rescales every metric.
+UI_SCALE_MINIMUM_TENTHS :: 5;
+UI_SCALE_MAXIMUM_TENTHS :: 25;
+
+zoom_configured_slot: s32;
+zoom_configured_epoch: u64;
+
+// The scale chosen in Appearance, in tenths, as a zoom factor: 1.0 for 100%.
+// The frame applies it as the DPI zoom, so it scales everything drawn and the
+// layout is the window divided by it, as a browser page zoom does.
+#program_export
+UserScale :: (tenths: s32) -> float32 {
+    if tenths <= 0 {
+        return 1.0
+    }
+    return cast(float32)tenths / 10.0
+}
+
+app_zoom_configure :: (session: Session) {
+    if session.slot == zoom_configured_slot &&
+        session.epoch == zoom_configured_epoch {
+        return
+    }
+    props: ZoomProps
+    props.minimum = cast(float32)UI_SCALE_MINIMUM_TENTHS / 10.0
+    props.maximum = cast(float32)UI_SCALE_MAXIMUM_TENTHS / 10.0
+    props.step = 0.1
+    unused ZoomConfigure(session, props)
+    zoom_configured_slot = session.slot
+    zoom_configured_epoch = session.epoch
+}
+
+AppZoomResult :: struct {
+    wheel: float32
+    tenths: s32
+    changed: bool
+}
+
+// One frame of zoom input: the saved scale in tenths, the wheel movement, the
+// held modifier bits, and the zoom shortcut key pressed this frame (0 for
+// none). The result holds the wheel movement left for scrolling, which is none
+// when Ctrl held it for zoom, and the scale to save when it changed.
+#program_export
+app_zoom_frame :: (session: Session, platform: DPIPlatform, tenths: s32,
+    wheel: float32, modifiers: s32, key: s32) -> AppZoomResult {
+    result: AppZoomResult
+    result.wheel = wheel
+    result.tenths = tenths
+    if !SessionValid(session) {
+        return result
+    }
+    app_zoom_configure(session)
+
+    // The saved setting is the truth; the slider changes it without telling
+    // the zoom, so bring the zoom to it before it reacts to the wheel.
+    unused ZoomSet(session, UserScale(tenths))
+
+    consumed := ZoomWheel(session, platform, wheel, modifiers)
+    if key != 0 && ZoomKey(session, platform, key, modifiers) {
+        consumed = true
+    }
+
+    next := cast(s32)(ZoomFactor(session) * 10.0 + 0.5)
+    if next < UI_SCALE_MINIMUM_TENTHS {
+        next = UI_SCALE_MINIMUM_TENTHS
+    }
+    if next > UI_SCALE_MAXIMUM_TENTHS {
+        next = UI_SCALE_MAXIMUM_TENTHS
+    }
+    if next != tenths {
+        result.tenths = next
+        result.changed = true
+    }
+    if consumed {
+        result.wheel = 0.0
+    }
+    return result
+}
