@@ -432,6 +432,18 @@ session_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
     }
 }
 
+session_advance_visible_frame :: (app: *InnerBreeze) {
+    if app == null || app.session_paused != 0 || app.backgrounded != 0 {
+        return
+    }
+
+    elapsed_ms: s32 = cast(s32)(GetFrameTime() * 1000.0f + 0.5f)
+    if elapsed_ms < 1 {
+        elapsed_ms = 1
+    }
+    session_advance_elapsed(app, elapsed_ms)
+}
+
 #program_export
 session_start :: (app: *InnerBreeze) {
     speed: s32 = app.breathing.speed_level
@@ -804,6 +816,10 @@ session_circle_progress :: (app: *InnerBreeze, total_ticks: *s32, progress: *flo
             amount = cast(float32)app.breathing.sectick / cast(float32)total_frames
         }
         is_countdown = 1
+    } else if app.breathing.phase == BreathPhaseBreathe {
+        count = BreathDigitsRead(app.breathing.count[:])
+        amount = (cast(float32)count + BreathProgress(app.breathing)) /
+            cast(float32)total
     } else if app.breathing.phase == BreathPhaseHold {
         total_frames = 60 * 60
         frame_in_minute = (BreathDigitsRead(app.breathing.count[:]) * 60 + app.breathing.sectick) %
@@ -839,7 +855,7 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
     countdown: s32 = 0
     progress: float32 = 0.0f
     gap: s32 = AppScale(5)
-    band_width: s32
+    band_width: s32 = AppScale(10)
     thickness: s32
     inner_radius: float32
     outer_radius: float32
@@ -857,15 +873,12 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
 
     session_circle_progress(app, *total_ticks, *progress, *countdown)
 
-    if total_ticks <= 20 {
-        band_width = AppScale(14)
-    } else if total_ticks <= 40 {
-        band_width = AppScale(11)
-    } else {
-        band_width = AppScale(8)
+    max_band_width: s32 = app.breathing.rmin - gap - 4
+    if max_band_width < 1 {
+        max_band_width = 1
     }
-    if band_width < 5 {
-        band_width = 5
+    if band_width > max_band_width {
+        band_width = max_band_width
     }
 
     thickness = ifx (total_ticks <= 40) then (AppScale(3)) else (AppScale(2))
@@ -875,9 +888,6 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
 
     outer_radius = radius - cast(float32)gap
     inner_radius = outer_radius - cast(float32)band_width
-    if inner_radius < radius * 0.66f {
-        inner_radius = radius * 0.66f
-    }
     if outer_radius <= inner_radius {
         return
     }
@@ -1063,10 +1073,12 @@ session_update_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover
         FrameTextHold(*app.ui.frame_text,
         AppTextFromCString(*title[0], 32)), title_h) != 0 {
         session_request_exit(app)
+        session_advance_visible_frame(app)
         return
     }
 
     if session_handle_exit_modal(app) != 0 {
+        session_advance_visible_frame(app)
         return
     }
 
@@ -1100,13 +1112,7 @@ session_update_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover
 
     draw_session_status(app, center_x, center_y)
 
-    if app.session_paused == 0 && app.backgrounded == 0 {
-        elapsed_ms: s32 = cast(s32)(GetFrameTime() * 1000.0f + 0.5f)
-        if elapsed_ms < 1 {
-            elapsed_ms = 1
-        }
-        session_advance_elapsed(app, elapsed_ms)
-    }
+    session_advance_visible_frame(app)
 
     if app.breathing.completed != 0 {
         session_complete(app)
