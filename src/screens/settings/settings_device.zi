@@ -1,6 +1,3 @@
-#import "checkbox"
-#import "checkbox_props"
-#import "checkbox_widget"
 #import "control_props"
 #import "drawing_props"
 #import "dropdown"
@@ -43,36 +40,60 @@ settings_device_clamp :: (value: s32, minimum: s32, maximum: s32) -> s32 {
     return value
 }
 
-#program_export
-settings_device_content_height :: (content_width: s32) -> s32 {
-    label_width := content_width
-    if label_width <= 0 {
-        label_width = AppScale(240)
-    }
-    height := AppScale(76) + AppScale(76) + AppScale(40)
-    height += toggle_row_height(LocaleText("language_system_label"), label_width)
-    height += toggle_row_height(LocaleText("play_in_background_label"), label_width)
+settings_device_language_body :: (width: s32) -> s32 {
+    return toggle_row_height(LocaleText("language_system_label"), width) +
+        settings_choice_row_height(LocaleText("language_label"), width)
+}
+
+settings_device_display_body :: (width: s32) -> s32 {
+    height := settings_choice_row_height(LocaleText("orientation_label"), width)
     if DesktopPlatform() != 0 {
-        height += AppScale(50)
-        height += toggle_row_height(LocaleText("on_screen_keyboard_label"), label_width)
-        height += AppScale(76) + AppScale(76)
+        height += toggle_row_height(LocaleText("fullscreen_label"), width)
+        height += toggle_row_height(LocaleText("on_screen_keyboard_label"), width)
     }
     return height
 }
 
-#program_export
-settings_device_draw :: (app: *InnerBreeze, x: s32, width: s32,
-    y: *s32, state: *SettingsDeviceState) {
-    if app == null || y == null || state == null {
-        return
-    }
-    desktop := DesktopPlatform() != 0
-    if !desktop {
-        app.on_screen_keyboard_enabled = 1
-    }
+settings_device_window_body :: (width: s32) -> s32 {
+    return settings_choice_row_height(
+        LocaleText("desktop_startup_mode_label"), width) +
+        settings_choice_row_height(
+            LocaleText("desktop_close_action_label"), width)
+}
 
+settings_device_playback_body :: (width: s32) -> s32 {
+    return toggle_row_height(LocaleText("play_in_background_label"), width)
+}
+
+#program_export
+settings_device_content_height :: (content_width: s32) -> s32 {
+    width := content_width
+    if width <= 0 {
+        width = AppScale(240)
+    }
+    inner := settings_section_inner_width(width)
+    height := settings_section_height(LocaleText("language_label"),
+        settings_device_language_body(inner))
+    height += settings_section_height(LocaleText("settings_section_display"),
+        settings_device_display_body(inner))
+    if DesktopPlatform() != 0 {
+        height += settings_section_height(
+            LocaleText("settings_section_window"),
+            settings_device_window_body(inner))
+    }
+    height += settings_section_height(
+        LocaleText("settings_section_playback"),
+        settings_device_playback_body(inner))
+    return height
+}
+
+settings_device_draw_language :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, state: *SettingsDeviceState) {
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("language_label"), settings_device_language_body(inner))
     language_system := app.language_system
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, section.inner_x, section.inner_width, y,
         LocaleText("language_system_label"), *language_system, 0) != 0 {
         app.language_system = language_system
         if app.language_system != 0 {
@@ -81,38 +102,35 @@ settings_device_draw :: (app: *InnerBreeze, x: s32, width: s32,
             apply_language_selection(app, app.language_index, 1)
         }
     }
-
-    label: TextProps
-    label.text = LocaleText("language_label")
-    label.font = AppFontSize()
-    label.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(24)
-}
-    Text(app.ui.session, label)
+    settings_row_divider(app, section, y.*)
     language_props: DropdownProps
     language_props.id = 101
-    language_props.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + AppScale(26)), cast(float32)width,
-        cast(float32)AppScale(36)
-}
+    language_props.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("language_label"))
     language_props.selected_index = app.language_index
     language_props.open = app.ui.locale_settings_menu.open
     language_props.highlight_index = app.ui.locale_settings_menu.highlight_index
     language_props.scroll_offset = app.ui.locale_settings_menu.scroll_offset
     language_props.placeholder = LocaleText("language_label")
+    language_props.disabled = app.language_system != 0
     app.ui.locale_settings_menu = LocaleDropdown(app.ui.session, language_props)
     if app.ui.locale_settings_menu.changed {
         app.language_index = app.ui.locale_settings_menu.selected_index
         state.language_menu_changed = 1
     }
-    y.* += AppScale(76)
+    settings_section_end(y)
+}
 
+settings_device_draw_display :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, state: *SettingsDeviceState) {
+    desktop := DesktopPlatform() != 0
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_section_display"),
+        settings_device_display_body(inner))
     orientation_count := settings_device_orientation_option_count()
     app.orientation_mode = settings_device_clamp(app.orientation_mode,
         cast(s32)APP_ORIENTATION_SYSTEM, orientation_count - 1)
-    label.text = LocaleText("orientation_label")
-    label.bounds.y = cast(float32)y.*
-    Text(app.ui.session, label)
     orientation_options: [4]DropdownOption
     orientation_options[0].label = LocaleText("orientation_system")
     orientation_options[1].label = LocaleText("orientation_portrait")
@@ -120,10 +138,8 @@ settings_device_draw :: (app: *InnerBreeze, x: s32, width: s32,
     orientation_options[3].label = LocaleText("orientation_sensor")
     orientation: DropdownProps
     orientation.id = 103
-    orientation.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + AppScale(26)), cast(float32)width,
-        cast(float32)AppScale(36)
-}
+    orientation.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("orientation_label"))
     orientation.selected_index = app.orientation_mode
     orientation.open = app.ui.orientation_settings_menu.open
     orientation.highlight_index = app.ui.orientation_settings_menu.highlight_index
@@ -134,87 +150,100 @@ settings_device_draw :: (app: *InnerBreeze, x: s32, width: s32,
         app.orientation_mode = app.ui.orientation_settings_menu.selected_index
         state.orientation_changed = 1
     }
-    y.* += AppScale(76)
-
     if desktop {
-        fullscreen: CheckboxProps
-        fullscreen.id = 102
-        fullscreen.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)width, cast(float32)AppScale(36)
-}
-        fullscreen.label = LocaleText("fullscreen_label")
-        fullscreen.checked = app.fullscreen_enabled != 0
-        fullscreen_result := Checkbox(app.ui.session, fullscreen)
-        if fullscreen_result.changed {
-            app.fullscreen_enabled = ifx fullscreen_result.checked then 1 else 0
+        settings_row_divider(app, section, y.*)
+        fullscreen := app.fullscreen_enabled
+        if commit_toggle_row(app, section.inner_x, section.inner_width, y,
+            LocaleText("fullscreen_label"), *fullscreen, 0) != 0 {
+            app.fullscreen_enabled = fullscreen
             app_desktop_set_fullscreen(app.fullscreen_enabled)
-            app.settings_dirty = 1
         }
-        y.* += AppScale(50)
-
+        settings_row_divider(app, section, y.*)
         keyboard := app.on_screen_keyboard_enabled
-        if commit_toggle_row(app, x, width, y,
+        if commit_toggle_row(app, section.inner_x, section.inner_width, y,
             LocaleText("on_screen_keyboard_label"), *keyboard, 0) != 0 {
             app.on_screen_keyboard_enabled = keyboard
         }
-
-        startup_options: [2]DropdownOption
-        startup_options[0].label = LocaleText("desktop_startup_mode_normal")
-        startup_options[1].label = LocaleText("desktop_startup_mode_minimized")
-        label.text = LocaleText("desktop_startup_mode_label")
-        label.bounds.y = cast(float32)y.*
-        Text(app.ui.session, label)
-        startup: DropdownProps
-        startup.id = 104
-        startup.bounds = Rectangle.{cast(float32)x,
-            cast(float32)(y.* + AppScale(26)), cast(float32)width,
-            cast(float32)AppScale(36)
-}
-        startup.selected_index = app.desktop_startup_mode
-        startup.open = app.ui.startup_settings_menu.open
-        startup.highlight_index = app.ui.startup_settings_menu.highlight_index
-        startup.scroll_offset = app.ui.startup_settings_menu.scroll_offset
-        app.ui.startup_settings_menu = Dropdown(app.ui.session, startup,
-            startup_options[:])
-        if app.ui.startup_settings_menu.changed {
-            app.desktop_startup_mode = app.ui.startup_settings_menu.selected_index
-            app.settings_dirty = 1
-            save_settings(app)
-        }
-        y.* += AppScale(76)
-
-        close_options: [3]DropdownOption
-        close_options[0].label = LocaleText("desktop_close_action_ask")
-        close_options[1].label = LocaleText("desktop_close_action_keep_running")
-        close_options[2].label = LocaleText("desktop_close_action_quit")
-        label.text = LocaleText("desktop_close_action_label")
-        label.bounds.y = cast(float32)y.*
-        Text(app.ui.session, label)
-        close: DropdownProps
-        close.id = 105
-        close.bounds = Rectangle.{cast(float32)x,
-            cast(float32)(y.* + AppScale(26)), cast(float32)width,
-            cast(float32)AppScale(36)
-}
-        close.selected_index = app.desktop_close_action
-        close.open = app.ui.close_settings_menu.open
-        close.highlight_index = app.ui.close_settings_menu.highlight_index
-        close.scroll_offset = app.ui.close_settings_menu.scroll_offset
-        app.ui.close_settings_menu = Dropdown(app.ui.session, close,
-            close_options[:])
-        if app.ui.close_settings_menu.changed {
-            app.desktop_close_action = app.ui.close_settings_menu.selected_index
-            app.settings_dirty = 1
-            save_settings(app)
-        }
-        y.* += AppScale(76)
     }
+    settings_section_end(y)
+}
 
+settings_device_draw_window :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32) {
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_section_window"),
+        settings_device_window_body(inner))
+    startup_options: [2]DropdownOption
+    startup_options[0].label = LocaleText("desktop_startup_mode_normal")
+    startup_options[1].label = LocaleText("desktop_startup_mode_minimized")
+    startup: DropdownProps
+    startup.id = 104
+    startup.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("desktop_startup_mode_label"))
+    startup.selected_index = app.desktop_startup_mode
+    startup.open = app.ui.startup_settings_menu.open
+    startup.highlight_index = app.ui.startup_settings_menu.highlight_index
+    startup.scroll_offset = app.ui.startup_settings_menu.scroll_offset
+    app.ui.startup_settings_menu = Dropdown(app.ui.session, startup,
+        startup_options[:])
+    if app.ui.startup_settings_menu.changed {
+        app.desktop_startup_mode = app.ui.startup_settings_menu.selected_index
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    settings_row_divider(app, section, y.*)
+    close_options: [3]DropdownOption
+    close_options[0].label = LocaleText("desktop_close_action_ask")
+    close_options[1].label = LocaleText("desktop_close_action_keep_running")
+    close_options[2].label = LocaleText("desktop_close_action_quit")
+    close: DropdownProps
+    close.id = 105
+    close.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("desktop_close_action_label"))
+    close.selected_index = app.desktop_close_action
+    close.open = app.ui.close_settings_menu.open
+    close.highlight_index = app.ui.close_settings_menu.highlight_index
+    close.scroll_offset = app.ui.close_settings_menu.scroll_offset
+    app.ui.close_settings_menu = Dropdown(app.ui.session, close,
+        close_options[:])
+    if app.ui.close_settings_menu.changed {
+        app.desktop_close_action = app.ui.close_settings_menu.selected_index
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    settings_section_end(y)
+}
+
+settings_device_draw_playback :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32) {
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_section_playback"),
+        settings_device_playback_body(inner))
     play_in_background := app.breathing.play_in_background
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, section.inner_x, section.inner_width, y,
         LocaleText("play_in_background_label"), *play_in_background, 0) != 0 {
         app.breathing.play_in_background = play_in_background
     }
+    settings_section_end(y)
+}
+
+#program_export
+settings_device_draw :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, state: *SettingsDeviceState) {
+    if app == null || y == null || state == null {
+        return
+    }
+    if DesktopPlatform() == 0 {
+        app.on_screen_keyboard_enabled = 1
+    }
+    settings_device_draw_language(app, x, width, y, state)
+    settings_device_draw_display(app, x, width, y, state)
+    if DesktopPlatform() != 0 {
+        settings_device_draw_window(app, x, width, y)
+    }
+    settings_device_draw_playback(app, x, width, y)
 }
 
 #program_export

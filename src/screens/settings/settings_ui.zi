@@ -16,13 +16,168 @@
 #import, file "../../app/metrics.zi";
 #import, file "../../app/text_buffers.zi";
 #import "drawing_props"
+#import "fieldset_props"
+#import "fieldset_widget"
+#import "semantic"
+#import "separator_props"
+#import "separator_widget"
 
 using TextAlign;
 using TextWrap;
+using SemanticKind;
+
+// Settings pages group related rows into titled sections. A section is a
+// heading above a framed card; rows inside the card share one inset, one
+// height rule, and a divider between neighbours.
+
+#program_export
+settings_section_inset :: () -> s32 {
+    return AppScale(16)
+}
+
+settings_section_title_height :: () -> s32 {
+    return AppScale(30)
+}
+
+settings_section_padding :: () -> s32 {
+    return AppScale(4)
+}
+
+settings_section_gap :: () -> s32 {
+    return AppScale(20)
+}
+
+SettingsSection :: struct {
+    inner_x: s32
+    inner_width: s32
+}
+
+// Total height of a section whose rows take body_height.
+#program_export
+settings_section_height :: (title: string, body_height: s32) -> s32 {
+    height := body_height + settings_section_padding() * 2 +
+        settings_section_gap()
+    if title != "" {
+        height += settings_section_title_height()
+    }
+    return height
+}
+
+settings_section_inner_width :: (width: s32) -> s32 {
+    return width - settings_section_inset() * 2
+}
+
+#program_export
+settings_section_begin :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, title: string, body_height: s32) -> SettingsSection {
+    section: SettingsSection
+    section.inner_x = x + settings_section_inset()
+    section.inner_width = settings_section_inner_width(width)
+    if title != "" {
+        heading: TextProps
+        heading.text = title
+        heading.font = AppSmallFontSize()
+        heading.wrap = cast(TextWrap)TextWrapNone
+        heading.semantic_kind = cast(SemanticKind)SemanticHeading
+        heading.heading_level = 2
+        heading.bounds = Rectangle.{cast(float32)(x + AppScale(4)),
+            cast(float32)y.*, cast(float32)(width - AppScale(4)),
+            cast(float32)AppScale(22)}
+        Text(app.ui.session, heading)
+        y.* += settings_section_title_height()
+    }
+    frame: FieldsetProps
+    frame.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width,
+        cast(float32)(body_height + settings_section_padding() * 2)}
+    Fieldset(app.ui.session, frame)
+    y.* += settings_section_padding()
+    return section
+}
+
+#program_export
+settings_section_end :: (y: *s32) {
+    y.* += settings_section_padding() + settings_section_gap()
+}
+
+// A hairline between two rows of the same section.
+#program_export
+settings_row_divider :: (app: *InnerBreeze, section: SettingsSection,
+    y: s32) {
+    line: SeparatorProps
+    line.bounds = Rectangle.{cast(float32)section.inner_x, cast(float32)y,
+        cast(float32)section.inner_width, 1.0}
+    Separator(app.ui.session, line)
+}
+
+settings_choice_control_width :: (width: s32) -> s32 {
+    control := width * 45 / 100
+    if control > AppScale(300) {
+        control = AppScale(300)
+    }
+    if control < AppScale(180) {
+        control = AppScale(180)
+    }
+    return control
+}
+
+// A choice row puts its label beside the control when both fit, and the
+// label above a full-width control otherwise.
+settings_choice_row_stacked :: (label: string, width: s32) -> bool {
+    label_width := width - settings_choice_control_width(width) - AppScale(16)
+    return label_width < AppScale(140) ||
+        AppTextWidth(label, AppFontSize()) > label_width
+}
+
+#program_export
+settings_choice_row_height :: (label: string, width: s32) -> s32 {
+    if settings_choice_row_stacked(label, width) {
+        return AppScale(10) + AppScale(22) + AppScale(6) +
+            AppScale(36) + AppScale(12)
+    }
+    return AppScale(56)
+}
+
+// Draws the row label and returns where the caller places its control.
+#program_export
+settings_choice_row :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, label: string) -> Rectangle {
+    control_height := AppScale(36)
+    text: TextProps
+    text.text = label
+    text.font = AppFontSize()
+    text.wrap = cast(TextWrap)TextWrapNone
+    control: Rectangle
+    if settings_choice_row_stacked(label, width) {
+        text.bounds = Rectangle.{cast(float32)x,
+            cast(float32)(y.* + AppScale(10)), cast(float32)width,
+            cast(float32)AppScale(22)}
+        control = Rectangle.{cast(float32)x,
+            cast(float32)(y.* + AppScale(38)), cast(float32)width,
+            cast(float32)control_height}
+    } else {
+        row_height := settings_choice_row_height(label, width)
+        control_width := settings_choice_control_width(width)
+        text.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+            cast(float32)(width - control_width - AppScale(16)),
+            cast(float32)row_height}
+        text.vertical_align = cast(TextAlign)TextAlignCenter
+        control = Rectangle.{cast(float32)(x + width - control_width),
+            cast(float32)(y.* + (row_height - control_height) / 2),
+            cast(float32)control_width, cast(float32)control_height}
+    }
+    Text(app.ui.session, text)
+    y.* += settings_choice_row_height(label, width)
+    return control
+}
 
 #program_export
 toggle_switch_width :: () -> s32 {
-    return AppScale(54)
+    return AppScale(50)
+}
+
+toggle_switch_height :: () -> s32 {
+    return AppScale(28)
 }
 
 #program_export
@@ -31,7 +186,7 @@ toggle_row_height :: (label: string, width: s32) -> s32 {
         width = AppScale(160)
     }
     toggle_width := toggle_switch_width()
-    toggle_height := AppScale(34)
+    toggle_height := toggle_switch_height()
     gap := AppScale(18)
     label_width := width - toggle_width - gap
     if label_width < AppScale(120) {
@@ -63,7 +218,7 @@ draw_toggle_row :: (app: *InnerBreeze, x: s32, width: s32,
     }
     row_height := toggle_row_height(label, width)
     toggle_width := toggle_switch_width()
-    toggle_height := AppScale(34)
+    toggle_height := toggle_switch_height()
     gap := AppScale(18)
     label_width := width - toggle_width - gap
     if label_width < AppScale(120) {
