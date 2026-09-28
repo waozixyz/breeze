@@ -745,7 +745,7 @@ route-host-test: $(ZI2C_BIN)
 	@$(ZI2C_BIN) --no-main --root src \
 		--module-path $(ZIRAN_DIR)/std \
 		-o $(BUILD_DIR)/route-host-test/generated src/app/route_log.zi
-	@$(ZI2C_BIN) --no-main --root src \
+	@$(ZI2C_BIN) --no-main --root src --define PLATFORM_WEB \
 		--module-path $(ZIRAN_DIR)/std \
 		-o $(BUILD_DIR)/route-host-test/generated src/app/route_host.zi
 	@$(CC) -std=c11 -ffunction-sections -fdata-sections \
@@ -754,6 +754,7 @@ route-host-test: $(ZI2C_BIN)
 		tests/route_host_test.c \
 		$(BUILD_DIR)/route-host-test/generated/c_string.c \
 		$(BUILD_DIR)/route-host-test/generated/text_buffers.c \
+		$(BUILD_DIR)/route-host-test/generated/byte_text_linux.c \
 		$(BUILD_DIR)/route-host-test/generated/app/route_log.c \
 		$(BUILD_DIR)/route-host-test/generated/app/route_host.c \
 		-I$(KRYON_DIR)/include \

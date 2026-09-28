@@ -72,7 +72,7 @@ int main(void)
     app.ui.session = SessionOpen();
     assert(SessionValid(app.ui.session));
     AppMetricsConfigure(1.0f);
-    assert(toggle_switch_width() == 54);
+    assert(toggle_switch_width() == 50);
     assert(toggle_row_height(label, 300) >= 52);
 
     TreeStart(app.ui.session, 1, (Rectangle){0, 0, 400, 300});

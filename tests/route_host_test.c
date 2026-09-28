@@ -32,14 +32,6 @@ void app_log_line(uint8_t *line)
     app_log_info("%s", (const char *)line);
 }
 
-String app_text_from_cstring(uint8_t *text, int32_t capacity)
-{
-    int32_t length = 0;
-    while (length < capacity && text[length] != 0)
-        length++;
-    return StringView((const char *)text, (size_t)length);
-}
-
 uint8_t *GetRoutePath(void) { return (uint8_t *)"/app"; }
 uint8_t *GetRouteHash(void) { return (uint8_t *)"#/start"; }
 int GetRouteVersion(void) { return 7; }
