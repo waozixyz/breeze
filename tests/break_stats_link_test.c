@@ -1,4 +1,18 @@
 #include "storage/break_stats.h"
+/* The generated SQLite module and the vendor header define the same
+ * constants; the vendor definitions win here. */
+#undef SQLITE_OK
+#undef SQLITE_ROW
+#undef SQLITE_DONE
+#undef SQLITE_BUSY
+#undef SQLITE_TRANSIENT
+#undef SQLITE_LOCKED
+#undef SQLITE_NOMEM
+#undef SQLITE_TOOBIG
+#undef SQLITE_MISUSE
+#undef SQLITE_OPEN_READWRITE
+#undef SQLITE_OPEN_CREATE
+#undef SQLITE_OPEN_FULLMUTEX
 #include <sqlite3.h>
 
 #include <assert.h>
