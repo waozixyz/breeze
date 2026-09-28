@@ -1,0 +1,734 @@
+#import "byte_text_linux"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/storage/storage_thread_buffers.zi";
+#import, file "../src/storage/legacy_session_files.zi";
+#import, file "../src/storage/legacy_session_time.zi";
+#import, file "../src/storage/sync_account_host.zi";
+#import, file "../src/app/host_services.zi";
+
+c :: #system_library "c";
+run_shell :: (command: *u8) -> s32 #foreign c "system";
+file_open :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+file_close :: (file: *void) -> s32 #foreign c "fclose";
+file_write :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fwrite";
+file_read :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fread";
+file_seek :: (file: *void, offset: s64, origin: s32) -> s32 #foreign c "fseek";
+file_tell :: (file: *void) -> s64 #foreign c "ftell";
+memory_allocate :: (size: usize) -> *void #foreign c "malloc";
+memory_free :: (memory: *void) #foreign c "free";
+write_bytes :: (descriptor: s32, data: *void, count: usize) -> s64 #foreign c "write";
+sleep_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+sqlite :: #system_library "sqlite3";
+TestSqliteOpen :: (path: *u8, db: **void) -> s32 #foreign c "sqlite3_open";
+TestSqliteClose :: (db: *void) -> s32 #foreign c "sqlite3_close";
+TestSqliteExec :: (db: *void, sql: *u8, callback: *void, argument: *void,
+    error: **u8) -> s32 #foreign c "sqlite3_exec";
+TestSqliteFree :: (memory: *void) #foreign c "sqlite3_free";
+TestSqlitePrepare :: (db: *void, sql: *u8, length: s32, statement: **void,
+    tail: **u8) -> s32 #foreign c "sqlite3_prepare_v2";
+TestSqliteStep :: (statement: *void) -> s32 #foreign c "sqlite3_step";
+TestSqliteColumnInt :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+TestSqliteColumnText :: (statement: *void, column: s32) -> *u8 #foreign c "sqlite3_column_text";
+TestSqliteFinalize :: (statement: *void) -> s32 #foreign c "sqlite3_finalize";
+
+WorkerFunction :: #type (argument: *void) -> *void #c_call;
+TestThreadCreate :: (thread: *u64, attributes: *void, function: WorkerFunction,
+    argument: *void) -> s32 #foreign c "pthread_create";
+TestThreadJoin :: (thread: u64, result: **void) -> s32 #foreign c "pthread_join";
+
+#program_export "asset_entry_at"
+asset_entry_at :: (index: usize) -> *void {
+    return null
+}
+#program_export "asset_entry_total"
+asset_entry_total :: () -> usize {
+    return 0
+}
+#program_export "app_text_from_cstring"
+app_text_from_cstring :: (data: *u8, capacity: s32) -> string {
+    if data == null || capacity <= 0 { return "" }
+    length: s32 = 0
+    while length < capacity && data[length] != cast(u8)0 { length += 1 }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+
+// File access the account code expects from its host.
+#program_export "LoadFileText"
+host_load_file_text :: (path: *u8) -> *u8 {
+    file := file_open(path, cstr("rb"))
+    if file == null { return null }
+    if file_seek(file, 0, 2) != 0 {
+        file_close(file)
+        return null
+    }
+    size := file_tell(file)
+    if size < 0 || file_seek(file, 0, 0) != 0 {
+        file_close(file)
+        return null
+    }
+    text := cast(*u8)memory_allocate(cast(usize)size + 1)
+    if text == null {
+        file_close(file)
+        return null
+    }
+    if cast(s64)file_read(cast(*void)text, 1, cast(usize)size, file) != size {
+        memory_free(cast(*void)text)
+        file_close(file)
+        return null
+    }
+    text[size] = cast(u8)0
+    file_close(file)
+    return text
+}
+#program_export "UnloadFileText"
+host_unload_file_text :: (text: *u8) {
+    memory_free(cast(*void)text)
+}
+#program_export "SaveFileData"
+host_save_file_data :: (path: *u8, data: *u8, size: s32) -> bool {
+    file := file_open(path, cstr("wb"))
+    if file == null { return false }
+    written := file_write(cast(*void)data, 1, cast(usize)size, file)
+    file_close(file)
+    return cast(s64)written == cast(s64)size
+}
+
+mode_bytes: [8]u8;
+
+// A C string for a short literal.
+cstr :: (text: string) -> *u8 {
+    index: s64 = 0
+    while index < text.count && index < 7 {
+        mode_bytes[index] = text[index]
+        index += 1
+    }
+    mode_bytes[index] = cast(u8)0
+    return *mode_bytes[0]
+}
+
+// Small text builder for key files and shell commands.
+TextBuffer :: struct {
+    bytes: [16384]u8
+    length: s32
+}
+
+append :: (buffer: *TextBuffer, text: string) {
+    index: s64 = 0
+    while index < text.count && buffer.length < 16383 {
+        buffer.bytes[buffer.length] = text[index]
+        buffer.length += 1
+        index += 1
+    }
+    buffer.bytes[buffer.length] = cast(u8)0
+}
+
+join_buffer: TextBuffer;
+
+// a followed by b. Chains such as join(join(a, b), c) work because the
+// buffer is rewritten in place.
+join :: (first: string, second: string) -> string {
+    copy: TextBuffer
+    append(*copy, first)
+    append(*copy, second)
+    join_buffer = copy
+    return TextFromBytes(join_buffer.bytes[0:join_buffer.length])
+}
+
+failures: s32;
+key_path_one: [600]u8;
+key_path_two: [600]u8;
+key_path: [600]u8;
+export_path: [600]u8;
+
+check_true :: (label: string, condition: bool) {
+    if condition { return }
+    failures += 1
+    prefix: string = "FAIL "
+    unused write_bytes(2, cast(*void)pointer_of(prefix), cast(usize)prefix.count)
+    unused write_bytes(2, cast(*void)pointer_of(label), cast(usize)label.count)
+    unused write_bytes(2, cast(*void)pointer_of("\n"), cast(usize)1)
+}
+
+pointer_of :: (text: string) -> *u8 {
+    copy: string = text
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*copy)
+    return descriptor.data
+}
+
+path_in :: (output: []u8, root: string, name: string) {
+    buffer: TextBuffer
+    append(*buffer, root)
+    append(*buffer, "/")
+    append(*buffer, name)
+    index: s32 = 0
+    while index <= buffer.length {
+        output[index] = buffer.bytes[index]
+        index += 1
+    }
+}
+
+// The data root the runner points APP_DATA_ROOT at, emptied for each test.
+// Account saving calls data_init, which opens storage at that root, so the
+// tests use the same directory.
+make_root :: () -> string {
+    root := data_root()
+    remove_tree(root)
+    buffer: TextBuffer
+    append(*buffer, "mkdir -p ")
+    append(*buffer, root)
+    unused run_shell(*buffer.bytes[0])
+    return root
+}
+
+remove_tree :: (root: string) {
+    buffer: TextBuffer
+    append(*buffer, "rm -rf ")
+    append(*buffer, root)
+    unused run_shell(*buffer.bytes[0])
+}
+
+hex_digit :: (value: s32) -> u8 {
+    if value < 10 { return cast(u8)(48 + value) }
+    return cast(u8)(87 + value)
+}
+
+// Deterministic key material: bytes i * mul + add (+ variant).
+make_hex :: (output: []u8, count: s32, multiplier: s32, offset: s32) {
+    index: s32 = 0
+    while index < count {
+        byte: s32 = (index * multiplier + offset) % 256
+        output[index * 2] = hex_digit(byte / 16)
+        output[index * 2 + 1] = hex_digit(byte % 16)
+        index += 1
+    }
+    output[count * 2] = cast(u8)0
+}
+
+AccountValues :: struct {
+    public_id: [65]u8
+    public_key: [2625]u8
+    private_key: [5121]u8
+}
+
+make_account :: (values: *AccountValues, variant: s32) {
+    raw: [1312]u8
+    index: s32 = 0
+    while index < 1312 {
+        raw[index] = cast(u8)((index * 31 + 7 + variant) % 256)
+        index += 1
+    }
+    sync_sha256_hex(*raw[0], 1312, *values.public_id[0])
+    make_hex(values.public_key[:], 1312, 31, 7 + variant)
+    make_hex(values.private_key[:], 2560, 17, 3 + variant * 3)
+}
+
+write_text_file :: (path: *u8, text: *TextBuffer) -> bool {
+    file := file_open(path, cstr("wb"))
+    if file == null { return false }
+    file_write(cast(*void)*text.bytes[0], 1, cast(usize)text.length, file)
+    file_close(file)
+    return true
+}
+
+write_key_file :: (path: *u8, values: *AccountValues, id: string) {
+    text: TextBuffer
+    append(*text, "breathing-sync-key-v1\nalgorithm=ML-DSA-44\npublic_id=")
+    append(*text, id)
+    append(*text, "\npublic_key=")
+    append(*text, TextFromCString(*values.public_key[0]))
+    append(*text, "\nprivate_key=")
+    append(*text, TextFromCString(*values.private_key[0]))
+    append(*text, "\n")
+    check_true("write key file", write_text_file(path, *text))
+}
+
+exec_db_sql :: (sql: string) {
+    db: *void = null
+    error: *u8 = null
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null {
+        check_true("open database", false)
+        return
+    }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqliteExec(db, *copy.bytes[0], null, null, *error) != 0 {
+        check_true("sql failed", false)
+        if error != null {
+            check_true(TextFromCString(error), false)
+            TestSqliteFree(cast(*void)error)
+        }
+    }
+    TestSqliteClose(db)
+}
+
+read_db_count :: (sql: string) -> s32 {
+    db: *void = null
+    statement: *void = null
+    count: s32 = -1
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null { return count }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqlitePrepare(db, *copy.bytes[0], -1, *statement, null) == 0 &&
+       TestSqliteStep(statement) == 100 {
+        count = TestSqliteColumnInt(statement, 0)
+    }
+    TestSqliteFinalize(statement)
+    TestSqliteClose(db)
+    return count
+}
+
+db_text_bytes: [512]u8;
+
+read_db_text :: (sql: string) -> string {
+    db: *void = null
+    statement: *void = null
+    db_text_bytes[0] = cast(u8)0
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null { return "" }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqlitePrepare(db, *copy.bytes[0], -1, *statement, null) == 0 &&
+       TestSqliteStep(statement) == 100 {
+        text := TestSqliteColumnText(statement, 0)
+        index: s32 = 0
+        while text != null && text[index] != cast(u8)0 && index < 500 {
+            db_text_bytes[index] = text[index]
+            index += 1
+        }
+        db_text_bytes[index] = cast(u8)0
+    }
+    TestSqliteFinalize(statement)
+    TestSqliteClose(db)
+    return TextFromCString(*db_text_bytes[0])
+}
+
+account_text :: (field: *u8) -> string {
+    return TextFromCString(field)
+}
+
+import_key_and_save :: (account: *SyncAccount, path: *u8, clear_local_data: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
+    if sync_account_import_private_key_preview(account, path) == 0 {
+        return SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_FAILED
+    }
+    return sync_account_save(account, clear_local_data)
+}
+
+read_short_setting :: (argument: *void) -> *void {
+    ok: *s32 = cast(*s32)argument
+    ok.* = 0
+    if storage_get_setting_text("sync_enabled") == "1" { ok.* = 1 }
+    return null
+}
+
+begin_and_commit :: (argument: *void) -> *void {
+    result: *s32 = cast(*s32)argument
+    ok: s32 = exec_sql("BEGIN IMMEDIATE")
+    if ok != 0 { ok = exec_sql("COMMIT") }
+    result.* = ok
+    return null
+}
+
+test_parallel :: () {
+    root := make_root()
+    check_true("open parallel storage", storage_init(root) != 0)
+    key: [5121]u8
+    index: s32 = 0
+    while index < 5120 {
+        key[index] = cast(u8)97
+        index += 1
+    }
+    key[5120] = cast(u8)0
+    key_text := TextFromCString(*key[0])
+    storage_set_setting_text("sync_private_key", key_text)
+    storage_set_setting_text("sync_enabled", "1")
+    main_value := storage_get_setting_text("sync_private_key")
+    check_true("main thread reads full recovery key", main_value.count == 5120)
+    result: s32 = 0
+    worker: u64 = 0
+    started := TestThreadCreate(*worker, null, read_short_setting, cast(*void)*result) == 0
+    check_true("start parallel setting read", started)
+    if started { unused TestThreadJoin(worker, null) }
+    check_true("parallel setting read succeeds", result == 1)
+    check_true("parallel read preserves recovery key buffer", main_value == key_text)
+
+    check_true("main transaction begins", exec_sql("BEGIN IMMEDIATE") != 0)
+    result = 0
+    started = TestThreadCreate(*worker, null, begin_and_commit, cast(*void)*result) == 0
+    check_true("start parallel transaction", started)
+    sleep_microseconds(20000)
+    check_true("main transaction commits", exec_sql("COMMIT") != 0)
+    if started { unused TestThreadJoin(worker, null) }
+    check_true("parallel transaction waits and commits", result == 1)
+    storage_close()
+    remove_tree(root)
+}
+
+test_import_export_clear :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    make_account(*values, 0)
+    path_in(key_path[:], root, "breathing-sync.key")
+    path_in(export_path[:], root, "exported.key")
+    id := TextFromCString(*values.public_id[0])
+    write_key_file(*key_path[0], *values, id)
+
+    check_true("init storage", storage_init(root) != 0)
+    storage_set_setting_text("sync_account_alias", "old-alias")
+    check_true("import key", import_key_and_save(*account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("import public id", account_text(*account.public_id[0]) == id)
+    check_true("import clears stale alias", storage_get_setting_text("sync_account_alias").count == 0)
+    check_true("load imported key", sync_account_load(*account) != 0)
+    check_true("load public key",
+        account_text(*account.public_key_hex[0]) == TextFromCString(*values.public_key[0]))
+    check_true("load private key",
+        account_text(*account.private_key_hex[0]) == TextFromCString(*values.private_key[0]))
+
+    check_true("export key", sync_account_export_private_key(*account, *export_path[0]) != 0)
+    exported := host_load_file_text(*export_path[0])
+    check_true("read exported key", exported != null)
+    if exported != null {
+        text := TextFromCString(exported)
+        check_true("export uses generic key header", starts_with(text, "account-key-v1\n"))
+        check_true("export includes public key", contains(text, "\npublic_key="))
+        host_unload_file_text(exported)
+    }
+
+    check_true("clear key", sync_account_clear() != 0)
+    check_true("load after clear", sync_account_load(*account) == 0)
+    check_true("import exported key", import_key_and_save(*account, *export_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("reimport public id", account_text(*account.public_id[0]) == id)
+
+    text: TextBuffer
+    append(*text, "breathing-sync-key-v1\nalgorithm=ML-DSA-44\npublic_key=")
+    append(*text, TextFromCString(*values.public_key[0]))
+    append(*text, "\nsecret_key=")
+    append(*text, TextFromCString(*values.private_key[0]))
+    append(*text, "\n")
+    check_true("write secret key alias file", write_text_file(*key_path[0], *text))
+    check_true("import secret key alias", import_key_and_save(*account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("derive public id", account_text(*account.public_id[0]) == id)
+
+    json: TextBuffer
+    append(*json, "{\"exported_key\":\"breathing-sync-key-v1\\nalgorithm=ML-DSA-44\\npublic_id=")
+    append(*json, id)
+    append(*json, "\\npublic_key=")
+    append(*json, TextFromCString(*values.public_key[0]))
+    append(*json, "\\nprivate_key=")
+    append(*json, TextFromCString(*values.private_key[0]))
+    append(*json, "\\n\"}\n")
+    check_true("write exported key json file", write_text_file(*key_path[0], *json))
+    check_true("import exported key json", import_key_and_save(*account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("json public key",
+        account_text(*account.public_key_hex[0]) == TextFromCString(*values.public_key[0]))
+    storage_close()
+    remove_tree(root)
+}
+
+starts_with :: (text: string, prefix: string) -> bool {
+    if prefix.count > text.count { return false }
+    index: s64 = 0
+    while index < prefix.count {
+        if text[index] != prefix[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+contains :: (text: string, needle: string) -> bool {
+    if needle.count > text.count { return false }
+    start: s64 = 0
+    while start + needle.count <= text.count {
+        matches: bool = true
+        index: s64 = 0
+        while index < needle.count {
+            if text[start + index] != needle[index] {
+                matches = false
+                break
+            }
+            index += 1
+        }
+        if matches { return true }
+        start += 1
+    }
+    return false
+}
+
+test_reject_invalid :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    make_account(*values, 0)
+    path_in(key_path[:], root, "breathing-sync.key")
+    check_true("init invalid storage", storage_init(root) != 0)
+
+    // Change the first character so the id no longer matches the key.
+    if values.public_id[0] == cast(u8)48 { values.public_id[0] = cast(u8)49 } else { values.public_id[0] = cast(u8)48 }
+    write_key_file(*key_path[0], *values, TextFromCString(*values.public_id[0]))
+    check_true("reject mismatched public id",
+        sync_account_import_private_key_preview(*account, *key_path[0]) == 0)
+
+    text: TextBuffer
+    append(*text, "breathing-sync-key-v1\nalgorithm=ML-DSA-44\npublic_id=")
+    append(*text, TextFromCString(*values.public_id[0]))
+    append(*text, "\nprivate_key=")
+    append(*text, TextFromCString(*values.private_key[0]))
+    append(*text, "\n")
+    check_true("write missing public key file", write_text_file(*key_path[0], *text))
+    check_true("reject missing public key",
+        sync_account_import_private_key_preview(*account, *key_path[0]) == 0)
+    check_true("no account after rejected imports", sync_account_load(*account) == 0)
+    storage_close()
+    remove_tree(root)
+}
+
+// Opens storage holding an imported account, with the server URL set.
+prepare_account :: (root: string, values: *AccountValues, account: *SyncAccount) {
+    make_account(values, 0)
+    path_in(key_path[:], root, "breathing-sync.key")
+    write_key_file(*key_path[0], values, TextFromCString(*values.public_id[0]))
+    check_true("init storage", storage_init(root) != 0)
+    check_true("save account", import_key_and_save(account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+}
+
+test_legacy_connected :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    prepare_account(root, *values, *account)
+    storage_set_setting_text("sync_server_url", "https://api.waozi.xyz")
+    exec_db_sql(join(join("INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','6638');", "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');"), "DELETE FROM settings WHERE key IN ('sync_server_connected','sync_enabled');"))
+    storage_close()
+    check_true("reopen legacy storage", storage_init(root) != 0)
+    check_true("legacy connected flag migrated", storage_get_setting_int("sync_enabled", 0) == 1)
+    check_true("legacy connected helper", storage_sync_enabled() != 0)
+    storage_close()
+    remove_tree(root)
+}
+
+test_unsynced_not_migrated :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    prepare_account(root, *values, *account)
+    storage_set_setting_text("sync_server_url", "https://api.waozi.xyz")
+    exec_db_sql("DELETE FROM settings WHERE key IN ('sync_server_connected','sync_enabled');")
+    storage_close()
+    check_true("reopen unsynced storage", storage_init(root) != 0)
+    check_true("unsynced account remains disconnected", storage_get_setting_int("sync_enabled", 0) == 0)
+    check_true("unsynced account helper disconnected", storage_sync_enabled() == 0)
+    storage_close()
+    remove_tree(root)
+}
+
+test_disconnected_queue :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    status: StorageSyncStatus
+    prepare_account(root, *values, *account)
+    storage_set_setting_text("sync_server_url", "https://api.waozi.xyz")
+    storage_set_sync_enabled(0)
+    exec_db_sql(join("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) ", "VALUES('session','queued-local-session',0,strftime('%s','now'));"))
+    check_true("disconnected server helper", storage_sync_enabled() == 0)
+    check_true("status loads", storage_sync_status(*status) != 0)
+    check_true("status has account", status.has_account != 0)
+    check_true("status not connected", status.enabled == 0)
+    check_true("queued count visible", status.queued_changes == 1)
+    check_true("queued row preserved", read_db_count("SELECT COUNT(*) FROM sync_outbox") == 1)
+
+    storage_set_sync_enabled(1)
+    storage_set_setting_int("sync_last_result", 6)
+    storage_set_setting_int("sync_retry_attempt", 3)
+    check_true("same key save succeeds", sync_account_save(*account,
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("same key preserves retry", storage_get_setting_int("sync_retry_attempt", 0) == 3)
+    check_true("same key preserves enabled sync", storage_sync_enabled() != 0)
+    check_true("same key status", storage_sync_status(*status) != 0)
+    storage_close()
+    check_true("reopen retry state", storage_init(root) != 0)
+    check_true("retry survives restart", storage_get_setting_int("sync_retry_attempt", 0) == 3)
+    check_true("queue survives restart", storage_sync_status(*status) != 0 && status.queued_changes == 1)
+    storage_set_sync_enabled(0)
+    check_true("disconnect clears retry", storage_get_setting_int("sync_retry_attempt", -1) == 0)
+    exec_db_sql(join(join("DELETE FROM settings WHERE key='sync_enabled';", "INSERT OR REPLACE INTO settings(user_id,key,value,updated_at) "), "SELECT id,'sync_server_connected','0',strftime('%s','now') FROM users LIMIT 1;"))
+    storage_close()
+    check_true("open 1.9.19 disconnected account", storage_init(root) != 0)
+    check_true("migration preserves explicit disconnect", storage_sync_enabled() == 0)
+    exec_db_sql(join("DELETE FROM settings WHERE key='sync_enabled';", "UPDATE settings SET value='1' WHERE key='sync_server_connected';"))
+    storage_close()
+    check_true("open 1.9.19 connected account", storage_init(root) != 0)
+    check_true("migration preserves enabled account", storage_sync_enabled() != 0)
+    storage_close()
+    remove_tree(root)
+}
+
+test_backfill :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    rounds: [3]s32 = .[30, 45, 60]
+    make_account(*values, 0)
+    path_in(key_path[:], root, "breathing-sync.key")
+    write_key_file(*key_path[0], *values, TextFromCString(*values.public_id[0]))
+    check_true("init backfill storage", storage_init(root) != 0)
+    check_true("save existing local session",
+        storage_save_session_at_for_activity(20260621, 8, 15, 0, *rounds[0], 3, 0, 1, null, 0) != 0)
+    exec_db_sql(join(join(join(join(join(join(join(join(join("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,", "sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) "), "VALUES('habit-local',(SELECT id FROM users LIMIT 1),'Existing Local Habit',"), "64,128,192,1,1,1,0,0,strftime('%s','now'));"), "INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) "), "VALUES('habit-local',20260621,1,5,strftime('%s','now'));"), "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','44');"), "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');"), "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');"), "DELETE FROM sync_outbox;"))
+    check_true("import account resets sync state", import_key_and_save(*account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("imported deterministic account",
+        account_text(*account.public_id[0]) == TextFromCString(*values.public_id[0]))
+    check_true("account owner marker",
+        storage_sync_data_owner_public_id() == TextFromCString(*values.public_id[0]))
+    payload := storage_build_sync_payload_json(TextFromCString(*account.public_id[0]),
+        TextFromCString(*account.public_key_hex[0]))
+    check_true("bootstrap payload built", payload != null)
+    if payload != null {
+        text := TextFromCString(payload)
+        check_true("bootstrap flag present", contains(text, "\"bootstrap\":true"))
+        check_true("existing local habit uploaded",
+            contains(text, "\"collection\":\"private.inbe.v1.habits\",\"id\":\"habit-local\""))
+        check_true("existing local habit day uploaded",
+            contains(text, "\"id\":\"habit-local:20260621\""))
+        check_true("existing local session uploaded",
+            contains(text, "\"collection\":\"private.inbe.v1.sessions\""))
+        check_true("habit content is encrypted, not sent in the clear",
+            !contains(text, "Existing Local Habit") && !contains(text, "\"rounds\""))
+        check_true("local settings still excluded",
+            !contains(text, "\"preferences\"") && !contains(text, "\"settings\""))
+    }
+    storage_free_sync_payload_json(payload)
+    storage_close()
+    remove_tree(root)
+}
+
+test_logout_owner :: () {
+    root := make_root()
+    values: AccountValues
+    account: SyncAccount
+    prepare_account(root, *values, *account)
+    id := TextFromCString(*values.public_id[0])
+    check_true("owner before logout", storage_sync_data_owner_public_id() == id)
+    check_true("logout account", sync_account_clear() != 0)
+    check_true("credentials removed", sync_account_load(*account) == 0)
+    check_true("owner after logout", storage_sync_data_owner_public_id() == id)
+    check_true("logout clears sync outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox") == 0)
+    storage_close()
+    remove_tree(root)
+}
+
+test_account_switch :: () {
+    root := make_root()
+    one: AccountValues
+    two: AccountValues
+    account: SyncAccount
+    loaded: SyncAccount
+    make_account(*one, 0)
+    make_account(*two, 9)
+    path_in(key_path_one[:], root, "one.key")
+    path_in(key_path_two[:], root, "two.key")
+    write_key_file(*key_path_one[0], *one, TextFromCString(*one.public_id[0]))
+    write_key_file(*key_path_two[0], *two, TextFromCString(*two.public_id[0]))
+    check_true("init account switch storage", storage_init(root) != 0)
+    exec_db_sql(join(join(join(join(join("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,", "sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) "), "VALUES('habit-switch',(SELECT id FROM users LIMIT 1),'Switch Habit',"), "64,128,192,1,1,1,0,0,strftime('%s','now'));"), "INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) "), "VALUES('habit-switch',20260622,1,3,strftime('%s','now'));"))
+    ask := SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK
+    check_true("first account binds data", import_key_and_save(*account, *key_path_one[0], ask) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("logout before account switch", sync_account_clear() != 0)
+    check_true("local syncable data remains", storage_has_local_syncable_data() != 0)
+    check_true("second account blocked before clear",
+        import_key_and_save(*account, *key_path_two[0], ask) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_NEEDS_CLEAR)
+    check_true("blocked switch leaves no credentials", sync_account_load(*loaded) == 0)
+    check_true("blocked switch keeps old owner",
+        storage_sync_data_owner_public_id() == TextFromCString(*one.public_id[0]))
+    check_true("blocked switch keeps local data", storage_has_local_syncable_data() != 0)
+    check_true("second account can clear local data",
+        import_key_and_save(*account, *key_path_two[0],
+            SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_REPLACE) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("new account stored", sync_account_load(*loaded) != 0)
+    check_true("new account public id",
+        account_text(*loaded.public_id[0]) == TextFromCString(*two.public_id[0]))
+    check_true("new account clears alias", storage_get_setting_text("sync_account_alias").count == 0)
+    check_true("new owner after clear",
+        storage_sync_data_owner_public_id() == TextFromCString(*two.public_id[0]))
+    check_true("local syncable data cleared", storage_has_local_syncable_data() == 0)
+    storage_close()
+    remove_tree(root)
+}
+
+test_social_cache :: () {
+    root := make_root()
+    one: AccountValues
+    two: AccountValues
+    account: SyncAccount
+    loaded: SyncAccount
+    make_account(*one, 1)
+    make_account(*two, 2)
+    path_in(key_path_one[:], root, "one.key")
+    path_in(key_path_two[:], root, "two.key")
+    write_key_file(*key_path_one[0], *one, TextFromCString(*one.public_id[0]))
+    write_key_file(*key_path_two[0], *two, TextFromCString(*two.public_id[0]))
+    ask := SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK
+    check_true("init social cache storage", storage_init(root) != 0)
+    check_true("first social cache account", import_key_and_save(*account, *key_path_one[0], ask) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("store social-only cache", storage_set_social_cache_json("friends.list",
+        "{\"friends\":[{\"user_id_hash\":\"friend\"}]}") != 0)
+    check_true("social-only cache is not local syncable data", storage_has_local_syncable_data() == 0)
+    check_true("logout social cache account", sync_account_clear() != 0)
+    check_true("second account saves without clear", import_key_and_save(*account, *key_path_two[0], ask) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("second account stored", sync_account_load(*loaded) != 0)
+    check_true("second account owner",
+        storage_sync_data_owner_public_id() == TextFromCString(*two.public_id[0]))
+    storage_close()
+    remove_tree(root)
+}
+
+#program_export
+Check :: () -> s32 {
+    // Never run against a real data directory.
+    if !starts_with(data_root(), "/tmp/inbe-sync-account-zi-test/") { return 100 }
+    // The first account call opens storage at the data root; do that now so
+    // it cannot replace a test's storage part way through.
+    data_init()
+    storage_close()
+    test_parallel()
+    test_import_export_clear()
+    test_reject_invalid()
+    test_legacy_connected()
+    test_unsynced_not_migrated()
+    test_disconnected_queue()
+    test_backfill()
+    test_logout_owner()
+    test_account_switch()
+    test_social_cache()
+    return failures
+}

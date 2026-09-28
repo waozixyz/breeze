@@ -21,6 +21,7 @@ STORAGE_PATH_SIZE :: 1024
 storage_migrate_default_habit_ids :: () -> s32 #foreign c;
 storage_migrate_habit_ids_to_uuid :: () -> s32 #foreign c;
 storage_migrate_default_meditation_activity_mask :: () -> s32 #foreign c;
+storage_migrate_sync_enabled_flag :: () -> s32 #foreign c;
 storage_materialize_session_habit_days :: () -> s32 #foreign c;
 migrate_legacy_file_sessions_once :: (root: *u8) -> s32 #foreign c;
 #import, file "user.zi";
@@ -73,9 +74,13 @@ exec_sql :: (sql: string) -> s32 {
     return result
 }
 
+// Meta values can be long, so they get their own buffer; the user id buffer
+// holds 64 bytes and lives in the middle of the shared storage state.
+storage_meta_value_bytes: [8192]u8;
+
 #program_export
 storage_meta_text_buffer :: () -> *u8 {
-    return storage_user_id_buffer()
+    return *storage_meta_value_bytes[0]
 }
 
 #program_export
@@ -176,7 +181,7 @@ storage_init :: (root: string) -> s32 {
     storage_migrate_default_habit_ids()
     storage_migrate_habit_ids_to_uuid()
     storage_migrate_default_meditation_activity_mask()
-    cast(s32)0
+    storage_migrate_sync_enabled_flag()
     storage_materialize_session_habit_days()
     if migrate_legacy_file_sessions_once(*storage_state_handle().root[0]) == 0 {
         LogStorage(LOG_WARNING, "STORAGE: historical session import deferred; source files retained")

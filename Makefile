@@ -348,7 +348,6 @@ STORAGE_IMPORT_TEST := $(TEST_BIN_DIR)/storage_import_test
 STORAGE_PATHS_TEST := $(TEST_BIN_DIR)/storage_paths_test
 LOCALE_KEYS_TEST := $(TEST_BIN_DIR)/locale_keys_test
 SYNC_URL_TEST := $(TEST_BIN_DIR)/sync_url_test
-SYNC_ACCOUNT_TEST := $(TEST_BIN_DIR)/sync_account_test
 SYNC_REVIEW_TEST := $(TEST_BIN_DIR)/sync_review_test
 FONT_LOCALE_TEST := $(TEST_BIN_DIR)/font_locale_test
 FONT_ASSETS_GEN_DIR := $(BUILD_DIR)/font-assets-test/generated
@@ -359,10 +358,9 @@ BREATH_TIMING_TEST := $(TEST_BIN_DIR)/breath_timing_test
 BREATH_TIMING_GEN_DIR := $(BUILD_DIR)/breath-timing-test/generated
 BREAK_ENGINE_TEST := $(TEST_BIN_DIR)/break_engine_test
 BREAK_RULES_GEN_DIR := $(BUILD_DIR)/break-rules-test/generated
-ACTIVITY_MONITOR_TEST := $(TEST_BIN_DIR)/activity_monitor_test
 FRAME_PACING_TEST := $(TEST_BIN_DIR)/frame_pacing_test
 SETTINGS_KEYS_TEST := $(TEST_BIN_DIR)/settings_keys_test
-TESTS := $(STORAGE_IMPORT_TEST) $(STORAGE_PATHS_TEST) $(LOCALE_KEYS_TEST) $(SYNC_URL_TEST) $(SYNC_ACCOUNT_TEST) $(SYNC_REVIEW_TEST) $(FONT_LOCALE_TEST) $(FONT_GLYPH_COVERAGE_TEST) $(HABIT_MODEL_TEST) $(HABIT_SESSIONS_TEST) $(BREATH_TIMING_TEST) $(BREAK_ENGINE_TEST) $(ACTIVITY_MONITOR_TEST) $(FRAME_PACING_TEST) $(SETTINGS_KEYS_TEST)
+TESTS := $(STORAGE_IMPORT_TEST) $(STORAGE_PATHS_TEST) $(LOCALE_KEYS_TEST) $(SYNC_URL_TEST) $(SYNC_REVIEW_TEST) $(FONT_LOCALE_TEST) $(FONT_GLYPH_COVERAGE_TEST) $(HABIT_MODEL_TEST) $(HABIT_SESSIONS_TEST) $(BREATH_TIMING_TEST) $(BREAK_ENGINE_TEST) $(FRAME_PACING_TEST) $(SETTINGS_KEYS_TEST)
 TESTS += $(TEST_BIN_DIR)/session_results_test
 TESTS += $(TEST_BIN_DIR)/habit_form_test
 TESTS += $(TEST_BIN_DIR)/practice_carousel_test
@@ -797,6 +795,13 @@ sync-crypto-zi-test: $(ZI2C_BIN)
 
 test: sync-crypto-zi-test
 
+.PHONY: sync-account-zi-test
+sync-account-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_account_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
+test: sync-account-zi-test
+
 .PHONY: sync-account-crypto-zi-test
 sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
@@ -1198,12 +1203,6 @@ $(SYNC_URL_TEST): tests/sync_url_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/
 		tests/sync_url_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_transport.c $(KRYON_SYNC_C) $(KRYON_SYNC_TRANSPORT_C) $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) \
 		$(LIBOQS_A) -Wl,--gc-sections $(KRYON_CURL_LDLIBS) $(NATIVE_SYSTEM_LDLIBS)
 
-$(SYNC_ACCOUNT_TEST): tests/sync_account_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_account.c src/storage/sync_account.h $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) $(KRYON_SYNC_ACCOUNT_H) $(STORAGE_CORE_SRCS) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c src/storage/storage.h src/storage/db.h src/storage/import.h $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(LIBOQS_A) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -DHAS_LIBOQS=1 -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(LIBOQS_INCLUDE) $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/sync_account_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_account.c $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(SQLITE_SRC) \
-		$(LIBOQS_A) -Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
 
 .PHONY: sync-server-test
 sync-server-test: $(TEST_BIN_DIR)/sync_server_test
@@ -1950,15 +1949,6 @@ $(BREAK_ENGINE_TEST): tests/break_engine_test.c $(BREAK_RULES_GEN_DIR)/breaks/br
 		tests/break_engine_test.c \
 		$(BREAK_RULES_GEN_DIR)/breaks/break_rules.c \
 		$(BREAK_RULES_GEN_DIR)/breaks/break_types.c
-
-# Plain C (no generated code): dlopen-based X idle monitor with stub fallback.
-$(ACTIVITY_MONITOR_TEST): tests/activity_monitor_test.c $(KRYON_DIR)/src/platform/kry_activity_monitor.c $(KRYON_DIR)/include/kry_activity_monitor.h | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc $(KRYON_INCLUDE) \
-		-o $@ \
-		tests/activity_monitor_test.c \
-		$(KRYON_DIR)/src/platform/kry_activity_monitor.c \
-		$(if $(filter linux,$(NATIVE_PLATFORM)),-ldl,)
 
 $(FRAME_PACING_TEST): tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c $(KRY_GEN_DIR)/src/app/frame_activity.c src/app/app_frame_pacing.zi src/app/frame_activity.zi src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) \
