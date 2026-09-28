@@ -9,6 +9,14 @@ fail() {
   exit 1
 }
 
+# An asset table entry starts with its path, with or without a byte-pointer
+# cast; a path mentioned anywhere else does not count.
+embedded_entry() {
+  local escaped
+  escaped=$(printf '%s' "$1" | sed 's/[.[\*^$]/\\&/g')
+  grep -Eq "\\{(\\(uint8_t \\*\\))?\"$escaped\"" "$EMBEDDED_C"
+}
+
 [[ -f "$EMBEDDED_C" ]] ||
   fail "embedded asset table missing; run make native or make build/obj/inbe_embedded_assets.c first"
 
@@ -42,7 +50,7 @@ for path in "${image_paths[@]}"; do
   [[ -f "$ROOT_DIR/$embedded_path" ]] ||
     fail "image literal '$path' points at missing file '$embedded_path'"
 
-  grep -Fq "{\"$embedded_path\"" "$EMBEDDED_C" ||
+  embedded_entry "$embedded_path" ||
     fail "image literal '$path' is not embedded as '$embedded_path'"
 done
 
@@ -61,17 +69,17 @@ for required in \
   assets/practices/patterns/banner-dark.png; do
   [[ -f "$ROOT_DIR/$required" ]] ||
     fail "required practice banner missing: $required"
-  grep -Fq "{\"$required\"" "$EMBEDDED_C" ||
+  embedded_entry "$required" ||
     fail "required practice banner is not embedded: $required"
 done
 
 [[ -f "$ROOT_DIR/build/packages/kryon/icons/ui.png" ]] ||
   fail "Kryon UI icon atlas missing"
-grep -Fq '{"icons/ui.png"' "$EMBEDDED_C" ||
+embedded_entry icons/ui.png ||
   fail "Kryon UI icon atlas is not embedded as icons/ui.png"
 [[ -f "$ROOT_DIR/build/packages/kryon/icons/pfp.png" ]] ||
   fail "profile picture icon atlas missing"
-grep -Fq '{"icons/pfp.png"' "$EMBEDDED_C" ||
+embedded_entry icons/pfp.png ||
   fail "profile picture icon atlas is not embedded as icons/pfp.png"
 
 echo "PASS embedded image asset contract"
