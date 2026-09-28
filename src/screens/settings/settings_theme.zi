@@ -3,6 +3,7 @@
 #import, file "settings_types.zi";
 #import "geometry"
 #import "text_props"
+#import "text_align"
 #import "image_props"
 #import "control_props"
 #import "layout"
@@ -47,6 +48,7 @@ using AppThemeMode;
 using AppThemeSource;
 using ModalType;
 using TextWrap;
+using TextAlign;
 using ImageFit;
 using ButtonTone;
 using ButtonEmphasis;
@@ -58,59 +60,94 @@ WEB :: #defined(PLATFORM_WEB)
     android_device_set_app_icon :: (icon: s32) -> s32 #foreign c;
 }
 
-theme_dropdown_section_height :: () -> s32 {
-    return AppScale(28) + AppScale(56)
+settings_theme_scale_row_height :: () -> s32 {
+    return AppScale(10) + AppScale(22) + AppScale(6) + AppScale(36) +
+        AppScale(12)
 }
 
-theme_value_dropdown_rows_height :: () -> s32 {
-    font := AppFontSize()
-    row_label_gap := AppScale(8)
-    row_gap := AppScale(14)
-    row_h := AppScale(40)
-    return (font + row_label_gap + row_h + row_gap) * 2
+settings_theme_button_row_height :: () -> s32 {
+    return AppScale(56)
 }
 
-scale_slider_content_height :: (content_w: s32) -> s32 {
-    label_h := AppParagraphHeight(LocaleText("appearance_scale_label"),
-        content_w, AppFontSize(), 0)
-    if label_h < AppScale(24) { label_h = AppScale(24) }
-    return label_h + AppScale(72)
+settings_theme_icon_row_height :: () -> s32 {
+    return AppScale(72)
+}
+
+settings_theme_theme_body :: (app: *InnerBreeze, width: s32) -> s32 {
+    height: s32 = 0
+    #if ANDROID {
+        height += settings_theme_icon_row_height()
+    }
+    height += settings_choice_row_height(LocaleText("appearance_style_label"),
+        width)
+    if style_pack_has_glow(app.style_index) != 0 {
+        height += toggle_row_height(LocaleText("appearance_glow_effects_label"),
+            width)
+    }
+    height += settings_choice_row_height(LocaleText("theme_color_label"), width)
+    height += settings_choice_row_height(LocaleText("theme_mode_label"), width)
+    return height
+}
+
+settings_theme_layout_body :: (app: *InnerBreeze, width: s32) -> s32 {
+    height := settings_theme_scale_row_height()
+    height += settings_choice_row_height(LocaleText("navigation_placement"),
+        width)
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        height += settings_choice_row_height(LocaleText("navigation_sidebar"),
+            width)
+    }
+    height += settings_theme_button_row_height()
+    return height
 }
 
 settings_theme_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
-    sidebar_h: s32 = 0
-    glow_h: s32 = 0
-    total: s32 = 0
-    if style_pack_has_glow(app.style_index) != 0 {
-        glow_h = toggle_row_height(LocaleText("appearance_glow_effects_label"),
-            content_w) + AppScale(6)
-    }
-    if app_nav_desktop_rail_enabled(app) != 0 {
-        options: [2] SegmentOption = .[
-        SegmentOption.{.label = LocaleText("navigation_sidebar_expanded")},
-        SegmentOption.{.label = LocaleText("navigation_sidebar_compact")}
-        ]
-        sidebar_props: SegmentedControlProps
-        sidebar_props.bounds = Rectangle.{0.0, 0.0,
-            cast(float32)content_w, cast(float32)AppScale(40)}
-        sidebar_props.height = AppScale(40)
-        sidebar_props.wrap = true
-        sidebar_h = AppScale(44) + SegmentedControlHeight(app.ui.session,
-            sidebar_props, options[:])
-    }
+    inner := settings_section_inner_width(content_w)
+    return settings_section_height(LocaleText("theme_label"),
+        settings_theme_theme_body(app, inner)) +
+        settings_section_height(LocaleText("settings_section_layout"),
+            settings_theme_layout_body(app, inner))
+}
 
-    total += theme_dropdown_section_height()
-    total += glow_h
-    total += scale_slider_content_height(content_w)
-    total += theme_dropdown_section_height()
-    total += sidebar_h
-    total += theme_value_dropdown_rows_height()
-    total += AppScale(24)
-    total += AppScale(58)
+settings_theme_draw_app_icon :: (app: *InnerBreeze, section: SettingsSection,
+    y: *s32, state: *SettingsThemeState) {
     #if ANDROID {
-        total += AppScale(80)
+        if state.app_icon_loaded == 0 {
+            state.app_icon = android_device_app_icon()
+            state.app_icon_loaded = 1
+        }
+        row_h := settings_theme_icon_row_height()
+        icon_size := AppScale(48)
+        if Button(app.ui.session, ButtonProps.{
+                .id = 152,
+                .bounds = Rectangle.{cast(float32)section.inner_x,
+                    cast(float32)(y.* + AppScale(6)),
+                    cast(float32)section.inner_width,
+                    cast(float32)(row_h - AppScale(12))},
+                .label = LocaleText("app_icon_label"),
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = app.modal.active != 0
+            }) != 0 {
+            state.app_icon = android_device_app_icon()
+            state.app_icon_error = 0
+            app_open_modal(app, cast(ModalType)ModalAppIconPicker)
+        }
+        Image(app.ui.session, ImageProps.{
+                .asset_path = ifx (state.app_icon == 1) then ("assets/app/icon-ink-and-air.png") else ("assets/app/icon-sky-cradle.png"),
+                .bounds = Rectangle.{cast(float32)(section.inner_x + AppScale(8)),
+                    cast(float32)(y.* + (row_h - icon_size) / 2),
+                    cast(float32)icon_size, cast(float32)icon_size},
+                .fit = cast(ImageFit)ImageFitContain
+            })
+        y.* += row_h
+        settings_row_divider(app, section, y.*)
+    } else {
+        unused app
+        unused section
+        unused y
+        unused state
     }
-    return total
 }
 
 settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
@@ -118,48 +155,19 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
     if app == null || y == null || state == null {
         return
     }
-
-    #if ANDROID {
-        if state.app_icon_loaded == 0 {
-            state.app_icon = android_device_app_icon()
-            state.app_icon_loaded = 1
-        }
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .id = 152,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)w, cast(float32)AppScale(64)},
-                .label = LocaleText("app_icon_label"),
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                .disabled = app.modal.active != 0
-            }) != 0 {
-            state.app_icon = android_device_app_icon()
-            state.app_icon_error = 0
-            app_open_modal(app, cast(ModalType)ModalAppIconPicker)
-        }
-        Image(CurrentApp().ui.session, ImageProps.{
-                .asset_path = ifx (state.app_icon == 1) then ("assets/app/icon-ink-and-air.png") else ("assets/app/icon-sky-cradle.png"),
-                .bounds = Rectangle.{cast(float32)(x + AppScale(8)),
-                    cast(float32)(y.* + AppScale(4)),
-                    cast(float32)AppScale(56), cast(float32)AppScale(56)},
-                .fit = cast(ImageFit)ImageFitContain
-            })
-        y.* += AppScale(80)
-    }
+    inner := settings_section_inner_width(w)
+    theme := settings_section_begin(app, x, w, y, LocaleText("theme_label"),
+        settings_theme_theme_body(app, inner))
+    settings_theme_draw_app_icon(app, theme, y, state)
 
     styles: [3]DropdownOption
     styles[0].label = style_pack_label(1)
     styles[1].label = style_pack_label(2)
     styles[2].label = style_pack_label(3)
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)w, cast(float32)AppScale(24)},
-            .text = LocaleText("appearance_style_label")
-        })
-    y.* += AppScale(28)
     style_props: DropdownProps
     style_props.id = 150
-    style_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)w, cast(float32)AppScale(40)}
+    style_props.bounds = settings_choice_row(app, theme.inner_x,
+        theme.inner_width, y, LocaleText("appearance_style_label"))
     style_props.selected_index = app.style_index - 1
     style_props.open = state.style_menu.open
     style_props.highlight_index = state.style_menu.highlight_index
@@ -172,16 +180,27 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
         app_block_current_click(app)
         save_settings(app)
     }
-    y.* += AppScale(56)
     if style_pack_has_glow(app.style_index) != 0 {
-        if commit_toggle_row(app, x, w, y,
+        settings_row_divider(app, theme, y.*)
+        if commit_toggle_row(app, theme.inner_x, theme.inner_width, y,
             LocaleText("appearance_glow_effects_label"),
             *app.lightfield_glow_enabled, 1) != 0 {
             app_apply_style(app)
         }
-        y.* += AppScale(6)
     }
-    draw_scale_row(app, x, w, y)
+    settings_row_divider(app, theme, y.*)
+    if draw_theme_settings(app, theme, y, state) != 0 {
+        app_refresh_theme(app)
+        app.settings_dirty = 1
+        app.settings_save_delay_ticks = 18
+    }
+    settings_section_end(y)
+
+    layout := settings_section_begin(app, x, w, y,
+        LocaleText("settings_section_layout"),
+        settings_theme_layout_body(app, inner))
+    draw_scale_row(app, layout.inner_x, layout.inner_width, y)
+    settings_row_divider(app, layout, y.*)
 
     placements: [5]DropdownOption
     placements[0].label = LocaleText("navigation_automatic")
@@ -189,15 +208,10 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
     placements[2].label = LocaleText("navigation_bottom")
     placements[3].label = LocaleText("navigation_right")
     placements[4].label = LocaleText("navigation_top")
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)AppScale(24)},
-            .text = LocaleText("navigation_placement")
-        })
-    y.* += AppScale(28)
     placement_props: DropdownProps
     placement_props.id = 149
-    placement_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)w, cast(float32)AppScale(40)}
+    placement_props.bounds = settings_choice_row(app, layout.inner_x,
+        layout.inner_width, y, LocaleText("navigation_placement"))
     placement_props.selected_index = app.navigation_placement
     placement_props.open = state.placement_menu.open
     placement_props.highlight_index = state.placement_menu.highlight_index
@@ -209,27 +223,20 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
         app_block_current_click(app)
         save_settings(app)
     }
-    y.* += AppScale(56)
 
     if app_nav_desktop_rail_enabled(app) != 0 {
+        settings_row_divider(app, layout, y.*)
         sidebar_options: [2] SegmentOption = .[
         SegmentOption.{.label = LocaleText("navigation_sidebar_expanded")},
         SegmentOption.{.label = LocaleText("navigation_sidebar_compact")}
         ]
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)w, cast(float32)AppScale(24)},
-                .text = LocaleText("navigation_sidebar")
-            })
-        y.* += AppScale(28)
         sidebar_props: SegmentedControlProps
         sidebar_props.id = 151
-        sidebar_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)w, cast(float32)AppScale(40)}
+        sidebar_props.bounds = settings_choice_row(app, layout.inner_x,
+            layout.inner_width, y, LocaleText("navigation_sidebar"))
         sidebar_props.selected_index = app.nav_rail_collapsed
         sidebar_props.has_selection = true
-        sidebar_props.height = AppScale(40)
-        sidebar_props.wrap = true
+        sidebar_props.height = cast(s32)sidebar_props.bounds.height
         sidebar := SegmentedControl(app.ui.session, sidebar_props,
             sidebar_options[:])
         if sidebar.changed {
@@ -237,28 +244,24 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
             app_block_current_click(app)
             save_settings(app)
         }
-        y.* += sidebar.height + AppScale(16)
     }
 
-    if draw_theme_settings(app, x, w, y, state) != 0 {
-        app_refresh_theme(app)
-        app.settings_dirty = 1
-        app.settings_save_delay_ticks = 18
-    }
-    y.* += AppScale(24)
-
-    if Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)w, cast(float32)AppScale(44)},
+    settings_row_divider(app, layout, y.*)
+    if Button(app.ui.session, ButtonProps.{
+            .id = 148,
+            .bounds = Rectangle.{cast(float32)layout.inner_x,
+                cast(float32)(y.* + AppScale(10)),
+                cast(float32)layout.inner_width, cast(float32)AppScale(36)},
             .label = LocaleText("customize_nav_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
             .disabled = app.modal.active != 0
         }) != 0 {
         app_block_current_click(app)
         app_open_customize_nav(app)
     }
-    y.* += AppScale(58)
+    y.* += settings_theme_button_row_height()
+    settings_section_end(y)
 }
 
 #program_export
@@ -342,51 +345,9 @@ ThemeLabel :: (id: s32) -> string {
     return LocaleText("theme_mono")
 }
 
-draw_theme_settings :: (app: *InnerBreeze, x: s32, w: s32,
+draw_theme_settings :: (app: *InnerBreeze, section: SettingsSection,
     y: *s32, state: *SettingsThemeState) -> s32 {
     changed: s32 = 0
-    row_label_gap := AppScale(8)
-    row_gap := AppScale(14)
-    row_h := AppScale(40)
-    font := AppFontSize()
-    follow_device_label: [128]u8
-    follow_args: [2]FormatArg = .[
-    FormatArg.{.text = LocaleText("theme_follow_device"), .is_text = true},
-    FormatArg.{.text = LocaleText(ifx app.dark_mode != 0 then "theme_dark" else "theme_light"), .is_text = true}
-    ]
-    FormatTemplate("%s (%s)", follow_args[:], follow_device_label[:])
-    mode_options: [3]DropdownOption
-    mode_options[0].label = AppTextFromCString(*follow_device_label[0],
-        size_of(type_of(follow_device_label)))
-    mode_options[1].label = LocaleText("theme_light")
-    mode_options[2].label = LocaleText("theme_dark")
-    mode_index := app.theme_mode
-
-    if mode_index < APP_THEME_SYSTEM || mode_index > APP_THEME_DARK {
-        mode_index = APP_THEME_SYSTEM
-    }
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0.0, 0.0},
-            .text = (LocaleText("theme_mode_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    mode_props: DropdownProps
-    mode_props.id = 102
-    mode_props.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + font + row_label_gap),
-        cast(float32)w, cast(float32)row_h}
-    mode_props.selected_index = mode_index
-    mode_props.open = state.mode_menu.open
-    mode_props.highlight_index = state.mode_menu.highlight_index
-    mode_props.scroll_offset = state.mode_menu.scroll_offset
-    mode_props.disabled = app.theme_source == APP_THEME_SOURCE_SYSTEM
-    state.mode_menu = Dropdown(app.ui.session, mode_props, mode_options[:])
-    if state.mode_menu.changed {
-        app.theme_mode = state.mode_menu.selected_index
-        changed = 1
-    }
-    y.* += font + row_label_gap + row_h + row_gap
-
     theme_options: [ThemeCount + 1]DropdownOption
     theme_options[0].label = LocaleText("theme_system")
     {
@@ -400,16 +361,10 @@ draw_theme_settings :: (app: *InnerBreeze, x: s32, w: s32,
     if theme_index < 0 || theme_index > ThemeCount {
         theme_index = 1
     }
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0.0, 0.0},
-            .text = (LocaleText("theme_color_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
     color_props: DropdownProps
     color_props.id = 103
-    color_props.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + font + row_label_gap),
-        cast(float32)w, cast(float32)row_h}
+    color_props.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("theme_color_label"))
     color_props.selected_index = theme_index
     color_props.open = state.color_menu.open
     color_props.highlight_index = state.color_menu.highlight_index
@@ -425,24 +380,72 @@ draw_theme_settings :: (app: *InnerBreeze, x: s32, w: s32,
         }
         changed = 1
     }
-    y.* += font + row_label_gap + row_h + row_gap
+    settings_row_divider(app, section, y.*)
+
+    // The dropdown paints after this function returns, so the formatted
+    // label must live in frame text rather than on this stack.
+    follow_device_label: [128]u8
+    follow_args: [2]FormatArg = .[
+    FormatArg.{.text = LocaleText("theme_follow_device"), .is_text = true},
+    FormatArg.{.text = LocaleText(ifx app.dark_mode != 0 then "theme_dark" else "theme_light"), .is_text = true}
+    ]
+    FormatTemplate("%s (%s)", follow_args[:], follow_device_label[:])
+    mode_options: [3]DropdownOption
+    mode_options[0].label = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*follow_device_label[0],
+            size_of(type_of(follow_device_label))))
+    mode_options[1].label = LocaleText("theme_light")
+    mode_options[2].label = LocaleText("theme_dark")
+    mode_index := app.theme_mode
+    if mode_index < APP_THEME_SYSTEM || mode_index > APP_THEME_DARK {
+        mode_index = APP_THEME_SYSTEM
+    }
+    mode_props: DropdownProps
+    mode_props.id = 102
+    mode_props.bounds = settings_choice_row(app, section.inner_x,
+        section.inner_width, y, LocaleText("theme_mode_label"))
+    mode_props.selected_index = mode_index
+    mode_props.open = state.mode_menu.open
+    mode_props.highlight_index = state.mode_menu.highlight_index
+    mode_props.scroll_offset = state.mode_menu.scroll_offset
+    mode_props.disabled = app.theme_source == APP_THEME_SOURCE_SYSTEM
+    state.mode_menu = Dropdown(app.ui.session, mode_props, mode_options[:])
+    if state.mode_menu.changed {
+        app.theme_mode = state.mode_menu.selected_index
+        changed = 1
+    }
     return changed
 }
 
 draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     label := LocaleText("appearance_scale_label")
-    label_h := AppParagraphHeight(label, w, AppFontSize(), 0)
-    if label_h < AppScale(24) { label_h = AppScale(24) }
+    percentage: [24]u8
+    percentage_args: [1]FormatArg = .[
+    FormatArg.{.number = app.ui_scale_tenths * 10}
+    ]
+    FormatTemplate("%d%%", percentage_args[:], percentage[:])
+    value := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*percentage[0], size_of(type_of(percentage))))
+    value_width := AppScale(64)
     Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)w, cast(float32)label_h},
-            .text = label
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.* + AppScale(10)),
+                cast(float32)(w - value_width), cast(float32)AppScale(22)},
+            .text = label,
+            .wrap = cast(TextWrap)TextWrapNone
+        })
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + w - value_width),
+                cast(float32)(y.* + AppScale(10)),
+                cast(float32)value_width, cast(float32)AppScale(22)},
+            .text = value,
+            .align = cast(TextAlign)TextAlignEnd,
+            .wrap = cast(TextWrap)TextWrapNone
         })
     slider: DiscreteSliderProps
     slider.id = 140
     slider.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + label_h + AppScale(4)), cast(float32)w,
-        cast(float32)AppScale(40)}
+        cast(float32)(y.* + AppScale(38)), cast(float32)w,
+        cast(float32)AppScale(36)}
     slider.semantic_label = label
     slider.value = app.ui_scale_tenths
     slider.min = 5
@@ -453,19 +456,7 @@ draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
         app.settings_dirty = 1
         save_settings(app)
     }
-    percentage: [24]u8
-    percentage_args: [1]FormatArg = .[
-    FormatArg.{.number = app.ui_scale_tenths * 10}
-    ]
-    FormatTemplate("%d%%", percentage_args[:], percentage[:])
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x,
-                cast(float32)(y.* + label_h + AppScale(48)),
-                cast(float32)w, cast(float32)AppScale(20)},
-            .text = AppTextFromCString(*percentage[0],
-            size_of(type_of(percentage)))
-        })
-    y.* += label_h + AppScale(72)
+    y.* += settings_theme_scale_row_height()
 }
 
 #program_export
