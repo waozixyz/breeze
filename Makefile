@@ -460,7 +460,7 @@ SYNC_RETRY_SOURCE := src/app/sync_retry.zi
 STORAGE_LAYOUT_HEADER := tests/storage_layout.h
 LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
 	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
-	src/storage/storage_layout_laws.zi
+	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -1131,11 +1131,14 @@ proof-test: $(ZI2C_BIN)
 	sh tests/law_mutation_test.sh $(ZIRAN_BIN)
 
 # The real merge SQL must satisfy the laws stated for its model.
-.PHONY: habit-merge-sql-test
+.PHONY: habit-merge-sql-test sync-restore-sql-test
 habit-merge-sql-test:
 	python3 tests/habit_merge_sql_test.py
 
-test: habit-merge-sql-test
+sync-restore-sql-test:
+	python3 tests/sync_restore_sql_test.py
+
+test: habit-merge-sql-test sync-restore-sql-test
 
 build-laws: version-check proofs
 

@@ -19,6 +19,8 @@ fresh() {
         "$root"/src/app/sync_recovery_policy_laws.zi "$work/src/app/"
     cp "$root"/src/storage/habit_merge_model.zi \
         "$root"/src/storage/habit_merge_laws.zi "$work/src/storage/"
+    cp "$root"/src/storage/sync_restore_model.zi \
+        "$root"/src/storage/sync_restore_laws.zi "$work/src/storage/"
     cp "$root"/src/storage/sync_result.zi "$root"/src/storage/storage_layout.zi \
         "$root"/src/storage/storage_layout_laws.zi "$work/src/storage/"
 }
@@ -33,6 +35,7 @@ check app/sync_retry_laws.zi
 check app/practice_lifecycle_laws.zi
 check app/sync_recovery_policy_laws.zi
 check storage/habit_merge_laws.zi
+check storage/sync_restore_laws.zi
 check storage/storage_layout_laws.zi
 
 # file, module to check, sed expression, expected disproved law
@@ -121,6 +124,26 @@ sed -i 's/completed=MAX(completed,/completed=MIN(completed,/' \
 if HABIT_MERGE_ROOT="$work/sql" python3 "$root/tests/habit_merge_sql_test.py" \
     > /dev/null 2>&1; then
     echo "SQL merge test accepted a merge that loses progress" >&2
+    exit 1
+fi
+restore=storage/sync_restore_model.zi
+mutate $restore storage/sync_restore_laws.zi \
+    's/    if present != 0 {/    if present == 0 {/' RestoreKeepsEveryLocalChange
+mutate $restore storage/sync_restore_laws.zi \
+    's/^    return OutboxAfterClear(queued_before)/    return 1/' \
+    RestoreQueuesOnlyLocalData
+
+# The real restore SQL must fail the same statements when it leaves data out.
+mkdir -p "$work/restore/src/storage"
+cp "$root"/src/storage/storage_core.zi "$root"/src/storage/schema_sql.zi \
+    "$work/restore/src/storage/"
+SYNC_RESTORE_ROOT="$work/restore" python3 \
+    "$root/tests/sync_restore_sql_test.py" > /dev/null
+sed -i "s/FROM elist_items WHERE user_id/FROM elist_items WHERE 0=1 AND user_id/" \
+    "$work/restore/src/storage/storage_core.zi"
+if SYNC_RESTORE_ROOT="$work/restore" python3 \
+    "$root/tests/sync_restore_sql_test.py" > /dev/null 2>&1; then
+    echo "restore test accepted a restore that leaves local data unqueued" >&2
     exit 1
 fi
 mutate storage/sync_result.zi app/sync_retry_laws.zi \
