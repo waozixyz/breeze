@@ -1,5 +1,4 @@
 c :: #system_library "c";
-fmaxf :: (a: float32, b: float32) -> float32 #foreign c;
 #import, file "../core/types.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/app.zi";
@@ -102,14 +101,14 @@ break_overlay_practice_chips :: (app: *InnerBreeze, view_w: s32, view_h: s32,
         while i < practice_count() && count < BREAK_OVERLAY_CHIP_MAX - 1 {
             id := practice_ordered_id(i)
             ids[count] = id
-            widths[count] = AppTextWidth(practice_label(id), Text12) +                             AppScale(24)
+            widths[count] = AppTextWidth(practice_label(id), AppSmallFontSize()) +                             AppScale(24)
             count += 1
             i += 1
         }
 
     }
     ids[count] = BREAK_OVERLAY_HABITS_CHIP_ID
-    widths[count] = AppTextWidth(LocaleText("tab_habits"), Text12) +                     AppScale(24)
+    widths[count] = AppTextWidth(LocaleText("tab_habits"), AppSmallFontSize()) +                     AppScale(24)
     count += 1
     if count == 0 {
         return 0
@@ -191,7 +190,7 @@ break_overlay_draw_practice_chips :: (app: *InnerBreeze, w: s32, h: s32) {
         return
     }
     chip_fill := DarkenColor(StyleTokenColor("canvas"), 18)
-    chip_border := DarkenColor(StyleTokenColor("text"), 55)
+    chip_border := StyleTokenColor("border")
     {
         i: s32 = 0
         while i < chips {
@@ -200,13 +199,17 @@ break_overlay_draw_practice_chips :: (app: *InnerBreeze, w: s32, h: s32) {
         Box(app.ui.session, BoxProps.{
             .bounds = r,
             .fill = chip_fill,
-            .border = chip_border
+            .border = chip_border,
+            .radius = cast(float32)AppScale(8)
         })
         label: string = ifx (ids[i] == BREAK_OVERLAY_HABITS_CHIP_ID) then (LocaleText("tab_habits")) else (practice_label(ids[i]))
-        lw := AppTextWidth(label, Text12)
+        // Measured with the same font as the chip width above.
         Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(cast(s32)r.x + (cast(s32)r.width - lw) / 2), cast(float32)(cast(s32)r.y + AppScale(10)), 0, 0},
+            .bounds = r,
             .text = label,
+            .font = AppSmallFontSize(),
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap=cast(TextWrap)TextWrapNone
         })
 
@@ -280,17 +283,17 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
     } else {
         body = LocaleText("break_micro_body")
     }
-    title_w := AppTextWidth(title, title_font)
-    text_x := w / 2
-
     Text(CurrentApp().ui.session, TextProps.{
-        .bounds = Rectangle.{cast(float32)(text_x - title_w / 2), cast(float32)(panel_y + AppScale(28)), 0, 0},
+        .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_y + AppScale(20)),
+            cast(float32)panel_w, cast(float32)AppScale(36)},
         .text = title,
+        .font = title_font,
+        .align = cast(TextAlign)TextAlignCenter,
+        .vertical_align = cast(TextAlign)TextAlignCenter,
         .wrap=cast(TextWrap)TextWrapNone
     })
 
     remaining := break_overlay_remaining_s(app, t)
-    time_text_w: s32 = 0
     if timer.duration_s > 0 {
         time_text := BreakFormatDuration(remaining)
         time_label: [96]u8
@@ -306,10 +309,13 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
         remaining_label := FrameTextHold(*app.ui.frame_text,
             AppTextFromCString(*time_label[0],
                 size_of(type_of(time_label))))
-        time_text_w = AppTextWidth(remaining_label, body_font)
         Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(text_x - time_text_w / 2), cast(float32)(panel_y + AppScale(64)), 0, 0},
+            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_y + AppScale(60)),
+                cast(float32)panel_w, cast(float32)AppScale(26)},
             .text = remaining_label,
+            .font = body_font,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap=cast(TextWrap)TextWrapNone
         })
     }
@@ -334,22 +340,35 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
             cast(float32)body_h},
         .text = body,
         .font = body_font,
+        .align = cast(TextAlign)TextAlignCenter,
         .wrap = cast(TextWrap)TextWrapAuto
     })
 
     if activity_flash {
-        active_note := LocaleText("break_stay_idle_note")
-        active_w := AppTextWidth(active_note, body_font)
         Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(text_x - active_w / 2), cast(float32)(panel_y + panel_h - AppScale(96)), 0, 0},
-            .text = active_note,
+            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_y + panel_h - AppScale(100)),
+                cast(float32)panel_w, cast(float32)AppScale(26)},
+            .text = LocaleText("break_stay_idle_note"),
+            .font = body_font,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap=cast(TextWrap)TextWrapNone
         })
     }
 
-    button_y := panel_y + panel_h - AppScale(56)
-    button_w := AppScale(132)
+    button_y := panel_y + panel_h - AppScale(60)
+    button_h := AppScale(36)
     gap := AppScale(12)
+    // Every action shares the width of the longest label.
+    button_w := AppScale(120)
+    labels: [3]string = .[LocaleText("break_postpone_button"),
+        LocaleText("break_skip_button"), LocaleText("break_rest_now_button")]
+    for label_index: 0..2 {
+        label_w := AppTextWidth(labels[label_index], AppFontSize()) + AppScale(32)
+        if label_w > button_w {
+            button_w = label_w
+        }
+    }
     count: s32 = 0
     if timer.show_postpone != 0 {
         count += 1
@@ -378,7 +397,7 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
                     size_of(type_of(locked_label))))
             Text(CurrentApp().ui.session, TextProps.{
                 .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
-                           cast(float32)button_w, cast(float32)AppScale(32)},
+                           cast(float32)button_w, cast(float32)button_h},
                 .text = lock_text,
                 .wrap = cast(TextWrap)TextWrapNone,
                 .align = cast(TextAlign)TextAlignCenter,
@@ -387,8 +406,8 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
         } else {
             if Button(CurrentApp().ui.session, ButtonProps.{
         .id = 4101, .label = LocaleText("break_postpone_button"),
-        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_postpone_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
-                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_postpone_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
+            cast(float32)button_w, cast(float32)button_h},
         .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     }) != 0 {
                 app.breaks = BreakPostpone(app.breaks, t)
@@ -402,8 +421,8 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
         if !locked {
             if Button(CurrentApp().ui.session, ButtonProps.{
         .id = 4102, .label = LocaleText("break_skip_button"),
-        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_skip_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
-                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_skip_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
+            cast(float32)button_w, cast(float32)button_h},
         .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     }) != 0 {
                 app.breaks = BreakSkip(app.breaks, t)
@@ -416,8 +435,8 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
     if t == BREAK_MICRO {
         if Button(CurrentApp().ui.session, ButtonProps.{
         .id = 4103, .label = LocaleText("break_rest_now_button"),
-        .bounds = Rectangle.{cast(float32)button_x - fmaxf(cast(float32)(AppTextWidth(LocaleText("break_rest_now_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)) / 2.0f,
-                   cast(float32)(button_y), fmaxf(cast(float32)(AppTextWidth(LocaleText("break_rest_now_button"), AppFontSize()) + AppScale(16)), cast(float32)AppScale(34)), fmaxf(cast(float32)(AppTextLineHeight(AppFontSize()) + AppScale(8)), cast(float32)AppScale(34))},
+        .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
+            cast(float32)button_w, cast(float32)button_h},
         .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     }) != 0 {
             app.breaks = BreakForce(app.breaks, BREAK_REST)
