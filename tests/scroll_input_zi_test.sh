@@ -9,7 +9,7 @@ ui=${KRYON_UI_DIR:-$root/build/packages/kryon/src/ui}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" \
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" \
     -o "$work/ir" "$source"
 for input in source saved; do
     if test "$input" = source; then
@@ -26,6 +26,7 @@ for input in source saved; do
     mkdir -p "$work/$input"
     "$bin/zi2zib" bundle --root "$module_root" \
         --module-path "$module_path" --module-path "$kryon_path" \
+        --module-path "$root/build/packages/ziran/std" \
         --entry scroll_input_behavior:Answer \
         -o "$work/$input/scroll_input.zib" "$file"
     test "$("$bin/zi2zib" run "$work/$input/scroll_input.zib")" = 42

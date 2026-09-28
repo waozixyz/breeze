@@ -10,9 +10,9 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 source=$root/tests/habit_calendar_behavior.zi
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" -o "$work/ir" "$source"
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" -o "$work/ir" "$source"
 "$bin/zi2zib" bundle --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" --entry habit_calendar_behavior:CalendarAnswer \
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --entry habit_calendar_behavior:CalendarAnswer \
     -o "$work/source.zib" "$source"
 "$bin/zi2zib" bundle --root "$work/ir" \
     --entry habit_calendar_behavior:CalendarAnswer \
@@ -22,7 +22,7 @@ test "$("$bin/zi2zib" run "$work/source.zib")" = 42
 test "$("$bin/zi2zib" run "$work/saved.zib")" = 42
 
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" -o "$work/c" "$source"
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "habit_calendar_behavior.h"
 int main(void) { return Answer() == 42 && CalendarAnswer() == 42 ? 0 : 1; }

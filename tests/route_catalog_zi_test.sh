@@ -10,7 +10,7 @@ ui=${KRYON_UI_DIR:-$root/build/packages/kryon/src/ui}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" -o "$work/ir" "$source"
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" -o "$work/ir" "$source"
 
 for input in source saved; do
     if [ "$input" = source ]; then

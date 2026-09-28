@@ -10,6 +10,7 @@ include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/ir" "$source"
 
 for input in source saved; do
@@ -28,6 +29,7 @@ for input in source saved; do
     "$bin/zi2zib" bundle --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
         --entry navigation_routes_behavior:Answer \
         -o "$output/navigation_routes.zib" "$file"
     [ "$("$bin/zi2zib" run "$output/navigation_routes.zib")" = 42 ]
@@ -35,6 +37,7 @@ for input in source saved; do
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
         -o "$output/c" "$file"
     cat > "$output/c/main.c" <<'C'
 #include "navigation_routes_behavior.h"
@@ -51,6 +54,7 @@ C
     "$bin/zi2cpp" --no-main --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
         -o "$output/cpp" "$file"
     cat > "$output/cpp/main.cpp" <<'CPP'
 #include "navigation_routes_behavior.hpp"
@@ -67,6 +71,7 @@ CPP
     "$bin/zi2go" --no-main --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
         -o "$output/go" "$file"
     cat > "$output/go/navigation_routes_behavior_test.go" <<'GO'
 package ziran

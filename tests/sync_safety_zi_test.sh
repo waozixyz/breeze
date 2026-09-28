@@ -68,6 +68,7 @@ cmp "$work/source/safety.zib" "$work/saved/safety.zib"
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/native" "$root/src/app/sync_safety.zi"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

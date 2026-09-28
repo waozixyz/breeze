@@ -6,7 +6,8 @@ bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$root/build/metrics-zi-test
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" -o "$work/c" \
+    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/ziran/std" -o "$work/c" \
     "$root/tests/metrics_link_behavior.zi"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \

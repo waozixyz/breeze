@@ -1,3 +1,4 @@
+#import "byte_text_linux"
 c :: #system_library "c";
 
 FrameTextCapacity :: 16384
@@ -7,9 +8,6 @@ FrameTextStore :: struct {
     used: s32
 }
 
-// Borrow text from an app-owned, bounded NUL-terminated buffer. The caller
-// keeps the buffer alive while the returned string is in use.
-app_text_from_cstring_host :: (data: *u8, capacity: s32) -> string #foreign c "app_text_from_cstring";
 app_append_text_host :: (dst: *u8, dst_size: s64, src: string) #foreign c "app_append_text";
 
 // C ABI callers still share these bounded text operations during the Ziran
@@ -54,12 +52,18 @@ AppendTextToBuffer :: (dst: *u8, dst_size: s64, src: string) {
     dst[index] = cast(u8)0
 }
 
+// Borrow text from an app-owned, bounded NUL-terminated buffer. The caller
+// keeps the buffer alive while the returned string is in use.
 #program_export
 AppTextFromCString :: (data: *u8, capacity: s32) -> string {
     if data == null || capacity <= 0 {
         return ""
     }
-    return app_text_from_cstring_host(data, capacity)
+    length: s32 = 0
+    while length < capacity && data[length] != cast(u8)0 {
+        length += 1
+    }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
 }
 
 // Copy borrowed text into caller-owned, NUL-terminated byte storage.
