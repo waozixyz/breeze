@@ -27,6 +27,20 @@ laws cover, how they are enforced, and what is still to do.
   homes, and temporary names are fixed by 11 laws. See `docs/STORAGE_LAYOUT.md`.
   `tests/storage_layout.h` holds independently written expected names for the C
   storage path test.
+- **Practice lifecycle** (`src/app/practice_lifecycle.zi`, laws in
+  `practice_lifecycle_laws.zi`). A pure decision that Android's
+  `android_sync_lifecycle` applies. Twelve laws, proved for every flag
+  combination: desktop focus loss cannot pause or move a session into the
+  background-timer path; a user pause is never resumed by the lifecycle; the
+  timer keeps running in the background only with permission and a visible
+  indicator; the lifecycle never pauses and resumes at once.
+- **Sync recovery** (`src/app/sync_recovery_policy.zi`, laws in
+  `sync_recovery_policy_laws.zi`). Pure decisions used by
+  `sync_async.zi` and `social_async.zi`. Thirteen laws: a response for a
+  switched account or server is never applied; a failed required social stage
+  ends the refresh without clearing anything, so known friends and requests
+  stay; a failed optional statistic clears only itself; stages run once, in
+  order, and the average statistic exists only for `whm`.
 - **Ziran `forall` laws** (in `~/Projects/ziran`).
   `#law NAME forall x: 0..4, k: SomeEnum => condition;` checks every
   combination of integer ranges and enum members with the compile-time
@@ -63,39 +77,38 @@ proof of application behavior.
 
 ## Toolchain pin
 
-`ziran.lock` still pins Ziran v0.2.0, which has no `forall` laws. Locked and CI
-builds cannot check the laws until the Ziran commit that adds `forall` is pushed
-and the lock is bumped (`sh scripts/packages.sh` after updating `ziran.toml`).
-Local builds use the `../ziran` working tree through `ziran.local.toml`.
+`ziran.lock` pins Ziran commit `ff497c9` (`forall` and enum-aware `custom` laws)
+on `master`. Law identity and waiver validation landed later in `e63fcf5`; bump
+the pin with `ziran lock` when the rest of the lock is ready to move.
+`ziran lock` currently also re-resolves Kryon, whose working tree needs raylib,
+so the pin was changed by hand to the toolchain commit only. Local builds use
+the `../ziran` and `../kryon` working trees through `ziran.local.toml`.
 
 ## Remaining Ziran work
 
-1. **Stable law identity and waivers.** Duplicate names, waivers for unknown
-   names, and waivers on `disproved` laws are errors.
-2. **Determinism matrix.** Law tables byte-identical across runs and between
-   source and saved IR (covered for `forall` in Ziran's `tests/laws.sh`, not yet
-   across the whole matrix).
-3. **Mutation gate as a Ziran library.** Inbe's `tests/law_mutation_test.sh` is
+1. **Determinism matrix.** Law tables byte-identical across runs and between
+   source and saved IR (covered for `forall` and enum laws in Ziran's
+   `tests/laws.sh`, not yet across the whole matrix).
+2. **Mutation gate as a Ziran library.** Inbe's `tests/law_mutation_test.sh` is
    a local script; Ziran should provide the reusable form.
-4. **Local enum variables and named enum domains in more contexts.** Enum
-   members and typed parameters work in laws; locals of enum type inside pure
-   procedures are not yet resolved.
-5. **Beyond finite tables.** Bounded quantification over sequences, and a stated
+3. **Beyond finite tables.** Bounded quantification over sequences, and a stated
    relation between the checked pure model and the lowered native code, so a
    proof of a model is never claimed to prove a separately implemented C path.
-   Needed for collection merges and recovery.
+   Needed for collection merges and the SQL-level recovery rules below.
+
+Done in Ziran: `forall` over integer ranges and enums, counterexamples, the case
+budget, enum members and typed locals in pure procedures, and law identity and
+waiver validation (unique names; a waiver must name an existing law; only
+unknown laws can be waived).
 
 ## Next migrations, in order
 
-1. **Practice lifecycle.** Desktop focus cannot pause a session, user pause
-   stays explicit, and mobile background transitions keep the required timer
-   behavior, as a pure finite policy with laws. Platform integration tests stay.
-2. **Sync recovery transitions.** Restoring an account cannot discard queued
-   local changes, partial social refresh cannot erase known friends, and an
-   account switch cannot apply responses belonging to the old account. Model
-   effects explicitly; a proof of scheduling is not a proof of network delivery.
-3. **Collection merges**, once Ziran supports bounded sequence quantification.
-4. **Widget behavior** in ordinary Kryon Ziran modules with tests of the
+1. **Recovery rules that live in SQL.** Restoring an account resets the sync
+   state and deletes the outbox, relying on a backfill to re-queue local data;
+   a law that restoring cannot lose queued local changes needs the sequence
+   model above, and is covered today only by storage integration tests.
+2. **Collection merges**, once Ziran supports bounded sequence quantification.
+3. **Widget behavior** in ordinary Kryon Ziran modules with tests of the
    portable values and host boundaries. Ziran stays unaware of UI widgets.
 
 ## Trust and use with smaller models
