@@ -1,0 +1,517 @@
+// Workrave-style break engine, driven tick by tick through the pure BreakTick
+// value function: activity-based timers, natural breaks, the prompt loop,
+// skip and postpone, micro to rest promotion, the daily limit, operation
+// modes, and reading mode.
+#import "byte_text_linux"
+#import, file "../src/breaks/break_types.zi";
+#import, file "../src/breaks/break_rules.zi";
+
+c :: #system_library "c";
+write_out :: (descriptor: s32, data: *void, count: usize) -> s64 #foreign c "write";
+
+failures: s32;
+newline: [1]u8 = .[10];
+
+expect :: (condition: bool, message: string) {
+    if condition { return }
+    failures += 1
+    copy: string = message
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*copy)
+    unused write_out(2, cast(*void)descriptor.data, descriptor.length)
+    unused write_out(2, cast(*void)*newline[0], cast(usize)1)
+}
+
+// The scenario driver over the value functions.
+break_engine_init :: (e: *BreakEngine) { e.* = BreakInit() }
+break_engine_tick :: (e: *BreakEngine, active: s32) { e.* = BreakTick(e.*, active) }
+break_engine_skip :: (e: *BreakEngine, t: s32) { e.* = BreakSkip(e.*, t) }
+break_engine_postpone :: (e: *BreakEngine, t: s32) { e.* = BreakPostpone(e.*, t) }
+break_engine_force_break :: (e: *BreakEngine, t: s32) { e.* = BreakForce(e.*, t) }
+break_engine_set_mode :: (e: *BreakEngine, mode: s32, duration_s: s32) {
+    e.* = BreakSetMode(e.*, mode, duration_s)
+}
+break_engine_set_day :: (e: *BreakEngine, day_key: s32) -> s32 {
+    result: BreakDayChange = BreakSetDay(e.*, day_key)
+    e.* = result.engine
+    return result.changed
+}
+break_engine_take_event :: (e: *BreakEngine, break_out: *s32) -> s32 {
+    result: BreakEventTake = BreakTakeEvent(e.*)
+    e.* = result.engine
+    if break_out != null { break_out.* = result.break_type }
+    return result.event
+}
+break_engine_active_break :: (e: *BreakEngine) -> s32 { return BreakActive(e.*) }
+break_timer_next_due_s :: (e: *BreakEngine, t: s32) -> s32 { return BreakNextDueSeconds(e.*, t) }
+break_engine_note_idle :: (e: *BreakEngine, idle_s: s32) -> s32 {
+    result: BreakIdleSample = BreakNoteIdle(e.*, idle_s)
+    e.* = result.engine
+    return result.took
+}
+
+// Advances one full second and returns the event raised during it.
+step_second :: (e: *BreakEngine, active: s32, break_out: *s32) -> s32 {
+    i: s32 = 0
+    while i < 60 {
+        break_engine_tick(e, active)
+        i += 1
+    }
+    return break_engine_take_event(e, break_out)
+}
+
+run_seconds :: (e: *BreakEngine, seconds: s32, active: s32) {
+    brk: s32 = 0
+    i: s32 = 0
+    while i < seconds {
+        unused step_second(e, active, *brk)
+        i += 1
+    }
+}
+
+test_defaults_match_workrave :: () {
+    e: BreakEngine
+    break_engine_init(*e)
+    expect(e.timers[BREAK_MICRO].limit_s == 180 &&
+           e.timers[BREAK_MICRO].duration_s == 30 &&
+           e.timers[BREAK_MICRO].postpone_s == 150,
+           "micro defaults: 3 min / 30 s / 150 s")
+    expect(e.timers[BREAK_REST].limit_s == 2700 &&
+           e.timers[BREAK_REST].duration_s == 600 &&
+           e.timers[BREAK_REST].postpone_s == 180,
+           "rest defaults: 45 min / 10 min / 180 s")
+    expect(e.timers[BREAK_DAILY].limit_s == 14400 &&
+           e.timers[BREAK_DAILY].duration_s == 0 &&
+           e.timers[BREAK_DAILY].postpone_s == 1200,
+           "daily defaults: 4 h / no duration / 1200 s")
+    expect(e.timers[BREAK_MICRO].max_prompts == 0 &&
+           e.timers[BREAK_REST].max_prompts == 3 &&
+           e.timers[BREAK_DAILY].max_prompts == 3,
+           "micro opens directly; rest/daily max prompts default to 3")
+    expect(e.mode == BreakModeNormal, "mode defaults to normal")
+    expect(break_timer_next_due_s(*e, BREAK_MICRO) == 180,
+           "fresh micro timer due in 180 s")
+}
+
+test_active_time_prompts_at_limit :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 60
+    e.timers[BREAK_MICRO].max_prompts = 3
+    run_seconds(*e, 59, 1)
+    expect(e.timers[BREAK_MICRO].state == BreakStateRunning &&
+           e.timers[BREAK_MICRO].active_s == 59,
+           "no prompt before the limit")
+    ev = step_second(*e, 1, *brk)
+    expect(ev == BreakEventPrompt && brk == BREAK_MICRO,
+           "reaching the limit raises a prompt")
+    expect(e.timers[BREAK_MICRO].state == BreakStatePrompting,
+           "timer enters prompting")
+    expect(e.stats[BREAK_MICRO].prompts == 1, "prompt counted once")
+}
+
+test_input_resets_idle_and_natural_take :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    run_seconds(*e, 170, 1)
+    expect(e.timers[BREAK_MICRO].active_s == 170, "active time accrues")
+    run_seconds(*e, 29, 0)
+    expect(e.timers[BREAK_MICRO].idle_s == 29 &&
+           e.timers[BREAK_MICRO].state == BreakStateRunning,
+           "idle below duration does not take the break")
+    run_seconds(*e, 1, 1)
+    expect(e.timers[BREAK_MICRO].idle_s == 0,
+           "any input resets the idle counter")
+    run_seconds(*e, 29, 0)
+    ev = step_second(*e, 0, *brk)
+    expect(ev == BreakEventNatural && brk == BREAK_MICRO,
+           "idle for the duration takes the break naturally")
+    expect(e.stats[BREAK_MICRO].natural == 1, "natural break counted")
+    expect(e.timers[BREAK_MICRO].active_s == 0 &&
+           e.timers[BREAK_MICRO].state == BreakStateRunning,
+           "natural take resets the timer")
+}
+
+test_ignored_prompts_escalate_to_break :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].max_prompts = 3
+    ev = 0
+    s: s32 = 0
+    while s < 240 {
+        ev = step_second(*e, 1, *brk)
+        s += 1
+    }
+    expect(ev == BreakEventStart && brk == BREAK_MICRO,
+           "three ignored prompts force the break")
+    expect(e.timers[BREAK_MICRO].state == BreakStateBreaking,
+           "timer enters breaking after max prompts")
+    expect(e.stats[BREAK_MICRO].prompts == 1 &&
+           e.stats[BREAK_MICRO].repeated_prompts == 2,
+           "one prompt plus two repeats before forcing")
+    expect(e.stats[BREAK_MICRO].overdue_s >= 60,
+           "ignored time counts as overdue")
+}
+
+test_unignorable_break_forces_immediately :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].max_prompts = 0
+    run_seconds(*e, 179, 1)
+    ev = step_second(*e, 1, *brk)
+    expect(ev == BreakEventStart && e.timers[BREAK_MICRO].state == BreakStateBreaking,
+           "max_prompts 0 skips prompting entirely")
+}
+
+test_skip_and_postpone :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10
+    e.timers[BREAK_MICRO].max_prompts = 0
+    run_seconds(*e, 10, 1)
+    expect(e.timers[BREAK_MICRO].state == BreakStateBreaking, "break started")
+    break_engine_skip(*e, BREAK_MICRO)
+    ev = break_engine_take_event(*e, *brk)
+    expect(ev == BreakEventSkipped &&
+           e.timers[BREAK_MICRO].state == BreakStateRunning &&
+           e.timers[BREAK_MICRO].active_s == 0,
+           "skip resets the timer as if taken")
+    expect(e.stats[BREAK_MICRO].skipped == 1, "skip counted")
+    run_seconds(*e, 10, 1)
+    expect(e.timers[BREAK_MICRO].state == BreakStateBreaking, "break re-started")
+    break_engine_postpone(*e, BREAK_MICRO)
+    ev = break_engine_take_event(*e, *brk)
+    expect(ev == BreakEventPostponed &&
+           e.timers[BREAK_MICRO].state == BreakStateSnoozed &&
+           e.timers[BREAK_MICRO].snooze_s == 150,
+           "postpone snoozes for the postpone time")
+    expect(e.stats[BREAK_MICRO].postponed == 1, "postpone counted")
+    run_seconds(*e, 149, 0)
+    expect(e.timers[BREAK_MICRO].state == BreakStateSnoozed, "still snoozing")
+    ev = step_second(*e, 0, *brk)
+    expect(ev == BreakEventStart &&
+           e.timers[BREAK_MICRO].state == BreakStateBreaking,
+           "snooze expiry re-arms an un-ignorable break")
+}
+
+test_break_freezes_on_activity :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10
+    e.timers[BREAK_MICRO].max_prompts = 0
+    run_seconds(*e, 10, 1)
+    run_seconds(*e, 29, 1)
+    expect(e.timers[BREAK_MICRO].state == BreakStateBreaking &&
+           e.timers[BREAK_MICRO].idle_s == 0,
+           "activity during the break freezes progress")
+    run_seconds(*e, 29, 0)
+    ev = step_second(*e, 0, *brk)
+    expect(ev == BreakEventTaken && e.stats[BREAK_MICRO].taken == 1,
+           "idle for the duration completes the break")
+    expect(e.timers[BREAK_MICRO].active_s == 0 &&
+           e.timers[BREAK_MICRO].state == BreakStateRunning,
+           "taken break resets the timer")
+}
+
+test_micro_promotes_to_rest :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 60
+    e.timers[BREAK_MICRO].max_prompts = 3
+    e.timers[BREAK_REST].limit_s = 80
+    run_seconds(*e, 59, 1)
+    ev = step_second(*e, 1, *brk)
+    expect(ev == BreakEventStart && brk == BREAK_REST,
+           "rest break fires in place of a due micro break")
+    expect(e.timers[BREAK_REST].state == BreakStateBreaking,
+           "rest timer owns the window")
+    expect(e.timers[BREAK_MICRO].active_s == 0 &&
+           e.timers[BREAK_MICRO].state == BreakStateRunning,
+           "micro timer credited and reset")
+    expect(e.timers[BREAK_REST].lock_buttons_s == 0,
+           "ignorable micro leaves rest buttons unlocked")
+    // An un-ignorable micro promotion locks the rest window buttons.
+    break_engine_init(*e)
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 60
+    e.timers[BREAK_MICRO].max_prompts = 0
+    e.timers[BREAK_REST].limit_s = 80
+    run_seconds(*e, 60, 1)
+    expect(e.timers[BREAK_REST].state == BreakStateBreaking &&
+           e.timers[BREAK_REST].lock_buttons_s == e.timers[BREAK_REST].duration_s,
+           "un-ignorable micro locks the rest buttons")
+}
+
+test_daily_limit_skip_and_day_reset :: () {
+    e: BreakEngine
+
+    break_engine_init(*e)
+    e.timers[BREAK_MICRO].enabled = 0
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].limit_s = 60
+    run_seconds(*e, 60, 1)
+    expect(e.timers[BREAK_DAILY].state == BreakStatePrompting,
+           "daily limit prompts when reached")
+    run_seconds(*e, 60, 1)
+    expect(e.timers[BREAK_DAILY].state == BreakStateBreaking,
+           "daily limit breaks after ignored prompts")
+    break_engine_skip(*e, BREAK_DAILY)
+    expect(e.timers[BREAK_DAILY].skipped_today == 1 &&
+           e.timers[BREAK_DAILY].state == BreakStateRunning,
+           "skipping disables the daily limit for today")
+    run_seconds(*e, 1000, 1)
+    expect(e.timers[BREAK_DAILY].state == BreakStateRunning,
+           "skipped daily limit stays silent")
+    expect(break_engine_set_day(*e, 1) == 1, "day change reported")
+    expect(e.timers[BREAK_DAILY].skipped_today == 0 &&
+           e.timers[BREAK_DAILY].active_s == 0,
+           "day reset restores the daily limit")
+    expect(break_engine_set_day(*e, 1) == 0, "same day is a no-op")
+    run_seconds(*e, 60, 1)
+    expect(e.timers[BREAK_DAILY].state == BreakStatePrompting,
+           "daily limit runs again after the day reset")
+}
+
+test_quiet_suspended_and_timed_modes :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 60
+    e.timers[BREAK_MICRO].max_prompts = 3
+    break_engine_set_mode(*e, BreakModeQuiet, 0)
+    run_seconds(*e, 70, 1)
+    expect(e.timers[BREAK_MICRO].state == BreakStateRunning,
+           "quiet mode monitors but never prompts")
+    expect(e.stats[BREAK_MICRO].overdue_s == 11,
+           "quiet mode accrues overdue time")
+    break_engine_set_mode(*e, BreakModeNormal, 0)
+    ev = step_second(*e, 1, *brk)
+    expect(ev == BreakEventPrompt, "overdue break fires after quiet ends")
+    {
+        active_before: s32 = e.timers[BREAK_MICRO].active_s
+        usage_before: s32 = e.usage_today_s
+
+        break_engine_set_mode(*e, BreakModeSuspended, 0)
+        run_seconds(*e, 500, 1)
+        expect(e.timers[BREAK_MICRO].active_s == active_before &&
+               e.usage_today_s == usage_before,
+               "suspended mode stops monitoring entirely")
+    }
+
+    break_engine_set_mode(*e, BreakModeQuiet, 2)
+    unused step_second(*e, 1, *brk)
+    expect(e.mode == BreakModeQuiet, "timed mode still active")
+    ev = step_second(*e, 1, *brk)
+    expect(ev == BreakEventModeExpired && e.mode == BreakModeNormal,
+           "timed mode expires back to normal")
+}
+
+test_reading_mode :: () {
+    e: BreakEngine
+    brk: s32 = -1
+    ev: s32 = 0
+
+    break_engine_init(*e)
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10000
+    e.timers[BREAK_REST].limit_s = 10
+    e.timers[BREAK_REST].max_prompts = 0
+    e.reading_mode = 1
+    unused step_second(*e, 1, *brk)          // first input latches reading
+    run_seconds(*e, 9, 0);                   // idle still counts as active
+    expect(e.timers[BREAK_REST].active_s == 10 && e.usage_today_s == 10,
+           "reading mode keeps timers running without input")
+    expect(e.timers[BREAK_REST].state == BreakStateBreaking,
+           "rest break started while reading")
+    expect(e.reading_active == 0, "reading latch cleared at rest break")
+    run_seconds(*e, 599, 0)
+    ev = step_second(*e, 0, *brk)
+    expect(ev == BreakEventTaken && e.stats[BREAK_REST].taken == 1,
+           "rest break completes once the user actually rests")
+    expect(e.usage_today_s == 10, "idle rest time is not usage")
+}
+
+test_micro_counts_toward_daily_limit :: () {
+    e: BreakEngine
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10
+    e.timers[BREAK_MICRO].duration_s = 5
+    e.timers[BREAK_MICRO].max_prompts = 3
+    e.timers[BREAK_DAILY].limit_s = 20
+    e.micro_counts_as_activity = 1
+    run_seconds(*e, 10, 1);                  // micro due -> prompting
+    run_seconds(*e, 5, 0);                   // idle -> natural take
+    expect(e.stats[BREAK_MICRO].natural == 1, "micro taken naturally")
+    expect(e.timers[BREAK_DAILY].active_s == 15,
+           "taken micro break counts toward the daily limit")
+}
+
+test_force_break_and_next_due :: () {
+    e: BreakEngine
+    brk: s32 = -1
+
+    break_engine_init(*e)
+    run_seconds(*e, 60, 1)
+    expect(break_timer_next_due_s(*e, BREAK_MICRO) == 120 &&
+           break_timer_next_due_s(*e, BREAK_REST) == 2640,
+           "next due reports active seconds remaining")
+    break_engine_force_break(*e, BREAK_REST)
+    expect(break_engine_take_event(*e, *brk) == BreakEventStart &&
+           brk == BREAK_REST &&
+           e.timers[BREAK_REST].state == BreakStateBreaking &&
+           e.timers[BREAK_REST].active_s == e.timers[BREAK_REST].limit_s,
+           "forced break opens the window immediately")
+    expect(break_engine_active_break(*e) == BREAK_REST,
+           "active break reports the breaking timer")
+    expect(break_timer_next_due_s(*e, BREAK_REST) == 0,
+           "breaking timer reports due now")
+}
+
+test_natural_take_latches_until_activity :: () {
+    e: BreakEngine
+
+    break_engine_init(*e)
+    e.timers[BREAK_REST].enabled = 0
+    e.timers[BREAK_DAILY].enabled = 0
+    // Three break-durations of continuous idle: exactly one natural take.
+    run_seconds(*e, 90, 0)
+    expect(e.stats[BREAK_MICRO].natural == 1 &&
+           e.timers[BREAK_MICRO].active_s == 0,
+           "one continuous idle period takes the break once")
+    run_seconds(*e, 5, 1);          // input re-arms the natural break
+    run_seconds(*e, 30, 0);         // a fresh idle period takes again
+    expect(e.stats[BREAK_MICRO].natural == 2,
+           "input re-arms the natural break")
+}
+
+test_rest_completion_resets_micro :: () {
+    e: BreakEngine
+
+    break_engine_init(*e)
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10000;   // keep micro dormant
+    e.timers[BREAK_MICRO].duration_s = 600;  // longer than the rest break
+    e.timers[BREAK_REST].limit_s = 10
+    e.timers[BREAK_REST].duration_s = 10
+    e.timers[BREAK_REST].max_prompts = 0
+    run_seconds(*e, 10, 1)
+    expect(e.timers[BREAK_REST].state == BreakStateBreaking,
+           "rest break window opens at its limit")
+    expect(e.timers[BREAK_MICRO].active_s == 10,
+           "micro accrues while the user works")
+    run_seconds(*e, 12, 0);         // idle through the 10 s rest break
+    expect(e.timers[BREAK_REST].state == BreakStateRunning &&
+           e.stats[BREAK_REST].taken == 1,
+           "rest break completes on idle")
+    expect(e.timers[BREAK_MICRO].active_s == 0,
+           "completing a rest break resets the micro timer")
+    // micro idle_s re-accrues from zero after the reset while the user is      * still away; that is expected, not a double take (the latch holds).
+}
+
+test_note_idle_resets_after_long_absence :: () {
+    e: BreakEngine
+    brk: s32 = -1
+
+    break_engine_init(*e)
+    e.timers[BREAK_DAILY].enabled = 0
+    e.timers[BREAK_MICRO].limit_s = 10000
+    e.timers[BREAK_REST].limit_s = 10000
+    run_seconds(*e, 20, 1)
+    expect(e.timers[BREAK_REST].active_s == 20 &&
+           e.timers[BREAK_MICRO].active_s == 20,
+           "activity accrues before the absence")
+    // The OS idle counter reports a 20 minute absence (beyond the catch-up      * cap of the per-second ticks): both timers reset naturally, once.
+    expect(break_engine_note_idle(*e, 1200) == 1,
+           "long observed absence takes the breaks")
+    expect(e.stats[BREAK_MICRO].natural == 1 &&
+           e.stats[BREAK_REST].natural == 1,
+           "micro and rest both reset naturally")
+    expect(e.timers[BREAK_MICRO].active_s == 0 &&
+           e.timers[BREAK_REST].active_s == 0,
+           "timers reset after the natural break")
+    unused break_engine_take_event(*e, *brk)
+
+    expect(break_engine_note_idle(*e, 3000) == 0,
+           "the same idle period does not take twice")
+    run_seconds(*e, 1, 1);          // input re-arms the latch
+    expect(break_engine_note_idle(*e, 1200) == 1,
+           "after input a new absence takes again")
+    unused break_engine_take_event(*e, *brk)
+}
+
+
+duration_is :: (seconds: s32, wanted: string) -> bool {
+    text: BreakDurationText = BreakFormatDuration(seconds)
+    return TextFromBytes(text.bytes[0:text.count]) == wanted
+}
+
+test_format_duration_formats_hours :: () {
+    expect(duration_is(59, "0:59"), "below an hour stays M:SS")
+    expect(duration_is(3599, "59:59"), "just under an hour stays M:SS")
+    expect(duration_is(3600, "1:00:00"), "hour boundary switches to H:MM:SS")
+    expect(duration_is(14400, "4:00:00"), "daily limit renders as H:MM:SS")
+    expect(duration_is(2147483647, "596523:14:07"),
+        "maximum signed seconds fits the duration buffer")
+    expect(duration_is(-5, "0:00"), "negative clamps to zero")
+}
+
+#program_export
+Check :: () -> s32 {
+    test_defaults_match_workrave()
+    test_active_time_prompts_at_limit()
+    test_input_resets_idle_and_natural_take()
+    test_ignored_prompts_escalate_to_break()
+    test_unignorable_break_forces_immediately()
+    test_skip_and_postpone()
+    test_break_freezes_on_activity()
+    test_micro_promotes_to_rest()
+    test_daily_limit_skip_and_day_reset()
+    test_quiet_suspended_and_timed_modes()
+    test_reading_mode()
+    test_micro_counts_toward_daily_limit()
+    test_force_break_and_next_due()
+    test_natural_take_latches_until_activity()
+    test_rest_completion_resets_micro()
+    test_note_idle_resets_after_long_absence()
+    test_format_duration_formats_hours()
+    return failures
+}
