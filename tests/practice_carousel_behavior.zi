@@ -1,0 +1,70 @@
+#import "button_props"
+#import "geometry"
+#import "text_align"
+#import "text_props"
+#import "control_props"
+#import, file "../src/screens/practice_carousel.zi";
+#import, file "fakes/button_widget.zi";
+#import, file "fakes/text_widget.zi";
+#import, file "storage_test_support.zi";
+#import, file "../src/app/current_app.zi";
+#import, file "../src/app/app_types.zi";
+
+app_state: InnerBreeze;
+
+using ArrowDirection;
+using TextAlign;
+using ButtonEmphasis;
+
+draw :: (bounds: Rectangle, count: s32, selected: s32, disabled: s32, click: s32) -> s32 {
+    fake_button_count = 0
+    fake_text_count = 0
+    fake_button_click = click
+    return practice_carousel_controls(bounds, count, selected, disabled, 7090)
+}
+
+#program_export
+Check :: () -> s32 {
+    app_state = InnerBreeze.{}
+    SetCurrentApp(*app_state)
+    widths: [3]s32 = .[280, 350, 480]
+    w: s32 = 0
+    while w <= 2 {
+        row := Rectangle.{20, 440, cast(float32)widths[w], 48}
+        selected: s32 = 0
+        while selected <= 3 {
+            check_int("idle result", draw(row, 4, selected, 0, -1), -1)
+            check_int("two buttons", fake_button_count, 2)
+            check_int("one counter", fake_text_count, 1)
+            check_true("counter centered", fake_text_last.align == cast(TextAlign)TextAlignCenter && fake_text_last.vertical_align == cast(TextAlign)TextAlignCenter)
+            check_true("counter fills row", fake_text_last.bounds.x == row.x && fake_text_last.bounds.width == row.width && fake_text_last.bounds.height == row.height)
+            i: s32 = 0
+            while i <= 1 {
+                b := fake_buttons[i].bounds
+                check_true("button inside row", b.x >= row.x && b.x + b.width <= row.x + row.width)
+                check_true("button ghost arrow", fake_buttons[i].arrow && fake_buttons[i].emphasis == cast(ButtonEmphasis)ButtonEmphasisGhost)
+                check_true("touch target", b.width >= 48 && b.height >= 48)
+                i += 1
+            }
+            check_true("left before centre", fake_buttons[0].bounds.x + fake_buttons[0].bounds.width < row.x + row.width / 2)
+            check_true("right after centre", fake_buttons[1].bounds.x > row.x + row.width / 2)
+            check_true("directions", fake_buttons[0].direction == cast(ArrowDirection)ArrowLeft && fake_buttons[1].direction == cast(ArrowDirection)ArrowRight)
+            check_int("prev wraps", draw(row, 4, selected, 0, 7091), (selected + 3) % 4)
+            check_int("next wraps", draw(row, 4, selected, 0, 7092), (selected + 1) % 4)
+            check_int("disabled prev", draw(row, 4, selected, 1, 7091), -1)
+            check_true("disabled flags", fake_buttons[0].disabled && fake_buttons[1].disabled && fake_text_count == 1)
+            check_int("disabled next", draw(row, 4, selected, 1, 7092), -1)
+            selected += 1
+        }
+        count: s32 = 0
+        while count <= 1 {
+            check_int("small count result", draw(row, count, 0, 0, 7092), -1)
+            check_true("small count draws nothing", fake_button_count == 0 && fake_text_count == 0)
+            count += 1
+        }
+        w += 1
+    }
+    check_int("empty bounds", draw(Rectangle.{0, 0, 0, 0}, 4, 0, 0, 7092), -1)
+    check_true("empty bounds draws nothing", fake_button_count == 0 && fake_text_count == 0)
+    return failures
+}

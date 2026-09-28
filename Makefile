@@ -345,26 +345,9 @@ WEB_LIBOQS_BUILD_DIR := $(KRYON_WEB_LIBOQS_BUILD_DIR)
 WEB_LIBOQS_A := $(KRYON_WEB_LIBOQS_A)
 WEB_LIBOQS_INCLUDE := -I$(WEB_LIBOQS_BUILD_DIR)/include
 TEST_BIN_DIR := $(BUILD_BIN_DIR)/tests
-STORAGE_IMPORT_TEST := $(TEST_BIN_DIR)/storage_import_test
-STORAGE_PATHS_TEST := $(TEST_BIN_DIR)/storage_paths_test
-LOCALE_KEYS_TEST := $(TEST_BIN_DIR)/locale_keys_test
-SYNC_URL_TEST := $(TEST_BIN_DIR)/sync_url_test
-SYNC_REVIEW_TEST := $(TEST_BIN_DIR)/sync_review_test
-FONT_LOCALE_TEST := $(TEST_BIN_DIR)/font_locale_test
 FONT_ASSETS_GEN_DIR := $(BUILD_DIR)/font-assets-test/generated
-FONT_GLYPH_COVERAGE_TEST := $(TEST_BIN_DIR)/font_glyph_coverage_test
-HABIT_MODEL_TEST := $(TEST_BIN_DIR)/habit_model_test
-HABIT_SESSIONS_TEST := $(TEST_BIN_DIR)/habit_sessions_test
-BREATH_TIMING_TEST := $(TEST_BIN_DIR)/breath_timing_test
 BREATH_TIMING_GEN_DIR := $(BUILD_DIR)/breath-timing-test/generated
-BREAK_ENGINE_TEST := $(TEST_BIN_DIR)/break_engine_test
 BREAK_RULES_GEN_DIR := $(BUILD_DIR)/break-rules-test/generated
-FRAME_PACING_TEST := $(TEST_BIN_DIR)/frame_pacing_test
-SETTINGS_KEYS_TEST := $(TEST_BIN_DIR)/settings_keys_test
-TESTS := $(STORAGE_IMPORT_TEST) $(STORAGE_PATHS_TEST) $(LOCALE_KEYS_TEST) $(SYNC_URL_TEST) $(SYNC_REVIEW_TEST) $(FONT_LOCALE_TEST) $(FONT_GLYPH_COVERAGE_TEST) $(HABIT_MODEL_TEST) $(HABIT_SESSIONS_TEST) $(BREATH_TIMING_TEST) $(BREAK_ENGINE_TEST) $(FRAME_PACING_TEST) $(SETTINGS_KEYS_TEST)
-TESTS += $(TEST_BIN_DIR)/session_results_test
-TESTS += $(TEST_BIN_DIR)/habit_form_test
-TESTS += $(TEST_BIN_DIR)/practice_carousel_test
 RUNTIME_ASSET_CFLAGS := -DHAS_LIBCURL=1 $(KRYON_CURL_CFLAGS)
 RUNTIME_ASSET_LDLIBS := $(KRYON_CURL_LDLIBS)
 STORAGE_CORE_SRCS = $(KRY_GEN_DIR)/src/storage/json.c $(KRY_GEN_DIR)/src/storage/storage_core.c $(KRY_GEN_DIR)/src/storage/storage_habits.c $(KRY_GEN_DIR)/src/storage/storage_habit_materialize.c $(KRY_GEN_DIR)/src/storage/storage_habit_sync.c
@@ -476,7 +459,8 @@ WINDOWS_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
 SYNC_RETRY_SOURCE := src/app/sync_retry.zi
 STORAGE_LAYOUT_HEADER := tests/storage_layout.h
 LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
-	src/app/sync_recovery_policy_laws.zi src/storage/storage_layout_laws.zi
+	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
+	src/storage/storage_layout_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -727,12 +711,12 @@ sun-salutation-test: $(ZI2C_BIN)
 	@sh tests/sun_salutation_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: break-engine-test
-break-engine-test: $(BREAK_ENGINE_TEST)
-	@env -u DISPLAY -u WAYLAND_DISPLAY $(BREAK_ENGINE_TEST)
+break-engine-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/break_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: breath-engine-test
-breath-engine-test: $(BREATH_TIMING_TEST)
-	@env -u DISPLAY -u WAYLAND_DISPLAY $(BREATH_TIMING_TEST)
+breath-engine-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/breath_rounds_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: route-host-test
 route-host-test: $(ZI2C_BIN)
@@ -842,6 +826,23 @@ sync-review-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) | build-laws
 		sh tests/sync_review_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran
 
 test: sync-review-zi-test
+
+.PHONY: ziran-behavior-tests
+ziran-behavior-tests: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@set -e; for t in storage_more habit_model habit_sessions habit_form practice_carousel; do \
+		env -u DISPLAY -u WAYLAND_DISPLAY sh tests/$${t}_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A); \
+	done
+	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/storage_paths_scenarios_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran
+	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/breath_rounds_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/break_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: asset-text-tests
+asset-text-tests:
+	@python3 tests/font_glyph_coverage_test.py
+	@python3 tests/locale_keys_test.py
+	@python3 tests/settings_keys_test.py
+
+test: ziran-behavior-tests asset-text-tests
 test: route-host-test
 test: profile-host-test
 test: scroll-input-test
@@ -1083,7 +1084,7 @@ test-termi-screenshot-direct: $(TARGET)
 	bash ./tests/termi_screenshot_test.sh "$(TARGET)"
 
 
-.SILENT: package-check test $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
+.SILENT: package-check test font-bundle-check audio-test-fixture-check embedded-image-assets-check
 
 ## Local parity with the ci.yml gate: unit tests plus the web build (emcc).
 ## Run before pushing to catch web-only breakage -- e.g. code under
@@ -1129,6 +1130,13 @@ proofs: $(ZI2C_BIN)
 proof-test: $(ZI2C_BIN)
 	sh tests/law_mutation_test.sh $(ZIRAN_BIN)
 
+# The real merge SQL must satisfy the laws stated for its model.
+.PHONY: habit-merge-sql-test
+habit-merge-sql-test:
+	python3 tests/habit_merge_sql_test.py
+
+test: habit-merge-sql-test
+
 build-laws: version-check proofs
 
 test: proof-test
@@ -1157,31 +1165,8 @@ lists-ui-test: $(TARGET)
 storage-literals-check:
 	bash ./scripts/check-storage-literals.sh
 
-test: clean-text-api-check package-check secret-check storage-literals-check $(TESTS) font-bundle-check audio-test-fixture-check embedded-image-assets-check
+test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check
 	bash ./tests/screenshot_scene_test.sh
-	echo "== BreathSession tests =="; \
-	status=0; \
-	for test_bin in $(TESTS); do \
-		name=$$(basename "$$test_bin"); \
-		log=$$(mktemp /tmp/$(APP_NAME)-test.XXXXXX); \
-		printf "%-28s" "$$name"; \
-		if "$$test_bin" >"$$log" 2>&1; then \
-			echo "PASS"; \
-			rm -f "$$log"; \
-		else \
-			echo "FAIL"; \
-			cat "$$log"; \
-			rm -f "$$log"; \
-			status=1; \
-			break; \
-		fi; \
-	done; \
-	if [ "$$status" -eq 0 ]; then \
-		echo "== PASS: all BreathSession tests =="; \
-	else \
-		echo "== FAIL: BreathSession tests =="; \
-	fi; \
-	exit "$$status"
 
 audio-test-fixture-check:
 	printf '%s  %s\n' \
@@ -1202,70 +1187,19 @@ font-subsets:
 	sh $(KRYON_DIR)/scripts/subset-fonts.sh "$(FONT_SUBSET_DIR)" \
 		"$(KRYON_DIR)/fonts/noto" App locales assets/fonts/input_common.txt
 
-$(STORAGE_IMPORT_TEST): tests/storage_import_test.c tests/test_locale_stub.c $(STORAGE_CORE_SRCS) $(KRYON_SYNC_CRYPTO_C) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c src/storage/storage.h src/storage/db.h src/storage/import.h $(KRY_GEN_DIR)/src/habits/habit_types.h $(KRY_GEN_DIR)/src/habits/habit_model.h $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/storage_import_test.c tests/test_locale_stub.c $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRYON_SYNC_CRYPTO_C) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(KRY_GEN_DIR)/src/storage/import.c $(SQLITE_SRC) \
-		-Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
-
-$(STORAGE_PATHS_TEST): tests/storage_paths_test.c $(STORAGE_CORE_SRCS) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/storage/data.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c src/storage/storage.h src/storage/db.h src/storage/import.h src/storage/data.h $(STORAGE_LAYOUT_HEADER) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party -Itests $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/storage_paths_test.c $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/storage/data.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(SQLITE_SRC) \
-		-Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
-
-$(LOCALE_KEYS_TEST): tests/locale_keys_test.c $(LOCALE_FILES) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-o $@ \
-		tests/locale_keys_test.c
-
-$(SETTINGS_KEYS_TEST): tests/settings_keys_test.c src/app/app_settings.zi src/app/app_setting_keys.h src/storage/import.zi | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-o $@ \
-		tests/settings_keys_test.c
-
-$(SYNC_URL_TEST): tests/sync_url_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_transport.c src/storage/sync_client.h $(KRYON_SYNC_C) $(KRYON_SYNC_TRANSPORT_C) $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) $(CURL_PROTOCOL_CHECK) $(LIBOQS_A) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -Wno-unused-function -std=c99 -D_DEFAULT_SOURCE -DSYNC_CLIENT_TESTS -DHAS_LIBOQS=1 -ffunction-sections -fdata-sections \
-		-Isrc/storage -Isrc -Isrc/core -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(KRYON_INCLUDE) $(KRYON_CURL_CFLAGS) $(LIBOQS_INCLUDE) -o $@ \
-		tests/sync_url_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_transport.c $(KRYON_SYNC_C) $(KRYON_SYNC_TRANSPORT_C) $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) \
-		$(LIBOQS_A) -Wl,--gc-sections $(KRYON_CURL_LDLIBS) $(NATIVE_SYSTEM_LDLIBS)
-
 
 .PHONY: sync-server-test
-sync-server-test: $(TEST_BIN_DIR)/sync_server_test
+sync-server-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@sh tests/sync_server_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	node scripts/sync-server-test.mjs
-
-$(TEST_BIN_DIR)/sync_server_test: tests/sync_server_test.c tests/test_locale_stub.c $(KRY_GEN_STAMP) $(STORAGE_CORE_SRCS) $(KRY_GEN_DIR)/src/storage/sync_transport.c $(KRYON_SYNC_C) $(KRYON_SYNC_TRANSPORT_C) $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) $(LIBOQS_A) $(SQLITE_SRC) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -DHAS_LIBOQS=1 -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(LIBOQS_INCLUDE) $(SQLITE_INCLUDE) $(KRYON_CURL_CFLAGS) \
-		-o $@ tests/sync_server_test.c tests/test_locale_stub.c $(KRY_GEN_DIR)/src/storage/sync_transport.c $(KRYON_SYNC_C) $(KRYON_SYNC_TRANSPORT_C) $(KRY_GEN_DIR)/src/storage/sync_account.c $(KRYON_SYNC_ACCOUNT_C) $(KRYON_SYNC_CRYPTO_C) $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(SQLITE_SRC) \
-		$(LIBOQS_A) -Wl,--gc-sections $(KRYON_CURL_LDLIBS) $(NATIVE_SYSTEM_LDLIBS)
-
-$(SYNC_REVIEW_TEST): tests/sync_review_test.c tests/test_locale_stub.c $(STORAGE_CORE_SRCS) $(KRYON_SYNC_CRYPTO_C) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c src/storage/storage.h src/storage/db.h src/storage/import.h $(KRY_GEN_DIR)/src/screens/habits_screen.c $(KRY_GEN_DIR)/src/habits/habit_types.h $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/sync_review_test.c tests/test_locale_stub.c $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRYON_SYNC_CRYPTO_C) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(KRY_GEN_DIR)/src/screens/habits_screen.c $(SQLITE_SRC) \
-		-Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
 
 $(FONT_ASSETS_GEN_DIR)/app/font_assets.c: src/app/font_assets.zi $(ZI2C_BIN)
 	@mkdir -p $(FONT_ASSETS_GEN_DIR)
 	$(ZI2C_BIN) --no-main --root src \
 		-o $(FONT_ASSETS_GEN_DIR) src/app/font_assets.zi
 
-$(FONT_LOCALE_TEST): $(FONT_ASSETS_GEN_DIR)/app/font_assets.c tests/font_locale_test.c $(FONT_FILES) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-DKRYON_DIR=\"$(KRYON_DIR)\" \
-		-o $@ \
-		-I$(ZIRAN_DIR)/include -I$(FONT_ASSETS_GEN_DIR) \
-		tests/font_locale_test.c \
-		$(FONT_ASSETS_GEN_DIR)/app/font_assets.c
-
 .PHONY: font-assets-test
-font-assets-test: build-laws $(FONT_LOCALE_TEST) $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY $(FONT_LOCALE_TEST)
+font-assets-test: build-laws $(ZI2C_BIN)
 	@sh tests/font_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: navigation-routes-test
@@ -1293,8 +1227,8 @@ patterns-session-zi-test: $(ZI2C_BIN)
 test: patterns-session-zi-test
 
 .PHONY: session-results-zi-test
-session-results-zi-test: $(ZI2C_BIN)
-	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+session-results-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
 	@$(CC) -std=c11 -Isrc/storage -Ibuild/packages/ziran/include \
@@ -1921,74 +1855,20 @@ modal-rules-test: build-laws $(ZI2C_BIN)
 
 test: modal-rules-test
 
-$(FONT_GLYPH_COVERAGE_TEST): tests/font_glyph_coverage_test.c $(FONT_FILES) $(LOCALE_FILES) assets/fonts/input_common.txt | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-o $@ \
-		tests/font_glyph_coverage_test.c
-
 .PHONY: elist-screen-test
 test: elist-screen-test
 elist-screen-test: $(ZI2C_BIN)
 	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-$(TEST_BIN_DIR)/habit_form_test: tests/habit_form_test.c $(KRY_GEN_DIR)/src/screens/habits/edit.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-Wl,--gc-sections -o $@ tests/habit_form_test.c $(KRY_GEN_DIR)/src/app/metrics.c $(KRY_GEN_DIR)/src/screens/habits/edit.c
-
-$(TEST_BIN_DIR)/practice_carousel_test: tests/practice_carousel_test.c $(KRY_GEN_DIR)/src/screens/practice_screen.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
-		$(APP_INCLUDE) $(SQLITE_INCLUDE) \
-		-Wl,--gc-sections -o $@ tests/practice_carousel_test.c
-
-$(HABIT_MODEL_TEST): tests/habit_model_test.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_types.h $(KRY_GEN_DIR)/src/habits/habit_model.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/habit_model_test.c \
-		$(KRY_GEN_DIR)/src/habits/habit_model.c
-
-$(HABIT_SESSIONS_TEST): tests/habit_sessions_test.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_types.h $(KRY_GEN_DIR)/src/habits/habit_model.h $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-o $@ \
-		tests/habit_sessions_test.c \
-		$(KRY_GEN_DIR)/src/habits/habit_sessions.c \
-		$(KRY_GEN_DIR)/src/habits/habit_model.c
 
 $(BREATH_TIMING_GEN_DIR)/core/breath_timing.c: src/core/breath_timing.zi src/core/types.zi $(ZI2C_BIN)
 	@mkdir -p $(BREATH_TIMING_GEN_DIR)
 	$(ZI2C_BIN) --no-main --root src \
 		-o $(BREATH_TIMING_GEN_DIR) src/core/breath_timing.zi
 
-$(BREATH_TIMING_TEST): tests/breath_timing_test.c $(BREATH_TIMING_GEN_DIR)/core/breath_timing.c | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c11 -I$(ZIRAN_DIR)/include \
-		-I$(BREATH_TIMING_GEN_DIR) -o $@ \
-		tests/breath_timing_test.c \
-		$(BREATH_TIMING_GEN_DIR)/core/breath_timing.c \
-		$(BREATH_TIMING_GEN_DIR)/core/types.c
-
-$(TEST_BIN_DIR)/session_results_test: tests/session_results_test.c $(KRY_GEN_DIR)/src/practices/session_results.c $(KRY_GEN_DIR)/src/practices/meditation/meditation_session.c src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) $(SQLITE_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src \
-		-o $@ tests/session_results_test.c $(KRY_GEN_DIR)/src/practices/session_results.c $(KRY_GEN_DIR)/src/practices/meditation/meditation_session.c -Wl,--gc-sections
-
 $(BREAK_RULES_GEN_DIR)/breaks/break_rules.c: src/breaks/break_rules.zi src/breaks/break_types.zi $(ZI2C_BIN)
 	@mkdir -p $(BREAK_RULES_GEN_DIR)
 	$(ZI2C_BIN) --no-main --root src \
 		-o $(BREAK_RULES_GEN_DIR) src/breaks/break_rules.zi
-
-$(BREAK_ENGINE_TEST): tests/break_engine_test.c $(BREAK_RULES_GEN_DIR)/breaks/break_rules.c | $(TEST_BIN_DIR)
-	$(CC) -Wall -Wextra -std=c11 -I$(ZIRAN_DIR)/include \
-		-I$(BREAK_RULES_GEN_DIR) -o $@ \
-		tests/break_engine_test.c \
-		$(BREAK_RULES_GEN_DIR)/breaks/break_rules.c \
-		$(BREAK_RULES_GEN_DIR)/breaks/break_types.c
-
-$(FRAME_PACING_TEST): tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c $(KRY_GEN_DIR)/src/app/frame_activity.c src/app/app_frame_pacing.zi src/app/frame_activity.zi src/app/app.zi $(KRY_GEN_DIR)/src/app/app.h | $(TEST_BIN_DIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		-Wl,--gc-sections -o $@ tests/frame_pacing_test.c $(KRY_GEN_DIR)/src/app/app_frame_pacing.c $(KRY_GEN_DIR)/src/app/frame_activity.c
 
 $(sort $(BUILD_OBJ_DIR) $(NATIVE_OBJ_DIR) $(NATIVE_BIN_DIR) $(NATIVE_DIST_DIR) $(LINUX_BIN_DIR) $(LINUX_DIST_DIR) $(LINUX_APPIMAGE_BUILD_DIR) $(DEB_BUILD_DIR) $(DEB_DIST_DIR) $(RPM_BUILD_DIR) $(RPM_DIST_DIR) $(SNAP_BUILD_DIR) $(SNAP_DIST_DIR) $(FLATPAK_BUILD_DIR) $(FLATPAK_DIST_DIR) $(CLICK_BIN_DIR) $(CLICK_BUILD_DIR) $(CLICK_DIST_DIR) $(WINDOWS_DIST_DIR) $(ANDROID_BUILD_DIR) $(TEST_BIN_DIR) $(WEB_OBJ_DIR) $(WEB_DIST_DIR) $(CHROME_WEB_STORE_DIR) $(FIREFOX_ADDONS_DIR)):
 	mkdir -p $@

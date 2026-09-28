@@ -5,7 +5,7 @@ set -eu
 # code. Thousands of ticks per scenario are too many for the portable interpreter.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
-work=$root/build/breath-rounds-zi-test
+work=$root/build/break-engine-zi-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 
 rm -rf "$work"

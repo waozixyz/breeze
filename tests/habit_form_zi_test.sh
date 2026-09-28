@@ -21,7 +21,7 @@ mkdir -p "$work/generated"
     --module-path "$root/build/packages/daochi-client" \
     --entry habit_form_behavior:Check \
     -o "$work/generated" "$root/tests/habit_form_behavior.zi" \
-    "$root/tests/sync_test_host.zi"
+    "$root/tests/sync_test_host.zi" "$root/tests/app_hooks_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "habit_form_behavior.h"
 #include <stdio.h>
