@@ -365,6 +365,112 @@ test_records_round_trip_between_devices :: () {
     storage_close()
 }
 
+// Sends device A's queued changes to device B and clears A's queue.
+ship_to :: (from_root: string, to_root: string, version: s32) -> bool {
+    if storage_init(from_root) == 0 { return false }
+    if !build_payload() {
+        storage_close()
+        return false
+    }
+    records := records_array()
+    copy: TextBuffer
+    append(*copy, records)
+    check_true("clear queue after upload", storage_apply_sync_response_json(empty_response(version)) != 0)
+    storage_close()
+    if storage_init(to_root) == 0 { return false }
+    ok: bool = storage_apply_sync_response_json(response_with(version, TextFromCString(*copy.bytes[0]))) != 0
+    storage_close()
+    return ok
+}
+
+test_deletion_round_trip :: () {
+    first := make_root("sync-delete-a")
+    second := make_root("sync-delete-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0) == 0)
+    habit_set_day_count(*habits_a, 0, 20260618, 3)
+    habits_save(*habits_a)
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship habit", ship_to(first, second, 1))
+    check_true("reopen device b", storage_init(second) != 0)
+    check_int("device b has the habit", storage_habit_count(), 1)
+    storage_close()
+
+    check_true("reopen device a", storage_init(first) != 0)
+    habits_a = Habits.{}
+    check_true("load device a", storage_habits_load(cast(*void)*habits_a) != 0)
+    habits_delete(*habits_a, 0)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("deletion payload builds", build_payload())
+    check_true("deletion is marked", contains(payload(), "\"deleted_at\":"))
+    storage_close()
+    check_true("ship deletion", ship_to(first, second, 2))
+    check_true("reopen device b after deletion", storage_init(second) != 0)
+    check_int("device b lost the habit", storage_habit_count(), 0)
+    storage_close()
+}
+
+// A newer remote count replaces the local one, in both directions, and a
+// queued local edit at the same time is not overwritten.
+test_counter_counts_apply :: () {
+    first := make_root("sync-counter-a")
+    second := make_root("sync-counter-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Counter", Green(), 0, 0) == 0)
+    habit_set_day_count(*habits_a, 0, 20260619, 4)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship habit", ship_to(first, second, 1))
+    // Both devices now agree on 4. Pin the times so ordering is explicit.
+    raw_exec(first, "UPDATE habit_days SET count=1,updated_at=1781902900;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781902900 FROM habit_days;")
+    raw_exec(second, "UPDATE habit_days SET updated_at=1781902800;DELETE FROM sync_outbox;")
+    check_true("ship lower newer count", ship_to(first, second, 2))
+    check_int("newer lower count applied", raw_count(second, "SELECT count FROM habit_days WHERE local_date=20260619"), 1)
+
+    raw_exec(first, "UPDATE habit_days SET count=5,updated_at=1781903000;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781903000 FROM habit_days;")
+    check_true("ship higher newer count", ship_to(first, second, 3))
+    check_int("newer higher count applied", raw_count(second, "SELECT count FROM habit_days WHERE local_date=20260619"), 5)
+
+    // An older remote value must lose to a newer local one.
+    raw_exec(first, "UPDATE habit_days SET count=2,updated_at=1781902000;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781902000 FROM habit_days;")
+    check_true("ship older count", ship_to(first, second, 4))
+    check_int("older remote count ignored", raw_count(second, "SELECT count FROM habit_days WHERE local_date=20260619"), 5)
+}
+
+// A queued local edit wins over an equal-time remote copy of the same day.
+test_queued_edit_beats_equal_time_remote :: () {
+    first := make_root("sync-equal-a")
+    second := make_root("sync-equal-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Counter", Green(), 0, 0) == 0)
+    habit_set_day_count(*habits_a, 0, 20260619, 4)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship habit", ship_to(first, second, 1))
+    raw_exec(first, "UPDATE habit_days SET count=1,updated_at=1781902800;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781902800 FROM habit_days;")
+    raw_exec(second, "UPDATE habit_days SET count=9,updated_at=1781902800;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781902800 FROM habit_days;")
+    check_true("ship equal-time count", ship_to(first, second, 2))
+    check_int("queued local edit kept", raw_count(second, "SELECT count FROM habit_days WHERE local_date=20260619"), 9)
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -381,5 +487,8 @@ Check :: () -> s32 {
     test_orphan_habit_days_reset_cursor()
     test_habit_name_repair_runs_once()
     test_records_round_trip_between_devices()
+    test_deletion_round_trip()
+    test_counter_counts_apply()
+    test_queued_edit_beats_equal_time_remote()
     return failures
 }
