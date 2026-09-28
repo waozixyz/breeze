@@ -1,4 +1,5 @@
 #import, file "app_types.zi";
+#import, file "locale.zi";
 #import, file "settings_cache.zi";
 #import, file "settings_key.zi";
 #import, file "settings_store.zi";
@@ -13,13 +14,36 @@ AudioItemKey :: (prefix: string, index: s32, field: string) -> SettingsKey {
     return SettingsKeyIndexed(prefix, index, field)
 }
 
+// The stored title stays empty for an untitled item so the default follows the
+// current language. Older saves wrote the English default; treat it the same.
+AUDIO_LEGACY_DEFAULT_TITLE :: "Custom audio"
+
 AudioDefaultTitle :: (output: []u8) {
-    text: string = "Custom audio"
+    text: string = LocaleText("audio_custom_default_title")
     if output.count == 0 { return }
     copied: s32 = cast(s32)text.count
     if copied >= cast(s32)output.count { copied = cast(s32)output.count - 1 }
     for i: 0..(cast(int)copied - 1) { output[i] = text[i] }
     output[copied] = 0
+}
+
+AudioTitleIsDefault :: (title: []u8) -> bool {
+    if title[0] == 0 { return true }
+    legacy: string = AUDIO_LEGACY_DEFAULT_TITLE
+    if cast(s32)legacy.count >= cast(s32)title.count { return false }
+    for i: 0..(cast(int)legacy.count - 1) {
+        if title[i] != legacy[i] { return false }
+    }
+    return title[legacy.count] == 0
+}
+
+AudioTitleIsLocalizedDefault :: (title: []u8) -> bool {
+    text: string = LocaleText("audio_custom_default_title")
+    if cast(s32)text.count >= cast(s32)title.count { return false }
+    for i: 0..(cast(int)text.count - 1) {
+        if title[i] != text[i] { return false }
+    }
+    return title[text.count] == 0
 }
 
 AudioLoadItem :: (prefix: string, index: s32) -> AudioLibraryItem {
@@ -29,7 +53,7 @@ AudioLoadItem :: (prefix: string, index: s32) -> AudioLibraryItem {
     if title.valid {
         SettingsCacheCopyTextBytes(title.bytes[0:title.count], item.title[:])
     }
-    if item.title[0] == 0 { AudioDefaultTitle(item.title[:]) }
+    if AudioTitleIsDefault(item.title[:]) { AudioDefaultTitle(item.title[:]) }
     if path.valid {
         SettingsCacheCopyTextBytes(path.bytes[0:path.count], item.path[:])
     }
@@ -39,7 +63,15 @@ AudioLoadItem :: (prefix: string, index: s32) -> AudioLibraryItem {
 AudioSaveItem :: (item: AudioLibraryItem, prefix: string, index: s32) {
     title: SettingsKey = AudioItemKey(prefix, index, "_title")
     path: SettingsKey = AudioItemKey(prefix, index, "_path")
-    if title.valid { SettingsStoreKeyText(title, item.title[:]) }
+    if title.valid {
+        if AudioTitleIsLocalizedDefault(item.title[:]) {
+            empty: [1]u8
+            empty[0] = 0
+            SettingsStoreKeyText(title, empty[:])
+        } else {
+            SettingsStoreKeyText(title, item.title[:])
+        }
+    }
     if path.valid { SettingsStoreKeyText(path, item.path[:]) }
 }
 

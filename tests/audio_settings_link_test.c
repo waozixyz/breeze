@@ -5,6 +5,21 @@
 #include <stdio.h>
 #include <string.h>
 
+/* No embedded catalog here: the locale lookup falls back to the key, which
+   proves the default title comes from the catalog and not from the source. */
+void *
+asset_entry_at(size_t index)
+{
+    (void)index;
+    return NULL;
+}
+
+size_t
+asset_entry_total(void)
+{
+    return 0;
+}
+
 static int int_writes;
 static int text_writes;
 static int saved_sound_count = -1;
@@ -99,7 +114,7 @@ main(void)
     assert(app.audio_custom_sound_count == 1);
     assert(app.audio_custom_music_count == 1);
     assert(strcmp((const char *)app.audio_custom_sounds[0].title,
-                  "Custom audio") == 0);
+                  "audio_custom_default_title") == 0);
     assert(strcmp((const char *)app.audio_custom_sounds[0].path,
                   "/sounds/one.ogg") == 0);
     assert(strcmp((const char *)app.audio_custom_music[0].title, "Moon") == 0);
@@ -113,7 +128,7 @@ main(void)
     assert(int_writes == 5 && text_writes == 48);
     assert(saved_sound_count == 1 && saved_music_count == 1);
     assert(saved_cue_in == 1 && saved_cue_out == 0);
-    assert(strcmp(sound_title, "Custom audio") == 0);
+    assert(sound_title[0] == 0); /* the default is not frozen into one language */
     assert(strcmp(sound_path, "/sounds/one.ogg") == 0);
     assert(strcmp(music_title, "Moon") == 0);
     assert(cleared_sound && cleared_music);
