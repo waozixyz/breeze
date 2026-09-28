@@ -1,0 +1,59 @@
+// Pure decisions for sync and social refresh recovery. The effectful code in
+// storage/sync_async.zi and storage/social_async.zi applies them; the laws in
+// sync_recovery_policy_laws.zi fix their behavior.
+
+// Stage numbers of a social refresh.
+SocialStageAction :: 1
+SocialStageRequests :: 2
+SocialStageFriends :: 3
+SocialStageStreak :: 4
+SocialStageAverage :: 5
+
+// A response is applied only while the account and server it was requested for
+// are still the current ones and the request succeeded.
+ResponseMayApply :: (identity_current: s32, succeeded: s32) -> s32 {
+    if identity_current != 0 && succeeded != 0 {
+        return 1
+    }
+    return 0
+}
+
+SocialStep :: struct {
+    stop_with_error: s32   // end the refresh and report the request's error
+    clear_streak: s32      // drop the optional streak statistic
+    clear_average: s32     // drop the optional average statistic
+    action_done: s32       // the friend action of stage 1 completed
+    next_stage: s32        // stage to run next when not stopped
+    finished: s32          // the refresh completed successfully
+}
+
+// Stages 1-3 (action, requests, friends) are required: their failure ends the
+// refresh, so known friends and requests are never replaced by partial data.
+// Stages 4-5 are optional statistics: their failure clears only that
+// statistic, unless the account changed, which ends the refresh.
+social_step :: (stage: s32, succeeded: s32, identity_current: s32,
+    practice_is_whm: s32) -> SocialStep {
+    clear_streak: s32 = 0
+    clear_average: s32 = 0
+    if succeeded == 0 {
+        if stage <= SocialStageFriends || identity_current == 0 {
+            return SocialStep.{1, 0, 0, 0, stage, 0}
+        }
+        if stage == SocialStageStreak {
+            clear_streak = 1
+        } else {
+            clear_average = 1
+        }
+    }
+    action_done: s32 = 0
+    if stage == SocialStageAction {
+        action_done = 1
+    }
+    next := stage + 1
+    finished: s32 = 0
+    if next > SocialStageAverage ||
+        (next == SocialStageAverage && practice_is_whm == 0) {
+        finished = 1
+    }
+    return SocialStep.{0, clear_streak, clear_average, action_done, next, finished}
+}

@@ -4,6 +4,7 @@
 #import "text_buffer"
 #import, file "sync_async.zi";
 #import, file "../app/text_buffers.zi";
+#import, file "../app/sync_recovery_policy.zi";
 
 SocialRefresh :: struct {
     operation: StoredOperation
@@ -104,24 +105,35 @@ PollSocialRefresh :: (refresh: *SocialRefresh) -> bool {
         return false
     }
     result := refresh.operation.result
-    if result != cast(s32)AuthResult.AUTH_OK {
-        if refresh.stage <= 3 || !StoredIdentityCurrent(*refresh.operation) {
-            refresh.result = result
-            refresh.active = false
-            return true
-        }
-        if refresh.stage == 4 {
-            refresh.streak[0] = cast(u8)0
-        } else {
-            refresh.average[0] = cast(u8)0
-        }
+    succeeded: s32 = 0
+    if result == cast(s32)AuthResult.AUTH_OK {
+        succeeded = 1
     }
-    if refresh.stage == 1 {
+    current: s32 = 0
+    if StoredIdentityCurrent(*refresh.operation) {
+        current = 1
+    }
+    is_whm: s32 = 0
+    if TextUntilNul(refresh.practice[:]) == "whm" {
+        is_whm = 1
+    }
+    step := social_step(refresh.stage, succeeded, current, is_whm)
+    if step.stop_with_error != 0 {
+        refresh.result = result
+        refresh.active = false
+        return true
+    }
+    if step.clear_streak != 0 {
+        refresh.streak[0] = cast(u8)0
+    }
+    if step.clear_average != 0 {
+        refresh.average[0] = cast(u8)0
+    }
+    if step.action_done != 0 {
         refresh.action_done = true
     }
-    refresh.stage += 1
-    if refresh.stage > 5 ||
-        (refresh.stage == 5 && TextUntilNul(refresh.practice[:]) != "whm") {
+    refresh.stage = step.next_stage
+    if step.finished != 0 {
         refresh.result = cast(s32)AuthResult.AUTH_OK
         refresh.active = false
         return true

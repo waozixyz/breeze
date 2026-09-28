@@ -54,6 +54,7 @@ add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/sync_retry_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/practice_lifecycle_laws.zi"
+    COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/sync_recovery_policy_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/storage/storage_layout_laws.zi"
     DEPENDS "${ZI2C_BIN}"
     WORKING_DIRECTORY "${REPO_ROOT}"
@@ -102,6 +103,9 @@ execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     "${SRC_DIR}/app/practice_lifecycle_laws.zi"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
+    "${SRC_DIR}/app/sync_recovery_policy_laws.zi"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     "${SRC_DIR}/storage/storage_layout_laws.zi"

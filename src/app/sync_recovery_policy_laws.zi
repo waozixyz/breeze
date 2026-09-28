@@ -1,0 +1,38 @@
+#import, file "sync_recovery_policy.zi";
+
+// Laws for sync and social refresh recovery, proved for every stage (including
+// out-of-range ones) and every combination of the flags. An implementation
+// edit may not change this file.
+
+// An account switch or server change cannot apply the old account's response.
+#law OnlyCurrentAccountApplies forall c: 0..1, s: 0..1 => (ResponseMayApply(c, s) == 1) == (c == 1 && s == 1);
+#law SwitchedAccountNeverApplies forall s: 0..1 => ResponseMayApply(0, s) == 0;
+#law FailedResponseNeverApplies forall c: 0..1 => ResponseMayApply(c, 0) == 0;
+
+// A refresh for a switched account ends instead of clearing or advancing.
+#law SwitchedAccountStopsRefresh forall stage: -1..7, whm: 0..1 => social_step(stage, 0, 0, whm).stop_with_error == 1 && social_step(stage, 0, 0, whm).clear_streak == 0 && social_step(stage, 0, 0, whm).clear_average == 0 && social_step(stage, 0, 0, whm).finished == 0;
+
+// A partial refresh cannot erase known friends: a failed required stage ends
+// the refresh and clears nothing, so the stored friends and requests stay.
+#law RequiredFailureKeepsKnownData forall stage: 1..3, c: 0..1, whm: 0..1 => social_step(stage, 0, c, whm).stop_with_error == 1 && social_step(stage, 0, c, whm).clear_streak == 0 && social_step(stage, 0, c, whm).clear_average == 0 && social_step(stage, 0, c, whm).finished == 0;
+
+// Only the failed optional statistic is dropped, and the refresh goes on.
+#law StreakFailureDropsOnlyStreak forall whm: 0..1 => social_step(4, 0, 1, whm).stop_with_error == 0 && social_step(4, 0, 1, whm).clear_streak == 1 && social_step(4, 0, 1, whm).clear_average == 0 && social_step(4, 0, 1, whm).next_stage == 5;
+#law AverageFailureDropsOnlyAverage forall whm: 0..1 => social_step(5, 0, 1, whm).stop_with_error == 0 && social_step(5, 0, 1, whm).clear_average == 1 && social_step(5, 0, 1, whm).clear_streak == 0 && social_step(5, 0, 1, whm).finished == 1;
+
+// Statistics are cleared only by their own failed stage.
+#law ClearsOnlyOnOptionalFailure forall stage: -1..7, c: 0..1, whm: 0..1 => (social_step(stage, 1, c, whm).clear_streak == 0 && social_step(stage, 1, c, whm).clear_average == 0) && (stage >= 4 || (social_step(stage, 0, c, whm).clear_streak == 0 && social_step(stage, 0, c, whm).clear_average == 0));
+
+// Success runs each stage once, in order.
+#law SuccessAdvancesOneStage forall stage: 1..5, c: 0..1, whm: 0..1 => social_step(stage, 1, c, whm).next_stage == stage + 1 && social_step(stage, 1, c, whm).stop_with_error == 0;
+#law ActionDoneOnlyAfterActionStage forall stage: -1..7, c: 0..1, whm: 0..1 => (social_step(stage, 1, c, whm).action_done == 1) == (stage == 1);
+
+// The average statistic exists only for the whm practice.
+#law FinishesAfterStreakUnlessWhm forall c: 0..1 => social_step(4, 1, c, 0).finished == 1 && social_step(4, 1, c, 1).finished == 0;
+#law FinishesAfterAverage forall c: 0..1, whm: 0..1 => social_step(5, 1, c, whm).finished == 1;
+#law NeverFinishedAndStopped forall stage: -1..7, s: 0..1, c: 0..1, whm: 0..1 => social_step(stage, s, c, whm).stop_with_error == 0 || social_step(stage, s, c, whm).finished == 0;
+
+#program_export
+sync_recovery_laws_entry :: () -> s32 {
+    return 0
+}
