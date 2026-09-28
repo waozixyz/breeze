@@ -70,3 +70,9 @@ done
 
 cmp "$work/source/font_assets.zib" "$work/saved/font_assets.zib"
 echo "font assets Ziran test passed"
+
+# Every font the locale mapping can pick is in the repository.
+for font in $(sed -n 's/^FONT_[A-Z]* :: "\(.*\)"$/\1/p' "$root/src/app/font_assets.zi"); do
+    [ -f "$root/$font" ] || { echo "missing font file $font" >&2; exit 1; }
+done
+echo "font asset files present"
