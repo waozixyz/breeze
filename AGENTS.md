@@ -14,6 +14,9 @@
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.
   Only the GitHub Actions release workflow creates or pushes release tags.
 - Translate changed strings in every affected locale; no English placeholders.
+- `make locale-translated-test` fails on any locale string that still equals
+  its English text. Translate it; add it to `tests/locale_same_as_english.txt`
+  only when it is a real brand name, loanword, or format string.
 
 ## Machine-checked contracts
 
