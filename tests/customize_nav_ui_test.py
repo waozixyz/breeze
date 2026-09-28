@@ -9,9 +9,14 @@ import time
 from PIL import Image, ImageChops
 
 root = Path(__file__).resolve().parent.parent
-output = root / "build/customize-nav-test"
-output.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
+narrow = os.environ.get("INBE_TEST_NARROW") == "1"
+width, height = (390, 844) if narrow else (900, 720)
+output = root / "build/customize-nav-test" / f"{width}x{height}"
+output.mkdir(parents=True, exist_ok=True)
+entry_clicks = ((340, 790), (190, 433)) if narrow else ((110, 670), (320, 325))
+customize_click = (195, 618) if narrow else (650, 576)
+press_seconds = float(os.environ.get("INBE_TEST_PRESS_SECONDS", "0.3"))
 env = os.environ.copy()
 for name in ("WAYLAND_DISPLAY", "GDK_DISPLAY"):
     env.pop(name, None)
@@ -38,18 +43,17 @@ expected_env = env.copy()
 expected_env.pop("APP_SHOT_WINDOW", None)
 expected_result = subprocess.run([
     sys.argv[1], "--screenshot", str(output / "expected.png"),
-    "--screenshot-scene", "customize_nav", "--screenshot-width", "900",
-    "--screenshot-height", "720"], cwd=root, env=expected_env,
+    "--screenshot-scene", "customize_nav", "--screenshot-width", str(width),
+    "--screenshot-height", str(height)], cwd=root, env=expected_env,
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
 assert expected_result.returncode in (0, 1), expected_result.returncode
 assert (output / "expected.png").is_file(), "expected screenshot was not written"
-
 log_path = output / "app.log"
 with log_path.open("w") as log:
     app = subprocess.Popen([
         sys.argv[1], "--screenshot", str(output / "theme.png"),
-        "--screenshot-scene", "theme_selection", "--screenshot-width", "900",
-        "--screenshot-height", "720"], cwd=root, env=env, stdout=log,
+        "--screenshot-scene", "home", "--screenshot-width", str(width),
+        "--screenshot-height", str(height)], cwd=root, env=env, stdout=log,
         stderr=subprocess.STDOUT, start_new_session=True)
     try:
         deadline = time.monotonic() + 10
@@ -68,11 +72,22 @@ with log_path.open("w") as log:
         command("xdotool", "windowfocus", window)
         time.sleep(0.5)
 
+        # Enter through the same navigation path as a normal user. A direct
+        # theme screenshot skips the route state created by those clicks.
+        for x, y in entry_clicks:
+            command("xdotool", "mousemove", "--window", window,
+                    str(x), str(y))
+            command("xdotool", "mousedown", "1")
+            time.sleep(0.08)
+            command("xdotool", "mouseup", "1")
+            time.sleep(0.2)
+
         # Keep the pointer down across route-change frames. A leaked press must
         # not activate the back action or any control on Customize Nav.
-        command("xdotool", "mousemove", "--window", window, "560", "620")
+        command("xdotool", "mousemove", "--window", window,
+                str(customize_click[0]), str(customize_click[1]))
         command("xdotool", "mousedown", "1")
-        time.sleep(0.3)
+        time.sleep(press_seconds)
         command("xdotool", "mouseup", "1")
         time.sleep(0.5)
         actual = capture(window, "after-click")
@@ -88,6 +103,7 @@ with log_path.open("w") as log:
         log_text = log_path.read_text()
         assert "ROUTE request frame=" in log_text, "Customize Nav button did not route"
         assert "12->" not in log_text, f"Customize Nav closed after opening: {log_text}"
+
     finally:
         if app.poll() is None:
             app.terminate()
@@ -97,4 +113,4 @@ with log_path.open("w") as log:
                 app.kill()
                 app.wait(timeout=2)
 
-print("Customize Nav: held opening click stays on the Customize Nav page")
+print("Customize Nav: opening click stays")
