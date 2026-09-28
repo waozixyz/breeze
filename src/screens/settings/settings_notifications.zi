@@ -10,6 +10,7 @@
 #import "spinbox"
 #import "spinbox_props"
 #import "spinbox_widget"
+#import "text_align"
 #import "text_props"
 #import "text_widget"
 #import "toggle"
@@ -28,27 +29,26 @@
 
 using ButtonTone;
 using ButtonEmphasis;
+using TextAlign;
 
-settings_notifications_entry_height :: () -> s32 {
-    return AppScale(36) + AppScale(8) + AppScale(34) + AppScale(14)
+settings_notifications_button_row_height :: () -> s32 {
+    return AppScale(56)
 }
 
-#program_export
-settings_notifications_content_height :: (app: *InnerBreeze,
-    content_width: s32) -> s32 {
-    height := AppScale(30)
-    if app == null {
-        return height
+// A reminder fits on one row when its practice picker keeps a usable width
+// beside the switch, time, and remove controls; otherwise it takes two.
+settings_notifications_entry_wide :: (width: s32) -> bool {
+    return width >= AppScale(520)
+}
+
+settings_notifications_entry_height :: (width: s32) -> s32 {
+    if settings_notifications_entry_wide(width) {
+        return AppScale(56)
     }
-    if AndroidPlatform() != 0 {
-        height += AppScale(30) + AppScale(44) + AppScale(50)
-    }
-    height += AppScale(34)
-    height += toggle_row_height(
-        LocaleText("notifications_friend_request_label"), content_width)
-    height += toggle_row_height(
-        LocaleText("notifications_habit_reminders_label"), content_width)
-    height += AppScale(16) + AppScale(50) + AppScale(34)
+    return AppScale(56) + AppScale(46)
+}
+
+settings_notifications_count :: (app: *InnerBreeze) -> s32 {
     count := app.reminder_count
     if count < 0 {
         count = 0
@@ -56,11 +56,65 @@ settings_notifications_content_height :: (app: *InnerBreeze,
     if count > APP_REMINDER_MAX {
         count = APP_REMINDER_MAX
     }
-    height += count * settings_notifications_entry_height()
+    return count
+}
+
+settings_notifications_general_body :: (width: s32) -> s32 {
+    return toggle_row_height(
+        LocaleText("notifications_friend_request_label"), width) +
+        toggle_row_height(
+            LocaleText("notifications_habit_reminders_label"), width) +
+        settings_notifications_button_row_height()
+}
+
+settings_notifications_reminders_body :: (app: *InnerBreeze,
+    width: s32) -> s32 {
+    count := settings_notifications_count(app)
+    height := count * settings_notifications_entry_height(width)
     if count < APP_REMINDER_MAX {
-        height += AppScale(42)
+        height += settings_notifications_button_row_height()
     }
     return height
+}
+
+settings_notifications_push_body :: () -> s32 {
+    return AppScale(44) + settings_notifications_button_row_height()
+}
+
+#program_export
+settings_notifications_content_height :: (app: *InnerBreeze,
+    content_width: s32) -> s32 {
+    if app == null {
+        return AppScale(30)
+    }
+    inner := settings_section_inner_width(content_width)
+    height: s32 = 0
+    if AndroidPlatform() != 0 {
+        height += settings_section_height(
+            LocaleText("notifications_push_section"),
+            settings_notifications_push_body())
+    }
+    height += settings_section_height(LocaleText("notifications_section"),
+        settings_notifications_general_body(inner))
+    height += settings_section_height(
+        LocaleText("notifications_reminders_section"),
+        settings_notifications_reminders_body(app, inner))
+    return height
+}
+
+// A full-width secondary button centred in its own row of a section.
+settings_notifications_button_row :: (app: *InnerBreeze, id: s32, x: s32,
+    width: s32, y: *s32, label: string) -> bool {
+    button: ButtonProps
+    button.id = id
+    button.bounds = Rectangle.{cast(float32)x,
+        cast(float32)(y.* + AppScale(10)), cast(float32)width,
+        cast(float32)AppScale(36)}
+    button.label = label
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    y.* += settings_notifications_button_row_height()
+    return Button(app.ui.session, button) != 0
 }
 
 settings_notifications_remove_reminder :: (app: *InnerBreeze,
@@ -83,44 +137,11 @@ settings_notifications_remove_reminder :: (app: *InnerBreeze,
 settings_notifications_draw_entry :: (app: *InnerBreeze, index: s32,
     x: s32, width: s32, y: *s32) -> bool {
     reminder := *app.reminders[index]
-    row_height := AppScale(36)
-    button_height := AppScale(34)
+    control_height := AppScale(36)
+    gap := AppScale(12)
     remove_width := AppScale(88)
-    gap := AppScale(10)
-    options: [APP_REMINDER_PRACTICE_COUNT]DropdownOption
-    for practice: 0..(APP_REMINDER_PRACTICE_COUNT - 1) {
-        options[practice].label = practice_label(cast(s32)practice)
-    }
-    menu: DropdownProps
-    menu.id = cast(s32)400 + index * 4
-    menu.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)(width - remove_width - gap), cast(float32)row_height
-}
-    menu.selected_index = reminder.practice
-    menu.open = app.ui.reminder_menus[index].open
-    menu.highlight_index = app.ui.reminder_menus[index].highlight_index
-    menu.scroll_offset = app.ui.reminder_menus[index].scroll_offset
-    app.ui.reminder_menus[index] = Dropdown(app.ui.session, menu, options[:])
-    if app.ui.reminder_menus[index].changed {
-        reminder.practice = app.ui.reminder_menus[index].selected_index
-        app.settings_dirty = 1
-        save_settings(app)
-    }
-    remove: ButtonProps
-    remove.id = cast(s32)440 + index
-    remove.bounds = Rectangle.{cast(float32)(x + width - remove_width),
-        cast(float32)(y.* + (row_height - button_height) / 2),
-        cast(float32)remove_width, cast(float32)button_height
-}
-    remove.label = LocaleText("remove_button")
-    remove.tone = cast(ButtonTone)ButtonToneNeutral
-    remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    if Button(app.ui.session, remove) != 0 {
-        settings_notifications_remove_reminder(app, index)
-        return true
-    }
-    y.* += row_height + AppScale(8)
-
+    toggle_width := toggle_switch_width()
+    toggle_height := toggle_switch_height()
     time_bytes: [6]u8
     hour := reminder.hour
     if hour < 0 {
@@ -137,13 +158,29 @@ settings_notifications_draw_entry :: (app: *InnerBreeze, index: s32,
     time_bytes[5] = cast(u8)0
     time_text := FrameTextHold(*app.ui.frame_text,
         AppTextFromCString(*time_bytes[0], 6))
-    stepper_width := button_height * 2 +         AppTextWidth(time_text, AppFontSize()) + AppScale(24)
+    stepper_width := control_height * 2 +
+        AppTextWidth(time_text, AppFontSize()) + AppScale(24)
+
+    first_center := y.* + AppScale(28)
+    toggle_x := x
+    toggle_center := first_center
+    menu_x := x + toggle_width + gap
+    menu_width := width - toggle_width - stepper_width - remove_width - gap * 3
+    stepper_x := x + width - remove_width - gap - stepper_width
+    stepper_center := first_center
+    if !settings_notifications_entry_wide(width) {
+        menu_x = x
+        menu_width = width - remove_width - gap
+        toggle_center = first_center + AppScale(46)
+        stepper_x = x + width - stepper_width
+        stepper_center = toggle_center
+    }
+
     enabled: ToggleProps
     enabled.id = cast(s32)4010 + index
-    enabled.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + (button_height - AppScale(34)) / 2),
-        cast(float32)toggle_switch_width(), cast(float32)AppScale(34)
-}
+    enabled.bounds = Rectangle.{cast(float32)toggle_x,
+        cast(float32)(toggle_center - toggle_height / 2),
+        cast(float32)toggle_width, cast(float32)toggle_height}
     enabled.label = practice_label(reminder.practice)
     enabled.value = reminder.enabled != 0
     toggle_result := Toggle(app.ui.session, enabled)
@@ -152,12 +189,32 @@ settings_notifications_draw_entry :: (app: *InnerBreeze, index: s32,
         app.settings_dirty = 1
         save_settings(app)
     }
+
+    options: [APP_REMINDER_PRACTICE_COUNT]DropdownOption
+    for practice: 0..(APP_REMINDER_PRACTICE_COUNT - 1) {
+        options[practice].label = practice_label(cast(s32)practice)
+    }
+    menu: DropdownProps
+    menu.id = cast(s32)400 + index * 4
+    menu.bounds = Rectangle.{cast(float32)menu_x,
+        cast(float32)(first_center - control_height / 2),
+        cast(float32)menu_width, cast(float32)control_height}
+    menu.selected_index = reminder.practice
+    menu.open = app.ui.reminder_menus[index].open
+    menu.highlight_index = app.ui.reminder_menus[index].highlight_index
+    menu.scroll_offset = app.ui.reminder_menus[index].scroll_offset
+    app.ui.reminder_menus[index] = Dropdown(app.ui.session, menu, options[:])
+    if app.ui.reminder_menus[index].changed {
+        reminder.practice = app.ui.reminder_menus[index].selected_index
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+
     time: SpinboxProps
     time.id = cast(s32)401 + index * 2
-    time.bounds = Rectangle.{cast(float32)(x + width - stepper_width),
-        cast(float32)y.*, cast(float32)stepper_width,
-        cast(float32)button_height
-}
+    time.bounds = Rectangle.{cast(float32)stepper_x,
+        cast(float32)(stepper_center - control_height / 2),
+        cast(float32)stepper_width, cast(float32)control_height}
     time.label = practice_label(reminder.practice)
     time.min = 0
     time.max = 23
@@ -170,7 +227,20 @@ settings_notifications_draw_entry :: (app: *InnerBreeze, index: s32,
         app.settings_dirty = 1
         save_settings(app)
     }
-    y.* += button_height + AppScale(14)
+
+    remove: ButtonProps
+    remove.id = cast(s32)440 + index
+    remove.bounds = Rectangle.{cast(float32)(x + width - remove_width),
+        cast(float32)(first_center - control_height / 2),
+        cast(float32)remove_width, cast(float32)control_height}
+    remove.label = LocaleText("remove_button")
+    remove.tone = cast(ButtonTone)ButtonToneNeutral
+    remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    y.* += settings_notifications_entry_height(width)
+    if Button(app.ui.session, remove) != 0 {
+        settings_notifications_remove_reminder(app, index)
+        return true
+    }
     return false
 }
 
@@ -222,30 +292,24 @@ settings_notifications_draw_push :: (app: *InnerBreeze,
     if AndroidPlatform() == 0 {
         return
     }
-    text: TextProps
-    text.text = LocaleText("notifications_push_section")
-    text.font = AppFontSize()
-    text.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(26)
-}
-    Text(app.ui.session, text)
-    y.* += AppScale(30)
-    text.text = LocaleText("notifications_push_status_off")
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("notifications_push_section"),
+        settings_notifications_push_body())
+    status: TextProps
+    status.text = LocaleText("notifications_push_status_off")
     if PushRegistered() != 0 {
-        text.text = LocaleText("notifications_push_status_on")
+        status.text = LocaleText("notifications_push_status_on")
     }
-    text.bounds.y = cast(float32)y.*
-    Text(app.ui.session, text)
+    status.font = AppFontSize()
+    status.vertical_align = cast(TextAlign)TextAlignCenter
+    status.bounds = Rectangle.{cast(float32)section.inner_x,
+        cast(float32)y.*, cast(float32)section.inner_width,
+        cast(float32)AppScale(44)}
+    Text(app.ui.session, status)
     y.* += AppScale(44)
-    setup: ButtonProps
-    setup.id = 730
-    setup.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(34)
-}
-    setup.label = LocaleText("notifications_push_setup")
-    setup.tone = cast(ButtonTone)ButtonToneNeutral
-    setup.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    if Button(app.ui.session, setup) != 0 {
+    settings_row_divider(app, section, y.*)
+    if settings_notifications_button_row(app, 730, section.inner_x,
+        section.inner_width, y, LocaleText("notifications_push_setup")) {
         PushRefresh(app)
         if app.push_distributor_count > 0 {
             app.push_picker_open = 1
@@ -253,7 +317,7 @@ settings_notifications_draw_push :: (app: *InnerBreeze,
             PushConfigure()
         }
     }
-    y.* += AppScale(50)
+    settings_section_end(y)
 }
 
 #program_export
@@ -263,61 +327,49 @@ settings_notifications_draw :: (app: *InnerBreeze, x: s32,
         return
     }
     settings_notifications_draw_push(app, x, width, y)
-    section: TextProps
-    section.text = LocaleText("notifications_section")
-    section.font = AppFontSize()
-    section.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(28)
-}
-    Text(app.ui.session, section)
-    y.* += AppScale(34)
+    inner := settings_section_inner_width(width)
+    general := settings_section_begin(app, x, width, y,
+        LocaleText("notifications_section"),
+        settings_notifications_general_body(inner))
     friend := app.notification_friend_request
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, general.inner_x, general.inner_width, y,
         LocaleText("notifications_friend_request_label"), *friend, 0) != 0 {
         app.notification_friend_request = friend
         save_settings(app)
     }
+    settings_row_divider(app, general, y.*)
     habit := app.notification_habit_reminders
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, general.inner_x, general.inner_width, y,
         LocaleText("notifications_habit_reminders_label"), *habit, 0) != 0 {
         app.notification_habit_reminders = habit
         save_settings(app)
     }
-    y.* += AppScale(16)
-
-    test_notification: ButtonProps
-    test_notification.id = 740
-    test_notification.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(34)
-}
-    test_notification.label = LocaleText("notifications_test")
-    test_notification.tone = cast(ButtonTone)ButtonToneNeutral
-    test_notification.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    if Button(app.ui.session, test_notification) != 0 {
+    settings_row_divider(app, general, y.*)
+    if settings_notifications_button_row(app, 740, general.inner_x,
+        general.inner_width, y, LocaleText("notifications_test")) {
         unused send_test_notification(app)
     }
-    y.* += AppScale(50)
+    settings_section_end(y)
 
-    section.text = LocaleText("notifications_reminders_section")
-    section.bounds.y = cast(float32)y.*
-    Text(app.ui.session, section)
-    y.* += AppScale(34)
+    reminders := settings_section_begin(app, x, width, y,
+        LocaleText("notifications_reminders_section"),
+        settings_notifications_reminders_body(app, inner))
     index: s32 = 0
     while index < app.reminder_count && index < APP_REMINDER_MAX {
-        if !settings_notifications_draw_entry(app, index, x, width, y) {
+        if index > 0 {
+            settings_row_divider(app, reminders, y.*)
+        }
+        if !settings_notifications_draw_entry(app, index,
+            reminders.inner_x, reminders.inner_width, y) {
             index += 1
         }
     }
     if app.reminder_count < APP_REMINDER_MAX {
-        add: ButtonProps
-        add.id = 750
-        add.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)width, cast(float32)AppScale(34)
-}
-        add.label = LocaleText("reminder_add")
-        add.tone = cast(ButtonTone)ButtonToneNeutral
-        add.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        if Button(app.ui.session, add) != 0 {
+        if app.reminder_count > 0 {
+            settings_row_divider(app, reminders, y.*)
+        }
+        if settings_notifications_button_row(app, 750, reminders.inner_x,
+            reminders.inner_width, y, LocaleText("reminder_add")) {
             reminder := *app.reminders[app.reminder_count]
             reminder.practice = 0
             reminder.hour = 8
@@ -328,6 +380,6 @@ settings_notifications_draw :: (app: *InnerBreeze, x: s32,
             app.settings_dirty = 1
             save_settings(app)
         }
-        y.* += AppScale(42)
     }
+    settings_section_end(y)
 }
