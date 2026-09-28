@@ -207,7 +207,7 @@ habits_flush_day_saves :: (habits: *Habits) {
             if storage_habit_day_save(AppTextFromCString(*pending[i].habit_id[0], 40),
                 pending[i].day_index,
                 pending[i].completed,
-                pending[i].count) != 0 {
+                pending[i].count) == 0 {
                 habits.dirty = 1
             }
             i += 1
@@ -679,18 +679,29 @@ habit_is_linked :: (habit: *Habit) -> s32 {
     return 0
 }
 
+// Appends a whole number, left-padded with zeros to `width` digits.
+habit_append_padded :: (out: *u8, out_size: s64, value: s32, width: s32) {
+    digits: [12] u8
+    AppFormatS32(value, digits[:])
+    text: string = AppTextFromCString(*digits[0], 12)
+    pad: s32 = width - cast(s32)text.count
+    while pad > 0 {
+        habit_model_append_text_boundary(out, out_size, "0")
+        pad -= 1
+    }
+    habit_model_append_text_boundary(out, out_size, text)
+}
+
 habit_format_date :: (day_index: s32, out: *u8, out_size: s64) {
-    year_text: [8] u8
-    month_text: [8] u8
-    day_text: [8] u8
-    AppFormatS32(day_index / 10000, year_text[:])
-    AppFormatS32((day_index / 100) % 100, month_text[:])
-    AppFormatS32(day_index % 100, day_text[:])
-    habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*year_text[0], 8))
+    if out == null || out_size == 0 {
+        return
+    }
+    habit_model_copy_text_boundary(out, out_size, "")
+    habit_append_padded(out, out_size, day_index / 10000, 4)
     habit_model_append_text_boundary(out, out_size, "-")
-    habit_model_append_text_boundary(out, out_size, AppTextFromCString(*month_text[0], 8))
+    habit_append_padded(out, out_size, (day_index / 100) % 100, 2)
     habit_model_append_text_boundary(out, out_size, "-")
-    habit_model_append_text_boundary(out, out_size, AppTextFromCString(*day_text[0], 8))
+    habit_append_padded(out, out_size, day_index % 100, 2)
 }
 
 habit_format_duration :: (seconds: s32, out: *u8, out_size: s64) {
@@ -705,21 +716,16 @@ habit_format_duration :: (seconds: s32, out: *u8, out_size: s64) {
     minutes := (seconds % 3600) / 60
     secs := seconds % 60
 
-    hours_text: [8] u8
-    minutes_text: [8] u8
-    secs_text: [8] u8
-    AppFormatS32(hours, hours_text[:])
-    AppFormatS32(minutes, minutes_text[:])
-    AppFormatS32(secs, secs_text[:])
+    habit_model_copy_text_boundary(out, out_size, "")
     if hours > 0 {
-        habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*hours_text[0], 8))
+        habit_append_padded(out, out_size, hours, 1)
         habit_model_append_text_boundary(out, out_size, "h ")
-        habit_model_append_text_boundary(out, out_size, AppTextFromCString(*minutes_text[0], 8))
+        habit_append_padded(out, out_size, minutes, 2)
         habit_model_append_text_boundary(out, out_size, "m")
     } else {
-        habit_model_copy_text_boundary(out, out_size, AppTextFromCString(*minutes_text[0], 8))
+        habit_append_padded(out, out_size, minutes, 1)
         habit_model_append_text_boundary(out, out_size, "m ")
-        habit_model_append_text_boundary(out, out_size, AppTextFromCString(*secs_text[0], 8))
+        habit_append_padded(out, out_size, secs, 2)
         habit_model_append_text_boundary(out, out_size, "s")
     }
 }

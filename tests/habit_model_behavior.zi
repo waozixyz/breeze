@@ -1,0 +1,182 @@
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/exercise_types.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/habits/habit_calendar.zi";
+#import, file "../src/habits/habit_days.zi";
+#import, file "../src/habits/habit_model.zi";
+
+using ExerciseType;
+
+app_state: InnerBreeze;
+habits_a: Habits;
+
+// Application hooks the habit model reaches that this test does not need.
+#program_export "app_auto_sync"
+host_auto_sync :: (app: *InnerBreeze) -> s32 {
+    unused app
+    return 1
+}
+
+Walk :: () -> Color {
+    return Color.{1, 2, 3, 255}
+}
+
+name_of :: (habits: *Habits, index: s32) -> string {
+    return TextFromCString(*habits.items[index].name[0])
+}
+
+test_date_helpers :: () {
+    habit: Habit
+    text: [32]u8
+    check_int("monday weekday", habit_weekday_bit(20260105), 0)
+    check_int("sunday weekday", habit_weekday_bit(20260111), 6)
+    check_int("unscheduled means every day", habit_scheduled_day(*habit, 20260106), 1)
+    habit.weekdays = 1 << 2
+    check_int("scheduled day included", habit_scheduled_day(*habit, 20260107), 1)
+    check_int("scheduled day excluded", habit_scheduled_day(*habit, 20260108), 0)
+    habit_format_date(20261203, *text[0], 32)
+    check_true("format date", TextFromCString(*text[0]) == "2026-12-03")
+    habit_format_duration(65, *text[0], 32)
+    check_true("format seconds duration", TextFromCString(*text[0]) == "1m 05s")
+    habit_format_duration(3661, *text[0], 32)
+    check_true("format hour duration", TextFromCString(*text[0]) == "1h 01m")
+    moment: Tm
+    moment.tm_year = 2026 - 1900
+    moment.tm_mon = 7
+    moment.tm_mday = 28
+    check_int("tm date index", habit_tm_date_index(*moment), 20260828)
+}
+
+test_count_mutations :: () {
+    root := make_root("habit-model-counts")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    habits := *app_state.habits
+    check_int("add custom index", habits_add_custom(habits, "Walk", Walk(), 0, 0), 0)
+    check_int("add custom count", habits.count, 1)
+    check_true("add custom name", name_of(habits, 0) == "Walk")
+    check_true("id copied to loaded id", TextFromCString(*habits.loaded_ids[0][0]) ==
+        TextFromCString(*habits.items[0].id[0]))
+
+    habit_toggle_day(habits, 0, 20260828)
+    check_int("toggle creates one day", habits.items[0].day_count, 1)
+    check_int("toggle completes the day", habit_completed_day(*habits.items[0], 20260828), 1)
+    check_int("toggle count", HabitDayCount(*habits.items[0], 20260828), 1)
+    habit_toggle_day(habits, 0, 20260828)
+    check_int("second toggle leaves the day record", habits.items[0].day_count, 1)
+    check_int("second toggle clears completed", habit_completed_day(*habits.items[0], 20260828), 0)
+    check_int("second toggle count", HabitDayCount(*habits.items[0], 20260828), 0)
+
+    habit_set_day_count(habits, 0, 20260828, 3)
+    check_int("explicit count", HabitDayCount(*habits.items[0], 20260828), 3)
+    habit_increment_day(habits, 0, 20260828, -5)
+    check_int("count clamps at zero", HabitDayCount(*habits.items[0], 20260828), 0)
+    check_int("nothing stored before the flush",
+        raw_free_count("SELECT COUNT(*) FROM habit_days WHERE local_date=20260828"), 0)
+    check_int("pending day saves coalesce", habits.pending_day_save_count, 1)
+    habits_flush_save(*app_state)
+    check_int("the flush stores the day",
+        raw_free_count("SELECT COUNT(*) FROM habit_days WHERE local_date=20260828"), 1)
+    check_int("pending day saves cleared", habits.pending_day_save_count, 0)
+    habits_free(habits)
+    storage_close()
+}
+
+// The database's own count, for a query on the open storage.
+raw_free_count :: (sql: string) -> s32 {
+    return read_db_count(sql)
+}
+
+test_dirty_flush_on_storage_failure :: () {
+    root := make_root("habit-model-dirty")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    habits_add_custom(*app_state.habits, "Walk", Walk(), 0, 0)
+    habits_flush_save(*app_state)
+    // With storage closed, saving the day cannot succeed.
+    storage_close()
+    habit_toggle_day(*app_state.habits, 0, 20260828)
+    check_int("a failed day save waits for the flush", app_state.habits.dirty, 0)
+    check_int("the failed day save is pending", app_state.habits.pending_day_save_count, 1)
+    habits_flush_save(*app_state)
+    check_int("a failed day save marks dirty", app_state.habits.dirty, 1)
+    check_true("reopen db", storage_init(root) != 0)
+    habits_flush_save(*app_state)
+    check_int("the next flush clears dirty", app_state.habits.dirty, 0)
+    check_int("the day is stored after recovery",
+        read_db_count("SELECT COUNT(*) FROM habit_days WHERE local_date=20260828"), 1)
+    habits_free(*app_state.habits)
+    storage_close()
+}
+
+test_move_delete_and_unique_names :: () {
+    root := make_root("habit-model-move")
+    unique: [HABIT_NAME_SIZE]u8
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_custom(*habits_a, "Walk", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Walk", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Read", Walk(), 0, 0)
+    check_true("duplicate name gets a suffix", name_of(*habits_a, 1) == "Walk 2")
+    check_int("exclude the current duplicate", habits_name_exists(*habits_a, "Walk", 0), 0)
+    check_int("find the other duplicate", habits_name_exists(*habits_a, "Walk", 1), 1)
+    habits_generate_unique_name(*habits_a, *unique[0], cast(s64)HABIT_NAME_SIZE, "Walk")
+    check_true("generate a unique name", TextFromCString(*unique[0]) == "Walk 3")
+    habits_a.selected = 1
+    check_int("move 0 to 2", habits_move(*habits_a, 0, 2), 1)
+    check_true("move order first", name_of(*habits_a, 0) == "Walk 2")
+    check_true("move order last", name_of(*habits_a, 2) == "Walk")
+    check_int("move keeps the selected habit", habits_a.selected, 0)
+    habits_delete(*habits_a, 0)
+    check_int("delete count", habits_a.count, 2)
+    check_true("delete shifts the first", name_of(*habits_a, 0) == "Read")
+    check_int("delete selected clamps", habits_a.selected, 0)
+    habits_free(*habits_a)
+    storage_close()
+}
+
+test_defaults_and_activity_matching :: () {
+    root := make_root("habit-model-defaults")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("default habit count", habits_a.count, 2)
+    check_true("default meditation id", TextFromCString(*habits_a.items[0].id[0]) == "meditation")
+    check_true("default yoga id", TextFromCString(*habits_a.items[1].id[0]) == "yoga")
+    check_int("default meditation matches patterns", habit_matches_activity(*habits_a.items[0], EXERCISE_PATTERNS), 1)
+    check_int("default yoga excludes meditation", habit_matches_activity(*habits_a.items[1], EXERCISE_MEDITATION), 0)
+    habits_free(*habits_a)
+
+    app_state = InnerBreeze.{}
+    habits_add_custom(*app_state.habits, "Linked", Walk(), 1, habit_activity_mask_for(EXERCISE_PATTERNS))
+    habits_add_custom(*app_state.habits, "Manual", Walk(), 0, 0)
+    app_state.habits.selected = 1
+    sync_habits_for_activity(*app_state, EXERCISE_PATTERNS)
+    today := habits_today_index()
+    check_int("sync completes the linked habit", habit_completed_day(*app_state.habits.items[0], today), 1)
+    check_int("sync leaves the manual habit alone", habit_completed_day(*app_state.habits.items[1], today), 0)
+    check_int("sync restores the selection", app_state.habits.selected, 1)
+    habits_free(*app_state.habits)
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-habit-model-zi-test/")
+    if guard != 0 { return guard }
+    test_date_helpers()
+    test_count_mutations()
+    test_dirty_flush_on_storage_failure()
+    test_move_delete_and_unique_names()
+    test_defaults_and_activity_matching()
+    return failures
+}
