@@ -760,6 +760,27 @@ storage_set_sync_enabled :: (enabled: s32) {
     storage_set_setting_int("sync_retry_attempt", 0)
 }
 
+// Appends `,"name":value` for a whole number.
+storage_json_append_int_field :: (json: *StorageJsonBuilder, name: string, value: s64) {
+    digits: [24] u8
+    storage_json_builder_append_text(json, ",\"")
+    storage_json_builder_append_text(json, name)
+    storage_json_builder_append_text(json, "\":")
+    AppFormatS64(value, digits[:])
+    storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+}
+
+// Appends `,"name":true` or `,"name":false`.
+storage_json_append_bool_field :: (json: *StorageJsonBuilder, name: string, value: bool) {
+    storage_json_builder_append_text(json, ",\"")
+    storage_json_builder_append_text(json, name)
+    if value {
+        storage_json_builder_append_text(json, "\":true")
+    } else {
+        storage_json_builder_append_text(json, "\":false")
+    }
+}
+
 storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
     json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
     stmt: *void = cast(*void)stmt_handle
@@ -767,11 +788,20 @@ storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_builder_key_value_text(json, "id", AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "name", AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
-    storage_json_builder_append_text(json, ",")
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_int_field(json, "color_r", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "color_g", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_append_int_field(json, "color_b", cast(s64)sqlite3_column_int(stmt, 4))
+    storage_json_append_int_field(json, "sync_mode", cast(s64)sqlite3_column_int(stmt, 5))
+    storage_json_append_int_field(json, "sync_activity", cast(s64)sqlite3_column_int(stmt, 6))
+    storage_json_append_int_field(json, "counter_enabled",
+        ifx (sqlite3_column_int(stmt, 7) != 0) then (cast(s64)1) else (cast(s64)0))
+    storage_json_append_int_field(json, "counter_target", cast(s64)sqlite3_column_int(stmt, 8))
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 9))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 10))
     storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 11))
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_int_field(json, "weekdays", cast(s64)sqlite3_column_int(stmt, 12))
+    storage_json_append_int_field(json, "reminder_hour", cast(s64)sqlite3_column_int(stmt, 13))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -780,7 +810,10 @@ storage_append_habit_day_row_json :: (json_handle: s64, stmt_handle: s64) {
     stmt: *void = cast(*void)stmt_handle
     storage_json_builder_append_text(json, "{")
     storage_json_builder_key_value_text(json, "habit_id", AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_int_field(json, "local_date", cast(s64)sqlite3_column_int(stmt, 1))
+    storage_json_append_bool_field(json, "completed", sqlite3_column_int(stmt, 2) != 0)
+    storage_json_append_int_field(json, "count", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
     storage_json_builder_append_text(json, "}")
 }
@@ -794,7 +827,9 @@ storage_append_elist_list_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "title",
         AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 3))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
     storage_json_builder_append_text(json, "}")
 }
@@ -814,7 +849,10 @@ storage_append_elist_item_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "comment",
         AppTextFromCString(SqliteColumnText(stmt, 3), 8192))
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_bool_field(json, "done", sqlite3_column_int(stmt, 4) != 0)
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 5))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 6))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 7))
     storage_json_builder_append_text(json, "}")
 }
@@ -833,7 +871,15 @@ storage_append_session_rounds_json :: (json: *StorageJsonBuilder, session_id: st
                 storage_json_builder_append_text(json, ",")
             }
             first = 0
-            storage_json_builder_append_text(json, ",")
+            storage_json_builder_append_text(json, "{")
+            storage_json_builder_append_text(json, "\"round_index\":")
+            digits: [24] u8
+            AppFormatS32(sqlite3_column_int(stmt, 0), digits[:])
+            storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+            storage_json_builder_append_text(json, ",\"breaths\":0,\"hold_seconds\":")
+            AppFormatS32(seconds, digits[:])
+            storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+            storage_json_builder_append_text(json, "}")
         }
     }
     if stmt != null {
@@ -852,15 +898,28 @@ storage_append_session_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_builder_key_value_text(json, "id", id)
     storage_json_builder_append_text(json, ",\"started_at\":")
     storage_json_builder_append_epoch(json, started_at)
+    storage_json_append_int_field(json, "local_date", cast(s64)sqlite3_column_int(stmt, 2))
+    // The topic travels as a string.
+    digits: [24] u8
+    AppFormatS32(sqlite3_column_int(stmt, 3), digits[:])
+    storage_json_builder_append_text(json, ",\"topic\":\"")
+    storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+    storage_json_builder_append_text(json, "\"")
+    storage_json_append_int_field(json, "activity", cast(s64)sqlite3_column_int(stmt, 4))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "source", AppTextFromCString(SqliteColumnText(stmt, 5), 8192))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "rounds_hash", AppTextFromCString(SqliteColumnText(stmt, 6), 8192))
+    storage_json_append_int_field(json, "mood_before", cast(s64)sqlite3_column_int(stmt, 7))
+    storage_json_append_int_field(json, "mood_after", cast(s64)sqlite3_column_int(stmt, 8))
+    storage_json_append_int_field(json, "energy", cast(s64)sqlite3_column_int(stmt, 9))
+    storage_json_append_int_field(json, "stress", cast(s64)sqlite3_column_int(stmt, 10))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "note", AppTextFromCString(SqliteColumnText(stmt, 11), 8192))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "tags", AppTextFromCString(SqliteColumnText(stmt, 12), 8192))
-    storage_json_builder_append_text(json, ",")
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 13))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, ifx (updated_at > 0) then (updated_at) else (started_at))
     storage_json_builder_append_text(json, ",")
     storage_append_session_rounds_json(json, id)
@@ -1590,12 +1649,10 @@ storage_exec_json_user_sql :: (sql: string, json: string) -> s32 {
     if storage_db_handle() == null || sql.count == 0 || json.count == 0 {
         return 0
     }
-    sql_buf3: [2048] u8
-    AppCopyText(sql, sql_buf3[:])
     {
         attempt: s32 = 0
         while attempt < 2 {
-            if SqlitePrepare(storage_db_handle(), *sql_buf3[0], -1, *stmt, null) == SQLITE_OK {
+            if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) == SQLITE_OK {
                 break
             }
             if attempt == 0 && migrate_schema() != 0 {

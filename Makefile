@@ -795,6 +795,13 @@ sync-crypto-zi-test: $(ZI2C_BIN)
 
 test: sync-crypto-zi-test
 
+.PHONY: sync-account-crypto-zi-test
+sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_account_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
+
+test: sync-account-crypto-zi-test
+
 .PHONY: sync-account-zi-test
 sync-account-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
@@ -802,12 +809,40 @@ sync-account-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 
 test: sync-account-zi-test
 
-.PHONY: sync-account-crypto-zi-test
-sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+.PHONY: storage-import-zi-test
+storage-import-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/sync_account_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
+		sh tests/storage_import_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 
-test: sync-account-crypto-zi-test
+test: storage-import-zi-test
+
+.PHONY: storage-habits-zi-test
+storage-habits-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_habits_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
+test: storage-habits-zi-test
+
+.PHONY: storage-sync-zi-test
+storage-sync-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_sync_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
+test: storage-sync-zi-test
+
+.PHONY: sync-url-zi-test
+sync-url-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_url_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran
+
+test: sync-url-zi-test
+
+.PHONY: sync-review-zi-test
+sync-review-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) | build-laws
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_review_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran
+
+test: sync-review-zi-test
 test: route-host-test
 test: profile-host-test
 test: scroll-input-test

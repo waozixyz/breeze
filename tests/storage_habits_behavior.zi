@@ -1,0 +1,508 @@
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/import.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+
+c :: #system_library "c";
+using StorageImportMode;
+
+// Habit sets are large, so the tests keep theirs in globals.
+habits_a: Habits;
+habits_b: Habits;
+
+ascii_lower :: (byte: u8) -> u8 {
+    if byte >= cast(u8)65 && byte <= cast(u8)90 { return byte + cast(u8)32 }
+    return byte
+}
+
+equal_ignoring_case :: (left: string, right: string) -> bool {
+    if left.count != right.count { return false }
+    index: s64 = 0
+    while index < left.count {
+        if ascii_lower(left[index]) != ascii_lower(right[index]) { return false }
+        index += 1
+    }
+    return true
+}
+
+find_habit :: (habits: *Habits, name: string) -> *Habit {
+    index: s32 = 0
+    while index < habits.count {
+        if equal_ignoring_case(TextFromCString(*habits.items[index].name[0]), name) {
+            return *habits.items[index]
+        }
+        index += 1
+    }
+    return null
+}
+
+has_day :: (habit: *Habit, day: s32) -> bool {
+    return habit != null && habit_completed_day(habit, day) != 0
+}
+
+// A habit's count on a day, or -1.
+day_count_of :: (habit: *Habit, day: s32) -> s32 {
+    index := habit_find_day(habit, day)
+    if index < 0 { return -1 }
+    return habit.days[index].count
+}
+
+Blue :: () -> Color {
+    return Color.{126, 183, 230, 255}
+}
+
+Orange :: () -> Color {
+    return Color.{224, 124, 104, 255}
+}
+
+Green :: () -> Color {
+    return Color.{99, 196, 165, 255}
+}
+
+Purple :: () -> Color {
+    return Color.{180, 132, 220, 255}
+}
+
+save_source_session :: (root: string) -> bool {
+    rounds: [3]s32 = .[45, 60, 75]
+    if storage_init(root) == 0 { return false }
+    ok: bool = storage_save_session(*rounds[0], 3, null, 0) != 0
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day(*habits_a, 0, 20260613, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    return ok
+}
+
+test_habit_name_merge_import :: () {
+    source := make_root("habit-name-source")
+    dest := make_root("habit-name-dest")
+    archive: TextBuffer
+    append(*archive, source)
+    append(*archive, "/export.zip")
+
+    check_true("init habit merge source", storage_init(source) != 0)
+    habits_a = Habits.{}
+    check_int("add imported meditation", habits_add_custom(*habits_a, "meditation", Orange(), 0, 0), 0)
+    habit_set_day(*habits_a, 0, 20260613, 1)
+    habits_save(*habits_a)
+    check_int("add imported push ups", habits_add_custom(*habits_a, "Push ups", Purple(), 0, 0), 1)
+    habit_set_day(*habits_a, 1, 20260614, 1)
+    habits_save(*habits_a)
+    check_int("add imported cold shower", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0), 2)
+    habit_set_day(*habits_a, 2, 20260615, 1)
+    habits_save(*habits_a)
+    check_true("habit merge export", storage_export_zip(TextFromCString(*archive.bytes[0])) != 0)
+    habits_free(*habits_a)
+    storage_close()
+
+    check_true("init habit merge dest", storage_init(dest) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day(*habits_a, 0, 20260612, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("habit merge import", storage_import_zip(TextFromCString(*archive.bytes[0])) != 0)
+    habits_b = Habits.{}
+    check_true("habit merge load", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("habit merge count", habits_b.count, 4)
+    meditation := find_habit(*habits_b, "Meditation")
+    check_true("habit merge meditation exists", meditation != null)
+    if meditation != null {
+        check_true("habit merge preserves local case",
+            TextFromCString(*meditation.name[0]) == "Meditation")
+    }
+    check_true("habit merge keeps local day", has_day(meditation, 20260612))
+    check_true("habit merge imports day", has_day(meditation, 20260613))
+    check_true("habit merge push ups day", has_day(find_habit(*habits_b, "Push ups"), 20260614))
+    check_true("habit merge cold shower day", has_day(find_habit(*habits_b, "Cold Shower"), 20260615))
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_import_conflict_prefers_data :: () {
+    source := make_root("conflict-source")
+    dest := make_root("conflict-dest")
+    archive: TextBuffer
+    append(*archive, source)
+    append(*archive, "/conflict-export.zip")
+
+    check_true("init conflict source", storage_init(source) != 0)
+    habits_a = Habits.{}
+    check_int("add conflict source habit", habits_add_custom(*habits_a, "Meditation", Orange(), 0, 0), 0)
+    storage_set_setting_text("language", "")
+    habits_free(*habits_a)
+    storage_close()
+    raw_exec(source, "INSERT OR REPLACE INTO habit_days(habit_id,local_date,completed,updated_at) VALUES('habit-1',20260618,0,0)")
+    check_true("reopen conflict source", storage_init(source) != 0)
+    check_true("conflict source export", storage_export_zip(TextFromCString(*archive.bytes[0])) != 0)
+    storage_close()
+
+    check_true("init conflict dest", storage_init(dest) != 0)
+    habits_a = Habits.{}
+    check_int("add conflict dest habit", habits_add_custom(*habits_a, "Meditation", Blue(), 0, 0), 0)
+    habit_set_day(*habits_a, 0, 20260618, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_set_setting_text("language", "en")
+    check_true("conflict import", storage_import_zip_ex(TextFromCString(*archive.bytes[0]),
+        cast(StorageImportMode)1) != 0)
+    habits_b = Habits.{}
+    check_true("conflict habits load", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_true("conflict keeps completed day", has_day(find_habit(*habits_b, "Meditation"), 20260618))
+    check_true("conflict keeps non-empty setting", storage_get_setting_text("language") == "en")
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_delete_all_resets :: () {
+    root := make_root("delete-all")
+    check_true("init delete all db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_int("add delete all habit", habits_add_custom(*habits_a, "Work out", Green(), 0, 0), 0)
+    habit_set_day(*habits_a, 0, 20260618, 1)
+    habits_save(*habits_a)
+    check_int("habit count before", storage_habit_count(), 1)
+    check_true("sees habit-only data", storage_has_any() != 0)
+    deleted := storage_delete_all_sessions()
+    check_true("delete removed habit data", deleted >= cast(s64)2)
+    check_int("habit count after", storage_habit_count(), 0)
+    check_true("hides active data", storage_has_any() == 0)
+    habits_add_default_set(*habits_a)
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load default habit after delete all", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("default habit count after delete all", habits_b.count, 2)
+    check_true("default meditation", find_habit(*habits_b, "Meditation") != null)
+    check_true("default yoga", find_habit(*habits_b, "Yoga") != null)
+    check_true("old workout day removed", !has_day(find_habit(*habits_b, "Meditation"), 20260618))
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_empty_initialized_seeds_meditation :: () {
+    root := make_root("empty-initialized")
+    check_true("init db", storage_init(root) != 0)
+    storage_mark_habits_initialized()
+    storage_close()
+    raw_exec(root, "DELETE FROM habit_days; DELETE FROM habits;")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("startup seeds default habits", habits_a.count, 2)
+    meditation := find_habit(*habits_a, "Meditation")
+    yoga := find_habit(*habits_a, "Yoga")
+    check_true("seeds meditation", meditation != null)
+    check_true("seeds yoga", yoga != null)
+    if meditation != null {
+        check_int("meditation linked mode", meditation.sync_mode, 1)
+        check_int("meditation linked activities", meditation.sync_activity, 1 | 2 | 8)
+    }
+    if yoga != null {
+        check_int("yoga linked mode", yoga.sync_mode, 1)
+        check_int("yoga linked activities", yoga.sync_activity, 4)
+    }
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("seeded defaults persisted", habits_b.count, 2)
+    persisted := find_habit(*habits_b, "Meditation")
+    check_true("persisted meditation", persisted != null)
+    if persisted != null {
+        check_int("persisted meditation linked activities", persisted.sync_activity, 1 | 2 | 8)
+    }
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_defaults_wait_for_language :: () {
+    root := make_root("deferred-defaults")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_init_with_defaults(*habits_a, 0)
+    check_int("deferred startup keeps habits empty", habits_a.count, 0)
+    check_int("deferred startup does not initialize habits", storage_habits_initialized(), 0)
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    check_true("seed defaults after language setup", habits_seed_default_set_if_needed(*habits_a) != 0)
+    check_int("deferred defaults seeded", habits_a.count, 2)
+    check_true("deferred meditation", find_habit(*habits_a, "Meditation") != null)
+    check_true("deferred yoga", find_habit(*habits_a, "Yoga") != null)
+    check_int("deferred habits initialized", storage_habits_initialized(), 1)
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load deferred seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("deferred persisted count", habits_b.count, 2)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_default_meditation_not_repaired :: () {
+    root := make_root("default-meditation")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_int("add unlinked meditation", habits_add_custom(*habits_a, "Meditation", Blue(), 0, 0), 0)
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("no repair count", habits_a.count, 1)
+    meditation := find_habit(*habits_a, "Meditation")
+    check_true("no repair exists", meditation != null)
+    if meditation != null {
+        check_int("no repair sync mode", meditation.sync_mode, 0)
+        check_int("no repair sync activity", meditation.sync_activity, 0)
+    }
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load unchanged meditation", storage_habits_load(cast(*void)*habits_b) != 0)
+    persisted := find_habit(*habits_b, "Meditation")
+    if persisted != null {
+        check_int("persisted unchanged sync mode", persisted.sync_mode, 0)
+        check_int("persisted unchanged sync activity", persisted.sync_activity, 0)
+    } else {
+        check_true("persisted meditation exists", false)
+    }
+    habits_free(*habits_b)
+    storage_close()
+}
+
+write_multi_habit_source :: (root: string, archive: string) {
+    rounds: [1]s32 = .[77]
+    check_true("init multi habit source", storage_init(root) != 0)
+    check_true("save source session", storage_save_session_for_activity(*rounds[0], 1, 0, 1, null, 0) != 0)
+    habits_a = Habits.{}
+    check_int("add meditation", habits_add_custom(*habits_a, "Meditation", Orange(), 1, 1 | 2), 0)
+    check_int("add push ups", habits_add_custom(*habits_a, "Push ups", Purple(), 0, 0), 1)
+    check_int("add cold shower", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0), 2)
+    habit_set_day(*habits_a, 0, 20260617, 1)
+    habits_save(*habits_a)
+    habit_set_day(*habits_a, 1, 20260617, 1)
+    habits_save(*habits_a)
+    habit_set_day(*habits_a, 2, 20260617, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_set_setting_int("speed", 7)
+    storage_set_setting_int("sun_salutation_repetitions", 6)
+    storage_set_setting_int("sun_salutation_start_seconds", 9)
+    storage_set_setting_int("sun_salutation_end_seconds", 4)
+    storage_set_setting_int("sun_salutation_figure", 1)
+    storage_set_setting_int("audio_custom_music_count", 1)
+    storage_set_setting_text("audio_custom_music_0_title", "Test track")
+    storage_set_setting_text("audio_custom_music_0_path", "/tmp/test-track.ogg")
+    storage_set_setting_text("audio_custom_music_0_file", "ignore-me")
+    storage_set_setting_text("language", "en")
+    storage_set_setting_text("future_unknown_key", "ignore-me")
+    check_true("export multi habit source", storage_export_zip(archive) != 0)
+    storage_close()
+}
+
+assert_multi_habits_imported :: (root: string, want_speed: s32, expect_settings: bool) {
+    check_true("init multi habit import db", storage_init(root) != 0)
+    check_int("imported sessions", storage_session_count(), 1)
+    habits_b = Habits.{}
+    check_true("multi habit load", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("multi habit count", habits_b.count, 3)
+    meditation := find_habit(*habits_b, "Meditation")
+    check_true("multi meditation exists", meditation != null)
+    if meditation != null {
+        check_int("multi meditation sync mode", meditation.sync_mode, 1)
+        check_int("multi meditation sync activity", meditation.sync_activity, 1 | 2)
+    }
+    check_true("multi meditation day", has_day(meditation, 20260617))
+    check_true("multi push ups day", has_day(find_habit(*habits_b, "Push ups"), 20260617))
+    check_true("multi cold shower day", has_day(find_habit(*habits_b, "Cold Shower"), 20260617))
+    habits_free(*habits_b)
+    check_int("import speed setting", storage_get_setting_int("speed", -1), want_speed)
+    if expect_settings {
+        check_int("sun reps", storage_get_setting_int("sun_salutation_repetitions", -1), 6)
+        check_int("sun start", storage_get_setting_int("sun_salutation_start_seconds", -1), 9)
+        check_int("sun end", storage_get_setting_int("sun_salutation_end_seconds", -1), 4)
+        check_int("sun figure", storage_get_setting_int("sun_salutation_figure", -1), 1)
+        check_int("audio count", storage_get_setting_int("audio_custom_music_count", -1), 1)
+        check_true("audio title", storage_get_setting_text("audio_custom_music_0_title") == "Test track")
+        check_true("audio path", storage_get_setting_text("audio_custom_music_0_path") == "/tmp/test-track.ogg")
+    } else {
+        check_int("data-only skips sun figure", storage_get_setting_int("sun_salutation_figure", -1), -1)
+        check_int("data-only skips audio count", storage_get_setting_int("audio_custom_music_count", -1), -1)
+    }
+    check_true("malformed audio setting ignored",
+        storage_get_setting_text("audio_custom_music_0_file").count == 0)
+    check_true("unknown setting ignored", storage_get_setting_text("future_unknown_key").count == 0)
+    storage_close()
+}
+
+test_import_modes :: () {
+    source := make_root("multi-source")
+    dest_data := make_root("multi-dest-data")
+    dest_settings := make_root("multi-dest-settings")
+    archive: TextBuffer
+    append(*archive, source)
+    append(*archive, "/multi-export.zip")
+    archive_path := TextFromCString(*archive.bytes[0])
+    write_multi_habit_source(source, archive_path)
+
+    check_true("init inspect dest", storage_init(dest_data) != 0)
+    info: StorageImportInfo
+    check_true("inspect multi export", storage_inspect_import(archive_path, *info) != 0)
+    check_true("inspect valid", info.valid != 0)
+    check_true("inspect sessions", info.has_sessions != 0)
+    check_true("inspect habits", info.has_habits != 0)
+    check_true("inspect settings", info.has_settings != 0)
+    check_int("inspect habit count", info.habit_count, 3)
+    storage_set_setting_int("speed", 1)
+    check_true("data only import",
+        storage_import_zip_ex(archive_path, cast(StorageImportMode)0) != 0)
+    storage_close()
+    assert_multi_habits_imported(dest_data, 1, false)
+
+    check_true("init settings import dest", storage_init(dest_settings) != 0)
+    storage_set_setting_int("speed", 1)
+    check_true("data and settings import",
+        storage_import_zip_ex(archive_path, cast(StorageImportMode)1) != 0)
+    storage_close()
+    assert_multi_habits_imported(dest_settings, 7, true)
+}
+
+metadata_topic: s32;
+metadata_activity: s32;
+
+record_metadata :: (path: string, year: s32, month: s32, day: s32, hour: s32,
+    minute: s32, second: s32, topic: s32, activity: s32, round_times: []s32,
+    round_count: s32, user: s64) {
+    unused path
+    unused year
+    unused month
+    unused day
+    unused hour
+    unused minute
+    unused second
+    unused round_times
+    unused round_count
+    unused user
+    metadata_topic = topic
+    metadata_activity = activity
+}
+
+test_session_metadata :: () {
+    root := make_root("metadata")
+    rounds: [2]s32 = .[30, 45]
+    check_true("init metadata db", storage_init(root) != 0)
+    check_true("save metadata session",
+        storage_save_session_for_activity(*rounds[0], 2, 2, 3, null, 0) != 0)
+    metadata_topic = -1
+    metadata_activity = -1
+    callback: StorageSessionRecordCallback = record_metadata
+    storage_list_session_records(callback, null)
+    check_int("metadata topic", metadata_topic, 2)
+    check_int("metadata activity", metadata_activity, 3)
+    storage_close()
+}
+
+test_profile_week_stats :: () {
+    root := make_root("profile-week")
+    rounds: [1]s32 = .[45]
+    check_true("init profile week db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_save(*habits_a)
+    check_true("session today", storage_save_session_at_for_activity(20260715, 9, 0, 0, *rounds[0], 1, 0, 0, null, 0) != 0)
+    check_true("session earlier", storage_save_session_at_for_activity(20260713, 9, 0, 0, *rounds[0], 1, 0, 1, null, 0) != 0)
+    check_true("session outside week", storage_save_session_at_for_activity(20260708, 9, 0, 0, *rounds[0], 1, 0, 0, null, 0) != 0)
+    habit_id := TextFromCString(*habits_a.items[0].id[0])
+    check_true("habit distinct day", storage_habit_day_save(habit_id, 20260714, 1, 1) != 0)
+    check_true("habit overlapping day", storage_habit_day_save(habit_id, 20260713, 1, 1) != 0)
+    active_days: s32 = -1
+    practice_sessions: s32 = -1
+    check_true("week stats call", storage_profile_week_stats(20260715, *active_days, *practice_sessions) != 0)
+    check_int("week active days", active_days, 3)
+    check_int("week practice sessions", practice_sessions, 2)
+    habits_free(*habits_a)
+    storage_close()
+}
+
+test_linked_counts_materialize :: () {
+    root := make_root("linked-counts")
+    first: [1]s32 = .[30]
+    second: [1]s32 = .[45]
+    first_id: [44]u8
+    second_id: [44]u8
+    today := habits_today_index()
+    check_true("init linked counter db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    check_true("save session one", storage_save_session_for_activity(*first[0], 1, 0, 1, *first_id[0], 44) != 0)
+    check_true("save session two", storage_save_session_for_activity(*second[0], 1, 0, 1, *second_id[0], 44) != 0)
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load linked habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("linked sessions materialize count", day_count_of(*habits_b.items[0], today), 2)
+    habit_set_day_count(*habits_b, 0, today, 0)
+    habits_save(*habits_b)
+    habits_free(*habits_b)
+    habits_b = Habits.{}
+    check_true("reload after manual clear", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("manual clear overrides linked sessions", day_count_of(*habits_b.items[0], today), 0)
+    habit_set_day_count(*habits_b, 0, today, 2)
+    habits_save(*habits_b)
+    check_true("delete linked session one", storage_delete_session(TextFromCString(*first_id[0])) != 0)
+    habits_free(*habits_b)
+    habits_b = Habits.{}
+    check_true("reload after delete", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("delete lowers derived count", day_count_of(*habits_b.items[0], today), 1)
+    habit_set_day_count(*habits_b, 0, today, 4)
+    habits_save(*habits_b)
+    check_true("delete linked session two", storage_delete_session(TextFromCString(*second_id[0])) != 0)
+    habits_free(*habits_b)
+    habits_b = Habits.{}
+    check_true("reload after manual override", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("delete preserves manual count", day_count_of(*habits_b.items[0], today), 4)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_existing_sessions_materialize :: () {
+    root := make_root("existing-linked")
+    rounds: [1]s32 = .[30]
+    today := habits_today_index()
+    check_true("init db", storage_init(root) != 0)
+    check_true("save existing session", storage_save_session_for_activity(*rounds[0], 1, 0, 1, null, 0) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("existing session materializes after habit save", day_count_of(*habits_b.items[0], today), 1)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
+    if guard != 0 { return guard }
+    test_habit_name_merge_import()
+    test_import_conflict_prefers_data()
+    test_delete_all_resets()
+    test_empty_initialized_seeds_meditation()
+    test_defaults_wait_for_language()
+    test_default_meditation_not_repaired()
+    test_import_modes()
+    test_session_metadata()
+    test_profile_week_stats()
+    test_linked_counts_materialize()
+    test_existing_sessions_materialize()
+    return failures
+}

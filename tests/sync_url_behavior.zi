@@ -1,0 +1,73 @@
+#import "text_buffer"
+#import "social"
+#import "url"
+
+check_valid :: (input: string, normalized: string) -> s32 {
+    output: [256]u8
+    if !UrlValid(input) { return 1 }
+    if !NormalizeUrl(input, output[:]) ||
+        TextUntilNul(output[:]) != normalized { return 2 }
+    return 0
+}
+
+check_invalid :: (input: string) -> s32 {
+    output: [256]u8
+    if UrlValid(input) { return 1 }
+    if NormalizeUrl(input, output[:]) { return 2 }
+    return 0
+}
+
+#program_export
+Check :: () -> s32 {
+    result := check_valid("https://api.waozi.xyz", "https://api.waozi.xyz")
+    if result != 0 { return result }
+    result = check_valid("http://localhost:8080", "http://localhost:8080")
+    if result != 0 { return 10 + result }
+    result = check_valid("localhost:8080", "http://localhost:8080")
+    if result != 0 { return 20 + result }
+    result = check_valid("localhost:3000", "http://localhost:3000")
+    if result != 0 { return 30 + result }
+    result = check_valid("127.0.0.1:8080", "http://127.0.0.1:8080")
+    if result != 0 { return 40 + result }
+    result = check_valid("127.0.0.1:49152", "http://127.0.0.1:49152")
+    if result != 0 { return 50 + result }
+    result = check_valid("10.0.2.2:8080", "http://10.0.2.2:8080")
+    if result != 0 { return 60 + result }
+    result = check_valid("192.168.100.97:18080", "http://192.168.100.97:18080")
+    if result != 0 { return 70 + result }
+    result = check_valid("http://10.1.2.3:18080", "http://10.1.2.3:18080")
+    if result != 0 { return 80 + result }
+    result = check_valid("http://172.16.0.1:18080", "http://172.16.0.1:18080")
+    if result != 0 { return 90 + result }
+    result = check_valid("http://172.31.255.254:18080", "http://172.31.255.254:18080")
+    if result != 0 { return 100 + result }
+
+    invalid: [6]string = .["", "localhost.evil.test:8080",
+        "http://localhost.evil.test", "http://example.com",
+        "http://192.168.100.97.evil.test", "http://172.32.0.1:18080"]
+    index: s32 = 0
+    while index < 6 {
+        result = check_invalid(invalid[index])
+        if result != 0 { return 200 + index * 10 + result }
+        index += 1
+    }
+
+    body: [128]u8
+    if !BuildFriendRequestBody("@bobby", body[:]) ||
+        TextUntilNul(body[:]) != "{\"target\":\"@bobby\"}" { return 300 }
+    if !BuildFriendRequestBody("Luna", body[:]) ||
+        TextUntilNul(body[:]) != "{\"target\":\"@luna\"}" { return 301 }
+    if BuildFriendRequestBody("quote\"name", body[:]) { return 302 }
+
+    friend_id := "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    if !NormalizeFriendTarget(friend_id, body[:]) ||
+        TextUntilNul(body[:]) != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+        return 303
+    }
+    if !BuildFriendStatsPath("breathing", "whm", "avg hold", body[:]) ||
+        TextUntilNul(body[:]) !=
+        "/api/v1/friends/stats?app=breathing&practice=whm&metric=avg%20hold" {
+        return 304
+    }
+    return 0
+}

@@ -1,3 +1,4 @@
+#import, file "../src/app/app_clock_host.zi";
 // Host functions the storage modules call that a test does not provide. It is
 // built as a separate root so that no generated header declares them twice.
 
@@ -6,20 +7,66 @@
 #program_export "TraceLog"
 host_trace_log :: (level: s32, format: *u8, arguments: *void) {
     unused level
-    unused format
     unused arguments
+    if format == null { return }
+    length: usize = 0
+    while format[length] != cast(u8)0 { length += 1 }
+    unused HostWrite(2, cast(*void)format, length)
+    unused HostWrite(2, cast(*void)*newline[0], 1)
 }
 
+newline: [1]u8 = .[10];
+
+c :: #system_library "c";
+HostOpen :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+HostClose :: (file: *void) -> s32 #foreign c "fclose";
+HostRead :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fread";
+HostSeek :: (file: *void, offset: s64, origin: s32) -> s32 #foreign c "fseek";
+HostTell :: (file: *void) -> s64 #foreign c "ftell";
+HostAllocate :: (size: usize) -> *void #foreign c "malloc";
+HostRelease :: (memory: *void) #foreign c "free";
+HostWrite :: (descriptor: s32, data: *void, count: usize) -> s64 #foreign c "write";
+
+read_mode: [3]u8;
+
+// Reads a whole file into memory the caller releases with UnloadFileData.
 #program_export "LoadFileData"
 host_load_file_data :: (path: *u8, size: *s32) -> *u8 {
-    unused path
     if size != null { size.* = 0 }
-    return null
+    if path == null { return null }
+    read_mode[0] = cast(u8)114
+    read_mode[1] = cast(u8)98
+    read_mode[2] = cast(u8)0
+    file := HostOpen(path, *read_mode[0])
+    if file == null { return null }
+    if HostSeek(file, 0, 2) != 0 {
+        HostClose(file)
+        return null
+    }
+    length := HostTell(file)
+    if length < 0 || length > 2147483647 || HostSeek(file, 0, 0) != 0 {
+        HostClose(file)
+        return null
+    }
+    data := cast(*u8)HostAllocate(cast(usize)length + 1)
+    if data == null {
+        HostClose(file)
+        return null
+    }
+    if cast(s64)HostRead(cast(*void)data, 1, cast(usize)length, file) != length {
+        HostRelease(cast(*void)data)
+        HostClose(file)
+        return null
+    }
+    data[length] = cast(u8)0
+    HostClose(file)
+    if size != null { size.* = cast(s32)length }
+    return data
 }
 
 #program_export "UnloadFileData"
 host_unload_file_data :: (data: *u8) {
-    unused data
+    HostRelease(cast(*void)data)
 }
 
 // Directory listing for legacy text sessions: there are none in a test root.

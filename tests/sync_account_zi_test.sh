@@ -24,7 +24,13 @@ mkdir -p "$work/generated"
     "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "sync_account_behavior.h"
-int main(void) { return Check() == 0 ? 0 : 1; }
+#include <stdio.h>
+int main(void)
+{
+    int result = Check();
+    if (result != 0) fprintf(stderr, "check failed with code %d\n", result);
+    return result == 0 ? 0 : 1;
+}
 C
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \

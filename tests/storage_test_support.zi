@@ -1,0 +1,398 @@
+// Shared pieces for the storage behaviour tests: libc and SQLite access, host
+// functions the storage modules call, small text helpers, and a failure count.
+// Tests run against a data root the runner points APP_DATA_ROOT at.
+#import "byte_text_linux"
+#import "number_text"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/storage/storage_thread_buffers.zi";
+#import, file "../src/storage/legacy_session_files.zi";
+#import, file "../src/storage/legacy_session_time.zi";
+#import, file "../src/app/host_services.zi";
+c :: #system_library "c";
+run_shell :: (command: *u8) -> s32 #foreign c "system";
+file_open :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+file_close :: (file: *void) -> s32 #foreign c "fclose";
+file_write :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fwrite";
+file_read :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fread";
+file_seek :: (file: *void, offset: s64, origin: s32) -> s32 #foreign c "fseek";
+file_tell :: (file: *void) -> s64 #foreign c "ftell";
+memory_allocate :: (size: usize) -> *void #foreign c "malloc";
+memory_free :: (memory: *void) #foreign c "free";
+write_bytes :: (descriptor: s32, data: *void, count: usize) -> s64 #foreign c "write";
+sleep_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+sqlite :: #system_library "sqlite3";
+TestSqliteOpen :: (path: *u8, db: **void) -> s32 #foreign c "sqlite3_open";
+TestSqliteClose :: (db: *void) -> s32 #foreign c "sqlite3_close";
+TestSqliteExec :: (db: *void, sql: *u8, callback: *void, argument: *void,
+    error: **u8) -> s32 #foreign c "sqlite3_exec";
+TestSqliteFree :: (memory: *void) #foreign c "sqlite3_free";
+TestSqlitePrepare :: (db: *void, sql: *u8, length: s32, statement: **void,
+    tail: **u8) -> s32 #foreign c "sqlite3_prepare_v2";
+TestSqliteStep :: (statement: *void) -> s32 #foreign c "sqlite3_step";
+TestSqliteColumnInt :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+TestSqliteColumnText :: (statement: *void, column: s32) -> *u8 #foreign c "sqlite3_column_text";
+TestSqliteFinalize :: (statement: *void) -> s32 #foreign c "sqlite3_finalize";
+
+// The one embedded asset tests need: an English catalog for default habit names.
+english_catalog: string = "[habit_default_name_format]\nHabit %d\n---\n[habit_default_meditation_name]\nMeditation\n---\n[habit_default_meditation_description]\nBreathing and meditation sessions.\n---\n[habit_default_yoga_name]\nYoga\n---\n[habit_default_yoga_description]\nYoga practice sessions.\n---\n[habit_new_default_name]\nNew Habit\n---\n[exercise_wim_hof]\nWim Hof Breathing\n---\n[exercise_meditation]\nMeditation\n---\n[exercise_sun_salutation]\nSun Salutation\n---\n";
+english_path: [16]u8;
+english_mime: [16]u8;
+english_entry: EmbeddedAssetEntry;
+
+install_english_catalog :: () {
+    path: string = "locales/en.txt"
+    index: s64 = 0
+    while index < path.count {
+        english_path[index] = path[index]
+        index += 1
+    }
+    english_path[index] = cast(u8)0
+    english_mime[0] = cast(u8)0
+    english_entry.path = *english_path[0]
+    english_entry.mime = *english_mime[0]
+    english_entry.data = pointer_of(english_catalog)
+    english_entry.size = cast(usize)english_catalog.count
+}
+
+#program_export "asset_entry_at"
+asset_entry_at :: (index: usize) -> *EmbeddedAssetEntry {
+    if index == 0 { return *english_entry }
+    return null
+}
+#program_export "asset_entry_total"
+asset_entry_total :: () -> usize {
+    return 1
+}
+#program_export "app_text_from_cstring"
+app_text_from_cstring :: (data: *u8, capacity: s32) -> string {
+    if data == null || capacity <= 0 { return "" }
+    length: s32 = 0
+    while length < capacity && data[length] != cast(u8)0 { length += 1 }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+
+// File access the account code expects from its host.
+#program_export "LoadFileText"
+host_load_file_text :: (path: *u8) -> *u8 {
+    file := file_open(path, cstr("rb"))
+    if file == null { return null }
+    if file_seek(file, 0, 2) != 0 {
+        file_close(file)
+        return null
+    }
+    size := file_tell(file)
+    if size < 0 || file_seek(file, 0, 0) != 0 {
+        file_close(file)
+        return null
+    }
+    text := cast(*u8)memory_allocate(cast(usize)size + 1)
+    if text == null {
+        file_close(file)
+        return null
+    }
+    if cast(s64)file_read(cast(*void)text, 1, cast(usize)size, file) != size {
+        memory_free(cast(*void)text)
+        file_close(file)
+        return null
+    }
+    text[size] = cast(u8)0
+    file_close(file)
+    return text
+}
+#program_export "UnloadFileText"
+host_unload_file_text :: (text: *u8) {
+    memory_free(cast(*void)text)
+}
+#program_export "SaveFileData"
+host_save_file_data :: (path: *u8, data: *u8, size: s32) -> bool {
+    file := file_open(path, cstr("wb"))
+    if file == null { return false }
+    written := file_write(cast(*void)data, 1, cast(usize)size, file)
+    file_close(file)
+    return cast(s64)written == cast(s64)size
+}
+
+mode_bytes: [8]u8;
+
+// A C string for a short literal.
+cstr :: (text: string) -> *u8 {
+    index: s64 = 0
+    while index < text.count && index < 7 {
+        mode_bytes[index] = text[index]
+        index += 1
+    }
+    mode_bytes[index] = cast(u8)0
+    return *mode_bytes[0]
+}
+
+// Small text builder for key files and shell commands.
+TextBuffer :: struct {
+    bytes: [16384]u8
+    length: s32
+}
+
+append :: (buffer: *TextBuffer, text: string) {
+    index: s64 = 0
+    while index < text.count && buffer.length < 16383 {
+        buffer.bytes[buffer.length] = text[index]
+        buffer.length += 1
+        index += 1
+    }
+    buffer.bytes[buffer.length] = cast(u8)0
+}
+
+join_buffer: TextBuffer;
+
+// a followed by b. Chains such as join(join(a, b), c) work because the
+// buffer is rewritten in place.
+join :: (first: string, second: string) -> string {
+    copy: TextBuffer
+    append(*copy, first)
+    append(*copy, second)
+    join_buffer = copy
+    return TextFromBytes(join_buffer.bytes[0:join_buffer.length])
+}
+
+failures: s32;
+check_true :: (label: string, condition: bool) {
+    if condition { return }
+    failures += 1
+    prefix: string = "FAIL "
+    unused write_bytes(2, cast(*void)pointer_of(prefix), cast(usize)prefix.count)
+    unused write_bytes(2, cast(*void)pointer_of(label), cast(usize)label.count)
+    unused write_bytes(2, cast(*void)pointer_of("\n"), cast(usize)1)
+}
+
+pointer_of :: (text: string) -> *u8 {
+    copy: string = text
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*copy)
+    return descriptor.data
+}
+
+path_in :: (output: []u8, root: string, name: string) {
+    buffer: TextBuffer
+    append(*buffer, root)
+    append(*buffer, "/")
+    append(*buffer, name)
+    index: s32 = 0
+    while index <= buffer.length {
+        output[index] = buffer.bytes[index]
+        index += 1
+    }
+}
+
+remove_tree :: (root: string) {
+    buffer: TextBuffer
+    append(*buffer, "rm -rf ")
+    append(*buffer, root)
+    unused run_shell(*buffer.bytes[0])
+}
+
+write_text_file :: (path: *u8, text: *TextBuffer) -> bool {
+    file := file_open(path, cstr("wb"))
+    if file == null { return false }
+    file_write(cast(*void)*text.bytes[0], 1, cast(usize)text.length, file)
+    file_close(file)
+    return true
+}
+
+exec_db_sql :: (sql: string) {
+    db: *void = null
+    error: *u8 = null
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null {
+        check_true("open database", false)
+        return
+    }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqliteExec(db, *copy.bytes[0], null, null, *error) != 0 {
+        check_true("sql failed", false)
+        if error != null {
+            check_true(TextFromCString(error), false)
+            TestSqliteFree(cast(*void)error)
+        }
+    }
+    TestSqliteClose(db)
+}
+
+read_db_count :: (sql: string) -> s32 {
+    db: *void = null
+    statement: *void = null
+    count: s32 = -1
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null { return count }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqlitePrepare(db, *copy.bytes[0], -1, *statement, null) == 0 &&
+       TestSqliteStep(statement) == 100 {
+        count = TestSqliteColumnInt(statement, 0)
+    }
+    TestSqliteFinalize(statement)
+    TestSqliteClose(db)
+    return count
+}
+
+db_text_bytes: [512]u8;
+
+read_db_text :: (sql: string) -> string {
+    db: *void = null
+    statement: *void = null
+    db_text_bytes[0] = cast(u8)0
+    if TestSqliteOpen(pointer_of(storage_db_path()), *db) != 0 || db == null { return "" }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqlitePrepare(db, *copy.bytes[0], -1, *statement, null) == 0 &&
+       TestSqliteStep(statement) == 100 {
+        text := TestSqliteColumnText(statement, 0)
+        index: s32 = 0
+        while text != null && text[index] != cast(u8)0 && index < 500 {
+            db_text_bytes[index] = text[index]
+            index += 1
+        }
+        db_text_bytes[index] = cast(u8)0
+    }
+    TestSqliteFinalize(statement)
+    TestSqliteClose(db)
+    return TextFromCString(*db_text_bytes[0])
+}
+
+starts_with :: (text: string, prefix: string) -> bool {
+    if prefix.count > text.count { return false }
+    index: s64 = 0
+    while index < prefix.count {
+        if text[index] != prefix[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+contains :: (text: string, needle: string) -> bool {
+    if needle.count > text.count { return false }
+    start: s64 = 0
+    while start + needle.count <= text.count {
+        matches: bool = true
+        index: s64 = 0
+        while index < needle.count {
+            if text[start + index] != needle[index] {
+                matches = false
+                break
+            }
+            index += 1
+        }
+        if matches { return true }
+        start += 1
+    }
+    return false
+}
+
+
+check_int :: (label: string, got: s32, want: s32) {
+    if got == want { return }
+    part: [24]u8
+    text: TextBuffer
+    append(*text, label)
+    append(*text, ": got ")
+    append(*text, FormatInteger(cast(s64)got, part[:]))
+    append(*text, ", want ")
+    append(*text, FormatInteger(cast(s64)want, part[:]))
+    check_true(TextFromCString(*text.bytes[0]), false)
+}
+
+// Under the data root, emptied, for one test's storage. The root itself is
+// used by data_init, so tests take a named subdirectory.
+make_root :: (name: string) -> string {
+    buffer: TextBuffer
+    append(*buffer, data_root())
+    append(*buffer, "/")
+    append(*buffer, name)
+    root_copy: TextBuffer = buffer
+    remove_tree(TextFromCString(*root_copy.bytes[0]))
+    make: TextBuffer
+    append(*make, "mkdir -p ")
+    append(*make, TextFromCString(*root_copy.bytes[0]))
+    unused run_shell(*make.bytes[0])
+    root_paths[root_next] = root_copy
+    root_next = (root_next + 1) % 8
+    return TextFromCString(*root_paths[(root_next + 7) % 8].bytes[0])
+}
+
+root_paths: [8]TextBuffer;
+root_next: s32;
+
+// Refuses to run anywhere but a data root under `prefix`, then opens and
+// closes storage there once so data_init cannot replace a test's storage.
+// Returns 0 when it is safe to go on.
+support_begin :: (prefix: string) -> s32 {
+    root := data_root()
+    if !starts_with(root, prefix) { return 100 }
+    install_english_catalog()
+    data_init()
+    storage_close()
+    return 0
+}
+
+// The database inside a closed storage root, for changes made "offline".
+raw_database :: (root: string, path: *TextBuffer) {
+    append(path, root)
+    append(path, "/inbe.db")
+}
+
+raw_exec :: (root: string, sql: string) {
+    path: TextBuffer
+    raw_database(root, *path)
+    db: *void = null
+    error: *u8 = null
+    if TestSqliteOpen(*path.bytes[0], *db) != 0 || db == null {
+        check_true("open raw database", false)
+        return
+    }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqliteExec(db, *copy.bytes[0], null, null, *error) != 0 {
+        check_true(join("raw sql failed: ", sql), false)
+        if error != null {
+            check_true(TextFromCString(error), false)
+            TestSqliteFree(cast(*void)error)
+        }
+    }
+    TestSqliteClose(db)
+}
+
+raw_count :: (root: string, sql: string) -> s32 {
+    path: TextBuffer
+    raw_database(root, *path)
+    db: *void = null
+    statement: *void = null
+    count: s32 = -1
+    if TestSqliteOpen(*path.bytes[0], *db) != 0 || db == null { return count }
+    copy: TextBuffer
+    append(*copy, sql)
+    if TestSqlitePrepare(db, *copy.bytes[0], -1, *statement, null) == 0 &&
+       TestSqliteStep(statement) == 100 {
+        count = TestSqliteColumnInt(statement, 0)
+    }
+    TestSqliteFinalize(statement)
+    TestSqliteClose(db)
+    return count
+}
+
+load_file_data :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
+
+// Whether a file holds exactly `text`.
+file_holds :: (path: *u8, text: string) -> bool {
+    size: s32 = 0
+    data := load_file_data(path, *size)
+    if data == null { return false }
+    return cast(s64)size == cast(s64)text.count && TextFromCString(data) == text
+}

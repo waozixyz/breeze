@@ -1,0 +1,385 @@
+#import "number_text"
+#import "byte_text_linux"
+#import "drawing_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+
+c :: #system_library "c";
+sqlite_free :: (memory: *void) #foreign c "free";
+
+habits_a: Habits;
+habits_b: Habits;
+
+// The account key material: an ML-DSA-sized key of repeating "42" hex.
+set_account :: () {
+    key: [5121]u8
+    index: s32 = 0
+    while index < 5120 {
+        if index % 2 == 0 { key[index] = cast(u8)52 } else { key[index] = cast(u8)50 }
+        index += 1
+    }
+    key[5120] = cast(u8)0
+    storage_set_setting_text("sync_public_id", "test-public-id")
+    storage_set_setting_text("sync_public_key", "test-public-key")
+    storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
+}
+
+payload_text: TextBuffer;
+
+// Builds the sync payload into `payload_text`; false when none is produced.
+build_payload :: () -> bool {
+    payload := storage_build_sync_payload_json("test-public-id", "test-public-key")
+    if payload == null { return false }
+    payload_text = TextBuffer.{}
+    append(*payload_text, TextFromCString(payload))
+    storage_free_sync_payload_json(payload)
+    return true
+}
+
+payload :: () -> string {
+    return TextFromCString(*payload_text.bytes[0])
+}
+
+record_count :: () -> s32 {
+    return storage_json_array_count_path(payload(), "$.encrypted_records")
+}
+
+// The "encrypted_records" array of the last payload, as text.
+records_array :: () -> string {
+    text := payload()
+    key: string = "\"encrypted_records\":"
+    start: s64 = 0
+    found: bool = false
+    while start + key.count <= text.count && !found {
+        matches: bool = true
+        index: s64 = 0
+        while index < key.count {
+            if text[start + index] != key[index] {
+                matches = false
+                break
+            }
+            index += 1
+        }
+        if matches { found = true } else { start += 1 }
+    }
+    if !found { return "[]" }
+    begin: s64 = start + key.count
+    depth: s32 = 0
+    end: s64 = begin
+    while end < text.count {
+        if text[end] == cast(u8)91 { depth += 1 }
+        if text[end] == cast(u8)93 {
+            depth -= 1
+            if depth == 0 {
+                end += 1
+                break
+            }
+        }
+        end += 1
+    }
+    return text[begin:end]
+}
+
+response_buffer: TextBuffer;
+
+// A v6 server response carrying `records` for a device to apply.
+response_with :: (version: s32, records: string) -> string {
+    part: [24]u8
+    response_buffer = TextBuffer.{}
+    append(*response_buffer, "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":")
+    append(*response_buffer, FormatInteger(cast(s64)version, part[:]))
+    append(*response_buffer, ",\"server_clock\":")
+    append(*response_buffer, FormatInteger(cast(s64)version, part[:]))
+    append(*response_buffer, ",\"changes\":{\"encrypted_records\":")
+    append(*response_buffer, records)
+    append(*response_buffer, "}}")
+    return TextFromCString(*response_buffer.bytes[0])
+}
+
+empty_response :: (version: s32) -> string {
+    return response_with(version, "[]")
+}
+
+ascii_lower :: (byte: u8) -> u8 {
+    if byte >= cast(u8)65 && byte <= cast(u8)90 { return byte + cast(u8)32 }
+    return byte
+}
+
+find_habit :: (habits: *Habits, name: string) -> *Habit {
+    index: s32 = 0
+    while index < habits.count {
+        text := TextFromCString(*habits.items[index].name[0])
+        if text.count == name.count {
+            same: bool = true
+            position: s64 = 0
+            while position < text.count {
+                if ascii_lower(text[position]) != ascii_lower(name[position]) { same = false }
+                position += 1
+            }
+            if same { return *habits.items[index] }
+        }
+        index += 1
+    }
+    return null
+}
+
+day_count_of :: (habit: *Habit, day: s32) -> s32 {
+    index := habit_find_day(habit, day)
+    if index < 0 { return -1 }
+    return habit.days[index].count
+}
+
+Green :: () -> Color {
+    return Color.{99, 196, 165, 255}
+}
+
+test_payload_after_upload_marker :: () {
+    root := make_root("sync-uploaded")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day_count(*habits_a, 0, 20260612, 12)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_habit_name_repair_done','1');DELETE FROM sync_outbox;")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_int("uploaded state is not sent again", record_count(), 0)
+    storage_close()
+}
+
+test_backfill_includes_existing_habits :: () {
+    root := make_root("sync-backfill")
+    check_true("init db", storage_init(root) != 0)
+    check_true("no payload without a private record key",
+        storage_build_sync_payload_json("test-hash", "test-public-key") == null)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');DELETE FROM sync_outbox;")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_true("existing habit is in the encrypted backfill",
+        contains(payload(), "private.inbe.v1.habits") && !contains(payload(), "\"ops\":"))
+    storage_close()
+}
+
+test_payload_excludes_local_settings :: () {
+    root := make_root("sync-settings")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_set_setting_text("theme", "dark")
+    storage_set_setting_text("main_tab", "0")
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_free(*habits_a)
+    check_true("payload builds", build_payload())
+    check_true("settings are not in the payload",
+        !contains(payload(), "\"preferences\"") && !contains(payload(), "\"theme\"") &&
+        !contains(payload(), "\"main_tab\""))
+    storage_close()
+}
+
+test_payload_includes_queued_edits :: () {
+    root := make_root("sync-queued")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day_count(*habits_a, 0, 20260617, 7)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("payload builds", build_payload())
+    check_true("queued habit day is sent", contains(payload(), ":20260617\""))
+    check_true("its content is encrypted", !contains(payload(), "\"count\":7"))
+    storage_close()
+}
+
+test_rejects_unknown_outbox_record :: () {
+    root := make_root("sync-unknown")
+    status: StorageSyncStatus
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    exec_db_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('unknown','record-1',0,1)")
+    check_true("unknown queued record rejects the payload", !build_payload())
+    check_true("status stays available", storage_sync_status(*status) != 0)
+    check_true("the record stays pending", status.queued_changes > 0)
+    storage_close()
+}
+
+test_v6_encrypted_records :: () {
+    root := make_root("sync-v6")
+    collection: [80]u8
+    record_id: [180]u8
+    ciphertext: [4096]u8
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day_count(*habits_a, 0, 20260829, 3)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("payload builds", build_payload())
+    text := payload()
+    check_true("v6 protocol", contains(text, "\"protocol_version\":6"))
+    check_true("app id", contains(text, "\"app_id\":\"inbe\""))
+    check_true("no legacy data opt-in", !contains(text, "include_legacy_data"))
+    check_true("capabilities", contains(text, "\"client_capabilities\"") &&
+        contains(text, "v6-device-transactions") && contains(text, "encrypted-primary") &&
+        !contains(text, "legacy-dual-write"))
+    check_true("encrypted records present", record_count() > 0)
+    check_true("first collection", storage_json_array_object_text(text, "$.encrypted_records", 0,
+        "collection", *collection[0], 80) != 0 && collection[0] != cast(u8)0)
+    check_true("first record id", storage_json_array_object_text(text, "$.encrypted_records", 0,
+        "id", *record_id[0], 180) != 0 && record_id[0] != cast(u8)0)
+    check_true("first ciphertext", storage_json_array_object_text(text, "$.encrypted_records", 0,
+        "ciphertext", *ciphertext[0], 4096) != 0 && ciphertext[0] != cast(u8)0 &&
+        !contains(TextFromCString(*ciphertext[0]), "Yoga"))
+    check_true("pre-v6 response rejected", storage_apply_sync_response_json(
+        "{\"protocol_version\":4,\"status\":\"ok\",\"server_version\":10,\"changes\":{\"encrypted_records\":[]}}") == 0)
+    check_true("payload builds again", build_payload())
+    check_true("records survive the rejected response", record_count() > 0)
+    storage_close()
+}
+
+test_plaintext_private_response_ignored :: () {
+    root := make_root("sync-plaintext")
+    check_true("init db", storage_init(root) != 0)
+    check_true("v6 response with a plaintext private row applies", storage_apply_sync_response_json(
+        "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":12,\"server_clock\":12,\"changes\":{\"habits\":[{\"id\":\"plaintext-habit\",\"name\":\"Unexpected\",\"color_r\":1,\"color_g\":2,\"color_b\":3,\"sync_mode\":0,\"sync_activity\":0,\"counter_enabled\":0,\"sort_order\":0,\"deleted_at\":0,\"updated_at\":\"2026-08-29T12:30:00Z\"}],\"habit_days\":[],\"sessions\":[],\"encrypted_records\":[]}}") != 0)
+    check_int("plaintext private row ignored", storage_habit_count(), 0)
+    check_int("no changed private data signalled", storage_last_sync_changed(), 0)
+    storage_close()
+}
+
+test_large_outbox_batches :: () {
+    root := make_root("sync-batch")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('batch-habit',(SELECT id FROM users LIMIT 1),'Batch',255,255,255,0,0,1,0,0,1781902800);")
+    raw_exec(root, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<404) INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) SELECT 'batch-habit',20260101+i,1,1,1781902800 FROM n;")
+    raw_exec(root, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<404) INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day','batch-habit',20260101+i,1781902800 FROM n;")
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');")
+    check_true("reopen db", storage_init(root) != 0)
+    // A full batch is far larger than the shared text buffer, so count it in place.
+    large := storage_build_sync_payload_json("test-public-id", "test-public-key")
+    check_true("payload builds", large != null)
+    if large != null {
+        check_int("large outbox payload is batched",
+            storage_json_array_count_path(TextFromCString(large), "$.encrypted_records"), 400)
+        storage_free_sync_payload_json(large)
+    }
+    check_true("apply response", storage_apply_sync_response_json(empty_response(1)) != 0)
+    storage_close()
+    check_int("later rows stay queued", raw_count(root, "SELECT COUNT(*) FROM sync_outbox"), 5)
+}
+
+test_outbox_keeps_edits_after_snapshot :: () {
+    root := make_root("sync-snapshot")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day_count(*habits_a, 0, 20260618, 1)
+    habits_save(*habits_a)
+    check_true("first payload", build_payload())
+    check_true("first edit in payload", contains(payload(), ":20260618\""))
+    habit_set_day_count(*habits_a, 0, 20260619, 2)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("apply clears only the snapshot", storage_apply_sync_response_json(empty_response(1)) != 0)
+    check_true("second payload", build_payload())
+    check_true("later edit stays queued", contains(payload(), ":20260619\""))
+    check_true("earlier edit was cleared", !contains(payload(), ":20260618\""))
+    storage_close()
+}
+
+test_orphan_habit_days_reset_cursor :: () {
+    root := make_root("sync-orphan")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO habit_days(habit_id,local_date,completed,updated_at) VALUES('habit-2',20260617,1,0);INSERT OR REPLACE INTO habit_days(habit_id,local_date,completed,updated_at) VALUES('habit-3',20260618,1,0);INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','530');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_true("orphan habit days request a full snapshot", contains(payload(), "\"since_server_version\":0"))
+    storage_close()
+}
+
+test_habit_name_repair_runs_once :: () {
+    root := make_root("sync-name-repair")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','530');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_true("repair requests a full snapshot", contains(payload(), "\"since_server_version\":0"))
+    check_true("apply repair response", storage_apply_sync_response_json(empty_response(530)) != 0)
+    check_true("payload builds again", build_payload())
+    check_true("repair only runs once", contains(payload(), "\"since_server_version\":530"))
+    storage_close()
+}
+
+// Device A's records applied on device B come out as the same habits.
+test_records_round_trip_between_devices :: () {
+    first := make_root("sync-device-a")
+    second := make_root("sync-device-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0) == 0)
+    habit_set_day_count(*habits_a, 0, 20260618, 3)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("device a payload", build_payload())
+    check_true("device a has records", record_count() > 0)
+    records := records_array()
+    storage_close()
+
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    check_true("device b applies", storage_apply_sync_response_json(response_with(5, records)) != 0)
+    habits_b = Habits.{}
+    check_true("device b loads", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("device b habit count", habits_b.count, 1)
+    habit := find_habit(*habits_b, "Cold Shower")
+    check_true("device b has the habit", habit != null)
+    check_int("device b day count", day_count_of(habit, 20260618), 3)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
+    if guard != 0 { return guard }
+    test_payload_after_upload_marker()
+    test_backfill_includes_existing_habits()
+    test_payload_excludes_local_settings()
+    test_payload_includes_queued_edits()
+    test_rejects_unknown_outbox_record()
+    test_v6_encrypted_records()
+    test_plaintext_private_response_ignored()
+    test_large_outbox_batches()
+    test_outbox_keeps_edits_after_snapshot()
+    test_orphan_habit_days_reset_cursor()
+    test_habit_name_repair_runs_once()
+    test_records_round_trip_between_devices()
+    return failures
+}

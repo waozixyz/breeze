@@ -1,0 +1,265 @@
+#import "byte_text_linux"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/import.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/path_join.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/storage_thread_buffers.zi";
+#import, file "../src/storage/legacy_session_files.zi";
+#import, file "../src/storage/legacy_session_time.zi";
+#import, file "../src/app/host_services.zi";
+
+c :: #system_library "c";
+mkdtemp :: (template: *u8) -> *u8 #foreign c;
+rename_path :: (old_path: *u8, new_path: *u8) -> s32 #foreign c "rename";
+remove_file :: (path: *u8) -> s32 #foreign c "remove";
+remove_directory :: (path: *u8) -> s32 #foreign c "rmdir";
+access :: (path: *u8, mode: s32) -> s32 #foreign c;
+open_file :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+close_file :: (file: *void) -> s32 #foreign c "fclose";
+write_file :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fwrite";
+load_file_data :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
+
+write_mode: [3]u8;
+
+// Writes `text` as the whole contents of a file.
+write_text_file :: (path: *u8, text: string) -> bool {
+    write_mode[0] = cast(u8)119
+    write_mode[1] = cast(u8)98
+    write_mode[2] = cast(u8)0
+    file := open_file(path, *write_mode[0])
+    if file == null { return false }
+    copy: string = text
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*copy)
+    written := write_file(cast(*void)descriptor.data, 1, cast(usize)text.count, file)
+    close_file(file)
+    return cast(s64)written == cast(s64)text.count
+}
+
+// Whether a file holds exactly `text`.
+file_holds :: (path: *u8, text: string) -> bool {
+    size: s32 = 0
+    data := load_file_data(path, *size)
+    if data == null { return false }
+    return cast(s64)size == cast(s64)text.count && TextFromCString(data) == text
+}
+
+#program_export "asset_entry_at"
+asset_entry_at :: (index: usize) -> *void {
+    return null
+}
+#program_export "asset_entry_total"
+asset_entry_total :: () -> usize {
+    return 0
+}
+#program_export "app_text_from_cstring"
+app_text_from_cstring :: (data: *u8, capacity: s32) -> string {
+    if data == null || capacity <= 0 { return "" }
+    length: s32 = 0
+    while length < capacity && data[length] != cast(u8)0 { length += 1 }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)length))
+}
+#program_export "FileExists"
+file_exists :: (path: *u8) -> bool {
+    return path != null && access(path, 0) == 0
+}
+
+pointer_of :: (text: string) -> *u8 {
+    copy: string = text
+    descriptor: *TextDescriptor = cast(*TextDescriptor)(*copy)
+    return descriptor.data
+}
+
+make_path :: (output: []u8, root: *u8, name: string) -> bool {
+    name_buffer: [128]u8
+    if !AppCopyText(name, name_buffer[:]) { return false }
+    return storage_join_path(*output[0], cast(u64)output.count,
+        root, *name_buffer[0]) != 0
+}
+
+make_root :: (output: []u8) -> bool {
+    if !AppCopyText("/tmp/inbe-storage-import-zi-XXXXXX", output) { return false }
+    return mkdtemp(*output[0]) != null
+}
+
+remove_database_files :: (root: *u8) {
+    path: [512]u8
+    if make_path(path[:], root, "inbe.db") { remove_file(*path[0]) }
+    if make_path(path[:], root, "breathing.db") { remove_file(*path[0]) }
+    if make_path(path[:], root, "inbe.db.migrated") { remove_file(*path[0]) }
+    if make_path(path[:], root, "inbe.db-journal") { remove_file(*path[0]) }
+    if make_path(path[:], root, "inbe.db-wal") { remove_file(*path[0]) }
+    if make_path(path[:], root, "inbe.db-shm") { remove_file(*path[0]) }
+    remove_directory(root)
+}
+
+write_source_database :: (root: *u8) -> s32 {
+    rounds: [3]s32 = .[45, 60, 75]
+    habits: Habits = Habits.{}
+
+    if storage_init(TextFromCString(root)) == 0 { return 1 }
+    if storage_save_session(*rounds[0], 3, null, 0) == 0 { return 2 }
+    habits_add_default_set(*habits)
+    habit_set_day(*habits, 0, 20260613, 1)
+    habits_save(*habits)
+    if storage_session_count() != 1 { return 3 }
+    storage_close()
+    habits_free(*habits)
+    return 0
+}
+
+test_legacy_database_migration :: () -> s32 {
+    root: [512]u8
+    current: [512]u8
+    old_path: [512]u8
+    marker: [512]u8
+
+    if !make_root(root[:]) { return 1 }
+    result := write_source_database(*root[0])
+    if result != 0 { return 10 + result }
+    if !make_path(current[:], *root[0], "inbe.db") ||
+       !make_path(old_path[:], *root[0], "breathing.db") ||
+       !AppCopyText(TextFromCString(*current[0]), marker[:]) ||
+       !AppAppendText(".migrated", marker[:]) { return 2 }
+    if rename_path(*current[0], *old_path[0]) != 0 { return 3 }
+    if storage_init(TextFromCString(*root[0])) == 0 { return 4 }
+    if storage_session_count() != 1 { return 5 }
+    storage_close()
+    if !file_exists(*current[0]) || !file_exists(*old_path[0]) ||
+       !file_exists(*marker[0]) { return 6 }
+    remove_database_files(*root[0])
+    return 0
+}
+
+test_conflicting_database_names :: () -> s32 {
+    root: [512]u8
+    current: [512]u8
+    old_path: [512]u8
+
+    if !make_root(root[:]) { return 1 }
+    result := write_source_database(*root[0])
+    if result != 0 { return 10 + result }
+    if !make_path(current[:], *root[0], "inbe.db") ||
+       !make_path(old_path[:], *root[0], "breathing.db") { return 2 }
+    if !write_text_file(*old_path[0], "old data") { return 3 }
+    if storage_init(TextFromCString(*root[0])) != 0 { return 4 }
+    storage_close()
+    if !file_exists(*current[0]) ||
+       !file_holds(*old_path[0], "old data") { return 5 }
+    remove_database_files(*root[0])
+    return 0
+}
+
+test_raw_database_import :: () -> s32 {
+    source: [512]u8
+    destination: [512]u8
+    database: [512]u8
+
+    if !make_root(source[:]) || !make_root(destination[:]) { return 1 }
+    result := write_source_database(*source[0])
+    if result != 0 { return 10 + result }
+    if !make_path(database[:], *source[0], "inbe.db") { return 2 }
+    if storage_init(TextFromCString(*destination[0])) == 0 { return 3 }
+    info: StorageImportInfo
+    if storage_inspect_import(TextFromCString(*database[0]), *info) == 0 { return 40 }
+    if info.session_count != 1 { return 41 }
+    if storage_import_zip(TextFromCString(*database[0])) == 0 { return 4 }
+    if storage_session_count() != 1 || storage_habit_count() < 1 { return 5 }
+    storage_close()
+    remove_database_files(*source[0])
+    remove_database_files(*destination[0])
+    return 0
+}
+
+test_zip_round_trip :: () -> s32 {
+    source: [512]u8
+    destination: [512]u8
+    archive: [512]u8
+
+    if !make_root(source[:]) || !make_root(destination[:]) { return 1 }
+    result := write_source_database(*source[0])
+    if result != 0 { return 10 + result }
+    if !make_path(archive[:], *source[0], "export.zip") { return 2 }
+    if storage_init(TextFromCString(*source[0])) == 0 { return 3 }
+    if storage_export_zip(TextFromCString(*archive[0])) == 0 { return 4 }
+    storage_close()
+    if storage_init(TextFromCString(*destination[0])) == 0 { return 5 }
+    if storage_import_zip(TextFromCString(*archive[0])) == 0 { return 6 }
+    if storage_session_count() != 1 || storage_habit_count() < 1 { return 7 }
+    storage_close()
+    if !file_exists(*archive[0]) { return 8 }
+    remove_file(*archive[0])
+    remove_database_files(*source[0])
+    remove_database_files(*destination[0])
+    return 0
+}
+
+test_checkin_round_trip :: () -> s32 {
+    source: [512]u8
+    destination: [512]u8
+    archive: [512]u8
+    id: [64]u8
+    rounds: [2]s32 = .[31, 35]
+    saved: SessionMoodCheckin
+    loaded: SessionMoodCheckin
+
+    if !make_root(source[:]) || !make_root(destination[:]) { return 1 }
+    if !make_path(archive[:], *source[0], "backup.zip") { return 2 }
+    if storage_init(TextFromCString(*source[0])) == 0 { return 3 }
+    if storage_save_session(*rounds[0], 2, *id[0], 64) == 0 { return 4 }
+    saved.mood_before = 3
+    saved.mood_after = 5
+    saved.energy = 4
+    saved.stress = 2
+    if !AppCopyText("Quiet morning", saved.note[:]) ||
+       !AppCopyText("morning,home", saved.tags[:]) { return 5 }
+    if storage_save_session_checkin(TextFromCString(*id[0]), *saved) == 0 { return 6 }
+    if storage_export_zip(TextFromCString(*archive[0])) == 0 { return 7 }
+    storage_close()
+
+    if storage_init(TextFromCString(*destination[0])) == 0 { return 8 }
+    if storage_import_zip(TextFromCString(*archive[0])) == 0 { return 9 }
+    if storage_load_session_checkin(TextFromCString(*id[0]), *loaded) == 0 { return 10 }
+    if loaded.mood_before != 3 || loaded.mood_after != 5 ||
+       loaded.energy != 4 || loaded.stress != 2 ||
+       TextFromCString(*loaded.note[0]) != "Quiet morning" ||
+       TextFromCString(*loaded.tags[0]) != "morning,home" { return 11 }
+    if storage_session_count() != 1 { return 12 }
+    storage_close()
+    remove_file(*archive[0])
+    remove_database_files(*source[0])
+    remove_database_files(*destination[0])
+    return 0
+}
+
+#program_export
+Check :: () -> s32 {
+    // Habit saving calls data_init, which opens storage at the data root.
+    // Never let that be a real data directory, and do it now so it cannot
+    // replace a test's storage part way through.
+    root := data_root()
+    prefix: string = "/tmp/inbe-storage-import-zi-test/"
+    if root.count < prefix.count || TextFromBytes(BytesFromPointer(pointer_of(root), cast(u64)prefix.count)) != prefix {
+        return 100
+    }
+    data_init()
+    storage_close()
+    result := test_legacy_database_migration()
+    if result != 0 { return result }
+    result = test_conflicting_database_names()
+    if result != 0 { return 1000 + result }
+    result = test_raw_database_import()
+    if result != 0 { return 2000 + result }
+    result = test_zip_round_trip()
+    if result != 0 { return 3000 + result }
+    result = test_checkin_round_trip()
+    if result != 0 { return 4000 + result }
+    return 0
+}
