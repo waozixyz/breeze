@@ -525,6 +525,13 @@ endif
 
 BINARY_NAME := $(APP_NAME)-$(NATIVE_PLATFORM)-$(ARCH)
 TARGET := $(NATIVE_BIN_DIR)/$(BINARY_NAME)
+# Native sources compile to per-file objects through mk/native-objects.mk.
+NATIVE_OBJ_DIR := $(abspath $(BUILD_OBJ_DIR)/native)
+NATIVE_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
+NATIVE_COMPILE_FLAGS = $(KRYON_NATIVE_CFLAGS) $(APP_INCLUDE) $(KRYON_INCLUDE) \
+	-iquote$(KRYON_LIBRARY_BUILD_DIR)/c $(SQLITE_INCLUDE) $(LIBOQS_INCLUDE) \
+	$(KRYON_NATIVE_BACKEND_CFLAGS) -DHAS_LIBOQS=1 -DSUPPORT_MODULE_RAUDIO=1 \
+	-DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=0
 KRYON_HOST_TARGET := $(BUILD_DIR)/kryon/app_host.so
 WIN64_BINARY_NAME := $(APP_NAME)-windows-$(WIN64_ARCH).exe
 WIN64_TARGET := $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
@@ -828,9 +835,8 @@ $(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
 	@test -f $@
 
 $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
-	rm -rf $(KRY_GEN_DIR)
 	mkdir -p $(KRY_GEN_DIR)
-	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
+	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
 		--module-path $(KRYON_DIR)/src/kss \
@@ -840,7 +846,6 @@ $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		--module-path build/packages/daochi-client \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
-	find $(KRY_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
 
 $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
@@ -2078,21 +2083,16 @@ $(WIN32_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
 
 $(TARGET): Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
 $(TARGET): | zi-check
+	$(shell mkdir -p $(NATIVE_OBJ_DIR))
+	$(file >$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_SOURCES := $(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) $(SQLITE_SRC))
+	$(file >>$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_CFLAGS := $(NATIVE_COMPILE_FLAGS))
+	+@$(MAKE) --no-print-directory -f mk/native-objects.mk \
+		$(if $(filter -j%,$(MAKEFLAGS)),,-j$(NATIVE_JOBS)) \
+		CC='$(CC)' OBJ_DIR=$(NATIVE_OBJ_DIR)
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
-		$(APP_INCLUDE) \
-		$(KRYON_INCLUDE) \
-		-iquote$(KRYON_LIBRARY_BUILD_DIR)/c \
-		$(SQLITE_INCLUDE) \
-		$(LIBOQS_INCLUDE) \
-		$(KRYON_NATIVE_BACKEND_CFLAGS) \
-		-DHAS_LIBOQS=1 \
-		-DSUPPORT_MODULE_RAUDIO=1 \
-		-DSUPPORT_FILEFORMAT_OGG=1 \
-		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
-		$(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) \
+		@$(NATIVE_OBJ_DIR)/objects.rsp \
 		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a \
-		$(SQLITE_SRC) \
 		$(KRYON_NATIVE_BACKEND_LIBS) \
 		$(LIBOQS_A) \
 		$(KRYON_NATIVE_BACKEND_LDLIBS) \
