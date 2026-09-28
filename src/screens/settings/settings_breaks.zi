@@ -24,60 +24,114 @@
 #import, file "settings_ui.zi";
 
 using TextAlign;
+using ButtonTone;
+using ButtonEmphasis;
 
 settings_breaks_slider_height :: () -> s32 {
     return AppScale(66)
+}
+
+settings_breaks_slider_row_height :: () -> s32 {
+    return AppScale(10) + settings_breaks_slider_height()
+}
+
+settings_breaks_status_row_height :: () -> s32 {
+    return AppScale(30)
+}
+
+settings_breaks_button_row_height :: () -> s32 {
+    return AppScale(56)
+}
+
+settings_breaks_week_row_height :: () -> s32 {
+    return AppScale(28)
+}
+
+settings_breaks_timer_header :: (index: s32) -> string {
+    if index == BREAK_REST {
+        return LocaleText("settings_breaks_rest_header")
+    }
+    if index == BREAK_DAILY {
+        return LocaleText("settings_breaks_daily_header")
+    }
+    return LocaleText("settings_breaks_micro_header")
+}
+
+settings_breaks_status_body :: () -> s32 {
+    return AppScale(8) + settings_breaks_status_row_height() * BREAK_TYPE_COUNT +
+        AppScale(8) + settings_breaks_button_row_height()
+}
+
+settings_breaks_general_body :: (width: s32) -> s32 {
+    return toggle_row_height(LocaleText("settings_breaks_enabled"), width) +
+        settings_choice_row_height(LocaleText("settings_breaks_block_mode"), width) +
+        toggle_row_height(LocaleText("settings_breaks_sounds"), width) +
+        toggle_row_height(LocaleText("settings_breaks_reading_mode"), width) +
+        toggle_row_height(LocaleText("settings_breaks_micro_counts"), width)
+}
+
+settings_breaks_timer_body :: (index: s32, width: s32) -> s32 {
+    sliders: s32 = 4
+    if index == BREAK_DAILY {
+        sliders = 3
+    }
+    return toggle_row_height(LocaleText("settings_breaks_timer_enabled"), width) +
+        settings_breaks_slider_row_height() * sliders + AppScale(10) +
+        toggle_row_height(LocaleText("settings_breaks_show_skip"), width) +
+        toggle_row_height(LocaleText("settings_breaks_show_postpone"), width)
+}
+
+settings_breaks_week_body :: (has_data: bool) -> s32 {
+    if !has_data {
+        return settings_breaks_week_row_height() + AppScale(12)
+    }
+    return settings_breaks_week_row_height() * BREAK_TYPE_COUNT + AppScale(12)
+}
+
+settings_breaks_week_has_data :: () -> bool {
+    rows: [42]BreakDayRow
+    return storage_break_history(7, *rows[0], 42) > 0
 }
 
 #program_export
 settings_breaks_content_height :: (app: *InnerBreeze,
     content_width: s32) -> s32 {
     unused app
-    label_width := content_width
-    if label_width <= 0 {
-        label_width = AppScale(240)
+    width := content_width
+    if width <= 0 {
+        width = AppScale(240)
     }
-    height := AppScale(120)
-    height += toggle_row_height(LocaleText("settings_breaks_enabled"), label_width)
-    height += AppScale(76)
-    height += toggle_row_height(LocaleText("settings_breaks_sounds"), label_width)
-    height += toggle_row_height(LocaleText("settings_breaks_reading_mode"), label_width)
-    height += toggle_row_height(LocaleText("settings_breaks_micro_counts"), label_width)
-    timer_keys: [3]string
-    timer_keys[0] = "settings_breaks_micro_header"
-    timer_keys[1] = "settings_breaks_rest_header"
-    timer_keys[2] = "settings_breaks_daily_header"
-    for index: 0..2 {
-        header := LocaleText(timer_keys[index])
-        height += AppScale(44) + AppParagraphHeight(header, label_width, 0, 0)
-        height += toggle_row_height(LocaleText("settings_breaks_timer_enabled"), label_width)
-        height += settings_breaks_slider_height() * 4
-        height += toggle_row_height(LocaleText("settings_breaks_show_skip"), label_width)
-        height += toggle_row_height(LocaleText("settings_breaks_show_postpone"), label_width)
+    inner := settings_section_inner_width(width)
+    height := settings_section_height(LocaleText("settings_breaks_status"),
+        settings_breaks_status_body())
+    height += settings_section_height(LocaleText("settings_tab_breaks"),
+        settings_breaks_general_body(inner))
+    for index: 0..(BREAK_TYPE_COUNT - 1) {
+        height += settings_section_height(
+            settings_breaks_timer_header(cast(s32)index),
+            settings_breaks_timer_body(cast(s32)index, inner))
     }
-    return height + AppScale(200)
+    height += settings_section_height(LocaleText("settings_breaks_week_stats"),
+        settings_breaks_week_body(settings_breaks_week_has_data()))
+    return height
 }
 
 settings_breaks_draw_status :: (app: *InnerBreeze, x: s32,
     width: s32, y: *s32) {
-    title: TextProps
-    title.text = LocaleText("settings_breaks_status")
-    title.font = AppFontSize()
-    title.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(24)
-}
-    Text(app.ui.session, title)
-    y.* += AppScale(30)
-
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_breaks_status"), settings_breaks_status_body())
+    ix := section.inner_x
+    iw := section.inner_width
     names: [3]string
     names[0] = LocaleText("break_micro_title")
     names[1] = LocaleText("break_rest_title")
     names[2] = LocaleText("break_daily_title")
-    bar_x := x + width / 2
-    bar_width := width / 2 - AppScale(8)
-    if bar_width < AppScale(80) {
-        bar_width = AppScale(80)
-    }
+    row_h := settings_breaks_status_row_height()
+    bar_width := iw * 2 / 5
+    due_width := AppScale(72)
+    bar_x := ix + iw - bar_width
+    name_width := iw - bar_width - due_width - AppScale(24)
+    y.* += AppScale(8)
     for index: 0..(BREAK_TYPE_COUNT - 1) {
         timer := app.*.breaks.timers[index]
         next := BreakNextDueSeconds(app.breaks, cast(s32)index)
@@ -94,32 +148,53 @@ settings_breaks_draw_status :: (app: *InnerBreeze, x: s32,
         name_props: TextProps
         name_props.text = names[index]
         name_props.font = AppSmallFontSize()
-        name_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)(bar_x - x), cast(float32)AppScale(20)
-}
+        name_props.vertical_align = cast(TextAlign)TextAlignCenter
+        name_props.bounds = Rectangle.{cast(float32)ix, cast(float32)y.*,
+            cast(float32)name_width, cast(float32)row_h}
         Text(app.ui.session, name_props)
         due_props: TextProps
         due_props.text = due
         due_props.font = AppSmallFontSize()
         due_props.align = cast(TextAlign)TextAlignEnd
-        due_props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)(bar_x - x - AppScale(8)), cast(float32)AppScale(20)
-}
+        due_props.vertical_align = cast(TextAlign)TextAlignCenter
+        due_props.bounds = Rectangle.{cast(float32)(bar_x - AppScale(12) - due_width),
+            cast(float32)y.*, cast(float32)due_width, cast(float32)row_h}
         Text(app.ui.session, due_props)
         if timer.limit_s > 0 {
             progress: ProgressProps
             progress.bounds = Rectangle.{cast(float32)bar_x,
-                cast(float32)(y.* + AppScale(3)), cast(float32)bar_width,
-                cast(float32)AppScale(10)
-}
+                cast(float32)(y.* + (row_h - AppScale(8)) / 2),
+                cast(float32)bar_width, cast(float32)AppScale(8)}
             progress.min = 0
             progress.max = timer.limit_s
             progress.value = timer.active_s
             Progress(app.ui.session, progress)
         }
-        y.* += AppScale(22)
+        y.* += row_h
     }
-    y.* += AppScale(12)
+    y.* += AppScale(8)
+    settings_row_divider(app, section, y.*)
+    rest: ButtonProps
+    rest.id = 545
+    rest.bounds = Rectangle.{cast(float32)ix, cast(float32)(y.* + AppScale(10)),
+        cast(float32)iw, cast(float32)AppScale(36)}
+    rest.label = LocaleText("settings_breaks_rest_now")
+    rest.tone = cast(ButtonTone)ButtonToneNeutral
+    rest.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(app.ui.session, rest) != 0 {
+        app.ui.rest_break_requested = true
+    }
+    y.* += settings_breaks_button_row_height()
+    settings_section_end(y)
+}
+
+settings_breaks_slider :: (app: *InnerBreeze, id: s32, x: s32, width: s32,
+    y: *s32, label: string, minimum: s32, maximum: s32,
+    value: *s32) -> bool {
+    y.* += AppScale(10)
+    return commit_slider_row(app, id, x, width, y,
+        settings_breaks_slider_height(), label, minimum, maximum, value,
+        "", 0) != 0
 }
 
 settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
@@ -133,25 +208,18 @@ settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
     show_skip := timer.show_skip
     show_postpone := timer.show_postpone
     changed := false
-    header: string = LocaleText("settings_breaks_micro_header")
-    if index == BREAK_REST {
-        header = LocaleText("settings_breaks_rest_header")
-    } else if index == BREAK_DAILY {
-        header = LocaleText("settings_breaks_daily_header")
-    }
-    text: TextProps
-    text.text = header
-    text.font = AppFontSize()
-    text.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(30)
-}
-    Text(app.ui.session, text)
-    y.* += AppScale(34)
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        settings_breaks_timer_header(index),
+        settings_breaks_timer_body(index, inner))
+    ix := section.inner_x
+    iw := section.inner_width
 
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_timer_enabled"), *enabled, 0) != 0 {
         changed = true
     }
+    settings_row_divider(app, section, y.*)
     minimum: s32 = 1
     maximum: s32 = 30
     if index == BREAK_REST {
@@ -161,9 +229,9 @@ settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
         minimum = 60
         maximum = 1440
     }
-    if commit_slider_row(app, 500 + index * 10, x, width, y,
-        settings_breaks_slider_height(), LocaleText("settings_breaks_limit"),
-        minimum, maximum, *limit_minutes, "", 0) != 0 {
+    if settings_breaks_slider(app, 500 + index * 10, ix, iw, y,
+        LocaleText("settings_breaks_limit"), minimum, maximum,
+        *limit_minutes) {
         changed = true
     }
     if index != BREAK_DAILY {
@@ -173,27 +241,28 @@ settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
             duration_min = 60
             duration_max = 1800
         }
-        if commit_slider_row(app, 501 + index * 10, x, width, y,
-            settings_breaks_slider_height(), LocaleText("settings_breaks_duration"),
-            duration_min, duration_max, *duration, "", 0) != 0 {
+        if settings_breaks_slider(app, 501 + index * 10, ix, iw, y,
+            LocaleText("settings_breaks_duration"), duration_min,
+            duration_max, *duration) {
             changed = true
         }
     }
-    if commit_slider_row(app, 502 + index * 10, x, width, y,
-        settings_breaks_slider_height(), LocaleText("settings_breaks_postpone"),
-        60, 1800, *postpone, "", 0) != 0 {
+    if settings_breaks_slider(app, 502 + index * 10, ix, iw, y,
+        LocaleText("settings_breaks_postpone"), 60, 1800, *postpone) {
         changed = true
     }
-    if commit_slider_row(app, 503 + index * 10, x, width, y,
-        settings_breaks_slider_height(), LocaleText("settings_breaks_prompts"),
-        0, 10, *prompts, "", 0) != 0 {
+    if settings_breaks_slider(app, 503 + index * 10, ix, iw, y,
+        LocaleText("settings_breaks_prompts"), 0, 10, *prompts) {
         changed = true
     }
-    if commit_toggle_row(app, x, width, y,
+    y.* += AppScale(10)
+    settings_row_divider(app, section, y.*)
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_show_skip"), *show_skip, 0) != 0 {
         changed = true
     }
-    if commit_toggle_row(app, x, width, y,
+    settings_row_divider(app, section, y.*)
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_show_postpone"), *show_postpone, 0) != 0 {
         changed = true
     }
@@ -210,30 +279,30 @@ settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
         }
         app.settings_dirty = 1
     }
-    y.* += AppScale(10)
+    settings_section_end(y)
 }
 
 settings_breaks_draw_week :: (app: *InnerBreeze, x: s32,
     width: s32, y: *s32) {
     rows: [42]BreakDayRow
     count := storage_break_history(7, *rows[0], 42)
-    heading: TextProps
-    heading.text = LocaleText("settings_breaks_week_stats")
-    heading.font = AppFontSize()
-    heading.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(24)
-}
-    Text(app.ui.session, heading)
-    y.* += AppScale(30)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_breaks_week_stats"),
+        settings_breaks_week_body(count > 0))
+    ix := section.inner_x
+    iw := section.inner_width
+    row_h := settings_breaks_week_row_height()
+    y.* += AppScale(6)
     if count <= 0 {
         empty: TextProps
         empty.text = LocaleText("settings_breaks_no_data")
         empty.font = AppSmallFontSize()
-        empty.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)width, cast(float32)AppScale(20)
-}
+        empty.vertical_align = cast(TextAlign)TextAlignCenter
+        empty.bounds = Rectangle.{cast(float32)ix, cast(float32)y.*,
+            cast(float32)iw, cast(float32)row_h}
         Text(app.ui.session, empty)
-        y.* += AppScale(24)
+        y.* += row_h + AppScale(6)
+        settings_section_end(y)
         return
     }
     taken: [3]s32
@@ -257,80 +326,61 @@ settings_breaks_draw_week :: (app: *InnerBreeze, x: s32,
         if kind == BREAK_DAILY {
             name = LocaleText("break_daily_title")
         }
-        first: [16]u8
-        second: [16]u8
-        third: [16]u8
-        unused FormatNumberTemplate("%d", taken[kind], first[:])
-        unused FormatNumberTemplate("%d", skipped[kind], second[:])
-        unused FormatNumberTemplate("%d", postponed[kind], third[:])
-        values: [3]string
-        values[0] = FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*first[0], 16))
-        values[1] = FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*second[0], 16))
-        values[2] = FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*third[0], 16))
-        cursor := x
-        line: TextProps
-        line.font = AppSmallFontSize()
-        line.bounds = Rectangle.{cast(float32)cursor, cast(float32)y.*,
-            cast(float32)width, cast(float32)AppScale(20)
-}
-        line.text = name
-        Text(app.ui.session, line)
-        cursor += AppTextWidth(name, line.font) + AppScale(8)
-        for item: 0..2 {
-            line.text = values[item]
-            line.bounds.x = cast(float32)cursor
-            Text(app.ui.session, line)
-            cursor += AppTextWidth(values[item], line.font)
-            if item < 2 {
-                line.text = "/"
-                line.bounds.x = cast(float32)(cursor + AppScale(4))
-                Text(app.ui.session, line)
-                cursor += AppScale(4) + AppTextWidth("/", line.font) + AppScale(4)
-            }
-        }
-        y.* += AppScale(20)
+        summary: [48]u8
+        summary_args: [3]FormatArg = .[
+        FormatArg.{.number = taken[kind]},
+        FormatArg.{.number = skipped[kind]},
+        FormatArg.{.number = postponed[kind]}
+        ]
+        FormatTemplate("%d / %d / %d", summary_args[:], summary[:])
+        name_props: TextProps
+        name_props.text = name
+        name_props.font = AppSmallFontSize()
+        name_props.vertical_align = cast(TextAlign)TextAlignCenter
+        name_props.bounds = Rectangle.{cast(float32)ix, cast(float32)y.*,
+            cast(float32)(iw / 2), cast(float32)row_h}
+        Text(app.ui.session, name_props)
+        value_props: TextProps
+        value_props.text = AppTextFromCString(*summary[0], 48)
+        value_props.font = AppSmallFontSize()
+        value_props.align = cast(TextAlign)TextAlignEnd
+        value_props.vertical_align = cast(TextAlign)TextAlignCenter
+        value_props.bounds = Rectangle.{cast(float32)(ix + iw / 2), cast(float32)y.*,
+            cast(float32)(iw - iw / 2), cast(float32)row_h}
+        Text(app.ui.session, value_props)
+        y.* += row_h
     }
-    y.* += AppScale(12)
+    y.* += AppScale(6)
+    settings_section_end(y)
 }
 
-#program_export
-settings_breaks_draw :: (app: *InnerBreeze, x: s32,
+settings_breaks_draw_general :: (app: *InnerBreeze, x: s32,
     width: s32, y: *s32) {
-    if app == null || y == null {
-        return
-    }
+    inner := settings_section_inner_width(width)
+    section := settings_section_begin(app, x, width, y,
+        LocaleText("settings_tab_breaks"), settings_breaks_general_body(inner))
+    ix := section.inner_x
+    iw := section.inner_width
     enabled := app.breaks_enabled
     sounds := app.break_sounds_enabled
     reading := app.breaks.reading_mode
     micro_counts := app.breaks.micro_counts_as_activity
-    settings_breaks_draw_status(app, x, width, y)
-    if commit_toggle_row(app, x, width, y,
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_enabled"), *enabled, 0) != 0 {
         app.breaks_enabled = enabled
         if enabled == 0 {
             app.breaks = BreakSetMode(app.breaks, BreakModeNormal, 0)
         }
     }
+    settings_row_divider(app, section, y.*)
     block_options: [3]DropdownOption
     block_options[0].label = LocaleText("settings_breaks_block_off")
     block_options[1].label = LocaleText("settings_breaks_block_input")
     block_options[2].label = LocaleText("settings_breaks_block_screen")
-    block_label: TextProps
-    block_label.text = LocaleText("settings_breaks_block_mode")
-    block_label.font = AppFontSize()
-    block_label.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)width, cast(float32)AppScale(24)
-}
-    Text(app.ui.session, block_label)
     block: DropdownProps
     block.id = 540
-    block.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + AppScale(26)), cast(float32)width,
-        cast(float32)AppScale(36)
-}
+    block.bounds = settings_choice_row(app, ix, iw, y,
+        LocaleText("settings_breaks_block_mode"))
     block.selected_index = app.break_block_mode
     block.open = app.ui.break_mode_settings_menu.open
     block.highlight_index = app.ui.break_mode_settings_menu.highlight_index
@@ -341,32 +391,32 @@ settings_breaks_draw :: (app: *InnerBreeze, x: s32,
         app.break_block_mode = app.ui.break_mode_settings_menu.selected_index
         app.settings_dirty = 1
     }
-    y.* += AppScale(76)
-    if commit_toggle_row(app, x, width, y,
+    settings_row_divider(app, section, y.*)
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_sounds"), *sounds, 0) != 0 {
         app.break_sounds_enabled = sounds
     }
-    if commit_toggle_row(app, x, width, y,
+    settings_row_divider(app, section, y.*)
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_reading_mode"), *reading, 0) != 0 {
         app.breaks.reading_mode = reading
     }
-    if commit_toggle_row(app, x, width, y,
+    settings_row_divider(app, section, y.*)
+    if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_micro_counts"), *micro_counts, 0) != 0 {
         app.breaks.micro_counts_as_activity = micro_counts
     }
-    button_width := (width - AppScale(12)) / 2
-    if button_width > AppScale(200) {
-        button_width = AppScale(200)
-    }
-    rest: ButtonProps
-    rest.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-        cast(float32)button_width, cast(float32)AppScale(40)
+    settings_section_end(y)
 }
-    rest.label = LocaleText("settings_breaks_rest_now")
-    if Button(app.ui.session, rest) != 0 {
-        app.ui.rest_break_requested = true
+
+#program_export
+settings_breaks_draw :: (app: *InnerBreeze, x: s32,
+    width: s32, y: *s32) {
+    if app == null || y == null {
+        return
     }
-    y.* += AppScale(60)
+    settings_breaks_draw_status(app, x, width, y)
+    settings_breaks_draw_general(app, x, width, y)
     for index: 0..(BREAK_TYPE_COUNT - 1) {
         settings_breaks_draw_timer(app, cast(s32)index, x, width, y)
     }
