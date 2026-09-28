@@ -1315,6 +1315,26 @@ metrics-zi-test: $(ZI2C_BIN)
 
 test: metrics-zi-test
 
+.PHONY: mood-average-zi-test
+mood-average-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/mood_average_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: mood-average-zi-test
+
+.PHONY: habit-session-rules-zi-test
+habit-session-rules-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/habit_session_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: habit-session-rules-zi-test
+
+.PHONY: locale-used-keys-test
+locale-used-keys-test:
+	@python3 tests/locale_used_keys_test.py
+
+test: locale-used-keys-test
+
 .PHONY: music-library-zi-test
 music-library-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
