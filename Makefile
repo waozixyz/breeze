@@ -378,40 +378,13 @@ APP_SRCS := \
 	$(sort $(wildcard src/app/*.c)) \
 	$(MONOCYPHER_SRCS)
 
-ifeq ($(NATIVE_PLATFORM),linux)
-# Prefer AppIndicator (visible on GNOME/KDE via StatusNotifierItem); fall back to
-# the GTK GtkStatusIcon backend when only GTK3 is available. GtkStatusIcon is
-# deprecated and invisible on stock GNOME, so install libayatana-appindicator3-dev
-# for a reliable tray icon on modern desktops.
-DESKTOP_TRAY_PKG := $(shell if pkg-config --exists ayatana-appindicator3-0.1; then printf '%s' ayatana-appindicator3-0.1; elif pkg-config --exists appindicator3-0.1; then printf '%s' appindicator3-0.1; elif pkg-config --exists gtk+-3.0; then printf '%s' gtk+-3.0; fi)
-ifeq ($(filter ayatana-appindicator3-0.1 appindicator3-0.1,$(DESKTOP_TRAY_PKG)),)
-# GTK-only tray: resolve GTK at runtime through the app's gtk_dl shim so neither
-# libgtk-3 nor its gdk/pango/cairo chain is linked into the binary. GTK maps
-# only when the tray actually starts (unset APP_NO_TRAY to skip it entirely).
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DDESKTOP_TRAY_GTK_DL
-else ifeq ($(filter ayatana-appindicator3-0.1,$(DESKTOP_TRAY_PKG)),ayatana-appindicator3-0.1)
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_AYATANA
-else
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_APPINDICATOR
+# Kryon's tray loads GTK and AppIndicator with dlopen only when the tray opens
+# (APP_NO_TRAY=1 skips it), preferring a StatusNotifierItem and falling back
+# to a GTK status icon, so nothing tray-related is compiled in or linked.
+ifneq ($(filter linux freebsd,$(NATIVE_PLATFORM)),)
+DESKTOP_TRAY_DEFINE := DESKTOP_TRAY_ENABLED
 endif
-endif
-ifeq ($(NATIVE_PLATFORM),freebsd)
-DESKTOP_TRAY_PKG := $(shell if pkg-config --exists gtk+-3.0; then printf '%s' gtk+-3.0; fi)
-DESKTOP_TRAY_DEFINE := -DDESKTOP_TRAY_GTK_STATUS_ICON -DDESKTOP_TRAY_GTK_DL
-endif
-ifneq ($(strip $(DESKTOP_TRAY_PKG)),)
-
-DESKTOP_TRAY_CFLAGS := $(shell pkg-config --cflags $(DESKTOP_TRAY_PKG)) -DDESKTOP_TRAY_ENABLED $(DESKTOP_TRAY_DEFINE)
-ifeq ($(filter ayatana-appindicator3-0.1 appindicator3-0.1,$(DESKTOP_TRAY_PKG)),)
-# Headers only for the GTK-only tray; the gtk_dl shim owns the symbols.
-DESKTOP_TRAY_LDLIBS :=
-else
-DESKTOP_TRAY_LDLIBS := $(shell pkg-config --libs $(DESKTOP_TRAY_PKG))
-endif
-
-endif
-ZI_NATIVE_DEFINES := PLATFORM_DESKTOP $(if $(strip $(DESKTOP_TRAY_PKG)),DESKTOP_TRAY_ENABLED,)
-ZI_NATIVE_DEFINES += $(patsubst -D%,%,$(DESKTOP_TRAY_DEFINE))
+ZI_NATIVE_DEFINES := PLATFORM_DESKTOP $(DESKTOP_TRAY_DEFINE)
 # Ziran preprocessing must see the libc choice used by the native C compiler.
 NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | rg -q '^\#define __GLIBC__ ' && printf yes)
 ifeq ($(NATIVE_GLIBC),yes)
@@ -528,9 +501,9 @@ KRYON_RAYLIB_AUDIO_PERIOD_CONFIG := $(if $(strip $(KRYON_RAYLIB_AUDIO_PERIOD_FRA
 KRYON_RAYLIB_AUDIO_PERIODS_CONFIG := $(if $(strip $(KRYON_RAYLIB_AUDIO_PERIODS)),-DAUDIO_DEVICE_PERIODS=$(KRYON_RAYLIB_AUDIO_PERIODS),)
 APP_RAYLIB_CONFIG := $(filter-out -DSUPPORT_MODULE_RAUDIO=0 -DSUPPORT_FILEFORMAT_PNG=0 -DSUPPORT_FILEFORMAT_JPG=0 -DSUPPORT_FILEFORMAT_OGG=0 -DSUPPORT_FILEFORMAT_MP3=%,$(RAY_RAYLIB_CONFIG)) -DSUPPORT_MODULE_RAUDIO=1 -DSUPPORT_FILEFORMAT_JPG=1 -DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=0 $(KRYON_RAYLIB_AUDIO_PERIOD_CONFIG) $(KRYON_RAYLIB_AUDIO_PERIODS_CONFIG)
 COMMON_CFLAGS := -Wall -Wextra -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DNATIVE_WINDOW_HAVE_SDL -DKRYON_WITH_SYNC=1
-CFLAGS := $(COMMON_CFLAGS) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(DESKTOP_TRAY_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
+CFLAGS := $(COMMON_CFLAGS) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
 NATIVE_SYSTEM_LDLIBS := $(KRYON_NOTIFICATION_LDLIBS) -lz -lm -lpthread -latomic $(if $(filter linux,$(NATIVE_PLATFORM)),-ldl -lrt,) $(SYSTEM_THEME_LDLIBS)
-WINDOWS_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDESKTOP_TRAY_ENABLED -DKRYON_WITH_SYNC=1
+WINDOWS_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DKRYON_WITH_SYNC=1
 WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -Oz -std=gnu99
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
 LDFLAGS := -Wl,--gc-sections -s
@@ -600,14 +573,10 @@ KRYON_SRCS += $(KRYON_LIBDRAW_SRCS)
 KRYON_NATIVE_CFLAGS := $(filter-out -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_LIBDRAW=1 -I$(PLAN9PORT_DIR)/include -idirafter $(RAYLIB_DIR)/external
 KRYON_NATIVE_BACKEND_LDLIBS := -L$(PLAN9PORT_DIR)/lib -ldraw -lmemdraw -lmux -lthread -l9 -lpthread -lm
-DESKTOP_TRAY_CFLAGS :=
-DESKTOP_TRAY_LDLIBS :=
 else ifeq ($(KRYON_BACKEND),termi)
 KRYON_SRCS += $(KRYON_TERMI_SRCS) $(KRYON_NULL_BACKEND_C)
 KRYON_NATIVE_CFLAGS := $(filter-out -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_TERMI=1
-DESKTOP_TRAY_CFLAGS :=
-DESKTOP_TRAY_LDLIBS :=
 else
 $(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib, libdraw, or termi))
 endif
@@ -719,9 +688,6 @@ scroll-input-link-test: kryon-library-check $(ZI2C_BIN)
 		-o $(BUILD_DIR)/scroll-input-link/test
 	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/scroll-input-link/test
 
-.PHONY: desktop-tray-host-test
-desktop-tray-host-test:
-	@sh tests/desktop_tray_host_test.sh
 
 .PHONY: uri-link-test
 uri-link-test: $(ZI2C_BIN)
@@ -2131,7 +2097,6 @@ $(TARGET): | zi-check
 		$(LIBOQS_A) \
 		$(KRYON_NATIVE_BACKEND_LDLIBS) \
 		$(RUNTIME_ASSET_LDLIBS) \
-		$(DESKTOP_TRAY_LDLIBS) \
 		$(NATIVE_SYSTEM_LDLIBS) \
 		$(LDFLAGS)
 
