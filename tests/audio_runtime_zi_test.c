@@ -7,17 +7,17 @@ static int played_sounds;
 static int unloaded_music;
 static int played_music;
 
-bool raylib_game_IsSoundValid(Sound sound) { return sound.frame_count != 0; }
-void raylib_game_UnloadSound(Sound sound) { assert(sound.frame_count != 0); unloaded_sounds++; }
-void raylib_game_PlaySound(Sound sound) { assert(sound.frame_count != 0); played_sounds++; }
-bool raylib_game_IsMusicValid(Music music) { return music.frame_count != 0; }
-void raylib_game_UnloadMusicStream(Music music) { assert(music.frame_count != 0); unloaded_music++; }
-void raylib_game_PlayMusicStream(Music music) { assert(music.frame_count != 0); played_music++; }
+bool IsSoundValid(NativeSound sound) { return sound.frame_count != 0; }
+void UnloadSound(NativeSound sound) { assert(sound.frame_count != 0); unloaded_sounds++; }
+void PlaySound(NativeSound sound) { assert(sound.frame_count != 0); played_sounds++; }
+bool IsMusicValid(NativeMusic music) { return music.frame_count != 0; }
+void UnloadMusicStream(NativeMusic music) { assert(music.frame_count != 0); unloaded_music++; }
+void PlayMusicStream(NativeMusic music) { assert(music.frame_count != 0); played_music++; }
 
 int main(void)
 {
-    Sound sound = {0};
-    Music music = {0};
+    NativeSound sound = {0};
+    NativeMusic music = {0};
     SoundHandle sounds[64];
     MusicHandle tracks[16];
     sound.frame_count = 123;
