@@ -159,7 +159,6 @@ habits_expand_card :: (app: *InnerBreeze, index: s32) {
     app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
     app.habits.tab = HABIT_TAB_WEEKLY
     app.habits.view_mode = HABIT_VIEW_WEEKLY
-    app.habits.scroll = 0
     HabitScreenSave(app)
 }
 
@@ -197,6 +196,14 @@ habits_return_to_overview :: (app: *InnerBreeze) {
     app.habits.tab = HABIT_TAB_WEEKLY
     app.habits.view_mode = HABIT_VIEW_WEEKLY
     app.habits.scroll = 0
+    HabitScreenSave(app)
+}
+
+habits_collapse_card :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.habits.selected = -1
     HabitScreenSave(app)
 }
 
@@ -263,7 +270,7 @@ habits_screen_draw_first_run_guide :: (app: *InnerBreeze) {
     props.view_height = app.ui.view_height
     props.reserved_bottom = app_content_bottom_reserved(app)
     props.max_width = AppScale(300)
-    props.paragraph_font = AppSmallFontSize()
+    props.paragraph_font = AppFontSize()
     props.previous_requested = app.ui.manual_previous
     props.next_requested = app.ui.manual_next
     props.close_requested = app.ui.manual_close
@@ -757,19 +764,28 @@ HabitScreenOverview :: (app: *InnerBreeze,
     heading_h := AppScale(34)
     button_h := AppScale(42)
     gap := AppScale(12)
+    add_label := LocaleText("habit_new_button")
+    add_width := AppTextWidth(add_label, AppFontSize()) + AppScale(40)
+    if add_width < AppScale(120) {
+        add_width = AppScale(120)
+    }
+    if add_width > geometry.width * 2 / 3 {
+        add_width = geometry.width * 2 / 3
+    }
     heading: TextProps
     heading.bounds = HabitScreenRect(geometry.x, geometry.y,
-        geometry.width - button_h - gap, heading_h)
+        geometry.width - add_width - gap, heading_h)
     heading.text = LocaleText("tab_habits")
-    heading.font = AppTitleFontSize(heading.text, geometry.width)
+    heading.font = AppTitleFontSize(heading.text,
+        cast(s32)heading.bounds.width)
     heading.wrap = cast(TextWrap)TextWrapNone
     Text(app.ui.session, heading)
-    add_bounds := HabitScreenRect(geometry.x + geometry.width - button_h,
-        geometry.y, button_h, button_h)
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_new_button"), 4100,
-        cast(s32)add_bounds.x, cast(s32)add_bounds.y,
-        cast(s32)add_bounds.width, cast(s32)add_bounds.height,
-        false, app.habits.count >= HABIT_MAX)) != 0 {
+    add_button := HabitScreenButtonProps(app, add_label, 4100,
+        geometry.x + geometry.width - add_width, geometry.y,
+        add_width, button_h, false, app.habits.count >= HABIT_MAX)
+    add_button.tone = cast(ButtonTone)ButtonToneAccent
+    add_button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    if Button(app.ui.session, add_button) != 0 {
         habit_edit_begin_new(app)
         return
     }
@@ -849,7 +865,7 @@ HabitScreenOverview :: (app: *InnerBreeze,
         if index == app.habits.selected {
             if HabitScreenSelectedCard(app, index, card) {
                 End(app.ui.session)
-                habits_return_to_overview(app)
+                habits_collapse_card(app)
                 return
             }
             index += 1
@@ -1106,8 +1122,10 @@ draw_habits_screen :: (app: *InnerBreeze) {
     if app == null { return }
     geometry := HabitScreenLayout(app)
     if geometry.width <= 0 || geometry.height <= 0 { return }
-    if app.habits.count <= 0 || app.habits.selected < 0 ||
-    app.habits.selected >= app.habits.count {
+    show_overview := app.habits.screen_mode == HABITS_SCREEN_OVERVIEW &&
+        app.habits.tab == HABIT_TAB_WEEKLY
+    if show_overview || app.habits.count <= 0 ||
+    app.habits.selected < 0 || app.habits.selected >= app.habits.count {
         HabitScreenOverview(app, geometry)
         return
     }

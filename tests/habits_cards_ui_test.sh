@@ -51,15 +51,16 @@ expect "$(day_count)" "$before" 'collapsed today undo'
 # Open Yoga only through its chevron.
 tap 350 269
 import -window "$window" "$test_dir/yoga-expanded.png"
-tap 50 417
+expanded_day_y=528
+tap 50 "$expanded_day_y"
 expect "$(day_count)" "$((before+1))" 'expanded today check-in'
-tap 50 417
+tap 50 "$expanded_day_y"
 expect "$(day_count)" "$before" 'expanded today undo'
-tap 99 417
+tap 99 "$expanded_day_y"
 expect "$(day_count)" "$((before+1))" 'expanded past-day check-in'
-tap 99 417
+tap 99 "$expanded_day_y"
 expect "$(day_count)" "$before" 'expanded past-day undo'
-drag 50 417 294 417
+drag 50 "$expanded_day_y" 294 "$expanded_day_y"
 expect "$(day_count)" "$before" 'drag does not check a day'
 tap 350 269
 import -window "$window" "$test_dir/collapsed.png"
