@@ -30,6 +30,7 @@
 using ButtonEmphasis;
 using ButtonState;
 using ButtonTone;
+using ArrowDirection;
 using ControlSize;
 using StyleField;
 using TextAlign;
@@ -66,7 +67,7 @@ ActionImage :: (icon: ActionIcon, label: string) -> ImageProps {
     }
     image.source = Rectangle.{cast(float32)x, cast(float32)y,
         64.0, 64.0
-}
+    }
     return image
 }
 
@@ -139,38 +140,87 @@ GuideFace :: (role: s32) -> StyleFrame {
 
 GuidePageLabel :: (app: *InnerBreeze, step: s32,
     count: s32) -> string {
-    first: [16]u8
-    last: [16]u8
-    page: [36]u8
-    if !FormatNumberTemplate("%d", step + 1, first[:])  || !FormatNumberTemplate("%d", count, last[:]) {
+    page: [96]u8
+    if !FormatTwoNumberTemplate(LocaleText("tutorial_step_progress"),
+        step + 1, count, page[:]) {
         return ""
     }
-    used: s32 = 0
-    index: s32 = 0
-    while index < 15 && first[index] != cast(u8)0 {
-        page[used] = first[index]
-        used += 1
-        index += 1
-    }
-    page[used] = cast(u8)47
-    used += 1
-    index = 0
-    while index < 15 && last[index] != cast(u8)0 {
-        page[used] = last[index]
-        used += 1
-        index += 1
-    }
-    page[used] = cast(u8)0
     return FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*page[0], used + 1))
+        AppTextFromCString(*page[0], 96))
 }
 
-GuidePaintLine :: (session: Session, node: s32,
-    start: Vector2, finish: Vector2, color: Color) {
-    bounds := Rectangle.{start.x, start.y,
-        finish.x - start.x, finish.y - start.y
+GuideRoundedScrimCorners :: (session: Session, node: s32,
+    scrim: GuideScrim, color: Color) {
+    left := cast(s32)scrim.left.width
+    right := cast(s32)scrim.right.x
+    top := cast(s32)scrim.top.height
+    bottom := cast(s32)scrim.bottom.y
+    radius := AppScale(12)
+    if radius > (right - left) / 2 {
+        radius = (right - left) / 2
+    }
+    if radius > (bottom - top) / 2 {
+        radius = (bottom - top) / 2
+    }
+    if radius <= 0 {
+        return
+    }
+    row: s32 = 0
+    while row < radius {
+        dy := radius - row - 1
+        inset: s32 = 0
+        while inset < radius {
+            dx := radius - inset - 1
+            if dx * dx + dy * dy <= radius * radius {
+                break
+            }
+            inset += 1
+        }
+        if inset > 0 {
+            PaintRoundedFill(session, node,
+                Rectangle.{cast(float32)left, cast(float32)(top + row),
+                    cast(float32)inset, 1.0}, 0.0, 4, color)
+            PaintRoundedFill(session, node,
+                Rectangle.{cast(float32)(right - inset),
+                    cast(float32)(top + row), cast(float32)inset, 1.0},
+                0.0, 4, color)
+            PaintRoundedFill(session, node,
+                Rectangle.{cast(float32)left,
+                    cast(float32)(bottom - row - 1),
+                    cast(float32)inset, 1.0}, 0.0, 4, color)
+            PaintRoundedFill(session, node,
+                Rectangle.{cast(float32)(right - inset),
+                    cast(float32)(bottom - row - 1),
+                    cast(float32)inset, 1.0}, 0.0, 4, color)
+        }
+        row += 1
+    }
 }
-    PaintLine(session, node, bounds, color)
+
+GuideProgressDots :: (session: Session, node: s32,
+    tip: Rectangle, controls_y: s32, button_size: s32,
+    pad: s32, step: s32, count: s32, active: Color,
+    muted: Color) {
+    dot_size := AppScale(6)
+    gap := AppScale(9)
+    active_width := AppScale(18)
+    x := cast(s32)tip.x + pad
+    y := controls_y + (button_size - dot_size) / 2
+    index: s32 = 0
+    while index < count {
+        width := dot_size
+        color := muted
+        if index == step {
+            width = active_width
+            color = active
+        }
+        PaintRoundedFill(session, node,
+            Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)dot_size},
+            cast(float32)dot_size / 2.0, 8, color)
+        x += width + gap
+        index += 1
+    }
 }
 
 #program_export
@@ -203,6 +253,12 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     }
     if metrics.close_size < AppScale(44) {
         metrics.close_size = AppScale(44)
+    }
+    if metrics.pad < AppScale(16) {
+        metrics.pad = AppScale(16)
+    }
+    if metrics.anchor_padding < AppScale(12) {
+        metrics.anchor_padding = AppScale(12)
     }
     tip_width := GuideTipWidth(width, guide.max_width, metrics)
     maximum_height := GuideMaxTipHeight(height,
@@ -253,38 +309,48 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
         scrim_color)
     PaintRoundedFill(session, overlay.node, scrim.right, 0.0, 4,
         scrim_color)
-    ink := ColorFromPacked(panel.value.foreground)
-    PaintRoundedOutline(session, overlay.node, anchor, 0.0, 4,
+    GuideRoundedScrimCorners(session, overlay.node, scrim,
+        scrim_color)
+    focus := Rectangle.{scrim.left.width, scrim.top.height,
+        scrim.right.x - scrim.left.width,
+        scrim.bottom.y - scrim.top.height}
+    focus_radius := cast(float32)AppScale(12)
+    if focus_radius > focus.height / 2.0 {
+        focus_radius = focus.height / 2.0
+    }
+    if focus_radius > focus.width / 2.0 {
+        focus_radius = focus.width / 2.0
+    }
+    ink := ColorFromPacked(GuideFace(24).value.foreground)
+    PaintRoundedOutline(session, overlay.node, focus,
+        focus_radius, 12,
         cast(float32)metrics.anchor_stroke, ink)
-    arrow := GuideArrowFor(tip, anchor, metrics)
-    GuidePaintLine(session, overlay.node, arrow.line_start,
-        arrow.line_end, ink)
-    GuidePaintLine(session, overlay.node, arrow.tip0,
-        arrow.tip1, ink)
-    GuidePaintLine(session, overlay.node, arrow.tip0,
-        arrow.tip2, ink)
     panel_color := ColorFromPacked(Opacity(panel.value.background,
         panel.value.opacity))
+    panel_radius := panel.value.radius
+    if panel_radius < cast(float32)AppScale(18) {
+        panel_radius = cast(float32)AppScale(18)
+    }
     PaintRoundedFill(session, overlay.panel_node, tip,
-        panel.value.radius, 12, panel_color)
+        panel_radius, 16, panel_color)
     if panel.value.border_width > 0.0 {
         PaintRoundedOutline(session, overlay.panel_node, tip,
-            panel.value.radius, 12, panel.value.border_width,
+            panel_radius, 16, panel.value.border_width,
             ColorFromPacked(panel.value.border))
     }
     if !TreePushScope(session, overlay.panel_node) {
         return result
     }
-    title := LocaleText("guide_title")
+    title := GuidePageLabel(app, step, guide.count)
     title_width := tip.width -         cast(float32)(metrics.pad * 2 + metrics.close_size +         metrics.nav_gap)
     title_props: TextProps
     title_props.text = title
     title_props.bounds = Rectangle.{tip.x + cast(float32)metrics.pad,
         tip.y + cast(float32)metrics.pad, title_width,
         cast(float32)metrics.close_size
-}
+    }
     title_props.font = AppFitFontSize(title, cast(s32)title_width,
-        AppScale(Text20), AppFontSize())
+        AppScale(Text16), AppSmallFontSize())
     title_props.wrap = cast(TextWrap)TextWrapNone
     title_props.vertical_align = cast(TextAlign)TextAlignCenter
     title_props.style_kind = StyleKindGuide()
@@ -298,15 +364,10 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     paragraph.style_kind = StyleKindGuide()
     Text(session, paragraph)
 
-    page_props: TextProps
-    page_props.text = GuidePageLabel(app, step, guide.count)
-    page_props.font = AppFontSize()
-    page_props.bounds = Rectangle.{tip.x + cast(float32)metrics.pad,
-        cast(float32)layout.controls_y, cast(float32)AppScale(80),
-        cast(float32)metrics.button_size
-}
-    page_props.wrap = cast(TextWrap)TextWrapNone
-    Text(session, page_props)
+    GuideProgressDots(session, overlay.panel_node, tip,
+        layout.controls_y, metrics.button_size, metrics.pad,
+        step, guide.count, ink,
+        ColorFromPacked(panel.value.border))
 
     previous := guide.previous_requested
     next := guide.next_requested
@@ -318,6 +379,7 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     button.image = ActionImage(ActionIcon.IconClose,
         button.label)
     button.icon_only = true
+    button.circle = true
     button.tone = cast(ButtonTone)ButtonToneNeutral
     button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     if Button(session, button) != 0 {
@@ -327,8 +389,11 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
         button.id = 83111
         button.bounds = layout.back_button
         button.label = LocaleText("back_button")
-        button.image = ActionImage(ActionIcon.IconBack,
-            button.label)
+        button.image.asset_path = ""
+        button.arrow = true
+        button.direction = cast(ArrowDirection)ArrowLeft
+        button.tone = cast(ButtonTone)ButtonToneNeutral
+        button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
         if Button(session, button) != 0 {
             previous = true
         }
@@ -336,12 +401,17 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     button.id = 83112
     button.bounds = layout.next_button
     button.label = LocaleText("next_button")
-    next_icon := ActionIcon.IconNext
+    button.image.asset_path = ""
+    button.arrow = true
+    button.direction = cast(ArrowDirection)ArrowRight
+    button.tone = cast(ButtonTone)ButtonToneAccent
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
     if layout.finish {
         button.label = LocaleText("practice_start_button")
-        next_icon = ActionIcon.IconCheck
+        button.arrow = false
+        button.image = ActionImage(ActionIcon.IconCheck,
+            button.label)
     }
-    button.image = ActionImage(next_icon, button.label)
     if Button(session, button) != 0 {
         next = true
     }
