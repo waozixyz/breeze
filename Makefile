@@ -1341,6 +1341,12 @@ locale-used-keys-test:
 
 test: locale-used-keys-test
 
+.PHONY: locale-translated-test
+locale-translated-test:
+	@python3 tests/locale_translated_test.py
+
+test: locale-translated-test
+
 .PHONY: music-library-zi-test
 music-library-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
