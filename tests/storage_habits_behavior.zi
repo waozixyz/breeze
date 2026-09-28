@@ -489,6 +489,24 @@ test_existing_sessions_materialize :: () {
     storage_close()
 }
 
+// External meditation logs count towards the profile streak and average; a
+// log for a session that exists is not counted twice.
+test_meditation_logs_feed_profile_stats :: () {
+    root := make_root("meditation-log-stats")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('med-session-1',(SELECT id FROM users LIMIT 1),strftime('%s','2026-07-15T00:00:00Z'),20260715,0,1,'sync','1','101',0,strftime('%s','2026-07-15T00:00:00Z'));INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('med-session-1',0,600);INSERT INTO meditation_logs(id,user_id,session_id,duration_seconds,completed_at,updated_at) VALUES('med-log-external',(SELECT id FROM users LIMIT 1),'external-log-session',1200,strftime('%s','2026-07-14T00:00:00Z'),1),('med-log-duplicate',(SELECT id FROM users LIMIT 1),'med-session-1',3000,strftime('%s','2026-07-15T00:00:00Z'),1);")
+    check_true("reopen db", storage_init(root) != 0)
+    streak: s32 = -1
+    average: s64 = -1
+    check_true("stats call", storage_profile_activity_stats(1, 20260715, *streak, *average) != 0)
+    check_int("streak counts the external log day", streak, 2)
+    check_int("average counts each session once", cast(s32)average, 900)
+    check_true("stale day stats call", storage_profile_activity_stats(1, 20260716, *streak, *average) != 0)
+    check_int("streak resets on a stale day", streak, 0)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -504,5 +522,6 @@ Check :: () -> s32 {
     test_profile_week_stats()
     test_linked_counts_materialize()
     test_existing_sessions_materialize()
+    test_meditation_logs_feed_profile_stats()
     return failures
 }

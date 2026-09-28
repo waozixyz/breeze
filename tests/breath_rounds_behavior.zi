@@ -1,0 +1,121 @@
+#import, file "../src/core/types.zi";
+#import, file "../src/core/breath_timing.zi";
+
+using BreathAnimation;
+
+// Steps the session while it stays in `phase` (or `limit` steps).
+AdvanceWhilePhase :: (state: BreathSession, phase: s32, limit: s32) -> BreathSession {
+    steps: s32 = 0
+    while state.phase == phase && steps < limit && state.completed == 0 {
+        state = BreathSessionStep(state)
+        steps += 1
+    }
+    return state
+}
+
+// How many steps the session spends in `phase`.
+StepsInPhase :: (state: BreathSession, phase: s32, limit: s32) -> s32 {
+    steps: s32 = 0
+    while state.phase == phase && steps < limit && state.completed == 0 {
+        state = BreathSessionStep(state)
+        steps += 1
+    }
+    return steps
+}
+
+// Runs one round from Starting to the next round's Starting (or completion),
+// ending the hold at once as a tap would.
+RunOneRound :: (state: BreathSession) -> BreathSession {
+    state = AdvanceWhilePhase(state, BreathPhaseStarting, 4000)
+    state = AdvanceWhilePhase(state, BreathPhaseBreathe, 200000)
+    if state.phase == BreathPhaseHold { state = BreathEndHold(state) }
+    state = AdvanceWhilePhase(state, BreathPhaseRecover, 200000)
+    state = AdvanceWhilePhase(state, BreathPhaseNext, 200000)
+    return state
+}
+
+DigitsValue :: (digits: []u8) -> s32 {
+    total: s32 = 0
+    index: s32 = 0
+    while index < 3 {
+        digit: s32 = 0
+        if digits[index] >= cast(u8)48 && digits[index] <= cast(u8)57 {
+            digit = cast(s32)digits[index] - 48
+        }
+        total = total * 10 + digit
+        index += 1
+    }
+    return total
+}
+
+// Round flow: the first countdown is always 3 s; later rounds use the
+// configured pause; a zero pause skips it; results are recorded; the final
+// round completes and then stays put.
+RoundChecks :: () -> s32 {
+    state: BreathSession = BreathSessionInit()
+    state.pause_seconds = 15
+    state.breath_half_ticks = 120
+    state.max_rounds = 3
+    if StepsInPhase(state, BreathPhaseStarting, 4000) != 3 * 60 { return 1 }
+    state = AdvanceWhilePhase(state, BreathPhaseStarting, 4000)
+    if state.phase != BreathPhaseBreathe { return 2 }
+    state.round = 0
+    if BreathPauseSeconds(state) != 3 { return 3 }
+
+    state = BreathSessionInit()
+    state.pause_seconds = 15
+    state.breath_half_ticks = 120
+    state.max_rounds = 3
+    state.phase = BreathPhaseStarting
+    state.round = 0
+    state = RunOneRound(state)
+    if state.round != 1 { return 4 }
+    if BreathPauseSeconds(state) != 15 { return 5 }
+    if StepsInPhase(state, BreathPhaseStarting, 4000) != 15 * 60 { return 6 }
+
+    state = BreathSessionInit()
+    state.pause_seconds = 0
+    state.breath_half_ticks = 120
+    state.max_rounds = 2
+    state.phase = BreathPhaseStarting
+    state.round = 0
+    state = RunOneRound(state)
+    if state.round != 1 { return 7 }
+    if BreathPauseSeconds(state) != 0 { return 8 }
+    if StepsInPhase(state, BreathPhaseStarting, 4000) > 1 { return 9 }
+
+    state = BreathSessionInit()
+    state.pause_seconds = 2
+    state.breath_half_ticks = 120
+    state.max_rounds = 3
+    state.phase = BreathPhaseStarting
+    state.round = 0
+    state = RunOneRound(state)
+    if DigitsValue(state.results[0][:]) < 0 { return 10 }
+    state = RunOneRound(state)
+    if state.round != 2 { return 11 }
+    if DigitsValue(state.results[1][:]) < 0 { return 12 }
+
+    state = BreathSessionInit()
+    state.pause_seconds = 2
+    state.breath_half_ticks = 120
+    state.max_rounds = 2
+    state.phase = BreathPhaseStarting
+    state.round = 0
+    state = RunOneRound(state)
+    if state.completed != 0 { return 13 }
+    state = RunOneRound(state)
+    if state.completed == 0 { return 14 }
+    phase_before: s32 = state.phase
+    round_before: s32 = state.round
+    state = BreathSessionStep(state)
+    if state.phase != phase_before || state.round != round_before { return 15 }
+    state = BreathClearCompleted(state)
+    if state.completed != 0 { return 16 }
+    return 0
+}
+
+#program_export
+Check :: () -> s32 {
+    return RoundChecks()
+}

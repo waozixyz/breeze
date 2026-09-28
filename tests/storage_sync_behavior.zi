@@ -471,6 +471,188 @@ test_queued_edit_beats_equal_time_remote :: () {
     check_int("queued local edit kept", raw_count(second, "SELECT count FROM habit_days WHERE local_date=20260619"), 9)
 }
 
+// Two devices that already share `habit` (a habit named "Counter" with one
+// day), each in its own root. Returns to the caller with neither open.
+share_counter_habit :: (first: string, second: string) {
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Counter", Green(), 0, 0) == 0)
+    habit_set_day_count(*habits_a, 0, 20260619, 4)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship habit", ship_to(first, second, 1))
+}
+
+test_counter_enabled_follows_remote :: () {
+    first := make_root("sync-toggle-a")
+    second := make_root("sync-toggle-b")
+    share_counter_habit(first, second)
+    raw_exec(first, "UPDATE habits SET counter_enabled=1,updated_at=1781903000;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1781903000 FROM habits;")
+    raw_exec(second, "UPDATE habits SET counter_enabled=0,updated_at=1781902800;DELETE FROM sync_outbox;")
+    check_true("ship enable", ship_to(first, second, 2))
+    check_int("remote enables the counter", raw_count(second, "SELECT counter_enabled FROM habits"), 1)
+    raw_exec(first, "UPDATE habits SET counter_enabled=0,updated_at=1781903100;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1781903100 FROM habits;")
+    check_true("ship disable", ship_to(first, second, 3))
+    check_int("remote disables the counter", raw_count(second, "SELECT counter_enabled FROM habits"), 0)
+}
+
+test_queued_counter_enabled_survives_equal_remote :: () {
+    first := make_root("sync-queued-toggle-a")
+    second := make_root("sync-queued-toggle-b")
+    share_counter_habit(first, second)
+    raw_exec(first, "UPDATE habits SET counter_enabled=0,updated_at=1781902800;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1781902800 FROM habits;")
+    raw_exec(second, "UPDATE habits SET counter_enabled=1,updated_at=1781902800;DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1781902800 FROM habits;")
+    check_true("ship equal-time habit", ship_to(first, second, 2))
+    check_int("queued local counter setting kept", raw_count(second, "SELECT counter_enabled FROM habits"), 1)
+    check_true("reopen device b", storage_init(second) != 0)
+    check_true("still queued for upload", build_payload() && record_count() > 0)
+    storage_close()
+}
+
+test_stale_habit_save_keeps_remote_habits :: () {
+    first := make_root("sync-stale-a")
+    second := make_root("sync-stale-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add push ups", habits_add_custom(*habits_a, "Push ups", Green(), 0, 0) == 0)
+    check_true("add cold shower", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0) == 1)
+    habit_set_day(*habits_a, 0, 20260619, 1)
+    habit_set_day(*habits_a, 1, 20260619, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("device a payload", build_payload())
+    records := records_array()
+    kept: TextBuffer
+    append(*kept, records)
+    storage_close()
+
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    // Device b's screen holds only the default habits.
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    check_true("apply remote habits behind the stale screen",
+        storage_apply_sync_response_json(response_with(1, TextFromCString(*kept.bytes[0]))) != 0)
+    habits_save(*habits_a)
+    habits_b = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("stale save keeps the remote habits", habits_b.count, 4)
+    check_true("push ups survived", find_habit(*habits_b, "Push ups") != null)
+    check_true("cold shower survived", find_habit(*habits_b, "Cold Shower") != null)
+    check_true("default yoga survived", find_habit(*habits_b, "Yoga") != null)
+    habits_free(*habits_a)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_duplicate_named_habits_merge :: () {
+    first := make_root("sync-merge-a")
+    second := make_root("sync-merge-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    storage_close()
+    raw_exec(first, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('habit-1',(SELECT id FROM users LIMIT 1),'New Habit',99,196,165,0,0,0,0,0,1781902800),('habit-2',(SELECT id FROM users LIMIT 1),'New Habit',99,196,165,0,0,0,1,0,1781902860),('meditation',(SELECT id FROM users LIMIT 1),'Meditation',126,183,230,1,3,0,2,0,1781902920);INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) VALUES('habit-1',20260617,1,1,1781902800),('habit-2',20260618,1,1,1781902860),('meditation',20260619,1,1,1781902920);DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1781902800 FROM habits;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1781902800 FROM habit_days;")
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship duplicates", ship_to(first, second, 1))
+    check_true("reopen device b", storage_init(second) != 0)
+    habits_b = Habits.{}
+    check_true("load merged habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("duplicate habit names collapse to one", habits_b.count, 2)
+    merged := find_habit(*habits_b, "New Habit")
+    check_true("merged habit visible", merged != null)
+    check_true("first duplicate day kept", merged != null && habit_completed_day(merged, 20260617) != 0)
+    check_true("second duplicate day moved", merged != null && habit_completed_day(merged, 20260618) != 0)
+    check_true("meditation remains", find_habit(*habits_b, "Meditation") != null)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_session_last_write_wins :: () {
+    first := make_root("sync-session-a")
+    second := make_root("sync-session-b")
+    session_sql: string = "INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('session-equal-time',(SELECT id FROM users LIMIT 1),1781902800,20260619,0,1,'local',1781902800,'111',0,1781902800);"
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    raw_exec(first, session_sql)
+    raw_exec(first, "INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('session-equal-time',0,45);DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('session','session-equal-time',0,1781902800);")
+    raw_exec(second, session_sql)
+    raw_exec(second, "INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('session-equal-time',0,60);DELETE FROM sync_outbox;")
+    check_true("ship equal-time session", ship_to(first, second, 1))
+    check_int("equal-time remote update replaces rounds",
+        raw_count(second, "SELECT seconds FROM session_rounds WHERE session_id='session-equal-time' AND round_index=0"), 45)
+    // The same again with a queued local edit: it keeps its own rounds.
+    raw_exec(second, "UPDATE sessions SET rounds_hash='111',updated_at=1781902800;DELETE FROM session_rounds WHERE session_id='session-equal-time';INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('session-equal-time',0,60);INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('session','session-equal-time',0,1781902800);")
+    raw_exec(first, "DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('session','session-equal-time',0,1781902800);")
+    check_true("ship equal-time session again", ship_to(first, second, 2))
+    check_int("queued local rounds are kept",
+        raw_count(second, "SELECT seconds FROM session_rounds WHERE session_id='session-equal-time' AND round_index=0"), 60)
+}
+
+test_linked_session_delete_syncs :: () {
+    first := make_root("sync-linked-a")
+    second := make_root("sync-linked-b")
+    rounds: [1]s32 = .[60]
+    id: [44]u8
+    today := habits_today_index()
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_save(*habits_a)
+    check_true("save linked session", storage_save_session_for_activity(*rounds[0], 1, 0, 1, *id[0], 44) != 0)
+    habits_free(*habits_a)
+    storage_close()
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("ship linked session and habit day", ship_to(first, second, 1))
+    check_int("device b has the session", raw_count(second, "SELECT COUNT(*) FROM sessions WHERE deleted_at=0"), 1)
+    check_int("device b has the linked day", raw_count(second, "SELECT COUNT(*) FROM habit_days WHERE count>0"), 1)
+
+    check_true("reopen device a", storage_init(first) != 0)
+    check_true("delete the linked session", storage_delete_session(TextFromCString(*id[0])) != 0)
+    check_true("deletion payload builds", build_payload())
+    check_true("session tombstone uploaded", contains(payload(), "private.inbe.v1.sessions") && contains(payload(), "\"deleted_at\":"))
+    check_true("linked habit day is cleared remotely too", contains(payload(), "private.inbe.v1.habit-days"))
+    storage_close()
+    check_true("ship deletion", ship_to(first, second, 2))
+    check_int("device b lost the session", raw_count(second, "SELECT COUNT(*) FROM sessions WHERE deleted_at=0"), 0)
+    check_int("device b cleared the linked day", raw_count(second, "SELECT COUNT(*) FROM habit_days WHERE count>0"), 0)
+    unused today
+}
+
+test_fresh_account_bootstraps_without_tombstones :: () {
+    root := make_root("sync-fresh-account")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Work out", Green(), 0, 0) == 0)
+    habit_set_day(*habits_a, 0, 20260618, 1)
+    habits_save(*habits_a)
+    deleted := storage_delete_all_sessions()
+    check_true("local reset deleted rows", deleted >= cast(s64)2)
+    check_int("no active habits", storage_habit_count(), 0)
+    habits_free(*habits_a)
+    set_account()
+    storage_reset_sync_state()
+    check_true("payload builds", build_payload())
+    check_true("fresh account sends a bootstrap", contains(payload(), "\"since_server_version\":0") &&
+        contains(payload(), "\"bootstrap\":true"))
+    check_int("no stale tombstones or clears", record_count(), 0)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -490,5 +672,12 @@ Check :: () -> s32 {
     test_deletion_round_trip()
     test_counter_counts_apply()
     test_queued_edit_beats_equal_time_remote()
+    test_counter_enabled_follows_remote()
+    test_queued_counter_enabled_survives_equal_remote()
+    test_stale_habit_save_keeps_remote_habits()
+    test_duplicate_named_habits_merge()
+    test_session_last_write_wins()
+    test_linked_session_delete_syncs()
+    test_fresh_account_bootstraps_without_tombstones()
     return failures
 }

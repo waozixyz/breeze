@@ -1,0 +1,408 @@
+#import "byte_text_linux"
+#import "drawing_props"
+#import "zip"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/import.zi";
+#import, file "../src/storage/session_mood.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/screens/elist_types.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+
+c :: #system_library "c";
+zip_open :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
+zip_close :: (file: *void) -> s32 #foreign c "fclose";
+zip_write :: (data: *void, size: usize, count: usize, file: *void) -> usize #foreign c "fwrite";
+zip_allocate :: (size: usize) -> *void #foreign c "malloc";
+zip_release :: (memory: *void) #foreign c "free";
+run_command :: (command: *u8) -> s32 #foreign c "system";
+read_file :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
+using StorageImportMode;
+
+habits_a: Habits;
+habits_b: Habits;
+elists: EListState;
+
+ascii_lower :: (byte: u8) -> u8 {
+    if byte >= cast(u8)65 && byte <= cast(u8)90 { return byte + cast(u8)32 }
+    return byte
+}
+
+find_habit :: (habits: *Habits, name: string) -> *Habit {
+    index: s32 = 0
+    while index < habits.count {
+        text := TextFromCString(*habits.items[index].name[0])
+        if text.count == name.count {
+            same: bool = true
+            position: s64 = 0
+            while position < text.count {
+                if ascii_lower(text[position]) != ascii_lower(name[position]) { same = false }
+                position += 1
+            }
+            if same { return *habits.items[index] }
+        }
+        index += 1
+    }
+    return null
+}
+
+has_day :: (habit: *Habit, day: s32) -> bool {
+    return habit != null && habit_completed_day(habit, day) != 0
+}
+
+day_count_of :: (habit: *Habit, day: s32) -> s32 {
+    index := habit_find_day(habit, day)
+    if index < 0 { return -1 }
+    return habit.days[index].count
+}
+
+Meditation :: () -> Color {
+    return Color.{99, 196, 165, 255}
+}
+
+// A source database with one session and default habits (meditation done on
+// 20260613), like the one the import tests start from.
+write_source_database :: (root: string) {
+    rounds: [3]s32 = .[45, 60, 75]
+    check_true("init source db", storage_init(root) != 0)
+    check_true("save source session", storage_save_session_for_activity(*rounds[0], 3, 0, 0, null, 0) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habit_set_day(*habits_a, 0, 20260613, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_int("source sessions", storage_session_count(), 1)
+    storage_close()
+}
+
+assert_imported_database :: (root: string) {
+    check_true("init imported db", storage_init(root) != 0)
+    check_int("imported sessions", storage_session_count(), 1)
+    habits_b = Habits.{}
+    check_true("imported habits load", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("imported habit count", habits_b.count, 2)
+    check_true("imported meditation day", has_day(find_habit(*habits_b, "Meditation"), 20260613))
+    check_true("imported yoga", find_habit(*habits_b, "Yoga") != null)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+// Writes a stored ZIP holding `count` entries (up to 2).
+write_zip :: (path: string, first_name: string, first: *u8, first_size: s64,
+    second_name: string, second: *u8, second_size: s64) {
+    total: s64 = cast(s64)first_name.count + first_size + cast(s64)second_name.count + second_size
+    input: []u8 = BytesFromPointer(cast(*u8)zip_allocate(cast(usize)total), cast(u64)total)
+    items: [2]ZipWriteItem
+    at: s64 = 0
+    index: s64 = 0
+    while index < cast(s64)first_name.count {
+        input[at] = first_name[index]
+        at += 1
+        index += 1
+    }
+    items[0] = ZipWriteItem.{cast(u64)0, cast(u64)first_name.count, cast(u64)at, cast(u64)first_size}
+    index = 0
+    while index < first_size {
+        input[at] = first[index]
+        at += 1
+        index += 1
+    }
+    count: s32 = 1
+    if second_name.count > 0 {
+        name_at: s64 = at
+        index = 0
+        while index < cast(s64)second_name.count {
+            input[at] = second_name[index]
+            at += 1
+            index += 1
+        }
+        items[1] = ZipWriteItem.{cast(u64)name_at, cast(u64)second_name.count, cast(u64)at, cast(u64)second_size}
+        index = 0
+        while index < second_size {
+            input[at] = second[index]
+            at += 1
+            index += 1
+        }
+        count = 2
+    }
+    size: u64 = StoredZipSize(input, items[0:count])
+    output: []u8 = BytesFromPointer(cast(*u8)zip_allocate(cast(usize)size), size)
+    written: u64 = WriteStoredZip(output, input, items[0:count])
+    check_true("zip written", written == size && size > 0)
+    file_path: TextBuffer
+    append(*file_path, path)
+    mode: [3]u8 = .[119, 98, 0]
+    file := zip_open(*file_path.bytes[0], *mode[0])
+    if file != null {
+        unused zip_write(cast(*void)*output[0], 1, cast(usize)size, file)
+        unused zip_close(file)
+    } else {
+        check_true("open zip for writing", false)
+    }
+    zip_release(cast(*void)*input[0])
+    zip_release(cast(*void)*output[0])
+}
+
+test_previous_and_current_archive_entries :: () {
+    source := make_root("archive-source")
+    write_source_database(source)
+    database: TextBuffer
+    append(*database, source)
+    append(*database, "/inbe.db")
+    size: s32 = 0
+    bytes := read_file(*database.bytes[0], *size)
+    check_true("read source database", bytes != null && size > 0)
+    names: [2]string = .["inbe-data/inbe.db", "breathing-data/breathing.db"]
+    labels: [2]string = .["current", "previous"]
+    which: s32 = 0
+    while which < 2 {
+        dest := make_root(join("archive-dest-", labels[which]))
+        archive: TextBuffer
+        append(*archive, source)
+        append(*archive, "/")
+        append(*archive, labels[which])
+        append(*archive, ".zip")
+        write_zip(TextFromCString(*archive.bytes[0]), names[which], bytes, cast(s64)size, "", null, 0)
+        check_true("init import destination", storage_init(dest) != 0)
+        check_true(join("import ", join(labels[which], " archive entry")),
+            storage_import_zip(TextFromCString(*archive.bytes[0])) != 0)
+        storage_close()
+        assert_imported_database(dest)
+        which += 1
+    }
+}
+
+// Historical archives hold session text files rather than a database. They
+// import their sessions, and importing again adds nothing.
+test_legacy_file_session_zip :: () {
+    source := make_root("legacy-zip-source")
+    dest := make_root("legacy-zip-dest")
+    archive: TextBuffer
+    append(*archive, source)
+    append(*archive, "/legacy.zip")
+    metadata: string = "Legacy BreathSession export\n"
+    rounds: string = "31\n35\n39\n27\n"
+    write_zip(TextFromCString(*archive.bytes[0]), "lotus-data/metadata.txt", pointer_of(metadata),
+        cast(s64)metadata.count, "custom-root/sessions/2026/06/13/breathing-010203",
+        pointer_of(rounds), cast(s64)rounds.count)
+    path := TextFromCString(*archive.bytes[0])
+    check_true("init destination", storage_init(dest) != 0)
+    info: StorageImportInfo
+    check_true("inspection accepts the archive", storage_inspect_import(path, *info) != 0)
+    check_true("inspection sees sessions", info.valid != 0 && info.has_sessions != 0)
+    check_int("inspection counts the session", info.session_count, 1)
+    check_true("import", storage_import_zip(path) != 0)
+    check_int("session imported", storage_session_count(), 1)
+    check_true("import again", storage_import_zip(path) != 0)
+    check_int("repeat import adds nothing", storage_session_count(), 1)
+    storage_close()
+}
+
+test_checkin_backup_restore :: () {
+    source := make_root("checkin-backup")
+    target := make_root("checkin-restored")
+    archive: TextBuffer
+    append(*archive, source)
+    append(*archive, "/backup.zip")
+    archive_path := TextFromCString(*archive.bytes[0])
+    id: [128]u8
+    duration: [1]s32 = .[60]
+    saved: SessionMoodCheckin
+    loaded: SessionMoodCheckin
+    check_true("init source", storage_init(source) != 0)
+    check_true("save session", storage_save_session_for_activity(*duration[0], 1, 0, 1, *id[0], 128) != 0)
+    saved.mood_before = 2
+    saved.mood_after = 4
+    saved.energy = 3
+    saved.stress = 1
+    unused AppCopyText("Quiet morning", saved.note[:])
+    unused AppCopyText("morning,home", saved.tags[:])
+    session := TextFromCString(*id[0])
+    check_true("save check-in", storage_save_session_checkin(session, *saved) != 0)
+    check_true("export", storage_export_zip(archive_path) != 0)
+    storage_close()
+    check_true("init target", storage_init(target) != 0)
+    check_true("import", storage_import_zip(archive_path) != 0)
+    check_true("load restored check-in", storage_load_session_checkin(session, *loaded) != 0)
+    check_int("restored mood before", loaded.mood_before, 2)
+    check_int("restored mood after", loaded.mood_after, 4)
+    check_int("restored energy", loaded.energy, 3)
+    check_int("restored stress", loaded.stress, 1)
+    check_true("restored note", TextFromCString(*loaded.note[0]) == "Quiet morning")
+    check_true("restored tags", TextFromCString(*loaded.tags[0]) == "morning,home")
+    saved.mood_after = 5
+    check_true("edit restored check-in", storage_save_session_checkin(session, *saved) != 0)
+    check_true("re-import duplicate", storage_import_zip(archive_path) != 0)
+    check_true("load retained check-in", storage_load_session_checkin(session, *loaded) != 0)
+    check_int("duplicate keeps the local mood", loaded.mood_after, 5)
+    check_int("duplicate adds no session", storage_session_count(), 1)
+    storage_close()
+}
+
+test_historical_file_sessions :: () {
+    root := make_root("legacy-files")
+    nested: TextBuffer
+    append(*nested, "mkdir -p ")
+    append(*nested, root)
+    append(*nested, "/2026/06/13")
+    unused run_command(*nested.bytes[0])
+    session_path: TextBuffer
+    append(*session_path, root)
+    append(*session_path, "/2026/06/13/breathing-010203")
+    historical: TextBuffer = joined_text("31\n35\n39\n27\n")
+    check_true("write historical session", write_text_file(*session_path.bytes[0], *historical))
+    check_true("init with historical file sessions", storage_init(root) != 0)
+    check_int("historical session imported", storage_session_count(), 1)
+    check_true("historical source file retained", file_holds(*session_path.bytes[0], "31\n35\n39\n27\n"))
+    storage_close()
+    check_true("reopen after file import", storage_init(root) != 0)
+    check_int("historical session not duplicated", storage_session_count(), 1)
+    storage_close()
+}
+
+joined_text :: (text: string) -> TextBuffer {
+    buffer: TextBuffer
+    append(*buffer, text)
+    return buffer
+}
+
+test_deleted_list_defaults_stay_deleted :: () {
+    root := make_root("elist-defaults")
+    check_true("init db", storage_init(root) != 0)
+    elists = EListState.{}
+    check_true("load initial lists", storage_elist_load(cast(*void)*elists) != 0)
+    check_int("initial list count", elists.list_count, 1)
+    check_int("initial task count", elists.item_count, 3)
+    index: s32 = 0
+    while index < elists.item_count {
+        check_true("delete starter task", storage_elist_delete_item(TextFromCString(*elists.items[index].id[0])) != 0)
+        index += 1
+    }
+    check_true("reload empty list", storage_elist_load(cast(*void)*elists) != 0)
+    check_int("deleted tasks stay deleted", elists.item_count, 0)
+    check_true("delete last list", storage_elist_delete_list(TextFromCString(*elists.lists[0].id[0])) != 0)
+    // An installation from before the initialization marker existed.
+    storage_set_setting_int("elist_initialized", 0)
+    storage_close()
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("reload deleted lists", storage_elist_load(cast(*void)*elists) != 0)
+    check_int("deleted lists stay deleted after restart", elists.list_count, 0)
+    check_int("deleted tasks stay deleted after restart", elists.item_count, 0)
+    storage_close()
+}
+
+test_onelist_import :: () {
+    root := make_root("onelist")
+    path: TextBuffer
+    append(*path, root)
+    append(*path, "/tasks.1list")
+    onelist_text: TextBuffer = joined_text("{\"title\":\"Inbox\",\"items\":[{\"title\":\"Open\",\"comment\":\"Details\",\"done\":false,\"id\":1},{\"title\":\"Finished\",\"comment\":\"\",\"done\":true,\"id\":2}]}")
+    check_true("write OneList file", write_text_file(*path.bytes[0], *onelist_text))
+    check_true("init db", storage_init(root) != 0)
+    key: [5121]u8
+    index: s32 = 0
+    while index < 5120 {
+        if index % 2 == 0 { key[index] = cast(u8)52 } else { key[index] = cast(u8)50 }
+        index += 1
+    }
+    key[5120] = cast(u8)0
+    storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
+    check_true("import OneList file", storage_elist_import_onelist(TextFromCString(*path.bytes[0])) != 0)
+    elists = EListState.{}
+    check_true("load imported lists", storage_elist_load(cast(*void)*elists) != 0)
+    check_int("list count", elists.list_count, 1)
+    check_int("item count", elists.item_count, 2)
+    check_true("list title", TextFromCString(*elists.lists[0].title[0]) == "Inbox")
+    check_true("item comment", TextFromCString(*elists.items[0].comment[0]) == "Details")
+    check_int("done item", elists.items[1].done, 1)
+    payload := storage_build_sync_payload_json("test-public-id", "test-public-key")
+    check_true("payload builds", payload != null)
+    if payload != null {
+        text := TextFromCString(payload)
+        check_true("list collection", contains(text, "private.inbe.v1.elist-lists"))
+        check_true("item collection", contains(text, "private.inbe.v1.elist-items"))
+        storage_free_sync_payload_json(payload)
+    }
+    storage_close()
+}
+
+write_tickmate_database :: (path: string) {
+    file_exec(path, "CREATE TABLE tracks(_id integer primary key autoincrement,name text not null,description text not null,icon text not null,enabled integer not null,multiple_entries_per_day integer DEFAULT 0,color integer DEFAULT 0,\"order\" integer DEFAULT -1);CREATE TABLE ticks(_id integer primary key autoincrement,_track_id integer,year integer,month integer,day integer,hour integer,minute integer,second integer,has_time_info integer DEFAULT 0);INSERT INTO tracks(_id,name,description,icon,enabled,multiple_entries_per_day,color,\"order\") VALUES(1,'Meditation','Silenced my mind','',1,1,8925,0);")
+    file_exec(path, "INSERT INTO ticks(_track_id,year,month,day,hour,minute,second,has_time_info) VALUES(1,2026,0,1,0,0,0,0),(1,2026,1,2,0,0,0,0),(1,2026,2,3,0,0,0,0),(1,2026,3,4,0,0,0,0),(1,2026,4,5,0,0,0,0),(1,2026,5,6,0,0,0,0),(1,2026,6,7,0,0,0,0),(1,2026,7,8,0,0,0,0),(1,2026,8,9,0,0,0,0),(1,2026,9,10,0,0,0,0),(1,2026,10,11,0,0,0,0),(1,2026,11,12,0,0,0,0),(1,2025,0,1,0,0,0,0),(1,2025,0,1,0,0,0,0);")
+    // Thousands more, one per day from 2025-01-01, to check large imports.
+    file_exec(path, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<11999) INSERT INTO ticks(_track_id,year,month,day,hour,minute,second,has_time_info) SELECT 1,CAST(strftime('%Y',date('2025-01-01','+'||i||' day')) AS INTEGER),CAST(strftime('%m',date('2025-01-01','+'||i||' day')) AS INTEGER)-1,CAST(strftime('%d',date('2025-01-01','+'||i||' day')) AS INTEGER),0,0,0,0 FROM n;")
+}
+
+test_tickmate_import :: () {
+    source := make_root("tickmate-source")
+    dest := make_root("tickmate-dest")
+    database: TextBuffer
+    append(*database, source)
+    append(*database, "/tickmate.db")
+    write_tickmate_database(TextFromCString(*database.bytes[0]))
+    check_true("init destination", storage_init(dest) != 0)
+    check_true("tickmate import", storage_import_zip(TextFromCString(*database.bytes[0])) != 0)
+    habits_b = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("habit count", habits_b.count, 1)
+    habit := *habits_b.items[0]
+    days: [12]s32 = .[20260101, 20260202, 20260303, 20260404, 20260505, 20260606,
+        20260707, 20260808, 20260909, 20261010, 20261111, 20261212]
+    index: s32 = 0
+    while index < 12 {
+        check_true("tickmate month day", has_day(habit, days[index]))
+        index += 1
+    }
+    check_true("loads thousands of days", has_day(habit, 20571108))
+    check_true("habit name", TextFromCString(*habit.name[0]) == "Meditation")
+    check_int("counter habit enabled", habit.counter_enabled, 1)
+    check_int("imports the count", day_count_of(habit, 20250101), 3)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_tickmate_reimport_recovers_counts :: () {
+    source := make_root("tickmate-reimport-source")
+    dest := make_root("tickmate-reimport-dest")
+    database: TextBuffer
+    append(*database, source)
+    append(*database, "/tickmate.db")
+    write_tickmate_database(TextFromCString(*database.bytes[0]))
+    check_true("init destination", storage_init(dest) != 0)
+    habits_a = Habits.{}
+    check_int("add old boolean meditation", habits_add_custom(*habits_a, "Meditation", Meditation(), 0, 0), 0)
+    habit_set_day(*habits_a, 0, 20250101, 1)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("tickmate reimport", storage_import_zip(TextFromCString(*database.bytes[0])) != 0)
+    habits_b = Habits.{}
+    check_true("reload", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("habit count", habits_b.count, 1)
+    check_int("counter enabled", habits_b.items[0].counter_enabled, 1)
+    check_int("restores the count", day_count_of(*habits_b.items[0], 20250101), 3)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-storage-more-zi-test/")
+    if guard != 0 { return guard }
+    test_previous_and_current_archive_entries()
+    test_legacy_file_session_zip()
+    test_checkin_backup_restore()
+    test_historical_file_sessions()
+    test_deleted_list_defaults_stay_deleted()
+    test_onelist_import()
+    test_tickmate_import()
+    test_tickmate_reimport_recovers_counts()
+    return failures
+}

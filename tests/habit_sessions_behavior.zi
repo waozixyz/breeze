@@ -1,0 +1,146 @@
+#import "byte_text_linux"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/exercise_types.zi";
+#import, file "../src/app/app_modal_state.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_days.zi";
+#import, file "../src/habits/habit_linked_rules.zi";
+#import, file "../src/habits/habit_sessions.zi";
+
+using ExerciseType;
+using HabitSyncMode;
+
+app_state: InnerBreeze;
+context: HabitLinkedContext;
+auto_sync_count: s32;
+
+// The application's sync trigger; the test only counts how often it fires.
+#program_export "app_auto_sync"
+host_auto_sync :: (app: *InnerBreeze) -> s32 {
+    unused app
+    auto_sync_count += 1
+    return 1
+}
+
+record :: (day: s32, hour: s32, activity: s32, first: s32, second: s32) {
+    rounds: [2]s32 = .[first, second]
+    count: s32 = 1
+    if second > 0 { count = 2 }
+    check_true("save session", storage_save_session_at_for_activity(day, hour, 10, 20,
+        *rounds[0], count, 0, activity, null, 0) != 0)
+}
+
+prepare_habit :: (habit: *Habit, sync_mode: s32, sync_activity: s32) {
+    habit.* = Habit.{}
+    unused AppCopyText("habit-1", habit.id[:])
+    unused AppCopyText("Linked", habit.name[:])
+    habit.sync_mode = sync_mode
+    habit.sync_activity = sync_activity
+}
+
+test_collect_filters_and_summarizes :: () {
+    root := make_root("habit-sessions-collect")
+    check_true("init db", storage_init(root) != 0)
+    record(20260828, 8, EXERCISE_PATTERNS, 10, 20)
+    record(20260828, 9, EXERCISE_MEDITATION, 99, 0)
+    record(20260829, 8, EXERCISE_PATTERNS, 30, 0)
+    // A session whose activity is unknown counts as Wim Hof.
+    exec_db_sql("INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('invalid-whm',(SELECT id FROM users LIMIT 1),1788000000,20260830,0,-1,'local',1,'x',0,1);INSERT INTO session_rounds(session_id,round_index,seconds) VALUES('invalid-whm',0,40);")
+    habit: Habit
+    prepare_habit(*habit, 1, habit_activity_mask_for(EXERCISE_PATTERNS))
+    habit_collect_linked_entries(*habit, 0, *context)
+    check_int("filtered linked count", context.count, 2)
+    check_int("filtered total seconds", context.total_seconds, 60)
+    check_int("filtered best seconds", context.best_seconds, 30)
+    // Entries come newest first: one round on the 29th, two on the 28th.
+    check_int("entry round counts", context.entries[0].round_count + context.entries[1].round_count, 3)
+    check_int("newest entry has one round", context.entries[0].round_count, 1)
+    check_true("has included day", HabitLinkedHasDay(*context, 20260828))
+    check_true("does not have filtered day", !HabitLinkedHasDay(*context, 20260830))
+    check_int("count for included day", HabitLinkedSessionCountForDay(*context, 20260828), 1)
+
+    prepare_habit(*habit, 1, habit_activity_mask_for(EXERCISE_WIM_HOF))
+    habit_collect_linked_entries(*habit, 20260830, *context)
+    check_int("unknown activity falls back to Wim Hof", context.count, 1)
+    check_int("day filter excludes other days", HabitLinkedSessionCountForDay(*context, 20260828), 0)
+    storage_close()
+}
+
+test_effective_counts_and_actions :: () {
+    root := make_root("habit-sessions-counts")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    prepare_habit(*app_state.habits.items[0], 1, habit_activity_mask_for(EXERCISE_PATTERNS))
+    app_state.habits.count = 1
+    app_state.habits.selected = 0
+    record(20260828, 8, EXERCISE_PATTERNS, 10, 0)
+    record(20260828, 9, EXERCISE_PATTERNS, 20, 0)
+    habit := *app_state.habits.items[0]
+    habit_collect_linked_entries(habit, 20260828, *context)
+    habit_set_day_count(*app_state.habits, 0, 20260828, 1)
+    check_int("linked count wins", HabitEffectiveDayCount(habit, 20260828, *context), 2)
+    habit_set_day_count(*app_state.habits, 0, 20260828, 4)
+    check_int("manual count wins", HabitEffectiveDayCount(habit, 20260828, *context), 4)
+    habit_apply_count_action(*app_state, 0, 20260828, -10, 2)
+    check_int("count action respects the minimum", HabitDayCount(habit, 20260828), 2)
+    habits_free(*app_state.habits)
+    storage_close()
+}
+
+test_session_change_keeps_manual_extra :: () {
+    root := make_root("habit-sessions-changed")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    prepare_habit(*app_state.habits.items[0], 1, habit_activity_mask_for(EXERCISE_PATTERNS))
+    app_state.habits.count = 1
+    app_state.habit_detail_index = 0
+    app_state.habit_detail_day = 20260828
+    record(20260828, 8, EXERCISE_PATTERNS, 10, 0)
+    record(20260828, 9, EXERCISE_PATTERNS, 20, 0)
+    habit_set_day_count(*app_state.habits, 0, 20260828, 4)
+    auto_sync_count = 0
+    habit_session_changed(*app_state, 1)
+    check_int("session change keeps the manual extra", HabitDayCount(*app_state.habits.items[0], 20260828), 5)
+    check_int("session change syncs", auto_sync_count, 1)
+    habit_session_changed(*app_state, -1)
+    check_int("unknown old count only syncs", auto_sync_count, 2)
+    habits_free(*app_state.habits)
+    storage_close()
+}
+
+test_navigation_helpers :: () {
+    app_state = InnerBreeze.{}
+    app_state.habit_session_edit.active = 1
+    app_state.habit_session_edit.round = 3
+    habit_session_cancel_edit(*app_state)
+    check_int("cancel clears active", app_state.habit_session_edit.active, 0)
+    check_int("cancel sets the round sentinel", app_state.habit_session_edit.round, -1)
+
+    app_state.habit_session_edit.active = 1
+    app_state.habit_session_edit.round = 2
+    unused AppCopyText("old-path", app_state.habit_detail_session_path[:])
+    habit_open_linked_edit_page(*app_state, 4, 20260828)
+    check_int("open stores the habit index", app_state.habit_detail_index, 4)
+    check_int("open stores the day", app_state.habit_detail_day, 20260828)
+    check_true("open clears the selected session", app_state.habit_detail_session_path[0] == cast(u8)0)
+    check_int("open resets the edit round", app_state.habit_session_edit.round, -1)
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-habit-sessions-zi-test/")
+    if guard != 0 { return guard }
+    test_collect_filters_and_summarizes()
+    test_effective_counts_and_actions()
+    test_session_change_keeps_manual_extra()
+    test_navigation_helpers()
+    return failures
+}

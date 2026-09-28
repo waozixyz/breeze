@@ -69,27 +69,107 @@ host_unload_file_data :: (data: *u8) {
     HostRelease(cast(*void)data)
 }
 
-// Directory listing for legacy text sessions: there are none in a test root.
-EmptyPaths :: struct {
+// Directory listing for legacy text sessions, as raylib's FilePathList.
+PathList :: struct {
+    capacity: u32
     count: u32
     paths: **u8
 }
 
+HostPipeOpen :: (command: *u8, mode: *u8) -> *void #foreign c "popen";
+HostPipeClose :: (pipe: *void) -> s32 #foreign c "pclose";
+HostLine :: (buffer: *u8, size: s32, pipe: *void) -> *u8 #foreign c "fgets";
+HostCopy :: (destination: *u8, source: *u8, size: usize) -> *u8 #foreign c "strncpy";
+
+command_bytes: [1200]u8;
+line_bytes: [1100]u8;
+pipe_mode: [2]u8;
+
+// Lists the regular files under `root` (recursively), one path each.
 #program_export "LoadDirectoryFilesEx"
-host_load_directory_files :: (root: *u8, filter: *u8, recursive: bool) -> EmptyPaths {
-    unused root
+host_load_directory_files :: (root: *u8, filter: *u8, recursive: bool) -> PathList {
     unused filter
     unused recursive
-    return EmptyPaths.{0, null}
+    list: PathList = PathList.{0, 0, null}
+    if root == null { return list }
+    prefix: string = "find \""
+    index: s64 = 0
+    while index < prefix.count {
+        command_bytes[index] = prefix[index]
+        index += 1
+    }
+    position: s64 = 0
+    while root[position] != cast(u8)0 && index < 1100 {
+        command_bytes[index] = root[position]
+        index += 1
+        position += 1
+    }
+    tail: string = "\" -type f 2>/dev/null"
+    position = 0
+    while position < tail.count {
+        command_bytes[index] = tail[position]
+        index += 1
+        position += 1
+    }
+    command_bytes[index] = cast(u8)0
+    pipe_mode[0] = cast(u8)114
+    pipe_mode[1] = cast(u8)0
+    pipe := HostPipeOpen(*command_bytes[0], *pipe_mode[0])
+    if pipe == null { return list }
+    capacity: usize = 4096
+    list.paths = cast(**u8)HostAllocate(capacity * cast(usize)8)
+    if list.paths == null {
+        HostPipeClose(pipe)
+        return list
+    }
+    list.capacity = cast(u32)capacity
+    while HostLine(*line_bytes[0], 1100, pipe) != null && cast(usize)list.count < capacity {
+        length: s32 = 0
+        while line_bytes[length] != cast(u8)0 && line_bytes[length] != cast(u8)10 { length += 1 }
+        line_bytes[length] = cast(u8)0
+        copy := cast(*u8)HostAllocate(cast(usize)length + 1)
+        if copy == null { break }
+        unused HostCopy(copy, *line_bytes[0], cast(usize)length + 1)
+        list.paths[list.count] = copy
+        list.count += 1
+    }
+    HostPipeClose(pipe)
+    return list
 }
 
 #program_export "UnloadDirectoryFiles"
-host_unload_directory_files :: (paths: EmptyPaths) {
-    unused paths
+host_unload_directory_files :: (paths: PathList) {
+    index: u32 = 0
+    while index < paths.count {
+        HostRelease(cast(*void)paths.paths[index])
+        index += 1
+    }
+    if paths.paths != null { HostRelease(cast(*void)paths.paths) }
 }
 
 #program_export "IsPathFile"
 host_is_path_file :: (path: *u8) -> bool {
-    unused path
-    return false
+    return path != null
+}
+
+// Application-level hooks the route and modal code calls; tests that reach
+// them do not need their effects.
+#program_export "app_leave_practice_config"
+host_leave_practice_config :: (app: *void) {
+    unused app
+}
+
+#program_export "profile_social_load_friends_cache"
+host_load_friends_cache :: (app: *void) {
+    unused app
+}
+
+#program_export "profile_social_load_leaderboard_cache"
+host_load_leaderboard_cache :: (app: *void) {
+    unused app
+}
+
+#program_export "app_request_social_refresh"
+host_request_social_refresh :: (app: *void) {
+    unused app
 }

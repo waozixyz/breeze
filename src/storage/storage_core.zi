@@ -1726,7 +1726,7 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
     response: StorageJsonBuilder = StorageJsonBuilder.{}
     record_response: string
     ok: s32
-    if array_name.count == 0 || plaintext.count == 0  || storage_json_valid(plaintext) == 0 {
+    if array_name.count == 0 || plaintext.count == 0 {
         return 0
     }
     response.ok = 1
@@ -1740,6 +1740,11 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
         return 0
     }
     record_response = AppTextFromCString(response.data, cast(s32)(response.len + 1))
+    // `plaintext` is one record, or several separated by commas.
+    if storage_json_valid(record_response) == 0 {
+        storage_json_builder_free(*response)
+        return 0
+    }
     if storage_compare_text(array_name, "habits") == 0 {
         ok = ifx (storage_reconcile_remote_habit_ids(record_response) != 0  && storage_apply_sync_habits_json(record_response) != 0) then (1) else (0)
     } else if storage_compare_text(array_name, "habit_days") == 0 {
@@ -1824,6 +1829,11 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
 storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),'')FROM json_each(?1,?2)";
 
 storage_apply_encrypted_records :: (response_json: string) -> s32 {
+    habit_batch_storage: StorageJsonBuilder = StorageJsonBuilder.{}
+    habit_batch: *StorageJsonBuilder = *habit_batch_storage
+    habit_batch_count: s32 = 0
+    habit_batch_collection: string = ""
+    habit_batch_storage.ok = 1
     statement: *void = null
     ok: s32 = 1
     array_path: string = "$.data.encrypted_records"
@@ -1892,6 +1902,17 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
             if ok == 0 {
                 LogStorageText(LOG_WARNING, "SYNC: encrypted record decrypt failed: ",
                     collection)
+            } else if storage_compare_text(storage_decrypted_array_name(collection), "habits") == 0 {
+                // Habits are applied together, once every record has arrived, so
+                // habits that share a name are merged rather than replacing
+                // each other before their days are in.
+                if habit_batch_count > 0 {
+                    storage_json_builder_append_text(habit_batch, ",")
+                }
+                storage_json_builder_append_text(habit_batch,
+                    AppTextFromCString(plaintext, 2147483647))
+                habit_batch_count += 1
+                habit_batch_collection = collection
             } else {
                 ok = storage_apply_decrypted_record(collection,
                     AppTextFromCString(plaintext, 2147483647))
@@ -1903,6 +1924,14 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
             free(cast(*void)plaintext)
             index += 1
         }
+        if ok != 0 && habit_batch_count > 0 && habit_batch.ok != 0 && habit_batch.data != null {
+            ok = storage_apply_decrypted_record(habit_batch_collection,
+                AppTextFromCString(habit_batch.data, cast(s32)(habit_batch.len + 1)))
+            if ok == 0 {
+                LogStorage(LOG_WARNING, "SYNC: encrypted habit records apply failed")
+            }
+        }
+        storage_json_builder_free(habit_batch)
     }
     {
         index: s32 = 0
