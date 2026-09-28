@@ -29,10 +29,10 @@ optionally sync user-owned data through a Daochi-compatible sync server.
 
 ## Build
 
-The build host needs Node.js 22.18 or newer for mandatory Bend proof checking,
-as well as Python 3 and the platform's native build dependencies. Node and Bend
-are build tools; they are not installed with the app. See
-[build contracts and proofs](docs/build-laws-plan.md) for the checked behavior.
+The build checks Inbe's laws with the Ziran compiler (`ziran check`); no
+separate proof tool is needed. The build host needs Python 3 and the platform's
+native build dependencies. See [build laws](docs/build-laws-plan.md) for the
+checked behavior.
 
 Initialize the submodules once:
 

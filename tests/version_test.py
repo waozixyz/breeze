@@ -75,21 +75,13 @@ class VersionTest(unittest.TestCase):
             shutil.copy2(REPO / name, self.root / name)
         (self.root / "build/packages.mk").write_text("PACKAGES_READY := 1\n")
         (self.root / "build/packages/kryon").symlink_to(REPO / "build/packages/kryon", target_is_directory=True)
-        (self.root / "build/packages/bend").symlink_to(REPO / "build/packages/bend", target_is_directory=True)
-        shutil.copytree(REPO / "laws", self.root / "laws")
-        shutil.copy2(REPO / "scripts/generate-sync-retry.mjs", self.root / "scripts")
-        shutil.copy2(REPO / "scripts/generate-storage-layout.mjs", self.root / "scripts")
-        shutil.copy2(REPO / "scripts/bend-laws.mjs", self.root / "scripts")
-        shutil.copy2(REPO / "scripts/bend-pin.json", self.root / "scripts")
 
         def build():
-            return subprocess.run(["make", "build-laws"], cwd=self.root,
+            return subprocess.run(["make", "version-check"], cwd=self.root,
                                   capture_output=True, text=True, check=False)
 
         valid = build()
         self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
-        generated = self.root / "src/app/sync_retry.zi"
-        self.assertTrue(generated.exists())
         name = "droid/app/build.gradle"
         self.write(name, self.read(name).replace(self.version, "9.8.7"))
         invalid = build()

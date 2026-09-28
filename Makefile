@@ -47,6 +47,7 @@ ZIRAN_DIR := build/packages/ziran
 ZIRAN_BUILD_DIR := $(abspath $(BUILD_DIR)/ziran-toolchain)
 KRYON_LIBRARY_BUILD_DIR := $(abspath $(BUILD_DIR)/kryon-library)
 ZI2C_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2c
+ZIRAN_BIN := $(ZIRAN_BUILD_DIR)/bin/ziran
 ZI2ZIR_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2zir
 ZI_CHECK_STAMP := $(BUILD_DIR)/zi-check/native.fresh
 ZIRAN_SOURCES := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-c/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-ir/*.[ch]) $(ZIRAN_DIR)/Makefile
@@ -472,12 +473,9 @@ WEB_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
 WINDOWS_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
 	-iquote$(WINDOWS_GEN_DIR) \
 	$(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(WINDOWS_GEN_DIR)/$(dir))
-PROOF_DIR := $(BUILD_DIR)/proofs
 SYNC_RETRY_SOURCE := src/app/sync_retry.zi
-STORAGE_LAYOUT_HEADER := $(PROOF_DIR)/storage_layout.h
-STORAGE_LAYOUT_ZIRAN := src/storage/storage_layout.zi
-APP_INCLUDE += -I$(PROOF_DIR)
-KRYON_INCLUDE += -I$(PROOF_DIR)
+STORAGE_LAYOUT_HEADER := tests/storage_layout.h
+LAW_MODULES := src/app/sync_retry_laws.zi src/storage/storage_layout_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -884,7 +882,7 @@ $(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/mod
 $(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
+$(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	mkdir -p $(KRY_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
@@ -897,7 +895,7 @@ $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 
-$(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
+$(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -915,7 +913,7 @@ $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 $(WEB_GEN_SRCS) $(WEB_GEN_GAME_C): $(WEB_GEN_STAMP)
 	@test -f $@
 
-$(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws zi-check
+$(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -1118,24 +1116,19 @@ version-test:
 
 test: version-check version-test
 
-# Proofs run on every invocation, even with existing generated source.
-# Generators replace outputs only when their contents actually change.
+# Laws are checked by the Ziran compiler on every invocation. `ziran check`
+# exits nonzero on any disproved or unwaived unknown law.
 .PHONY: proofs proof-test build-laws
-proofs:
-	node scripts/generate-sync-retry.mjs $(SYNC_RETRY_SOURCE)
-	node scripts/generate-storage-layout.mjs $(STORAGE_LAYOUT_HEADER) $(STORAGE_LAYOUT_ZIRAN)
+proofs: $(ZI2C_BIN)
+	@for module in $(LAW_MODULES); do \
+		$(ZIRAN_BIN) check --root src $$module > /dev/null || exit 1; \
+	done
 
-proof-test:
-	node tests/sync_retry_proof_test.mjs
-	node tests/storage_layout_proof_test.mjs
+# Deliberately broken implementations must be rejected by the laws.
+proof-test: $(ZI2C_BIN)
+	sh tests/law_mutation_test.sh $(ZIRAN_BIN)
 
 build-laws: version-check proofs
-
-$(SYNC_RETRY_SOURCE): | proofs
-	@test -f $@
-
-$(STORAGE_LAYOUT_HEADER): | proofs
-	@test -f $@
 
 test: proof-test
 
@@ -1217,7 +1210,7 @@ $(STORAGE_IMPORT_TEST): tests/storage_import_test.c tests/test_locale_stub.c $(S
 
 $(STORAGE_PATHS_TEST): tests/storage_paths_test.c $(STORAGE_CORE_SRCS) $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/storage/data.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c src/storage/storage.h src/storage/db.h src/storage/import.h src/storage/data.h $(STORAGE_LAYOUT_HEADER) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | $(TEST_BIN_DIR)
 	$(CC) -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
+		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/storage -Isrc/platform/android -Isrc/third_party -Itests $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
 		-o $@ \
 		tests/storage_paths_test.c $(STORAGE_CORE_SRCS) $(KRYON_DIR)/src/kry_std/kry_archive.c $(KRY_GEN_DIR)/src/storage/storage_sessions.c $(KRY_GEN_DIR)/src/storage/storage_elist.c $(KRY_GEN_DIR)/src/storage/sync_review.c $(KRY_GEN_DIR)/src/storage/db.c $(KRY_GEN_DIR)/src/storage/import.c $(KRY_GEN_DIR)/src/storage/data.c $(KRY_GEN_DIR)/src/habits/habit_model.c $(KRY_GEN_DIR)/src/habits/habit_sessions.c $(SQLITE_SRC) \
 		-Wl,--gc-sections $(NATIVE_SYSTEM_LDLIBS)
@@ -3008,4 +3001,4 @@ $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) 
 android-release android-bundle android-copy-release-apks android-copy-bundle windows-setup site: version-check
 
 # Actual artifacts are gated too, including direct and incremental builds.
-$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WIN32_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) $(STORAGE_LAYOUT_HEADER) | build-laws
+$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WIN32_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws

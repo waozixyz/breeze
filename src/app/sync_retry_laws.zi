@@ -1,0 +1,69 @@
+#import, file "sync_retry.zi";
+#import, file "../storage/sync_result.zi";
+
+// Laws for the sync retry policy. Each states the expected behavior
+// independently of the implementation; `ziran check` proves it for every
+// result code (including out-of-range codes) and retry state (including
+// out-of-range saved states). An implementation edit may not change this file.
+
+// Wire result codes are part of the saved-data and sync protocol.
+#law WireOk custom cast(s32) SyncResult.SYNC_OK == 0;
+#law WireInvalidUrl custom cast(s32) SyncResult.SYNC_INVALID_URL == 1;
+#law WireNoAccount custom cast(s32) SyncResult.SYNC_NO_ACCOUNT == 2;
+#law WirePayloadFailed custom cast(s32) SyncResult.SYNC_PAYLOAD_FAILED == 3;
+#law WireChallengeFailed custom cast(s32) SyncResult.SYNC_CHALLENGE_FAILED == 4;
+#law WireSignFailed custom cast(s32) SyncResult.SYNC_SIGN_FAILED == 5;
+#law WireRequestFailed custom cast(s32) SyncResult.SYNC_REQUEST_FAILED == 6;
+#law WireAuthFailed custom cast(s32) SyncResult.SYNC_AUTH_FAILED == 7;
+
+// Expected schedule: 5, 15, 30, 60 seconds, then saturated at 60.
+ExpectedNext :: (attempt: s32) -> s32 {
+    if attempt >= 4 { return 4 }
+    return attempt + 1
+}
+
+ExpectedDelay :: (attempt: s32) -> s32 {
+    if attempt <= 1 { return 5 }
+    if attempt == 2 { return 15 }
+    if attempt == 3 { return 30 }
+    return 60
+}
+
+ExpectedClamp :: (attempt: s32) -> s32 {
+    if attempt < 0 { return 0 }
+    if attempt > 4 { return 4 }
+    return attempt
+}
+
+#law SuccessResets forall attempt: -2..6 => sync_retry_decision(0, attempt) == RetryDecision.{0, 0, 0};
+
+#law ChallengeRetries forall attempt: -2..6 => sync_retry_decision(4, attempt) == RetryDecision.{ExpectedNext(ExpectedClamp(attempt)), ExpectedDelay(ExpectedNext(ExpectedClamp(attempt))), 0};
+#law RequestRetries forall attempt: -2..6 => sync_retry_decision(6, attempt) == RetryDecision.{ExpectedNext(ExpectedClamp(attempt)), ExpectedDelay(ExpectedNext(ExpectedClamp(attempt))), 0};
+
+#law InvalidUrlStops forall attempt: -2..6 => sync_retry_decision(1, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+#law NoAccountStops forall attempt: -2..6 => sync_retry_decision(2, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+#law PayloadFailureStops forall attempt: -2..6 => sync_retry_decision(3, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+#law SigningFailureStops forall attempt: -2..6 => sync_retry_decision(5, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+#law AuthenticationFailureStops forall attempt: -2..6 => sync_retry_decision(7, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+
+// Any other code, including extremes of the persisted integer, stops retry.
+#law UnknownResultStops forall result: 8..40, attempt: -2..6 => sync_retry_decision(result, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+#law NegativeResultStops forall result: -40..-1, attempt: -2..6 => sync_retry_decision(result, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+
+#law SavedDelayMatches forall attempt: -2..6 => app_sync_retry_delay(attempt) == cast(float64) ExpectedDelay(ExpectedClamp(attempt));
+// Success and the two temporary failures need no user action; everything
+// else does.
+ExpectedNeedsAction :: (result: s32) -> s32 {
+    if result == 0 || result == 4 || result == 6 { return 0 }
+    return 1
+}
+
+#law FailureNeedsAction forall result: -40..40 => app_sync_failure_needs_action(result) == ExpectedNeedsAction(result);
+
+// The retry attempt never leaves the saved range.
+#law AttemptStaysBounded forall result: -40..40, attempt: -2..6 => sync_retry_decision(result, attempt).attempt >= 0 && sync_retry_decision(result, attempt).attempt <= 4;
+
+#program_export
+sync_retry_laws_entry :: () -> s32 {
+    return 0
+}

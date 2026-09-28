@@ -22,10 +22,12 @@
 
 - `make build-laws` is mandatory for native, web, and Windows artifacts;
   Gradle and CMake enforce the same version and proof checks independently.
-  Never bypass a failed gate or hand-edit generated policy tables.
-- Retry behavior lives in `laws/sync_retry/main.bend`. Implement changes there
-  and prove `LAWS.bend` in `PROOF.bend`; the app consumes the checked table.
-  Do not weaken laws to make an implementation pass. Contract changes require
+  Never bypass a failed gate.
+- Laws are Ziran `#law` obligations checked by `ziran check`. Retry behavior
+  lives in `src/app/sync_retry.zi` with its laws in `sync_retry_laws.zi`;
+  private-data names live in `src/storage/storage_layout.zi` with laws in
+  `storage_layout_laws.zi`. Change the implementation freely, but do not
+  weaken laws to make an implementation pass. Contract changes require
   explicit product intent and separate review from implementation changes.
 - Run `make proof-test sync-recovery-test version-test` for these contracts.
   Coverage, trust boundaries, and the next proof migrations are described in
@@ -65,11 +67,3 @@
 - Use descriptive names, explicit control flow, and focused helpers. Never
   compress multiple statements, branches, declarations, or checks onto one line.
   Format changed source, inspect the final diff, and run `git diff --check`.
-
-## Bend
-
-When using Bend:
-- run `bend guide` to learn it
-- use `LAWS.bend` to keep important rules
-- run `bend PROOF.bend` before committing
-- parallelize the code whenever possible

@@ -86,7 +86,6 @@ link curl curl
 link liboqs liboqs
 link monocypher monocypher
 link rini rini
-link bend bend
 
 rm -rf "$links"
 mv "$staging" "$links"

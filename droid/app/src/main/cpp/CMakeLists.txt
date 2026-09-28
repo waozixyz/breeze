@@ -49,15 +49,12 @@ file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${ZIRAN_DIR}/cmd/zir-ir/*.c" "${ZIRAN_DIR}/cmd/zir-ir/*.h")
 find_program(HOST_MAKE NAMES make gmake REQUIRED)
 find_program(HOST_PYTHON NAMES python3 REQUIRED)
-find_program(HOST_NODE NAMES node REQUIRED)
-set(APP_PROOF_DIR "${CMAKE_BINARY_DIR}/proofs")
+set(ZIRAN_BIN "${ZIRAN_BUILD_DIR}/bin/ziran")
 add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
-    COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-sync-retry.mjs"
-        "${SRC_DIR}/app/sync_retry.zi"
-    COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-storage-layout.mjs"
-        "${APP_PROOF_DIR}/storage_layout.h" "${SRC_DIR}/storage/storage_layout.zi"
-    BYPRODUCTS "${APP_PROOF_DIR}/storage_layout.h"
+    COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/sync_retry_laws.zi"
+    COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/storage/storage_layout_laws.zi"
+    DEPENDS "${ZI2C_BIN}"
     WORKING_DIRECTORY "${REPO_ROOT}"
     COMMENT "Checking release consistency and proving app laws"
     VERBATIM
@@ -99,11 +96,11 @@ execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
     "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
-execute_process(COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-sync-retry.mjs"
-    "${SRC_DIR}/app/sync_retry.zi" WORKING_DIRECTORY "${REPO_ROOT}"
-    COMMAND_ERROR_IS_FATAL ANY)
-execute_process(COMMAND "${HOST_NODE}" "${REPO_ROOT}/scripts/generate-storage-layout.mjs"
-    "${APP_PROOF_DIR}/storage_layout.h" "${SRC_DIR}/storage/storage_layout.zi"
+execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
+    "${SRC_DIR}/app/sync_retry_laws.zi"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
+    "${SRC_DIR}/storage/storage_layout_laws.zi"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set(APP_GENERATE_ZIRAN_COMMAND "${HOST_PYTHON}"
     "${REPO_ROOT}/scripts/generate-android-sources.py"
@@ -278,7 +275,6 @@ add_library(main SHARED
 add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
 
 target_include_directories(main PRIVATE
-    "${APP_PROOF_DIR}"
     "${ZIRAN_DIR}/include"
     "${MONOCYPHER_DIR}"
     "${MONOCYPHER_DIR}/optional"

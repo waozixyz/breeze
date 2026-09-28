@@ -21,16 +21,16 @@ table recognizes both
 Exports use `inbe-data/inbe.db` and `inbe-data/metadata.json` with format
 `inbe-data-sqlite`.
 
-`laws/storage_layout/LAWS.bend` proves the current and older directory names
-are distinct on every target, the current and older database names, and that
-both current and historical archive entries are importable. The
-checked generator emits `storage_layout.h` and `src/storage/storage_layout.zi`;
-the Ziran module supplies the current and historical directory and database
-names, archive suffix, and import/export entry names. `data_root()` and import/export
-code consume its names. The proof covers the finite naming policy. Native
-storage tests cover path selection, database opening, and archive round trips.
-The full app remains unbuildable during the Ziran migration, so those native
-integration tests cannot currently be linked from the full app build.
+`src/storage/storage_layout_laws.zi` states the current and older directory
+names (distinct on every target), the current and older database names, and
+the current and historical archive entries, and `ziran check` proves the
+constants in `src/storage/storage_layout.zi` match. That module supplies the
+directory and database names, archive suffix, and import/export entry names;
+`data_root()` and import/export code consume its names. The laws cover the
+finite naming policy only. Native storage tests cover path selection,
+database opening, and archive round trips. The full app remains unbuildable
+during the Ziran migration, so those native integration tests cannot currently
+be linked from the full app build.
 
 ## Desktop profiles
 

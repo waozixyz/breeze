@@ -1,118 +1,113 @@
-# Build contracts and Bend proofs
+# Build laws in Ziran
+
+Every Inbe law is stated, implemented, and checked in Ziran. Bend, its Node.js
+checker, and the generated `.zi` tables are gone. This file records what the
+laws cover, how they are enforced, and what is still to do.
 
 ## Implemented
 
-Inbe's release metadata uses the numeric changelog release and the permanent
-`APP_VERSION_*` macros. `update_version.sh` synchronizes the release fields;
-`check-version.py` rejects inconsistencies. The version check now runs in the
-native, web, and Windows artifact graphs and in both Gradle and CMake, including
-incremental builds. Version semantics remain a structural build check, not a
-formal theorem.
+- **Release metadata.** `update_version.sh` synchronizes the release fields from
+  the numeric `CHANGELOG.md` entry; `check-version.py` rejects inconsistencies.
+  It runs in the native, web, and Windows artifact graphs and in Gradle and
+  CMake, including incremental builds. It is a structural build check, not a
+  formal theorem.
+- **Sync retry** (`src/app/sync_retry.zi`, laws in `sync_retry_laws.zi`).
+  Ordinary hand-written Ziran, with 21 `#law` obligations checked by
+  `ziran check`. Result codes and retry states are checked exhaustively,
+  including out-of-range persisted integers. They establish: the wire result
+  codes; success resetting the retry state; temporary challenge and request
+  failures following 5/15/30/60 seconds with a saturated fourth attempt; each
+  actionable error class and every unknown code stopping automatic retry; the
+  saved-delay mapping; which results need user action; and the attempt never
+  leaving its saved range. Expected values are written independently of the
+  implementation.
+- **Storage layout** (`src/storage/storage_layout.zi`, laws in
+  `storage_layout_laws.zi`). The current and older directory names (distinct on
+  every target), database names, export and historical import entries, web
+  homes, and temporary names are fixed by 11 laws. See `docs/STORAGE_LAYOUT.md`.
+  `tests/storage_layout.h` holds independently written expected names for the C
+  storage path test.
+- **Ziran `forall` laws** (in `~/Projects/ziran`).
+  `#law NAME forall x: 0..4, k: SomeEnum => condition;` checks every
+  combination of integer ranges and enum members with the compile-time
+  evaluator. A failure reports the counterexample; a domain over 1,000,000
+  cases or a condition the evaluator cannot decide is `unknown`, which fails
+  the gate unless explicitly waived.
 
-The retry implementation is **Bend 2 code evaluated into checked Ziran**:
-
-1. `laws/sync_retry/main.bend` defines the actual pure retry policy.
-2. `LAWS.bend` states 11 universally quantified contracts; `PROOF.bend` proves
-   them for the complete finite input types.
-3. Inbe's `scripts/bend-laws.mjs` uses directly pinned Bend 2.0.16, commit
-   `15ae0c86f3193b8f645b4bedbc438655b648d0da`. It verifies the checker and Base
-   hashes before loading, checks termination and types, and rejects holes,
-   unproved declarations, `@unsafe`, foreign implementations, remote imports,
-   and imports outside the proof package.
-4. The checked function is evaluated directly in Bend's kernel for all 45
-   combinations of result and retry state. `scripts/generate-sync-retry.mjs`
-   writes `src/app/sync_retry.zi`, which the Ziran compiler checks and lowers.
-   There is no separate handwritten retry implementation or Bend runtime on
-   the phone.
-   `src/storage/sync_result.zi` declares the wire result codes; generation
-   rejects changes to their names or numeric values.
-5. Account-data and social retries both call that module. It clamps persisted
-   integers before selecting a proved decision, avoiding increment overflow.
-   Unknown results stop automatic retries.
-
-The proofs establish success resetting the retry state; temporary challenge
-and request failures following 5/15/30/60 seconds with a saturated fourth
-attempt; actionable failures stopping automatic retry; and the mapping of
-saved retry states and delays. Each error classification has its own law.
-They do not prove server availability, delivery, alias/friend restoration,
-or arbitrary `.zi` behavior. The integration tests for those effects remain,
-but their native build currently stops at the unfinished Ziran source gate.
-
-The private-data directory and database names come from the proved finite
-Bend policy in `laws/storage_layout`. Its generated header is consumed by
-`data_root()` and storage import/export code. The proof establishes current
-names on each target and that the export entry is importable; it does not
-establish filesystem or SQLite behavior. See `docs/STORAGE_LAYOUT.md`.
+The laws do not prove server availability, delivery, alias/friend restoration,
+filesystem or SQLite behavior, or arbitrary `.zi` code. Integration tests for
+those effects remain, and the sync recovery native build still stops at the
+unfinished Ziran source gate.
 
 ## Build behavior and verification
 
-Install Node.js **22.18 or newer** on the build host and initialize the
-`build/packages/bend`, `build/packages/ziran`, and `build/packages/kryon` submodules. The checker runs
-offline once those dependencies are present.
-CI and package builders provide Node explicitly. The container setup script
-uses pinned, checksummed official Node archives; ordinary compilation never
-downloads a proof tool. Flatpak removes its Node build tool from the app.
+`make build-laws` runs the version check and `ziran check` on each module in
+`LAW_MODULES`. Failed checking prevents compilation; no old generated output can
+satisfy it because none exists. Gradle and CMake run the same checks. Node is no
+longer required to build, and the Flatpak no longer carries a Node build tool.
 
-- `make build-laws`: release consistency and proofs.
-- `make proof-test`: deterministic generation, contract-breaking mutations,
-  enum mapping drift, and rejection with old generated Ziran source present.
-- `make sync-retry-zi-test`: source and saved IR behavior across C, C++, Go,
-  and portable bundles.
-- `make sync-recovery-test`: the generated Ziran C and coordinator, including
-  all known result codes, extreme persisted integers, and social retry state;
-  currently blocked by the unfinished app source gate.
-- `make version-test`: release synchronization and rejecting mismatches.
-- `make proof-test`: checker/evaluator acceptance and rejection, including
-  broken laws and changed wire codes.
+- `make proof-test` runs `tests/law_mutation_test.sh`: the unmutated tree
+  passes, and eight deliberate breakages (a changed result code, delay,
+  saturation bound, stop rule, reset value, and storage names) are each rejected
+  by the specific law that should catch them. This is what shows the laws are
+  not vacuous.
+- `make sync-retry-zi-test`: behavior across the portable bundle and the C, C++,
+  and Go targets, from source and saved IR.
+- `make sync-recovery-test`: generated Ziran C and the coordinator; blocked by
+  the unfinished app source gate.
+- `make version-test`: release synchronization and mismatch rejection.
 
-Make's generated-source and app artifact prerequisites run the checks on
-every invocation. Failed checking prevents compilation even if old source
-exists. Successful generation preserves its timestamp when the proved policy
-is unchanged. Gradle `preBuild` always checks; direct CMake builds regenerate
-the Ziran module. Plan 9 compiles that module with the other app sources.
+Compiler regression tests, the text/button scanners, migration tests, and the
+sync integration suite are separate checks with their own scope; none is a
+proof of application behavior.
 
-The Ziran compiler's image surface restriction remains separate from these
-application proofs. Compiler regression tests do not prove application
-behavior.
-The text/button scanners, migration tests, and sync integration suite remain
-separate checks with their own scope.
+## Toolchain pin
 
-## Trust and use with smaller models
+`ziran.lock` still pins Ziran v0.2.0, which has no `forall` laws. Locked and CI
+builds cannot check the laws until the Ziran commit that adds `forall` is pushed
+and the lock is bumped (`sh scripts/packages.sh` after updating `ziran.toml`).
+Local builds use the `../ziran` working tree through `ziran.local.toml`.
 
-A model can change the implementation and provide proofs while the contracts
-stay fixed. Its output is accepted only when the checker verifies those
-contracts. This reduces dependence on model quality for **specified behavior**;
-it does not establish that a smaller model is equally good at designing the
-contracts or diagnosing missing requirements.
+## Remaining Ziran work
 
-The trusted boundary is the pinned checker/Base, the finite-table generator,
-the enum/integer adapter, build graph, and target compiler. Regression tests
-exercise the integration boundary. An agent able to rewrite the laws or gates
-can weaken the guarantee. Protected branches, required checks, and independent
-review ownership should protect those files on the hosting service; repository
-files alone cannot make themselves immutable. Hosting settings have not been
-changed by this implementation.
-
-`AGENTS.md` now states ownership, contract-change boundaries, and the remaining
-product/review obligations instead of treating prose as a proof system.
+1. **Stable law identity and waivers.** Duplicate names, waivers for unknown
+   names, and waivers on `disproved` laws are errors.
+2. **Determinism matrix.** Law tables byte-identical across runs and between
+   source and saved IR (covered for `forall` in Ziran's `tests/laws.sh`, not yet
+   across the whole matrix).
+3. **Mutation gate as a Ziran library.** Inbe's `tests/law_mutation_test.sh` is
+   a local script; Ziran should provide the reusable form.
+4. **Local enum variables and named enum domains in more contexts.** Enum
+   members and typed parameters work in laws; locals of enum type inside pure
+   procedures are not yet resolved.
+5. **Beyond finite tables.** Bounded quantification over sequences, and a stated
+   relation between the checked pure model and the lowered native code, so a
+   proof of a model is never claimed to prove a separately implemented C path.
+   Needed for collection merges and recovery.
 
 ## Next migrations, in order
 
-1. Move practice lifecycle decisions into a pure finite policy: desktop focus
-   cannot pause a session, user pause remains explicit, and mobile background
-   transitions preserve the required timer behavior. Compile its proved table
-   through the same Bend checker; retain platform integration tests.
-2. Specify sync recovery transitions: restoring an account cannot discard
-   queued local changes, partial social refresh cannot erase known friends,
-   and an account switch cannot apply responses belonging to the old account.
-   Model effects explicitly; proofs of scheduling do not prove network delivery.
-3. For unbounded algorithms such as collection merges, define a checked direct
-   compilation path and its semantics before expanding beyond finite tables.
-   Do not claim a proof of a model also proves a separately implemented C path.
-4. Specify widget behavior in ordinary Kryon Ziran modules and test the
-   portable values and host boundaries. Ziran remains unaware of UI widgets.
-   The current Inbe source gate still reports unsupported host operations.
+1. **Practice lifecycle.** Desktop focus cannot pause a session, user pause
+   stays explicit, and mobile background transitions keep the required timer
+   behavior, as a pure finite policy with laws. Platform integration tests stay.
+2. **Sync recovery transitions.** Restoring an account cannot discard queued
+   local changes, partial social refresh cannot erase known friends, and an
+   account switch cannot apply responses belonging to the old account. Model
+   effects explicitly; a proof of scheduling is not a proof of network delivery.
+3. **Collection merges**, once Ziran supports bounded sequence quantification.
+4. **Widget behavior** in ordinary Kryon Ziran modules with tests of the
+   portable values and host boundaries. Ziran stays unaware of UI widgets.
 
-[Bend's upstream guide](https://github.com/bendlang/bend/blob/main/guide/GUIDE.md)
-describes its law/proof convention. Inbe uses the actual checker rather than
-naming ordinary assertions or tests mathematical proofs.
+## Trust and use with smaller models
+
+A model may change the implementation while the laws stay fixed; its output is
+accepted only when `ziran check` proves them. This reduces dependence on model
+quality for **specified behavior**. It does not make a small model as good at
+designing contracts or noticing a missing requirement.
+
+The trusted base is the Ziran checker and evaluator, the build graph, and the
+target compiler. An agent that can rewrite `*_laws.zi`, the mutation test, or
+the gates can weaken the guarantee, so protect them with protected branches,
+required checks, and independent review ownership on the host; repository files
+cannot make themselves immutable. Those hosting settings have not been changed.
+`AGENTS.md` states ownership and the rule not to weaken laws.
