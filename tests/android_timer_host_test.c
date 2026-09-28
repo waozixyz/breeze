@@ -1,4 +1,4 @@
-#include "platform/android/android_timer.h"
+#include "platform/android/android_timer_host.h"
 
 #include <assert.h>
 #include <pthread.h>
