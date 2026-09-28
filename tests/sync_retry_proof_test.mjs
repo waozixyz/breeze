@@ -87,6 +87,14 @@ test('actual Make proof prerequisite rejects broken policy despite existing Zira
         }
         fs.cpSync(path.join(root, 'laws/storage_layout'), path.join(directory, 'laws/storage_layout'),
             { recursive: true });
+        fs.mkdirSync(path.join(directory, 'build/packages'), { recursive: true });
+        // The package links below are already in place; the manifest and a
+        // newer packages.mk keep Make from fetching them again.
+        for (const file of ['ziran.toml', 'ziran.lock', 'scripts/packages.sh', 'mk/sync.mk']) {
+            fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+            fs.copyFileSync(path.join(root, file), path.join(directory, file));
+        }
+        fs.writeFileSync(path.join(directory, 'build/packages.mk'), 'PACKAGES_READY := 1\n');
         fs.symlinkSync(path.join(root, 'build/packages/kryon'), path.join(directory, 'build/packages/kryon'), 'dir');
         fs.symlinkSync(path.join(root, 'build/packages/bend'), path.join(directory, 'build/packages/bend'), 'dir');
         const make = () => spawnSync('make', ['src/app/sync_retry.zi'], {

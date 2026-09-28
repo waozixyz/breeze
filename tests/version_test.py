@@ -66,6 +66,14 @@ class VersionTest(unittest.TestCase):
 
     def test_build_gate_rejects_mismatch_after_success(self):
         (self.root / "vendor").mkdir()
+        (self.root / "build/packages").mkdir(parents=True)
+        # The package links below are already in place; the manifest and a
+        # newer packages.mk keep Make from fetching them again.
+        for name in ("ziran.toml", "ziran.lock", "scripts/packages.sh",
+                "mk/sync.mk"):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / name, self.root / name)
+        (self.root / "build/packages.mk").write_text("PACKAGES_READY := 1\n")
         (self.root / "build/packages/kryon").symlink_to(REPO / "build/packages/kryon", target_is_directory=True)
         (self.root / "build/packages/bend").symlink_to(REPO / "build/packages/bend", target_is_directory=True)
         shutil.copytree(REPO / "laws", self.root / "laws")
