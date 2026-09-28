@@ -17,6 +17,8 @@ fresh() {
         "$root"/src/app/practice_lifecycle_laws.zi "$work/src/app/"
     cp "$root"/src/app/sync_recovery_policy.zi \
         "$root"/src/app/sync_recovery_policy_laws.zi "$work/src/app/"
+    cp "$root"/src/storage/habit_merge_model.zi \
+        "$root"/src/storage/habit_merge_laws.zi "$work/src/storage/"
     cp "$root"/src/storage/sync_result.zi "$root"/src/storage/storage_layout.zi \
         "$root"/src/storage/storage_layout_laws.zi "$work/src/storage/"
 }
@@ -30,6 +32,7 @@ fresh
 check app/sync_retry_laws.zi
 check app/practice_lifecycle_laws.zi
 check app/sync_recovery_policy_laws.zi
+check storage/habit_merge_laws.zi
 check storage/storage_layout_laws.zi
 
 # file, module to check, sed expression, expected disproved law
@@ -98,6 +101,28 @@ mutate $recovery app/sync_recovery_policy_laws.zi \
 mutate $recovery app/sync_recovery_policy_laws.zi \
     's/(next == SocialStageAverage \&\& practice_is_whm == 0)/(next == SocialStageAverage \&\& practice_is_whm != 0)/' \
     FinishesAfterStreakUnlessWhm
+merge=storage/habit_merge_model.zi
+mutate $merge storage/habit_merge_laws.zi \
+    's/if mine > theirs {/if mine < theirs {/' MergeKeepsMine
+mutate $merge storage/habit_merge_laws.zi \
+    's/return HabitDayValue(HabitDayValue(a\[day\], b\[day\]), c\[day\])/return HabitDayValue(a[day], b[day])/' \
+    MergeAssociates
+mutate $merge storage/habit_merge_laws.zi \
+    's/    return theirs$/    return theirs + 1/' MergeInventsNothing
+
+# The real SQL must fail the same statements when it loses progress.
+fresh
+mkdir -p "$work/sql/src/storage"
+cp "$root"/src/storage/storage_habit_sync.zi "$root"/src/storage/habit_sync_sql.zi \
+    "$root"/src/storage/schema_sql.zi "$work/sql/src/storage/"
+HABIT_MERGE_ROOT="$work/sql" python3 "$root/tests/habit_merge_sql_test.py" > /dev/null
+sed -i 's/completed=MAX(completed,/completed=MIN(completed,/' \
+    "$work/sql/src/storage/storage_habit_sync.zi"
+if HABIT_MERGE_ROOT="$work/sql" python3 "$root/tests/habit_merge_sql_test.py" \
+    > /dev/null 2>&1; then
+    echo "SQL merge test accepted a merge that loses progress" >&2
+    exit 1
+fi
 mutate storage/sync_result.zi app/sync_retry_laws.zi \
     's/SYNC_AUTH_FAILED :: 7/SYNC_AUTH_FAILED :: 8/' WireAuthFailed
 mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
