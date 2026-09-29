@@ -11,6 +11,7 @@ static Vector2 window_scale = {1.0f, 1.0f};
 
 int32_t app_android_platform(void) { return platform == 1; }
 int32_t app_web_platform(void) { return platform == 2; }
+void RaylibSetZoom(float factor) { (void)factor; }
 bool IsWindowReady(void) { return ready; }
 Vector2 GetWindowScaleDPI(void) { return window_scale; }
 

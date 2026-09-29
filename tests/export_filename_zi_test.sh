@@ -10,7 +10,7 @@ mkdir -p "$work/generated"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -I"$root/build/packages/ziran/include" -I"$work/generated" \
     "$work/generated/storage/export_filename.c" \
-    "$work/generated/layout.c" -x c - -o "$work/test" <<'EOF'
+    "$work/generated/storage_layout.c" -x c - -o "$work/test" <<'EOF'
 #include "storage/export_filename.h"
 #include <assert.h>
 #include <stdint.h>

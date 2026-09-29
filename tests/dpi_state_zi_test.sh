@@ -23,7 +23,7 @@ mkdir -p "$work/c"
     "$root/tests/dpi_state_link_test.c" \
     "$work/c/platform/dpi_density.c" \
     "$work/c/app/dpi_state.c" "$work/c/dpi.c" \
-    "$work/c/environment.c" "$work/c/raylib_game.c" \
+    "$work/c/environment.c" \
     -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     "$work/test"
