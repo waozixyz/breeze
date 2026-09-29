@@ -1,0 +1,66 @@
+#import "drawing_props"
+#import "frame_transition"
+#import "geometry"
+#import "session"
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+
+APP_ROUTE_TRANSITION_SECONDS :: 0.12;
+
+#program_export
+app_route_transition_request :: (app: *InnerBreeze) {
+    if app == null { return }
+    if app.ui.route_transition_active { return }
+    app.ui.route_transition_pending = true
+}
+
+#program_export
+app_route_transition_capture :: (app: *InnerBreeze,
+    texture: Texture2D, now_seconds: float64, owns_texture: bool) {
+    if app == null || !app.ui.route_transition_pending { return }
+    app.ui.route_transition_pending = false
+    surface: FrameSurface
+    surface.texture = app.ui.route_transition_texture
+    if app.ui.route_transition_texture_owned && FrameSurfaceValid(surface) {
+        app.ui.route_transition_texture = FrameSurfaceRelease(surface).texture
+    }
+    app.ui.route_transition_texture_owned = owns_texture
+    app.ui.route_transition_texture = texture
+    surface.texture = texture
+    app.ui.route_transition_active = FrameSurfaceValid(surface)
+    app.ui.route_transition_started = now_seconds
+}
+
+#program_export
+app_route_transition_advance :: (app: *InnerBreeze,
+    now_seconds: float64) {
+    if app == null || !app.ui.route_transition_active { return }
+    if now_seconds - app.ui.route_transition_started <
+    APP_ROUTE_TRANSITION_SECONDS { return }
+    surface: FrameSurface
+    surface.texture = app.ui.route_transition_texture
+    if app.ui.route_transition_texture_owned && FrameSurfaceValid(surface) {
+        app.ui.route_transition_texture = FrameSurfaceRelease(surface).texture
+    }
+    app.ui.route_transition_texture = Texture2D.{}
+    app.ui.route_transition_texture_owned = false
+    app.ui.route_transition_active = false
+}
+
+#program_export
+app_route_transition_input_allowed :: (app: *InnerBreeze) -> bool {
+    if app == null { return true }
+    return !app.ui.route_transition_active
+}
+
+#program_export
+app_route_transition_draw :: (app: *InnerBreeze, bounds: Rectangle,
+    now_seconds: float64) {
+    if app == null || !app.ui.route_transition_active { return }
+    surface: FrameSurface
+    surface.texture = app.ui.route_transition_texture
+    elapsed := cast(float32)(now_seconds -
+        app.ui.route_transition_started)
+    FrameTransition(app.ui.session, surface, bounds, elapsed,
+        APP_ROUTE_TRANSITION_SECONDS)
+}

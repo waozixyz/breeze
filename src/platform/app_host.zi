@@ -8,6 +8,7 @@ SetTraceLogLevel :: (level: s32) #foreign raylib_log;
 app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
 #import, file "../app/app_types.zi";
 #import, file "../screens/elist_types.zi";
+#import, file "../app/app_frame_transition.zi";
 #import, file "../app/application.zi";
 #import, file "desktop_identity.zi";
 #import, file "../app/text_buffers.zi";
@@ -237,6 +238,18 @@ app_frame :: (app: *InnerBreeze) {
         }
     }
 
+    if app.ui.route_transition_pending {
+        #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+            app_route_transition_capture(app,
+                RetainedPreviousFrameTexture(), GetTime(), false)
+        } else {
+            app_route_transition_capture(app, Texture2D.{},
+                GetTime(), false)
+        }
+    }
+    app_route_transition_advance(app, GetTime())
+    transition_input_allowed := app_route_transition_input_allowed(app)
+
     screen_mouse: Vector2 = GetMousePosition()
     mouse: Vector2 = screen_mouse
     if app.camera.zoom > 0.0 {
@@ -258,12 +271,25 @@ app_frame :: (app: *InnerBreeze) {
         app.sync_server_url_focused != 0 ||
         app.sync_alias_focused != 0 ||
         app.habit_session_edit.active != 0
+    if !transition_input_allowed {
+        app.ui.keyboard_active = false
+        app.ui.manual_previous = false
+        app.ui.manual_next = false
+        app.ui.manual_finish = false
+        app.ui.manual_close = false
+        app.ui.text_input_active = false
+    }
     pointer: PointerFrame
     pointer.x = mouse.x
     pointer.y = mouse.y
     pointer.pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
     pointer.down = IsMouseButtonDown(MOUSE_BUTTON_LEFT)
     pointer.released = IsMouseButtonReleased(MOUSE_BUTTON_LEFT)
+    if !transition_input_allowed {
+        pointer.pressed = false
+        pointer.down = false
+        pointer.released = false
+    }
     app.ui.manual_swipe_frame.pointer = mouse
     app.ui.manual_swipe_frame.pressed = pointer.pressed
     app.ui.manual_swipe_frame.down = pointer.down
@@ -304,7 +330,8 @@ app_frame :: (app: *InnerBreeze) {
     }
     SetDPIZoom(UserScale(app.ui_scale_tenths))
     BeginScrollFrame(app.ui.session, mouse, pointer.pressed, pointer.down,
-        pointer.released, zoomed.wheel)
+        pointer.released,
+        ifx transition_input_allowed then (zoomed.wheel) else (0.0))
 
     frame_bounds := Rectangle.{0.0, 0.0,
         cast(float32)width, cast(float32)height}
@@ -318,14 +345,35 @@ app_frame :: (app: *InnerBreeze) {
             cast(float32)viewport.height}
         android_text_input_begin_frame(app.ui.session)
     }
-    BeginDrawing()
-    if first_frame {
-        TraceLog(LOG_INFO, "APP PROBE: drawing begun")
-    }
-    ClearBackground(StyleTokenColor("canvas"))
-    app_update_draw(cast(*void)app, frame_bounds)
-    if first_frame {
-        TraceLog(LOG_INFO, "APP PROBE: app draw complete")
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if BeginRetainedFrame(width, height) {
+            if first_frame {
+                TraceLog(LOG_INFO, "APP PROBE: drawing begun")
+            }
+            ClearBackground(StyleTokenColor("canvas"))
+            app_update_draw(cast(*void)app, frame_bounds)
+            if first_frame {
+                TraceLog(LOG_INFO, "APP PROBE: app draw complete")
+            }
+            if !EndRetainedFrame() && first_frame {
+                TraceLog(LOG_WARNING, "APP PROBE: retained frame failed")
+            }
+        } else {
+            BeginDrawing()
+            ClearBackground(StyleTokenColor("canvas"))
+            app_update_draw(cast(*void)app, frame_bounds)
+            EndDrawing()
+        }
+    } else {
+        BeginDrawing()
+        if first_frame {
+            TraceLog(LOG_INFO, "APP PROBE: drawing begun")
+        }
+        ClearBackground(StyleTokenColor("canvas"))
+        app_update_draw(cast(*void)app, frame_bounds)
+        if first_frame {
+            TraceLog(LOG_INFO, "APP PROBE: app draw complete")
+        }
     }
     #if #defined(ANDROID_BUILD) {
         active := app.elist.input_focused != 0 ||
@@ -339,7 +387,9 @@ app_frame :: (app: *InnerBreeze) {
             app.habit_session_edit.active != 0
         android_text_input_frame(app.ui.session, active)
     }
-    EndDrawing()
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        EndDrawing()
+    }
     if first_frame {
         TraceLog(LOG_INFO, "APP PROBE: drawing ended")
     }
