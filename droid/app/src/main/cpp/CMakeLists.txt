@@ -24,7 +24,7 @@ set(SQLITE_DIR "${REPO_ROOT}/build/packages/sqlite")
 set(SQLITE_BUILD_DIR "${CMAKE_BINARY_DIR}/sqlite")
 set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
-set(NATIVE_APP_GLUE_DIR "${ANDROID_NDK}/sources/android/native_app_glue")
+include("${KRYON_DIR}/cmake/KryonAndroid.cmake")
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(OQS_USE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(OQS_MINIMAL_BUILD "SIG_ml_dsa_44" CACHE STRING "" FORCE)
@@ -185,7 +185,11 @@ add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi
 file(GLOB APP_LOCALE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/locales/*.txt")
 file(GLOB APP_SOUND_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/sounds/*.ogg")
 file(GLOB APP_SOCIAL_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/social/*.png")
-file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/practices/*/banner*.png")
+# banner.png is the web/store copy of banner-light.png; the app loads only
+# the themed pair.
+file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
+    "${REPO_ROOT}/assets/practices/*/banner-light.png"
+    "${REPO_ROOT}/assets/practices/*/banner-dark.png")
 file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
     "${KRYON_DIR}/styles/kryon/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
     "${REPO_ROOT}/themes/catalog_*.kss")
@@ -247,42 +251,7 @@ add_custom_command(
     VERBATIM
 )
 
-add_library(raylib STATIC
-    "${RAYLIB_DIR}/rcore.c"
-    "${RAYLIB_DIR}/rshapes.c"
-    "${RAYLIB_DIR}/rtextures.c"
-    "${RAYLIB_DIR}/rtext.c"
-    "${RAYLIB_DIR}/raudio.c"
-)
-
-target_compile_definitions(raylib PRIVATE
-    PLATFORM_ANDROID
-    GRAPHICS_API_OPENGL_ES2
-    SUPPORT_SCREEN_CAPTURE=0
-    SUPPORT_COMPRESSION_API=0
-    SUPPORT_AUTOMATION_EVENTS=0
-    SUPPORT_CLIPBOARD_IMAGE=0
-    SUPPORT_FILEFORMAT_BMP=0
-    SUPPORT_FILEFORMAT_GIF=0
-    SUPPORT_FILEFORMAT_QOI=0
-    SUPPORT_FILEFORMAT_DDS=0
-    SUPPORT_FILEFORMAT_TTF=1
-    SUPPORT_FILEFORMAT_JPG=1
-    SUPPORT_FILEFORMAT_PNG=1
-    SUPPORT_FILEFORMAT_OGG=1
-    SUPPORT_MODULE_RAUDIO=1
-)
-
-target_compile_options(raylib PRIVATE
-    -Oz
-    -ffunction-sections
-    -fdata-sections
-)
-
-target_include_directories(raylib PUBLIC
-    "${RAYLIB_DIR}"
-    "${NATIVE_APP_GLUE_DIR}"
-)
+kryon_android_raylib("${RAYLIB_DIR}")
 
 add_library(main SHARED
     "${MONOCYPHER_DIR}/monocypher.c"
@@ -290,8 +259,8 @@ add_library(main SHARED
     "${SQLITE_AMALGAMATION_C}"
     "${APP_EMBEDDED_ASSETS_C}"
     ${APP_ZIRAN_GENERATED_SOURCES}
-    "${NATIVE_APP_GLUE_DIR}/android_native_app_glue.c"
 )
+kryon_android_app(main)
 add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
 
 target_include_directories(main PRIVATE
@@ -299,7 +268,6 @@ target_include_directories(main PRIVATE
     "${MONOCYPHER_DIR}"
     "${MONOCYPHER_DIR}/optional"
     "${SRC_DIR}/app"
-    "${NATIVE_APP_GLUE_DIR}"
     "${SQLITE_BUILD_DIR}"
 )
 # Generated module names such as math.h must not shadow libc's <math.h>
@@ -309,12 +277,7 @@ foreach(directory ${APP_ZIRAN_INCLUDE_DIRS})
 endforeach()
 
 target_compile_definitions(main PRIVATE
-    PLATFORM_ANDROID
-    ANDROID_BUILD=1
-    _DEFAULT_SOURCE
-    _GNU_SOURCE
     UTF8PROC_STATIC
-    _FILE_OFFSET_BITS=64
     MG_TLS=MG_TLS_BUILTIN
     MG_ENABLE_EPOLL=0
     MG_ENABLE_POLL=1
@@ -327,12 +290,6 @@ target_compile_definitions(main PRIVATE
     KRYON_WITH_PHYSICS=0
 )
 
-target_compile_options(main PRIVATE
-    -Oz
-    -ffunction-sections
-    -fdata-sections
-    -fvisibility=hidden
-)
 # The VM locates this exported entry before native methods are registered.
 foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
     get_filename_component(source_name "${source}" NAME)
@@ -347,26 +304,4 @@ foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
     endif()
 endforeach()
 
-target_link_options(main PRIVATE
-    -Wl,--gc-sections
-    -Wl,-z,max-page-size=16384
-    -Wl,-z,common-page-size=16384
-    -Wl,--wrap=fopen
-)
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_link_options(main PRIVATE -Wl,--strip-all)
-endif()
-
-target_link_libraries(main
-    raylib
-    oqs
-    atomic
-    android
-    dl
-    log
-    OpenSLES
-    EGL
-    GLESv2
-    z
-    m
-)
+target_link_libraries(main oqs z)
