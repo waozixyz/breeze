@@ -49,6 +49,8 @@ IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
 #import "control_props"
 #import "paint_queue"
 #import "text_align"
+#import "segmented_control_props"
+#import "segmented_control_widget"
 
 using ButtonTone;
 using ArrowDirection;
@@ -955,8 +957,11 @@ HabitScreenOverview :: (app: *InnerBreeze,
     End(app.ui.session)
 }
 
-HabitScreenSelectedHeader :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry, index: s32) -> s32 {
+// A habit's pages are separate: its view (week or calendar), its
+// statistics, and its editor. Each has only Back and its own title here;
+// none of them links sideways into the others.
+HabitScreenPageHeader :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry, index: s32, subtitle: string) -> s32 {
     y := geometry.y
     habit := *app.habits.items[index]
     if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("back_button"), 4300,
@@ -972,51 +977,43 @@ HabitScreenSelectedHeader :: (app: *InnerBreeze,
     title.font = AppTitleFontSize(name, geometry.width - AppScale(82))
     title.wrap = cast(TextWrap)TextWrapNone
     Text(app.ui.session, title)
-    y += AppScale(52)
-    tab_w := (geometry.width - AppScale(16)) / 3
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_focus_week"), 4301,
-        geometry.x, y, tab_w, AppScale(42),
-        app.habits.tab == HABIT_TAB_WEEKLY, false)) != 0 {
-        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
-        app.habits.tab = HABIT_TAB_WEEKLY
+    y += AppScale(44)
+    if subtitle.count > 0 {
+        label: TextProps
+        label.bounds = HabitScreenRect(geometry.x + AppScale(82), y,
+            geometry.width - AppScale(82), AppScale(24))
+        label.text = subtitle
+        label.font = AppSmallFontSize()
+        label.wrap = cast(TextWrap)TextWrapNone
+        Text(app.ui.session, label)
+        y += AppScale(32)
+    } else {
+        y += AppScale(8)
+    }
+    return y
+}
+
+// The habit view switches only between its week list and its calendar.
+HabitScreenViewSwitch :: (app: *InnerBreeze,
+    geometry: HabitScreenGeometry, top: s32) -> s32 {
+    options: [2]SegmentOption = .[
+        SegmentOption.{.label = LocaleText("habit_focus_week")},
+        SegmentOption.{.label = LocaleText("habit_focus_calendar")}
+    ]
+    props: SegmentedControlProps
+    props.id = 4301
+    props.bounds = HabitScreenRect(geometry.x, top, geometry.width, AppScale(42))
+    props.height = AppScale(42)
+    props.selected_index = ifx (app.habits.view_mode == HABIT_VIEW_CALENDAR) then (1) else (0)
+    props.has_selection = true
+    props.disabled = app.modal.active != 0
+    switch := SegmentedControl(app.ui.session, props, options[:])
+    if switch.changed {
+        app.habits.view_mode = ifx (switch.selected_index == 1) then (HABIT_VIEW_CALENDAR) else (HABIT_VIEW_WEEKLY)
         app.habits.scroll = 0
         HabitScreenSave(app)
     }
-    app.habits_guide_anchors[2] = HabitScreenRect(geometry.x, y,
-        tab_w, AppScale(42))
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_focus_calendar"), 4302,
-        geometry.x + tab_w + AppScale(8), y, tab_w, AppScale(42),
-        app.habits.tab == HABIT_TAB_MONTHLY, false)) != 0 {
-        habits_open_history(app)
-    }
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_stats_current_streak"), 4303,
-        geometry.x + (tab_w + AppScale(8)) * 2, y,
-        tab_w, AppScale(42),
-        app.habits.tab == HABIT_TAB_STATISTICS, false)) != 0 {
-        habits_open_statistics(app)
-    }
-    app.habits_guide_anchors[3] = HabitScreenRect(
-        geometry.x + (tab_w + AppScale(8)) * 2, y,
-        tab_w, AppScale(42))
-    y += AppScale(54)
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_new_button"), 4304,
-        geometry.x, y, (geometry.width - AppScale(8)) / 2,
-        AppScale(38), false, false)) != 0 {
-        habit_edit_begin_new(app)
-        return -1
-    }
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_edit_button"), 4305,
-        geometry.x + (geometry.width + AppScale(8)) / 2, y,
-        (geometry.width - AppScale(8)) / 2, AppScale(38),
-        false, false)) != 0 {
-        habit_edit_begin(app, index)
-        return -1
-    }
-    app.habits_guide_anchors[4] = HabitScreenRect(
-        geometry.x + (geometry.width + AppScale(8)) / 2, y,
-        (geometry.width - AppScale(8)) / 2, AppScale(38))
-    y += AppScale(50)
-    return y
+    return top + AppScale(54)
 }
 
 HabitScreenWeekly :: (app: *InnerBreeze,
@@ -1142,21 +1139,23 @@ draw_habits_screen :: (app: *InnerBreeze) {
     habits_first_day_bounds = Rectangle.{}
     geometry := HabitScreenLayout(app)
     if geometry.width <= 0 || geometry.height <= 0 { return }
-    show_overview := app.habits.screen_mode == HABITS_SCREEN_OVERVIEW &&
-    app.habits.tab == HABIT_TAB_WEEKLY
-    if show_overview || app.habits.count <= 0 ||
+    if app.habits.screen_mode == HABITS_SCREEN_OVERVIEW || app.habits.count <= 0 ||
     app.habits.selected < 0 || app.habits.selected >= app.habits.count {
         HabitScreenOverview(app, geometry)
         return
     }
     selected := app.habits.selected
-    top := HabitScreenSelectedHeader(app, geometry, selected)
-    if top < 0 { return }
-    if app.habits.screen_mode == HABITS_SCREEN_STATISTICS ||
-    app.habits.tab == HABIT_TAB_STATISTICS {
+    if app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
+        top := HabitScreenPageHeader(app, geometry, selected,
+            LocaleText("habit_statistics_title"))
+        if top < 0 { return }
         draw_statistics_content(app, top)
-    } else if app.habits.screen_mode == HABITS_SCREEN_HISTORY ||
-    app.habits.tab == HABIT_TAB_MONTHLY {
+        return
+    }
+    top := HabitScreenPageHeader(app, geometry, selected, "")
+    if top < 0 { return }
+    top = HabitScreenViewSwitch(app, geometry, top)
+    if app.habits.view_mode == HABIT_VIEW_CALENDAR {
         HabitScreenCalendar(app, geometry, selected, top)
     } else {
         HabitScreenWeekly(app, geometry, selected, top)
