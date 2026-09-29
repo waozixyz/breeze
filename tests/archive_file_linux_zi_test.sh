@@ -18,7 +18,7 @@ mkdir -p "$work/generated"
     "$work/generated/mapped_file_linux.c" \
     "$work/generated/byte_text_linux.c" \
     "$work/generated/file_linux.c" "$work/generated/c_string.c" \
-    "$work/generated/layout.c" "$work/generated/legacy_session_zip.c" \
+    "$work/generated/storage_layout.c" "$work/generated/legacy_session_zip.c" \
     "$work/generated/legacy_session.c" "$work/generated/state.c" \
     "$work/generated/path_join.c" "$work/generated/sqlite.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" \
