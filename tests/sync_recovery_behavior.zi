@@ -1,0 +1,102 @@
+#import, file "../src/app/app_sync.zi";
+#import, file "../src/app/settings_store.zi";
+#import, file "../src/app/sync_safety.zi";
+#import, file "../src/app/sync_retry.zi";
+
+// Host state the C side provides: the clock, the account switch, and the
+// queue the status key reads.
+recovery_c :: #system_library "c";
+recovery_set_time :: (seconds: float64) #foreign recovery_c;
+recovery_set_enabled :: (enabled: s32) #foreign recovery_c;
+recovery_set_queue :: (queued: s64, repair: s32, full_upload: s32) #foreign recovery_c;
+
+Retry :: (attempt: s32) -> bool {
+    return SettingsStoreInt("sync_retry_attempt", attempt)
+}
+
+Attempt :: () -> s32 {
+    return SettingsReadInt("sync_retry_attempt", 0)
+}
+
+// Zero when every check holds; otherwise the number of the first that fails.
+#program_export
+Answer :: () -> s32 {
+    least: s32 = -2147483647 - 1
+    most: s32 = 2147483647
+    now: float64 = 100.0
+    recovery_set_time(now)
+    recovery_set_enabled(1)
+
+    // Corrupted persisted attempt values must clamp, never overflow.
+    attempts: [9]s32 = .[least, -1, 0, 1, 2, 3, 4, 5, most]
+    expected_attempts: [9]s32 = .[1, 1, 1, 2, 3, 4, 4, 4, 4]
+    expected_delays: [9]s32 = .[5, 5, 5, 15, 30, 60, 60, 60, 60]
+    index: s32 = 0
+    while index < 9 {
+        result: s32 = 0
+        while result <= 7 {
+            unused Retry(attempts[index])
+            app_sync_record_result(result)
+            if result == 0 {
+                if Attempt() != 0 || g_sync.retry_at != 0.0 { return 3 }
+            } else if result == 4 || result == 6 {
+                if Attempt() != expected_attempts[index] { return 4 }
+                if g_sync.retry_at != now + cast(float64)expected_delays[index] { return 5 }
+            } else {
+                if Attempt() != attempts[index] { return 6 }
+                if g_sync.retry_at != 0.0 { return 7 }
+            }
+            result += 1
+        }
+        index += 1
+    }
+    app_sync_record_result(least)
+    if g_sync.retry_at != 0.0 || app_sync_failure_needs_action(least) == 0 { return 8 }
+    app_sync_record_result(most)
+    if g_sync.retry_at != 0.0 || app_sync_failure_needs_action(most) == 0 { return 9 }
+    if app_sync_retry_delay(least) != 5.0 { return 10 }
+    if app_sync_retry_delay(most) != 60.0 { return 11 }
+
+    // Social retries keep their own attempt counter and refresh flag.
+    g_sync.social_retry_attempt = most
+    app_social_record_result(6)
+    if g_sync.social_retry_attempt != 4 { return 12 }
+    if g_sync.social_retry_at != now + 60.0 { return 13 }
+    app_social_record_result(7)
+    if g_sync.social_retry_at != 0.0 { return 14 }
+    if g_sync.social_refresh_pending != 0 { return 15 }
+    app_social_record_result(0)
+    if g_sync.social_retry_attempt != 0 { return 17 }
+
+    // Repeated request failures back off 5, 15, 30, 60, 60 seconds.
+    unused Retry(0)
+    delays: [5]float64 = .[5.0, 15.0, 30.0, 60.0, 60.0]
+    index = 0
+    while index < 5 {
+        app_sync_record_result(6)
+        if g_sync.retry_at != now + delays[index] { return 18 }
+        if app_sync_status_key() != "sync_retry_waiting" { return 19 }
+        now = g_sync.retry_at
+        recovery_set_time(now)
+        index += 1
+    }
+    app_sync_record_result(7)
+    if g_sync.retry_at != 0.0 { return 20 }
+    if app_sync_failure_needs_action(SettingsReadInt("sync_last_result", 0)) == 0 { return 21 }
+    if app_sync_status_key() != "sync_auth_failed" { return 22 }
+    app_sync_record_result(0)
+    if Attempt() != 0 || g_sync.retry_at != 0.0 { return 23 }
+
+    // The status line follows the account, the running sync, and the queue.
+    recovery_set_queue(4745, 1, 0)
+    recovery_set_enabled(0)
+    if app_sync_status_key() != "sync_connection_required" { return 24 }
+    recovery_set_enabled(1)
+    g_sync.sync_running = 1
+    if app_sync_status_key() != "sync_in_progress" { return 25 }
+    g_sync.sync_running = 0
+    if app_sync_status_key() != "sync_status_local_queued" { return 26 }
+    recovery_set_queue(0, 1, 1)
+    if app_sync_status_key() != "sync_status_ready" { return 27 }
+    return 0
+}

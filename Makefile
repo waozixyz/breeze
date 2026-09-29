@@ -2871,16 +2871,11 @@ endif
 endif
 
 .PHONY: sync-recovery-test
-# Not part of `make test`: this C test includes the generated app_sync.c, which
-# the Ziran port no longer produces, so it cannot build. Port it to a Ziran test
-# (retry decisions are already covered by sync-retry-zi-test), then add it back.
-sync-recovery-test: $(TEST_BIN_DIR)/sync_recovery_test
-	$<
+sync-recovery-test: build-laws $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/sync_recovery_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-$(TEST_BIN_DIR)/sync_recovery_test: tests/sync_recovery_test.c $(KRY_GEN_STAMP) | $(TEST_BIN_DIR)
-	$(CC) -std=gnu99 -ffunction-sections -fdata-sections -D_DEFAULT_SOURCE \
-		-Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/storage -Isrc/platform/android $(KRYON_INCLUDE) -I$(KRY_GEN_DIR) -I$(KRY_GEN_DIR)/src $(SQLITE_INCLUDE) \
-		tests/sync_recovery_test.c $(KRY_GEN_DIR)/src/app/sync_retry.c -Wl,--gc-sections -o $@
+test: sync-recovery-test
 
 # Validate before producing release packages, including direct artifact targets.
 $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) $(CLICK_TARGET) $(CHROME_WEB_STORE_ZIP) $(FIREFOX_ADDONS_ZIP): | version-check
