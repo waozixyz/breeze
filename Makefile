@@ -910,7 +910,7 @@ $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--module-path build/packages/daochi-client \
-		-o $(WEB_GEN_DIR) $(ZI_SRCS)
+		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
 	touch $@
 	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
 
@@ -1902,8 +1902,6 @@ $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_ICON_TYPES_H): $(KRYON_ICON
 sync-web-icons: $(KRYON_SYNC_ICONS)
 	sh $(KRYON_SYNC_ICONS) web-assets/icons $(WEB_SHARED_ICON_SHEETS)
 	cp assets/app/icon.png web-assets/icons/$(APP_NAME).png
-
-$(WEB_LIBOQS_A): web-tools-check
 
 $(CLICK_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
 	rm -rf $(CLICK_LIBOQS_BUILD_DIR)
