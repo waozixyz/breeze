@@ -39,6 +39,27 @@ habit_linked_session_callback :: (path: string, year: s32, month: s32,
         second, activity, times, round_count)
 }
 
+// Every recorded session, loaded once per session change. Each habit and day
+// filters this in memory; the overview asks for many habit/day pairs per
+// frame, and reading the sessions from storage for each one is far too slow.
+habit_session_records: HabitLinkedContext;
+habit_session_records_clock: s64;
+habit_session_records_valid: bool;
+
+habit_session_records_current :: () -> *HabitLinkedContext {
+    session_clock := storage_session_change_clock()
+    if habit_session_records_valid && habit_session_records_clock == session_clock {
+        return *habit_session_records
+    }
+    habit_session_records = HabitLinkedContext.{}
+    habit_session_records.sync_mode = HABIT_SYNC_NONE
+    data_list_session_records(habit_linked_session_callback,
+        cast(*void)*habit_session_records)
+    habit_session_records_clock = session_clock
+    habit_session_records_valid = true
+    return *habit_session_records
+}
+
 habit_collect_linked_entries :: (habit: *Habit, day_filter: s32,
     ctx: *HabitLinkedContext) {
     if ctx == null {
@@ -50,7 +71,15 @@ habit_collect_linked_entries :: (habit: *Habit, day_filter: s32,
     ctx.day_filter = day_filter
     ctx.sync_mode = ifx (habit != null) then (habit.sync_mode) else (HABIT_SYNC_NONE)
     ctx.sync_activity = ifx (habit != null) then (habit.sync_activity) else (EXERCISE_WIM_HOF)
-    data_list_session_records(habit_linked_session_callback, cast(*void)ctx)
+    records := habit_session_records_current()
+    index: s32 = 0
+    while index < records.count {
+        entry := *records.entries[index]
+        unused HabitLinkedAppend(ctx, *entry.path[0], entry.year, entry.month,
+            entry.day, entry.hour, entry.minute, entry.second,
+            entry.activity, *entry.rounds[0], entry.round_count)
+        index += 1
+    }
 }
 
 #program_export

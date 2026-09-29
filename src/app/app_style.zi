@@ -5,6 +5,10 @@
 #import, file "app_types.zi";
 #import, file "assets.zi";
 #import, file "theme_catalog.zi";
+#import, file "metrics.zi";
+#import "text_style"
+#import "text_props"
+#import "style"
 
 using KssStatus;
 
@@ -206,8 +210,20 @@ StyleImport :: (name: KssName) -> AssetView {
     return AssetView.{}
 }
 
+// The installed style is fully determined by these inputs, and parsing it is
+// far too expensive to repeat every frame.
+style_installed: bool;
+style_installed_theme: s32;
+style_installed_dark: bool;
+style_installed_index: s32;
+
 #program_export
 StyleInstall :: (theme_id: s32, dark: bool, style_index: s32) -> bool {
+    if style_installed && style_installed_theme == theme_id &&
+        style_installed_dark == dark && style_installed_index == style_index {
+        return true
+    }
+    style_installed = false
     catalog := ThemeCatalogLoad(theme_id, dark)
     if !catalog.complete { return false }
     env := KssEnvironmentWithNames(KssDefaultEnvironment(),
@@ -230,7 +246,16 @@ StyleInstall :: (theme_id: s32, dark: bool, style_index: s32) -> bool {
     if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone {
         return false
     }
-    return InstallParsedStyleRules(parsed)
+    if !InstallParsedStyleRules(parsed) { return false }
+    body: StyleData
+    body.font_size = cast(float32)Text16
+    AppMetricsConfigureFont(cast(s32)(TextStyleFor(TextStyleRequest.{},
+        body).font_size + 0.5))
+    style_installed = true
+    style_installed_theme = theme_id
+    style_installed_dark = dark
+    style_installed_index = style_index
+    return true
 }
 
 #program_export

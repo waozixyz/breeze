@@ -8,6 +8,18 @@ NativeTraceLog :: (level: s32, message: *u8, args: ..any) #foreign c "TraceLog";
 sqlite3_open_v2 :: (path: *u8, database: **void, flags: s32, vfs: *u8) -> s32 #foreign sqlite3_lib "sqlite3_open_v2";
 sqlite3_close :: (database: *void) -> s32 #foreign sqlite3_lib "sqlite3_close";
 sqlite3_busy_timeout :: (database: *void, milliseconds: s32) -> s32 #foreign sqlite3_lib "sqlite3_busy_timeout";
+sqlite3_total_changes64 :: (database: *void) -> s64 #foreign sqlite3_lib "sqlite3_total_changes64";
+
+// Counts database opens and closes, so memoized reads can tell a reopened
+// connection, whose change counter starts again at zero, from the old one.
+storage_connection_generation: s64;
+
+// Rows changed through the open connection since it opened. The app has one
+// writing connection, so an unchanged value means no stored data changed.
+storage_connection_changes :: () -> s64 {
+    if storage_state_handle().db == null { return -1 }
+    return sqlite3_total_changes64(storage_state_handle().db)
+}
 sqlite3_db_cacheflush :: (db: *void) -> s32 #foreign sqlite3_lib "sqlite3_db_cacheflush";
 STORAGE_PATH_SIZE :: 1024
 
@@ -172,6 +184,7 @@ storage_init :: (root: string) -> s32 {
         storage_state_handle().db = null
         return 0
     }
+    storage_connection_generation += 1
     sqlite3_busy_timeout(storage_state_handle().db, 1000)
     if schema_create() == 0 || migrate_schema() == 0 || load_or_create_user() == 0 {
         sqlite3_close(storage_state_handle().db)
@@ -191,6 +204,7 @@ storage_init :: (root: string) -> s32 {
 
 #program_export
 storage_close :: () {
+    storage_connection_generation += 1
     if storage_state_handle().db != null {
         sqlite3_close(storage_state_handle().db)
         storage_state_handle().db = null
