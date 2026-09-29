@@ -1146,6 +1146,10 @@ storage-literals-check:
 	bash ./scripts/check-storage-literals.sh
 
 test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check
+test: screenshot-scene-test
+
+.PHONY: screenshot-scene-test
+screenshot-scene-test:
 	bash ./tests/screenshot_scene_test.sh
 
 audio-test-fixture-check:

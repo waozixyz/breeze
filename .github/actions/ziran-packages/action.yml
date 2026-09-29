@@ -1,22 +1,37 @@
 name: Fetch Ziran packages
 description: >
-  Fetch the packages pinned in ziran.lock. The built Ziran compiler and the
-  package checkouts are cached by the lock's hash, so a job only rebuilds and
-  clones when a dependency actually changes.
+  Fetch the packages pinned in ziran.lock. The built Ziran compiler is cached
+  by the toolchain commit alone, so bumping another package such as Kryon
+  keeps it; the package checkouts are cached by the whole lock and fall back
+  to the previous checkouts, so a bump fetches only what changed.
 
 runs:
   using: composite
   steps:
-    - name: Restore the Ziran toolchain and package sources
+    - name: Read the Ziran toolchain commit
+      id: toolchain
+      shell: sh
+      run: |
+        commit=$(python3 -c 'import json; print(json.load(open("ziran.lock"))["toolchain"]["commit"])')
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the Ziran toolchain
       uses: actions/cache@v4
       with:
         path: |
-          ~/.cache/ziran/sources
           build/ziran-bootstrap
           build/ziran-toolchain
-        key: ziran-${{ env.ImageOS }}-${{ runner.arch }}-${{ hashFiles('ziran.lock') }}
+        key: ziran-toolchain-${{ env.ImageOS }}-${{ runner.arch }}-${{ steps.toolchain.outputs.commit }}
         restore-keys: |
-          ziran-${{ env.ImageOS }}-${{ runner.arch }}-
+          ziran-toolchain-${{ env.ImageOS }}-${{ runner.arch }}-
+
+    - name: Restore the package sources
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ziran/sources
+        key: ziran-sources-${{ env.ImageOS }}-${{ runner.arch }}-${{ hashFiles('ziran.lock') }}
+        restore-keys: |
+          ziran-sources-${{ env.ImageOS }}-${{ runner.arch }}-
 
     - name: Fetch Ziran packages
       shell: sh

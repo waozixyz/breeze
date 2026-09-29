@@ -1,0 +1,42 @@
+name: Set up Emscripten
+description: >
+  Install the Emscripten SDK version named in .github/emscripten-version and
+  put it on PATH. The SDK, including the system libraries and ports it builds
+  on first use, is cached per version, so a job only downloads it when the
+  pinned version changes.
+
+runs:
+  using: composite
+  steps:
+    - name: Read the pinned Emscripten version
+      id: version
+      shell: bash
+      run: echo "version=$(tr -d '[:space:]' < .github/emscripten-version)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the Emscripten SDK
+      uses: actions/cache@v4
+      with:
+        path: ~/emsdk
+        key: emsdk-${{ env.ImageOS }}-${{ runner.arch }}-${{ steps.version.outputs.version }}-${{ hashFiles('scripts/ensure-emscripten-zlib.sh') }}
+        restore-keys: |
+          emsdk-${{ env.ImageOS }}-${{ runner.arch }}-${{ steps.version.outputs.version }}-
+
+    - name: Install and activate Emscripten
+      shell: bash
+      env:
+        EMSCRIPTEN_VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [ ! -x "$HOME/emsdk/emsdk" ]; then
+          rm -rf "$HOME/emsdk"
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+        fi
+        if [ ! -x "$HOME/emsdk/upstream/emscripten/emcc" ]; then
+          "$HOME/emsdk/emsdk" install "$EMSCRIPTEN_VERSION"
+        fi
+        "$HOME/emsdk/emsdk" activate "$EMSCRIPTEN_VERSION"
+        echo "EMSDK=$HOME/emsdk" >> "$GITHUB_ENV"
+        echo "EM_CONFIG=$HOME/emsdk/.emscripten" >> "$GITHUB_ENV"
+        echo "INBE_NODE_BIN=$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
+        echo "$HOME/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
+        bash scripts/ensure-emscripten-zlib.sh "$HOME/emsdk/upstream/emscripten/embuilder"
