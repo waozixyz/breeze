@@ -59,6 +59,7 @@ using SyncResult;
 using ModalType;
 #import, file "exercise_types.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/db.zi";
 using ExerciseType;
 
 SyncCopyText :: (dst: *u8, capacity: s64, value: string) -> bool {
@@ -693,22 +694,34 @@ app_apply_pending_sync_refresh :: (app: *InnerBreeze, now: float64) {
     app_reload_after_import(app, 0)
 }
 
-app_sync_url :: (url: *u8, url_size: s64) -> s32 {
-    saved_url: string
+// The sync pump runs every frame; the server URL and whether sync is on only
+// change with the stored data, so they are read again only after it does.
+sync_url_cache: [256] u8;
+sync_url_cache_ok: s32;
+sync_url_cache_revision: s64 = -1;
 
+app_sync_url :: (url: *u8, url_size: s64) -> s32 {
     if url == null || url_size == 0 {
         return 0
     }
     url[0] = cast(u8)0
-    if storage_sync_enabled() == 0 {
+    revision := storage_data_revision()
+    if revision != sync_url_cache_revision {
+        sync_url_cache_revision = revision
+        sync_url_cache_ok = 0
+        sync_url_cache[0] = cast(u8)0
+        if storage_sync_enabled() != 0 {
+            saved_url := storage_get_setting_text(sync_server_url_key)
+            if saved_url.count > 0 && NormalizeUrl(saved_url, sync_url_cache[:]) {
+                sync_url_cache_ok = 1
+            }
+        }
+    }
+    if sync_url_cache_ok == 0 {
         return 0
     }
-    saved_url = storage_get_setting_text(sync_server_url_key)
-    if saved_url.count == 0 {
-        return 0
-    }
-    if !NormalizeUrl(saved_url,
-        BytesFromPointer(*url[0], cast(u64)url_size)) {
+    if !AppCopyText(AppTextFromCString(*sync_url_cache[0],
+        cast(s32)sync_url_cache.count), BytesFromPointer(url, cast(u64)url_size)) {
         return 0
     }
     return 1
@@ -1044,6 +1057,19 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 {
     return 1
 }
 
+sync_review_cache: s32;
+sync_review_cache_revision: s64 = -1;
+
+// Whether a sync review waits, read again only after stored data changes.
+app_sync_review_pending :: () -> s32 {
+    revision := storage_data_revision()
+    if revision != sync_review_cache_revision {
+        sync_review_cache_revision = revision
+        sync_review_cache = storage_sync_review_pending()
+    }
+    return sync_review_cache
+}
+
 app_sync_pump :: (app: *InnerBreeze) {
     now: float64
     should_sync: s32 = 0
@@ -1066,7 +1092,7 @@ app_sync_pump :: (app: *InnerBreeze) {
     app_sync_record_input(app, now)
     app_collect_finished_sync()
     app_collect_finished_social_refresh(app)
-    if storage_sync_review_pending() != 0 && app_sync_ui_update_safe(app, now) != 0 {
+    if app_sync_review_pending() != 0 && app_sync_ui_update_safe(app, now) != 0 {
         if storage_sync_review_clear_if_no_visible_diff() != 0 {
             app_reload_after_import(app, 0)
         } else {
