@@ -892,6 +892,13 @@ async function pageJson(client, expression, awaitPromise = false) {
   return value;
 }
 
+// A route change fades over 0.12 seconds and ignores input meanwhile, so a
+// click that follows one must wait for the fade to finish.
+async function waitRouteTransition(client) {
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await waitAnimationFrames(client, 3);
+}
+
 async function waitAnimationFrames(client, frameCount = 3) {
   const result = await pageJson(client, `(async () => JSON.stringify(await new Promise(resolve => {
     let frames = 0;
@@ -1048,7 +1055,7 @@ async function verifyFirstRunGuideCanvasFlow(client) {
         target.canvas.width !== 450 || target.canvas.height !== 800)
       throw new Error(`guide canvas is not 1:1 at 450x800: ${JSON.stringify(target)}`);
     await dispatchCanvasClick(client, target.x, target.y);
-    await waitAnimationFrames(client, 3);
+    await waitRouteTransition(client);
     state = await firstRunGuideState(client, false);
     if (state.active !== 1 || state.step !== expected || state.clipped !== 0)
       throw new Error(`guide Next missed or clipped at 1:1 scale: ${JSON.stringify({ expected, state, target })}`);
