@@ -9,6 +9,7 @@ IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
 #import, file "../app/route_types.zi";
 #import, file "../app/app_route_state.zi";
 #import, file "../app/app_modal_state.zi";
+#import, file "../app/modal_rules.zi";
 #import, file "../app/app_settings.zi";
 #import, file "../app/app_sync.zi";
 #import, file "../app/widgets.zi";
@@ -52,6 +53,7 @@ IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
 #import "segmented_control_props"
 #import "segmented_control_widget"
 
+using ModalType;
 using ButtonTone;
 using ArrowDirection;
 using ButtonEmphasis;
@@ -323,6 +325,33 @@ HabitScreenDoneToday :: (app: *InnerBreeze) -> s32 {
     return done
 }
 
+// Linked practice sessions set the lowest count a day can have.
+HabitScreenLinkedCount :: (app: *InnerBreeze, index: s32,
+    day_index: s32) -> s32 {
+    return HabitLinkedSessionCountForDay(
+        habit_cached_linked_entries(app, index, day_index), day_index)
+}
+
+HabitScreenDayCount :: (app: *InnerBreeze, index: s32,
+    day_index: s32) -> s32 {
+    return HabitEffectiveDayCount(*app.habits.items[index], day_index,
+        habit_cached_linked_entries(app, index, day_index))
+}
+
+HabitScreenAdjustCount :: (app: *InnerBreeze, index: s32,
+    day_index: s32, delta: s32) {
+    habit_step_count(app, index, day_index, delta)
+    unused app_auto_sync(app)
+}
+
+// Counting habits open a dialog to count a day up or down; a tap alone
+// would only ever add one.
+HabitScreenOpenCount :: (app: *InnerBreeze, index: s32, day_index: s32) {
+    app.habits.count_dialog_habit = index
+    app.habits.count_dialog_day = day_index
+    app_open_modal(app, cast(ModalType)ModalHabitCount)
+}
+
 HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     day_index: s32, decrement: bool) {
     if app.modal.active != 0 || index < 0 || index >= app.habits.count {
@@ -331,21 +360,17 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     habit := *app.habits.items[index]
     if habit_scheduled_day(habit, day_index) == 0 &&
     !HabitScreenCompletion(app, index, day_index) { return }
-    linked := habit_cached_linked_entries(app, index, day_index)
-    linked_count: s32 = 0
-    if linked != null {
-        linked_count = HabitLinkedSessionCountForDay(linked, day_index)
-    }
     if habit_counting_enabled(habit) != 0 {
-        if linked_count > 0 && !decrement {
-            habit_open_linked_edit_page(app, index, day_index)
-            app_block_current_click(app)
-            return
+        if decrement {
+            HabitScreenAdjustCount(app, index, day_index, -1)
+        } else {
+            HabitScreenOpenCount(app, index, day_index)
         }
-        action: s32 = ifx (decrement) then (-1) else (1)
-        habit_apply_count_action(app, index, day_index, action, linked_count)
-        unused app_auto_sync(app)
-    } else if linked_count > 0 {
+        app_block_current_click(app)
+        return
+    }
+    linked_count := HabitScreenLinkedCount(app, index, day_index)
+    if linked_count > 0 {
         habit_open_linked_edit_page(app, index, day_index)
     } else {
         habit_toggle_day(*app.habits, index, day_index)
@@ -483,36 +508,43 @@ HabitScreenMarker :: (app: *InnerBreeze, habit_index: s32,
     }
     HabitScreenCircle(app, center_x, center_y + AppScale(1),
         radius + AppScale(2), Fade(Color.{0, 0, 0, 255}, 0.16))
+    // A counted day shows its count in place of the check.
+    show_count := habit_counting_enabled(habit) != 0 && count > 0
     if complete {
         HabitScreenCircle(app, center_x, center_y,
             radius + AppScale(1), LightenColor(accent, 16))
         HabitScreenCircle(app, center_x, center_y, radius, accent)
-        check := HabitScreenTextColor(accent)
-        HabitScreenLine(app, center_x - radius / 2, center_y,
-            center_x - radius / 8, center_y + radius / 3, check)
-        HabitScreenLine(app, center_x - radius / 8,
-            center_y + radius / 3, center_x + radius / 2,
-            center_y - radius / 3, check)
+        if !show_count {
+            check := HabitScreenTextColor(accent)
+            HabitScreenLine(app, center_x - radius / 2, center_y,
+                center_x - radius / 8, center_y + radius / 3, check)
+            HabitScreenLine(app, center_x - radius / 8,
+                center_y + radius / 3, center_x + radius / 2,
+                center_y - radius / 3, check)
+        }
     } else {
         HabitScreenCircle(app, center_x, center_y,
             radius + AppScale(1), Fade(foreground, 0.54))
         HabitScreenCircle(app, center_x, center_y,
             radius - AppScale(2), surface)
-        HabitScreenCircle(app, center_x - AppScale(2),
-            center_y - AppScale(3), ifx radius / 3 > AppScale(2) then
-            (radius / 3) else (AppScale(2)), Fade(Color.{255, 255, 255, 255}, 0.16))
+        if !show_count {
+            HabitScreenCircle(app, center_x - AppScale(2),
+                center_y - AppScale(3), ifx radius / 3 > AppScale(2) then
+                (radius / 3) else (AppScale(2)),
+                Fade(Color.{255, 255, 255, 255}, 0.16))
+        }
     }
 
-    if habit_counting_enabled(habit) != 0 && count > 0 {
+    if show_count {
         count_text := HabitScreenNumber(app, count)
-        count_props: TextProps
-        count_props.bounds = HabitScreenRect(x, center_y - AppScale(10),
-            width, AppScale(20))
-        count_props.text = count_text
-        count_props.font = AppScale(Text12)
-        count_props.align = cast(TextAlign)TextAlignCenter
-        count_props.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, count_props)
+        count_font := AppFitFontSize(count_text, radius * 2 - AppScale(2),
+            AppScale(Text12), AppScale(8))
+        count_color := foreground
+        if complete { count_color = HabitScreenTextColor(accent) }
+        PaintLabel(app.ui.session, -1, count_text,
+            center_x - AppTextWidth(count_text, count_font) / 2,
+            center_y - AppTextLineHeight(count_font) / 2, count_font,
+            count_color)
     }
     if marker_clicked {
         HabitScreenDayAction(app, habit_index, day_index, false)
@@ -608,32 +640,50 @@ HabitScreenSelectedWeek :: (app: *InnerBreeze, index: s32,
     habit := *app.habits.items[index]
     today := habits_today_index()
     counting := habit_counting_enabled(habit) != 0
-    today_count := HabitEffectiveDayCount(habit, today,
-        habit_cached_linked_entries(app, index, today))
+    today_count := HabitScreenDayCount(app, index, today)
     today_complete := HabitScreenCompletion(app, index, today)
+    today_disabled := app.modal.active != 0 ||
+    (habit_scheduled_day(habit, today) == 0 && !today_complete)
     today_label: [96]u8
     today_text := LocaleText("habit_complete_today_button")
     if today_complete {
         today_text = LocaleText("habit_day_completed")
     }
+    action_width := width
     if counting {
-        today_args: [2]FormatArg
+        today_args: [3]FormatArg
         today_args[0].text = LocaleText("habits_today")
         today_args[0].is_text = true
         today_args[1].number = today_count
-        if FormatTemplate("%s  %d", today_args[:], today_label[:]) {
+        today_args[2].number = habit_counter_target(habit)
+        if FormatTemplate("%s  %d / %d", today_args[:], today_label[:]) {
             today_text = FrameTextHold(*app.ui.frame_text,
                 AppTextFromCString(*today_label[0], cast(s32)today_label.count))
+        }
+        // Today's count steps right here; the label opens the full dialog.
+        step := AppScale(42)
+        gap := AppScale(8)
+        action_width = width - (step + gap) * 2
+        minus := HabitScreenButtonProps(app, "-", 5710000 + index * 2,
+            x + action_width + gap, y, step, step, false,
+            today_disabled ||
+            today_count <= HabitScreenLinkedCount(app, index, today))
+        if Button(app.ui.session, minus) != 0 {
+            HabitScreenAdjustCount(app, index, today, -1)
+        }
+        plus := HabitScreenButtonProps(app, "+", 5710001 + index * 2,
+            x + width - step, y, step, step, false, today_disabled)
+        if Button(app.ui.session, plus) != 0 {
+            HabitScreenAdjustCount(app, index, today, 1)
         }
     }
     action: ButtonProps
     action.id = 5700000 + index
-    action.bounds = HabitScreenRect(x, y, width, AppScale(42))
+    action.bounds = HabitScreenRect(x, y, action_width, AppScale(42))
     action.label = today_text
     action.tone = cast(ButtonTone)ButtonToneAccent
     action.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    action.disabled = app.modal.active != 0 ||
-    (habit_scheduled_day(habit, today) == 0 && !today_complete)
+    action.disabled = today_disabled
     if Button(app.ui.session, action) != 0 {
         HabitScreenDayAction(app, index, today, false)
     }
@@ -1133,9 +1183,133 @@ HabitScreenCalendar :: (app: *InnerBreeze,
     }
 }
 
+HabitScreenCountText :: (app: *InnerBreeze, bounds: Rectangle,
+    text: string, font: s32) {
+    props: TextProps
+    props.bounds = bounds
+    props.text = text
+    props.font = font
+    props.align = cast(TextAlign)TextAlignCenter
+    props.vertical_align = cast(TextAlign)TextAlignCenter
+    props.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, props)
+}
+
+// The count dialog: the day's count with large steps down and up. Linked
+// practice sessions are the floor, and their sessions open from here.
+HabitScreenCountDialog :: (app: *InnerBreeze) {
+    if app.modal.active == 0 ||
+    app.modal.type != cast(ModalType)ModalHabitCount { return }
+    index := app.habits.count_dialog_habit
+    day_index := app.habits.count_dialog_day
+    if index < 0 || index >= app.habits.count || day_index <= 0 ||
+    habit_counting_enabled(*app.habits.items[index]) == 0 {
+        app_close_modal(app)
+        return
+    }
+    habit := *app.habits.items[index]
+    count := HabitScreenDayCount(app, index, day_index)
+    linked_count := HabitScreenLinkedCount(app, index, day_index)
+    gap := AppScale(12)
+    step_h := AppScale(56)
+    button_h := AppScale(44)
+    content_h := AppScale(24) + AppScale(64) + AppScale(24) + gap +
+        step_h + gap + button_h
+    if linked_count > 0 { content_h += button_h + gap }
+    frame := ModalPanel(AppScale(340), content_h + AppScale(74),
+        AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE), true)
+    if frame.closed {
+        app_close_modal(app)
+        return
+    }
+    x := frame.content_x
+    y := frame.content_y
+    width := frame.content_w
+
+    day_text := HabitScreenDate(app, day_index)
+    if day_index == habits_today_index() {
+        day_text = LocaleText("habits_today")
+    }
+    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
+        day_text, AppSmallFontSize())
+    y += AppScale(24)
+    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(64)),
+        HabitScreenNumber(app, count), AppScale(Text48))
+    y += AppScale(64)
+    target_text: [96]u8
+    target_args: [2]FormatArg
+    target_args[0].text = LocaleText("habit_counter_target")
+    target_args[0].is_text = true
+    target_args[1].number = habit_counter_target(habit)
+    unused FormatTemplate("%s  %d", target_args[:], target_text[:])
+    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
+        FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*target_text[0], cast(s32)target_text.count)),
+        AppSmallFontSize())
+    y += AppScale(24) + gap
+
+    step_w := (width - gap) / 2
+    minus: ButtonProps
+    minus.id = 5720000
+    minus.bounds = HabitScreenRect(x, y, step_w, step_h)
+    minus.label = "-"
+    minus.tone = cast(ButtonTone)ButtonToneNeutral
+    minus.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    minus.disabled = count <= linked_count
+    if Button(app.ui.session, minus) != 0 {
+        HabitScreenAdjustCount(app, index, day_index, -1)
+    }
+    plus: ButtonProps
+    plus.id = 5720001
+    plus.bounds = HabitScreenRect(x + width - step_w, y, step_w, step_h)
+    plus.label = "+"
+    plus.tone = cast(ButtonTone)ButtonToneAccent
+    plus.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    if Button(app.ui.session, plus) != 0 {
+        HabitScreenAdjustCount(app, index, day_index, 1)
+    }
+    y += step_h + gap
+
+    if linked_count > 0 {
+        sessions_text: [96]u8
+        sessions_args: [1]FormatArg
+        sessions_args[0].number = linked_count
+        unused FormatTemplate(LocaleText(ifx (linked_count == 1)
+            then ("session_count_singular") else ("session_count_plural")),
+            sessions_args[:], sessions_text[:])
+        sessions: ButtonProps
+        sessions.id = 5720002
+        sessions.bounds = HabitScreenRect(x, y, width, button_h)
+        sessions.label = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*sessions_text[0],
+            cast(s32)sessions_text.count))
+        sessions.tone = cast(ButtonTone)ButtonToneNeutral
+        sessions.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        if Button(app.ui.session, sessions) != 0 {
+            habit_open_linked_edit_page(app, index, day_index)
+            return
+        }
+        y += button_h + gap
+    }
+    done: ButtonProps
+    done.id = 5720003
+    done.bounds = HabitScreenRect(x, y, width, button_h)
+    done.label = LocaleText("done_button")
+    done.tone = cast(ButtonTone)ButtonToneNeutral
+    done.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if Button(app.ui.session, done) != 0 {
+        app_close_modal(app)
+    }
+}
+
 #program_export
 draw_habits_screen :: (app: *InnerBreeze) {
     if app == null { return }
+    HabitScreenDrawPage(app)
+    HabitScreenCountDialog(app)
+}
+
+HabitScreenDrawPage :: (app: *InnerBreeze) {
     habits_first_day_bounds = Rectangle.{}
     geometry := HabitScreenLayout(app)
     if geometry.width <= 0 || geometry.height <= 0 { return }

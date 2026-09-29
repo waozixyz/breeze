@@ -100,6 +100,38 @@ test_effective_counts_and_actions :: () {
     storage_close()
 }
 
+// The count dialog and today's minus and plus step from the count the day
+// shows, so a plus on a day filled by linked sessions always adds one.
+test_step_count_from_shown_count :: () {
+    root := make_root("habit-sessions-step")
+    check_true("init db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    prepare_habit(*app_state.habits.items[0], 1, habit_activity_mask_for(EXERCISE_PATTERNS))
+    app_state.habits.count = 1
+    record(20260828, 8, EXERCISE_PATTERNS, 10, 0)
+    record(20260828, 9, EXERCISE_PATTERNS, 20, 0)
+    habit := *app_state.habits.items[0]
+    habit_step_count(*app_state, 0, 20260828, 1)
+    check_int("plus counts up from the linked sessions",
+        HabitEffectiveDayCount(habit, 20260828,
+            habit_cached_linked_entries(*app_state, 0, 20260828)), 3)
+    habit_step_count(*app_state, 0, 20260828, -1)
+    habit_step_count(*app_state, 0, 20260828, -1)
+    check_int("minus stops at the linked sessions", HabitDayCount(habit, 20260828), 2)
+    habit_step_count(*app_state, 0, 20260829, 1)
+    habit_step_count(*app_state, 0, 20260829, 1)
+    check_int("a day without sessions counts from zero", HabitDayCount(habit, 20260829), 2)
+    habit_step_count(*app_state, 0, 20260829, -1)
+    habit_step_count(*app_state, 0, 20260829, -1)
+    habit_step_count(*app_state, 0, 20260829, -1)
+    check_int("minus stops at zero", HabitDayCount(habit, 20260829), 0)
+    habit_step_count(*app_state, 3, 20260829, 1)
+    habit_step_count(*app_state, 0, 0, 1)
+    check_int("invalid habits and days are ignored", app_state.habits.items[0].day_count, 2)
+    habits_free(*app_state.habits)
+    storage_close()
+}
+
 test_session_change_keeps_manual_extra :: () {
     root := make_root("habit-sessions-changed")
     check_true("init db", storage_init(root) != 0)
@@ -145,6 +177,7 @@ Check :: () -> s32 {
     if guard != 0 { return guard }
     test_collect_filters_and_summarizes()
     test_effective_counts_and_actions()
+    test_step_count_from_shown_count()
     test_session_change_keeps_manual_extra()
     test_navigation_helpers()
     return failures
