@@ -185,7 +185,7 @@ ifeq ($(KRYON_BACKEND),tui)
 KRYON_BACKEND := termi
 endif
 PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
-RAYLIB_DIR = $(KRYON_DIR)/vendor/raylib/src
+RAYLIB_DIR = build/packages/raylib/src
 RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
 RAYLIB_A := $(RAYLIB_BUILD_DIR)/libraylib.a
 WIN64_ARCH := x86_64
@@ -446,7 +446,7 @@ GENERATED_WEB_C = $(shell find $(WEB_GEN_DIR) -type f -name '*.c' | LC_ALL=C sor
 
 APP_INCLUDE := -Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/practices/sun_salutation -Isrc/storage -Isrc/platform -Isrc/platform/android -Isrc/third_party
 APP_INCLUDE += -iquote$(KRY_GEN_DIR)
-APP_INCLUDE += -I$(KRYON_DIR)/vendor/raylib/src
+APP_INCLUDE += -I$(RAYLIB_DIR)
 APP_INCLUDE += $(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(KRY_GEN_DIR)/$(dir))
 APP_INCLUDE += $(KRYON_INCLUDE)
 APP_INCLUDE += -I$(MONOCYPHER_DIR) -I$(MONOCYPHER_DIR)/optional
