@@ -88,6 +88,7 @@ GetTime :: () -> float64 #foreign c;
 #import, file "metrics.zi";
 #import, file "dpi_state.zi";
 #import, file "draw.zi";
+#import, file "direct_draw_plan.zi";
 #import, file "current_app.zi";
 #import "button_widget"
 #import "image_widget"
@@ -396,8 +397,8 @@ app_reload_after_import :: (app: *InnerBreeze, reload_settings: s32) {
             i: s32 = 0
             while i < app.habits.count {
                 if detail_habit_id[0] != cast(u8)0 &&
-                    AppTextFromCString(*app.habits.items[i].id[0], HABIT_ID_SIZE) ==
-                    AppTextFromCString(*detail_habit_id[0], HABIT_ID_SIZE) {
+                AppTextFromCString(*app.habits.items[i].id[0], HABIT_ID_SIZE) ==
+                AppTextFromCString(*detail_habit_id[0], HABIT_ID_SIZE) {
                     app.habit_detail_index = i
                     break
                 }
@@ -705,7 +706,7 @@ draw_profile_picture_picker_modal :: (app: *InnerBreeze) {
 draw_donation_reminder_modal :: (app: *InnerBreeze) {
     modal_result: s32
     actions: [3] ActionModalAction = .[
-        ActionModalAction.{}, ActionModalAction.{}, ActionModalAction.{}
+    ActionModalAction.{}, ActionModalAction.{}, ActionModalAction.{}
     ]
     props: ActionModalProps = .{}
     if app == null {
@@ -886,7 +887,7 @@ updateapp :: (app: *InnerBreeze) {
     // These modals cover the practice page, which must then not draw the
     // same manual or configuration a second time with the same widget keys.
     practice_fullscreen_modal = app.modal.active != 0 &&
-        (app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed ||
+    (app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed ||
         app.modal.type == cast(ModalType)ModalPracticeManual ||
         app.modal.type == cast(ModalType)ModalPracticeConfig)
     view_height = app_page_height(app, view_height)
@@ -921,10 +922,10 @@ updateapp :: (app: *InnerBreeze) {
         if IsKeyPressed(KEY_Q)  && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
             app_request_desktop_quit(app)
         } else if IsKeyPressed(APP_KEY_ESCAPE) &&
-            app.breathing.screen == ScreenStart &&
-            app.practice_tab == PRACTICE_TAB_PLAY &&
-            app.modal.active == 0 && first_run_guide_active == 0 &&
-            habits_guide_active == 0 {
+        app.breathing.screen == ScreenStart &&
+        app.practice_tab == PRACTICE_TAB_PLAY &&
+        app.modal.active == 0 && first_run_guide_active == 0 &&
+        habits_guide_active == 0 {
             app_request_desktop_quit(app)
         }
     }
@@ -986,8 +987,8 @@ updateapp :: (app: *InnerBreeze) {
             }
             // Skip drawing on the same frame modal opens to prevent click propagation
             if app.modal.active != 0 &&
-                app.modal.type == cast(ModalType)ModalMeditationSetup &&
-                app.blocked_input_frame != app.breathing.frame {
+            app.modal.type == cast(ModalType)ModalMeditationSetup &&
+            app.blocked_input_frame != app.breathing.frame {
                 practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
                 if practice.draw_setup_modal != null {
                     practice.draw_setup_modal(app)
@@ -1053,15 +1054,26 @@ app_update_draw_last_log_time: float64 = -1.0;
 app_last_frame_status: s32;
 
 app_finish_frame :: (app: *InnerBreeze) {
-    status := cast(s32)EndFrame(app.ui.session)
+    status: s32
+    paint_unchanged: bool = false
+    if app.ui.retained_target_active {
+        result := EndFrameRetained(app.ui.session)
+        status = cast(s32)result.status
+        paint_unchanged = result.paint_unchanged
+    } else {
+        status = cast(s32)EndFrame(app.ui.session)
+    }
+    direct_unchanged := DirectDrawFrameFinish()
     if status != 0 && status != app_last_frame_status {
         TraceLogResult(LOG_WARNING, "APP: frame rejected with status %d", status)
         TraceLogResult(LOG_WARNING, "APP: rejected widget key %d",
             cast(s32)TreeFrameErrorKey(app.ui.session))
         TraceLogResult(LOG_WARNING, "APP: rejected widget kind %d",
-            TreeFrameErrorKind(app.ui.session))
+            cast(s32)TreeFrameErrorKind(app.ui.session))
     }
     app_last_frame_status = status
+    app.ui.retained_frame_unchanged = status == 0 && paint_unchanged &&
+    direct_unchanged
 }
 
 #program_export
@@ -1140,6 +1152,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app_device_preferences_update(app)
     update_check_poll()
     app_refresh_theme(app)
+    DirectDrawFrameBegin(viewport)
     DrawRectangleRec(viewport, StyleTokenColor("canvas"))
     content_w = full_width - rail_width
     if content_w < 1 {
@@ -1148,9 +1161,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     {
         now: float64 = GetTime()
         changed := full_width != app_update_draw_last_full_w ||
-            full_height != app_update_draw_last_full_h ||
-            content_x != app_update_draw_last_content_x ||
-            content_w != app_update_draw_last_content_w
+        full_height != app_update_draw_last_full_h ||
+        content_x != app_update_draw_last_content_x ||
+        content_w != app_update_draw_last_content_w
         if changed && (app_update_draw_last_log_time < 0.0 || now - app_update_draw_last_log_time >= 0.25) {
             TraceLogGeometry(LOG_INFO, "APP_EMBED: geometry viewport=%dx%d layout=%dx%d content_x=%d content=%dx%d render_scale=%.2f",
                 full_width, full_height, layout_width, layout_height,
@@ -1173,6 +1186,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app.camera.zoom = render_scale
     app.camera.offset.x = ifx (PreviewMode() != 0) then (0.0f) else (viewport.x + cast(float32)content_x)
     app.camera.offset.y = ifx (PreviewMode() != 0) then (0.0f) else (viewport.y + cast(float32)top_height)
+    if PreviewMode() == 0 {
+        DirectDrawTransform(app.camera)
+    }
     // Retained hit testing and widget bounds use the same logical coordinates
     // as the camera. A left navigation rail occupies negative content x.
     frame_origin := Vector2.{0.0, 0.0}
@@ -1181,6 +1197,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     }
     logical_frame := Rectangle.{frame_origin.x, frame_origin.y,
         viewport.width / render_scale, viewport.height / render_scale}
+    app.ui.retained_frame_unchanged = false
     if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/frame"),
         logical_frame) != 0 {
         return

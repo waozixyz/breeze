@@ -1,0 +1,329 @@
+#import "drawing_props"
+#import "geometry"
+#import "vec"
+
+DirectDrawKind :: enum {
+    DirectDrawContext :: 1
+    DirectDrawTransform :: 2
+    DirectDrawLine :: 3
+    DirectDrawLineEx :: 4
+    DirectDrawTriangle :: 5
+    DirectDrawRectangle :: 6
+    DirectDrawRectangleRec :: 7
+    DirectDrawRectangleLines :: 8
+    DirectDrawRectangleLinesEx :: 9
+    DirectDrawRectangleRounded :: 10
+    DirectDrawRectangleRoundedLinesEx :: 11
+    DirectDrawRectangleGradient :: 12
+    DirectDrawCircle :: 13
+    DirectDrawCircleV :: 14
+    DirectDrawCircleGradient :: 15
+    DirectDrawCircleLines :: 16
+    DirectDrawRing :: 17
+    DirectDrawCircleLinesEx :: 18
+}
+using DirectDrawKind;
+
+DirectDrawCommand :: struct {
+    kind: s32
+    a: s32
+    b: s32
+    c: s32
+    d: s32
+    values: [12] float32
+    color: Color
+    end_color: Color
+}
+
+direct_draw_current: Vec(DirectDrawCommand);
+direct_draw_previous: Vec(DirectDrawCommand);
+direct_draw_active: bool;
+direct_draw_valid: bool;
+direct_draw_unchanged: bool;
+
+DirectDrawStore :: (command: DirectDrawCommand) {
+    if !direct_draw_active { return }
+    if !VecPush(direct_draw_current, command) {
+        direct_draw_valid = false
+        direct_draw_unchanged = false
+    }
+}
+
+DirectDrawCommandsEqual :: (left: DirectDrawCommand,
+    right: DirectDrawCommand) -> bool {
+    if left.kind != right.kind || left.a != right.a || left.b != right.b ||
+    left.c != right.c || left.d != right.d { return false }
+    if left.color.r != right.color.r || left.color.g != right.color.g ||
+    left.color.b != right.color.b || left.color.a != right.color.a { return false }
+    if left.end_color.r != right.end_color.r ||
+    left.end_color.g != right.end_color.g ||
+    left.end_color.b != right.end_color.b ||
+    left.end_color.a != right.end_color.a { return false }
+    index: s32 = 0
+    while index < 12 {
+        if left.values[index] != right.values[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+#program_export
+DirectDrawFrameBegin :: (viewport: Rectangle) {
+    VecClear(direct_draw_current)
+    direct_draw_active = true
+    direct_draw_valid = true
+    direct_draw_unchanged = false
+    context: DirectDrawCommand
+    context.kind = cast(s32)DirectDrawContext
+    context.values[0] = viewport.x
+    context.values[1] = viewport.y
+    context.values[2] = viewport.width
+    context.values[3] = viewport.height
+    DirectDrawStore(context)
+}
+
+#program_export
+DirectDrawTransform :: (camera: Camera) {
+    transform: DirectDrawCommand
+    transform.kind = cast(s32)DirectDrawTransform
+    transform.values[0] = camera.offset.x
+    transform.values[1] = camera.offset.y
+    transform.values[2] = camera.target.x
+    transform.values[3] = camera.target.y
+    transform.values[4] = camera.rotation
+    transform.values[5] = camera.zoom
+    DirectDrawStore(transform)
+}
+
+DirectDrawRecordLine :: (start_x: s32, start_y: s32, end_x: s32,
+    end_y: s32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawLine
+    command.a = start_x
+    command.b = start_y
+    command.c = end_x
+    command.d = end_y
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordLineEx :: (start: Vector2, end: Vector2,
+    thickness: float32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawLineEx
+    command.values[0] = start.x
+    command.values[1] = start.y
+    command.values[2] = end.x
+    command.values[3] = end.y
+    command.values[4] = thickness
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordTriangle :: (v1: Vector2, v2: Vector2, v3: Vector2,
+    color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawTriangle
+    command.values[0] = v1.x
+    command.values[1] = v1.y
+    command.values[2] = v2.x
+    command.values[3] = v2.y
+    command.values[4] = v3.x
+    command.values[5] = v3.y
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangle :: (x: s32, y: s32, width: s32, height: s32,
+    color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangle
+    command.a = x
+    command.b = y
+    command.c = width
+    command.d = height
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleRec :: (bounds: Rectangle, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleRec
+    command.values[0] = bounds.x
+    command.values[1] = bounds.y
+    command.values[2] = bounds.width
+    command.values[3] = bounds.height
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleLines :: (x: s32, y: s32, width: s32, height: s32,
+    color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleLines
+    command.a = x
+    command.b = y
+    command.c = width
+    command.d = height
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleLinesEx :: (bounds: Rectangle, thick: float32,
+    color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleLinesEx
+    command.values[0] = bounds.x
+    command.values[1] = bounds.y
+    command.values[2] = bounds.width
+    command.values[3] = bounds.height
+    command.values[4] = thick
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleRounded :: (bounds: Rectangle, roundness: float32,
+    segments: s32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleRounded
+    command.values[0] = bounds.x
+    command.values[1] = bounds.y
+    command.values[2] = bounds.width
+    command.values[3] = bounds.height
+    command.values[4] = roundness
+    command.a = segments
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleRoundedLinesEx :: (bounds: Rectangle,
+    roundness: float32, segments: s32, thick: float32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleRoundedLinesEx
+    command.values[0] = bounds.x
+    command.values[1] = bounds.y
+    command.values[2] = bounds.width
+    command.values[3] = bounds.height
+    command.values[4] = roundness
+    command.values[5] = thick
+    command.a = segments
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRectangleGradient :: (x: s32, y: s32, width: s32,
+    height: s32, top: Color, bottom: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRectangleGradient
+    command.a = x
+    command.b = y
+    command.c = width
+    command.d = height
+    command.color = top
+    command.end_color = bottom
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordCircle :: (center_x: s32, center_y: s32, radius: float32,
+    color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawCircle
+    command.a = center_x
+    command.b = center_y
+    command.values[0] = radius
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordCircleV :: (center: Vector2, radius: float32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawCircleV
+    command.values[0] = center.x
+    command.values[1] = center.y
+    command.values[2] = radius
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordCircleGradient :: (center: Vector2, radius: float32,
+    inner: Color, outer: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawCircleGradient
+    command.values[0] = center.x
+    command.values[1] = center.y
+    command.values[2] = radius
+    command.color = inner
+    command.end_color = outer
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordCircleLines :: (center_x: s32, center_y: s32,
+    radius: float32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawCircleLines
+    command.a = center_x
+    command.b = center_y
+    command.values[0] = radius
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordRing :: (center: Vector2, inner_radius: float32,
+    outer_radius: float32, start_angle: float32, end_angle: float32,
+    segments: s32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawRing
+    command.values[0] = center.x
+    command.values[1] = center.y
+    command.values[2] = inner_radius
+    command.values[3] = outer_radius
+    command.values[4] = start_angle
+    command.values[5] = end_angle
+    command.a = segments
+    command.color = color
+    DirectDrawStore(command)
+}
+
+DirectDrawRecordCircleLinesEx :: (center: Vector2, radius: float32,
+    thickness: float32, color: Color) {
+    command: DirectDrawCommand
+    command.kind = cast(s32)DirectDrawCircleLinesEx
+    command.values[0] = center.x
+    command.values[1] = center.y
+    command.values[2] = radius
+    command.values[3] = thickness
+    command.color = color
+    DirectDrawStore(command)
+}
+
+#program_export
+DirectDrawFrameFinish :: () -> bool {
+    if !direct_draw_active { return false }
+    direct_draw_active = false
+    unchanged: bool = direct_draw_valid &&
+    direct_draw_current.count == direct_draw_previous.count
+    index: s32 = 0
+    while unchanged && cast(s64)index < direct_draw_current.count {
+        if !DirectDrawCommandsEqual(direct_draw_current[index],
+            direct_draw_previous[index]) { unchanged = false }
+        index += 1
+    }
+    VecClear(direct_draw_previous)
+    if direct_draw_valid {
+        index = 0
+        while cast(s64)index < direct_draw_current.count {
+            if !VecPush(direct_draw_previous, direct_draw_current[index]) {
+                direct_draw_valid = false
+                unchanged = false
+            }
+            index += 1
+        }
+    }
+    direct_draw_unchanged = unchanged
+    return unchanged
+}
+
+#program_export
+DirectDrawFrameUnchanged :: () -> bool {
+    return direct_draw_unchanged
+}
