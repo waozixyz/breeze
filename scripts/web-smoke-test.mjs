@@ -892,11 +892,20 @@ async function pageJson(client, expression, awaitPromise = false) {
   return value;
 }
 
-// A route change fades over 0.12 seconds and ignores input meanwhile, so a
-// click that follows one must wait for the fade to finish.
+// A route change fades over a fraction of a second and ignores input
+// meanwhile, so a click must wait for the fade to finish. The app reports
+// whether one is running.
 async function waitRouteTransition(client) {
-  await new Promise(resolve => setTimeout(resolve, 300));
-  await waitAnimationFrames(client, 3);
+  await waitAnimationFrames(client, 2);
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const active = await pageJson(client, `(() => JSON.stringify(
+      typeof Module._app_web_test_route_transition_active === 'function' ?
+        Module._app_web_test_route_transition_active() : 0))()`);
+    if (!active)
+      return;
+    await delay(20);
+  }
+  throw new Error('route transition did not finish');
 }
 
 async function waitAnimationFrames(client, frameCount = 3) {
@@ -915,6 +924,7 @@ async function waitAnimationFrames(client, frameCount = 3) {
 }
 
 async function dispatchCanvasClick(client, x, y) {
+  await waitRouteTransition(client);
   await client.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved',
     x,
