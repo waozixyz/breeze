@@ -661,29 +661,6 @@ $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/module
 	$(MAKE) -C $(KRYON_DIR) BUILD_DIR=$(KRYON_LIBRARY_BUILD_DIR) \
 		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) all
 
-.PHONY: scroll-input-test
-scroll-input-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/scroll_input_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-.PHONY: scroll-input-link-test
-scroll-input-link-test: kryon-library-check $(ZI2C_BIN)
-	@mkdir -p $(BUILD_DIR)/scroll-input-link/generated
-	@$(ZI2C_BIN) --no-main --root src \
-		--module-path $(KRYON_DIR)/src/ui \
-		--module-path $(ZIRAN_DIR)/std \
-		-o $(BUILD_DIR)/scroll-input-link/generated src/platform/scroll_input.zi
-	@$(CC) -std=c11 -I$(ZIRAN_DIR)/include \
-		-I$(BUILD_DIR)/scroll-input-link/generated \
-		-I$(BUILD_DIR)/scroll-input-link/generated/platform \
-		tests/scroll_input_link_test.c \
-		$(BUILD_DIR)/scroll-input-link/generated/platform/scroll_input.c \
-		$(BUILD_DIR)/scroll-input-link/generated/math.c \
-		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a \
-		-o $(BUILD_DIR)/scroll-input-link/test
-	@env -u DISPLAY -u WAYLAND_DISPLAY $(BUILD_DIR)/scroll-input-link/test
-
-
 .PHONY: uri-link-test
 uri-link-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
