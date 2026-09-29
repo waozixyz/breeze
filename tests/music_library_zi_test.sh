@@ -26,6 +26,8 @@ mkdir -p "$work/c" "$work/stubs"
     "$work/c/app/music_library_host.c" \
     "$work/c/app/music_library.c" "$work/c/c_string.c" \
     "$work/c/byte_text_linux.c" "$work/c/environment.c" \
+    "$work/c/locale.c" "$work/c/assets.c" "$work/c/text_buffers.c" \
+    "$work/c/locale_parser.c" "$work/c/locale_policy.c" \
     -o "$work/test"
 fixture=$(mktemp -d "$work/fixture.XXXXXX")
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \

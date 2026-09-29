@@ -4,6 +4,20 @@
 #include <stdio.h>
 #include <string.h>
 
+/* No embedded catalog here, so LocaleText falls back to the key. */
+void *
+asset_entry_at(size_t index)
+{
+    (void)index;
+    return NULL;
+}
+
+size_t
+asset_entry_total(void)
+{
+    return 0;
+}
+
 static const char *test_root;
 static int saves;
 static int reloads;
