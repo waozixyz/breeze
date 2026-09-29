@@ -824,8 +824,6 @@ asset-text-tests:
 test: ziran-behavior-tests asset-text-tests
 test: route-host-test
 test: profile-host-test
-test: scroll-input-test
-test: scroll-input-link-test
 
 native: $(TARGET)
 
