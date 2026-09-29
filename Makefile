@@ -829,7 +829,7 @@ sync-review-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) | build-laws
 test: sync-review-zi-test
 
 .PHONY: ziran-behavior-tests
-ziran-behavior-tests: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+ziran-behavior-tests: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
 	@set -e; for t in storage_more habit_model habit_sessions habit_form practice_carousel; do \
 		env -u DISPLAY -u WAYLAND_DISPLAY sh tests/$${t}_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A); \
 	done
