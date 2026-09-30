@@ -78,11 +78,11 @@ rm -f "$OUT_ABS"
            '*/build/packages/sqlite/test/*' \
            '*/build/packages/kryon/docs/site/*' \
            '*/build/packages/kryon/fonts/noto/*' \
-           '*/build/packages/kryon/vendor/liboqs/docs/*' \
-           '*/build/packages/kryon/vendor/liboqs/tests/*' \
-           '*/build/packages/kryon/vendor/raylib/examples/*' \
-           '*/build/packages/kryon/vendor/raylib/logo/*' \
-           '*/build/packages/kryon/vendor/raylib/projects/*' \
+           '*/build/packages/liboqs/docs/*' \
+           '*/build/packages/liboqs/tests/*' \
+           '*/build/packages/raylib/examples/*' \
+           '*/build/packages/raylib/logo/*' \
+           '*/build/packages/raylib/projects/*' \
            '*/tmp/*'
 )
 

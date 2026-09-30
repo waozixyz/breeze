@@ -16,7 +16,7 @@ export PKG_CONFIG_PATH="/home/wao/.local/sdl2/lib/pkgconfig${PKG_CONFIG_PATH:+:$
 # shellcheck disable=SC2046
 "${CC:-cc}" -std=c11 -Wall -Wextra \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
-    -I"$root/build/packages/kryon/vendor/raylib/src" $(pkg-config --cflags sdl2) \
+    -I"$root/build/packages/raylib/src" $(pkg-config --cflags sdl2) \
     "$root/tests/secondary_window_host_test.c" \
     "$work/c/platform/secondary_window_host.c" "$raylib" \
     $(pkg-config --libs sdl2) -lGL -lm -ldl -lpthread -o "$work/test"

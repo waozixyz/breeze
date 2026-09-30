@@ -11,8 +11,8 @@ package name in:
   $ZIRAN_PACKAGE_SOURCES   when set
   ../srclib                F-Droid's srclib layout, when present
 
-Submodules of a seeded package (Kryon's vendor/raylib) are filled from a local
-source with the submodule's name the same way. Anything not found is left for
+Submodules of a seeded package are filled from a local source with the
+submodule's name the same way. Anything not found is left for
 `ziran fetch` to download, and a checkout without the locked commit is never
 used.
 """
