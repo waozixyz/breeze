@@ -18,23 +18,25 @@ for input in source saved; do
         module_root=$root/tests
         app_path=$root/src
         ui_path=$ui
+        std_path=$root/build/packages/ziran/std
     else
         file=$work/ir/route_catalog_behavior.zir
         module_root=$work/ir
         app_path=$work/ir
         ui_path=$work/ir
+        std_path=$work/ir
     fi
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
     "$bin/zi2zib" bundle --root "$module_root" \
-        --module-path "$app_path" --module-path "$ui_path" \
+        --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         --entry route_catalog_behavior:Answer \
         -o "$output/routes.zib" "$file"
     [ "$("$bin/zi2zib" run "$output/routes.zib")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
-        --module-path "$app_path" --module-path "$ui_path" \
+        --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         -o "$output/c" "$file"
     cat > "$output/c/main.c" <<'C'
 #include "route_catalog_behavior.h"
@@ -46,7 +48,7 @@ C
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"
 
     "$bin/zi2cpp" --no-main --root "$module_root" \
-        --module-path "$app_path" --module-path "$ui_path" \
+        --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         -o "$output/cpp" "$file"
     cat > "$output/cpp/main.cpp" <<'CPP'
 #include "route_catalog_behavior.hpp"
@@ -58,7 +60,7 @@ CPP
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/cpp/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \
-        --module-path "$app_path" --module-path "$ui_path" \
+        --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         -o "$output/go" "$file"
     cat > "$output/go/route_catalog_behavior_test.go" <<'GO'
 package ziran
