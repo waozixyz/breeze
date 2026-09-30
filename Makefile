@@ -547,6 +547,26 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 		SDL_INCLUDE_PATH=$(shell pkg-config --variable=includedir sdl2) \
 		CUSTOM_CFLAGS="-DUSING_SDL2_PROJECT $(RAY_CFLAGS) $(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
 	@test -f $@
+# Windows raylib, cross-compiled with MinGW. Kryon's shared make fragments
+# used to provide this rule; Inbe builds it now, like the native library.
+define WINDOWS_RAYLIB_RULE
+$(1): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
+	@test -f $(RAYLIB_DIR)/raylib.h || { echo "Fetch the raylib package: sh scripts/packages.sh" >&2; exit 1; }
+	rm -rf $(2)/source
+	mkdir -p $(2)/source
+	cp -R $(RAYLIB_DIR)/. $(2)/source/
+	find $(2)/source -type f \( -name '*.o' -o -name '*.a' \) -delete
+	$(MAKE) -j4 -C $(2)/source \
+		OS=Windows_NT RAYLIB_SRC_PATH=. RAYLIB_RELEASE_PATH=.. \
+		PLATFORM=PLATFORM_DESKTOP_RGFW GRAPHICS=GRAPHICS_API_OPENGL_11 \
+		RAYLIB_LIBTYPE=STATIC RAYLIB_MODULE_AUDIO=TRUE \
+		RAYLIB_MODULE_MODELS=TRUE \
+		CC="$(3)" AR="$(4)" RANLIB="$(5)" \
+		CUSTOM_CFLAGS="$(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
+	@test -f $$@
+endef
+$(eval $(call WINDOWS_RAYLIB_RULE,$(WIN64_RAYLIB_A),$(WIN64_RAYLIB_BUILD_DIR),$(WIN64_CC),$(WIN64_AR),$(WIN64_RANLIB)))
+$(eval $(call WINDOWS_RAYLIB_RULE,$(WIN32_RAYLIB_A),$(WIN32_RAYLIB_BUILD_DIR),$(WIN32_CC),$(WIN32_AR),$(WIN32_RANLIB)))
 KRYON_NATIVE_BACKEND_DEPS :=
 KRYON_NATIVE_BACKEND_LIBS :=
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
@@ -630,7 +650,7 @@ MEDITATION_AUDIO_TRACKS := \
 	Elijah_K/path-of-meditation.ogg \
 	Elijah_K/truth-of-silence.ogg
 
--include $(KRYON_DIR)/mk/package-freebsd.mk
+include mk/package-freebsd.mk
 
 .PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 windows32 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
 .PHONY: zi-check
