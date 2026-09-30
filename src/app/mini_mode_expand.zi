@@ -1,0 +1,95 @@
+#import, file "app_types.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "mini_mode.zi";
+#import, file "mini_mode_policy.zi";
+#import, file "route_host.zi";
+#import, file "text_buffers.zi";
+#import, file "../core/types.zi";
+#import, file "../platform/uri.zi";
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "icon"
+#import "image_props"
+#import "session"
+
+using IconType;
+using ButtonTone;
+using ButtonEmphasis;
+
+#scope_file
+c :: #system_library "c";
+app_device_resize :: (width: s32, height: s32) #foreign c;
+WEB :: #defined(PLATFORM_WEB)
+
+#scope_export
+// The full app's default desktop window.
+FULL_WINDOW_WIDTH :: 900
+FULL_WINDOW_HEIGHT :: 720
+
+// Leaves mini mode for the full app. A page opens the full app in a new tab,
+// so an embedding page keeps its small frame; the desktop window grows into
+// the full app in place.
+AppMiniModeExpand :: (app: *InnerBreeze) {
+    #if WEB {
+        href: [4096]u8
+        url: [4096]u8
+        length := MiniModeFullAppUrl(app_route_href(href[:]), url[:])
+        if length > 0 {
+            unused OpenUri(AppTextFromCString(*url[0], cast(s32)length + 1))
+        }
+    } else {
+        AppMiniModeEnd()
+        app_device_resize(FULL_WINDOW_WIDTH, FULL_WINDOW_HEIGHT)
+    }
+    unused app
+}
+
+AppMiniExpandButtonSize :: () -> s32 {
+    return AppScale(24) + AppScale(10) * 2
+}
+
+// The expand button at `bounds`; true when pressed.
+AppMiniExpandButton :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    label := LocaleText("mini_open_full_app")
+    icon := ImageForIcon(cast(s32)IconExpand, bounds, label)
+    button: ButtonProps
+    button.id = 9103
+    button.label = label
+    button.bounds = bounds
+    button.image.asset_path = icon.asset_path
+    button.image.alt_text = label
+    button.image.source = icon.source
+    button.icon_only = true
+    button.circle = true
+    button.tone = cast(ButtonTone)ButtonToneNeutral
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    return Button(app.ui.session, button) != 0
+}
+
+// Practice sessions draw the expand button in their own title bar.
+AppMiniScreenHasPracticeTitleBar :: (screen: s32) -> bool {
+    return screen == ScreenSession || screen == ScreenMeditation ||
+        screen == ScreenSunSalutation || screen == ScreenPatterns
+}
+
+// Draws the expand button in the top-right corner of mini pages that have no
+// practice title bar.
+#program_export
+app_draw_mini_expand_button :: (app: *InnerBreeze) {
+    if !AppMiniMode() || app == null || app.modal.active != 0 {
+        return
+    }
+    if AppMiniScreenHasPracticeTitleBar(app.breathing.screen) {
+        return
+    }
+    size := AppMiniExpandButtonSize()
+    margin := AppScale(12)
+    bounds := Rectangle.{cast(float32)(app.ui.view_width - size - margin),
+        cast(float32)margin, cast(float32)size, cast(float32)size}
+    if AppMiniExpandButton(app, bounds) {
+        AppMiniModeExpand(app)
+    }
+}

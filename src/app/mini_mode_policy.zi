@@ -1,0 +1,161 @@
+#import, file "../core/types.zi";
+
+// Mini mode is Inbe reduced to its practices: the practice start page, the
+// practices themselves, and their results. Navigation, habits, lists, the
+// profile, settings, onboarding, and reminders are left out. A page embeds it
+// with ?mini in the address; the desktop app starts it with --mini.
+
+MINI_MODE_ARGUMENT :: "--mini"
+MINI_MODE_PARAMETER :: "mini"
+
+// True when the command-line arguments after the program name include --mini.
+MiniModeArgument :: (args: []string) -> bool {
+    index: s64 = 1
+    while index < args.count {
+        if args[index] == MINI_MODE_ARGUMENT {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// True when query[start:end] is the parameter `name`, bare or with a value.
+MiniQueryParameterIs :: (query: string, start: s64, end: s64,
+    name: string) -> bool {
+    if end - start < name.count {
+        return false
+    }
+    index: s64 = 0
+    while index < name.count {
+        if query[start + index] != name[index] {
+            return false
+        }
+        index += 1
+    }
+    // '=' starts the value.
+    return end - start == name.count ||
+        query[start + name.count] == cast(u8)61
+}
+
+// Index where the parameters of text[begin:end] start, after a leading '?'.
+MiniQueryStart :: (text: string, begin: s64, end: s64) -> s64 {
+    if end > begin && text[begin] == cast(u8)63 {
+        return begin + 1
+    }
+    return begin
+}
+
+// True when a page query such as "?mini" or "?lang=de&mini=1" asks for mini
+// mode.
+MiniModeQuery :: (query: string) -> bool {
+    start := MiniQueryStart(query, 0, query.count)
+    index := start
+    while index <= query.count {
+        // '&' separates parameters.
+        if index == query.count || query[index] == cast(u8)38 {
+            if MiniQueryParameterIs(query, start, index, MINI_MODE_PARAMETER) {
+                return true
+            }
+            start = index + 1
+        }
+        index += 1
+    }
+    return false
+}
+
+// Appends text[start:end] to output after `length` bytes and keeps output
+// NUL-terminated. Returns the new length, or -1 when it does not fit.
+MiniAppendRange :: (output: []u8, length: s64, text: string, start: s64,
+    end: s64) -> s64 {
+    if length < 0 || start < 0 || end < start || end > text.count {
+        return -1
+    }
+    if length + (end - start) + 1 > output.count {
+        return -1
+    }
+    index := start
+    while index < end {
+        output[length + index - start] = text[index]
+        index += 1
+    }
+    length += end - start
+    output[length] = cast(u8)0
+    return length
+}
+
+MiniAppendByte :: (output: []u8, length: s64, byte: u8) -> s64 {
+    if length < 0 || length + 2 > output.count {
+        return -1
+    }
+    output[length] = byte
+    output[length + 1] = cast(u8)0
+    return length + 1
+}
+
+// Appends the query text[begin:end] without its mini parameter:
+// "?lang=de&mini" becomes "?lang=de", and a query holding only mini
+// parameters becomes empty.
+MiniAppendQueryWithoutFlag :: (output: []u8, length: s64, text: string,
+    begin: s64, end: s64) -> s64 {
+    start := MiniQueryStart(text, begin, end)
+    index := start
+    kept: s32 = 0
+    while index <= end && length >= 0 {
+        if index == end || text[index] == cast(u8)38 {
+            if index > start && !MiniQueryParameterIs(text, start, index,
+                MINI_MODE_PARAMETER) {
+                // The first kept parameter opens the query with '?'; the
+                // others are joined with '&'.
+                separator: u8 = ifx kept == 0 then cast(u8)63 else cast(u8)38
+                length = MiniAppendByte(output, length, separator)
+                length = MiniAppendRange(output, length, text, start, index)
+                kept += 1
+            }
+            start = index + 1
+        }
+        index += 1
+    }
+    return length
+}
+
+// The full app's address for a mini page: the same page and route without
+// the mini parameter, so "https://a.b/app/?mini#/start" becomes
+// "https://a.b/app/#/start". Returns the length, or -1 when output is too
+// small.
+MiniModeFullAppUrl :: (href: string, output: []u8) -> s64 {
+    if output.count == 0 {
+        return -1
+    }
+    output[0] = cast(u8)0
+    // '?' starts the query and '#' the hash; a '?' inside the hash belongs to
+    // the hash.
+    hash_start := href.count
+    query_start := href.count
+    index: s64 = 0
+    while index < href.count {
+        if href[index] == cast(u8)35 {
+            hash_start = index
+            break
+        }
+        if href[index] == cast(u8)63 && query_start == href.count {
+            query_start = index
+        }
+        index += 1
+    }
+    if query_start > hash_start {
+        query_start = hash_start
+    }
+    length := MiniAppendRange(output, 0, href, 0, query_start)
+    length = MiniAppendQueryWithoutFlag(output, length, href, query_start,
+        hash_start)
+    return MiniAppendRange(output, length, href, hash_start, href.count)
+}
+
+// Mini mode keeps the practice start page, the practices, and their results.
+MiniModeAllowsScreen :: (screen: s32) -> bool {
+    return screen == ScreenStart || screen == ScreenSession ||
+        screen == ScreenMeditation || screen == ScreenSunSalutation ||
+        screen == ScreenPatterns || screen == ScreenResults ||
+        screen == ScreenPracticeConfig
+}

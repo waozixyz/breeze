@@ -423,12 +423,24 @@ function launchPracticeId(value) {
   }
 }
 
+// A launch command runs once. Route changes keep the page query, so remove the
+// command from the address; reloading must not start the practice again.
+function clearLaunchCommand(params) {
+  var query;
+  params.delete('launch');
+  params.delete('practice');
+  query = params.toString();
+  window.history.replaceState(window.history.state, '',
+    window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+}
+
 function runLaunchCommand() {
   var params = new URLSearchParams(window.location.search || '');
   var launch = params.get('launch');
   var practice = params.get('practice');
   var practiceId;
 
+  if (launch) clearLaunchCommand(params);
   if (launch === 'break-settings') {
     extensionCallExport('app_web_extension_open_break_settings');
     return;

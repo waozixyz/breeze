@@ -59,6 +59,8 @@ GetTime :: () -> float64 #foreign c;
 #import, file "app_persistence.zi";
 #import, file "app_modal_state.zi";
 #import, file "app_chrome.zi";
+#import, file "mini_mode.zi";
+#import, file "mini_mode_expand.zi";
 #import, file "app_settings.zi";
 #import, file "language_selection.zi";
 #import, file "../habits/view_settings.zi";
@@ -178,6 +180,11 @@ app_leave_practice_config :: (app: *InnerBreeze) {
 #program_export
 app_request_desktop_close :: (app: *InnerBreeze) {
     if app == null {
+        return
+    }
+    // The mini window has no tray or close prompt.
+    if AppMiniMode() {
+        app.request_quit = 1
         return
     }
     // Configured close behaviour overrides the ask prompt (desktop only).
@@ -473,6 +480,13 @@ app_apply_initial_screen :: (app: *InnerBreeze) {
     if app == null {
         return
     }
+    // Mini mode skips language selection and opens on the practices.
+    if AppMiniMode() {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.breathing.screen = ScreenStart
+        app.habits.focus_selected_tab = 0
+        return
+    }
     if app.language_selected == 0 {
         app.breathing.screen = ScreenLanguage
         app.habits.focus_selected_tab = 0
@@ -539,7 +553,9 @@ app_init :: (vapp: *void) {
         TraceLog(LOG_WARNING, "FONT: Failed to load Noto UI font -> using built-in default")
     }
     TraceLog(LOG_INFO, "APP PROBE: locale font initialized")
-    update_check_start()
+    if !AppMiniMode() {
+        update_check_start()
+    }
     app.practice_tab = PRACTICE_TAB_PLAY
     app.practice_config_tab = 0
     app.session_result = SessionResult.{}
@@ -594,7 +610,9 @@ app_init :: (vapp: *void) {
     app.meditation.duration_seconds = 0
     app.meditation.remaining_seconds = 0
     app.meditation.frame_ticks = 0
-    app_auto_sync(app)
+    if !AppMiniMode() {
+        app_auto_sync(app)
+    }
     TraceLog(LOG_INFO, "APP PROBE: app init complete")
 }
 
@@ -860,9 +878,12 @@ updateapp :: (app: *InnerBreeze) {
             }
         }
     }
-    app_breaks_update(app)
-    if app_notifications_tick(app) {
-        save_settings(app)
+    // Mini mode is only the practices: no break or reminder prompts.
+    if !AppMiniMode() {
+        app_breaks_update(app)
+        if app_notifications_tick(app) {
+            save_settings(app)
+        }
     }
     {
         i: s32 = 0
@@ -882,8 +903,10 @@ updateapp :: (app: *InnerBreeze) {
     first_run_guide_active = practice_screen_first_run_guide_active(app)
     habits_guide_active = habits_screen_first_run_guide_active(app)
     app_clear_invalid_screen_local_modal(app)
-    app_maybe_open_donation_reminder(app, first_run_guide_active,
-        habits_guide_active)
+    if !AppMiniMode() {
+        app_maybe_open_donation_reminder(app, first_run_guide_active,
+            habits_guide_active)
+    }
     // These modals cover the practice page, which must then not draw the
     // same manual or configuration a second time with the same widget keys.
     practice_fullscreen_modal = app.modal.active != 0 &&
@@ -1030,6 +1053,7 @@ updateapp :: (app: *InnerBreeze) {
     if app_nav_desktop_rail_enabled(app) == 0 {
         app_draw_bottom_nav(app)
     }
+    app_draw_mini_expand_button(app)
     practice_screen_draw_first_run_guide(app)
     habits_screen_draw_first_run_guide(app)
     if !global_modal_drawn {

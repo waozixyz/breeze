@@ -4,8 +4,10 @@
 c :: #system_library "c";
 WEB :: #defined(PLATFORM_WEB)
 #if WEB {
+    #import "web"
     GetRoutePath :: () -> *u8 #foreign c;
     GetRouteHash :: () -> *u8 #foreign c;
+    GetRouteQuery :: () -> *u8 #foreign c;
     GetRouteVersion :: () -> s32 #foreign c;
     PushRoute :: (path: *u8) #foreign c;
     ReplaceRoute :: (path: *u8) #foreign c;
@@ -26,6 +28,35 @@ app_route_hash :: () -> string {
         return app_route_text(GetRouteHash())
     }
     return ""
+}
+
+// The page's query string, "?" included; empty when there is none.
+#program_export
+app_route_query :: () -> string {
+    #if WEB {
+        return app_route_text(GetRouteQuery())
+    }
+    return ""
+}
+
+// The page's full address, read into `buffer`; empty outside a page.
+app_route_href :: (buffer: []u8) -> string {
+    if buffer.count == 0 {
+        return ""
+    }
+    buffer[0] = cast(u8)0
+    #if WEB {
+        scope: s32 = WebScope()
+        location: s32 = WebGetObject(WebGlobal, WebName("location"))
+        if location != 0 && !WebFailed() {
+            value: WebValue = WebGet(location, WebName("href"))
+            if value.tag == WebStringTag {
+                unused WebCopyString(WebAsObject(value), buffer)
+            }
+        }
+        WebEnd(scope)
+    }
+    return AppTextFromCString(*buffer[0], cast(s32)buffer.count)
 }
 
 #program_export

@@ -1729,6 +1729,13 @@ bottom-nav-policy-test: $(ZI2C_BIN)
 
 test: bottom-nav-policy-test
 
+.PHONY: mini-mode-policy-test
+mini-mode-policy-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/mini_mode_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: mini-mode-policy-test
+
 .PHONY: app-nav-state-zi-test
 app-nav-state-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
