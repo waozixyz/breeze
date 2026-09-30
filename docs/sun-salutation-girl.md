@@ -4,8 +4,10 @@
 Inbe's twelve-step sun salutation:
 
 ```sh
-python3 scripts/render-sun-salutation-girl.py            # video
-python3 scripts/render-sun-salutation-girl.py --still 21 # one frame
+python3 scripts/render-sun-salutation-girl.py                # video
+python3 scripts/render-sun-salutation-girl.py --still 21     # one frame
+python3 scripts/render-sun-salutation-girl.py --theme clear  # transparent video
+python3 scripts/render-sun-salutation-girl.py --sprites      # the app's frames
 ```
 
 The video goes to `build/sun-salutation-girl/video/light/sun-salutation.mp4`
@@ -40,14 +42,43 @@ from the Python ones by a fraction of a pixel along edges.
 
 The timeline interpolates the rig poses and moves the hip so hands and feet
 can reach. Arms and legs are two-bone chains; their paintings are warped
-along the bent bones. Head, torso, hips, hands and feet move rigidly, and the
-hand and foot drawings switch at the moment of contact. The long lock is a
-Verlet strand stepped once per video frame from rest at 0 s.
+along the bent bones. Each leg painting carries her seat: above the hip joint
+it follows the pelvis and bends round into the thigh, so the seat stays
+smooth even when the hip folds all the way. The top is warped too: its hem
+flares out over the leggings, more at the back while she is upside down.
+The seat is a little fuller at the back, widening smoothly around the hip
+while its front and the lower leg keep their shape.
+Head, hands and feet move rigidly, and the hand and foot drawings switch at
+the moment of contact. The long lock is a Verlet strand stepped once per
+video frame from rest at 0 s.
 
-Back to front: far leg and arm (slightly darker), long hair, back hair, hips,
-near leg, torso, face and neck, front hair, near arm. The shirt is always
-drawn over the leggings; when her hips are above her shoulders it slides
-toward her chest and shows the waistband.
+Back to front: far leg and arm (slightly darker), long hair, back hair, near
+leg, top, face and neck, front hair, near arm. The top is always over the
+leggings: above its hem, anything of the leggings behind her back is
+clipped away.
+
+## Transparent output
+
+The `clear` theme paints no background, so every pixel keeps its real
+coverage and the white top stays intact; nothing is keyed out afterwards.
+`--theme clear` writes `build/sun-salutation-girl/video/clear/sun-salutation.webm`
+(VP9 with an alpha channel) and `--still` writes PNGs with alpha.
+
+## The app's frames
+
+`--sprites` renders what the Sun Salutation practice shows: for every step
+the move into its pose at 30 frames per second, then half a second of the hold
+while the hair settles; the last frame is the held pose, and the first step
+is only its held pose. Frames are rendered at 0.55 of the design size on the
+`clear` theme, trimmed to what they show and saved as 256-colour PNGs in
+`assets/practices/sunsalutation/girl/`. The generated
+`src/practices/sun_salutation/sun_salutation_frames.zi` places every frame on
+one shared stage. Settings are under `sprites` in the rig.
+
+The app opens each step with the move, over at most 3 s and at most half the
+step, showing one solid frame at a time, then holds the pose. Hands and feet
+also switch contact drawings without a fade. Frames are
+separate images so that only the few most recent ones stay loaded.
 
 ## Transitions
 

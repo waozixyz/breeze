@@ -1,16 +1,9 @@
 
 SUN_SALUTATION_STEP_COUNT :: 12
 SUN_SALUTATION_POSE_COUNT :: SUN_SALUTATION_STEP_COUNT
-SUN_SALUTATION_FIGURE_COUNT :: 2
-SUN_SALUTATION_ACTIVE_FIGURE_COUNT :: SUN_SALUTATION_FIGURE_COUNT
-SUN_SALUTATION_FIGURE_MAN :: 0
-SUN_SALUTATION_FIGURE_WOMAN :: 1
-SUN_SALUTATION_POSE_SHEET_COLS :: 4
-SUN_SALUTATION_POSE_FRAME_W :: 106
-SUN_SALUTATION_POSE_FRAME_H :: 96
-SUN_SALUTATION_TRANSITION_COUNT :: 2
-SUN_SALUTATION_TRANSITION_FRAME_COUNT :: 8
-SUN_SALUTATION_TRANSITION_SHEET_COLS :: 8
+// A step opens with the move into its pose, at most this long and at most
+// half the step.
+SUN_SALUTATION_TRANSITION_SECONDS :: 3
 SUN_SALUTATION_SECONDS_MIN :: 3
 SUN_SALUTATION_SECONDS_MAX :: 12
 SUN_SALUTATION_DEFAULT_REPETITIONS :: 3
@@ -24,7 +17,6 @@ SunSalutationPracticeState :: struct {
     start_seconds: s32
     end_seconds: s32
     step_ticks: s32
-    figure: s32
 }
 
 SalutationStepResult :: struct {
@@ -53,8 +45,6 @@ SalutationNormalizeSettings :: (state: SunSalutationPracticeState) -> SunSalutat
     if state.start_seconds < state.end_seconds {
         state.end_seconds = state.start_seconds
     }
-    state.figure = SalutationClamp(state.figure, 0,
-        SUN_SALUTATION_ACTIVE_FIGURE_COUNT - 1)
     return state
 }
 
@@ -118,9 +108,6 @@ SalutationNormalizeDraw :: (state: SunSalutationPracticeState) -> SunSalutationP
         SUN_SALUTATION_STEP_COUNT - 1)
     state.repetition = SalutationClamp(state.repetition, 0,
         state.repetitions - 1)
-    if state.figure < 0 || state.figure >= SUN_SALUTATION_ACTIVE_FIGURE_COUNT {
-        state.figure = SUN_SALUTATION_FIGURE_MAN
-    }
     return state
 }
 
@@ -192,30 +179,38 @@ SalutationTick :: (state: SunSalutationPracticeState) -> SalutationStepResult {
     return result
 }
 
+// The frame to show `step_ticks` into a step of `ticks_per_step` whose
+// animation has `frame_count` frames: the move into the pose
+// (`transition_frames`), then the first moments of the hold at
+// `frames_per_second`, whose last frame stays. Frames count from the
+// step's first one; -1 is the previous step's held pose.
 #program_export
-SalutationTransitionIndex :: (step: s32) -> s32 {
-    if step == 0 {
+SalutationFrameAt :: (step_ticks: s32, ticks_per_step: s32,
+    frame_count: s32, transition_frames: s32,
+    frames_per_second: s32) -> s32 {
+    if frame_count <= 1 || transition_frames <= 0 {
         return 0
     }
-    if step == 1 {
-        return 1
+    if transition_frames > frame_count {
+        transition_frames = frame_count
     }
-    return -1
-}
-
-#program_export
-SalutationTransitionFrame :: (step_ticks: s32,
-    ticks_per_step: s32) -> s32 {
-    if ticks_per_step <= 0 {
-        return 0
+    transition_ticks: s32 = SUN_SALUTATION_TRANSITION_SECONDS * 60
+    if transition_ticks > ticks_per_step / 2 {
+        transition_ticks = ticks_per_step / 2
+    }
+    if transition_ticks < 1 {
+        transition_ticks = 1
     }
     if step_ticks < 0 {
         step_ticks = 0
     }
-    frame: s32 = (step_ticks * SUN_SALUTATION_TRANSITION_FRAME_COUNT) /
-    ticks_per_step
-    if frame >= SUN_SALUTATION_TRANSITION_FRAME_COUNT {
-        frame = SUN_SALUTATION_TRANSITION_FRAME_COUNT - 1
+    frame: s32 = step_ticks * transition_frames / transition_ticks - 1
+    if step_ticks >= transition_ticks {
+        frame = transition_frames - 1 +
+            (step_ticks - transition_ticks) * frames_per_second / 60
+    }
+    if frame > frame_count - 1 {
+        frame = frame_count - 1
     }
     return frame
 }

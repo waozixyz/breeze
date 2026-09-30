@@ -23,13 +23,11 @@
 #import, file "../../app/metrics.zi";
 #import, file "../../app/draw.zi";
 #import, file "../../app/current_app.zi";
-#import "button_widget"
 #import "image_widget"
 #import "slider_widget"
 #import "text_widget"
 #import "drawing_props"
 #import "session"
-#import "button_props"
 #import "slider_props"
 #import, file "../../app/app_chrome.zi";
 #import, file "../../app/locale.zi";
@@ -40,25 +38,7 @@ using ModalType;
 using ExerciseType;
 using TextWrap;
 using ImageFit;
-using ButtonTone;
-using ButtonEmphasis;
 using NumericValueKind;
-
-sun_salutation_clampi :: (value: s32, min_value: s32, max_value: s32) -> s32 {
-    if value < min_value {
-        return min_value
-    }
-    if value > max_value {
-        return max_value
-    }
-    return value
-}
-
-#program_export
-sun_salutation_step_pose_index :: (step: s32) -> s32 {
-    step = sun_salutation_clampi(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
-    return step
-}
 
 sun_salutation_practice_init :: (app: *InnerBreeze) {
     if app == null {
@@ -68,18 +48,11 @@ sun_salutation_practice_init :: (app: *InnerBreeze) {
     app.sun_salutation = SalutationInit(app.sun_salutation)
 }
 
-draw_preview_pose :: (figure: s32, pose_index: s32,
-x: s32, y: s32, w: s32, h: s32, active: bool) {
-    pose_index = sun_salutation_clampi(pose_index, 0, SUN_SALUTATION_POSE_COUNT - 1)
-    Image(CurrentApp().ui.session, ImageProps.{
-        .asset_path = sun_salutation_pose_asset(figure),
-        .source = {
-            cast(float32)((pose_index % SUN_SALUTATION_POSE_SHEET_COLS) * SUN_SALUTATION_POSE_FRAME_W),
-            cast(float32)((pose_index / SUN_SALUTATION_POSE_SHEET_COLS) * SUN_SALUTATION_POSE_FRAME_H),
-            cast(float32)SUN_SALUTATION_POSE_FRAME_W, cast(float32)SUN_SALUTATION_POSE_FRAME_H},
-        .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
-        .fit = cast(ImageFit)ImageFitContain,
-        .class_name = ifx (active) then (0) else (0)})
+draw_preview_pose :: (step: s32, x: s32, y: s32, w: s32, h: s32) {
+    inset := AppScale(3)
+    Image(CurrentApp().ui.session, SunSalutationPoseImage(step,
+        Rectangle.{cast(float32)(x + inset), cast(float32)(y + inset),
+            cast(float32)(w - inset * 2), cast(float32)(h - inset * 2)}))
 }
 
 preview_height :: (content_w: s32) -> s32 {
@@ -137,20 +110,13 @@ draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
             row := i / 6
             px := x + col * (thumb_w + gap) +             (w - (thumb_w * 6 + gap * 5)) / 2
             py := y + row * (thumb_h + AppScale(18))
-            pose_index := sun_salutation_step_pose_index(i)
 
             DrawRectangle(px, py, thumb_w, thumb_h,
             DarkenColor(StyleTokenColor("canvas"), 6))
             if i == active_step {
                 DrawRectangleLines(px, py, thumb_w, thumb_h, StyleTokenColor("accent-hover"))
             }
-            draw_preview_pose(app.sun_salutation.figure,
-            pose_index,
-            px,
-            py,
-            thumb_w,
-            thumb_h,
-            i == active_step)
+            draw_preview_pose(i, px, py, thumb_w, thumb_h)
             if i < SUN_SALUTATION_STEP_COUNT - 1 {
                 next_col := (i + 1) % 6
 
@@ -177,88 +143,6 @@ draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
     }
 }
 
-draw_figure_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s32) -> s32 {
-    label_font := AppFontSize()
-    small_font := AppSmallFontSize()
-    label_w: s32
-    row_y: s32
-    option_gap := AppScale(10)
-    option_w := (w - option_gap) / 2
-    option_h := AppScale(118)
-    image_h := AppScale(72)
-    changed: s32 = 0
-
-    if app == null || SUN_SALUTATION_ACTIVE_FIGURE_COUNT <= 1 {
-        return 0
-    }
-
-    label_w = AppTextWidth(LocaleText("sun_salutation_figure_label"),
-    label_font)
-    Text(CurrentApp().ui.session, TextProps.{
-        .bounds = Rectangle.{cast(float32)(x + (w - label_w) / 2), cast(float32)(y), 0, 0},
-        .text = (LocaleText("sun_salutation_figure_label")),
-        .wrap = cast(TextWrap)TextWrapNone
-    })
-    row_y = y + AppScale(30)
-
-    {
-        i: s32 = 0
-        while i < SUN_SALUTATION_ACTIVE_FIGURE_COUNT {
-            bounds := Rectangle.{
-                cast(float32)(x + i * (option_w + option_gap)),
-                cast(float32)row_y,
-                cast(float32)option_w,
-                cast(float32)option_h
-            }
-            image_bounds := Rectangle.{
-                bounds.x + cast(float32)AppScale(8),
-                bounds.y + cast(float32)AppScale(8),
-                bounds.width - cast(float32)AppScale(16),
-                cast(float32)image_h
-            }
-            selected := app.sun_salutation.figure == i
-            label: string
-            text_w: float32
-            pose_index := sun_salutation_step_pose_index(1)
-
-
-            if i == SUN_SALUTATION_FIGURE_MAN {
-                label = LocaleText("sun_salutation_figure_man")
-            } else {
-                label = LocaleText("sun_salutation_figure_woman")
-            }
-            text_w = cast(float32)AppTextWidth(label, small_font)
-
-            clicked := Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = bounds, .id = cast(s32)24900 + i,
-                .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected,
-                .disabled = app.modal.active != 0
-            })
-            draw_preview_pose(i,
-            pose_index,
-            cast(s32)image_bounds.x,
-            cast(s32)image_bounds.y,
-            cast(s32)image_bounds.width,
-            cast(s32)image_bounds.height,
-            true)
-            Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{bounds.x + (bounds.width - text_w) * 0.5f, bounds.y + (bounds.height - cast(float32)AppScale(28)), 0, 0},
-                .text = label,
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-
-            if clicked != 0 && selected == false {
-                app.sun_salutation.figure = i
-                changed = 1
-            }
-            i += 1
-        }
-    }
-
-    return changed
-}
-
 config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
     bottom_padding: s32
 
@@ -268,7 +152,7 @@ config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
 
     bottom_padding = app_content_bottom_reserved(app) + AppScale(24)
     app.practice_config_tab = 0
-    return (ifx (SUN_SALUTATION_ACTIVE_FIGURE_COUNT > 1) then (AppScale(148) + AppScale(16)) else (0)) +     preview_height(content_w) + AppScale(16) +     AppScale(74) * 3 +     meditation_music_measure_practice_settings(app,
+    return preview_height(content_w) + AppScale(16) +     AppScale(74) * 3 +     meditation_music_measure_practice_settings(app,
     EXERCISE_SUN_SALUTATION,
     content_w, 0, 1) +     bottom_padding
 }
@@ -323,13 +207,6 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
         page: Rectangle = scroll_1_result.content
 
         y := cast(s32)page.y
-
-        if SUN_SALUTATION_ACTIVE_FIGURE_COUNT > 1 {
-            if draw_figure_selector(app, content_x, y, content_w) != 0 {
-                save_settings(app)
-            }
-            y += AppScale(148) + AppScale(16)
-        }
 
         draw_preview(app, content_x, y, content_w)
         y += preview_height(content_w) + AppScale(16)

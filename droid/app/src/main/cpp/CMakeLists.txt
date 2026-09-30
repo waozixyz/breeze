@@ -195,6 +195,8 @@ file(GLOB APP_SOCIAL_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_RO
 file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
     "${REPO_ROOT}/assets/practices/*/banner-light.png"
     "${REPO_ROOT}/assets/practices/*/banner-dark.png")
+file(GLOB APP_SUN_SALUTATION_FRAMES RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
+    "${REPO_ROOT}/assets/practices/sunsalutation/girl/*.png")
 file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
     "${REPO_ROOT}/build/packages/kss/styles/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
     "${REPO_ROOT}/themes/catalog_*.kss")
@@ -221,10 +223,7 @@ set(APP_EMBEDDED_INPUTS
     build/packages/kryon/icons/pfp.png
     ${APP_PRACTICE_BANNER_ASSETS}
     ${APP_SOCIAL_ASSETS}
-    assets/practices/sunsalutation/poses_man_sheet.png
-    assets/practices/sunsalutation/poses_woman_sheet.png
-    assets/practices/sunsalutation/transition_01_01_to_02_man_sheet.png
-    assets/practices/sunsalutation/transition_02_02_to_03_man_sheet.png
+    ${APP_SUN_SALUTATION_FRAMES}
     assets/fonts/subset/NotoSans-App-Regular.ttf
     assets/fonts/subset/NotoSansSC-App-Regular.otf
     assets/fonts/subset/NotoSansJP-App-Regular.otf

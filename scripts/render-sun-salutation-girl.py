@@ -515,10 +515,13 @@ class Limb:
         # Smoothed center line of the painting, row by row.
         full = Picture(spec["file"], units, detail, box)
         centers = []
+        fronts = []
         for y in range(full.height):
             xs = np.nonzero(full.alpha[y] > 40)[0]
             centers.append((xs.min() + xs.max()) / 2 if len(xs) else full.width / 2)
+            fronts.append(xs.max() if len(xs) else full.width / 2)
         self.centers = np.convolve(np.pad(centers, 6, mode="edge"), np.ones(13) / 13, mode="valid")
+        self.fronts = np.convolve(np.pad(fronts, 6, mode="edge"), np.ones(13) / 13, mode="valid")
 
     def paint(self, ctx, start, middle, end, above=None):
         """Bend the painting over start→middle→end.
@@ -547,8 +550,15 @@ class Limb:
         for y in sorted(set(min(picture.height - 1.0, max(0.0, float(y))) for y in ys)):
             distance = offset + (y - self.root[1]) / scale
             center, normal = bent_point(points, lengths, bands, distance, turns)
+            row_scale = picture.unit * self.spec["width"]
+            seat = self.spec.get("seat")
+            if seat:
+                fullness = seat["depth"] * smoothstep(0, 1, 1 - abs(distance - offset - seat["center"]) / seat["span"])
+                # Widen the painted seat behind her, keeping its front fixed.
+                center = add(center, mul(normal, (self.centers[int(y)] - self.fronts[int(y)]) * row_scale * fullness))
+                row_scale *= 1 + fullness
             rows.append((float(y), float(self.centers[int(y)]), center, normal,
-                         picture.unit * self.spec["width"]))
+                         row_scale))
         warp_strip(ctx, picture, rows)
 
 
@@ -747,9 +757,13 @@ class Girl:
 
         def draw():
             tucked = (1 - p.instep) * smoothstep(0.55, 0.63, foot) * (1 - smoothstep(0.18, 0.22, airborne))
-            self.foot_flat.paint(self.ctx, ankle, angle, 1 - p.instep - tucked)
-            self.foot_tucked.paint(self.ctx, ankle, 0, tucked)
-            self.foot_instep.paint(self.ctx, ankle, 0, p.instep)
+            # Contact drawings switch as solid cels, without ghosted feet.
+            if p.instep >= 0.5:
+                self.foot_instep.paint(self.ctx, ankle)
+            elif tucked >= 0.5:
+                self.foot_tucked.paint(self.ctx, ankle)
+            else:
+                self.foot_flat.paint(self.ctx, ankle, angle)
             # The seat at the top of the leg painting stays on the pelvis.
             above = add(p.shoulder, sub(hip, p.hip))
             self.leg.paint(self.ctx, hip, knee, ankle, above)
@@ -765,10 +779,11 @@ class Girl:
         def draw():
             # The flat hand shows only once the wrist is down at the floor.
             flat = smoothstep(0.45, 0.55, p.palm) * (1 - smoothstep(16, 30, self.ground - wrist[1]))
-            self.hand_upright.paint(self.ctx, wrist, hand_angle, 1 - flat)
-            if flat > 0.01:
+            if flat >= 0.5:
                 bottom = self.hand_flat.local((0, 1))[1]
-                self.hand_flat.paint(self.ctx, (wrist[0], self.ground - bottom), 0, flat)
+                self.hand_flat.paint(self.ctx, (wrist[0], self.ground - bottom))
+            else:
+                self.hand_upright.paint(self.ctx, wrist, hand_angle)
             self.arm.paint(self.ctx, shoulder, elbow, wrist)
 
         self.tinted(draw, far)
@@ -887,8 +902,15 @@ class Girl:
         self.update_hair(p, time)
         camera = self.rig["camera"]
         ctx.save()
-        ctx.set_source_rgb(*(value / 255 for value in self.theme["background"]))
-        ctx.paint()
+        background = self.theme.get("background")
+        if background is None:
+            # A theme without a background leaves the stage transparent.
+            ctx.set_operator(cairo.OPERATOR_CLEAR)
+            ctx.paint()
+            ctx.set_operator(cairo.OPERATOR_OVER)
+        else:
+            ctx.set_source_rgb(*(value / 255 for value in background))
+            ctx.paint()
         ctx.scale(self.width / camera["designWidth"], self.height / camera["designHeight"])
         ctx.translate(camera["centerX"], camera["groundY"])
         ctx.scale(camera["scale"], camera["scale"])
@@ -921,9 +943,20 @@ class Girl:
         return self.surface.get_data()
 
 
+def straight_alpha(data, width, height):
+    """Cairo's premultiplied BGRA frame as straight-alpha BGRA bytes."""
+    pixels = np.frombuffer(data, np.uint8).reshape(height, -1, 4)[:, :width].astype(np.float32)
+    alpha = pixels[..., 3:4]
+    pixels[..., :3] = np.where(alpha > 0, pixels[..., :3] * 255 / np.maximum(alpha, 1), 0)
+    return pixels.clip(0, 255).round().astype(np.uint8).tobytes()
+
+
 def render(rig, theme, output, width, height, fps):
+    """The video: H.264 MP4 on a theme's stage, or VP9 WebM with an alpha
+    channel on the transparent theme."""
     girl = Girl(rig, theme, width, height, fps)
-    target = output / theme / "sun-salutation.mp4"
+    transparent = girl.theme.get("background") is None
+    target = output / theme / ("sun-salutation.webm" if transparent else "sun-salutation.mp4")
     target.parent.mkdir(parents=True, exist_ok=True)
     BUILD.mkdir(parents=True, exist_ok=True)
     timeline = girl.timeline
@@ -939,12 +972,16 @@ def render(rig, theme, output, width, height, fps):
         "-f", "rawvideo", "-pixel_format", "bgra", "-video_size", f"{width}x{height}",
         "-framerate", str(fps), "-i", "pipe:0", "-f", "ffmetadata", "-i", str(metadata),
         "-map", "0:v:0", "-map_metadata", "1", "-map_chapters", "1", "-an",
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-threads", "3",
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target),
+        *(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "32",
+           "-row-mt", "1", "-auto-alt-ref", "0", "-threads", "3"] if transparent else
+          ["-c:v", "libx264", "-crf", "18", "-preset", "fast", "-threads", "3",
+           "-pix_fmt", "yuv420p", "-movflags", "+faststart"]),
+        str(target),
     ], stdin=subprocess.PIPE)
     try:
         for frame in range(round(timeline.duration * fps)):
-            encoder.stdin.write(girl.frame(frame / fps))
+            data = girl.frame(frame / fps)
+            encoder.stdin.write(straight_alpha(data, width, height) if transparent else data)
     finally:
         encoder.stdin.close()
     if encoder.wait() != 0:
@@ -952,17 +989,119 @@ def render(rig, theme, output, width, height, fps):
     print(f"Saved {target}", flush=True)
 
 
+def sprite_times(rig, timeline):
+    """Per step, the times of its frames: the transition into its pose, then
+    the first moments of the hold while the hair settles; the last frame is
+    the held pose. The first step has only its held pose."""
+    sprites = rig["sprites"]
+    fps = sprites["fps"]
+    moving = round(rig["timing"]["transition"] * fps)
+    settle = round(sprites["settle"] * fps)
+    steps = [[timeline.hold - 1 / fps]]
+    for step in range(1, timeline.steps):
+        start = (step - 1) * timeline.period + timeline.hold
+        steps.append([start + index / fps for index in range(1, moving + 1)]
+                     + [step * timeline.period + index / fps for index in range(1, settle + 1)])
+    return steps
+
+
+def export_sprites(rig):
+    """Transparent frames of every step for the app, and their table.
+
+    Frames are rendered at the app's size on the rig's transparent theme and
+    stored as palette PNGs. A step's frames share one box, trimmed to what
+    any of them shows; the generated Ziran table places each step's box on
+    one shared stage, so the app draws her at a fixed spot.
+    """
+    sprites = rig["sprites"]
+    design = rig["camera"]
+    width = round(design["designWidth"] * sprites["scale"] / 2) * 2
+    height = round(design["designHeight"] * sprites["scale"] / 2) * 2
+    girl = Girl(rig, sprites["theme"], width, height, rig["output"]["fps"])
+    directory = ROOT / sprites["directory"]
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob("*.png"):
+        stale.unlink()
+    steps = []
+    for times in sprite_times(rig, girl.timeline):
+        frames = []
+        for time in times:
+            girl.frame(time)
+            stride = girl.surface.get_stride()
+            pixels = np.frombuffer(girl.surface.get_data(), np.uint8).reshape(height, stride // 4, 4)[:, :width]
+            frames.append(pixels.copy())
+        ys, xs = np.nonzero(np.any(np.stack([frame[..., 3] for frame in frames]) > 0, axis=0))
+        box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+        steps.append((box, frames))
+    for step, (box, frames) in enumerate(steps):
+        for index, pixels in enumerate(frames):
+            premultiplied = pixels[box[1]:box[3], box[0]:box[2]].astype(np.float32)
+            alpha = premultiplied[..., 3:4]
+            color = np.where(alpha > 0, premultiplied[..., :3] * 255 / np.maximum(alpha, 1), 0)
+            rgba = np.concatenate([color[..., ::-1], alpha], -1).clip(0, 255).round().astype(np.uint8)
+            image = Image.fromarray(rgba, "RGBA").quantize(sprites["colors"], method=Image.Quantize.FASTOCTREE)
+            image.save(directory / f"{step + 1:02d}-{index + 1:03d}.png", optimize=True)
+    boxes = [box for box, _ in steps]
+    # The held pose's own box inside its step's frames, for thumbnails.
+    held = []
+    for box, frames in steps:
+        ys, xs = np.nonzero(frames[-1][box[1]:box[3], box[0]:box[2], 3] > 0)
+        held.append((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    stage = (max(box[2] for box in boxes) - left, max(box[3] for box in boxes) - top)
+
+    def row(values):
+        return ".[" + ", ".join(str(value) for value in values) + "];"
+
+    lines = [
+        "// Generated by scripts/render-sun-salutation-girl.py --sprites from",
+        "// docs/sun-salutation-girl.json; do not edit. Frame F of step S is",
+        "// SUN_SALUTATION_FRAME_DIRECTORY + \"SS-FFF.png\", both counted from 1.",
+        "// A step's frames are the move into its pose and the first moments of",
+        "// the hold; the last one is the held pose. All frames of a step fill",
+        "// that step's box, in pixels on the shared stage; the held box is",
+        "// where the held pose lies inside that frame.",
+        "",
+        f'SUN_SALUTATION_FRAME_DIRECTORY :: "{sprites["directory"]}/"',
+        f"SUN_SALUTATION_STAGE_W :: {stage[0]}",
+        f"SUN_SALUTATION_STAGE_H :: {stage[1]}",
+        f"SUN_SALUTATION_FRAME_FPS :: {sprites['fps']}",
+        f"SUN_SALUTATION_TRANSITION_FRAMES :: {round(rig['timing']['transition'] * sprites['fps'])}",
+        "",
+        f"sun_salutation_step_frames: [{len(steps)}]s32 = " + row(len(frames) for _, frames in steps),
+        f"sun_salutation_step_x: [{len(steps)}]s32 = " + row(box[0] - left for box in boxes),
+        f"sun_salutation_step_y: [{len(steps)}]s32 = " + row(box[1] - top for box in boxes),
+        f"sun_salutation_step_w: [{len(steps)}]s32 = " + row(box[2] - box[0] for box in boxes),
+        f"sun_salutation_step_h: [{len(steps)}]s32 = " + row(box[3] - box[1] for box in boxes),
+        f"sun_salutation_held_x: [{len(steps)}]s32 = " + row(box[0] for box in held),
+        f"sun_salutation_held_y: [{len(steps)}]s32 = " + row(box[1] for box in held),
+        f"sun_salutation_held_w: [{len(steps)}]s32 = " + row(box[2] - box[0] for box in held),
+        f"sun_salutation_held_h: [{len(steps)}]s32 = " + row(box[3] - box[1] for box in held),
+    ]
+    (ROOT / sprites["table"]).write_text("\n".join(lines) + "\n")
+    count = sum(len(frames) for _, frames in steps)
+    total = sum(path.stat().st_size for path in directory.glob("*.png"))
+    print(f"Saved {count} frames ({total / 1024 / 1024:.2f} MB) to {directory}, "
+          f"stage {stage[0]}x{stage[1]}, table {sprites['table']}", flush=True)
+
+
 def main():
     rig = json.loads(RIG.read_text())
     output = rig["output"]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--theme", choices=("light", "dark", "both"), default="light")
+    parser.add_argument("--theme", choices=("light", "dark", "clear", "both"), default="light",
+                        help="clear leaves the stage transparent (WebM with alpha, or PNG stills)")
     parser.add_argument("--output", type=Path, default=BUILD / "video")
     parser.add_argument("--width", type=int, default=output["width"])
     parser.add_argument("--height", type=int, default=output["height"])
     parser.add_argument("--fps", type=int, default=output["fps"])
     parser.add_argument("--still", type=float, action="append", help="render a PNG at this time in seconds")
+    parser.add_argument("--sprites", action="store_true", help="export the app's transparent frames and table")
     options = parser.parse_args()
+    if options.sprites:
+        export_sprites(rig)
+        return
     if min(options.width, options.height, options.fps) <= 0 or options.width % 2 or options.height % 2:
         parser.error("Dimensions must be positive and even; fps must be positive")
     themes = ("light", "dark") if options.theme == "both" else (options.theme,)

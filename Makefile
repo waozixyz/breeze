@@ -375,7 +375,7 @@ SYSTEM_THEME_CFLAGS :=
 SYSTEM_THEME_LDLIBS :=
 
 LOCALE_FILES := $(wildcard locales/*.txt)
-IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) assets/practices/sunsalutation/poses_man_sheet.png assets/practices/sunsalutation/poses_woman_sheet.png assets/practices/sunsalutation/transition_01_01_to_02_man_sheet.png assets/practices/sunsalutation/transition_02_02_to_03_man_sheet.png
+IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/girl/*.png)
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
 FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt

@@ -70,6 +70,9 @@ with log_path.open("w") as log:
             command("xdotool", "mousedown", "1")
             time.sleep(0.1)
             command("xdotool", "mouseup", "1")
+            # Let the page transition finish before clicking the next route.
+            # Its first changed pixel can appear while input is still blocked.
+            time.sleep(0.4)
             deadline = time.monotonic() + 3
             changed = False
             while time.monotonic() < deadline:

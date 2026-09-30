@@ -1,22 +1,84 @@
 #import, file "sun_salutation_rules.zi";
+#import, file "sun_salutation_frames.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/current_app.zi";
+#import "geometry"
+#import "image_props"
 
-#program_export
-sun_salutation_pose_asset :: (figure: s32) -> string {
-    if figure == SUN_SALUTATION_FIGURE_WOMAN {
-        return "assets/practices/sunsalutation/poses_woman_sheet.png"
-    }
-    return "assets/practices/sunsalutation/poses_man_sheet.png"
+using ImageFit;
+
+// The painted girl's frames (scripts/render-sun-salutation-girl.py
+// --sprites) share one transparent stage, so every frame keeps her in place.
+
+// The number of frames of `step`; the last one is its held pose.
+SunSalutationFrameCount :: (step: s32) -> s32 {
+    return sun_salutation_step_frames[SalutationClamp(step, 0,
+        SUN_SALUTATION_STEP_COUNT - 1)]
 }
 
-#program_export
-sun_salutation_transition_asset :: (figure: s32,
-    transition: s32) -> string {
-    if figure != SUN_SALUTATION_FIGURE_MAN { return "" }
-    if transition == 0 {
-        return "assets/practices/sunsalutation/transition_01_01_to_02_man_sheet.png"
+// The asset of frame `index` of `step`, both counted from 0, held for this
+// frame of the app.
+SunSalutationFramePath :: (step: s32, index: s32) -> string {
+    name: [96]u8
+    if !AppAppendText(SUN_SALUTATION_FRAME_DIRECTORY, name[:]) ||
+    !AppAppendText("00-000.png", name[:]) {
+        return ""
     }
-    if transition == 1 {
-        return "assets/practices/sunsalutation/transition_02_02_to_03_man_sheet.png"
+    at := cast(s32)SUN_SALUTATION_FRAME_DIRECTORY.count
+    name[at] = cast(u8)(#char "0" + (step + 1) / 10)
+    name[at + 1] = cast(u8)(#char "0" + (step + 1) % 10)
+    name[at + 3] = cast(u8)(#char "0" + (index + 1) / 100)
+    name[at + 4] = cast(u8)(#char "0" + ((index + 1) / 10) % 10)
+    name[at + 5] = cast(u8)(#char "0" + (index + 1) % 10)
+    return FrameTextHold(*CurrentApp().ui.frame_text,
+        AppTextFromCString(*name[0], 96))
+}
+
+// The stage, as large as fits in `bounds` and centered there.
+SunSalutationStage :: (bounds: Rectangle) -> Rectangle {
+    scale := bounds.width / cast(float32)SUN_SALUTATION_STAGE_W
+    tall := bounds.height / cast(float32)SUN_SALUTATION_STAGE_H
+    if tall < scale {
+        scale = tall
     }
-    return ""
+    width := cast(float32)SUN_SALUTATION_STAGE_W * scale
+    height := cast(float32)SUN_SALUTATION_STAGE_H * scale
+    return Rectangle.{bounds.x + (bounds.width - width) * 0.5,
+        bounds.y + (bounds.height - height) * 0.5, width, height}
+}
+
+// Frame `index` of `step` at its place on `stage`, -1 being the previous
+// step's held pose.
+SunSalutationFrameImage :: (step: s32, index: s32, stage: Rectangle) -> ImageProps {
+    step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    if index < 0 && step > 0 {
+        step -= 1
+        index = SunSalutationFrameCount(step) - 1
+    }
+    index = SalutationClamp(index, 0, SunSalutationFrameCount(step) - 1)
+    scale := stage.width / cast(float32)SUN_SALUTATION_STAGE_W
+    picture: ImageProps
+    picture.asset_path = SunSalutationFramePath(step, index)
+    picture.bounds = Rectangle.{
+        stage.x + cast(float32)sun_salutation_step_x[step] * scale,
+        stage.y + cast(float32)sun_salutation_step_y[step] * scale,
+        cast(float32)sun_salutation_step_w[step] * scale,
+        cast(float32)sun_salutation_step_h[step] * scale}
+    picture.fit = cast(ImageFit)ImageFitStretch
+    return picture
+}
+
+// The pose held at `step`, as large as fits in `bounds` (thumbnails).
+SunSalutationPoseImage :: (step: s32, bounds: Rectangle) -> ImageProps {
+    step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    picture: ImageProps
+    picture.asset_path = SunSalutationFramePath(step,
+        SunSalutationFrameCount(step) - 1)
+    picture.source = Rectangle.{cast(float32)sun_salutation_held_x[step],
+        cast(float32)sun_salutation_held_y[step],
+        cast(float32)sun_salutation_held_w[step],
+        cast(float32)sun_salutation_held_h[step]}
+    picture.bounds = bounds
+    picture.fit = cast(ImageFit)ImageFitContain
+    return picture
 }

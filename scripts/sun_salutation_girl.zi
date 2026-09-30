@@ -1115,7 +1115,7 @@ Bend :: (chain: *Chain, distance: float64) -> BentPoint {
             a := Minus(joint, Times(direction, band))
             b := Plus(joint, Times(onward, band))
             result.center = Plus(Plus(Times(a, (1.0 - amount) * (1.0 - amount)), Times(joint, 2.0 * amount * (1.0 - amount))),
-                                 Times(b, amount * amount))
+                Times(b, amount * amount))
             heading := AngleOf(direction)
             middle := chain.turns[index]
             turn := Wrap(AngleOf(onward) - heading - middle) + middle
@@ -1141,12 +1141,17 @@ Limb :: struct {
     band: float64
     root_band: float64
     root_turn: float64
+    seat_depth: float64
+    seat_center: float64
+    seat_span: float64
     centers: [2048]float64
+    fronts: [2048]float64
 }
 
 // The painting's smoothed center line, row by row.
 MeasureCenters :: (limb: *Limb) {
     raw: [2048]float64
+    front: [2048]float64
     height := limb.picture.height
     y: s32 = 0
     while y < height && y < 2048 {
@@ -1164,14 +1169,17 @@ MeasureCenters :: (limb: *Limb) {
             x += 1
         }
         raw[y] = cast(float64) limb.picture.width / 2.0
+        front[y] = raw[y]
         if low >= 0 {
             raw[y] = cast(float64)(low + high) / 2.0
+            front[y] = cast(float64)high
         }
         y += 1
     }
     y = 0
     while y < height && y < 2048 {
         total := 0.0
+        front_total := 0.0
         offset: s32 = -6
         while offset <= 6 {
             at := y + offset
@@ -1182,9 +1190,11 @@ MeasureCenters :: (limb: *Limb) {
                 at = height - 1
             }
             total += raw[at]
+            front_total += front[at]
             offset += 1
         }
         limb.centers[y] = total / 13.0
+        limb.fronts[y] = front_total / 13.0
         y += 1
     }
 }
@@ -1211,6 +1221,12 @@ LoadLimb :: (limb: *Limb, spec_at: s32, first: float64, second: float64) {
     limb.band = NumberField(spec_at, "band")
     limb.root_band = OptionalNumber(spec_at, "rootBand", 0.0)
     limb.root_turn = Radians(OptionalNumber(spec_at, "rootTurn", 0.0))
+    seat := FieldAt(json, spec_at, "seat")
+    if seat >= 0 {
+        limb.seat_depth = NumberField(seat, "depth")
+        limb.seat_center = NumberField(seat, "center")
+        limb.seat_span = NumberField(seat, "span")
+    }
 }
 
 // Bend the painting over start, middle, end. With `above`, a point up the
@@ -1282,12 +1298,28 @@ PaintLimb :: (context: *void, limb: *Limb, start: V2, middle: V2, end: V2, above
     while index < count {
         y := ys[index]
         if used == 0 || y != rows[used - 1].source_y {
-            bent := Bend(*chain, offset + (y - limb.root.y) / scale)
+            distance := (y - limb.root.y) / scale
+            bent := Bend(*chain, offset + distance)
             rows[used].source_y = y
             rows[used].center_x = limb.centers[cast(s32) y]
             rows[used].center = bent.center
             rows[used].normal = bent.normal
             rows[used].scale = limb.picture.unit * limb.width
+            if limb.seat_depth > 0.0 && limb.seat_span > 0.0 {
+                difference := distance - limb.seat_center
+                if difference < 0.0 {
+                    difference = -difference
+                }
+                fullness := limb.seat_depth * Smoothstep(0.0, 1.0,
+                    1.0 - difference / limb.seat_span)
+                // Widen the painted seat behind her, keeping its front fixed.
+                row_index := cast(s32)y
+                offset_back := (limb.centers[row_index] - limb.fronts[row_index]) *
+                rows[used].scale * fullness
+                rows[used].center = Plus(rows[used].center,
+                    Times(bent.normal, offset_back))
+                rows[used].scale *= 1.0 + fullness
+            }
             used += 1
         }
         index += 1
@@ -1383,7 +1415,7 @@ LoadRigid :: (part: *Rigid, spec_at: s32) {
     part.layer_count = count
     part.scale = cast(float64) part.layers[0].width / BoxWidth(box)
     part.reference = Box.{left = reference.left - box.left, top = reference.top - box.top,
-                          right = reference.right - box.left, bottom = reference.bottom - box.top}
+        right = reference.right - box.left, bottom = reference.bottom - box.top}
     part.pivot = CanvasPoint(part, PointField(spec_at, "pivot"))
     part.turn = Radians(OptionalNumber(spec_at, "turn", 0.0))
 }
@@ -1527,7 +1559,7 @@ PaintTorso :: (context: *void, torso: *Torso, p: Pose) {
         column: s32 = 0
         while column <= columns {
             source := Vec2(cast(float64) torso.picture.width * cast(float64) column / cast(float64) columns,
-                           cast(float64) torso.picture.height * cast(float64) row / cast(float64) rows)
+                cast(float64) torso.picture.height * cast(float64) row / cast(float64) rows)
             mesh_targets[row * (columns + 1) + column] = BodyPoint(p, PlaceTop(torso, p, ToBody(torso, source)))
             column += 1
         }
@@ -1573,7 +1605,7 @@ HairSubstep :: (hair: *Hair, torso: *Torso, p: Pose, collide: bool, first_root: 
         before := hair.previous[index]
         hair.previous[index] = point
         hair.points[index] = Vec2(point.x + (point.x - before.x) * rig.hair_damping,
-                                  point.y + (point.y - before.y) * rig.hair_damping + rig.hair_gravity * h * h)
+            point.y + (point.y - before.y) * rig.hair_damping + rig.hair_gravity * h * h)
         index += 1
     }
     hair.points[0] = first_root
@@ -1654,7 +1686,7 @@ HairStep :: (hair: *Hair, torso: *Torso, p: Pose, first_root: V2, second_root: V
     while index <= rig.hair_substeps {
         amount := cast(float64) index / cast(float64) rig.hair_substeps
         HairSubstep(hair, torso, p, collide, Mix(start_first, first_root, amount), Mix(start_second, second_root, amount),
-                    dt / cast(float64) rig.hair_substeps)
+            dt / cast(float64) rig.hair_substeps)
         index += 1
     }
     hair.roots[0] = first_root
@@ -1816,9 +1848,14 @@ DrawLeg :: (p: Pose, far: bool) {
     tucked := (1.0 - p.instep) * Smoothstep(0.55, 0.63, state.angle) * (1.0 - Smoothstep(0.18, 0.22, state.airborne))
     context := girl.context
     BeginTint(far)
-    PaintRigid(context, *girl.foot_flat, 0, ends.end, angle, 1.0 - p.instep - tucked)
-    PaintRigid(context, *girl.foot_tucked, 0, ends.end, 0.0, tucked)
-    PaintRigid(context, *girl.foot_instep, 0, ends.end, 0.0, p.instep)
+    // Contact drawings switch as solid cels, without ghosted feet.
+    if p.instep >= 0.5 {
+        PaintRigid(context, *girl.foot_instep, 0, ends.end, 0.0, 1.0)
+    } else if tucked >= 0.5 {
+        PaintRigid(context, *girl.foot_tucked, 0, ends.end, 0.0, 1.0)
+    } else {
+        PaintRigid(context, *girl.foot_flat, 0, ends.end, angle, 1.0)
+    }
     // The seat at the top of the leg painting stays on the pelvis.
     above := Plus(Shoulder(p), Minus(ends.root, p.hip))
     PaintLimb(context, *girl.leg, ends.root, ends.middle, ends.end, above, true)
@@ -1833,10 +1870,11 @@ DrawArm :: (p: Pose, far: bool) {
     flat := Smoothstep(0.45, 0.55, p.palm) * (1.0 - Smoothstep(16.0, 30.0, rig.ground - ends.end.y))
     context := girl.context
     BeginTint(far)
-    PaintRigid(context, *girl.hand_upright, 0, ends.end, hand_angle, 1.0 - flat)
-    if flat > 0.01 {
+    if flat >= 0.5 {
         bottom := LocalPoint(*girl.hand_flat, Vec2(0.0, 1.0)).y
-        PaintRigid(context, *girl.hand_flat, 0, Vec2(ends.end.x, rig.ground - bottom), 0.0, flat)
+        PaintRigid(context, *girl.hand_flat, 0, Vec2(ends.end.x, rig.ground - bottom), 0.0, 1.0)
+    } else {
+        PaintRigid(context, *girl.hand_upright, 0, ends.end, hand_angle, 1.0)
     }
     PaintLimb(context, *girl.arm, ends.root, ends.middle, ends.end, ends.root, false)
     EndTint(far)
@@ -1898,9 +1936,9 @@ SplineCount :: () -> s32 {
             t3 := t2 * t
             spline[written] = Vec2(
                 0.5 * (2.0 * p1.x + (p2.x - p0.x) * t + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2 +
-                       (3.0 * p1.x - p0.x - 3.0 * p2.x + p3.x) * t3),
+                (3.0 * p1.x - p0.x - 3.0 * p2.x + p3.x) * t3),
                 0.5 * (2.0 * p1.y + (p2.y - p0.y) * t + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2 +
-                       (3.0 * p1.y - p0.y - 3.0 * p2.y + p3.y) * t3))
+                (3.0 * p1.y - p0.y - 3.0 * p2.y + p3.y) * t3))
             written += 1
             step += 1
         }
