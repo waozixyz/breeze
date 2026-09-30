@@ -53,9 +53,9 @@ the moment of contact. The long lock is a Verlet strand stepped once per
 video frame from rest at 0 s.
 
 Back to front: far leg and arm (slightly darker), long hair, back hair, near
-leg, top, face and neck, front hair, near arm. The top is always over the
-leggings: above its hem, anything of the leggings behind her back is
-clipped away.
+leg, face and neck, top, front hair, near arm. The collar covers the base of
+the neck as the head turns. The top is always over the leggings: above its
+hem, anything of the leggings behind her back is clipped away.
 
 ## Transparent output
 

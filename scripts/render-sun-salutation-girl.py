@@ -917,9 +917,9 @@ class Girl:
         ctx.translate(-camera["rigX"], -self.ground)
         self.ground_shadow(p)
         # Back to front as seen from her near side: far limbs, the long hair
-        # and the back hair behind her head, neck and back, near leg, torso
-        # (the shirt covers the leggings), face and neck, the bangs and side
-        # hair in front of the face, near arm.
+        # and the back hair behind her head, neck and back, near leg, face
+        # and neck, torso (the collar covers the neck's base and the shirt
+        # covers the leggings), bangs and side hair, near arm.
         ctx.save()
         self.covered_by_top(p)
         self.draw_leg(p, far=True)
@@ -933,8 +933,8 @@ class Girl:
         self.covered_by_top(p)
         self.draw_leg(p, far=False)
         ctx.restore()
-        self.torso.paint(ctx, p)
         self.draw_head(p)
+        self.torso.paint(ctx, p)
         if "front" in self.head.layers:
             self.draw_head(p, "front")
         self.draw_arm(p, far=False)
