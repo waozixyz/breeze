@@ -1,8 +1,8 @@
 name: Fetch Ziran packages
 description: >
   Fetch the packages pinned in ziran.lock. The built Ziran compiler is cached
-  by the toolchain commit alone, so bumping another package such as Kryon
-  keeps it; the package checkouts are cached by the whole lock and fall back
+  by the runner image and the toolchain commit, so bumping another package
+  such as Kryon keeps it; the package checkouts are cached by the whole lock and fall back
   to the previous checkouts, so a bump fetches only what changed.
 
 inputs:
@@ -21,6 +21,10 @@ runs:
       run: |
         commit=$(python3 -c 'import json; print(json.load(open("ziran.lock"))["toolchain"]["commit"])')
         echo "commit=$commit" >> "$GITHUB_OUTPUT"
+        # A compiler built on a newer image needs its newer C library, so
+        # images do not share one: ubuntu-22.04 cannot run a glibc 2.39 build.
+        libc=$(getconf GNU_LIBC_VERSION 2>/dev/null | tr ' ' '-' || true)
+        echo "system=${ImageOS:-local}-${libc:-nolibc}" >> "$GITHUB_OUTPUT"
 
     - name: Restore the Ziran toolchain
       if: inputs.save-toolchain == 'true'
@@ -29,9 +33,9 @@ runs:
         path: |
           build/ziran-bootstrap
           build/ziran-toolchain
-        key: ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.commit }}
+        key: ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.system }}-${{ steps.toolchain.outputs.commit }}
         restore-keys: |
-          ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-
+          ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.system }}-
 
     - name: Restore the Ziran toolchain without saving it
       if: inputs.save-toolchain != 'true'
@@ -40,9 +44,9 @@ runs:
         path: |
           build/ziran-bootstrap
           build/ziran-toolchain
-        key: ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.commit }}
+        key: ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.system }}-${{ steps.toolchain.outputs.commit }}
         restore-keys: |
-          ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-
+          ziran-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.system }}-
 
     - name: Restore the package sources
       uses: actions/cache@v4

@@ -368,7 +368,7 @@ DESKTOP_TRAY_DEFINE := DESKTOP_TRAY_ENABLED
 endif
 ZI_NATIVE_DEFINES := PLATFORM_DESKTOP $(DESKTOP_TRAY_DEFINE)
 # Ziran preprocessing must see the libc choice used by the native C compiler.
-NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | rg -q '^\#define __GLIBC__ ' && printf yes)
+NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | grep -q '^\#define __GLIBC__ ' && printf yes)
 ifeq ($(NATIVE_GLIBC),yes)
 ZI_NATIVE_DEFINES += __GLIBC__
 endif
@@ -1562,11 +1562,11 @@ raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		$(BUILD_DIR)/raylib-log-host-test/test \
 		> $(BUILD_DIR)/raylib-log-host-test/output 2>&1
-	@rg -q 'width=320 height=560 embedded=1' \
+	@grep -qF 'width=320 height=560 embedded=1' \
 		$(BUILD_DIR)/raylib-log-host-test/output
-	@rg -q 'scale=1.50 layout=320x560' \
+	@grep -qF 'scale=1.50 layout=320x560' \
 		$(BUILD_DIR)/raylib-log-host-test/output
-	@rg -q 'track=2 practice=3' \
+	@grep -qF 'track=2 practice=3' \
 		$(BUILD_DIR)/raylib-log-host-test/output
 
 test: raylib-log-host-test
