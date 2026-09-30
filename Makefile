@@ -680,7 +680,8 @@ kryon-library-check: $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
 
 $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modules.txt $(KRYON_DIR)/Makefile $(ZI2C_BIN)
 	$(MAKE) -C $(KRYON_DIR) BUILD_DIR=$(KRYON_LIBRARY_BUILD_DIR) \
-		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) all
+		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) \
+		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
 
 .PHONY: uri-link-test
 uri-link-test: $(ZI2C_BIN)

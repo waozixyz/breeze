@@ -24,6 +24,9 @@ for argument in "$@"; do
     esac
 done
 
+# Ziran's Makefile is GNU make; on the BSDs that is gmake, not make.
+gnu_make=$(command -v gmake || command -v make)
+
 toolchain_field() {
     python3 -c 'import json, sys; print(json.load(open("ziran.lock"))["toolchain"][sys.argv[1]])' "$1"
 }
@@ -56,7 +59,7 @@ if [ -z "${ZIRAN:-}" ]; then
         fi
     fi
     if [ ! -x "$ziran" ]; then
-        env -u DISPLAY -u WAYLAND_DISPLAY make -C "$bootstrap" -s all >&2
+        env -u DISPLAY -u WAYLAND_DISPLAY "$gnu_make" -C "$bootstrap" -s all >&2
     fi
 fi
 
