@@ -70,7 +70,7 @@ class VersionTest(unittest.TestCase):
         # The package links below are already in place; the manifest and a
         # newer packages.mk keep Make from fetching them again.
         for name in ("ziran.toml", "ziran.lock", "scripts/packages.sh",
-                "mk/sync.mk"):
+                "mk/sync.mk", "mk/package-freebsd.mk"):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / name, self.root / name)
         (self.root / "build/packages.mk").write_text("PACKAGES_READY := 1\n")
