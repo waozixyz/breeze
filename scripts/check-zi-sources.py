@@ -44,6 +44,8 @@ result = subprocess.run(
         str(ui),
         "--module-path",
         str(kss),
+        "--module-path",
+        str(root / "build/packages/oqs/src"),
         # KSS imports Kryon as kryon/NAME.
         "--module-path",
         f"kryon={ui}",

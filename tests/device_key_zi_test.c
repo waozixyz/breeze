@@ -48,14 +48,13 @@ int32_t storage_setting_text_equals(String key, String value)
 void storage_settings_begin_write(void) {}
 void storage_settings_end_write(void) {}
 
-int32_t inbe_oqs_random_bytes(uint8_t *output, uint64_t length)
+void OQS_randombytes(uint8_t *output, size_t length)
 {
     assert(length == 32);
     memset(output, 0x42, length);
-    return 1;
 }
 
-void OQS_MEM_cleanse(void *output, uint64_t length)
+void OQS_MEM_cleanse(void *output, size_t length)
 {
     volatile uint8_t *bytes = output;
     while (length > 0) {

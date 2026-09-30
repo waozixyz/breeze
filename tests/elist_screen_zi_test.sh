@@ -8,13 +8,13 @@ mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kss/src" --module-path "$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     "$root/src/screens/elist_screen.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kss/src" --module-path "$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/src/screens/elist_screen.zi"

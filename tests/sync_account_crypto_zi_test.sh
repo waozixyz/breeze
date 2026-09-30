@@ -9,6 +9,7 @@ mkdir -p "$work/generated"
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/oqs/src" \
     -o "$work/generated" \
     "$root/src/storage/sync_crypto.zi" \
     "$root/src/storage/sync_account_crypto.zi" \
@@ -39,6 +40,7 @@ mkdir -p "$work/generated"
     "$work/generated/storage/sync_crypto_chacha.c" \
     "$work/generated/storage/sync_account_encrypted.c" \
     "$work/generated/byte_text_linux.c" \
+    "$work/generated/oqs.c" \
     "$work/generated/text_buffers.c" \
     "$liboqs" -lm -lpthread -o "$work/test"
 

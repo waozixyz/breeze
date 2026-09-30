@@ -27,6 +27,7 @@ for name in args.define:
     command.extend(["--define", name])
 for directory in (
     root / "src", kryon / "src/ui", kryon / "src/backend", root / "build/packages/kss/src",
+    root / "build/packages/oqs/src",
     root / "build/packages/game2d/src", root / "build/packages/ziran/std", root / "build/packages/daochi-client",
 ):
     command.extend(["--module-path", str(directory)])

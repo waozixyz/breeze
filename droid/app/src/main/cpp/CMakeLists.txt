@@ -78,7 +78,7 @@ set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
 file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
 file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
-    "${REPO_ROOT}/build/packages/kss/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
+    "${REPO_ROOT}/build/packages/kss/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD)
 set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD")

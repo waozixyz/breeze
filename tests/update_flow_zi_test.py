@@ -80,6 +80,7 @@ def build_probe(work, compiler, env):
         "--module-path", "build/packages/kss/src",
         "--module-path", "kryon=build/packages/kryon/src/ui",
         "--module-path", "build/packages/ziran/std",
+        "--module-path", "build/packages/oqs/src",
         "--module-path", "build/packages/daochi-client",
         "-o", str(output), "tests/update_flow_probe.zi",
     ], cwd=ROOT, check=True, env=env)

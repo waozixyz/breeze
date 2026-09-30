@@ -5,11 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
-int32_t inbe_oqs_ml_dsa_44_sign(uint8_t *signature,
-                                 uint64_t *signature_length,
-                                 uint8_t *message,
-                                 uint64_t message_length,
-                                 uint8_t *private_key)
+/* liboqs stands in for the signer: it checks the exact bytes each Daochi
+ * message signs and returns a recognizable signature. */
+int32_t OQS_SIG_ml_dsa_44_sign(uint8_t *signature, size_t *signature_length,
+                               const uint8_t *message, size_t message_length,
+                               const uint8_t *private_key)
 {
     const char login[] = "daochi-sync-v1\nPOST\n/api/v1/sync/login\n";
     const char registration[] = "daochi-device-registration-v1\n";
@@ -44,15 +44,34 @@ int32_t inbe_oqs_ml_dsa_44_sign(uint8_t *signature,
     return 0;
 }
 
-int32_t inbe_oqs_random_bytes(uint8_t *output, uint64_t length)
+void OQS_randombytes(uint8_t *output, size_t length)
 {
     static uint8_t next = 1;
     assert(length == 32);
     memset(output, next++, length);
-    return 1;
 }
 
-void OQS_MEM_cleanse(void *output, uint64_t length)
+int32_t OQS_SIG_ml_dsa_44_keypair(uint8_t *public_key, uint8_t *secret_key)
+{
+    (void)public_key;
+    (void)secret_key;
+    return -1;
+}
+
+int32_t OQS_SIG_ml_dsa_44_verify(const uint8_t *message, size_t message_length,
+                                 const uint8_t *signature,
+                                 size_t signature_length,
+                                 const uint8_t *public_key)
+{
+    (void)message;
+    (void)message_length;
+    (void)signature;
+    (void)signature_length;
+    (void)public_key;
+    return -1;
+}
+
+void OQS_MEM_cleanse(void *output, size_t length)
 {
     memset(output, 0, length);
 }
