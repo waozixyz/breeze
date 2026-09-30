@@ -103,5 +103,8 @@ main(void)
     assert(strcmp(saved_key, "language") == 0);
     assert(strcmp(saved_text, "zh") == 0);
     assert(int_reads == 1);
+    assert(TemporaryAnswer() == 42);
+    assert(int_writes == 1 && saved_value == 7);
+    assert(text_writes == 1 && strcmp(saved_text, "zh") == 0);
     return 0;
 }
