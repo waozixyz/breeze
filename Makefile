@@ -200,34 +200,15 @@ WIN64_CMAKE_SYSTEM_PROCESSOR ?= x86_64
 WIN64_CC_PATH := $(shell command -v $(WIN64_CC) 2>/dev/null || printf '%s' $(WIN64_CC))
 WIN64_AR_PATH := $(shell command -v $(WIN64_AR) 2>/dev/null || printf '%s' $(WIN64_AR))
 WIN64_RANLIB_PATH := $(shell command -v $(WIN64_RANLIB) 2>/dev/null || printf '%s' $(WIN64_RANLIB))
-WIN32_ARCH := i686
-WIN32_CC ?= i686-w64-mingw32-gcc
-WIN32_AR ?= i686-w64-mingw32-ar
-WIN32_RANLIB ?= i686-w64-mingw32-ranlib
-WIN32_STRIP ?= i686-w64-mingw32-strip
-WIN32_WINDRES ?= i686-w64-mingw32-windres
-WIN32_CMAKE_SYSTEM_PROCESSOR ?= x86
-WIN32_CC_PATH := $(shell command -v $(WIN32_CC) 2>/dev/null || printf '%s' $(WIN32_CC))
-WIN32_AR_PATH := $(shell command -v $(WIN32_AR) 2>/dev/null || printf '%s' $(WIN32_AR))
-WIN32_RANLIB_PATH := $(shell command -v $(WIN32_RANLIB) 2>/dev/null || printf '%s' $(WIN32_RANLIB))
 WIN64_RAYLIB_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/raylib
 WIN64_RAYLIB_A := $(WIN64_RAYLIB_BUILD_DIR)/libraylib.a
-WIN32_RAYLIB_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN32_ARCH)/raylib
-WIN32_RAYLIB_A := $(WIN32_RAYLIB_BUILD_DIR)/libraylib.a
 WIN64_CURL_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/curl
 WIN64_CURL_INCLUDE_DIR := $(WIN64_CURL_BUILD_DIR)/include
 WIN64_CURL_A := $(WIN64_CURL_BUILD_DIR)/lib/libcurl.a
 WIN64_LIBOQS_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/liboqs
 WIN64_LIBOQS_A := $(WIN64_LIBOQS_BUILD_DIR)/lib/liboqs.a
 WIN64_LIBOQS_INCLUDE := -I$(WIN64_LIBOQS_BUILD_DIR)/include
-WIN32_CURL_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN32_ARCH)/curl
-WIN32_CURL_INCLUDE_DIR := $(WIN32_CURL_BUILD_DIR)/include
-WIN32_CURL_A := $(WIN32_CURL_BUILD_DIR)/lib/libcurl.a
-WIN32_LIBOQS_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN32_ARCH)/liboqs
-WIN32_LIBOQS_A := $(WIN32_LIBOQS_BUILD_DIR)/lib/liboqs.a
-WIN32_LIBOQS_INCLUDE := -I$(WIN32_LIBOQS_BUILD_DIR)/include
 WIN64_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN64_ARCH)/$(APP_NAME).res
-WIN32_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN32_ARCH)/$(APP_NAME).res
 RAYLIB_SOURCES := $(if $(wildcard $(RAYLIB_DIR)),$(shell find $(RAYLIB_DIR) -type f \( -name '*.c' -o -name '*.h' \)))
 
 KRYON_ICON_DIR := icons
@@ -492,19 +473,11 @@ WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -Oz -s
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
 LDFLAGS := -Wl,--gc-sections -s
 WINDOWS_LDFLAGS := -Wl,--gc-sections -static -static-libgcc -mwindows
-# GNU ld's i686 stdcall fixups synthesize an undecorated glReadPixels alias,
-# but its decorated import can otherwise be discarded before fixup resolution.
-WIN32_WINDOWS_LDFLAGS := -Wl,--undefined=_glReadPixels@28 -static -static-libgcc -mwindows
-WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lm -latomic
+WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lz -lm -latomic
 ifneq ($(strip $(MCFGTHREADS)),)
 WIN64_THREAD_LDFLAGS := -L$(MCFGTHREADS)/lib
 else
 WIN64_THREAD_LDFLAGS :=
-endif
-ifneq ($(strip $(WIN32_MCFGTHREADS)),)
-WIN32_THREAD_LDFLAGS := -L$(WIN32_MCFGTHREADS)/lib
-else
-WIN32_THREAD_LDFLAGS :=
 endif
 
 BINARY_NAME := $(APP_NAME)-$(NATIVE_PLATFORM)-$(ARCH)
@@ -519,8 +492,6 @@ NATIVE_COMPILE_FLAGS = $(KRYON_NATIVE_CFLAGS) $(APP_INCLUDE) $(KRYON_INCLUDE) \
 KRYON_HOST_TARGET := $(BUILD_DIR)/kryon/app_host.so
 WIN64_BINARY_NAME := $(APP_NAME)-windows-$(WIN64_ARCH).exe
 WIN64_TARGET := $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
-WIN32_BINARY_NAME := $(APP_NAME)-windows-$(WIN32_ARCH).exe
-WIN32_TARGET := $(WINDOWS_BIN_DIR)/$(WIN32_ARCH)/$(WIN32_BINARY_NAME)
 WINDOWS_DIST := $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows.zip
 APPIMAGE_NAME := $(APP_NAME)-linux-$(ARCH).AppImage
 APPIMAGE_TARGET := $(LINUX_DIST_DIR)/$(APPIMAGE_NAME)
@@ -567,7 +538,6 @@ $(1): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 	@test -f $$@
 endef
 $(eval $(call WINDOWS_RAYLIB_RULE,$(WIN64_RAYLIB_A),$(WIN64_RAYLIB_BUILD_DIR),$(WIN64_CC),$(WIN64_AR),$(WIN64_RANLIB)))
-$(eval $(call WINDOWS_RAYLIB_RULE,$(WIN32_RAYLIB_A),$(WIN32_RAYLIB_BUILD_DIR),$(WIN32_CC),$(WIN32_AR),$(WIN32_RANLIB)))
 KRYON_NATIVE_BACKEND_DEPS :=
 KRYON_NATIVE_BACKEND_LIBS :=
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
@@ -653,10 +623,10 @@ MEDITATION_AUDIO_TRACKS := \
 
 include mk/package-freebsd.mk
 
-.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 windows32 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
+.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
 .PHONY: zi-check
 .PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
-.NOTPARALLEL: all native test ci zi-check dist windows windows64 windows32 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
+.NOTPARALLEL: all native test ci zi-check dist windows windows64 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
 
 all: native
 
@@ -1031,7 +1001,7 @@ vendor-prebuilds-native: $(KRYON_NATIVE_BACKEND_DEPS) $(SQLITE_AMALGAMATION_C) $
 
 vendor-prebuilds-web: web-tools-check $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H) $(WEB_LIBOQS_A)
 
-vendor-prebuilds-windows: $(WIN64_RAYLIB_A) $(WIN32_RAYLIB_A) $(WIN64_CURL_A) $(WIN32_CURL_A) $(WIN64_LIBOQS_A) $(WIN32_LIBOQS_A) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
+vendor-prebuilds-windows: $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
 
 run: $(TARGET)
 	@root="$${XDG_DATA_HOME:-$$HOME/.local/share}/inbe-debug"; \
@@ -1893,7 +1863,7 @@ $(BREAK_RULES_GEN_DIR)/breaks/break_rules.c: src/breaks/break_rules.zi src/break
 $(sort $(BUILD_OBJ_DIR) $(NATIVE_OBJ_DIR) $(NATIVE_BIN_DIR) $(NATIVE_DIST_DIR) $(LINUX_BIN_DIR) $(LINUX_DIST_DIR) $(LINUX_APPIMAGE_BUILD_DIR) $(DEB_BUILD_DIR) $(DEB_DIST_DIR) $(RPM_BUILD_DIR) $(RPM_DIST_DIR) $(SNAP_BUILD_DIR) $(SNAP_DIST_DIR) $(FLATPAK_BUILD_DIR) $(FLATPAK_DIST_DIR) $(CLICK_BIN_DIR) $(CLICK_BUILD_DIR) $(CLICK_DIST_DIR) $(WINDOWS_DIST_DIR) $(ANDROID_BUILD_DIR) $(TEST_BIN_DIR) $(WEB_OBJ_DIR) $(WEB_DIST_DIR) $(CHROME_WEB_STORE_DIR) $(FIREFOX_ADDONS_DIR)):
 	mkdir -p $@
 
-$(WINDOWS_BIN_DIR)/$(WIN64_ARCH) $(WINDOWS_BIN_DIR)/$(WIN32_ARCH):
+$(WINDOWS_BIN_DIR)/$(WIN64_ARCH):
 	mkdir -p $@
 
 FORCE:
@@ -1990,56 +1960,6 @@ $(WIN64_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
 		$(KRYON_LIBOQS_CPU_FEATURE_CMAKE_FLAGS) \
 		-DOQS_MINIMAL_BUILD=$(KRYON_LIBOQS_MINIMAL_BUILD)
 	$(CMAKE) --build $(WIN64_LIBOQS_BUILD_DIR) --target oqs
-
-$(WIN32_CURL_A): $(CURL_DIR)/CMakeLists.txt
-	rm -rf $(WIN32_CURL_BUILD_DIR)
-	$(CMAKE) -S $(CURL_DIR) -B $(WIN32_CURL_BUILD_DIR) \
-		-DCMAKE_SYSTEM_NAME=Windows \
-		-DCMAKE_C_COMPILER=$(WIN32_CC_PATH) \
-		-DCMAKE_AR=$(WIN32_AR_PATH) \
-		-DCMAKE_RANLIB=$(WIN32_RANLIB_PATH) \
-		-DCMAKE_EXE_LINKER_FLAGS="$(WIN32_THREAD_LDFLAGS)" \
-		-DCMAKE_INSTALL_PREFIX=$(abspath $(WIN32_CURL_BUILD_DIR)) \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DBUILD_STATIC_LIBS=ON \
-		-DBUILD_CURL_EXE=OFF \
-		-DCURL_STATICLIB=ON \
-		-DCURL_USE_SCHANNEL=ON \
-		-DCURL_USE_OPENSSL=OFF \
-		-DCURL_USE_LIBPSL=OFF \
-		-DCURL_USE_LIBSSH2=OFF \
-		-DCURL_USE_GSSAPI=OFF \
-		-DUSE_NGHTTP2=OFF \
-		-DUSE_LIBIDN2=OFF \
-		-DCURL_DISABLE_LDAP=ON \
-		-DCURL_DISABLE_LDAPS=ON \
-		-DCURL_DISABLE_SMB=ON \
-		-DENABLE_CURL_MANUAL=OFF \
-		-DBUILD_EXAMPLES=OFF \
-		-DBUILD_LIBCURL_DOCS=OFF \
-		-DBUILD_MISC_DOCS=OFF \
-		-DBUILD_TESTING=OFF
-	$(CMAKE) --build $(WIN32_CURL_BUILD_DIR) --target install
-
-$(WIN32_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
-	rm -rf $(WIN32_LIBOQS_BUILD_DIR)
-	$(CMAKE) -S $(LIBOQS_DIR) -B $(WIN32_LIBOQS_BUILD_DIR) \
-		-DCMAKE_SYSTEM_NAME=Windows \
-		-DCMAKE_SYSTEM_PROCESSOR=$(WIN32_CMAKE_SYSTEM_PROCESSOR) \
-		-DCMAKE_C_COMPILER=$(WIN32_CC_PATH) \
-		-DCMAKE_AR=$(WIN32_AR_PATH) \
-		-DCMAKE_RANLIB=$(WIN32_RANLIB_PATH) \
-		-DCMAKE_EXE_LINKER_FLAGS="$(WIN32_THREAD_LDFLAGS)" \
-		-DCMAKE_BUILD_TYPE=$(KRYON_LIBOQS_BUILD_TYPE) \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DOQS_BUILD_ONLY_LIB=ON \
-		-DOQS_USE_OPENSSL=OFF \
-		-DOQS_DIST_BUILD=OFF \
-		-DOQS_OPT_TARGET=generic \
-		$(KRYON_LIBOQS_CPU_FEATURE_CMAKE_FLAGS) \
-		-DOQS_MINIMAL_BUILD=$(KRYON_LIBOQS_MINIMAL_BUILD)
-	$(CMAKE) --build $(WIN32_LIBOQS_BUILD_DIR) --target oqs
 
 $(TARGET): Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
 $(TARGET): | zi-check
@@ -2166,10 +2086,6 @@ $(WIN64_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
 	mkdir -p $(dir $@)
 	$(WIN64_WINDRES) -Iwindows -O coff $< $@
 
-$(WIN32_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
-	mkdir -p $(dir $@)
-	$(WIN32_WINDRES) -Iwindows -O coff $< $@
-
 $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
 	$(WIN64_CC) $(WINDOWS_CFLAGS) \
 		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
@@ -2190,27 +2106,6 @@ $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQ
 		$(WIN64_THREAD_LDFLAGS) \
 		$(WINDOWS_LDFLAGS)
 	$(WIN64_STRIP) $@
-
-$(WIN32_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN32_RAYLIB_A) $(WIN32_CURL_A) $(WIN32_LIBOQS_A) $(WIN32_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN32_ARCH)
-	$(WIN32_CC) $(WINDOWS_CFLAGS) \
-		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
-		$(KRYON_INCLUDE) \
-		$(SQLITE_INCLUDE) \
-		$(WIN32_LIBOQS_INCLUDE) \
-		-I$(WIN32_CURL_INCLUDE_DIR) \
-		-DHAS_LIBOQS=1 \
-		-DPLATFORM_DESKTOP \
-		-DCURL_STATICLIB \
-		-o $@ \
-		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) \
-		$(SQLITE_SRC) \
-		$(WIN32_RAYLIB_A) \
-		$(WIN32_CURL_A) \
-		$(WIN32_LIBOQS_A) \
-		$(WIN32_RESOURCE) $(WINDOWS_LDLIBS) \
-		$(WIN32_THREAD_LDFLAGS) \
-		$(WIN32_WINDOWS_LDFLAGS)
-	$(WIN32_STRIP) $@
 
 $(APPIMAGE_TARGET): $(TARGET) $(LINUX_APPIMAGE_APPRUN) $(LINUX_APPIMAGE_DESKTOP) $(LINUX_APPIMAGE_ICON) $(LINUX_APPIMAGE_APPDATA) | $(LINUX_DIST_DIR) $(LINUX_APPIMAGE_BUILD_DIR)
 	@test -n "$(strip $(APPIMAGE_INTERPRETER))" || { \
@@ -2693,17 +2588,15 @@ windows-runtime-assets-check:
 
 windows64: windows-runtime-assets-check $(WIN64_TARGET)
 
-windows32: windows-runtime-assets-check $(WIN32_TARGET)
-
+# Windows ships for x86_64 only. 32-bit Windows needs stdcall Win32 calls,
+# which Ziran's C output does not emit.
 windows:
 	$(MAKE) windows64
-	$(MAKE) windows32
 	mkdir -p $(WINDOWS_DIST_DIR)
 	rm -f $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows-*.zip
 	rm -f $(WINDOWS_DIST)
 	cd $(WINDOWS_BIN_DIR) && zip -9 -j $(abspath $(WINDOWS_DIST)) \
-		$(WIN64_ARCH)/$(WIN64_BINARY_NAME) \
-		$(WIN32_ARCH)/$(WIN32_BINARY_NAME)
+		$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
 
 WINDOWS_SETUP := $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows-setup-$(APP_VERSION).exe
 WINDOWS_SETUP_SCRIPT := packaging/windows/$(APP_NAME)-setup.nsi
@@ -2718,7 +2611,6 @@ windows-setup: windows windows-setup-check
 	rm -f $(WINDOWS_SETUP)
 	makensis -DVERSION=$(APP_VERSION) \
 		-DWIN64_EXE=$(abspath $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)) \
-		-DWIN32_EXE=$(abspath $(WINDOWS_BIN_DIR)/$(WIN32_ARCH)/$(WIN32_BINARY_NAME)) \
 		-DOUT=$(abspath $(WINDOWS_SETUP)) $(WINDOWS_SETUP_SCRIPT)
 	test -f $(WINDOWS_SETUP)
 
@@ -2902,4 +2794,4 @@ $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) 
 android-release android-bundle android-copy-release-apks android-copy-bundle windows-setup site: version-check
 
 # Actual artifacts are gated too, including direct and incremental builds.
-$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WIN32_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
+$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws

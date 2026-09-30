@@ -1,9 +1,9 @@
 ; inbe-setup.nsi — Inner Breeze Windows installer.
 ;
 ; Built by `make windows-setup` (see Makefile), which passes:
-;   -DVERSION=<x.y.z> -DWIN64_EXE=<path> [-DWIN32_EXE=<path>] -DOUT=<path>
-; The 32-bit executable is optional; CI always passes both. /S silent
-; installs work (winget relies on them).
+;   -DVERSION=<x.y.z> -DWIN64_EXE=<path> -DOUT=<path>
+; Inner Breeze runs on 64-bit Windows only. /S silent installs work (winget
+; relies on them).
 
 !ifndef VERSION
 !error "VERSION must be defined (-DVERSION=1.2.3)"
@@ -24,6 +24,7 @@ InstallDirRegKey HKLM "Software\Inner Breeze" "InstallDir"
 RequestExecutionLevel admin
 
 !include "MUI2.nsh"
+!include "x64.nsh"
 
 !define ARP "Software\Microsoft\Windows\CurrentVersion\Uninstall\Inner Breeze"
 
@@ -33,14 +34,17 @@ RequestExecutionLevel admin
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+Function .onInit
+    ${IfNot} ${RunningX64}
+        MessageBox MB_OK|MB_ICONSTOP "Inner Breeze requires 64-bit Windows." /SD IDOK
+        Abort
+    ${EndIf}
+FunctionEnd
+
 Section "Inner Breeze"
     SetOutPath "$INSTDIR"
     File "${WIN64_EXE}"
-!ifdef WIN32_EXE
-    File "${WIN32_EXE}"
-!endif
 
-    ; the shortcut launches the arch-matching executable
     Var /GLOBAL ExeName
     StrCpy $ExeName "inbe-windows-x86_64.exe"
 
@@ -60,9 +64,8 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\inbe-windows-x86_64.exe"
-!ifdef WIN32_EXE
+    ; Installs from before 64-bit only releases also carried this file.
     Delete "$INSTDIR\inbe-windows-i686.exe"
-!endif
     Delete "$INSTDIR\uninstall.exe"
     Delete "$SMPROGRAMS\Inner Breeze\Inner Breeze.lnk"
     RMDir "$SMPROGRAMS\Inner Breeze"
