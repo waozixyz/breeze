@@ -16,13 +16,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
     subprocess.run([
         str(COMPILER), "--no-main", "--root", str(ROOT / "src"),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
-        "--module-path", str(ROOT / "build/packages/oqs/src"),
+        "--module-path", f"oqs={ROOT / 'build/packages/oqs/src'}",
         "--module-path", str(ROOT / "build/packages/daochi-client"),
         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),
     ], check=True)
     names = {"device_key_store.c", "device_key.c", "sync_crypto.c",
-             "sync_crypto_random.c", "byte_text_linux.c", "oqs.c"}
+             "sync_crypto_random.c", "byte_text_linux.c", "Oqs.c"}
     sources = sorted(str(path) for path in generated.rglob("*.c")
                      if path.name in names)
     monocypher = ROOT / "build/packages/monocypher/src"

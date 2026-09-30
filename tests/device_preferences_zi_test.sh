@@ -9,7 +9,7 @@ mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/device_preferences_link_behavior.zi"
 mv "$work/c/device_host.c" "$work/c/device_host.c.skip"
 mkdir -p "$work/c/app"

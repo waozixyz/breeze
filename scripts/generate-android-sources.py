@@ -27,12 +27,12 @@ for name in args.define:
     command.extend(["--define", name])
 for directory in (
     root / "src", kryon / "src/ui", kryon / "src/backend", root / "build/packages/kss/src",
-    root / "build/packages/oqs/src",
     root / "build/packages/game2d/src", root / "build/packages/ziran/std", root / "build/packages/daochi-client",
 ):
     command.extend(["--module-path", str(directory)])
-# KSS imports Kryon as kryon/NAME.
+# KSS imports Kryon as kryon/NAME, and account code imports oqs/Oqs.
 command.extend(["--module-path", f"kryon={kryon / 'src/ui'}"])
+command.extend(["--module-path", f"oqs={root / 'build/packages/oqs/src'}"])
 command.extend(["-o", str(args.output)])
 command.extend(str(path.relative_to(root)) for path in sources)
 completed = subprocess.run(command, cwd=root)
