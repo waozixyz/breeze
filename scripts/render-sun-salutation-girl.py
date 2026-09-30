@@ -5,9 +5,10 @@ Every visible drawing is one of the painted parts in
 design/sun-salutation/girl-parts/ (made with Codex's built-in image
 generation; prompts in prompts.json). The pose timeline, bone lengths,
 camera and part key points live in docs/sun-salutation-girl.json. Arms, legs
-and the long hair are warped along their bones; head, torso, hands and feet
-move rigidly. Rendering is offscreen with Cairo and deterministic: the same
-inputs give the same frames, and a single still matches its video frame.
+and the long hair are warped along their bones, each leg's seat along the
+pelvis; the top flares over the leggings; head, hands and feet move rigidly.
+Rendering is offscreen with Cairo and deterministic: the same inputs give the
+same frames, and a single still matches its video frame.
 """
 
 import argparse
@@ -447,20 +448,56 @@ def warp_strip(ctx, picture, rows):
     ctx.restore()
 
 
-def bent_point(start, middle, end, first, band, distance):
-    """Point and normal at `distance` along start→middle→end, joint rounded."""
-    forward = normalize(sub(middle, start))
-    onward = normalize(sub(end, middle))
-    if distance <= first - band:
-        center, tangent = add(start, mul(forward, distance)), forward
-    elif distance >= first + band:
-        center, tangent = add(middle, mul(onward, distance - first)), onward
-    else:
-        amount = (distance - first + band) / (2 * band)
-        a, b = sub(middle, mul(forward, band)), add(middle, mul(onward, band))
-        center = add(add(mul(a, (1 - amount) ** 2), mul(middle, 2 * amount * (1 - amount))), mul(b, amount ** 2))
-        tangent = normalize(add(mul(sub(middle, a), 1 - amount), mul(sub(b, middle), amount)))
-    return center, (tangent[1], -tangent[0])
+def warp_mesh(ctx, picture, columns, rows, target):
+    """Map a picture onto the target of each point of a columns x rows grid."""
+    xs = np.linspace(0, picture.width, columns + 1)
+    ys = np.linspace(0, picture.height, rows + 1)
+    grid = [[((float(x), float(y)), target((x, y))) for x in xs] for y in ys]
+    ctx.save()
+    ctx.set_antialias(cairo.ANTIALIAS_NONE)
+    for row in range(rows):
+        for column in range(columns):
+            corners = (grid[row][column], grid[row][column + 1],
+                       grid[row + 1][column + 1], grid[row + 1][column])
+            for indices in ((0, 1, 2), (0, 2, 3)):
+                affine_triangle(ctx, picture.surface, [corners[i][0] for i in indices],
+                                [corners[i][1] for i in indices])
+    ctx.restore()
+
+
+def bent_point(points, lengths, bands, distance, turns=None):
+    """Point and normal at `distance` along a chain of bones from its first
+    point, each joint rounded over its band. `lengths` are the bone lengths
+    but the last; the chain runs straight on past both ends.
+
+    Across a band the normal turns steadily from one bone to the next, so a
+    joint folded all the way back still fans out round. `turns` gives, per
+    joint, the middle of the range of its turn in radians (a hip folds
+    forward up to 180 degrees); the turn is taken within half a circle of it.
+    """
+    start = 0.0
+    for index in range(len(points) - 1):
+        direction = normalize(sub(points[index + 1], points[index]))
+        if index == len(lengths):
+            break
+        joint_at = start + lengths[index]
+        band = bands[index]
+        if distance <= joint_at - band:
+            break
+        if distance < joint_at + band:
+            onward = normalize(sub(points[index + 2], points[index + 1]))
+            joint = points[index + 1]
+            amount = (distance - joint_at + band) / (2 * band)
+            a, b = sub(joint, mul(direction, band)), add(joint, mul(onward, band))
+            center = add(add(mul(a, (1 - amount) ** 2), mul(joint, 2 * amount * (1 - amount))), mul(b, amount ** 2))
+            middle = turns[index] if turns else 0.0
+            heading = math.atan2(direction[1], direction[0])
+            turn = wrap(math.atan2(onward[1], onward[0]) - heading - middle) + middle
+            tangent = unit(heading + turn * amount)
+            return center, (tangent[1], -tangent[0])
+        start = joint_at
+    center = add(points[index], mul(direction, distance - start))
+    return center, (direction[1], -direction[0])
 
 
 class Limb:
@@ -483,13 +520,33 @@ class Limb:
             centers.append((xs.min() + xs.max()) / 2 if len(xs) else full.width / 2)
         self.centers = np.convolve(np.pad(centers, 6, mode="edge"), np.ones(13) / 13, mode="valid")
 
-    def paint(self, ctx, start, middle, end):
+    def paint(self, ctx, start, middle, end, above=None):
+        """Bend the painting over start→middle→end.
+
+        With `above`, a point up the body from the root joint, the painting
+        above the root joint lies along that line and bends into the first
+        bone over the spec's "rootBand": a leg's seat stays on the pelvis
+        while the thigh swings.
+        """
         picture = self.picture
         first, second = self.lengths
+        points, lengths, bands, turns, offset = [start, middle, end], [first], [self.spec["band"]], [0.0], 0.0
+        if above is not None:
+            offset = math.dist(above, start)
+            points, lengths = [above, *points], [offset, first]
+            bands, turns = [self.spec["rootBand"], *bands], [math.radians(self.spec["rootTurn"]), *turns]
+        # Extra rows across each rounded joint keep a sharp bend smooth.
+        scale = self.length / (first + second)
+        ys = list(np.linspace(0, picture.height - 1, 40))
+        joint_at = 0.0
+        for length, band in zip(lengths, bands):
+            joint_at += length
+            for distance in np.linspace(joint_at - band, joint_at + band, 17):
+                ys.append(self.root[1] + (distance - offset) * scale)
         rows = []
-        for y in np.linspace(0, picture.height - 1, 40):
-            distance = (y - self.root[1]) / self.length * (first + second)
-            center, normal = bent_point(start, middle, end, first, self.spec["band"], distance)
+        for y in sorted(set(min(picture.height - 1.0, max(0.0, float(y))) for y in ys)):
+            distance = offset + (y - self.root[1]) / scale
+            center, normal = bent_point(points, lengths, bands, distance, turns)
             rows.append((float(y), float(self.centers[int(y)]), center, normal,
                          picture.unit * self.spec["width"]))
         warp_strip(ctx, picture, rows)
@@ -555,6 +612,7 @@ class Torso:
         shoulder = self.picture.point(spec["shoulder"])
         self.axis_angle = math.atan2(shoulder[1] - self.hip[1], shoulder[0] - self.hip[0])
         self.neck = self.to_body(self.picture.point(spec["neck"]))
+        self.hem = [self.to_body(self.picture.point(point)) for point in spec["hem"]]
         self.back = self.back_contour()
 
     def to_body(self, point):
@@ -575,25 +633,31 @@ class Torso:
             bins[key] = min(bins.get(key, 0), ahead)
         return sorted((key * 4, depth) for key, depth in bins.items())
 
-    def paint(self, ctx, p, length):
-        ctx.save()
-        ctx.translate(*p.hip)
-        ctx.rotate(p.spine)
-        # The loose top slides toward her chest when her hips are above her
-        # shoulders, showing the waistband of her leggings.
-        inverted = smoothstep(*self.spec["slideFrom"], math.sin(p.spine))
-        ctx.translate(length, 0)
-        ctx.scale(1 - self.spec["slide"] * inverted, 1)
-        ctx.translate(-length, 0)
-        # Squeeze front-to-back around the spine axis.
-        ctx.scale(1, self.spec["width"])
-        ctx.rotate(-self.axis_angle)
-        ctx.scale(self.picture.unit, self.picture.unit)
-        ctx.translate(-self.hip[0], -self.hip[1])
-        ctx.set_source_surface(self.picture.surface)
-        ctx.get_source().set_filter(cairo.FILTER_GOOD)
-        ctx.paint()
-        ctx.restore()
+    def place(self, p, point):
+        """Where a (distance up the spine, forward offset) point of the top
+        goes in this pose: its lower part flares out over the leggings, more
+        so at the back when it hangs away from her upside down."""
+        up, ahead = point
+        flare = self.spec["flare"]
+        amount = smoothstep(*flare["from"], up)
+        if ahead < 0:
+            hang = smoothstep(*flare["hangFrom"], math.sin(p.spine))
+            return up, ahead * (1 + (flare["back"] + flare["hang"] * hang) * amount)
+        return up, ahead * (1 + flare["front"] * amount)
+
+    def hem_line(self, p):
+        """The hem's back and front corners, (up, ahead), as the top flares."""
+        return [self.place(p, point) for point in self.hem]
+
+    def paint(self, ctx, p):
+        columns, rows = self.spec["mesh"]
+        forward = (-math.sin(p.spine), math.cos(p.spine))
+
+        def target(point):
+            up, ahead = self.place(p, self.to_body(point))
+            return add(add(p.hip, mul(unit(p.spine), up)), mul(forward, ahead))
+
+        warp_mesh(ctx, self.picture, columns, rows, target)
 
 
 # The girl ----------------------------------------------------------------
@@ -614,7 +678,6 @@ class Girl:
         self.arm = Limb(parts["arm"], (bones["upperArm"], bones["forearm"]), detail)
         self.torso = Torso(parts["torso"], bones["torso"], detail)
         self.head = Rigid(parts["head"], detail)
-        self.hips = Rigid(parts["hips"], detail)
         self.hand_upright = Rigid(parts["handUpright"], detail)
         self.hand_flat = Rigid(parts["handFlat"], detail)
         self.foot_flat = Rigid(parts["footFlat"], detail)
@@ -687,7 +750,9 @@ class Girl:
             self.foot_flat.paint(self.ctx, ankle, angle, 1 - p.instep - tucked)
             self.foot_tucked.paint(self.ctx, ankle, 0, tucked)
             self.foot_instep.paint(self.ctx, ankle, 0, p.instep)
-            self.leg.paint(self.ctx, hip, knee, ankle)
+            # The seat at the top of the leg painting stays on the pelvis.
+            above = add(p.shoulder, sub(hip, p.hip))
+            self.leg.paint(self.ctx, hip, knee, ankle, above)
 
         self.tinted(draw, far)
 
@@ -790,6 +855,28 @@ class Girl:
         ctx.fill()
         ctx.restore()
 
+    def covered_by_top(self, p):
+        """Clip away the leggings above the hem behind her back.
+
+        The top is worn over the leggings: above its hem only the top shows,
+        so the seat can never stick out past its back. In front the top
+        already covers the hips, and the thighs of a fold must stay visible.
+        """
+        (back_up, back_ahead), (front_up, front_ahead) = self.torso.hem_line(p)
+        slope = (front_up - back_up) / (front_ahead - back_ahead)
+        reach = self.rig["parts"]["torso"]["cover"]
+        corners = [(back_up + (-reach - back_ahead) * slope, -reach),
+                   (back_up - back_ahead * slope, 0), (reach, 0), (reach, -reach)]
+        ctx = self.ctx
+        ctx.rectangle(-10000, -10000, 20000, 20000)
+        ctx.move_to(*self.body(p, corners[0]))
+        for corner in corners[1:]:
+            ctx.line_to(*self.body(p, corner))
+        ctx.close_path()
+        ctx.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        ctx.clip()
+        ctx.set_fill_rule(cairo.FILL_RULE_WINDING)
+
     def draw_head(self, p, layer=None):
         self.head.paint(self.ctx, self.body(p, self.torso.neck), self.head_turn(p), layer=layer)
 
@@ -808,20 +895,23 @@ class Girl:
         ctx.translate(-camera["rigX"], -self.ground)
         self.ground_shadow(p)
         # Back to front as seen from her near side: far limbs, the long hair
-        # and the back hair behind her head, neck and back, hips, near leg,
-        # torso (the shirt covers the leggings), face and neck, the bangs and
-        # side hair in front of the face, near arm.
+        # and the back hair behind her head, neck and back, near leg, torso
+        # (the shirt covers the leggings), face and neck, the bangs and side
+        # hair in front of the face, near arm.
+        ctx.save()
+        self.covered_by_top(p)
         self.draw_leg(p, far=True)
+        ctx.restore()
         self.draw_arm(p, far=True)
         # The long lock hangs from under the back hair, which covers its top.
         self.draw_hair()
         if "back" in self.head.layers:
             self.draw_head(p, "back")
-        # The pelvis in leggings moves with the torso; the shirt covers it
-        # unless she is upside down.
-        self.hips.paint(ctx, p.hip, p.spine + math.pi / 2)
+        ctx.save()
+        self.covered_by_top(p)
         self.draw_leg(p, far=False)
-        self.torso.paint(ctx, p, self.rig["bones"]["torso"])
+        ctx.restore()
+        self.torso.paint(ctx, p)
         self.draw_head(p)
         if "front" in self.head.layers:
             self.draw_head(p, "front")

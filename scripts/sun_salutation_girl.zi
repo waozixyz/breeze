@@ -75,6 +75,8 @@ ClosePath :: (context: *void) #foreign cairo "cairo_close_path";
 Clip :: (context: *void) #foreign cairo "cairo_clip";
 Arc :: (context: *void, x: float64, y: float64, radius: float64, start: float64, end: float64) #foreign cairo "cairo_arc";
 Fill :: (context: *void) #foreign cairo "cairo_fill";
+Rectangle :: (context: *void, x: float64, y: float64, width: float64, height: float64) #foreign cairo "cairo_rectangle";
+SetFillRule :: (context: *void, rule: s32) #foreign cairo "cairo_set_fill_rule";
 
 FORMAT_ARGB32 :: 0;
 FILTER_GOOD :: 1;
@@ -82,6 +84,8 @@ FILTER_BILINEAR :: 4;
 OPERATOR_ATOP :: 5;
 OPERATOR_DEST_IN :: 8;
 ANTIALIAS_NONE :: 1;
+FILL_RULE_WINDING :: 0;
+FILL_RULE_EVEN_ODD :: 1;
 
 // Geometry ----------------------------------------------------------------
 
@@ -1025,32 +1029,105 @@ WarpStrip :: (context: *void, picture: Picture, rows: []StripRow) {
     Restore(context)
 }
 
+// Map a picture onto `targets`, the places of a grid of (columns + 1) by
+// (rows + 1) points spread evenly over it, row by row.
+WarpMesh :: (context: *void, picture: Picture, columns: s32, rows: s32, targets: []V2) {
+    Save(context)
+    SetAntialias(context, ANTIALIAS_NONE)
+    cell_width := cast(float64) picture.width / cast(float64) columns
+    cell_height := cast(float64) picture.height / cast(float64) rows
+    row: s32 = 0
+    while row < rows {
+        column: s32 = 0
+        while column < columns {
+            at := row * (columns + 1) + column
+            source: [4]V2
+            target: [4]V2
+            source[0] = Vec2(cast(float64) column * cell_width, cast(float64) row * cell_height)
+            source[1] = Vec2(cast(float64)(column + 1) * cell_width, cast(float64) row * cell_height)
+            source[2] = Vec2(cast(float64)(column + 1) * cell_width, cast(float64)(row + 1) * cell_height)
+            source[3] = Vec2(cast(float64) column * cell_width, cast(float64)(row + 1) * cell_height)
+            target[0] = targets[at]
+            target[1] = targets[at + 1]
+            target[2] = targets[at + columns + 2]
+            target[3] = targets[at + columns + 1]
+            one_source: [3]V2
+            one_target: [3]V2
+            one_source[0] = source[0]
+            one_source[1] = source[1]
+            one_source[2] = source[2]
+            one_target[0] = target[0]
+            one_target[1] = target[1]
+            one_target[2] = target[2]
+            AffineTriangle(context, picture.surface, one_source, one_target)
+            one_source[1] = source[2]
+            one_source[2] = source[3]
+            one_target[1] = target[2]
+            one_target[2] = target[3]
+            AffineTriangle(context, picture.surface, one_source, one_target)
+            column += 1
+        }
+        row += 1
+    }
+    Restore(context)
+}
+
 BentPoint :: struct {
     center: V2
     normal: V2
 }
 
-// Point and normal at `distance` along start, middle, end with the joint
-// rounded over `band` on either side.
-Bend :: (start: V2, middle: V2, end: V2, first: float64, band: float64, distance: float64) -> BentPoint {
-    forward := Normalize(Minus(middle, start))
-    onward := Normalize(Minus(end, middle))
+// A chain of bones: `count` points, the lengths of all bones but the last,
+// and per joint the band it is rounded over and the middle of the range of
+// its turn in radians (a hip folds forward up to 180 degrees).
+Chain :: struct {
+    points: [4]V2
+    count: s32
+    lengths: [2]float64
+    bands: [2]float64
+    turns: [2]float64
+}
+
+// Point and normal at `distance` along the chain from its first point. The
+// chain runs straight on past both ends. Across a band the normal turns
+// steadily from one bone to the next, taken within half a circle of the
+// joint's middle turn, so a joint folded all the way back still fans out
+// round.
+Bend :: (chain: *Chain, distance: float64) -> BentPoint {
     result: BentPoint
-    tangent := forward
-    if distance <= first - band {
-        result.center = Plus(start, Times(forward, distance))
-    } else if distance >= first + band {
-        result.center = Plus(middle, Times(onward, distance - first))
-        tangent = onward
-    } else {
-        amount := (distance - first + band) / (2.0 * band)
-        a := Minus(middle, Times(forward, band))
-        b := Plus(middle, Times(onward, band))
-        result.center = Plus(Plus(Times(a, (1.0 - amount) * (1.0 - amount)), Times(middle, 2.0 * amount * (1.0 - amount))),
-                             Times(b, amount * amount))
-        tangent = Normalize(Plus(Times(Minus(middle, a), 1.0 - amount), Times(Minus(b, middle), amount)))
+    start := 0.0
+    index: s32 = 0
+    direction := Normalize(Minus(chain.points[1], chain.points[0]))
+    while index < chain.count - 1 {
+        direction = Normalize(Minus(chain.points[index + 1], chain.points[index]))
+        if index == chain.count - 2 {
+            break
+        }
+        joint_at := start + chain.lengths[index]
+        band := chain.bands[index]
+        if distance <= joint_at - band {
+            break
+        }
+        if distance < joint_at + band {
+            onward := Normalize(Minus(chain.points[index + 2], chain.points[index + 1]))
+            joint := chain.points[index + 1]
+            amount := (distance - joint_at + band) / (2.0 * band)
+            a := Minus(joint, Times(direction, band))
+            b := Plus(joint, Times(onward, band))
+            result.center = Plus(Plus(Times(a, (1.0 - amount) * (1.0 - amount)), Times(joint, 2.0 * amount * (1.0 - amount))),
+                                 Times(b, amount * amount))
+            heading := AngleOf(direction)
+            middle := chain.turns[index]
+            turn := Wrap(AngleOf(onward) - heading - middle) + middle
+            tangent := UnitAt(heading + turn * amount)
+            result.normal = Vec2(tangent.y, -tangent.x)
+            return result
+        }
+        start = joint_at
+        index += 1
     }
-    result.normal = Vec2(tangent.y, -tangent.x)
+    result.center = Plus(chain.points[index], Times(direction, distance - start))
+    result.normal = Vec2(direction.y, -direction.x)
     return result
 }
 
@@ -1062,6 +1139,8 @@ Limb :: struct {
     second: float64
     width: float64
     band: float64
+    root_band: float64
+    root_turn: float64
     centers: [2048]float64
 }
 
@@ -1130,23 +1209,90 @@ LoadLimb :: (limb: *Limb, spec_at: s32, first: float64, second: float64) {
     limb.second = second
     limb.width = NumberField(spec_at, "width")
     limb.band = NumberField(spec_at, "band")
+    limb.root_band = OptionalNumber(spec_at, "rootBand", 0.0)
+    limb.root_turn = Radians(OptionalNumber(spec_at, "rootTurn", 0.0))
 }
 
-PaintLimb :: (context: *void, limb: *Limb, start: V2, middle: V2, end: V2) {
-    rows: [40]StripRow
-    index: s32 = 0
-    while index < 40 {
-        y := cast(float64)(limb.picture.height - 1) * cast(float64) index / 39.0
-        distance := (y - limb.root.y) / limb.length * (limb.first + limb.second)
-        bent := Bend(start, middle, end, limb.first, limb.band, distance)
-        rows[index].source_y = y
-        rows[index].center_x = limb.centers[cast(s32) y]
-        rows[index].center = bent.center
-        rows[index].normal = bent.normal
-        rows[index].scale = limb.picture.unit * limb.width
+// Bend the painting over start, middle, end. With `above`, a point up the
+// body from the root joint, the painting above the root joint lies along
+// that line and bends into the first bone over the limb's root band: a
+// leg's seat stays on the pelvis while the thigh swings.
+PaintLimb :: (context: *void, limb: *Limb, start: V2, middle: V2, end: V2, above: V2, has_above: bool) {
+    chain: Chain
+    chain.points[0] = start
+    chain.points[1] = middle
+    chain.points[2] = end
+    chain.count = 3
+    chain.lengths[0] = limb.first
+    chain.bands[0] = limb.band
+    chain.turns[0] = 0.0
+    offset := 0.0
+    if has_above {
+        offset = Distance(above, start)
+        chain.points[0] = above
+        chain.points[1] = start
+        chain.points[2] = middle
+        chain.points[3] = end
+        chain.count = 4
+        chain.lengths[0] = offset
+        chain.lengths[1] = limb.first
+        chain.bands[0] = limb.root_band
+        chain.bands[1] = limb.band
+        chain.turns[0] = limb.root_turn
+        chain.turns[1] = 0.0
+    }
+    // Extra rows across each rounded joint keep a sharp bend smooth.
+    scale := limb.length / (limb.first + limb.second)
+    bottom := cast(float64)(limb.picture.height - 1)
+    ys: [80]float64
+    count: s32 = 0
+    while count < 40 {
+        ys[count] = bottom * cast(float64) count / 39.0
+        count += 1
+    }
+    joint_at := 0.0
+    joint: s32 = 0
+    while joint < chain.count - 2 {
+        joint_at += chain.lengths[joint]
+        band := chain.bands[joint]
+        step: s32 = 0
+        while step < 17 {
+            distance := joint_at - band + 2.0 * band * cast(float64) step / 16.0
+            ys[count] = Least(bottom, Most(0.0, limb.root.y + (distance - offset) * scale))
+            count += 1
+            step += 1
+        }
+        joint += 1
+    }
+    // Sorted, each row once.
+    index: s32 = 1
+    while index < count {
+        value := ys[index]
+        at := index - 1
+        while at >= 0 && ys[at] > value {
+            ys[at + 1] = ys[at]
+            at -= 1
+        }
+        ys[at + 1] = value
         index += 1
     }
-    WarpStrip(context, limb.picture, rows[:])
+    rows: [80]StripRow
+    used: s32 = 0
+    index = 0
+    while index < count {
+        y := ys[index]
+        if used == 0 || y != rows[used - 1].source_y {
+            bent := Bend(*chain, offset + (y - limb.root.y) / scale)
+            rows[used].source_y = y
+            rows[used].center_x = limb.centers[cast(s32) y]
+            rows[used].center = bent.center
+            rows[used].normal = bent.normal
+            rows[used].scale = limb.picture.unit * limb.width
+            used += 1
+        }
+        index += 1
+    }
+    WarpStrip(context, limb.picture, rows[:used])
 }
 
 // Rigid parts ---------------------------------------------------------------
@@ -1266,8 +1412,15 @@ Torso :: struct {
     axis_angle: float64
     neck: V2
     width: float64
-    slide: float64
-    slide_from: V2
+    hem: [2]V2
+    cover: float64
+    flare_from: V2
+    flare_back: float64
+    flare_front: float64
+    flare_hang: float64
+    hang_from: V2
+    columns: s32
+    rows: s32
     back_heights: [128]float64
     back_depths: [128]float64
     back_count: s32
@@ -1329,33 +1482,58 @@ LoadTorso :: (torso: *Torso, spec_at: s32) {
     torso.picture = MakePicture(source, box, rig.torso / Distance(hip, shoulder))
     SurfaceDestroy(source)
     torso.width = NumberField(spec_at, "width")
-    torso.slide = NumberField(spec_at, "slide")
-    torso.slide_from = PointField(spec_at, "slideFrom")
     torso.hip = PicturePoint(torso.picture, hip_fraction)
     torso.axis_angle = AngleOf(Minus(PicturePoint(torso.picture, shoulder_fraction), torso.hip))
     torso.neck = ToBody(torso, PicturePoint(torso.picture, PointField(spec_at, "neck")))
+    hem := Field(spec_at, "hem")
+    torso.hem[0] = ToBody(torso, PicturePoint(torso.picture, PointAt(ElementAt(json, hem, 0))))
+    torso.hem[1] = ToBody(torso, PicturePoint(torso.picture, PointAt(ElementAt(json, hem, 1))))
+    torso.cover = NumberField(spec_at, "cover")
+    flare := Field(spec_at, "flare")
+    torso.flare_from = PointField(flare, "from")
+    torso.flare_back = NumberField(flare, "back")
+    torso.flare_front = NumberField(flare, "front")
+    torso.flare_hang = NumberField(flare, "hang")
+    torso.hang_from = PointField(flare, "hangFrom")
+    mesh := Field(spec_at, "mesh")
+    torso.columns = RoundWhole(Element(mesh, 0))
+    torso.rows = RoundWhole(Element(mesh, 1))
     MeasureBack(torso)
 }
 
+// Where a (distance up the spine, forward offset) point of the top goes in
+// this pose: its lower part flares out over the leggings, more so at the
+// back when it hangs away from her upside down.
+PlaceTop :: (torso: *Torso, p: Pose, point: V2) -> V2 {
+    amount := Smoothstep(torso.flare_from.x, torso.flare_from.y, point.x)
+    if point.y < 0.0 {
+        hang := Smoothstep(torso.hang_from.x, torso.hang_from.y, Sine(p.spine))
+        return Vec2(point.x, point.y * (1.0 + (torso.flare_back + torso.flare_hang * hang) * amount))
+    }
+    return Vec2(point.x, point.y * (1.0 + torso.flare_front * amount))
+}
+
+mesh_targets: [1024]V2;
+
 PaintTorso :: (context: *void, torso: *Torso, p: Pose) {
-    Save(context)
-    Translate(context, p.hip.x, p.hip.y)
-    Rotate(context, p.spine)
-    // The loose top slides toward her chest when her hips are above her
-    // shoulders, showing the waistband of her leggings.
-    inverted := Smoothstep(torso.slide_from.x, torso.slide_from.y, Sine(p.spine))
-    Translate(context, rig.torso, 0.0)
-    Scale(context, 1.0 - torso.slide * inverted, 1.0)
-    Translate(context, -rig.torso, 0.0)
-    // Squeeze front-to-back around the spine axis.
-    Scale(context, 1.0, torso.width)
-    Rotate(context, -torso.axis_angle)
-    Scale(context, torso.picture.unit, torso.picture.unit)
-    Translate(context, -torso.hip.x, -torso.hip.y)
-    SetSourceSurface(context, torso.picture.surface, 0.0, 0.0)
-    PatternSetFilter(GetSource(context), FILTER_GOOD)
-    Paint(context)
-    Restore(context)
+    columns := torso.columns
+    rows := torso.rows
+    if (columns + 1) * (rows + 1) > 1024 {
+        print("sun-salutation-girl.json: the torso mesh is too fine\n")
+        return
+    }
+    row: s32 = 0
+    while row <= rows {
+        column: s32 = 0
+        while column <= columns {
+            source := Vec2(cast(float64) torso.picture.width * cast(float64) column / cast(float64) columns,
+                           cast(float64) torso.picture.height * cast(float64) row / cast(float64) rows)
+            mesh_targets[row * (columns + 1) + column] = BodyPoint(p, PlaceTop(torso, p, ToBody(torso, source)))
+            column += 1
+        }
+        row += 1
+    }
+    WarpMesh(context, torso.picture, columns, rows, mesh_targets[:(columns + 1) * (rows + 1)])
 }
 
 // The long hair --------------------------------------------------------------
@@ -1520,7 +1698,6 @@ Girl :: struct {
     arm: Limb
     torso: Torso
     head: Rigid
-    hips: Rigid
     hand_upright: Rigid
     hand_flat: Rigid
     foot_flat: Rigid
@@ -1543,7 +1720,6 @@ LoadGirl :: (width: s32, height: s32) -> bool {
     LoadLimb(*girl.arm, Field(parts, "arm"), rig.upper_arm, rig.forearm)
     LoadTorso(*girl.torso, Field(parts, "torso"))
     LoadRigid(*girl.head, Field(parts, "head"))
-    LoadRigid(*girl.hips, Field(parts, "hips"))
     LoadRigid(*girl.hand_upright, Field(parts, "handUpright"))
     LoadRigid(*girl.hand_flat, Field(parts, "handFlat"))
     LoadRigid(*girl.foot_flat, Field(parts, "footFlat"))
@@ -1643,7 +1819,9 @@ DrawLeg :: (p: Pose, far: bool) {
     PaintRigid(context, *girl.foot_flat, 0, ends.end, angle, 1.0 - p.instep - tucked)
     PaintRigid(context, *girl.foot_tucked, 0, ends.end, 0.0, tucked)
     PaintRigid(context, *girl.foot_instep, 0, ends.end, 0.0, p.instep)
-    PaintLimb(context, *girl.leg, ends.root, ends.middle, ends.end)
+    // The seat at the top of the leg painting stays on the pelvis.
+    above := Plus(Shoulder(p), Minus(ends.root, p.hip))
+    PaintLimb(context, *girl.leg, ends.root, ends.middle, ends.end, above, true)
     EndTint(far)
 }
 
@@ -1660,7 +1838,7 @@ DrawArm :: (p: Pose, far: bool) {
         bottom := LocalPoint(*girl.hand_flat, Vec2(0.0, 1.0)).y
         PaintRigid(context, *girl.hand_flat, 0, Vec2(ends.end.x, rig.ground - bottom), 0.0, flat)
     }
-    PaintLimb(context, *girl.arm, ends.root, ends.middle, ends.end)
+    PaintLimb(context, *girl.arm, ends.root, ends.middle, ends.end, ends.root, false)
     EndTint(far)
 }
 
@@ -1782,6 +1960,32 @@ DrawShadow :: (p: Pose) {
     Restore(context)
 }
 
+// Clip away the leggings above the hem behind her back. The top is worn
+// over the leggings: above its hem only the top shows, so the seat can never
+// stick out past its back. In front the top already covers the hips, and
+// the thighs of a fold must stay visible.
+CoveredByTop :: (p: Pose) {
+    torso := *girl.torso
+    back := PlaceTop(torso, p, torso.hem[0])
+    front := PlaceTop(torso, p, torso.hem[1])
+    slope := (front.x - back.x) / (front.y - back.y)
+    reach := torso.cover
+    context := girl.context
+    Rectangle(context, -10000.0, -10000.0, 20000.0, 20000.0)
+    corner := BodyPoint(p, Vec2(back.x + (-reach - back.y) * slope, -reach))
+    MoveTo(context, corner.x, corner.y)
+    corner = BodyPoint(p, Vec2(back.x - back.y * slope, 0.0))
+    LineTo(context, corner.x, corner.y)
+    corner = BodyPoint(p, Vec2(reach, 0.0))
+    LineTo(context, corner.x, corner.y)
+    corner = BodyPoint(p, Vec2(reach, -reach))
+    LineTo(context, corner.x, corner.y)
+    ClosePath(context)
+    SetFillRule(context, FILL_RULE_EVEN_ODD)
+    Clip(context)
+    SetFillRule(context, FILL_RULE_WINDING)
+}
+
 DrawHead :: (p: Pose, layer: s32) {
     PaintRigid(girl.context, *girl.head, layer, BodyPoint(p, girl.torso.neck), HeadTurn(p), 1.0)
 }
@@ -1800,16 +2004,21 @@ DrawFrame :: (time: float64) {
     Translate(context, -rig.rig_x, -rig.ground)
     DrawShadow(p)
     // Back to front as seen from her near side: far limbs, the long hair and
-    // the back hair, hips, near leg, torso (the shirt covers the leggings),
-    // face and neck, the bangs and side hair, near arm.
+    // the back hair, near leg, torso (the shirt covers the leggings), face
+    // and neck, the bangs and side hair, near arm.
+    Save(context)
+    CoveredByTop(p)
     DrawLeg(p, true)
+    Restore(context)
     DrawArm(p, true)
     DrawHair()
     if girl.head.layer_count == 3 {
         DrawHead(p, LAYER_BACK)
     }
-    PaintRigid(context, *girl.hips, 0, p.hip, p.spine + pi / 2.0, 1.0)
+    Save(context)
+    CoveredByTop(p)
     DrawLeg(p, false)
+    Restore(context)
     PaintTorso(context, *girl.torso, p)
     if girl.head.layer_count == 3 {
         DrawHead(p, LAYER_BASE)
