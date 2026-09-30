@@ -1,0 +1,36 @@
+#import, file "guide.zi";
+#import, file "guide_pager.zi";
+
+// Laws for guides and guide pagers. Each states the expected behavior
+// independently of the implementation; `ziran check` proves it over every
+// listed input. An implementation edit may not change this file.
+
+B :: (value: s32) -> bool { return value != 0 }
+
+// Right and Enter go forward, Left goes back, and Back and Escape close;
+// no other key asks for anything.
+#law GuideKeys forall left: 0..1, right: 0..1, enter: 0..1, back: 0..1, escape: 0..1 => GuideInputFor(B(left), B(right), B(enter), B(back), B(escape)).previous_requested == B(left) && GuideInputFor(B(left), B(right), B(enter), B(back), B(escape)).next_requested == (B(right) || B(enter)) && GuideInputFor(B(left), B(right), B(enter), B(back), B(escape)).close_requested == (B(back) || B(escape));
+#law PagerKeys forall left: 0..1, right: 0..1, enter: 0..1, back: 0..1, escape: 0..1, swipe: 0..1 => GuidePagerInputFor(B(left), B(right), B(enter), B(back), B(escape), B(swipe)).next_requested == (B(right) || B(enter)) && GuidePagerInputFor(B(left), B(right), B(enter), B(back), B(escape), B(swipe)).close_requested == (B(back) || B(escape));
+
+// A key finishes a pager only when no swipe is under way.
+#law SwipeBlocksKeyFinish forall right: 0..1, enter: 0..1 => !GuidePagerInputFor(false, B(right), B(enter), false, false, true).keyboard_finish;
+#law KeyFinishes forall right: 0..1, enter: 0..1 => GuidePagerInputFor(false, B(right), B(enter), false, false, false).keyboard_finish == (B(right) || B(enter));
+
+// A guide's step always names one of its steps.
+#law StepInRange forall step: -3..6, count: 1..4 => GuideStepFor(step, count) >= 0 && GuideStepFor(step, count) < count;
+
+// Closing wins over moving; Back steps back except on the first step, Next
+// steps forward and finishes on the last step.
+#law CloseWins forall step: 0..3, previous: 0..1, next: 0..1 => GuidePolicyFor(step, 4, B(previous), B(next), true).closed && !GuidePolicyFor(step, 4, B(previous), B(next), true).changed;
+#law BackSteps forall step: 1..3 => GuidePolicyFor(step, 4, true, false, false).step == step - 1 && GuidePolicyFor(step, 4, true, false, false).changed;
+#law FirstStepStays custom GuidePolicyFor(0, 4, true, false, false).step == 0 && !GuidePolicyFor(0, 4, true, false, false).changed;
+#law NextSteps forall step: 0..2 => GuidePolicyFor(step, 4, false, true, false).step == step + 1 && !GuidePolicyFor(step, 4, false, true, false).finished;
+#law LastStepFinishes custom GuidePolicyFor(3, 4, false, true, false).finished && GuidePolicyFor(3, 4, false, true, false).step == 3;
+
+// A pager's page names one of its pages; closing wins, a finish request
+// finishes, and Next on the last page finishes only when asked to.
+#law PageInRange forall page: -3..6, count: -1..4 => GuidePagerPageFor(page, count) >= 0 && GuidePagerPageFor(page, count) < GuidePagerPageCount(count);
+#law PagerCloseWins forall page: 0..3, finish: 0..1 => GuidePagerPolicyFor(page, 4, false, true, true, B(finish), true).closed && !GuidePagerPolicyFor(page, 4, false, true, true, B(finish), true).finished;
+#law FinishRequestFinishes forall page: 0..3 => GuidePagerPolicyFor(page, 4, false, false, false, true, false).finished;
+#law LastPageNext forall finish_on_next: 0..1 => GuidePagerPolicyFor(3, 4, false, true, false, false, B(finish_on_next)).finished == B(finish_on_next) && GuidePagerPolicyFor(3, 4, false, true, false, false, B(finish_on_next)).page == 3;
+#law PagerStepsBothWays forall page: 1..2 => GuidePagerPolicyFor(page, 4, true, false, false, false, false).page == page - 1 && GuidePagerPolicyFor(page, 4, false, true, false, false, false).page == page + 1;

@@ -59,6 +59,7 @@ add_custom_target(app_build_laws
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/storage/sync_restore_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/modal_rules_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/storage/storage_layout_laws.zi"
+    COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" --module-path "${KRYON_DIR}/src/ui" --module-path "${ZIRAN_DIR}/std" "${SRC_DIR}/guide_laws.zi"
     DEPENDS "${ZI2C_BIN}"
     WORKING_DIRECTORY "${REPO_ROOT}"
     COMMENT "Checking release consistency and proving app laws"
@@ -121,6 +122,10 @@ execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     "${SRC_DIR}/storage/storage_layout_laws.zi"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
+    --module-path "${KRYON_DIR}/src/ui" --module-path "${ZIRAN_DIR}/std"
+    "${SRC_DIR}/guide_laws.zi"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set(APP_GENERATE_ZIRAN_COMMAND "${HOST_PYTHON}"
     "${REPO_ROOT}/scripts/generate-android-sources.py"

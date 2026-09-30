@@ -461,7 +461,8 @@ STORAGE_LAYOUT_HEADER := tests/storage_layout.h
 LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
 	src/app/modal_rules_laws.zi \
 	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
-	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi
+	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi \
+	src/guide_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -1100,7 +1101,8 @@ test: version-check version-test
 .PHONY: proofs proof-test build-laws
 proofs: $(ZI2C_BIN)
 	@for module in $(LAW_MODULES); do \
-		$(ZIRAN_BIN) check --root src $$module > /dev/null || exit 1; \
+		$(ZIRAN_BIN) check --root src --module-path $(KRYON_DIR)/src/ui \
+			--module-path $(ZIRAN_DIR)/std $$module > /dev/null || exit 1; \
 	done
 
 # Deliberately broken implementations must be rejected by the laws.
