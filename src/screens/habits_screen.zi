@@ -116,12 +116,20 @@ HabitScreenDate :: (app: *InnerBreeze, day_index: s32) -> string {
         AppTextFromCString(*buffer[0], cast(s32)buffer.count))
 }
 
+HabitScreenMonthKeys: [12]string = .["habit_month_1", "habit_month_2",
+    "habit_month_3", "habit_month_4", "habit_month_5", "habit_month_6",
+    "habit_month_7", "habit_month_8", "habit_month_9", "habit_month_10",
+    "habit_month_11", "habit_month_12"];
+
+// The month and year in the language's own order, such as "September 2026"
+// or "2026年9月".
 HabitScreenMonth :: (app: *InnerBreeze, year: s32, month: s32) -> string {
-    buffer: [24]u8
-    args: [2]FormatArg
+    if month < 1 || month > 12 { return "" }
+    buffer: [64]u8
+    args: [1]FormatArg
     args[0].number = year
-    args[1].number = month
-    if !FormatTemplate("%04d-%02d", args[:], buffer[:]) { return "" }
+    if !FormatTemplate(LocaleText(HabitScreenMonthKeys[month - 1]), args[:],
+        buffer[:]) { return "" }
     return FrameTextHold(*app.ui.frame_text,
         AppTextFromCString(*buffer[0], cast(s32)buffer.count))
 }
@@ -338,6 +346,36 @@ HabitScreenDayCount :: (app: *InnerBreeze, index: s32,
         habit_cached_linked_entries(app, index, day_index))
 }
 
+// A step button draws its minus or plus as bars sized to the button, which
+// read clearly where a "-" or "+" glyph is thin and small.
+HabitScreenStepButton :: (app: *InnerBreeze, id: s32, bounds: Rectangle,
+    plus: bool, disabled: bool) -> bool {
+    props: ButtonProps
+    props.id = id
+    props.bounds = bounds
+    props.tone = cast(ButtonTone)ButtonToneNeutral
+    props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    props.disabled = disabled
+    clicked := Button(app.ui.session, props) != 0
+    side := bounds.height
+    if bounds.width < side { side = bounds.width }
+    length := side * 0.36
+    thickness := cast(float32)AppScale(3)
+    center_x := bounds.x + bounds.width * 0.5
+    center_y := bounds.y + bounds.height * 0.5
+    color := StyleTokenColor("text")
+    if disabled { color = Fade(color, 0.35) }
+    PaintRoundedFill(app.ui.session, -1, Rectangle.{
+        center_x - length * 0.5, center_y - thickness * 0.5,
+        length, thickness}, thickness * 0.5, 6, color)
+    if plus {
+        PaintRoundedFill(app.ui.session, -1, Rectangle.{
+            center_x - thickness * 0.5, center_y - length * 0.5,
+            thickness, length}, thickness * 0.5, 6, color)
+    }
+    return clicked
+}
+
 HabitScreenAdjustCount :: (app: *InnerBreeze, index: s32,
     day_index: s32, delta: s32) {
     habit_step_count(app, index, day_index, delta)
@@ -379,23 +417,49 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     app_block_current_click(app)
 }
 
+// A day button. With a dot, as for a counting habit's calendar day, the
+// label sits at the top and the day's dot with its count below it, and the
+// dot rather than the button shows that the day is complete.
 HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
-    day_index: s32, label: string, id: s32, bounds: Rectangle) {
+    day_index: s32, label: string, id: s32, bounds: Rectangle, dot: bool) {
     habit := *app.habits.items[index]
     scheduled := habit_scheduled_day(habit, day_index) != 0
     complete := HabitScreenCompletion(app, index, day_index)
     disabled := !scheduled && !complete
+    filled := complete && !dot
     props: ButtonProps
     props.bounds = bounds
     props.id = id
-    props.label = label
-    props.tone = cast(ButtonTone)(ifx (complete) then
+    props.label = ifx (dot) then ("") else (label)
+    props.tone = cast(ButtonTone)(ifx (filled) then
         (ButtonToneAccent) else (ButtonToneNeutral))
-    props.emphasis = cast(ButtonEmphasis)(ifx (complete) then
+    props.emphasis = cast(ButtonEmphasis)(ifx (filled) then
         (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
-    props.selected = complete
+    props.selected = filled
     props.disabled = disabled || app.modal.active != 0
-    if Button(app.ui.session, props) != 0 {
+    clicked := Button(app.ui.session, props) != 0
+    if dot {
+        top := cast(s32)bounds.y + AppScale(3)
+        number: TextProps
+        number.bounds = HabitScreenRect(cast(s32)bounds.x, top,
+            cast(s32)bounds.width, AppScale(18))
+        number.text = label
+        number.font = AppSmallFontSize()
+        number.align = cast(TextAlign)TextAlignCenter
+        number.vertical_align = cast(TextAlign)TextAlignCenter
+        number.wrap = cast(TextWrap)TextWrapNone
+        number.disabled = props.disabled
+        Text(app.ui.session, number)
+        count := HabitScreenDayCount(app, index, day_index)
+        if count > 0 || complete {
+            radius := AppScale(12)
+            HabitScreenDayDot(app,
+                cast(s32)(bounds.x + bounds.width / 2),
+                cast(s32)(bounds.y + bounds.height) - AppScale(4) - radius,
+                radius, habit.color, complete, true, count)
+        }
+    }
+    if clicked {
         HabitScreenDayAction(app, index, day_index, false)
     }
     if !disabled && IsMouseButtonReleased(HABITS_MOUSE_RIGHT) &&
@@ -493,8 +557,6 @@ HabitScreenMarker :: (app: *InnerBreeze, habit_index: s32,
         habits_first_day_bounds = marker.bounds
     }
 
-    surface := StyleTokenColor("surface")
-    foreground := StyleTokenColor("text")
     accent := habit.color
     center_x := x + width / 2
     center_y := y + AppScale(42)
@@ -506,10 +568,22 @@ HabitScreenMarker :: (app: *InnerBreeze, habit_index: s32,
         HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
             Fade(accent, 0.24))
     }
+    HabitScreenDayDot(app, center_x, center_y, radius, accent, complete,
+        habit_counting_enabled(habit) != 0, count)
+    if marker_clicked {
+        HabitScreenDayAction(app, habit_index, day_index, false)
+    }
+}
+
+// A day's dot: filled once the day is complete, showing the day's count
+// when the habit counts and a check when it does not.
+HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
+    radius: s32, accent: Color, complete: bool, counting: bool, count: s32) {
+    surface := StyleTokenColor("surface")
+    foreground := StyleTokenColor("text")
     HabitScreenCircle(app, center_x, center_y + AppScale(1),
         radius + AppScale(2), Fade(Color.{0, 0, 0, 255}, 0.16))
-    // A counted day shows its count in place of the check.
-    show_count := habit_counting_enabled(habit) != 0 && count > 0
+    show_count := counting && count > 0
     if complete {
         HabitScreenCircle(app, center_x, center_y,
             radius + AppScale(1), LightenColor(accent, 16))
@@ -538,16 +612,13 @@ HabitScreenMarker :: (app: *InnerBreeze, habit_index: s32,
     if show_count {
         count_text := HabitScreenNumber(app, count)
         count_font := AppFitFontSize(count_text, radius * 2 - AppScale(2),
-            AppScale(Text12), AppScale(8))
+            radius + AppScale(4), AppScale(8))
         count_color := foreground
         if complete { count_color = HabitScreenTextColor(accent) }
         PaintLabel(app.ui.session, -1, count_text,
             center_x - AppTextWidth(count_text, count_font) / 2,
             center_y - AppTextLineHeight(count_font) / 2, count_font,
             count_color)
-    }
-    if marker_clicked {
-        HabitScreenDayAction(app, habit_index, day_index, false)
     }
 }
 
@@ -664,16 +735,15 @@ HabitScreenSelectedWeek :: (app: *InnerBreeze, index: s32,
         step := AppScale(42)
         gap := AppScale(8)
         action_width = width - (step + gap) * 2
-        minus := HabitScreenButtonProps(app, "-", 5710000 + index * 2,
-            x + action_width + gap, y, step, step, false,
+        if HabitScreenStepButton(app, 5710000 + index * 2,
+            HabitScreenRect(x + action_width + gap, y, step, step), false,
             today_disabled ||
-            today_count <= HabitScreenLinkedCount(app, index, today))
-        if Button(app.ui.session, minus) != 0 {
+            today_count <= HabitScreenLinkedCount(app, index, today)) {
             HabitScreenAdjustCount(app, index, today, -1)
         }
-        plus := HabitScreenButtonProps(app, "+", 5710001 + index * 2,
-            x + width - step, y, step, step, false, today_disabled)
-        if Button(app.ui.session, plus) != 0 {
+        if HabitScreenStepButton(app, 5710001 + index * 2,
+            HabitScreenRect(x + width - step, y, step, step), true,
+            today_disabled) {
             HabitScreenAdjustCount(app, index, today, 1)
         }
     }
@@ -1025,6 +1095,7 @@ HabitScreenPageHeader :: (app: *InnerBreeze,
         geometry.width - AppScale(82), AppScale(40))
     title.text = name
     title.font = AppTitleFontSize(name, geometry.width - AppScale(82))
+    title.vertical_align = cast(TextAlign)TextAlignCenter
     title.wrap = cast(TextWrap)TextWrapNone
     Text(app.ui.session, title)
     y += AppScale(44)
@@ -1106,7 +1177,7 @@ HabitScreenWeekly :: (app: *InnerBreeze,
                 AppTextFromCString(*count_text[0], cast(s32)count_text.count))
         }
         HabitScreenDayButton(app, index, day, label, 4400 + row,
-            HabitScreenRect(geometry.x, row_y, geometry.width, row_h))
+            HabitScreenRect(geometry.x, row_y, geometry.width, row_h), false)
         row += 1
     }
     if count < HABIT_WEEKLY_MAX_DAYS {
@@ -1159,12 +1230,16 @@ HabitScreenCalendar :: (app: *InnerBreeze,
         top, geometry.width - (arrow_w + gap) * 2, header_h)
     month_title.text = title
     month_title.font = AppFontSize()
+    month_title.align = cast(TextAlign)TextAlignCenter
+    month_title.vertical_align = cast(TextAlign)TextAlignCenter
     month_title.wrap = cast(TextWrap)TextWrapNone
     Text(app.ui.session, month_title)
     first := DaysFromCivil(year, month, 1)
     weekday := cast(s32)((first + 3) % 7)
     cell_w := (geometry.width - gap * 6) / 7
-    cell_h := AppScale(50)
+    counting := habit_counting_enabled(*app.habits.items[index]) != 0
+    // A counting habit's day holds its date above its count.
+    cell_h := AppScale(ifx counting then 56 else 50)
     today := habits_today_index()
     day: s32 = 1
     while DateValid(year, month, day) {
@@ -1177,7 +1252,8 @@ HabitScreenCalendar :: (app: *InnerBreeze,
         if day_index <= today {
             label := HabitScreenNumber(app, day)
             HabitScreenDayButton(app, index, day_index, label,
-                4700 + slot, HabitScreenRect(x, y, cell_w, cell_h))
+                4700 + slot, HabitScreenRect(x, y, cell_w, cell_h),
+                counting)
         }
         day += 1
     }
@@ -1249,23 +1325,12 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     y += AppScale(24) + gap
 
     step_w := (width - gap) / 2
-    minus: ButtonProps
-    minus.id = 5720000
-    minus.bounds = HabitScreenRect(x, y, step_w, step_h)
-    minus.label = "-"
-    minus.tone = cast(ButtonTone)ButtonToneNeutral
-    minus.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    minus.disabled = count <= linked_count
-    if Button(app.ui.session, minus) != 0 {
+    if HabitScreenStepButton(app, 5720000,
+        HabitScreenRect(x, y, step_w, step_h), false, count <= linked_count) {
         HabitScreenAdjustCount(app, index, day_index, -1)
     }
-    plus: ButtonProps
-    plus.id = 5720001
-    plus.bounds = HabitScreenRect(x + width - step_w, y, step_w, step_h)
-    plus.label = "+"
-    plus.tone = cast(ButtonTone)ButtonToneAccent
-    plus.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    if Button(app.ui.session, plus) != 0 {
+    if HabitScreenStepButton(app, 5720001,
+        HabitScreenRect(x + width - step_w, y, step_w, step_h), true, false) {
         HabitScreenAdjustCount(app, index, day_index, 1)
     }
     y += step_h + gap
