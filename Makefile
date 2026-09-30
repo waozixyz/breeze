@@ -2822,6 +2822,10 @@ clean-vendor-builds:
 NEEDS_DEB_NATIVE := $(if $(strip $(DEB_BIN_SOURCE)),,$(if $(filter linux,$(NATIVE_PLATFORM)),$(filter deb package-deb,$(MAKECMDGOALS))))
 NEEDS_RPM_NATIVE := $(if $(strip $(RPM_BIN_SOURCE)),,$(if $(filter linux,$(NATIVE_PLATFORM)),$(filter rpm package-rpm,$(MAKECMDGOALS))))
 NEEDS_NATIVE_ENV := $(if $(MAKECMDGOALS),$(filter all native install install-user stage package-freebsd run run-fresh dist appimage vendor-prebuilds vendor-prebuilds-native,$(MAKECMDGOALS)) $(NEEDS_DEB_NATIVE) $(NEEDS_RPM_NATIVE),native)
+# A fresh tree (a container or snap build) has not fetched the packages yet,
+# and make reads this whole file before it fetches them and reads it again.
+# Check the build environment on that second read, against real sources.
+ifeq ($(PACKAGES_READY),1)
 ifneq ($(strip $(NEEDS_NATIVE_ENV)),)
 ifeq ($(KRYON_BACKEND),raylib)
 ifeq ($(strip $(RAY_CFLAGS)),)
@@ -2853,6 +2857,7 @@ $(error libcurl metadata is missing. Install libcurl pkg-config metadata or set 
 endif
 ifneq ($(shell v='$(KRYON_CURL_VERSION_HEX)'; if [ "$$v" = 075600 ] || [ "$$v" \> 075600 ]; then echo yes; fi),yes)
 $(error libcurl >= 7.86.0 is required for websocket sync; found LIBCURL_VERSION_NUM=$(KRYON_CURL_VERSION_NUM))
+endif
 endif
 endif
 
