@@ -99,7 +99,7 @@ To debug Inbe against the root Kryon checkout, map it in an ignored
 
 ```toml
 [overrides]
-kryon = "../kryon"
+kryon = "../../kryonlabs/kryon"
 ```
 
 Use this only for local debugging. Permanent Kryon fixes should be committed in
