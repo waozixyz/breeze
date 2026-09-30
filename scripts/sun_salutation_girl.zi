@@ -1,0 +1,1914 @@
+// Animate the painted girl through Inbe's twelve-step sun salutation.
+//
+// The Ziran version of scripts/render-sun-salutation-girl.py. It reads the
+// same rig (docs/sun-salutation-girl.json) and painted parts
+// (design/sun-salutation/girl-parts/), draws with Cairo, and pipes the frames
+// to FFmpeg. scripts/render-sun-salutation-girl-zi.sh builds it with zi2py
+// and runs it from the Inbe root. Set STILL to a time in seconds to write one
+// PNG instead of the video, and THEME to light or dark.
+//
+// Part images are measured at a quarter of their size and resampled with
+// Cairo instead of Pillow, so frames differ slightly from the Python output.
+
+#import "vec"
+#import "format"
+#import "json_scan"
+#import "file_linux"
+
+libc :: #system_library "libc";
+libm :: #system_library "m";
+cairo :: #system_library "cairo";
+
+Sine :: (value: float64) -> float64 #foreign libm "sin";
+Cosine :: (value: float64) -> float64 #foreign libm "cos";
+ArcTangent2 :: (y: float64, x: float64) -> float64 #foreign libm "atan2";
+SquareRoot :: (value: float64) -> float64 #foreign libm "sqrt";
+Floor :: (value: float64) -> float64 #foreign libm "floor";
+
+MemoryCopy :: (destination: *u8, source: u64, count: u64) -> u64 #foreign libc "memcpy";
+GetEnvironment :: (name: string) -> string #foreign libc "getenv";
+RunCommand :: (command: string) -> s32 #foreign libc "system";
+OpenPipe :: (command: string, mode: string) -> *void #foreign libc "popen";
+ClosePipe :: (stream: *void) -> s32 #foreign libc "pclose";
+OpenStream :: (path: string, mode: string) -> *void #foreign libc "fopen";
+PutText :: (text: string, stream: *void) -> s32 #foreign libc "fputs";
+CloseStream :: (stream: *void) -> s32 #foreign libc "fclose";
+WriteBytes :: (data: u64, size: u64, count: u64, stream: *void) -> u64 #foreign libc "fwrite";
+
+ImageSurfaceCreate :: (format: s32, width: s32, height: s32) -> *void #foreign cairo "cairo_image_surface_create";
+ImageSurfaceFromPng :: (path: string) -> *void #foreign cairo "cairo_image_surface_create_from_png";
+SurfaceWidth :: (surface: *void) -> s32 #foreign cairo "cairo_image_surface_get_width";
+SurfaceHeight :: (surface: *void) -> s32 #foreign cairo "cairo_image_surface_get_height";
+SurfaceStride :: (surface: *void) -> s32 #foreign cairo "cairo_image_surface_get_stride";
+SurfaceData :: (surface: *void) -> u64 #foreign cairo "cairo_image_surface_get_data";
+SurfaceFlush :: (surface: *void) #foreign cairo "cairo_surface_flush";
+SurfaceStatus :: (surface: *void) -> s32 #foreign cairo "cairo_surface_status";
+SurfaceWritePng :: (surface: *void, path: string) -> s32 #foreign cairo "cairo_surface_write_to_png";
+SurfaceDestroy :: (surface: *void) #foreign cairo "cairo_surface_destroy";
+ContextCreate :: (surface: *void) -> *void #foreign cairo "cairo_create";
+ContextDestroy :: (context: *void) #foreign cairo "cairo_destroy";
+Save :: (context: *void) #foreign cairo "cairo_save";
+Restore :: (context: *void) #foreign cairo "cairo_restore";
+Translate :: (context: *void, x: float64, y: float64) #foreign cairo "cairo_translate";
+Scale :: (context: *void, x: float64, y: float64) #foreign cairo "cairo_scale";
+Rotate :: (context: *void, angle: float64) #foreign cairo "cairo_rotate";
+Transform :: (context: *void, matrix: *float64) #foreign cairo "cairo_transform";
+SetSourceSurface :: (context: *void, surface: *void, x: float64, y: float64) #foreign cairo "cairo_set_source_surface";
+SetSourceRgb :: (context: *void, red: float64, green: float64, blue: float64) #foreign cairo "cairo_set_source_rgb";
+SetSourceRgba :: (context: *void, red: float64, green: float64, blue: float64, alpha: float64) #foreign cairo "cairo_set_source_rgba";
+SetSource :: (context: *void, pattern: *void) #foreign cairo "cairo_set_source";
+GetSource :: (context: *void) -> *void #foreign cairo "cairo_get_source";
+PatternSetFilter :: (pattern: *void, filter: s32) #foreign cairo "cairo_pattern_set_filter";
+PatternDestroy :: (pattern: *void) #foreign cairo "cairo_pattern_destroy";
+LinearGradient :: (x0: float64, y0: float64, x1: float64, y1: float64) -> *void #foreign cairo "cairo_pattern_create_linear";
+RadialGradient :: (x0: float64, y0: float64, r0: float64, x1: float64, y1: float64, r1: float64) -> *void #foreign cairo "cairo_pattern_create_radial";
+AddColorStop :: (pattern: *void, offset: float64, red: float64, green: float64, blue: float64, alpha: float64) #foreign cairo "cairo_pattern_add_color_stop_rgba";
+Paint :: (context: *void) #foreign cairo "cairo_paint";
+PaintWithAlpha :: (context: *void, alpha: float64) #foreign cairo "cairo_paint_with_alpha";
+SetOperator :: (context: *void, operator: s32) #foreign cairo "cairo_set_operator";
+SetAntialias :: (context: *void, antialias: s32) #foreign cairo "cairo_set_antialias";
+PushGroup :: (context: *void) #foreign cairo "cairo_push_group";
+PopGroupToSource :: (context: *void) #foreign cairo "cairo_pop_group_to_source";
+MoveTo :: (context: *void, x: float64, y: float64) #foreign cairo "cairo_move_to";
+LineTo :: (context: *void, x: float64, y: float64) #foreign cairo "cairo_line_to";
+ClosePath :: (context: *void) #foreign cairo "cairo_close_path";
+Clip :: (context: *void) #foreign cairo "cairo_clip";
+Arc :: (context: *void, x: float64, y: float64, radius: float64, start: float64, end: float64) #foreign cairo "cairo_arc";
+Fill :: (context: *void) #foreign cairo "cairo_fill";
+
+FORMAT_ARGB32 :: 0;
+FILTER_GOOD :: 1;
+FILTER_BILINEAR :: 4;
+OPERATOR_ATOP :: 5;
+OPERATOR_DEST_IN :: 8;
+ANTIALIAS_NONE :: 1;
+
+// Geometry ----------------------------------------------------------------
+
+V2 :: struct {
+    x: float64
+    y: float64
+}
+
+Joint :: struct {
+    middle: V2
+    end: V2
+}
+
+pi: float64 = 3.141592653589793;
+
+Vec2 :: (x: float64, y: float64) -> V2 {
+    return V2.{x = x, y = y}
+}
+
+Plus :: (a: V2, b: V2) -> V2 {
+    return Vec2(a.x + b.x, a.y + b.y)
+}
+
+Minus :: (a: V2, b: V2) -> V2 {
+    return Vec2(a.x - b.x, a.y - b.y)
+}
+
+Times :: (a: V2, value: float64) -> V2 {
+    return Vec2(a.x * value, a.y * value)
+}
+
+Mix :: (a: V2, b: V2, amount: float64) -> V2 {
+    return Plus(Times(a, 1.0 - amount), Times(b, amount))
+}
+
+UnitAt :: (angle: float64) -> V2 {
+    return Vec2(Cosine(angle), Sine(angle))
+}
+
+Length :: (a: V2) -> float64 {
+    return SquareRoot(a.x * a.x + a.y * a.y)
+}
+
+Distance :: (a: V2, b: V2) -> float64 {
+    return Length(Minus(a, b))
+}
+
+Normalize :: (a: V2) -> V2 {
+    length := Length(a)
+    if length < 0.000000001 {
+        length = 0.000000001
+    }
+    return Times(a, 1.0 / length)
+}
+
+Turn :: (a: V2, angle: float64) -> V2 {
+    c := Cosine(angle)
+    s := Sine(angle)
+    return Vec2(a.x * c - a.y * s, a.x * s + a.y * c)
+}
+
+AngleOf :: (a: V2) -> float64 {
+    return ArcTangent2(a.y, a.x)
+}
+
+Wrap :: (angle: float64) -> float64 {
+    return ArcTangent2(Sine(angle), Cosine(angle))
+}
+
+Radians :: (degrees: float64) -> float64 {
+    return degrees * pi / 180.0
+}
+
+Degrees :: (radians: float64) -> float64 {
+    return radians * 180.0 / pi
+}
+
+Least :: (a: float64, b: float64) -> float64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+Most :: (a: float64, b: float64) -> float64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+Magnitude :: (value: float64) -> float64 {
+    if value < 0.0 {
+        return -value
+    }
+    return value
+}
+
+Clamp01 :: (value: float64) -> float64 {
+    return Least(1.0, Most(0.0, value))
+}
+
+Ease :: (amount: float64) -> float64 {
+    t := Clamp01(amount)
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+Smoothstep :: (low: float64, high: float64, value: float64) -> float64 {
+    t := Clamp01((value - low) / (high - low))
+    return t * t * (3.0 - 2.0 * t)
+}
+
+RoundWhole :: (value: float64) -> s32 {
+    return cast(s32) Floor(value + 0.5)
+}
+
+// Two-bone inverse kinematics: the middle joint and the reached end.
+SolveJoint :: (root: V2, target: V2, first: float64, second: float64, bend: float64) -> Joint {
+    delta := Minus(target, root)
+    distance := Length(delta)
+    direction := Times(delta, 1.0 / Most(distance, 0.000001))
+    distance = Least(first + second - 0.00001, Most(Magnitude(first - second) + 0.00001, distance))
+    along := (first * first - second * second + distance * distance) / (2.0 * distance)
+    height := SquareRoot(Most(0.0, first * first - along * along))
+    perpendicular := Vec2(-direction.y, direction.x)
+    result: Joint
+    result.middle = Plus(Plus(root, Times(direction, along)), Times(perpendicular, height * bend))
+    result.end = Plus(root, Times(direction, distance))
+    return result
+}
+
+// The rig, read from docs/sun-salutation-girl.json ------------------------
+
+Pose :: struct {
+    hip: V2
+    spine: float64
+    gaze: float64
+    near_ankle: V2
+    far_ankle: V2
+    near_wrist: V2
+    far_wrist: V2
+    foot: float64
+    palm: float64
+    instep: float64
+    upright: float64
+}
+
+Stepping :: struct {
+    step: s32
+    stops: [4]Pose
+}
+
+Rig :: struct {
+    width: s32
+    height: s32
+    fps: s32
+    detail: float64
+    design_width: float64
+    design_height: float64
+    center_x: float64
+    ground_y: float64
+    camera_scale: float64
+    rig_x: float64
+    ground: float64
+    torso: float64
+    upper_arm: float64
+    forearm: float64
+    thigh: float64
+    shin: float64
+    far_offset: V2
+    hold: float64
+    transition: float64
+    breath: float64
+    reach_leg: float64
+    reach_arm: float64
+    steps: s32
+    sequence: [16]Pose
+    sequence_is_fold: [16]bool
+    fold: Pose
+    plank: Pose
+    down_dog: Pose
+    stepping: [4]Stepping
+    stepping_count: s32
+    stepping_lift: float64
+    swan_steps: [4]s32
+    swan_count: s32
+    swan_lower_from: float64
+    swan_straight_reach: float64
+    swan_palm_from: float64
+    point_toes: float64
+    resting_radius: float64
+    head_lift: float64
+    head_lift_min: float64
+    head_lift_max: float64
+    hair_roots: [2]V2
+    hair_width: float64
+    hair_segment: float64
+    hair_count: s32
+    hair_damping: float64
+    hair_gravity: float64
+    hair_substeps: s32
+    background: [3]float64
+    shadow: [4]float64
+    far: [4]float64
+}
+
+json_bytes: [65536]u8;
+json: string;
+rig: Rig;
+missing: s32 = 0;
+
+Field :: (object_at: s32, name: string) -> s32 {
+    at := FieldAt(json, object_at, name)
+    if at < 0 {
+        print("sun-salutation-girl.json: missing %\n", name)
+        missing += 1
+    }
+    return at
+}
+
+Number :: (at: s32) -> float64 {
+    number := ReadNumber(json, at)
+    if !number.valid {
+        missing += 1
+        return 0.0
+    }
+    return number.value
+}
+
+NumberField :: (object_at: s32, name: string) -> float64 {
+    return Number(Field(object_at, name))
+}
+
+OptionalNumber :: (object_at: s32, name: string, fallback: float64) -> float64 {
+    at := FieldAt(json, object_at, name)
+    if at < 0 {
+        return fallback
+    }
+    return Number(at)
+}
+
+Element :: (array_at: s32, index: s32) -> float64 {
+    return Number(ElementAt(json, array_at, index))
+}
+
+PointAt :: (at: s32) -> V2 {
+    return Vec2(Element(at, 0), Element(at, 1))
+}
+
+PointField :: (object_at: s32, name: string) -> V2 {
+    return PointAt(Field(object_at, name))
+}
+
+// The text of a JSON string value, without its quotes.
+TextAt :: (at: s32) -> string {
+    span := ReadString(json, at)
+    if !span.valid {
+        missing += 1
+        return ""
+    }
+    return json[span.start:span.end]
+}
+
+TextField :: (object_at: s32, name: string) -> string {
+    return TextAt(Field(object_at, name))
+}
+
+ReadPose :: (poses_at: s32, name: string) -> Pose {
+    at := Field(poses_at, name)
+    pose: Pose
+    pose.hip = PointField(at, "hip")
+    pose.spine = Radians(NumberField(at, "spine"))
+    pose.gaze = Radians(NumberField(at, "gaze"))
+    pose.near_ankle = PointField(at, "ankles")
+    pose.far_ankle = pose.near_ankle
+    if FieldAt(json, at, "farAnkle") >= 0 {
+        pose.far_ankle = PointField(at, "farAnkle")
+    }
+    pose.near_wrist = PointField(at, "wrists")
+    pose.far_wrist = pose.near_wrist
+    if FieldAt(json, at, "farWrist") >= 0 {
+        pose.far_wrist = PointField(at, "farWrist")
+    }
+    pose.foot = OptionalNumber(at, "foot", 0.0)
+    pose.palm = OptionalNumber(at, "palm", 0.0)
+    pose.instep = OptionalNumber(at, "instep", 0.0)
+    pose.upright = OptionalNumber(at, "upright", 0.0)
+    return pose
+}
+
+// A step number written as the digits of a JSON member name, or -1.
+StepNumber :: (name: string) -> s32 {
+    if name.count == 0 {
+        return -1
+    }
+    value: s32 = 0
+    for byte: name {
+        if byte < cast(u8)48 || byte > cast(u8)57 {
+            return -1
+        }
+        value = value * 10 + cast(s32)(byte - cast(u8)48)
+    }
+    return value
+}
+
+ReadStepping :: (stepping_at: s32, poses_at: s32) {
+    rig.stepping_lift = NumberField(stepping_at, "lift")
+    cursor := Space(json, stepping_at + 1)
+    while cursor < cast(s32)json.count && json[cursor] != cast(u8)125 {
+        key := ReadString(json, cursor)
+        if !key.valid {
+            missing += 1
+            return
+        }
+        cursor = Space(json, key.after)
+        cursor = Space(json, cursor + 1)
+        step := StepNumber(json[key.start:key.end])
+        if step >= 0 && rig.stepping_count < 4 {
+            entry: Stepping
+            entry.step = step
+            index: s32 = 0
+            while index < 4 {
+                entry.stops[index] = ReadPose(poses_at, TextAt(ElementAt(json, cursor, index)))
+                index += 1
+            }
+            rig.stepping[rig.stepping_count] = entry
+            rig.stepping_count += 1
+        }
+        cursor = Space(json, ValueEnd(json, cursor, 0))
+        if cursor < cast(s32)json.count && json[cursor] == cast(u8)44 {
+            cursor = Space(json, cursor + 1)
+        }
+    }
+}
+
+ReadRig :: (path: string, theme: string) -> bool {
+    file := OpenRead(path)
+    size := ReadAt(file, json_bytes[:], 0)
+    CloseFile(file)
+    if size <= 0 {
+        print("cannot read %\n", path)
+        return false
+    }
+    json = TextView(json_bytes[0:cast(s32)size])
+    output := Field(0, "output")
+    rig.width = cast(s32) NumberField(output, "width")
+    rig.height = cast(s32) NumberField(output, "height")
+    rig.fps = cast(s32) NumberField(output, "fps")
+    rig.detail = NumberField(output, "detail")
+    camera := Field(0, "camera")
+    rig.design_width = NumberField(camera, "designWidth")
+    rig.design_height = NumberField(camera, "designHeight")
+    rig.center_x = NumberField(camera, "centerX")
+    rig.ground_y = NumberField(camera, "groundY")
+    rig.camera_scale = NumberField(camera, "scale")
+    rig.rig_x = NumberField(camera, "rigX")
+    rig.ground = NumberField(0, "ground")
+    bones := Field(0, "bones")
+    rig.torso = NumberField(bones, "torso")
+    rig.upper_arm = NumberField(bones, "upperArm")
+    rig.forearm = NumberField(bones, "forearm")
+    rig.thigh = NumberField(bones, "thigh")
+    rig.shin = NumberField(bones, "shin")
+    rig.far_offset = PointField(bones, "farOffset")
+    timing := Field(0, "timing")
+    rig.hold = NumberField(timing, "hold")
+    rig.transition = NumberField(timing, "transition")
+    rig.breath = NumberField(timing, "breath")
+    reach := Field(0, "reach")
+    rig.reach_leg = NumberField(reach, "leg")
+    rig.reach_arm = NumberField(reach, "arm")
+    poses := Field(0, "poses")
+    sequence := Field(0, "sequence")
+    rig.steps = ArrayCount(json, sequence)
+    if rig.steps < 1 || rig.steps > 16 {
+        print("the sequence needs 1 to 16 steps\n")
+        return false
+    }
+    index: s32 = 0
+    while index < rig.steps {
+        name := TextAt(ElementAt(json, sequence, index))
+        rig.sequence[index] = ReadPose(poses, name)
+        rig.sequence_is_fold[index] = name == "fold"
+        index += 1
+    }
+    rig.fold = ReadPose(poses, "fold")
+    rig.plank = ReadPose(poses, "plank")
+    rig.down_dog = ReadPose(poses, "downDog")
+    ReadStepping(Field(0, "stepping"), poses)
+    dive := Field(0, "swanDive")
+    swan_steps := Field(dive, "steps")
+    rig.swan_count = ArrayCount(json, swan_steps)
+    index = 0
+    while index < rig.swan_count && index < 4 {
+        rig.swan_steps[index] = cast(s32) Element(swan_steps, index)
+        index += 1
+    }
+    rig.swan_lower_from = NumberField(dive, "lowerFrom")
+    rig.swan_straight_reach = NumberField(dive, "straightReach")
+    rig.swan_palm_from = NumberField(dive, "palmFrom")
+    feet := Field(0, "feet")
+    rig.point_toes = NumberField(feet, "pointToes")
+    rig.resting_radius = NumberField(feet, "restingRadius")
+    head := Field(0, "head")
+    rig.head_lift = NumberField(head, "lift")
+    rig.head_lift_min = NumberField(head, "liftMin")
+    rig.head_lift_max = NumberField(head, "liftMax")
+    hair := Field(0, "hair")
+    roots := Field(hair, "roots")
+    rig.hair_roots[0] = PointAt(ElementAt(json, roots, 0))
+    rig.hair_roots[1] = PointAt(ElementAt(json, roots, 1))
+    rig.hair_width = NumberField(hair, "width")
+    rig.hair_segment = NumberField(hair, "segment")
+    rig.hair_count = cast(s32) NumberField(hair, "count")
+    rig.hair_damping = NumberField(hair, "damping")
+    rig.hair_gravity = NumberField(hair, "gravity")
+    rig.hair_substeps = cast(s32) NumberField(hair, "substeps")
+    if rig.hair_count < 4 || rig.hair_count > 16 {
+        print("the hair needs 4 to 16 points\n")
+        return false
+    }
+    colors := Field(Field(0, "themes"), theme)
+    background := Field(colors, "background")
+    shadow := Field(colors, "shadow")
+    far := Field(colors, "far")
+    index = 0
+    while index < 4 {
+        if index < 3 {
+            rig.background[index] = Element(background, index)
+        }
+        rig.shadow[index] = Element(shadow, index)
+        rig.far[index] = Element(far, index)
+        index += 1
+    }
+    return missing == 0
+}
+
+// Timeline ------------------------------------------------------------------
+
+Phase :: struct {
+    step: s32
+    moving: bool
+    amount: float64
+}
+
+Period :: () -> float64 {
+    return rig.hold + rig.transition
+}
+
+Duration :: () -> float64 {
+    return Period() * cast(float64)(rig.steps - 1) + rig.hold
+}
+
+PhaseAt :: (time: float64) -> Phase {
+    result: Phase
+    step := cast(s32) Floor(time / Period())
+    if step > rig.steps - 1 {
+        step = rig.steps - 1
+    }
+    result.step = step
+    local := time - cast(float64) step * Period()
+    if local < rig.hold || step == rig.steps - 1 {
+        return result
+    }
+    result.moving = true
+    result.amount = (local - rig.hold) / rig.transition
+    return result
+}
+
+SteppingIndex :: (step: s32) -> s32 {
+    index: s32 = 0
+    while index < rig.stepping_count {
+        if rig.stepping[index].step == step {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+Segment :: struct {
+    start: Pose
+    end: Pose
+    amount: float64
+}
+
+SteppingSegment :: (index: s32, amount: float64) -> Segment {
+    count: s32 = 3
+    segment := cast(s32) Floor(amount * cast(float64) count)
+    if segment > count - 1 {
+        segment = count - 1
+    }
+    result: Segment
+    result.start = rig.stepping[index].stops[segment]
+    result.end = rig.stepping[index].stops[segment + 1]
+    result.amount = amount * cast(float64) count - cast(float64) segment
+    return result
+}
+
+SteppedAnkle :: (a: V2, b: V2, amount: float64, stepping: bool) -> V2 {
+    point := Mix(a, b, amount)
+    if stepping {
+        travel := Magnitude(b.x - a.x)
+        lift := Least(rig.stepping_lift, travel * 0.2)
+        point.y = point.y - lift * Sine(pi * amount)
+    }
+    return point
+}
+
+Interpolate :: (a: Pose, b: Pose, linear: float64, stepping: bool) -> Pose {
+    amount := Ease(linear)
+    result: Pose
+    result.hip = Mix(a.hip, b.hip, amount)
+    result.near_ankle = SteppedAnkle(a.near_ankle, b.near_ankle, amount, stepping)
+    result.far_ankle = SteppedAnkle(a.far_ankle, b.far_ankle, amount, stepping)
+    result.near_wrist = Mix(a.near_wrist, b.near_wrist, amount)
+    result.far_wrist = Mix(a.far_wrist, b.far_wrist, amount)
+    result.spine = a.spine * (1.0 - amount) + b.spine * amount
+    result.gaze = a.gaze * (1.0 - amount) + b.gaze * amount
+    result.foot = a.foot * (1.0 - amount) + b.foot * amount
+    result.palm = a.palm * (1.0 - amount) + b.palm * amount
+    result.instep = a.instep * (1.0 - amount) + b.instep * amount
+    result.upright = a.upright * (1.0 - amount) + b.upright * amount
+    return result
+}
+
+Shoulder :: (p: Pose) -> V2 {
+    return Plus(p.hip, Times(UnitAt(p.spine), rig.torso))
+}
+
+RawPose :: (time: float64) -> Pose {
+    phase := PhaseAt(time)
+    if !phase.moving {
+        local := time - cast(float64) phase.step * Period()
+        wave := Sine(pi * Least(local, rig.hold) / rig.hold)
+        pose := rig.sequence[phase.step]
+        pose.hip.y = pose.hip.y - rig.breath * wave * wave
+        return pose
+    }
+    stepping := SteppingIndex(phase.step)
+    if stepping >= 0 {
+        segment := SteppingSegment(stepping, phase.amount)
+        return Interpolate(segment.start, segment.end, segment.amount, true)
+    }
+    return Interpolate(rig.sequence[phase.step], rig.sequence[phase.step + 1], phase.amount, false)
+}
+
+IsSwanStep :: (step: s32) -> bool {
+    index: s32 = 0
+    while index < rig.swan_count {
+        if rig.swan_steps[index] == step {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// Upward salute to forward fold (and back up) as a swan dive: straight arms
+// stay in line with the spine as she hinges, then sweep down to the floor.
+SwanDive :: (p: Pose, time: float64) -> Pose {
+    phase := PhaseAt(time)
+    if !phase.moving || !IsSwanStep(phase.step) {
+        return p
+    }
+    amount := Ease(phase.amount)
+    down := 1.0 - amount
+    if rig.sequence_is_fold[phase.step + 1] {
+        down = amount
+    }
+    reach_vector := Minus(rig.fold.near_wrist, Shoulder(rig.fold))
+    fold_relative := Wrap(AngleOf(reach_vector) - rig.fold.spine)
+    lower := Smoothstep(rig.swan_lower_from, 1.0, down)
+    straight := rig.swan_straight_reach
+    reach := straight + (Length(reach_vector) - straight) * lower
+    wrist := Plus(Shoulder(p), Times(UnitAt(p.spine + fold_relative * lower), reach))
+    result := p
+    result.near_wrist = wrist
+    result.far_wrist = wrist
+    result.upright = 0.0
+    result.palm = Smoothstep(rig.swan_palm_from, 1.0, down)
+    return result
+}
+
+// The pose at `time`, with the hip moved so hands and feet can reach.
+SamplePose :: (time: float64) -> Pose {
+    p := SwanDive(RawPose(time), time)
+    axis := Times(UnitAt(p.spine), rig.torso)
+    centers: [4]V2
+    radii: [4]float64
+    centers[0] = p.near_ankle
+    centers[1] = p.far_ankle
+    centers[2] = Minus(p.near_wrist, axis)
+    centers[3] = Minus(p.far_wrist, axis)
+    radii[0] = rig.reach_leg
+    radii[1] = rig.reach_leg
+    radii[2] = rig.reach_arm
+    radii[3] = rig.reach_arm
+    hip := p.hip
+    round: s32 = 0
+    while round < 40 {
+        index: s32 = 0
+        while index < 4 {
+            delta := Minus(hip, centers[index])
+            distance := Length(delta)
+            if distance > radii[index] {
+                hip = Plus(centers[index], Times(delta, radii[index] / distance))
+            }
+            index += 1
+        }
+        round += 1
+    }
+    p.hip = hip
+    return p
+}
+
+RestingFoot :: (ankle: V2) -> float64 {
+    if Distance(ankle, rig.plank.near_ankle) < rig.resting_radius {
+        return rig.plank.foot
+    }
+    if Distance(ankle, rig.down_dog.near_ankle) < rig.resting_radius {
+        return rig.down_dog.foot
+    }
+    return 0.0
+}
+
+FootState :: struct {
+    angle: float64
+    airborne: float64
+}
+
+// Per-foot angle and airborne amount; index 1 is the far foot. While
+// stepping the feet are in different places and the moving foot is lifted.
+FeetAt :: (p: Pose, time: float64) -> [2]FootState {
+    result: [2]FootState
+    result[0].angle = p.foot
+    result[1].angle = p.foot
+    phase := PhaseAt(time)
+    if !phase.moving {
+        return result
+    }
+    stepping := SteppingIndex(phase.step)
+    if stepping < 0 {
+        return result
+    }
+    segment := SteppingSegment(stepping, phase.amount)
+    eased := Ease(segment.amount)
+    index: s32 = 0
+    while index < 2 {
+        begin := segment.start.near_ankle
+        finish := segment.end.near_ankle
+        if index == 1 {
+            begin = segment.start.far_ankle
+            finish = segment.end.far_ankle
+        }
+        result[index].angle = RestingFoot(begin) * (1.0 - eased) + RestingFoot(finish) * eased
+        result[index].airborne = 0.0
+        if Distance(begin, finish) > 1.0 {
+            result[index].airborne = Sine(pi * eased)
+        }
+        index += 1
+    }
+    return result
+}
+
+// Painted parts -------------------------------------------------------------
+
+Box :: struct {
+    left: s32
+    top: s32
+    right: s32
+    bottom: s32
+}
+
+Picture :: struct {
+    surface: *void
+    width: s32
+    height: s32
+    unit: float64
+}
+
+row: [2048]u8;
+
+ReadRow :: (surface: *void, y: s32, width: s32) {
+    address := SurfaceData(surface) + cast(u64)(y * SurfaceStride(surface))
+    MemoryCopy(*row[0], address, cast(u64)(width * 4))
+}
+
+PartPath :: (file: string) -> string {
+    path: Vec(u8);
+    BuilderPrint(*path, "design/sun-salutation/girl-parts/%", file);
+    return BuilderFinish(path)
+}
+
+LoadPart :: (file: string) -> *void {
+    surface := ImageSurfaceFromPng(PartPath(file))
+    if SurfaceStatus(surface) != 0 {
+        print("cannot load part %\n", file)
+        missing += 1
+    }
+    return surface
+}
+
+// The box around pixels more than faintly opaque, found on a quarter-size
+// copy of the image.
+TrimmedBox :: (source: *void) -> Box {
+    width := SurfaceWidth(source)
+    height := SurfaceHeight(source)
+    small_width := (width + 3) / 4
+    small_height := (height + 3) / 4
+    small := ImageSurfaceCreate(FORMAT_ARGB32, small_width, small_height)
+    context := ContextCreate(small)
+    Scale(context, 0.25, 0.25)
+    SetSourceSurface(context, source, 0.0, 0.0)
+    PatternSetFilter(GetSource(context), FILTER_GOOD)
+    Paint(context)
+    ContextDestroy(context)
+    SurfaceFlush(small)
+    box := Box.{left = small_width, top = small_height, right = -1, bottom = -1}
+    y: s32 = 0
+    while y < small_height {
+        ReadRow(small, y, small_width)
+        x: s32 = 0
+        while x < small_width {
+            if row[x * 4 + 3] > cast(u8)5 {
+                if x < box.left {
+                    box.left = x
+                }
+                if x > box.right {
+                    box.right = x
+                }
+                if y < box.top {
+                    box.top = y
+                }
+                box.bottom = y
+            }
+            x += 1
+        }
+        y += 1
+    }
+    SurfaceDestroy(small)
+    box.left = box.left * 4
+    box.top = box.top * 4
+    box.right = box.right * 4 + 4
+    box.bottom = box.bottom * 4 + 4
+    if box.right > width {
+        box.right = width
+    }
+    if box.bottom > height {
+        box.bottom = height
+    }
+    return box
+}
+
+Union :: (a: Box, b: Box) -> Box {
+    result := a
+    if b.left < result.left {
+        result.left = b.left
+    }
+    if b.top < result.top {
+        result.top = b.top
+    }
+    if b.right > result.right {
+        result.right = b.right
+    }
+    if b.bottom > result.bottom {
+        result.bottom = b.bottom
+    }
+    return result
+}
+
+BoxWidth :: (box: Box) -> float64 {
+    return cast(float64)(box.right - box.left)
+}
+
+BoxHeight :: (box: Box) -> float64 {
+    return cast(float64)(box.bottom - box.top)
+}
+
+// The box of a part, resampled to `detail` pixels per rig unit.
+MakePicture :: (source: *void, box: Box, units_per_pixel: float64) -> Picture {
+    factor := units_per_pixel * rig.detail
+    picture: Picture
+    picture.width = RoundWhole(BoxWidth(box) * factor)
+    picture.height = RoundWhole(BoxHeight(box) * factor)
+    if picture.width < 2 {
+        picture.width = 2
+    }
+    if picture.height < 2 {
+        picture.height = 2
+    }
+    picture.unit = 1.0 / rig.detail
+    picture.surface = ImageSurfaceCreate(FORMAT_ARGB32, picture.width, picture.height)
+    context := ContextCreate(picture.surface)
+    Scale(context, cast(float64) picture.width / BoxWidth(box), cast(float64) picture.height / BoxHeight(box))
+    SetSourceSurface(context, source, -cast(float64) box.left, -cast(float64) box.top)
+    PatternSetFilter(GetSource(context), FILTER_GOOD)
+    Paint(context)
+    ContextDestroy(context)
+    SurfaceFlush(picture.surface)
+    return picture
+}
+
+// Multiply the picture's alpha by a ramp from `from_alpha` at `from` to
+// `to_alpha` at `to`, fractions along its height (or width when across).
+Ramp :: (picture: Picture, across: bool, from: float64, from_alpha: float64, to: float64, to_alpha: float64) {
+    size := cast(float64) picture.height
+    if across {
+        size = cast(float64) picture.width
+    }
+    pattern := LinearGradient(0.0, from * size, 0.0, to * size)
+    if across {
+        PatternDestroy(pattern)
+        pattern = LinearGradient(from * size, 0.0, to * size, 0.0)
+    }
+    AddColorStop(pattern, 0.0, 0.0, 0.0, 0.0, from_alpha)
+    AddColorStop(pattern, 1.0, 0.0, 0.0, 0.0, to_alpha)
+    context := ContextCreate(picture.surface)
+    SetOperator(context, OPERATOR_DEST_IN)
+    SetSource(context, pattern)
+    Paint(context)
+    ContextDestroy(context)
+    PatternDestroy(pattern)
+    SurfaceFlush(picture.surface)
+}
+
+// A cut stump fades out below `fade`, so it tucks under a hand or foot.
+FadeBelow :: (picture: Picture, fade: float64) {
+    Ramp(picture, false, fade - 0.012, 1.0, fade + 0.012, 0.0)
+}
+
+// The picture fades in from above, centered on `start`.
+FadeAbove :: (picture: Picture, start: float64, ramp: float64) {
+    Ramp(picture, false, start - ramp / 2.0, 0.0, start + ramp / 2.0, 1.0)
+}
+
+PicturePoint :: (picture: Picture, fractions: V2) -> V2 {
+    return Vec2(fractions.x * cast(float64) picture.width, fractions.y * cast(float64) picture.height)
+}
+
+// The limbs ------------------------------------------------------------------
+
+StripRow :: struct {
+    source_y: float64
+    center_x: float64
+    center: V2
+    normal: V2
+    scale: float64
+}
+
+matrix: [6]float64;
+
+AffineTriangle :: (context: *void, surface: *void, source: [3]V2, target: [3]V2) {
+    u := Minus(source[1], source[0])
+    v := Minus(source[2], source[0])
+    a := Minus(target[1], target[0])
+    b := Minus(target[2], target[0])
+    determinant := u.x * v.y - v.x * u.y
+    if Magnitude(determinant) < 0.000000001 {
+        return
+    }
+    xx := (a.x * v.y - b.x * u.y) / determinant
+    xy := (-a.x * v.x + b.x * u.x) / determinant
+    yx := (a.y * v.y - b.y * u.y) / determinant
+    yy := (-a.y * v.x + b.y * u.x) / determinant
+    // A collapsed sliver (the inside of a tightly bent knee) has nothing to
+    // show, and its near-singular transform makes Cairo allocate huge
+    // intermediate surfaces.
+    stretch := Most(xx * xx + yx * yx, xy * xy + yy * yy)
+    if Magnitude(xx * yy - xy * yx) < 0.001 * stretch {
+        return
+    }
+    Save(context)
+    MoveTo(context, target[0].x, target[0].y)
+    LineTo(context, target[1].x, target[1].y)
+    LineTo(context, target[2].x, target[2].y)
+    ClosePath(context)
+    Clip(context)
+    matrix[0] = xx
+    matrix[1] = yx
+    matrix[2] = xy
+    matrix[3] = yy
+    matrix[4] = target[0].x - xx * source[0].x - xy * source[0].y
+    matrix[5] = target[0].y - yx * source[0].x - yy * source[0].y
+    Transform(context, *matrix[0])
+    SetSourceSurface(context, surface, 0.0, 0.0)
+    PatternSetFilter(GetSource(context), FILTER_BILINEAR)
+    Paint(context)
+    Restore(context)
+}
+
+// Map horizontal bands of a picture onto a curved strip; source columns left
+// of each row's center go to -normal.
+WarpStrip :: (context: *void, picture: Picture, rows: []StripRow) {
+    Save(context)
+    SetAntialias(context, ANTIALIAS_NONE)
+    index: s32 = 0
+    while index + 1 < cast(s32) rows.count {
+        first := rows[index]
+        second := rows[index + 1]
+        side: s32 = 0
+        while side < 2 {
+            left_first := 0.0
+            right_first := first.center_x
+            left_second := 0.0
+            right_second := second.center_x
+            if side == 1 {
+                left_first = first.center_x
+                right_first = cast(float64) picture.width
+                left_second = second.center_x
+                right_second = cast(float64) picture.width
+            }
+            source: [4]V2
+            target: [4]V2
+            source[0] = Vec2(left_first, first.source_y)
+            source[1] = Vec2(right_first, first.source_y)
+            source[2] = Vec2(right_second, second.source_y)
+            source[3] = Vec2(left_second, second.source_y)
+            target[0] = Plus(first.center, Times(first.normal, (left_first - first.center_x) * first.scale))
+            target[1] = Plus(first.center, Times(first.normal, (right_first - first.center_x) * first.scale))
+            target[2] = Plus(second.center, Times(second.normal, (right_second - second.center_x) * second.scale))
+            target[3] = Plus(second.center, Times(second.normal, (left_second - second.center_x) * second.scale))
+            one_source: [3]V2
+            one_target: [3]V2
+            one_source[0] = source[0]
+            one_source[1] = source[1]
+            one_source[2] = source[2]
+            one_target[0] = target[0]
+            one_target[1] = target[1]
+            one_target[2] = target[2]
+            AffineTriangle(context, picture.surface, one_source, one_target)
+            one_source[1] = source[2]
+            one_source[2] = source[3]
+            one_target[1] = target[2]
+            one_target[2] = target[3]
+            AffineTriangle(context, picture.surface, one_source, one_target)
+            side += 1
+        }
+        index += 1
+    }
+    Restore(context)
+}
+
+BentPoint :: struct {
+    center: V2
+    normal: V2
+}
+
+// Point and normal at `distance` along start, middle, end with the joint
+// rounded over `band` on either side.
+Bend :: (start: V2, middle: V2, end: V2, first: float64, band: float64, distance: float64) -> BentPoint {
+    forward := Normalize(Minus(middle, start))
+    onward := Normalize(Minus(end, middle))
+    result: BentPoint
+    tangent := forward
+    if distance <= first - band {
+        result.center = Plus(start, Times(forward, distance))
+    } else if distance >= first + band {
+        result.center = Plus(middle, Times(onward, distance - first))
+        tangent = onward
+    } else {
+        amount := (distance - first + band) / (2.0 * band)
+        a := Minus(middle, Times(forward, band))
+        b := Plus(middle, Times(onward, band))
+        result.center = Plus(Plus(Times(a, (1.0 - amount) * (1.0 - amount)), Times(middle, 2.0 * amount * (1.0 - amount))),
+                             Times(b, amount * amount))
+        tangent = Normalize(Plus(Times(Minus(middle, a), 1.0 - amount), Times(Minus(b, middle), amount)))
+    }
+    result.normal = Vec2(tangent.y, -tangent.x)
+    return result
+}
+
+Limb :: struct {
+    picture: Picture
+    root: V2
+    length: float64
+    first: float64
+    second: float64
+    width: float64
+    band: float64
+    centers: [2048]float64
+}
+
+// The painting's smoothed center line, row by row.
+MeasureCenters :: (limb: *Limb) {
+    raw: [2048]float64
+    height := limb.picture.height
+    y: s32 = 0
+    while y < height && y < 2048 {
+        ReadRow(limb.picture.surface, y, limb.picture.width)
+        low: s32 = -1
+        high: s32 = -1
+        x: s32 = 0
+        while x < limb.picture.width {
+            if row[x * 4 + 3] > cast(u8)40 {
+                if low < 0 {
+                    low = x
+                }
+                high = x
+            }
+            x += 1
+        }
+        raw[y] = cast(float64) limb.picture.width / 2.0
+        if low >= 0 {
+            raw[y] = cast(float64)(low + high) / 2.0
+        }
+        y += 1
+    }
+    y = 0
+    while y < height && y < 2048 {
+        total := 0.0
+        offset: s32 = -6
+        while offset <= 6 {
+            at := y + offset
+            if at < 0 {
+                at = 0
+            }
+            if at > height - 1 {
+                at = height - 1
+            }
+            total += raw[at]
+            offset += 1
+        }
+        limb.centers[y] = total / 13.0
+        y += 1
+    }
+}
+
+LoadLimb :: (limb: *Limb, spec_at: s32, first: float64, second: float64) {
+    source := LoadPart(TextField(spec_at, "file"))
+    box := TrimmedBox(source)
+    root := PointField(spec_at, "root")
+    tip := PointField(spec_at, "tip")
+    units := (first + second) / ((tip.y - root.y) * BoxHeight(box))
+    limb.picture = MakePicture(source, box, units)
+    SurfaceDestroy(source)
+    MeasureCenters(limb)
+    FadeBelow(limb.picture, NumberField(spec_at, "fade"))
+    top := FieldAt(json, spec_at, "top")
+    if top >= 0 {
+        FadeAbove(limb.picture, Element(top, 0), Element(top, 1))
+    }
+    limb.root = PicturePoint(limb.picture, root)
+    limb.length = PicturePoint(limb.picture, tip).y - limb.root.y
+    limb.first = first
+    limb.second = second
+    limb.width = NumberField(spec_at, "width")
+    limb.band = NumberField(spec_at, "band")
+}
+
+PaintLimb :: (context: *void, limb: *Limb, start: V2, middle: V2, end: V2) {
+    rows: [40]StripRow
+    index: s32 = 0
+    while index < 40 {
+        y := cast(float64)(limb.picture.height - 1) * cast(float64) index / 39.0
+        distance := (y - limb.root.y) / limb.length * (limb.first + limb.second)
+        bent := Bend(start, middle, end, limb.first, limb.band, distance)
+        rows[index].source_y = y
+        rows[index].center_x = limb.centers[cast(s32) y]
+        rows[index].center = bent.center
+        rows[index].normal = bent.normal
+        rows[index].scale = limb.picture.unit * limb.width
+        index += 1
+    }
+    WarpStrip(context, limb.picture, rows[:])
+}
+
+// Rigid parts ---------------------------------------------------------------
+
+// A part that moves rigidly: pivot pinned to a point, turned, scaled. The
+// head is three layers on one canvas; key points are measured on the
+// reference image's box.
+Rigid :: struct {
+    layers: [3]Picture
+    layer_count: s32
+    scale: float64
+    reference: Box
+    pivot: V2
+    turn: float64
+}
+
+LAYER_BACK :: 0;
+LAYER_BASE :: 1;
+LAYER_FRONT :: 2;
+
+CanvasPoint :: (part: *Rigid, fractions: V2) -> V2 {
+    left := cast(float64) part.reference.left
+    top := cast(float64) part.reference.top
+    width := BoxWidth(part.reference)
+    height := BoxHeight(part.reference)
+    return Vec2((left + fractions.x * width) * part.scale, (top + fractions.y * height) * part.scale)
+}
+
+// Offset of a reference-box point from the pivot, in unrotated rig units.
+LocalPoint :: (part: *Rigid, fractions: V2) -> V2 {
+    return Times(Minus(CanvasPoint(part, fractions), part.pivot), part.layers[0].unit)
+}
+
+Cut :: (picture: Picture, cut_at: s32) {
+    side := TextAt(ElementAt(json, cut_at, 0))
+    fraction := Element(cut_at, 1)
+    if side == "top" {
+        Ramp(picture, false, fraction - 0.015, 0.0, fraction + 0.015, 1.0)
+    } else {
+        Ramp(picture, true, fraction - 0.01, 1.0, fraction + 0.01, 0.0)
+    }
+}
+
+LoadRigid :: (part: *Rigid, spec_at: s32) {
+    files: [3]string
+    count: s32 = 0
+    layers := FieldAt(json, spec_at, "layers")
+    if layers >= 0 {
+        files[LAYER_BACK] = TextField(layers, "back")
+        files[LAYER_BASE] = TextField(layers, "base")
+        files[LAYER_FRONT] = TextField(layers, "front")
+        count = 3
+    } else {
+        files[0] = TextField(spec_at, "file")
+        count = 1
+    }
+    reference_file := files[0]
+    if FieldAt(json, spec_at, "reference") >= 0 {
+        reference_file = TextField(spec_at, "reference")
+    }
+    sources: [3]*void
+    reference_source := LoadPart(reference_file)
+    reference := TrimmedBox(reference_source)
+    SurfaceDestroy(reference_source)
+    box := reference
+    index: s32 = 0
+    while index < count {
+        sources[index] = LoadPart(files[index])
+        box = Union(box, TrimmedBox(sources[index]))
+        index += 1
+    }
+    units := 0.0
+    if FieldAt(json, spec_at, "height") >= 0 {
+        units = NumberField(spec_at, "height") / BoxHeight(reference)
+    } else {
+        units = NumberField(spec_at, "width") / BoxWidth(reference)
+    }
+    cut := FieldAt(json, spec_at, "cut")
+    index = 0
+    while index < count {
+        part.layers[index] = MakePicture(sources[index], box, units)
+        SurfaceDestroy(sources[index])
+        if cut >= 0 {
+            Cut(part.layers[index], cut)
+        }
+        index += 1
+    }
+    part.layer_count = count
+    part.scale = cast(float64) part.layers[0].width / BoxWidth(box)
+    part.reference = Box.{left = reference.left - box.left, top = reference.top - box.top,
+                          right = reference.right - box.left, bottom = reference.bottom - box.top}
+    part.pivot = CanvasPoint(part, PointField(spec_at, "pivot"))
+    part.turn = Radians(OptionalNumber(spec_at, "turn", 0.0))
+}
+
+PaintRigid :: (context: *void, part: *Rigid, layer: s32, point: V2, angle: float64, alpha: float64) {
+    if alpha <= 0.01 {
+        return
+    }
+    picture := part.layers[layer]
+    Save(context)
+    Translate(context, point.x, point.y)
+    Rotate(context, angle + part.turn)
+    Scale(context, picture.unit, picture.unit)
+    Translate(context, -part.pivot.x, -part.pivot.y)
+    SetSourceSurface(context, picture.surface, 0.0, 0.0)
+    PatternSetFilter(GetSource(context), FILTER_GOOD)
+    PaintWithAlpha(context, alpha)
+    Restore(context)
+}
+
+// The torso -------------------------------------------------------------
+
+Torso :: struct {
+    picture: Picture
+    hip: V2
+    axis_angle: float64
+    neck: V2
+    width: float64
+    slide: float64
+    slide_from: V2
+    back_heights: [128]float64
+    back_depths: [128]float64
+    back_count: s32
+}
+
+// Image pixel to (distance up the spine, forward offset) in rig units.
+ToBody :: (torso: *Torso, point: V2) -> V2 {
+    offset := Minus(point, torso.hip)
+    axis := UnitAt(torso.axis_angle)
+    forward := Vec2(-axis.y, axis.x)
+    up := (offset.x * axis.x + offset.y * axis.y) * torso.picture.unit
+    ahead := (offset.x * forward.x + offset.y * forward.y) * torso.picture.unit
+    return Vec2(up, ahead * torso.width)
+}
+
+// The back edge of the shirt, as the least forward offset per 4 units up.
+MeasureBack :: (torso: *Torso) {
+    depths: [128]float64
+    seen: [128]bool
+    y: s32 = 0
+    while y < torso.picture.height {
+        ReadRow(torso.picture.surface, y, torso.picture.width)
+        x: s32 = 0
+        while x < torso.picture.width {
+            if row[x * 4 + 3] > cast(u8)60 {
+                body := ToBody(torso, Vec2(cast(float64) x, cast(float64) y))
+                key := RoundWhole(body.x / 4.0) + 32
+                if key >= 0 && key < 128 {
+                    if !seen[key] {
+                        seen[key] = true
+                        depths[key] = 0.0
+                    }
+                    depths[key] = Least(depths[key], body.y)
+                }
+            }
+            x += 2
+        }
+        y += 2
+    }
+    torso.back_count = 0
+    key: s32 = 0
+    while key < 128 {
+        if seen[key] {
+            torso.back_heights[torso.back_count] = cast(float64)((key - 32) * 4)
+            torso.back_depths[torso.back_count] = depths[key]
+            torso.back_count += 1
+        }
+        key += 1
+    }
+}
+
+LoadTorso :: (torso: *Torso, spec_at: s32) {
+    source := LoadPart(TextField(spec_at, "file"))
+    box := TrimmedBox(source)
+    hip_fraction := PointField(spec_at, "hip")
+    shoulder_fraction := PointField(spec_at, "shoulder")
+    hip := Vec2(hip_fraction.x * BoxWidth(box), hip_fraction.y * BoxHeight(box))
+    shoulder := Vec2(shoulder_fraction.x * BoxWidth(box), shoulder_fraction.y * BoxHeight(box))
+    torso.picture = MakePicture(source, box, rig.torso / Distance(hip, shoulder))
+    SurfaceDestroy(source)
+    torso.width = NumberField(spec_at, "width")
+    torso.slide = NumberField(spec_at, "slide")
+    torso.slide_from = PointField(spec_at, "slideFrom")
+    torso.hip = PicturePoint(torso.picture, hip_fraction)
+    torso.axis_angle = AngleOf(Minus(PicturePoint(torso.picture, shoulder_fraction), torso.hip))
+    torso.neck = ToBody(torso, PicturePoint(torso.picture, PointField(spec_at, "neck")))
+    MeasureBack(torso)
+}
+
+PaintTorso :: (context: *void, torso: *Torso, p: Pose) {
+    Save(context)
+    Translate(context, p.hip.x, p.hip.y)
+    Rotate(context, p.spine)
+    // The loose top slides toward her chest when her hips are above her
+    // shoulders, showing the waistband of her leggings.
+    inverted := Smoothstep(torso.slide_from.x, torso.slide_from.y, Sine(p.spine))
+    Translate(context, rig.torso, 0.0)
+    Scale(context, 1.0 - torso.slide * inverted, 1.0)
+    Translate(context, -rig.torso, 0.0)
+    // Squeeze front-to-back around the spine axis.
+    Scale(context, 1.0, torso.width)
+    Rotate(context, -torso.axis_angle)
+    Scale(context, torso.picture.unit, torso.picture.unit)
+    Translate(context, -torso.hip.x, -torso.hip.y)
+    SetSourceSurface(context, torso.picture.surface, 0.0, 0.0)
+    PatternSetFilter(GetSource(context), FILTER_GOOD)
+    Paint(context)
+    Restore(context)
+}
+
+// The long hair --------------------------------------------------------------
+
+// A Verlet strand whose first two points follow the head.
+Hair :: struct {
+    points: [16]V2
+    previous: [16]V2
+    roots: [2]V2
+    time: float64
+    started: bool
+}
+
+HoldPair :: (hair: *Hair, first: s32, second: s32, shortest: float64, longest: float64) {
+    delta := Minus(hair.points[second], hair.points[first])
+    distance := Most(Length(delta), 0.000000001)
+    target := Least(longest, Most(shortest, distance))
+    if Magnitude(target - distance) < 0.000000001 {
+        return
+    }
+    correction := Times(delta, (distance - target) / distance)
+    if first <= 1 {
+        hair.points[second] = Minus(hair.points[second], correction)
+    } else {
+        hair.points[first] = Plus(hair.points[first], Times(correction, 0.5))
+        hair.points[second] = Minus(hair.points[second], Times(correction, 0.5))
+    }
+}
+
+HairSubstep :: (hair: *Hair, torso: *Torso, p: Pose, collide: bool, first_root: V2, second_root: V2, h: float64) {
+    count := rig.hair_count
+    segment := rig.hair_segment
+    floor := rig.ground - 3.0
+    index: s32 = 2
+    while index < count {
+        point := hair.points[index]
+        before := hair.previous[index]
+        hair.previous[index] = point
+        hair.points[index] = Vec2(point.x + (point.x - before.x) * rig.hair_damping,
+                                  point.y + (point.y - before.y) * rig.hair_damping + rig.hair_gravity * h * h)
+        index += 1
+    }
+    hair.points[0] = first_root
+    hair.points[1] = second_root
+    hair.previous[0] = first_root
+    hair.previous[1] = second_root
+    // Bending limits keep the hair from folding back on itself into a loop.
+    pass: s32 = 0
+    while pass < 6 {
+        index = 1
+        while index < count - 1 {
+            HoldPair(hair, index, index + 1, segment, segment)
+            index += 1
+        }
+        index = 1
+        while index < count - 2 {
+            HoldPair(hair, index, index + 2, segment * 1.85, segment * 2.0)
+            index += 1
+        }
+        index = 1
+        while index < count - 3 {
+            HoldPair(hair, index, index + 3, segment * 2.5, segment * 3.0)
+            index += 1
+        }
+        index = 2
+        while index < count {
+            if hair.points[index].y > floor {
+                hair.points[index].y = floor
+            }
+            if collide {
+                hair.points[index] = OutsideBack(torso, p, hair.points[index])
+            }
+            index += 1
+        }
+        pass += 1
+    }
+}
+
+// Keep a hair point outside her back while she is upright.
+OutsideBack :: (torso: *Torso, p: Pose, point: V2) -> V2 {
+    axis := UnitAt(p.spine)
+    forward := Vec2(-Sine(p.spine), Cosine(p.spine))
+    strength := 1.0 - Smoothstep(0.2, 0.5, forward.y)
+    offset := Minus(point, p.hip)
+    height := offset.x * axis.x + offset.y * axis.y
+    depth := offset.x * forward.x + offset.y * forward.y
+    count := torso.back_count
+    if count < 2 || height < torso.back_heights[0] || height > torso.back_heights[count - 1] {
+        return point
+    }
+    index: s32 = 0
+    while index < count - 2 && torso.back_heights[index + 1] < height {
+        index += 1
+    }
+    low := torso.back_heights[index]
+    high := torso.back_heights[index + 1]
+    amount := 0.0
+    if high > low {
+        amount = (height - low) / (high - low)
+    }
+    back := torso.back_depths[index] * (1.0 - amount) + torso.back_depths[index + 1] * amount - 1.5
+    if back < depth && depth < 0.0 {
+        return Plus(point, Times(forward, (back - depth) * strength))
+    }
+    return point
+}
+
+Collides :: (p: Pose) -> bool {
+    forward_y := Cosine(p.spine)
+    return 1.0 - Smoothstep(0.2, 0.5, forward_y) > 0.0
+}
+
+HairStep :: (hair: *Hair, torso: *Torso, p: Pose, first_root: V2, second_root: V2, dt: float64) {
+    start_first := hair.roots[0]
+    start_second := hair.roots[1]
+    collide := Collides(p)
+    index: s32 = 1
+    while index <= rig.hair_substeps {
+        amount := cast(float64) index / cast(float64) rig.hair_substeps
+        HairSubstep(hair, torso, p, collide, Mix(start_first, first_root, amount), Mix(start_second, second_root, amount),
+                    dt / cast(float64) rig.hair_substeps)
+        index += 1
+    }
+    hair.roots[0] = first_root
+    hair.roots[1] = second_root
+}
+
+HairReset :: (hair: *Hair, torso: *Torso, p: Pose, first_root: V2, second_root: V2) {
+    floor := rig.ground - 3.0
+    hair.points[0] = first_root
+    hair.points[1] = second_root
+    index: s32 = 2
+    while index < rig.hair_count {
+        hair.points[index] = Vec2(second_root.x, second_root.y + rig.hair_segment * cast(float64)(index - 1))
+        if hair.points[index].y > floor {
+            hair.points[index].y = floor
+        }
+        index += 1
+    }
+    index = 0
+    while index < rig.hair_count {
+        hair.previous[index] = hair.points[index]
+        index += 1
+    }
+    hair.roots[0] = first_root
+    hair.roots[1] = second_root
+    settle: s32 = 0
+    while settle < 90 {
+        HairSubstep(hair, torso, p, false, first_root, second_root, 1.0 / 120.0)
+        settle += 1
+    }
+}
+
+// The girl ---------------------------------------------------------------
+
+Girl :: struct {
+    surface: *void
+    context: *void
+    width: s32
+    height: s32
+    leg: Limb
+    arm: Limb
+    torso: Torso
+    head: Rigid
+    hips: Rigid
+    hand_upright: Rigid
+    hand_flat: Rigid
+    foot_flat: Rigid
+    foot_tucked: Rigid
+    foot_instep: Rigid
+    hair_picture: Picture
+    hair: Hair
+    feet: [2]FootState
+}
+
+girl: Girl;
+
+LoadGirl :: (width: s32, height: s32) -> bool {
+    girl.width = width
+    girl.height = height
+    girl.surface = ImageSurfaceCreate(FORMAT_ARGB32, width, height)
+    girl.context = ContextCreate(girl.surface)
+    parts := Field(0, "parts")
+    LoadLimb(*girl.leg, Field(parts, "leg"), rig.thigh, rig.shin)
+    LoadLimb(*girl.arm, Field(parts, "arm"), rig.upper_arm, rig.forearm)
+    LoadTorso(*girl.torso, Field(parts, "torso"))
+    LoadRigid(*girl.head, Field(parts, "head"))
+    LoadRigid(*girl.hips, Field(parts, "hips"))
+    LoadRigid(*girl.hand_upright, Field(parts, "handUpright"))
+    LoadRigid(*girl.hand_flat, Field(parts, "handFlat"))
+    LoadRigid(*girl.foot_flat, Field(parts, "footFlat"))
+    LoadRigid(*girl.foot_tucked, Field(parts, "footTucked"))
+    LoadRigid(*girl.foot_instep, Field(parts, "footInstep"))
+    hair_source := LoadPart(TextField(Field(parts, "longHair"), "file"))
+    hair_box := TrimmedBox(hair_source)
+    hair_length := rig.hair_segment * cast(float64)(rig.hair_count - 1) + 10.0
+    girl.hair_picture = MakePicture(hair_source, hair_box, hair_length / BoxHeight(hair_box))
+    SurfaceDestroy(hair_source)
+    return missing == 0
+}
+
+// A (distance up the spine, forward offset) point in rig space.
+BodyPoint :: (p: Pose, point: V2) -> V2 {
+    forward := Vec2(-Sine(p.spine), Cosine(p.spine))
+    return Plus(Plus(p.hip, Times(UnitAt(p.spine), point.x)), Times(forward, point.y))
+}
+
+HeadTurn :: (p: Pose) -> float64 {
+    lift := Wrap(p.gaze - p.spine) * rig.head_lift
+    lift = Most(Radians(rig.head_lift_min), Least(Radians(rig.head_lift_max), lift))
+    return p.spine + lift + pi / 2.0
+}
+
+HeadPoint :: (p: Pose, fractions: V2) -> V2 {
+    neck := BodyPoint(p, girl.torso.neck)
+    return Plus(neck, Turn(LocalPoint(*girl.head, fractions), HeadTurn(p)))
+}
+
+LimbEnds :: struct {
+    root: V2
+    middle: V2
+    end: V2
+}
+
+EndsOf :: (p: Pose, far: bool, leg: bool) -> LimbEnds {
+    offset := Vec2(0.0, 0.0)
+    if far {
+        offset = rig.far_offset
+    }
+    result: LimbEnds
+    if leg {
+        result.root = Plus(p.hip, offset)
+        target := Plus(p.near_ankle, offset)
+        if far {
+            target = Plus(p.far_ankle, offset)
+        }
+        solved := SolveJoint(result.root, target, rig.thigh, rig.shin, -1.0)
+        result.middle = solved.middle
+        result.end = solved.end
+        return result
+    }
+    result.root = Plus(Shoulder(p), offset)
+    target := Plus(p.near_wrist, offset)
+    if far {
+        target = Plus(p.far_wrist, offset)
+    }
+    solved := SolveJoint(result.root, target, rig.upper_arm, rig.forearm, 1.0)
+    result.middle = solved.middle
+    result.end = solved.end
+    return result
+}
+
+// Far-side limbs are drawn slightly darker.
+BeginTint :: (far: bool) {
+    if far {
+        PushGroup(girl.context)
+    }
+}
+
+EndTint :: (far: bool) {
+    if !far {
+        return
+    }
+    context := girl.context
+    SetOperator(context, OPERATOR_ATOP)
+    SetSourceRgba(context, rig.far[0] / 255.0, rig.far[1] / 255.0, rig.far[2] / 255.0, rig.far[3])
+    Paint(context)
+    PopGroupToSource(context)
+    Paint(context)
+}
+
+DrawLeg :: (p: Pose, far: bool) {
+    ends := EndsOf(p, far, true)
+    state := girl.feet[0]
+    if far {
+        state = girl.feet[1]
+    }
+    // A lifted foot points its toes along the line of the shin.
+    shin := AngleOf(Minus(ends.end, ends.middle))
+    pointed := shin - pi / 2.0 + rig.point_toes
+    angle := state.angle + Wrap(pointed - state.angle) * Smoothstep(0.0, 0.5, state.airborne)
+    tucked := (1.0 - p.instep) * Smoothstep(0.55, 0.63, state.angle) * (1.0 - Smoothstep(0.18, 0.22, state.airborne))
+    context := girl.context
+    BeginTint(far)
+    PaintRigid(context, *girl.foot_flat, 0, ends.end, angle, 1.0 - p.instep - tucked)
+    PaintRigid(context, *girl.foot_tucked, 0, ends.end, 0.0, tucked)
+    PaintRigid(context, *girl.foot_instep, 0, ends.end, 0.0, p.instep)
+    PaintLimb(context, *girl.leg, ends.root, ends.middle, ends.end)
+    EndTint(far)
+}
+
+DrawArm :: (p: Pose, far: bool) {
+    ends := EndsOf(p, far, false)
+    // Fingers follow the forearm, except upright prayer and salute hands.
+    hand_angle := Wrap(AngleOf(Minus(ends.end, ends.middle)) + pi / 2.0) * (1.0 - p.upright)
+    // The flat hand shows only once the wrist is down at the floor.
+    flat := Smoothstep(0.45, 0.55, p.palm) * (1.0 - Smoothstep(16.0, 30.0, rig.ground - ends.end.y))
+    context := girl.context
+    BeginTint(far)
+    PaintRigid(context, *girl.hand_upright, 0, ends.end, hand_angle, 1.0 - flat)
+    if flat > 0.01 {
+        bottom := LocalPoint(*girl.hand_flat, Vec2(0.0, 1.0)).y
+        PaintRigid(context, *girl.hand_flat, 0, Vec2(ends.end.x, rig.ground - bottom), 0.0, flat)
+    }
+    PaintLimb(context, *girl.arm, ends.root, ends.middle, ends.end)
+    EndTint(far)
+}
+
+// Advance the hair to `time` exactly as the video does: from rest at 0 s,
+// one step per video frame with that frame's pose.
+UpdateHair :: (p: Pose, time: float64) {
+    frame_step := 1.0 / cast(float64) rig.fps
+    if !girl.hair.started || time < girl.hair.time - 0.000000001 {
+        start := SamplePose(0.0)
+        HairReset(*girl.hair, *girl.torso, start, HeadPoint(start, rig.hair_roots[0]), HeadPoint(start, rig.hair_roots[1]))
+        girl.hair.time = 0.0
+        girl.hair.started = true
+    }
+    frame := RoundWhole(girl.hair.time / frame_step)
+    target := RoundWhole(time / frame_step)
+    index := frame + 1
+    while index < target {
+        moment := cast(float64) index * frame_step
+        AdvanceHair(SamplePose(moment), moment)
+        index += 1
+    }
+    if target > frame {
+        AdvanceHair(p, time)
+    }
+}
+
+AdvanceHair :: (p: Pose, time: float64) {
+    first_root := HeadPoint(p, rig.hair_roots[0])
+    second_root := HeadPoint(p, rig.hair_roots[1])
+    HairStep(*girl.hair, *girl.torso, p, first_root, second_root, time - girl.hair.time)
+    girl.hair.time = time
+}
+
+spline: [256]V2;
+lengths: [256]float64;
+
+// Dense open Catmull-Rom samples through the hair points.
+SplineCount :: () -> s32 {
+    count := rig.hair_count
+    written: s32 = 0
+    index: s32 = 0
+    while index < count - 1 {
+        p0 := girl.hair.points[index]
+        if index > 0 {
+            p0 = girl.hair.points[index - 1]
+        }
+        p1 := girl.hair.points[index]
+        p2 := girl.hair.points[index + 1]
+        p3 := girl.hair.points[index + 1]
+        if index + 2 < count {
+            p3 = girl.hair.points[index + 2]
+        }
+        step: s32 = 0
+        while step < 5 {
+            t := cast(float64) step / 5.0
+            t2 := t * t
+            t3 := t2 * t
+            spline[written] = Vec2(
+                0.5 * (2.0 * p1.x + (p2.x - p0.x) * t + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2 +
+                       (3.0 * p1.x - p0.x - 3.0 * p2.x + p3.x) * t3),
+                0.5 * (2.0 * p1.y + (p2.y - p0.y) * t + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2 +
+                       (3.0 * p1.y - p0.y - 3.0 * p2.y + p3.y) * t3))
+            written += 1
+            step += 1
+        }
+        index += 1
+    }
+    spline[written] = girl.hair.points[count - 1]
+    return written + 1
+}
+
+DrawHair :: () {
+    count := SplineCount()
+    lengths[0] = 0.0
+    index: s32 = 1
+    while index < count {
+        lengths[index] = lengths[index - 1] + Distance(spline[index - 1], spline[index])
+        index += 1
+    }
+    total := lengths[count - 1]
+    picture := girl.hair_picture
+    rows: [48]StripRow
+    row_index: s32 = 0
+    while row_index < 48 {
+        y := cast(float64)(picture.height - 1) * cast(float64) row_index / 47.0
+        distance := y / cast(float64)(picture.height - 1) * total
+        segment: s32 = 0
+        while segment < count - 2 && lengths[segment + 1] <= distance {
+            segment += 1
+        }
+        span := Most(lengths[segment + 1] - lengths[segment], 0.000000001)
+        center := Mix(spline[segment], spline[segment + 1], (distance - lengths[segment]) / span)
+        tangent := Normalize(Minus(spline[segment + 1], spline[segment]))
+        rows[row_index].source_y = y
+        rows[row_index].center_x = cast(float64) picture.width / 2.0
+        rows[row_index].center = center
+        rows[row_index].normal = Vec2(tangent.y, -tangent.x)
+        rows[row_index].scale = picture.unit * rig.hair_width
+        row_index += 1
+    }
+    WarpStrip(girl.context, picture, rows[:])
+}
+
+DrawShadow :: (p: Pose) {
+    context := girl.context
+    left := Least(Least(Least(p.near_ankle.x, p.far_ankle.x), Least(p.near_wrist.x, p.far_wrist.x)), p.hip.x) - 40.0
+    right := Most(Most(Most(p.near_ankle.x, p.far_ankle.x), Most(p.near_wrist.x, p.far_wrist.x)), p.hip.x) + 40.0
+    radius := (right - left) / 2.0
+    Save(context)
+    Translate(context, (left + right) / 2.0, rig.ground)
+    Scale(context, 1.0, 9.0 / radius)
+    gradient := RadialGradient(0.0, 0.0, 0.0, 0.0, 0.0, radius)
+    AddColorStop(gradient, 0.0, rig.shadow[0] / 255.0, rig.shadow[1] / 255.0, rig.shadow[2] / 255.0, rig.shadow[3])
+    AddColorStop(gradient, 1.0, rig.shadow[0] / 255.0, rig.shadow[1] / 255.0, rig.shadow[2] / 255.0, 0.0)
+    SetSource(context, gradient)
+    Arc(context, 0.0, 0.0, radius, 0.0, 2.0 * pi)
+    Fill(context)
+    PatternDestroy(gradient)
+    Restore(context)
+}
+
+DrawHead :: (p: Pose, layer: s32) {
+    PaintRigid(girl.context, *girl.head, layer, BodyPoint(p, girl.torso.neck), HeadTurn(p), 1.0)
+}
+
+DrawFrame :: (time: float64) {
+    context := girl.context
+    p := SamplePose(time)
+    girl.feet = FeetAt(p, time)
+    UpdateHair(p, time)
+    Save(context)
+    SetSourceRgb(context, rig.background[0] / 255.0, rig.background[1] / 255.0, rig.background[2] / 255.0)
+    Paint(context)
+    Scale(context, cast(float64) girl.width / rig.design_width, cast(float64) girl.height / rig.design_height)
+    Translate(context, rig.center_x, rig.ground_y)
+    Scale(context, rig.camera_scale, rig.camera_scale)
+    Translate(context, -rig.rig_x, -rig.ground)
+    DrawShadow(p)
+    // Back to front as seen from her near side: far limbs, the long hair and
+    // the back hair, hips, near leg, torso (the shirt covers the leggings),
+    // face and neck, the bangs and side hair, near arm.
+    DrawLeg(p, true)
+    DrawArm(p, true)
+    DrawHair()
+    if girl.head.layer_count == 3 {
+        DrawHead(p, LAYER_BACK)
+    }
+    PaintRigid(context, *girl.hips, 0, p.hip, p.spine + pi / 2.0, 1.0)
+    DrawLeg(p, false)
+    PaintTorso(context, *girl.torso, p)
+    if girl.head.layer_count == 3 {
+        DrawHead(p, LAYER_BASE)
+        DrawHead(p, LAYER_FRONT)
+    } else {
+        DrawHead(p, 0)
+    }
+    DrawArm(p, false)
+    Restore(context)
+    SurfaceFlush(girl.surface)
+}
+
+// Output -------------------------------------------------------------------
+
+WriteChapters :: (path: string) -> bool {
+    stream := OpenStream(path, "w")
+    if stream == null {
+        return false
+    }
+    PutText(";FFMETADATA1\ntitle=Sun salutation\n", stream)
+    names := Field(0, "names")
+    index: s32 = 0
+    while index < rig.steps {
+        start := cast(float64) index * Period() * 1000.0
+        end := Least(start + Period() * 1000.0, Duration() * 1000.0)
+        chapter: Vec(u8);
+        BuilderPrint(*chapter, "[CHAPTER]\nTIMEBASE=1/1000\nSTART=%\nEND=%\ntitle=%\n", RoundWhole(start), RoundWhole(end), TextAt(ElementAt(json, names, index)));
+        PutText(BuilderFinish(chapter), stream)
+        index += 1
+    }
+    CloseStream(stream)
+    return true
+}
+
+RenderVideo :: (directory: string) -> s32 {
+    chapters: Vec(u8);
+    BuilderPrint(*chapters, "%/chapters.txt", directory);
+    chapters_path := BuilderFinish(chapters)
+    if !WriteChapters(chapters_path) {
+        print("cannot write %\n", chapters_path)
+        return 1
+    }
+    command: Vec(u8);
+    BuilderPrint(*command, "ffmpeg -hide_banner -loglevel error -nostdin -y -f rawvideo -pixel_format bgra -video_size %x% -framerate % -i pipe:0 -f ffmetadata -i % -map 0:v:0 -map_metadata 1 -map_chapters 1 -an -c:v libx264 -crf 18 -preset fast -threads 3 -pix_fmt yuv420p -movflags +faststart %/sun-salutation.mp4", girl.width, girl.height, rig.fps, chapters_path, directory);
+    pipe := OpenPipe(BuilderFinish(command), "w")
+    if pipe == null {
+        print("cannot start ffmpeg\n")
+        return 1
+    }
+    frames := RoundWhole(Duration() * cast(float64) rig.fps)
+    bytes := cast(u64)(SurfaceStride(girl.surface) * girl.height)
+    frame: s32 = 0
+    while frame < frames {
+        DrawFrame(cast(float64) frame / cast(float64) rig.fps)
+        WriteBytes(SurfaceData(girl.surface), 1, bytes, pipe)
+        if frame % (rig.fps * 6) == 0 {
+            print("% / % s\n", frame / rig.fps, RoundWhole(Duration()))
+        }
+        frame += 1
+    }
+    if ClosePipe(pipe) != 0 {
+        print("ffmpeg failed\n")
+        return 1
+    }
+    print("Saved %/sun-salutation.mp4\n", directory)
+    return 0
+}
+
+Main :: () -> s32 {
+    theme := GetEnvironment("THEME")
+    if theme.count == 0 {
+        theme = "light"
+    }
+    if !ReadRig("docs/sun-salutation-girl.json", theme) {
+        return 1
+    }
+    if !LoadGirl(rig.width, rig.height) {
+        return 1
+    }
+    directory: Vec(u8);
+    BuilderPrint(*directory, "build/sun-salutation-girl-zi/%", theme);
+    output := BuilderFinish(directory)
+    make: Vec(u8);
+    BuilderPrint(*make, "mkdir -p %", output);
+    RunCommand(BuilderFinish(make))
+    still := GetEnvironment("STILL")
+    if still.count > 0 {
+        seconds := ReadNumber(still, 0)
+        if !seconds.valid {
+            print("STILL must be a time in seconds\n")
+            return 1
+        }
+        DrawFrame(seconds.value)
+        path: Vec(u8);
+        BuilderPrint(*path, "%/frame-%.png", output, still);
+        target := BuilderFinish(path)
+        SurfaceWritePng(girl.surface, target)
+        print("%\n", target)
+        return 0
+    }
+    return RenderVideo(output)
+}

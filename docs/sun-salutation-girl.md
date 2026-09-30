@@ -15,6 +15,15 @@ Pillow, and FFmpeg with libx264. Rendering is offscreen and deterministic: the
 same inputs give byte-identical video, and a still matches the same frame of
 the video, hair included.
 
+The same renderer is also written in Ziran, `scripts/sun_salutation_girl.zi`.
+`scripts/render-sun-salutation-girl-zi.sh` builds it to Python with Inbe's
+pinned toolchain (`zi2py`, with `LDLIBS=-lcairo` so its C calls reach
+Cairo) and runs it; set `STILL=seconds` for one frame and `THEME=dark` for
+the dark stage. It reads the same rig and parts and writes under
+`build/sun-salutation-girl-zi/`. It measures part images at a quarter of their
+size and resamples them with Cairo rather than Pillow, so its frames differ
+from the Python ones by a fraction of a pixel along edges.
+
 ## Inputs
 
 - `docs/sun-salutation-girl.json` holds everything that places her: the
