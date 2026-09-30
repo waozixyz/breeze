@@ -14,7 +14,7 @@ cp "$work/c/assets.h" "$work/c/app/assets.h"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/assets/styles/inbe.kss" "$root/locales/index.txt" \
     "$root/assets/pet/egg1.png" \
-    "$root/build/packages/kryon/styles/kryon/material.kss"
+    "$root/build/packages/kss/styles/material.kss"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -Wall -Wextra \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/assets_link_test.c" \

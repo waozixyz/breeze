@@ -9,15 +9,15 @@ mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/kss" \
+    --module-path "$root/build/packages/kss/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/style_apply_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/themes/catalog_light.kss" "$root/themes/catalog_dark.kss" \
-    "$root/build/packages/kryon/styles/kryon/material.kss" \
-    "$root/build/packages/kryon/styles/kryon/classic.kss" \
-    "$root/build/packages/kryon/styles/kryon/lightfield.kss" \
+    "$root/build/packages/kss/styles/material.kss" \
+    "$root/build/packages/kss/styles/classic.kss" \
+    "$root/build/packages/kss/styles/lightfield.kss" \
     "$root/assets/styles/inbe.kss"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \

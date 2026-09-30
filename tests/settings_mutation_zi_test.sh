@@ -7,7 +7,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/kss" \
+    --module-path "$root/build/packages/kss/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/tests/settings_mutation_behavior.zi"

@@ -180,6 +180,7 @@ APP_VERSION := $(shell awk '/APP_VERSION_STRING/ { print $$3; exit }' $(VERSION_
 SOCIAL_PY ?= $(if $(wildcard .local/social-venv/bin/python),.local/social-venv/bin/python,python3)
 
 KRYON_DIR ?= build/packages/kryon
+KSS_DIR ?= build/packages/kss
 KRYON_BACKEND ?= raylib
 ifeq ($(KRYON_BACKEND),tui)
 KRYON_BACKEND := termi
@@ -236,8 +237,8 @@ KRYON_UI_ZI := $(addprefix $(KRYON_DIR)/src/ui/,$(shell cat $(KRYON_DIR)/src/ui/
 KRYON_UI_C := $(patsubst $(KRYON_DIR)/src/ui/%.zi,$(KRYON_GENERATED_SRC_DIR)/ui/%.c,$(KRYON_UI_ZI))
 KRYON_UI_H := $(KRYON_UI_C:.c=.h)
 KRYON_UI_STAMP := $(KRYON_GENERATED_SRC_DIR)/ui/.fresh
-KRYON_KSS_ZI := $(wildcard $(KRYON_DIR)/src/kss/*.zi)
-KRYON_KSS_C := $(patsubst $(KRYON_DIR)/src/kss/%.zi,$(KRYON_GENERATED_SRC_DIR)/kss/%.c,$(KRYON_KSS_ZI))
+KRYON_KSS_ZI := $(wildcard $(KSS_DIR)/src/*.zi)
+KRYON_KSS_C := $(patsubst $(KSS_DIR)/src/%.zi,$(KRYON_GENERATED_SRC_DIR)/kss/%.c,$(KRYON_KSS_ZI))
 KRYON_KSS_H := $(KRYON_KSS_C:.c=.h)
 KRYON_KSS_STAMP := $(KRYON_GENERATED_SRC_DIR)/kss/.fresh
 KRYON_ICON_ASSETS_C := $(KRYON_GENERATED_SRC_DIR)/ui/ui_icon_assets.c
@@ -404,7 +405,7 @@ FONT_FILES := \
 	$(FONT_SUBSET_DIR)/NotoSansKR-App-Regular.otf \
 	$(FONT_SUBSET_DIR)/NotoSansTC-App-Regular.otf
 EMBEDDED_ASSETS_C := $(BUILD_OBJ_DIR)/$(APP_NAME)_embedded_assets.c
-STYLE_FILES := $(wildcard $(KRYON_DIR)/styles/kryon/*.kss) \
+STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
 	$(wildcard assets/styles/*.kss) \
 	$(wildcard themes/catalog_*.kss)
 IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
@@ -650,7 +651,7 @@ zi-check: $(ZI_CHECK_STAMP) | build-laws
 $(ZI_CHECK_STAMP): Makefile scripts/check-zi-sources.py $(ZI2C_BIN) \
 	$(ZI_SRCS) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) \
 	$(KRYON_UI_ZI) $(KRYON_KSS_ZI) $(GAME2D_MODULES) | build-laws
-	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KRYON_DIR)/src/kss
+	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KSS_DIR)/src
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -853,8 +854,8 @@ $(KRYON_UI_C) $(KRYON_UI_H): $(KRYON_UI_STAMP)
 
 $(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/modules.txt
 	mkdir -p $(dir $@)
-	$(ZI2C_BIN) --no-main --root $(KRYON_DIR)/src/kss \
-		--module-path $(KRYON_DIR)/src/ui \
+	$(ZI2C_BIN) --no-main --root $(KSS_DIR)/src \
+		--module-path $(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/ui \
 		-o $(dir $@) $(KRYON_KSS_ZI)
 	touch $@
 
@@ -866,7 +867,7 @@ $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KSS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -880,7 +881,7 @@ $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KSS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -899,7 +900,7 @@ $(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME
 		--define PLATFORM_DESKTOP --define _WIN32 \
 		--define DESKTOP_TRAY_ENABLED \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KSS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -926,7 +927,7 @@ zi-c-plan9: $(KRY_GEN_STAMP)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --plan9 --define PLAN9_BUILD \
 		--define KRYON_PLATFORM_PLAN9 --root . \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KRYON_DIR)/src/kss \
+		--module-path $(KSS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \

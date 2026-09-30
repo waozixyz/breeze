@@ -9,7 +9,7 @@ mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/kss" \
+    --module-path "$root/build/packages/kss/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/theme_catalog_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"

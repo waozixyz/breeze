@@ -77,7 +77,7 @@ set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
 file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
 file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
-    "${KRYON_DIR}/src/kss/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
+    "${REPO_ROOT}/build/packages/kss/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD)
 set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD")
@@ -191,7 +191,7 @@ file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
     "${REPO_ROOT}/assets/practices/*/banner-light.png"
     "${REPO_ROOT}/assets/practices/*/banner-dark.png")
 file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
-    "${KRYON_DIR}/styles/kryon/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
+    "${REPO_ROOT}/build/packages/kss/styles/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
     "${REPO_ROOT}/themes/catalog_*.kss")
 foreach(mode light dark)
     file(SHA256 "${REPO_ROOT}/themes/catalog_${mode}.kss" APP_CATALOG_HASH)
