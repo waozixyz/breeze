@@ -229,17 +229,20 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       const before = await state();
       if (before.step !== step || before.paused !== 1 || before.ticks !== 0)
         throw new Error(`Sun Salutation Next lost state: ${JSON.stringify(before)}`);
-      await evaluate(`(() => {
-        window.__inbeAnimationProbe.last = 0;
-        window.__inbeAnimationProbe.active = true;
-      })()`);
       await control(1);
       // Start both clocks after the resume gesture has been handled. Mouse
       // dispatch and protocol latency happen while the practice is paused.
       const running = await state();
       if (running.paused !== 0 || running.step !== step)
         throw new Error(`Sun Salutation resume lost state: ${JSON.stringify(running)}`);
+      // Measure uninterrupted playback after Resume and the pixel comparison.
+      // Paused frames and test readbacks are not active rendering work.
+      await evaluate(`(() => {
+        window.__inbeAnimationProbe.last = 0;
+        window.__inbeAnimationProbe.active = true;
+      })()`);
       await delay(600);
+      await evaluate('window.__inbeAnimationProbe.active = false');
       const moving = await state();
       if (moving.ticks <= before.ticks || moving.paused !== 0 || moving.hash === before.hash)
         throw new Error(`Sun Salutation pose ${step + 1} did not animate: ${JSON.stringify({ before, moving })}`);
@@ -252,6 +255,10 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       // On the phone, watch each transition until it settles into its pose.
       // On desktop, cover controls and responsive placement on every step.
       if (label === 'phone') {
+        await evaluate(`(() => {
+          window.__inbeAnimationProbe.last = 0;
+          window.__inbeAnimationProbe.active = true;
+        })()`);
         const deadline = Date.now() + 10000;
         while (await evaluate('Module._app_web_test_sun_salutation_ticks()') < 215 && Date.now() < deadline) {
           await delay(100);
