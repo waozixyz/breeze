@@ -67,7 +67,7 @@ function installMusicProbe() {
 
 export const musicAudioInstrumentation = `(${installMusicProbe.toString()})()`;
 
-export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, callHook }) {
+export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, callHook, settle }) {
   await resize(1280, 1600);
   await callHook('app_web_test_save_onboarding_state');
   await evaluate(`(() => {
@@ -98,6 +98,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
   await delay(250);
 
   async function button(action) {
+    await settle();
     let point;
     for (let attempt = 0; attempt < 4; attempt++) {
       point = await evaluate(`(() => {

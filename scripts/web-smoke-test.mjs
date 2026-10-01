@@ -1686,6 +1686,7 @@ async function sunSalutationChecks(client, browser) {
 async function musicChecks(client) {
   try {
     await verifyMusicAcrossTabs({
+      settle: () => waitRouteTransition(client),
       evaluate: (expression, awaitPromise = false) => pageJson(client, expression, awaitPromise),
       callHook: (name, args = []) => pageJson(client, `(async () => {
         ${wasmHookEvalHelper()}
