@@ -828,6 +828,11 @@ native-screenshot-test: $(TARGET)
 native-navigation-test: $(TARGET)
 	sh tests/native_navigation_test.sh $(abspath $(TARGET))
 
+.PHONY: music-navigation-test
+music-navigation-test: $(TARGET)
+	@python3 tests/music_navigation_test.py '$(CC)' '$(NATIVE_COMPILE_FLAGS)' \
+		'$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(KRYON_NATIVE_BACKEND_LIBS) $(LIBOQS_A) $(KRYON_NATIVE_BACKEND_LDLIBS) $(RUNTIME_ASSET_LDLIBS) $(NATIVE_SYSTEM_LDLIBS) $(LDFLAGS)'
+
 .PHONY: native-zoom-test
 native-zoom-test: $(TARGET)
 	sh tests/native_zoom_test.sh $(abspath $(TARGET))

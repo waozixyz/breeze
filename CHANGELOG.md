@@ -12,6 +12,7 @@
 - Refined Settings, Profile, Lists, habit cards, session controls, and mood check-in buttons. Desktop users can zoom with Ctrl and the mouse wheel.
 
 ### Fixed
+- Music keeps playing when you switch tabs inside the app or leave practice customization.
 - Appearance dropdown menus stay above the Layout card and other settings, keeping every option visible and selectable.
 - Practice Customize and How-to actions now open the correct pages, and carousel swipes reliably change practices.
 - Animated screens keep their controls visible, and navigation transitions finish before accepting the next action.

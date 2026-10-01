@@ -50,6 +50,7 @@ LOG_INFO :: 3;
 LOG_WARNING :: 4;
 NativeTraceLog :: (level: s32, message: *u8, args: ..any) #foreign c "TraceLog";
 app_audio_ensure_ready :: (app: *InnerBreeze) #foreign c;
+settings_audio_stop_preview :: (app: *InnerBreeze) #foreign c;
 data_root_host_buffer :: () -> *u8 {
     if !AppCopyText(data_root(), data_root_text[:]) {
         return null
@@ -523,6 +524,7 @@ test_track :: (app: *InnerBreeze) {
         set_status(app, LocaleText("meditation_music_test_stopped"))
         return
     }
+    settings_audio_stop_preview(app)
     track = app.meditation.music_track
     if track < 0 || track >= app_audio_music_count(app) {
         track = 0
@@ -546,10 +548,12 @@ meditation_music_start_session :: (app: *InnerBreeze) {
         return
     }
 
+    settings_audio_stop_preview(app)
     sanitize_practice_music(app)
     practice = practice_clamp_id(app.exercise_type)
     track = app.meditation.music_practice_tracks[practice]
     if track == AUDIO_MUSIC_NONE {
+        meditation_music_stop(app)
         return
     }
     if load_track(app, track) == 0 {
@@ -568,10 +572,6 @@ meditation_music_update :: (app: *InnerBreeze) {
         return
     }
     PollRuntimeAssetDownload(*app.meditation.music_download)
-    if app.meditation.music_test_playing != 0  && ((app.breathing.screen == ScreenStart  && app.practice_tab == PRACTICE_TAB_CONFIG)  || app.breathing.screen == ScreenPracticeConfig  || app.breathing.screen == ScreenManual  || app.breathing.screen == ScreenSettings) == false {
-        meditation_music_stop(app)
-        return
-    }
 
     if app.meditation.music_download.status == AssetDownloadStatus.Ready  && app.meditation.music_archive_extracted == 0 {
         archive_path(app, *archive_file_path[0], size_of(type_of(archive_file_path)))
@@ -690,7 +690,8 @@ meditation_music_draw_practice_settings :: (app: *InnerBreeze,
     dropdown_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = cast(s32)451 + practice,
             .bounds = Rectangle.{cast(float32)content_x, cast(float32)(y.* + AppScale(26)), cast(float32)content_w, cast(float32)AppScale(48)},
             .selected_index = selection}, track_options[:track_count + 1])
-    if dropdown_pick.node > 0 {
+    if dropdown_pick.changed {
+        selection = dropdown_pick.selected_index
         if selection <= 0 {
             app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE
             app.meditation.music_practice_mask &= ~(1 << practice)
