@@ -7,6 +7,8 @@ matching male counterparts. The app still uses its existing animation assets.
 - `02-sage-bun.webp` — approved woman, chestnut bun, ivory top and moss trousers.
 - `03-sunrise-ponytail-male.webp` — approved male artwork with the neck joined to the teal shirt.
 - `04-sage-male.webp` — new male counterpart, short chestnut hair, ivory top and moss trousers.
+  His painted leg is a fifth thicker than the first man's, so the rig draws it
+  narrower and without the seat fullness, keeping his seat flat.
 
 Open `index.html` for synchronized playback. Gwenview can browse the GIF loops
 and still images. `00-proposals-montage.jpg` places each woman above her male

@@ -64,6 +64,10 @@ CONCEPTS = [
         "design": "The adult male counterpart of Sage bun: warm golden-tan skin, short softly swept chestnut-brown hair, small calm brown eyes, natural adult male proportions, a plain warm ivory long-sleeve exercise top, moss-green trousers and bare feet. His complete bare neck tucks naturally inside the shirt collar.",
         "rig": {
             "torso": {"neck": [0.62, 0.13]},
+            # His painted leg is about a fifth thicker for its length than
+            # the first man's, seat included; draw it at the same thickness
+            # and without the extra fullness behind the hip.
+            "leg": {"width": 0.7, "seat": {"depth": 0.0, "center": 8, "span": 32}},
         },
     },
 ]
