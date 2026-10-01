@@ -1,13 +1,14 @@
 name: Cloudflare Pages
 
 on:
-  workflow_run:
-    workflows:
-      - Release
-    types:
-      - completed
+  push:
     branches:
       - master
+  # Refresh available downloads after a release; pushes deploy independently.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [master]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -20,20 +21,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.event.workflow_run.head_branch || github.ref }}
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Build Site
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
           lfs: true
 
       - name: Fetch Ziran packages
@@ -43,6 +44,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Resolve published downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/waozixyz/inbe/releases/latest --jq .tag_name)
+          version=${tag#v}
+          python3 -c 'import re, sys; assert re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", sys.argv[1]), "Invalid published release version"' "$version"
+          echo "SITE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Install Packages
         if: ${{ !inputs.released_web }}
@@ -59,7 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^#define APP_VERSION_STRING "\([^"]*\)"/\1/p' src/core/version.h)
+          version="$SITE_RELEASE_VERSION"
           test -n "$version"
           mkdir -p build/released-web build/dist/web
           gh release download "v$version" --pattern inbe-web.zip --dir build/released-web
@@ -75,6 +86,7 @@ jobs:
           else
             export PATH="$INBE_NODE_BIN:$PATH"
             node --version
+            make build-laws
             make site
           fi
           test -f build/site/index.html
@@ -115,17 +127,13 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy build/site --project-name=inbe --branch=${{ github.head_ref || github.ref_name }}
+          command: pages deploy build/site --project-name=inbe --branch=${{ github.head_ref || github.ref_name }} --commit-hash=${{ github.sha }}
 
   deploy-production:
     name: Deploy Production
     runs-on: ubuntu-latest
     needs: build
-    if: |
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'master') ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
 
     steps:
       - name: Download Site Artifact
@@ -139,4 +147,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy build/site --project-name=inbe --branch=master
+          command: pages deploy build/site --project-name=inbe --branch=master --commit-hash=${{ github.sha }}

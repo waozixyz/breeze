@@ -7,6 +7,7 @@ root_dir=$(dirname -- "$script_dir")
 site_index=${SITE_INDEX:-"$root_dir/build/site/index.html"}
 
 version=$(python3 "$root_dir/scripts/check-version.py" --print-version)
+version=${SITE_RELEASE_VERSION:-$version}
 if [ -z "$version" ]; then
 	printf 'Error: could not read APP_VERSION_STRING\n' >&2
 	exit 1

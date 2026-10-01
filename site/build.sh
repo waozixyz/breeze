@@ -173,6 +173,8 @@ version=$(python3 "$root_dir/scripts/check-version.py" --print-version) || {
 	printf 'Error: could not read app version from %s\n' "$root_dir/src/core/version.h" >&2
 	exit 1
 }
+release_version=${SITE_RELEASE_VERSION:-$version}
+python3 -c 'import re, sys; assert re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", sys.argv[1]), "Invalid download release version"' "$release_version"
 asset_version=${SITE_ASSET_VERSION:-}
 if [ -z "$asset_version" ]; then
 	if git -C "$root_dir" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
@@ -189,7 +191,7 @@ copy_dir_contents "$script_dir/css" "$out_dir/css"
 copy_path "$script_dir/themes/inbe.css" "$out_dir/theme.css"
 write_site_imports "$asset_version"
 copy_template_dir "$script_dir/static" "$out_dir" "$version" "$asset_version"
-expand_template_file "$script_dir/index.html" "$out_dir/index.html" "$version" "$asset_version"
+expand_template_file "$script_dir/index.html" "$out_dir/index.html" "$release_version" "$asset_version"
 mkdir -p "$out_dir/legacy-converter"
 cp "$out_dir/legacy-converter.html" "$out_dir/legacy-converter/index.html"
 
