@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
+import { verifyAppearanceCanvas, verifySunSalutationCanvas } from './web-sun-salutation-test.mjs';
+import { verifyCanvasTextResolution } from './web-canvas-text-test.mjs';
 
 if (typeof WebSocket === 'undefined') {
   console.error('web smoke: FAIL: this script needs the global WebSocket API. Use Node >= 21, or pass --experimental-websocket on Node 20.');
@@ -29,6 +31,9 @@ const useNoSandbox = process.env.WEB_SMOKE_NO_SANDBOX
   ? !/^(0|false|no)$/i.test(process.env.WEB_SMOKE_NO_SANDBOX)
   : !!process.env.CI || (typeof process.getuid === 'function' && process.getuid() === 0);
 const userDataDir = mkdtempSync(join(tmpdir(), 'inbe-web-smoke-'));
+const browserEnvironment = { ...process.env };
+delete browserEnvironment.DISPLAY;
+delete browserEnvironment.WAYLAND_DISPLAY;
 const mime = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
@@ -937,7 +942,7 @@ async function dispatchCanvasClick(client, x, y) {
     button: 'left',
     clickCount: 1
   });
-  await delay(50);
+  await waitAnimationFrames(client, 3);
   await client.send('Input.dispatchMouseEvent', {
     type: 'mouseReleased',
     x,
@@ -945,6 +950,7 @@ async function dispatchCanvasClick(client, x, y) {
     button: 'left',
     clickCount: 1
   });
+  await waitAnimationFrames(client, 3);
 }
 
 async function firstRunGuideButtonTarget(client, kind) {
@@ -1625,6 +1631,93 @@ async function verifyRenderingLiveBidi(client, context) {
     throw new Error(`page is not rendering: ${state.reason}`);
 }
 
+async function sunSalutationChecks(client, browser) {
+  await pageJson(client, `(async () => {
+    ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_launch_practice', [2]);
+  })()`, true);
+  await waitAnimationFrames(client, 3);
+  await waitRouteTransition(client);
+  const launched = await pageJson(client, `(() => ({
+    screen: Module._app_web_test_screen(),
+    selected: Module._app_web_test_practice_selected()
+  }))()`);
+  if (launched.screen !== 3 || launched.selected !== 2) {
+    throw new Error(`web practice launch lost its route: ${JSON.stringify(launched)}`);
+  }
+  console.log(`web practice launch: session navigation preserved (${browser})`);
+  const driver = {
+    browser,
+    evaluate: (expression, awaitPromise = false) => pageJson(client, expression, awaitPromise),
+    callHook: (name, args = []) => pageJson(client, `(async () => {
+      ${wasmHookEvalHelper()}
+      await callWasmHook(${JSON.stringify(name)}, ${JSON.stringify(args)});
+    })()`, true),
+    resize: (width, height, dpi = 1) => client.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: dpi, mobile: false
+    }),
+    capture: async () => {
+      const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+      return Buffer.from(screenshot.data, 'base64');
+    },
+    click: async (x, y, endX, endY) => {
+      if (endX === undefined) return dispatchCanvasClick(client, x, y);
+      await waitRouteTransition(client);
+      await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      for (let step = 1; step <= 6; step++) {
+        await client.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved', x: x + (endX - x) * step / 6,
+          y: y + (endY - y) * step / 6, button: 'left', buttons: 1
+        });
+        await waitAnimationFrames(client, 1);
+      }
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: endX, y: endY, button: 'left', clickCount: 1
+      });
+      await waitAnimationFrames(client, 3);
+    }
+  };
+  await verifyAppearanceCanvas(driver);
+  await verifyCanvasTextResolution(driver);
+  await verifySunSalutationCanvas(driver);
+}
+
+// The same browser flows run through Firefox's WebDriver BiDi transport.
+// This facade translates only the commands used by these tests.
+function firefoxPageClient(bidi, context) {
+  return {
+    events: [],
+    async send(method, params = {}) {
+      if (method === 'Runtime.evaluate') {
+        const result = await bidi.send('script.evaluate', {
+          target: { context }, awaitPromise: true,
+          resultOwnership: 'none', expression: `(async () => JSON.stringify({ value: await (${params.expression}) }))()`
+        });
+        const value = bidiResultValue(result, 'browser test evaluation');
+        return { result: { value: JSON.parse(value).value } };
+      }
+      if (method === 'Page.reload') return bidi.send('browsingContext.reload', { context, wait: 'complete' });
+      if (method === 'Page.navigate') return bidi.send('browsingContext.navigate', { context, url: params.url, wait: 'complete' });
+      if (method === 'Page.captureScreenshot') return bidi.send('browsingContext.captureScreenshot', { context, origin: 'viewport' });
+      if (method === 'Page.setLifecycleEventsEnabled') return {};
+      if (method === 'Emulation.setDeviceMetricsOverride' || method === 'Emulation.clearDeviceMetricsOverride') {
+        return bidi.send('browsingContext.setViewport', {
+          context, viewport: method.endsWith('clearDeviceMetricsOverride') ? { width: 1280, height: 800 } :
+            { width: params.width, height: params.height }, devicePixelRatio: params.deviceScaleFactor || 1
+        });
+      }
+      if (method === 'Input.dispatchMouseEvent') {
+        const actions = [{ type: 'pointerMove', x: Math.round(params.x), y: Math.round(params.y), origin: 'viewport', duration: 0 }];
+        if (params.type === 'mousePressed') actions.push({ type: 'pointerDown', button: 0 });
+        if (params.type === 'mouseReleased') actions.push({ type: 'pointerUp', button: 0 });
+        return bidi.send('input.performActions', { context,
+          actions: [{ type: 'pointer', id: 'inbe-test-pointer', parameters: { pointerType: 'mouse' }, actions }] });
+      }
+      throw new Error(`unsupported Firefox test command: ${method}`);
+    }
+  };
+}
+
 try {
   const port = await listen();
   const browser = resolveBrowser();
@@ -1645,7 +1738,7 @@ try {
       'about:blank'
     ];
     const firefoxStderr = [];
-    chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
     chrome.stderr.setEncoding('utf8');
     chrome.stderr.on('data', chunk => {
       firefoxStderr.push(chunk);
@@ -1672,6 +1765,16 @@ try {
     await verifyRenderingLiveBidi(client, context);
     await verifyAppSettingsImmediateBidi(client, context);
     await verifySyncKeyImportBidi(client, context);
+    const pageClient = firefoxPageClient(client, context);
+    await verifyReloadPersistence(pageClient);
+    await verifyAppSettingsReloadPersistence(pageClient);
+    await verifyLanguageRouteDoesNotOverrideSavedOnboarding(pageClient, port);
+    await verifyFirstRunGuideCanvasFlow(pageClient);
+    await verifyHabitsClickDoesNotReload(pageClient);
+    await verifyPracticeCarouselSwipe(pageClient);
+    await verifyPracticeStartClick(pageClient);
+    await verifyPracticeCompletionPersistence(pageClient);
+    await sunSalutationChecks(pageClient, 'firefox');
   } else {
     const args = [
       '--headless=new',
@@ -1694,7 +1797,7 @@ try {
       args.splice(1, 0, '--no-sandbox');
 
     const chromeStderr = [];
-    chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
     chrome.stderr.setEncoding('utf8');
     chrome.stderr.on('data', chunk => {
       chromeStderr.push(chunk);
@@ -1727,6 +1830,7 @@ try {
     await verifyPracticeCarouselSwipe(client);
     await verifyPracticeStartClick(client);
     await verifyPracticeCompletionPersistence(client);
+    await sunSalutationChecks(client, 'chromium');
   }
   console.log(`web smoke: PASS (${renderer})`);
 } catch (error) {

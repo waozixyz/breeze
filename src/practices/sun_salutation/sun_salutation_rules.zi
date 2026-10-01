@@ -17,6 +17,7 @@ SunSalutationPracticeState :: struct {
     start_seconds: s32
     end_seconds: s32
     step_ticks: s32
+    tick_fraction: float64
 }
 
 SalutationStepResult :: struct {
@@ -79,6 +80,7 @@ SalutationStart :: (state: SunSalutationPracticeState) -> SunSalutationPracticeS
         state.end_seconds = state.start_seconds
     }
     state.step_ticks = 0
+    state.tick_fraction = 0.0
     return state
 }
 
@@ -87,6 +89,7 @@ SalutationReset :: (state: SunSalutationPracticeState) -> SunSalutationPracticeS
     state.step = 0
     state.repetition = 0
     state.step_ticks = 0
+    state.tick_fraction = 0.0
     return state
 }
 
@@ -139,6 +142,7 @@ SalutationForward :: (state: SunSalutationPracticeState) -> SalutationStepResult
     result: SalutationStepResult
     result.state = state
     result.state.step_ticks = 0
+    result.state.tick_fraction = 0.0
     if state.step >= SUN_SALUTATION_STEP_COUNT - 1 {
         if state.repetition >= state.repetitions - 1 {
             result.completed = 1
@@ -155,6 +159,7 @@ SalutationForward :: (state: SunSalutationPracticeState) -> SalutationStepResult
 #program_export
 SalutationBack :: (state: SunSalutationPracticeState) -> SunSalutationPracticeState {
     state.step_ticks = 0
+    state.tick_fraction = 0.0
     if state.step > 0 {
         state.step -= 1
     } else if state.repetition > 0 {
@@ -165,17 +170,38 @@ SalutationBack :: (state: SunSalutationPracticeState) -> SunSalutationPracticeSt
 }
 
 #program_export
-SalutationTick :: (state: SunSalutationPracticeState) -> SalutationStepResult {
+SalutationAdvance :: (state: SunSalutationPracticeState,
+    elapsed_seconds: float64) -> SalutationStepResult {
     result: SalutationStepResult
     result.state = state
-    ticks_per_step: s32 = SalutationStepSeconds(state) * 60
-    if ticks_per_step <= 0 {
-        ticks_per_step = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
+    if !(elapsed_seconds > 0.0) {
+        return result
     }
-    result.state.step_ticks += 1
-    if result.state.step_ticks >= ticks_per_step {
-        return SalutationForward(result.state)
+    // Even a full day away cannot exceed the longest possible session.
+    maximum_seconds := SUN_SALUTATION_SECONDS_MAX * SUN_SALUTATION_STEP_COUNT * 12
+    if elapsed_seconds > cast(float64)maximum_seconds {
+        elapsed_seconds = cast(float64)maximum_seconds
     }
+    ticks := state.tick_fraction + elapsed_seconds * 60.0
+    // Retain sub-tick time at any display rate, including 90/120 Hz.
+    remaining := cast(s32)(ticks + 0.000000001)
+    fraction := ticks - cast(float64)remaining
+    if fraction < 0.0 {
+        fraction = 0.0
+    }
+    while remaining > 0 {
+        needed := SalutationStepSeconds(result.state) * 60 - result.state.step_ticks
+        if remaining < needed {
+            result.state.step_ticks += remaining
+            break
+        }
+        remaining -= needed
+        result = SalutationForward(result.state)
+        if result.completed != 0 {
+            return result
+        }
+    }
+    result.state.tick_fraction = fraction
     return result
 }
 
@@ -207,7 +233,7 @@ SalutationFrameAt :: (step_ticks: s32, ticks_per_step: s32,
     frame: s32 = step_ticks * transition_frames / transition_ticks - 1
     if step_ticks >= transition_ticks {
         frame = transition_frames - 1 +
-            (step_ticks - transition_ticks) * frames_per_second / 60
+        (step_ticks - transition_ticks) * frames_per_second / 60
     }
     if frame > frame_count - 1 {
         frame = frame_count - 1

@@ -1721,6 +1721,12 @@ HairReset :: (hair: *Hair, torso: *Torso, p: Pose, first_root: V2, second_root: 
 
 // The girl ---------------------------------------------------------------
 
+FootRoll :: struct {
+    enabled: bool
+    instep: [6]float64
+    flat: [6]float64
+}
+
 Girl :: struct {
     surface: *void
     context: *void
@@ -1735,6 +1741,11 @@ Girl :: struct {
     foot_flat: Rigid
     foot_tucked: Rigid
     foot_instep: Rigid
+    flat_toe: V2
+    instep_toe: V2
+    flat_heel: V2
+    instep_heel: V2
+    foot_roll: FootRoll
     hair_picture: Picture
     hair: Hair
     feet: [2]FootState
@@ -1757,6 +1768,10 @@ LoadGirl :: (width: s32, height: s32) -> bool {
     LoadRigid(*girl.foot_flat, Field(parts, "footFlat"))
     LoadRigid(*girl.foot_tucked, Field(parts, "footTucked"))
     LoadRigid(*girl.foot_instep, Field(parts, "footInstep"))
+    girl.flat_toe = Turn(LocalPoint(*girl.foot_flat, PointField(Field(parts, "footFlat"), "toe")), girl.foot_flat.turn)
+    girl.instep_toe = Turn(LocalPoint(*girl.foot_instep, PointField(Field(parts, "footInstep"), "toe")), girl.foot_instep.turn)
+    girl.flat_heel = Turn(LocalPoint(*girl.foot_flat, PointField(Field(parts, "footFlat"), "heel")), girl.foot_flat.turn)
+    girl.instep_heel = Turn(LocalPoint(*girl.foot_instep, PointField(Field(parts, "footInstep"), "heel")), girl.foot_instep.turn)
     hair_source := LoadPart(TextField(Field(parts, "longHair"), "file"))
     hair_box := TrimmedBox(hair_source)
     hair_length := rig.hair_segment * cast(float64)(rig.hair_count - 1) + 10.0
@@ -1816,6 +1831,43 @@ EndsOf :: (p: Pose, far: bool, leg: bool) -> LimbEnds {
     return result
 }
 
+ContactTransform :: (toe: V2, heel: V2, target_toe: V2, target_heel: V2) -> [6]float64 {
+    determinant := toe.x * heel.y - heel.x * toe.y
+    result: [6]float64
+    result[0] = (target_toe.x * heel.y - target_heel.x * toe.y) / determinant
+    result[1] = (target_toe.y * heel.y - target_heel.y * toe.y) / determinant
+    result[2] = (target_heel.x * toe.x - target_toe.x * heel.x) / determinant
+    result[3] = (target_heel.y * toe.x - target_toe.y * heel.x) / determinant
+    return result
+}
+
+// Both contact cels follow one ankle, toe and heel as the toes roll under.
+// Lift the ankle over the toes so the leg stays attached above the floor.
+RollFeet :: (p: Pose, time: float64) -> Pose {
+    girl.foot_roll.enabled = false
+    phase := PhaseAt(time)
+    if !phase.moving || rig.sequence[phase.step].instep != 1.0 || rig.sequence[phase.step + 1].instep != 0.0 {
+        return p
+    }
+    start_angle := AngleOf(girl.instep_toe)
+    finish_angle := AngleOf(girl.flat_toe) + p.foot
+    progress := 1.0 - p.instep
+    angle := start_angle + Wrap(finish_angle - start_angle) * progress
+    start_length := Length(girl.instep_toe)
+    finish_length := Length(girl.flat_toe)
+    length := start_length * (1.0 - progress) + finish_length * progress
+    girl.foot_roll.enabled = true
+    toe := Times(UnitAt(angle), length)
+    heel := Turn(Mix(Turn(girl.instep_heel, -start_angle), Turn(girl.flat_heel, -(finish_angle - p.foot)), progress), angle)
+    girl.foot_roll.instep = ContactTransform(girl.instep_toe, girl.instep_heel, toe, heel)
+    girl.foot_roll.flat = ContactTransform(girl.flat_toe, girl.flat_heel, toe, heel)
+    floor := rig.ground - Most(toe.y, heel.y)
+    result := p
+    result.near_ankle.y = Least(p.near_ankle.y, floor)
+    result.far_ankle.y = Least(p.far_ankle.y, floor)
+    return result
+}
+
 // Far-side limbs are drawn slightly darker.
 BeginTint :: (far: bool) {
     if far {
@@ -1849,7 +1901,19 @@ DrawLeg :: (p: Pose, far: bool) {
     context := girl.context
     BeginTint(far)
     // Contact drawings switch as solid cels, without ghosted feet.
-    if p.instep >= 0.5 {
+    if girl.foot_roll.enabled {
+        part := *girl.foot_flat
+        matrix := girl.foot_roll.flat
+        if p.instep >= 0.5 {
+            part = *girl.foot_instep
+            matrix = girl.foot_roll.instep
+        }
+        Save(context)
+        Translate(context, ends.end.x, ends.end.y)
+        Transform(context, *matrix[0])
+        PaintRigid(context, part, 0, Vec2(0.0, 0.0), 0.0, 1.0)
+        Restore(context)
+    } else if p.instep >= 0.5 {
         PaintRigid(context, *girl.foot_instep, 0, ends.end, 0.0, 1.0)
     } else if tucked >= 0.5 {
         PaintRigid(context, *girl.foot_tucked, 0, ends.end, 0.0, 1.0)
@@ -2030,7 +2094,7 @@ DrawHead :: (p: Pose, layer: s32) {
 
 DrawFrame :: (time: float64) {
     context := girl.context
-    p := SamplePose(time)
+    p := RollFeet(SamplePose(time), time)
     girl.feet = FeetAt(p, time)
     UpdateHair(p, time)
     Save(context)

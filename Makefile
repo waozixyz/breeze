@@ -854,7 +854,7 @@ $(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/mod
 $(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	mkdir -p $(KRY_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
@@ -867,7 +867,7 @@ $(KRY_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 
-$(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -885,7 +885,7 @@ $(WEB_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_M
 $(WEB_GEN_SRCS) $(WEB_GEN_GAME_C): $(WEB_GEN_STAMP)
 	@test -f $@
 
-$(WINDOWS_GEN_STAMP): Makefile $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -1805,6 +1805,8 @@ meditation-timing-test: build-laws $(ZI2C_BIN)
 
 test: meditation-timing-test
 
+test: sun-salutation-test
+
 .PHONY: app-clock-test
 app-clock-test: $(ZI2C_BIN)
 	@mkdir -p $(BUILD_DIR)/app-clock-test/generated
@@ -2326,7 +2328,7 @@ $(WEB_JS_TARGET): | zi-check
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
 		-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=33554432 \
 		-sEXPORTED_RUNTIME_METHODS=Asyncify,FS \
-		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_enable_extension_breaks \
+		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_show_appearance,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks \
 		--preload-file locales --preload-file assets
 
 $(WEB_TARGET): src/web_shell.html $(WEB_BOOT_JS) $(WEB_JS_TARGET) manifest.json $(WEB_ASSET_FILES) | $(WEB_DIST_DIR)
@@ -2364,7 +2366,7 @@ $(WEB_CANVAS_TARGET): | zi-check
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
 		-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=33554432 \
 		-sEXPORTED_RUNTIME_METHODS=Asyncify,FS \
-		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_enable_extension_breaks \
+		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_show_appearance,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks \
 		--preload-file locales --preload-file assets
 	perl -0pe 's#\{\{\{ APP_SCRIPT \}\}\}#$(WEB_CANVAS_APP_SCRIPT)#g; s/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' src/web_shell.html > $@
 	cp $(WEB_BOOT_JS) $(WEB_CANVAS_DIR)/index_boot.js

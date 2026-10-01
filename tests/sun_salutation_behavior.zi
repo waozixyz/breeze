@@ -67,13 +67,43 @@ Answer :: () -> s32 {
     }
     tick: s32 = 0
     while tick < 480 {
-        next = SalutationTick(state)
+        next = SalutationAdvance(state, 1.0 / 60.0)
         state = next.state
         tick += 1
     }
     if state.step != 1 || state.step_ticks != 0 ||
     next.completed != 0 {
         return 10
+    }
+
+    // Equal wall time must produce the same pose at slow and fast frame rates.
+    rates: [5]s32 = .[15, 30, 60, 90, 120]
+    for rate: rates {
+        state = SalutationStart(state)
+        for frame: 0..rate * 3 - 1 {
+            unused frame
+            state = SalutationAdvance(state, 1.0 / cast(float64)rate).state
+        }
+        if state.step_ticks != 180 {
+            return 15
+        }
+    }
+    // A slow render can cross step boundaries without discarding time.
+    state = SalutationStart(state)
+    next = SalutationAdvance(state, 17.25)
+    if next.completed != 0 || next.state.step != 2 || next.state.step_ticks != 75 {
+        return 16
+    }
+    state = SalutationBack(next.state)
+    state.tick_fraction = 0.5
+    state = SalutationForward(state).state
+    if state.tick_fraction != 0.0 || SalutationReset(state).tick_fraction != 0.0 ||
+    SalutationStart(state).tick_fraction != 0.0 {
+        return 17
+    }
+    next = SalutationAdvance(state, 2000.0)
+    if next.completed != 1 {
+        return 18
     }
 
     // A step of 8 s with 24 move frames and 4 hold frames at 8 fps: the

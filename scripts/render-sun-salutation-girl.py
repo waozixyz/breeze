@@ -693,6 +693,11 @@ class Girl:
         self.foot_flat = Rigid(parts["footFlat"], detail)
         self.foot_tucked = Rigid(parts["footTucked"], detail)
         self.foot_instep = Rigid(parts["footInstep"], detail)
+        self.flat_toe = rotate(self.foot_flat.local(parts["footFlat"]["toe"]), self.foot_flat.turn)
+        self.instep_toe = rotate(self.foot_instep.local(parts["footInstep"]["toe"]), self.foot_instep.turn)
+        self.flat_heel = rotate(self.foot_flat.local(parts["footFlat"]["heel"]), self.foot_flat.turn)
+        self.instep_heel = rotate(self.foot_instep.local(parts["footInstep"]["heel"]), self.foot_instep.turn)
+        self.foot_roll = None
         hair = rig["hair"]
         hair_box = trimmed_box([parts["longHair"]["file"]])
         hair_length = hair["segment"] * (hair["count"] - 1) + 10
@@ -730,6 +735,43 @@ class Girl:
         target = add(p.far_wrist if far else p.near_wrist, offset)
         return (root, *joint(root, target, bones["upperArm"], bones["forearm"], 1))
 
+    def roll_feet(self, p, time):
+        """Roll the toes under when leaving an instep contact.
+
+        Both painted cels follow the same ankle, toe and heel at their
+        handoff. The ankle lifts over the rolling toes, keeping the foot
+        above the floor and the leg attached without fading between cels.
+        """
+        self.foot_roll = None
+        step, amount = self.timeline.phase(time)
+        if (amount is None or self.timeline.sequence[step].instep != 1
+                or self.timeline.sequence[step + 1].instep != 0):
+            return p
+        start_angle = math.atan2(self.instep_toe[1], self.instep_toe[0])
+        finish_angle = math.atan2(self.flat_toe[1], self.flat_toe[0]) + p.foot
+        progress = 1 - p.instep
+        angle = start_angle + wrap(finish_angle - start_angle) * progress
+        start_length = math.hypot(*self.instep_toe)
+        finish_length = math.hypot(*self.flat_toe)
+        length = start_length * (1 - progress) + finish_length * progress
+        toe = mul(unit(angle), length)
+        heel = rotate(mix(rotate(self.instep_heel, -start_angle),
+                          rotate(self.flat_heel, -(finish_angle - p.foot)), progress), angle)
+        self.foot_roll = (self.contact_transform(self.instep_toe, self.instep_heel, toe, heel),
+                          self.contact_transform(self.flat_toe, self.flat_heel, toe, heel))
+        floor = self.ground - max(toe[1], heel[1])
+        return replace(p, near_ankle=(p.near_ankle[0], min(p.near_ankle[1], floor)),
+                       far_ankle=(p.far_ankle[0], min(p.far_ankle[1], floor)))
+
+    @staticmethod
+    def contact_transform(toe, heel, target_toe, target_heel):
+        determinant = toe[0] * heel[1] - heel[0] * toe[1]
+        return cairo.Matrix(
+            (target_toe[0] * heel[1] - target_heel[0] * toe[1]) / determinant,
+            (target_toe[1] * heel[1] - target_heel[1] * toe[1]) / determinant,
+            (target_heel[0] * toe[0] - target_toe[0] * heel[0]) / determinant,
+            (target_heel[1] * toe[0] - target_toe[1] * heel[0]) / determinant)
+
     # Drawing -----------------------------------------------------------
 
     def tinted(self, draw, far):
@@ -758,7 +800,15 @@ class Girl:
         def draw():
             tucked = (1 - p.instep) * smoothstep(0.55, 0.63, foot) * (1 - smoothstep(0.18, 0.22, airborne))
             # Contact drawings switch as solid cels, without ghosted feet.
-            if p.instep >= 0.5:
+            if self.foot_roll is not None:
+                part = self.foot_instep if p.instep >= 0.5 else self.foot_flat
+                transform = self.foot_roll[0 if p.instep >= 0.5 else 1]
+                self.ctx.save()
+                self.ctx.translate(*ankle)
+                self.ctx.transform(transform)
+                part.paint(self.ctx, (0, 0))
+                self.ctx.restore()
+            elif p.instep >= 0.5:
                 self.foot_instep.paint(self.ctx, ankle)
             elif tucked >= 0.5:
                 self.foot_tucked.paint(self.ctx, ankle)
@@ -897,7 +947,7 @@ class Girl:
 
     def frame(self, time):
         ctx = self.ctx
-        p = self.timeline.sample(time)
+        p = self.roll_feet(self.timeline.sample(time), time)
         self.feet = self.timeline.feet(p, time)
         self.update_hair(p, time)
         camera = self.rig["camera"]

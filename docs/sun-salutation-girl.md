@@ -48,8 +48,8 @@ smooth even when the hip folds all the way. The top is warped too: its hem
 flares out over the leggings, more at the back while she is upside down.
 The seat is a little fuller at the back, widening smoothly around the hip
 while its front and the lower leg keep their shape.
-Head, hands and feet move rigidly, and the hand and foot drawings switch at
-the moment of contact. The long lock is a Verlet strand stepped once per
+Head and hands move rigidly; the foot drawings rotate and adjust their shape
+while rolling between contacts. The long lock is a Verlet strand stepped once per
 video frame from rest at 0 s.
 
 Back to front: far leg and arm (slightly darker), long hair, back hair, near
@@ -87,5 +87,9 @@ separate images so that only the few most recent ones stay loaded.
 - Half lift to plank goes through a low lunge: hands planted, the far foot
   steps back first with the front knee over the ankle, then the near foot.
   Down dog to half lift steps forward the same way.
+- Upward dog to downward dog rolls the toes under and lifts the ankle over
+  them. The instep and flat-foot drawings share the same ankle, toe and heel
+  positions at their solid handoff, using the `toe` and `heel` key points in
+  the rig's foot parts. The two renderers use the same contact transforms.
 - A foot in the air points its toes along the shin; each foot keeps its own
   drawing while the feet are apart.
