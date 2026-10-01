@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import { verifyAppearanceCanvas, verifySunSalutationCanvas } from './web-sun-salutation-test.mjs';
 import { verifyCanvasTextResolution } from './web-canvas-text-test.mjs';
+import { musicAudioInstrumentation, verifyMusicAcrossTabs } from './web-music-test.mjs';
 
 if (typeof WebSocket === 'undefined') {
   console.error('web smoke: FAIL: this script needs the global WebSocket API. Use Node >= 21, or pass --experimental-websocket on Node 20.');
@@ -1682,6 +1683,35 @@ async function sunSalutationChecks(client, browser) {
   await verifySunSalutationCanvas(driver);
 }
 
+async function musicChecks(client) {
+  try {
+    await verifyMusicAcrossTabs({
+      evaluate: (expression, awaitPromise = false) => pageJson(client, expression, awaitPromise),
+      callHook: (name, args = []) => pageJson(client, `(async () => {
+        ${wasmHookEvalHelper()}
+        await callWasmHook(${JSON.stringify(name)}, ${JSON.stringify(args)});
+      })()`, true),
+      resize: (width, height) => client.send('Emulation.setDeviceMetricsOverride', {
+        width, height, deviceScaleFactor: 1, mobile: false
+      }),
+      click: (x, y) => dispatchCanvasClick(client, x, y),
+      scroll: async (x, y, deltaY) => {
+        await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+        await waitAnimationFrames(client, 2);
+        await client.send('Input.dispatchMouseEvent', {
+          type: 'mouseWheel', x, y, deltaX: 0, deltaY
+        });
+        await waitAnimationFrames(client, 6);
+      }
+    });
+  } catch (error) {
+    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    writeFileSync('build/music-browser-failure.png', Buffer.from(screenshot.data, 'base64'));
+    const recent = client.events.map(eventText).filter(text => /AUDIO|music|decode/i.test(text)).slice(-8);
+    throw new Error(`${error.message}; audio logs: ${recent.join(' | ')}`);
+  }
+}
+
 // The same browser flows run through Firefox's WebDriver BiDi transport.
 // This facade translates only the commands used by these tests.
 function firefoxPageClient(bidi, context) {
@@ -1785,6 +1815,7 @@ try {
       '--no-default-browser-check',
       '--disable-background-networking',
       '--disable-dev-shm-usage',
+      '--mute-audio',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
       '--enable-webgl',
@@ -1817,8 +1848,10 @@ try {
     await client.send('Runtime.enable');
     await client.send('Log.enable');
     await client.send('Page.enable');
+    await client.send('Page.addScriptToEvaluateOnNewDocument', { source: musicAudioInstrumentation });
     await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html` });
     await waitForHealthyPage(client);
+    await musicChecks(client);
     await verifyRenderingLive(client);
     await verifyReloadPersistence(client);
     await verifyAppSettingsReloadPersistence(client);

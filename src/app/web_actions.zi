@@ -1,5 +1,6 @@
 c :: #system_library "c";
 #import, file "current_app.zi";
+#import, file "locale.zi";
 #import, file "app_settings.zi";
 #import, file "../storage/account_types.zi";
 #import, file "../storage/storage_core.zi";
@@ -693,6 +694,66 @@ using AppThemeSource;
         app.theme_mode = APP_THEME_LIGHT
         app_refresh_theme(app)
         app_observe_direct_route_change(app, before)
+    }
+    // Browser tests supply a real WAV in the virtual filesystem. Playback
+    // starts through the same visible controls a person uses.
+    #program_export
+    app_web_test_prepare_music :: () {
+        app := CurrentApp()
+        if app == null {
+            return
+        }
+        before := app_current_route(app)
+        if app.modal.active != 0 {
+            app_close_modal(app)
+        }
+        app.tutorial_seen = 1
+        app.music_volume = 60
+        app.audio_custom_music_count = 1
+        AppCopyText("/tmp/inbe-navigation.wav", app.audio_custom_music[0].path[:])
+        AppCopyText("Navigation test track", app.audio_custom_music[0].title[:])
+        app.exercise_type = EXERCISE_MEDITATION
+        app.meditation.music_track = AUDIO_BUILTIN_MUSIC_COUNT
+        app.meditation.music_practice_tracks[EXERCISE_MEDITATION] = AUDIO_BUILTIN_MUSIC_COUNT
+        app.practice_tab = PRACTICE_TAB_PLAY
+        app.practice_config_tab = 0
+        app.settings_tab = SETTINGS_TAB_AUDIO
+        app.settings_overview = 0
+        app.settings_scroll = 0
+        app.breathing.screen = ScreenSettings
+        app_observe_direct_route_change(app, before)
+    }
+    web_test_music_button_target :: (action: s32) -> Vector2 {
+        app := CurrentApp()
+        keys: [13]string = .{"", "meditation_music_test_button",
+            "settings_tab_device", "settings_tab_audio",
+            "settings_section_appearance", "settings_tab_about",
+            "tab_habits", "tab_practice", "tab_elist", "tab_profile",
+            "settings_title", "practice_configure_button", "back_button"}
+        if app == null || action < 0 || action >= cast(s32)keys.count {
+            return Vector2.{-1, -1}
+        }
+        label := LocaleText(keys[action])
+        index: s32 = 0
+        while index < TreeCount(app.ui.session) {
+            node := TreeNodeAt(app.ui.session, index)
+            if node.interactive && !node.disabled &&
+            ((action == 0 && node.focus_id == 18400) ||
+                (action != 0 && node.semantic_label == label)) {
+                return WorldToScreen(Vector2.{node.bounds.x + node.bounds.width / 2,
+                        node.bounds.y + node.bounds.height / 2}, app.camera)
+            }
+            index += 1
+        }
+        return Vector2.{-1, -1}
+    }
+    #program_export
+    app_web_test_music_button_x :: (action: s32) -> s32 {
+        return cast(s32)web_test_music_button_target(action).x
+    }
+    #program_export
+    app_web_test_music_button_y :: (action: s32) -> s32 {
+        return cast(s32)web_test_music_button_target(action).y
     }
     web_test_control_bounds :: (focus_id: s32) -> Rectangle {
         app := CurrentApp()

@@ -13,6 +13,7 @@
 
 ### Fixed
 - Music keeps playing when you switch tabs inside the app or leave practice customization.
+- Restored sound and music playback in the web app.
 - Appearance dropdown menus stay above the Layout card and other settings, keeping every option visible and selectable.
 - Practice Customize and How-to actions now open the correct pages, and carousel swipes reliably change practices.
 - Animated screens keep their controls visible, and navigation transitions finish before accepting the next action.
