@@ -82,11 +82,20 @@ separate images so that only the few most recent ones stay loaded.
 
 ## Transitions
 
+- Mountain to upward salute, and back down, is a sweep: the praying hands
+  open forward into straight arms that rise in front of her to overhead, so
+  they never pass across her face.
 - Upward salute to forward fold, and back up, is a swan dive: straight arms
   stay in line with the spine, then sweep to the floor.
-- Half lift to plank goes through a low lunge: hands planted, the far foot
-  steps back first with the front knee over the ankle, then the near foot.
-  Down dog to half lift steps forward the same way.
+- The half lift keeps the legs straight and the back long, hands at the
+  knees.
+- Half lift to plank goes through a low lunge: she bends her knees and plants
+  her hands with long arms and her head up, then the far foot steps back
+  first with the front knee over the ankle, then the near foot. Down dog to
+  half lift steps forward the same way.
+- A foot steps while her hips are high: it leads hips that lower and follows
+  hips that rise, skims just off the floor, and the hips lift a little as it
+  passes under them. The leg reaches long instead of kicking up behind her.
 - Upward dog to downward dog rolls the toes under and lifts the ankle over
   them. The instep and flat-foot drawings share the same ankle, toe and heel
   positions at their solid handoff, using the `toe` and `heel` key points in

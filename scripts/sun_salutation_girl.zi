@@ -264,12 +264,22 @@ Rig :: struct {
     steps: s32
     sequence: [16]Pose
     sequence_is_fold: [16]bool
+    sequence_is_salute: [16]bool
+    mountain: Pose
+    salute: Pose
     fold: Pose
     plank: Pose
     down_dog: Pose
     stepping: [4]Stepping
     stepping_count: s32
     stepping_lift: float64
+    stepping_rise: float64
+    stepping_lead: float64
+    sweep_steps: [4]s32
+    sweep_count: s32
+    sweep_straight_by: float64
+    sweep_turn_from: float64
+    sweep_upright_from: float64
     swan_steps: [4]s32
     swan_count: s32
     swan_lower_from: float64
@@ -393,6 +403,8 @@ StepNumber :: (name: string) -> s32 {
 
 ReadStepping :: (stepping_at: s32, poses_at: s32) {
     rig.stepping_lift = NumberField(stepping_at, "lift")
+    rig.stepping_rise = NumberField(stepping_at, "rise")
+    rig.stepping_lead = NumberField(stepping_at, "lead")
     cursor := Space(json, stepping_at + 1)
     while cursor < cast(s32)json.count && json[cursor] != cast(u8)125 {
         key := ReadString(json, cursor)
@@ -469,8 +481,11 @@ ReadRig :: (path: string, theme: string) -> bool {
         name := TextAt(ElementAt(json, sequence, index))
         rig.sequence[index] = ReadPose(poses, name)
         rig.sequence_is_fold[index] = name == "fold"
+        rig.sequence_is_salute[index] = name == "salute"
         index += 1
     }
+    rig.mountain = ReadPose(poses, "mountain")
+    rig.salute = ReadPose(poses, "salute")
     rig.fold = ReadPose(poses, "fold")
     rig.plank = ReadPose(poses, "plank")
     rig.down_dog = ReadPose(poses, "downDog")
@@ -486,6 +501,17 @@ ReadRig :: (path: string, theme: string) -> bool {
     rig.swan_lower_from = NumberField(dive, "lowerFrom")
     rig.swan_straight_reach = NumberField(dive, "straightReach")
     rig.swan_palm_from = NumberField(dive, "palmFrom")
+    sweep := Field(0, "armSweep")
+    sweep_steps := Field(sweep, "steps")
+    rig.sweep_count = ArrayCount(json, sweep_steps)
+    index = 0
+    while index < rig.sweep_count && index < 4 {
+        rig.sweep_steps[index] = cast(s32) Element(sweep_steps, index)
+        index += 1
+    }
+    rig.sweep_straight_by = NumberField(sweep, "straightBy")
+    rig.sweep_turn_from = NumberField(sweep, "turnFrom")
+    rig.sweep_upright_from = NumberField(sweep, "uprightFrom")
     feet := Field(0, "feet")
     rig.point_toes = NumberField(feet, "pointToes")
     rig.resting_radius = NumberField(feet, "restingRadius")
@@ -595,12 +621,55 @@ SteppedAnkle :: (a: V2, b: V2, amount: float64, stepping: bool) -> V2 {
     return point
 }
 
+FootMoves :: (a: Pose, b: Pose) -> bool {
+    return Distance(a.near_ankle, b.near_ankle) > 1.0 || Distance(a.far_ankle, b.far_ankle) > 1.0
+}
+
+Shares :: struct {
+    foot: float64
+    body: float64
+}
+
+// Eased progress of the stepping foot and of the rest of her body. A foot
+// steps while her hips are high: it leads hips that lower and follows hips
+// that rise, so the leg reaches long instead of folding under her.
+StepShares :: (a: Pose, b: Pose, amount: float64) -> Shares {
+    result: Shares
+    result.foot = Ease(amount)
+    result.body = result.foot
+    if !FootMoves(a, b) {
+        return result
+    }
+    lead := rig.stepping_lead
+    early := Ease(Least(1.0, amount / (1.0 - lead)))
+    late := Ease(Most(0.0, (amount - lead) / (1.0 - lead)))
+    result.foot = early
+    result.body = late
+    if b.hip.y < a.hip.y {
+        result.foot = late
+        result.body = early
+    }
+    return result
+}
+
 Interpolate :: (a: Pose, b: Pose, linear: float64, stepping: bool) -> Pose {
-    amount := Ease(linear)
+    shares: Shares
+    shares.foot = Ease(linear)
+    shares.body = shares.foot
+    rise := 0.0
+    if stepping {
+        shares = StepShares(a, b, linear)
+        if FootMoves(a, b) {
+            rise = rig.stepping_rise * Sine(pi * Ease(linear))
+        }
+    }
+    amount := shares.body
     result: Pose
     result.hip = Mix(a.hip, b.hip, amount)
-    result.near_ankle = SteppedAnkle(a.near_ankle, b.near_ankle, amount, stepping)
-    result.far_ankle = SteppedAnkle(a.far_ankle, b.far_ankle, amount, stepping)
+    // The hips lift a little while a foot steps under them.
+    result.hip.y = result.hip.y - rise
+    result.near_ankle = SteppedAnkle(a.near_ankle, b.near_ankle, shares.foot, stepping)
+    result.far_ankle = SteppedAnkle(a.far_ankle, b.far_ankle, shares.foot, stepping)
     result.near_wrist = Mix(a.near_wrist, b.near_wrist, amount)
     result.far_wrist = Mix(a.far_wrist, b.far_wrist, amount)
     result.spine = a.spine * (1.0 - amount) + b.spine * amount
@@ -644,6 +713,45 @@ IsSwanStep :: (step: s32) -> bool {
     return false
 }
 
+IsSweepStep :: (step: s32) -> bool {
+    index: s32 = 0
+    while index < rig.sweep_count {
+        if rig.sweep_steps[index] == step {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// Prayer to upward salute (and back down) as a sweep of straight arms. Moving
+// the wrists in a straight line from the chest to overhead drags the hands up
+// across her face. Instead the hands open forward into straight arms, which
+// sweep up in front of her to overhead. The hands follow the forearms while
+// the arms are long and stand upright again for prayer and overhead.
+ArmSweep :: (p: Pose, time: float64) -> Pose {
+    phase := PhaseAt(time)
+    if !phase.moving || !IsSweepStep(phase.step) {
+        return p
+    }
+    amount := Ease(phase.amount)
+    up := 1.0 - amount
+    if rig.sequence_is_salute[phase.step + 1] {
+        up = amount
+    }
+    low := Minus(rig.mountain.near_wrist, Shoulder(rig.mountain))
+    high := Minus(rig.salute.near_wrist, Shoulder(rig.salute))
+    straight := Smoothstep(0.0, rig.sweep_straight_by, up)
+    turn := Wrap(AngleOf(high) - AngleOf(low)) * Smoothstep(rig.sweep_turn_from, 1.0, up)
+    reach := Length(low) + (Length(high) - Length(low)) * straight
+    wrist := Plus(Shoulder(p), Times(UnitAt(AngleOf(low) + turn), reach))
+    result := p
+    result.near_wrist = wrist
+    result.far_wrist = wrist
+    result.upright = 1.0 - straight * (1.0 - Smoothstep(rig.sweep_upright_from, 1.0, up))
+    return result
+}
+
 // Upward salute to forward fold (and back up) as a swan dive: straight arms
 // stay in line with the spine as she hinges, then sweep down to the floor.
 SwanDive :: (p: Pose, time: float64) -> Pose {
@@ -672,7 +780,7 @@ SwanDive :: (p: Pose, time: float64) -> Pose {
 
 // The pose at `time`, with the hip moved so hands and feet can reach.
 SamplePose :: (time: float64) -> Pose {
-    p := SwanDive(RawPose(time), time)
+    p := SwanDive(ArmSweep(RawPose(time), time), time)
     axis := Times(UnitAt(p.spine), rig.torso)
     centers: [4]V2
     radii: [4]float64
@@ -732,7 +840,7 @@ FeetAt :: (p: Pose, time: float64) -> [2]FootState {
         return result
     }
     segment := SteppingSegment(stepping, phase.amount)
-    eased := Ease(segment.amount)
+    eased := StepShares(segment.start, segment.end, segment.amount).foot
     index: s32 = 0
     while index < 2 {
         begin := segment.start.near_ankle

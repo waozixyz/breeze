@@ -170,17 +170,46 @@ class Timeline:
         segment = min(count - 1, int(amount * count))
         return stops[segment], stops[segment + 1], amount * count - segment
 
+    @staticmethod
+    def foot_moves(a, b):
+        return math.dist(a.near_ankle, b.near_ankle) > 1 or math.dist(a.far_ankle, b.far_ankle) > 1
+
+    def step_shares(self, a, b, amount):
+        """Eased progress of the stepping foot and of the rest of her body.
+
+        A foot steps while her hips are high: it leads hips that lower and
+        follows hips that rise, so the leg reaches long instead of folding
+        under her.
+        """
+        eased = ease(amount)
+        if not self.foot_moves(a, b):
+            return eased, eased
+        lead = self.rig["stepping"]["lead"]
+        early = ease(min(1.0, amount / (1 - lead)))
+        late = ease(max(0.0, (amount - lead) / (1 - lead)))
+        if b.hip[1] < a.hip[1]:
+            return late, early
+        return early, late
+
     def interpolate(self, a, b, amount, stepping=False):
-        amount = ease(amount)
+        foot = body = ease(amount)
+        rise = 0.0
+        if stepping:
+            foot, body = self.step_shares(a, b, amount)
+            if self.foot_moves(a, b):
+                rise = self.rig["stepping"]["rise"] * math.sin(math.pi * ease(amount))
         points = {}
         for name in ("hip", "near_ankle", "far_ankle", "near_wrist", "far_wrist"):
-            point = mix(getattr(a, name), getattr(b, name), amount)
+            share = foot if "ankle" in name else body
+            point = mix(getattr(a, name), getattr(b, name), share)
             if stepping and "ankle" in name:
                 travel = abs(getattr(b, name)[0] - getattr(a, name)[0])
                 lift = min(self.rig["stepping"]["lift"], travel * 0.2)
-                point = point[0], point[1] - lift * math.sin(math.pi * amount)
+                point = point[0], point[1] - lift * math.sin(math.pi * share)
             points[name] = point
-        scalars = {name: getattr(a, name) * (1 - amount) + getattr(b, name) * amount
+        # The hips lift a little while a foot steps under them.
+        points["hip"] = points["hip"][0], points["hip"][1] - rise
+        scalars = {name: getattr(a, name) * (1 - body) + getattr(b, name) * body
                    for name in ("spine", "gaze", "foot", "palm", "instep", "upright")}
         return Pose(**points, **scalars, torso=a.torso)
 
@@ -198,7 +227,7 @@ class Timeline:
 
     def sample(self, time):
         """The pose at `time`, with the hip moved so hands and feet can reach."""
-        p = self.swan_dive(self.raw(time), time)
+        p = self.swan_dive(self.arm_sweep(self.raw(time), time), time)
         axis = mul(unit(p.spine), p.torso)
         reach = self.rig["reach"]
         discs = ((p.near_ankle, reach["leg"]), (p.far_ankle, reach["leg"]),
@@ -211,6 +240,32 @@ class Timeline:
                 if distance > radius:
                     hip = add(center, mul(delta, radius / distance))
         return replace(p, hip=hip)
+
+    def arm_sweep(self, p, time):
+        """Prayer to upward salute (and back down) as a sweep of straight arms.
+
+        Moving the wrists in a straight line from the chest to overhead
+        drags the hands up across her face. Instead the hands open forward
+        into straight arms, which sweep up in front of her to overhead. The
+        hands follow the forearms while the arms are long and stand upright
+        again for prayer and overhead.
+        """
+        sweep = self.rig["armSweep"]
+        step, amount = self.phase(time)
+        if amount is None or step not in sweep["steps"]:
+            return p
+        amount = ease(amount)
+        prayer, salute = self.poses["mountain"], self.poses["salute"]
+        up = amount if self.sequence[step + 1] is salute else 1 - amount
+        low = sub(prayer.near_wrist, prayer.shoulder)
+        high = sub(salute.near_wrist, salute.shoulder)
+        straight = smoothstep(0.0, sweep["straightBy"], up)
+        low_angle = math.atan2(low[1], low[0])
+        turn = wrap(math.atan2(high[1], high[0]) - low_angle) * smoothstep(sweep["turnFrom"], 1.0, up)
+        reach = math.hypot(*low) + (math.hypot(*high) - math.hypot(*low)) * straight
+        wrist = add(p.shoulder, mul(unit(low_angle + turn), reach))
+        upright = 1 - straight * (1 - smoothstep(sweep["uprightFrom"], 1.0, up))
+        return replace(p, near_wrist=wrist, far_wrist=wrist, upright=upright)
 
     def swan_dive(self, p, time):
         """Upward salute to forward fold (and back up) as a swan dive.
@@ -256,7 +311,7 @@ class Timeline:
         if amount is None or step not in self.stepping:
             return shared
         start, end, part = self.stepping_segment(step, amount)
-        eased = ease(part)
+        eased, _ = self.step_shares(start, end, part)
         result = {}
         for far, name in ((False, "near_ankle"), (True, "far_ankle")):
             begin, finish = getattr(start, name), getattr(end, name)
