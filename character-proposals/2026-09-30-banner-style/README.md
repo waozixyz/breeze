@@ -1,79 +1,67 @@
 # Inner Breeze character proposals
 
-Four new banner-inspired character designs for owner review. These files are
-local proposals; no app asset, app reference, site file or deployment was changed.
+Four banner-inspired characters for owner review: two approved women and two
+matching male counterparts. The app still uses its existing animation assets.
 
-Open `index.html` for a two-by-two grid with synchronized restart and playback
-controls. Gwenview can browse the looping animations and still previews in this
-folder. `00-proposals-montage.jpg` compares all four designs in one image.
+- `01-sunrise-ponytail.webp` — approved woman, honey-brown ponytail, teal top and sage trousers.
+- `02-sage-bun.webp` — approved woman, chestnut bun, ivory top and moss trousers.
+- `03-sunrise-ponytail-male.webp` — approved male artwork with the neck joined to the teal shirt.
+- `04-sage-male.webp` — new male counterpart, short chestnut hair, ivory top and moss trousers.
 
-## Animations
+Open `index.html` for synchronized playback. Gwenview can browse the GIF loops
+and still images. `00-proposals-montage.jpg` places each woman above her male
+counterpart. Each design also has MP4, WebP, GIF, preview PNG and twelve-pose
+sequence JPG files.
 
-- `01-sunrise-ponytail.webp` — honey-brown ponytail, lake-teal top, sage trousers.
-- `02-sage-bun.webp` — chestnut bun, warm ivory top, moss trousers.
-- `03-lake-bob.webp` — dark wavy bob, dusty sage top, blue-teal trousers.
-- `04-dusk-braid.webp` — braided crown, clay top, slate-teal trousers.
+Each 40-second loop covers prayer, upward salute, forward fold, half lift, plank,
+low plank, upward dog, downward dog, half lift, forward fold, upward salute and
+prayer. The movement uses articulated transitions, with 1.5-second holds and
+2-second transitions. MP4s are 960 × 640 at 20 fps; WebP and GIF loops are
+768 × 512 at 12 fps and repeat indefinitely.
 
-Each WebP loops infinitely and contains the complete twelve-pose sun-salutation
-sequence: prayer, upward salute, forward fold, half lift, plank, low plank,
-upward dog, downward dog, half lift, forward fold, upward salute and prayer.
-The movement uses continuous articulated transitions rather than a moving camera
-over a still picture. The loop lasts 40 seconds, with 1.5-second holds and
-2-second transitions. The MP4 companions render at 20 fps; WebP loops render at
-12 fps. Separate `*-preview.png` and `*-sequence.jpg` files show each design and
-all twelve poses. GIF companions are provided for image viewers with limited
-animated WebP support.
+The male neck attachment sits inside the painted shirt neckline, with the
+head drawn behind the torso. This closes the gap in upright and bent poses.
+The approved female output files were reused without rerendering them, and
+the first male keeps his approved painting.
 
-## References and generation
+## Artwork and prompts
 
-Authoritative style references:
+The first two women and the original male artwork came from the existing
+OpenRouter generation archive. The second male atlas was created with the
+built-in image_gen tool, using the approved characters and the actual Sun
+Salutation banner as references. Its exact prompt and reference paths are
+saved in `source/04-sage-male-generation.json`. Saved reference copies are
+byte-identical to the images supplied to the tool.
 
-- `assets/practices/sunsalutation/banner-light.png`: warm sunlight, muted teal
-  mountains, sage greens, natural adult anatomy, quiet painted contours.
-- `assets/practices/meditation/banner-light.png`: restrained anime facial
-  features, matte hand-painted texture, peaceful expression and atmosphere.
-- `assets/practices/whm/banner-dark.png`: muted night palette and serene mood.
+`prompts.json` records the four active concepts and their separate artwork
+sources. The first male's torso refinement prompt and original usage metadata
+are retained under the `03-sunrise-ponytail-male` source prefix. The archived
+metadata did not retain his original atlas prompt.
 
-The existing mismatched girl is referenced by
-`scripts/render-sun-salutation-girl.py` and stored in
-`design/sun-salutation/girl-parts/`; the app consumes rendered frames in
-`assets/practices/sunsalutation/girl/`. Those existing files were read only.
+The renderer uses the existing twelve-pose timeline and draws the painted
+parts offscreen with Cairo, then encodes them with FFmpeg. It does not access
+the desktop display. The shared rig keeps comparable body proportions.
 
-The owner's configured **OpenRouter** route was used, with the fast image model
-**`google/gemini-3.1-flash-image`**, at 2K. The imagegen skill's labeled prompt
-conventions were used. The shared brief calls for a new anime-inspired adult
-woman matching the actual banners' matte watercolor/gouache painting, subtle
-paper texture, muted teal/sage/cream/earth palette, small calm facial features,
-natural proportions, modest exercise clothing and bare feet. The four briefs
-specify different hair, skin and clothing. Exact prompts are in `prompts.json`;
-all targeted refinements and model usage metadata are under `source/`.
+## Rebuild the male review files
 
-The image model generated fresh painted part atlases, then refined the torso
-pieces for animation. The existing twelve-pose renderer supplies the pose
-timeline and articulates those new paintings. Frames are drawn offscreen with
-Cairo and encoded by FFmpeg. No display is accessed while generating frames.
-Short/bound hairstyles move with the head. These are art-direction proposals;
-the reusable rig keeps the same body proportions across all four for comparison.
-
-## Rebuild locally
-
-Requires Python with Pillow, NumPy, SciPy, Requests and pycairo, and FFmpeg.
-The generation commands require the already configured `OPENROUTER_API_KEY` in
-the desktop environment. No credential is saved in this folder.
+Requires Python with Pillow, NumPy, SciPy, Requests and pycairo, plus FFmpeg.
+Run from this folder:
 
 ```sh
-python3 build_proposals.py prepare
-python3 build_proposals.py generate
-python3 build_proposals.py refine
-python3 build_proposals.py shoulder --concept 3
-python3 build_proposals.py shoulder --concept 4
-python3 build_proposals.py inspect
-python3 build_proposals.py render
-python3 build_proposals.py gif
-python3 build_proposals.py page
+python3 build_male.py all
+python3 validate_male.py
 ```
 
-Run these from this proposal folder. Image generation skips already saved
-outputs; saved atlases and corrected parts can be reused without another API
-call. Temporary render copies, logs and intermediate part crops are ignored by
-Git. Generated artwork, exact prompts and final review files are retained.
+The build reuses the saved male atlases, renders both men, exports their GIFs,
+and updates the four-character review page and montage. It makes no image API
+calls and leaves the female output files untouched. For individual previews:
+
+```sh
+python3 build_male.py inspect --concept 3
+python3 build_male.py inspect --concept 4
+```
+
+`validate_male.py` checks all four loops, decoded frames, duration, repeat
+settings, twelve pose chapters and review images, then writes `validation.json`.
+Temporary crops, render copies, logs and exit-status files are ignored by Git;
+the artwork, prompts, rig settings and final review files are retained.

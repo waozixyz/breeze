@@ -3,6 +3,11 @@
 
 No app assets, generated app sources, or site files are written by this script.
 The existing twelve-pose renderer is imported, with all paths redirected here.
+
+2026-10-01 owner feedback revision: the four proposals are gender-varied (two
+women, two men) and every prompt carries an explicit natural-anatomy guard
+against exaggerated hips or buttocks. `legfix` can correct a generated leg part
+whose rear contour still reads as oversized.
 """
 from __future__ import annotations
 
@@ -33,15 +38,34 @@ PART_FILES = [
     "hand-upright.png", "hand-flat.png", "foot-flat.png",
     "foot-tucked.png", "foot-instep.png",
 ]
+ANATOMY = ("Natural, tasteful adult anatomy in every part: slim ordinary hips "
+           "and seat. NO exaggerated, oversized, rounded or emphasized "
+           "buttocks, no arched lower back, no hip or thigh inflation, no "
+           "pin-up curves or posed emphasis. The rear contour stays flat to "
+           "gently curved, like the quietly standing people in the banners.")
 CONCEPTS = [
     {"id": "01-sunrise-ponytail", "name": "Sunrise ponytail",
      "design": "An adult woman with warm light peach skin, honey-brown hair in a short low ponytail (entire ponytail fits inside the head tile), soft brown eyes and a calm expression. A plain muted lake-teal long-sleeve exercise top with a round neckline, olive-sage leggings, bare feet. The top has no hood and no ribbon."},
     {"id": "02-sage-bun", "name": "Sage bun",
      "design": "An adult woman with medium warm golden skin, chestnut-brown hair in a compact high bun, a few softly curved wisps, small brown eyes and a peaceful expression. A plain warm ivory long-sleeve exercise top with a round neckline, moss-green leggings, bare feet. The top has no hood and no ribbon."},
-    {"id": "03-lake-bob", "name": "Lake bob",
-     "design": "An adult woman with medium warm tan skin, very dark brown hair in a softly waved chin-length bob, small dark eyes and a kind relaxed expression. A plain dusty sage long-sleeve exercise top with a round neckline, muted blue-teal leggings, bare feet. The top has no hood and no ribbon."},
-    {"id": "04-dusk-braid", "name": "Dusk braid",
-     "design": "An adult woman with rich warm brown skin, dark espresso hair arranged in a compact braided crown gathered at the nape, small dark brown eyes and a serene expression. A plain muted clay-terracotta long-sleeve exercise top with a round neckline, dark slate-teal leggings, bare feet. The top has no hood and no ribbon."},
+    {
+        "id": "03-sunrise-ponytail-male",
+        "name": "Sunrise ponytail (male)",
+        "gender": "male",
+        "design": "The approved adult male counterpart of Sunrise ponytail: warm light peach skin, honey-brown hair in a short tied-back ponytail, calm small brown eyes, a plain lake-teal long-sleeve exercise top, olive-sage trousers and bare feet. Keep his existing face, hair and clothing. His neck tucks naturally inside the shirt collar.",
+        "rig": {
+            "torso": {"neck": [0.62, 0.13]},
+        },
+    },
+    {
+        "id": "04-sage-male",
+        "name": "Sage crop (male)",
+        "gender": "male",
+        "design": "The adult male counterpart of Sage bun: warm golden-tan skin, short softly swept chestnut-brown hair, small calm brown eyes, natural adult male proportions, a plain warm ivory long-sleeve exercise top, moss-green trousers and bare feet. His complete bare neck tucks naturally inside the shirt collar.",
+        "rig": {
+            "torso": {"neck": [0.62, 0.13]},
+        },
+    },
 ]
 REFERENCES = [
     ROOT / "assets/practices/sunsalutation/banner-light.png",
@@ -79,6 +103,7 @@ def prepare():
     (HERE / "source/layout.json").write_text(json.dumps(layout, indent=2) + "\n")
     manifest = {"model": MODEL, "route": "https://openrouter.ai/api/v1/images",
                 "resolution": "2K", "aspect_ratio": "1:1",
+                "revision": "2026-10-01 gender-varied set with natural-anatomy guard",
                 "references": [str(p.relative_to(ROOT)) for p in REFERENCES],
                 "reference_roles": ["sun banner: palette, person, soft paint", "meditation banner: facial depiction and texture", "night banner: quiet atmosphere", "geometry-guide: part order, orientation, anchors only"],
                 "concepts": []}
@@ -91,14 +116,14 @@ def prepare():
 
 def prompt(concept):
     return f"""Use case: stylized-concept
-Asset type: nine painted animation parts for a NEW Inner Breeze anime-inspired adult female character proposal.
+Asset type: nine painted animation parts for a NEW Inner Breeze anime-inspired adult character proposal. Across the set the characters are two grown women and two grown men; this request is for {concept['design'].split('.', 1)[0].lower()}.
 Input images: images 1-3 are the ACTUAL Inner Breeze banners, the authoritative visual style references. Image 4 is ONLY a geometry and tile-layout guide from the old mismatched character; do NOT copy its blue hair, schoolgirl styling, shiny rendering or large eyes.
 Primary request: {concept['design']}
-Style/medium: Match the banners' gentle hand-painted storybook anime, matte watercolor-gouache surfaces with fine paper grain, restrained warm contour lines, simplified natural anatomy and small facial features. She belongs beside the people in these banners. Warm, grounded and quiet, not glossy generic anime. Adult proportions and practical modest yoga clothing.
-Composition/framing: Repaint image 4 as the exact same 3-column by 3-row atlas, 9 separate parts on PURE WHITE. Preserve its part order, orientation and anchor positions. Each part is centered independently in its tile; do not assemble a full person. Row 1: right-facing profile head WITH painted neck ending at the bottom (new hairstyle contained within this tile), right-facing side torso from neck opening through hips WITHOUT head or arms, one straight full leg from upper hip through ankle WITHOUT foot. Row 2: one straight full arm from shoulder through wrist WITHOUT hand, upright hand with fingers pointing up, horizontal hand with fingers pointing right. Row 3: flat bare foot pointing right, toe-tucked foot matching guide orientation, bare instep foot matching guide orientation. Make torso and sleeve color identical; make skin identical throughout; leggings end at ankles.
+Style/medium: Match the banners' gentle hand-painted storybook anime, matte watercolor-gouache surfaces with fine paper grain, restrained warm contour lines, simplified natural anatomy and small facial features. This character belongs beside the people in these banners. Warm, grounded and quiet, not glossy generic anime. Adult proportions, practical modest yoga clothing. {ANATOMY}
+Composition/framing: Repaint image 4 as the exact same 3-column by 3-row atlas, 9 separate parts on PURE WHITE. Preserve its part order, orientation and anchor positions. Each part is centered independently in its tile; do not assemble a full person. Row 1: right-facing profile head WITH painted neck ending at the bottom (new hairstyle contained within this tile), right-facing side torso from neck opening through hips WITHOUT head or arms, one straight full leg from upper hip through ankle WITHOUT foot. Row 2: one straight full arm from shoulder through wrist WITHOUT hand, upright hand with fingers pointing up, horizontal hand with fingers pointing right. Row 3: flat bare foot pointing right, toe-tucked foot matching guide orientation, bare instep foot matching guide orientation. Make torso and sleeve color identical; make skin identical throughout; leggings end at ankles. The leg is matte fabric over a straight adult leg: the rear line from waistband over the seat into the thigh stays nearly straight to gently curved.
 Lighting/mood: Soft diffuse warm daylight, calm expression. No hard specular highlights.
 Color palette: muted teal, sage, cream and warm earth colors from image 1; use the specified character colors.
-Constraints: Clean reusable animation pieces. Preserve geometrical placement, profiles, scale, and silhouettes of limbs and feet from image 4. The head may change hairstyle. Use small relaxed eyes. Draw the entire neck; don't hide it behind hair. The torso is a plain exercise top with sleeves supplied by the separate arm. Remove the old red ribbon and hood completely. No blue hair, school uniform, text, labels, grid lines, shadows on white, decorations, extra pieces, extra limbs or background scene. Leave ample pure white gutters around EVERY isolated part. White is background only; ivory clothing remains shaded with painted contour edges.
+Constraints: Clean reusable animation pieces. Preserve geometrical placement, profiles, scale, and silhouettes of limbs and feet from image 4. The head may change hairstyle. Use small relaxed eyes. Draw the entire neck; don't hide it behind hair. The torso is a plain exercise top with sleeves supplied by the separate arm. Remove the old red ribbon and hood completely. {ANATOMY} No blue hair, school uniform, text, labels, grid lines, shadows on white, decorations, extra pieces, extra limbs or background scene. Leave ample pure white gutters around EVERY isolated part. White is background only; ivory clothing remains shaded with painted contour edges.
 """
 
 
@@ -149,14 +174,13 @@ Asset type: detached torso-only garment for a paper-doll animation rig.
 Input images: Image 1 is the new character's painted parts and defines the EXACT palette and matte illustration style. Image 2 is the exact torso-only shape/orientation guide; image 3 is the Inner Breeze banner style reference.
 Primary request: Paint ONLY the separate TORSO clothing piece for this character: {concept['design']}
 Composition: Right-facing profile garment, centered on pure white with ample margin. Match the torso outline and geometry in image 2: shoulder joint is at the upper LEFT, chest at upper RIGHT, waist and hem below. This is the vest-shaped body panel of the exercise shirt, NOT a complete shirt with hanging arms. The arm is supplied by a different animation asset. Keep the softly outlined round shoulder attachment area on the upper left, but NO sleeve extending downward. Keep the bottom hem covering the hips.
-Style: Match image 1's clothing paint exactly, muted color with soft gouache texture and quiet warm contour lines.
-Constraints: Only torso garment fabric may be visible. ZERO SKIN, ZERO NECK, ZERO HEAD, ZERO ARMS, ZERO SLEEVES EXTENDING FROM THE BODY, ZERO HANDS, ZERO PANTS, ZERO LEGS. No hood, no ribbon, no red bow. Do not include the head or any other pieces from image 1. Stop at the neckline and shirt hem. Use a plain small round neck opening. Preserve the shirt color from image 1. No labels, text, grid or ground shadow. One isolated torso clothing panel only, flat side profile as in image 2.
+Style: Match image 1's clothing paint exactly, muted color with soft gouache texture and quiet warm contour lines. The hem hangs straight down over the hips in a relaxed drape.
+Constraints: Only torso garment fabric may be visible. ZERO SKIN, ZERO NECK, ZERO HEAD, ZERO ARMS, ZERO SLEEVES EXTENDING FROM THE BODY, ZERO HANDS, ZERO PANTS, ZERO LEGS. No hood, no ribbon, no red bow. Do not include the head or any other pieces from image 1. Stop at the neckline and shirt hem. Use a plain small round neck opening. Preserve the shirt color from image 1. No labels, text, grid or ground shadow. One isolated torso clothing panel only, flat side profile as in image 2. {ANATOMY}
 """
     key = os.environ["OPENROUTER_API_KEY"]
     payload = {"model": MODEL, "prompt": refinement, "n": 1, "resolution": "2K",
                "aspect_ratio": "3:4", "input_references": [data_reference(p) for p in [HERE / "source" / (concept["id"] + "-atlas.png"), HERE / "source/torso-geometry.png", REFERENCES[0]]]}
-    response = requests.post("https://openrouter.ai/api/v1/images", json=payload,
-                             headers={"Authorization": "Bearer " + key}, timeout=(20, 240))
+    response = requests.post("https://openrouter.ai/api/v1/images", json=payload, headers={"Authorization": "Bearer " + key}, timeout=(20, 240))
     if not response.ok:
         raise RuntimeError(f"Torso refinement returned HTTP {response.status_code}")
     result = response.json()
@@ -167,7 +191,7 @@ Constraints: Only torso garment fabric may be visible. ZERO SKIN, ZERO NECK, ZER
 
 
 def extract(concept):
-    atlas = Image.open(HERE / "source" / (concept["id"] + "-atlas.png")).convert("RGB")
+    atlas = Image.open(HERE / "source" / (concept["id"] + "-atlas.png")).convert("RGBA")
     output = HERE / "source" / concept["id"] / "parts"
     output.mkdir(parents=True, exist_ok=True)
     for index, filename in enumerate(PART_FILES):
@@ -178,13 +202,35 @@ def extract(concept):
         # Strip tile labels and preserve only the connected painted silhouette.
         margin = round((right - left) * .035)
         picture = atlas.crop((left + margin, top + margin, right - margin, bottom - margin))
-        refined = HERE / "source" / (concept["id"] + "-torso.png")
-        repaired = HERE / "source" / (concept["id"] + "-torso-v2.png")
-        if repaired.exists():
-            refined = repaired
-        if filename == "torso.png" and refined.exists():
-            picture = Image.open(refined).convert("RGB")
-        pixels = np.asarray(picture)
+        refined_torso = HERE / "source" / (concept["id"] + "-torso.png")
+        repaired_torso = HERE / "source" / (concept["id"] + "-torso-v2.png")
+        corrected_leg = HERE / "source" / (concept["id"] + "-leg-v2.png")
+        if filename == "torso.png":
+            if repaired_torso.exists():
+                picture = Image.open(repaired_torso).convert("RGBA")
+            elif refined_torso.exists():
+                picture = Image.open(refined_torso).convert("RGBA")
+        elif filename == "leg.png" and corrected_leg.exists():
+            picture = Image.open(corrected_leg).convert("RGBA")
+        # Built-in imagegen supplies real alpha. Preserve its coverage rather
+        # than treating the transparent pixels as a painted background.
+        if picture.getchannel("A").getextrema()[0] < 255:
+            pixels = np.array(picture)
+            labels, count = ndimage.label(pixels[..., 3] > 40)
+            areas = np.bincount(labels.ravel())
+            areas[0] = 0
+            if not count or areas.max() < 500:
+                raise RuntimeError("Missing painted part: " + filename)
+            silhouette = labels == areas.argmax()
+            # Keep the original alpha at the painted contour. Isolated
+            # transparent specks must not redefine a part's attachment box.
+            coverage = ndimage.binary_dilation(silhouette, iterations=2)
+            pixels[..., 3] = np.where(coverage, pixels[..., 3], 0)
+            result = Image.fromarray(pixels, "RGBA")
+            result = result.crop(result.getbbox())
+            result.save(output / filename)
+            continue
+        pixels = np.asarray(picture.convert("RGB"))
         white = pixels.min(axis=2) > 240
         seeds = np.zeros(white.shape, bool)
         seeds[0] = seeds[-1] = True
@@ -233,6 +279,43 @@ Constraints: Change ONLY the interior white oval shoulder cutout. Keep every oth
     print("Corrected shoulder " + concept["id"], flush=True)
 
 
+def fix_leg(concept):
+    """Repaint one leg part whose rear contour reads as exaggerated.
+
+    Uses the generated atlas for palette/style, the original guide leg for
+    orientation and scale, and demands natural adult hip/seat anatomy.
+    """
+    destination = HERE / "source" / (concept["id"] + "-leg-v2.png")
+    if destination.exists():
+        return
+    original = Image.open(SOURCE_PARTS / "leg.png").convert("RGBA")
+    geometry = Image.new("RGB", original.size, "white")
+    geometry.paste(original, (0, 0), original)
+    geometry.save(HERE / "source/leg-geometry.png")
+    correction = f"""Use case: precise-object-edit
+Asset type: one detached painted leg-with-hip part for a paper-doll animation rig.
+Input images: Image 1 is the painted leg from the generated part set and defines the EXACT palette and matte illustration style. Image 2 is the leg's shape/orientation guide from the original rig; match its scale, length and ankle position. Image 3 is the Inner Breeze banner style reference.
+Primary request: Paint ONLY the corrected replacement leg part for this character: {concept['design']}
+Edit: remove every trace of exaggerated or oversized buttocks. The rear of the upper hip must read as natural, tasteful adult anatomy: a nearly straight to only gently curved line from the waistband down over the seat and into the thigh. {ANATOMY}
+Composition: Right-facing straight leg from upper hip through ankle, WITHOUT foot, centered on pure white with ample white gutter. Keep the leggings color, matte fabric rendering and quiet painted contour style of image 1. Flat matte fabric: no stretched, shiny or wedgie-emphasizing material, no seam or crease emphasis on the seat.
+Constraints: One isolated leg only. No shadows on the white, no other body parts, no text, labels or decorations. Keep paint texture consistent with image 1.
+"""
+    payload = {"model": MODEL, "prompt": correction, "n": 1, "resolution": "2K",
+               "aspect_ratio": "3:4", "input_references": [data_reference(p) for p in
+                                                           [HERE / "source" / (concept["id"] + "-atlas.png"),
+                                                            HERE / "source/leg-geometry.png",
+                                                            REFERENCES[0]]]}
+    response = requests.post("https://openrouter.ai/api/v1/images", json=payload,
+                             headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"]}, timeout=(20, 240))
+    if not response.ok:
+        raise RuntimeError(f"Leg correction returned HTTP {response.status_code}")
+    result = response.json()
+    picture = Image.open(io.BytesIO(base64.b64decode(result["data"][0]["b64_json"])))
+    picture.save(destination)
+    (HERE / "source" / (concept["id"] + "-leg-prompt.json")).write_text(json.dumps({"model": MODEL, "prompt": correction, "usage": result.get("usage", {})}, indent=2) + "\n")
+    print("Corrected leg " + concept["id"], flush=True)
+
+
 def load_renderer():
     spec = importlib.util.spec_from_file_location("inbe_character_review_renderer", ROOT / "scripts/render-sun-salutation-girl.py")
     module = importlib.util.module_from_spec(spec)
@@ -248,6 +331,10 @@ def render(concept, inspect=False):
     rig = copy.deepcopy(json.loads((ROOT / "docs/sun-salutation-girl.json").read_text()))
     rig["parts"]["head"] = {"file": "head.png", "pivot": [.66, .985], "height": 71.43}
     rig["parts"]["longHair"] = {"file": "long-hair.png"}
+    # Attachment points belong to the painting: the collar covers the neck
+    # base before the head rotates through the folded poses.
+    for part, adjustments in concept.get("rig", {}).items():
+        rig["parts"][part].update(copy.deepcopy(adjustments))
     rig["output"]["detail"] = 1.6
     rig["timing"]["hold"] = 1.5
     rig["timing"]["transition"] = 2.0
@@ -312,11 +399,13 @@ def review_page():
     montage.save(HERE / "00-proposals-montage.jpg", quality=94)
     html = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Inner Breeze · Character proposals</title>
 <style>body{margin:0;padding:28px;background:#f4efde;color:#315951;font:16px/1.5 system-ui}header{max-width:960px;margin:0 auto 24px}h1{font-size:32px;margin:0}p{margin:8px 0}main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;max-width:1400px;margin:auto}article{background:#e9e6d5;border:1px solid #c5d4c7;border-radius:16px;overflow:hidden}h2,article p{padding:0 20px}h2{font-size:20px}video{display:block;width:100%}a{color:#285b58}button{background:#315951;color:white;border:0;border-radius:8px;padding:10px 16px;font:inherit;cursor:pointer}@media(max-width:700px){main{grid-template-columns:1fr}body{padding:16px}}</style>
-<header><h1>Inner Breeze · Four character proposals</h1><p>Banner-inspired painted characters. Each performs a complete twelve-pose sun-salutation loop. Local review only.</p><button id="restart">Restart all loops together</button> <a href="prompts.json">Models and exact prompts</a></header><main>''' + "".join(cards) + '''</main><script>document.querySelector('#restart').onclick=()=>document.querySelectorAll('video').forEach(v=>{v.currentTime=0;v.play()});</script></html>'''
+<header><h1>Inner Breeze · Four character proposals</h1><p>Banner-inspired painted characters, two women and two men, all with natural adult anatomy. Each performs a complete twelve-pose sun-salutation loop. Local review only.</p><button id="restart">Restart all loops together</button> <a href="prompts.json">Models and exact prompts</a></header><main>''' + "".join(cards) + '''</main><script>document.querySelector('#restart').onclick=()=>document.querySelectorAll('video').forEach(v=>{v.currentTime=0;v.play()});</script></html>'''
     (HERE / "index.html").write_text(html)
     manifest = json.loads((HERE / "prompts.json").read_text())
     manifest["targeted_refinements"] = []
     for path in sorted((HERE / "source").glob("*-prompt.json")):
+        if not any(path.name.startswith(concept["id"] + "-") for concept in CONCEPTS):
+            continue
         manifest["targeted_refinements"].append({"source": str(path.relative_to(HERE)), **json.loads(path.read_text())})
     manifest["animation"] = {"sequence": "complete twelve-pose sun salutation", "seconds": 40,
                              "mp4_fps": 20, "webp_fps": 12, "loop": "infinite",
@@ -335,7 +424,7 @@ def export_gif(concept):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["prepare", "generate", "refine", "shoulder", "render", "inspect", "gif", "page"])
+    parser.add_argument("action", choices=["prepare", "generate", "refine", "shoulder", "legfix", "render", "inspect", "gif", "page"])
     parser.add_argument("--concept", type=int)
     args = parser.parse_args()
     concepts = [CONCEPTS[args.concept - 1]] if args.concept else CONCEPTS
@@ -350,6 +439,9 @@ def main():
     elif args.action == "shoulder":
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(repair_shoulder, concepts))
+    elif args.action == "legfix":
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(fix_leg, concepts))
     elif args.action in ("render", "inspect"):
         for concept in concepts:
             render(concept, inspect=args.action == "inspect")
