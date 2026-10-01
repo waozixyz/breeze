@@ -207,6 +207,23 @@ copy_dir_contents "$out_dir/build/web" "$out_dir/build/telegram"
 write_telegram_web_app_html "$out_dir/build/telegram/index.html" "$out_dir/build/telegram/index.html.tmp"
 mv "$out_dir/build/telegram/index.html.tmp" "$out_dir/build/telegram/index.html"
 
+# Keep preloaded assets within Pages' 25 MiB per-file limit. The worker serves
+# these already-compressed bytes with the original index.data address.
+python3 - "$out_dir" <<'PY_COMPRESS'
+import gzip
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+for path in (root / "build/web/index.data", root / "build/telegram/index.data"):
+    if path.exists() and path.stat().st_size > 25 * 1024 * 1024:
+        compressed = gzip.compress(path.read_bytes(), compresslevel=9, mtime=0)
+        if len(compressed) > 25 * 1024 * 1024:
+            raise SystemExit(f"Preloaded assets still exceed the Pages limit: {path}")
+        path.with_suffix(".data.gz").write_bytes(compressed)
+        path.unlink()
+PY_COMPRESS
+
 for path in \
 	index.html \
 	privacy.html \
