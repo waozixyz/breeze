@@ -25,7 +25,8 @@ const stateExpression = `(() => {
     ticks: Module._app_web_test_sun_salutation_ticks(),
     paused: Module._app_web_test_sun_salutation_paused(),
     screen: Module._app_web_test_screen(),
-    blue, hash, width: canvas.width, height: canvas.height
+    blue, hash, width: canvas.width, height: canvas.height,
+    sampledAt: performance.now()
   };
 })()`;
 
@@ -232,14 +233,18 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
         window.__inbeAnimationProbe.last = 0;
         window.__inbeAnimationProbe.active = true;
       })()`);
-      const startedAt = Date.now();
       await control(1);
+      // Start both clocks after the resume gesture has been handled. Mouse
+      // dispatch and protocol latency happen while the practice is paused.
+      const running = await state();
+      if (running.paused !== 0 || running.step !== step)
+        throw new Error(`Sun Salutation resume lost state: ${JSON.stringify(running)}`);
       await delay(600);
       const moving = await state();
       if (moving.ticks <= before.ticks || moving.paused !== 0 || moving.hash === before.hash)
         throw new Error(`Sun Salutation pose ${step + 1} did not animate: ${JSON.stringify({ before, moving })}`);
-      const elapsedSeconds = (Date.now() - startedAt) / 1000;
-      const timerSeconds = (moving.ticks - before.ticks) / 60;
+      const elapsedSeconds = (moving.sampledAt - running.sampledAt) / 1000;
+      const timerSeconds = (moving.ticks - running.ticks) / 60;
       if (timerSeconds < elapsedSeconds * 0.8 || timerSeconds > elapsedSeconds * 1.2)
         throw new Error(`Sun Salutation timer is not running in real time: ${JSON.stringify({
           step: step + 1, elapsedSeconds, timerSeconds
