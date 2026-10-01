@@ -101,18 +101,32 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
     await settle();
     let point;
     for (let attempt = 0; attempt < 4; attempt++) {
-      point = await evaluate(`(() => {
-        const canvas = Module.canvas;
-        const rect = canvas.getBoundingClientRect();
-        const rawX = Module._app_web_test_music_button_x(${action});
-        const rawY = Module._app_web_test_music_button_y(${action});
-        return { rawX, rawY,
-          x: rect.left + rawX * rect.width / canvas.width,
-          y: rect.top + rawY * rect.height / canvas.height,
-          right: rect.right, bottom: rect.bottom };
-      })()`);
-      if (point.rawX < 0 && action >= 2 && action <= 5 && attempt === 0) {
+      // Entering Audio can suspend the first draw while cue files decode.
+      // Wait for that draw and its actual control before choosing a position.
+      const deadline = Date.now() + 10000;
+      do {
+        point = await evaluate(`(() => {
+          const canvas = Module.canvas;
+          const rect = canvas.getBoundingClientRect();
+          const busy = !!(Module.Asyncify?.state || Module.Asyncify?.currData);
+          const rawX = busy ? -1 : Module._app_web_test_music_button_x(${action});
+          const rawY = busy ? -1 : Module._app_web_test_music_button_y(${action});
+          return { rawX, rawY, busy,
+            screen: busy ? -1 : Module._app_web_test_screen(),
+            x: rect.left + rawX * rect.width / canvas.width,
+            y: rect.top + rawY * rect.height / canvas.height,
+            right: rect.right, bottom: rect.bottom };
+        })()`);
+        if (!point.busy) break;
+        await delay(100);
+      } while (Date.now() < deadline);
+      if (!point.busy && point.rawX < 0 && action >= 2 && action <= 5 && attempt === 0) {
         await button(10);
+        continue;
+      }
+      if (!point.busy && point.rawX < 0 && (action === 0 || action === 1)) {
+        await scroll(point.right * 0.7, point.bottom * 0.6, 400);
+        await delay(600);
         continue;
       }
       if (point.rawX < 0 || point.rawY < 0 ||
@@ -133,7 +147,13 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
       context.state === 'running' && context.rms > 0.005);
   }
   async function playing(label, expected) {
-    const state = await probe();
+    let state;
+    const deadline = Date.now() + 10000;
+    do {
+      state = await probe();
+      if (expected || audible(state)) break;
+      await delay(100);
+    } while (Date.now() < deadline);
     if (!audible(state) || (expected && (state.active[0] !== expected.active[0] ||
         state.starts !== expected.starts || state.stops !== expected.stops ||
         state.contexts[0].time <= expected.contexts[0].time))) {

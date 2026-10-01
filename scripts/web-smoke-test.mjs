@@ -1850,9 +1850,15 @@ try {
     await client.send('Log.enable');
     await client.send('Page.enable');
     await client.send('Page.addScriptToEvaluateOnNewDocument', { source: musicAudioInstrumentation });
+    if (process.env.WEB_SMOKE_CPU_THROTTLE)
+      await client.send('Emulation.setCPUThrottlingRate', {
+        rate: Number(process.env.WEB_SMOKE_CPU_THROTTLE)
+      });
     await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html` });
     await waitForHealthyPage(client);
     await musicChecks(client);
+    if (process.env.WEB_SMOKE_CPU_THROTTLE)
+      await client.send('Emulation.setCPUThrottlingRate', { rate: 1 });
     await verifyRenderingLive(client);
     await verifyReloadPersistence(client);
     await verifyAppSettingsReloadPersistence(client);
