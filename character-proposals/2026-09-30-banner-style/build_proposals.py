@@ -45,9 +45,15 @@ ANATOMY = ("Natural, tasteful adult anatomy in every part: slim ordinary hips "
            "gently curved, like the quietly standing people in the banners.")
 CONCEPTS = [
     {"id": "01-sunrise-ponytail", "name": "Sunrise ponytail",
-     "design": "An adult woman with warm light peach skin, honey-brown hair in a short low ponytail (entire ponytail fits inside the head tile), soft brown eyes and a calm expression. A plain muted lake-teal long-sleeve exercise top with a round neckline, olive-sage leggings, bare feet. The top has no hood and no ribbon."},
+     "design": "An adult woman with warm light peach skin, honey-brown hair in a short low ponytail (entire ponytail fits inside the head tile), soft brown eyes and a calm expression. A plain muted lake-teal long-sleeve exercise top with a round neckline, olive-sage leggings, bare feet. The top has no hood and no ribbon.",
+     # The head tilts back up to 42° from the spine in the planks, half lift
+     # and upward dog; a neck attached this deep stays inside the round collar.
+     "rig": {"torso": {"neck": [0.62, 0.11]}}},
     {"id": "02-sage-bun", "name": "Sage bun",
-     "design": "An adult woman with medium warm golden skin, chestnut-brown hair in a compact high bun, a few softly curved wisps, small brown eyes and a peaceful expression. A plain warm ivory long-sleeve exercise top with a round neckline, moss-green leggings, bare feet. The top has no hood and no ribbon."},
+     "design": "An adult woman with medium warm golden skin, chestnut-brown hair in a compact high bun, a few softly curved wisps, small brown eyes and a peaceful expression. A plain warm ivory long-sleeve exercise top with a round neckline, moss-green leggings, bare feet. The top has no hood and no ribbon.",
+     # The head tilts back up to 42° from the spine in the planks, half lift
+     # and upward dog; a neck attached this deep stays inside the round collar.
+     "rig": {"torso": {"neck": [0.62, 0.11]}}},
     {
         "id": "03-sunrise-ponytail-male",
         "name": "Sunrise ponytail (male)",

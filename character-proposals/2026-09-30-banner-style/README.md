@@ -23,8 +23,13 @@ prayer. The movement uses articulated transitions, with 1.5-second holds and
 
 The male neck attachment sits inside the painted shirt neckline, with the
 head drawn behind the torso. This closes the gap in upright and bent poses.
-The approved female output files were reused without rerendering them, and
-the first male keeps his approved painting.
+The first male keeps his approved painting.
+
+The women's necks attach inside the round collar too (11% down the torso
+instead of 5%). Their heads tilt back up to 42° from the spine in the half
+lift, both planks and upward dog, which used to swing the throat out below
+the collar. Both women and the first male were rerendered with this and the
+current sun salutation motion.
 
 ## Artwork and prompts
 
