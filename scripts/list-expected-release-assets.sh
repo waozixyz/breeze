@@ -40,5 +40,4 @@ inbe_${version}_x86_64.snap
 inbe_${version}_aarch64.snap
 inbe-${version}-x86_64.flatpak
 inbe-${version}-aarch64.flatpak
-inbe-${version}-freebsd-x86_64.pkg
 EOF

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "storage/archive_file_linux.h"
+#include "../src/core/version.h"
 
 #include <assert.h>
 #include <sqlite3.h>
@@ -215,7 +216,7 @@ int main(void)
     assert(CopyStoredZipEntry(export_view, metadata_entry,
                               (Slice){metadata, (int64_t)metadata_entry.size}));
     assert(strstr(metadata, "\"format\":\"inbe-data-sqlite\"") != NULL);
-    assert(strstr(metadata, "\"app_version\":\"2.0.6\"") != NULL);
+    assert(strstr(metadata, "\"app_version\":\"" APP_VERSION_STRING "\"") != NULL);
     assert(strstr(metadata, "\"user_id\":\"user-\\\"\\\\\"") != NULL);
     assert(strstr(metadata, "\"session_count\":1") != NULL);
     assert(strstr(metadata, "\"habit_count\":1") != NULL);

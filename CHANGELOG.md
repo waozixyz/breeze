@@ -1,4 +1,27 @@
 # Changelog
+## [2.0.7] - 2026-10-01
+### Added
+- Mini mode provides a compact practice window without changing your saved window or navigation settings.
+- Habits now have separate overview, statistics, and edit pages, with a dialog for recording daily counts and clearer week and month calendars.
+
+### Changed
+- Prebuilt FreeBSD packages are temporarily unavailable.
+- Sun Salutation now uses a painted character with smooth movement through all twelve poses, consistent proportions, and clean transitions without crossfading.
+- Practice customization and guides use the full screen, and Sun Salutation shows a simple seconds counter without the distracting progress bar.
+- Improved phone performance, touch responsiveness, text sizing, and Japanese and Chinese text wrapping.
+- Refined Settings, Profile, Lists, habit cards, session controls, and mood check-in buttons. Desktop users can zoom with Ctrl and the mouse wheel.
+
+### Fixed
+- Appearance dropdown menus stay above the Layout card and other settings, keeping every option visible and selectable.
+- Practice Customize and How-to actions now open the correct pages, and carousel swipes reliably change practices.
+- Animated screens keep their controls visible, and navigation transitions finish before accepting the next action.
+- Habit statistics no longer crash, and saved habit counts and imported records are retained correctly.
+- Opening a habit card keeps your place in the list instead of scrolling back to the top.
+- Habit day counts sit centered inside each circle, in a color that stays readable on every habit color.
+- Deleted sync records stay deleted across devices, and restoring an account preserves local changes waiting to sync.
+- Web and browser add-on text stays sharp at different text sizes, display scales, and zoom levels with the Canvas renderer.
+- Cancel reliably closes the exit-session dialog without interrupting the practice.
+
 ## [2.0.6] - 2026-09-22
 ### Fixed
 - Selected app color themes now keep their backgrounds, cards, and text visible. Theme catalogs are included in every build, and an unavailable palette falls back to readable built-in colors.
