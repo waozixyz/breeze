@@ -22,6 +22,7 @@ GetFrameTime :: () -> float32 #foreign c;
 
 #import, file "../../screens/practice_screen_calls.zi";
 #import, file "../../screens/practice_subscreen_layout.zi";
+#import, file "../../screens/settings/settings_ui.zi";
 #import "control_props"
 #import "input_props"
 #import "text_props"
@@ -31,15 +32,14 @@ GetFrameTime :: () -> float32 #foreign c;
 #import, file "../../app/current_app.zi";
 #import "button_widget"
 #import "dropdown_widget"
-#import "slider_widget"
+#import "modal_frame_widget"
+#import "modal_props"
 #import "text_widget"
 #import "toggle_widget"
 #import "drawing_props"
 #import "session"
 #import "button_props"
 #import "dropdown_props"
-#import "slider_props"
-#import "slider"
 #import "toggle_props"
 #import "toggle"
 
@@ -172,36 +172,43 @@ whm_draw_progressive_start_speed_editor :: (app: *InnerBreeze) {
     max_speed := app.breathing.speed_level
     start_speed := WhmConfigClamp(app.breathing.progressive_start_speed,
         SETTINGS_SPEED_MIN, max_speed)
-    frame := ModalPanel(AppScale(340), AppScale(360),
-        LocaleText("progressive_start_speed_editor_title"), true)
-    if frame.closed {
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("whm/start_speed"),
+            .title = LocaleText("progressive_start_speed_editor_title"),
+            .width = AppScale(340),
+            .height = AppScale(360),
+            .scale = MetricsScale(),
+            .has_right_action = true,
+            .right_label = LocaleText("close_button")
+        })
+    if frame.dismissed || frame.right_clicked {
         app_close_modal(app)
         return
     }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    content_x := cast(s32)content.x
+    content_y := cast(s32)content.y
+    content_w := cast(s32)content.width
     whm_draw_exact_speed_preview(*app.start_speed_preview,
         *app.start_speed_preview_speed, start_speed,
         app.breathing.max_rounds,
         BreathDigitsRead(app.breathing.maxbreaths[:]),
         app.breathing.pause_seconds,
         app.breathing.breath_animation,
-        frame.content_w, AppScale(180),
-        frame.content_x + frame.content_w / 2,
-        frame.content_y + AppScale(90),
+        content_w, AppScale(180),
+        content_x + content_w / 2,
+        content_y + AppScale(90),
         *whm_start_speed_preview_remainder)
-    step := DiscreteSlider(CurrentApp().ui.session,
-        DiscreteSliderProps.{
-            .id = 12,
-            .bounds = Rectangle.{cast(float32)frame.content_x,
-                cast(float32)(frame.content_y + AppScale(206)),
-                cast(float32)frame.content_w, cast(float32)AppScale(56)},
-            .label = LocaleText("progressive_start_speed_label"),
-            .value = start_speed, .min = SETTINGS_SPEED_MIN,
-            .max = max_speed
-        })
-    if step.changed {
-        app.breathing.progressive_start_speed = step.value
-        app.settings_dirty = 1
+    slider_y := content_y + AppScale(206)
+    if commit_slider_row(app, 12, content_x, content_w,
+        *slider_y, AppScale(56), LocaleText("progressive_start_speed_label"),
+        SETTINGS_SPEED_MIN, max_speed, *start_speed, "", 0) != 0 {
+        app.breathing.progressive_start_speed = start_speed
     }
+    unused End(app.ui.session)
 }
 
 whm_config_draw_section_title :: (x: s32, y: *s32, title: string) {
@@ -305,8 +312,14 @@ whm_config_draw_breath_card :: (app: *InnerBreeze, content_x: s32, content_w: s3
         cast(float32)AppScale(72),
         Fade(StyleTokenColor("link"), 0.16f),
         Fade(StyleTokenColor("canvas"), 0.0f))
-    whm_preview_step_elapsed(*app.settings_preview,
-        *whm_config_preview_remainder)
+    // The start-speed editor shows its own preview; this one holds still
+    // behind it.
+    start_speed_editor_open := app.modal.active != 0 &&
+    app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed
+    if !start_speed_editor_open {
+        whm_preview_step_elapsed(*app.settings_preview,
+            *whm_config_preview_remainder)
+    }
     if app.settings_preview.phase != BreathPhaseBreathe {
         whm_preview_reset(*app.settings_preview, speed, max_rounds,
             max_breaths, pause_seconds,
@@ -318,21 +331,14 @@ whm_config_draw_breath_card :: (app: *InnerBreeze, content_x: s32, content_w: s3
         inner_y + preview_h / 2)
     inner_y += preview_h + AppScale(20)
 
-    speed_step := DiscreteSlider(CurrentApp().ui.session,
-        DiscreteSliderProps.{.id = 1,
-            .bounds = Rectangle.{cast(float32)inner_x, cast(float32)inner_y,
-                cast(float32)inner_w, cast(float32)AppScale(56)},
-            .label = LocaleText("speed_label"), .value = speed,
-            .min = SETTINGS_SPEED_MIN, .max = SETTINGS_SPEED_MAX})
-    if speed_step.changed {
-        speed = speed_step.value
+    if commit_slider_row(app, 1, inner_x, inner_w, *inner_y, AppScale(78),
+        LocaleText("speed_label"), SETTINGS_SPEED_MIN, SETTINGS_SPEED_MAX,
+        *speed, "", 0) != 0 {
         apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
         apply_settings(*app.settings_preview, speed, max_rounds,
             max_breaths, pause_seconds)
         app.settings_preview.progressive_speed = 0
-        app.settings_dirty = 1
     }
-    inner_y += AppScale(78)
 
     Text(CurrentApp().ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
@@ -398,49 +404,28 @@ whm_config_draw_session_card :: (app: *InnerBreeze, content_x: s32, content_w: s
 
     whm_config_draw_card(content_x, y, content_w, card_h)
 
-    rounds_step := DiscreteSlider(CurrentApp().ui.session,
-        DiscreteSliderProps.{.id = 2,
-            .bounds = Rectangle.{cast(float32)inner_x, cast(float32)inner_y,
-                cast(float32)inner_w, cast(float32)AppScale(56)},
-            .label = LocaleText("max_rounds_label"), .value = max_rounds,
-            .min = 1, .max = MaxRounds})
-    if rounds_step.changed {
-        max_rounds = rounds_step.value
+    if commit_slider_row(app, 2, inner_x, inner_w, *inner_y, AppScale(82),
+        LocaleText("max_rounds_label"), 1, MaxRounds,
+        *max_rounds, "", 0) != 0 {
         apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
         apply_settings(*app.settings_preview, speed, max_rounds,
             max_breaths, pause_seconds)
-        app.settings_dirty = 1
     }
-    inner_y += AppScale(82)
 
-    breaths_step := DiscreteSlider(CurrentApp().ui.session,
-        DiscreteSliderProps.{.id = 3,
-            .bounds = Rectangle.{cast(float32)inner_x, cast(float32)inner_y,
-                cast(float32)inner_w, cast(float32)AppScale(56)},
-            .label = LocaleText("max_breaths_label"), .value = max_breaths,
-            .min = SETTINGS_BREATHS_MIN, .max = SETTINGS_BREATHS_MAX})
-    if breaths_step.changed {
-        max_breaths = breaths_step.value
+    if commit_slider_row(app, 3, inner_x, inner_w, *inner_y, AppScale(82),
+        LocaleText("max_breaths_label"), SETTINGS_BREATHS_MIN,
+        SETTINGS_BREATHS_MAX, *max_breaths, "", 0) != 0 {
         apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
         apply_settings(*app.settings_preview, speed, max_rounds,
             max_breaths, pause_seconds)
-        app.settings_dirty = 1
     }
-    inner_y += AppScale(82)
 
-    pause_step := DiscreteSlider(CurrentApp().ui.session,
-        DiscreteSliderProps.{.id = 4,
-            .bounds = Rectangle.{cast(float32)inner_x, cast(float32)inner_y,
-                cast(float32)inner_w, cast(float32)AppScale(56)},
-            .label = LocaleText("pause_after_round_label"),
-            .value = pause_seconds, .min = SETTINGS_PAUSE_MIN,
-            .max = SETTINGS_PAUSE_MAX})
-    if pause_step.changed {
-        pause_seconds = pause_step.value
+    if commit_slider_row(app, 4, inner_x, inner_w, *inner_y, AppScale(56),
+        LocaleText("pause_after_round_label"), SETTINGS_PAUSE_MIN,
+        SETTINGS_PAUSE_MAX, *pause_seconds, "s", 0) != 0 {
         apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
         apply_settings(*app.settings_preview, speed, max_rounds,
             max_breaths, pause_seconds)
-        app.settings_dirty = 1
     }
 
     return y + card_h + AppScale(16)

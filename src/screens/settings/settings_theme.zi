@@ -11,6 +11,8 @@
 #import "scroll_props"
 #import "scroll_widget"
 #import "tree"
+#import "modal_frame_widget"
+#import "modal_props"
 
 #import, file "../../app/app.zi";
 #import, file "../../app/app_nav_state.zi";
@@ -267,12 +269,24 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
 settings_screen_draw_app_icon_modal :: (app: *InnerBreeze) {
     #if ANDROID {
         state := *app.theme_state
-        frame := ModalPanel(AppScale(360), AppScale(300),
-            LocaleText("app_icon_label"), true)
-        if frame.closed {
+        frame := ModalFrame(app.ui.session, ModalFrameProps.{
+                .key = KeyHash("settings/app-icon"),
+                .title = LocaleText("app_icon_label"),
+                .width = AppScale(360), .height = AppScale(300),
+                .scale = MetricsScale(),
+                .has_right_action = true,
+                .right_label = LocaleText("close_button")})
+        if frame.dismissed || frame.right_clicked {
             app_close_modal(app)
             return
         }
+        if !frame.opened {
+            return
+        }
+        content := frame.layout.content
+        content_x := cast(s32)content.x
+        content_y := cast(s32)content.y
+        content_w := cast(s32)content.width
         names: [2]string = .[
         LocaleText("app_icon_sky_cradle"),
         LocaleText("app_icon_ink_and_air")]
@@ -280,23 +294,23 @@ settings_screen_draw_app_icon_modal :: (app: *InnerBreeze) {
         "assets/app/icon-sky-cradle.png",
         "assets/app/icon-ink-and-air.png"]
         gap := AppScale(12)
-        choice_w := (frame.content_w - gap) / 2
+        choice_w := (content_w - gap) / 2
         {
             i: s32 = 0
             while i < 2 {
-                choice_x := frame.content_x + i * (choice_w + gap)
+                choice_x := content_x + i * (choice_w + gap)
                 selected := state.app_icon == i
                 Image(CurrentApp().ui.session, ImageProps.{
                         .asset_path = previews[i], .alt_text = names[i],
                         .bounds = Rectangle.{cast(float32)choice_x,
-                            cast(float32)frame.content_y, cast(float32)choice_w,
+                            cast(float32)content_y, cast(float32)choice_w,
                             cast(float32)AppScale(120)},
                         .fit = cast(ImageFit)ImageFitContain
                     })
                 if Button(CurrentApp().ui.session, ButtonProps.{
                         .id = cast(s32)153 + i,
                         .bounds = Rectangle.{cast(float32)choice_x,
-                            cast(float32)(frame.content_y + AppScale(128)),
+                            cast(float32)(content_y + AppScale(128)),
                             cast(float32)choice_w, cast(float32)AppScale(44)},
                         .label = names[i],
                         .tone = ifx selected then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
@@ -306,6 +320,7 @@ settings_screen_draw_app_icon_modal :: (app: *InnerBreeze) {
                     state.app_icon = android_device_app_icon()
                     app_block_current_click(app)
                     if state.app_icon_error == 0 {
+                        unused End(app.ui.session)
                         app_close_modal(app)
                         return
                     }
@@ -315,13 +330,14 @@ settings_screen_draw_app_icon_modal :: (app: *InnerBreeze) {
         }
         message := LocaleText(ifx state.app_icon_error != 0 then "app_icon_error" else "app_icon_hint")
         Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)frame.content_x,
-                    cast(float32)(frame.content_y + AppScale(184)),
-                    cast(float32)frame.content_w, cast(float32)AppScale(30)},
+                .bounds = Rectangle.{cast(float32)content_x,
+                    cast(float32)(content_y + AppScale(184)),
+                    cast(float32)content_w, cast(float32)AppScale(30)},
                 .text = message, .wrap = cast(TextWrap)TextWrapNone,
-                .font = AppFitFontSize(message, frame.content_w,
+                .font = AppFitFontSize(message, content_w,
                 AppSmallFontSize(), AppScale(8))
             })
+        unused End(app.ui.session)
     } else {
         unused app
     }
@@ -463,21 +479,24 @@ settings_screen_draw_theme_picker_modal :: (app: *InnerBreeze) {
     modal_w := AppScale(320)
     modal_h := AppScale(360)
     title := LocaleText("theme_picker_title")
-    frame := ModalPanelResult.{}
-    picker_h: s32 = 0
-
-    frame = ModalPanel(modal_w, modal_h, title, true)
-    if frame.closed {
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("settings/theme-picker"),
+            .title = title, .width = modal_w, .height = modal_h,
+            .scale = MetricsScale(),
+            .has_right_action = true,
+            .right_label = LocaleText("close_button")})
+    if frame.dismissed || frame.right_clicked {
         app_close_modal(app)
         return
     }
-
-    picker_h = theme_picker_content_height(frame.content_w)
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    picker_h := theme_picker_content_height(cast(s32)content.width)
 
     {
-        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)frame.content_x, cast(float32)frame.content_y,
-            cast(float32)frame.content_w, cast(float32)frame.content_h
-        }
+        scroll_1_bounds: Rectangle = content
         scroll_1_key: u64 = KeyHash("inbe/screens/settings/settings_theme/scroll/1")
         scroll_1_props: ScrollProps
         scroll_1_props.key = scroll_1_key
@@ -499,6 +518,7 @@ settings_screen_draw_theme_picker_modal :: (app: *InnerBreeze) {
         }
         unused End(app.ui.session)
     }
+    unused End(app.ui.session)
 }
 
 theme_picker_content_height :: (w: s32) -> s32 {
