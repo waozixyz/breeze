@@ -19,7 +19,7 @@ python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/build/packages/kss/styles/classic.kss" \
     "$root/build/packages/kss/styles/lightfield.kss" \
     "$root/assets/styles/inbe.kss"
-"${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
+"${CC:-cc}" -std=c11 -Os -pthread -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/style_apply_link_test.c" \

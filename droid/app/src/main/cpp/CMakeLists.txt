@@ -49,6 +49,7 @@ file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${ZIRAN_DIR}/cmd/zir-ir/*.c" "${ZIRAN_DIR}/cmd/zir-ir/*.h")
 find_program(HOST_MAKE NAMES make gmake REQUIRED)
 find_program(HOST_PYTHON NAMES python3 REQUIRED)
+find_program(HOST_CC NAMES cc gcc REQUIRED NO_CMAKE_FIND_ROOT_PATH)
 set(ZIRAN_BIN "${ZIRAN_BUILD_DIR}/bin/ziran")
 add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
@@ -69,6 +70,7 @@ add_custom_command(
     OUTPUT "${ZI2C_BIN}"
     BYPRODUCTS "${ZI2ZIR_BIN}"
     COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+        "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
         "BUILD_DIR=${ZIRAN_BUILD_DIR}" all
     DEPENDS ${ZIRAN_SOURCES} "${ZIRAN_DIR}/Makefile"
     VERBATIM
@@ -99,6 +101,7 @@ string(APPEND APP_ZIRAN_CHECK_DEFINES " ${APP_ZIRAN_ARCH}")
 # CMake needs the complete emitted import graph before it creates build rules.
 # Run the same required law gates before this initial source generation.
 execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+    "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
     "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)

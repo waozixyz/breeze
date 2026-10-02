@@ -29,4 +29,5 @@ mkdir -p "$work/generated"
     "$work/generated/sqlite.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" -ldl -lpthread -lm \
     -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" \
+    "$root/tests/fixtures/schema-1.8.9.sql"

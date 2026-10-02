@@ -91,6 +91,12 @@ else
   QEMU_MEMORY_ARGS=()
 fi
 
+if [ "${ANDROID_EMULATOR_HEADLESS:-0}" = 1 ]; then
+  WINDOW_ARGS=(-no-window)
+else
+  WINDOW_ARGS=()
+fi
+
 EMULATOR_CMD="${ANDROID_SDK_ROOT}/emulator/emulator"
 if [ ! -x "$EMULATOR_CMD" ]; then
   EMULATOR_CMD="$(command -v emulator)"
@@ -141,6 +147,7 @@ if [ "$SOFT_EMULATOR" -eq 1 ]; then
     -verbose > /tmp/emulator.log 2>&1 &
 else
   LD_LIBRARY_PATH="$EMULATOR_LD_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$EMULATOR_CMD" @"$AVD_NAME" \
+    "${WINDOW_ARGS[@]}" \
     "${AUDIO_ARGS[@]}" \
     "${PORT_ARGS[@]}" \
     "${MEMORY_ARGS[@]}" \

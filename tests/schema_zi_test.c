@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static sqlite3 *database;
@@ -105,8 +106,80 @@ static void close_database(void)
     database = NULL;
 }
 
-int main(void)
+static void upgrade_1_8_9(const char *fixture)
 {
+    FILE *file = fopen(fixture, "rb");
+    assert(file != NULL);
+    assert(fseek(file, 0, SEEK_END) == 0);
+    long length = ftell(file);
+    assert(length > 0);
+    rewind(file);
+    char *sql = malloc((size_t)length + 1);
+    assert(sql != NULL);
+    assert(fread(sql, 1, (size_t)length, file) == (size_t)length);
+    sql[length] = '\0';
+    assert(fclose(file) == 0);
+
+    open_memory_database();
+    assert(exec_sql((uint8_t *)sql));
+    free(sql);
+    assert(exec_sql((uint8_t *)
+        "INSERT INTO users VALUES('upgrade-user',123,'local');"
+        "INSERT INTO settings VALUES('upgrade-user','style_index','3',124);"
+        "INSERT INTO settings VALUES('upgrade-user','language','es',124);"
+        "INSERT INTO habits VALUES('habit','upgrade-user','Practice','Keep me',"
+        "10,20,30,0,0,1,0,0,125);"
+        "INSERT INTO habit_days VALUES('habit',20261001,1,7,2,126);"
+        "INSERT INTO sessions VALUES('session','upgrade-user',127,20261001,"
+        "0,0,'local',127,12345,0,128);"
+        "INSERT INTO session_rounds VALUES('session',0,60);"
+        "INSERT INTO meditation_logs VALUES('meditation','upgrade-user',"
+        "'session',60,129,130);"
+        "INSERT INTO social_snapshots VALUES('upgrade-user','friends','{}',131);"
+        "INSERT INTO imports VALUES('import',132,'csv','fixture',1,1);"
+        "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) "
+        "VALUES('habit','habit',0,133);"
+        "INSERT INTO sync_ops VALUES('pending-op','client',1,'habit','habit',"
+        "0,'upsert','{\"name\":\"Practice\"}',134,0,0);"));
+
+    /* Opening the upgraded database repeatedly must retain all existing
+     * rows, identity, preferences and pending synchronization work. */
+    for(int launch = 0; launch < 2; launch++) {
+        assert(schema_create());
+        assert(migrate_schema());
+        assert(load_or_create_user());
+        assert(strcmp(current_user_id, "upgrade-user") == 0);
+        assert(scalar("SELECT COUNT(*) FROM users") == 1);
+        assert(scalar("SELECT COUNT(*) FROM settings WHERE "
+                      "key='style_index' AND value='3'") == 1);
+        assert(scalar("SELECT COUNT(*) FROM settings WHERE "
+                      "key='language' AND value='es'") == 1);
+        assert(scalar("SELECT COUNT(*) FROM habits WHERE id='habit' AND "
+                      "description='Keep me' AND counter_enabled=1 AND "
+                      "counter_target=1 AND weekdays=0 AND reminder_hour=-1 "
+                      "AND updated_at=125") == 1);
+        assert(scalar("SELECT count FROM habit_days") == 7);
+        assert(scalar("SELECT session_count FROM habit_days") == 2);
+        assert(scalar("SELECT COUNT(*) FROM sessions WHERE id='session' AND "
+                      "updated_at=128 AND mood_before=0 AND mood_after=0 "
+                      "AND rounds_hash=12345") == 1);
+        assert(scalar("SELECT seconds FROM session_rounds") == 60);
+        assert(scalar("SELECT duration_seconds FROM meditation_logs") == 60);
+        assert(scalar("SELECT COUNT(*) FROM social_snapshots") == 1);
+        assert(scalar("SELECT COUNT(*) FROM imports") == 1);
+        assert(scalar("SELECT COUNT(*) FROM sync_outbox") == 1);
+        assert(scalar("SELECT queued_at FROM sync_outbox") == 133);
+        assert(scalar("SELECT COUNT(*) FROM sync_ops WHERE "
+                      "op_id='pending-op' AND acked_at=0 AND "
+                      "payload_json='{\"name\":\"Practice\"}'") == 1);
+    }
+    close_database();
+}
+
+int main(int argc, char **argv)
+{
+    assert(argc == 2);
+    upgrade_1_8_9(argv[1]);
     open_memory_database();
     assert(schema_create());
     assert(!has_table("sync_outbox"));

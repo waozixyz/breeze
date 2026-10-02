@@ -1,4 +1,9 @@
 # Changelog
+## [2.0.8] - 2026-10-02
+### Fixed
+- Fixed an Android startup crash after upgrading from older versions, while preserving saved preferences and practice history.
+- Keep drawing the app when a device cannot allocate the graphics buffers used for screen transitions.
+
 ## [2.0.7] - 2026-10-01
 ### Added
 - Mini mode provides a compact practice window without changing your saved window or navigation settings.

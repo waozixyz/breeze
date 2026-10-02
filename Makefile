@@ -2552,7 +2552,13 @@ android-avd:
 
 android-smoke:
 	@mkdir -p build/android
-	sh scripts/android-smoke-test.sh "$(ANDROID_SDK)" "$(ANDROID_APP_ID)" "$(ANDROID_ACTIVITY)"
+	sh scripts/android-smoke-test.sh "$(ANDROID_SDK)" "$(ANDROID_DEBUG_APP_ID)" "$(ANDROID_ACTIVITY)"
+
+.PHONY: android-smoke-script-test
+android-smoke-script-test:
+	python3 tests/android_smoke_script_test.py
+
+test: android-smoke-script-test
 
 android-audio-e2e:
 	bash scripts/android-audio-e2e.sh
