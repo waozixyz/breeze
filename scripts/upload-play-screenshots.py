@@ -137,6 +137,45 @@ def list_images(images_root, image_type):
     return files
 
 
+def listing_texts(metadata_root):
+    """Short and full descriptions for each Fastlane locale folder."""
+    texts = {}
+    for folder in sorted(metadata_root.iterdir()):
+        short = folder / "short_description.txt"
+        full = folder / "full_description.txt"
+        if folder.is_dir() and short.is_file() and full.is_file():
+            texts[folder.name] = {
+                "shortDescription": short.read_text().strip(),
+                "fullDescription": full.read_text().strip(),
+            }
+    return texts
+
+
+def upload_listing_texts(package_name, edit_id, metadata_root, token):
+    existing = json.loads(http_request(
+        "GET", api_url(package_name, f"/edits/{edit_id}/listings"), token=token))
+    listings = {item["language"]: item for item in existing.get("listings", [])}
+    title = listings.get("en-US", {}).get("title", "Inner Breeze")
+    for language, text in listing_texts(metadata_root).items():
+        if len(text["shortDescription"]) > 80 or len(text["fullDescription"]) > 4000:
+            raise SystemExit(f"{language} description is over Play's length limit")
+        path = api_url(package_name, f"/edits/{edit_id}/listings/{language}")
+        body = dict(text)
+        # Titles stay as they are on Play; a new translation borrows en-US's.
+        method = "PATCH" if language in listings else "PUT"
+        if method == "PUT":
+            body["language"] = language
+            body["title"] = title
+        http_request(
+            method,
+            path,
+            body=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            token=token,
+        )
+        print(f"Updated {language} listing text")
+
+
 def main():
     load_env_file(ROOT / ".env.play")
     package_name = required_env("PLAY_PACKAGE_NAME")
@@ -156,6 +195,9 @@ def main():
         ).split(",")
         if item.strip()
     ]
+    metadata_root = pathlib.Path(
+        os.environ.get("PLAY_METADATA_DIR", str(ROOT / "fastlane/metadata/android")))
+    listing_text = os.environ.get("PLAY_LISTING_TEXT", "1") != "0"
     commit = os.environ.get("PLAY_COMMIT", "0") == "1"
     delete_existing = os.environ.get("PLAY_DELETE_EXISTING", "1") != "0"
 
@@ -165,6 +207,8 @@ def main():
     print(f"Created Google Play edit: {edit_id}")
 
     try:
+        if listing_text:
+            upload_listing_texts(package_name, edit_id, metadata_root, token)
         for image_type in image_types:
             files = list_images(images_root, image_type)
             if not files:
@@ -189,10 +233,10 @@ def main():
         action = "commit" if commit else "validate"
         http_request("POST", api_url(package_name, f"/edits/{edit_id}:{action}"), token=token)
         if commit:
-            print("Committed screenshots to Google Play.")
+            print("Committed the store listing to Google Play.")
         else:
             http_request("DELETE", api_url(package_name, f"/edits/{edit_id}"), token=token)
-            print("Validated screenshots and deleted the draft edit. Set PLAY_COMMIT=1 to publish.")
+            print("Validated the store listing and deleted the draft edit. Set PLAY_COMMIT=1 to publish.")
     except Exception:
         try:
             http_request("DELETE", api_url(package_name, f"/edits/{edit_id}"), token=token)
