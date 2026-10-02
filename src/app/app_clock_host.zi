@@ -1,47 +1,62 @@
 // The host supplies local civil time, including timezone and daylight saving.
 #import "date_time"
-#import, file "../storage/time_parts.zi";
 
-c :: #system_library "c";
+// Browser and Windows clocks keep their platform ABI. Native Unix clocks
+// use the standard provider without exporting another UnixNow/LocalNow.
+#if #defined(_WIN32) || #defined(PLATFORM_WEB) || #defined(__EMSCRIPTEN__) {
+    #import, file "../storage/time_parts.zi";
 
-#if #defined(_WIN32) {
-    // MinGW's localtime_s is an inline wrapper; the CRT exports the 64-bit
-    // forms, which keep time_t 64 bits on 32-bit Windows too.
-    ClockTime :: (output: *s64) -> s64 #foreign c "_time64";
-    ClockLocalTime :: (output: *Tm, input: *s64) -> s32 #foreign c "_localtime64_s";
+    c :: #system_library "c";
+
+    #if #defined(_WIN32) {
+        // MinGW's localtime_s is an inline wrapper; the CRT exports the 64-bit
+        // forms, which keep time_t 64 bits on 32-bit Windows too.
+        ClockTime :: (output: *s64) -> s64 #foreign c "_time64";
+        ClockLocalTime :: (output: *Tm, input: *s64) -> s32 #foreign c "_localtime64_s";
+    } else {
+        ClockTime :: (output: *s64) -> s64 #foreign c "time";
+        ClockLocalTime :: (input: *s64, output: *Tm) -> *Tm #foreign c "localtime_r";
+    }
 } else {
-    ClockTime :: (output: *s64) -> s64 #foreign c "time";
-    ClockLocalTime :: (input: *s64, output: *Tm) -> *Tm #foreign c "localtime_r";
+    Native :: #import "date_time_linux";
 }
 
 #program_export
 LocalNowHost :: () -> LocalDateTime {
-    result: LocalDateTime = .{}
-    now := ClockTime(null)
-    local: Tm
+    #if #defined(_WIN32) || #defined(PLATFORM_WEB) || #defined(__EMSCRIPTEN__) {
+        result: LocalDateTime = .{}
+        now := ClockTime(null)
+        local: Tm
 
-    #if #defined(_WIN32) {
-        if ClockLocalTime(*local, *now) != 0 {
-            return result
+        #if #defined(_WIN32) {
+            if ClockLocalTime(*local, *now) != 0 {
+                return result
+            }
+        } else {
+            if ClockLocalTime(*now, *local) == null {
+                return result
+            }
         }
+
+        result.year = local.tm_year + 1900
+        result.month = local.tm_mon + 1
+        result.day = local.tm_mday
+        result.day_of_year = local.tm_yday
+        result.hour = local.tm_hour
+        result.minute = local.tm_min
+        result.second = local.tm_sec
+        result.valid = true
+        return result
     } else {
-        if ClockLocalTime(*now, *local) == null {
-            return result
-        }
+        return Native.LocalNow()
     }
-
-    result.year = local.tm_year + 1900
-    result.month = local.tm_mon + 1
-    result.day = local.tm_mday
-    result.day_of_year = local.tm_yday
-    result.hour = local.tm_hour
-    result.minute = local.tm_min
-    result.second = local.tm_sec
-    result.valid = true
-    return result
 }
 
 #program_export
 UnixNowHost :: () -> s64 {
-    return ClockTime(null)
+    #if #defined(_WIN32) || #defined(PLATFORM_WEB) || #defined(__EMSCRIPTEN__) {
+        return ClockTime(null)
+    } else {
+        return Native.UnixNow()
+    }
 }

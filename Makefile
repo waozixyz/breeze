@@ -416,6 +416,9 @@ WINDOWS_GEN_DIR := $(BUILD_DIR)/kryon/generated-windows
 WINDOWS_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WINDOWS_GEN_DIR)/%,$(KRY_GEN_SRCS))
 WINDOWS_GEN_GAME_C := $(WINDOWS_GEN_DIR)/Raylib.c
 WINDOWS_GEN_STAMP := $(WINDOWS_GEN_DIR)/.fresh
+# The Unix clock provider is generated only for the native app. Web and
+# Windows source lists above retain their platform clock implementations.
+KRY_GEN_SRCS += $(KRY_GEN_DIR)/date_time_linux.c
 SRC := $(APP_SRCS) $(KRY_GEN_STAMP) $(EMBEDDED_ASSETS_C)
 GENERATED_NATIVE_C = $(shell find $(KRY_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
 WINDOWS_SRC := $(APP_SRCS) $(EMBEDDED_ASSETS_C)
@@ -1814,21 +1817,9 @@ test: sun-salutation-test
 
 .PHONY: app-clock-test
 app-clock-test: $(ZI2C_BIN)
-	@mkdir -p $(BUILD_DIR)/app-clock-test/generated
-	@$(ZI2C_BIN) --no-main --root src \
-		--module-path $(ZIRAN_DIR)/std \
-		-o $(BUILD_DIR)/app-clock-test/generated \
-		src/app/app_clock_host.zi
-	@$(CC) -std=c11 -Wall -Wextra -Werror \
-		-Wno-unused-function -I$(ZIRAN_DIR)/include \
-		-iquote $(BUILD_DIR)/app-clock-test/generated \
-		tests/app_clock_host_test.c \
-		$(BUILD_DIR)/app-clock-test/generated/app/app_clock_host.c \
-		$(BUILD_DIR)/app-clock-test/generated/time_parts.c \
-		$(BUILD_DIR)/app-clock-test/generated/date_time.c \
-		-o $(BUILD_DIR)/app-clock-test/test
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		$(BUILD_DIR)/app-clock-test/test
+		CC="$(CC)" WINDOWS_CC="$(WIN64_CC)" \
+		sh tests/app_clock_host_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: app-clock-test
 
