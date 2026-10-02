@@ -3,6 +3,7 @@
 #import "file_linux"
 #import "byte_text_linux"
 #import "string_range"
+#import "date_parse"
 #import, file "time_parts.zi";
 #import, file "setting_visitor.zi";
 #import, file "state.zi";
@@ -19,8 +20,6 @@
 #import, file "sync_crypto_chacha.zi";
 c :: #system_library "c";
 StorageCacheFlush :: (database: *void) -> s32 #foreign c "sqlite3_db_cacheflush";
-difftime :: (end: s64, start: s64) -> float64 #foreign c;
-mktime :: (tm: *Tm) -> s64 #foreign c;
 StorageSyncStatus :: struct {
     has_account: s32
     enabled: s32
@@ -2217,30 +2216,32 @@ storage_purge_synced_deleted_data :: () {
     storage_schedule_persist()
 }
 
+// Civil day arithmetic: C time_t is 32-bit on 32-bit Android, so mktime and
+// difftime cannot be declared with one integer type for every target.
+storage_profile_day_number :: (local_date: s32) -> s64 {
+    year := local_date / 10000
+    month := (local_date / 100) % 100
+    day := local_date % 100
+    if !DateValid(year, month, day) {
+        return -1
+    }
+    return DaysFromCivil(year, month, day)
+}
+
 storage_profile_day_offset :: (local_date: s32, today_date: s32) -> s32 {
-    day_tm: Tm = Tm.{}
-    today_tm: Tm = Tm.{}
-    day_time: s64
-    today_time: s64
-    diff_days: float64
     if local_date <= 0 || today_date <= 0 {
         return -1
     }
-    day_tm.tm_year = local_date / 10000 - 1900
-    day_tm.tm_mon = (local_date / 100) % 100 - 1
-    day_tm.tm_mday = local_date % 100
-    day_tm.tm_hour = 12
-    today_tm.tm_year = today_date / 10000 - 1900
-    today_tm.tm_mon = (today_date / 100) % 100 - 1
-    today_tm.tm_mday = today_date % 100
-    today_tm.tm_hour = 12
-    day_time = mktime(*day_tm)
-    today_time = mktime(*today_tm)
-    diff_days = difftime(today_time, day_time) / 86400.0
-    if diff_days < -0.5 || diff_days > 370.5 {
+    day := storage_profile_day_number(local_date)
+    today := storage_profile_day_number(today_date)
+    if day < 0 || today < 0 {
         return -1
     }
-    return cast(s32)(diff_days + 0.5)
+    offset := today - day
+    if offset < 0 || offset > 370 {
+        return -1
+    }
+    return cast(s32)offset
 }
 
 storage_profile_date_from_epoch :: (epoch: s64) -> s32 {
