@@ -20,7 +20,7 @@ DEFAULT_X_DRAFT = ROOT / ".local" / "social-posts" / "latest-x-draft.txt"
 DEFAULT_X_ATTACHMENTS = ROOT / ".local" / "social-posts" / "latest-x-attachments.txt"
 DEFAULT_FEATURE_SCREENSHOTS = [
     ROOT / "build" / "screenshots" / "results" / "all-results-pages.png",
-    ROOT / "build" / "screenshots" / "phone" / "04-habit-statistics-1080x1920.png",
+    ROOT / "build" / "screenshots" / "phone" / "06-habit-statistics-1080x1920.png",
 ]
 
 
