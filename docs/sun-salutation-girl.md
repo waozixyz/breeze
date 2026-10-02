@@ -1,13 +1,14 @@
-# Sun salutation with the painted girl
+# Sun Salutation animation rig
 
-`scripts/render-sun-salutation-girl.py` animates the painted girl through
-Inbe's twelve-step sun salutation:
+The shared pose rig drives all four approved Sun Salutation characters.
+The original `scripts/render-sun-salutation-girl.py` remains the offscreen
+renderer and can render its archived reference character for motion studies:
 
 ```sh
 python3 scripts/render-sun-salutation-girl.py                # video
 python3 scripts/render-sun-salutation-girl.py --still 21     # one frame
 python3 scripts/render-sun-salutation-girl.py --theme clear  # transparent video
-python3 scripts/render-sun-salutation-girl.py --sprites      # the app's frames
+python3 scripts/render-sun-salutation-characters.py          # all four app characters
 ```
 
 The video goes to `build/sun-salutation-girl/video/light/sun-salutation.mp4`
@@ -66,14 +67,20 @@ coverage and the white top stays intact; nothing is keyed out afterwards.
 
 ## The app's frames
 
-`--sprites` renders what the Sun Salutation practice shows: for every step
-the move into its pose at 30 frames per second, then half a second of the hold
-while the hair settles; the last frame is the held pose, and the first step
-is only its held pose. Frames are rendered at 0.55 of the design size on the
-`clear` theme, trimmed to what they show and saved as 256-colour PNGs in
-`assets/practices/sunsalutation/girl/`. The generated
-`src/practices/sun_salutation/sun_salutation_frames.zi` places every frame on
-one shared stage. Settings are under `sprites` in the rig.
+`scripts/render-sun-salutation-characters.py` exports all four approved painted
+characters from `character-proposals/2026-09-30-banner-style/`. The original
+renderer’s `--sprites` option also invokes this exporter. Each character has
+991 transparent 256-colour PNGs: one held frame for the first pose and 90 frames
+for each of the eleven transitions at 30 fps. Short and bound hairstyles need
+no extra settling frames. Frames are rendered at 0.55 of the design size and
+saved under `assets/practices/sunsalutation/characters/<character>/`.
+
+The generated `src/practices/sun_salutation/sun_salutation_frames.zi` places all
+four characters on one shared stage and supplies separate pose and thumbnail
+crop geometry for each. `docs/sun-salutation-characters.json` records the export.
+Customize saves the character choice; the live session, previews and guide all
+use it. Run `make sun-salutation-test sun-salutation-assets-test` to validate
+session behavior and decode all 3,964 shipped frames.
 
 The app opens each step with the move, over at most 3 s and at most half the
 step, showing one solid frame at a time, then holds the pose. Hands and feet

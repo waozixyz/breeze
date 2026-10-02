@@ -1,4 +1,11 @@
 # Changelog
+## [2.0.9] - 2026-10-02
+### Added
+- Choose between four painted Sun Salutation characters in Customize. Your choice is saved and appears in the practice, pose previews, and guide.
+
+### Changed
+- Replaced the previous Sun Salutation character with the four banner-inspired designs. The men wear distinct rust-and-charcoal and indigo-and-sand outfits.
+
 ## [2.0.8] - 2026-10-02
 ### Fixed
 - Fixed an Android startup crash after upgrading from older versions, while preserving saved preferences and practice history.

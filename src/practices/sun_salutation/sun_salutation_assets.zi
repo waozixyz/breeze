@@ -7,8 +7,7 @@
 
 using ImageFit;
 
-// The painted girl's frames (scripts/render-sun-salutation-girl.py
-// --sprites) share one transparent stage, so every frame keeps her in place.
+// All four painted characters share one transparent stage and pose timing.
 
 // The number of frames of `step`; the last one is its held pose.
 SunSalutationFrameCount :: (step: s32) -> s32 {
@@ -18,13 +17,15 @@ SunSalutationFrameCount :: (step: s32) -> s32 {
 
 // The asset of frame `index` of `step`, both counted from 0, held for this
 // frame of the app.
-SunSalutationFramePath :: (step: s32, index: s32) -> string {
+SunSalutationFramePath :: (character: s32, step: s32, index: s32) -> string {
+    character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)
+    directory := sun_salutation_frame_directories[character]
     name: [96]u8
-    if !AppAppendText(SUN_SALUTATION_FRAME_DIRECTORY, name[:]) ||
+    if !AppAppendText(directory, name[:]) ||
     !AppAppendText("00-000.png", name[:]) {
         return ""
     }
-    at := cast(s32)SUN_SALUTATION_FRAME_DIRECTORY.count
+    at := cast(s32)directory.count
     name[at] = cast(u8)(#char "0" + (step + 1) / 10)
     name[at + 1] = cast(u8)(#char "0" + (step + 1) % 10)
     name[at + 3] = cast(u8)(#char "0" + (index + 1) / 100)
@@ -49,35 +50,41 @@ SunSalutationStage :: (bounds: Rectangle) -> Rectangle {
 
 // Frame `index` of `step` at its place on `stage`, -1 being the previous
 // step's held pose.
-SunSalutationFrameImage :: (step: s32, index: s32, stage: Rectangle) -> ImageProps {
+SunSalutationFrameImage :: (character: s32, step: s32, index: s32,
+    stage: Rectangle) -> ImageProps {
+    character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     if index < 0 && step > 0 {
         step -= 1
         index = SunSalutationFrameCount(step) - 1
     }
     index = SalutationClamp(index, 0, SunSalutationFrameCount(step) - 1)
+    pose := character * SUN_SALUTATION_STEP_COUNT + step
     scale := stage.width / cast(float32)SUN_SALUTATION_STAGE_W
     picture: ImageProps
-    picture.asset_path = SunSalutationFramePath(step, index)
+    picture.asset_path = SunSalutationFramePath(character, step, index)
     picture.bounds = Rectangle.{
-        stage.x + cast(float32)sun_salutation_step_x[step] * scale,
-        stage.y + cast(float32)sun_salutation_step_y[step] * scale,
-        cast(float32)sun_salutation_step_w[step] * scale,
-        cast(float32)sun_salutation_step_h[step] * scale}
+        stage.x + cast(float32)sun_salutation_step_x[pose] * scale,
+        stage.y + cast(float32)sun_salutation_step_y[pose] * scale,
+        cast(float32)sun_salutation_step_w[pose] * scale,
+        cast(float32)sun_salutation_step_h[pose] * scale}
     picture.fit = cast(ImageFit)ImageFitStretch
     return picture
 }
 
 // The pose held at `step`, as large as fits in `bounds` (thumbnails).
-SunSalutationPoseImage :: (step: s32, bounds: Rectangle) -> ImageProps {
+SunSalutationPoseImage :: (character: s32, step: s32,
+    bounds: Rectangle) -> ImageProps {
+    character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    pose := character * SUN_SALUTATION_STEP_COUNT + step
     picture: ImageProps
-    picture.asset_path = SunSalutationFramePath(step,
+    picture.asset_path = SunSalutationFramePath(character, step,
         SunSalutationFrameCount(step) - 1)
-    picture.source = Rectangle.{cast(float32)sun_salutation_held_x[step],
-        cast(float32)sun_salutation_held_y[step],
-        cast(float32)sun_salutation_held_w[step],
-        cast(float32)sun_salutation_held_h[step]}
+    picture.source = Rectangle.{cast(float32)sun_salutation_held_x[pose],
+        cast(float32)sun_salutation_held_y[pose],
+        cast(float32)sun_salutation_held_w[pose],
+        cast(float32)sun_salutation_held_h[pose]}
     picture.bounds = bounds
     picture.fit = cast(ImageFit)ImageFitContain
     return picture

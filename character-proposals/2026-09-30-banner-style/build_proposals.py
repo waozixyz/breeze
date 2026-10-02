@@ -56,18 +56,18 @@ CONCEPTS = [
      "rig": {"torso": {"neck": [0.62, 0.11]}}},
     {
         "id": "03-sunrise-ponytail-male",
-        "name": "Sunrise ponytail (male)",
+        "name": "Rust ponytail (male)",
         "gender": "male",
-        "design": "The approved adult male counterpart of Sunrise ponytail: warm light peach skin, honey-brown hair in a short tied-back ponytail, calm small brown eyes, a plain lake-teal long-sleeve exercise top, olive-sage trousers and bare feet. Keep his existing face, hair and clothing. His neck tucks naturally inside the shirt collar.",
+        "design": "The approved adult male counterpart of Sunrise ponytail: warm light peach skin, honey-brown hair in a short tied-back ponytail, calm small brown eyes, a plain burnt-rust long-sleeve exercise top, charcoal trousers and bare feet. Keep his existing face, hair and proportions. His neck tucks naturally inside the shirt collar.",
         "rig": {
             "torso": {"neck": [0.62, 0.13]},
         },
     },
     {
         "id": "04-sage-male",
-        "name": "Sage crop (male)",
+        "name": "Indigo crop (male)",
         "gender": "male",
-        "design": "The adult male counterpart of Sage bun: warm golden-tan skin, short softly swept chestnut-brown hair, small calm brown eyes, natural adult male proportions, a plain warm ivory long-sleeve exercise top, moss-green trousers and bare feet. His complete bare neck tucks naturally inside the shirt collar.",
+        "design": "The adult male counterpart of Sage bun: warm golden-tan skin, short softly swept chestnut-brown hair, small calm brown eyes, natural adult male proportions, a plain muted-indigo long-sleeve exercise top, sand trousers and bare feet. His complete bare neck tucks naturally inside the shirt collar.",
         "rig": {
             "torso": {"neck": [0.62, 0.13]},
             # His painted leg is about a fifth thicker for its length than
@@ -334,7 +334,8 @@ def load_renderer():
     return module
 
 
-def render(concept, inspect=False):
+def configure_renderer(concept):
+    """Bind the approved parts and attachment points for review and app exports."""
     module = load_renderer()
     module.PARTS = extract(concept)
     module.BUILD = HERE / "source" / concept["id"] / "render"
@@ -345,6 +346,19 @@ def render(concept, inspect=False):
     # base before the head rotates through the folded poses.
     for part, adjustments in concept.get("rig", {}).items():
         rig["parts"][part].update(copy.deepcopy(adjustments))
+    class Character(module.Girl):
+        def update_hair(self, pose, seconds):
+            pass
+
+        def draw_hair(self):
+            pass
+
+    module.Girl = Character
+    return module, rig
+
+
+def render(concept, inspect=False):
+    module, rig = configure_renderer(concept)
     rig["output"]["detail"] = 1.6
     rig["timing"]["hold"] = 1.5
     rig["timing"]["transition"] = 2.0
@@ -352,17 +366,9 @@ def render(concept, inspect=False):
     rig["themes"]["light"]["far"] = [50, 65, 49, .13]
     rig["themes"]["light"]["shadow"] = [76, 82, 55, .20]
     (HERE / "source" / concept["id"] / "rig.json").write_text(json.dumps(rig, indent=2) + "\n")
-    class ReviewGirl(module.Girl):
-        def update_hair(self, pose, seconds):
-            pass
-
-        def draw_hair(self):
-            pass
-
-    module.Girl = ReviewGirl
     width, height, fps = 960, 640, 20
     if inspect:
-        girl = ReviewGirl(rig, "light", width, height, fps)
+        girl = module.Girl(rig, "light", width, height, fps)
         for label, second in [("standing", 0), ("salute", 4), ("fold", 8), ("dog", 25)]:
             girl.frame(second)
             girl.surface.write_to_png(str(HERE / "source" / concept["id"] / (label + ".png")))
@@ -382,7 +388,7 @@ def render(concept, inspect=False):
     # Twelve evenly spaced held poses demonstrate that this is a full sequence.
     positions = [index * 3.5 + .6 for index in range(12)]
     contact = Image.new("RGB", (1440, 800), "#f4efde")
-    girl = ReviewGirl(rig, "light", 960, 640, fps)
+    girl = module.Girl(rig, "light", 960, 640, fps)
     for index, second in enumerate(positions):
         girl.frame(second)
         frame = Image.frombuffer("RGBA", (960, 640), bytes(girl.surface.get_data()), "raw", "BGRA", 0, 1).convert("RGB")

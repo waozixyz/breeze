@@ -1,12 +1,13 @@
 # Inner Breeze character proposals
 
-Four banner-inspired characters for owner review: two approved women and two
-matching male counterparts. The app still uses its existing animation assets.
+Four approved banner-inspired characters: two women and two men. All four are
+available in Sun Salutation's Customize screen. The saved selection appears in
+the twelve-pose preview, practice animation and guide.
 
 - `01-sunrise-ponytail.webp` — approved woman, honey-brown ponytail, teal top and sage trousers.
 - `02-sage-bun.webp` — approved woman, chestnut bun, ivory top and moss trousers.
-- `03-sunrise-ponytail-male.webp` — approved male artwork with the neck joined to the teal shirt.
-- `04-sage-male.webp` — new male counterpart, short chestnut hair, ivory top and moss trousers.
+- `03-sunrise-ponytail-male.webp` — honey-brown ponytail, burnt-rust top and charcoal trousers.
+- `04-sage-male.webp` — short chestnut hair, indigo top and sand trousers.
   His painted leg is a fifth thicker than the first man's, so the rig draws it
   narrower and without the seat fullness, keeping his seat flat.
 
@@ -23,7 +24,8 @@ prayer. The movement uses articulated transitions, with 1.5-second holds and
 
 The male neck attachment sits inside the painted shirt neckline, with the
 head drawn behind the torso. This closes the gap in upright and bent poses.
-The first male keeps his approved painting.
+Both men keep their approved faces, hairstyles and proportions, with distinct
+clothing palettes requested by the owner on 2026-10-02.
 
 The women's necks attach inside the round collar too (11% down the torso
 instead of 5%). Their heads tilt back up to 42° from the spine in the half
@@ -39,6 +41,12 @@ built-in image_gen tool, using the approved characters and the actual Sun
 Salutation banner as references. Its exact prompt and reference paths are
 saved in `source/04-sage-male-generation.json`. Saved reference copies are
 byte-identical to the images supplied to the tool.
+
+The men's outfit changes used the built-in image_gen tool. Exact edit prompts,
+palettes, input and output hashes are in `source/outfit-edits-20261002.json`.
+Only clothing colors were requested to change: the first man's torso, sleeve
+and collar are rust and his trousers charcoal; the second man's torso and
+sleeve are indigo and his trousers sand.
 
 `prompts.json` records the four active concepts and their separate artwork
 sources. The first male's torso refinement prompt and original usage metadata
@@ -72,3 +80,19 @@ python3 build_male.py inspect --concept 4
 settings, twelve pose chapters and review images, then writes `validation.json`.
 Temporary crops, render copies, logs and exit-status files are ignored by Git;
 the artwork, prompts, rig settings and final review files are retained.
+
+## Rebuild the app frames
+
+From the repository root, run:
+
+```sh
+python3 scripts/render-sun-salutation-characters.py
+make sun-salutation-test sun-salutation-assets-test
+```
+
+The app exporter reuses the approved painted parts and corrected attachment
+points. It writes transparent PNGs under `assets/practices/sunsalutation/characters/`,
+the generated Ziran frame table, and `docs/sun-salutation-characters.json`.
+All four characters share a stage and 30 fps transitions lasting three seconds;
+each has 991 frames covering all twelve poses. Bound hairstyles need no extra
+settling frames. Native, Android and web builds include every character.

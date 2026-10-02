@@ -9,23 +9,25 @@ const stateExpression = `(() => {
   const top = Math.floor(canvas.height * 0.25);
   const height = Math.max(1, canvas.height - top - 90);
   const pixels = context.getImageData(0, top, canvas.width, height).data;
-  let blue = 0;
+  let painted = 0;
   let hash = 2166136261;
   for (let offset = 0; offset < pixels.length; offset += 4) {
     const red = pixels[offset];
     const green = pixels[offset + 1];
     const value = pixels[offset + 2];
-    if (value > 80 && green < 150 && value > red * 1.4 && value > green * 1.15) {
-      blue++;
+    // Every approved character has warm painted skin, independent of outfit.
+    if (red > 150 && green > 85 && red > green + 12 && red > value + 15) {
+      painted++;
       hash = Math.imul(hash ^ offset, 16777619) >>> 0;
     }
   }
   return {
     step: Module._app_web_test_sun_salutation_step(),
     ticks: Module._app_web_test_sun_salutation_ticks(),
+    character: Module._app_web_test_sun_salutation_character(),
     paused: Module._app_web_test_sun_salutation_paused(),
     screen: Module._app_web_test_screen(),
-    blue, hash, width: canvas.width, height: canvas.height,
+    painted, hash, width: canvas.width, height: canvas.height,
     sampledAt: performance.now()
   };
 })()`;
@@ -70,63 +72,70 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
 
   async function state() {
     const result = await evaluate(stateExpression);
-    if (result.blue < 250) throw new Error(`Sun Salutation artwork is missing: ${JSON.stringify(result)}`);
+    if (result.painted < 250) throw new Error(`Sun Salutation artwork is missing: ${JSON.stringify(result)}`);
     return result;
   }
 
   // Decode every shipped frame in the browser, including frames a slow device
   // can skip during playback. This also verifies the complete release bundle.
   const assets = await evaluate(`(async () => {
-    const directory = '/assets/practices/sunsalutation/girl';
-    const paths = Module.FS.readdir(directory).filter(name => name.endsWith('.png')).sort();
-    if (paths.length !== 1156) throw new Error('expected 1156 Sun Salutation frames, got ' + paths.length);
-    const steps = Array(12).fill(0);
-    let previousFoot = null;
+    const root = '/assets/practices/sunsalutation/characters';
+    const characters = Module.FS.readdir(root).filter(name => name !== '.' && name !== '..').sort();
+    if (characters.length !== 4) throw new Error('expected four Sun Salutation characters');
+    let totalFrames = 0;
     let maximumFootJump = 0;
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    for (const path of paths) {
-      const step = Number(path.slice(0, 2)) - 1;
-      if (step < 0 || step >= 12) throw new Error('invalid pose path ' + path);
-      const bytes = Module.FS.readFile(directory + '/' + path);
-      const image = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-      if (!image.width || !image.height) throw new Error('empty image ' + path);
-      canvas.width = image.width;
-      canvas.height = image.height;
-      context.drawImage(image, 0, 0);
-      image.close();
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      let visible = 0;
-      for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] > 0) visible++;
-      if (visible < 100) throw new Error('blank image ' + path);
-      // Pose 7 -> 8 used to flip the feet in one frame. Track the visible
-      // feet through every shipped frame, including the solid-cel handoff.
-      if (step === 7) {
-        let count = 0, sumX = 0, sumY = 0;
-        for (let y = Math.ceil(canvas.height * 0.65); y < canvas.height; y++) {
-          for (let x = 0; x < canvas.width / 3; x++) {
-            const offset = (y * canvas.width + x) * 4;
-            const red = pixels[offset];
-            if (pixels[offset + 3] > 80 && red > 140 &&
-                red > pixels[offset + 1] + 8 && red > pixels[offset + 2] + 8) {
-              count++; sumX += x; sumY += y;
+    for (const character of characters) {
+      const directory = root + '/' + character;
+      const paths = Module.FS.readdir(directory).filter(name => name.endsWith('.png')).sort();
+      if (paths.length !== 991) throw new Error('expected 991 frames for ' + character + ', got ' + paths.length);
+      const steps = Array(12).fill(0);
+      let previousFoot = null;
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      for (const path of paths) {
+        const step = Number(path.slice(0, 2)) - 1;
+        if (step < 0 || step >= 12) throw new Error('invalid pose path ' + path);
+        const bytes = Module.FS.readFile(directory + '/' + path);
+        const image = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        if (!image.width || !image.height) throw new Error('empty image ' + path);
+        canvas.width = image.width;
+        canvas.height = image.height;
+        context.drawImage(image, 0, 0);
+        image.close();
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let visible = 0;
+        for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] > 0) visible++;
+        if (visible < 100) throw new Error('blank image ' + path);
+        // Pose 7 -> 8 used to flip the feet in one frame. Track the visible
+        // feet through every shipped frame, including the solid-cel handoff.
+        if (step === 7) {
+          let count = 0, sumX = 0, sumY = 0;
+          for (let y = Math.ceil(canvas.height * 0.65); y < canvas.height; y++) {
+            for (let x = 0; x < canvas.width / 3; x++) {
+              const offset = (y * canvas.width + x) * 4;
+              const red = pixels[offset];
+              if (pixels[offset + 3] > 80 && red > 140 &&
+                  red > pixels[offset + 1] + 8 && red > pixels[offset + 2] + 8) {
+                count++; sumX += x; sumY += y;
+              }
             }
           }
+          if (count < 100) throw new Error('missing feet in ' + path);
+          const foot = { x: sumX / count, y: sumY / count };
+          if (previousFoot) {
+            const jump = Math.hypot(foot.x - previousFoot.x, foot.y - previousFoot.y);
+            maximumFootJump = Math.max(maximumFootJump, jump);
+            if (jump > 6) throw new Error('foot jumps ' + jump.toFixed(2) + ' pixels in ' + path);
+          }
+          previousFoot = foot;
         }
-        if (count < 100) throw new Error('missing feet in ' + path);
-        const foot = { x: sumX / count, y: sumY / count };
-        if (previousFoot) {
-          const jump = Math.hypot(foot.x - previousFoot.x, foot.y - previousFoot.y);
-          maximumFootJump = Math.max(maximumFootJump, jump);
-          if (jump > 6) throw new Error('foot jumps ' + jump.toFixed(2) + ' pixels in ' + path);
-        }
-        previousFoot = foot;
+        steps[step]++;
       }
-      steps[step]++;
+      if (steps[0] !== 1 || steps.slice(1).some(count => count !== 90))
+        throw new Error('incomplete pose frames ' + JSON.stringify(steps));
+      totalFrames += paths.length;
     }
-    if (steps[0] !== 1 || steps.slice(1).some(count => count !== 105))
-      throw new Error('incomplete pose frames ' + JSON.stringify(steps));
-    return { frames: paths.length, steps, maximumFootJump };
+    return { frames: totalFrames, characters, maximumFootJump };
   })()`, true);
   console.log(`web Sun Salutation: decoded ${assets.frames} frames (${browser})`);
   console.log(`web Sun Salutation: maximum foot movement ${assets.maximumFootJump.toFixed(2)}px (${browser})`);
@@ -203,6 +212,22 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
         throw new Error(`Sun Salutation ${name} did not open: tab=${tab}, target=${JSON.stringify(point)}`);
       }
       await save(`${label}-${name}`);
+      if (name === 'customize') {
+        const picker = await evaluate(`(() => ({
+          x: Module._app_web_test_control_x(613), y: Module._app_web_test_control_y(613),
+          width: Module._app_web_test_control_width(613), height: Module._app_web_test_control_height(613)
+        }))()`);
+        if (picker.width <= 0 || picker.height <= 0) throw new Error('Character selector is missing');
+        for (const character of [1, 2, 3, 0]) {
+          await click(picker.x + picker.width / 2, picker.y + picker.height / 2);
+          await delay(200);
+          await click(picker.x + picker.width / 2, picker.y + picker.height * (character + 1.5));
+          await delay(200);
+          const selected = await evaluate('Module._app_web_test_sun_salutation_character()');
+          if (selected !== character) throw new Error(`Character selector chose ${selected}, expected ${character}`);
+          await save(`${label}-character-${character}`);
+        }
+      }
       await click(24, 24);
       await delay(500);
       if (await evaluate('Module._app_web_test_practice_tab()') !== 1)
@@ -214,6 +239,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     await delay(500);
     await control(1);
     const paused = await state();
+    if (paused.character !== 0) throw new Error('Practice lost the selected character');
     await delay(350);
     const frozen = await state();
     if (paused.paused !== 1 || paused.ticks !== frozen.ticks || paused.hash !== frozen.hash)

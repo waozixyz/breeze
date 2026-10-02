@@ -39,11 +39,12 @@ def register(pipeline):
         if "prompt" in generation:
             entry["prompt"] = generation["prompt"]
         else:
-            entry["artwork_note"] = "Reuses the approved archived male atlas and torso; only the neck attachment changes. The archive retains model usage, but not the original atlas prompt."
+            entry["artwork_note"] = "Uses the approved archived male atlas and torso with joined necks and the saved built-in image_gen outfit edits. The archive retains model usage, but not the original atlas prompt."
         entry["source_generation"] = str(source.relative_to(HERE))
         entries.append(entry)
     manifest["concepts"] = entries
-    manifest["revision"] = "2026-10-01: two approved women and two male counterparts with joined necks"
+    manifest["revision"] = "2026-10-02: two approved women and two men with distinct rust-and-charcoal and indigo-and-sand outfits"
+    manifest["outfit_edits"] = "source/outfit-edits-20261002.json"
     manifest["artwork_sources"] = [
         {
             "concepts": [entry["id"] for entry in entries[:3]],

@@ -199,7 +199,7 @@ file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
     "${REPO_ROOT}/assets/practices/*/banner-light.png"
     "${REPO_ROOT}/assets/practices/*/banner-dark.png")
 file(GLOB APP_SUN_SALUTATION_FRAMES RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
-    "${REPO_ROOT}/assets/practices/sunsalutation/girl/*.png")
+    "${REPO_ROOT}/assets/practices/sunsalutation/characters/*/*.png")
 file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
     "${REPO_ROOT}/build/packages/kss/styles/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
     "${REPO_ROOT}/themes/catalog_*.kss")
