@@ -1877,6 +1877,12 @@ theme-catalog-bundle-check:
 
 test: theme-catalog-bundle-check
 
+.PHONY: site-assets-test
+site-assets-test:
+	node tests/site_assets_test.mjs
+
+test: site-assets-test
+
 $(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) scripts/embed-app-assets.py src/app/assets_host.h | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
 	python3 scripts/embed-app-assets.py $@ $(EMBEDDED_ASSET_FILES)
 

@@ -163,6 +163,13 @@ write_telegram_web_app_html() {
 
 require_output() {
 	path=$1
+	case "$path" in
+		build/web/index.wasm|build/web/index.data|build/telegram/index.wasm|build/telegram/index.data)
+			if [ -f "$out_dir/$path.gz" ] || [ -f "$out_dir/$path.parts.json" ]; then
+				return
+			fi
+			;;
+	esac
 	if [ ! -e "$out_dir/$path" ]; then
 		printf 'Error: required output missing: %s\n' "$path" >&2
 		exit 1
@@ -209,22 +216,8 @@ copy_dir_contents "$out_dir/build/web" "$out_dir/build/telegram"
 write_telegram_web_app_html "$out_dir/build/telegram/index.html" "$out_dir/build/telegram/index.html.tmp"
 mv "$out_dir/build/telegram/index.html.tmp" "$out_dir/build/telegram/index.html"
 
-# Keep preloaded assets within Pages' 25 MiB per-file limit. The worker serves
-# these already-compressed bytes with the original index.data address.
-python3 - "$out_dir" <<'PY_COMPRESS'
-import gzip
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-for path in (root / "build/web/index.data", root / "build/telegram/index.data"):
-    if path.exists() and path.stat().st_size > 25 * 1024 * 1024:
-        compressed = gzip.compress(path.read_bytes(), compresslevel=9, mtime=0)
-        if len(compressed) > 25 * 1024 * 1024:
-            raise SystemExit(f"Preloaded assets still exceed the Pages limit: {path}")
-        path.with_suffix(".data.gz").write_bytes(compressed)
-        path.unlink()
-PY_COMPRESS
+# The worker streams compressed pieces at the original browser asset URLs.
+python3 "$root_dir/scripts/prepare-site-assets.py" "$out_dir"
 
 for path in \
 	index.html \
@@ -248,9 +241,11 @@ for path in \
 	build/web/index.html \
 	build/web/index.js \
 	build/web/index.wasm \
+	build/web/index.data \
 	build/telegram/index.html \
 	build/telegram/index.js \
 	build/telegram/index.wasm \
+	build/telegram/index.data \
 	site-icons/favicon-32x32.png \
 	css/base.css \
 	css/components.css \

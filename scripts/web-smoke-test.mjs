@@ -5,6 +5,7 @@ import { createReadStream, mkdtempSync, rmSync, existsSync, accessSync, constant
 import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
 import { inflateSync } from 'node:zlib';
 import { verifyAppearanceCanvas, verifySunSalutationCanvas } from './web-sun-salutation-test.mjs';
 import { verifyCanvasTextResolution } from './web-canvas-text-test.mjs';
@@ -16,6 +17,11 @@ if (typeof WebSocket === 'undefined') {
 }
 
 const root = resolve(process.argv[2] || 'build/dist/web');
+const testSiteAssets = process.env.WEB_SMOKE_SITE_ASSETS === '1';
+const siteRoot = resolve(root, '../..');
+const siteWorker = testSiteAssets
+  ? (await import('data:text/javascript;base64,' + readFileSync(join(siteRoot, '_worker.js')).toString('base64'))).default
+  : null;
 const browserSetting = process.env.WEB_SMOKE_BROWSER || 'auto';
 const browserArgs = (process.env.WEB_SMOKE_BROWSER_ARGS || '').split(/\s+/).filter(Boolean);
 const timeoutMs = Number(process.env.WEB_SMOKE_TIMEOUT_MS || 90000);
@@ -48,7 +54,9 @@ const mime = new Map([
   ['.ogg', 'audio/ogg']
 ]);
 
-if (!existsSync(join(root, 'index.html')) || !existsSync(join(root, 'index.js')) || !existsSync(join(root, 'index.wasm'))) {
+const hasWasm = existsSync(join(root, 'index.wasm')) || (testSiteAssets &&
+  (existsSync(join(root, 'index.wasm.gz')) || existsSync(join(root, 'index.wasm.parts.json'))));
+if (!existsSync(join(root, 'index.html')) || !existsSync(join(root, 'index.js')) || !hasWasm) {
   console.error(`web smoke: missing web build outputs in ${root}`);
   process.exit(1);
 }
@@ -129,9 +137,40 @@ function isInside(base, path) {
   return path === base || rel;
 }
 
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   const leaf = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  if (siteWorker) {
+    const assetUrl = new URL(url);
+    assetUrl.pathname = '/build/web' + leaf;
+    try {
+      const response = await siteWorker.fetch(new Request(assetUrl, {
+        method: req.method, headers: req.headers,
+      }), {
+        ASSETS: {
+          async fetch(request) {
+            const path = resolve(siteRoot, '.' + new URL(request.url).pathname);
+            if (!isInside(siteRoot, path) || !existsSync(path)) {
+              return new Response('not found', { status: 404 });
+            }
+            return new Response(request.method === 'HEAD' ? null :
+              Readable.toWeb(createReadStream(path)), {
+              headers: { 'Content-Type': contentType(path), 'Cache-Control': 'no-store' },
+            });
+          },
+        },
+      });
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      if (response.body) {
+        Readable.fromWeb(response.body).on('error', error => res.destroy(error)).pipe(res);
+      } else {
+        res.end();
+      }
+    } catch (error) {
+      res.destroy(error);
+    }
+    return;
+  }
   const path = resolve(root, '.' + leaf);
 
   if (!isInside(root, path) || !existsSync(path)) {
