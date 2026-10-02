@@ -979,6 +979,9 @@ async function firstRunGuideButtonTarget(client, kind) {
       y,
       rawX,
       rawY,
+      guideActive: Module._app_web_test_first_run_guide_active(),
+      guideStep: Module._app_web_test_first_run_guide_step(),
+      transitionActive: Module._app_web_test_route_transition_active(),
       rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
       logical: { width: logicalW, height: logicalH },
       canvas: { width: canvas.width, height: canvas.height }
@@ -997,10 +1000,13 @@ async function firstRunGuideState(client, requireDebug = true, requireActive = f
     state = await pageJson(client, `(() => ({
       active: Module._app_web_test_first_run_guide_active(),
       step: Module._app_web_test_first_run_guide_step(),
-      clipped: Module._app_web_test_first_run_guide_text_clipped()
+      clipped: Module._app_web_test_first_run_guide_text_clipped(),
+      nextX: Module._app_web_test_first_run_guide_next_x(),
+      nextY: Module._app_web_test_first_run_guide_next_y()
     }))()`);
     if ((!requireActive || (state?.active === 1 && state?.step === 0)) &&
-        (!requireDebug || state?.clipped !== -1))
+        (!requireDebug || (state?.clipped !== -1 &&
+          state?.nextX >= 0 && state?.nextY >= 0)))
       return state;
     await waitAnimationFrames(client, 1);
   }
@@ -1047,7 +1053,7 @@ async function verifyFirstRunGuideCanvasFlow(client) {
     return { ok: true };
   })()))()`, true);
   if (state?.ok) {
-    await waitAnimationFrames(client, 2);
+    await waitRouteTransition(client);
     state = { ok: true, ...(await firstRunGuideState(client, true, true)) };
   }
   if (!state?.ok || state.active !== 1 || state.step !== 0)
