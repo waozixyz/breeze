@@ -46,14 +46,13 @@ ANATOMY = ("Natural, tasteful adult anatomy in every part: slim ordinary hips "
 CONCEPTS = [
     {"id": "01-sunrise-ponytail", "name": "Sunrise ponytail",
      "design": "An adult woman with warm light peach skin, honey-brown hair in a short low ponytail (entire ponytail fits inside the head tile), soft brown eyes and a calm expression. A plain muted lake-teal long-sleeve exercise top with a round neckline, olive-sage leggings, bare feet. The top has no hood and no ribbon.",
-     # The head tilts back up to 42° from the spine in the planks, half lift
-     # and upward dog; a neck attached this deep stays inside the round collar.
-     "rig": {"torso": {"neck": [0.62, 0.11]}}},
+     # This painting's collar sits behind the old character's attachment.
+     # Keep the neck base inside it as the head turns in the folded poses.
+     "rig": {"torso": {"neck": [0.50, 0.11]}}},
     {"id": "02-sage-bun", "name": "Sage bun",
      "design": "An adult woman with medium warm golden skin, chestnut-brown hair in a compact high bun, a few softly curved wisps, small brown eyes and a peaceful expression. A plain warm ivory long-sleeve exercise top with a round neckline, moss-green leggings, bare feet. The top has no hood and no ribbon.",
-     # The head tilts back up to 42° from the spine in the planks, half lift
-     # and upward dog; a neck attached this deep stays inside the round collar.
-     "rig": {"torso": {"neck": [0.62, 0.11]}}},
+     # Anchor this neck inside its painted collar rather than at its front.
+     "rig": {"torso": {"neck": [0.54, 0.11]}}},
     {
         "id": "03-sunrise-ponytail-male",
         "name": "Rust ponytail (male)",
@@ -200,6 +199,49 @@ Constraints: Only torso garment fabric may be visible. ZERO SKIN, ZERO NECK, ZER
     print("Refined torso " + concept["id"], flush=True)
 
 
+def white_background_cutout(picture, filename):
+    """Recover painted coverage and color from a part composited on white."""
+    pixels = np.asarray(picture.convert("RGB"), dtype=np.float32)
+    white = pixels.min(axis=2) > 240
+    seeds = np.zeros(white.shape, bool)
+    seeds[0] = seeds[-1] = True
+    seeds[:, 0] = seeds[:, -1] = True
+    background = ndimage.binary_propagation(seeds & white, mask=white)
+    labels, count = ndimage.label(~background)
+    areas = np.bincount(labels.ravel())
+    areas[0] = 0
+    if not count or areas.max() < 500:
+        raise RuntimeError("Missing painted part: " + filename)
+    silhouette = ndimage.binary_fill_holes(labels == areas.argmax())
+    interior = ndimage.binary_erosion(silhouette, iterations=2)
+    if not interior.any():
+        raise RuntimeError("Missing painted interior: " + filename)
+
+    # Thresholding a white-matted contour as opaque keeps its white pixels.
+    # Estimate the edge's paint from the nearest interior, then invert the
+    # white composite. Interior colors, including ivory fabric, stay intact.
+    _, nearest = ndimage.distance_transform_edt(~interior, return_indices=True)
+    paint = pixels[tuple(nearest)]
+    contrast = 255 - paint
+    coverage = np.sum((255 - pixels) * contrast, axis=2) / np.maximum(
+        np.sum(contrast * contrast, axis=2), 1
+    )
+    coverage = np.clip(coverage, 0, 1)
+    coverage[interior] = 1
+    coverage[~ndimage.binary_dilation(silhouette, iterations=2)] = 0
+    alpha = np.round(coverage * 255).astype(np.uint8)
+    color = (pixels - 255 * (1 - coverage[..., None])) / np.maximum(
+        coverage[..., None], 1 / 255
+    )
+    # Faint edges amplify 8-bit rounding on white; stabilize their color
+    # towards the neighboring paint rather than introducing bright specks.
+    confidence = np.clip(coverage[..., None] * 8, 0, 1)
+    color = paint + (color - paint) * confidence
+    color[alpha == 0] = 0
+    color = np.round(color.clip(0, 255)).astype(np.uint8)
+    return Image.fromarray(np.dstack([color, alpha]), "RGBA")
+
+
 def extract(concept):
     atlas = Image.open(HERE / "source" / (concept["id"] + "-atlas.png")).convert("RGBA")
     output = HERE / "source" / concept["id"] / "parts"
@@ -240,26 +282,7 @@ def extract(concept):
             result = result.crop(result.getbbox())
             result.save(output / filename)
             continue
-        pixels = np.asarray(picture.convert("RGB"))
-        white = pixels.min(axis=2) > 240
-        seeds = np.zeros(white.shape, bool)
-        seeds[0] = seeds[-1] = True
-        seeds[:, 0] = seeds[:, -1] = True
-        background = ndimage.binary_propagation(seeds & white, mask=white)
-        foreground = ~background
-        labels, count = ndimage.label(foreground)
-        areas = np.bincount(labels.ravel())
-        areas[0] = 0
-        if not count or areas.max() < 500:
-            raise RuntimeError("Missing painted part: " + filename)
-        # Keep the main part. Hair islands can be kept when close to its outline.
-        silhouette = labels == areas.argmax()
-        silhouette = ndimage.binary_fill_holes(silhouette)
-        edge = ndimage.binary_dilation(silhouette, iterations=1) & ~silhouette
-        alpha = np.where(silhouette, 255, 0).astype(np.uint8)
-        alpha[edge] = (255 - pixels.min(axis=2)[edge]).clip(0, 255)
-        rgba = np.dstack([pixels, alpha])
-        result = Image.fromarray(rgba, "RGBA")
+        result = white_background_cutout(picture, filename)
         result = result.crop(result.getbbox())
         result.save(output / filename)
     # The full head contains short/bound hair; there is no detached long lock.
@@ -418,6 +441,10 @@ def review_page():
 <header><h1>Inner Breeze · Four character proposals</h1><p>Banner-inspired painted characters, two women and two men, all with natural adult anatomy. Each performs a complete twelve-pose sun-salutation loop. Local review only.</p><button id="restart">Restart all loops together</button> <a href="prompts.json">Models and exact prompts</a></header><main>''' + "".join(cards) + '''</main><script>document.querySelector('#restart').onclick=()=>document.querySelectorAll('video').forEach(v=>{v.currentTime=0;v.play()});</script></html>'''
     (HERE / "index.html").write_text(html)
     manifest = json.loads((HERE / "prompts.json").read_text())
+    concepts = {concept["id"]: concept for concept in CONCEPTS}
+    for entry in manifest["concepts"]:
+        entry["rig"] = copy.deepcopy(concepts[entry["id"]].get("rig", {}))
+    manifest["rig_revision"] = "2026-10-02: corrected women's collar attachments and recovered white-matted edge colors"
     manifest["targeted_refinements"] = []
     for path in sorted((HERE / "source").glob("*-prompt.json")):
         if not any(path.name.startswith(concept["id"] + "-") for concept in CONCEPTS):

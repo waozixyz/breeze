@@ -46,7 +46,16 @@ def export_character(pipeline, concept):
     camera = rig["camera"]
     width = round(camera["designWidth"] * sprites["scale"] / 2) * 2
     height = round(camera["designHeight"] * sprites["scale"] / 2) * 2
-    character = module.Girl(rig, "clear", width, height, sprites["fps"])
+    # Supersample the articulated meshes before reducing to the app's size.
+    # This smooths moving contours without increasing the texture dimensions.
+    sample_scale = 2
+    character = module.Girl(
+        rig, "clear", width * sample_scale, height * sample_scale, sprites["fps"]
+    )
+    surface = module.cairo.ImageSurface(module.cairo.FORMAT_ARGB32, width, height)
+    context = module.cairo.Context(surface)
+    context.scale(1 / sample_scale, 1 / sample_scale)
+    context.set_operator(module.cairo.OPERATOR_SOURCE)
     directory = ROOT / DIRECTORY / concept["id"]
     directory.mkdir(parents=True, exist_ok=True)
     expected = set()
@@ -57,8 +66,12 @@ def export_character(pipeline, concept):
         coverage = np.zeros((height, width), dtype=bool)
         for second in times:
             character.frame(second)
-            stride = character.surface.get_stride()
-            pixels = np.frombuffer(character.surface.get_data(), np.uint8)
+            context.set_source_surface(character.surface)
+            context.get_source().set_filter(module.cairo.FILTER_BEST)
+            context.paint()
+            surface.flush()
+            stride = surface.get_stride()
+            pixels = np.frombuffer(surface.get_data(), np.uint8)
             pixels = pixels.reshape(height, stride // 4, 4)[:, :width].copy()
             coverage |= pixels[..., 3] > 0
             frames.append(pixels)

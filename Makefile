@@ -689,6 +689,10 @@ sun-salutation-test: $(ZI2C_BIN)
 sun-salutation-assets-test:
 	python3 tests/sun_salutation_assets_test.py
 
+.PHONY: sun-salutation-artwork-test
+sun-salutation-artwork-test:
+	python3 tests/sun_salutation_artwork_test.py
+
 .PHONY: break-engine-test
 break-engine-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/break_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
@@ -1817,7 +1821,7 @@ meditation-timing-test: build-laws $(ZI2C_BIN)
 
 test: meditation-timing-test
 
-test: sun-salutation-test sun-salutation-assets-test
+test: sun-salutation-test sun-salutation-assets-test sun-salutation-artwork-test
 
 .PHONY: app-clock-test
 app-clock-test: $(ZI2C_BIN)

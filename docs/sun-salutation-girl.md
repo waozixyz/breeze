@@ -75,6 +75,13 @@ for each of the eleven transitions at 30 fps. Short and bound hairstyles need
 no extra settling frames. Frames are rendered at 0.55 of the design size and
 saved under `assets/practices/sunsalutation/characters/<character>/`.
 
+The app exporter renders at twice the final resolution and downsamples the
+premultiplied surface before quantization. This smooths the articulated
+contours while keeping the existing texture dimensions and playback timing.
+White-background source paintings recover both edge coverage and the original
+paint color; retaining the white matte as opaque pixels would leave pale
+fringes on a dark background. Sources with real alpha keep their coverage.
+
 The generated `src/practices/sun_salutation/sun_salutation_frames.zi` places all
 four characters on one shared stage and supplies separate pose and thumbnail
 crop geometry for each. `docs/sun-salutation-characters.json` records the export.

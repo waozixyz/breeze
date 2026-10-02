@@ -33,6 +33,13 @@ lift, both planks and upward dog, which used to swing the throat out below
 the collar. Both women and the first male were rerendered with this and the
 current sun salutation motion.
 
+The women's collar attachment points also sit farther back inside each
+painting's neckline, rather than at the old character's forward attachment.
+Their white-background parts recover clean edge colors and transparency, so
+the trousers, sleeves and hair no longer carry a pale matte onto dark scenes.
+The app exporter supersamples the motion before reducing to its existing
+texture size, smoothing the outlines without increasing texture dimensions.
+
 ## Artwork and prompts
 
 The first two women and the original male artwork came from the existing

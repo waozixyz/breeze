@@ -1,4 +1,11 @@
 # Changelog
+## [2.0.10] - 2026-10-02
+### Changed
+- Smoothed the outlines of all four Sun Salutation characters during movement.
+
+### Fixed
+- Corrected the women's neck placement and removed white fringes and specks around their clothing.
+
 ## [2.0.9] - 2026-10-02
 ### Added
 - Choose between four painted Sun Salutation characters in Customize. Your choice is saved and appears in the practice, pose previews, and guide.
