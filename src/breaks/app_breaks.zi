@@ -22,6 +22,7 @@ WEB :: #defined(PLATFORM_WEB)
 #import, file "break_calendar.zi";
 #import, file "break_types.zi";
 #import "date_time"
+#import "std/vec"
 
 
 #import, file "../storage/break_stats.zi";
@@ -84,6 +85,17 @@ break_window_session: Session;
 break_hud_session: Session;
 break_toast_state: ToastState;
 break_toast_request: string;
+
+BreakToastMessage :: () -> string {
+    // Toast state outlives this frame and language catalogs can change while
+    // it is visible. Retain an owned value.
+    message: Vec(u8)
+    if !BuilderAppend(message, LocaleText("break_prelude_text")) {
+        VecFree(message)
+        return ""
+    }
+    return BuilderFinish(message)
+}
 
 #program_export
 app_breaks_draw_toast :: (app: *InnerBreeze, viewport: Rectangle) {
@@ -493,7 +505,7 @@ app_breaks_update :: (app: *InnerBreeze) {
 
         // The activity sample only says whether input happened within the last
         // BreakActivityThresholdMs - it cannot vouch for a longer stall (occluded
-            // or hidden window, system suspend, a slow frame). Credit at most one
+        // or hidden window, system suspend, a slow frame). Credit at most one
         // second of the batch to the live sample; older catch-up ticks run as
         // idle so time away from the machine never counts toward the next break.
         active_ticks: s32 = 0
@@ -546,7 +558,7 @@ app_breaks_update :: (app: *InnerBreeze) {
                 }
 
                 if event == BreakEventPrompt {
-                    break_toast_request = LocaleText("break_prelude_text")
+                    break_toast_request = BreakToastMessage()
                     break_play_cue(app, 0.8f)
                 } else if event == BreakEventStart {
                     break_engine_open_window(app, t)
@@ -860,7 +872,7 @@ app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, p
                     })
             } else if timer.state == BreakStateBreaking {
                 // active break: count down the remaining rest time (this is the
-                    // wait that resets the timer once it completes)
+                // wait that resets the timer once it completes)
                 left: s32 = timer.duration_s - timer.idle_s
                 if left < 0 {
                     left = 0
