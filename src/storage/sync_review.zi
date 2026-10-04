@@ -235,9 +235,9 @@ review_activity_name :: (activity: s32) -> string {
         case 1;
             return LocaleText("exercise_meditation")
         case 2;
-            return LocaleText("exercise_patterns")
-        case 3;
             return LocaleText("exercise_sun_salutation")
+        case 3;
+            return LocaleText("exercise_patterns")
     }
     return LocaleText("exercise_wim_hof")
 }
@@ -780,6 +780,7 @@ review_visible_change_count :: (diff: string) -> s32 {
 }
 
 storage_apply_pending_sync_review :: (use_remote: s32) -> s32 {
+    if use_remote < 0 || use_remote > 2 { return 0 }
     json: *u8 = storage_sync_review_read_json()
     ok: s32
 
@@ -787,21 +788,359 @@ storage_apply_pending_sync_review :: (use_remote: s32) -> s32 {
         return 0
     }
     if use_remote == 0 {
-        apply_key_buffer: [64] u8
-        AppCopyText(storage_sync_pending_review_key, apply_key_buffer[:])
-        set_meta(*apply_key_buffer[0], *empty_meta[0])
-        storage_sync_review_delete_json()
-        AppCopyText(storage_sync_apply_review_key, apply_key_buffer[:])
-        set_meta_int64(*apply_key_buffer[0], 0)
-        AppCopyText(storage_sync_full_replace_key, apply_key_buffer[:])
-        set_meta_int64(*apply_key_buffer[0], 0)
-        exec_sql("DELETE FROM sync_outbox")
+        if exec_sql("SAVEPOINT sync_review_keep") == 0 {
+            free(cast(*void)json)
+            return 0
+        }
+        ok = exec_sql("UPDATE meta SET value=CASE WHEN key='sync_pending_review_pending' THEN '' ELSE '0' END WHERE key IN ('sync_pending_review_pending','sync_apply_pending_review','sync_full_replace_requested')")
+        if ok == 0 || exec_sql("RELEASE sync_review_keep") == 0 {
+            exec_sql("ROLLBACK TO sync_review_keep")
+            exec_sql("RELEASE sync_review_keep")
+            free(cast(*void)json)
+            return 0
+        }
         storage_state_handle().pending_sync_outbox_seq = 0
+        storage_sync_review_delete_json()
         storage_schedule_persist()
         free(cast(*void)json)
         return 1
     }
-    ok = storage_apply_remote_full_snapshot(AppTextFromCString(json, 2147483647))
+    if use_remote == 2 {
+        if exec_sql("SAVEPOINT sync_review_merge") == 0 {
+            free(cast(*void)json)
+            return 0
+        }
+        previous: StorageState = storage_state_handle().*
+        storage_set_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 1)
+        // The review has not acknowledged an upload: retain all local outbox rows.
+        storage_state_handle().pending_sync_outbox_seq = 0
+        ok = storage_apply_sync_response_json(AppTextFromCString(json, 2147483647))
+        if ok == 0 {
+            exec_sql("ROLLBACK TO sync_review_merge")
+            storage_state_handle().* = previous
+        }
+        if exec_sql("RELEASE sync_review_merge") == 0 {
+            exec_sql("ROLLBACK TO sync_review_merge")
+            exec_sql("RELEASE sync_review_merge")
+            storage_state_handle().* = previous
+            ok = 0
+        }
+        if ok != 0 { storage_sync_review_delete_json() }
+    } else {
+        ok = storage_apply_remote_full_snapshot(AppTextFromCString(json, 2147483647))
+    }
+    free(cast(*void)json)
+    return ok
+}
+
+// Read-only rehearsal: the same record application runs inside a savepoint.
+// Every database write and storage-state change is rolled back before return.
+ReviewRowsSQL :: #string SQL
+SELECT 'profile_sessions_label' category, id identity,
+ CAST(activity AS TEXT) parent, strftime('%Y-%m-%d %H:%M:%S',started_at,'unixepoch','localtime') name,
+ json_object('review_date',local_date,'review_activity',activity,'review_topic',topic,
+ 'review_source',source,'review_mood_before',mood_before,'review_mood_after',mood_after,
+ 'review_energy',energy,'review_stress',stress,'review_note',note,'review_tags',tags,
+ 'round_times_title',COALESCE((SELECT group_concat(seconds, ', ') FROM
+ (SELECT seconds FROM session_rounds WHERE session_id=s.id ORDER BY round_index)),'')) details
+FROM sessions s WHERE deleted_at=0
+UNION ALL
+SELECT 'meditation_title','meditation_log/'||id,'',
+ strftime('%Y-%m-%d %H:%M:%S',completed_at,'unixepoch','localtime'),
+ json_object('review_date',CAST(strftime('%Y%m%d',completed_at,'unixepoch','localtime') AS INTEGER),
+ 'results_duration',printf('%d s',duration_seconds))
+FROM meditation_logs
+UNION ALL
+SELECT 'tab_habits',id,name,name,
+ json_object('habit_name_label',name,'habit_description_label',description,
+ 'habit_color_label',printf('%d, %d, %d',color_r,color_g,color_b),
+ 'review_tracking',sync_mode,'habit_link_practices',sync_activity,
+ 'habit_counter_mode',counter_enabled,'habit_counter_target',counter_target,
+ 'review_order',sort_order,'review_weekdays',weekdays,'habit_reminder_label',reminder_hour)
+FROM habits WHERE deleted_at=0
+UNION ALL
+SELECT 'review_habit_days',d.habit_id||'/'||d.local_date,h.name,CAST(d.local_date AS TEXT),
+ json_object('review_completed',completed,'review_count',count,'profile_sessions_label',session_count)
+FROM habit_days d JOIN habits h ON h.id=d.habit_id WHERE h.deleted_at=0
+UNION ALL
+SELECT 'sync_lists_label',id,title,title,
+ json_object('habit_name_label',title,'review_order',sort_order)
+FROM elist_lists WHERE deleted_at=0
+UNION ALL
+SELECT 'sync_list_items_label',i.id,COALESCE(l.title,''),i.title,
+ json_object('sync_lists_label',COALESCE(l.title,''),'habit_name_label',i.title,'review_note',i.comment,'review_completed',i.done,'review_order',i.sort_order)
+FROM elist_items i LEFT JOIN elist_lists l ON l.id=i.list_id WHERE i.deleted_at=0
+UNION ALL
+SELECT 'profile_friends_title',user_id||'/'||kind,kind,kind,json_object('review_data',json)
+FROM social_snapshots
+SQL
+
+ReviewChangesSQL :: #string SQL
+SELECT a.category,a.parent,a.name,'review_added',NULL,a.details,2 priority
+FROM review_after a LEFT JOIN review_before b USING(category,identity)
+WHERE b.identity IS NULL
+UNION ALL
+SELECT b.category,b.parent,b.name,'review_removed',b.details,NULL,0
+FROM review_before b LEFT JOIN review_after a USING(category,identity)
+WHERE a.identity IS NULL
+UNION ALL
+SELECT a.category,a.parent,a.name,'review_changed',b.details,a.details,1
+FROM review_after a JOIN review_before b USING(category,identity)
+WHERE a.details<>b.details OR a.parent<>b.parent OR a.name<>b.name
+ORDER BY 7,1,2,3,4
+SQL
+
+review_create_rows :: (prefix: string) -> s32 {
+    sql: ReviewText
+    sql.ok = 1
+    review_append(*sql, prefix)
+    review_append(*sql, ReviewRowsSQL)
+    ok: s32 = 0
+    if sql.ok != 0 && sql.data != null {
+        ok = exec_sql(AppTextFromCString(sql.data, cast(s32)(sql.len + 1)))
+    }
+    free(cast(*void)sql.data)
+    return ok
+}
+
+review_append_field_value :: (out: *ReviewText, field: string,
+    value: string, number: s32) {
+    if value == "" {
+        review_append(out, LocaleText("profile_none_label"))
+    } else if field == "review_activity" {
+        review_append(out, review_activity_name(number))
+    } else if field == "review_date" {
+        review_append_date(out, number)
+    } else if field == "review_completed" || field == "review_tracking" || field == "habit_counter_mode" {
+        key := "toggle_off"
+        if number != 0 {
+            key = "toggle_on"
+        }
+        review_append(out, LocaleText(key))
+    } else if field == "review_weekdays" {
+        if number == 0 {
+            review_append(out, LocaleText("habit_every_day"))
+        }
+        days: [7]string = .["habit_day_mon", "habit_day_tue", "habit_day_wed", "habit_day_thu", "habit_day_fri", "habit_day_sat", "habit_day_sun"]
+        day: s32 = 0
+        found: bool = false
+        while day < 7 {
+            if (number & (1 << day)) != 0 {
+                if found {
+                    review_append(out, ", ")
+                }
+                review_append(out, LocaleText(days[day]))
+                found = true
+            }
+            day += 1
+        }
+    } else if field == "habit_link_practices" {
+        found: bool = false
+        activity: s32 = 0
+        while activity < 4 {
+            if (number & (1 << activity)) != 0 {
+                if found {
+                    review_append(out, ", ")
+                }
+                review_append(out, review_activity_name(activity))
+                found = true
+            }
+            activity += 1
+        }
+        if !found {
+            review_append(out, LocaleText("profile_none_label"))
+        }
+    } else if field == "habit_reminder_label" && number < 0 {
+        review_append(out, LocaleText("habit_reminder_off"))
+    } else {
+        review_append(out, value)
+    }
+}
+
+review_append_fields :: (out: *ReviewText, before: string, after: string) {
+    statement: *void = null
+    sql := "SELECT k.key,COALESCE(CAST(b.value AS TEXT),''),COALESCE(CAST(a.value AS TEXT),'') FROM json_each(COALESCE(NULLIF(?2,''),?1)) k LEFT JOIN json_each(NULLIF(?1,'')) b ON b.key=k.key LEFT JOIN json_each(NULLIF(?2,'')) a ON a.key=k.key"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK {
+        out.ok = 0
+        return
+    }
+    bind_text(statement, 1, before)
+    bind_text(statement, 2, after)
+    while true {
+        status := SqliteStep(statement)
+        if status == SQLITE_DONE { break }
+        if status != SQLITE_ROW {
+            out.ok = 0
+            break
+        }
+        field := AppTextFromCString(SqliteColumnText(statement, 0), 2147483647)
+        old_value := AppTextFromCString(SqliteColumnText(statement, 1), 2147483647)
+        new_value := AppTextFromCString(SqliteColumnText(statement, 2), 2147483647)
+        if before != "" && after != "" && old_value == new_value {
+            continue
+        }
+        review_append(out, "      ")
+        review_append(out, LocaleText(field))
+        review_append(out, ": ")
+        if before != "" {
+            review_append_field_value(out, field, old_value, sqlite3_column_int(statement, 1))
+        }
+        if before != "" && after != "" {
+            review_append(out, " → ")
+        }
+        if after != "" {
+            review_append_field_value(out, field, new_value, sqlite3_column_int(statement, 2))
+        }
+        review_append(out, "\n")
+    }
+    SqliteFinalize(statement)
+}
+
+#program_export
+storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s32 {
+    out.* = null
+    if storage_db_handle() == null || storage_json_valid(json) == 0 ||
+    storage_json_extract_int64(json, "$.protocol_version", 0) != SYNC_PROTOCOL_VERSION {
+        return 0
+    }
+    text: ReviewText
+    text.ok = 1
+    if choice == 0 {
+        review_append(*text, LocaleText("review_unchanged"))
+        out.* = text.data
+        return text.ok
+    }
+    if choice != 1 && choice != 2 {
+        return 0
+    }
+    saved: StorageState = storage_state_handle().*
+    if exec_sql("SAVEPOINT sync_review_preview") == 0 {
+        return 0
+    }
+    ok := review_create_rows("CREATE TEMP TABLE review_before AS ")
+    if ok != 0 && choice == 1 {
+        ok = storage_clear_local_sync_data()
+    }
+    if ok != 0 {
+        ok = storage_apply_sync_records(json)
+    }
+    if ok != 0 {
+        ok = review_create_rows("CREATE TEMP TABLE review_after AS ")
+    }
+    statement: *void = null
+    if ok != 0 && SqlitePrepareText(storage_db_handle(), ReviewChangesSQL,
+        -1, *statement, null) == SQLITE_OK {
+        category: string = ""
+        parent: string = ""
+        category_copy: *u8 = null
+        parent_copy: *u8 = null
+        rows: s32 = 0
+        removed: s32 = 0
+        changed: s32 = 0
+        added: s32 = 0
+        action: s32 = -1
+        while true {
+            status := SqliteStep(statement)
+            if status == SQLITE_DONE { break }
+            if status != SQLITE_ROW {
+                ok = 0
+                break
+            }
+            next_action := sqlite3_column_int(statement, 6)
+            if next_action == 0 { removed += 1 }
+            if next_action == 1 { changed += 1 }
+            if next_action == 2 { added += 1 }
+            if action != next_action {
+                review_append(*text, "\n")
+                review_append(*text, LocaleText(AppTextFromCString(SqliteColumnText(statement, 3), 2147483647)))
+                review_append(*text, "\n")
+                action = next_action
+                category = ""
+                parent = ""
+            }
+            next_category := AppTextFromCString(SqliteColumnText(statement, 0), 2147483647)
+            next_parent := AppTextFromCString(SqliteColumnText(statement, 1), 2147483647)
+            if category != next_category {
+                review_append(*text, "\n")
+                review_append(*text, LocaleText(next_category))
+                review_append(*text, "\n")
+                free(cast(*void)category_copy)
+                category_copy = storage_duplicate_cstring(SqliteColumnText(statement, 0))
+                category = AppTextFromCString(category_copy, 2147483647)
+                parent = ""
+            }
+            if parent != next_parent {
+                review_append(*text, "  ")
+                if next_category == "profile_sessions_label" {
+                    activity := sqlite3_column_int(statement, 1)
+                    review_append(*text, review_activity_name(activity))
+                } else {
+                    review_append(*text, next_parent)
+                }
+                review_append(*text, "\n")
+                free(cast(*void)parent_copy)
+                parent_copy = storage_duplicate_cstring(SqliteColumnText(statement, 1))
+                parent = AppTextFromCString(parent_copy, 2147483647)
+            }
+            review_append(*text, "    ")
+            review_append(*text, LocaleText(AppTextFromCString(SqliteColumnText(statement, 3), 2147483647)))
+            review_append(*text, ": ")
+            review_append(*text, AppTextFromCString(SqliteColumnText(statement, 2), 2147483647))
+            review_append(*text, "\n")
+            review_append_fields(*text,
+                AppTextFromCString(SqliteColumnText(statement, 4), 2147483647),
+                AppTextFromCString(SqliteColumnText(statement, 5), 2147483647))
+            rows += 1
+        }
+        free(cast(*void)category_copy)
+        free(cast(*void)parent_copy)
+        SqliteFinalize(statement)
+        if rows == 0 {
+            review_append(*text, LocaleText("review_unchanged"))
+        } else {
+            summary: ReviewText
+            summary.ok = 1
+            review_append(*summary, LocaleText("review_removed"))
+            review_append(*summary, ": ")
+            review_append_number(*summary, removed, 0)
+            review_append(*summary, " · ")
+            review_append(*summary, LocaleText("review_changed"))
+            review_append(*summary, ": ")
+            review_append_number(*summary, changed, 0)
+            review_append(*summary, " · ")
+            review_append(*summary, LocaleText("review_added"))
+            review_append(*summary, ": ")
+            review_append_number(*summary, added, 0)
+            review_append(*summary, "\n")
+            review_append(*summary, AppTextFromCString(text.data, cast(s32)(text.len + 1)))
+            free(cast(*void)text.data)
+            text = summary
+        }
+    } else {
+        ok = 0
+    }
+    if exec_sql("ROLLBACK TO sync_review_preview") == 0 {
+        ok = 0
+    }
+    if exec_sql("RELEASE sync_review_preview") == 0 {
+        ok = 0
+    }
+    storage_state_handle().* = saved
+    if ok == 0 || text.ok == 0 {
+        free(cast(*void)text.data)
+        return 0
+    }
+    out.* = text.data
+    return 1
+}
+
+#program_export
+storage_sync_review_plan :: (choice: s32, out: **u8) -> s32 {
+    json := storage_sync_review_read_json()
+    if json == null {
+        return 0
+    }
+    ok := storage_sync_review_plan_for_json(AppTextFromCString(json, 2147483647), choice, out)
     free(cast(*void)json)
     return ok
 }

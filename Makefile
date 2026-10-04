@@ -2813,3 +2813,7 @@ android-release android-bundle android-copy-release-apks android-copy-bundle win
 
 # Actual artifacts are gated too, including direct and incremental builds.
 $(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
+
+.PHONY: sync-review-ui-test
+sync-review-ui-test: $(TARGET)
+	@sh tests/sync_review_ui_test.sh $(TARGET)

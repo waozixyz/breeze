@@ -871,6 +871,77 @@ test_social_cache_is_server_authored :: () {
     storage_close()
 }
 
+// The preview rehearses encrypted v6 application, then returns with the
+// snapshot, local records, metadata and pending uploads still intact.
+test_review_preview_and_choices :: () {
+    remote_seed: TextBuffer
+    append(*remote_seed, REMOTE_SQL)
+    append(*remote_seed, "INSERT INTO elist_lists VALUES('remote-review-list',(SELECT id FROM users LIMIT 1),'Remote list',0,0,1782290000);INSERT INTO elist_items VALUES('remote-review-item',(SELECT id FROM users LIMIT 1),'remote-review-list','Remote item','',0,0,0,1782290000);")
+    remote_records("review-preview-source", TextFromCString(*remote_seed.bytes[0]))
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, "INSERT INTO elist_lists VALUES('local-review-list',(SELECT id FROM users LIMIT 1),'Local list',0,0,1782300000);INSERT INTO elist_items VALUES('local-review-item',(SELECT id FROM users LIMIT 1),'local-review-list','Local item','',0,0,0,1782300000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('remote-session',(SELECT id FROM users LIMIT 1),1782290000,20260624,2,2,'sync-test',1782290000,'202',0,1782200000);INSERT INTO session_rounds VALUES('remote-session',0,25);")
+    root := local_device("review-preview-local", TextFromCString(*seed.bytes[0]), LOCAL_PENDING_SQL)
+    raw_exec(root, "INSERT INTO meditation_logs VALUES('local-review-meditation',(SELECT id FROM users LIMIT 1),'local-session',77,1782300000,1782300000);")
+    snapshot := snapshot_response(24, "review-preview-hash")
+    check_true("save review snapshot", storage_sync_review_write_json(snapshot) != 0)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    before_outbox := read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    before_meta := read_db_count("SELECT COUNT(*) FROM meta")
+    state := storage_state_handle().*
+    plan: *u8 = null
+    check_true("merge preview", storage_sync_review_plan_for_json(snapshot, 2, *plan) != 0)
+    text := TextFromCString(plan)
+    check_true("encrypted habit appears in grouped preview", contains(text, "Remote Breath"))
+    check_true("changed session shows before and after", contains(text, "25 → 55"))
+    check_true("encrypted list and item appear in grouped preview", contains(text, "Remote list") && contains(text, "Remote item"))
+    check_true("merge leaves local-only habit out of changes", !contains(text, "Local Breath"))
+    sqlite_free(cast(*void)plan)
+    plan = null
+    check_true("replace preview", storage_sync_review_plan_for_json(snapshot, 1, *plan) != 0)
+    check_true("replacement explicitly includes cascading local removals", contains(TextFromCString(plan), "Local Breath") &&
+        contains(TextFromCString(plan), "Local list") && contains(TextFromCString(plan), "Local item"))
+    check_true("replacement includes stored meditation duration", contains(TextFromCString(plan), "77 s"))
+    sqlite_free(cast(*void)plan)
+    check_int("preview kept local habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_int("preview kept stored meditation", read_db_count("SELECT COUNT(*) FROM meditation_logs WHERE id='local-review-meditation'"), 1)
+    check_int("preview did not add remote habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 0)
+    check_int("preview kept outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox"), before_outbox)
+    check_int("preview kept metadata", read_db_count("SELECT COUNT(*) FROM meta"), before_meta)
+    check_true("preview kept storage state", storage_state_handle().pending_sync_outbox_seq == state.pending_sync_outbox_seq &&
+        storage_state_handle().last_sync_changed == state.last_sync_changed)
+    check_true("preview kept pending review", storage_sync_review_pending() != 0)
+    plan = null
+    check_true("invalid encrypted preview is rejected", storage_sync_review_plan_for_json(
+        "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[{\"collection\":\"private.inbe.v1.sessions\",\"id\":\"bad\",\"key_id\":\"bad\",\"nonce\":\"bad\",\"ciphertext\":\"bad\"}]}}", 2, *plan) == 0)
+    check_true("failed preview returned no partial text", plan == null)
+    check_int("failed preview kept local habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_true("merge applies", storage_apply_pending_sync_review(2) != 0)
+    check_int("merge retains local session", read_db_count("SELECT COUNT(*) FROM sessions WHERE id='local-session'"), 1)
+    check_int("merge retains stored meditation", read_db_count("SELECT COUNT(*) FROM meditation_logs WHERE id='local-review-meditation'"), 1)
+    check_int("merge adds remote session", read_db_count("SELECT COUNT(*) FROM sessions WHERE id='remote-session'"), 1)
+    check_int("merge retains local habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_int("merge adds remote habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 1)
+    check_int("merge retains local pending records", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id IN ('local-habit','local-session')"), 3)
+    check_int("merge retains local list and item", read_db_count("SELECT COUNT(*) FROM elist_items WHERE id='local-review-item' AND list_id='local-review-list'"), 1)
+    check_true("merge clears pending review", storage_sync_review_pending() == 0)
+    check_true("keep test saves review", storage_sync_review_write_json(snapshot) != 0)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    before_outbox = read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    check_true("keep applies", storage_apply_pending_sync_review(0) != 0)
+    check_int("keep retains pending uploads", read_db_count("SELECT COUNT(*) FROM sync_outbox"), before_outbox)
+    check_int("keep retains local records", read_db_count("SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_true("replace test saves review", storage_sync_review_write_json(snapshot) != 0)
+    check_true("replace applies", storage_apply_pending_sync_review(1) != 0)
+    check_int("replacement removes local habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 0)
+    check_int("replacement removes stored meditation", read_db_count("SELECT COUNT(*) FROM meditation_logs WHERE id='local-review-meditation'"), 0)
+    check_int("replacement retains remote habit", read_db_count("SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 1)
+    check_int("replacement removes absent local list", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='local-review-list'"), 0)
+    check_int("replacement removes absent local item", read_db_count("SELECT COUNT(*) FROM elist_items WHERE id='local-review-item'"), 0)
+    check_int("replacement restores remote list and item", read_db_count("SELECT COUNT(*) FROM elist_items WHERE id='remote-review-item' AND list_id='remote-review-list'"), 1)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -907,5 +978,6 @@ Check :: () -> s32 {
     test_snapshot_keeps_pending_yoga()
     test_normal_response_records_server_hash()
     test_social_cache_is_server_authored()
+    test_review_preview_and_choices()
     return failures
 }

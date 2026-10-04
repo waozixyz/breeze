@@ -23,6 +23,10 @@
 #import, file "../storage/storage_sessions.zi";
 #import, file "../storage/storage_elist.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_review.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/state.zi";
 #import, file "../storage/sync_account.zi";
 #import, file "../storage/account_types.zi";
 #import, file "../storage/sync_result.zi";
@@ -531,6 +535,40 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.profile_view = PROFILE_VIEW_PRACTICES
         app.profile_tab = PROFILE_TAB_OVERVIEW
         app.breathing.screen = ScreenProfile
+    } else if scene_text == "sync_review" {
+        // This path only runs in the screenshot mode's isolated data root.
+        account: SyncAccount = .{}
+        if sync_account_generate(*account) == 0 {
+            return
+        }
+        if cast(s32)sync_account_save(*account, cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK) == 0 {
+            return
+        }
+        screenshot_seed_habits(app)
+        storage_enqueue_all_sync_state()
+        payload := storage_build_sync_payload_json("review-fixture", "review-fixture")
+        if payload == null {
+            return
+        }
+        statement: *void = null
+        sql := "SELECT json_object('protocol_version',6,'server_version',24,'full_snapshot_required',json('true'),'changes',json_object('encrypted_records',json_extract(?1,'$.encrypted_records')))"
+        if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) == SQLITE_OK {
+            bind_text(statement, 1, AppTextFromCString(payload, 2147483647))
+            if SqliteStep(statement) == SQLITE_ROW {
+                storage_sync_review_write_json(AppTextFromCString(SqliteColumnText(statement, 0), 2147483647))
+            }
+            SqliteFinalize(statement)
+        }
+        storage_free_sync_payload_json(payload)
+        storage_clear_local_sync_data()
+        exec_sql("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('local-review-walk',(SELECT id FROM users LIMIT 1),'Local walk',80,140,100,0,0,1,0,0,1782300000)")
+        storage_enqueue_all_sync_state()
+        storage_set_sync_enabled(0)
+        storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+        app.profile_view = PROFILE_VIEW_MAIN
+        app.profile_tab = PROFILE_TAB_DATA
+        app.breathing.screen = ScreenProfile
+        app_open_modal(app, cast(ModalType)ModalSyncReview)
     } else if AppTextFromCString(*request.scene[0], 64) == "sync_disconnected"  || AppTextFromCString(*request.scene[0], 64) == "sync_retry" {
         account: SyncAccount = .{}
         if sync_account_generate(*account) != 0 {

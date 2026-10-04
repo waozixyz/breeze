@@ -1943,6 +1943,17 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     return ok
 }
 
+// Shared by sync application and its rollback-only review preview.
+storage_apply_sync_records :: (response_json: string) -> s32 {
+    if storage_apply_encrypted_records(response_json) == 0 ||
+    storage_merge_duplicate_habit_names() == 0 ||
+    storage_apply_sync_social_json(response_json) == 0 ||
+    storage_materialize_session_habit_days() == 0 {
+        return 0
+    }
+    return 1
+}
+
 #program_export
 storage_apply_sync_response_json :: (response_json: string) -> s32 {
     server_version: s64
@@ -2008,15 +2019,7 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
         return 0
     }
     storage_clear_uploaded_outbox(storage_state_handle().pending_sync_outbox_seq)
-    if storage_apply_encrypted_records(response_json) == 0 {
-        LogStorage(LOG_WARNING, "SYNC: encrypted records apply failed")
-        exec_sql("ROLLBACK TO sync_apply")
-        exec_sql("RELEASE sync_apply")
-        return 0
-    }
-    if storage_merge_duplicate_habit_names() == 0 ||
-    storage_apply_sync_social_json(response_json) == 0 {
-        LogStorage(LOG_WARNING, "SYNC: response apply failed")
+    if storage_apply_sync_records(response_json) == 0 {
         exec_sql("ROLLBACK TO sync_apply")
         exec_sql("RELEASE sync_apply")
         return 0
@@ -2024,7 +2027,6 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
     if exec_sql("RELEASE sync_apply") == 0 {
         return 0
     }
-    storage_materialize_session_habit_days()
     server_version = storage_json_extract_int64(response_json, "$.server_version", 0)
     server_clock = storage_json_extract_int64(response_json, "$.server_clock", 0)
     storage_log_number("SYNC: response server_version=", server_version)
@@ -2120,7 +2122,9 @@ storage_apply_remote_full_snapshot :: (response_json: string) -> s32 {
     return ok
 }
 
-storage_clear_local_sync_data_sqls: [7] string = .[
+storage_clear_local_sync_data_sqls: [9] string = .[
+"DELETE FROM elist_items",
+"DELETE FROM elist_lists",
 "DELETE FROM meditation_logs",
 "DELETE FROM session_rounds",
 "DELETE FROM sessions",

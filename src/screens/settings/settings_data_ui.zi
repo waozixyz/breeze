@@ -18,6 +18,7 @@ c :: #system_library "c";
 #import, file "../../storage/storage_core.zi";
 #import, file "../../storage/sync_review.zi";
 #import, file "../../storage/data.zi";
+#import, file "../../storage/db.zi";
 #import, file "../../storage/import.zi";
 #import, file "../../storage/path_join.zi";
 #import, file "../../platform/android/android_import.zi";
@@ -39,6 +40,10 @@ c :: #system_library "c";
 #import "modal_widget"
 #import "modal"
 #import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_layout"
+#import "string_range"
 #import "byte_text_linux"
 #import "file_linux"
 
@@ -550,66 +555,140 @@ SettingsDataPrompt :: (app: *InnerBreeze, key: string,
     return result.action
 }
 
+review_choice: s32 = 2;
+review_scroll: s32;
+review_cached_choice: s32 = -1;
+review_cached_revision: s64 = -1;
+review_cached_text: *u8;
+review_cached_available: bool;
+
+SettingsReviewReset :: () {
+    free(cast(*void)review_cached_text)
+    review_cached_text = null
+    review_cached_choice = -1
+    review_cached_revision = -1
+    review_choice = 2
+    review_scroll = 0
+}
+
+SettingsReviewLines :: (app: *InnerBreeze, value: string,
+    bounds: Rectangle, offset: s32, font: s32, line_height: s32) {
+    start: s32 = 0
+    y := cast(s32)bounds.y - offset
+    while start < cast(s32)value.count {
+        line := NextTextLine(value, start, bounds.width - cast(float32)AppScale(12),
+            cast(TextWrap)TextWrapAuto, font, "ui")
+        if y + line_height >= cast(s32)bounds.y &&
+        y < cast(s32)(bounds.y + bounds.height) {
+            props := SettingsDataTextProps(value[line.start:line.end],
+                cast(s32)bounds.x, y, cast(s32)bounds.width - AppScale(12), line_height)
+            props.font = font
+            props.wrap = cast(TextWrap)TextWrapNone
+            Text(app.ui.session, props)
+        }
+        y += line_height
+        if line.next <= start {
+            break
+        }
+        start = line.next
+    }
+}
+
 SettingsDataReviewModal :: (app: *InnerBreeze) -> s32 {
-    diff: *u8 = null
-    available := storage_sync_review_diff(*diff) != 0
     width := app.ui.view_width - AppScale(32)
-    if width > AppScale(560) {
-        width = AppScale(560)
+    if width > AppScale(680) {
+        width = AppScale(680)
+    }
+    height := app.ui.view_height - AppScale(32)
+    if height > AppScale(720) {
+        height = AppScale(720)
     }
     frame := ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash("inbe/data/sync-review"),
             .title = LocaleText("sync_review_title"),
-            .width = width, .height = AppScale(430)})
-    if frame.dismissed {
-        if diff != null {
-            free(cast(*void)diff)
-        }
+            .width = width, .height = height,
+            .has_right_action = true, .right_label = LocaleText("cancel_button")})
+    if frame.dismissed || frame.right_clicked {
+        SettingsReviewReset()
+        app_close_modal(app)
         return 0
     }
     if !frame.opened {
-        if diff != null {
-            free(cast(*void)diff)
-        }
         return 0
     }
     content := frame.layout.content
     x := cast(s32)content.x
     y := cast(s32)content.y
     text_width := cast(s32)content.width
-    Text(app.ui.session, SettingsDataTextProps(
-        LocaleText("sync_review_message"),
-        x, y, text_width, AppScale(50)))
-    y += AppScale(56)
-    if available && diff != null {
-        value := AppTextFromCString(diff, 8192)
-        Text(app.ui.session, SettingsDataTextProps(
-            FrameTextHold(*app.ui.frame_text, value),
-            x, y, text_width, AppScale(210)))
+    options: [3]string = .["review_merge", "sync_review_keep_local", "sync_review_use_remote"]
+    modes: [3]s32 = .[2, 0, 1]
+    index: s32 = 0
+    while index < 3 {
+        button := SettingsDataButtonProps(LocaleText(options[index]),
+            x, y, text_width, 5351 + index, review_choice == modes[index])
+        if Button(app.ui.session, button) != 0 && review_choice != modes[index] {
+            review_choice = modes[index]
+            review_scroll = 0
+        }
+        y += AppScale(44)
+        index += 1
     }
-    y += AppScale(222)
-    keep := SettingsDataButtonProps(LocaleText("sync_review_keep_local"),
-        x, y, text_width, 5351, false)
+    revision := storage_data_revision()
+    if review_cached_choice != review_choice || review_cached_revision != revision {
+        free(cast(*void)review_cached_text)
+        review_cached_text = null
+        review_cached_available = storage_sync_review_plan(review_choice, *review_cached_text) != 0
+        review_cached_choice = review_choice
+        review_cached_revision = storage_data_revision()
+    }
+    explanation_key := "review_merge_detail"
+    if review_choice == 0 {
+        explanation_key = "review_keep_detail"
+    }
+    if review_choice == 1 {
+        explanation_key = "review_replace_detail"
+    }
+    // The cache owns the full preview; render only visible wrapped lines so
+    // large reviews never hit a fixed frame-text or tree-label capacity.
+    value := LocaleText("review_unavailable")
+    if review_cached_available {
+        value = AppTextFromCString(review_cached_text, 2147483647)
+    }
+    explanation := LocaleText(explanation_key)
+    font := AppScale(14)
+    line_height := AppTextLineHeight(font)
+    view := SettingsDataRect(x, y, text_width,
+        cast(s32)(content.y + content.height) - y - AppScale(50))
+    explanation_height := AppParagraphHeight(explanation,
+        text_width - AppScale(12), font, 0) + line_height
+    props: ScrollProps
+    props.key = KeyHash("inbe/data/sync-review/details")
+    props.bounds = view
+    props.content_height = explanation_height +
+    AppParagraphHeight(value, text_width - AppScale(12), font, 0)
+    props.scroll_offset = review_scroll
+    scrolled := Scroll(app.ui.session, props)
+    review_scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        SettingsReviewLines(app, explanation, view, review_scroll, font, line_height)
+        SettingsReviewLines(app, value, view, review_scroll - explanation_height, font, line_height)
+        unused End(app.ui.session)
+    }
+    apply := SettingsDataButtonProps(LocaleText("review_apply"),
+        x, cast(s32)(content.y + content.height) - AppScale(40), text_width, 5354, true)
+    apply.disabled = !review_cached_available
     decision: s32 = 0
-    if Button(app.ui.session, keep) != 0 {
-        decision = 1
-    }
-    y += AppScale(48)
-    remote := SettingsDataButtonProps(LocaleText("sync_review_use_remote"),
-        x, y, text_width, 5352, true)
-    if Button(app.ui.session, remote) != 0 {
-        decision = 2
+    if Button(app.ui.session, apply) != 0 {
+        decision = review_choice + 1
     }
     unused End(app.ui.session)
-    if diff != null {
-        free(cast(*void)diff)
-    }
     return decision
 }
 
 #program_export
 settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
     if app == null || app.modal.active == 0 {
+        SettingsReviewReset()
         return 0
     }
     modal := app.modal.type
@@ -732,15 +811,17 @@ settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
         choice := SettingsDataReviewModal(app)
         if choice > 0 {
             if storage_apply_pending_sync_review(
-                ifx (choice == 2) then (1) else (0)) != 0 {
+                choice - 1) != 0 {
                 app_close_modal(app)
-                if choice == 2 {
+                if choice != 1 {
                     app_reload_after_import(app, 0)
                 }
                 key := "sync_review_keeping_local"
                 if choice == 2 {
                     key = "sync_review_using_remote"
                 }
+                if choice == 3 { key = "review_merged" }
+                SettingsReviewReset()
                 settings_screen_set_status_success(LocaleText(key), "")
             } else {
                 settings_screen_set_status_error(LocaleText("sync_review_failed"))
