@@ -44,17 +44,19 @@ ExpectedClamp :: (attempt: s32) -> s32 {
 #law NoAccountStops forall attempt: -2..6 => sync_retry_decision(2, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
 #law PayloadFailureStops forall attempt: -2..6 => sync_retry_decision(3, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
 #law SigningFailureStops forall attempt: -2..6 => sync_retry_decision(5, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
-#law AuthenticationFailureStops forall attempt: -2..6 => sync_retry_decision(7, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
+// A rejected sign-in retries on the same schedule; the owner chose automatic
+// sync over waiting for the user after a failed sign-in (2026-10-04).
+#law AuthenticationFailureRetries forall attempt: -2..6 => sync_retry_decision(7, attempt) == RetryDecision.{ExpectedNext(ExpectedClamp(attempt)), ExpectedDelay(ExpectedNext(ExpectedClamp(attempt))), 0};
 
 // Any other code, including extremes of the persisted integer, stops retry.
 #law UnknownResultStops forall result: 8..40, attempt: -2..6 => sync_retry_decision(result, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
 #law NegativeResultStops forall result: -40..-1, attempt: -2..6 => sync_retry_decision(result, attempt) == RetryDecision.{ExpectedClamp(attempt), 0, 1};
 
 #law SavedDelayMatches forall attempt: -2..6 => app_sync_retry_delay(attempt) == cast(float64) ExpectedDelay(ExpectedClamp(attempt));
-// Success and the two temporary failures need no user action; everything
-// else does.
+// Success, the two temporary failures and a rejected sign-in need no user
+// action; everything else does.
 ExpectedNeedsAction :: (result: s32) -> s32 {
-    if result == 0 || result == 4 || result == 6 { return 0 }
+    if result == 0 || result == 4 || result == 6 || result == 7 { return 0 }
     return 1
 }
 

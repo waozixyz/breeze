@@ -29,13 +29,20 @@ retry_is_temporary :: (result: s32) -> bool {
         result == cast(s32) SyncResult.SYNC_REQUEST_FAILED
 }
 
+// A rejected sign-in is retried with a fresh challenge while the account key
+// exists: overlapping sign-ins and server restarts reject one attempt without
+// anything being wrong with the account.
+retry_after_sign_in :: (result: s32) -> bool {
+    return result == cast(s32) SyncResult.SYNC_AUTH_FAILED
+}
+
 #program_export
 sync_retry_decision :: (result: s32, attempt: s32) -> RetryDecision {
     attempt = retry_attempt_index(attempt)
     if result == cast(s32) SyncResult.SYNC_OK {
         return RetryDecision.{0, 0, 0}
     }
-    if retry_is_temporary(result) {
+    if retry_is_temporary(result) || retry_after_sign_in(result) {
         next := retry_attempt_index(attempt + 1)
         return RetryDecision.{next, retry_delay_seconds(next), 0}
     }

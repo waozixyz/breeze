@@ -78,6 +78,8 @@ mutate $sync app/sync_retry_laws.zi \
 mutate $sync app/sync_retry_laws.zi \
     's/return RetryDecision.{attempt, 0, 1}/return RetryDecision.{attempt, 0, 0}/' \
     InvalidUrlStops
+mutate $sync app/sync_retry_laws.zi \
+    's/ || retry_after_sign_in(result)//' AuthenticationFailureRetries
 lifecycle=app/practice_lifecycle.zi
 mutate $lifecycle app/practice_lifecycle_laws.zi \
     's/if auto_paused == 0 \&\& session_paused == 0 {/if auto_paused == 0 {/' \
