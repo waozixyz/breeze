@@ -22,6 +22,22 @@ mkdir -p "$work/generated"
     --entry storage_sync_behavior:Check \
     -o "$work/generated" "$root/tests/storage_sync_behavior.zi" \
     "$root/tests/sync_test_host.zi"
+cat > "$work/generated/review_failure.c" <<'C'
+#include <sqlite3.h>
+#include <string.h>
+static int review_field_failure;
+void ReviewFieldFailure(int enabled) { review_field_failure = enabled; }
+int __real_sqlite3_prepare_v2(sqlite3 *, const char *, int, sqlite3_stmt **, const char **);
+int __wrap_sqlite3_prepare_v2(sqlite3 *db, const char *sql, int size,
+                            sqlite3_stmt **statement, const char **tail)
+{
+    if (review_field_failure && strstr(sql, "SELECT k.key,COALESCE(CAST") != NULL) {
+        *statement = NULL;
+        return SQLITE_AUTH;
+    }
+    return __real_sqlite3_prepare_v2(db, sql, size, statement, tail);
+}
+C
 cat > "$work/generated/main.c" <<'C'
 #include "storage_sync_behavior.h"
 #include <stdio.h>
@@ -36,7 +52,7 @@ C
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
-    -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
+    -Wl,--wrap=sqlite3_prepare_v2 -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-storage-sync-zi-test/data
 export APP_DATA_ROOT
