@@ -39,7 +39,7 @@ Answer :: () -> s32 {
             app_sync_record_result(result)
             if result == 0 {
                 if Attempt() != 0 || g_sync.retry_at != 0.0 { return 3 }
-            } else if result == 4 || result == 6 {
+            } else if result == 4 || result == 6 || result == 7 {
                 if Attempt() != expected_attempts[index] { return 4 }
                 if g_sync.retry_at != now + cast(float64)expected_delays[index] { return 5 }
             } else {
@@ -62,9 +62,12 @@ Answer :: () -> s32 {
     app_social_record_result(6)
     if g_sync.social_retry_attempt != 4 { return 12 }
     if g_sync.social_retry_at != now + 60.0 { return 13 }
+    // A rejected sign-in retries too; an actionable failure stops.
     app_social_record_result(7)
-    if g_sync.social_retry_at != 0.0 { return 14 }
-    if g_sync.social_refresh_pending != 0 { return 15 }
+    if g_sync.social_retry_at != now + 60.0 { return 14 }
+    if g_sync.social_refresh_pending != 1 { return 15 }
+    app_social_record_result(5)
+    if g_sync.social_retry_at != 0.0 || g_sync.social_refresh_pending != 0 { return 16 }
     app_social_record_result(0)
     if g_sync.social_retry_attempt != 0 { return 17 }
 
@@ -80,10 +83,15 @@ Answer :: () -> s32 {
         recovery_set_time(now)
         index += 1
     }
+    // A rejected sign-in keeps retrying and still says why (owner, 2026-10-04).
     app_sync_record_result(7)
-    if g_sync.retry_at != 0.0 { return 20 }
-    if app_sync_failure_needs_action(SettingsReadInt("sync_last_result", 0)) == 0 { return 21 }
+    if g_sync.retry_at != now + 60.0 { return 20 }
+    if app_sync_failure_needs_action(SettingsReadInt("sync_last_result", 0)) != 0 { return 21 }
     if app_sync_status_key() != "sync_auth_failed" { return 22 }
+    // A failure the person must fix still stops automatic retry.
+    app_sync_record_result(5)
+    if g_sync.retry_at != 0.0 || app_sync_failure_needs_action(SettingsReadInt("sync_last_result", 0)) == 0 { return 28 }
+    if app_sync_status_key() != "sync_sign_failed" { return 29 }
     app_sync_record_result(0)
     if Attempt() != 0 || g_sync.retry_at != 0.0 { return 23 }
 
