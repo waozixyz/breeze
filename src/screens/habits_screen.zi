@@ -27,6 +27,7 @@ IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
 #import, file "../storage/storage_core.zi";
 #import, file "../platform/web_storage.zi";
 #import, file "habits/edit.zi";
+#import, file "habits/card_layout.zi";
 #import, file "statistics_screen.zi";
 #import "date_parse"
 #import "date_time"
@@ -960,22 +961,28 @@ HabitScreenOverview :: (app: *InnerBreeze,
             StyleTokenColor("accent"))
     }
     list_y := summary_y + AppScale(54)
-    card_h := AppScale(HABITS_CARD_HEIGHT)
     viewport := HabitScreenRect(geometry.x, list_y, geometry.width,
         geometry.height - (list_y - geometry.y))
     measure_grid: GridProps
     measure_grid.bounds = viewport
     measure_grid.min_item_width = AppScale(300)
     measure_grid.gap = gap
-    measure_cursor := BeginGridCursor(measure_grid)
+    metrics := MeasureGrid(measure_grid)
+    collapsed_h := AppScale(HABITS_CARD_HEIGHT)
+    expanded_h := AppScale(HABITS_SELECTED_CARD_HEIGHT)
+    content_h: s32 = 0
     index: s32 = 0
     while index < app.habits.count {
         item_h := AppScale(ifx index == app.habits.selected then
             (HABITS_SELECTED_CARD_HEIGHT) else (HABITS_CARD_HEIGHT))
-        measure_cursor = GridStep(measure_cursor, item_h, 1)
+        bottom := HabitCardOffset(index, app.habits.selected,
+            metrics.columns, collapsed_h, expanded_h, gap) + item_h
+        if bottom > content_h {
+            content_h = bottom
+        }
         index += 1
     }
-    content_h := GridCursorHeight(measure_cursor) + AppScale(8)
+    content_h += AppScale(8)
     if app.habits.count == 0 { content_h = AppScale(80) }
     scrolled := HabitScreenScroll(app, "inbe/habits/overview", viewport,
         content_h)
@@ -990,21 +997,19 @@ HabitScreenOverview :: (app: *InnerBreeze,
         empty.wrap = cast(TextWrap)TextWrapNone
         Text(app.ui.session, empty)
     }
-    grid: GridProps
-    grid.bounds = HabitScreenRect(0, 0,
-        cast(s32)scrolled.content.width, content_h)
-    grid.min_item_width = AppScale(300)
-    grid.gap = gap
-    cursor := BeginGridCursor(grid)
-    cursor.x = cast(s32)scrolled.content.x
-    cursor.y = cast(s32)scrolled.content.y
     index = 0
     while index < app.habits.count {
         habit := *app.habits.items[index]
         item_h := AppScale(ifx index == app.habits.selected then
             (HABITS_SELECTED_CARD_HEIGHT) else (HABITS_CARD_HEIGHT))
-        cursor = GridStep(cursor, item_h, 1)
-        card := cursor.item
+        column_index := index % metrics.columns
+        card := HabitScreenRect(
+            cast(s32)scrolled.content.x +
+            column_index * (metrics.cell_width + gap),
+            cast(s32)scrolled.content.y + HabitCardOffset(index,
+            app.habits.selected, metrics.columns, collapsed_h,
+            expanded_h, gap),
+            metrics.cell_width, item_h)
         if index == app.habits.selected {
             if HabitScreenSelectedCard(app, index, card) {
                 End(app.ui.session)
