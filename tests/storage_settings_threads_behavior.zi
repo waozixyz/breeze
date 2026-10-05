@@ -1,0 +1,110 @@
+#import "byte_text_linux"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+
+// Background sync workers save their session through settings write batches
+// while another worker does the same. One thread's batch must never absorb
+// another thread's: the thread that began the transaction would then return
+// without committing and leave the connection held after it exits, which
+// stopped every later database call, including the app's frame loop.
+
+c :: #system_library "c";
+ThreadRoutine :: #type (*void) -> *void #c_call;
+thread_create :: (thread: *usize, attributes: *void, routine: ThreadRoutine,
+    argument: *void) -> s32 #foreign c "pthread_create";
+thread_join :: (thread: usize, result: **void) -> s32 #foreign c "pthread_join";
+alarm :: (seconds: u32) -> u32 #foreign c "alarm";
+pause_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
+
+first_in_batch: s32;
+second_started: s32;
+second_done: s32;
+
+wait_for_flag :: (flag: *s32, milliseconds: s32) -> bool {
+    waited: s32 = 0
+    while flag.* == 0 && waited < milliseconds {
+        unused pause_microseconds(1000)
+        waited += 1
+    }
+    return flag.* != 0
+}
+
+first_writer :: (argument: *void) -> *void {
+    unused argument
+    storage_settings_begin_write()
+    storage_set_setting_text("thread_first", "one")
+    first_in_batch = 1
+    unused wait_for_flag(*second_started, 1000)
+    // Give the second thread time to reach its own batch before this ends.
+    unused pause_microseconds(200000)
+    storage_settings_end_write()
+    return null
+}
+
+second_writer :: (argument: *void) -> *void {
+    unused argument
+    unused wait_for_flag(*first_in_batch, 2000)
+    second_started = 1
+    storage_settings_begin_write()
+    storage_set_setting_text("thread_second", "two")
+    storage_settings_end_write()
+    second_done = 1
+    return null
+}
+
+test_concurrent_batches_commit_and_release :: () {
+    root := make_root("threads")
+    check_true("init threaded settings", storage_init(root) != 0)
+    first_routine: ThreadRoutine = first_writer
+    second_routine: ThreadRoutine = second_writer
+    first_thread: usize
+    second_thread: usize
+    check_int("start first writer", thread_create(*first_thread, null, first_routine, null), 0)
+    check_int("start second writer", thread_create(*second_thread, null, second_routine, null), 0)
+    finished := wait_for_flag(*second_done, 5000)
+    check_true("second batch finishes after the first thread ends its batch", finished)
+    if !finished {
+        // The connection is held by an exited thread; joining would hang.
+        return
+    }
+    unused thread_join(first_thread, null)
+    unused thread_join(second_thread, null)
+    check_int("no batch remains open", storage_state_handle().settings_write_depth, 0)
+
+    // The connection is free for this thread too, and both batches committed.
+    storage_settings_begin_write()
+    storage_set_setting_text("thread_main", "three")
+    storage_settings_end_write()
+    storage_close()
+    check_true("reopen threaded settings", storage_init(root) != 0)
+    check_true("first thread's setting committed", storage_get_setting_text("thread_first") == "one")
+    check_true("second thread's setting committed", storage_get_setting_text("thread_second") == "two")
+    check_true("main thread's setting committed", storage_get_setting_text("thread_main") == "three")
+    storage_close()
+}
+
+test_unmatched_end_releases_connection :: () {
+    root := make_root("unmatched")
+    check_true("init unmatched settings", storage_init(root) != 0)
+    storage_settings_end_write()
+    storage_set_setting_text("after_unmatched_end", "ok")
+    check_true("connection usable after an unmatched end", storage_get_setting_text("after_unmatched_end") == "ok")
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-storage-settings-threads-zi-test/")
+    if guard != 0 {
+        return guard
+    }
+    // A deadlock must fail the test instead of hanging it.
+    unused alarm(60)
+    test_concurrent_batches_commit_and_release()
+    test_unmatched_end_releases_connection()
+    return failures
+}

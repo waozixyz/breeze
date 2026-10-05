@@ -799,6 +799,13 @@ storage-habits-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 
 test: storage-habits-zi-test
 
+.PHONY: storage-settings-threads-zi-test
+storage-settings-threads-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_settings_threads_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
+test: storage-settings-threads-zi-test
+
 .PHONY: storage-sync-zi-test
 storage-sync-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \

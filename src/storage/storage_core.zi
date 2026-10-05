@@ -647,24 +647,54 @@ storage_set_setting_text :: (key: string, value: string) {
 
 #program_export
 storage_settings_begin_write :: () {
-    if storage_db_handle() == null {
+    database := storage_db_handle()
+    if database == null {
         return
     }
-    if storage_state_handle().settings_write_depth == 0 {
-        exec_sql("BEGIN IMMEDIATE")
+    // A batch belongs to the thread that begins it. The connection's
+    // recursive mutex stays held until the batch ends, so another thread's
+    // batch waits here instead of joining this one: a shared depth let a
+    // second thread skip its BEGIN, and the first thread could then return
+    // without COMMIT while its open transaction still held the connection.
+    mutex := sqlite3_db_mutex(database)
+    if mutex != null {
+        sqlite3_mutex_enter(mutex)
     }
     storage_state_handle().settings_write_depth += 1
+    if storage_state_handle().settings_write_depth == 1 {
+        exec_sql("BEGIN IMMEDIATE")
+    }
 }
 
 #program_export
 storage_settings_end_write :: () {
-    if storage_db_handle() == null || storage_state_handle().settings_write_depth <= 0 {
+    database := storage_db_handle()
+    if database == null {
+        return
+    }
+    mutex := sqlite3_db_mutex(database)
+    if mutex != null {
+        sqlite3_mutex_enter(mutex)
+    }
+    if storage_state_handle().settings_write_depth <= 0 {
+        if mutex != null {
+            sqlite3_mutex_leave(mutex)
+        }
         return
     }
     storage_state_handle().settings_write_depth -= 1
     if storage_state_handle().settings_write_depth == 0 {
-        exec_sql("COMMIT")
+        // A failed COMMIT must not leave the transaction, and with it the
+        // connection, held after this thread returns.
+        if exec_sql("COMMIT") == 0 && sqlite3_get_autocommit(database) == 0 {
+            exec_sql("ROLLBACK")
+        }
         storage_schedule_persist()
+    }
+    if mutex != null {
+        // Release this call's enter and the one its batch began with.
+        sqlite3_mutex_leave(mutex)
+        sqlite3_mutex_leave(mutex)
     }
 }
 
@@ -2034,6 +2064,10 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
         return 0
     }
     if exec_sql("RELEASE sync_apply") == 0 {
+        // An unreleased savepoint keeps the transaction, and the connection,
+        // held by this worker thread after it returns.
+        exec_sql("ROLLBACK TO sync_apply")
+        exec_sql("RELEASE sync_apply")
         return 0
     }
     server_version = storage_json_extract_int64(response_json, "$.server_version", 0)
