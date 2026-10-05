@@ -2855,6 +2855,10 @@ subapps-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A)
 subapps-navigation-test: $(TARGET)
 	sh tests/subapps_navigation_test.sh $(abspath $(TARGET))
 
+.PHONY: host-actions-test
+host-actions-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 python3 tests/host_actions_test.py $(abspath $(TARGET))
+
 .PHONY: subapps-artifact-test
 subapps-artifact-test: $(TARGET) $(SUBAPP_BUNDLES)
 	python3 tests/subapps_artifact_test.py $(abspath $(TARGET))

@@ -23,10 +23,14 @@ FEATURE_X11 :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(_WIN32) && !#define
     FeatureGet :: #type (*void, usize, usize, isize, isize, s32, usize,
         *usize, *s32, *usize, *usize, **u8) -> s32 #c_call;
     FeatureFree :: #type (*void) -> s32 #c_call;
+    FeatureChange :: #type (*void, usize, usize, usize, s32, s32, *u8, s32) -> s32 #c_call;
+    FeatureFlush :: #type (*void) -> s32 #c_call;
     library: *void;
     atom_call: FeatureAtom;
     get_call: FeatureGet;
     free_call: FeatureFree;
+    change_call: FeatureChange;
+    flush_call: FeatureFlush;
     attempted: bool;
 
     ResolveFeatureSymbol :: (slot: *void, name: string) -> bool {
@@ -51,16 +55,68 @@ FEATURE_X11 :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(_WIN32) && !#define
             if library != null {
                 if !ResolveFeatureSymbol(cast(*void)*atom_call, "XInternAtom") ||
                 !ResolveFeatureSymbol(cast(*void)*get_call, "XGetWindowProperty") ||
-                !ResolveFeatureSymbol(cast(*void)*free_call, "XFree") {
+                !ResolveFeatureSymbol(cast(*void)*free_call, "XFree") ||
+                !ResolveFeatureSymbol(cast(*void)*change_call, "XChangeProperty") ||
+                !ResolveFeatureSymbol(cast(*void)*flush_call, "XFlush") {
                     return false
                 }
             }
         }
-        return atom_call != null && get_call != null && free_call != null
+        return atom_call != null && get_call != null && free_call != null &&
+        change_call != null && flush_call != null
     }
 }
 
 #scope_export
+// Text controls share the same own-window boundary as feature requests.
+ReadHostAction :: (output: []u8) -> s32 {
+    #if FEATURE_X11 {
+        info: FeatureWindowInfo
+        window := FeatureWindow()
+        if window == null || !LoadFeatureReader() { return 0 }
+        FeatureVersion(*info.version[0])
+        if FeatureInfo(window, *info) == 0 || info.subsystem != 2 ||
+        info.display == null || info.window == 0 { return 0 }
+        name: [32]u8
+        unused CopyCString("_HARMONY_APP_ACTION", name[:])
+        atom := atom_call(info.display, *name[0], 1)
+        if atom == 0 { return 0 }
+        actual: usize
+        format: s32
+        count: usize
+        after: usize
+        data: *u8
+        status := get_call(info.display, info.window, atom, 0,
+            cast(isize)((output.count + 3) / 4), 1, 31,
+            *actual, *format, *count, *after, *data)
+        defer { if data != null { unused free_call(cast(*void)data) } }
+        if status != 0 || actual != 31 || format != 8 || after != 0 ||
+        count >= cast(usize)output.count || data == null { return 0 }
+        for i: 0..cast(s32)count - 1 { output[i] = data[i] }
+        return cast(s32)count
+    }
+    return 0
+}
+
+PublishHostState :: (state: string) {
+    #if FEATURE_X11 {
+        info: FeatureWindowInfo
+        window := FeatureWindow()
+        if window == null || !LoadFeatureReader() { return }
+        FeatureVersion(*info.version[0])
+        if FeatureInfo(window, *info) == 0 || info.subsystem != 2 ||
+        info.display == null || info.window == 0 { return }
+        name: [32]u8
+        unused CopyCString("_HARMONY_APP_STATE", name[:])
+        atom := atom_call(info.display, *name[0], 0)
+        descriptor := cast(*HostTextDescriptor)(*state)
+        unused change_call(info.display, info.window, atom, 31, 8, 0,
+            descriptor.data, cast(s32)state.count)
+        unused flush_call(info.display)
+    }
+}
+HostTextDescriptor :: struct { data: *u8; count: s64 }
+
 TakeHostFeatureRequest :: () -> s32 {
     #if FEATURE_X11 {
         window := FeatureWindow()

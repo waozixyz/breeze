@@ -1,0 +1,130 @@
+// The application owns semantic actions; Harmony only transports them to
+// this supervised window and reads the application's resulting state.
+#scope_file
+#import "std/text"
+#import "std/json_scan"
+#import "byte_text_linux"
+#import, file "feature_request.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../subapps/module_host.zi";
+#import, file "../app/application.zi";
+#import, file "../app/app_route_url.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/mini_mode.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../core/breath_timing.zi";
+using ExerciseType;
+using AppMainTab;
+host_c :: #system_library "c";
+HostFree :: (bytes: *u8) #foreign host_c "free";
+app_close_modal :: (app: *InnerBreeze) #foreign host_c;
+HostDescriptor :: struct { data: *u8; count: s64 }
+HostReceipt :: struct { request: [65]u8; control: [96]u8; ok: bool }
+receipts: [32]HostReceipt;
+receipt_next: s32;
+last_request: [65]u8;
+last_ok: bool;
+published: [8192]u8;
+published_size: s32;
+
+HostIdentifier :: (value: string) -> bool {
+    if value.count == 0 { return false }
+    for byte: value {
+        if !((byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) ||
+            (byte >= 97 && byte <= 122) || byte == 45 || byte == 46 || byte == 95) {
+            return false
+        }
+    }
+    return true
+}
+
+HostAction :: (app: *InnerBreeze, control: string) -> bool {
+    before := app_current_route(app)
+    if control == "open.practices" { return app_open_feature(cast(*void)app, 4) != 0 }
+    if control == "open.habits" { return app_open_feature(cast(*void)app, 2) != 0 }
+    if control == "open.lists" { return app_open_feature(cast(*void)app, 1) != 0 }
+    active := practice_active(app)
+    if control == "practice.pause" || control == "practice.resume" {
+        if active == null { return false }
+        app.session_paused = ifx control == "practice.pause" then 1 else 0
+        return true
+    }
+    names: [4]string = .{"practice.whm.start", "practice.meditation.start",
+        "practice.sun_salutation.start", "practice.patterns.start"}
+    for id: 0..cast(s32)3 {
+        if control != names[id] { continue }
+        if active != null { return cast(s32)active.id == id }
+        if app_open_feature(cast(*void)app, 4) == 0 { return false }
+        app.exercise_type = id
+        app.practice_tab = PRACTICE_TAB_PLAY
+        if app.modal.active != 0 { app_close_modal(app) }
+        practice := practice_get(id)
+        if practice.start == null { return false }
+        practice.start(app)
+        app_observe_direct_route_change(app, before)
+        active = practice_active(app)
+        return active != null && cast(s32)active.id == id && app.session_paused == 0
+    }
+    return false
+}
+
+#scope_export
+PollHostActions :: (app: *InnerBreeze) {
+    if app == null { return }
+    bytes: [1024]u8
+    size := ReadHostAction(bytes[:])
+    if size <= 0 { return }
+    value := TextFromBytes(bytes[:size])
+    if ValueEnd(value, 0, 0) != size { return }
+    request: [65]u8
+    control: [96]u8
+    rn := ReadStringText(value, FieldAt(value, 0, "request_id"), request[:])
+    cn := ReadStringText(value, FieldAt(value, 0, "control"), control[:])
+    if rn < 1 || rn > 64 || cn < 1 || cn > 95 ||
+    !HostIdentifier(TextFromBytes(request[:rn])) ||
+    !HostIdentifier(TextFromBytes(control[:cn])) { return }
+    last_request = request
+    for receipt: receipts {
+        if AppTextFromCString(*receipt.request[0], 65) == TextFromBytes(request[:rn]) {
+            last_ok = AppTextFromCString(*receipt.control[0], 96) == TextFromBytes(control[:cn]) && receipt.ok
+            return
+        }
+    }
+    last_ok = HostAction(app, TextFromBytes(control[:cn]))
+    receipts[receipt_next] = .{request, control, last_ok}
+    receipt_next = (receipt_next + 1) % 32
+}
+
+ReportHostState :: (app: *InnerBreeze) {
+    if app == null { return }
+    feature: s32 = 0
+    if app.main_tab == APP_MAIN_TAB_PRACTICE { feature = 4 }
+    if app.main_tab == APP_MAIN_TAB_HABITS { feature = 2 }
+    if app.main_tab == APP_MAIN_TAB_ELIST { feature = 1 }
+    active := practice_active(app)
+    active_id := ifx active != null then cast(s32)active.id else -1
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"interface\":\"harmony.app-state.v1\",\"feature\":%,\"screen\":%,\"practice\":%,\"practice_running\":%,\"paused\":%,\"round\":%,\"breath\":%,\"last_request_id\":\"%\",\"last_request_ok\":%,\"controls\":[", feature, app.breathing.screen, active_id, active != null, app.session_paused != 0, app.breathing.round, BreathCountValue(app.breathing), AppTextFromCString(*last_request[0], 65), last_ok)
+    names: [9]string = .{"open.practices", "open.habits", "open.lists",
+        "practice.whm.start", "practice.meditation.start", "practice.sun_salutation.start",
+        "practice.patterns.start", "practice.pause", "practice.resume"}
+    labels: [9]string = .{"Practices", "Habits", "Lists", "Start WHM",
+        "Start meditation", "Start Sun Salutation", "Start breathing patterns", "Pause practice", "Resume practice"}
+    for i: 0..8 {
+        enabled := !AppMiniMode()
+        if i >= 3 && i <= 6 { enabled = enabled && (active == null || active_id == i - 3) }
+        if i == 7 { enabled = active != null && app.session_paused == 0 }
+        if i == 8 { enabled = active != null && app.session_paused != 0 }
+        BuilderPrint(*out, "%{\"control\":\"%\",\"label\":\"%\",\"enabled\":%}", ifx i == 0 then "" else ",", names[i], labels[i], enabled)
+    }
+    BuilderPrint(*out, "]}")
+    state := BuilderFinish(out)
+    defer { descriptor := cast(*HostDescriptor)(*state); HostFree(descriptor.data) }
+    if state == TextFromBytes(published[:published_size]) { return }
+    PublishHostState(state)
+    published_size = cast(s32)state.count
+    for i: 0..published_size - 1 { published[i] = state[i] }
+}
