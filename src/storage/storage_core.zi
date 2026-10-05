@@ -194,6 +194,7 @@ STORAGE_SYNC_ACCOUNT_ALIAS_KEY :: "sync_account_alias"
 STORAGE_SYNC_DATA_OWNER_PUBLIC_ID_KEY :: "sync_data_owner_public_id"
 
 STORAGE_SYNC_ZERO_HABIT_DAY_REPAIR_KEY :: "sync_zero_habit_day_repair_v1_done"
+STORAGE_SYNC_SEEN_SERVER_VERSION_KEY :: "sync_seen_server_version"
 
 STORAGE_SYNC_OP_BATCH_LIMIT :: 400
 
@@ -353,6 +354,7 @@ storage_reset_sync_state :: () {
         return
     }
     storage_set_meta_int64("sync_last_server_version", 0)
+    storage_set_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0)
     storage_set_meta_int64("sync_last_upload_at", 0)
     storage_set_meta_int64("sync_full_upload_done", 0)
     set_meta_buf(STORAGE_SYNC_LAST_SERVER_HASH_KEY, "")
@@ -1986,6 +1988,13 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
     if storage_json_extract_text(response_json, "$.account_alias", *account_alias[0],
         size_of(type_of(account_alias))) != 0 {
         storage_set_setting_text(STORAGE_SYNC_ACCOUNT_ALIAS_KEY, AppTextFromCString(*account_alias[0], 40))
+    }
+    // The newest server version this device has heard of, even when a full
+    // snapshot waits for review and the applied version stays behind. Live
+    // updates compare against it, so a waiting review is not news each time.
+    seen_server_version := storage_json_extract_int64(response_json, "$.server_version", 0)
+    if seen_server_version > storage_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0) {
+        storage_set_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, seen_server_version)
     }
     if storage_json_extract_int64(response_json, "$.full_snapshot_required", 0) != 0  && storage_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 0) == 0 {
         if storage_has_any() == 0 {
