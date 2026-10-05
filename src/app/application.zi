@@ -1,3 +1,5 @@
+#import, file "../subapps/shared_state.zi";
+#import, file "../subapps/module_host.zi";
 c :: #system_library "c";
 raylib_log :: #system_library "raylib";
 LOG_INFO :: 3
@@ -70,6 +72,8 @@ GetTime :: () -> float64 #foreign c;
 #import "c_string"
 #import, file "app_notifications.zi";
 #import, file "../screens/language_screen.zi";
+#import, file "../screens/app_selection_screen.zi";
+#import, file "../subapps/inbe_types.zi";
 #import, file "app_style.zi";
 #import, file "../screens/manual_screen.zi";
 #import, file "../screens/manual_dispatch.zi";
@@ -290,13 +294,13 @@ app_draw_close_prompt :: (app: *InnerBreeze) {
     modal_result = ActionModal(app.ui.session, props, actions[:2]).action
     if modal_result == {
         case -1;
-            app.close_prompt_open = 0
+        app.close_prompt_open = 0
         case 1;
-            app.close_prompt_open = 0
-            app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptKeepRunning
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptKeepRunning
         case 2;
-            app.close_prompt_open = 0
-            app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptQuit
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptQuit
     }
 }
 
@@ -482,20 +486,81 @@ app_apply_initial_screen :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    // Mini mode skips language selection and opens on the practices.
+    // Mini mode uses the root's temporary Practice selection and skips the
+    // full app's onboarding without bypassing its route policy.
     if AppMiniMode() {
         app.main_tab = APP_MAIN_TAB_PRACTICE
-        app.breathing.screen = ScreenStart
-        app.habits.focus_selected_tab = 0
+    }
+    initial := InbeRun(InbeMessage.{.action = INBE_INITIAL_SCREEN,
+            .enabled_apps = ifx AppMiniMode() then APP_PRACTICE else app.enabled_apps,
+            .language_selected = AppMiniMode() || app.language_selected != 0,
+            .apps_selected = AppMiniMode() || app.apps_selected != 0,
+            .screen = app_screen_for_main_tab(app.main_tab)})
+    if !initial.succeeded {
+        app.request_quit = 1
         return
     }
-    if app.language_selected == 0 {
-        app.breathing.screen = ScreenLanguage
-        app.habits.focus_selected_tab = 0
-        return
-    }
-    app.breathing.screen = app_screen_for_main_tab(app.main_tab)
+    app.breathing.screen = initial.screen
     app.habits.focus_selected_tab = ifx (app.breathing.screen == ScreenHabits) then (1) else (0)
+}
+
+#program_export
+app_mini_restore_selection :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // An active mini practice continues when the full window opens, while
+    // the stored selection still controls full-app navigation and saving.
+    active := practice_active(app) != null
+    mask := app.enabled_apps
+    if active {
+        mask |= APP_PRACTICE
+    }
+    if !SubappsSetEnabled(mask) {
+        app.request_quit = 1
+        return
+    }
+    if !active {
+        app_apply_initial_screen(app)
+    }
+}
+
+// Host feature IDs use the app-selection bits; zero restores the parent route.
+#program_export
+app_open_feature :: (vapp: *void, feature: s32) -> s32 {
+    app := cast(*InnerBreeze)vapp
+    if app == null || !SubappsReady() || AppMiniMode() {
+        return 0
+    }
+    if feature == 0 {
+        app_apply_initial_screen(app)
+        return cast(s32)(app.request_quit == 0)
+    }
+    bit: s32 = 0
+    tab: s32 = APP_MAIN_TAB_NONE
+    if feature == APP_PRACTICE {
+        bit = APP_PRACTICE
+        tab = APP_MAIN_TAB_PRACTICE
+    } else if feature == APP_HABITS {
+        bit = APP_HABITS
+        tab = APP_MAIN_TAB_HABITS
+    } else if feature == APP_LISTS {
+        bit = APP_LISTS
+        tab = APP_MAIN_TAB_ELIST
+    } else {
+        return 0
+    }
+    selected := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
+            .enabled_apps = app.enabled_apps, .app = bit, .checked = true})
+    if !selected.succeeded || !SubappsSetEnabled(selected.enabled_apps) {
+        return 0
+    }
+    app.enabled_apps = selected.enabled_apps
+    app.apps_selected = 1
+    app.main_tab = tab
+    app_switch_screen(app, app_screen_for_main_tab(tab))
+    save_settings(app)
+    return cast(s32)(app.breathing.screen == app_screen_for_main_tab(tab))
 }
 
 #program_export
@@ -503,6 +568,11 @@ app_init :: (vapp: *void) {
     app: *InnerBreeze = cast(*InnerBreeze)vapp
     i: s32
     if app == null {
+        return
+    }
+    if !SubappsStart(app) {
+        TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
+        app.request_quit = 1
         return
     }
     FramePacingReset()
@@ -544,6 +614,19 @@ app_init :: (vapp: *void) {
     data_init()
     TraceLog(LOG_INFO, "APP PROBE: data initialized")
     settings_missing := app_load_settings(app)
+    configuration_action: s32 = INBE_CONFIGURE
+    if AppMiniMode() {
+        configuration_action = INBE_MINI_CONFIGURE
+    }
+    selection := InbeRun(InbeMessage.{.action = configuration_action,
+            .enabled_apps = app.enabled_apps})
+    if !selection.succeeded || !SubappsSetEnabled(selection.enabled_apps) {
+        app.request_quit = 1
+        return
+    }
+    if !AppMiniMode() {
+        app.enabled_apps = selection.enabled_apps
+    }
     refresh_locale_dependent_text(app)
     app_device_preferences_init(app)
     if settings_missing != 0 {
@@ -810,22 +893,22 @@ draw_global_modal :: (app: *InnerBreeze) {
         modal_result = settings_sync_account_draw_alias_modal(app)
         if modal_result == {
             case 1;
-                then_backup: s32 = app.sync_alias_then_backup
-                app.sync_alias_then_backup = 0
-                app_close_modal(app)
-                settings_screen_set_status_success(LocaleText("sync_alias_saved"), "")
-                if then_backup != 0 {
-                    app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
-                }
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            settings_screen_set_status_success(LocaleText("sync_alias_saved"), "")
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
             case 2;
-                settings_screen_set_status_error(LocaleText("sync_alias_failed"))
+            settings_screen_set_status_error(LocaleText("sync_alias_failed"))
             case 3;
-                then_backup: s32 = app.sync_alias_then_backup
-                app.sync_alias_then_backup = 0
-                app_close_modal(app)
-                if then_backup != 0 {
-                    app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
-                }
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
         }
     }
     if app.modal.type == cast(ModalType)ModalSyncPublicId {
@@ -969,6 +1052,9 @@ updateapp :: (app: *InnerBreeze) {
         handled_screen = true
     } else if app.breathing.screen == ScreenLanguage {
         language_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenAppSelection {
+        app_selection_screen_draw(app)
         handled_screen = true
     } else if app.breathing.screen == ScreenHabits {
         draw_habits_screen(app)
@@ -1125,7 +1211,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     layout_content_x: s32
     layout_content_w: s32
     render_scale: float32
-    if app == null { return }
+    if app == null || !SubappsReady() {
+        return
+    }
     if viewport.width <= 0 || viewport.height <= 0 {
         return
     }
@@ -1274,6 +1362,10 @@ app_destroy :: (vapp: *void) {
     if app == null {
         return
     }
+    if !SubappsReady() {
+        SubappsClose()
+        return
+    }
     CloseBreakWindows()
     ReleaseRuntimeAssetDownload(*app.meditation.music_download)
     save_settings(app)
@@ -1298,6 +1390,7 @@ app_destroy :: (vapp: *void) {
     settings_audio_stop_preview(app)
     app_audio_shutdown(app)
     app.* = InnerBreeze.{}
+    SubappsClose()
 }
 
 #program_export

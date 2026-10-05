@@ -1,0 +1,85 @@
+#import "button_props"
+#import "button_widget"
+#import "checkbox_props"
+#import "checkbox_widget"
+#import "geometry"
+#import "layout"
+#import "text_props"
+#import "text_widget"
+#import "control_props"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../subapps/module_host.zi";
+#import, file "../subapps/inbe_types.zi";
+#import, file "../core/types.zi";
+using ButtonTone;
+using ButtonEmphasis;
+using AppMainTab;
+
+#program_export
+app_selection_screen_draw :: (app: *InnerBreeze) {
+    column := CenteredColumnFor(app.ui.view_width, AppScale(420), AppScale(16))
+    top := AppScale(28)
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)top,
+                cast(float32)column.width, cast(float32)AppScale(56)},
+            .text = LocaleText("apps_picker_title"), .font = AppFontSize()})
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(top + AppScale(64)),
+                cast(float32)column.width, cast(float32)AppScale(96)},
+            .text = LocaleText("apps_picker_body"), .font = AppFontSize()})
+    labels: [3]string = .[LocaleText("tab_elist"), LocaleText("tab_habits"),
+    LocaleText("tab_practice")]
+    index: s32 = 0
+    while index < 3 {
+        bit: s32 = cast(s32)1 << index
+        checkbox := Checkbox(app.ui.session, CheckboxProps.{
+                .id = 270 + index,
+                .bounds = Rectangle.{cast(float32)column.x,
+                    cast(float32)(top + AppScale(172) + index * AppScale(52)),
+                    cast(float32)column.width, cast(float32)AppScale(44)},
+                .label = labels[index], .checked = (app.enabled_apps & bit) != 0})
+        if checkbox.changed {
+            result := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
+                    .enabled_apps = app.enabled_apps, .app = bit, .checked = checkbox.checked})
+            if result.succeeded {
+                app.enabled_apps = result.enabled_apps
+            }
+        }
+        index += 1
+    }
+    if Button(app.ui.session, ButtonProps.{.id = 274,
+            .bounds = Rectangle.{cast(float32)column.x,
+                cast(float32)(top + AppScale(340)), cast(float32)column.width,
+                cast(float32)AppScale(44)},
+            .label = LocaleText("next_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        if !SubappsSetEnabled(app.enabled_apps) {
+            return
+        }
+        result := InbeRun(InbeMessage.{.action = INBE_CONFIGURE,
+                .enabled_apps = app.enabled_apps})
+        if !result.succeeded {
+            return
+        }
+        app.apps_selected = 1
+        app.main_tab = APP_MAIN_TAB_NONE
+        if result.screen == ScreenStart {
+            app.main_tab = APP_MAIN_TAB_PRACTICE
+        } else if result.screen == ScreenHabits {
+            app.main_tab = APP_MAIN_TAB_HABITS
+        } else if result.screen == ScreenEList {
+            app.main_tab = APP_MAIN_TAB_ELIST
+        }
+        save_settings(app)
+        destination := ifx app.app_selection_return_to_settings then ScreenSettings else result.screen
+        app.app_selection_return_to_settings = false
+        app_switch_screen(app, destination)
+    }
+}

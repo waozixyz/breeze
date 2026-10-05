@@ -1,0 +1,62 @@
+// The live practice clocks run in this bundle; the unified host performs
+// audio, notification, session-save and mobile lifecycle effects.
+#import, file "../../src/subapps/practice_types.zi";
+#import, file "../../src/core/breath_timing.zi";
+#import, file "../../src/practices/meditation/meditation_timing.zi";
+#import, file "../../src/practices/patterns/patterns_clock.zi";
+#import, file "../../src/subapps/module_types.zi";
+#import, file "../../src/core/types.zi";
+#import, file "../../src/practices/sun_salutation/sun_salutation_rules.zi";
+host_api :: #system_library "host_api";
+ReadPracticeHost :: () -> PracticeMessage #foreign host_api;
+WritePracticeHost :: (message: PracticeMessage) #foreign host_api;
+
+PracticeApply :: (message: PracticeMessage) -> PracticeMessage {
+    message.succeeded = true
+    if message.action == PRACTICE_ROUTE {
+        message.succeeded = message.screen == ScreenStart || message.screen == ScreenSession ||
+        message.screen == ScreenMeditation || message.screen == ScreenSunSalutation ||
+        message.screen == ScreenPatterns || message.screen == ScreenResults ||
+        message.screen == ScreenPracticeConfig || message.screen == ScreenManual
+        return message
+    }
+    if message.paused {
+        return message
+    }
+    if message.action == PRACTICE_BREATH_STEP {
+        message.breathing = BreathSessionStep(message.breathing)
+        message.completed = message.breathing.completed != 0
+    } else if message.action == PRACTICE_MEDITATION_STEP {
+        next := AdvanceMeditationTime(message.remaining_seconds,
+            message.remainder_ms, message.elapsed_ms)
+        message.remaining_seconds = next.remaining_seconds
+        message.remainder_ms = next.remainder_ms
+        message.elapsed_seconds = next.elapsed_seconds
+        message.completed = next.completed
+    } else if message.action == PRACTICE_SALUTATION_STEP {
+        next := SalutationAdvance(message.salutation, message.elapsed)
+        message.salutation = next.state
+        message.completed = next.completed != 0
+    } else if message.action == PRACTICE_PATTERNS_STEP {
+        next := PatternsAdvance(message.patterns)
+        message.patterns = next.state
+        message.cue = next.cue
+        message.completed = next.completed
+    } else {
+        message.succeeded = false
+    }
+    return message
+}
+
+#program_export "PracticeMain"
+Main :: () -> s32 {
+    message := ReadPracticeHost()
+    if message.abi != MODULE_ABI {
+        return -1
+    }
+    if message.action == MODULE_IDENTIFY {
+        return MODULE_PRACTICE
+    }
+    WritePracticeHost(PracticeApply(message))
+    return 0
+}

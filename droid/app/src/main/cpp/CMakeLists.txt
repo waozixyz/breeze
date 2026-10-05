@@ -210,7 +210,27 @@ foreach(mode light dark)
         message(FATAL_ERROR "Packaged ${mode} theme catalog differs from Kryon")
     endif()
 endforeach()
+# Portable feature payloads are architecture-independent, but their embedding
+# runtime must match each Android ABI. Both are built from pinned packages.
+set(APP_SUBAPPS_DIR "${REPO_ROOT}/build/subapps")
+file(GLOB_RECURSE APP_SUBAPP_INPUTS CONFIGURE_DEPENDS "${REPO_ROOT}/apps/*.zi" "${REPO_ROOT}/src/subapps/*.zi")
+execute_process(COMMAND sh "${REPO_ROOT}/scripts/run-ziran.sh"
+    sh "${REPO_ROOT}/scripts/build-subapps.sh" "${ZIRAN_BIN}" "${APP_SUBAPPS_DIR}"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+set(APP_BUNDLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bundle-runtime")
+set(APP_BUNDLE_RUNTIME "${APP_BUNDLE_RUNTIME_DIR}/libziran.a")
+execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
+    --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
+    --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
+    --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
+    "--flags=-O2 -fPIC"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${APP_SUBAPP_INPUTS} "${REPO_ROOT}/scripts/build-subapps.sh"
+    "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
+
 set(APP_EMBEDDED_INPUTS
+    build/inbe.zib
     ${APP_STYLE_ASSETS}
     ${APP_LOCALE_ASSETS}
     assets/app/icon.png
@@ -311,4 +331,4 @@ foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
     endif()
 endforeach()
 
-target_link_libraries(main oqs z)
+target_link_libraries(main oqs z "${APP_BUNDLE_RUNTIME}")

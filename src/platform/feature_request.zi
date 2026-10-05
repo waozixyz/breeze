@@ -1,0 +1,104 @@
+// Read and consume a request on this process's own SDL X11 window only.
+#scope_file
+FEATURE_X11 :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(_WIN32) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD)
+#if FEATURE_X11 {
+    #import "c_string"
+    sdl :: #system_library "SDL2";
+    libc :: #system_library "c";
+    FeatureWindowInfo :: struct {
+        version: [3]u8
+        padding: u8
+        subsystem: s32
+        display: *void
+        window: usize
+        remainder: [64]u8
+    }
+    FeatureVersion :: (version: *u8) #foreign sdl "SDL_GetVersion";
+    FeatureWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
+    FeatureInfo :: (window: *void, info: *FeatureWindowInfo) -> s32 #foreign sdl "SDL_GetWindowWMInfo";
+    FeatureLoad :: (name: *u8, flags: s32) -> *void #foreign libc "dlopen";
+    FeatureSymbol :: (library: *void, name: *u8) -> *void #foreign libc "dlsym";
+    FeatureCopy :: (destination: *void, source: *void, size: usize) -> *void #foreign libc "memcpy";
+    FeatureAtom :: #type (*void, *u8, s32) -> usize #c_call;
+    FeatureGet :: #type (*void, usize, usize, isize, isize, s32, usize,
+        *usize, *s32, *usize, *usize, **u8) -> s32 #c_call;
+    FeatureFree :: #type (*void) -> s32 #c_call;
+    library: *void;
+    atom_call: FeatureAtom;
+    get_call: FeatureGet;
+    free_call: FeatureFree;
+    attempted: bool;
+
+    ResolveFeatureSymbol :: (slot: *void, name: string) -> bool {
+        bytes: [64]u8
+        if !CopyCString(name, bytes[:]) {
+            return false
+        }
+        symbol := FeatureSymbol(library, *bytes[0])
+        if symbol == null {
+            return false
+        }
+        unused FeatureCopy(slot, cast(*void)*symbol, size_of(*void))
+        return true
+    }
+
+    LoadFeatureReader :: () -> bool {
+        if !attempted {
+            attempted = true
+            name: [32]u8
+            unused CopyCString("libX11.so.6", name[:])
+            library = FeatureLoad(*name[0], 1)
+            if library != null {
+                if !ResolveFeatureSymbol(cast(*void)*atom_call, "XInternAtom") ||
+                !ResolveFeatureSymbol(cast(*void)*get_call, "XGetWindowProperty") ||
+                !ResolveFeatureSymbol(cast(*void)*free_call, "XFree") {
+                    return false
+                }
+            }
+        }
+        return atom_call != null && get_call != null && free_call != null
+    }
+}
+
+#scope_export
+TakeHostFeatureRequest :: () -> s32 {
+    #if FEATURE_X11 {
+        window := FeatureWindow()
+        if window == null || !LoadFeatureReader() {
+            return -1
+        }
+        info: FeatureWindowInfo
+        FeatureVersion(*info.version[0])
+        if FeatureInfo(window, *info) == 0 || info.subsystem != 2 ||
+        info.display == null || info.window == 0 {
+            return -1
+        }
+        name: [32]u8
+        unused CopyCString("_HARMONY_APP_FEATURE", name[:])
+        atom := atom_call(info.display, *name[0], 1)
+        if atom == 0 {
+            return -1
+        }
+        actual: usize
+        format: s32
+        count: usize
+        after: usize
+        data: *u8
+        status := get_call(info.display, info.window, atom, 0, 1, 1, 6,
+            *actual, *format, *count, *after, *data)
+        feature: s32 = -1
+        if status == 0 && actual == 6 && format == 32 && count == 1 &&
+        after == 0 && data != null {
+            value := cast(*usize)data
+            if value[0] == cast(usize)0 || value[0] == cast(usize)1 ||
+            value[0] == cast(usize)2 || value[0] == cast(usize)4 {
+                feature = cast(s32)value[0]
+            }
+        }
+        if data != null {
+            unused free_call(cast(*void)data)
+        }
+        return feature
+    }
+    return -1
+}

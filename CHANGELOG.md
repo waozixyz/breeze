@@ -1,4 +1,8 @@
 # Changelog
+## [2.0.11] - 2026-10-04
+### Changed
+- Lists, Habits, and Practice now load as separate modules inside Inner Breeze, with shared navigation, settings, and saved data.
+
 ## [2.0.10] - 2026-10-02
 ### Changed
 - Smoothed the outlines of all four Sun Salutation characters during movement.

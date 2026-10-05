@@ -1,0 +1,326 @@
+#import, file "../src/subapps/module_host.zi";
+#import, file "../src/subapps/shared_state.zi";
+#import, file "../src/subapps/lists_types.zi";
+#import, file "../src/subapps/lists_visibility.zi";
+#import, file "../src/subapps/habits_types.zi";
+#import, file "../src/subapps/practice_types.zi";
+#import, file "../src/subapps/inbe_types.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/core/breath_timing.zi";
+#import, file "../src/practices/sun_salutation/sun_salutation_rules.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/legacy_session_files.zi";
+#import, file "../src/storage/legacy_session_time.zi";
+#import, file "../src/storage/storage_thread_buffers.zi";
+#import, file "../src/app/host_services.zi";
+#import, file "../src/screens/elist_types.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../src/app/text_buffers.zi";
+#import "byte_text_linux"
+
+c :: #system_library "c";
+ModuleTestText :: (name: string) -> string #foreign c;
+ModuleTestCount :: (sql: string) -> s32 #foreign c;
+ModuleTestSeedOld :: () -> bool #foreign c;
+ModuleTestRuns :: () -> s32 #foreign c;
+ModuleTestPackageBytes :: () -> bool #foreign c;
+
+app: InnerBreeze;
+list_id: [37]u8;
+item_id: [37]u8;
+user_id: [128]u8;
+migrated_habit_id: [HABIT_ID_SIZE]u8;
+edited_habit_id: [HABIT_ID_SIZE]u8;
+failures: s32;
+
+FindHabit :: (name: string) -> s32 {
+    index: s32 = 0
+    while index < app.habits.count {
+        if AppTextFromCString(*app.habits.items[index].name[0], HABIT_NAME_SIZE) == name {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+Expect :: (ok: bool, code: s32) {
+    if !ok {
+        print("Module check failed: %\n", code)
+        if failures == 0 {
+            failures = code
+        }
+    }
+}
+
+CheckRootConfiguration :: () {
+    Expect(ModuleTestPackageBytes(), 74)
+    Expect(!SubappsOpenPackage(""), 57)
+    Expect(!SubappsOpenPackage(ModuleTestText("missing-assets")), 58)
+    Expect(!SubappsOpenPackage(ModuleTestText("invalid-nested")), 59)
+    Expect(SubappsOpenPackage(ModuleTestText("inbe")), 60)
+    initial := InbeRun(InbeMessage.{.action = INBE_INITIAL_SCREEN,
+            .enabled_apps = APP_ALL, .screen = ScreenStart})
+    Expect(initial.succeeded && initial.screen == ScreenLanguage, 61)
+    initial.language_selected = true
+    initial = InbeRun(initial)
+    Expect(initial.succeeded && initial.screen == ScreenAppSelection, 62)
+    mask: s32 = 0
+    while mask <= APP_ALL {
+        Expect(SubappsSetEnabled(mask) && SubappsReady(), 63)
+        Expect(InbeAllows(ScreenEList) == ((mask & APP_LISTS) != 0) &&
+            InbeAllows(ScreenHabits) == ((mask & APP_HABITS) != 0) &&
+            InbeAllows(ScreenPatterns) == ((mask & APP_PRACTICE) != 0), 64)
+        Expect(InbeAllows(ScreenSettings) && InbeAllows(ScreenAppSelection), 65)
+        initial = InbeMessage.{.action = INBE_INITIAL_SCREEN,
+            .enabled_apps = mask, .screen = ScreenStart,
+            .language_selected = true, .apps_selected = true}
+        initial = InbeRun(initial)
+        expected: s32 = ScreenSettings
+        if (mask & APP_PRACTICE) != 0 {
+            expected = ScreenStart
+        } else if (mask & APP_HABITS) != 0 {
+            expected = ScreenHabits
+        } else if (mask & APP_LISTS) != 0 {
+            expected = ScreenEList
+        }
+        Expect(initial.succeeded && initial.screen == expected, 66)
+        if (mask & APP_LISTS) == 0 {
+            Expect(!ListsRun(ListsMessage.{.action = LISTS_ROUTE,
+                    .screen = ScreenEList}).succeeded, 67)
+        }
+        if (mask & APP_HABITS) == 0 {
+            Expect(!HabitsRun(HabitsMessage.{.action = HABITS_ROUTE,
+                    .screen = ScreenHabits}).succeeded, 68)
+        }
+        if (mask & APP_PRACTICE) == 0 {
+            Expect(!PracticeRun(PracticeMessage.{.action = PRACTICE_ROUTE,
+                    .screen = ScreenStart}).succeeded, 69)
+        }
+        mini := InbeRun(InbeMessage.{.action = INBE_MINI_CONFIGURE,
+                .enabled_apps = mask})
+        Expect(mini.succeeded && mini.enabled_apps == APP_PRACTICE &&
+            mini.screen == ScreenStart, 75)
+        Expect(SubappsSetEnabled(mini.enabled_apps) &&
+            InbeAllows(ScreenStart) && !InbeAllows(ScreenEList), 76)
+        mini_session := PracticeRun(PracticeMessage.{
+                .action = PRACTICE_MEDITATION_STEP,
+                .remaining_seconds = 1, .elapsed_ms = 1000})
+        Expect(mini_session.succeeded && mini_session.completed, 77)
+        mask += 1
+    }
+    toggle := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
+            .enabled_apps = APP_ALL, .app = APP_PRACTICE, .checked = false})
+    Expect(toggle.succeeded && toggle.enabled_apps == (APP_LISTS | APP_HABITS), 70)
+    toggle.app = APP_LISTS | APP_HABITS
+    Expect(!InbeRun(toggle).succeeded, 71)
+    Expect(SubappsSetEnabled(APP_ALL), 72)
+    runs := ModuleTestRuns()
+    Expect(InbeAllows(ScreenEList) && ModuleTestRuns() == runs + 2, 73)
+}
+
+#program_export
+CheckModules :: () -> s32 {
+    lists := ModuleTestText("lists")
+    habits := ModuleTestText("habits")
+    practice := ModuleTestText("practice")
+    Expect(!SubappsOpenBytes("", habits, practice), 1)
+    Expect(!SubappsOpenBytes(lists, "ZIB", practice), 2)
+    Expect(!SubappsOpenBytes(habits, lists, practice), 3)
+    // Bind the actual shared persistence effects without opening user data.
+    unused SubappsStart(*app)
+    Expect(SubappsOpenBytes(lists, habits, practice), 4)
+    Expect(SubappsRoute(ScreenEList) && SubappsRoute(ScreenHabits) &&
+        SubappsRoute(ScreenStart) && SubappsRoute(ScreenMeditation) &&
+        !SubappsRoute(ScreenSettings), 5)
+    CheckRootConfiguration()
+    Expect(ModuleTestSeedOld(), 6)
+    data_init()
+    Expect(storage_db_handle() != null, 7)
+    AppCopyText(AppTextFromCString(storage_user_id_buffer(), 128), user_id[:])
+    habits_init_with_defaults(*app.habits, 0)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM sessions WHERE id='old-session'") == 1, 8)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key='language' AND value='es'") == 1, 9)
+    // The existing upgrade rewrites non-UUID IDs together with their day rows.
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM habits h JOIN habit_days d ON d.habit_id=h.id WHERE h.name='Old habit' AND h.user_id='module-user' AND length(h.id)=36 AND h.id<>'old-habit' AND d.local_date=20260925 AND d.completed=1 AND d.count=1") == 1, 10)
+    old_index := FindHabit("Old habit")
+    Expect(old_index >= 0, 44)
+    if old_index >= 0 {
+        AppCopyText(AppTextFromCString(*app.habits.items[old_index].id[0], HABIT_ID_SIZE), migrated_habit_id[:])
+    }
+
+    edit := ListsMessage.{.action = LISTS_COMMIT, .editing_item = -2, .title = "Trip"}
+    edit = ListsRun(edit)
+    Expect(edit.succeeded && edit.reload && edit.sync, 11)
+    AppCopyText(edit.selected_id, list_id[:])
+    unused storage_elist_load(cast(*void)*app.elist)
+    Expect(app.elist.list_count == 1, 12)
+    edit = ListsMessage.{.action = LISTS_COMMIT, .editing_item = -1,
+        .selected_list = 0, .list_count = 1, .selected_id = AppTextFromCString(*list_id[0], 37),
+        .title = "Passport"}
+    Expect(ListsRun(edit).succeeded, 13)
+    unused storage_elist_load(cast(*void)*app.elist)
+    AppCopyText(AppTextFromCString(*app.elist.items[0].id[0], 37), item_id[:])
+    edit.action = LISTS_SET_DONE
+    edit.id = AppTextFromCString(*item_id[0], 37)
+    edit.parent_id = AppTextFromCString(*list_id[0], 37)
+    edit.index = 0
+    edit.item_count = 1
+    edit.done = 1
+    edit.comment = "Keep relationship"
+    edit.now = 2.0
+    edit = ListsRun(edit)
+    Expect(edit.succeeded && edit.completing_until == 2.45, 14)
+    edit.action = LISTS_VISIBLE
+    edit = ListsRun(edit)
+    Expect(edit.visible, 15)
+    edit.now = 3.0
+    Expect(!ListsRun(edit).visible, 16)
+    unused storage_elist_load(cast(*void)*app.elist)
+    AppCopyText(AppTextFromCString(*item_id[0], 37), app.elist.completing_item[:])
+    app.elist.completing_until = 2.45
+    Expect(ListsRefreshVisibility(*app.elist, 2.1) && app.elist.item_visibility[0] && app.elist.visibility_deadline == 2.45, 51)
+    runs := ModuleTestRuns()
+    Expect(ListsRefreshVisibility(*app.elist, 2.2) && ModuleTestRuns() == runs, 52)
+    Expect(ListsRefreshVisibility(*app.elist, 2.5) && !app.elist.item_visibility[0] && ModuleTestRuns() == runs + 1, 53)
+    app.elist.show_completed = 1
+    Expect(ListsRefreshVisibility(*app.elist, 3.0) && app.elist.item_visibility[0] && ModuleTestRuns() == runs + 2, 54)
+    app.elist.show_completed = 0
+    unused storage_elist_load(cast(*void)*app.elist)
+    Expect(!app.elist.visibility_valid && ListsRefreshVisibility(*app.elist, 3.0) && !app.elist.item_visibility[0], 55)
+    // A returned text view lasts until the next call to that feature. This
+    // selection follows several visibility calls, so start a fresh message.
+    edit = ListsMessage.{.action = LISTS_SELECT, .index = 1, .list_count = 2}
+    edit = ListsRun(edit)
+    Expect(edit.selected_list == 1 && edit.reset_input && edit.reset_scroll && edit.show_completed == 0, 17)
+
+    habit := HabitsMessageFor(*app, HABITS_COMMIT)
+    habit.active = true
+    habit.is_new = true
+    habit.name = " \t "
+    habit = HabitsRun(habit)
+    Expect(habit.name_error == 1 && !habit.cancel_edit, 18)
+    // Reuse the rejected response, including its old validation error.
+    habit.name = "Reading"
+    habit.description = "Shared habit"
+    habit.weekdays = 127
+    habit.counter_enabled = 1
+    habit.counter_target = 3
+    habit.reminder_hour = 9
+    habit = HabitsRun(habit)
+    Expect(habit.succeeded && habit.name_error == 0 && habit.cancel_edit, 19)
+    habit.action = HABITS_COMMIT
+    habit.count = app.habits.count
+    habit.name = "Reading"
+    habit = HabitsRun(habit)
+    Expect(habit.name_error == 2, 20)
+    habit.name = "Writing"
+    habit = HabitsRun(habit)
+    Expect(habit.succeeded && habit.name_error == 0 && habit.cancel_edit, 21)
+    reading_index := FindHabit("Reading")
+    Expect(reading_index >= 0, 45)
+    if reading_index >= 0 {
+        AppCopyText(AppTextFromCString(*app.habits.items[reading_index].id[0], HABIT_ID_SIZE), edited_habit_id[:])
+        habit = HabitsMessageFor(*app, HABITS_COMMIT)
+        habit.active = true
+        habit.index = reading_index
+        habit.name = "Reading"
+        habit.description = "Edited through Habits bundle"
+        habit.counter_enabled = 1
+        habit.counter_target = 7
+        habit.weekdays = 31
+        habit = HabitsRun(habit)
+        Expect(habit.succeeded && habit.cancel_edit, 46)
+        Expect(ModuleTestCount("SELECT COUNT(*) FROM habits WHERE name='Reading' AND description='Edited through Habits bundle' AND counter_enabled=1 AND counter_target=7 AND weekdays=31") == 1, 47)
+    }
+    habit.action = HABITS_DAY_ACTION
+    habit.index = 0
+    habit.count = app.habits.count
+    habit.scheduled = true
+    habit.counter_enabled = 0
+    habit.linked_count = 1
+    habit = HabitsRun(habit)
+    Expect(habit.day_action == HABITS_DAY_LINKED && habit.block_click, 22)
+    habit.action = HABITS_HISTORY
+    habit.selected = 0
+    habit = HabitsRun(habit)
+    Expect(habit.screen_mode == HABITS_SCREEN_HISTORY && habit.view_mode == HABIT_VIEW_CALENDAR, 23)
+
+    step := PracticeMessage.{.action = PRACTICE_MEDITATION_STEP,
+        .remaining_seconds = 2, .elapsed_ms = 1500}
+    step = PracticeRun(step)
+    Expect(step.succeeded && step.remaining_seconds == 1 && step.remainder_ms == 500 && !step.completed, 24)
+    step.paused = true
+    Expect(PracticeRun(step).remaining_seconds == 1, 25)
+    step.paused = false
+    step.elapsed_ms = 500
+    step = PracticeRun(step)
+    Expect(step.completed && step.remaining_seconds == 0, 26)
+    step = PracticeMessage.{.action = PRACTICE_BREATH_STEP}
+    step.breathing = BreathSessionInit()
+    step.breathing.phase = BreathPhaseNext
+    step.breathing.round = step.breathing.max_rounds - 1
+    step.breathing.breath_half_ticks = 1
+    i: s32 = 0
+    while i < 120 && !step.completed {
+        step = PracticeRun(step)
+        i += 1
+    }
+    Expect(step.succeeded && step.completed, 27)
+    step = PracticeMessage.{.action = PRACTICE_SALUTATION_STEP}
+    step.salutation = SalutationStart(SalutationInit(step.salutation))
+    step.elapsed = 1000.0
+    step = PracticeRun(step)
+    Expect(step.succeeded && step.completed, 28)
+    step = PracticeMessage.{.action = PRACTICE_PATTERNS_STEP}
+    step.patterns.active = 1
+    step.patterns.duration_minutes = 1
+    step.patterns.elapsed_seconds = 59
+    step = PracticeRun(step)
+    Expect(step.succeeded && step.completed && step.patterns.elapsed_seconds == 60, 29)
+
+    rounds: [1]s32 = .[42]
+    Expect(storage_save_session(*rounds[0], 1, null, 0) != 0, 30)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM elist_items i JOIN elist_lists l ON l.id=i.list_id WHERE i.user_id=l.user_id AND i.title='Passport' AND i.comment='Keep relationship' AND i.done=1") == 1, 31)
+    habits_free(*app.habits)
+    storage_close()
+    SubappsClose()
+    Expect(SubappsOpenPackage(ModuleTestText("inbe")), 32)
+    Expect(storage_init("module-data") != 0, 33)
+    Expect(AppTextFromCString(storage_user_id_buffer(), 128) == AppTextFromCString(*user_id[0], 128), 34)
+    unused storage_elist_load(cast(*void)*app.elist)
+    habits_init_with_defaults(*app.habits, 0)
+    Expect(app.elist.item_count == 1 && app.elist.items[0].done == 1 && app.habits.count >= 3, 35)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM sessions") == 2, 36)
+    Expect(ModuleTestCount("SELECT COUNT(DISTINCT entity_type) FROM sync_outbox WHERE entity_type IN ('elist_list','elist_item','habit','session')") == 4, 37)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM habits h JOIN habit_days d ON d.habit_id=h.id WHERE h.name='Old habit' AND h.user_id='module-user' AND length(h.id)=36 AND d.local_date=20260925 AND d.completed=1 AND d.count=1") == 1, 43)
+    old_index = FindHabit("Old habit")
+    reading_index = FindHabit("Reading")
+    Expect(old_index >= 0 && reading_index >= 0, 48)
+    if old_index >= 0 && reading_index >= 0 {
+        Expect(AppTextFromCString(*app.habits.items[old_index].id[0], HABIT_ID_SIZE) == AppTextFromCString(*migrated_habit_id[0], HABIT_ID_SIZE), 49)
+        Expect(AppTextFromCString(*app.habits.items[reading_index].id[0], HABIT_ID_SIZE) == AppTextFromCString(*edited_habit_id[0], HABIT_ID_SIZE) && app.habits.items[reading_index].counter_target == 7, 50)
+    }
+    // A valid bundle with a mismatched host schema must fail before saving.
+    Expect(SubappsOpenBytes(ModuleTestText("wrong-record"), habits, practice), 38)
+    edit = ListsMessage.{.action = LISTS_COMMIT, .editing_item = -2, .title = "Unsafe"}
+    Expect(!ListsRun(edit).succeeded, 39)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM elist_lists") == 1, 40)
+    Expect(SubappsOpenBytes(ModuleTestText("wrong-scalar"), habits, practice), 41)
+    Expect(!ListsRun(edit).succeeded, 42)
+    app.elist.visibility_valid = false
+    Expect(!ListsRefreshVisibility(*app.elist, 3.0), 56)
+    habits_free(*app.habits)
+    storage_close()
+    SubappsClose()
+    return failures
+}

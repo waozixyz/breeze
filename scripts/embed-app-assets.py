@@ -29,6 +29,10 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
         # Keep build/packages/<name> links unresolved so package assets get
         # stable embedded names regardless of the package cache location.
         path = Path(os.path.abspath(file)).relative_to(root).as_posix()
+        if path.startswith("build/subapps/"):
+            path = path.removeprefix("build/")
+        if path == "build/inbe.zib":
+            path = "inbe.zib"
         if path.startswith("build/packages/kss/styles/"):
             path = path.removeprefix("build/packages/kss/")
         if path.startswith("build/packages/kryon/icons/"):

@@ -1,3 +1,6 @@
+#import, file "../../subapps/shared_state.zi";
+#import, file "../../subapps/module_host.zi";
+#import, file "../../subapps/practice_types.zi";
 c3 :: #system_library "c";
 GetTabBarHeight :: () -> s32 #foreign c3;
 GetFrameTime :: () -> float32 #foreign c3;
@@ -59,7 +62,7 @@ using ButtonTone;
 using ButtonEmphasis;
 
 // Timed-ratio breathing practice: preset patterns (box, 4-7-8, coherent,
-    // extended exhale) plus a fully custom in/hold/exhale/hold-out ratio. The
+// extended exhale) plus a fully custom in/hold/exhale/hold-out ratio. The
 // session is a driven animation (circle grows on inhale, shrinks on exhale)
 // with optional breath cues, saved as one session of its own activity kind.
 
@@ -123,7 +126,13 @@ handle_exit_modal :: (app: *InnerBreeze) -> s32 {
 }
 
 advance_second :: (app: *InnerBreeze) {
-    step := patterns_advance_second(*app.patterns)
+    step := PracticeRun(PracticeStepFor(app, PRACTICE_PATTERNS_STEP))
+    if !step.succeeded {
+        app.request_quit = 1
+        app.patterns.active = 0
+        return
+    }
+    app.patterns = step.patterns
     if step.cue == 1 {
         app_play_breath_cue(app, 0)
     } else if step.cue == 2 {
@@ -220,9 +229,9 @@ draw_config :: (app: *InnerBreeze) {
                     }
                 }
                 args: [5]FormatArg = .[
-                    FormatArg.{.text = LocaleText(patterns_preset_label_key(i)), .is_text = true},
-                    FormatArg.{.number = ratio[0]}, FormatArg.{.number = ratio[1]},
-                    FormatArg.{.number = ratio[2]}, FormatArg.{.number = ratio[3]}
+                FormatArg.{.text = LocaleText(patterns_preset_label_key(i)), .is_text = true},
+                FormatArg.{.number = ratio[0]}, FormatArg.{.number = ratio[1]},
+                FormatArg.{.number = ratio[2]}, FormatArg.{.number = ratio[3]}
                 ]
                 FormatTemplate("%s  %d-%d-%d-%d", args[:], label[:])
                 style := cast(ButtonTone)(ifx (app.patterns.preset == i) then (ButtonToneAccent) else (ButtonToneNeutral))
@@ -419,13 +428,13 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
     if app.patterns.phase == {
         case PATTERNS_PHASE_INHALE;
-            pattern_circle_draw(app, center_x, center_y, 0.25 + progress * 0.75)
+        pattern_circle_draw(app, center_x, center_y, 0.25 + progress * 0.75)
         case PATTERNS_PHASE_EXHALE;
-            pattern_circle_draw(app, center_x, center_y, 1.0 - progress * 0.75)
+        pattern_circle_draw(app, center_x, center_y, 1.0 - progress * 0.75)
         case PATTERNS_PHASE_HOLD_IN;
-            pattern_circle_draw(app, center_x, center_y, 1.0)
+        pattern_circle_draw(app, center_x, center_y, 1.0)
         case;
-            pattern_circle_draw(app, center_x, center_y, 0.25)
+        pattern_circle_draw(app, center_x, center_y, 0.25)
     }
 
     label := LocaleText(patterns_phase_label_key(app.patterns.phase))
@@ -444,8 +453,8 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         })
 
     cycle_args: [2]FormatArg = .[
-        FormatArg.{.text = LocaleText("patterns_cycle_label"), .is_text = true},
-        FormatArg.{.number = app.patterns.cycle + 1}
+    FormatArg.{.text = LocaleText("patterns_cycle_label"), .is_text = true},
+    FormatArg.{.number = app.patterns.cycle + 1}
     ]
     FormatTemplate("%s %d", cycle_args[:], cycle_text[:])
     if app.patterns.duration_minutes > 0 {
@@ -454,21 +463,21 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
             remain = 0
         }
         time_args: [2]FormatArg = .[
-            FormatArg.{.number = remain / 60},
-            FormatArg.{.number = remain % 60}
+        FormatArg.{.number = remain / 60},
+        FormatArg.{.number = remain % 60}
         ]
         FormatTemplate("%d:%02d", time_args[:], time_text[:])
     } else {
         time_args: [2]FormatArg = .[
-            FormatArg.{.number = app.patterns.elapsed_seconds / 60},
-            FormatArg.{.number = app.patterns.elapsed_seconds % 60}
+        FormatArg.{.number = app.patterns.elapsed_seconds / 60},
+        FormatArg.{.number = app.patterns.elapsed_seconds % 60}
         ]
         FormatTemplate("%d:%02d", time_args[:], time_text[:])
     }
     status_text: [72] u8
     status_args: [2]FormatArg = .[
-        FormatArg.{.text = AppTextFromCString(*cycle_text[0], cast(s32)cycle_text.count), .is_text = true},
-        FormatArg.{.text = AppTextFromCString(*time_text[0], cast(s32)time_text.count), .is_text = true}
+    FormatArg.{.text = AppTextFromCString(*cycle_text[0], cast(s32)cycle_text.count), .is_text = true},
+    FormatArg.{.text = AppTextFromCString(*time_text[0], cast(s32)time_text.count), .is_text = true}
     ]
     FormatTemplate("%s  ·  %s", status_args[:], status_text[:])
     status_font: s32 = AppScale(Text20)
@@ -564,7 +573,7 @@ pattern_circle_draw :: (app: *InnerBreeze, center_x: s32, center_y: s32,
 
 pattern_text_color_for_background :: (background: Color) -> Color {
     luma := cast(s32)background.r * 299 +
-        cast(s32)background.g * 587 + cast(s32)background.b * 114
+    cast(s32)background.g * 587 + cast(s32)background.b * 114
     if luma > 150000 {
         return Color.{.r = 0, .g = 0, .b = 0, .a = 255}
     }

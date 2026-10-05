@@ -1,0 +1,59 @@
+// Headless target probe: execute the same typed host and exact shipped package.
+#import, file "../src/subapps/module_host.zi";
+#import, file "../src/subapps/inbe_types.zi";
+#import, file "../src/subapps/lists_types.zi";
+#import, file "../src/subapps/habits_types.zi";
+#import, file "../src/subapps/practice_types.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/habits/habit_types.zi";
+c :: #system_library "c";
+ProbeRoot :: () -> string #foreign c;
+
+#program_export
+CheckPlatformModules :: () -> s32 {
+    if !SubappsOpenPackage(ProbeRoot()) {
+        return 1
+    }
+    mask: s32 = 0
+    while mask <= APP_ALL {
+        if !SubappsSetEnabled(mask) || !SubappsReady() {
+            return 2
+        }
+        if InbeAllows(ScreenEList) != ((mask & APP_LISTS) != 0) ||
+        InbeAllows(ScreenHabits) != ((mask & APP_HABITS) != 0) ||
+        InbeAllows(ScreenPatterns) != ((mask & APP_PRACTICE) != 0) ||
+        !InbeAllows(ScreenSettings) {
+            return 3
+        }
+        mask += 1
+    }
+    if !SubappsSetEnabled(APP_ALL) {
+        return 4
+    }
+    lists := ListsRun(ListsMessage.{.action = LISTS_SELECT,
+            .index = 1, .list_count = 2})
+    if !lists.succeeded || lists.selected_list != 1 || !lists.reset_input {
+        return 5
+    }
+    habits := HabitsRun(HabitsMessage.{.action = HABITS_HISTORY,
+            .selected = 0, .count = 1})
+    if !habits.succeeded || habits.screen_mode != HABITS_SCREEN_HISTORY {
+        return 6
+    }
+    practice := PracticeRun(PracticeMessage.{.action = PRACTICE_MEDITATION_STEP,
+            .remaining_seconds = 1, .elapsed_ms = 1000})
+    if !practice.succeeded || !practice.completed || practice.remaining_seconds != 0 {
+        return 7
+    }
+    practice.paused = true
+    practice.completed = false
+    practice.remaining_seconds = 1
+    if PracticeRun(practice).remaining_seconds != 1 {
+        return 8
+    }
+    SubappsClose()
+    if SubappsOpenPackage("invalid") || SubappsReady() {
+        return 9
+    }
+    return 0
+}

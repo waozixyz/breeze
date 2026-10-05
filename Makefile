@@ -392,7 +392,15 @@ STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
 IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-EMBEDDED_ASSET_FILES := $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
+SUBAPP_BUNDLES := $(addprefix $(BUILD_DIR)/subapps/,lists.zib habits.zib practice.zib)
+INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
+SUBAPP_SOURCES := $(shell find apps src/subapps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
+.PHONY: subapps
+subapps: $(SUBAPP_BUNDLES) $(INBE_BUNDLE)
+$(SUBAPP_BUNDLES) $(INBE_BUNDLE) &: $(SUBAPP_SOURCES) ziran.lock scripts/build-subapps.sh $(ZIRAN_BIN)
+	sh scripts/build-subapps.sh $(ZIRAN_BIN)
+
+EMBEDDED_ASSET_FILES := $(INBE_BUNDLE) $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort)
 GAME2D_DIR := build/packages/game2d
@@ -637,8 +645,10 @@ all: native
 # mixing a new zi2zir with an old ziran fails on the ZIR version.
 ZIRAN_TOOLS := $(addprefix $(ZIRAN_BUILD_DIR)/bin/,zi2c zi2zir zi2zib zi2cpp zi2go ziran)
 
-$(ZI2C_BIN): $(ZIRAN_SOURCES)
-	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $(ZIRAN_TOOLS)
+$(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a &: $(ZIRAN_SOURCES) ziran.lock
+	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $(ZIRAN_TOOLS) $(ZIRAN_BUILD_DIR)/libziran.a
+
+$(ZIRAN_BIN): $(ZI2C_BIN)
 
 zi-check: $(ZI_CHECK_STAMP) | build-laws
 
@@ -871,6 +881,8 @@ $(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
 	@test -f $@
 
 $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+	# Imports can change emitted paths; never retain an obsolete header/code pair.
+	rm -rf $(KRY_GEN_DIR)
 	mkdir -p $(KRY_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
@@ -1973,7 +1985,7 @@ $(WIN64_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt
 		-DOQS_MINIMAL_BUILD=$(KRYON_LIBOQS_MINIMAL_BUILD)
 	$(CMAKE) --build $(WIN64_LIBOQS_BUILD_DIR) --target oqs
 
-$(TARGET): Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
+$(TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
 $(TARGET): | zi-check
 	$(shell mkdir -p $(NATIVE_OBJ_DIR))
 	$(file >$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_SOURCES := $(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) $(SQLITE_SRC))
@@ -1984,7 +1996,7 @@ $(TARGET): | zi-check
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
 		-o $@ \
 		@$(NATIVE_OBJ_DIR)/objects.rsp \
-		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a \
+		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(ZIRAN_BUILD_DIR)/libziran.a \
 		$(KRYON_NATIVE_BACKEND_LIBS) \
 		$(LIBOQS_A) \
 		$(KRYON_NATIVE_BACKEND_LDLIBS) \
@@ -1992,7 +2004,7 @@ $(TARGET): | zi-check
 		$(NATIVE_SYSTEM_LDLIBS) \
 		$(LDFLAGS)
 
-$(KRYON_HOST_TARGET): Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)
+$(KRYON_HOST_TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -fPIC -shared \
 		$(APP_INCLUDE) \
@@ -2005,7 +2017,7 @@ $(KRYON_HOST_TARGET): Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMA
 		-DSUPPORT_FILEFORMAT_OGG=1 \
 		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
-		$(KRYON_HOST_SRC) \
+		$(KRYON_HOST_SRC) $(ZIRAN_BUILD_DIR)/libziran.a \
 		$(SQLITE_SRC) \
 		$(NATIVE_SYSTEM_LDLIBS) \
 		-Wl,-Bsymbolic \
@@ -2025,7 +2037,7 @@ $(CLICK_BIN): Makefile $(SRC) $(KRYON_CLICK_SRCS) $(SQLITE_SRC) $(SQLITE_AMALGAM
 		-DSUPPORT_FILEFORMAT_OGG=1 \
 		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
-		$(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) \
+		$(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) $(CLICK_BUNDLE_RUNTIME) \
 		$(KRYON_CLICK_SRCS) \
 		$(SQLITE_SRC) \
 		$(CLICK_RAYLIB_A) \
@@ -2109,7 +2121,7 @@ $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQ
 		-DPLATFORM_DESKTOP \
 		-DCURL_STATICLIB \
 		-o $@ \
-		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) \
+		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) $(WINDOWS_BUNDLE_RUNTIME) \
 		$(SQLITE_SRC) \
 		$(WIN64_RAYLIB_A) \
 		$(WIN64_CURL_A) \
@@ -2331,7 +2343,7 @@ $(WEB_JS_TARGET): | zi-check
 		-DHAS_LIBOQS=1 \
 		-DPLATFORM_WEB \
 		-o $(WEB_JS_TARGET) \
-		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) \
+		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) $(WEB_BUNDLE_RUNTIME) \
 		$(foreach library,$(WEB_HOST_JS),--js-library $(library)) \
 		$(WEB_LIBOQS_A) \
 		-sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 -fexceptions \
@@ -2369,7 +2381,7 @@ $(WEB_CANVAS_TARGET): | zi-check
 		-DHAS_LIBOQS=1 \
 		-DPLATFORM_WEB \
 		-o $(WEB_CANVAS_DIR)/index.js \
-		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) \
+		$(WEB_SRC) $(GENERATED_WEB_C) $(SQLITE_SRC) $(WEB_BUNDLE_RUNTIME) \
 		$(foreach library,$(WEB_HOST_JS),--js-library $(library)) \
 		$(WEB_LIBOQS_A) \
 		-sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576 -fexceptions \
@@ -2813,6 +2825,43 @@ android-release android-bundle android-copy-release-apks android-copy-bundle win
 
 # Actual artifacts are gated too, including direct and incremental builds.
 $(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
+
+BUNDLE_RUNTIME_INPUTS := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(ZIRAN_DIR)/Makefile scripts/build-bundle-runtime.py
+WEB_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/web/libziran.a)
+WINDOWS_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/windows/libziran.a)
+CLICK_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/click/libziran.a)
+$(WEB_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(WEB_CC)' --ar '$(WEB_AR)' --objcopy true --flags='-O2' --wasm
+$(WINDOWS_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(WIN64_CC)' --ar '$(WIN64_AR)' --objcopy x86_64-w64-mingw32-objcopy
+$(CLICK_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(AARCH64_CC)' --ar '$(AARCH64_AR)' --objcopy aarch64-linux-gnu-objcopy
+$(WIN64_TARGET): $(WINDOWS_BUNDLE_RUNTIME)
+$(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(WEB_BUNDLE_RUNTIME)
+$(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
+
+.PHONY: subapps-test
+subapps-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A)
+	sh tests/subapps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+.PHONY: subapps-navigation-test
+subapps-navigation-test: $(TARGET)
+	sh tests/subapps_navigation_test.sh $(abspath $(TARGET))
+
+.PHONY: subapps-artifact-test
+subapps-artifact-test: $(TARGET) $(SUBAPP_BUNDLES)
+	python3 tests/subapps_artifact_test.py $(abspath $(TARGET))
+
+.PHONY: subapps-onboarding-test
+subapps-onboarding-test: $(TARGET)
+	sh tests/subapps_onboarding_test.sh $(abspath $(TARGET))
+
+.PHONY: subapps-platform-test subapps-android-probe
+subapps-platform-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a
+	sh tests/subapps_platform_test.sh $(ZIRAN_BIN) native
+
+subapps-android-probe: subapps
+	sh tests/subapps_platform_test.sh $(ZIRAN_BIN) android
 
 .PHONY: sync-review-ui-test
 sync-review-ui-test: $(TARGET)

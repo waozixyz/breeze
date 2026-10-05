@@ -1,3 +1,6 @@
+#import, file "../subapps/module_host.zi";
+#import, file "../subapps/lists_types.zi";
+#import, file "../subapps/lists_visibility.zi";
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
@@ -126,60 +129,86 @@ elist_begin_input :: (app: *InnerBreeze, editing_item: s32,
     app.elist.editing_item = editing_item
 }
 
-elist_commit_input :: (app: *InnerBreeze) {
-    state: *EListState = *app.elist
-    saved: s32 = 0
-    created_id: [37]u8
-    title := AppTextFromCString(*state.input[0], ELIST_TITLE_SIZE)
-    if title.count == 0 {
-        return
+elist_message_for :: (state: *EListState, action: s32, index: s32) -> ListsMessage {
+    message: ListsMessage
+    message.action = action
+    message.index = index
+    message.selected_list = state.selected_list
+    message.list_count = state.list_count
+    message.item_count = state.item_count
+    message.editing_item = state.editing_item
+    message.show_completed = state.show_completed
+    message.input_error = state.input_error
+    message.completing_until = state.completing_until
+    message.completing_id = AppTextFromCString(*state.completing_item[0], 37)
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        list := *state.lists[state.selected_list]
+        message.selected_id = AppTextFromCString(*list.id[0], 37)
+        message.id = message.selected_id
+        message.sort_order = list.sort_order
     }
+    item_index := ifx action == LISTS_COMMIT then state.editing_item else index
+    if item_index >= 0 && item_index < state.item_count {
+        item := *state.items[item_index]
+        message.id = AppTextFromCString(*item.id[0], 37)
+        message.parent_id = AppTextFromCString(*item.list_id[0], 37)
+        message.title = AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE)
+        message.comment = AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE)
+        message.done = item.done
+        message.sort_order = item.sort_order
+    }
+    return message
+}
 
-    if state.editing_item == -2 {
-        saved = storage_elist_create_list(title, *created_id[0])
-    } else if state.editing_item == -3 &&
-    state.selected_list >= 0 && state.selected_list < state.list_count {
-        list: *EListList = *state.lists[state.selected_list]
-        saved = storage_elist_update_list(
-            AppTextFromCString(*list.id[0], 37), title, list.sort_order)
-    } else if state.editing_item >= 0 &&
-    state.editing_item < state.item_count {
-        item: *EListItem = *state.items[state.editing_item]
-        saved = storage_elist_update_item(
-            AppTextFromCString(*item.id[0], 37), title,
-            AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE),
-            item.done, item.sort_order)
-    } else if state.selected_list >= 0 &&
-    state.selected_list < state.list_count {
-        saved = storage_elist_create_item(
-            AppTextFromCString(*state.lists[state.selected_list].id[0], 37),
-            title, "", null)
-    }
-    if saved == 0 {
+elist_accept_message :: (app: *InnerBreeze, message: ListsMessage) {
+    state := *app.elist
+    if !message.succeeded {
         state.input_error = 1
         return
     }
-
-    state.input_error = 0
-    state.input[0] = cast(u8)0
-    state.input_cursor = 0
-    state.input_anchor = 0
-    state.input_scroll_x = 0
-    state.input_focused = 0
-    state.input_committed = 0
-    state.editing_item = -1
-    elist_reload(app)
-    if created_id[0] != cast(u8)0 {
+    state.input_error = message.input_error
+    if message.changed {
+        state.visibility_valid = false
+    }
+    state.selected_list = message.selected_list
+    state.editing_item = message.editing_item
+    state.show_completed = message.show_completed
+    state.completing_until = message.completing_until
+    AppCopyText(message.completing_id, state.completing_item[:])
+    if message.reset_scroll {
+        state.scroll = 0
+    }
+    if message.reset_input {
+        state.input[0] = cast(u8)0
+        state.input_cursor = 0
+        state.input_anchor = 0
+        state.input_scroll_x = 0
+        state.input_focused = 0
+        state.input_error = 0
+        state.input_committed = 0
+    }
+    if message.reload {
+        elist_reload(app)
+    }
+    if message.action == LISTS_COMMIT && message.selected_id.count > 0 {
         index: s32 = 0
         while index < state.list_count {
-            if elist_ids_equal(*state.lists[index].id[0], *created_id[0]) {
+            if AppTextFromCString(*state.lists[index].id[0], 37) == message.selected_id {
                 state.selected_list = index
                 break
             }
             index += 1
         }
     }
-    app_auto_sync(app)
+    if message.sync {
+        app_auto_sync(app)
+    }
+}
+
+elist_commit_input :: (app: *InnerBreeze) {
+    message := elist_message_for(*app.elist, LISTS_COMMIT, -1)
+    message.title = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE)
+    elist_accept_message(app, ListsRun(message))
 }
 
 elist_content_bounds :: (app: *InnerBreeze) -> Rectangle {
@@ -192,67 +221,18 @@ elist_content_bounds :: (app: *InnerBreeze) -> Rectangle {
 }
 
 elist_select_list :: (app: *InnerBreeze, index: s32) {
-    state: *EListState = *app.elist
-    if index < 0 || index >= state.list_count || index == state.selected_list {
-        return
-    }
-    state.selected_list = index
-    state.scroll = 0
-    state.show_completed = 0
-    state.completing_item[0] = cast(u8)0
-    state.completing_until = 0.0
-    state.editing_item = -1
-    state.input[0] = cast(u8)0
-    state.input_cursor = 0
-    state.input_anchor = 0
-    state.input_scroll_x = 0
-    state.input_focused = 0
-    state.input_error = 0
-    state.input_committed = 0
-}
-
-elist_item_visible :: (state: *EListState, index: s32, now: float64) -> bool {
-    if index < 0 || index >= state.item_count ||
-    state.selected_list < 0 || state.selected_list >= state.list_count {
-        return false
-    }
-    item: *EListItem = *state.items[index]
-    if !elist_ids_equal(*item.list_id[0],
-        *state.lists[state.selected_list].id[0]) {
-        return false
-    }
-    return item.done == 0 || state.show_completed != 0 ||
-    (now < state.completing_until &&
-        elist_ids_equal(*item.id[0], *state.completing_item[0]))
+    message := elist_message_for(*app.elist, LISTS_SELECT, index)
+    elist_accept_message(app, ListsRun(message))
 }
 
 elist_set_done :: (app: *InnerBreeze, index: s32,
     done: s32, now: float64) -> bool {
-    if index < 0 || index >= app.elist.item_count {
-        return false
-    }
-    item: *EListItem = *app.elist.items[index]
-    if storage_elist_update_item(
-        AppTextFromCString(*item.id[0], 37),
-        AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE),
-        AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE),
-        done, item.sort_order) == 0 {
-        app.elist.input_error = 1
-        return false
-    }
-    app.elist.input_error = 0
-    item.done = done
-    if done != 0 {
-        AppCopyText(AppTextFromCString(*item.id[0], 37),
-            app.elist.completing_item[:])
-        app.elist.completing_until = now + 0.45
-    } else if elist_ids_equal(*item.id[0],
-        *app.elist.completing_item[0]) {
-        app.elist.completing_item[0] = cast(u8)0
-    }
-    elist_reload(app)
-    app_auto_sync(app)
-    return true
+    message := elist_message_for(*app.elist, LISTS_SET_DONE, index)
+    message.done = done
+    message.now = now
+    message = ListsRun(message)
+    elist_accept_message(app, message)
+    return message.succeeded
 }
 
 elist_draw_empty :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
@@ -367,11 +347,8 @@ draw_elist_screen :: (app: *InnerBreeze) {
                 .icon_type = cast(s32)IconTrash, .icon_only = true,
                 .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
             }) != 0 {
-            storage_elist_delete_list(AppTextFromCString(
-                *state.lists[state.selected_list].id[0], 37))
-            state.selected_list = 0
-            elist_reload(app)
-            app_auto_sync(app)
+            message := elist_message_for(state, LISTS_DELETE_LIST, -1)
+            elist_accept_message(app, ListsRun(message))
             return
         }
     }
@@ -458,16 +435,9 @@ draw_elist_screen :: (app: *InnerBreeze) {
         state.show_completed = ifx (state.show_completed == 0) then (1) else (0)
         state.scroll = 0
     }
-    visible_count: s32 = 0
-    {
-        i: s32 = 0
-        while i < state.item_count {
-            if elist_item_visible(state, i, now) {
-                visible_count += 1
-            }
-            i += 1
-        }
-
+    if !ListsRefreshVisibility(state, now) {
+        app.request_quit = 1
+        return
     }
     scroll_key: u64 = cast(u64)6600
     scroll_bounds := Rectangle.{
@@ -478,7 +448,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
     scroll := Scroll(app.ui.session, ScrollProps.{
             .key = scroll_key,
             .bounds = scroll_bounds,
-            .content_height = visible_count * (row_h + AppScale(8)),
+            .content_height = state.visibility_count * (row_h + AppScale(8)),
             .scroll_offset = state.scroll
         })
     state.scroll = scroll.scroll_offset
@@ -487,7 +457,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
         changed: bool = false
         index: s32 = 0
         while index < state.item_count {
-            if !elist_item_visible(state, index, now) {
+            if !state.item_visibility[index] {
                 index += 1
                 continue
             }
@@ -587,10 +557,8 @@ draw_elist_screen :: (app: *InnerBreeze) {
                     .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
                     .circle = true
                 }) != 0 {
-                storage_elist_delete_item(
-                    AppTextFromCString(*item.id[0], 37))
-                elist_reload(app)
-                app_auto_sync(app)
+                message := elist_message_for(state, LISTS_DELETE_ITEM, index)
+                elist_accept_message(app, ListsRun(message))
                 changed = true
                 break
             }

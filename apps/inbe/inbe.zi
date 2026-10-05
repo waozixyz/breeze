@@ -1,0 +1,98 @@
+// The portable root owns app selection and unified navigation policy.
+// Its assets contain the three separately compiled feature applications.
+#import, file "../../src/subapps/inbe_types.zi";
+#import, file "../../src/subapps/module_types.zi";
+#import, file "../../src/core/types.zi";
+host_api :: #system_library "host_api";
+ReadInbeHost :: () -> InbeMessage #foreign host_api;
+WriteInbeHost :: (message: InbeMessage) #foreign host_api;
+RouteFeatureHost :: (app: s32, screen: s32) -> bool #foreign host_api;
+
+InbeAppForScreen :: (screen: s32) -> s32 {
+    if screen == ScreenEList {
+        return APP_LISTS
+    }
+    if screen == ScreenHabits || screen == ScreenHabitEdit ||
+    screen == ScreenHabitSessionEdit {
+        return APP_HABITS
+    }
+    if screen == ScreenStart || screen == ScreenSession ||
+    screen == ScreenMeditation || screen == ScreenSunSalutation ||
+    screen == ScreenPatterns || screen == ScreenResults ||
+    screen == ScreenPracticeConfig || screen == ScreenManual {
+        return APP_PRACTICE
+    }
+    return 0
+}
+
+InbeHome :: (apps: s32) -> s32 {
+    if (apps & APP_PRACTICE) != 0 {
+        return ScreenStart
+    }
+    if (apps & APP_HABITS) != 0 {
+        return ScreenHabits
+    }
+    if (apps & APP_LISTS) != 0 {
+        return ScreenEList
+    }
+    return ScreenSettings
+}
+
+InbeApply :: (message: InbeMessage) -> InbeMessage {
+    message.enabled_apps &= APP_ALL
+    message.succeeded = true
+    if message.action == INBE_MINI_CONFIGURE {
+        // An explicit mini launch is a temporary practice session. It does
+        // not replace the profile's saved selection for the full app.
+        message.enabled_apps = APP_PRACTICE
+        message.screen = ScreenStart
+    }
+    if message.action == INBE_TOGGLE_APP {
+        if message.app != APP_LISTS && message.app != APP_HABITS &&
+        message.app != APP_PRACTICE {
+            message.succeeded = false
+            return message
+        }
+        if message.checked {
+            message.enabled_apps |= message.app
+        } else {
+            message.enabled_apps &= ~message.app
+        }
+    }
+    if message.action == INBE_CONFIGURE || message.action == INBE_TOGGLE_APP ||
+    message.action == INBE_MINI_CONFIGURE {
+        message.screen = InbeHome(message.enabled_apps)
+    } else if message.action == INBE_INITIAL_SCREEN {
+        if !message.language_selected {
+            message.screen = ScreenLanguage
+        } else if !message.apps_selected {
+            message.screen = ScreenAppSelection
+        } else {
+            app := InbeAppForScreen(message.screen)
+            if app != 0 && (message.enabled_apps & app) == 0 {
+                message.screen = InbeHome(message.enabled_apps)
+            }
+        }
+    } else if message.action != INBE_ROUTE {
+        message.succeeded = false
+    }
+    app := InbeAppForScreen(message.screen)
+    message.allowed = app == 0 || (message.enabled_apps & app) != 0
+    if message.action == INBE_ROUTE && message.allowed && app != 0 {
+        message.succeeded = RouteFeatureHost(app, message.screen)
+    }
+    return message
+}
+
+#program_export "InnerBreezeMain"
+Main :: () -> s32 {
+    message := ReadInbeHost()
+    if message.abi != MODULE_ABI {
+        return -1
+    }
+    if message.action == MODULE_IDENTIFY {
+        return MODULE_INBE
+    }
+    WriteInbeHost(InbeApply(message))
+    return 0
+}

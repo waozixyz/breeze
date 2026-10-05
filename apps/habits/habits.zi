@@ -1,0 +1,128 @@
+// Habits owns page transitions, linked-day actions and form validation.
+#import, file "../../src/subapps/habits_types.zi";
+#import, file "../../src/habits/habit_types.zi";
+#import, file "../../src/core/types.zi";
+#import, file "../../src/subapps/module_types.zi";
+host_api :: #system_library "host_api";
+ReadHabitsHost :: () -> HabitsMessage #foreign host_api;
+WriteHabitsHost :: (message: HabitsMessage) #foreign host_api;
+HabitNameExistsHost :: (name: string, excluding: s32) -> bool #foreign host_api;
+SaveHabitHost :: (message: HabitsMessage) -> bool #foreign host_api;
+
+HabitTrimName :: (name: string) -> string {
+    start: s64 = 0
+    end := name.count
+    while start < end && (name[start] == cast(u8)32 || name[start] == cast(u8)9) {
+        start += 1
+    }
+    while end > start && (name[end - 1] == cast(u8)32 || name[end - 1] == cast(u8)9) {
+        end -= 1
+    }
+    return name[start:end]
+}
+
+using HabitSyncMode;
+
+HabitsApply :: (message: HabitsMessage) -> HabitsMessage {
+    message.succeeded = true
+    if message.action == HABITS_ROUTE {
+        message.succeeded = message.screen == ScreenHabits ||
+        message.screen == ScreenHabitEdit || message.screen == ScreenHabitSessionEdit
+        return message
+    }
+    if message.action == HABITS_DAY_ACTION {
+        if message.modal_active || message.index < 0 || message.index >= message.count ||
+        (!message.scheduled && !message.completed) {
+            return message
+        }
+        if message.counter_enabled != 0 {
+            message.day_action = ifx message.decrement then HABITS_DAY_DECREMENT else HABITS_DAY_COUNT
+        } else if message.linked_count > 0 {
+            message.day_action = HABITS_DAY_LINKED
+        } else {
+            message.day_action = HABITS_DAY_TOGGLE
+        }
+        message.block_click = true
+        return message
+    }
+    if message.action == HABITS_COMMIT {
+        if !message.active {
+            return message
+        }
+        if !message.is_new && (message.index < 0 || message.index >= message.count) {
+            message.cancel_edit = true
+            return message
+        }
+        message.name_error = 0
+        message.name = HabitTrimName(message.name)
+        if message.name.count == 0 {
+            message.name_error = 1
+        } else if HabitNameExistsHost(message.name,
+            ifx message.is_new then -1 else message.index) {
+            message.name_error = 2
+        }
+        if message.name_error != 0 {
+            message.reset_scroll = true
+            return message
+        }
+        message.sync_mode = ifx message.sync_activity != 0 then HABIT_SYNC_ACTIVITIES else HABIT_SYNC_NONE
+        message.weekdays = message.weekdays & 0xff
+        message.color.a = 255
+        message.succeeded = SaveHabitHost(message)
+        if !message.succeeded {
+            return message
+        }
+        message.cancel_edit = true
+        message.action = HABITS_OVERVIEW
+    }
+    if message.action == HABITS_EXPAND {
+        if message.index < 0 || message.index >= message.count {
+            return message
+        }
+        message.selected = message.index
+        message.screen_mode = HABITS_SCREEN_OVERVIEW
+        message.tab = HABIT_TAB_WEEKLY
+        message.view_mode = HABIT_VIEW_WEEKLY
+    } else if message.action == HABITS_HISTORY || message.action == HABITS_STATISTICS {
+        if message.selected < 0 || message.selected >= message.count {
+            return message
+        }
+        message.reset_scroll = true
+        if message.action == HABITS_HISTORY {
+            message.screen_mode = HABITS_SCREEN_HISTORY
+            message.view_mode = HABIT_VIEW_CALENDAR
+            message.tab = HABIT_TAB_MONTHLY
+        } else {
+            message.screen_mode = HABITS_SCREEN_STATISTICS
+            message.tab = HABIT_TAB_STATISTICS
+        }
+    } else if message.action == HABITS_FOCUS {
+        message.screen_mode = HABITS_SCREEN_OVERVIEW
+        message.tab = HABIT_TAB_WEEKLY
+        message.reset_scroll = true
+    } else if message.action == HABITS_OVERVIEW {
+        message.selected = -1
+        message.screen_mode = HABITS_SCREEN_OVERVIEW
+        message.tab = HABIT_TAB_WEEKLY
+        message.view_mode = HABIT_VIEW_WEEKLY
+        message.reset_scroll = true
+    } else if message.action == HABITS_COLLAPSE {
+        message.selected = -1
+    } else {
+        message.succeeded = false
+    }
+    return message
+}
+
+#program_export "HabitsMain"
+Main :: () -> s32 {
+    message := ReadHabitsHost()
+    if message.abi != MODULE_ABI {
+        return -1
+    }
+    if message.action == MODULE_IDENTIFY {
+        return MODULE_HABITS
+    }
+    WriteHabitsHost(HabitsApply(message))
+    return 0
+}

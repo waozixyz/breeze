@@ -1,3 +1,6 @@
+#import, file "../subapps/shared_state.zi";
+#import, file "../subapps/habits_types.zi";
+#import, file "../subapps/module_host.zi";
 // Habit navigation and presentation. Habit persistence and counting rules live
 // in the habit modules; this screen composes them with Kryon's current widgets.
 raylib_input :: #system_library "raylib";
@@ -120,9 +123,9 @@ HabitScreenDate :: (app: *InnerBreeze, day_index: s32) -> string {
 }
 
 HabitScreenMonthKeys: [12]string = .["habit_month_1", "habit_month_2",
-    "habit_month_3", "habit_month_4", "habit_month_5", "habit_month_6",
-    "habit_month_7", "habit_month_8", "habit_month_9", "habit_month_10",
-    "habit_month_11", "habit_month_12"];
+"habit_month_3", "habit_month_4", "habit_month_5", "habit_month_6",
+"habit_month_7", "habit_month_8", "habit_month_9", "habit_month_10",
+"habit_month_11", "habit_month_12"];
 
 // The month and year in the language's own order, such as "September 2026"
 // or "2026年9月".
@@ -170,57 +173,76 @@ HabitScreenSave :: (app: *InnerBreeze) {
 }
 
 habits_expand_card :: (app: *InnerBreeze, index: s32) {
-    if app == null || index < 0 || index >= app.habits.count { return }
-    app.habits.selected = index
-    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
-    app.habits.tab = HABIT_TAB_WEEKLY
-    app.habits.view_mode = HABIT_VIEW_WEEKLY
-    HabitScreenSave(app)
+    if app == null {
+        return
+    }
+    message := HabitsMessageFor(app, HABITS_EXPAND)
+    message.index = index
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_return_to_focus :: (app: *InnerBreeze) {
-    if app == null { return }
-    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
-    app.habits.tab = HABIT_TAB_WEEKLY
-    app.habits.scroll = 0
-    HabitScreenSave(app)
+    if app == null {
+        return
+    }
+    message := HabitsMessageFor(app, HABITS_FOCUS)
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_open_history :: (app: *InnerBreeze) {
-    if app == null || app.habits.selected < 0 ||
-    app.habits.selected >= app.habits.count { return }
-    app.habits.screen_mode = HABITS_SCREEN_HISTORY
-    app.habits.view_mode = HABIT_VIEW_CALENDAR
-    app.habits.tab = HABIT_TAB_MONTHLY
-    app.habits.scroll = 0
-    HabitScreenSave(app)
+    if app == null {
+        return
+    }
+    message := HabitsMessageFor(app, HABITS_HISTORY)
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_open_statistics :: (app: *InnerBreeze) {
-    if app == null || app.habits.selected < 0 ||
-    app.habits.selected >= app.habits.count { return }
-    app.habits.screen_mode = HABITS_SCREEN_STATISTICS
-    app.habits.tab = HABIT_TAB_STATISTICS
-    app.habits.scroll = 0
-    HabitScreenSave(app)
+    if app == null {
+        return
+    }
+    message := HabitsMessageFor(app, HABITS_STATISTICS)
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_return_to_overview :: (app: *InnerBreeze) {
-    if app == null { return }
-    app.habits.selected = -1
-    app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
-    app.habits.tab = HABIT_TAB_WEEKLY
-    app.habits.view_mode = HABIT_VIEW_WEEKLY
-    app.habits.scroll = 0
-    HabitScreenSave(app)
+    if app == null {
+        return
+    }
+    message := HabitsMessageFor(app, HABITS_OVERVIEW)
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_collapse_card :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    app.habits.selected = -1
-    HabitScreenSave(app)
+    message := HabitsMessageFor(app, HABITS_COLLAPSE)
+    message = HabitsRun(message)
+    HabitsAcceptView(app, message)
+    if message.succeeded {
+        HabitScreenSave(app)
+    }
 }
 
 habits_day_index :: (days_ago: s32) -> s32 {
@@ -369,12 +391,12 @@ HabitScreenStepButton :: (app: *InnerBreeze, id: s32, bounds: Rectangle,
     color := StyleTokenColor("text")
     if disabled { color = Fade(color, 0.35) }
     PaintRoundedFill(app.ui.session, -1, Rectangle.{
-        center_x - length * 0.5, center_y - thickness * 0.5,
-        length, thickness}, thickness * 0.5, 6, color)
+            center_x - length * 0.5, center_y - thickness * 0.5,
+            length, thickness}, thickness * 0.5, 6, color)
     if plus {
         PaintRoundedFill(app.ui.session, -1, Rectangle.{
-            center_x - thickness * 0.5, center_y - length * 0.5,
-            thickness, length}, thickness * 0.5, 6, color)
+                center_x - thickness * 0.5, center_y - length * 0.5,
+                thickness, length}, thickness * 0.5, 6, color)
     }
     return clicked
 }
@@ -395,29 +417,35 @@ HabitScreenOpenCount :: (app: *InnerBreeze, index: s32, day_index: s32) {
 
 HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     day_index: s32, decrement: bool) {
-    if app.modal.active != 0 || index < 0 || index >= app.habits.count {
+    if app == null || index < 0 || index >= app.habits.count {
         return
     }
     habit := *app.habits.items[index]
-    if habit_scheduled_day(habit, day_index) == 0 &&
-    !HabitScreenCompletion(app, index, day_index) { return }
-    if habit_counting_enabled(habit) != 0 {
-        if decrement {
-            HabitScreenAdjustCount(app, index, day_index, -1)
-        } else {
-            HabitScreenOpenCount(app, index, day_index)
-        }
-        app_block_current_click(app)
+    message := HabitsMessageFor(app, HABITS_DAY_ACTION)
+    message.index = index
+    message.modal_active = app.modal.active != 0
+    message.scheduled = habit_scheduled_day(habit, day_index) != 0
+    message.completed = HabitScreenCompletion(app, index, day_index)
+    message.counter_enabled = habit_counting_enabled(habit)
+    message.linked_count = HabitScreenLinkedCount(app, index, day_index)
+    message.decrement = decrement
+    message = HabitsRun(message)
+    if !message.succeeded {
         return
     }
-    linked_count := HabitScreenLinkedCount(app, index, day_index)
-    if linked_count > 0 {
+    if message.day_action == HABITS_DAY_DECREMENT {
+        HabitScreenAdjustCount(app, index, day_index, -1)
+    } else if message.day_action == HABITS_DAY_COUNT {
+        HabitScreenOpenCount(app, index, day_index)
+    } else if message.day_action == HABITS_DAY_LINKED {
         habit_open_linked_edit_page(app, index, day_index)
-    } else {
+    } else if message.day_action == HABITS_DAY_TOGGLE {
         habit_toggle_day(*app.habits, index, day_index)
         unused app_auto_sync(app)
     }
-    app_block_current_click(app)
+    if message.block_click {
+        app_block_current_click(app)
+    }
 }
 
 // A day button. With a dot, as for a counting habit's calendar day, the
@@ -1125,8 +1153,8 @@ HabitScreenPageHeader :: (app: *InnerBreeze,
 HabitScreenViewSwitch :: (app: *InnerBreeze,
     geometry: HabitScreenGeometry, top: s32) -> s32 {
     options: [2]SegmentOption = .[
-        SegmentOption.{.label = LocaleText("habit_focus_week")},
-        SegmentOption.{.label = LocaleText("habit_focus_calendar")}
+    SegmentOption.{.label = LocaleText("habit_focus_week")},
+    SegmentOption.{.label = LocaleText("habit_focus_calendar")}
     ]
     props: SegmentedControlProps
     props.id = 4301
@@ -1297,7 +1325,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     step_h := AppScale(56)
     button_h := AppScale(44)
     content_h := AppScale(24) + AppScale(64) + AppScale(24) + gap +
-        step_h + gap + button_h
+    step_h + gap + button_h
     if linked_count > 0 { content_h += button_h + gap }
     frame := ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash("habits/count-dialog"),
@@ -1336,7 +1364,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     unused FormatTemplate("%s  %d", target_args[:], target_text[:])
     HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
         FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*target_text[0], cast(s32)target_text.count)),
+        AppTextFromCString(*target_text[0], cast(s32)target_text.count)),
         AppSmallFontSize())
     y += AppScale(24) + gap
 

@@ -1,0 +1,91 @@
+#import, file "patterns_types.zi";
+#import, file "patterns_rules.zi";
+PatternsStep :: struct {
+    state: Patterns
+    cue: s32
+    completed: bool
+}
+
+#program_export
+patterns_ratio_part :: (state: Patterns, part: s32) -> s32 {
+    if part < 0 || part >= 4 {
+        return 0
+    }
+    preset: s32 = state.preset
+    if preset < 0 || preset >= PATTERNS_PRESET_COUNT {
+        preset = PATTERNS_PRESET_BOX
+    }
+    value: s32 = patterns_preset_ratio(preset, part)
+    if preset == PATTERNS_PRESET_CUSTOM {
+        value = state.custom[part]
+    }
+    if value < 0 {
+        return 0
+    }
+    if value > PATTERNS_MAX_SECONDS {
+        return PATTERNS_MAX_SECONDS
+    }
+    return value
+}
+
+#program_export
+patterns_phase_remaining :: (state: Patterns) -> s32 {
+    phase: s32 = state.phase
+    if phase < PATTERNS_PHASE_INHALE || phase > PATTERNS_PHASE_HOLD_OUT {
+        phase = PATTERNS_PHASE_INHALE
+    }
+    left: s32 = patterns_ratio_part(state, phase) - state.phase_second
+    if left < 1 {
+        return 1
+    }
+    return left
+}
+
+#program_export
+PatternsAdvance :: (state: Patterns) -> PatternsStep {
+    result: PatternsStep
+    result.state = state
+    if state.active == 0 {
+        return result
+    }
+    total: s32 = 0
+    index: s32 = 0
+    while index < 4 {
+        total += patterns_ratio_part(state, index)
+        index += 1
+    }
+    if total <= 0 {
+        return result
+    }
+
+    if state.phase < PATTERNS_PHASE_INHALE  || state.phase > PATTERNS_PHASE_HOLD_OUT {
+        state.phase = PATTERNS_PHASE_INHALE
+        state.phase_second = 0
+    }
+    state.elapsed_seconds += 1
+    state.phase_second += 1
+    if state.phase_second >= patterns_ratio_part(state, state.phase) {
+        state.phase_second = 0
+        state.phase = (state.phase + 1) % 4
+        if state.phase == PATTERNS_PHASE_INHALE {
+            state.cycle += 1
+        }
+        if patterns_ratio_part(state, state.phase) == 0 {
+            // Preserve the existing one-phase skip per elapsed second.
+            state.phase = (state.phase + 1) % 4
+            if state.phase == PATTERNS_PHASE_INHALE {
+                state.cycle += 1
+            }
+        }
+        if state.phase == PATTERNS_PHASE_EXHALE {
+            result.cue = 2
+        } else if state.phase == PATTERNS_PHASE_INHALE {
+            result.cue = 1
+        }
+    }
+    if state.duration_minutes > 0  && state.elapsed_seconds >= state.duration_minutes * 60 {
+        result.completed = true
+    }
+    result.state = state
+    return result
+}

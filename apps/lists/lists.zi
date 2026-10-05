@@ -1,0 +1,133 @@
+// Lists owns edit decisions and list/item mutations. Storage capabilities use
+// the unified host's open database and identity.
+#import, file "../../src/subapps/lists_types.zi";
+#import, file "../../src/core/types.zi";
+#import, file "../../src/subapps/module_types.zi";
+host_api :: #system_library "host_api";
+ReadListsHost :: () -> ListsMessage #foreign host_api;
+WriteListsHost :: (message: ListsMessage) #foreign host_api;
+PersistListsHost :: (mutation: ListsMutation) -> ListsMutationResult #foreign host_api;
+
+ListsApply :: (message: ListsMessage) -> ListsMessage {
+    message.succeeded = true
+    if message.action == LISTS_ROUTE {
+        message.visible = message.screen == ScreenEList
+        return message
+    }
+    if message.action == LISTS_SELECT {
+        if message.index < 0 || message.index >= message.list_count ||
+        message.index == message.selected_list {
+            return message
+        }
+        message.selected_list = message.index
+        message.show_completed = 0
+        message.completing_id = ""
+        message.completing_until = 0.0
+        message.editing_item = -1
+        message.reset_input = true
+        message.reset_scroll = true
+        message.changed = true
+        return message
+    }
+    if message.action == LISTS_VISIBLE {
+        message.visibility_deadline = 0.0
+        message.visible = message.index >= 0 && message.index < message.item_count &&
+        message.selected_list >= 0 && message.selected_list < message.list_count &&
+        message.parent_id == message.selected_id &&
+        (message.done == 0 || message.show_completed != 0 ||
+            (message.now < message.completing_until &&
+            message.id == message.completing_id))
+        if message.visible && message.done != 0 && message.show_completed == 0 {
+            message.visibility_deadline = message.completing_until
+        }
+        return message
+    }
+    mutation: ListsMutation
+    mutation.id = message.id
+    mutation.parent_id = message.parent_id
+    mutation.title = message.title
+    mutation.comment = message.comment
+    mutation.done = message.done
+    mutation.sort_order = message.sort_order
+    if message.action == LISTS_COMMIT {
+        if message.title.count == 0 {
+            return message
+        }
+        if message.editing_item == -2 {
+            mutation.kind = LISTS_CREATE_LIST
+        } else if message.editing_item == -3 && message.selected_list >= 0 &&
+        message.selected_list < message.list_count {
+            mutation.kind = LISTS_UPDATE_LIST
+        } else if message.editing_item >= 0 &&
+        message.editing_item < message.item_count {
+            mutation.kind = LISTS_UPDATE_ITEM
+        } else if message.selected_list >= 0 && message.selected_list < message.list_count {
+            mutation.kind = LISTS_CREATE_ITEM
+            mutation.parent_id = message.selected_id
+            mutation.comment = ""
+        } else {
+            message.input_error = 1
+            message.succeeded = false
+            return message
+        }
+    } else if message.action == LISTS_SET_DONE {
+        if message.index < 0 || message.index >= message.item_count {
+            message.succeeded = false
+            return message
+        }
+        mutation.kind = LISTS_UPDATE_ITEM
+    } else if message.action == LISTS_DELETE_LIST {
+        if message.selected_list < 0 || message.selected_list >= message.list_count {
+            message.succeeded = false
+            return message
+        }
+        mutation.kind = LISTS_REMOVE_LIST
+    } else if message.action == LISTS_DELETE_ITEM {
+        if message.index < 0 || message.index >= message.item_count {
+            message.succeeded = false
+            return message
+        }
+        mutation.kind = LISTS_REMOVE_ITEM
+    } else {
+        message.succeeded = false
+        return message
+    }
+    result := PersistListsHost(mutation)
+    message.succeeded = result.saved
+    if !result.saved {
+        message.input_error = 1
+        return message
+    }
+    message.input_error = 0
+    message.changed = true
+    message.reload = true
+    message.sync = true
+    if message.action == LISTS_COMMIT {
+        message.reset_input = true
+        message.editing_item = -1
+        message.selected_id = result.created_id
+    } else if message.action == LISTS_SET_DONE {
+        if message.done != 0 {
+            message.completing_id = message.id
+            message.completing_until = message.now + 0.45
+        } else if message.id == message.completing_id {
+            message.completing_id = ""
+        }
+    } else if message.action == LISTS_DELETE_LIST {
+        message.selected_list = 0
+    }
+    return message
+}
+
+#program_export "ListsMain"
+Main :: () -> s32 {
+    message := ReadListsHost()
+    if message.abi != MODULE_ABI {
+        return -1
+    }
+    if message.action == MODULE_IDENTIFY {
+        return MODULE_LISTS
+    }
+    WriteListsHost(ListsApply(message))
+    return 0
+}
