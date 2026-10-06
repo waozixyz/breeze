@@ -128,4 +128,41 @@ for choice, width, height in [('merge', 900, 720), ('replace', 411, 813), ('keep
                 app.kill()
                 app.wait(timeout=5)
     assert 'APP: frame rejected with status' not in logfile.read_text()
-print('PASS: desktop merge/keep, narrow replacement, modal scrolling, encrypted data outcomes, pending-upload preservation')
+# A persisted review whose merge has no visible changes must resolve before
+# rendering a dialog, including when screenshot setup explicitly opened one.
+env = os.environ.copy()
+env.update(APP_SHOT_WINDOW='1', APP_NO_TRAY='1', SDL_VIDEODRIVER='x11',
+           YUE_DESKTOP_RECOVERY='0', LIBGL_ALWAYS_SOFTWARE='1')
+with (output / 'no-changes.log').open('w') as log:
+    app = subprocess.Popen([str(binary), '--screenshot', str(output / 'no-changes-initial.png'),
+        '--screenshot-scene', 'sync_review_no_changes', '--screenshot-width', '900',
+        '--screenshot-height', '720', '--screenshot-dark', '0'],
+        cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        db = Path('/tmp') / ('inbe-screenshot-' + str(app.pid)) / 'inbe.db'
+        deadline = time.monotonic() + 30
+        resolved = False
+        while time.monotonic() < deadline:
+            assert app.poll() is None, 'no-changes fixture exited'
+            if db.is_file():
+                try:
+                    resolved = count(db, "SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='sync_last_server_version'),0)") == 24
+                except sqlite3.Error:
+                    pass
+            if resolved:
+                break
+            time.sleep(0.1)
+        assert resolved, 'no-changes review did not resolve automatically'
+        assert count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'") != '1'
+        assert count(db, 'SELECT COUNT(*) FROM sync_outbox') > 0
+        assert count(db, 'SELECT COUNT(*) FROM habits') > 0
+        window = command('xdotool', 'search', '--onlyvisible', '--pid', str(app.pid)).splitlines()[0]
+        command('import', '-window', window, str(output / 'no-changes.png'))
+    finally:
+        app.terminate()
+        try:
+            app.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            app.kill()
+            app.wait(timeout=5)
+print('PASS: desktop merge/keep, narrow replacement, modal scrolling, encrypted data outcomes, pending-upload preservation, no-changes review automatically resolved')

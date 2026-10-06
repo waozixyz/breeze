@@ -19,6 +19,7 @@
 c :: #system_library "c";
 sqlite_free :: (memory: *void) #foreign c "free";
 ReviewFieldFailure :: (enabled: s32) #foreign c;
+TestAllocate :: (size: usize) -> *void #foreign c "malloc";
 
 habits_a: Habits;
 habits_b: Habits;
@@ -763,7 +764,7 @@ test_local_habit_without_activity_does_not_force_review :: () {
 test_review_ignores_deleted_remote_rows :: () {
     root := make_root("review-deleted")
     check_true("init db", storage_init(root) != 0)
-    deleted: string = "{\"server_version\":13,\"server_state_hash\":\"remote-hash-deleted\",\"full_snapshot_required\":true,\"changes_complete\":false,\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[{\"id\":\"deleted-session\",\"started_at\":\"2026-06-24T10:00:00Z\",\"local_date\":20260624,\"topic\":2,\"activity\":3,\"source\":\"sync-test\",\"rounds_hash\":202,\"deleted_at\":1782300000,\"updated_at\":\"2026-06-24T10:00:00Z\",\"rounds\":[{\"round_index\":0,\"hold_seconds\":55}]}],\"meditation_logs\":[]}}"
+    deleted: string = "{\"protocol_version\":6,\"server_version\":13,\"server_state_hash\":\"remote-hash-deleted\",\"full_snapshot_required\":true,\"changes_complete\":false,\"changes\":{\"habits\":[],\"habit_days\":[],\"sessions\":[{\"id\":\"deleted-session\",\"started_at\":\"2026-06-24T10:00:00Z\",\"local_date\":20260624,\"topic\":2,\"activity\":3,\"source\":\"sync-test\",\"rounds_hash\":202,\"deleted_at\":1782300000,\"updated_at\":\"2026-06-24T10:00:00Z\",\"rounds\":[{\"round_index\":0,\"hold_seconds\":55}]}],\"meditation_logs\":[]}}"
     check_true("no visible diff", storage_sync_review_json_has_visible_diff(deleted) == 0)
     check_true("review not pending", storage_sync_review_pending() == 0)
     storage_close()
@@ -968,10 +969,12 @@ test_review_social_differences :: () {
     check_true("equivalent social preview", storage_sync_review_plan_for_json(equivalent, 2, *plan) != 0)
     check_true("formatting, ordering and cache metadata are not changes",
         TextFromCString(plan) == LocaleText("review_unchanged"))
+    check_true("equivalent social data does not trigger review", storage_sync_review_json_has_visible_diff(equivalent) == 0)
     sqlite_free(cast(*void)plan)
     plan = null
     changed := "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[],\"social_cache\":[{\"kind\":\"friends.list\",\"json\":{\"friends\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"Alicia\"},{\"user_id_hash\":\"friend-c\",\"alias\":\"Cara\"}]}},{\"kind\":\"friends.requests\",\"json\":{\"incoming\":[{\"id\":\"request-d\",\"requester_user_id_hash\":\"friend-d\",\"requester_alias\":\"Dani\"}],\"outgoing\":[{\"id\":\"request-e\",\"target_user_id_hash\":\"friend-e\",\"target_alias\":\"Eli\"}]}}]}}"
     check_true("changed social preview", storage_sync_review_plan_for_json(changed, 2, *plan) != 0)
+    check_true("real social changes remain reviewable", storage_sync_review_json_has_visible_diff(changed) != 0)
     text := TextFromCString(plan)
     check_true("friend name change shows the exact values", contains(text, "Alice → Alicia"))
     check_true("friend additions and removals name the person", contains(text, "Cara") && contains(text, "Bob"))
@@ -983,6 +986,67 @@ test_review_social_differences :: () {
     cached: [512]u8
     check_true("preview leaves friend data intact", storage_get_social_cache_json("friends.list", *cached[0], 512) != 0 &&
         contains(TextFromCString(*cached[0]), "Alice") && !contains(TextFromCString(*cached[0]), "Cara"))
+    storage_close()
+}
+
+test_review_no_changes_resolves_automatically :: () {
+    remote_seed: TextBuffer
+    append(*remote_seed, LOCAL_SQL)
+    append(*remote_seed, "UPDATE sessions SET activity=3;INSERT INTO habit_days VALUES('local-habit',20260905,0,0,0,1782290000);")
+    remote_records("review-no-changes-source", TextFromCString(*remote_seed.bytes[0]))
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, "UPDATE sessions SET activity=3;INSERT INTO elist_lists VALUES('local-only-list',(SELECT id FROM users LIMIT 1),'Keep this list',0,0,1782300000);")
+    unused local_device("review-no-changes-local", TextFromCString(*seed.bytes[0]), "DELETE FROM sync_outbox;")
+    snapshot := snapshot_response(55, "no-changes-receipt")
+    plan: *u8 = null
+    check_true("no-op preview succeeds", storage_sync_review_plan_for_json(snapshot, 2, *plan) != 0)
+    check_true("no-op preview and trigger agree", TextFromCString(plan) == LocaleText("review_unchanged") &&
+        storage_sync_review_json_has_visible_diff(snapshot) == 0)
+    sqlite_free(cast(*void)plan)
+    check_true("incoming no-op snapshot applies", storage_apply_sync_response_json(snapshot) != 0)
+    check_true("incoming no-op snapshot needs no review", storage_sync_review_pending() == 0)
+    check_int("no-op merge keeps local-only records", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='local-only-list'"), 1)
+    check_int("no-op sync records its receipt", cast(s32)storage_meta_int64("sync_last_server_version", 0), 55)
+    check_true("no-op sync records its hash", storage_meta_text("sync_last_server_state_hash") == "no-changes-receipt")
+    storage_enqueue_all_sync_state()
+    mark_pending_payload_in_flight()
+    queued := read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    check_true("fixture has pending local uploads", queued > 0)
+    pending_snapshot := snapshot_response(56, "resolved-no-changes-receipt")
+    padding: s64 = 70000
+    large := cast(*u8)TestAllocate(cast(usize)(padding + pending_snapshot.count + 1))
+    check_true("allocate a large review snapshot", large != null)
+    if large == null {
+        storage_close()
+        return
+    }
+    index: s64 = 0
+    while index < padding {
+        large[index] = cast(u8)32
+        index += 1
+    }
+    index = 0
+    while index < pending_snapshot.count {
+        large[padding + index] = pending_snapshot[index]
+        index += 1
+    }
+    large[padding + pending_snapshot.count] = cast(u8)0
+    check_true("save an older pending review larger than 64 KiB", storage_sync_review_write_json(TextFromCString(large)) != 0)
+    sqlite_free(cast(*void)large)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    check_true("large review is compared in full", storage_sync_review_has_visible_diff() == 0)
+    check_true("pending no-op review resolves", storage_sync_review_clear_if_no_visible_diff() != 0)
+    check_true("pending no-op review is cleared", storage_sync_review_pending() == 0)
+    check_int("pending no-op review preserves uploads", read_db_count("SELECT COUNT(*) FROM sync_outbox"), queued)
+    check_int("pending no-op review advances receipt", cast(s32)storage_meta_int64("sync_last_server_version", 0), 56)
+    check_int("pending no-op review keeps local-only data", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='local-only-list'"), 1)
+    invalid := "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[{\"collection\":\"private.inbe.v1.sessions\",\"id\":\"bad\",\"key_id\":\"bad\",\"nonce\":\"bad\",\"ciphertext\":\"bad\"}]}}"
+    check_true("unverified data is not treated as a no-op", storage_sync_review_json_has_visible_diff(invalid) != 0)
+    check_true("save unverified review", storage_sync_review_write_json(invalid) != 0)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    check_true("unverified review is not silently cleared", storage_sync_review_clear_if_no_visible_diff() == 0 &&
+        storage_sync_review_pending() != 0)
     storage_close()
 }
 
@@ -1047,5 +1111,6 @@ Check :: () -> s32 {
     test_review_preview_and_choices()
     test_review_social_differences()
     test_review_completion_changes()
+    test_review_no_changes_resolves_automatically()
     return failures
 }

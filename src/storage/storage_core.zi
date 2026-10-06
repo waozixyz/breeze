@@ -127,12 +127,12 @@ storage_compare_text :: (left: string, right: string) -> s32 {
 storage_parse_setting_int :: (text: string) -> s32 {
     index: s32 = 0
     while index < cast(s32)text.count &&
-        (text[index] == cast(u8)32 || text[index] == cast(u8)9) {
+    (text[index] == cast(u8)32 || text[index] == cast(u8)9) {
         index += 1
     }
     negative := false
     if index < cast(s32)text.count &&
-        (text[index] == cast(u8)45 || text[index] == cast(u8)43) {
+    (text[index] == cast(u8)45 || text[index] == cast(u8)43) {
         negative = text[index] == cast(u8)45
         index += 1
     }
@@ -2032,10 +2032,13 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
         }
         if storage_has_pending_sync_outbox() != 0 {
             LogStorage(LOG_INFO, "SYNC: merging full snapshot with pending local edits")
+        } else if storage_sync_review_json_should_auto_apply_remote(response_json) != 0 {
+            return storage_apply_remote_full_snapshot(response_json)
+        } else if storage_sync_review_json_has_visible_diff(response_json) == 0 {
+            // The same merge preview shown to the user has no changes. Apply
+            // its bookkeeping without replacing or removing local records.
+            LogStorage(LOG_INFO, "SYNC: full snapshot has no visible merge changes")
         } else {
-            if storage_sync_review_json_should_auto_apply_remote(response_json) != 0 {
-                return storage_apply_remote_full_snapshot(response_json)
-            }
             if storage_sync_review_write_json(response_json) == 0 {
                 LogStorage(LOG_WARNING, "SYNC: response review save failed")
                 return 0
@@ -2497,18 +2500,18 @@ storage_export_sessions_csv :: (path: string) -> s32 {
         }
         ok = storage_csv_write(file, *offset,
             ifx (date != null) then (AppTextFromCString(date, 32)) else ("")) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write(file, *offset, topic_name) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write(file, *offset,
-                ifx (source != null) then (AppTextFromCString(source, 64)) else ("")) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 4)) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 3)) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 5)) &&
-            storage_csv_write(file, *offset, "\n")
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write(file, *offset, topic_name) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write(file, *offset,
+            ifx (source != null) then (AppTextFromCString(source, 64)) else ("")) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 4)) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 3)) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 5)) &&
+        storage_csv_write(file, *offset, "\n")
         if ok { rc = SqliteStep(stmt) }
     }
     closed := CloseFile(file)
@@ -2519,7 +2522,7 @@ storage_export_sessions_csv :: (path: string) -> s32 {
 // Minimal session list for Health Connect: epoch start/end plus the
 // activity id. Duration prefers meditation_logs (activity 1) and falls
 // back to the sum of session_rounds (breathwork, sun salutation,
-    // patterns).
+// patterns).
 
 #program_export
 storage_export_health_connect_csv :: (path: string) -> s32 {
@@ -2548,11 +2551,11 @@ storage_export_health_connect_csv :: (path: string) -> s32 {
             continue
         }
         ok = storage_csv_write_s64(file, *offset, start) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write_s64(file, *offset, start + duration) &&
-            storage_csv_write(file, *offset, ",") &&
-            storage_csv_write_s32(file, *offset, activity) &&
-            storage_csv_write(file, *offset, "\n")
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s64(file, *offset, start + duration) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, activity) &&
+        storage_csv_write(file, *offset, "\n")
         if !ok { break }
         rows += 1
         rc = SqliteStep(stmt)

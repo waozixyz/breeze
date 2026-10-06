@@ -610,13 +610,11 @@ storage_sync_review_diff :: (diff_out: **u8) -> s32 {
 
 storage_sync_review_has_visible_diff :: () -> s32 {
     json: *u8 = storage_sync_review_read_json()
-    result: s32 = storage_sync_review_json_has_visible_diff(AppTextFromCString(json, 65536))
+    result: s32 = storage_sync_review_json_has_visible_diff(AppTextFromCString(json, 2147483647))
 
     free(cast(*void)json)
     return result
 }
-
-empty_meta: [2] u8 = .[0, 0];
 
 #program_export
 storage_sync_review_clear_if_no_visible_diff :: () -> s32 {
@@ -626,14 +624,9 @@ storage_sync_review_clear_if_no_visible_diff :: () -> s32 {
     if storage_sync_review_has_visible_diff() != 0 {
         return 0
     }
-    key_buffer: [64] u8
-    AppCopyText(storage_sync_pending_review_key, key_buffer[:])
-    set_meta(*key_buffer[0], *empty_meta[0])
-    storage_sync_review_delete_json()
-    AppCopyText(storage_sync_apply_review_key, key_buffer[:])
-    set_meta_int64(*key_buffer[0], 0)
-    storage_schedule_persist()
-    return 1
+    // Complete the harmless merge so its server receipt advances too. Merely
+    // discarding the snapshot would make the same review return on next sync.
+    return storage_apply_pending_sync_review(2)
 }
 
 storage_sync_review_apply_remote_if_local_empty :: () -> s32 {
@@ -647,16 +640,11 @@ storage_sync_review_apply_remote_if_local_empty :: () -> s32 {
 }
 
 storage_sync_review_json_has_visible_diff :: (json: string) -> s32 {
-    diff: *u8 = null
-    has_diff: s32
-
-    if storage_sync_review_diff_for_json(json, 0, *diff) == 0 {
-        free(cast(*void)diff)
+    changes: s32 = -1
+    if review_plan_for_json(json, 2, null, *changes) == 0 {
         return 1
     }
-    has_diff = ifx (diff != null && diff[0] != #char "\0"  && (review_has_pending_outbox() != 0 || review_has_unknown_activity(json) != 0)) then (1) else (0)
-    free(cast(*void)diff)
-    return has_diff
+    return ifx changes > 0 then 1 else 0
 }
 
 storage_sync_review_json_should_auto_apply_remote :: (json: string) -> s32 {
@@ -1042,9 +1030,16 @@ review_append_fields :: (out: *ReviewText, before: string, after: string) {
     SqliteFinalize(statement)
 }
 
-#program_export
-storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s32 {
-    out.* = null
+// Both the review trigger and its text use these exact rehearsed changes.
+// A count-only caller verifies the snapshot without allocating display text.
+review_plan_for_json :: (json: string, choice: s32, out: **u8,
+    changes: *s32) -> s32 {
+    if out != null {
+        out.* = null
+    }
+    if changes != null {
+        changes.* = -1
+    }
     if storage_db_handle() == null || storage_json_valid(json) == 0 ||
     storage_json_extract_int64(json, "$.protocol_version", 0) != SYNC_PROTOCOL_VERSION {
         return 0
@@ -1052,8 +1047,13 @@ storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s
     text: ReviewText
     text.ok = 1
     if choice == 0 {
-        review_append(*text, LocaleText("review_unchanged"))
-        out.* = text.data
+        if out != null {
+            review_append(*text, LocaleText("review_unchanged"))
+            out.* = text.data
+        }
+        if changes != null {
+            changes.* = 0
+        }
         return text.ok
     }
     if choice != 1 && choice != 2 {
@@ -1074,13 +1074,13 @@ storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s
         ok = review_create_rows("CREATE TEMP TABLE review_after AS ")
     }
     statement: *void = null
+    rows: s32 = 0
     if ok != 0 && SqlitePrepareText(storage_db_handle(), ReviewChangesSQL,
         -1, *statement, null) == SQLITE_OK {
         category: string = ""
         parent: string = ""
         category_copy: *u8 = null
         parent_copy: *u8 = null
-        rows: s32 = 0
         removed: s32 = 0
         changed: s32 = 0
         added: s32 = 0
@@ -1091,6 +1091,10 @@ storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s
             if status != SQLITE_ROW {
                 ok = 0
                 break
+            }
+            rows += 1
+            if out == null {
+                continue
             }
             next_action := sqlite3_column_int(statement, 6)
             if next_action == 0 { removed += 1 }
@@ -1136,12 +1140,13 @@ storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s
             review_append_fields(*text,
                 AppTextFromCString(SqliteColumnText(statement, 4), 2147483647),
                 AppTextFromCString(SqliteColumnText(statement, 5), 2147483647))
-            rows += 1
         }
         free(cast(*void)category_copy)
         free(cast(*void)parent_copy)
         SqliteFinalize(statement)
-        if rows == 0 {
+        if out == null {
+            // Counts are returned only after the savepoint rolls back.
+        } else if rows == 0 {
             review_append(*text, LocaleText("review_unchanged"))
         } else {
             summary: ReviewText
@@ -1176,8 +1181,21 @@ storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s
         free(cast(*void)text.data)
         return 0
     }
-    out.* = text.data
+    if changes != null {
+        changes.* = rows
+    }
+    if out != null {
+        out.* = text.data
+    }
     return 1
+}
+
+#program_export
+storage_sync_review_plan_for_json :: (json: string, choice: s32, out: **u8) -> s32 {
+    if out == null {
+        return 0
+    }
+    return review_plan_for_json(json, choice, out, null)
 }
 
 #program_export
