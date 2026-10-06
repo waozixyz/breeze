@@ -231,13 +231,13 @@ storage_sync_review_pending :: () -> s32 {
 review_activity_name :: (activity: s32) -> string {
     if activity == {
         case 0;
-            return LocaleText("exercise_wim_hof")
+        return LocaleText("exercise_wim_hof")
         case 1;
-            return LocaleText("exercise_meditation")
+        return LocaleText("exercise_meditation")
         case 2;
-            return LocaleText("exercise_sun_salutation")
+        return LocaleText("exercise_sun_salutation")
         case 3;
-            return LocaleText("exercise_patterns")
+        return LocaleText("exercise_patterns")
     }
     return LocaleText("exercise_wim_hof")
 }
@@ -836,6 +836,27 @@ storage_apply_pending_sync_review :: (use_remote: s32) -> s32 {
 // Read-only rehearsal: the same record application runs inside a savepoint.
 // Every database write and storage-state change is rolled back before return.
 ReviewRowsSQL :: #string SQL
+WITH social_people AS (
+ SELECT s.user_id,'profile_friends_title' category,
+ COALESCE(NULLIF(json_extract(p.value,'$.user_id_hash'),''),json_extract(p.value,'$.id')) identity,
+ COALESCE(json_extract(p.value,'$.alias'),'') alias
+ FROM social_snapshots s,json_each(s.json,'$.friends') p
+ WHERE s.kind='friends.list' AND p.type='object'
+ UNION ALL
+ SELECT s.user_id,'profile_incoming_title',
+ COALESCE(NULLIF(json_extract(p.value,'$.id'),''),
+ NULLIF(json_extract(p.value,'$.requester_user_id_hash'),''),json_extract(p.value,'$.user_id_hash')),
+ COALESCE(NULLIF(json_extract(p.value,'$.requester_alias'),''),json_extract(p.value,'$.alias'),'')
+ FROM social_snapshots s,json_each(s.json,'$.incoming') p
+ WHERE s.kind='friends.requests' AND p.type='object'
+ UNION ALL
+ SELECT s.user_id,'profile_outgoing_title',
+ COALESCE(NULLIF(json_extract(p.value,'$.id'),''),
+ NULLIF(json_extract(p.value,'$.target_user_id_hash'),''),json_extract(p.value,'$.user_id_hash')),
+ COALESCE(NULLIF(json_extract(p.value,'$.target_alias'),''),json_extract(p.value,'$.alias'),'')
+ FROM social_snapshots s,json_each(s.json,'$.outgoing') p
+ WHERE s.kind='friends.requests' AND p.type='object'
+)
 SELECT 'profile_sessions_label' category, id identity,
  CAST(activity AS TEXT) parent, strftime('%Y-%m-%d %H:%M:%S',started_at,'unixepoch','localtime') name,
  json_object('review_date',local_date,'review_activity',activity,'review_topic',topic,
@@ -859,7 +880,8 @@ SELECT 'tab_habits',id,name,name,
  'review_order',sort_order,'review_weekdays',weekdays,'habit_reminder_label',reminder_hour)
 FROM habits WHERE deleted_at=0
 UNION ALL
-SELECT 'review_habit_days',d.habit_id||'/'||d.local_date,h.name,CAST(d.local_date AS TEXT),
+SELECT 'review_habit_days',d.habit_id||'/'||d.local_date,h.name,
+ printf('%04d-%02d-%02d',d.local_date/10000,(d.local_date/100)%100,d.local_date%100),
  json_object('review_completed',completed,'review_count',count,'profile_sessions_label',session_count)
 FROM habit_days d JOIN habits h ON h.id=d.habit_id WHERE h.deleted_at=0
 UNION ALL
@@ -871,18 +893,27 @@ SELECT 'sync_list_items_label',i.id,COALESCE(l.title,''),i.title,
  json_object('sync_lists_label',COALESCE(l.title,''),'habit_name_label',i.title,'review_note',i.comment,'review_completed',i.done,'review_order',i.sort_order)
 FROM elist_items i LEFT JOIN elist_lists l ON l.id=i.list_id WHERE i.deleted_at=0
 UNION ALL
-SELECT 'profile_friends_title',user_id||'/'||kind,kind,kind,json_object('review_data',json)
-FROM social_snapshots
+SELECT category,user_id||'/'||identity,'',
+ COALESCE(NULLIF(alias,''),substr(identity,1,12)||'…'),json_object('habit_name_label',alias)
+FROM social_people WHERE COALESCE(identity,'')<>''
 SQL
 
 ReviewChangesSQL :: #string SQL
 SELECT a.category,a.parent,a.name,'review_added',NULL,a.details,2 priority
 FROM review_after a LEFT JOIN review_before b USING(category,identity)
 WHERE b.identity IS NULL
+AND (a.category<>'review_habit_days' OR
+ json_extract(a.details,'$.review_completed')<>0 OR
+ json_extract(a.details,'$.review_count')>0 OR
+ json_extract(a.details,'$.profile_sessions_label')>0)
 UNION ALL
 SELECT b.category,b.parent,b.name,'review_removed',b.details,NULL,0
 FROM review_before b LEFT JOIN review_after a USING(category,identity)
 WHERE a.identity IS NULL
+AND (b.category<>'review_habit_days' OR
+ json_extract(b.details,'$.review_completed')<>0 OR
+ json_extract(b.details,'$.review_count')>0 OR
+ json_extract(b.details,'$.profile_sessions_label')>0)
 UNION ALL
 SELECT a.category,a.parent,a.name,'review_changed',b.details,a.details,1
 FROM review_after a JOIN review_before b USING(category,identity)
@@ -911,7 +942,13 @@ review_append_field_value :: (out: *ReviewText, field: string,
         review_append(out, review_activity_name(number))
     } else if field == "review_date" {
         review_append_date(out, number)
-    } else if field == "review_completed" || field == "review_tracking" || field == "habit_counter_mode" {
+    } else if field == "review_completed" {
+        key := "review_incomplete"
+        if number != 0 {
+            key = "review_complete"
+        }
+        review_append(out, LocaleText(key))
+    } else if field == "review_tracking" || field == "habit_counter_mode" {
         key := "toggle_off"
         if number != 0 {
             key = "toggle_on"
@@ -978,6 +1015,15 @@ review_append_fields :: (out: *ReviewText, before: string, after: string) {
         new_value := AppTextFromCString(SqliteColumnText(statement, 2), 2147483647)
         if before != "" && after != "" && old_value == new_value {
             continue
+        }
+        if before == "" || after == "" {
+            value := ifx after != "" then new_value else old_value
+            if (field == "review_count" || field == "profile_sessions_label") && value == "0" {
+                continue
+            }
+            if field == "habit_name_label" && value == "" {
+                continue
+            }
         }
         review_append(out, "      ")
         review_append(out, LocaleText(field))

@@ -3,6 +3,7 @@
 #import "drawing_props"
 #import, file "storage_test_support.zi";
 #import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/locale.zi";
 #import, file "../src/storage/data.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/db.zi";
@@ -877,6 +878,7 @@ test_social_cache_is_server_authored :: () {
 test_review_preview_and_choices :: () {
     remote_seed: TextBuffer
     append(*remote_seed, REMOTE_SQL)
+    append(*remote_seed, "INSERT INTO habit_days VALUES('remote-habit',20260905,0,0,0,1782290000);INSERT INTO habit_days VALUES('remote-habit',20260906,0,3,0,1782290000);")
     append(*remote_seed, "INSERT INTO elist_lists VALUES('remote-review-list',(SELECT id FROM users LIMIT 1),'Remote list',0,0,1782290000);INSERT INTO elist_items VALUES('remote-review-item',(SELECT id FROM users LIMIT 1),'remote-review-list','Remote item','',0,0,0,1782290000);")
     remote_records("review-preview-source", TextFromCString(*remote_seed.bytes[0]))
     seed: TextBuffer
@@ -897,6 +899,9 @@ test_review_preview_and_choices :: () {
     check_true("changed session shows before and after", contains(text, "25 → 55"))
     check_true("encrypted list and item appear in grouped preview", contains(text, "Remote list") && contains(text, "Remote item"))
     check_true("merge leaves local-only habit out of changes", !contains(text, "Local Breath"))
+    check_true("empty incomplete days are not additions", !contains(text, "2026-09-05"))
+    check_true("incomplete days with real progress remain visible", contains(text, "2026-09-06"))
+    check_true("habit dates are readable", !contains(text, "20260624"))
     sqlite_free(cast(*void)plan)
     plan = null
     check_true("replace preview", storage_sync_review_plan_for_json(snapshot, 1, *plan) != 0)
@@ -950,6 +955,59 @@ test_review_preview_and_choices :: () {
     storage_close()
 }
 
+test_review_social_differences :: () {
+    root := make_root("review-social-differences")
+    check_true("init social review db", storage_init(root) != 0)
+    set_account()
+    check_true("seed friend list", storage_set_social_cache_json("friends.list",
+        "{\"friends\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"Alice\",\"updated_at\":1},{\"user_id_hash\":\"friend-b\",\"alias\":\"Bob\"}]}") != 0)
+    check_true("seed empty requests", storage_set_social_cache_json("friends.requests",
+        "{ \"outgoing\": [], \"incoming\": [] }") != 0)
+    equivalent := "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[],\"social_cache\":[{\"kind\":\"friends.list\",\"json\":{\"friends\":[{\"alias\":\"Bob\",\"user_id_hash\":\"friend-b\"},{\"updated_at\":2,\"alias\":\"Alice\",\"user_id_hash\":\"friend-a\"}]}},{\"kind\":\"friends.requests\",\"json\":{\"incoming\":[],\"outgoing\":[]}}]}}"
+    plan: *u8 = null
+    check_true("equivalent social preview", storage_sync_review_plan_for_json(equivalent, 2, *plan) != 0)
+    check_true("formatting, ordering and cache metadata are not changes",
+        TextFromCString(plan) == LocaleText("review_unchanged"))
+    sqlite_free(cast(*void)plan)
+    plan = null
+    changed := "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[],\"social_cache\":[{\"kind\":\"friends.list\",\"json\":{\"friends\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"Alicia\"},{\"user_id_hash\":\"friend-c\",\"alias\":\"Cara\"}]}},{\"kind\":\"friends.requests\",\"json\":{\"incoming\":[{\"id\":\"request-d\",\"requester_user_id_hash\":\"friend-d\",\"requester_alias\":\"Dani\"}],\"outgoing\":[{\"id\":\"request-e\",\"target_user_id_hash\":\"friend-e\",\"target_alias\":\"Eli\"}]}}]}}"
+    check_true("changed social preview", storage_sync_review_plan_for_json(changed, 2, *plan) != 0)
+    text := TextFromCString(plan)
+    check_true("friend name change shows the exact values", contains(text, "Alice → Alicia"))
+    check_true("friend additions and removals name the person", contains(text, "Cara") && contains(text, "Bob"))
+    check_true("requests name their sender or recipient", contains(text, "Dani") && contains(text, "Eli"))
+    check_true("social review has no raw JSON or internal cache names",
+        !contains(text, "user_id_hash") && !contains(text, "friends.list") &&
+        !contains(text, "friends.requests") && !contains(text, "{\""))
+    sqlite_free(cast(*void)plan)
+    cached: [512]u8
+    check_true("preview leaves friend data intact", storage_get_social_cache_json("friends.list", *cached[0], 512) != 0 &&
+        contains(TextFromCString(*cached[0]), "Alice") && !contains(TextFromCString(*cached[0]), "Cara"))
+    storage_close()
+}
+
+test_review_completion_changes :: () {
+    remote_seed: TextBuffer
+    append(*remote_seed, REMOTE_SQL)
+    append(*remote_seed, "DELETE FROM sessions;UPDATE habit_days SET completed=0,count=0,session_count=0;INSERT INTO habit_days VALUES('remote-habit',20260905,0,0,0,1782290000);")
+    remote_records("review-completion-source", TextFromCString(*remote_seed.bytes[0]))
+    seed: TextBuffer
+    append(*seed, REMOTE_SQL)
+    append(*seed, "DELETE FROM sessions;INSERT INTO habit_days VALUES('remote-habit',20260904,0,0,0,1782290000);")
+    unused local_device("review-completion-local", TextFromCString(*seed.bytes[0]), "")
+    snapshot := snapshot_response(24, "review-completion-hash")
+    plan: *u8 = null
+    check_true("completion replacement preview", storage_sync_review_plan_for_json(snapshot, 1, *plan) != 0)
+    text := TextFromCString(plan)
+    check_true("completion change is explicit", contains(text, "Completed → Not completed"))
+    check_true("new empty days are not additions", !contains(text, "2026-09-05"))
+    check_true("missing empty days are not removals", !contains(text, "2026-09-04"))
+    check_true("completion is not displayed as a toggle", !contains(text, "OFF") && !contains(text, "ON"))
+    sqlite_free(cast(*void)plan)
+    check_int("preview preserved completed day", read_db_count("SELECT completed FROM habit_days WHERE habit_id='remote-habit' AND local_date=20260624"), 1)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -987,5 +1045,7 @@ Check :: () -> s32 {
     test_normal_response_records_server_hash()
     test_social_cache_is_server_authored()
     test_review_preview_and_choices()
+    test_review_social_differences()
+    test_review_completion_changes()
     return failures
 }

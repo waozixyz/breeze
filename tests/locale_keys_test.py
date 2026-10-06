@@ -94,8 +94,9 @@ for source in sources:
         for match in call.finditer(line):
             if match.group(1) not in english_set:
                 failures.append(f"{source.relative_to(root)}:{number} locale call missing English key [{match.group(1)}]")
-    # Key literals also appear in data tables, not only in direct calls.
-    for literal in re.findall(r'"([^"\n]{1,127})"', text):
+    # Key literals also appear in data tables and SQL projections. SQL uses
+    # single quotes for the field labels resolved by LocaleText at runtime.
+    for literal in re.findall(r'''["']([^"'\n]{1,127})["']''', text):
         if literal in english_set:
             used.add(literal)
 

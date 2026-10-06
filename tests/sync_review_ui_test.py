@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the review choices using isolated encrypted screenshot fixtures."""
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -56,12 +57,42 @@ for choice, width, height in [('merge', 900, 720), ('replace', 411, 813), ('keep
             assert window, 'fixture did not become ready'
             command('xdotool', 'windowfocus', '--sync', window)
             time.sleep(0.5)
-            command('import', '-window', window, str(initial))
+            # Reproduce readable person-level changes in this child's store.
+            # The real account, pending snapshot and desktop are untouched.
+            snapshot_path = db.parent / 'sync-review.json'
+            snapshot = json.loads(snapshot_path.read_text())
+            snapshot['changes']['social_cache'] = [
+                {'kind': 'friends.list', 'json': {'friends': [
+                    {'user_id_hash': 'fixture-a', 'alias': 'Alicia'},
+                    {'user_id_hash': 'fixture-c', 'alias': 'Cara'},
+                ]}},
+                {'kind': 'friends.requests', 'json': {
+                    'incoming': [{'id': 'fixture-request-d',
+                                  'requester_user_id_hash': 'fixture-d',
+                                  'requester_alias': 'Dani'}],
+                    'outgoing': [],
+                }},
+            ]
+            snapshot_path.write_text(json.dumps(snapshot))
+            with sqlite3.connect(db, timeout=3) as connection:
+                user = connection.execute('SELECT id FROM users LIMIT 1').fetchone()[0]
+                connection.executemany(
+                    'INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,0)', [
+                        (user, 'friends.list', json.dumps({'friends': [
+                            {'user_id_hash': 'fixture-a', 'alias': 'Alice'},
+                            {'user_id_hash': 'fixture-b', 'alias': 'Bob'},
+                        ]})),
+                        (user, 'friends.requests', '{ "outgoing": [], "incoming": [] }'),
+                    ])
             assert count(db, "SELECT COUNT(*) FROM habits WHERE id='local-review-walk'") == 1
             assert count(db, "SELECT COUNT(*) FROM habits WHERE id<>'local-review-walk'") == 0
             # The frame uses a 32-unit viewport margin and a 720-unit max height.
             panel_top = (height - min(height - 32, 720)) // 2
             content_top = panel_top + 56
+            # Switching choices refreshes the cached plan after fixture edits.
+            click(window, width // 2, content_top + 44 + 19)
+            click(window, width // 2, content_top + 19)
+            command('import', '-window', window, str(initial))
             if choice == 'keep':
                 click(window, width // 2, content_top + 44 + 19)
             elif choice == 'replace':
@@ -86,6 +117,8 @@ for choice, width, height in [('merge', 900, 720), ('replace', 411, 813), ('keep
             assert (remote > 0) == (choice != 'keep'), (choice, 'remote', remote)
             if choice == 'keep':
                 assert count(db, 'SELECT COUNT(*) FROM sync_outbox') == pending_before
+            assert count(db, "SELECT json_extract(json,'$.friends[0].alias') FROM social_snapshots WHERE kind='friends.list'") == (
+                'Alice' if choice == 'keep' else 'Alicia')
             assert count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'") != '1'
         finally:
             app.terminate()
