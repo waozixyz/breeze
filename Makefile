@@ -2877,3 +2877,12 @@ subapps-android-probe: subapps
 .PHONY: sync-review-ui-test
 sync-review-ui-test: $(TARGET)
 	@sh tests/sync_review_ui_test.sh $(TARGET)
+
+.PHONY: app-click-block-zi-test data-back-ui-test
+app-click-block-zi-test: $(ZI2C_BIN)
+	@sh tests/app_click_block_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+data-back-ui-test: $(TARGET)
+	@sh tests/data_back_ui_test.sh $(abspath $(TARGET))
+
+test: app-click-block-zi-test
