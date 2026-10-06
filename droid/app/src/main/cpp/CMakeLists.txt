@@ -193,6 +193,7 @@ add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi
 file(GLOB APP_LOCALE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/locales/*.txt")
 file(GLOB APP_SOUND_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/sounds/*.ogg")
 file(GLOB APP_SOCIAL_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/social/*.png")
+file(GLOB APP_PROFILE_PICTURE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/profile-pictures/*.png")
 # banner.png is the web/store copy of banner-light.png; the app loads only
 # the themed pair.
 file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
@@ -246,6 +247,7 @@ set(APP_EMBEDDED_INPUTS
     build/packages/kryon/icons/pfp.png
     ${APP_PRACTICE_BANNER_ASSETS}
     ${APP_SOCIAL_ASSETS}
+    ${APP_PROFILE_PICTURE_ASSETS}
     ${APP_SUN_SALUTATION_FRAMES}
     assets/fonts/subset/NotoSans-App-Regular.ttf
     assets/fonts/subset/NotoSansSC-App-Regular.otf

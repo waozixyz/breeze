@@ -18,6 +18,7 @@ for name in ("WAYLAND_DISPLAY", "GDK_DISPLAY"):
     env.pop(name, None)
 env["APP_NO_TRAY"] = "1"
 env["APP_SHOT_WINDOW"] = "1"
+env["INBE_DEBUG_ROUTE"] = "1"
 
 
 def command(*args):
@@ -63,6 +64,15 @@ with log_path.open("w") as log:
         time.sleep(0.5)
         before = capture(window, "home")
         assert before.size == (900, 720), before.size
+        # The name side of the profile card is part of the click target.
+        # icon_only would silently shrink this wide card to a square.
+        command("xdotool", "mousemove", "--window", window, "160", "60")
+        command("xdotool", "mousedown", "1")
+        time.sleep(0.1)
+        command("xdotool", "mouseup", "1")
+        time.sleep(0.5)
+        assert "screen=0->10" in log_path.read_text(), "profile name did not open Profile"
+        before = capture(window, "profile")
         for name, y in (("lists", 145), ("habits", 210),
                         ("practice", 275), ("settings", 670)):
             prior = before.getpixel((20, y))
@@ -94,4 +104,4 @@ with log_path.open("w") as log:
                 app.kill()
                 app.wait(timeout=2)
 
-print("Native navigation: lists, habits, practice and settings clicks passed")
+print("Native navigation: profile name, lists, habits, practice and settings clicks passed")
