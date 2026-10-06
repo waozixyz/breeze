@@ -19,5 +19,5 @@ python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/assets_link_test.c" \
     "$work/assets.c" "$work/c"/*.c -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/assets/styles/inbe.kss"
 echo "Inbe embedded asset Ziran/native link test passed"
