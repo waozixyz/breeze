@@ -11,6 +11,7 @@
 #import "scroll_props"
 #import "scroll_widget"
 #import "tree"
+#import "tree_input"
 #import "modal_frame_widget"
 #import "modal_props"
 
@@ -200,7 +201,7 @@ settings_theme_draw :: (app: *InnerBreeze, x: s32, w: s32,
     layout := settings_section_begin(app, x, w, y,
         LocaleText("settings_section_layout"),
         settings_theme_layout_body(app, inner))
-    draw_scale_row(app, layout.inner_x, layout.inner_width, y)
+    draw_scale_row(app, layout.inner_x, layout.inner_width, y, state)
     settings_row_divider(app, layout, y.*)
 
     placements: [5]DropdownOption
@@ -432,11 +433,15 @@ draw_theme_settings :: (app: *InnerBreeze, section: SettingsSection,
     return changed
 }
 
-draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32,
+    state: *SettingsThemeState) {
+    if !state.scale_editing {
+        state.scale_preview = app.ui_scale_tenths
+    }
     label := LocaleText("appearance_scale_label")
     percentage: [24]u8
     percentage_args: [1]FormatArg = .[
-    FormatArg.{.number = app.ui_scale_tenths * 10}
+    FormatArg.{.number = state.scale_preview * 10}
     ]
     FormatTemplate("%d%%", percentage_args[:], percentage[:])
     value := FrameTextHold(*app.ui.frame_text,
@@ -462,13 +467,22 @@ draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
         cast(float32)(y.* + AppScale(38)), cast(float32)w,
         cast(float32)AppScale(36)}
     slider.semantic_label = label
-    slider.value = app.ui_scale_tenths
+    slider.value = state.scale_preview
     slider.min = 5
     slider.max = 25
     result := DiscreteSlider(app.ui.session, slider)
     if result.changed {
-        app.ui_scale_tenths = result.value
+        state.scale_preview = result.value
+        state.scale_editing = true
+    }
+    // Keep the slider, hit targets and responsive sidebars fixed while held.
+    // Apply the chosen zoom once the gesture ends, including focus loss.
+    pointer := PointerSample(app.ui.session)
+    if state.scale_editing && !pointer.down {
+        state.scale_editing = false
+        app.ui_scale_tenths = state.scale_preview
         app.settings_dirty = 1
+        app_block_current_click(app)
         save_settings(app)
     }
     y.* += settings_theme_scale_row_height()
