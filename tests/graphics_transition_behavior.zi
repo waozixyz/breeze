@@ -1,0 +1,50 @@
+#import, file "../src/app/app_frame_transition.zi";
+#import, file "../src/app/app_types.zi";
+#import "drawing_props"
+
+released: s32;
+wrong_texture: bool;
+
+#program_export
+DisposeFrameTexture :: (texture: Texture2D) {
+    released += 1
+    if texture.id != 42 {
+        wrong_texture = true
+    }
+}
+
+Prepared :: (app: *InnerBreeze, owned: bool) {
+    app.ui.route_transition_texture = Texture2D.{42, 20, 20, 1, 7}
+    app.ui.route_transition_texture_owned = owned
+    app.ui.route_transition_active = true
+    app.ui.route_transition_pending = true
+}
+
+Cleared :: (app: *InnerBreeze) -> bool {
+    return app.ui.route_transition_texture.id == 0 &&
+    !app.ui.route_transition_texture_owned &&
+    !app.ui.route_transition_active && !app.ui.route_transition_pending
+}
+
+#program_export
+main :: () -> s32 {
+    app: InnerBreeze
+    // The renderer owns borrowed retained frames. Never delete them twice.
+    Prepared(*app, false)
+    app_route_transition_cancel(*app)
+    if released != 0 || !Cleared(*app) { return 1 }
+
+    // An independently captured frame is released while its context is valid.
+    Prepared(*app, true)
+    app_route_transition_cancel(*app)
+    if released != 1 || wrong_texture || !Cleared(*app) { return 2 }
+
+    // Old context names may now identify unrelated textures. Discard only.
+    Prepared(*app, true)
+    app_route_transition_cancel(*app, true)
+    if released != 1 || !Cleared(*app) { return 3 }
+    app_route_transition_cancel(*app)
+    app_route_transition_cancel(null)
+    if released != 1 { return 4 }
+    return 0
+}

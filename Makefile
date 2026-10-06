@@ -1670,6 +1670,25 @@ android-lifecycle-zi-test: $(ZI2C_BIN)
 
 test: android-lifecycle-zi-test
 
+.PHONY: raylib-graphics-test android-graphics-device-test
+raylib-graphics-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		ZIRAN_ROOT="$(ZIRAN_DIR)" ZIRAN_BIN="$(ZIRAN_BUILD_DIR)/bin/ziran" \
+		sh "$(KRYON_DIR)/tests/ziran_raylib_graphics_test.sh"
+
+test: raylib-graphics-test
+
+.PHONY: graphics-transition-test
+graphics-transition-test: $(ZI2C_BIN)
+	@sh tests/graphics_transition_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: graphics-transition-test
+
+# Explicit device check; never part of the CI or ordinary test target.
+# Inbe's Device settings must allow System orientation for real rotation.
+android-graphics-device-test:
+	@python3 tests/android_graphics_recovery_device.py $(ANDROID_GRAPHICS_ARGS)
+
 .PHONY: language-selection-zi-test
 language-selection-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \

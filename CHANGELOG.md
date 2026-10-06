@@ -1,4 +1,9 @@
 # Changelog
+## [2.0.12] - 2026-10-06
+### Fixed
+- Restore banners and navigation icons when returning to the Android app or changing orientation.
+- Keep images from disappearing or showing font characters after graphics resources are recreated.
+
 ## [2.0.11] - 2026-10-04
 ### Changed
 - Lists, Habits, and Practice now load as separate modules inside Inner Breeze, with shared navigation, settings, and saved data.
