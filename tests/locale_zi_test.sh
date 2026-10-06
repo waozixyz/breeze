@@ -28,9 +28,7 @@ mkdir -p "$work/c" "$work/dropdown-c"
     -o "$work/c" "$root/tests/locale_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
-python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
-    "$root/locales/index.txt" "$root/locales/en.txt" \
-    "$root/locales/es.txt" "$root/locales/ru.txt" "$root/locales/ja.txt"
+python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" "$root"/locales/*.txt
 cat > "$work/c/main.c" <<'C'
 #include "locale_link_behavior.h"
 int main(void) { return Answer() == 42 ? 0 : 1; }

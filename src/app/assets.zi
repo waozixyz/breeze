@@ -72,7 +72,29 @@ AssetFind :: (path: string) -> *EmbeddedAssetEntry {
     return null
 }
 
+AssetProvider :: #type (path: string) -> AssetView;
+asset_provider: AssetProvider;
+asset_provider_enabled: bool;
+asset_generation: u64;
+
+AssetBindProvider :: (provider: AssetProvider) {
+    asset_provider = provider
+    asset_provider_enabled = true
+    asset_generation += 1
+}
+
+AssetUnbindProvider :: () {
+    asset_provider_enabled = false
+    asset_generation += 1
+}
+
+AssetGeneration :: () -> u64 { return asset_generation }
+
 AssetViewFor :: (path: string) -> AssetView {
+    if asset_provider_enabled {
+        supplied := asset_provider(path)
+        if supplied.found { return supplied }
+    }
     result: AssetView
     entry := AssetFind(path)
     if entry == null {
@@ -103,6 +125,18 @@ AssetReadBytes :: (path: []u8) -> AssetView {
 asset_lookup_bytes :: (path: *u8, length: usize) -> AssetBlobResult {
     result: AssetBlobResult
     if path == null || length == 0 || length > cast(usize)9223372036854775807 {
+        return result
+    }
+    view := AssetViewFor(TextFromBytes(BytesFromPointer(path, cast(u64)length)))
+    if view.found {
+        descriptor := cast(*TextDescriptor)(*view.data)
+        result.data = descriptor.data
+        result.size = cast(usize)view.data.count
+        // The file decoder determines the format from its bytes.
+        mime := view.mime
+        mime_descriptor := cast(*TextDescriptor)(*mime)
+        result.mime = mime_descriptor.data
+        result.found = true
         return result
     }
     entry := AssetFind(TextFromBytes(BytesFromPointer(path,

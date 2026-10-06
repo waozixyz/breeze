@@ -81,7 +81,22 @@ for cp in sorted(cjk_needed):
 print(f"CJK/picker: {len(cjk_needed)} required codepoints checked against "
       f"{len(opened)} fonts, {failures - before} missing")
 
+# A locale's selected face must cover its own text. Another bundled font
+# cannot hide a stale primary subset, especially on mobile hosts.
+for locale, face in (("ja", "jp"), ("ko", "kr"), ("zh", "sc")):
+    needed = codepoints(root / f"locales/{locale}.txt")
+    cmap = cmaps[face] or {}
+    before = failures
+    for cp in sorted(needed):
+        if cp not in cmap:
+            print(f"FAIL: {locale} U+{cp:04X} has no glyph in its selected font",
+                  file=sys.stderr)
+            failures += 1
+    print(f"{locale} selected font: {len(needed)} required codepoints, "
+          f"{failures - before} missing")
+
 if failures:
     print(f"font_glyph_coverage tests FAILED ({failures} missing glyphs)", file=sys.stderr)
+    print("Run make font-subsets after updating translations.", file=sys.stderr)
     sys.exit(1)
 print("font_glyph_coverage tests passed")
