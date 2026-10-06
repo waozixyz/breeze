@@ -3,12 +3,17 @@
 
 #include <assert.h>
 #include <pthread.h>
+#include <stdio.h>
 
 static void *
 startup(void *argument)
 {
     (void)argument;
-    assert(StartupStyleCheck() == 42);
+    int result = StartupStyleCheck();
+    if(result != 42) {
+        fprintf(stderr, "Style startup check failed: %d\n", result);
+    }
+    assert(result == 42);
     return NULL;
 }
 

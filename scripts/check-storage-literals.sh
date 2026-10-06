@@ -15,9 +15,10 @@ status=0
 check_pattern() {
     local pattern="$1"
     local message="$2"
+    local allowed="${3:-^$}"
     if rg -n "$pattern" src --glob '*.zi' --glob '*.c' --glob '*.h' \
         --glob '!layout.zi' --glob '!storage_layout.zi' \
-        --glob '!storage_layout_laws.zi'; then
+        --glob '!storage_layout_laws.zi' | rg -v "$allowed"; then
         echo "$message" >&2
         status=1
     fi
@@ -31,8 +32,11 @@ check_pattern '"(breathing|inbe)-data-sqlite"' \
     'The export metadata format comes from the storage layout.'
 check_pattern '"/home/(breathing|inbe)"' \
     'Web home paths come from the storage layout.'
+# The portable ABI record has the same name as the legacy directory. Only
+# its two type-name operations are allowed; paths in this file still fail.
 check_pattern '"BreathSession"' \
-    'Directory names come from the storage layout.'
+    'Directory names come from the storage layout.' \
+    '^src/subapps/value_codec\.zi:[0-9]+:    (value\.type_name = ModuleTextData\("BreathSession"\)|if value\.kind != cast\(s32\)HostRecord \|\| TextFromCString\(value\.type_name\) != "BreathSession" \|\|)$'
 check_pattern '"(breathing|inbe)-sessions\.csv"|"breathing-web-export' \
     'Export artifact names come from the storage layout.'
 check_pattern '\bjoin_path2\b' \

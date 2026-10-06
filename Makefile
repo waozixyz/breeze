@@ -1173,6 +1173,7 @@ lists-ui-test: $(TARGET)
 
 .PHONY: storage-literals-check
 storage-literals-check:
+	python3 tests/storage_literals_test.py
 	bash ./scripts/check-storage-literals.sh
 
 test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check
@@ -1241,7 +1242,7 @@ patterns-session-zi-test: $(ZI2C_BIN)
 test: patterns-session-zi-test
 
 .PHONY: session-results-zi-test
-session-results-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+session-results-zi-test: subapps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
@@ -1439,9 +1440,11 @@ storage-paths-zi-test: $(ZI2C_BIN)
 test: storage-paths-zi-test
 
 .PHONY: daochi-client-zi-test
-daochi-client-zi-test: $(ZI2C_BIN)
+daochi-client-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		ZI2C_BIN=$(abspath $(ZI2C_BIN)) ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) \
+		ZIRAN_BIN=$(abspath $(ZIRAN_BIN)) OQS_DIR=$(abspath build/packages/oqs) \
+		LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh build/packages/daochi-client/tests/run.sh
 
 test: daochi-client-zi-test
@@ -1892,7 +1895,7 @@ direct-draw-plan-test: $(ZI2C_BIN)
 
 .PHONY: elist-screen-test
 test: elist-screen-test
-elist-screen-test: $(ZI2C_BIN)
+elist-screen-test: subapps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 $(BREATH_TIMING_GEN_DIR)/core/breath_timing.c: src/core/breath_timing.zi src/core/types.zi $(ZI2C_BIN)

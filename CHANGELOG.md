@@ -3,6 +3,8 @@
 ### Fixed
 - Restore banners and navigation icons when returning to the Android app or changing orientation.
 - Keep images from disappearing or showing font characters after graphics resources are recreated.
+- Restore missing characters in translated screens.
+- Keep Classic and Lightfield styles working on profile actions.
 
 ## [2.0.11] - 2026-10-04
 ### Changed

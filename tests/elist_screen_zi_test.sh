@@ -29,6 +29,9 @@ mkdir -p "$work/c"
     "$root/tests/elist_screen_link_test.c" \
     "$work/c/screens/elist_screen.c" "$work/c/text_buffers.c" \
     "$work/c/byte_text_linux.c" \
+    "$work/c/module_host.c" "$work/c/value_codec.c" \
+    "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
+    "$root/build/ziran-toolchain/libziran.a" -lm \
     -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"
 echo "Inbe elist screen Ziran/native test passed"

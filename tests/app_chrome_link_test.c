@@ -35,6 +35,10 @@ void app_device_resize(int32_t width, int32_t height) {
     (void)width; (void)height; assert(0);
 }
 
+void app_mini_restore_selection(InnerBreeze *app) {
+    (void)app; assert(0);
+}
+
 int32_t
 MeasureGlyphWidth(String value, int32_t font, String typeface)
 {

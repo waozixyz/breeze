@@ -1,10 +1,15 @@
 #include "screens/elist_screen.h"
+#include "module_host.h"
+#include "lists_visibility.h"
 
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 static int save_succeeds = 1;
 static int sync_calls;
+static int saved_done;
 static char saved_comment[ELIST_COMMENT_SIZE];
 
 
@@ -29,6 +34,9 @@ storage_elist_load(void *value)
     state->list_count = 2;
     memcpy(state->lists[0].id, "old-list", 9);
     memcpy(state->lists[1].id, "created-list", 13);
+    if(state->item_count > 0) {
+        state->items[0].done = saved_done;
+    }
     return 1;
 }
 
@@ -69,17 +77,60 @@ storage_elist_update_item(String id, String title, String comment,
 {
     (void)id;
     (void)title;
-    (void)done;
     (void)order;
     assert(comment.length < sizeof(saved_comment));
     memcpy(saved_comment, comment.data, comment.length);
     saved_comment[comment.length] = 0;
+    if(save_succeeds) {
+        saved_done = done;
+    }
     return save_succeeds;
 }
 
-int
-main(void)
+static void assert_visible(EListState *state, double now, bool expected)
 {
+    /* The fixture edits records directly, so invalidate the VM result cache. */
+    state->visibility_valid = false;
+    assert(ListsRefreshVisibility(state, now));
+    assert(state->item_visibility[0] == expected);
+}
+
+static ListsMutationResult persist_fixture_mutation(void *context, ListsMutation mutation)
+{
+    (void)context;
+    static uint8_t created[37];
+    ListsMutationResult result = {0};
+    if(mutation.kind == LISTS_CREATE_LIST) {
+        result.saved = storage_elist_create_list(mutation.title, created) != 0;
+        result.created_id = StringView((char *)created, strlen((char *)created));
+    } else if(mutation.kind == LISTS_UPDATE_LIST) {
+        result.saved = storage_elist_update_list(mutation.id, mutation.title, mutation.sort_order) != 0;
+    } else if(mutation.kind == LISTS_CREATE_ITEM) {
+        result.saved = storage_elist_create_item(mutation.parent_id, mutation.title, mutation.comment, NULL) != 0;
+    } else if(mutation.kind == LISTS_UPDATE_ITEM) {
+        result.saved = storage_elist_update_item(mutation.id, mutation.title, mutation.comment,
+                                                mutation.done, mutation.sort_order) != 0;
+    } else {
+        assert(0);
+    }
+    return result;
+}
+
+int
+main(int argc, char **argv)
+{
+    assert(argc == 2);
+    FILE *file = fopen(argv[1], "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    long size = ftell(file);
+    assert(size > 0 && fseek(file, 0, SEEK_SET) == 0);
+    char *bytes = malloc((size_t)size);
+    assert(bytes != NULL && fread(bytes, 1, (size_t)size, file) == (size_t)size);
+    fclose(file);
+    SubappsBindPersistence((ListsPersist){.call = persist_fixture_mutation},
+                          (HabitNameExists){0}, (HabitSave){0});
+    assert(SubappsOpenPackage(StringView(bytes, (size_t)size)));
+
     EListState state = {0};
     state.list_count = 1;
     state.item_count = 1;
@@ -92,20 +143,22 @@ main(void)
                                        state.items[0].list_id));
     assert(!elist_screen_elist_ids_equal(state.lists[0].id,
                                         state.items[0].id));
-    assert(elist_screen_elist_item_visible(&state, 0, 9.0));
+    assert_visible(&state, 9.0, true);
 
     state.items[0].done = 1;
-    assert(!elist_screen_elist_item_visible(&state, 0, 9.0));
+    assert_visible(&state, 9.0, false);
     memcpy(state.completing_item, "item-id", 8);
     state.completing_until = 10.0;
-    assert(elist_screen_elist_item_visible(&state, 0, 9.0));
-    assert(!elist_screen_elist_item_visible(&state, 0, 10.0));
+    assert_visible(&state, 9.0, true);
+    assert_visible(&state, 10.0, false);
 
     state.show_completed = 1;
-    assert(elist_screen_elist_item_visible(&state, 0, 11.0));
+    assert_visible(&state, 11.0, true);
     memcpy(state.items[0].list_id, "other-id", 9);
-    assert(!elist_screen_elist_item_visible(&state, 0, 9.0));
-    assert(!elist_screen_elist_item_visible(&state, 1, 9.0));
+    assert_visible(&state, 9.0, false);
+    state.selected_list = 2;
+    assert_visible(&state, 9.0, false);
+    state.selected_list = 0;
 
     static InnerBreeze app;
     app.ui.view_width = 768;
@@ -152,7 +205,7 @@ main(void)
     app.elist.selected_list = 0;
     memcpy(app.elist.items[0].id, "task", 5);
     memcpy(app.elist.items[0].list_id, "old-list", 9);
-    assert(elist_screen_elist_item_visible(&app.elist, 0, 10.0));
+    assert_visible(&app.elist, 10.0, true);
     int before_sync = sync_calls;
     save_succeeds = 0;
     assert(!elist_screen_elist_set_done(&app, 0, 1, 10.0));
@@ -160,16 +213,18 @@ main(void)
     save_succeeds = 1;
     assert(elist_screen_elist_set_done(&app, 0, 1, 10.0));
     assert(app.elist.items[0].done && sync_calls == before_sync + 1);
-    assert(elist_screen_elist_item_visible(&app.elist, 0, 10.2));
-    assert(!elist_screen_elist_item_visible(&app.elist, 0, 10.5));
+    assert_visible(&app.elist, 10.2, true);
+    assert_visible(&app.elist, 10.5, false);
     app.elist.show_completed = 1;
-    assert(elist_screen_elist_item_visible(&app.elist, 0, 11.0));
+    assert_visible(&app.elist, 11.0, true);
     assert(elist_screen_elist_set_done(&app, 0, 0, 11.0));
     app.elist.show_completed = 0;
-    assert(elist_screen_elist_item_visible(&app.elist, 0, 12.0));
+    assert_visible(&app.elist, 12.0, true);
     app.elist.show_completed = 1;
     elist_screen_elist_select_list(&app, 1);
     assert(!app.elist.show_completed);
-    assert(!elist_screen_elist_item_visible(&app.elist, 0, 12.0));
+    assert_visible(&app.elist, 12.0, false);
+    SubappsClose();
+    free(bytes);
     return 0;
 }
