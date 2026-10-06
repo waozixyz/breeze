@@ -1,0 +1,215 @@
+#import "geometry"
+#import "layout"
+#import "text_props"
+#import "text_widget"
+#import "text_input_props"
+#import "text_area_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "text"
+#import "vec"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../subapps/module_host.zi";
+#import, file "../subapps/diary_types.zi";
+#import, file "../subapps/package_files.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+diary_state: DiaryMessage;
+diary_loaded: bool;
+diary_focused: bool;
+diary_selecting: bool;
+diary_scroll: s32;
+diary_calendar_scroll: s32;
+diary_page_scroll: s32;
+diary_save_at: float64;
+diary_pending: bool;
+diary_pending_replacement: string;
+diary_frame_text: string;
+c :: #system_library "c";
+DiaryNow :: () -> float64 #foreign c "GetTime";
+
+DiaryPump :: () {
+    if !diary_pending {
+        return
+    }
+    diary_pending = false
+    if diary_state.action == DIARY_EDIT {
+        diary_state.replacement = diary_pending_replacement
+    }
+    diary_state = DiaryRun(diary_state)
+    diary_state.replacement = ""
+    PackageFree(diary_pending_replacement)
+    diary_pending_replacement = ""
+}
+
+#program_export
+app_diary_save :: () -> bool {
+    DiaryPump()
+    if !diary_loaded || diary_state.saved || diary_state.load_error {
+        return true
+    }
+    diary_state.action = DIARY_SAVE
+    diary_state = DiaryRun(diary_state)
+    return diary_state.succeeded && diary_state.saved
+}
+
+app_diary_reset :: () {
+    diary_loaded = false
+    diary_pending = false
+    PackageFree(diary_pending_replacement)
+    diary_pending_replacement = ""
+    PackageFree(diary_frame_text)
+    diary_frame_text = ""
+    diary_state = DiaryMessage.{}
+}
+
+DiaryAction :: (app: *InnerBreeze, id: s32, label: string, bounds: Rectangle) {
+    if Button(app.ui.session, ButtonProps.{.id = id, .bounds = bounds,
+            .label = label, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        diary_state.action = DIARY_CONTROL
+        diary_state.control = id
+        diary_pending = true
+        diary_scroll = 0
+        diary_focused = false
+    }
+}
+
+#program_export
+diary_screen_draw :: (app: *InnerBreeze) {
+    DiaryPump()
+    if !diary_loaded {
+        diary_state = DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
+        diary_loaded = diary_state.succeeded
+    }
+    column := CenteredColumnFor(app.ui.view_width, AppScale(640), AppScale(16))
+    left := cast(float32)column.x
+    width := cast(float32)column.width
+    title: [64]u8
+    args: [3]FormatArg = .[FormatArg.{.number = diary_state.year},
+    FormatArg.{.number = diary_state.month}, FormatArg.{.number = diary_state.day}]
+    unused FormatTemplate("%04d-%02d-%02d", args[:], title[:])
+    Text(app.ui.session, TextProps.{.bounds = Rectangle.{left, cast(float32)AppScale(24),
+                width, cast(float32)AppScale(40)}, .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)), .font = AppFontSize()})
+    part := (width - cast(float32)AppScale(12)) / 3.0
+    compact := app.ui.view_height < AppScale(480)
+    top := cast(float32)(ifx compact then AppScale(44) else AppScale(76))
+    DiaryAction(app, 29001, "‹", Rectangle.{left, top, part, cast(float32)AppScale(44)})
+    DiaryAction(app, 29004, LocaleText("diary_today"), Rectangle.{left + part + cast(float32)AppScale(6),
+            top, part, cast(float32)AppScale(44)})
+    DiaryAction(app, 29002, "›", Rectangle.{left + 2.0 * (part + cast(float32)AppScale(6)),
+            top, part, cast(float32)AppScale(44)})
+    DiaryAction(app, 29003, LocaleText("tab_diary_calendar"),
+        Rectangle.{left, top + cast(float32)AppScale(52), width, cast(float32)AppScale(44)})
+    if diary_state.calendar {
+        scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)290300,
+                .bounds = Rectangle.{left, top + cast(float32)AppScale(104), width,
+                    cast(float32)(app.ui.view_height - app_content_bottom_reserved(app) - AppScale(200))},
+                .content_height = AppScale(344), .scroll_offset = diary_calendar_scroll})
+        diary_calendar_scroll = scroll.scroll_offset
+        if !scroll.opened {
+            return
+        }
+        origin := scroll.content.y
+        DiaryAction(app, 29011, "‹", Rectangle.{left, origin, part, cast(float32)AppScale(44)})
+        DiaryAction(app, 29012, "›", Rectangle.{left + 2.0 * (part + cast(float32)AppScale(6)),
+                origin, part, cast(float32)AppScale(44)})
+        month_args: [2]FormatArg = .[FormatArg.{.number = diary_state.month_year},
+        FormatArg.{.number = diary_state.month_number}]
+        unused FormatTemplate("%04d-%02d", month_args[:], title[:])
+        Text(app.ui.session, TextProps.{.bounds = Rectangle.{left + part,
+                    origin + cast(float32)AppScale(8), part, cast(float32)AppScale(32)},
+                .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)), .font = AppFontSize()})
+        weekdays: [7]string = .["habit_day_mon", "habit_day_tue", "habit_day_wed", "habit_day_thu",
+        "habit_day_fri", "habit_day_sat", "habit_day_sun"]
+        for day: cast(s32)0..cast(s32)6 {
+            Text(app.ui.session, TextProps.{.bounds = Rectangle.{left + cast(float32)day * width / 7.0,
+                        origin + cast(float32)AppScale(52), width / 7.0, cast(float32)AppScale(24)},
+                    .text = LocaleText(weekdays[day]), .font = AppFontSize()})
+        }
+        for day: cast(s32)1..diary_state.month_days {
+            position := diary_state.month_weekday + day - 1
+            args[0].number = day
+            unused FormatTemplate(ifx diary_state.marks[day] != cast(u8)0 then "%d •" else "%d",
+                args[0:1], title[:])
+            cell := width / 7.0
+            DiaryAction(app, 29100 + day, FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)),
+                Rectangle.{left + cast(float32)(position % 7) * cell,
+                    origin + cast(float32)AppScale(80 + (position / 7) * 44), cell - 2.0,
+                    cast(float32)AppScale(42)})
+        }
+        End(app.ui.session)
+        return
+    }
+    editor_height := app.ui.view_height - app_content_bottom_reserved(app) - cast(s32)top - AppScale(236)
+    if editor_height < AppScale(120) {
+        editor_height = AppScale(120)
+    }
+    page := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)290301,
+            .bounds = Rectangle.{left, top + cast(float32)AppScale(104), width,
+                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app) - cast(s32)top - AppScale(120))},
+            .content_height = editor_height + AppScale(104), .scroll_offset = diary_page_scroll})
+    diary_page_scroll = page.scroll_offset
+    if !page.opened {
+        return
+    }
+    DiaryAction(app, 29013, LocaleText("diary_insert_time"),
+        Rectangle.{left, page.content.y, width, cast(float32)AppScale(44)})
+    area: TextAreaProps
+    area.key = cast(u64)290200
+    area.focus_id = 29020
+    area.bounds = Rectangle.{left, page.content.y + cast(float32)AppScale(56), width,
+        cast(float32)editor_height}
+    PackageFree(diary_frame_text)
+    diary_frame_text = PackageText(diary_state.text, "")
+    area.value = diary_frame_text
+    area.placeholder = LocaleText("diary_placeholder")
+    area.label = LocaleText("tab_diary")
+    area.wrap = true
+    area.cursor = diary_state.cursor
+    area.anchor = diary_state.anchor
+    area.scroll_y = diary_scroll
+    area.focused = diary_focused
+    area.selecting = diary_selecting
+    area.read_only = diary_state.load_error || !diary_loaded
+    area.max_bytes = 2147483646
+    area.max_codepoints = 2147483646
+    typed: [512]u8
+    area.input = SampleTextAreaInput(diary_focused, typed[:])
+    edited := TextArea(app.ui.session, area)
+    diary_state.cursor = edited.cursor
+    diary_state.anchor = edited.anchor
+    diary_scroll = edited.scroll_y
+    diary_focused = edited.focused
+    diary_selecting = edited.selecting
+    if edited.edit.changed {
+        diary_state.action = DIARY_EDIT
+        diary_state.edit_start = edited.edit.start
+        diary_state.edit_end = edited.edit.end
+        PackageFree(diary_pending_replacement)
+        diary_pending_replacement = PackageText(edited.edit.replacement, "")
+        diary_pending = true
+        diary_save_at = DiaryNow() + 0.75
+    }
+    if edited.clipboard_write {
+        unused TextInputWriteClipboard(edited.clipboard_text)
+    }
+    if !diary_state.saved && DiaryNow() >= diary_save_at {
+        unused app_diary_save()
+    }
+    status := ifx diary_state.load_error then "diary_read_error" else ifx diary_state.saved then "diary_saved" else "diary_save_pending"
+    Text(app.ui.session, TextProps.{.bounds = Rectangle.{left,
+                area.bounds.y + area.bounds.height + cast(float32)AppScale(12), width, cast(float32)AppScale(40)},
+            .text = LocaleText(status), .font = AppFontSize()})
+    End(app.ui.session)
+}

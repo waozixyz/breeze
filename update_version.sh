@@ -6,6 +6,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+if [[ "${1:-}" == "--module" ]]; then
+    python3 scripts/update-package-version.py "${2:?module name required}"
+    python3 scripts/generate-package-versions.py
+    exit 0
+fi
+
 CHANGELOG_FILE="CHANGELOG.md"
 GRADLE_FILE="droid/app/build.gradle"
 WINDOWS_RC_FILE="windows/inbe.rc"

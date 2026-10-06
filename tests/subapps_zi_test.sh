@@ -39,7 +39,7 @@ done
     "$root/apps/inbe/inbe.zi"
 mkdir -p "$work/invalid-nested"
 printf 'ZIB' > "$work/invalid-nested/lists.zib"
-cp "$root/build/subapps/habits.zib" "$root/build/subapps/practice.zib" "$work/invalid-nested/"
+cp "$root/build/subapps/habits.zib" "$root/build/subapps/practices.zib" "$work/invalid-nested/"
 "$ziran" bundle --root "$root" --entry inbe:Main \
     --asset-dir "subapps=$work/invalid-nested" -o "$work/invalid-nested.zib" \
     "$root/apps/inbe/inbe.zi"
@@ -52,18 +52,22 @@ cp "$root/build/subapps/habits.zib" "$root/build/subapps/practice.zib" "$work/in
     -o "$work/generated" "$root/tests/subapps_behavior.zi" "$root/tests/sync_test_host.zi"
 "${CC:-cc}" -D_GNU_SOURCE -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/subapps" \
+    -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$root/tests/subapps_host_test.c" "$work/generated"/*.c \
+    "$root/build/packages/monocypher/src/monocypher.c" \
+    "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "$root/build/ziran-toolchain/libziran.a" \
-    -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
+    -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun \
+    -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d)
 trap 'rm -rf "$data"' EXIT HUP INT TERM
 mkdir -p "$data/module-data"
 cp "$root/tests/fixtures/schema-1.8.9.sql" "$data/"
 cd "$data"
-env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     APP_DATA_ROOT="$data/module-data" "$work/test" "$root/build/subapps/lists.zib" \
-    "$root/build/subapps/habits.zib" "$root/build/subapps/practice.zib" \
-    "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$root/build/inbe.zib" \
-    "$work/missing-assets.zib" "$work/invalid-nested.zib"
+    "$root/build/subapps/habits.zib" "$root/build/subapps/practices.zib" \
+    "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$root/build/inbe-full.zib" \
+    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$root/build/subapps/diary.zib"

@@ -7,6 +7,7 @@ LOG_WARNING :: 4
 LOG_ERROR :: 5
 #import, file "../platform/trace_log.zi";
 GetTime :: () -> float64 #foreign c;
+PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "modal_rules.zi";
 #import, file "../habits/habit_types.zi";
 #import, file "../core/types.zi";
@@ -77,6 +78,9 @@ GetTime :: () -> float64 #foreign c;
 #import, file "app_notifications.zi";
 #import, file "../screens/language_screen.zi";
 #import, file "../screens/app_selection_screen.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../subapps/package_manager.zi";
+#import, file "../subapps/catalog.zi";
 #import, file "../subapps/inbe_types.zi";
 #import, file "app_style.zi";
 #import, file "../screens/manual_screen.zi";
@@ -403,6 +407,7 @@ app_reload_after_import :: (app: *InnerBreeze, reload_settings: s32) {
         return
     }
     if reload_settings == 0 {
+        app.app_choices_pending = true
         if app.habit_detail_index >= 0 && app.habit_detail_index < app.habits.count {
             AppCopyText(AppTextFromCString(
                 *app.habits.items[app.habit_detail_index].id[0],
@@ -577,7 +582,14 @@ app_open_feature :: (vapp: *void, feature: s32) -> s32 {
     } else if feature == APP_LISTS {
         bit = APP_LISTS
         tab = APP_MAIN_TAB_ELIST
+    } else if feature == APP_DIARY {
+
+        bit = APP_DIARY
+        tab = APP_MAIN_TAB_DIARY
     } else {
+        return 0
+    }
+    if app.breathing.screen == ScreenDiary && !app_diary_save() {
         return 0
     }
     selected := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
@@ -587,7 +599,19 @@ app_open_feature :: (vapp: *void, feature: s32) -> s32 {
     }
     app.enabled_apps = selected.enabled_apps
     app.apps_selected = 1
+    if (SubappsInstalledMask() & bit) == 0 {
+        for index: cast(s32)1..cast(s32)4 {
+            if PackageBit(index) == bit {
+                PackageRequest(index)
+            }
+        }
+        app_update_app_navigation(app)
+        app_switch_screen(app, ScreenAppSelection)
+        save_settings(app)
+        return 0
+    }
     app.main_tab = tab
+    app_update_app_navigation(app)
     app_switch_screen(app, app_screen_for_main_tab(tab))
     app_observe_direct_route_change(app, before)
     save_settings(app)
@@ -599,11 +623,6 @@ app_init :: (vapp: *void) {
     app: *InnerBreeze = cast(*InnerBreeze)vapp
     i: s32
     if app == null {
-        return
-    }
-    if !SubappsStart(app) {
-        TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
-        app.request_quit = 1
         return
     }
     FramePacingReset()
@@ -644,6 +663,11 @@ app_init :: (vapp: *void) {
         app.break_sounds_enabled = 0
     }
     data_init()
+    if !SubappsStart(app) {
+        TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
+        app.request_quit = 1
+        return
+    }
     TraceLog(LOG_INFO, "APP PROBE: data initialized")
     settings_missing := app_load_settings(app)
     configuration_action: s32 = INBE_CONFIGURE
@@ -658,6 +682,15 @@ app_init :: (vapp: *void) {
     }
     if !AppMiniMode() {
         app.enabled_apps = selection.enabled_apps
+        app_update_app_navigation(app)
+        if app.apps_selected != 0 {
+            for index: cast(s32)1..cast(s32)4 {
+                bit := PackageBit(index)
+                if (app.enabled_apps & bit) != 0 && (SubappsInstalledMask() & bit) == 0 {
+                    PackageRequest(index)
+                }
+            }
+        }
     }
     refresh_locale_dependent_text(app)
     app_device_preferences_init(app)
@@ -1091,6 +1124,10 @@ updateapp :: (app: *InnerBreeze) {
     } else if app.breathing.screen == ScreenHabits {
         draw_habits_screen(app)
         handled_screen = true
+    } else if app.breathing.screen == ScreenDiary {
+
+        diary_screen_draw(app)
+        handled_screen = true
     } else if app.breathing.screen == ScreenEList {
         draw_elist_screen(app)
         handled_screen = true
@@ -1385,6 +1422,23 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     profile_sync_start = app_profile_now()
     settings_sync_account_pump(app)
     app_sync_pump(app)
+    PackagePump(app.enabled_apps, cast(s32)PackageNow())
+    if app.app_choices_pending && practice_active(app) == null && app.modal.active == 0 &&
+    app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&
+    app_diary_save() {
+        app_reload_app_choices(app)
+        app.app_choices_pending = false
+    }
+    if app.package_revision != PackageRevision() && app.modal.active == 0 &&
+    practice_active(app) == null &&
+    app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&
+    app_diary_save() {
+        if SubappsReloadFeatures(app.enabled_apps) {
+            app.package_revision = PackageRevision()
+            app_diary_reset()
+            app_update_app_navigation(app)
+        }
+    }
     app_profile_record_sync(profile_sync_start)
     app_profile_frame_end(profile_frame_start)
 }
@@ -1402,6 +1456,8 @@ app_destroy :: (vapp: *void) {
     }
     CloseBreakWindows()
     ReleaseRuntimeAssetDownload(*app.meditation.music_download)
+    unused app_diary_save()
+    PackageCancel()
     save_settings(app)
     settings_sync_account_cancel(app)
     app_clear_disconnected_sync_work()
@@ -1423,6 +1479,7 @@ app_destroy :: (vapp: *void) {
     }
     settings_audio_stop_preview(app)
     app_audio_shutdown(app)
+    app_diary_reset()
     app.* = InnerBreeze.{}
     SubappsClose()
 }

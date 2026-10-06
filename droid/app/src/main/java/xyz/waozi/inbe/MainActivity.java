@@ -297,73 +297,87 @@ public class MainActivity extends NativeActivity {
         });
     }
 
-    public void startRuntimeAssetDownload(final String url, final String path, final long handle) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                HttpURLConnection connection = null;
-                int status = 0;
-                long written = 0;
-                long total = 0;
-                long lastNotify = 0;
-                File outputFile = new File(path);
-                File parent = outputFile.getParentFile();
-                NotificationManager notificationManager = getDownloadNotificationManager();
+    private static final class RuntimeDownload {
+        volatile boolean cancelled;
+        volatile HttpURLConnection connection;
+        volatile Thread thread;
+    }
 
-                try {
-                    if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                        nativeRuntimeAssetDownloadFailed(handle, status, "failed to create download directory");
-                        return;
-                    }
+    private final java.util.concurrent.ConcurrentHashMap<Long, RuntimeDownload> runtimeDownloads =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
-                    connection = (HttpURLConnection) new URL(url).openConnection();
-                    connection.setInstanceFollowRedirects(true);
-                    connection.setConnectTimeout(15000);
-                    connection.setReadTimeout(30000);
-                    connection.setRequestProperty("User-Agent", "kryon-runtime-assets/1");
-                    status = connection.getResponseCode();
+    public void cancelRuntimeAssetDownload(long handle) {
+        RuntimeDownload task = runtimeDownloads.remove(handle);
+        if (task == null) return;
+        synchronized (task) { task.cancelled = true; }
+        if (task.connection != null) task.connection.disconnect();
+        if (task.thread != null) task.thread.interrupt();
+    }
 
-                    if (status < 200 || status >= 300) {
-                        outputFile.delete();
-                        nativeRuntimeAssetDownloadFailed(handle, status, "HTTP " + status);
-                        return;
-                    }
-
-                    total = connection.getContentLengthLong();
-                    nativeRuntimeAssetDownloadProgress(handle, written, total);
-                    showDownloadNotification(notificationManager, written, total);
-
-                    try (InputStream input = connection.getInputStream();
-                         FileOutputStream output = new FileOutputStream(outputFile)) {
-                        byte[] buffer = new byte[32768];
-                        int read;
-                        while ((read = input.read(buffer)) != -1) {
-                            output.write(buffer, 0, read);
-                            written += read;
-                            nativeRuntimeAssetDownloadProgress(handle, written, total);
-                            long now = android.os.SystemClock.uptimeMillis();
-                            if (now - lastNotify > 250 || (total > 0 && written >= total)) {
-                                showDownloadNotification(notificationManager, written, total);
-                                lastNotify = now;
-                            }
+    public void startRuntimeAssetDownload(final String url, final String path,
+                                         final long handle, final long maximumBytes) {
+        final RuntimeDownload task = new RuntimeDownload();
+        runtimeDownloads.put(handle, task);
+        task.thread = new Thread(() -> {
+            int status = 0;
+            long written = 0;
+            long lastNotify = 0;
+            File outputFile = new File(path);
+            File temporary = new File(path + ".part");
+            File parent = outputFile.getParentFile();
+            NotificationManager notifications = getDownloadNotificationManager();
+            try {
+                if (maximumBytes <= 0 || task.cancelled) throw new java.io.IOException("download cancelled");
+                if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                    throw new java.io.IOException("failed to create download directory");
+                }
+                task.connection = (HttpURLConnection) new URL(url).openConnection();
+                task.connection.setInstanceFollowRedirects(true);
+                task.connection.setConnectTimeout(15000);
+                task.connection.setReadTimeout(30000);
+                task.connection.setRequestProperty("User-Agent", "inbe-runtime-assets/1");
+                if (task.cancelled) throw new java.io.IOException("download cancelled");
+                status = task.connection.getResponseCode();
+                if (status < 200 || status >= 300) throw new java.io.IOException("HTTP " + status);
+                long total = task.connection.getContentLengthLong();
+                if (total > maximumBytes) throw new java.io.IOException("download exceeds size limit");
+                nativeRuntimeAssetDownloadProgress(handle, written, total);
+                showDownloadNotification(notifications, written, total);
+                try (InputStream input = task.connection.getInputStream();
+                     FileOutputStream output = new FileOutputStream(temporary)) {
+                    byte[] buffer = new byte[32768];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        if (task.cancelled) throw new java.io.IOException("download cancelled");
+                        if (written + read > maximumBytes) throw new java.io.IOException("download exceeds size limit");
+                        output.write(buffer, 0, read);
+                        written += read;
+                        nativeRuntimeAssetDownloadProgress(handle, written, total);
+                        long now = android.os.SystemClock.uptimeMillis();
+                        if (now - lastNotify > 250) {
+                            showDownloadNotification(notifications, written, total);
+                            lastNotify = now;
                         }
                     }
-
-                    nativeRuntimeAssetDownloadSucceeded(handle, written, status);
-                } catch (UnknownHostException | SocketException | SocketTimeoutException e) {
-                    outputFile.delete();
-                    nativeRuntimeAssetDownloadFailed(handle, status, "NETWORK_UNAVAILABLE");
-                } catch (Exception e) {
-                    outputFile.delete();
-                    nativeRuntimeAssetDownloadFailed(handle, status, e.getMessage());
-                } finally {
-                    clearDownloadNotification(notificationManager);
-                    if (connection != null) {
-                        connection.disconnect();
-                    }
+                    output.getFD().sync();
                 }
+                synchronized (task) {
+                    if (task.cancelled) throw new java.io.IOException("download cancelled");
+                    if (!temporary.renameTo(outputFile)) throw new java.io.IOException("failed to publish download");
+                    nativeRuntimeAssetDownloadSucceeded(handle, written, status);
+                }
+            } catch (UnknownHostException | SocketException | SocketTimeoutException e) {
+                if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, "NETWORK_UNAVAILABLE");
+            } catch (Exception e) {
+                if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, e.getMessage());
+            } finally {
+                temporary.delete();
+                clearDownloadNotification(notifications);
+                if (task.connection != null) task.connection.disconnect();
+                runtimeDownloads.remove(handle, task);
             }
-        }, "runtime-asset-download").start();
+        }, "runtime-asset-download");
+        task.thread.start();
     }
 
     public String syncHttpRequest(String method, String urlText, String body, String[] headers) {

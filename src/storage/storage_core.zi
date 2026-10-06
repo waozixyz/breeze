@@ -4,8 +4,10 @@
 #import "byte_text_linux"
 #import "string_range"
 #import "date_parse"
+Scan :: #import "json_scan"
 #import, file "time_parts.zi";
 #import, file "setting_visitor.zi";
+#import, file "../subapps/catalog.zi";
 #import, file "state.zi";
 #import, file "sqlite.zi";
 #import, file "json.zi";
@@ -343,6 +345,7 @@ storage_enqueue_all_sync_state :: () {
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'session',id,0,strftime('%s','now') FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_list',id,0,strftime('%s','now') FROM elist_lists WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_item',id,0,strftime('%s','now') FROM elist_items WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     if owns_transaction != 0 {
         exec_sql("COMMIT")
     }
@@ -640,8 +643,13 @@ storage_set_setting_text :: (key: string, value: string) {
     SqliteBindInt64(stmt, 4, now_seconds())
     rc = SqliteStep(stmt)
     SqliteFinalize(stmt)
-    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0  && storage_state_handle().settings_write_depth <= 0 {
-        storage_schedule_persist()
+    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        if AppPreferenceValid(key) {
+            unused storage_enqueue_sync_entity("app_preference", key, 0)
+        }
+        if storage_state_handle().settings_write_depth <= 0 {
+            storage_schedule_persist()
+        }
     }
 }
 
@@ -1107,9 +1115,40 @@ storage_sync_op_is_delete :: (entity_type: string, entity_id: string, local_date
     return deleted
 }
 
+storage_append_app_preference_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !AppPreferenceValid(key) {
+        return 0
+    }
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value,updated_at FROM settings WHERE user_id=?1 AND key=?2", -1,
+        *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer {
+        unused SqliteFinalize(statement)
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return 0
+    }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "key", key)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), 16))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(statement, 1))
+    storage_json_builder_append_text(json, "}")
+    return json.ok
+}
+
 storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: string, entity_id: string, local_date: s32) {
     found: s32 = 0
-    if storage_compare_text(entity_type, "habit") == 0 {
+    if entity_type == "app_preference" {
+        found = storage_append_app_preference_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit") == 0 {
+
         found = storage_append_habit_payload_json(json, entity_id)
     } else if storage_compare_text(entity_type, "habit_day") == 0 {
         found = storage_append_habit_day_payload_json(json, entity_id, local_date)
@@ -1126,6 +1165,9 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
 }
 
 storage_encrypted_collection_for_entity :: (entity_type: string) -> string {
+    if entity_type == "app_preference" {
+        return "private.inbe.v1.app-preferences"
+    }
     if entity_type.count == 0 {
         return ""
     }
@@ -1734,6 +1776,9 @@ storage_apply_sync_social_json :: (response_json: string) -> s32 {
 }
 
 storage_decrypted_array_name :: (collection: string) -> string {
+    if collection == "private.inbe.v1.app-preferences" {
+        return "app_preferences"
+    }
     if storage_compare_text(collection, "private.inbe.v1.habits") == 0 {
         return "habits"
     }
@@ -1776,7 +1821,40 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
         storage_json_builder_free(*response)
         return 0
     }
-    if storage_compare_text(array_name, "habits") == 0 {
+    if array_name == "app_preferences" {
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_preferences")
+        count := Scan.ArrayCount(record_response, records)
+        if count <= 0 || count > 4 {
+            storage_json_builder_free(*response);
+            return 0
+        }
+        valid := true
+        for index: cast(s32)0..count - 1 {
+            record := Scan.ElementAt(record_response, records, index)
+            key: [64]u8
+            value: [8]u8
+            key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, record, "key"), key[:])
+            value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, record, "value"), value[:])
+            if key_count <= 0 || key_count >= 64 || value_count != 1 {
+                valid = false;
+                break
+            }
+            if !AppPreferenceValid(TextFromBytes(key[:key_count])) ||
+            (value[0] != cast(u8)48 && value[0] != cast(u8)49) {
+                valid = false
+                break
+            }
+        }
+        if !valid {
+            storage_json_builder_free(*response);
+            return 0
+        }
+        ok = storage_exec_json_user_sql(SyncAppPreferencesSQL, record_response)
+        if ok != 0 {
+            storage_set_setting_int("apps_setup_done", 1)
+        }
+    } else if storage_compare_text(array_name, "habits") == 0 {
+
         ok = ifx (storage_reconcile_remote_habit_ids(record_response) != 0  && storage_apply_sync_habits_json(record_response) != 0) then (1) else (0)
     } else if storage_compare_text(array_name, "habit_days") == 0 {
         ok = storage_apply_sync_habit_days_json(record_response)

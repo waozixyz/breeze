@@ -1,12 +1,18 @@
-// The root and three feature VM instances share persistence and host effects.
+// Independently versioned feature VMs share persistence and platform effects.
 #import "bundle_host"
 #import "byte_text_linux"
+#import "c_string"
 #import, file "module_types.zi";
 #import, file "lists_types.zi";
 #import, file "habits_types.zi";
 #import, file "practice_types.zi";
 #import, file "inbe_types.zi";
 #import, file "value_codec.zi";
+#import, file "diary_types.zi";
+#import, file "diary_store.zi";
+#import, file "package_manager.zi";
+#import, file "package_files.zi";
+#import, file "catalog.zi";
 #import, file "../app/assets.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../screens/elist_types.zi";
@@ -18,13 +24,21 @@ ModuleSlot :: struct {
     bundle: *void
     instance: *void
     kind: s32
+    received: bool
 }
 
 #scope_file
-slots: [4]ModuleSlot;
+slots: [5]ModuleSlot;
+diary_message: DiaryMessage;
+diary_codec: DiaryMessageCodec;
+diary_file_codec: DiaryFileResultCodec;
+diary_text: string;
+diary_document: string;
+local_bundle_path: [4096]u8;
+local_bundle_index: s32 = -1;
 inbe_message: InbeMessage;
 inbe_codec: InbeMessageCodec;
-enabled_apps: s32 = APP_ALL;
+enabled_apps: s32 = APP_RECOMMENDED;
 package_required: bool;
 lists_message: ListsMessage;
 habits_message: HabitsMessage;
@@ -42,8 +56,10 @@ lists_title: [ELIST_TITLE_SIZE]u8;
 lists_comment: [ELIST_COMMENT_SIZE]u8;
 habit_name: [HABIT_NAME_SIZE]u8;
 habit_description: [HABIT_DESCRIPTION_SIZE]u8;
-received: bool;
 identifying: bool;
+diary_routing: bool;
+diary_route_screen: s32;
+diary_route_allowed: bool;
 
 // Persistence effects are bound by the shared application, not the modules.
 #scope_export
@@ -69,9 +85,72 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
     unused module
     slot := cast(*ModuleSlot)context
     name := TextFromCString(function)
+    if slot.kind == MODULE_DIARY {
+        if name == "ReadDiaryHost" && count == 0 {
+            message := ifx identifying then DiaryMessage.{.abi = MODULE_ABI} else diary_message
+            if diary_routing && !identifying {
+                message = DiaryMessage.{.abi = MODULE_ABI, .action = DIARY_ROUTE, .screen = diary_route_screen}
+            }
+            result.* = EncodeDiaryMessage(message, *diary_codec)
+            return 1
+        }
+        if name == "WriteDiaryHost" && count == 1 && !identifying {
+            if !ValidDiaryMessage(arguments[0]) {
+                return 0
+            }
+            message := DecodeDiaryMessage(arguments[0])
+            if message.action == DIARY_ROUTE {
+                diary_route_allowed = message.succeeded
+                slot.received = true
+                return 1
+            }
+            next_text := PackageText(message.text, "")
+            next_document := PackageText(message.document, "")
+            PackageFree(diary_text)
+            PackageFree(diary_document)
+            diary_text = next_text
+            diary_document = next_document
+            message.text = diary_text
+            message.document = diary_document
+            message.replacement = ""
+            diary_message = message
+            slot.received = true
+            return 1
+        }
+        if name == "ReadDiaryFileHost" && count == 1 && !identifying {
+            if !ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+                return 0
+            }
+            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+            result.* = EncodeDiaryFileResult(DiaryStoreRead(filename), *diary_file_codec)
+            return 1
+        }
+        if name == "SaveDiaryFileHost" && count == 2 && !identifying {
+            if !ModuleScalarValid(arguments[0], "string", cast(s32)HostString) ||
+            !ModuleScalarValid(arguments[1], "string", cast(s32)HostString) {
+                return 0
+            }
+            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+            data := TextFromBytes(BytesFromPointer(arguments[1].data,
+                cast(u64)arguments[1].length))
+            result.* = ModuleScalar("bool", ifx DiaryStoreSave(filename, data) then 1 else 0)
+            return 1
+        }
+        if name == "DiaryClockHost" && count == 0 && !identifying {
+            value := DiaryStoreClock()
+            result.* = HostValue.{.kind = cast(s32)HostString,
+                .type_name = ModuleTextData("string"), .data = ModuleTextData(value),
+                .length = cast(usize)value.count}
+            return 1
+        }
+        return 0
+    }
     if slot.kind == MODULE_INBE {
         if name == "ReadInbeHost" && count == 0 {
-            result.* = EncodeInbeMessage(inbe_message, *inbe_codec)
+            message := ifx identifying then InbeMessage.{.abi = MODULE_ABI} else inbe_message
+            result.* = EncodeInbeMessage(message, *inbe_codec)
             return 1
         }
         if name == "WriteInbeHost" && count == 1 && !identifying {
@@ -79,7 +158,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
                 return 0
             }
             inbe_message = DecodeInbeMessage(arguments[0])
-            received = true
+            slot.received = true
             return 1
         }
         if name == "RouteFeatureHost" && count == 2 && !identifying {
@@ -98,6 +177,9 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             } else if feature == APP_PRACTICE {
                 allowed = PracticeRun(PracticeMessage.{.action = PRACTICE_ROUTE, .screen = screen}).succeeded
             }
+            else if feature == APP_DIARY {
+                allowed = DiaryRoute(screen)
+            }
             result.* = ModuleScalar("bool", ifx allowed then 1 else 0)
             return 1
         }
@@ -105,7 +187,8 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
     }
     if slot.kind == MODULE_LISTS {
         if name == "ReadListsHost" && count == 0 {
-            result.* = EncodeListsMessage(lists_message, *lists_codec)
+            message := ifx identifying then ListsMessage.{.abi = MODULE_ABI} else lists_message
+            result.* = EncodeListsMessage(message, *lists_codec)
             return 1
         }
         if name == "WriteListsHost" && count == 1 && !identifying {
@@ -129,7 +212,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             message.title = AppTextFromCString(*lists_title[0], ELIST_TITLE_SIZE)
             message.comment = AppTextFromCString(*lists_comment[0], ELIST_COMMENT_SIZE)
             lists_message = message
-            received = true
+            slot.received = true
             return 1
         }
         if name == "PersistListsHost" && count == 1 && !identifying && list_persist != null {
@@ -146,7 +229,8 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
         }
     } else if slot.kind == MODULE_HABITS {
         if name == "ReadHabitsHost" && count == 0 {
-            result.* = EncodeHabitsMessage(habits_message, *habits_codec)
+            message := ifx identifying then HabitsMessage.{.abi = MODULE_ABI} else habits_message
+            result.* = EncodeHabitsMessage(message, *habits_codec)
             return 1
         }
         if name == "WriteHabitsHost" && count == 1 && !identifying {
@@ -161,7 +245,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             message.name = AppTextFromCString(*habit_name[0], HABIT_NAME_SIZE)
             message.description = AppTextFromCString(*habit_description[0], HABIT_DESCRIPTION_SIZE)
             habits_message = message
-            received = true
+            slot.received = true
             return 1
         }
         if name == "HabitNameExistsHost" && count == 2 && !identifying && habit_exists != null {
@@ -185,7 +269,8 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
         }
     } else if slot.kind == MODULE_PRACTICE {
         if name == "ReadPracticeHost" && count == 0 {
-            result.* = EncodePracticeMessage(practice_message, *practice_codec)
+            message := ifx identifying then PracticeMessage.{.abi = MODULE_ABI} else practice_message
+            result.* = EncodePracticeMessage(message, *practice_codec)
             return 1
         }
         if name == "WritePracticeHost" && count == 1 && !identifying {
@@ -193,7 +278,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
                 return 0
             }
             practice_message = DecodePracticeMessage(arguments[0])
-            received = true
+            slot.received = true
             return 1
         }
     }
@@ -201,6 +286,10 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
 }
 
 ModuleCapabilityAllowed :: (kind: s32, name: string) -> bool {
+    if kind == MODULE_DIARY {
+        return name == "ReadDiaryHost" || name == "WriteDiaryHost" ||
+        name == "ReadDiaryFileHost" || name == "SaveDiaryFileHost" || name == "DiaryClockHost"
+    }
     if kind == MODULE_INBE {
         return name == "ReadInbeHost" || name == "WriteInbeHost" ||
         name == "RouteFeatureHost"
@@ -222,20 +311,26 @@ SubappsReady :: () -> bool {
     return (!package_required || slots[3].instance != null) &&
     ((enabled_apps & APP_LISTS) == 0 || slots[0].instance != null) &&
     ((enabled_apps & APP_HABITS) == 0 || slots[1].instance != null) &&
-    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].instance != null)
+    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].instance != null) &&
+    ((enabled_apps & APP_DIARY) == 0 || slots[4].instance != null)
 }
 
 #program_export
 SubappsClose :: () {
     index: s32 = 0
-    while index < 4 {
+    while index < 5 {
         CloseBundleInstance(slots[index].instance)
         CloseBundle(slots[index].bundle)
         slots[index] = ModuleSlot.{}
         index += 1
     }
-    enabled_apps = APP_ALL
+    enabled_apps = APP_RECOMMENDED
     package_required = false
+    PackageFree(diary_text)
+    PackageFree(diary_document)
+    diary_text = ""
+    diary_document = ""
+    DiaryStoreClose()
 }
 
 ModuleRun :: (slot: *ModuleSlot) -> bool {
@@ -244,7 +339,7 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
     }
     answer: s64
     has_answer: s32
-    received = false
+    slot.received = false
     if RunBundleInstance(slot.instance, *answer, *has_answer) == 0 ||
     has_answer == 0 {
         return false
@@ -252,7 +347,7 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
     if identifying {
         return answer == cast(s64)slot.kind
     }
-    return answer == 0 && received
+    return answer == 0 && slot.received
 }
 
 ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
@@ -261,23 +356,31 @@ ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
     if slot.bundle == null {
         return false
     }
+    return ModuleInstantiate(slot)
+}
+
+ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
+    kind := slot.kind
     count := BundleCapabilities(slot.bundle)
     expected: u64 = 2
     if kind == MODULE_LISTS || kind == MODULE_INBE {
         expected = 3
     } else if kind == MODULE_HABITS {
         expected = 4
+    } else if kind == MODULE_DIARY {
+
+        expected = 5
     }
     if count != expected {
         return false
     }
     // Binding storage is schema-sized; instantiation copies it and the names.
-    bindings: [4]HostBinding
+    bindings: [5]HostBinding
     index: u64 = 0
     while index < count {
         module_name := BundleCapabilityModuleName(slot.bundle, index)
         name := BundleCapabilityFunctionName(slot.bundle, index)
-        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else "inbe"
+        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else "inbe"
         if TextFromCString(module_name) != owner ||
         !ModuleCapabilityAllowed(kind, TextFromCString(name)) {
             return false
@@ -289,6 +392,7 @@ ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
         index += 1
     }
     slot.instance = InstantiateBundle(slot.bundle, *bindings[0], count)
+    LimitBundleSteps(slot.instance, 10000000)
     return ModuleRun(slot)
 }
 
@@ -298,6 +402,7 @@ SubappsOpenBytes :: (lists: string, habits: string, practice: string) -> bool {
     lists_message = ListsMessage.{.abi = MODULE_ABI}
     habits_message = HabitsMessage.{.abi = MODULE_ABI}
     practice_message = PracticeMessage.{.abi = MODULE_ABI}
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
     identifying = true
     ready := ModuleOpen(*slots[0], lists, MODULE_LISTS) &&
     ModuleOpen(*slots[1], habits, MODULE_HABITS) &&
@@ -306,20 +411,84 @@ SubappsOpenBytes :: (lists: string, habits: string, practice: string) -> bool {
     if !ready {
         SubappsClose()
     }
+    if ready {
+        enabled_apps = APP_LISTS | APP_HABITS | APP_PRACTICE
+    }
     return ready
+}
+
+// A desktop owner can run a local package explicitly. Network installs still
+// require a pinned publisher signature; this does not read paths from sync.
+#program_export
+SubappsUseFile :: (path: string) -> bool {
+    bytes := PackageRead(path, PackageMaximumBytes)
+    defer {
+        PackageFree(bytes)
+    }
+    for index: cast(s32)0..cast(s32)4 {
+        if SubappsValidatePackage(index, bytes) && CopyCString(path, local_bundle_path[:]) {
+            local_bundle_index = index
+            return true
+        }
+    }
+    return false
+}
+
+#program_export
+SubappsLocalFeature :: () -> s32 {
+    return PackageBit(local_bundle_index)
 }
 
 #program_export
 SubappsOpen :: () -> bool {
-    return SubappsOpenPackage(AssetRead("inbe.zib").data)
+    if local_bundle_index == 0 {
+        PackageMarkRootActive(false)
+        bytes := PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+        defer {
+            PackageFree(bytes)
+        }
+        return SubappsOpenPackage(bytes)
+    }
+    downloaded := PackageInstalledBytes(0)
+    defer {
+        PackageFree(downloaded)
+    }
+    ready := downloaded.count > 0 && SubappsOpenPackage(downloaded)
+    downloaded_root := ready
+    if !ready {
+        ready = SubappsOpenPackage(AssetRead("inbe.zib").data)
+    }
+    if ready {
+        PackageMarkRootActive(downloaded_root)
+        ready = SubappsReloadFeatures(SubappsInstalledMask())
+    }
+    if ready && local_bundle_index > 0 {
+        bytes := PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+        defer {
+            PackageFree(bytes)
+        }
+        slot := ifx local_bundle_index == 4 then 4 else local_bundle_index - 1
+        kind := ifx local_bundle_index == 4 then MODULE_DIARY else local_bundle_index
+        CloseBundleInstance(slots[slot].instance)
+        CloseBundle(slots[slot].bundle)
+        slots[slot] = ModuleSlot.{}
+        identifying = true
+        ready = ModuleOpen(*slots[slot], bytes, kind)
+        identifying = false
+        enabled_apps = SubappsInstalledMask()
+    }
+    return ready
 }
 
 PackageFeature :: (index: s32) -> string {
-    name: string = "subapps/practice.zib"
+    name: string = "subapps/practices.zib"
     if index == 0 {
         name = "subapps/lists.zib"
     } else if index == 1 {
         name = "subapps/habits.zib"
+    } else if index == 3 {
+
+        name = "subapps/diary.zib"
     }
     asset: u64 = 0
     while asset < BundleAssets(slots[3].bundle) {
@@ -342,10 +511,22 @@ SubappsOpenPackage :: (bytes: string) -> bool {
     identifying = true
     ready := ModuleOpen(*slots[3], bytes, MODULE_INBE)
     if ready {
-        ready = BundleAssets(slots[3].bundle) == cast(u64)3
+        ready = ModulePackageAssetsValid(slots[3].bundle)
+    }
+    if ready {
         index: s32 = 0
-        while ready && index < 3 {
-            ready = ModuleOpen(*slots[index], PackageFeature(index), index + 1)
+        while ready && index < 4 {
+            feature := PackageFeature(index)
+            // Optional apps are absent from the APK. Recommended apps are
+            // always available offline, even before account enrollment.
+            if feature.count == 0 {
+                ready = index == 0 || index == 3
+            } else {
+
+                slot := ifx index == 3 then 4 else index
+                kind := ifx index == 3 then MODULE_DIARY else index + 1
+                ready = ModuleOpen(*slots[slot], feature, kind)
+            }
             index += 1
         }
     }
@@ -355,6 +536,7 @@ SubappsOpenPackage :: (bytes: string) -> bool {
         return false
     }
     package_required = true
+    enabled_apps = SubappsInstalledMask()
     return true
 }
 
@@ -386,24 +568,149 @@ SubappsSetEnabled :: (mask: s32) -> bool {
     lists_message = ListsMessage.{.abi = MODULE_ABI}
     habits_message = HabitsMessage.{.abi = MODULE_ABI}
     practice_message = PracticeMessage.{.abi = MODULE_ABI}
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
     identifying = true
     index: s32 = 0
-    while index < 3 {
+    while index < 4 {
         bit: s32 = cast(s32)1 << index
+        slot := ifx index == 3 then 4 else index
         if (result.enabled_apps & bit) == 0 {
-            CloseBundleInstance(slots[index].instance)
-            CloseBundle(slots[index].bundle)
-            slots[index] = ModuleSlot.{}
-        } else if slots[index].instance == null &&
-        !ModuleOpen(*slots[index], PackageFeature(index), index + 1) {
-            identifying = false
-            return false
+            CloseBundleInstance(slots[slot].instance)
+            CloseBundle(slots[slot].bundle)
+            slots[slot] = ModuleSlot.{}
+        } else if slots[slot].instance == null {
+
+            downloaded: string
+            if local_bundle_index == index + 1 {
+                downloaded = PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+            } else {
+
+                downloaded = PackageInstalledBytes(index + 1)
+            }
+            kind := ifx index == 3 then MODULE_DIARY else index + 1
+            ready := downloaded.count > 0 && ModuleOpen(*slots[slot], downloaded, kind)
+            PackageFree(downloaded)
+            if !ready {
+                CloseBundleInstance(slots[slot].instance)
+                CloseBundle(slots[slot].bundle)
+                slots[slot] = ModuleSlot.{}
+                feature := PackageFeature(index)
+                if feature.count > 0 && !ModuleOpen(*slots[slot], feature, kind) {
+                    identifying = false
+                    return false
+                }
+            }
         }
         index += 1
     }
     identifying = false
-    enabled_apps = result.enabled_apps
+    enabled_apps = result.enabled_apps & SubappsInstalledMask()
     return SubappsReady()
+}
+
+#program_export
+SubappsInstalledMask :: () -> s32 {
+    mask: s32 = 0
+    if slots[0].instance != null {
+        mask |= APP_LISTS
+    }
+    if slots[1].instance != null {
+        mask |= APP_HABITS
+    }
+    if slots[2].instance != null {
+        mask |= APP_PRACTICE
+    }
+    if slots[4].instance != null {
+        mask |= APP_DIARY
+    }
+    return mask
+}
+
+// Validation uses isolated instances and cannot mutate the live messages.
+#program_export
+SubappsValidatePackage :: (index: s32, bytes: string) -> bool {
+    if index < 0 || index > 4 {
+        return false
+    }
+    test: ModuleSlot
+    previous := identifying
+    identifying = true
+    kind := ifx index == 0 then MODULE_INBE else ifx index == 4 then MODULE_DIARY else index
+    ok := ModuleOpen(*test, bytes, kind)
+    if ok {
+        if index == 0 {
+            ok = ModulePackageAssetsValid(test.bundle)
+        } else {
+
+            ok = BundleAssets(test.bundle) == cast(u64)0
+        }
+    }
+    identifying = previous
+    CloseBundleInstance(test.instance)
+    CloseBundle(test.bundle)
+    return ok
+}
+
+ModulePackageAssetsValid :: (bundle: *void) -> bool {
+    count := BundleAssets(bundle)
+    if count < cast(u64)2 || count > cast(u64)4 {
+        return false
+    }
+    found: [4]bool
+    names: [4]string = .["subapps/lists.zib", "subapps/habits.zib", "subapps/practices.zib", "subapps/diary.zib"]
+    for asset: cast(u64)0..count - cast(u64)1 {
+        matched := false
+        for feature: cast(s32)0..cast(s32)3 {
+            if TextFromCString(BundleAssetPath(bundle, asset)) == names[feature] && !found[feature] {
+                bytes := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset), BundleAssetLength(bundle, asset)))
+                if !SubappsValidatePackage(feature + 1, bytes) {
+                    return false
+                }
+                found[feature] = true
+                matched = true
+                break
+            }
+        }
+        if !matched {
+            return false
+        }
+    }
+    return found[1] && found[2]
+}
+
+DiaryRoute :: (screen: s32) -> bool {
+    diary_routing = true
+    diary_route_screen = screen
+    diary_route_allowed = false
+    ok := ModuleRun(*slots[4]) && diary_route_allowed
+    diary_routing = false
+    return ok
+}
+
+#program_export
+DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    if slots[4].bundle == null {
+        return message
+    }
+    // Diary is stateless across calls; dispose temporary decode/build storage
+    // after each previous call while the host keeps the unsaved editor state.
+    CloseBundleInstance(slots[4].instance)
+    slots[4].instance = null
+    previous := identifying
+    identifying = true
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
+    ready := ModuleInstantiate(*slots[4])
+    identifying = previous
+    if !ready {
+        return message
+    }
+    diary_message = message
+    if !ModuleRun(*slots[4]) {
+        return message
+    }
+    return diary_message
 }
 
 #program_export
@@ -448,4 +755,17 @@ SubappsRoute :: (screen: s32) -> bool {
     habits := HabitsRun(HabitsMessage.{.action = HABITS_ROUTE, .screen = screen})
     practice := PracticeRun(PracticeMessage.{.action = PRACTICE_ROUTE, .screen = screen})
     return (lists.succeeded && lists.visible) || habits.succeeded || practice.succeeded
+}
+
+#program_export
+SubappsReloadFeatures :: (mask: s32) -> bool {
+    for index: cast(s32)0..cast(s32)4 {
+        if index == 3 {
+            continue
+        }
+        CloseBundleInstance(slots[index].instance)
+        CloseBundle(slots[index].bundle)
+        slots[index] = ModuleSlot.{}
+    }
+    return SubappsSetEnabled(mask)
 }

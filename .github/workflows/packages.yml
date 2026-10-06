@@ -1,0 +1,87 @@
+name: App packages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/**'
+      - 'src/**'
+      - 'scripts/build-subapps.sh'
+      - 'scripts/package-release.py'
+      - 'scripts/generate-package-versions.py'
+      - 'scripts/update-package-version.py'
+      - 'ziran.lock'
+      - '.github/workflows/packages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inbe-package-publishing
+  cancel-in-progress: false
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ziran-packages
+      - name: Install signing and test dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-cryptography
+      - name: Build independent packages and check signatures
+        run: |
+          make subapps build-laws
+          python3 tests/package_release_test.py
+      - name: Configure publisher
+        id: publisher
+        env:
+          SIGNING_KEY: ${{ secrets.INBE_PACKAGE_SIGNING_KEY }}
+          KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
+          SSH_KEY: ${{ secrets.INBE_NODE_SSH_KEY }}
+          SSH_HOSTS: ${{ vars.INBE_NODE_KNOWN_HOSTS }}
+          TARGET: ${{ vars.INBE_NODE_SSH_TARGET }}
+          STORE: ${{ vars.INBE_NODE_PACKAGE_STORE }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          required = ('SIGNING_KEY', 'KEY_ID', 'SSH_KEY', 'SSH_HOSTS', 'TARGET', 'STORE')
+          configured = all(os.environ.get(name) for name in required)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('configured=' + str(configured).lower() + '\n')
+          if configured:
+              directory = Path(os.environ['RUNNER_TEMP']) / 'inbe-publisher'
+              directory.mkdir(mode=0o700)
+              for filename, name in (('publisher.pem', 'SIGNING_KEY'), ('node.key', 'SSH_KEY'), ('known_hosts', 'SSH_HOSTS')):
+                  path = directory / filename
+                  path.write_text(os.environ[name] + '\n')
+                  path.chmod(0o600)
+          else:
+              print('Publisher configuration is incomplete; built packages will be archived without publication.')
+          PY
+      - name: Sign and publish to Waozi's Daochi node
+        if: steps.publisher.outputs.configured == 'true'
+        env:
+          KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
+          TARGET: ${{ vars.INBE_NODE_SSH_TARGET }}
+          STORE: ${{ vars.INBE_NODE_PACKAGE_STORE }}
+        run: |
+          export INBE_SSH_IDENTITY="$RUNNER_TEMP/inbe-publisher/node.key"
+          export INBE_SSH_KNOWN_HOSTS="$RUNNER_TEMP/inbe-publisher/known_hosts"
+          python3 scripts/package-release.py --store build/package-releases \
+            --key "$RUNNER_TEMP/inbe-publisher/publisher.pem" --key-id "$KEY_ID" \
+            --ssh-target "$TARGET" --remote-store "$STORE"
+      - name: Archive packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: inbe-app-packages
+          path: |
+            build/inbe.zib
+            build/subapps/*.zib
+            build/package-releases/
+          if-no-files-found: error
+      - name: Remove signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/inbe-publisher"

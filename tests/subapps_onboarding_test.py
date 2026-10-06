@@ -62,7 +62,7 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
     log_path = OUTPUT / f"{label}.log"
     with log_path.open("w") as log:
         app = subprocess.Popen(
-            [sys.argv[1], *(["--mini"] if mini else []),
+            [sys.argv[1], "--bundle", str(ROOT / "build/inbe-full.zib"), *(["--mini"] if mini else []),
              *(["--feature", feature] if feature else [])], cwd=ROOT, env=environment,
             stdout=log, stderr=subprocess.STDOUT,
         )
@@ -80,7 +80,7 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
                     window = found.stdout.splitlines()[0]
                     break
                 time.sleep(0.1)
-            assert window, log_path.read_text()
+            assert window, (log_path.read_text(), found.stdout, found.stderr, list(profile.iterdir()))
             width = "400" if mini else "900"
             command("xdotool", "windowsize", window, width, "720")
             command("xdotool", "windowfocus", window)
@@ -111,12 +111,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         assert "screen=8->21" in log.read_text(), log.read_text()
         assert settings(profile)["apps_setup_done"] == "0"
         capture(window, "after-language-apps")
+        tap(window, 618, 594)
+        wait_setting(profile, "apps_auto_update", 0)
     # Restart between language and app selection must still show the chooser.
     with application(profile, "resume-chooser") as (window, log):
         capture(window, "resumed-apps")
-        tap(window, 260, 274)  # Habits off
-        tap(window, 260, 326)  # Practice off
-        tap(window, 450, 390)
+        assert settings(profile)["apps_auto_update"] == "0"
+        tap(window, 618, 594)
+        wait_setting(profile, "apps_auto_update", 1)
+        tap(window, 260, 254)  # Habits off
+        tap(window, 260, 326)  # Practices off
+        tap(window, 260, 438)  # Optional Lists on
+        tap(window, 450, 676)
         wait_setting(profile, "enabled_apps", 1)
         wait_setting(profile, "apps_setup_done", 1)
         assert "screen=21->16" in log.read_text(), log.read_text()
@@ -130,8 +136,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         db.execute("UPDATE settings SET value='0' WHERE key='apps_setup_done'")
     # The chooser can select no apps; Settings remains usable and data is kept.
     with application(profile, "choose-none") as (window, log):
-        tap(window, 260, 222)  # Lists off
-        tap(window, 450, 390)
+        tap(window, 260, 438)  # Lists off
+        tap(window, 450, 676)
         wait_setting(profile, "enabled_apps", 0)
         assert "screen=21->6" in log.read_text(), log.read_text()
         capture(window, "settings-no-apps")
@@ -143,14 +149,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
         tap(window, 650, 254)  # Reopen the chooser from Device settings.
         assert "screen=6->21" in log.read_text(), log.read_text()
-        tap(window, 260, 274)  # Reenable Habits.
-        tap(window, 450, 390)
+        tap(window, 260, 254)  # Reenable Habits.
+        tap(window, 450, 676)
         wait_setting(profile, "enabled_apps", 2)
         assert "screen=21->6" in log.read_text(), log.read_text()
         capture(window, "settings-habits-reenabled")
     # Mini is explicitly temporary Practice, independently of saved choices.
     for mask in (1, 0):
         with sqlite3.connect(profile / "inbe.db") as db:
+            db.execute("DELETE FROM settings WHERE key LIKE 'app_used_%'")
             db.execute("UPDATE settings SET value=? WHERE key='enabled_apps'", (str(mask),))
             db.execute("UPDATE settings SET value='0' WHERE key='exercise_type'")
             db.execute("UPDATE settings SET value='1' WHERE key='advanced_session_controls'")
@@ -212,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             tap(window, 110, 670)
             tap(window, 650, 254)
             assert "->21" in log.read_text(), log.read_text()
-            tap(window, 450, 390)
+            tap(window, 450, 676)
             assert "screen=21->6" in log.read_text(), log.read_text()
             assert settings(profile)["enabled_apps"] == str(mask)
             # Ctrl+Q follows the owned window's normal quit and app_destroy
@@ -233,6 +240,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             assert settings(profile)["enabled_apps"] == str(mask)
     # One host runtime can explicitly open disabled children, preserving data.
     with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("DELETE FROM settings WHERE key LIKE 'app_used_%'")
         db.execute("UPDATE settings SET value='0' WHERE key='enabled_apps'")
     with application(profile, "explicit-habits", feature="habits") as (window, log):
         wait_setting(profile, "enabled_apps", 2)
@@ -256,16 +264,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
     # An existing profile without the new settings keeps all three features.
     with sqlite3.connect(profile / "inbe.db") as db:
-        db.execute("DELETE FROM settings WHERE key IN ('enabled_apps','apps_setup_done')")
+        db.execute("DELETE FROM settings WHERE key IN ('enabled_apps','apps_setup_done') OR key LIKE 'app_used_%'")
         # This represents an established profile whose existing guides are done.
         db.execute("UPDATE settings SET value='1' WHERE key IN ('tutorial_seen','habits_guide_seen')")
     with application(profile, "existing-profile") as (window, log):
         capture(window, "existing-profile-all-apps")
-        tap(window, 110, 145)
+        tap(window, 110, 273)
         assert "->16" in log.read_text(), log.read_text()
         capture(window, "existing-data-lists")
     result.update(
         language_then_apps=True, restart_in_onboarding=True,
+        auto_update_switch_persists=True,
         lists_only=True, zero_apps_settings=True, restart_choices=True,
         settings_reenable=True, explicit_feature_cli=True, same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,
         mini_starts_practice_without_profile_writes=True,

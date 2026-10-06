@@ -38,6 +38,8 @@ string_count: s32;
 void_calls: s32;
 last_integer: s32;
 java_handle: s64;
+java_asset_maximum: s64;
+java_asset_cancelled: s64;
 registered_methods: s32;
 native_dark: NativeIntegerFn;
 native_practice: NativePracticeFn;
@@ -137,6 +139,12 @@ FakeMethod :: (env: *JniEnv, klass: *void, name: *u8,
     unused env
     unused klass
     Require(signature != null && signature[0] == #char "(", 15)
+    if CStringEquals(name, "startRuntimeAssetDownload") {
+        Require(CStringEquals(signature, "(Ljava/lang/String;Ljava/lang/String;JJ)V"), 97)
+    }
+    if CStringEquals(name, "cancelRuntimeAssetDownload") {
+        Require(CStringEquals(signature, "(J)V"), 98)
+    }
     index: s32 = 0
     while name[index] != 0 && index < 95 {
         method_name[index] = name[index]
@@ -180,6 +188,10 @@ FakeVoid :: (env: *JniEnv, object: *void, method: *void,
     }
     if CStringEquals(*method_name[0], "startRuntimeAssetDownload") {
         java_handle = arguments[2].long_integer
+        java_asset_maximum = arguments[3].long_integer
+    }
+    if CStringEquals(*method_name[0], "cancelRuntimeAssetDownload") {
+        java_asset_cancelled = arguments[0].long_integer
     }
     if CStringEquals(*method_name[0], "shareFile") {
         Require(CStringEquals(cast(*u8)arguments[2].reference, "export.csv"), 18)
@@ -479,8 +491,9 @@ main :: () -> s32 {
     SessionClose(input_session)
 
     error: [64]u8
-    handle := android_asset_start_host(*path[0], *path[0], *error[0], 64)
+    handle := android_asset_start_host(*path[0], *path[0], cast(u64)65536, *error[0], 64)
     Require(handle > 0 && java_handle == cast(s64)handle, 70)
+    Require(java_asset_maximum == 65536, 99)
     status: s32
     http_status: s32
     bytes: u64
@@ -495,6 +508,7 @@ main :: () -> s32 {
     Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
         *total_bytes, *error[0], 64) && status == 2, 73)
     android_asset_release_host(handle)
+    Require(java_asset_cancelled == cast(s64)handle, 100)
     Require(!android_asset_poll_host(handle, *status, *http_status, *bytes,
         *total_bytes, *error[0], 64), 74)
 

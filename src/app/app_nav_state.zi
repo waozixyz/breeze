@@ -19,6 +19,10 @@
 #import, file "../storage/account_types.zi";
 #import, file "navigation_routes.zi";
 #import, file "../subapps/inbe_types.zi";
+#import, file "../subapps/module_host.zi";
+#import, file "../subapps/catalog.zi";
+#import, file "../subapps/package_manager.zi";
+#import, file "settings_store.zi";
 #import, file "../screens/settings/settings_status.zi";
 
 using NavigationPlacement;
@@ -37,7 +41,10 @@ app_nav_route_available :: (app: *InnerBreeze, route: s32) -> bool {
     } else if route == APP_NAV_ROUTE_PRACTICE || route == APP_NAV_ROUTE_PRACTICES {
         bit = APP_PRACTICE
     }
-    return app != null && (bit == 0 || (app.enabled_apps & bit) != 0)
+    if route == APP_NAV_ROUTE_DIARY {
+        bit = APP_DIARY
+    }
+    return app != null && (bit == 0 || (app.enabled_apps & SubappsInstalledMask() & bit) != 0)
 }
 
 c :: #system_library "c";
@@ -46,7 +53,7 @@ save_settings :: (app: *InnerBreeze) #foreign c;
 sync_account_load :: (account: *SyncAccount) -> s32 #foreign c;
 storage_get_setting_text :: (key: string) -> string #foreign c;
 
-APP_BOTTOM_NAV_CONFIGURABLE_COUNT :: 5
+APP_BOTTOM_NAV_CONFIGURABLE_COUNT :: 6
 APP_NAV_CONFIG_ACTION_NONE :: 0
 APP_NAV_CONFIG_ACTION_MOVE :: 1
 APP_NAV_CONFIG_ACTION_REMOVE :: 2
@@ -114,11 +121,11 @@ app_nav_desktop_rail_enabled :: (app: *InnerBreeze) -> s32 {
     if app.breathing.screen == ScreenHabitSessionEdit  || app.breathing.screen == ScreenSession  || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation  || app.breathing.screen == ScreenPatterns  || app.breathing.screen == ScreenResults {
         return 0
     }
-    return cast(s32)(app.breathing.screen == ScreenStart  || app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenEList  || app.breathing.screen == ScreenProfile  || app.breathing.screen == ScreenSettings)
+    return cast(s32)(app.breathing.screen == ScreenStart  || app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenEList  || app.breathing.screen == ScreenDiary  || app.breathing.screen == ScreenProfile  || app.breathing.screen == ScreenSettings)
 }
 
 app_bottom_nav_configurable_route :: (route: s32) -> s32 {
-    return cast(s32)(route == APP_NAV_ROUTE_HABITS  || route == APP_NAV_ROUTE_ELIST  || route == APP_NAV_ROUTE_PRACTICE  || route == APP_NAV_ROUTE_PROFILE  || route == APP_NAV_ROUTE_SETTINGS)
+    return cast(s32)(route == APP_NAV_ROUTE_HABITS  || route == APP_NAV_ROUTE_ELIST  || route == APP_NAV_ROUTE_PRACTICE  || route == APP_NAV_ROUTE_PROFILE  || route == APP_NAV_ROUTE_SETTINGS || route == APP_NAV_ROUTE_DIARY)
 }
 
 #program_export
@@ -226,7 +233,7 @@ app_open_main_tab :: (app: *InnerBreeze, main_tab: s32, persist: s32) {
         return
     }
 
-    app.main_tab = Clamp(main_tab, APP_MAIN_TAB_HABITS, APP_MAIN_TAB_ELIST)
+    app.main_tab = Clamp(main_tab, APP_MAIN_TAB_HABITS, APP_MAIN_TAB_DIARY)
     if app.main_tab == APP_MAIN_TAB_PRACTICE {
         app.practice_tab = PRACTICE_TAB_PLAY
     }
@@ -286,6 +293,8 @@ app_apply_nav_route :: (app: *InnerBreeze, route: s32) {
         app_open_main_tab(app, APP_MAIN_TAB_HABITS, 1)
         case APP_NAV_ROUTE_ELIST;
         app_open_main_tab(app, APP_MAIN_TAB_ELIST, 1)
+        case APP_NAV_ROUTE_DIARY;
+        app_open_main_tab(app, APP_MAIN_TAB_DIARY, 1)
         case APP_NAV_ROUTE_SETTINGS;
         app_open_settings(app)
     }
@@ -349,6 +358,9 @@ app_page_height :: (app: *InnerBreeze, full_height: s32) -> s32 {
 
 #program_export
 app_nav_route_label :: (route: s32) -> string {
+    if route == APP_NAV_ROUTE_DIARY {
+        return LocaleText("tab_diary")
+    }
     if route == APP_NAV_ROUTE_PROFILE {
         return LocaleText("tab_profile")
     }
@@ -404,6 +416,9 @@ app_current_nav_route :: (app: *InnerBreeze) -> s32 {
     }
     if app.breathing.screen == ScreenEList {
         return APP_NAV_ROUTE_ELIST
+    }
+    if app.breathing.screen == ScreenDiary {
+        return APP_NAV_ROUTE_DIARY
     }
     return APP_NAV_ROUTE_NONE
 }
@@ -606,7 +621,7 @@ app_nav_config_option_count :: (app: *InnerBreeze) -> s32 {
     if app_nav_bottom_profile_enabled(app) != 0 {
         return APP_BOTTOM_NAV_CONFIGURABLE_COUNT
     }
-    return 4
+    return 5
 }
 
 #program_export
@@ -620,8 +635,10 @@ app_nav_route_for_option :: (app: *InnerBreeze, option: s32) -> s32 {
     if app_nav_bottom_profile_enabled(app) != 0 {
         routes[3] = APP_NAV_ROUTE_PROFILE
         routes[4] = APP_NAV_ROUTE_SETTINGS
+        routes[5] = APP_NAV_ROUTE_DIARY
     } else {
         routes[3] = APP_NAV_ROUTE_SETTINGS
+        routes[4] = APP_NAV_ROUTE_DIARY
     }
 
     if option < 0 || option >= count {
@@ -672,8 +689,10 @@ app_first_unused_bottom_nav_route :: (app: *InnerBreeze) -> s32 {
     if app_nav_bottom_profile_enabled(app) != 0 {
         routes[3] = APP_NAV_ROUTE_PROFILE
         routes[4] = APP_NAV_ROUTE_SETTINGS
+        routes[5] = APP_NAV_ROUTE_DIARY
     } else {
         routes[3] = APP_NAV_ROUTE_SETTINGS
+        routes[4] = APP_NAV_ROUTE_DIARY
     }
 
     if app == null {
@@ -711,4 +730,67 @@ app_settings_wide_layout :: (app: *InnerBreeze) -> s32 {
     width := ifx app != null then app.ui.view_width else 0
     height := ifx app != null then app.ui.view_height else 0
     return cast(s32)(width >= AppScale(620) && height >= AppScale(476))
+}
+
+// Build navigation from the selected, locally available applications.
+#program_export
+app_update_app_navigation :: (app: *InnerBreeze) {
+    previous: [5]s32
+    count: s32 = 0
+    for index: cast(s32)0..app.bottom_nav_route_count - 1 {
+        route := app.bottom_nav_routes[index]
+        if route != APP_NAV_ROUTE_SETTINGS && app_nav_route_available(app, route) && count < 4 {
+            previous[count] = route
+            count += 1
+        }
+    }
+    routes: [4]s32 = .[APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_PRACTICE,
+    APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_DIARY]
+    for index: cast(s32)0..cast(s32)3 {
+        found := false
+        for item: cast(s32)0..count - 1 {
+            if previous[item] == routes[index] {
+                found = true
+            }
+        }
+        if !found && count < 4 && app_nav_route_available(app, routes[index]) {
+            previous[count] = routes[index]
+            count += 1
+        }
+    }
+    for index: cast(s32)0..count - 1 {
+        app.bottom_nav_routes[index] = previous[index]
+    }
+    app.bottom_nav_routes[count] = APP_NAV_ROUTE_SETTINGS
+    app.bottom_nav_route_count = count + 1
+}
+
+#program_export
+app_reload_app_choices :: (app: *InnerBreeze) {
+    mask := app.enabled_apps
+    for index: cast(s32)1..cast(s32)4 {
+        bit := PackageBit(index)
+        enabled := SettingsReadInt(PackagePreferenceKey(index), ifx (mask & bit) != 0 then 1 else 0)
+        if enabled != 0 {
+            mask |= bit
+        } else {
+            mask &= ~bit
+        }
+    }
+    if mask == app.enabled_apps {
+        return
+    }
+    app.enabled_apps = mask
+    app.apps_selected = 1
+    if SubappsSetEnabled(mask) {
+        for index: cast(s32)1..cast(s32)4 {
+            if (mask & PackageBit(index)) != 0 && (SubappsInstalledMask() & PackageBit(index)) == 0 {
+                PackageRequest(index)
+            }
+        }
+        app_update_app_navigation(app)
+        if !InbeAllows(app.breathing.screen) {
+            app.breathing.screen = ScreenAppSelection
+        }
+    }
 }

@@ -2,8 +2,8 @@
 #define APP_VERSION_H
 
 #define APP_VERSION_MAJOR 2
-#define APP_VERSION_MINOR 0
-#define APP_VERSION_PATCH 12
-#define APP_VERSION_STRING "2.0.12"
+#define APP_VERSION_MINOR 1
+#define APP_VERSION_PATCH 0
+#define APP_VERSION_STRING "2.1.0"
 
 #endif

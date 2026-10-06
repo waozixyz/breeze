@@ -1,4 +1,12 @@
 # Changelog
+## [2.1.0] - 2026-10-06
+### Added
+- Choose recommended Habits and Practices or download optional Lists and Diary from the app picker.
+- Receive verified app module updates independently, with a switch to disable automatic updates and a manual update check.
+- Sync selected apps with your account, including removals, while keeping saved data on each device.
+- Write private daily entries in Diary and browse them by calendar, preserving the existing Harmony entry format.
+- View the main application version and each app module version in About.
+
 ## [2.0.12] - 2026-10-06
 ### Fixed
 - Restore banners and navigation icons when returning to the Android app or changing orientation.

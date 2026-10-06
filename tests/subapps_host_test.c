@@ -6,9 +6,39 @@
 #include <stdlib.h>
 #include <string.h>
 
-static unsigned char *payloads[8];
-static size_t sizes[8];
+static unsigned char *payloads[9];
+static size_t sizes[9];
 static int32_t module_runs;
+static bool use_cached_bundles;
+static int32_t cached_reads[5];
+
+void ModuleTestUseCache(bool enabled)
+{
+    use_cached_bundles = enabled;
+    memset(cached_reads, 0, sizeof(cached_reads));
+}
+
+int32_t ModuleTestCachedReads(int32_t index)
+{
+    assert(index >= 0 && index < 5);
+    return cached_reads[index];
+}
+
+extern String __real_package_manager_PackageInstalledBytes(int32_t index);
+String __wrap_package_manager_PackageInstalledBytes(int32_t index)
+{
+    if(!use_cached_bundles) {
+        return __real_package_manager_PackageInstalledBytes(index);
+    }
+    assert(index >= 0 && index < 5);
+    cached_reads[index]++;
+    const int fixture[] = {5, 0, 1, 2, 8};
+    int source = fixture[index];
+    char *copy = malloc(sizes[source]);
+    assert(copy);
+    memcpy(copy, payloads[source], sizes[source]);
+    return StringView(copy, sizes[source]);
+}
 
 int __real_BundleInstanceRun(BundleInstance *instance, long long *result,
                              int *has_result);
@@ -28,21 +58,22 @@ int32_t ModuleTestRuns(void)
 bool ModuleTestPackageBytes(void)
 {
     Bundle *root = BundleOpenBytes(payloads[5], sizes[5]);
-    if(root == NULL || BundleAssetCount(root) != 3) {
+    if(root == NULL || BundleAssetCount(root) != 4) {
         BundleClose(root);
         return false;
     }
-    const char *names[] = {"subapps/lists.zib", "subapps/habits.zib", "subapps/practice.zib"};
-    bool matched[3] = {false, false, false};
+    const char *names[] = {"subapps/lists.zib", "subapps/habits.zib", "subapps/practices.zib", "subapps/diary.zib"};
+    bool matched[4] = {false, false, false, false};
     bool valid = true;
     for(size_t asset = 0; asset < BundleAssetCount(root); asset++) {
         bool found = false;
-        for(size_t feature = 0; feature < 3; feature++) {
+        for(size_t feature = 0; feature < 4; feature++) {
             if(strcmp(BundleAssetName(root, asset), names[feature]) != 0) {
                 continue;
             }
-            found = !matched[feature] && BundleAssetSize(root, asset) == sizes[feature] &&
-                    memcmp(BundleAssetData(root, asset), payloads[feature], sizes[feature]) == 0;
+            int payload = feature == 3 ? 8 : (int)feature;
+            found = !matched[feature] && BundleAssetSize(root, asset) == sizes[payload] &&
+                    memcmp(BundleAssetData(root, asset), payloads[payload], sizes[payload]) == 0;
             matched[feature] = found;
             Bundle *nested = BundleOpenBytes(BundleAssetData(root, asset), BundleAssetSize(root, asset));
             valid = valid && nested != NULL && BundleAssetCount(nested) == 0;
@@ -51,8 +82,10 @@ bool ModuleTestPackageBytes(void)
         valid = valid && found;
     }
     BundleClose(root);
-    return valid && matched[0] && matched[1] && matched[2];
+    return valid && matched[0] && matched[1] && matched[2] && matched[3];
 }
+
+void app_web_storage_flush(void) {}
 
 extern int32_t CheckModules(void);
 extern void *storage_db_handle(void);
@@ -72,8 +105,8 @@ size_t asset_entry_total(void)
 String ModuleTestText(String name)
 {
     const char *names[] = {"lists", "habits", "practice", "wrong-record", "wrong-scalar",
-                           "inbe", "missing-assets", "invalid-nested"};
-    for(int i = 0; i < 8; i++) {
+                           "inbe", "missing-assets", "invalid-nested", "diary"};
+    for(int i = 0; i < 9; i++) {
         if(StringEqual(name, StringView(names[i], strlen(names[i])))) {
             return StringView((char *)payloads[i], sizes[i]);
         }
@@ -128,8 +161,8 @@ FILE *__wrap_tmpfile(void)
 
 int main(int argc, char **argv)
 {
-    assert(argc == 9);
-    for(int i = 0; i < 8; i++) {
+    assert(argc == 10);
+    for(int i = 0; i < 9; i++) {
         FILE *file = fopen(argv[i + 1], "rb");
         assert(file != NULL);
         assert(fseek(file, 0, SEEK_END) == 0);
@@ -141,13 +174,13 @@ int main(int argc, char **argv)
         fclose(file);
     }
     int result = CheckModules();
-    for(int i = 0; i < 8; i++) {
+    for(int i = 0; i < 9; i++) {
         free(payloads[i]);
     }
     if(result != 0) {
         fprintf(stderr, "Module integration failed: %d\n", result);
     } else {
-        puts("Root and three nested bundles: app selection, routes, edits, shared SQLite/identity, practices, migration/restart and invalid-schema handling passed");
+        puts("Root and four independent bundles: app selection, routes, edits, shared SQLite/identity, practices, migration/restart and invalid-schema handling passed");
     }
     return result != 0;
 }

@@ -1,0 +1,114 @@
+// Private package cache. Only validated files are published as current.
+#import "file_linux"
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import, file "catalog.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/paths.zi";
+#import, file "../platform/web_storage.zi";
+
+PackageText :: (parts: string, suffix: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", parts)
+    BuilderPrint(*out, "%", suffix)
+    return BuilderFinish(out)
+}
+
+PackageFree :: (value: string) {
+    if value.count == 0 {
+        return
+    }
+    bytes := cast(*TextDescriptor)(*value)
+    PackageFreeRaw(bytes.data)
+}
+c :: #system_library "c";
+PackageFreeRaw :: (bytes: *u8) #foreign c "free";
+
+PackageDirectory :: () -> string {
+    database := storage_db_path()
+    at := database.count - 1
+    while at >= 0 && database[at] != cast(u8)47 && database[at] != cast(u8)92 {
+        at -= 1
+    }
+    if at < 0 {
+        return ""
+    }
+    return PackageText(database[:at + 1], "packages")
+}
+
+PackagePath :: (index: s32, suffix: string) -> string {
+    directory := PackageDirectory()
+    defer {
+        PackageFree(directory)
+    }
+    if directory.count == 0 || PackageName(index).count == 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%/%", directory, PackageName(index))
+    BuilderPrint(*out, "%", suffix)
+    return BuilderFinish(out)
+}
+
+PackageRead :: (path: string, maximum: s64) -> string {
+    file := OpenRead(path)
+    if !file.valid {
+        return ""
+    }
+    defer {
+        unused CloseFile(file)
+    }
+    length := FileSize(file)
+    if length <= 0 || length > maximum {
+        return ""
+    }
+    bytes: Vec(u8)
+    for index: 0..length - 1 {
+        if !VecPush(bytes, cast(u8)0) {
+            VecFree(bytes);
+            return ""
+        }
+    }
+    at: s64 = 0
+    while at < length {
+        count := ReadAt(file, VecSlice(bytes, at, length), at)
+        if count <= 0 {
+            VecFree(bytes);
+            return ""
+        }
+        at += count
+    }
+    return BuilderFinish(bytes)
+}
+
+PackageWrite :: (path: string, value: string) -> bool {
+    temporary := PackageText(path, ".new")
+    defer {
+        PackageFree(temporary)
+    }
+    file := OpenReplace(temporary)
+    if !file.valid {
+        return false
+    }
+    ok := WriteTextAt(file, value, 0) == value.count && SyncFile(file)
+    closed := CloseFile(file)
+    if !ok || !closed || !RenamePath(temporary, path) {
+        unused RemoveFile(temporary)
+        return false
+    }
+    at := path.count - 1
+    while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 {
+        at -= 1
+    }
+    if at < 0 {
+        return false
+    }
+    folder := OpenRead(path[:at])
+    if folder.valid {
+        unused SyncFile(folder)
+        unused CloseFile(folder)
+    }
+    sync_web_storage()
+    return true
+}

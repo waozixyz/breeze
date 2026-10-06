@@ -139,6 +139,17 @@ function isInside(base, path) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
+  if (url.pathname === '/__test_subapps__/lists.zib') {
+    const fixture = new URL('../build/subapps/lists.zib', import.meta.url);
+    if (!existsSync(fixture)) {
+      res.writeHead(404);
+      res.end('Build the subapp fixtures before running the smoke test');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    createReadStream(fixture).pipe(res);
+    return;
+  }
   const leaf = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
   if (siteWorker) {
     const assetUrl = new URL(url);

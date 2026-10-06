@@ -16,6 +16,13 @@
 #import, file "../app/metrics.zi";
 #import, file "../subapps/module_host.zi";
 #import, file "../subapps/inbe_types.zi";
+#import, file "../subapps/catalog.zi";
+#import, file "../subapps/package_manager.zi";
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "toggle_props"
+#import "toggle_widget"
 #import, file "../core/types.zi";
 using ButtonTone;
 using ButtonEmphasis;
@@ -24,25 +31,52 @@ using AppMainTab;
 #program_export
 app_selection_screen_draw :: (app: *InnerBreeze) {
     column := CenteredColumnFor(app.ui.view_width, AppScale(420), AppScale(16))
-    top := AppScale(28)
+    top := AppScale(20)
+    compact := app.ui.view_height < AppScale(480)
+    scroll_top := ifx compact then AppScale(104) else AppScale(192)
+    content_height := AppScale(504)
+    for package: cast(s32)1..cast(s32)4 {
+        if PackageStatus(package) >= 3 {
+            content_height += AppScale(16)
+        }
+    }
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)column.x, cast(float32)top,
-                cast(float32)column.width, cast(float32)AppScale(56)},
+                cast(float32)column.width, cast(float32)(ifx compact then AppScale(28) else AppScale(56))},
             .text = LocaleText("apps_picker_title"), .font = AppFontSize()})
     Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(top + AppScale(64)),
-                cast(float32)column.width, cast(float32)AppScale(96)},
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(top + (ifx compact then AppScale(32) else AppScale(64))),
+                cast(float32)column.width, cast(float32)(ifx compact then AppScale(44) else AppScale(100))},
             .text = LocaleText("apps_picker_body"), .font = AppFontSize()})
-    labels: [3]string = .[LocaleText("tab_elist"), LocaleText("tab_habits"),
-    LocaleText("tab_practice")]
+    scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)27000,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)scroll_top,
+                cast(float32)column.width, cast(float32)(app.ui.view_height - scroll_top - AppScale(80))},
+            .content_height = content_height, .scroll_offset = app.app_selection_scroll})
+    app.app_selection_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return
+    }
+    content_width := cast(s32)scroll.content.width
+    row_top := cast(s32)scroll.content.y
+    labels: [4]string = .[LocaleText("tab_habits"), LocaleText("tab_practices"),
+    LocaleText("tab_elist"), LocaleText("tab_diary")]
+    packages: [4]s32 = .[2, 3, 1, 4]
     index: s32 = 0
-    while index < 3 {
-        bit: s32 = cast(s32)1 << index
+    while index < 4 {
+        if index == 0 || index == 2 {
+            Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)column.x,
+                        cast(float32)row_top, cast(float32)content_width, cast(float32)AppScale(36)},
+                    .text = LocaleText(ifx index == 0 then "apps_recommended" else "apps_optional"),
+                    .font = AppFontSize()})
+            row_top += AppScale(40)
+        }
+        package := packages[index]
+        bit := PackageBit(package)
         checkbox := Checkbox(app.ui.session, CheckboxProps.{
-                .id = 270 + index,
+                .id = 270 + package - 1,
                 .bounds = Rectangle.{cast(float32)column.x,
-                    cast(float32)(top + AppScale(172) + index * AppScale(52)),
-                    cast(float32)column.width, cast(float32)AppScale(44)},
+                    cast(float32)row_top,
+                    cast(float32)content_width, cast(float32)AppScale(44)},
                 .label = labels[index], .checked = (app.enabled_apps & bit) != 0})
         if checkbox.changed {
             result := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
@@ -51,11 +85,51 @@ app_selection_screen_draw :: (app: *InnerBreeze) {
                 app.enabled_apps = result.enabled_apps
             }
         }
+        row_top += AppScale(44)
+        {
+            status := PackageStatus(package)
+            key := ifx ((SubappsInstalledMask() & bit) != 0 || PackageAvailable(package)) then "apps_installed" else "apps_download"
+            if status == 1 {
+                key = "update_downloading"
+            }
+            else if status == 3 {
+                key = "apps_download_failed"
+            }
+            else if status == 4 {
+                key = "apps_signing_setup"
+            }
+            Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)(column.x + AppScale(32)),
+                        cast(float32)row_top, cast(float32)(content_width - AppScale(32)),
+                        cast(float32)(ifx status >= 3 then AppScale(44) else AppScale(28))},
+                    .text = LocaleText(key), .font = AppScale(14)})
+            row_top += ifx status >= 3 then AppScale(44) else AppScale(28)
+        }
         index += 1
     }
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(row_top + AppScale(12)),
+                cast(float32)(content_width - AppScale(80)), cast(float32)AppScale(44)},
+            .text = LocaleText("apps_auto_update"), .font = AppFontSize()})
+    automatic := Toggle(app.ui.session, ToggleProps.{.id = 276,
+            .bounds = Rectangle.{cast(float32)(column.x + content_width - AppScale(64)),
+                cast(float32)(row_top + AppScale(12)), cast(float32)AppScale(64), cast(float32)AppScale(44)},
+            .label = LocaleText("apps_auto_update"), .value = PackageAutomaticEnabled()})
+    if automatic.changed {
+        PackageSetAutomatic(automatic.value)
+    }
+    row_top += AppScale(64)
+    if Button(app.ui.session, ButtonProps.{.id = 277,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)row_top,
+                cast(float32)content_width, cast(float32)AppScale(44)},
+            .label = LocaleText("apps_check_updates"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        PackageRequestAll(app.enabled_apps)
+    }
+    End(app.ui.session)
     if Button(app.ui.session, ButtonProps.{.id = 274,
             .bounds = Rectangle.{cast(float32)column.x,
-                cast(float32)(top + AppScale(340)), cast(float32)column.width,
+                cast(float32)(app.ui.view_height - AppScale(64)), cast(float32)column.width,
                 cast(float32)AppScale(44)},
             .label = LocaleText("next_button"),
             .tone = cast(ButtonTone)ButtonToneNeutral,
@@ -63,8 +137,14 @@ app_selection_screen_draw :: (app: *InnerBreeze) {
         if !SubappsSetEnabled(app.enabled_apps) {
             return
         }
+        for package: cast(s32)1..cast(s32)4 {
+            bit := PackageBit(package)
+            if (app.enabled_apps & bit) != 0 && (SubappsInstalledMask() & bit) == 0 {
+                PackageRequest(package)
+            }
+        }
         result := InbeRun(InbeMessage.{.action = INBE_CONFIGURE,
-                .enabled_apps = app.enabled_apps})
+                .enabled_apps = app.enabled_apps & SubappsInstalledMask()})
         if !result.succeeded {
             return
         }
@@ -77,6 +157,10 @@ app_selection_screen_draw :: (app: *InnerBreeze) {
         } else if result.screen == ScreenEList {
             app.main_tab = APP_MAIN_TAB_ELIST
         }
+        if result.screen == ScreenDiary {
+            app.main_tab = APP_MAIN_TAB_DIARY
+        }
+        app_update_app_navigation(app)
         save_settings(app)
         destination := ifx app.app_selection_return_to_settings then ScreenSettings else result.screen
         app.app_selection_return_to_settings = false

@@ -21,6 +21,8 @@ for file in [
 constants = {"CountSize": 4, "MaxRounds": 12}
 roots = [
     "InbeMessage",
+    "DiaryMessage",
+    "DiaryFileResult",
     "ListsMessage",
     "ListsMutation",
     "ListsMutationResult",
@@ -47,7 +49,7 @@ lines = [
     "// No native application pointers cross the portable module boundary.",
     *[
         f'#import, file "{name}_types.zi";'
-        for name in ["module", "lists", "habits", "practice", "inbe"]
+        for name in ["module", "lists", "habits", "practice", "inbe", "diary"]
     ],
     '#import "bundle_host"',
     '#import "byte_text_linux"',

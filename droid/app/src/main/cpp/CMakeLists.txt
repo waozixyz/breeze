@@ -228,10 +228,12 @@ execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runt
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${APP_SUBAPP_INPUTS} "${REPO_ROOT}/scripts/build-subapps.sh"
+    "${REPO_ROOT}/scripts/generate-package-versions.py" "${REPO_ROOT}/apps/versions.json"
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
 
 set(APP_EMBEDDED_INPUTS
     build/inbe.zib
+    apps/publishers.json
     ${APP_STYLE_ASSETS}
     ${APP_LOCALE_ASSETS}
     assets/app/icon.png

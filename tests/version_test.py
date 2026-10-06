@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise the release guard and updater in disposable checkouts."""
+"""Exercise the release guard and updater in disposable release fixtures."""
 
 from pathlib import Path
+import json
 import re
 import shutil
 import subprocess
@@ -20,6 +21,9 @@ class VersionTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         paths = (
             "CHANGELOG.md", "Makefile", "mkfile", "update_version.sh",
+            "apps/versions.json", "apps/practice/CHANGELOG.md",
+            "src/subapps/versions.zi",
+            "scripts/update-package-version.py", "scripts/generate-package-versions.py",
             "src/core/version.h", "src/core/version.zi",
             "src/storage/sync_result.zi",
             "droid/app/build.gradle", "windows/inbe.rc",
@@ -40,6 +44,27 @@ class VersionTest(unittest.TestCase):
         shutil.copytree(REPO / "fastlane", self.root / "fastlane")
         self.version = re.search(r'^#define APP_VERSION_STRING "([^"]+)"',
                                  self.read("src/core/version.h"), re.MULTILINE)[1]
+
+    def test_module_release_retains_wrapper_version(self):
+        wrapper = self.read("src/core/version.zi")
+        android = self.read("droid/app/build.gradle")
+        ledger = json.loads(self.read("apps/versions.json"))
+        component = ledger["apps"]["practices"]
+        previous = component.copy()
+        major, minor, patch = map(int, previous["version"].split("."))
+        latest = f"{major}.{minor}.{patch + 1}"
+        (self.root / "apps/practice/CHANGELOG.md").write_text(f"## [{latest}] - 2026-10-06\nUpdated practices.\n")
+        for attempt in range(2):
+            result = subprocess.run(["bash", str(self.root / "update_version.sh"), "--module", "practices"],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        changed = json.loads(self.read("apps/versions.json"))
+        self.assertEqual(changed["apps"]["practices"]["version"], latest)
+        self.assertEqual(changed["apps"]["practices"]["sequence"], previous["sequence"] + 1)
+        for name in ("inbe", "habits", "lists", "diary"):
+            self.assertEqual(changed["apps"][name], ledger["apps"][name])
+        self.assertEqual(self.read("src/core/version.zi"), wrapper)
+        self.assertEqual(self.read("droid/app/build.gradle"), android)
 
     def read(self, name):
         return (self.root / name).read_text()

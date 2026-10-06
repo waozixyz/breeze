@@ -70,7 +70,11 @@ export const musicAudioInstrumentation = `(${installMusicProbe.toString()})()`;
 export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, callHook, settle }) {
   await resize(1280, 1600);
   await callHook('app_web_test_save_onboarding_state');
-  await evaluate(`(() => {
+  await evaluate(`(async () => {
+    const bundle = await fetch('/__test_subapps__/lists.zib');
+    if (!bundle.ok) throw new Error('Lists test fixture is unavailable');
+    Module.FS.writeFile('/tmp/inbe-navigation-lists.zib',
+      new Uint8Array(await bundle.arrayBuffer()));
     const sampleRate = 24000;
     const frames = sampleRate * 40;
     const bytes = new Uint8Array(44 + frames * 2);
@@ -93,7 +97,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
     const ogg = Module.FS.readFile('/assets/sounds/bell.ogg');
     for (const name of ['deep-meditation', 'path-of-meditation', 'truth-of-silence'])
       Module.FS.writeFile('/unpackaged_assets/audio/Elijah_K/' + name + '.ogg', ogg);
-  })()`);
+  })()`, true);
   await callHook('app_web_test_prepare_music');
   await delay(250);
 

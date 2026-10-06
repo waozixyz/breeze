@@ -24,6 +24,7 @@ app_force_dark_mode :: () -> bool #foreign c;
 #import, file "settings_store.zi";
 #import, file "bottom_nav_policy.zi";
 #import, file "../subapps/inbe_types.zi";
+#import, file "../subapps/catalog.zi";
 #import, file "profile_picture_policy.zi";
 #import, file "../platform/environment.zi";
 #import, file "../platform/web_storage.zi";
@@ -80,6 +81,7 @@ load_bottom_nav_routes :: (app: *InnerBreeze) {
     SettingsCacheInt("bottom_nav_route_2", APP_NAV_ROUTE_PRACTICE)
     app.bottom_nav_routes[3] =
     SettingsCacheInt("bottom_nav_route_3", APP_NAV_ROUTE_SETTINGS)
+    app.bottom_nav_routes[4] = SettingsCacheInt("bottom_nav_route_4", APP_NAV_ROUTE_NONE)
     profile_allowed := DesktopPlatform() != 0  && IsDesktopWidth(app.ui.view_width, 1.0)
     app.bottom_nav_route_count = BottomNavSanitize(
         app.bottom_nav_routes[:], app.bottom_nav_route_count, profile_allowed)
@@ -180,6 +182,7 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("bottom_nav_route_1", app.bottom_nav_routes[1])
     save_setting_int("bottom_nav_route_2", app.bottom_nav_routes[2])
     save_setting_int("bottom_nav_route_3", app.bottom_nav_routes[3])
+    save_setting_int("bottom_nav_route_4", app.bottom_nav_routes[4])
     save_setting_int("main_tab", app.main_tab)
     SettingsStoreText("profile_display_name", app.profile_display_name[:])
     SettingsStoreText("profile_intention", app.profile_intention[:])
@@ -302,6 +305,12 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("language_setup_done", ifx app.language_selected != 0 then 1 else 0)
     save_setting_int("enabled_apps", app.enabled_apps)
     save_setting_int("apps_setup_done", app.apps_selected)
+    if app.apps_selected != 0 {
+        for index: cast(s32)1..cast(s32)4 {
+            save_setting_int(PackagePreferenceKey(index),
+                ifx (app.enabled_apps & PackageBit(index)) != 0 then 1 else 0)
+        }
+    }
     SettingsEndWrite()
     sync_web_storage()
     app.settings_dirty = 0
@@ -659,7 +668,20 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     load_language_setting(app, settings_missing)
     // Existing profiles keep every feature; a fresh profile follows language
     // with the app chooser, including after restarting mid-onboarding.
-    app.enabled_apps = SettingsCacheInt("enabled_apps", APP_ALL) & APP_ALL
+    app.enabled_apps = SettingsCacheInt("enabled_apps",
+        ifx settings_missing != 0 then APP_RECOMMENDED else APP_LISTS | APP_RECOMMENDED) & APP_ALL
+    for index: cast(s32)1..cast(s32)4 {
+        key := PackagePreferenceKey(index)
+        if SettingsCacheContains(key) {
+            bit := PackageBit(index)
+            if SettingsCacheInt(key, 0) != 0 {
+                app.enabled_apps |= bit
+            }
+            else {
+                app.enabled_apps &= ~bit
+            }
+        }
+    }
     app.apps_selected = SettingsCacheInt("apps_setup_done",
         ifx settings_missing != 0 then 0 else 1)
 

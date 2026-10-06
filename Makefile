@@ -393,15 +393,16 @@ IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-SUBAPP_BUNDLES := $(addprefix $(BUILD_DIR)/subapps/,lists.zib habits.zib practice.zib)
+SUBAPP_BUNDLES := $(addprefix $(BUILD_DIR)/subapps/,lists.zib habits.zib practices.zib diary.zib)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
+INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zib
 SUBAPP_SOURCES := $(shell find apps src/subapps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 .PHONY: subapps
-subapps: $(SUBAPP_BUNDLES) $(INBE_BUNDLE)
-$(SUBAPP_BUNDLES) $(INBE_BUNDLE) &: $(SUBAPP_SOURCES) ziran.lock scripts/build-subapps.sh $(ZIRAN_BIN)
+subapps: $(SUBAPP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
+$(SUBAPP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(SUBAPP_SOURCES) ziran.lock apps/versions.json scripts/generate-package-versions.py scripts/build-subapps.sh $(ZIRAN_BIN)
 	sh scripts/build-subapps.sh $(ZIRAN_BIN)
 
-EMBEDDED_ASSET_FILES := $(INBE_BUNDLE) $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort)
 GAME2D_DIR := build/packages/game2d
@@ -2909,3 +2910,19 @@ data-back-ui-test: $(TARGET)
 	@sh tests/data_back_ui_test.sh $(abspath $(TARGET))
 
 test: app-click-block-zi-test
+
+.PHONY: package-release-test
+package-release-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a
+	python3 tests/package_release_test.py
+
+test: package-release-test
+
+.PHONY: app-preferences-sync-test
+app-preferences-sync-test:
+	python3 tests/app_preferences_sync_test.py
+
+test: app-preferences-sync-test
+
+.PHONY: subapps-diary-test
+subapps-diary-test: $(TARGET)
+	sh tests/subapps_diary_test.sh $(abspath $(TARGET))

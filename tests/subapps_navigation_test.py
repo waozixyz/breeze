@@ -63,6 +63,9 @@ def application(scene):
         app = subprocess.Popen(
             [
                 sys.argv[1],
+                "--bundle",
+                str(ROOT / "build/inbe-full.zib"),
+                *(["--feature", "lists"] if scene == "lists" else []),
                 "--screenshot",
                 str(OUTPUT / f"{scene}-initial.png"),
                 "--screenshot-scene",
@@ -183,10 +186,10 @@ with application("lists") as (app, window, database):
         result["populated_lists"]["usage_samples"].append(usage(app.pid))
     before = capture(window, "lists-final")
     for name, y in (
-        ("habits", 210),
-        ("practice", 275),
+        ("habits", 145),
+        ("practice", 209),
         ("settings", 670),
-        ("lists", 145),
+        ("lists", 273),
     ):
         tap(window, 110, y)
         after = capture(window, f"navigation-{name}")

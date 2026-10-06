@@ -24,7 +24,7 @@ result["root_bundle"] = {
     "bytes": len(root_payload),
     "embedded_identically": True,
 }
-for name in ("lists", "habits", "practice"):
+for name in ("habits", "practices"):
     path = ROOT / "build/subapps" / f"{name}.zib"
     payload = path.read_bytes()
     assert data.count(payload) == 1, f"{name} payload missing or duplicated"
@@ -35,6 +35,11 @@ for name in ("lists", "habits", "practice"):
         "bytes": len(payload),
         "embedded_identically": True,
     }
+
+for name in ("lists", "diary"):
+    payload = (ROOT / "build/subapps" / f"{name}.zib").read_bytes()
+    assert payload not in root_payload, f"optional {name} is embedded in the APK"
+    assert payload not in data, f"optional {name} is embedded in the native wrapper"
 
 # A renamed generated path must not leave a second, stale codec/header pair.
 generated = ROOT / "build/kryon/generated"

@@ -32,11 +32,10 @@ WEB_ASSET_DOWNLOAD :: #defined(PLATFORM_WEB)
     HostAssetSeek :: (file: *void, offset: s64,
         origin: s32) -> s32 #foreign c "fseek";
     HostAssetTell :: (file: *void) -> s64 #foreign c "ftell";
+    HostAssetFormat :: (out: *u8, size: usize, format: *u8, args: ..any) -> s32 #foreign c "snprintf";
     HostAssetClose :: (file: *void) -> s32 #foreign c "fclose";
 }
 
-asset_temp_path: [4096]u8;
-asset_destination_path: [4096]u8;
 
 AssetDownloadError :: (download: *AssetDownload, message: string) {
     download.status = cast(AssetDownloadStatus)Error
@@ -59,6 +58,9 @@ DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
     download.total_bytes = cast(u64)0
     download.http_status = 0
     download.error[0] = cast(u8)0
+    if download.maximum_bytes == cast(u64)0 {
+        download.maximum_bytes = cast(u64)536870912
+    }
 
     #if WEB_ASSET_DOWNLOAD {
         return BrowserAssetDownloadStart(download, url, destination)
@@ -68,7 +70,7 @@ DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
         url_bytes: [4096]u8
         destination_bytes: [4096]u8
         if !CopyCString(url, url_bytes[:]) ||
-            !CopyCString(destination, destination_bytes[:]) {
+        !CopyCString(destination, destination_bytes[:]) {
             AssetDownloadError(download, "invalid download path")
             return 0
         }
@@ -81,23 +83,23 @@ DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
 
     #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
         if destination.count + 6 >= 4096 || url.count >= 4096 ||
-            !CopyCString(destination, asset_destination_path[:]) {
+        !CopyCString(destination, download.destination[:]) {
             AssetDownloadError(download, "invalid download path")
             return 0
         }
         url_bytes: [4096]u8
         if !CopyCString(url, url_bytes[:]) ||
-            !CopyCString(destination, asset_temp_path[:]) {
+        !CopyCString(destination, download.temporary[:]) {
             AssetDownloadError(download, "invalid download URL")
             return 0
         }
         path_end: s32 = cast(s32)destination.count
-        asset_temp_path[path_end] = cast(u8)46
-        asset_temp_path[path_end + 1] = cast(u8)112
-        asset_temp_path[path_end + 2] = cast(u8)97
-        asset_temp_path[path_end + 3] = cast(u8)114
-        asset_temp_path[path_end + 4] = cast(u8)116
-        asset_temp_path[path_end + 5] = cast(u8)0
+        download.temporary[path_end] = cast(u8)46
+        download.temporary[path_end + 1] = cast(u8)112
+        download.temporary[path_end + 2] = cast(u8)97
+        download.temporary[path_end + 3] = cast(u8)114
+        download.temporary[path_end + 4] = cast(u8)116
+        download.temporary[path_end + 5] = cast(u8)0
 
         executable: [32]u8
         fail_flag: [8]u8
@@ -106,14 +108,24 @@ DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
         show_error_flag: [16]u8
         output_flag: [16]u8
         if !CopyCString("/usr/bin/curl", executable[:]) ||
-            !CopyCString("--fail", fail_flag[:]) ||
-            !CopyCString("--location", location_flag[:]) ||
-            !CopyCString("--silent", silent_flag[:]) ||
-            !CopyCString("--show-error", show_error_flag[:]) ||
-            !CopyCString("--output", output_flag[:]) {
+        !CopyCString("--fail", fail_flag[:]) ||
+        !CopyCString("--location", location_flag[:]) ||
+        !CopyCString("--silent", silent_flag[:]) ||
+        !CopyCString("--show-error", show_error_flag[:]) ||
+        !CopyCString("--output", output_flag[:]) {
             AssetDownloadError(download, "download service unavailable")
             return 0
         }
+        maximum_flag: [32]u8
+        timeout_flag: [32]u8
+        timeout_value: [8]u8
+        maximum: [32]u8
+        format: [8]u8
+        unused CopyCString("--max-filesize", maximum_flag[:])
+        unused CopyCString("--max-time", timeout_flag[:])
+        unused CopyCString("900", timeout_value[:])
+        unused CopyCString("%llu", format[:])
+        unused HostAssetFormat(*maximum[0], 32, *format[0], download.maximum_bytes)
         pid: s32 = HostAssetFork()
         if pid < 0 {
             AssetDownloadError(download, "failed to start download")
@@ -123,8 +135,9 @@ DownloadRuntimeAsset :: (download: *AssetDownload, url: string,
             terminator: *u8 = null
             HostAssetExec(*executable[0], *executable[0],
                 *fail_flag[0], *location_flag[0], *silent_flag[0],
-                *show_error_flag[0], *output_flag[0],
-                *asset_temp_path[0], *url_bytes[0], terminator)
+                *show_error_flag[0], *maximum_flag[0], *maximum[0],
+                *timeout_flag[0], *timeout_value[0], *output_flag[0],
+                *download.temporary[0], *url_bytes[0], terminator)
             HostAssetExit(127)
         }
         download.handle = cast(u64)pid
@@ -149,12 +162,12 @@ PollRuntimeAssetDownload :: (download: *AssetDownload) -> AssetDownloadStatus {
     }
     #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
         if download.status != cast(AssetDownloadStatus)Downloading ||
-            download.handle == cast(u64)0 {
+        download.handle == cast(u64)0 {
             return download.status
         }
         mode: [4]u8
         if CopyCString("rb", mode[:]) {
-            file: *void = HostAssetOpen(*asset_temp_path[0], *mode[0])
+            file: *void = HostAssetOpen(*download.temporary[0], *mode[0])
             if file != null {
                 if HostAssetSeek(file, 0, 2) == 0 {
                     size: s64 = HostAssetTell(file)
@@ -165,6 +178,11 @@ PollRuntimeAssetDownload :: (download: *AssetDownload) -> AssetDownloadStatus {
                 HostAssetClose(file)
             }
         }
+        if download.bytes > download.maximum_bytes {
+            ReleaseRuntimeAssetDownload(download)
+            AssetDownloadError(download, "download exceeds size limit")
+            return download.status
+        }
         status: s32 = 0
         pid: s32 = cast(s32)download.handle
         result: s32 = HostAssetWait(pid, *status, 1)
@@ -173,13 +191,13 @@ PollRuntimeAssetDownload :: (download: *AssetDownload) -> AssetDownloadStatus {
         }
         download.handle = cast(u64)0
         if result == pid && status == 0 &&
-            HostAssetRename(*asset_temp_path[0],
-                *asset_destination_path[0]) == 0 {
+        HostAssetRename(*download.temporary[0],
+            *download.destination[0]) == 0 {
             download.status = cast(AssetDownloadStatus)Ready
             download.total_bytes = download.bytes
             return download.status
         }
-        HostAssetRemove(*asset_temp_path[0])
+        HostAssetRemove(*download.temporary[0])
         exit_code: s32 = (status >> 8) & 255
         if exit_code == 6 || exit_code == 7 || exit_code == 28 {
             AssetDownloadError(download, "NETWORK_UNAVAILABLE")
@@ -205,12 +223,12 @@ ReleaseRuntimeAssetDownload :: (download: *AssetDownload) {
     }
     #if DESKTOP_ASSET_DOWNLOAD && !WINDOWS_ASSET_DOWNLOAD {
         if download.status == cast(AssetDownloadStatus)Downloading &&
-            download.handle != cast(u64)0 {
+        download.handle != cast(u64)0 {
             pid: s32 = cast(s32)download.handle
-            HostAssetKill(pid, 15)
+            HostAssetKill(pid, 9)
             status: s32 = 0
             HostAssetWait(pid, *status, 0)
-            HostAssetRemove(*asset_temp_path[0])
+            HostAssetRemove(*download.temporary[0])
         }
     }
     download.handle = cast(u64)0

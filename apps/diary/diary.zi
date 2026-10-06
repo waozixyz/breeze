@@ -1,0 +1,384 @@
+// Date arithmetic and per-day documents moved from Harmony's original Diary.
+// File effects belong to the host; this bundle has no OS or database access.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import, file "../../src/subapps/diary_types.zi";
+#import, file "../../src/subapps/module_types.zi";
+#import, file "../../src/core/types.zi";
+
+host_api :: #system_library "host_api";
+ReadDiaryHost :: () -> DiaryMessage #foreign host_api;
+WriteDiaryHost :: (message: DiaryMessage) #foreign host_api;
+ReadDiaryFileHost :: (name: string) -> DiaryFileResult #foreign host_api;
+SaveDiaryFileHost :: (name: string, data: string) -> bool #foreign host_api;
+DiaryClockHost :: () -> string #foreign host_api;
+
+Date :: struct {
+    year: s32;
+    month: s32;
+    day: s32;
+}
+
+Leap :: (year: s32) -> bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+Days :: (year: s32, month: s32) -> s32 {
+    lengths: [12]s32 = .[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if month < 1 || month > 12 {
+        return 0
+    }
+    if month == 2 && Leap(year) {
+        return 29
+    }
+    return lengths[month - 1]
+}
+
+Valid :: (date: Date) -> bool {
+    return date.year >= 1 && date.year <= 9999 && date.month >= 1 &&
+    date.month <= 12 && date.day >= 1 && date.day <= Days(date.year, date.month)
+}
+
+Next :: (date: Date, delta: s32) -> Date {
+    value := date
+    if delta > 0 {
+        value.day += 1
+        if value.day > Days(value.year, value.month) {
+            value.day = 1
+            value.month += 1
+            if value.month > 12 {
+                value.month = 1;
+                value.year += 1
+            }
+        }
+    }
+    if delta < 0 {
+        value.day -= 1
+        if value.day < 1 {
+            value.month -= 1
+            if value.month < 1 {
+                value.month = 12;
+                value.year -= 1
+            }
+            value.day = Days(value.year, value.month)
+        }
+    }
+    return ifx Valid(value) then value else date
+}
+
+Weekday :: (date: Date) -> s32 {
+    year := date.year
+    if date.month < 3 {
+        year -= 1
+    }
+    offsets: [12]s32 = .[0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    return (year + year / 4 - year / 100 + year / 400 +
+        offsets[date.month - 1] + date.day + 6) % 7
+}
+
+ISO :: (date: Date) -> string {
+    bytes: [10]u8
+    values: [3]s32 = .[date.year, date.month, date.day]
+    starts: [3]s32 = .[0, 5, 8]
+    lengths: [3]s32 = .[4, 2, 2]
+    bytes[4] = cast(u8)45
+    bytes[7] = cast(u8)45
+    for index: cast(s32)0..cast(s32)2 {
+        number := values[index]
+        for digit: cast(s32)0..lengths[index] - 1 {
+            bytes[starts[index] + lengths[index] - digit - 1] = cast(u8)(48 + number % 10)
+            number /= 10
+        }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextFromBytes(bytes[:]))
+    return BuilderFinish(out)
+}
+
+ParseDate :: (value: string) -> Date {
+    date: Date
+    if value.count != 10 || value[4] != cast(u8)45 || value[7] != cast(u8)45 {
+        return date
+    }
+    for index: cast(s32)0..cast(s32)9 {
+        if index == 4 || index == 7 {
+            continue
+        }
+        if value[index] < cast(u8)48 || value[index] > cast(u8)57 {
+            return Date.{}
+        }
+        number := cast(s32)value[index] - 48
+        if index < 4 {
+            date.year = date.year * 10 + number
+        }
+        else if index < 7 {
+            date.month = date.month * 10 + number
+        }
+        else {
+            date.day = date.day * 10 + number
+        }
+    }
+    return ifx Valid(date) then date else Date.{}
+}
+
+Today :: () -> Date {
+    clock := DiaryClockHost()
+    if clock.count < 10 {
+        return Date.{}
+    }
+    return ParseDate(clock[:10])
+}
+
+Filename :: (date: Date) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%.json", ISO(date))
+    return BuilderFinish(out)
+}
+
+Decode :: (value: string, at: s32) -> string {
+    bytes: Vec(u8)
+    for index: 0..value.count {
+        if !VecPush(bytes, cast(u8)0) {
+            VecFree(bytes);
+            return ""
+        }
+    }
+    count := ReadStringText(value, at, VecSlice(bytes, 0, bytes.count))
+    if count < 0 {
+        VecFree(bytes);
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextFromBytes(VecSlice(bytes, 0, count)))
+    VecFree(bytes)
+    return BuilderFinish(out)
+}
+
+Json :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for index: 0..value.count - 1 {
+        byte := value[index]
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        }
+        else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        }
+        else if byte == cast(u8)10 {
+            BuilderPrint(out, "\\n")
+        }
+        else if byte == cast(u8)13 {
+            BuilderPrint(out, "\\r")
+        }
+        else if byte == cast(u8)9 {
+            BuilderPrint(out, "\\t")
+        }
+        else if byte < cast(u8)32 {
+            BuilderPrint(out, " ")
+        }
+        else {
+            BuilderPrint(out, "%", value[index:index + 1])
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+Document :: (message: DiaryMessage) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"date\":")
+    Json(*out, ISO(Date.{message.year, message.month, message.day}))
+    BuilderPrint(*out, ",\"text\":")
+    Json(*out, message.text)
+    BuilderPrint(*out, ",\"photos\":")
+    photos := FieldAt(message.document, 0, "photos")
+    if photos >= 0 && ArrayCount(message.document, photos) >= 0 {
+        end := ValueEnd(message.document, photos, 0)
+        BuilderPrint(*out, "%", message.document[photos:end])
+    } else {
+        BuilderPrint(*out, "[]")
+    }
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
+    if !Valid(date) {
+        message.succeeded = false;
+        return message
+    }
+    loaded := ReadDiaryFileHost(Filename(date))
+    message.year = date.year
+    message.month = date.month
+    message.day = date.day
+    message.text = ""
+    message.document = loaded.data
+    message.cursor = 0
+    message.anchor = 0
+    message.load_error = !loaded.succeeded
+    message.saved = true
+    if loaded.missing {
+        message.load_error = false;
+        return message
+    }
+    version := ReadNumber(loaded.data, FieldAt(loaded.data, 0, "version"))
+    day := Decode(loaded.data, FieldAt(loaded.data, 0, "date"))
+    text := FieldAt(loaded.data, 0, "text")
+    if !version.valid || version.value != 1.0 || day != ISO(date) || text < 0 ||
+    loaded.data[text] != cast(u8)34 ||
+    ArrayCount(loaded.data, FieldAt(loaded.data, 0, "photos")) < 0 ||
+    Space(loaded.data, ValueEnd(loaded.data, 0, 0)) != loaded.data.count {
+        message.load_error = true
+        return message
+    }
+    message.text = Decode(loaded.data, text)
+    return message
+}
+
+Save :: (message: DiaryMessage) -> DiaryMessage {
+    if message.load_error {
+        message.succeeded = false;
+        return message
+    }
+    if message.saved {
+        return message
+    }
+    message.document = Document(message)
+    message.saved = SaveDiaryFileHost(Filename(Date.{message.year, message.month, message.day}),
+        message.document)
+    message.succeeded = message.saved
+    return message
+}
+
+Apply :: (message: DiaryMessage) -> DiaryMessage {
+    message.succeeded = true
+    if message.action == DIARY_ROUTE {
+        message.succeeded = message.screen == ScreenDiary
+        return message
+    }
+    if message.action == DIARY_LOAD {
+        date := Date.{message.year, message.month, message.day}
+        if !Valid(date) {
+            date = Today()
+        }
+        return Load(message, date)
+    }
+    if message.action == DIARY_SAVE {
+        return Save(message)
+    }
+    if message.action == DIARY_EDIT {
+        if message.load_error || message.edit_start < 0 ||
+        message.edit_end < message.edit_start || message.edit_end > message.text.count {
+            message.succeeded = false
+            return message
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "%", message.text[0:message.edit_start])
+        BuilderPrint(*out, "%", message.replacement)
+        BuilderPrint(*out, "%", message.text[message.edit_end:message.text.count])
+        message.text = BuilderFinish(out)
+        message.cursor = message.edit_start + cast(s32)message.replacement.count
+        message.anchor = message.cursor
+        message.saved = false
+        return message
+    }
+    if message.action != DIARY_CONTROL {
+        message.succeeded = false;
+        return message
+    }
+    if message.control == 29013 {
+        clock := DiaryClockHost()
+        if message.load_error || message.calendar || clock.count < 16 {
+            message.succeeded = false
+            return message
+        }
+        stamp: Vec(u8)
+        BuilderPrint(*stamp, "**%**", clock[11:16])
+        message.replacement = BuilderFinish(stamp)
+        message.edit_start = ifx message.cursor < message.anchor then message.cursor else message.anchor
+        message.edit_end = ifx message.cursor > message.anchor then message.cursor else message.anchor
+        message.action = DIARY_EDIT
+        return Apply(message)
+    }
+    if message.control == 29003 {
+        message.calendar = !message.calendar
+        message.month_year = message.year
+        message.month_number = message.month
+    } else if message.control == 29011 || message.control == 29012 {
+        previous_year := message.month_year
+        previous_month := message.month_number
+        message.month_number += ifx message.control == 29011 then -1 else 1
+        if message.month_number < 1 {
+            message.month_number = 12;
+            message.month_year -= 1
+        }
+        if message.month_number > 12 {
+            message.month_number = 1;
+            message.month_year += 1
+        }
+        if message.month_year < 1 || message.month_year > 9999 {
+            message.month_year = previous_year
+            message.month_number = previous_month
+            message.succeeded = false;
+            return message
+        }
+    } else {
+        before := message
+        message = Save(message)
+        if !message.saved && !message.load_error {
+            return message
+        }
+        date := Date.{before.year, before.month, before.day}
+        if message.control == 29001 {
+            date = Next(date, -1)
+        }
+        else if message.control == 29002 {
+            date = Next(date, 1)
+        }
+        else if message.control == 29004 {
+            date = Today()
+        }
+        else if message.control >= 29101 && message.control <= 29131 {
+            date = Date.{message.month_year, message.month_number, message.control - 29100}
+        } else {
+            message.succeeded = false;
+            return message
+        }
+        message = Load(message, date)
+        message.calendar = false
+    }
+    if message.calendar {
+        if !Valid(Date.{message.month_year, message.month_number, 1}) {
+            message.succeeded = false
+            message.calendar = false
+            return message
+        }
+        message.month_days = Days(message.month_year, message.month_number)
+        message.month_weekday = Weekday(Date.{message.month_year, message.month_number, 1})
+        for day: cast(s32)0..cast(s32)31 {
+            message.marks[day] = cast(u8)0
+        }
+        for day: cast(s32)1..Days(message.month_year, message.month_number) {
+            file := ReadDiaryFileHost(Filename(Date.{message.month_year, message.month_number, day}))
+            text := FieldAt(file.data, 0, "text")
+            has_text := text >= 0 && text + 1 < file.data.count && file.data[text + 1] != cast(u8)34
+            message.marks[day] = ifx has_text ||
+            ArrayCount(file.data, FieldAt(file.data, 0, "photos")) > 0 then cast(u8)1 else cast(u8)0
+        }
+    }
+    return message
+}
+
+#program_export "DiaryMain"
+Main :: () -> s32 {
+    message := ReadDiaryHost()
+    if message.abi != MODULE_ABI {
+        return -1
+    }
+    if message.action == MODULE_IDENTIFY {
+        return MODULE_DIARY
+    }
+    WriteDiaryHost(Apply(message))
+    return 0
+}

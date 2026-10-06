@@ -21,7 +21,7 @@ CORE = (ROOT / "src/storage/storage_core.zi").read_text()
 SCHEMA = (ROOT / "src/storage/schema_sql.zi").read_text()
 
 TABLES = ["users", "habits", "habit_days", "sessions", "elist_lists",
-          "elist_items", "sync_outbox"]
+          "elist_items", "settings", "sync_outbox"]
 
 
 def table_sql(name):
@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 5, inserts
+    assert len(inserts) == 6, inserts
     return clear + inserts
 
 
@@ -59,6 +59,7 @@ def insert_row(database, table, values):
 
 ENTITIES = [
     ("habit", "h1", 0), ("habit", "h2", 0), ("habit_day", "h1", 20260101),
+    ("app_preference", "app_used_lists", 0), ("app_preference", "app_used_diary", 0),
     ("session", "s1", 0), ("elist_list", "l1", 0), ("elist_item", "i1", 0),
 ]
 
@@ -75,6 +76,9 @@ def open_database():
     insert_row(database, "sessions", {"id": "s1", "user_id": "u1"})
     insert_row(database, "elist_lists", {"id": "l1", "user_id": "u1"})
     insert_row(database, "elist_items", {"id": "i1", "user_id": "u1"})
+    insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "apps_auto_update", "value": "0", "updated_at": 2})
     return database
 
 

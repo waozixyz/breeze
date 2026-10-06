@@ -1,10 +1,15 @@
 #import, file "../src/subapps/module_host.zi";
+c_cache :: #system_library "c";
+ModuleTestUseCache :: (enabled: bool) #foreign c_cache;
+ModuleTestCachedReads :: (index: s32) -> s32 #foreign c_cache;
 #import, file "../src/subapps/shared_state.zi";
 #import, file "../src/subapps/lists_types.zi";
 #import, file "../src/subapps/lists_visibility.zi";
 #import, file "../src/subapps/habits_types.zi";
 #import, file "../src/subapps/practice_types.zi";
 #import, file "../src/subapps/inbe_types.zi";
+#import, file "../src/subapps/diary_types.zi";
+#import, file "../src/subapps/diary_store.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/core/types.zi";
 #import, file "../src/core/breath_timing.zi";
@@ -92,6 +97,8 @@ CheckRootConfiguration :: () {
             expected = ScreenHabits
         } else if (mask & APP_LISTS) != 0 {
             expected = ScreenEList
+        } else if (mask & APP_DIARY) != 0 {
+            expected = ScreenDiary
         }
         Expect(initial.succeeded && initial.screen == expected, 66)
         if (mask & APP_LISTS) == 0 {
@@ -120,12 +127,54 @@ CheckRootConfiguration :: () {
     }
     toggle := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
             .enabled_apps = APP_ALL, .app = APP_PRACTICE, .checked = false})
-    Expect(toggle.succeeded && toggle.enabled_apps == (APP_LISTS | APP_HABITS), 70)
+    Expect(toggle.succeeded && toggle.enabled_apps == (APP_LISTS | APP_HABITS | APP_DIARY), 70)
     toggle.app = APP_LISTS | APP_HABITS
     Expect(!InbeRun(toggle).succeeded, 71)
     Expect(SubappsSetEnabled(APP_ALL), 72)
     runs := ModuleTestRuns()
     Expect(InbeAllows(ScreenEList) && ModuleTestRuns() == runs + 2, 73)
+}
+
+CheckDiary :: () {
+    Expect(SubappsValidatePackage(4, ModuleTestText("diary")), 80)
+    Expect(!SubappsValidatePackage(4, ModuleTestText("habits")), 81)
+    state := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 2, .day = 28})
+    Expect(state.succeeded && state.saved && !state.load_error && state.text == "", 82)
+    state.action = DIARY_EDIT
+    state.replacement = "A calm day 🌿\nSecond line"
+    state = DiaryRun(state)
+    Expect(state.succeeded && !state.saved && state.text == "A calm day 🌿\nSecond line", 83)
+    // Routing must not overwrite unsaved text held by the editor.
+    Expect(InbeAllows(ScreenDiary), 84)
+    state.action = DIARY_CONTROL
+    state.control = 29002
+    state = DiaryRun(state)
+    Expect(state.succeeded && state.day == 29 && state.month == 2 && state.saved, 85)
+    loaded := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 2, .day = 28})
+    Expect(loaded.succeeded && loaded.text == "A calm day 🌿\nSecond line", 86)
+    loaded.action = DIARY_CONTROL
+    loaded.control = 29003
+    loaded = DiaryRun(loaded)
+    Expect(loaded.calendar && loaded.month_days == 29 && loaded.month_weekday == 3 && loaded.marks[28] == cast(u8)1, 87)
+    loaded.control = 29129
+    loaded = DiaryRun(loaded)
+    Expect(loaded.succeeded && !loaded.calendar && loaded.day == 29, 88)
+    Expect(!DiaryStoreSave("../outside.json", "invalid"), 89)
+    Expect(DiaryStoreSave("2024-03-01.json", "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}"), 90)
+    photo := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 1})
+    photo.action = DIARY_EDIT
+    photo.edit_start = 6
+    photo.edit_end = 6
+    photo.replacement = " after"
+    photo = DiaryRun(photo)
+    photo.action = DIARY_SAVE
+    photo = DiaryRun(photo)
+    Expect(photo.saved && photo.document == "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before after\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}", 91)
+    Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)
+    bad := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 2})
+    bad.action = DIARY_SAVE
+    Expect(bad.load_error && !DiaryRun(bad).succeeded, 93)
+    Expect(DiaryStoreRead("2024-03-02.json").data == "damaged", 94)
 }
 
 #program_export
@@ -147,6 +196,7 @@ CheckModules :: () -> s32 {
     data_init()
     Expect(storage_db_handle() != null, 7)
     AppCopyText(AppTextFromCString(storage_user_id_buffer(), 128), user_id[:])
+    CheckDiary()
     habits_init_with_defaults(*app.habits, 0)
     Expect(ModuleTestCount("SELECT COUNT(*) FROM sessions WHERE id='old-session'") == 1, 8)
     Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key='language' AND value='es'") == 1, 9)
@@ -322,5 +372,13 @@ CheckModules :: () -> s32 {
     habits_free(*app.habits)
     storage_close()
     SubappsClose()
+    ModuleTestUseCache(true)
+    Expect(SubappsOpen(), 96)
+    for index: cast(s32)1..cast(s32)4 {
+        Expect(ModuleTestCachedReads(index) > 0, 97)
+    }
+    Expect(SubappsInstalledMask() == APP_ALL, 98)
+    SubappsClose()
+    ModuleTestUseCache(false)
     return failures
 }
