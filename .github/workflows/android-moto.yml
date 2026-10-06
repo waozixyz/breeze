@@ -1,0 +1,148 @@
+name: Android Moto APK
+
+"on":
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full commit hash whose Release checks passed
+        required: true
+      verified_run:
+        description: Release run with successful Secret Scan and Test jobs
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  android:
+    name: Build signed Moto APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Require passing checks for the exact source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERIFIED_RUN: ${{ inputs.verified_run }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          commit = os.environ['SOURCE_COMMIT']
+          run_id = os.environ['VERIFIED_RUN']
+          repository = os.environ['GITHUB_REPOSITORY']
+          if not re.fullmatch(r'[0-9a-f]{40}', commit):
+              raise SystemExit('A full, immutable source commit is required')
+          if not re.fullmatch(r'[0-9]+', run_id):
+              raise SystemExit('A numeric Release run ID is required')
+
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+
+          run = api(f'repos/{repository}/actions/runs/{run_id}')
+          if run['head_sha'] != commit or run['path'] != '.github/workflows/release.yml':
+              raise SystemExit('The Release checks must belong to the requested source commit')
+          jobs = api(f'repos/{repository}/actions/runs/{run_id}/jobs?per_page=100')['jobs']
+          for name in ('Secret Scan', 'Test'):
+              checks = [job for job in jobs if job['name'] == name]
+              if len(checks) != 1 or checks[0]['conclusion'] != 'success':
+                  raise SystemExit(f'{name} must have passed before signing')
+          print('Verified passing Secret Scan and full Test jobs for ' + commit)
+          PY
+
+      - name: Checkout verified source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          fetch-depth: 1
+
+      - name: Fetch Ziran packages
+        uses: ./.github/actions/ziran-packages
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Cache Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/platforms/android-36
+            ${{ env.ANDROID_HOME }}/build-tools/34.0.0
+            ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+            ${{ env.ANDROID_HOME }}/cmake/3.22.1
+          key: android-moto-sdk-${{ runner.os }}-api36-ndk28-cmake322
+          restore-keys: |
+            android-sdk-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Android SDK components
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;34.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Prepare Android signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.android
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > ~/.android/inbe-release.keystore
+
+      - name: Prepare Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: ./scripts/write-google-services-json.sh
+
+      - name: Copy Android assets
+        run: ./scripts/copy-android-assets.sh
+
+      - name: Build signed ARMv7 release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          ./droid/gradlew -p droid assembleRelease \
+            -Papp.onlyAbi=armeabi-v7a \
+            -Pkeystore.path="$HOME/.android/inbe-release.keystore" \
+            -Pkeystore.alias="$KEY_ALIAS" \
+            -Pkeystore.password="$KEYSTORE_PASSWORD" \
+            --stacktrace
+          VERSION=$(python3 scripts/check-version.py --print-version)
+          mkdir -p build/release/moto
+          cp droid/app/build/outputs/apk/release/app-armeabi-v7a-release.apk "build/release/moto/inbe-$VERSION-moto.apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "build/release/moto/inbe-$VERSION-moto.apk"
+          printf '%s\n' "$SOURCE_COMMIT" > build/release/moto/source-commit.txt
+          (
+            cd build/release/moto
+            sha256sum "inbe-$VERSION-moto.apk" > "inbe-$VERSION-moto.apk.sha256"
+          )
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f ~/.android/inbe-release.keystore
+
+      - name: Upload signed Moto APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-moto
+          path: build/release/moto/*
+          if-no-files-found: error
