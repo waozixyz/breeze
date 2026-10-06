@@ -50,8 +50,6 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import "swipe_props"
 #import "text_align"
 #import "text_props"
-#import "kss_parser"
-#import "semantic"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/draw.zi";
@@ -88,7 +86,6 @@ using ImageFit;
 using SwipeDirection;
 using ButtonTone;
 using ControlSize;
-using SemanticKind;
 using ButtonEmphasis;
 
 PracticeScreenConstants :: enum {
@@ -230,9 +227,7 @@ practice_draw_card_banner :: (asset_path: string, dest: Rectangle) {
     Image(CurrentApp().ui.session, ImageProps.{
             .asset_path = asset_path,
             .bounds = dest,
-            .fit = cast(ImageFit)ImageFitCover,
-            .alt_text = practice_home_title(CurrentApp().exercise_type),
-            .class_name = KssClassId(KssMakeName("practice-banner"))
+            .fit = cast(ImageFit)ImageFitCover
         })
     if first_banner {
         TraceLog(3, "APP PROBE: after banner Image")
@@ -394,6 +389,65 @@ practice_home_metadata :: (app: *InnerBreeze, out: *u8, out_size: s64) {
     }
 }
 
+practice_draw_title_crescent :: (center_x: s32, y: s32, w: s32,
+    color: Color) {
+    segments: s32 = 28
+    half := cast(float32)w * 0.5f
+    start := Vector2.{cast(float32)center_x - half, cast(float32)y - cast(float32)AppScale(3) }
+    control := Vector2.{cast(float32)center_x, cast(float32)y + cast(float32)AppScale(26) }
+    end := Vector2.{cast(float32)center_x + half, cast(float32)y - cast(float32)AppScale(4) }
+
+    {
+        layer: s32 = 0
+        while layer < 3 {
+            {
+                i: s32 = 0
+                while i < segments {
+
+                    t0 := cast(float32)i / cast(float32)segments
+                    t1 := cast(float32)(i + 1) / cast(float32)segments
+                    u0 := 1.0f - t0
+                    u1 := 1.0f - t1
+                    p0 := Vector2.{
+                        u0 * u0 * start.x + 2.0f * u0 * t0 * control.x + t0 * t0 * end.x,
+                        u0 * u0 * start.y + 2.0f * u0 * t0 * control.y + t0 * t0 * end.y
+                    }
+                    p1 := Vector2.{
+                        u1 * u1 * start.x + 2.0f * u1 * t1 * control.x + t1 * t1 * end.x,
+                        u1 * u1 * start.y + 2.0f * u1 * t1 * control.y + t1 * t1 * end.y
+                    }
+                    mid := (t0 + t1) * 0.5f
+                    edge := ifx (mid < 0.5f) then (mid * 2.0f) else ((1.0f - mid) * 2.0f)
+                    if edge < 0.0f {
+                        edge = 0.0f
+                    }
+                    if edge > 1.0f {
+                        edge = 1.0f
+                    }
+                    thickness := cast(float32)AppScale(2)
+                    alpha: float32 = 0.58f
+                    draw_color := color
+                    if layer == 0 {
+                        thickness = cast(float32)AppScale(15)
+                        alpha = 0.08f
+                    } else if layer == 1 {
+                        thickness = cast(float32)AppScale(7)
+                        alpha = 0.20f
+                    }
+                    if layer == 2 {
+                        draw_color = Color.{.r = 250, .g = 225, .b = 255, .a = 255}
+                    }
+                    DrawLineEx(p0, p1, thickness * (0.35f + edge * 0.65f),
+                        Fade(draw_color, alpha * edge))
+                    i += 1
+                }
+            }
+
+            layer += 1
+        }
+    }
+}
+
 PracticeHomeTitleLayout :: struct {
     title: TextProps
     subtitle: TextProps
@@ -404,39 +458,37 @@ practice_home_title_layout :: (app: *InnerBreeze, x: s32, w: s32) -> PracticeHom
     layout: PracticeHomeTitleLayout
     title := practice_home_title(app.exercise_type)
     subtitle := practice_home_subtitle(app.exercise_type)
-    preferred_font := ifx w >= AppScale(600) then AppScale(48) else AppScale(40)
-    title_font := AppFitFontSize(title, w - AppScale(16), preferred_font, AppScale(26))
+    preferred_font := ifx w >= AppScale(600) then AppScale(42) else AppScale(34)
+    max_text_w := w - AppScale(36)
+    if max_text_w < AppScale(220) {
+        max_text_w = w
+    }
     padding := AppScale(4)
-
+    title_font := AppFitFontSize(title, max_text_w, preferred_font, AppFontSize() + AppScale(4))
     layout.title = TextProps.{
         .text = title,
         .bounds = Rectangle.{cast(float32)x, 0, cast(float32)w, 0},
         .font = title_font,
-        .class_name = KssClassId(KssMakeName("practice-heading")),
-        .align = cast(TextAlign)TextAlignStart,
+        .align = cast(TextAlign)TextAlignCenter,
         .vertical_align = cast(TextAlign)TextAlignCenter,
-        .wrap = cast(TextWrap)TextWrapAuto,
-        .semantic_kind = cast(SemanticKind)SemanticHeading,
-        .heading_level = 1
+        .wrap = cast(TextWrap)TextWrapAuto
     }
-    // Measure the same styled Text that will be painted. Explicit padded
-    // bounds leave room for glyph edges and accents instead of clipping to
-    // a tightly measured string width.
+    // Keep the original centered heading, but measure its actual glyph height
+    // and give accents and descenders room inside explicit padded bounds.
     title_plan := PrepareText(layout.title, TextFaceFor(layout.title, DefaultTextFace()))
     title_h := cast(s32)title_plan.bounds.height + padding * 2
     layout.title.bounds.height = cast(float32)title_h
     layout.height = title_h
-
     if subtitle.count > 0 {
+        subtitle_font := AppFitFontSize(subtitle, max_text_w,
+            AppFontSize() + AppScale(1), AppScale(Text14))
         layout.subtitle = TextProps.{
             .text = subtitle,
             .bounds = Rectangle.{cast(float32)x, cast(float32)(title_h + AppScale(6)), cast(float32)w, 0},
-            .font = AppScale(18),
-            .class_name = KssClassId(KssMakeName("practice-subtitle")),
-            .align = cast(TextAlign)TextAlignStart,
+            .font = subtitle_font,
+            .align = cast(TextAlign)TextAlignCenter,
             .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto,
-            .semantic_kind = cast(SemanticKind)SemanticParagraph
+            .wrap = cast(TextWrap)TextWrapAuto
         }
         subtitle_plan := PrepareText(layout.subtitle, TextFaceFor(layout.subtitle, DefaultTextFace()))
         subtitle_h := cast(s32)subtitle_plan.bounds.height + padding * 2
@@ -446,165 +498,253 @@ practice_home_title_layout :: (app: *InnerBreeze, x: s32, w: s32) -> PracticeHom
     return layout
 }
 
+practice_home_action_row_widths :: (content_w: s32, manual_w: *s32, config_w: *s32) -> s32 {
+    font := AppFontSize()
+    pad := AppScale(20)
+    gap := practice_home_action_gap(content_w)
+    manual_min: s32 = AppTextWidth(LocaleText("practice_manual_button"), font) + pad * 2
+    config_min: s32 = AppTextWidth(LocaleText("practice_configure_button"), font) + pad * 2
+    half_w: s32 = 0
+    available_w: s32 = 0
+
+    if content_w < manual_min + config_min + gap {
+        return 0
+    }
+    available_w = content_w - gap
+    half_w = available_w / 2
+    if half_w >= manual_min && available_w - half_w >= config_min {
+        manual_w.* = half_w
+        config_w.* = available_w - half_w
+        return 1
+    }
+    manual_w.* = manual_min
+    config_w.* = available_w - manual_w.*
+    if config_w.* < config_min {
+        config_w.* = config_min
+        manual_w.* = available_w - config_w.*
+    }
+    return ifx (manual_w.* >= manual_min && config_w.* >= config_min) then (1) else (0)
+}
+
+practice_home_actions_share_row :: (practice: *PracticeDefinition, content_w: s32) -> s32 {
+    manual_w: s32 = 0
+    config_w: s32 = 0
+    return ifx (practice != null && practice.draw_manual != null && practice.draw_config != null && practice_home_action_row_widths(content_w, *manual_w, *config_w) != 0) then (1) else (0)
+}
+
+practice_draw_home_title :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
+    if app == null {
+        return
+    }
+    layout := practice_home_title_layout(app, x, w)
+    layout.title.bounds.y += cast(float32)y
+    title_props: TextProps = layout.title
+    Text(app.ui.session, title_props)
+    if layout.subtitle.text.count > 0 {
+        layout.subtitle.bounds.y += cast(float32)y
+        subtitle_props: TextProps = layout.subtitle
+        Text(app.ui.session, subtitle_props)
+    }
+    underline_w := AppTextWidth(layout.title.text, layout.title.font) * 64 / 100
+    underline_w = clampi(underline_w, AppScale(170), AppScale(340))
+    practice_draw_title_crescent(x + w / 2, y + layout.height + AppScale(6),
+        underline_w, Color.{.r = 193, .g = 146, .b = 255, .a = 255})
+}
+
 practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
-    if app == null { return 0 }
-    practice := practice_get(app.exercise_type)
-    content_x := app_content_left_reserved(app)
-    content_w := app.ui.view_width - content_x
-    page_h := app.ui.view_height - app_content_bottom_reserved(app)
-    outer := ifx content_w < AppScale(480) then AppScale(16) else AppScale(24)
-    card_w := content_w - outer * 2
-    if card_w > AppScale(1060) { card_w = AppScale(1060) }
-    if card_w <= 0 || page_h <= 0 { return 0 }
-    card_x := content_x + (content_w - card_w) / 2
-    footer_h := AppScale(48)
-    footer_gap := AppScale(16)
-    pager_w := AppScale(200)
-    manual_w := AppTextWidth(LocaleText("practice_manual_button"), AppFontSize()) + AppScale(32)
-    config_w := AppTextWidth(LocaleText("practice_configure_button"), AppFontSize()) + AppScale(32)
-    has_manual := practice != null && practice.draw_manual != null
-    has_config := practice != null && practice.draw_config != null
-    secondary_w := (ifx has_manual then manual_w else 0) + (ifx has_config then config_w else 0)
-    footer_stacked := secondary_w + pager_w + AppScale(24) > card_w
-    if footer_stacked { footer_h = AppScale(104) }
-    card_h := page_h - outer * 2 - footer_gap - footer_h
-    padding := ifx card_w < AppScale(480) then AppScale(24) else AppScale(32)
-    text_w := card_w - padding * 2
-    title_layout := practice_home_title_layout(app, card_x + padding, text_w)
-    button_h := AppScale(52)
-    required_h := title_layout.height + button_h + AppScale(16) + padding * 2
-    if card_h < required_h { card_h = required_h }
-    card := Rectangle.{cast(float32)card_x, cast(float32)outer,
-        cast(float32)card_w, cast(float32)card_h}
-    button_y := outer + card_h - padding - button_h
-    title_y := button_y - AppScale(16) - title_layout.height
-    footer_y := outer + card_h + footer_gap
-    pager_x := card_x + (card_w - pager_w) / 2
-    pager_y := footer_y
-    manual_x := card_x
-    config_x := card_x + card_w - config_w
-    manual_y := footer_y
-    config_y := footer_y
-    if footer_stacked {
-        pager_y += AppScale(56)
-        if has_manual && has_config {
-            manual_w = (card_w - AppScale(12)) / 2
-            config_w = card_w - AppScale(12) - manual_w
-            config_x = card_x + manual_w + AppScale(12)
-        } else {
-            manual_x = card_x + (card_w - manual_w) / 2
-            config_x = card_x + (card_w - config_w) / 2
-        }
+    if app == null {
+        return 0
     }
 
+    practice := practice_get(app.exercise_type)
+    bottom_reserved := app_content_bottom_reserved(app)
+    left_reserved := app_content_left_reserved(app)
+    content_view_x := left_reserved
+    content_view_w := app.ui.view_width - left_reserved
+    if content_view_w < AppScale(320) {
+        content_view_x = 0
+        content_view_w = app.ui.view_width
+    }
+    content_w := content_view_w - AppScale(80)
+    if content_w > AppScale(940) {
+        content_w = AppScale(940)
+    }
+    if content_w < AppScale(520) {
+        content_w = content_view_w - AppScale(32)
+    }
+    x := content_view_x + (content_view_w - content_w) / 2
+    hero_h := app.ui.view_height - bottom_reserved
+    if hero_h <= 0 {
+        return 0
+    }
+    hero := Rectangle.{cast(float32)content_view_x, 0, cast(float32)content_view_w, cast(float32)app.ui.view_height }
+    button_h := AppScale(48)
+    action_gap := AppScale(14)
+    total_w := content_w
+    if total_w > AppScale(700) {
+        total_w = AppScale(700)
+    }
+    if total_w > content_view_w - AppScale(32) {
+        total_w = content_view_w - AppScale(32)
+    }
+    if total_w < AppScale(360) {
+        total_w = content_view_w - AppScale(24)
+    }
+    secondary_count: s32 = 0
+    if practice != null && practice.draw_manual != null {
+        secondary_count += 1
+    }
+    if practice != null && practice.draw_config != null {
+        secondary_count += 1
+    }
+    button_count := 1 + secondary_count
+    wide_actions: s32 = ifx (total_w >= AppScale(600)) then (1) else (0)
+    secondary_row: s32 = ifx (secondary_count < 2 || practice_home_actions_share_row(practice, total_w) != 0) then (1) else (0)
+    rows := ifx (wide_actions != 0) then (1) else (1 + (ifx (secondary_row != 0) then ((ifx (secondary_count > 0) then (1) else (0))) else (secondary_count)))
+    bottom_gap: s32 = ifx (bottom_reserved > 0) then (AppScale(28)) else (AppScale(20))
+    button_y := hero_h - bottom_gap - rows * button_h - (rows - 1) * action_gap
+    pager_h := practice_home_carousel_controls_height(app)
+    pager_y := button_y - AppScale(10) - pager_h
+    title_layout := practice_home_title_layout(app, x, content_w)
+    title_block_h := title_layout.height + AppScale(28)
+    if title_block_h < AppScale(100) {
+        title_block_h = AppScale(100)
+    }
+    title_y := pager_y - title_block_h
+    if title_y < AppScale(8) {
+        title_y = AppScale(8)
+    }
+    primary_w: s32 = ifx (wide_actions != 0) then ((total_w - action_gap * (button_count - 1)) / button_count) else (total_w)
+    secondary_w: s32 = ifx (wide_actions != 0) then (primary_w) else ((ifx (secondary_row != 0 && secondary_count > 0) then ((total_w - action_gap * (secondary_count - 1)) / secondary_count) else (total_w)))
+    action_x := content_view_x + (content_view_w - total_w) / 2
+    pager_w := ifx (total_w < AppScale(480)) then (total_w) else (AppScale(480))
+    pager_x := content_view_x + (content_view_w - pager_w) / 2
+
     app.practice_home_bounds_valid = 1
-    app.practice_home_bounds_card = card
-    app.practice_home_bounds_start = Rectangle.{0}
-    app.practice_home_bounds_manual = Rectangle.{0}
-    app.practice_home_bounds_config = Rectangle.{0}
+    app.practice_home_bounds_card = hero
+    app.practice_home_bounds_start = Rectangle.{0 }
+    app.practice_home_bounds_manual = Rectangle.{0 }
+    app.practice_home_bounds_config = Rectangle.{0 }
+
     swipe_spec := SwipeSpec.{
-        .bounds = card, .directions = 3,
-        .min_distance = cast(float32)AppScale(48), .axis_bias = 1.4f,
+        .bounds = hero,
+        .directions = 3,
+        .min_distance = cast(float32)AppScale(48),
+        .axis_bias = 1.4f,
         .max_duration = 1.2f
     }
-    swipe := Swipe(swipe_spec, app.practice_home_swipe, app.ui.manual_swipe_frame)
+    swipe := Swipe(swipe_spec, app.practice_home_swipe,
+        app.ui.manual_swipe_frame)
     app.practice_home_swipe = swipe.gesture
     if swipe.claim_pointer { app.ui.manual_swipe_owner = true }
     if swipe.release_pointer { app.ui.manual_swipe_owner = false }
-    if swipe.capture_input || swipe.consume_release { app_block_current_click(app) }
+    if swipe.capture_input || swipe.consume_release {
+        app_block_current_click(app)
+    }
     if app.modal.active == 0 && (swipe.direction == cast(SwipeDirection)SwipeLeft || IsKeyPressed(KEY_RIGHT)) {
         practice_select_home_card(app, practice_next_ordered(app, 1))
     } else if app.modal.active == 0 && (swipe.direction == cast(SwipeDirection)SwipeRight || IsKeyPressed(KEY_LEFT)) {
         practice_select_home_card(app, practice_next_ordered(app, -1))
     }
 
-    shade := Color.{.r = 9, .g = 17, .b = 29, .a = 255}
-    PaintRoundedFill(app.ui.session, -1, card, cast(float32)AppScale(24), 12, shade)
-    image_h := card_h - AppScale(24)
-    // Keep the character and breathing outline inside the crop on phones.
-    maximum_image_h := card_w * 100 / 82
-    if image_h > maximum_image_h { image_h = maximum_image_h }
     banner_path := practice_card_banner_asset_path(app, app.exercise_type)
-    if banner_path.count > 0 && image_h > 0 {
-        practice_draw_card_banner(banner_path, Rectangle.{card.x, card.y, card.width, cast(float32)image_h})
-        fade_start := title_y - AppScale(160)
-        if fade_start < outer + AppScale(24) { fade_start = outer + AppScale(24) }
-        fade_end := title_y + AppScale(24)
-        image_bottom := outer + image_h
-        if fade_end > image_bottom { fade_end = image_bottom }
-        if fade_end > fade_start {
-            PaintVerticalGradient(app.ui.session, -1,
-                Rectangle.{card.x, cast(float32)fade_start, card.width, cast(float32)(fade_end - fade_start)},
-                Fade(shade, 0.0f), shade)
-        }
-        if image_bottom > fade_end {
-            PaintRoundedFill(app.ui.session, -1,
-                Rectangle.{card.x, cast(float32)fade_end, card.width, cast(float32)(image_bottom - fade_end)},
-                0.0, 4, shade)
-        }
+    if banner_path.count > 0 {
+        practice_draw_card_banner(banner_path, Rectangle.{hero.x, hero.y, hero.width, cast(float32)(title_y + AppScale(8))})
+    } else {
+        DrawRectangleRec(hero, StyleTokenColor("surface"))
     }
 
-    metadata: [128]u8
-    practice_home_metadata(app, *metadata[0], cast(s64)metadata.count)
-    metadata_text := FrameTextHold(*app.ui.frame_text, AppTextFromCString(*metadata[0], 128))
-    if metadata_text.count > 0 && title_y > outer + AppScale(100) {
-        metadata_font := AppFitFontSize(metadata_text, text_w - AppScale(24), AppScale(14), AppScale(12))
-        badge_w := AppTextWidth(metadata_text, metadata_font) + AppScale(24)
-        badge := Rectangle.{card.x + cast(float32)padding, card.y + cast(float32)AppScale(20),
-            cast(float32)badge_w, cast(float32)AppScale(32)}
-        PaintRoundedFill(app.ui.session, -1, badge, cast(float32)AppScale(16), 12,
-            Color.{.r = 9, .g = 17, .b = 29, .a = 190})
-        Text(app.ui.session, TextProps.{.text = metadata_text, .bounds = badge,
-                .font = metadata_font, .class_name = KssClassId(KssMakeName("practice-metadata")),
-                .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapNone})
-    }
-    title_layout.title.bounds.y += cast(float32)title_y
-    title_props: TextProps = title_layout.title
-    Text(app.ui.session, title_props)
-    if title_layout.subtitle.text.count > 0 {
-        title_layout.subtitle.bounds.y += cast(float32)title_y
-        subtitle_props: TextProps = title_layout.subtitle
-        Text(app.ui.session, subtitle_props)
+    if practice_banner_probe_count == 1 {
+        TraceLog(3, "APP PROBE: banner block complete")
     }
 
-    primary_w := text_w
-    if primary_w > AppScale(300) { primary_w = AppScale(300) }
-    app.practice_home_bounds_start = Rectangle.{cast(float32)(card_x + padding), cast(float32)button_y,
-        cast(float32)primary_w, cast(float32)button_h}
-    if Button(app.ui.session, ButtonProps.{
-            .key = KeyHash("practice/start"), .bounds = app.practice_home_bounds_start,
-            .label = LocaleText("practice_start_button"), .disabled = app.modal.active != 0,
-            .class_name = KssClassId(KssMakeName("practice-start")),
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .size = cast(ControlSize)ControlSizeLarge}) != 0 {
-        if practice != null && practice.start != null { practice.start(app) }
+    // The banner Image is queued paint, so the fade must be queued after it
+    // to cover its bottom edge.
+    fade_h := AppScale(120)
+    fade_y := title_y - fade_h
+    PaintVerticalGradient(app.ui.session, -1,
+        Rectangle.{cast(float32)content_view_x, cast(float32)fade_y,
+            cast(float32)content_view_w, cast(float32)fade_h},
+        Fade(StyleTokenColor("canvas"), 0.0f), StyleTokenColor("canvas"))
+    PaintRoundedFill(app.ui.session, -1,
+        Rectangle.{cast(float32)content_view_x, cast(float32)title_y,
+            cast(float32)content_view_w,
+            cast(float32)(app.ui.view_height - title_y)},
+        0.0, 4, StyleTokenColor("canvas"))
+
+    practice_draw_home_title(app, x, title_y, content_w)
+
+    if practice_banner_probe_count == 1 {
+        TraceLog(3, "APP PROBE: home title complete")
     }
+
     current_index := practice_ordered_index(app, app.exercise_type)
-    selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y,
-            cast(float32)pager_w, cast(float32)AppScale(48)}, practice_home_count(app), current_index, app.modal.active, 7090)
+    selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y, cast(float32)pager_w, cast(float32)pager_h}, practice_home_count(app), current_index, app.modal.active, 7090)
     if selected_index >= 0 && selected_index != current_index {
         practice_select_home_card(app, practice_ordered_id(selected_index))
     }
-    if has_manual {
-        app.practice_home_bounds_manual = Rectangle.{cast(float32)manual_x, cast(float32)manual_y,
-            cast(float32)manual_w, cast(float32)AppScale(48)}
-        if Button(app.ui.session, ButtonProps.{
-                .key = KeyHash("practice/manual"), .bounds = app.practice_home_bounds_manual,
-                .label = LocaleText("practice_manual_button"), .disabled = app.modal.active != 0,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-            practice_screen_open_tab(app, PRACTICE_TAB_MANUAL)
+
+    app.practice_home_bounds_start = Rectangle.{cast(float32)action_x, cast(float32)button_y,
+        cast(float32)primary_w, cast(float32)button_h
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = app.practice_home_bounds_start,
+            .label = LocaleText("practice_start_button"),
+            .disabled = app != null && app.modal.active != 0,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .size = cast(ControlSize)ControlSizeLarge,
+            .pill = true
+        }) != 0 {
+        if practice != null && practice.start != null {
+            practice.start(app)
         }
     }
-    if has_config {
-        app.practice_home_bounds_config = Rectangle.{cast(float32)config_x, cast(float32)config_y,
-            cast(float32)config_w, cast(float32)AppScale(48)}
-        if Button(app.ui.session, ButtonProps.{
-                .key = KeyHash("practice/configure"), .bounds = app.practice_home_bounds_config,
-                .label = LocaleText("practice_configure_button"), .disabled = app.modal.active != 0,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+    if wide_actions != 0 {
+        action_x += primary_w + action_gap
+    } else {
+        button_y += button_h + action_gap
+    }
+
+    if practice != null && practice.draw_manual != null {
+        app.practice_home_bounds_manual = Rectangle.{cast(float32)action_x, cast(float32)button_y,
+            cast(float32)secondary_w, cast(float32)button_h
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = app.practice_home_bounds_manual,
+                .label = LocaleText("practice_manual_button"),
+                .disabled = app != null && app.modal.active != 0,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .pill = true
+            }) != 0 {
+            practice_screen_open_tab(app, PRACTICE_TAB_MANUAL)
+        }
+        if wide_actions != 0 || secondary_row != 0 {
+            action_x += secondary_w + action_gap
+        } else {
+            button_y += button_h + action_gap
+        }
+    }
+
+    if practice != null && practice.draw_config != null {
+        app.practice_home_bounds_config = Rectangle.{cast(float32)action_x, cast(float32)button_y,
+            cast(float32)secondary_w, cast(float32)button_h
+        }
+        if Button(CurrentApp().ui.session, ButtonProps.{
+                .bounds = app.practice_home_bounds_config,
+                .label = LocaleText("practice_configure_button"),
+                .disabled = app != null && app.modal.active != 0,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .pill = true
+            }) != 0 {
             practice_screen_open_tab(app, PRACTICE_TAB_CONFIG)
         }
+    }
+
+    if practice_banner_probe_count == 1 {
+        TraceLog(3, "APP PROBE: home hero complete")
     }
     return 1
 }
