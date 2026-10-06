@@ -18,6 +18,10 @@ GetTime :: () -> float64 #foreign c;
 #import, file "../platform/asset_download.zi";
 #import, file "../platform/asset_download_types.zi";
 #import, file "../platform/android/android_device.zi";
+#import, file "../platform/android/graphics_context.zi";
+#if #defined(ANDROID_BUILD) {
+    #import "kryon/raylib_runtime"
+}
 #if #defined(DESKTOP_TRAY_ENABLED) {
     #import, file "../platform/desktop_tray.zi";
 }
@@ -304,18 +308,44 @@ app_draw_close_prompt :: (app: *InnerBreeze) {
     }
 }
 
-app_reload_graphics_resources :: (app: *InnerBreeze) {
-    if app == null || app.graphics_reload_requested == 0 {
-        return
+app_reload_graphics_resources :: (app: *InnerBreeze) -> bool {
+    if app == null {
+        return false
+    }
+    context_lost: bool = false
+    #if #defined(ANDROID_BUILD) {
+        context := AndroidGraphicsContext()
+        if context == null {
+            // EndDrawing continues polling Android events until the surface
+            // is rebound. Do not populate any GPU caches in the meantime.
+            return false
+        }
+        context_lost = app.graphics_context != null &&
+        app.graphics_context != context
+        app.graphics_context = context
+    }
+    if app.graphics_reload_requested == 0 && !context_lost {
+        return true
     }
     app.graphics_reload_requested = 0
     if PreviewMode() != 0 {
-        return
+        return true
     }
     TraceLog(LOG_INFO, "ANDROID: Reloading graphics resources")
+    #if #defined(ANDROID_BUILD) {
+        ResetRaylibGraphics(context_lost)
+        if context_lost {
+            app.ui.route_transition_texture = Texture2D.{}
+            app.ui.route_transition_texture_owned = false
+            app.ui.route_transition_active = false
+            app.ui.route_transition_pending = false
+        }
+        app.ui.retained_frame_unchanged = false
+    }
     if !LoadLocaleFont(app) {
         TraceLog(LOG_WARNING, "FONT: Failed to reload Noto UI font")
     }
+    return true
 }
 
 #program_export
@@ -583,6 +613,7 @@ app_init :: (vapp: *void) {
     if !SessionValid(app.ui.session) { return }
     android_text_input_open(app.ui.session)
     #if #defined(ANDROID_BUILD) {
+        app.graphics_context = AndroidGraphicsContext()
         if practice_active(app) != null {
             android_allow_screen_off()
         }
@@ -1231,7 +1262,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     frame_decision := app_update_frame_pacing(app, frame_sample)
     app.ui.frame_target_fps = frame_decision.state.target_fps
     app.ui.frame_target_changed = frame_decision.apply_target
-    app_reload_graphics_resources(app)
+    if !app_reload_graphics_resources(app) {
+        return
+    }
     full_width = cast(s32)viewport.width
     full_height = cast(s32)viewport.height
     view_width = full_width

@@ -32,6 +32,7 @@ for directory in (
     command.extend(["--module-path", str(directory)])
 # KSS imports Kryon as kryon/NAME, and account code imports oqs/Oqs.
 command.extend(["--module-path", f"kryon={kryon / 'src/ui'}"])
+command.extend(["--module-path", f"kryon={kryon / 'src/backend'}"])
 command.extend(["--module-path", f"oqs={root / 'build/packages/oqs/src'}"])
 command.extend(["-o", str(args.output)])
 command.extend(str(path.relative_to(root)) for path in sources)
