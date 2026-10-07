@@ -8,6 +8,7 @@ if [[ ! -s "$bundle" ]]; then
     echo "FAIL: missing Play bundle: $bundle" >&2
     exit 1
 fi
+python3 scripts/check-package-size.py --assets "$bundle"
 
 dex_bytes=$(unzip -l "$bundle" | awk '$4 ~ /\/dex\/classes[0-9]*\.dex$/ { total += $1 } END { printf "%.0f", total }')
 if (( dex_bytes <= 0 || dex_bytes >= 10000000 )); then
@@ -33,4 +34,3 @@ renamed=$(unzip -p "$bundle" "$mapping" | awk '
 }
 
 echo "PASS Play optimization: $dex_bytes uncompressed DEX bytes; $renamed renamed classes; embedded R8 mapping."
-

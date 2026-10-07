@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.2] - 2026-10-07
+
+- Keep all four Sun Salutation characters and smooth movement in a smaller offline package.
+- Keep older installations on their working practice graphics until the app is upgraded.
+
 ## [1.1.1] - 2026-10-06
 
 - Use Cells consistently in the cell and its independently delivered package.

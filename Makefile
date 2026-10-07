@@ -413,7 +413,7 @@ lumi-test: cells
 lumi-ui-test: $(TARGET)
 	sh tests/lumi_ui_test.sh $(abspath $(TARGET))
 
-$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/build-cells.sh $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
+$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 
 EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.png
@@ -1762,6 +1762,15 @@ assets-zi-test: $(ZI2C_BIN)
 
 test: assets-zi-test
 
+.PHONY: android-package-assets-test package-size-test
+android-package-assets-test: $(ZI2C_BIN)
+	sh tests/android_package_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+package-size-test:
+	python3 tests/package_size_test.py
+
+test: android-package-assets-test package-size-test
+
 .PHONY: asset-files-zi-test
 asset-files-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@sh tests/asset_files_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_A)
@@ -2061,6 +2070,7 @@ $(TARGET): | zi-check
 		$(RUNTIME_ASSET_LDLIBS) \
 		$(NATIVE_SYSTEM_LDLIBS) \
 		$(LDFLAGS)
+	$(if $(filter linux,$(NATIVE_PLATFORM)),python3 scripts/check-package-size.py --assets $@,)
 
 $(KRYON_HOST_TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)
 	mkdir -p $(dir $@)
@@ -2458,7 +2468,7 @@ $(WEB_CANVAS_TARGET): | zi-check
 
 android-copy-assets:
 	$(MAKE) $(FONT_FILES)
-	$(MAKE) $(EMBEDDED_ASSETS_C)
+	$(MAKE) cells
 	rm -rf droid/app/src/main/assets
 	mkdir -p droid/app/src/main/assets
 
@@ -2539,6 +2549,7 @@ android-copy-release-apks: | $(ANDROID_BUILD_DIR)
 	@found=0; \
 	for apk in droid/app/build/outputs/apk/release/*.apk droid/app/build/outputs/apk/gplay/*.apk; do \
 		if [ -f "$$apk" ]; then \
+			python3 scripts/check-package-size.py --assets "$$apk" || exit $$?; \
 			cp "$$apk" "$(ANDROID_BUILD_DIR)/$$(basename "$$apk")"; \
 			found=1; \
 		fi; \
@@ -2557,6 +2568,13 @@ android-copy-release-apks: | $(ANDROID_BUILD_DIR)
 		exit 1; \
 	fi; \
 	cp "$$release_universal" "$(ANDROID_BUILD_DIR)/$(APP_NAME)-$(APP_VERSION).apk"; \
+	for abi in arm64-v8a armeabi-v7a x86 x86_64; do \
+		for apk in droid/app/build/outputs/apk/release/app-$$abi-release*.apk; do \
+			if [ -f "$$apk" ]; then \
+				cp "$$apk" "$(ANDROID_BUILD_DIR)/$(APP_NAME)-$(APP_VERSION)-$$abi.apk"; \
+			fi; \
+		done; \
+	done; \
 	gplay_universal="$$(find droid/app/build/outputs/apk -path '*/gplay/*' -name "app-universal-gplay*.apk" | head -n 1)"; \
 	if [ -z "$$gplay_universal" ] || [ ! -f "$$gplay_universal" ]; then \
 		echo "No gplay universal release APK was produced"; \

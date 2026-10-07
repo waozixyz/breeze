@@ -2,8 +2,11 @@
 from pathlib import Path
 import re
 import struct
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from animation_inventory import inventory
 
 def assets(data):
     assert data[:8] == b'ZIB\0\x1a\0\0\0'
@@ -60,7 +63,17 @@ for file in (ROOT / 'assets/fonts/subset').glob('*-App-Regular.*'):
     assert root[path] == file.read_bytes(), f'stale font in root package: {path}'
 assert any(name.startswith('assets/sounds/') for name in practices)
 assert not any(name.startswith('assets/practices/') for name in root)
-assert len(practices) >= 3982
+for name in root:
+    assert not any(part in name for part in (
+        'test-background', 'source-icon', 'readme-', 'badge-', '-prompt.')), \
+        f'development artwork shipped: {name}'
+assert not any(name.endswith('/banner.png') for name in practices)
+paths, sources, unique_animation = inventory()
+packaged_animation = {name for name in practices if '/characters/' in name}
+assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}
+for index, original in enumerate(paths):
+    stored = paths[sources[index]].relative_to(ROOT).as_posix()
+    assert practices[stored] == original.read_bytes(), f'animation frame changed: {original}'
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
 assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zib'}, entries

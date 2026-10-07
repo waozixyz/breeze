@@ -163,6 +163,46 @@ tasks.named('preBuild').configure {
     dependsOn 'checkBuildLaws'
 }
 
+// Architecture-independent app code and artwork belong once in APK assets,
+// including direct Gradle/F-Droid builds and incremental asset-only changes.
+tasks.register('prepareAppPackage', Exec) {
+    workingDir rootProject.file('..')
+    commandLine 'make', 'cells'
+}
+def sharedAppAssets = layout.buildDirectory.dir('generated/app-assets')
+def stageAppPackage = tasks.register('stageAppPackage', Sync) {
+    dependsOn 'prepareAppPackage'
+    from(rootProject.file('../build/inbe.zib'))
+    into(sharedAppAssets)
+}
+// Declare generated sources through their producing task; lint consumers also
+// need the explicit dependency below because AGP resolves their paths eagerly.
+android.sourceSets.main.assets.srcDir(stageAppPackage)
+tasks.configureEach { task ->
+    // AGP's lint model resolves srcDirs as plain files, losing builtBy.
+    if ((task.name.startsWith('merge') && task.name.endsWith('Assets')) ||
+        task.name.toLowerCase().contains('lint')) {
+        task.dependsOn(stageAppPackage)
+    }
+    if (task.name in ['assembleRelease', 'assembleGplay', 'bundleRelease', 'bundleGplay']) {
+        task.doLast {
+            def variant = task.name.endsWith('Gplay') ? 'gplay' : 'release'
+            def artifacts
+            if (task.name.startsWith('bundle')) {
+                artifacts = [layout.buildDirectory.file("outputs/bundle/${variant}/app-${variant}.aab").get().asFile]
+            } else {
+                def outputDir = layout.buildDirectory.dir("outputs/apk/${variant}").get().asFile
+                def metadata = new groovy.json.JsonSlurper().parse(new File(outputDir, 'output-metadata.json'))
+                artifacts = metadata.elements.collect { new File(outputDir, it.outputFile) }
+            }
+            exec {
+                workingDir rootProject.file('..')
+                commandLine(['python3', 'scripts/check-package-size.py', '--assets'] + artifacts*.absolutePath)
+            }
+        }
+    }
+}
+
 gradle.taskGraph.whenReady { taskGraph ->
     def signedTasks = [":app:assembleRelease", ":app:bundleRelease", ":app:assembleGplay", ":app:bundleGplay"]
     if (signedTasks.any { taskGraph.hasTask(it) }

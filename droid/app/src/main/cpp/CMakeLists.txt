@@ -199,20 +199,6 @@ add_custom_target(app_zi_check
 add_dependencies(app_zi_check app_build_laws)
 add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi_check)
 
-file(GLOB APP_LOCALE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/locales/*.txt")
-file(GLOB APP_SOUND_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/sounds/*.ogg")
-file(GLOB APP_SOCIAL_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/social/*.png")
-file(GLOB APP_PROFILE_PICTURE_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS "${REPO_ROOT}/assets/profile-pictures/*.png")
-# banner.png is the web/store copy of banner-light.png; the app loads only
-# the themed pair.
-file(GLOB APP_PRACTICE_BANNER_ASSETS RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
-    "${REPO_ROOT}/assets/practices/*/banner-light.png"
-    "${REPO_ROOT}/assets/practices/*/banner-dark.png")
-file(GLOB APP_SUN_SALUTATION_FRAMES RELATIVE "${REPO_ROOT}" CONFIGURE_DEPENDS
-    "${REPO_ROOT}/assets/practices/sunsalutation/characters/*/*.png")
-file(GLOB APP_STYLE_ASSETS RELATIVE "${REPO_ROOT}"
-    "${REPO_ROOT}/build/packages/kss/styles/*.kss" "${REPO_ROOT}/assets/styles/*.kss"
-    "${REPO_ROOT}/themes/catalog_*.kss")
 foreach(mode light dark)
     file(SHA256 "${REPO_ROOT}/themes/catalog_${mode}.kss" APP_CATALOG_HASH)
     file(SHA256 "${KRYON_DIR}/themes/catalog_${mode}.kss" KRYON_CATALOG_HASH)
@@ -220,13 +206,8 @@ foreach(mode light dark)
         message(FATAL_ERROR "Packaged ${mode} theme catalog differs from Kryon")
     endif()
 endforeach()
-# Portable feature payloads are architecture-independent, but their embedding
-# runtime must match each Android ABI. Both are built from pinned packages.
-set(APP_CELLS_DIR "${REPO_ROOT}/build/cells")
-file(GLOB_RECURSE APP_CELL_INPUTS CONFIGURE_DEPENDS "${REPO_ROOT}/apps/*.zi" "${REPO_ROOT}/src/cells/*.zi")
-execute_process(COMMAND sh "${REPO_ROOT}/scripts/run-ziran.sh"
-    sh "${REPO_ROOT}/scripts/build-cells.sh" "${ZIRAN_BIN}" "${APP_CELLS_DIR}"
-    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+# Gradle builds and stages the portable package independently of ABI-specific
+# native compilation. Artwork changes must not reconfigure every native host.
 set(APP_BUNDLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bundle-runtime")
 set(APP_BUNDLE_RUNTIME "${APP_BUNDLE_RUNTIME_DIR}/libziran.a")
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
@@ -236,12 +217,9 @@ execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runt
     "--flags=-O2 -fPIC"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${APP_CELL_INPUTS} "${REPO_ROOT}/scripts/build-cells.sh"
-    "${REPO_ROOT}/scripts/generate-package-versions.py" "${REPO_ROOT}/scripts/prepare-package-assets.py" "${REPO_ROOT}/apps/versions.json"
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
 
 set(APP_EMBEDDED_INPUTS
-    build/inbe.zib
     apps/publishers.json
     assets/app/icon.png
 )
@@ -323,3 +301,11 @@ foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
 endforeach()
 
 target_link_libraries(main oqs z "${APP_BUNDLE_RUNTIME}")
+
+# Keep the Android entry points public and let the linker discard unreachable
+# functions from the statically linked runtime and graphics dependencies.
+set(APP_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/libmain.map.txt")
+target_link_options(main PRIVATE
+    "-Wl,--version-script,${APP_EXPORT_MAP}"
+    "-Wl,--no-undefined-version")
+set_property(TARGET main APPEND PROPERTY LINK_DEPENDS "${APP_EXPORT_MAP}")

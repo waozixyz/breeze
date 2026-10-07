@@ -2,8 +2,8 @@
 # Prepare the source tree for a Gradle Android build. Used by the release
 # workflow and by F-Droid's prebuild step, from any working directory.
 #
-# Runtime assets are compiled into libmain.so by the CMake build
-# (scripts/embed-app-assets.py), so the APK assets directory stays empty.
+# Gradle stages the portable app package once in generated APK assets.
+# Only the tiny native bootstrap assets are compiled into each libmain.so.
 # The CMake build needs the locked Ziran packages under build/packages.
 set -eu
 

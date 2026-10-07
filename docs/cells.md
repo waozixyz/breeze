@@ -84,7 +84,12 @@ Enable chat / Disable chat control preserves the agent and saved conversation.
 - Independent `build/cells/{lumi,habits,practices,lists,diary}.zib` files.
 - `build/inbe-full.zib`, a local development and test bundle containing all five.
 
-Native, Android and browser builds embed the base root. Lists and Diary are
+Native and browser builds embed the base root. Android stores `inbe.zib`
+once in APK assets and opens its bytes through the NDK asset manager. Each
+CPU library contains only the native host and small bootstrap assets, so a
+universal APK shares the artwork across all four architectures. Direct Gradle
+builds run `make cells` and stage the current package before merging assets.
+Lists and Diary are
 absent from that root and the native embedded payload. Recommended apps work
 offline. Downloaded packages are stored in the private `packages/` directory
 beside `inbe.db`. The host checks signed release identity, API compatibility,
@@ -92,6 +97,23 @@ hash, size, allowed capabilities and the typed identity handshake before
 publishing an immutable payload and atomically replacing its current pointer.
 Root packages must contain exactly the three signed recommended dependencies.
 Malformed packages cannot apply writes through a mismatched host protocol.
+
+Runtime resources are selected in `scripts/prepare-package-assets.py`; source
+icons, store banners, prompts and test images are excluded. Sun Salutation
+keeps its full four-character, 30 fps timeline while storing identical PNGs
+once. Character regeneration losslessly compresses the PNGs and regenerates
+`sun_salutation_inventory.zi`; builds check that this table is current. The
+compression step requires Python `zopfli`, while ordinary builds use the
+committed PNGs. `packaging/size-budgets.json` bounds the app package, native
+libraries, Linux binary and release APKs. Android releases include a smaller
+APK for each CPU architecture as well as the universal APK.
+The native library exports only the NativeActivity and JNI loading entries;
+registered JNI methods stay internal. This follows the Android NDK
+[symbol visibility guidance](https://developer.android.com/ndk/guides/symbol-visibility)
+and allows unused dependency functions to be removed when linking.
+The smaller Practices inventory requires the `SunSalutationStoredFrame` host
+capability. Older wrappers reject it before replacing their working package;
+upgrading the wrapper enables the new inventory without changing saved data.
 
 The cell selection screen follows language selection. Settings → Cells & sidebar
 lists installed and available cells alongside the sidebar shortcuts. Drag a

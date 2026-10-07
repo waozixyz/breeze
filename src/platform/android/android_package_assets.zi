@@ -1,0 +1,44 @@
+// The portable app package is shared by every ABI in the APK. Keep the NDK
+// asset open for the lifetime of its borrowed bytes, including Activity resets.
+#import, file "activity_jni.zi";
+#import "byte_text_linux"
+
+#if #defined(ANDROID_BUILD) {
+    android :: #system_library "android";
+    raylib :: #system_library "raylib";
+    PackageAndroidApp :: () -> *NativeAndroidApp #foreign raylib "GetAndroidApp";
+    PackageAssetOpen :: (manager: *void, path: *u8,
+        mode: s32) -> *void #foreign android "AAssetManager_open";
+    PackageAssetBuffer :: (asset: *void) -> *u8 #foreign android "AAsset_getBuffer";
+    PackageAssetLength :: (asset: *void) -> s64 #foreign android "AAsset_getLength64";
+    PackageAssetClose :: (asset: *void) #foreign android "AAsset_close";
+    package_asset: *void;
+    package_bytes: string;
+}
+
+AndroidPackageBytes :: () -> string {
+    #if #defined(ANDROID_BUILD) {
+        if package_asset != null {
+            return package_bytes
+        }
+        app := PackageAndroidApp()
+        if app == null || app.activity == null || app.activity.asset_manager == null {
+            return ""
+        }
+        path: [9]u8 = .[105, 110, 98, 101, 46, 122, 105, 98, 0]
+        asset := PackageAssetOpen(app.activity.asset_manager, *path[0], 3)
+        if asset == null {
+            return ""
+        }
+        length := PackageAssetLength(asset)
+        data := PackageAssetBuffer(asset)
+        if length <= 0 || data == null {
+            PackageAssetClose(asset)
+            return ""
+        }
+        package_asset = asset
+        package_bytes = TextFromBytes(BytesFromPointer(data, cast(u64)length))
+        return package_bytes
+    }
+    return ""
+}

@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 from PIL import Image
@@ -163,6 +165,10 @@ def main():
     pipeline = load_pipeline()
     characters = [export_character(pipeline, concept) for concept in pipeline.CONCEPTS]
     write_tables(characters)
+    subprocess.run([sys.executable, str(ROOT / "scripts/optimize-animation-pngs.py")],
+                   check=True)
+    subprocess.run([sys.executable, str(ROOT / "scripts/animation_inventory.py")],
+                   check=True)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,57 @@ static int32_t cached_reads[6];
 static bool fail_next_instance;
 static bool fail_next_run;
 
+BundleInstance *__real_BundleInstantiate(const Bundle *bundle,
+    const HostBinding *bindings, size_t count);
+
+static int unused_capability(void *context, const char *module,
+    const char *function, const VmHostValue *arguments, int count,
+    VmHostValue *result)
+{
+    (void)context;
+    (void)module;
+    (void)function;
+    (void)arguments;
+    (void)count;
+    (void)result;
+    return 0;
+}
+
+/* A wrapper without the frame inventory must reject the smaller package
+ * before running it. The current host handshake is exercised by CheckModules. */
+static void check_practice_inventory_capability(void)
+{
+    Bundle *bundle = BundleOpenBytes(payloads[2], sizes[2]);
+    assert(bundle != NULL);
+    size_t count = BundleCapabilityCount(bundle);
+    assert(count > 2 && count <= 64);
+    HostBinding bindings[64];
+    size_t legacy_count = 0;
+    size_t inventory_index = count;
+    for(size_t i = 0; i < count; i++) {
+        HostBinding binding = {
+            BundleCapabilityModule(bundle, i),
+            BundleCapabilityFunction(bundle, i), unused_capability, NULL
+        };
+        if(strcmp(binding.function, "SunSalutationStoredFrame") == 0) {
+            assert(inventory_index == count);
+            inventory_index = i;
+        } else {
+            bindings[legacy_count++] = binding;
+        }
+    }
+    assert(inventory_index < count && legacy_count == count - 1);
+    assert(__real_BundleInstantiate(bundle, bindings, legacy_count) == NULL);
+    bindings[legacy_count] = (HostBinding){
+        BundleCapabilityModule(bundle, inventory_index),
+        BundleCapabilityFunction(bundle, inventory_index), unused_capability, NULL
+    };
+    BundleInstance *instance = __real_BundleInstantiate(bundle, bindings, count);
+    assert(instance != NULL);
+    BundleInstanceClose(instance);
+    BundleClose(bundle);
+}
+
 void ModuleTestFailRun(void)
 {
     fail_next_run = true;
@@ -23,9 +74,6 @@ void ModuleTestFailInstantiate(void)
 {
     fail_next_instance = true;
 }
-
-BundleInstance *__real_BundleInstantiate(const Bundle *bundle,
-    const HostBinding *bindings, size_t count);
 
 BundleInstance *__wrap_BundleInstantiate(const Bundle *bundle,
     const HostBinding *bindings, size_t count)
@@ -203,6 +251,7 @@ int main(int argc, char **argv)
         assert(payloads[i] != NULL && fread(payloads[i], 1, sizes[i], file) == sizes[i]);
         fclose(file);
     }
+    check_practice_inventory_capability();
     int result = CheckModules();
     for(int i = 0; i < 10; i++) {
         free(payloads[i]);

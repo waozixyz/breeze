@@ -23,6 +23,10 @@ fi
 
 cat <<EOF
 inbe-$version.apk
+inbe-$version-arm64-v8a.apk
+inbe-$version-armeabi-v7a.apk
+inbe-$version-x86.apk
+inbe-$version-x86_64.apk
 inbe-$version-gplay.apk
 inbe-$version-gplay.aab
 inbe-web.zip

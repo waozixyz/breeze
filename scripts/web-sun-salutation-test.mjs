@@ -1,10 +1,23 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const inventory = readFileSync(new URL('../src/practices/sun_salutation/sun_salutation_inventory.zi', import.meta.url), 'utf8');
+const frameSources = [...inventory.matchAll(/sun_salutation_frame_sources_\d+:[^=]+=[^[]*\[([^\]]+)\]/g)]
+  .flatMap(match => match[1].split(',').map(value => value.trim()).filter(Boolean).map(Number));
 
 const stateExpression = `(() => {
   const canvas = Module.canvas;
+  // Capture the timer and wall clock together, before pixel readback can
+  // block rendering. Both measurements refer to the same observed state.
+  const practice = {
+    sampledAt: performance.now(),
+    step: Module._app_web_test_sun_salutation_step(),
+    ticks: Module._app_web_test_sun_salutation_ticks(),
+    character: Module._app_web_test_sun_salutation_character(),
+    paused: Module._app_web_test_sun_salutation_paused(),
+    screen: Module._app_web_test_screen()
+  };
   const context = canvas.getContext('2d');
   const top = Math.floor(canvas.height * 0.25);
   const height = Math.max(1, canvas.height - top - 90);
@@ -22,13 +35,8 @@ const stateExpression = `(() => {
     }
   }
   return {
-    step: Module._app_web_test_sun_salutation_step(),
-    ticks: Module._app_web_test_sun_salutation_ticks(),
-    character: Module._app_web_test_sun_salutation_character(),
-    paused: Module._app_web_test_sun_salutation_paused(),
-    screen: Module._app_web_test_screen(),
-    painted, hash, width: canvas.width, height: canvas.height,
-    sampledAt: performance.now()
+    ...practice,
+    painted, hash, width: canvas.width, height: canvas.height
   };
 })()`;
 
@@ -117,21 +125,36 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     const characters = [...new Set([...files.keys()].filter(name => name.startsWith(root + '/'))
       .map(name => name.slice(root.length + 1).split('/')[0]))].sort();
     if (characters.length !== 4) throw new Error('expected four Sun Salutation characters');
+    const frameSources = ${JSON.stringify(frameSources)};
+    if (frameSources.length !== 3964) throw new Error('incomplete animation timeline');
+    const storedPaths = [...files.keys()].filter(name => name.startsWith(root + '/') && name.endsWith('.png'));
+    if (storedPaths.length !== new Set(frameSources).size) throw new Error('stored animation inventory differs');
     let totalFrames = 0;
     let maximumFootJump = 0;
     for (const character of characters) {
       const directory = root + '/' + character;
-      const paths = [...files.keys()].filter(name => name.startsWith(directory + '/') && name.endsWith('.png'))
-        .map(name => name.slice(directory.length + 1)).sort();
-      if (paths.length !== 991) throw new Error('expected 991 frames for ' + character + ', got ' + paths.length);
+      const paths = [];
+      for (let pose = 1; pose <= 12; pose++) {
+        for (let frame = 1; frame <= (pose === 1 ? 1 : 90); frame++) {
+          paths.push(String(pose).padStart(2, '0') + '-' + String(frame).padStart(3, '0') + '.png');
+        }
+      }
       const steps = Array(12).fill(0);
       let previousFoot = null;
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { willReadFrequently: true });
-      for (const path of paths) {
+      for (const [frameIndex, path] of paths.entries()) {
         const step = Number(path.slice(0, 2)) - 1;
         if (step < 0 || step >= 12) throw new Error('invalid pose path ' + path);
-        const bytes = files.get(directory + '/' + path);
+        const source = frameSources[characters.indexOf(character) * 991 + frameIndex];
+        const sourceCharacter = Math.floor(source / 991);
+        const sourceFrame = source % 991;
+        const sourcePose = sourceFrame === 0 ? 1 : 2 + Math.floor((sourceFrame - 1) / 90);
+        const sourceIndex = sourceFrame === 0 ? 1 : 1 + (sourceFrame - 1) % 90;
+        const sourcePath = root + '/' + characters[sourceCharacter] + '/' +
+          String(sourcePose).padStart(2, '0') + '-' + String(sourceIndex).padStart(3, '0') + '.png';
+        const bytes = files.get(sourcePath);
+        if (!bytes) throw new Error('missing stored image for ' + directory + '/' + path);
         const image = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
         if (!image.width || !image.height) throw new Error('empty image ' + path);
         canvas.width = image.width;
