@@ -24,6 +24,7 @@ def command(*args):
 
 
 def tap(window, x, y):
+    command("xdotool", "windowfocus", window)
     command("xdotool", "mousemove", "--window", window, str(x), str(y))
     command("xdotool", "mousedown", "1")
     time.sleep(0.06)
@@ -51,7 +52,7 @@ def application(profile, label, standalone=False, recommended=False):
             while time.monotonic() < deadline:
                 assert app.poll() is None, f"Lumi exited: {label}"
                 found = subprocess.run(["xdotool", "search", "--all", "--onlyvisible", "--pid", str(app.pid)],
-                                       env=ENV, text=True, capture_output=True, timeout=2)
+                                       env=ENV, text=True, capture_output=True, timeout=5)
                 if found.returncode == 0 and found.stdout.strip():
                     window = found.stdout.splitlines()[0]
                     break
@@ -117,10 +118,18 @@ def send(window, profile, text, *, button=False):
         command("xdotool", "keydown", "--clearmodifiers", "Return")
         time.sleep(0.15)
         command("xdotool", "keyup", "Return")
+
+    def exchange_saved():
+        rows = chat(profile)
+        return (rows != before and len(rows) >= 2 and
+                rows[-2] == {"user": 1, "text": text.strip()} and
+                rows[-1]["user"] == 0)
+
     try:
-        wait_for(lambda: chat(profile) != before and
-                 len(chat(profile)) == min(64, len(before) + 2) and
-                 chat(profile)[-2]["text"] == text.strip(), "Chat exchange was not saved")
+        wait_for(exchange_saved, "Chat exchange was not saved")
+        rows = chat(profile)
+        assert len(rows) <= 64, "Chat history exceeded its bound"
+        assert rows[:-2] in (before, before[2:]), "Chat lost recent conversation"
     except AssertionError:
         capture(window, "failure")
         raise
@@ -291,6 +300,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "Lists absent", "WHM starts and advances immediately", "Practices and Habits absent", "habit question and name reply",
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
-                    "multiline Diary append", "Diary restart persistence"],
+                    "multiline Diary append", "Diary restart persistence", "bounded history retention"],
     }, indent=2) + "\n")
 print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")

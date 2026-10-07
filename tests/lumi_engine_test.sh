@@ -9,4 +9,11 @@ mkdir -p "$work"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     "$root/build/ziran-toolchain/bin/ziran" run "$work/engine.zib")
 [ "$result" = 42 ]
+"$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
+    --entry lumi_response_behavior:Answer -o "$work/response.zib" \
+    "$root/tests/lumi_response_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/response.zib")
+[ "$result" = 42 ]
+printf '%s\n' 'Lumi responses: JSON trailing whitespace accepted; malformed and trailing data rejected'
 printf '%s\n' 'Lumi engine: translated commands, Unicode titles, completion matching and bounded actions passed'
