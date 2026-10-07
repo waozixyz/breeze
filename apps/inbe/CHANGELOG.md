@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.12] - 2026-10-07
+
+- Keep all apps working with Lumi's bold formatting and offline feature suggestions.
+
 ## [2.1.11] - 2026-10-07
 
 - Connect Lumi to online conversation and app actions without blocking the interface.

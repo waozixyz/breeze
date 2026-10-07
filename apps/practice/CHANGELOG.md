@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.3] - 2026-10-07
+
+- Keep app labels and content visible after updating Inner Breeze.
+
 ## [1.1.2] - 2026-10-07
 
 - Keep all four Sun Salutation characters and smooth movement in a smaller offline package.

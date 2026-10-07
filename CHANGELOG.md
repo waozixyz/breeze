@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.12] - 2026-10-07
+### Fixed
+- Display bold emphasis in Lumi replies and recognize app feature suggestions as feedback offline.
+- Keep app text visible when upgrading to the new Lumi formatting.
+
 ## [2.1.11] - 2026-10-07
 ### Added
 - Ask Lumi for progress charts and donation links directly in chat.
@@ -6,7 +11,6 @@
 - Save app feedback from chat, send it when connected, and receive developer replies in Lumi.
 ### Fixed
 - Keep feedback available when online chat is disabled or its allowance runs out.
-- Display bold emphasis in Lumi replies and recognize app feature suggestions as feedback offline.
 
 ## [2.1.10] - 2026-10-06
 ### Fixed
