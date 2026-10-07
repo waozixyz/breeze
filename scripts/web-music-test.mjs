@@ -71,7 +71,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
   await resize(1280, 1600);
   await callHook('app_web_test_save_onboarding_state');
   await evaluate(`(async () => {
-    const bundle = await fetch('/__test_subapps__/lists.zib');
+    const bundle = await fetch('/__test_cells__/lists.zib');
     if (!bundle.ok) throw new Error('Lists test fixture is unavailable');
     Module.FS.writeFile('/tmp/inbe-navigation-lists.zib',
       new Uint8Array(await bundle.arrayBuffer()));
@@ -94,7 +94,9 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
     // Seed the optional music pack with valid shipped Ogg data so Customize
     // exposes its preview control. The track being tested is the WAV above.
     Module.FS.mkdirTree('/unpackaged_assets/audio/Elijah_K');
-    const ogg = Module.FS.readFile('/assets/sounds/bell.ogg');
+    const cue = await fetch('/__test_assets__/bell.ogg');
+    if (!cue.ok) throw new Error('Music test cue is unavailable');
+    const ogg = new Uint8Array(await cue.arrayBuffer());
     for (const name of ['deep-meditation', 'path-of-meditation', 'truth-of-silence'])
       Module.FS.writeFile('/unpackaged_assets/audio/Elijah_K/' + name + '.ogg', ogg);
   })()`, true);

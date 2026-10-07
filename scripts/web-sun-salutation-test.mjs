@@ -79,14 +79,50 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
   // Decode every shipped frame in the browser, including frames a slow device
   // can skip during playback. This also verifies the complete release bundle.
   const assets = await evaluate(`(async () => {
-    const root = '/assets/practices/sunsalutation/characters';
-    const characters = Module.FS.readdir(root).filter(name => name !== '.' && name !== '..').sort();
+    const response = await fetch('/__test_cells__/practices.zib');
+    if (!response.ok) throw new Error('Practices package is unavailable');
+    const bundle = new Uint8Array(await response.arrayBuffer());
+    const view = new DataView(bundle.buffer);
+    if (view.getUint32(0, true) !== 0x0042495a || view.getUint32(4, true) !== 26)
+      throw new Error('Unsupported Practices package');
+    let at = 8;
+    function number() {
+      const value = view.getUint32(at, true);
+      at += 4;
+      return value;
+    }
+    function take(size) {
+      if (size > bundle.length - at) throw new Error('Truncated Practices package');
+      const value = bundle.subarray(at, at + size);
+      at += size;
+      return value;
+    }
+    function text() { return new TextDecoder().decode(take(number())); }
+    text(); text();
+    for (let count = number(); count > 0; count--) { text(); text(); }
+    for (let count = number(); count > 0; count--) {
+      for (let field = 0; field < 7; field++) text();
+      take(8); text(); take(4);
+    }
+    for (let count = number(); count > 0; count--) { text(); text(); text(); }
+    take(number());
+    const files = new Map();
+    for (let count = number(); count > 0; count--) {
+      const name = text();
+      if (files.has(name)) throw new Error('Duplicate package resource ' + name);
+      files.set(name, take(number()));
+    }
+    if (at !== bundle.length) throw new Error('Trailing Practices package data');
+    const root = 'assets/practices/sunsalutation/characters';
+    const characters = [...new Set([...files.keys()].filter(name => name.startsWith(root + '/'))
+      .map(name => name.slice(root.length + 1).split('/')[0]))].sort();
     if (characters.length !== 4) throw new Error('expected four Sun Salutation characters');
     let totalFrames = 0;
     let maximumFootJump = 0;
     for (const character of characters) {
       const directory = root + '/' + character;
-      const paths = Module.FS.readdir(directory).filter(name => name.endsWith('.png')).sort();
+      const paths = [...files.keys()].filter(name => name.startsWith(directory + '/') && name.endsWith('.png'))
+        .map(name => name.slice(directory.length + 1)).sort();
       if (paths.length !== 991) throw new Error('expected 991 frames for ' + character + ', got ' + paths.length);
       const steps = Array(12).fill(0);
       let previousFoot = null;
@@ -95,7 +131,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       for (const path of paths) {
         const step = Number(path.slice(0, 2)) - 1;
         if (step < 0 || step >= 12) throw new Error('invalid pose path ' + path);
-        const bytes = Module.FS.readFile(directory + '/' + path);
+        const bytes = files.get(directory + '/' + path);
         const image = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
         if (!image.width || !image.height) throw new Error('empty image ' + path);
         canvas.width = image.width;

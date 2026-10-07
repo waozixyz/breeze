@@ -8,9 +8,10 @@ SetTraceLogLevel :: (level: s32) #foreign raylib_log;
 app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
 #import, file "../app/app_types.zi";
 #import, file "../screens/elist_types.zi";
+#import, file "../screens/lumi_screen.zi";
 #import, file "../app/app_frame_transition.zi";
 #import, file "../app/application.zi";
-#import, file "../subapps/module_host.zi";
+#import, file "../cells/module_host.zi";
 #import, file "desktop_identity.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../app/screenshot_request.zi";
@@ -135,7 +136,7 @@ Prepare :: (argc: s32, argv: **u8) {
     #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
         for index: cast(s32)0..cast(s32)(arg_count - 1) {
             if args[index] == "--bundle" && index + 1 < arg_count {
-                if !SubappsUseFile(args[index + 1]) {
+                if !CellsUseFile(args[index + 1]) {
                     invalid_arguments = true
                 }
             }
@@ -294,7 +295,7 @@ app_frame :: (app: *InnerBreeze) {
     app.ui.manual_next = IsKeyPressed(KEY_RIGHT)
     app.ui.manual_finish = IsKeyPressed(KEY_ENTER)
     app.ui.manual_close = IsKeyPressed(KEY_BACK) || IsKeyPressed(KEY_ESCAPE)
-    app.ui.text_input_active = app.elist.input_focused != 0 ||
+    app.ui.text_input_active = app_lumi_input_focused(app) || app.elist.input_focused != 0 ||
     app.habit_edit.focused != 0 ||
     app.habit_edit.description_focused != 0 ||
     app.profile_friend_input_focused != 0 ||
@@ -485,9 +486,11 @@ CaptureScreenshot :: (app: *InnerBreeze) -> s32 {
 
         // External capture on GL stacks where the direct readback is blank.
         if HostEnv("APP_SHOT_WINDOW") != null {
-            while true {
+            while ShutdownRequested() == 0 && app.request_quit == 0 &&
+            TakeWindowCloseRequest() == 0 {
                 app_frame(app)
             }
+            return 1
         }
 
         capture: RaylibImage = LoadImageFromScreen()
@@ -535,8 +538,8 @@ native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
     }
     SetCurrentApp(app)
     TraceLog(LOG_INFO, "APP: Global app pointer set")
-    if SubappsLocalFeature() != 0 {
-        unused app_open_feature(cast(*void)app, SubappsLocalFeature())
+    if CellsLocalFeature() != 0 {
+        unused app_open_feature(cast(*void)app, CellsLocalFeature())
     }
     if AppMiniMode() {
         // Mini mode opens on the first practice's start page.
@@ -547,7 +550,8 @@ native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
     {
         argi: s32 = 1
         while argi < argc {
-            if AppTextFromCString(argv[argi], 16) == "--feature" && argi + 1 < argc {
+            option := AppTextFromCString(argv[argi], 16)
+            if (option == "--cell" || option == "--feature") && argi + 1 < argc {
                 name := AppTextFromCString(argv[argi + 1], 16)
                 feature: s32 = -1
                 if name == "practices" {
@@ -559,9 +563,11 @@ native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
                 } else if name == "diary" {
 
                     feature = 8
+                } else if name == "lumi" {
+                    feature = 16
                 }
                 if feature < 0 || app_open_feature(cast(*void)app, feature) == 0 {
-                    TraceLog(LOG_WARNING, "APP: feature launch rejected")
+                    TraceLog(LOG_WARNING, "APP: cell launch rejected")
                 }
                 argi += 1
             }

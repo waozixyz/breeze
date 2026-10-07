@@ -127,9 +127,9 @@ main(int argc, char **argv)
     char *bytes = malloc((size_t)size);
     assert(bytes != NULL && fread(bytes, 1, (size_t)size, file) == (size_t)size);
     fclose(file);
-    SubappsBindPersistence((ListsPersist){.call = persist_fixture_mutation},
+    CellsBindPersistence((ListsPersist){.call = persist_fixture_mutation},
                           (HabitNameExists){0}, (HabitSave){0});
-    assert(SubappsOpenPackage(StringView(bytes, (size_t)size)));
+    assert(CellsOpenPackage(StringView(bytes, (size_t)size)));
 
     EListState state = {0};
     state.list_count = 1;
@@ -224,7 +224,7 @@ main(int argc, char **argv)
     elist_screen_elist_select_list(&app, 1);
     assert(!app.elist.show_completed);
     assert_visible(&app.elist, 12.0, false);
-    SubappsClose();
+    CellsClose();
     free(bytes);
     return 0;
 }

@@ -1,0 +1,152 @@
+// Device-local conversation, scoped to the active account. Existing settings
+// storage is reused, so this adds no database schema or sync collection.
+#import "json_scan"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import, file "lumi_types.zi";
+#import, file "lumi_ui_types.zi";
+#import, file "package_files.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../app/text_buffers.zi";
+
+lumi_rows: [64]LumiChatRow;
+lumi_count: s32;
+lumi_owner: [64]u8;
+lumi_store_loaded: bool;
+lumi_store_error: bool;
+
+LumiStoreReset :: () {
+    for index: cast(s32)0..lumi_count - 1 {
+        PackageFree(lumi_rows[index].text)
+        lumi_rows[index] = LumiChatRow.{}
+    }
+    lumi_count = 0
+    lumi_owner[0] = cast(u8)0
+    lumi_store_loaded = false
+    lumi_store_error = false
+}
+
+LumiStoreLoad :: () {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if lumi_store_loaded && owner == AppTextFromCString(*lumi_owner[0], 64) {
+        return
+    }
+    LumiStoreReset()
+    unused AppCopyText(owner, lumi_owner[:])
+    lumi_store_loaded = true
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key='lumi_chat'",
+        -1, *statement, null) != SQLITE_OK {
+        lumi_store_error = true
+        return
+    }
+    defer {
+        SqliteFinalize(statement)
+    }
+    unused SqliteBindTextString(statement, 1, owner, cast(s32)owner.count)
+    result := SqliteStep(statement)
+    if result == SQLITE_DONE {
+        return
+    }
+    if result != SQLITE_ROW {
+        lumi_store_error = true
+        return
+    }
+    document := AppTextFromCString(SqliteColumnText(statement, 0), 131072)
+    count := ArrayCount(document, 0)
+    if count < 0 || count > LUMI_CHAT_MAX || ValueEnd(document, 0, 0) != document.count {
+        lumi_store_error = true
+        return
+    }
+    for index: cast(s32)0..count - 1 {
+        element := ElementAt(document, 0, index)
+        bytes: [1024]u8
+        length := ReadStringText(document, FieldAt(document, element, "text"), bytes[:])
+        user := ReadNumber(document, FieldAt(document, element, "user"))
+        if length <= 0 || length >= LUMI_INPUT_MAX || !user.valid ||
+        (user.value != 0.0 && user.value != 1.0) {
+            LumiStoreReset()
+            unused AppCopyText(owner, lumi_owner[:])
+            lumi_store_loaded = true
+            lumi_store_error = true
+            return
+        }
+        lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(TextFromBytes(bytes[0:length]), ""),
+            .user = user.value == 1.0}
+        lumi_count += 1
+    }
+}
+
+LumiJsonString :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte == cast(u8)10 {
+            BuilderPrint(out, "\\n")
+        } else if byte == cast(u8)13 {
+            BuilderPrint(out, "\\r")
+        } else if byte == cast(u8)9 {
+            BuilderPrint(out, "\\t")
+        } else if byte >= cast(u8)32 {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+LumiStoreSave :: () -> bool {
+    if lumi_store_error {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    for index: cast(s32)0..lumi_count - 1 {
+        BuilderPrint(*out, "%{\"user\":%,\"text\":", ifx index == 0 then "" else ",",
+            ifx lumi_rows[index].user then 1 else 0)
+        LumiJsonString(*out, lumi_rows[index].text)
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]")
+    document := BuilderFinish(out)
+    defer {
+        PackageFree(document)
+    }
+    storage_set_setting_text("lumi_chat", document)
+    return storage_setting_text_equals("lumi_chat", document) != 0
+}
+
+LumiStoreAppend :: (text: string, user: bool) {
+    if text.count == 0 || text.count >= LUMI_INPUT_MAX {
+        return
+    }
+    LumiStoreLoad()
+    if lumi_count == LUMI_CHAT_MAX {
+        // Trim a complete conversation pair, preserving user/reply ordering.
+        PackageFree(lumi_rows[0].text)
+        PackageFree(lumi_rows[1].text)
+        for index: cast(s32)2..lumi_count - 1 {
+            lumi_rows[index - 2] = lumi_rows[index]
+        }
+        lumi_count -= 2
+    }
+    lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(text, ""), .user = user}
+    lumi_count += 1
+}
+
+LumiStoreCount :: () -> s32 {
+    LumiStoreLoad()
+    return lumi_count
+}
+
+LumiStoreRow :: (index: s32) -> LumiChatRow {
+    if index < 0 || index >= lumi_count {
+        return LumiChatRow.{}
+    }
+    return lumi_rows[index]
+}

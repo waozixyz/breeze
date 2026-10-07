@@ -15,6 +15,7 @@ static int releases;
 static bool held;
 static const char *manifest = "diary";
 static EmbeddedAssetEntry publisher;
+extern int32_t FixtureHabitsSequence(void);
 
 static String load(const char *name) {
     char path[4096];
@@ -67,9 +68,9 @@ size_t asset_entry_total(void) {
 }
 void app_web_storage_flush(void) {
 }
-bool SubappsValidatePackage(int32_t index, String bytes) {
+bool CellsValidatePackage(int32_t index, String bytes) {
     assert((index == 0 || index == 4) && bytes.length > 8);
-    return true; /* The capability decoder is covered by subapps-test. */
+    return true; /* The capability decoder is covered by cells-test. */
 }
 
 int32_t __wrap_DownloadRuntimeAsset(AssetDownload *download, String url, String destination) {
@@ -116,25 +117,29 @@ int32_t RunPackageManagerFixture(void) {
     package_manager_PackageSetAutomatic(false);
     pump();
     assert(starts == 0); /* Off means no implicit request. */
-    assert(package_manager_PackageSequence(2) == 1);
+    int32_t baseline = FixtureHabitsSequence();
+    assert(package_manager_PackageSequence(2) == baseline);
     storage_set_setting_int(StringLiteral("package_sequence_habits"), -10);
-    assert(package_manager_PackageSequence(2) == 1); /* Installed baseline is the floor. */
-    request(); /* Manual installation is allowed with automatic updates off. */
-    assert(package_manager_PackageStatus(4) == 2 && starts == 2);
-    assert(package_manager_PackageSequence(4) == 1);
+    assert(package_manager_PackageSequence(2) == baseline); /* Installed baseline is the floor. */
+    request(); /* A manual check reuses the bundled cell at the same sequence. */
+    assert(package_manager_PackageStatus(4) == 2 && starts == 1);
+    int32_t installed_sequence = package_manager_PackageSequence(4);
+    assert(installed_sequence > 0);
     String installed = package_manager_PackageInstalledBytes(4);
-    assert(installed.length > 8);
-    free((void *)installed.data);
+    assert(installed.length == 0); /* The offline bundle needs no disk cache. */
     assert(package_manager_PackageAvailable(4));
     manifest = "diary-new";
     request();
-    assert(package_manager_PackageSequence(4) == 2);
+    assert(package_manager_PackageSequence(4) == installed_sequence + 1);
+    installed = package_manager_PackageInstalledBytes(4);
+    assert(installed.length > 8);
+    free((void *)installed.data);
     manifest = "diary";
     request(); /* A correctly signed older manifest must still fail. */
-    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == 2);
+    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence + 1);
     manifest = "diary-bad";
     request();
-    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == 2);
+    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence + 1);
     installed = package_manager_PackageInstalledBytes(4);
     assert(installed.length > 8);
     free((void *)installed.data);

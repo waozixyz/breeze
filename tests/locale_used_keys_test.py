@@ -8,8 +8,9 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 used = set()
-for source in (root / "src").rglob("*.zi"):
-    used |= set(re.findall(r'LocaleText\(\s*"([a-z0-9_]+)"', source.read_text(encoding="utf-8")))
+for directory in (root / "src", root / "apps"):
+    for source in directory.rglob("*.zi"):
+        used |= set(re.findall(r'(?:LocaleText|[A-Za-z]+LocaleHost)\(\s*"([a-z0-9_]+)"', source.read_text(encoding="utf-8")))
 
 # Placeholders the app's formatters substitute.
 placeholder = re.compile(r"%(?:%|0?\d*d|s|i)")

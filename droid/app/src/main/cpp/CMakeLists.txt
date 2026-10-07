@@ -53,6 +53,9 @@ find_program(HOST_CC NAMES cc gcc REQUIRED NO_CMAKE_FIND_ROOT_PATH)
 set(ZIRAN_BIN "${ZIRAN_BUILD_DIR}/bin/ziran")
 add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/font_glyph_coverage_test.py"
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/locale_translated_test.py"
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/locale_used_keys_test.py"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/sync_retry_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/practice_lifecycle_laws.zi"
     COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}" "${SRC_DIR}/app/sync_recovery_policy_laws.zi"
@@ -104,6 +107,12 @@ execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
     "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
     "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/font_glyph_coverage_test.py"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/locale_translated_test.py"
+    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/locale_used_keys_test.py"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     "${SRC_DIR}/app/sync_retry_laws.zi"
@@ -213,10 +222,10 @@ foreach(mode light dark)
 endforeach()
 # Portable feature payloads are architecture-independent, but their embedding
 # runtime must match each Android ABI. Both are built from pinned packages.
-set(APP_SUBAPPS_DIR "${REPO_ROOT}/build/subapps")
-file(GLOB_RECURSE APP_SUBAPP_INPUTS CONFIGURE_DEPENDS "${REPO_ROOT}/apps/*.zi" "${REPO_ROOT}/src/subapps/*.zi")
+set(APP_CELLS_DIR "${REPO_ROOT}/build/cells")
+file(GLOB_RECURSE APP_CELL_INPUTS CONFIGURE_DEPENDS "${REPO_ROOT}/apps/*.zi" "${REPO_ROOT}/src/cells/*.zi")
 execute_process(COMMAND sh "${REPO_ROOT}/scripts/run-ziran.sh"
-    sh "${REPO_ROOT}/scripts/build-subapps.sh" "${ZIRAN_BIN}" "${APP_SUBAPPS_DIR}"
+    sh "${REPO_ROOT}/scripts/build-cells.sh" "${ZIRAN_BIN}" "${APP_CELLS_DIR}"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set(APP_BUNDLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bundle-runtime")
 set(APP_BUNDLE_RUNTIME "${APP_BUNDLE_RUNTIME_DIR}/libziran.a")
@@ -227,36 +236,14 @@ execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runt
     "--flags=-O2 -fPIC"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${APP_SUBAPP_INPUTS} "${REPO_ROOT}/scripts/build-subapps.sh"
-    "${REPO_ROOT}/scripts/generate-package-versions.py" "${REPO_ROOT}/apps/versions.json"
+    ${APP_CELL_INPUTS} "${REPO_ROOT}/scripts/build-cells.sh"
+    "${REPO_ROOT}/scripts/generate-package-versions.py" "${REPO_ROOT}/scripts/prepare-package-assets.py" "${REPO_ROOT}/apps/versions.json"
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
 
 set(APP_EMBEDDED_INPUTS
     build/inbe.zib
     apps/publishers.json
-    ${APP_STYLE_ASSETS}
-    ${APP_LOCALE_ASSETS}
     assets/app/icon.png
-    assets/app/icon-sky-cradle.png
-    assets/app/icon-ink-and-air.png
-    assets/easteregg/art.png
-    assets/easteregg/waozi.png
-    assets/practices/whm/1.png
-    assets/practices/whm/2.png
-    assets/practices/meditation/1.png
-    assets/pet/egg1.png
-    build/packages/kryon/icons/ui.png
-    build/packages/kryon/icons/pfp.png
-    ${APP_PRACTICE_BANNER_ASSETS}
-    ${APP_SOCIAL_ASSETS}
-    ${APP_PROFILE_PICTURE_ASSETS}
-    ${APP_SUN_SALUTATION_FRAMES}
-    assets/fonts/subset/NotoSans-App-Regular.ttf
-    assets/fonts/subset/NotoSansSC-App-Regular.otf
-    assets/fonts/subset/NotoSansJP-App-Regular.otf
-    assets/fonts/subset/NotoSansKR-App-Regular.otf
-    assets/fonts/subset/NotoSansTC-App-Regular.otf
-    ${APP_SOUND_ASSETS}
 )
 set(APP_EMBEDDED_DEPS)
 foreach(asset ${APP_EMBEDDED_INPUTS})

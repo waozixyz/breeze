@@ -1,0 +1,222 @@
+#import "geometry"
+#import "image_props"
+#import "image_widget"
+#import "layout"
+#import "text_props"
+#import "text_widget"
+#import "text_input_props"
+#import "text_area_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../../src/cells/diary_types.zi";
+#import, file "../../src/cells/diary_ui_types.zi";
+
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+host_api :: #system_library "host_api";
+ReadDiaryUiHost :: () -> DiaryUiFrame #foreign host_api;
+WriteDiaryUiHost :: (frame: DiaryUiFrame) #foreign host_api;
+DiaryLocaleHost :: (key: string) -> string #foreign host_api;
+state: DiaryMessage;
+frame: DiaryUiFrame;
+pending: bool;
+
+DiaryObserve :: () -> DiaryUiFrame {
+    return ReadDiaryUiHost()
+}
+
+DiarySaveDue :: () -> bool {
+    return frame.now >= frame.save_at
+}
+
+DateTitle :: (year: s32, month: s32, day: s32) -> string {
+    bytes: [10]u8
+    numbers: [3]s32 = .[year, month, day]
+    positions: [3]s32 = .[0, 5, 8]
+    lengths: [3]s32 = .[4, 2, 2]
+    bytes[4] = cast(u8)45
+    bytes[7] = cast(u8)45
+    for index: cast(s32)0..cast(s32)2 {
+        number := numbers[index]
+        for digit: cast(s32)0..lengths[index] - 1 {
+            bytes[positions[index] + lengths[index] - digit - 1] = cast(u8)(48 + number % 10)
+            number /= 10
+        }
+    }
+    title: Vec(u8)
+    BuilderPrint(*title, "%", TextFromBytes(bytes[:ifx day == 0 then 7 else 10]))
+    return BuilderFinish(title)
+}
+
+Scale :: (value: s32) -> s32 {
+    return cast(s32)(cast(float32)value * frame.scale)
+}
+
+FinishView :: () -> DiaryMessage {
+    WriteDiaryUiHost(frame)
+    return state
+}
+
+DiaryAction :: ( id: s32, label: string, bounds: Rectangle) {
+    if Button(frame.session, ButtonProps.{.id = id, .bounds = bounds,
+            .label = label, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        if id == 29005 {
+            frame.photo_requested = true
+            frame.focused = false
+            return
+        }
+        state.action = DIARY_CONTROL
+        state.control = id
+        pending = true
+        frame.scroll = 0
+        frame.focused = false
+    }
+}
+
+DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
+    state = message
+    frame = observed
+    column := CenteredColumnFor(frame.width, Scale(640), Scale(16))
+    left := cast(float32)column.x
+    width := cast(float32)column.width
+    Text(frame.session, TextProps.{.bounds = Rectangle.{left, cast(float32)Scale(24),
+                width, cast(float32)Scale(40)}, .text = DateTitle(state.year, state.month, state.day), .font = frame.font})
+    part := (width - cast(float32)Scale(12)) / 3.0
+    compact := frame.height < Scale(480)
+    top := cast(float32)(ifx compact then Scale(44) else Scale(76))
+    DiaryAction(29001, "‹", Rectangle.{left, top, part, cast(float32)Scale(44)})
+    DiaryAction(29004, DiaryLocaleHost("diary_today"), Rectangle.{left + part + cast(float32)Scale(6),
+            top, part, cast(float32)Scale(44)})
+    DiaryAction(29002, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
+            top, part, cast(float32)Scale(44)})
+    DiaryAction(29003, DiaryLocaleHost("tab_diary_calendar"),
+        Rectangle.{left, top + cast(float32)Scale(52), width, cast(float32)Scale(44)})
+    if state.calendar {
+        scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)290300,
+                .bounds = Rectangle.{left, top + cast(float32)Scale(104), width,
+                    cast(float32)(frame.height - frame.bottom - Scale(200))},
+                .content_height = Scale(344), .scroll_offset = frame.calendar_scroll})
+        frame.calendar_scroll = scroll.scroll_offset
+        if !scroll.opened {
+            return FinishView()
+        }
+        origin := scroll.content.y
+        DiaryAction(29011, "‹", Rectangle.{left, origin, part, cast(float32)Scale(44)})
+        DiaryAction(29012, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
+                origin, part, cast(float32)Scale(44)})
+        Text(frame.session, TextProps.{.bounds = Rectangle.{left + part,
+                    origin + cast(float32)Scale(8), part, cast(float32)Scale(32)},
+                .text = DateTitle(state.month_year, state.month_number, 0), .font = frame.font})
+        weekdays: [7]string = .["habit_day_mon", "habit_day_tue", "habit_day_wed", "habit_day_thu",
+        "habit_day_fri", "habit_day_sat", "habit_day_sun"]
+        for day: cast(s32)0..cast(s32)6 {
+            Text(frame.session, TextProps.{.bounds = Rectangle.{left + cast(float32)day * width / 7.0,
+                        origin + cast(float32)Scale(52), width / 7.0, cast(float32)Scale(24)},
+                    .text = DiaryLocaleHost(weekdays[day]), .font = frame.font})
+        }
+        for day: cast(s32)1..state.month_days {
+            position := state.month_weekday + day - 1
+            label: Vec(u8)
+            BuilderPrint(*label, "%", day)
+            if state.marks[day] != cast(u8)0 { BuilderPrint(*label, " •") }
+            day_title := BuilderFinish(label)
+            cell := width / 7.0
+            DiaryAction(29100 + day, day_title,
+                Rectangle.{left + cast(float32)(position % 7) * cell,
+                    origin + cast(float32)Scale(80 + (position / 7) * 44), cell - 2.0,
+                    cast(float32)Scale(42)})
+        }
+        End(frame.session)
+        return FinishView()
+    }
+    editor_height := frame.height - frame.bottom - cast(s32)top - Scale(236)
+    if editor_height < Scale(120) {
+        editor_height = Scale(120)
+    }
+    page := Scroll(frame.session, ScrollProps.{.key = cast(u64)290301,
+            .bounds = Rectangle.{left, top + cast(float32)Scale(104), width,
+                cast(float32)(frame.height - frame.bottom - cast(s32)top - Scale(120))},
+            .content_height = editor_height + Scale(104) +
+            (ifx state.photo_count > 0 then Scale(380) else 0), .scroll_offset = frame.page_scroll})
+    frame.page_scroll = page.scroll_offset
+    if !page.opened {
+        return FinishView()
+    }
+    DiaryAction(29013, DiaryLocaleHost("diary_insert_time"),
+        Rectangle.{left, page.content.y, (width - cast(float32)Scale(8)) / 2.0, cast(float32)Scale(44)})
+    DiaryAction(29005, DiaryLocaleHost("diary_attach_photo"),
+        Rectangle.{left + (width + cast(float32)Scale(8)) / 2.0, page.content.y,
+            (width - cast(float32)Scale(8)) / 2.0, cast(float32)Scale(44)})
+    area: TextAreaProps
+    area.key = cast(u64)290200
+    area.focus_id = 29020
+    area.bounds = Rectangle.{left, page.content.y + cast(float32)Scale(56), width,
+        cast(float32)editor_height}
+    area.value = state.text
+    area.placeholder = DiaryLocaleHost("diary_placeholder")
+    area.label = DiaryLocaleHost("tab_diary")
+    area.wrap = true
+    area.cursor = state.cursor
+    area.anchor = state.anchor
+    area.scroll_y = frame.scroll
+    area.focused = frame.focused
+    area.selecting = frame.selecting
+    area.read_only = state.load_error || state.year < 1
+    area.max_bytes = 2147483646
+    area.max_codepoints = 2147483646
+    area.input = frame.input
+    edited := TextArea(frame.session, area)
+    state.cursor = edited.cursor
+    state.anchor = edited.anchor
+    frame.scroll = edited.scroll_y
+    frame.focused = edited.focused
+    frame.selecting = edited.selecting
+    if edited.edit.changed {
+        state.action = DIARY_EDIT
+        state.edit_start = edited.edit.start
+        state.edit_end = edited.edit.end
+        state.replacement = edited.edit.replacement
+        pending = true
+        frame.save_at = frame.now + 0.75
+    }
+    if edited.clipboard_write {
+        frame.clipboard_write = true
+        frame.clipboard_text = edited.clipboard_text
+    }
+
+    status := ifx frame.photo_error then "diary_photo_error" else ifx state.load_error then "diary_read_error" else ifx state.saved then "diary_saved" else "diary_save_pending"
+    Text(frame.session, TextProps.{.bounds = Rectangle.{left,
+                area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
+            .text = DiaryLocaleHost(status), .font = frame.font})
+    if state.photo_count > 0 {
+        photo_top := area.bounds.y + area.bounds.height + cast(float32)Scale(60)
+        path: Vec(u8)
+        BuilderPrint(*path, "diary/photos/%.%", state.photo_file, frame.photo_format)
+        image := BuilderFinish(path)
+        Image(frame.session, ImageProps.{.asset_path = image,
+                .alt_text = state.photo_name,
+                .bounds = Rectangle.{left, photo_top, width, cast(float32)Scale(240)},
+                .fit = cast(ImageFit)ImageFitContain})
+        Text(frame.session, TextProps.{.text = state.photo_name,
+                .bounds = Rectangle.{left, photo_top + cast(float32)Scale(248), width,
+                    cast(float32)Scale(32)}, .font = frame.font})
+        DiaryAction(29008, "‹", Rectangle.{left, photo_top + cast(float32)Scale(288),
+                part, cast(float32)Scale(44)})
+        DiaryAction(29010, DiaryLocaleHost("diary_remove_photo"),
+            Rectangle.{left + part + cast(float32)Scale(6), photo_top + cast(float32)Scale(288),
+                part, cast(float32)Scale(44)})
+        DiaryAction(29009, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
+                photo_top + cast(float32)Scale(288), part, cast(float32)Scale(44)})
+    }
+    End(frame.session)
+    return FinishView()
+}

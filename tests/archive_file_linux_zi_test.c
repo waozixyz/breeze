@@ -30,7 +30,7 @@ static void read_file(const char *path, char *output, size_t size)
     assert(fclose(file) == 0);
 }
 
-int32_t import_sqlite_db_file(String path, int32_t mode)
+int32_t import_sqlite_db_file(String path, int64_t mode)
 {
     char data[26] = {0};
     assert(mode == 0 || mode == 1);

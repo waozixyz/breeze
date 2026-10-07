@@ -1,0 +1,117 @@
+// Platform effects and persistence stay in the unified host. Feature decisions
+// arrive from the loaded bundles; the host retains one database and identity.
+#import, file "module_host.zi";
+ModuleHost :: #import, file "module_host.zi";
+#import, file "lists_types.zi";
+#import, file "habits_types.zi";
+#import, file "practice_types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_types.zi";
+
+#scope_file
+shared_app: *InnerBreeze;
+list_created: [37]u8;
+
+PersistLists :: (mutation: ListsMutation) -> ListsMutationResult {
+    result: ListsMutationResult
+    list_created[0] = cast(u8)0
+    if mutation.kind == LISTS_CREATE_LIST {
+        result.saved = storage_elist_create_list(mutation.title, *list_created[0]) != 0
+    } else if mutation.kind == LISTS_UPDATE_LIST {
+        result.saved = storage_elist_update_list(mutation.id, mutation.title,
+            mutation.sort_order) != 0
+    } else if mutation.kind == LISTS_CREATE_ITEM {
+        result.saved = storage_elist_create_item(mutation.parent_id,
+            mutation.title, mutation.comment, null) != 0
+    } else if mutation.kind == LISTS_UPDATE_ITEM {
+        result.saved = storage_elist_update_item(mutation.id, mutation.title,
+            mutation.comment, mutation.done, mutation.sort_order) != 0
+    } else if mutation.kind == LISTS_REMOVE_LIST {
+        result.saved = storage_elist_delete_list(mutation.id) != 0
+    } else if mutation.kind == LISTS_REMOVE_ITEM {
+        result.saved = storage_elist_delete_item(mutation.id) != 0
+    }
+    result.created_id = AppTextFromCString(*list_created[0], 37)
+    return result
+}
+
+NameExists :: (name: string, excluding: s32) -> bool {
+    return shared_app != null && habits_name_exists(*shared_app.habits,
+        name, excluding) != 0
+}
+
+SaveHabit :: (message: HabitsMessage) -> bool {
+    if shared_app == null {
+        return false
+    }
+    index := message.index
+    if message.is_new {
+        index = habits_add_custom(*shared_app.habits, message.name,
+            message.color, message.sync_mode, message.sync_activity)
+    }
+    if index < 0 || index >= shared_app.habits.count {
+        return false
+    }
+    habit := *shared_app.habits.items[index]
+    if !AppCopyText(message.name, habit.name[:]) ||
+    !AppCopyText(message.description, habit.description[:]) {
+        return false
+    }
+    habit.color = message.color
+    habit.sync_mode = message.sync_mode
+    habit.sync_activity = message.sync_activity
+    habit.counter_enabled = message.counter_enabled
+    habit.counter_target = message.counter_target
+    habit.weekdays = message.weekdays
+    habit.reminder_hour = message.reminder_hour
+    habits_save(*shared_app.habits)
+    return true
+}
+
+#scope_export
+#program_export
+CellsStart :: (app: *InnerBreeze) -> bool {
+    shared_app = app
+    ModuleHost.CellsBindPersistence(PersistLists, NameExists, SaveHabit)
+    return CellsOpen()
+}
+
+#program_export
+HabitsMessageFor :: (app: *InnerBreeze, action: s32) -> HabitsMessage {
+    message: HabitsMessage
+    message.action = action
+    message.count = app.habits.count
+    message.selected = app.habits.selected
+    message.screen_mode = app.habits.screen_mode
+    message.view_mode = app.habits.view_mode
+    message.tab = app.habits.tab
+    return message
+}
+
+#program_export
+HabitsAcceptView :: (app: *InnerBreeze, message: HabitsMessage) {
+    if !message.succeeded {
+        return
+    }
+    app.habits.selected = message.selected
+    app.habits.screen_mode = message.screen_mode
+    app.habits.view_mode = message.view_mode
+    app.habits.tab = message.tab
+    if message.reset_scroll {
+        app.habits.scroll = 0
+    }
+}
+
+#program_export
+PracticeStepFor :: (app: *InnerBreeze, action: s32) -> PracticeMessage {
+    message: PracticeMessage
+    message.action = action
+    message.breathing = app.breathing
+    message.salutation = app.sun_salutation
+    message.patterns = app.patterns
+    message.paused = app.session_paused != 0
+    return message
+}

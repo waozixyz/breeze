@@ -12,10 +12,10 @@ schema = (root / "src/storage/schema_sql.zi").read_text()
 database = sqlite3.connect(":memory:")
 for table in ("settings", "sync_outbox"):
     database.execute(re.search(r"CREATE TABLE IF NOT EXISTS " + table + r"\(.*?\);", schema, re.S)[0])
-keys = ("app_used_lists", "app_used_habits", "app_used_practices", "app_used_diary")
+keys = ("app_used_lists", "app_used_habits", "app_used_practices", "app_used_diary", "app_used_lumi")
 for key in keys:
     database.execute("INSERT INTO settings VALUES('account',?,?,100)", (key, "1"))
-database.execute("INSERT INTO settings VALUES('account','apps_auto_update','0',100)")
+database.execute("INSERT INTO settings VALUES('account','cells_auto_update','0',100)")
 database.execute("INSERT INTO settings VALUES('account','package_sequence_diary','10',100)")
 database.execute("INSERT INTO settings VALUES('other-account','app_used_diary','1',100)")
 
@@ -42,11 +42,11 @@ assert value("app_used_habits") == "1"
 merge("app_used_habits", "0", "1970-01-01T00:05:00Z")
 assert value("app_used_habits") == "0"
 assert value("app_used_lists") == "1", "merging one app replaced another app's choice"
-merge("apps_auto_update", "1", "1970-01-01T00:10:00Z")
+merge("cells_auto_update", "1", "1970-01-01T00:10:00Z")
 merge("package_sequence_diary", "1", "1970-01-01T00:10:00Z")
 merge("app_used_lists", "99", "1970-01-01T00:10:00Z")
 merge("app_used_practices", "0", "invalid")
-assert value("apps_auto_update") == "0"
+assert value("cells_auto_update") == "0"
 assert value("package_sequence_diary") == "10"
 assert value("app_used_lists") == "1"
 assert value("app_used_practices") == "1"

@@ -6,8 +6,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [[ "${1:-}" == "--module" ]]; then
-    python3 scripts/update-package-version.py "${2:?module name required}"
+if [[ "${1:-}" == "--cell" || "${1:-}" == "--module" ]]; then
+    python3 scripts/update-package-version.py "${2:?cell name required}"
     python3 scripts/generate-package-versions.py
     exit 0
 fi

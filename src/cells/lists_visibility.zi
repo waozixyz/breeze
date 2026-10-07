@@ -1,0 +1,58 @@
+// Cache only results computed by the Lists VM. The feature supplies the next
+// time at which its completion grace can change a result.
+#import, file "module_host.zi";
+#import, file "lists_types.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../app/text_buffers.zi";
+
+#program_export
+ListsRefreshVisibility :: (state: *EListState, now: float64) -> bool {
+    if state == null || !CellsReady() {
+        return false
+    }
+    if state.visibility_valid &&
+    state.visibility_selected_list == state.selected_list &&
+    state.visibility_show_completed == state.show_completed &&
+    (state.visibility_deadline == 0.0 || now < state.visibility_deadline) {
+        return true
+    }
+    state.visibility_valid = false
+    state.visibility_count = 0
+    state.visibility_deadline = 0.0
+    message: ListsMessage
+    message.action = LISTS_VISIBLE
+    message.selected_list = state.selected_list
+    message.list_count = state.list_count
+    message.item_count = state.item_count
+    message.show_completed = state.show_completed
+    message.completing_until = state.completing_until
+    message.completing_id = AppTextFromCString(*state.completing_item[0], 37)
+    message.now = now
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        message.selected_id = AppTextFromCString(*state.lists[state.selected_list].id[0], 37)
+    }
+    index: s32 = 0
+    while index < state.item_count {
+        message.index = index
+        message.id = AppTextFromCString(*state.items[index].id[0], 37)
+        message.parent_id = AppTextFromCString(*state.items[index].list_id[0], 37)
+        message.done = state.items[index].done
+        result := ListsRun(message)
+        if !result.succeeded {
+            return false
+        }
+        state.item_visibility[index] = result.visible
+        if result.visible {
+            state.visibility_count += 1
+        }
+        if result.visibility_deadline > now &&
+        (state.visibility_deadline == 0.0 || result.visibility_deadline < state.visibility_deadline) {
+            state.visibility_deadline = result.visibility_deadline
+        }
+        index += 1
+    }
+    state.visibility_selected_list = state.selected_list
+    state.visibility_show_completed = state.show_completed
+    state.visibility_valid = true
+    return true
+}

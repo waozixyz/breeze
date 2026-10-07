@@ -1,4 +1,16 @@
 #import "geometry"
+#import "bundle_host"
+#import "byte_text_linux"
+#import, file "../cells/diary_ui_types.zi";
+#import, file "../cells/widget_host.zi";
+#import, file "../cells/widget_codec.zi";
+#import, file "../cells/value_codec.zi";
+#import "image_props"
+#import "image_widget"
+#import, file "../cells/diary_store.zi";
+#import, file "../platform/file_picker.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/android/android_import.zi";
 #import "layout"
 #import "text_props"
 #import "text_widget"
@@ -18,21 +30,32 @@
 #import, file "../app/locale.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../platform/raylib_text_input.zi";
-#import, file "../subapps/module_host.zi";
-#import, file "../subapps/diary_types.zi";
-#import, file "../subapps/package_files.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../cells/diary_types.zi";
+#import, file "../cells/package_files.zi";
 
+using AndroidImportKind;
+using AndroidImportResult;
+using ImageFit;
 using ButtonTone;
 using ButtonEmphasis;
 diary_state: DiaryMessage;
 diary_loaded: bool;
 diary_focused: bool;
+diary_ui: DiaryUiFrame;
+diary_ui_codec: WidgetDiaryUiFrameCodec;
 diary_selecting: bool;
 diary_scroll: s32;
 diary_calendar_scroll: s32;
 diary_page_scroll: s32;
 diary_save_at: float64;
 diary_pending: bool;
+diary_photo_requested: bool;
+diary_photo_waiting: bool;
+diary_photo_year: s32;
+diary_photo_month: s32;
+diary_photo_day: s32;
+diary_photo_error: bool;
 diary_pending_replacement: string;
 diary_frame_text: string;
 c :: #system_library "c";
@@ -71,18 +94,103 @@ app_diary_reset :: () {
     PackageFree(diary_frame_text)
     diary_frame_text = ""
     diary_state = DiaryMessage.{}
+    diary_ui = DiaryUiFrame.{}
+    diary_focused = false
 }
 
-DiaryAction :: (app: *InnerBreeze, id: s32, label: string, bounds: Rectangle) {
-    if Button(app.ui.session, ButtonProps.{.id = id, .bounds = bounds,
-            .label = label, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        diary_state.action = DIARY_CONTROL
-        diary_state.control = id
-        diary_pending = true
-        diary_scroll = 0
-        diary_focused = false
+DiaryAcceptPhoto :: (path: string) {
+    if path.count == 0 || diary_state.load_error || !diary_loaded ||
+    diary_state.year != diary_photo_year || diary_state.month != diary_photo_month ||
+    diary_state.day != diary_photo_day {
+        diary_photo_error = path.count > 0
+        return
     }
+    filename := DiaryStoreAttach(path)
+    defer { PackageFree(filename) }
+    if filename.count == 0 { diary_photo_error = true; return }
+    at := path.count - 1
+    while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 { at -= 1 }
+    diary_state.action = DIARY_ATTACH
+    diary_state.attachment_file = filename
+    diary_state.attachment_name = path[at + 1:]
+    diary_state = DiaryRun(diary_state)
+    diary_photo_error = !diary_state.succeeded
+}
+
+DiaryPhotoPicker :: (app: *InnerBreeze) {
+    if diary_photo_waiting {
+        path: [4096]u8
+        result := android_import_poll_result_for(cast(s32)ANDROID_IMPORT_KIND_DIARY_PHOTO,
+            *path[0], cast(s32)path.count)
+        if result == cast(s32)ANDROID_IMPORT_RESULT_NONE { return }
+        diary_photo_waiting = false
+        app.file_dialog_active = 0
+        if result == cast(s32)ANDROID_IMPORT_RESULT_SELECTED {
+            DiaryAcceptPhoto(AppTextFromCString(*path[0], cast(s32)path.count))
+        }
+    }
+    if !diary_photo_requested { return }
+    diary_photo_requested = false
+    diary_photo_error = false
+    diary_photo_year = diary_state.year
+    diary_photo_month = diary_state.month
+    diary_photo_day = diary_state.day
+    if !app_diary_save() { diary_photo_error = true; return }
+    app.file_dialog_active = 1
+    if AndroidPlatform() != 0 {
+        mime: [32]u8
+        unused AppCopyText("image/*", mime[:])
+        diary_photo_waiting = android_import_open_picker_for(
+            cast(s32)ANDROID_IMPORT_KIND_DIARY_PHOTO, *mime[0]) != 0
+        if !diary_photo_waiting { app.file_dialog_active = 0; diary_photo_error = true }
+        return
+    }
+    title: [128]u8
+    filter: [128]u8
+    path: [4096]u8
+    unused AppCopyText(LocaleText("diary_attach_photo"), title[:])
+    unused AppCopyText("Images | *.png *.jpg *.jpeg *.webp *.gif", filter[:])
+    selected := app_pick_file(*title[0], *filter[0], null, false, *path[0], cast(s32)path.count)
+    app.file_dialog_active = 0
+    if selected == 1 { DiaryAcceptPhoto(AppTextFromCString(*path[0], cast(s32)path.count)) }
+    if selected < 0 { diary_photo_error = true }
+}
+
+
+using HostValueKind;
+
+DiaryUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "diary_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadDiaryUiHost" && count == 0 {
+        result.* = WidgetEncodeDiaryUiFrame(diary_ui, *diary_ui_codec)
+        return 1
+    }
+    if name == "WriteDiaryUiHost" && count == 1 && WidgetValidDiaryUiFrame(arguments[0]) {
+        observed := WidgetDecodeDiaryUiFrame(arguments[0], *diary_ui_codec)
+        diary_ui.focused = observed.focused
+        diary_ui.selecting = observed.selecting
+        diary_ui.scroll = observed.scroll
+        diary_ui.calendar_scroll = observed.calendar_scroll
+        diary_ui.page_scroll = observed.page_scroll
+        diary_ui.save_at = observed.save_at
+        diary_photo_requested = observed.photo_requested
+        diary_focused = observed.focused
+        if observed.clipboard_write { unused TextInputWriteClipboard(observed.clipboard_text) }
+        return 1
+    }
+    if name == "DiaryLocaleHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = ModuleTextData("string"),
+            .data = ModuleTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
 }
 
 #program_export
@@ -92,124 +200,25 @@ diary_screen_draw :: (app: *InnerBreeze) {
         diary_state = DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
         diary_loaded = diary_state.succeeded
     }
-    column := CenteredColumnFor(app.ui.view_width, AppScale(640), AppScale(16))
-    left := cast(float32)column.x
-    width := cast(float32)column.width
-    title: [64]u8
-    args: [3]FormatArg = .[FormatArg.{.number = diary_state.year},
-    FormatArg.{.number = diary_state.month}, FormatArg.{.number = diary_state.day}]
-    unused FormatTemplate("%04d-%02d-%02d", args[:], title[:])
-    Text(app.ui.session, TextProps.{.bounds = Rectangle.{left, cast(float32)AppScale(24),
-                width, cast(float32)AppScale(40)}, .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)), .font = AppFontSize()})
-    part := (width - cast(float32)AppScale(12)) / 3.0
-    compact := app.ui.view_height < AppScale(480)
-    top := cast(float32)(ifx compact then AppScale(44) else AppScale(76))
-    DiaryAction(app, 29001, "‹", Rectangle.{left, top, part, cast(float32)AppScale(44)})
-    DiaryAction(app, 29004, LocaleText("diary_today"), Rectangle.{left + part + cast(float32)AppScale(6),
-            top, part, cast(float32)AppScale(44)})
-    DiaryAction(app, 29002, "›", Rectangle.{left + 2.0 * (part + cast(float32)AppScale(6)),
-            top, part, cast(float32)AppScale(44)})
-    DiaryAction(app, 29003, LocaleText("tab_diary_calendar"),
-        Rectangle.{left, top + cast(float32)AppScale(52), width, cast(float32)AppScale(44)})
-    if diary_state.calendar {
-        scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)290300,
-                .bounds = Rectangle.{left, top + cast(float32)AppScale(104), width,
-                    cast(float32)(app.ui.view_height - app_content_bottom_reserved(app) - AppScale(200))},
-                .content_height = AppScale(344), .scroll_offset = diary_calendar_scroll})
-        diary_calendar_scroll = scroll.scroll_offset
-        if !scroll.opened {
-            return
-        }
-        origin := scroll.content.y
-        DiaryAction(app, 29011, "‹", Rectangle.{left, origin, part, cast(float32)AppScale(44)})
-        DiaryAction(app, 29012, "›", Rectangle.{left + 2.0 * (part + cast(float32)AppScale(6)),
-                origin, part, cast(float32)AppScale(44)})
-        month_args: [2]FormatArg = .[FormatArg.{.number = diary_state.month_year},
-        FormatArg.{.number = diary_state.month_number}]
-        unused FormatTemplate("%04d-%02d", month_args[:], title[:])
-        Text(app.ui.session, TextProps.{.bounds = Rectangle.{left + part,
-                    origin + cast(float32)AppScale(8), part, cast(float32)AppScale(32)},
-                .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)), .font = AppFontSize()})
-        weekdays: [7]string = .["habit_day_mon", "habit_day_tue", "habit_day_wed", "habit_day_thu",
-        "habit_day_fri", "habit_day_sat", "habit_day_sun"]
-        for day: cast(s32)0..cast(s32)6 {
-            Text(app.ui.session, TextProps.{.bounds = Rectangle.{left + cast(float32)day * width / 7.0,
-                        origin + cast(float32)AppScale(52), width / 7.0, cast(float32)AppScale(24)},
-                    .text = LocaleText(weekdays[day]), .font = AppFontSize()})
-        }
-        for day: cast(s32)1..diary_state.month_days {
-            position := diary_state.month_weekday + day - 1
-            args[0].number = day
-            unused FormatTemplate(ifx diary_state.marks[day] != cast(u8)0 then "%d •" else "%d",
-                args[0:1], title[:])
-            cell := width / 7.0
-            DiaryAction(app, 29100 + day, FrameTextHold(*app.ui.frame_text, AppTextFromCString(*title[0], 64)),
-                Rectangle.{left + cast(float32)(position % 7) * cell,
-                    origin + cast(float32)AppScale(80 + (position / 7) * 44), cell - 2.0,
-                    cast(float32)AppScale(42)})
-        }
-        End(app.ui.session)
-        return
-    }
-    editor_height := app.ui.view_height - app_content_bottom_reserved(app) - cast(s32)top - AppScale(236)
-    if editor_height < AppScale(120) {
-        editor_height = AppScale(120)
-    }
-    page := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)290301,
-            .bounds = Rectangle.{left, top + cast(float32)AppScale(104), width,
-                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app) - cast(s32)top - AppScale(120))},
-            .content_height = editor_height + AppScale(104), .scroll_offset = diary_page_scroll})
-    diary_page_scroll = page.scroll_offset
-    if !page.opened {
-        return
-    }
-    DiaryAction(app, 29013, LocaleText("diary_insert_time"),
-        Rectangle.{left, page.content.y, width, cast(float32)AppScale(44)})
-    area: TextAreaProps
-    area.key = cast(u64)290200
-    area.focus_id = 29020
-    area.bounds = Rectangle.{left, page.content.y + cast(float32)AppScale(56), width,
-        cast(float32)editor_height}
-    PackageFree(diary_frame_text)
-    diary_frame_text = PackageText(diary_state.text, "")
-    area.value = diary_frame_text
-    area.placeholder = LocaleText("diary_placeholder")
-    area.label = LocaleText("tab_diary")
-    area.wrap = true
-    area.cursor = diary_state.cursor
-    area.anchor = diary_state.anchor
-    area.scroll_y = diary_scroll
-    area.focused = diary_focused
-    area.selecting = diary_selecting
-    area.read_only = diary_state.load_error || !diary_loaded
-    area.max_bytes = 2147483646
-    area.max_codepoints = 2147483646
+    DiaryPhotoPicker(app)
+    diary_ui.session = app.ui.session
+    diary_ui.width = app.ui.view_width
+    diary_ui.height = app.ui.view_height
+    diary_ui.bottom = app_content_bottom_reserved(app)
+    diary_ui.scale = MetricsScale()
+    diary_ui.font = AppFontSize()
+    diary_ui.now = DiaryNow()
+    diary_ui.photo_error = diary_photo_error
+    diary_ui.photo_format = DiaryImageFormat(DiaryStorePreview(diary_state.photo_file))
+    diary_ui.photo_requested = false
+    diary_ui.clipboard_write = false
+    diary_ui.clipboard_text = ""
     typed: [512]u8
-    area.input = SampleTextAreaInput(diary_focused, typed[:])
-    edited := TextArea(app.ui.session, area)
-    diary_state.cursor = edited.cursor
-    diary_state.anchor = edited.anchor
-    diary_scroll = edited.scroll_y
-    diary_focused = edited.focused
-    diary_selecting = edited.selecting
-    if edited.edit.changed {
-        diary_state.action = DIARY_EDIT
-        diary_state.edit_start = edited.edit.start
-        diary_state.edit_end = edited.edit.end
-        PackageFree(diary_pending_replacement)
-        diary_pending_replacement = PackageText(edited.edit.replacement, "")
-        diary_pending = true
-        diary_save_at = DiaryNow() + 0.75
-    }
-    if edited.clipboard_write {
-        unused TextInputWriteClipboard(edited.clipboard_text)
-    }
-    if !diary_state.saved && DiaryNow() >= diary_save_at {
-        unused app_diary_save()
-    }
-    status := ifx diary_state.load_error then "diary_read_error" else ifx diary_state.saved then "diary_saved" else "diary_save_pending"
-    Text(app.ui.session, TextProps.{.bounds = Rectangle.{left,
-                area.bounds.y + area.bounds.height + cast(float32)AppScale(12), width, cast(float32)AppScale(40)},
-            .text = LocaleText(status), .font = AppFontSize()})
-    End(app.ui.session)
+    diary_ui.input = SampleTextAreaInput(diary_focused, typed[:])
+    WidgetHostBegin(app.ui.session)
+    CellsUiBegin(DiaryUiCall, cast(*void)app)
+    diary_state.action = DIARY_FRAME
+    diary_state = DiaryRun(diary_state)
+    CellsUiEnd()
+    WidgetHostEnd()
 }

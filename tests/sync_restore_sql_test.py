@@ -78,7 +78,7 @@ def open_database():
     insert_row(database, "elist_items", {"id": "i1", "user_id": "u1"})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
-    insert_row(database, "settings", {"user_id": "u1", "key": "apps_auto_update", "value": "0", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})
     return database
 
 

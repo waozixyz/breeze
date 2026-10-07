@@ -1,5 +1,5 @@
-#import, file "../subapps/shared_state.zi";
-#import, file "../subapps/module_host.zi";
+#import, file "../cells/shared_state.zi";
+#import, file "../cells/module_host.zi";
 c :: #system_library "c";
 raylib_log :: #system_library "raylib";
 LOG_INFO :: 3
@@ -20,7 +20,9 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../platform/asset_download_types.zi";
 #import, file "../platform/android/android_device.zi";
 #import, file "../platform/android/graphics_context.zi";
-#if #defined(ANDROID_BUILD) {
+#if #defined(PLATFORM_WEB) {
+    #import "kryon/canvas_host"
+} else {
     #import "kryon/raylib_runtime"
 }
 #if #defined(DESKTOP_TRAY_ENABLED) {
@@ -79,9 +81,10 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../screens/language_screen.zi";
 #import, file "../screens/app_selection_screen.zi";
 #import, file "../screens/diary_screen.zi";
-#import, file "../subapps/package_manager.zi";
-#import, file "../subapps/catalog.zi";
-#import, file "../subapps/inbe_types.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../cells/package_manager.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../cells/inbe_types.zi";
 #import, file "app_style.zi";
 #import, file "../screens/manual_screen.zi";
 #import, file "../screens/manual_dispatch.zi";
@@ -296,6 +299,7 @@ app_draw_close_prompt :: (app: *InnerBreeze) {
     actions[1].label = LocaleText("desktop_close_quit_button")
     actions[1].tone = cast(ButtonTone)ButtonToneDanger
     actions[1].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    props.key = KeyHash("inbe/desktop-close")
     props.title = LocaleText("desktop_close_prompt_title")
     props.message = LocaleText("desktop_close_prompt_message")
     props.max_width = 420
@@ -309,6 +313,7 @@ app_draw_close_prompt :: (app: *InnerBreeze) {
         case 2;
         app.close_prompt_open = 0
         app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptQuit
+        app_request_desktop_quit(app)
     }
 }
 
@@ -549,7 +554,7 @@ app_mini_restore_selection :: (app: *InnerBreeze) {
     if active {
         mask |= APP_PRACTICE
     }
-    if !SubappsSetEnabled(mask) {
+    if !CellsSetEnabled(mask) {
         app.request_quit = 1
         return
     }
@@ -562,7 +567,7 @@ app_mini_restore_selection :: (app: *InnerBreeze) {
 #program_export
 app_open_feature :: (vapp: *void, feature: s32) -> s32 {
     app := cast(*InnerBreeze)vapp
-    if app == null || !SubappsReady() || AppMiniMode() {
+    if app == null || !CellsReady() || AppMiniMode() {
         return 0
     }
     before := app_current_route(app)
@@ -582,6 +587,9 @@ app_open_feature :: (vapp: *void, feature: s32) -> s32 {
     } else if feature == APP_LISTS {
         bit = APP_LISTS
         tab = APP_MAIN_TAB_ELIST
+    } else if feature == APP_LUMI {
+        bit = APP_LUMI
+        tab = APP_MAIN_TAB_LUMI
     } else if feature == APP_DIARY {
 
         bit = APP_DIARY
@@ -594,24 +602,24 @@ app_open_feature :: (vapp: *void, feature: s32) -> s32 {
     }
     selected := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
             .enabled_apps = app.enabled_apps, .app = bit, .checked = true})
-    if !selected.succeeded || !SubappsSetEnabled(selected.enabled_apps) {
+    if !selected.succeeded || !CellsSetEnabled(selected.enabled_apps) {
         return 0
     }
     app.enabled_apps = selected.enabled_apps
     app.apps_selected = 1
-    if (SubappsInstalledMask() & bit) == 0 {
-        for index: cast(s32)1..cast(s32)4 {
+    if (CellsInstalledMask() & bit) == 0 {
+        for index: cast(s32)1..cast(s32)(PackageCount - 1) {
             if PackageBit(index) == bit {
                 PackageRequest(index)
             }
         }
-        app_update_app_navigation(app)
+        app_update_app_navigation(app, bit)
         app_switch_screen(app, ScreenAppSelection)
         save_settings(app)
         return 0
     }
     app.main_tab = tab
-    app_update_app_navigation(app)
+    app_update_app_navigation(app, bit)
     app_switch_screen(app, app_screen_for_main_tab(tab))
     app_observe_direct_route_change(app, before)
     save_settings(app)
@@ -662,7 +670,7 @@ app_init :: (vapp: *void) {
         app.break_sounds_enabled = 0
     }
     data_init()
-    if !SubappsStart(app) {
+    if !CellsStart(app) {
         TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
         app.request_quit = 1
         return
@@ -675,7 +683,7 @@ app_init :: (vapp: *void) {
     }
     selection := InbeRun(InbeMessage.{.action = configuration_action,
             .enabled_apps = app.enabled_apps})
-    if !selection.succeeded || !SubappsSetEnabled(selection.enabled_apps) {
+    if !selection.succeeded || !CellsSetEnabled(selection.enabled_apps) {
         app.request_quit = 1
         return
     }
@@ -683,9 +691,9 @@ app_init :: (vapp: *void) {
         app.enabled_apps = selection.enabled_apps
         app_update_app_navigation(app)
         if app.apps_selected != 0 {
-            for index: cast(s32)1..cast(s32)4 {
+            for index: cast(s32)1..cast(s32)(PackageCount - 1) {
                 bit := PackageBit(index)
-                if (app.enabled_apps & bit) != 0 && (SubappsInstalledMask() & bit) == 0 {
+                if (app.enabled_apps & bit) != 0 && (CellsInstalledMask() & bit) == 0 {
                     PackageRequest(index)
                 }
             }
@@ -1123,6 +1131,9 @@ updateapp :: (app: *InnerBreeze) {
     } else if app.breathing.screen == ScreenHabits {
         draw_habits_screen(app)
         handled_screen = true
+    } else if app.breathing.screen == ScreenLumi {
+        lumi_screen_draw(app)
+        handled_screen = true
     } else if app.breathing.screen == ScreenDiary {
 
         diary_screen_draw(app)
@@ -1279,7 +1290,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     layout_content_x: s32
     layout_content_w: s32
     render_scale: float32
-    if app == null || !SubappsReady() {
+    if app == null || !CellsReady() {
         return
     }
     if viewport.width <= 0 || viewport.height <= 0 {
@@ -1416,6 +1427,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         EndScissorMode()
     }
     profile_habits_start = app_profile_now()
+    if app.request_quit != 0 {
+        return
+    }
     app_flush_habits_after_frame(app)
     app_profile_record_habits(profile_habits_start)
     profile_sync_start = app_profile_now()
@@ -1432,7 +1446,12 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     practice_active(app) == null &&
     app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&
     app_diary_save() {
-        if SubappsReloadFeatures(app.enabled_apps) {
+        if CellsReloadFeatures(app.enabled_apps) {
+            #if #defined(PLATFORM_WEB) {
+                InvalidateCanvasAssets()
+            } else {
+                InvalidateRaylibAssets()
+            }
             app.package_revision = PackageRevision()
             app_diary_reset()
             app_update_app_navigation(app)
@@ -1449,8 +1468,8 @@ app_destroy :: (vapp: *void) {
     if app == null {
         return
     }
-    if !SubappsReady() {
-        SubappsClose()
+    if !CellsReady() {
+        CellsClose()
         return
     }
     CloseBreakWindows()
@@ -1479,8 +1498,9 @@ app_destroy :: (vapp: *void) {
     settings_audio_stop_preview(app)
     app_audio_shutdown(app)
     app_diary_reset()
+    app_lumi_reset()
     app.* = InnerBreeze.{}
-    SubappsClose()
+    CellsClose()
 }
 
 #program_export

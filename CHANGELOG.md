@@ -1,11 +1,58 @@
 # Changelog
+## [2.1.7] - 2026-10-06
+### Changed
+- Manage Lumi and all other cells in one compact list with icons, drag handles and add/remove controls.
+- Include Lists and Diary with the app so every cell can be added to the sidebar offline.
+
+## [2.1.6] - 2026-10-06
+### Changed
+- Manage installed and available cells together in Settings, with drag reordering, trash controls and quick reinstallation from saved packages.
+- Keep Lumi included as the app companion while allowing her sidebar shortcut to be hidden, with an outlined firefly icon matching the other navigation icons.
+- Let Lumi change themes and appearance directly through chat and app tools.
+### Fixed
+- Keep sidebars steady while dragging the scale slider and apply the new scale on release.
+- Keep Settings available in the final sidebar position.
+- Honor every checked startup cell, including Diary, and report Diary correctly when opened in Harmony.
+- Exit promptly when Quit is pressed in the close dialog.
+
+## [2.1.5] - 2026-10-06
+### Changed
+- Chat with Lumi in a simpler conversation view, with her avatar beside replies and a standard cell icon.
+- Let Lumi complete today’s habits and start practices immediately, including WHM.
+- Show Lumi commands only for installed and enabled cells.
+- Ask which habit to complete, choose it by name, and use compact autocomplete chips with case-insensitive matching and command spelling correction.
+
+## [2.1.4] - 2026-10-06
+### Added
+- Meet Lumi, Inner Breeze's firefly companion, as the first recommended cell and home screen.
+- Chat privately with Lumi, complete commands and todo names as you type, and add, complete or reopen todos locally.
+### Fixed
+- Restore missing characters in translations and mixed-language labels, including the Android language picker.
+
+## [2.1.3] - 2026-10-06
+### Fixed
+- Restore translated text after the cell packages load, and refresh translations when packages change.
+
+## [2.1.2] - 2026-10-06
+### Changed
+- Call the independently installed features Cells, with a translated cell picker and separate versions in About.
+
+## [2.1.1] - 2026-10-06
+### Added
+- Attach, browse and remove Diary photos while preserving imported originals.
+- Load graphics, translations, fonts and styles from cell packages so these resources can update without replacing the APK.
+- Update the cell picker, Diary and Lists screens through their cell packages.
+### Fixed
+- Keep browser account signing and update checks working with the current web runtime.
+- Keep importing saved account data working in the browser.
+
 ## [2.1.0] - 2026-10-06
 ### Added
-- Choose recommended Habits and Practices or download optional Lists and Diary from the app picker.
-- Receive verified app module updates independently, with a switch to disable automatic updates and a manual update check.
+- Choose recommended Habits and Practices or download optional Lists and Diary from the cell picker.
+- Receive verified cell updates independently, with a switch to disable automatic updates and a manual update check.
 - Sync selected apps with your account, including removals, while keeping saved data on each device.
 - Write private daily entries in Diary and browse them by calendar, preserving the existing Harmony entry format.
-- View the main application version and each app module version in About.
+- View the main application version and each cell version in About.
 
 ## [2.0.12] - 2026-10-06
 ### Fixed
@@ -360,7 +407,7 @@
 ## [1.9.0] - 2026-08-15
 ### Added
 - Break reminders, Workrave-style: micro, rest and daily break timers with statistics and a desktop timer HUD that lives as a real OS window next to the app (desktop only, off by default, with its own settings tab).
-- A dedicated Notifications settings tab. Push delivery uses UnifiedPush (no Google services): "Set up push" opens an in-app picker that lists installed distributor apps with their name and icon and registers with the one you pick; the status line reports the real registration state.
+- A dedicated Notifications settings tab. Push delivery uses UnifiedPush (no Google services): "Set up push" opens an in-cell picker that lists installed distributor apps with their name and icon and registers with the one you pick; the status line reports the real registration state.
 - Reminders are an editable list: add as many as you want, each with a practice dropdown (Wim Hof, Meditation, Sun Salutation), a [-] time [+] stepper, an on/off toggle and delete. Ships with one enabled Wim-Hof 08:00 reminder.
 - A notification when new friend requests arrive over social sync (toggleable, on by default).
 - Screenshot scenes for the first-run guide and the notifications settings, for regression coverage.

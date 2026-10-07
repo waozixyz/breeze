@@ -1,0 +1,30 @@
+#import, file "habit_model.zi";
+#import, file "habit_sessions.zi";
+#import, file "habit_linked_rules.zi";
+#import, file "habit_types.zi";
+#import, file "habit_calendar.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/storage_habits.zi";
+
+c :: #system_library "c";
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
+
+// An explicit completion reaches today's target and preserves linked counts.
+habit_complete_day :: (app: *InnerBreeze, index: s32, day: s32) -> bool {
+    if app == null || index < 0 || index >= app.habits.count || day <= 0 {
+        return false
+    }
+    habit := *app.habits.items[index]
+    count := HabitEffectiveDayCount(habit, day, habit_cached_linked_entries(app, index, day))
+    target := ifx habit_counting_enabled(habit) != 0 then habit_counter_target(habit) else 1
+    if count < target {
+        count = target
+    }
+    if storage_habit_day_save(AppTextFromCString(*habit.id[0], HABIT_ID_SIZE), day, 1, count) == 0 {
+        return false
+    }
+    habit_set_day_count(*app.habits, index, day, count)
+    unused app_auto_sync(app)
+    return habit_completed_day(habit, day) != 0
+}

@@ -41,6 +41,9 @@ const userDataDir = mkdtempSync(join(tmpdir(), 'inbe-web-smoke-'));
 const browserEnvironment = { ...process.env };
 delete browserEnvironment.DISPLAY;
 delete browserEnvironment.WAYLAND_DISPLAY;
+delete browserEnvironment.XAUTHORITY;
+delete browserEnvironment.DBUS_SESSION_BUS_ADDRESS;
+browserEnvironment.YUE_DESKTOP_RECOVERY = '0';
 const mime = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
@@ -139,11 +142,18 @@ function isInside(base, path) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
-  if (url.pathname === '/__test_subapps__/lists.zib') {
-    const fixture = new URL('../build/subapps/lists.zib', import.meta.url);
+  if (url.pathname === '/__test_assets__/bell.ogg') {
+    res.writeHead(200, { 'content-type': 'audio/ogg' });
+    createReadStream(new URL('../assets/sounds/bell.ogg', import.meta.url)).pipe(res);
+    return;
+  }
+  if (url.pathname === '/__test_cells__/lists.zib' ||
+      url.pathname === '/__test_cells__/practices.zib') {
+    const name = url.pathname.split('/').pop();
+    const fixture = new URL('../build/cells/' + name, import.meta.url);
     if (!existsSync(fixture)) {
       res.writeHead(404);
-      res.end('Build the subapp fixtures before running the smoke test');
+      res.end('Build the cell fixtures before running the smoke test');
       return;
     }
     res.writeHead(200, { 'content-type': 'application/octet-stream' });

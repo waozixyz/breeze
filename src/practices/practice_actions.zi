@@ -1,0 +1,43 @@
+// One start path for app tools and the supervising host.
+#import, file "practice_registry.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_route_url.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/mini_mode.zi";
+#import, file "../app/app_modal_state.zi";
+
+using AppNavRoute;
+using ExerciseType;
+
+app_can_start_practice :: (app: *InnerBreeze, id: s32) -> bool {
+    if app == null || AppMiniMode() || id < 0 || id >= EXERCISE_COUNT ||
+    !app_nav_route_available(app, APP_NAV_ROUTE_PRACTICE) {
+        return false
+    }
+    active := practice_active(app)
+    return (active == null || cast(s32)active.id == id) && practice_get(id).start != null
+}
+
+app_start_practice :: (app: *InnerBreeze, id: s32) -> bool {
+    if !app_can_start_practice(app, id) {
+        return false
+    }
+    active := practice_active(app)
+    if active != null {
+        return cast(s32)active.id == id
+    }
+    before := app_current_route(app)
+    app_apply_nav_route(app, APP_NAV_ROUTE_PRACTICE)
+    app.exercise_type = id
+    app.practice_tab = PRACTICE_TAB_PLAY
+    if app.modal.active != 0 {
+        app_close_modal(app)
+    }
+    practice_get(id).start(app)
+    app_observe_direct_route_change(app, before)
+    active = practice_active(app)
+    return active != null && cast(s32)active.id == id && app.session_paused == 0
+}

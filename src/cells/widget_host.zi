@@ -1,0 +1,172 @@
+// Render effects are active only during a bundle frame and for its session.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "session"
+#import "text_widget"
+#import "image_widget"
+#import "button_widget"
+#import "checkbox_widget"
+#import "toggle_widget"
+#import "text_area_widget"
+#import "text_field_widget"
+#import "tab_bar_widget"
+#import "tab_bar_props"
+#import "box_widget"
+#import "box_props"
+#import "text_input_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "widget_codec.zi";
+#import, file "value_codec.zi";
+#import, file "asset_paths.zi";
+#import, file "module_types.zi";
+#import, file "diary_store.zi";
+
+using HostValueKind;
+widget_session: Session;
+widget_active: bool;
+widget_depth: s32;
+text_codec: WidgetTextPropsCodec;
+image_codec: WidgetImagePropsCodec;
+button_codec: WidgetButtonPropsCodec;
+area_codec: WidgetTextAreaPropsCodec;
+area_result_codec: WidgetTextAreaResultCodec;
+scroll_codec: WidgetScrollPropsCodec;
+scroll_result_codec: WidgetScrollResultCodec;
+session_codec: WidgetSessionCodec;
+checkbox_codec: WidgetCheckboxPropsCodec;
+checkbox_result_codec: WidgetCheckboxValueResultCodec;
+toggle_codec: WidgetTogglePropsCodec;
+toggle_result_codec: WidgetToggleValueResultCodec;
+field_codec: WidgetTextFieldPropsCodec;
+field_result_codec: WidgetTextFieldResultCodec;
+tabs: [32]Tab;
+tab_codecs: [32]WidgetTabCodec;
+tab_bar_codec: WidgetTabBarPropsCodec;
+tab_bar_result_codec: WidgetTabBarResultCodec;
+box_codec: WidgetBoxPropsCodec;
+
+WidgetImagePathAllowed :: (path: string) -> bool {
+    if path.count == 0 || PackageResourceValid(path, MODULE_INBE) {
+        return true
+    }
+    if path.count <= 17 || path[:13] != "diary/photos/" {
+        return false
+    }
+    at := path.count - 1
+    while at > 13 && path[at] != cast(u8)46 {
+        at -= 1
+    }
+    extension := path[at + 1:]
+    return DiaryStoreNameValid(path[13:at]) &&
+    (extension == "png" || extension == "jpg" || extension == "gif" || extension == "webp")
+}
+
+WidgetHostBegin :: (session: Session) {
+    widget_session = session
+    widget_depth = 0
+    widget_active = true
+}
+
+WidgetHostEnd :: () {
+    while widget_depth > 0 {
+        End(widget_session)
+        widget_depth -= 1
+    }
+    widget_active = false
+}
+
+WidgetHostCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    unused context
+    if !widget_active || count < 1 || !WidgetValidSession(arguments[0]) {
+        return 0
+    }
+    session := WidgetDecodeSession(arguments[0], *session_codec)
+    if session.slot != widget_session.slot || session.epoch != widget_session.epoch {
+        return 0
+    }
+    owner := TextFromCString(module)
+    name := TextFromCString(function)
+    if owner == "tree" && name == "EndHostedHost" && count == 1 {
+        if widget_depth == 0 { return 0 }
+        End(session)
+        widget_depth -= 1
+        result.* = ModuleScalar("bool", 1)
+        return 1
+    }
+    if owner == "tab_bar_widget" && name == "TabBarHostedHost" && count == 3 &&
+    WidgetValidTabBarProps(arguments[1]) {
+        values := arguments[2]
+        if values.kind != cast(s32)HostSlice || TextFromCString(values.type_name) != "[]Tab" ||
+        values.length > cast(usize)32 || (values.length > cast(usize)0 && values.elements == null) {
+            return 0
+        }
+        index: usize = 0
+        while index < values.length {
+            if !WidgetValidTab(values.elements[index]) {
+                return 0
+            }
+            tabs[index] = WidgetDecodeTab(values.elements[index], *tab_codecs[index])
+            index += cast(usize)1
+        }
+        selected := TabBar(session, WidgetDecodeTabBarProps(arguments[1], *tab_bar_codec),
+            tabs[:cast(s32)values.length])
+        result.* = WidgetEncodeTabBarResult(selected, *tab_bar_result_codec)
+        return 1
+    }
+    if count != 2 { return 0 }
+    if owner == "box_widget" && name == "BoxHostedHost" && WidgetValidBoxProps(arguments[1]) {
+        result.* = ModuleScalar("s32", cast(s64)Box(session, WidgetDecodeBoxProps(arguments[1], *box_codec)))
+        return 1
+    }
+    if owner == "text_field_widget" && name == "TextFieldHostedHost" && WidgetValidTextFieldProps(arguments[1]) {
+        edited := TextField(session, WidgetDecodeTextFieldProps(arguments[1], *field_codec))
+        result.* = WidgetEncodeTextFieldResult(edited, *field_result_codec)
+        return 1
+    }
+    if owner == "text_widget" && name == "TextHostedHost" && WidgetValidTextProps(arguments[1]) {
+        Text(session, WidgetDecodeTextProps(arguments[1], *text_codec))
+        return 1
+    }
+    if owner == "image_widget" && name == "ImageHostedHost" && WidgetValidImageProps(arguments[1]) {
+        props := WidgetDecodeImageProps(arguments[1], *image_codec)
+        // Runtime texture handles belong to the renderer, never a package.
+        if props.texture.id != cast(u32)0 || !WidgetImagePathAllowed(props.asset_path) { return 0 }
+        Image(session, props)
+        return 1
+    }
+    if owner == "button_widget" && name == "ButtonHostedHost" && WidgetValidButtonProps(arguments[1]) {
+        props := WidgetDecodeButtonProps(arguments[1], *button_codec)
+        if props.icon.id != cast(u32)0 || props.image.texture.id != cast(u32)0 ||
+        !WidgetImagePathAllowed(props.image.asset_path) { return 0 }
+        result.* = ModuleScalar("s32", cast(s64)Button(session, props))
+        return 1
+    }
+    if owner == "text_area_widget" && name == "TextAreaHostedHost" && WidgetValidTextAreaProps(arguments[1]) {
+        props := WidgetDecodeTextAreaProps(arguments[1], *area_codec)
+        colors := arguments[1].fields[16].value
+        props.colors = area_codec.colors_decoded[:cast(s32)colors.length]
+        edited := TextArea(session, props)
+        result.* = WidgetEncodeTextAreaResult(edited, *area_result_codec)
+        return 1
+    }
+    if owner == "scroll_widget" && name == "ScrollHostedHost" && WidgetValidScrollProps(arguments[1]) {
+        if widget_depth >= 16 { return 0 }
+        frame := Scroll(session, WidgetDecodeScrollProps(arguments[1], *scroll_codec))
+        if frame.opened { widget_depth += 1 }
+        result.* = WidgetEncodeScrollResult(frame, *scroll_result_codec)
+        return 1
+    }
+    if owner == "checkbox_widget" && name == "CheckboxHostedHost" && WidgetValidCheckboxProps(arguments[1]) {
+        checked := Checkbox(session, WidgetDecodeCheckboxProps(arguments[1], *checkbox_codec))
+        result.* = WidgetEncodeCheckboxValueResult(checked, *checkbox_result_codec)
+        return 1
+    }
+    if owner == "toggle_widget" && name == "ToggleHostedHost" && WidgetValidToggleProps(arguments[1]) {
+        automatic := Toggle(session, WidgetDecodeToggleProps(arguments[1], *toggle_codec))
+        result.* = WidgetEncodeToggleValueResult(automatic, *toggle_result_codec)
+        return 1
+    }
+    return 0
+}

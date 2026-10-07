@@ -23,8 +23,8 @@ app_force_dark_mode :: () -> bool #foreign c;
 #import, file "settings_key.zi";
 #import, file "settings_store.zi";
 #import, file "bottom_nav_policy.zi";
-#import, file "../subapps/inbe_types.zi";
-#import, file "../subapps/catalog.zi";
+#import, file "../cells/inbe_types.zi";
+#import, file "../cells/catalog.zi";
 #import, file "profile_picture_policy.zi";
 #import, file "../platform/environment.zi";
 #import, file "../platform/web_storage.zi";
@@ -310,7 +310,7 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("enabled_apps", app.enabled_apps)
     save_setting_int("apps_setup_done", app.apps_selected)
     if app.apps_selected != 0 {
-        for index: cast(s32)1..cast(s32)4 {
+        for index: cast(s32)1..cast(s32)(PackageCount - 1) {
             save_setting_int(PackagePreferenceKey(index),
                 ifx (app.enabled_apps & PackageBit(index)) != 0 then 1 else 0)
         }
@@ -564,8 +564,8 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     load_clamped_setting(*app.ui_scale_tenths,
         "ui_scale", 10, 5, 25)
     load_clamped_setting(*app.main_tab, "main_tab",
-        APP_MAIN_TAB_PRACTICE, APP_MAIN_TAB_NONE,
-        APP_MAIN_TAB_PRACTICE)
+        APP_MAIN_TAB_LUMI, APP_MAIN_TAB_NONE,
+        APP_MAIN_TAB_LUMI)
     load_clamped_setting(*app.habits.screen_mode,
         "habits_screen_mode", HABITS_SCREEN_OVERVIEW,
         HABITS_SCREEN_OVERVIEW, HABITS_SCREEN_STATISTICS)
@@ -674,7 +674,7 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     // with the app chooser, including after restarting mid-onboarding.
     app.enabled_apps = SettingsCacheInt("enabled_apps",
         ifx settings_missing != 0 then APP_RECOMMENDED else APP_LISTS | APP_RECOMMENDED) & APP_ALL
-    for index: cast(s32)1..cast(s32)4 {
+    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
         key := PackagePreferenceKey(index)
         if SettingsCacheContains(key) {
             bit := PackageBit(index)
@@ -685,6 +685,18 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
                 app.enabled_apps &= ~bit
             }
         }
+    }
+    if !SettingsCacheContains("lumi_introduced") {
+        if !SettingsCacheContains("app_used_lumi") {
+            app.enabled_apps |= APP_LUMI
+            save_setting_int("app_used_lumi", 1)
+        }
+        if (app.enabled_apps & APP_LUMI) != 0 {
+            app.main_tab = APP_MAIN_TAB_LUMI
+        }
+        save_setting_int("enabled_apps", app.enabled_apps)
+        save_setting_int("main_tab", app.main_tab)
+        save_setting_int("lumi_introduced", 1)
     }
     app.apps_selected = SettingsCacheInt("apps_setup_done",
         ifx settings_missing != 0 then 0 else 1)

@@ -1,6 +1,6 @@
-#import, file "../subapps/module_host.zi";
-#import, file "../subapps/lists_types.zi";
-#import, file "../subapps/lists_visibility.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../cells/lists_types.zi";
+#import, file "../cells/lists_visibility.zi";
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
@@ -235,341 +235,104 @@ elist_set_done :: (app: *InnerBreeze, index: s32,
     return message.succeeded
 }
 
-elist_draw_empty :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
-    title := LocaleText("elist_empty_title")
-    detail := LocaleText("elist_empty_detail")
+// The Lists ZIB owns presentation and interaction. This adapter exposes only
+// typed device observations, bounded saved rows and retained input state.
+#import "bundle_host"
+#import "byte_text_linux"
+#import, file "../cells/lists_ui_types.zi";
+#import, file "../cells/widget_codec.zi";
+#import, file "../cells/widget_host.zi";
+#import, file "../cells/value_codec.zi";
+using HostValueKind;
+lists_ui: ListsUiFrame;
+lists_ui_codec: WidgetListsUiFrameCodec;
+lists_row_codec: WidgetListsUiRowCodec;
 
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)AppScale(30)},
-            .text = title,
-            .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto
-        })
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(40)), cast(float32)w, cast(float32)AppScale(48)},
-            .text = detail,
-            .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto
-        })
+ListsUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "lists_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    app := cast(*InnerBreeze)context
+    name := TextFromCString(function)
+    if name == "ReadListsUiHost" && count == 0 {
+        result.* = WidgetEncodeListsUiFrame(lists_ui, *lists_ui_codec)
+        return 1
+    }
+    if name == "WriteListsUiHost" && count == 1 && WidgetValidListsUiFrame(arguments[0]) {
+        observed := WidgetDecodeListsUiFrame(arguments[0], *lists_ui_codec)
+        if !AppCopyText(observed.value, app.elist.input[:]) {
+            return 0
+        }
+        app.elist.input_cursor = observed.cursor
+        app.elist.input_anchor = observed.anchor
+        app.elist.input_scroll_x = observed.scroll_x
+        app.elist.input_focused = ifx observed.focused then 1 else 0
+        app.elist.scroll = observed.scroll
+        if observed.clipboard_write {
+            unused TextInputWriteClipboard(observed.clipboard_text)
+        }
+        return 1
+    }
+    if name == "ReadListsRowHost" && count == 2 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    ModuleScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        item := arguments[1].integer != 0
+        row: ListsUiRow
+        if item && index >= 0 && index < app.elist.item_count {
+            source := *app.elist.items[index]
+            row.id = AppTextFromCString(*source.id[0], 37)
+            row.parent_id = AppTextFromCString(*source.list_id[0], 37)
+            row.title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE)
+            row.comment = AppTextFromCString(*source.comment[0], ELIST_COMMENT_SIZE)
+            row.done = source.done
+            row.sort_order = source.sort_order
+        } else if !item && index >= 0 && index < app.elist.list_count {
+            source := *app.elist.lists[index]
+            row.id = AppTextFromCString(*source.id[0], 37)
+            row.title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE)
+            row.sort_order = source.sort_order
+        }
+        result.* = WidgetEncodeListsUiRow(row, *lists_row_codec)
+        return 1
+    }
+    if name == "ListsLocaleHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = ModuleTextData("string"),
+            .data = ModuleTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
 }
 
 draw_elist_screen :: (app: *InnerBreeze) {
-    state: *EListState
-    if app == null {
-        return
-    }
-    content := elist_content_bounds(app)
-    x := cast(s32)content.x
-    content_w := cast(s32)content.width
-    y := AppScale(12)
-
-    tab_h := AppScale(44)
-    list_tabs: [ELIST_LIST_MAX] Tab
-
-    state = *app.elist
-    if state.loaded == 0 {
+    if app.elist.loaded == 0 {
         elist_reload(app)
     }
-
-    {
-        i: s32 = 0
-        while i < state.list_count {
-            list_tabs[i] = Tab.{
-                .key = KeyHash(AppTextFromCString(*state.lists[i].id[0], 37)),
-                .label = FrameTextHold(*app.ui.frame_text,
-                    AppTextFromCString(*state.lists[i].title[0],
-                    ELIST_TITLE_SIZE))
-            }
-            i += 1
-        }
-
-    }
-    header_action_w := AppScale(118)
-    header_gap := AppScale(10)
-    header_actions := header_action_w
-    if state.list_count > 0 && state.selected_list >= 0 {
-        header_actions += AppScale(88)
-    }
-    selector_w := content_w - header_actions - header_gap
-    if selector_w < AppScale(160) {
-        header_actions = header_action_w
-        selector_w = content_w - header_actions - header_gap
-    }
-    if selector_w < AppScale(120) {
-        selector_w = content_w - header_action_w - header_gap
-    }
-    if selector_w < 0 {
-        selector_w = 0
-    }
-    if state.list_count > 0 && selector_w > 0 {
-        selected := TabBar(app.ui.session, TabBarProps.{
-                .id = 6500,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)selector_w, cast(float32)tab_h},
-                .selected_index = state.selected_list,
-                .min_tab_width = AppScale(72),
-                .max_tab_width = selector_w
-            }, list_tabs[:state.list_count])
-        elist_select_list(app, selected.selected_index)
-    }
-    if Button(app.ui.session, ButtonProps.{
-            .key = cast(u64)6505,
-            .bounds = Rectangle.{cast(float32)(x + content_w - header_action_w), cast(float32)(y),
-                cast(float32)header_action_w, cast(float32)(tab_h)},
-            .label = LocaleText("elist_new_list"),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .pill = true,
-            .disabled = false
-        }) != 0 {
-        elist_begin_input(app, -2, "")
-        return
-    }
-    if state.list_count > 0 && state.selected_list >= 0  && header_actions > header_action_w {
-        icon_y := y + (tab_h - (AppScale(22) + AppScale(8) * 2)) / 2
-        edit_x := x + content_w - header_action_w - AppScale(84)
-        if Button(app.ui.session, ButtonProps.{
-                .key = cast(u64)6503,
-                .bounds = Rectangle.{cast(float32)edit_x, cast(float32)icon_y,
-                    cast(float32)((AppScale(22)) + (AppScale(8)) * 2),
-                    cast(float32)((AppScale(22)) + (AppScale(8)) * 2)},
-                .icon_type = cast(s32)IconEdit, .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            }) != 0 {
-            elist_begin_input(app, -3,
-                AppTextFromCString(*state.lists[state.selected_list].title[0],
-                ELIST_TITLE_SIZE))
-        }
-        if Button(app.ui.session, ButtonProps.{
-                .key = cast(u64)6504,
-                .bounds = Rectangle.{cast(float32)(edit_x + AppScale(40)), cast(float32)icon_y,
-                    cast(float32)((AppScale(22)) + (AppScale(8)) * 2),
-                    cast(float32)((AppScale(22)) + (AppScale(8)) * 2)},
-                .icon_type = cast(s32)IconTrash, .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            }) != 0 {
-            message := elist_message_for(state, LISTS_DELETE_LIST, -1)
-            elist_accept_message(app, ListsRun(message))
-            return
-        }
-    }
-    y += tab_h + AppScale(16)
-
-    if state.input_error != 0 {
-        Text(app.ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(40)},
-                .text = LocaleText("results_write_failed"),
-                .wrap = cast(TextWrap)TextWrapAuto
-            })
-        y += AppScale(48)
-    }
-
-    if state.editing_item == -2 || state.editing_item == -3 {
-        typed: [ELIST_TITLE_SIZE]u8
-        field := TextField(app.ui.session, elist_field(app,
-            Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)content_w, cast(float32)AppScale(44)},
-            typed[:]))
-        elist_accept_field(app, field)
-        y += AppScale(52)
-        if Button(app.ui.session, ButtonProps.{
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), cast(float32)(content_w), cast(float32)(AppScale(40))},
-                .label = ifx (state.editing_item == -3) then (LocaleText("done_button")) else (LocaleText("elist_create_list")),
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .pill = true,
-                .disabled = state.input[0] == #char "\0"
-            }) != 0 || state.input_committed != 0 {
-            elist_commit_input(app)
-        }
-        return
-    }
-
-    if state.list_count == 0 {
-        elist_draw_empty(app, x, y + AppScale(48), content_w)
-        return
-    }
-
-    field_w := content_w - AppScale(92)
     typed: [ELIST_TITLE_SIZE]u8
-    field := TextField(app.ui.session, elist_field(app,
-        Rectangle.{cast(float32)x, cast(float32)y,
-            cast(float32)field_w, cast(float32)AppScale(44)},
-        typed[:]))
-    elist_accept_field(app, field)
-    if Button(app.ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)(x + field_w + AppScale(8)), cast(float32)(y), cast(float32)(AppScale(84)), cast(float32)(AppScale(44))},
-            .label = ifx (state.editing_item >= 0) then (LocaleText("done_button")) else (LocaleText("elist_add_item")),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .pill = true,
-            .disabled = state.input[0] == #char "\0"
-        }) != 0 || state.input_committed != 0 {
-        elist_commit_input(app)
-    }
-    y += AppScale(52)
-
-    row_h := AppScale(58)
-    now := GetTime()
-    footer_h := AppScale(44)
-    footer_y := app.ui.view_height - app_content_bottom_reserved(app) -
-    AppScale(28) - footer_h
-    if footer_y < y + AppScale(58) {
-        footer_y = y + AppScale(58)
-    }
-    footer_w := AppScale(176)
-    if footer_w > content_w {
-        footer_w = content_w
-    }
-    if Button(app.ui.session, ButtonProps.{
-            .id = 6502,
-            .bounds = Rectangle.{cast(float32)(x + content_w - footer_w),
-                cast(float32)footer_y, cast(float32)footer_w,
-                cast(float32)footer_h},
-            .label = ifx (state.show_completed != 0) then
-            (LocaleText("elist_hide_completed")) else
-            (LocaleText("elist_show_completed")),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .pill = true
-        }) != 0 {
-        state.show_completed = ifx (state.show_completed == 0) then (1) else (0)
-        state.scroll = 0
-    }
-    if !ListsRefreshVisibility(state, now) {
+    lists_ui = ListsUiFrame.{.session = app.ui.session,
+        .width = app.ui.view_width, .height = app.ui.view_height,
+        .bottom = app_content_bottom_reserved(app), .scale = MetricsScale(),
+        .input = SampleTextFieldInput(app.elist.input_focused != 0, typed[:]),
+        .value = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE),
+        .cursor = app.elist.input_cursor, .anchor = app.elist.input_anchor,
+        .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
+        .scroll = app.elist.scroll}
+    message := elist_message_for(*app.elist, LISTS_FRAME, -1)
+    message.now = GetTime()
+    WidgetHostBegin(app.ui.session)
+    CellsUiBegin(ListsUiCall, cast(*void)app)
+    message = ListsUiRun(message)
+    CellsUiEnd()
+    WidgetHostEnd()
+    if !message.succeeded {
         app.request_quit = 1
         return
     }
-    scroll_key: u64 = cast(u64)6600
-    scroll_bounds := Rectangle.{
-        cast(float32)x, cast(float32)y,
-        cast(float32)content_w,
-        cast(float32)(footer_y - y - AppScale(12))
-    }
-    scroll := Scroll(app.ui.session, ScrollProps.{
-            .key = scroll_key,
-            .bounds = scroll_bounds,
-            .content_height = state.visibility_count * (row_h + AppScale(8)),
-            .scroll_offset = state.scroll
-        })
-    state.scroll = scroll.scroll_offset
-    if scroll.opened {
-        row_y: s32 = cast(s32)scroll.content.y
-        changed: bool = false
-        index: s32 = 0
-        while index < state.item_count {
-            if !state.item_visibility[index] {
-                index += 1
-                continue
-            }
-            if row_y + row_h <= cast(s32)scroll.viewport.y ||
-            row_y >= cast(s32)(scroll.viewport.y +
-                scroll.viewport.height) {
-                row_y += row_h + AppScale(8)
-                index += 1
-                continue
-            }
-            item: *EListItem = *state.items[index]
-            item_key := KeyHash(AppTextFromCString(*item.id[0], 37))
-            Box(app.ui.session, BoxProps.{
-                    .key = item_key * cast(u64)4,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)row_y,
-                        cast(float32)content_w, cast(float32)row_h},
-                    .fill = DarkenColor(StyleTokenColor("canvas"), 5),
-                    .radius = cast(float32)AppScale(14)
-                })
-
-            checked := Checkbox(app.ui.session, CheckboxProps.{
-                    .key = item_key * cast(u64)4 + cast(u64)1,
-                    .bounds = Rectangle.{
-                        cast(float32)(x + AppScale(10)),
-                        cast(float32)(row_y + AppScale(17)),
-                        cast(float32)AppScale(28),
-                        cast(float32)AppScale(28)
-                    },
-                    .checked = item.done != 0
-                })
-            if checked.changed {
-                elist_set_done(app, index,
-                    ifx (checked.checked) then (1) else (0), now)
-                changed = true
-                break
-            }
-
-            has_comment := item.comment[0] != cast(u8)0
-            title_height := ifx (has_comment) then (AppScale(24)) else (row_h)
-            title_y: s32 = row_y
-            if has_comment {
-                title_y += AppScale(6)
-            }
-            Text(app.ui.session, TextProps.{
-                    .bounds = Rectangle.{
-                        cast(float32)(x + AppScale(52)),
-                        cast(float32)title_y,
-                        cast(float32)(content_w - AppScale(138)),
-                        cast(float32)title_height
-                    },
-                    .text = FrameTextHold(*app.ui.frame_text,
-                    AppTextFromCString(*item.title[0],
-                    ELIST_TITLE_SIZE)),
-                    .wrap = cast(TextWrap)TextWrapNone,
-                    .align = cast(TextAlign)TextAlignStart,
-                    .vertical_align = cast(TextAlign)TextAlignCenter,
-                    .strikethrough = item.done != 0
-                })
-            if has_comment {
-                Text(app.ui.session, TextProps.{
-                        .bounds = Rectangle.{
-                            cast(float32)(x + AppScale(52)),
-                            cast(float32)(row_y + AppScale(32)),
-                            cast(float32)(content_w - AppScale(138)),
-                            cast(float32)AppScale(18)
-                        },
-                        .text = FrameTextHold(*app.ui.frame_text,
-                        AppTextFromCString(*item.comment[0],
-                        ELIST_COMMENT_SIZE)),
-                        .wrap = cast(TextWrap)TextWrapNone
-                    })
-            }
-            if Button(app.ui.session, ButtonProps.{
-                    .key = item_key * cast(u64)4 + cast(u64)2,
-                    .bounds = Rectangle.{
-                        cast(float32)(x + content_w - AppScale(78)),
-                        cast(float32)(row_y + AppScale(12)),
-                        cast(float32)AppScale(34), cast(float32)AppScale(34)
-                    },
-                    .icon_type = cast(s32)IconEdit, .icon_only = true,
-                    .tone = cast(ButtonTone)ButtonToneNeutral,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                    .circle = true
-                }) != 0 {
-                elist_begin_input(app, index,
-                    AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE))
-            }
-            if Button(app.ui.session, ButtonProps.{
-                    .key = item_key * cast(u64)4 + cast(u64)3,
-                    .bounds = Rectangle.{
-                        cast(float32)(x + content_w - AppScale(40)),
-                        cast(float32)(row_y + AppScale(12)),
-                        cast(float32)AppScale(34), cast(float32)AppScale(34)
-                    },
-                    .icon_type = cast(s32)IconTrash, .icon_only = true,
-                    .tone = cast(ButtonTone)ButtonToneNeutral,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                    .circle = true
-                }) != 0 {
-                message := elist_message_for(state, LISTS_DELETE_ITEM, index)
-                elist_accept_message(app, ListsRun(message))
-                changed = true
-                break
-            }
-            row_y += row_h + AppScale(8)
-            index += 1
-        }
-        End(app.ui.session)
-        if changed {
-            return
-        }
-    }
+    elist_accept_message(app, message)
 }
 
 elist :: (app: *InnerBreeze) {

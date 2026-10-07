@@ -1,11 +1,12 @@
 // Date arithmetic and per-day documents moved from Harmony's original Diary.
 // File effects belong to the host; this bundle has no OS or database access.
 #import "json_scan"
+#import, file "diary_view.zi";
 #import "text"
 #import "vec"
 #import "byte_text_linux"
-#import, file "../../src/subapps/diary_types.zi";
-#import, file "../../src/subapps/module_types.zi";
+#import, file "../../src/cells/diary_types.zi";
+#import, file "../../src/cells/module_types.zi";
 #import, file "../../src/core/types.zi";
 
 host_api :: #system_library "host_api";
@@ -203,6 +204,84 @@ Document :: (message: DiaryMessage) -> string {
     return BuilderFinish(out)
 }
 
+SafePhoto :: (file: string) -> bool {
+    if file.count == 0 || file.count > 200 || file == "." || file == ".." {
+        return false
+    }
+    for byte: file {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            byte == cast(u8)45 || byte == cast(u8)46) {
+            return false
+        }
+    }
+    return true
+}
+
+PhotoSelection :: (message: DiaryMessage) -> DiaryMessage {
+    rows := FieldAt(message.document, 0, "photos")
+    message.photo_count = ArrayCount(message.document, rows)
+    if message.photo_count < 0 {
+        message.photo_count = 0
+    }
+    message.photo_file = ""
+    message.photo_name = ""
+    if message.photo_count == 0 {
+        message.photo_index = 0
+        return message
+    }
+    if message.photo_index < 0 || message.photo_index >= message.photo_count {
+        message.photo_index = 0
+    }
+    row := ElementAt(message.document, rows, message.photo_index)
+    message.photo_file = Decode(message.document, FieldAt(message.document, row, "file"))
+    message.photo_name = Decode(message.document, FieldAt(message.document, row, "name"))
+    return message
+}
+
+PhotoChange :: (message: DiaryMessage, remove: bool) -> DiaryMessage {
+    if message.load_error || (!remove && !SafePhoto(message.attachment_file)) {
+        message.succeeded = false
+        return message
+    }
+    rows := FieldAt(message.document, 0, "photos")
+    count := ArrayCount(message.document, rows)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"photos\":[")
+    written: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if remove && index == message.photo_index {
+            continue
+        }
+        row := ElementAt(message.document, rows, index)
+        end := ValueEnd(message.document, row, 0)
+        if written > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "%", message.document[row:end])
+        written += 1
+    }
+    if !remove {
+        if written > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "{\"file\":")
+        Json(*out, message.attachment_file)
+        BuilderPrint(*out, ",\"name\":")
+        Json(*out, message.attachment_name)
+        BuilderPrint(*out, "}")
+        message.photo_index = written
+    }
+    BuilderPrint(*out, "]}")
+    previous := message
+    message.document = BuilderFinish(out)
+    message.saved = false
+    message = Save(message)
+    if !message.saved {
+        previous.succeeded = false
+        return previous
+    }
+    // Removing a reference keeps its private original bytes. A damaged entry
+    // or another imported document can still refer to that same photo.
+    return PhotoSelection(message)
+}
+
 Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
     if !Valid(date) {
         message.succeeded = false;
@@ -214,6 +293,10 @@ Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
     message.day = date.day
     message.text = ""
     message.document = loaded.data
+    message.photo_index = 0
+    message.photo_count = 0
+    message.photo_file = ""
+    message.photo_name = ""
     message.cursor = 0
     message.anchor = 0
     message.load_error = !loaded.succeeded
@@ -232,8 +315,18 @@ Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
         message.load_error = true
         return message
     }
+    rows := FieldAt(loaded.data, 0, "photos")
+    for index: cast(s32)0..ArrayCount(loaded.data, rows) - 1 {
+        row := ElementAt(loaded.data, rows, index)
+        file := Decode(loaded.data, FieldAt(loaded.data, row, "file"))
+        label := FieldAt(loaded.data, row, "name")
+        if !SafePhoto(file) || label < 0 || loaded.data[label] != cast(u8)34 {
+            message.load_error = true
+            return message
+        }
+    }
     message.text = Decode(loaded.data, text)
-    return message
+    return PhotoSelection(message)
 }
 
 Save :: (message: DiaryMessage) -> DiaryMessage {
@@ -267,6 +360,9 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
     if message.action == DIARY_SAVE {
         return Save(message)
     }
+    if message.action == DIARY_ATTACH {
+        return PhotoChange(message, false)
+    }
     if message.action == DIARY_EDIT {
         if message.load_error || message.edit_start < 0 ||
         message.edit_end < message.edit_start || message.edit_end > message.text.count {
@@ -285,6 +381,19 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
     }
     if message.action != DIARY_CONTROL {
         message.succeeded = false;
+        return message
+    }
+    if message.control == 29008 || message.control == 29009 {
+        if message.photo_count > 0 {
+            message.photo_index = (message.photo_index + message.photo_count +
+                (ifx message.control == 29008 then -1 else 1)) % message.photo_count
+        }
+        return PhotoSelection(message)
+    }
+    if message.control == 29010 {
+        if message.photo_count > 0 {
+            return PhotoChange(message, true)
+        }
         return message
     }
     if message.control == 29013 {
@@ -379,6 +488,19 @@ Main :: () -> s32 {
     if message.action == MODULE_IDENTIFY {
         return MODULE_DIARY
     }
-    WriteDiaryHost(Apply(message))
+    if message.action == DIARY_FRAME {
+        message.succeeded = true
+        message = DiaryView(message, DiaryObserve())
+        if message.action != DIARY_FRAME {
+            message = Apply(message)
+        }
+        // A quiet editor saves after its typing delay; file errors stay visible.
+        if !message.saved && DiarySaveDue() {
+            message = Save(message)
+        }
+        WriteDiaryHost(message)
+    } else {
+        WriteDiaryHost(Apply(message))
+    }
     return 0
 }

@@ -13,7 +13,7 @@ ABI_NAMES = '''    value.type_name = ModuleTextData("BreathSession")
 
 
 class StorageLiteralsTest(unittest.TestCase):
-    def check_source(self, source, path='subapps/value_codec.zi'):
+    def check_source(self, source, path='cells/value_codec.zi'):
         with tempfile.TemporaryDirectory(prefix='inbe-storage-literals-') as temporary:
             root = Path(temporary)
             (root / 'scripts').mkdir()

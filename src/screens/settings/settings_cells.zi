@@ -1,0 +1,193 @@
+// Cell choices and sidebar order share one Settings page and saved profile.
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/app_settings.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/route_list.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../cells/catalog.zi";
+#import, file "../../cells/module_host.zi";
+#import, file "../../cells/package_manager.zi";
+#import, file "../../app/assets.zi";
+#import, file "../../widgets/bottom_nav.zi";
+#import, file "settings_ui.zi";
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "image_props"
+#import "geometry"
+#import "reorder_props"
+#import "reorder_widget"
+#import "text_props"
+#import "text_widget"
+
+using AppNavRoute;
+using ButtonTone;
+using ButtonEmphasis;
+
+SettingsCellRoute :: (package: s32) -> s32 {
+    routes: [6]s32 = .{APP_NAV_ROUTE_NONE, APP_NAV_ROUTE_ELIST,
+        APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_PRACTICE,
+        APP_NAV_ROUTE_DIARY, APP_NAV_ROUTE_LUMI}
+    return routes[package]
+}
+
+SettingsCellLabel :: (package: s32) -> string {
+    return app_nav_route_label(SettingsCellRoute(package))
+}
+
+// Active cells follow their saved navigation order. Available cells share
+// the same list, after the active rows, and never duplicate a sidebar entry.
+SettingsCellsOrder :: (app: *InnerBreeze, packages: []s32) -> s32 {
+    count: s32
+    for index: cast(s32)0..app.bottom_nav_route_count - 1 {
+        route := app.bottom_nav_routes[index]
+        for package: cast(s32)1..cast(s32)(PackageCount - 1) {
+            if route == SettingsCellRoute(package) && SettingsCellVisible(app, package) {
+                packages[count] = package
+                count += 1
+                break
+            }
+        }
+    }
+    active := count
+    for package: cast(s32)1..cast(s32)(PackageCount - 1) {
+        if !SettingsCellVisible(app, package) {
+            packages[count] = package
+            count += 1
+        }
+    }
+    return active
+}
+
+SettingsCellVisible :: (app: *InnerBreeze, package: s32) -> bool {
+    return app_bottom_nav_has_route(app, SettingsCellRoute(package)) != 0 &&
+    (app.enabled_apps & PackageBit(package)) != 0
+}
+
+settings_cells_content_height :: (app: *InnerBreeze, width: s32) -> s32 {
+    return settings_section_height("", (PackageCount - 1) * AppScale(56))
+}
+
+SettingsCellsSaveOrder :: (app: *InnerBreeze, packages: []s32) {
+    app_update_app_navigation(app, app.enabled_apps)
+    cell: s32
+    for index: cast(s32)0..app.bottom_nav_route_count - 1 {
+        if app_nav_route_bit(app.bottom_nav_routes[index]) != 0 {
+            app.bottom_nav_routes[index] = SettingsCellRoute(packages[cell])
+            cell += 1
+        }
+    }
+    app_block_current_click(app)
+    save_settings(app)
+}
+
+SettingsCellsTrash :: () -> ImageProps {
+    image: ImageProps
+    image.asset_path = "icons/ui.png"
+    image.alt_text = LocaleText("remove_button")
+    image.source = Rectangle.{0.0, 384.0, 64.0, 64.0}
+    return image
+}
+
+SettingsCellsChange :: (app: *InnerBreeze, package: s32, enabled: bool) {
+    bit := PackageBit(package)
+    mask := ifx enabled then app.enabled_apps | bit else app.enabled_apps & ~bit
+    if package != 5 && !CellsSetEnabled(mask) {
+        return
+    }
+    app.enabled_apps = mask
+    app.apps_selected = 1
+    if enabled {
+        if (CellsInstalledMask() & bit) == 0 {
+            PackageRequest(package)
+        }
+        app_update_app_navigation(app, bit)
+    } else {
+        app_update_app_navigation(app)
+    }
+    app_block_current_click(app)
+    save_settings(app)
+}
+
+settings_cells_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32,
+    viewport: Rectangle, max_scroll: s32) {
+    packages: [PackageCount - 1]s32
+    active := SettingsCellsOrder(app, packages[:])
+    row_height := AppScale(56)
+    cells := settings_section_begin(app, x, width, y, "",
+        (PackageCount - 1) * row_height)
+    rows: [PackageCount - 1]ReorderItem
+    for index: cast(s32)0..active - 1 {
+        rows[index].id = packages[index]
+        rows[index].bounds = Rectangle.{cast(float32)cells.inner_x,
+            cast(float32)(y.* + index * row_height),
+            cast(float32)cells.inner_width, cast(float32)row_height}
+    }
+    list: ReorderList
+    list.id = 701
+    list.bounds = Rectangle.{cast(float32)cells.inner_x, cast(float32)y.*,
+        cast(float32)cells.inner_width, cast(float32)(active * row_height)}
+    list.handle_width = AppScale(40)
+    list.scroll_offset = app.settings_scroll
+    list.max_scroll = max_scroll
+    list.viewport_top = cast(s32)viewport.y
+    list.viewport_bottom = cast(s32)(viewport.y + viewport.height)
+    moved := Reorder(app.ui.session, list, rows[0:active])
+    app.settings_scroll = moved.scroll_offset
+    changed: s32 = -1
+    open_cell: s32 = -1
+    for index: cast(s32)0..cast(s32)(PackageCount - 2) {
+        package := packages[index]
+        visible := index < active
+        text_x := cells.inner_x + AppScale(40)
+        name: ButtonProps
+        name.id = 810 + package
+        name.bounds = Rectangle.{cast(float32)text_x, cast(float32)(y.* + AppScale(6)),
+            cast(float32)(cells.inner_width - AppScale(96)), cast(float32)AppScale(44)}
+        name.label = SettingsCellLabel(package)
+        name.image = bottom_nav_route_image(SettingsCellRoute(package))
+        if SettingsCellRoute(package) == APP_NAV_ROUTE_LUMI {
+            name.icon_shape = AssetRead("assets/lumi/sidebar.shape").data
+        }
+        name.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        name.loading = (CellsInstalledMask() & PackageBit(package)) == 0 &&
+        PackageStatus(package) == 1
+        if Button(app.ui.session, name) != 0 {
+            if visible && app_nav_route_available(app, SettingsCellRoute(package)) {
+                open_cell = package
+            } else {
+                changed = package
+            }
+        }
+        action: ButtonProps
+        action.id = 790 + package
+        action.bounds = Rectangle.{cast(float32)(cells.inner_x + cells.inner_width - AppScale(44)),
+            cast(float32)(y.* + AppScale(6)), cast(float32)AppScale(44), cast(float32)AppScale(44)}
+        action.label = LocaleText(ifx visible then "remove_button" else "cells_add_sidebar")
+        action.icon_only = true
+        action.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        if visible {
+            action.image = SettingsCellsTrash()
+        } else {
+            action.icon_shape = "S1.6rr:M12 5V19M5 12H19"
+        }
+        if Button(app.ui.session, action) != 0 {
+            changed = package
+        }
+        y.* += row_height
+    }
+    settings_section_end(y)
+    if changed >= 0 {
+        SettingsCellsChange(app, changed, !SettingsCellVisible(app, changed))
+    } else if moved.committed != 0 {
+        if RouteListMove(packages[:], active, moved.from_index, moved.to_index) {
+            SettingsCellsSaveOrder(app, packages[0:active])
+        }
+    } else if open_cell >= 0 {
+        app_block_current_click(app)
+        app_apply_nav_route(app, SettingsCellRoute(open_cell))
+    }
+}

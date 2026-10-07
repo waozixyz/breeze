@@ -19,6 +19,7 @@ optionally sync user-owned data through a Daochi-compatible sync server.
 
 ## Features
 
+- Lumi, a local firefly companion with private chat, habit completion, practice starts, and optional todo tools
 - Guided practice sessions with visual and audio cues
 - Mind, Yoga, and Fitness organization for different practice routines
 - Customizable breathing sessions, meditation timers, and habit counters
@@ -83,8 +84,8 @@ make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi
 This uses disposable client databases and a loopback server; see
 [web and sync test coverage](WEB_RENDERER_TESTS.md) for details.
 
-The app picker, independent ZIB packages, update settings, account choices and
-publisher setup are described in [app packages](docs/subapps.md).
+The cell picker, independent ZIB packages, update settings, account choices and
+publisher setup are described in [cell packages](docs/cells.md).
 
 Native binaries are written to `build/bin/<platform>/`. Release artifacts are
 written under `build/dist/`.

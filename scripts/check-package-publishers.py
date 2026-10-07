@@ -9,7 +9,7 @@ root = Path(__file__).resolve().parent.parent
 publishers = json.loads((root / "apps/publishers.json").read_text())
 required = {value["id"] for value in json.loads((root / "apps/versions.json").read_text())["apps"].values()}
 if not isinstance(publishers, list) or not 0 < len(publishers) <= 32:
-    raise SystemExit("Release requires registered public publisher pins in apps/publishers.json; see docs/subapps.md")
+    raise SystemExit("Release requires registered public publisher pins in apps/publishers.json; see docs/cells.md")
 covered = set()
 seen = set()
 for publisher in publishers:
@@ -27,5 +27,5 @@ for publisher in publishers:
     covered.update(apps)
     seen.add(key_id)
 if covered != required:
-    raise SystemExit("Release requires publisher coverage for the root and all four apps")
-print("Publisher pins cover the root and all four apps")
+    raise SystemExit("Release requires publisher coverage for the root and all five cells")
+print("Publisher pins cover the root and all five cells")

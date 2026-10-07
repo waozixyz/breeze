@@ -6,23 +6,29 @@
 #import "byte_text_linux"
 #import, file "feature_request.zi";
 #import, file "../app/app_types.zi";
+#import, file "../core/types.zi";
+#import, file "../app/settings_actions.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/assets.zi";
 #import, file "../app/exercise_types.zi";
 #import, file "../app/route_types.zi";
 #import, file "../app/text_buffers.zi";
-#import, file "../subapps/module_host.zi";
+#import, file "../cells/module_host.zi";
 #import, file "../app/application.zi";
 #import, file "../app/app_route_url.zi";
 #import, file "../app/app_route_state.zi";
 #import, file "../app/mini_mode.zi";
 #import, file "../practices/practice_registry.zi";
+#import, file "../practices/practice_actions.zi";
 #import, file "../core/breath_timing.zi";
 using ExerciseType;
 using AppMainTab;
+using AppNavRoute;
 host_c :: #system_library "c";
 HostFree :: (bytes: *u8) #foreign host_c "free";
 app_close_modal :: (app: *InnerBreeze) #foreign host_c;
 HostDescriptor :: struct { data: *u8; count: s64 }
-HostReceipt :: struct { request: [65]u8; control: [96]u8; ok: bool }
+HostReceipt :: struct { request: [65]u8; control: [96]u8; payload: [2048]u8; ok: bool }
 receipts: [32]HostReceipt;
 receipt_next: s32;
 last_request: [65]u8;
@@ -41,11 +47,77 @@ HostIdentifier :: (value: string) -> bool {
     return true
 }
 
-HostAction :: (app: *InnerBreeze, control: string) -> bool {
-    before := app_current_route(app)
+HostArgument :: (arguments: string, field: string, output: []u8) -> string {
+    count := ReadStringText(arguments, FieldAt(arguments, 0, field), output)
+    if count <= 0 || count >= cast(s32)output.count {
+        return ""
+    }
+    return TextFromBytes(output[:count])
+}
+
+HostAction :: (app: *InnerBreeze, control: string, arguments: string) -> bool {
+    text: [96]u8
+    if control == "mcp.set_theme" {
+        return AppSetTheme(app, HostArgument(arguments, "theme", text[:]))
+    }
+    if control == "mcp.set_theme_mode" {
+        mode := HostArgument(arguments, "mode", text[:])
+        if mode == "system" { return AppSetThemeMode(app, 0) }
+        if mode == "light" { return AppSetThemeMode(app, 1) }
+        if mode == "dark" { return AppSetThemeMode(app, 2) }
+        return false
+    }
+    if control == "mcp.set_setting" {
+        name := HostArgument(arguments, "name", text[:])
+        number := ReadNumber(arguments, FieldAt(arguments, 0, "value"))
+        if !number.valid || number.value < 0 || number.value > 25 ||
+        number.value != cast(float64)cast(s32)number.value {
+            return false
+        }
+        return AppSetPreference(app, name, cast(s32)number.value)
+    }
+    if control == "mcp.open_view" {
+        view := HostArgument(arguments, "view", text[:])
+        if view == "lumi" {
+            app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
+            return app.breathing.screen == ScreenLumi
+        }
+        if view == "settings" || view == "appearance" {
+            app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
+            if view == "appearance" {
+                app.settings_tab = SETTINGS_TAB_THEME
+                app.settings_overview = 0
+            }
+            return app.breathing.screen == ScreenSettings
+        }
+        names: [5]string = .["lumi", "habits", "lists", "practices", "diary"]
+        bits: [5]s32 = .[16, 2, 1, 4, 8]
+        for index: cast(s32)0..cast(s32)4 {
+            if view == names[index] {
+                return app_open_feature(cast(*void)app, bits[index]) != 0
+            }
+        }
+        return false
+    }
+    if control == "mcp.practice" {
+        action := HostArgument(arguments, "action", text[:])
+        controls: [6]string = .["practice.whm.start", "practice.meditation.start",
+        "practice.sun_salutation.start", "practice.patterns.start", "practice.pause", "practice.resume"]
+        names: [6]string = .["whm", "meditation", "sun_salutation", "patterns", "pause", "resume"]
+        for index: cast(s32)0..cast(s32)5 {
+            if action == names[index] {
+                return HostAction(app, controls[index], "{}")
+            }
+        }
+        return false
+    }
     if control == "open.practices" { return app_open_feature(cast(*void)app, 4) != 0 }
     if control == "open.habits" { return app_open_feature(cast(*void)app, 2) != 0 }
     if control == "open.lists" { return app_open_feature(cast(*void)app, 1) != 0 }
+    if control == "open.lumi" {
+        app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
+        return app.breathing.screen == ScreenLumi
+    }
     if control == "open.diary" {
         return app_open_feature(cast(*void)app, 8) != 0
     }
@@ -61,15 +133,7 @@ HostAction :: (app: *InnerBreeze, control: string) -> bool {
         if control != names[id] { continue }
         if active != null { return cast(s32)active.id == id }
         if app_open_feature(cast(*void)app, 4) == 0 { return false }
-        app.exercise_type = id
-        app.practice_tab = PRACTICE_TAB_PLAY
-        if app.modal.active != 0 { app_close_modal(app) }
-        practice := practice_get(id)
-        if practice.start == null { return false }
-        practice.start(app)
-        app_observe_direct_route_change(app, before)
-        active = practice_active(app)
-        return active != null && cast(s32)active.id == id && app.session_paused == 0
+        return app_start_practice(app, id)
     }
     return false
 }
@@ -77,7 +141,7 @@ HostAction :: (app: *InnerBreeze, control: string) -> bool {
 #scope_export
 PollHostActions :: (app: *InnerBreeze) {
     if app == null { return }
-    bytes: [1024]u8
+    bytes: [2048]u8
     size := ReadHostAction(bytes[:])
     if size <= 0 { return }
     value := TextFromBytes(bytes[:size])
@@ -89,15 +153,27 @@ PollHostActions :: (app: *InnerBreeze) {
     if rn < 1 || rn > 64 || cn < 1 || cn > 95 ||
     !HostIdentifier(TextFromBytes(request[:rn])) ||
     !HostIdentifier(TextFromBytes(control[:cn])) { return }
+    arguments_at := FieldAt(value, 0, "arguments")
+    arguments := "{}"
+    if arguments_at >= 0 {
+        end := ValueEnd(value, arguments_at, 0)
+        if end < 0 || value[arguments_at] != cast(u8)123 {
+            return
+        }
+        arguments = value[arguments_at:end]
+    }
     last_request = request
     for receipt: receipts {
         if AppTextFromCString(*receipt.request[0], 65) == TextFromBytes(request[:rn]) {
-            last_ok = AppTextFromCString(*receipt.control[0], 96) == TextFromBytes(control[:cn]) && receipt.ok
+            last_ok = AppTextFromCString(*receipt.control[0], 96) == TextFromBytes(control[:cn]) &&
+            AppTextFromCString(*receipt.payload[0], 2048) == value && receipt.ok
             return
         }
     }
-    last_ok = HostAction(app, TextFromBytes(control[:cn]))
-    receipts[receipt_next] = .{request, control, last_ok}
+    last_ok = HostAction(app, TextFromBytes(control[:cn]), arguments)
+    payload: [2048]u8
+    unused AppCopyText(value, payload[:])
+    receipts[receipt_next] = .{request, control, payload, last_ok}
     receipt_next = (receipt_next + 1) % 32
 }
 
@@ -107,23 +183,31 @@ ReportHostState :: (app: *InnerBreeze) {
     if app.main_tab == APP_MAIN_TAB_PRACTICE { feature = 4 }
     if app.main_tab == APP_MAIN_TAB_HABITS { feature = 2 }
     if app.main_tab == APP_MAIN_TAB_ELIST { feature = 1 }
+    if app.main_tab == APP_MAIN_TAB_LUMI { feature = 16 }
+    if app.main_tab == APP_MAIN_TAB_DIARY { feature = 8 }
     active := practice_active(app)
     active_id := ifx active != null then cast(s32)active.id else -1
     out: Vec(u8)
     BuilderPrint(*out, "{\"interface\":\"harmony.app-state.v1\",\"feature\":%,\"screen\":%,\"practice\":%,\"practice_running\":%,\"paused\":%,\"round\":%,\"breath\":%,\"last_request_id\":\"%\",\"last_request_ok\":%,\"controls\":[", feature, app.breathing.screen, active_id, active != null, app.session_paused != 0, app.breathing.round, BreathCountValue(app.breathing), AppTextFromCString(*last_request[0], 65), last_ok)
-    names: [9]string = .{"open.practices", "open.habits", "open.lists",
+    names: [11]string = .{"open.practices", "open.habits", "open.lists",
         "practice.whm.start", "practice.meditation.start", "practice.sun_salutation.start",
-        "practice.patterns.start", "practice.pause", "practice.resume"}
-    labels: [9]string = .{"Practices", "Habits", "Lists", "Start WHM",
-        "Start meditation", "Start Sun Salutation", "Start breathing patterns", "Pause practice", "Resume practice"}
-    for i: 0..8 {
+        "practice.patterns.start", "practice.pause", "practice.resume", "open.lumi", "open.diary"}
+    labels: [11]string = .{"Practices", "Habits", "Lists", "Start WHM",
+        "Start meditation", "Start Sun Salutation", "Start breathing patterns", "Pause practice", "Resume practice", "Lumi", "Diary"}
+    for i: 0..10 {
         enabled := !AppMiniMode()
         if i >= 3 && i <= 6 { enabled = enabled && (active == null || active_id == i - 3) }
         if i == 7 { enabled = active != null && app.session_paused == 0 }
         if i == 8 { enabled = active != null && app.session_paused != 0 }
+        if i == 9 { enabled = enabled && (CellsInstalledMask() & 16) != 0 }
+        if i == 10 { enabled = enabled && (app.enabled_apps & CellsInstalledMask() & 8) != 0 }
         BuilderPrint(*out, "%{\"control\":\"%\",\"label\":\"%\",\"enabled\":%}", ifx i == 0 then "" else ",", names[i], labels[i], enabled)
     }
-    BuilderPrint(*out, "]}")
+    tools := AssetRead("assets/mcp/tools.json")
+    BuilderPrint(*out, "],\"settings\":{\"theme\":\"%\",\"theme_id\":%,\"theme_mode\":%,\"theme_source\":%,\"style\":%,\"scale\":%,\"navigation\":%,\"sidebar_compact\":%},\"mcp\":{\"tools\":%}}",
+        AppThemeName(app.theme_id), app.theme_id, app.theme_mode, app.theme_source,
+        app.style_index, app.ui_scale_tenths, app.navigation_placement,
+        app.nav_rail_collapsed, ifx tools.found then tools.data else "[]")
     state := BuilderFinish(out)
     defer { descriptor := cast(*HostDescriptor)(*state); HostFree(descriptor.data) }
     if state == TextFromBytes(published[:published_size]) { return }

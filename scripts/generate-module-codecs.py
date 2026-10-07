@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit typed Ziran value codecs for the sub-app protocol, with schema-sized storage."""
+"""Emit typed Ziran value codecs for the cell protocol, with schema-sized storage."""
 
 from pathlib import Path
 import re
@@ -7,7 +7,7 @@ import re
 root = Path(__file__).resolve().parent.parent
 schema = {}
 for file in [
-    *sorted((root / "src/subapps").glob("*_types.zi")),
+    *sorted((root / "src/cells").glob("*_types.zi")),
     root / "src/core/types.zi",
     root / "src/practices/patterns/patterns_types.zi",
     root / "src/practices/sun_salutation/sun_salutation_rules.zi",
@@ -20,6 +20,7 @@ for file in [
         schema[name] = [(n, re.sub(r"\s+", "", t.split("//")[0])) for n, t in fields]
 constants = {"CountSize": 4, "MaxRounds": 12}
 roots = [
+    "LumiMessage",
     "InbeMessage",
     "DiaryMessage",
     "DiaryFileResult",
@@ -49,7 +50,7 @@ lines = [
     "// No native application pointers cross the portable module boundary.",
     *[
         f'#import, file "{name}_types.zi";'
-        for name in ["module", "lists", "habits", "practice", "inbe", "diary"]
+        for name in ["module", "lists", "habits", "practice", "inbe", "diary", "lumi"]
     ],
     '#import "bundle_host"',
     '#import "byte_text_linux"',
@@ -307,4 +308,4 @@ lines += [
 ]
 source = "\n".join(lines)
 source = re.sub(r'("[^"\n]+"|data\.\w+|type_name)\.data', r"ModuleTextData(\1)", source)
-(root / "src/subapps/value_codec.zi").write_text(source)
+(root / "src/cells/value_codec.zi").write_text(source)

@@ -1,0 +1,85 @@
+// Bounded, case-insensitive regex matching for Lumi's fixed command patterns.
+// Supports anchors, character classes, escapes and ?, * and + quantifiers.
+RegexAtom :: struct {
+    after: s32
+    matches: bool
+}
+
+RegexLower :: (byte: u8) -> u8 {
+    return ifx byte >= 65 && byte <= 90 then byte + cast(u8)32 else byte
+}
+
+RegexReadAtom :: (pattern: string, at: s32, value: u8) -> RegexAtom {
+    atom := RegexAtom.{.after = at + 1}
+    byte := pattern[at]
+    if byte == cast(u8)92 && at + 1 < pattern.count {
+        atom.after += 1
+        escaped := pattern[at + 1]
+        atom.matches = ifx escaped == cast(u8)115 then value == 32 || value == 9 || value == 10 || value == 13 else RegexLower(escaped) == RegexLower(value)
+    } else if byte == cast(u8)91 {
+        cursor := at + 1
+        while cursor < pattern.count && pattern[cursor] != cast(u8)93 {
+            if RegexLower(pattern[cursor]) == RegexLower(value) {
+                atom.matches = true
+            }
+            cursor += 1
+        }
+        atom.after = cursor + 1
+    } else {
+        atom.matches = byte == cast(u8)46 || RegexLower(byte) == RegexLower(value)
+    }
+    return atom
+}
+
+RegexHere :: (pattern: string, at: s32, input: string, position: s32, budget: *s32) -> bool {
+    budget.* -= 1
+    if budget.* <= 0 {
+        return false
+    }
+    if at >= pattern.count {
+        return true
+    }
+    if pattern[at] == cast(u8)36 && at + 1 == pattern.count {
+        return position == input.count
+    }
+    atom := RegexReadAtom(pattern, at, ifx position < input.count then input[position] else cast(u8)0)
+    if atom.after > pattern.count {
+        return false
+    }
+    quantifier := ifx atom.after < pattern.count then pattern[atom.after] else cast(u8)0
+    if quantifier == 42 || quantifier == 43 || quantifier == 63 {
+        minimum := ifx quantifier == 43 then 1 else 0
+        maximum: s32 = 0
+        while position + maximum < input.count &&
+        RegexReadAtom(pattern, at, input[position + maximum]).matches {
+            maximum += 1
+            if quantifier == 63 {
+                break
+            }
+        }
+        while maximum >= minimum {
+            if RegexHere(pattern, atom.after + 1, input, position + maximum, budget) {
+                return true
+            }
+            maximum -= 1
+        }
+        return false
+    }
+    return position < input.count && atom.matches && RegexHere(pattern, atom.after, input, position + 1, budget)
+}
+
+RegexMatch :: (pattern: string, input: string) -> bool {
+    if pattern.count == 0 || pattern.count > 128 || input.count >= 1024 {
+        return false
+    }
+    budget: s32 = 8192
+    if pattern[0] == cast(u8)94 {
+        return RegexHere(pattern, 1, input, 0, *budget)
+    }
+    for position: cast(s32)0..cast(s32)input.count {
+        if RegexHere(pattern, 0, input, position, *budget) {
+            return true
+        }
+    }
+    return false
+}

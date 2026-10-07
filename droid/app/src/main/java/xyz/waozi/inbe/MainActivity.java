@@ -684,8 +684,11 @@ public class MainActivity extends NativeActivity {
                 int read;
                 long totalBytes = 0;
                 while ((read = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, read);
                     totalBytes += read;
+                    if (pendingImportKind == 4 && totalBytes > 16L * 1024 * 1024) {
+                        throw new java.io.IOException("Diary photo exceeds 16 MiB");
+                    }
+                    output.write(buffer, 0, read);
                 }
                 Log.d(TAG, "File copied successfully - kind=" + pendingImportKind + ", path=" + importFile.getAbsolutePath() + ", size=" + totalBytes + " bytes");
             }
@@ -694,6 +697,7 @@ public class MainActivity extends NativeActivity {
             Log.d(TAG, "Calling nativeImportSelectedFile - kind=" + pendingImportKind + ", path=" + importFile.getAbsolutePath() + ", mimeType=" + mimeType);
             nativeImportSelectedFile(pendingImportKind, importFile.getAbsolutePath());
         } catch (Exception e) {
+            importFile.delete();
             Log.e(TAG, "Failed to import selected file", e);
             nativeImportSelectedFile(pendingImportKind, "");
         }

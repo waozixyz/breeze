@@ -1,0 +1,84 @@
+// Lumi and app automation use the same validated, persisted app preferences.
+#import, file "app_types.zi";
+#import, file "app_settings.zi";
+#import, file "device_preferences.zi";
+#import, file "app_style.zi";
+#import, file "theme_catalog.zi";
+#import, file "locale.zi";
+using AppThemeMode;
+using AppThemeSource;
+
+AppThemeName :: (index: s32) -> string {
+    names: [13]string = .["sky", "ocean", "forest", "sunset", "lavender",
+    "cherry", "dawn", "sage", "sepia", "mono", "mint", "cobalt", "sweet"]
+    if index < 0 || index >= ThemeCount {
+        return ""
+    }
+    return names[index]
+}
+
+AppThemeIndex :: (name: string) -> s32 {
+    keys: [13]string = .["theme_sky", "theme_ocean", "theme_forest", "theme_sunset",
+    "theme_lavender", "theme_cherry", "theme_dawn", "theme_sage", "theme_sepia",
+    "theme_mono", "theme_mint", "theme_cobalt", ""]
+    for index: cast(s32)0..ThemeCount - 1 {
+        if name == AppThemeName(index) || (keys[index] != "" && name == LocaleText(keys[index])) {
+            return index
+        }
+    }
+    return -1
+}
+
+AppSetTheme :: (app: *InnerBreeze, name: string) -> bool {
+    if app == null {
+        return false
+    }
+    if name == "system" {
+        app.theme_source = APP_THEME_SOURCE_SYSTEM
+        app.theme_mode = APP_THEME_SYSTEM
+    } else {
+        index := AppThemeIndex(name)
+        if index < 0 {
+            return false
+        }
+        app.theme_source = APP_THEME_SOURCE_APP
+        app.theme_id = index
+    }
+    app_refresh_theme(app)
+    save_settings(app)
+    return true
+}
+
+AppSetThemeMode :: (app: *InnerBreeze, mode: s32) -> bool {
+    if app == null || mode < APP_THEME_SYSTEM || mode > APP_THEME_DARK {
+        return false
+    }
+    // Choosing light/dark explicitly also stops following the device palette.
+    if mode != APP_THEME_SYSTEM {
+        app.theme_source = APP_THEME_SOURCE_APP
+    }
+    app.theme_mode = mode
+    app_refresh_theme(app)
+    save_settings(app)
+    return true
+}
+
+AppSetPreference :: (app: *InnerBreeze, name: string, value: s32) -> bool {
+    if app == null {
+        return false
+    }
+    if name == "scale" && value >= 5 && value <= 25 {
+        app.ui_scale_tenths = value
+    } else if name == "navigation" && value >= 0 && value <= 4 {
+        app.navigation_placement = value
+    } else if name == "sidebar_compact" && (value == 0 || value == 1) {
+        app.nav_rail_collapsed = value
+    } else if name == "style" && value >= 1 && value <= 3 {
+        app.style_index = value
+        app_apply_style(app)
+    } else {
+        return false
+    }
+    save_settings(app)
+    return true
+}

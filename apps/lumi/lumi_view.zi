@@ -1,0 +1,221 @@
+#import "geometry"
+#import "drawing_props"
+#import "layout"
+#import "image_props"
+#import "image_widget"
+#import "text_props"
+#import "text_widget"
+#import "text_align"
+#import "text_input_props"
+#import "text_field_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "text"
+#import "vec"
+#import, file "../../src/cells/lumi_types.zi";
+#import, file "../../src/cells/lumi_ui_types.zi";
+#import, file "engine.zi";
+
+using ImageFit;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+host_api :: #system_library "host_api";
+ReadLumiUiHost :: () -> LumiUiFrame #foreign host_api;
+WriteLumiUiHost :: (frame: LumiUiFrame) #foreign host_api;
+ReadLumiChatRowHost :: (index: s32) -> LumiChatRow #foreign host_api;
+ReadLumiSuggestionTaskHost :: (index: s32) -> LumiTask #foreign host_api;
+ReadLumiSuggestionHabitHost :: (index: s32) -> LumiTask #foreign host_api;
+LumiViewLocaleHost :: (key: string) -> string #foreign host_api;
+frame: LumiUiFrame;
+
+Scale :: (value: s32) -> s32 {
+    return cast(s32)(cast(float32)value * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height}
+}
+
+Suggestion :: (id: s32, text: string, bounds: Rectangle, label: string = "") -> bool {
+    if Button(frame.session, ButtonProps.{.id = id, .bounds = bounds,
+            .label = ifx label.count > 0 then label else text, .pill = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        frame.value = text
+        frame.cursor = cast(s32)text.count
+        frame.anchor = frame.cursor
+        frame.focused = true
+        return true
+    }
+    return false
+}
+
+LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
+    frame = ReadLumiUiHost()
+    column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
+    x := column.x
+    width := column.width
+    footer := frame.height - frame.bottom - Scale(64)
+    suggestions_top := footer - Scale(46)
+    history_top := Scale(12)
+    chat_height := suggestions_top - history_top - Scale(8)
+    if chat_height < Scale(60) {
+        chat_height = Scale(60)
+    }
+    rows: [65]LumiChatRow
+    content_height: s32 = 0
+    for index: cast(s32)0..frame.chat_count - 1 {
+        rows[index] = ReadLumiChatRowHost(index)
+        minimum := Scale(ifx rows[index].user then 54 else 80)
+        if rows[index].height < minimum {
+            rows[index].height = minimum
+        }
+        content_height += rows[index].height
+    }
+    history := Scroll(frame.session, ScrollProps.{.key = cast(u64)300100,
+            .bounds = Bounds(x, history_top, width, chat_height),
+            .content_height = content_height, .scroll_offset = frame.scroll, .scale = frame.scale})
+    frame.scroll = history.scroll_offset
+    frame.follow_end = history.scroll_offset == history.max_scroll
+    if history.opened {
+        top := cast(s32)history.content.y
+        for index: cast(s32)0..frame.chat_count - 1 {
+            row := rows[index]
+            row_height := row.height
+            bubble_width := width - Scale(ifx row.user then 60 else 80)
+            left := x + Scale(48)
+            if !row.user {
+                Image(frame.session, ImageProps.{.asset_path = "assets/lumi/mascot.png", .alt_text = "Lumi",
+                        .bounds = Bounds(x, top + row_height - Scale(54), Scale(40), Scale(40)),
+                        .source = Rectangle.{0.0, 0.0, -1254.0, 1254.0},
+                        .fit = cast(ImageFit)ImageFitContain})
+            }
+            Box(frame.session, BoxProps.{.bounds = Bounds(left, top, bubble_width, row_height - Scale(10)),
+                    .fill = ifx row.user then Color.{156, 188, 143, 48} else Color.{156, 156, 156, 24},
+                    .radius = cast(float32)Scale(16)})
+            if !row.user {
+                Text(frame.session, TextProps.{.bounds = Bounds(left + Scale(14), top + Scale(8),
+                        bubble_width - Scale(28), Scale(20)), .text = "Lumi", .font = Scale(12)})
+            }
+            text_top := Scale(ifx row.user then 12 else 32)
+            Text(frame.session, TextProps.{.bounds = Bounds(left + Scale(14), top + text_top,
+                    bubble_width - Scale(28), row_height - text_top - Scale(16)),
+                    .text = row.text, .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+            top += row_height
+        }
+        End(frame.session)
+    }
+    typed := LumiTrim(frame.value)
+    candidates: [17]string = .[commands.start_whm, commands.complete_habit,
+    commands.start_meditation, commands.start_sun, commands.start_patterns,
+    commands.add, commands.complete, commands.reopen,
+    commands.lists, commands.habits, commands.practices, commands.diary,
+    commands.settings, commands.appearance, commands.dark, commands.light, commands.system]
+    requirements: [17]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
+    LUMI_PRACTICES, LUMI_PRACTICES, LUMI_LISTS, LUMI_LISTS, LUMI_LISTS,
+    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0]
+    suggestion_count: s32 = 0
+    selected: bool
+    limit: s32 = 2
+    chip_width := (width - Scale(8)) / limit
+    action := LumiIntent(typed, commands)
+    if action.kind == 0 && frame.choosing_habit {
+        action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = typed}
+    }
+    if LumiActionAvailable(action, frame.available_apps) &&
+    (action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO || action.kind == LUMI_COMPLETE_HABIT) {
+        count := ifx action.kind == LUMI_COMPLETE_HABIT then frame.habit_count else frame.task_count
+        for index: cast(s32)0..count - 1 {
+            task := ifx action.kind == LUMI_COMPLETE_HABIT then ReadLumiSuggestionHabitHost(index) else ReadLumiSuggestionTaskHost(index)
+            eligible := action.kind == LUMI_COMPLETE_HABIT || (action.kind == LUMI_COMPLETE_TODO && !task.done) ||
+            (action.kind == LUMI_REOPEN_TODO && task.done)
+            if !eligible || !LumiStarts(task.title, action.title) || suggestion_count >= limit {
+                continue
+            }
+            out: Vec(u8)
+            command := commands.reopen
+            if action.kind == LUMI_COMPLETE_HABIT {
+                command = commands.complete_habit
+            } else if action.kind == LUMI_COMPLETE_TODO {
+                command = commands.complete
+            }
+            BuilderPrint(*out, "% %", command, task.title)
+            completion := BuilderFinish(out)
+            selected = Suggestion(30020 + suggestion_count, completion,
+                Bounds(x + suggestion_count * (chip_width + Scale(8)), suggestions_top, chip_width, Scale(36)), task.title) || selected
+            suggestion_count += 1
+        }
+    }
+    for index: cast(s32)0..cast(s32)16 {
+        if action.kind == LUMI_COMPLETE_HABIT {
+            break
+        }
+        candidate_action := LumiIntent(candidates[index], commands)
+        practice_match := action.kind == LUMI_START_PRACTICE && candidate_action.kind == LUMI_START_PRACTICE &&
+        action.practice == candidate_action.practice
+        if (requirements[index] != 0 && (frame.available_apps & requirements[index]) == 0) || suggestion_count >= limit ||
+        (typed.count > 0 && !LumiSuggests(candidates[index], typed) && !practice_match) {
+            continue
+        }
+        text := candidates[index]
+        if index == 1 || (index >= 5 && index <= 7) {
+            out: Vec(u8)
+            BuilderPrint(*out, "% ", text)
+            text = BuilderFinish(out)
+        }
+        selected = Suggestion(30030 + index, text,
+            Bounds(x + suggestion_count * (chip_width + Scale(8)), suggestions_top, chip_width, Scale(36))) || selected
+        suggestion_count += 1
+    }
+    field := TextField(frame.session, TextFieldProps.{.key = cast(u64)300200, .focus_id = 30010,
+            .bounds = Bounds(x, footer, width - Scale(80), Scale(48)),
+            .value = frame.value, .placeholder = LumiViewLocaleHost("lumi_placeholder"), .label = "Lumi",
+            .cursor = frame.cursor, .anchor = frame.anchor, .scroll_x = frame.scroll_x,
+            .focused = frame.focused, .input = frame.input, .max_bytes = LUMI_INPUT_MAX - 1,
+            .max_codepoints = LUMI_INPUT_MAX - 1})
+    if !selected {
+        if field.edit.changed && field.edit.start >= 0 && field.edit.end >= field.edit.start &&
+        field.edit.end <= frame.value.count {
+            out: Vec(u8)
+            BuilderPrint(*out, "%", frame.value[:field.edit.start])
+            BuilderPrint(*out, "%", field.edit.replacement)
+            BuilderPrint(*out, "%", frame.value[field.edit.end:])
+            replacement := BuilderFinish(out)
+            if replacement.count < LUMI_INPUT_MAX {
+                frame.value = replacement
+            }
+        }
+        frame.cursor = field.cursor
+        frame.anchor = field.anchor
+        frame.scroll_x = field.scroll_x
+        frame.focused = field.focused
+    }
+    frame.clipboard_write = field.clipboard_write
+    frame.clipboard_text = field.clipboard_text
+    send := Button(frame.session, ButtonProps.{.id = 30011,
+            .bounds = Bounds(x + width - Scale(72), footer, Scale(72), Scale(48)),
+            .label = LumiViewLocaleHost("lumi_send"), .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+    if (send || field.committed) && LumiTrim(frame.value).count > 0 && !selected {
+        message.action = LUMI_SEND
+        // The host owns the draft buffer. Keep the submitted text before
+        // WriteLumiUiHost clears that buffer for the next message.
+        submitted: Vec(u8)
+        BuilderPrint(*submitted, "%", frame.value)
+        message.input = BuilderFinish(submitted)
+        frame.value = ""
+        frame.cursor = 0
+        frame.anchor = 0
+        frame.scroll_x = 0
+        frame.scroll = 1000000
+        frame.follow_end = true
+    }
+    WriteLumiUiHost(frame)
+    return message
+}

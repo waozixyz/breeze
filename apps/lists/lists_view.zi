@@ -1,0 +1,277 @@
+// Lists owns its complete screen composition; the host supplies saved rows,
+// device input and ordinary Kryon widget effects.
+#import "session"
+#import "geometry"
+#import "text"
+#import "vec"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_input_props"
+#import "text_field_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "checkbox_props"
+#import "checkbox_widget"
+#import "tab_bar_props"
+#import "tab_bar_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "icon"
+#import, file "../../src/cells/lists_ui_types.zi";
+#import, file "../../src/cells/lists_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextAlign;
+using TextWrap;
+using IconType;
+host_api :: #system_library "host_api";
+ReadListsUiHost :: () -> ListsUiFrame #foreign host_api;
+WriteListsUiHost :: (frame: ListsUiFrame) #foreign host_api;
+ReadListsRowHost :: (index: s32, item: bool) -> ListsUiRow #foreign host_api;
+ListsLocaleHost :: (key: string) -> string #foreign host_api;
+frame: ListsUiFrame;
+state: ListsMessage;
+
+Scale :: (pixels: s32) -> s32 {
+    return cast(s32)(cast(float32)pixels * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+ListsActionProps :: (key: u64, label: string, bounds: Rectangle,
+    accent: bool, disabled: bool, icon: s32) -> ButtonProps {
+    return ButtonProps.{.key = key, .bounds = bounds,
+        .label = label, .tone = cast(ButtonTone)(ifx accent then ButtonToneAccent else ButtonToneNeutral),
+        .emphasis = cast(ButtonEmphasis)(ifx accent then ButtonEmphasisFilled else ButtonEmphasisSoft),
+        .pill = icon == 0, .icon_only = icon != 0, .icon_type = icon,
+        .disabled = disabled}
+}
+
+BeginInput :: (item: s32, value: string) {
+    state.editing_item = item
+    state.input_error = 0
+    frame.value = value
+    frame.cursor = cast(s32)value.count
+    frame.anchor = frame.cursor
+    frame.scroll_x = 0
+    frame.focused = true
+}
+
+Finish :: () -> ListsMessage {
+    WriteListsUiHost(frame)
+    state.succeeded = true
+    return state
+}
+
+Mutation :: (action: s32, index: s32) {
+    state.action = action
+    state.index = index
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        row := ReadListsRowHost(state.selected_list, false)
+        state.id = row.id
+        state.selected_id = row.id
+        state.sort_order = row.sort_order
+    }
+    item := ifx action == LISTS_COMMIT then state.editing_item else index
+    if item >= 0 && item < state.item_count {
+        row := ReadListsRowHost(item, true)
+        state.id = row.id
+        state.parent_id = row.parent_id
+        state.title = row.title
+        state.comment = row.comment
+        state.done = row.done
+        state.sort_order = row.sort_order
+    }
+    if action == LISTS_COMMIT {
+        state.title = frame.value
+    }
+}
+
+Field :: (bounds: Rectangle) -> bool {
+    edited := TextField(frame.session, TextFieldProps.{.key = cast(u64)6501,
+            .bounds = bounds, .value = frame.value, .cursor = frame.cursor,
+            .anchor = frame.anchor, .scroll_x = frame.scroll_x,
+            .focused = frame.focused, .focus_id = 6501,
+            .max_bytes = 127, .max_codepoints = 127, .input = frame.input})
+    if edited.edit.changed {
+        start := edited.edit.start
+        end := edited.edit.end
+        if start >= 0 && end >= start && end <= frame.value.count {
+            value: Vec(u8)
+            BuilderPrint(*value, "%", frame.value[:start])
+            BuilderPrint(*value, "%", edited.edit.replacement)
+            BuilderPrint(*value, "%", frame.value[end:])
+            replacement := BuilderFinish(value)
+            if replacement.count <= 127 {
+                frame.value = replacement
+            }
+        }
+    }
+    frame.cursor = edited.cursor
+    frame.anchor = edited.anchor
+    frame.scroll_x = edited.scroll_x
+    frame.focused = edited.focused
+    frame.clipboard_write = edited.clipboard_write
+    frame.clipboard_text = edited.clipboard_text
+    return edited.committed
+}
+
+ListsView :: (message: ListsMessage) -> ListsMessage {
+    frame = ReadListsUiHost()
+    state = message
+    x := Scale(16)
+    width := frame.width - x * 2
+    y := Scale(12)
+    tabs: [32]Tab
+    for index: cast(s32)0..state.list_count - 1 {
+        row := ReadListsRowHost(index, false)
+        tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = row.title}
+    }
+    action_width := Scale(118)
+    actions := action_width
+    if state.list_count > 0 && state.selected_list >= 0 {
+        actions += Scale(88)
+    }
+    selector := width - actions - Scale(10)
+    if selector < Scale(160) {
+        actions = action_width
+        selector = width - actions - Scale(10)
+    }
+    if state.list_count > 0 && selector > 0 {
+        selected := TabBar(frame.session, TabBarProps.{.id = 6500,
+                .bounds = Bounds(x, y, selector, Scale(44)),
+                .selected_index = state.selected_list, .min_tab_width = Scale(72),
+                .max_tab_width = selector}, tabs[:state.list_count])
+        if selected.selected_index != state.selected_list {
+            state.action = LISTS_SELECT
+            state.index = selected.selected_index
+            return Finish()
+        }
+    }
+    if Button(frame.session, ListsActionProps(cast(u64)6505, ListsLocaleHost("elist_new_list"),
+        Bounds(x + width - action_width, y, action_width, Scale(44)), false, false, 0)) != 0 {
+        BeginInput(-2, "")
+        return Finish()
+    }
+    if state.list_count > 0 && state.selected_list >= 0 && actions > action_width {
+        edit_x := x + width - action_width - Scale(84)
+        if Button(frame.session, ListsActionProps(cast(u64)6503, "", Bounds(edit_x, y, Scale(38), Scale(38)),
+            false, false, cast(s32)IconEdit)) != 0 {
+            BeginInput(-3, ReadListsRowHost(state.selected_list, false).title)
+        }
+        if Button(frame.session, ListsActionProps(cast(u64)6504, "", Bounds(edit_x + Scale(40), y, Scale(38), Scale(38)),
+            false, false, cast(s32)IconTrash)) != 0 {
+            Mutation(LISTS_DELETE_LIST, -1)
+            return Finish()
+        }
+    }
+    y += Scale(60)
+    if state.input_error != 0 {
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y, width, Scale(40)),
+                .text = ListsLocaleHost("results_write_failed"), .wrap = cast(TextWrap)TextWrapAuto})
+        y += Scale(48)
+    }
+    if state.editing_item == -2 || state.editing_item == -3 {
+        committed := Field(Bounds(x, y, width, Scale(44)))
+        if Button(frame.session, ListsActionProps(cast(u64)6506,
+            ListsLocaleHost(ifx state.editing_item == -3 then "done_button" else "elist_create_list"),
+            Bounds(x, y + Scale(52), width, Scale(40)), true, frame.value.count == 0, 0)) != 0 || committed {
+            Mutation(LISTS_COMMIT, -1)
+        }
+        return Finish()
+    }
+    if state.list_count == 0 {
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(48), width, Scale(30)),
+                .text = ListsLocaleHost("elist_empty_title"), .align = cast(TextAlign)TextAlignCenter})
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(88), width, Scale(48)),
+                .text = ListsLocaleHost("elist_empty_detail"), .align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapAuto})
+        return Finish()
+    }
+    field_width := width - Scale(92)
+    committed := Field(Bounds(x, y, field_width, Scale(44)))
+    if Button(frame.session, ListsActionProps(cast(u64)6507,
+        ListsLocaleHost(ifx state.editing_item >= 0 then "done_button" else "elist_add_item"),
+        Bounds(x + field_width + Scale(8), y, Scale(84), Scale(44)),
+        true, frame.value.count == 0, 0)) != 0 || committed {
+        Mutation(LISTS_COMMIT, -1)
+        return Finish()
+    }
+    y += Scale(52)
+    footer := frame.height - frame.bottom - Scale(72)
+    if footer < y + Scale(58) {
+        footer = y + Scale(58)
+    }
+    footer_width := ifx Scale(176) > width then width else Scale(176)
+    if Button(frame.session, ListsActionProps(cast(u64)6502,
+        ListsLocaleHost(ifx state.show_completed != 0 then "elist_hide_completed" else "elist_show_completed"),
+        Bounds(x + width - footer_width, footer, footer_width, Scale(44)), false, false, 0)) != 0 {
+        state.show_completed = ifx state.show_completed == 0 then 1 else 0
+        frame.scroll = 0
+    }
+    visible: [256]bool
+    count: s32 = 0
+    selected_id := ReadListsRowHost(state.selected_list, false).id
+    for index: cast(s32)0..state.item_count - 1 {
+        row := ReadListsRowHost(index, true)
+        visible[index] = row.parent_id == selected_id && (row.done == 0 ||
+            state.show_completed != 0 || (row.id == state.completing_id && state.now < state.completing_until))
+        if visible[index] {
+            count += 1
+        }
+    }
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6600,
+            .bounds = Bounds(x, y, width, footer - y - Scale(12)),
+            .content_height = count * Scale(66), .scroll_offset = frame.scroll})
+    frame.scroll = scroll.scroll_offset
+    if scroll.opened {
+        row_y := cast(s32)scroll.content.y
+        for index: cast(s32)0..state.item_count - 1 {
+            if !visible[index] {
+                continue
+            }
+            if row_y + Scale(58) > cast(s32)scroll.viewport.y &&
+            row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
+                row := ReadListsRowHost(index, true)
+                key := cast(u64)(7000 + index * 4)
+                checked := Checkbox(frame.session, CheckboxProps.{.key = key,
+                        .bounds = Bounds(x + Scale(10), row_y + Scale(17), Scale(28), Scale(28)),
+                        .checked = row.done != 0})
+                if checked.changed {
+                    Mutation(LISTS_SET_DONE, index)
+                    state.done = ifx checked.checked then 1 else 0
+                    End(frame.session)
+                    return Finish()
+                }
+                Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(52), row_y,
+                        width - Scale(138), ifx row.comment.count > 0 then Scale(28) else Scale(58)),
+                        .text = row.title, .vertical_align = cast(TextAlign)TextAlignCenter,
+                        .strikethrough = row.done != 0})
+                if row.comment.count > 0 {
+                    Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(52), row_y + Scale(32),
+                            width - Scale(138), Scale(18)), .text = row.comment})
+                }
+                if Button(frame.session, ListsActionProps(key + cast(u64)1, "", Bounds(x + width - Scale(78), row_y + Scale(12), Scale(34), Scale(34)),
+                    false, false, cast(s32)IconEdit)) != 0 {
+                    BeginInput(index, row.title)
+                }
+                if Button(frame.session, ListsActionProps(key + cast(u64)2, "", Bounds(x + width - Scale(40), row_y + Scale(12), Scale(34), Scale(34)),
+                    false, false, cast(s32)IconTrash)) != 0 {
+                    Mutation(LISTS_DELETE_ITEM, index)
+                    End(frame.session)
+                    return Finish()
+                }
+            }
+            row_y += Scale(66)
+        }
+        End(frame.session)
+    }
+    return Finish()
+}

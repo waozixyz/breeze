@@ -393,16 +393,26 @@ IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-SUBAPP_BUNDLES := $(addprefix $(BUILD_DIR)/subapps/,lists.zib habits.zib practices.zib diary.zib)
+CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zib habits.zib practices.zib diary.zib lumi.zib)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zib
-SUBAPP_SOURCES := $(shell find apps src/subapps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
-.PHONY: subapps
-subapps: $(SUBAPP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
-$(SUBAPP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(SUBAPP_SOURCES) ziran.lock apps/versions.json scripts/generate-package-versions.py scripts/build-subapps.sh $(ZIRAN_BIN)
-	sh scripts/build-subapps.sh $(ZIRAN_BIN)
+CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
+CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
+.PHONY: cells
+cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(STYLE_FILES) $(LOCALE_FILES) $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES)
+.PHONY: lumi-test
+lumi-test: cells
+	sh tests/lumi_engine_test.sh
+
+.PHONY: lumi-ui-test
+lumi-ui-test: $(TARGET)
+	sh tests/lumi_ui_test.sh $(abspath $(TARGET))
+
+$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/build-cells.sh $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
+	sh scripts/build-cells.sh $(ZIRAN_BIN)
+
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort)
 GAME2D_DIR := build/packages/game2d
@@ -830,7 +840,7 @@ sync-review-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) | build-laws
 test: sync-review-zi-test
 
 .PHONY: ziran-behavior-tests
-ziran-behavior-tests: subapps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
+ziran-behavior-tests: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
 	@set -e; for t in storage_more habit_model habit_sessions habit_form practice_carousel; do \
 		env -u DISPLAY -u WAYLAND_DISPLAY sh tests/$${t}_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A); \
 	done
@@ -867,6 +877,16 @@ music-navigation-test: $(TARGET)
 native-zoom-test: $(TARGET)
 	sh tests/native_zoom_test.sh $(abspath $(TARGET))
 
+.PHONY: settings-sidebar-ui-test
+settings-sidebar-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/settings_sidebar_ui_test.py $(abspath $(TARGET))
+
+.PHONY: startup-quit-ui-test
+startup-quit-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/startup_quit_ui_test.py $(abspath $(TARGET))
+
 kryon-host: $(KRYON_HOST_TARGET)
 
 # Generate Kryon's checked Ziran modules into Inbe's build tree.
@@ -882,7 +902,7 @@ $(KRYON_UI_C) $(KRYON_UI_H): $(KRYON_UI_STAMP)
 $(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/modules.txt
 	mkdir -p $(dir $@)
 	$(ZI2C_BIN) --no-main --root $(KSS_DIR)/src \
-		--module-path $(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/ui \
+		--module-path $(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
 		-o $(dir $@) $(KRYON_KSS_ZI)
 	touch $@
 
@@ -896,7 +916,7 @@ $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
+		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -910,7 +930,7 @@ $(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
+		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -929,7 +949,7 @@ $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODU
 		--define PLATFORM_DESKTOP --define _WIN32 \
 		--define DESKTOP_TRAY_ENABLED \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
+		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -956,7 +976,7 @@ zi-c-plan9: $(KRY_GEN_STAMP)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --plan9 --define PLAN9_BUILD \
 		--define KRYON_PLATFORM_PLAN9 --root . \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui \
+		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -1148,7 +1168,10 @@ sync-restore-sql-test:
 
 test: habit-merge-sql-test sync-restore-sql-test
 
-build-laws: version-check proofs
+build-laws: version-check proofs locale-check
+
+.PHONY: locale-check
+locale-check: asset-text-tests locale-translated-test locale-used-keys-test
 
 test: proof-test
 
@@ -1243,7 +1266,7 @@ patterns-session-zi-test: $(ZI2C_BIN)
 test: patterns-session-zi-test
 
 .PHONY: session-results-zi-test
-session-results-zi-test: subapps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+session-results-zi-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
@@ -1896,7 +1919,7 @@ direct-draw-plan-test: $(ZI2C_BIN)
 
 .PHONY: elist-screen-test
 test: elist-screen-test
-elist-screen-test: subapps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
+elist-screen-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 $(BREATH_TIMING_GEN_DIR)/core/breath_timing.c: src/core/breath_timing.zi src/core/types.zi $(ZI2C_BIN)
@@ -2381,8 +2404,7 @@ $(WEB_JS_TARGET): | zi-check
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
 		-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=33554432 \
 		-sEXPORTED_RUNTIME_METHODS=Asyncify,FS \
-		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_sun_salutation_character,_app_web_test_show_appearance,_app_web_test_prepare_music,_app_web_test_music_button_x,_app_web_test_music_button_y,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks \
-		--preload-file locales --preload-file assets
+		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_sun_salutation_character,_app_web_test_show_appearance,_app_web_test_prepare_music,_app_web_test_music_button_x,_app_web_test_music_button_y,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks
 
 $(WEB_TARGET): src/web_shell.html $(WEB_BOOT_JS) $(WEB_JS_TARGET) manifest.json $(WEB_ASSET_FILES) | $(WEB_DIST_DIR)
 	perl -0pe 's#\{\{\{ APP_SCRIPT \}\}\}#$(WEB_APP_SCRIPT)#g; s/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' src/web_shell.html > $@
@@ -2419,8 +2441,7 @@ $(WEB_CANVAS_TARGET): | zi-check
 		-sFORCE_FILESYSTEM=1 -sFETCH=1 -sUSE_ZLIB=1 -lidbfs.js \
 		-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=33554432 \
 		-sEXPORTED_RUNTIME_METHODS=Asyncify,FS \
-		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_sun_salutation_character,_app_web_test_show_appearance,_app_web_test_prepare_music,_app_web_test_music_button_x,_app_web_test_music_button_y,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks \
-		--preload-file locales --preload-file assets
+		-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_app_web_get_play_in_background,_app_web_set_backgrounded,_app_web_background_tick,_app_web_launch_practice,_app_web_extension_host,_app_web_extension_break_now,_app_web_extension_breaks_enabled,_app_web_extension_break_timer_enabled,_app_web_extension_break_timer_limit_s,_app_web_extension_break_timer_duration_s,_app_web_extension_break_timer_postpone_s,_app_web_extension_break_timer_max_prompts,_app_web_extension_break_timer_show_skip,_app_web_extension_break_timer_show_postpone,_app_web_extension_open_break_settings,_app_web_extension_open_habits,_app_web_test_save_onboarding_state,_app_web_test_onboarding_state,_app_web_test_show_first_run_guide,_app_web_test_first_run_guide_active,_app_web_test_first_run_guide_step,_app_web_test_first_run_guide_text_clipped,_app_web_test_first_run_guide_next_x,_app_web_test_first_run_guide_next_y,_app_web_test_first_run_guide_close_x,_app_web_test_first_run_guide_close_y,_app_web_test_first_run_guide_anchor_x,_app_web_test_first_run_guide_anchor_y,_app_web_test_first_run_guide_anchor_w,_app_web_test_first_run_guide_anchor_h,_app_web_test_sync_key_state,_app_web_test_import_sync_key,_app_web_test_habits_click_x,_app_web_test_habits_click_y,_app_web_test_show_practice_home,_app_web_test_practice_selected,_app_web_test_practice_tab,_app_web_test_complete_practice,_app_web_test_completion_stage,_app_web_test_completed_practice_persisted,_app_web_test_screen,_app_web_test_route_transition_active,_app_web_test_practice_start_click_x,_app_web_test_practice_start_click_y,_app_web_test_practice_action_click_x,_app_web_test_practice_action_click_y,_app_web_test_sun_salutation_control_x,_app_web_test_sun_salutation_control_y,_app_web_test_sun_salutation_step,_app_web_test_sun_salutation_ticks,_app_web_test_sun_salutation_paused,_app_web_test_sun_salutation_character,_app_web_test_show_appearance,_app_web_test_prepare_music,_app_web_test_music_button_x,_app_web_test_music_button_y,_app_web_test_control_x,_app_web_test_control_y,_app_web_test_control_width,_app_web_test_control_height,_app_web_test_enable_extension_breaks
 	perl -0pe 's#\{\{\{ APP_SCRIPT \}\}\}#$(WEB_CANVAS_APP_SCRIPT)#g; s/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' src/web_shell.html > $@
 	cp $(WEB_BOOT_JS) $(WEB_CANVAS_DIR)/index_boot.js
 	perl -0pi -e 's/WEB_CACHE_BUSTER/$(WEB_CACHE_BUSTER)/g' $(WEB_CANVAS_DIR)/index_boot.js
@@ -2871,32 +2892,36 @@ $(WIN64_TARGET): $(WINDOWS_BUNDLE_RUNTIME)
 $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(WEB_BUNDLE_RUNTIME)
 $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
 
-.PHONY: subapps-test
-subapps-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A)
-	sh tests/subapps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+.PHONY: cells-test
+cells-test: cells $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A)
+	sh tests/cells_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-.PHONY: subapps-navigation-test
-subapps-navigation-test: $(TARGET)
-	sh tests/subapps_navigation_test.sh $(abspath $(TARGET))
+.PHONY: cells-navigation-test
+cells-navigation-test: $(TARGET)
+	sh tests/cells_navigation_test.sh $(abspath $(TARGET))
 
 .PHONY: host-actions-test
 host-actions-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 python3 tests/host_actions_test.py $(abspath $(TARGET))
 
-.PHONY: subapps-artifact-test
-subapps-artifact-test: $(TARGET) $(SUBAPP_BUNDLES)
-	python3 tests/subapps_artifact_test.py $(abspath $(TARGET))
+.PHONY: cells-artifact-test
+cells-artifact-test: $(TARGET) $(CELL_BUNDLES)
+	python3 tests/cells_artifact_test.py $(abspath $(TARGET))
 
-.PHONY: subapps-onboarding-test
-subapps-onboarding-test: $(TARGET)
-	sh tests/subapps_onboarding_test.sh $(abspath $(TARGET))
+.PHONY: cells-onboarding-test
+cells-onboarding-test: $(TARGET)
+	sh tests/cells_onboarding_test.sh $(abspath $(TARGET))
 
-.PHONY: subapps-platform-test subapps-android-probe
-subapps-platform-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a
-	sh tests/subapps_platform_test.sh $(ZIRAN_BIN) native
+.PHONY: locale-render-ui-test
+locale-render-ui-test: $(TARGET) $(INBE_BUNDLE)
+	sh tests/locale_render_ui_test.sh $(abspath $(TARGET))
 
-subapps-android-probe: subapps
-	sh tests/subapps_platform_test.sh $(ZIRAN_BIN) android
+.PHONY: cells-platform-test cells-android-probe
+cells-platform-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
+	sh tests/cells_platform_test.sh $(ZIRAN_BIN) native
+
+cells-android-probe: cells
+	sh tests/cells_platform_test.sh $(ZIRAN_BIN) android
 
 .PHONY: sync-review-ui-test
 sync-review-ui-test: $(TARGET)
@@ -2912,7 +2937,7 @@ data-back-ui-test: $(TARGET)
 test: app-click-block-zi-test
 
 .PHONY: package-release-test
-package-release-test: subapps $(ZIRAN_BUILD_DIR)/libziran.a
+package-release-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
 	python3 tests/package_release_test.py
 
 test: package-release-test
@@ -2923,6 +2948,41 @@ app-preferences-sync-test:
 
 test: app-preferences-sync-test
 
-.PHONY: subapps-diary-test
-subapps-diary-test: $(TARGET)
-	sh tests/subapps_diary_test.sh $(abspath $(TARGET))
+.PHONY: cells-diary-test
+cells-diary-test: $(TARGET)
+	sh tests/cells_diary_test.sh $(abspath $(TARGET))
+
+.PHONY: package-version-test
+package-version-test:
+	python3 scripts/check-package-versions.py
+	python3 tests/package_versions_test.py
+
+test: package-version-test
+
+.PHONY: package-workflow-test
+package-workflow-test:
+	python3 tests/package_workflow_test.py
+
+test: package-workflow-test
+
+.PHONY: package-manifest-test
+package-manifest-test:
+	python3 tests/package_manifests_test.py
+
+test: package-manifest-test
+
+.PHONY: package-upload-test
+package-upload-test:
+	python3 tests/package_upload_test.py
+
+test: package-upload-test
+
+.PHONY: device-key-test device-key-wasm-test
+device-key-test: $(ZI2C_BIN)
+	python3 tests/device_key_zi_test.py $(ZI2C_BIN)
+
+device-key-wasm-test: $(ZI2C_BIN)
+	python3 tests/device_key_zi_test.py $(ZI2C_BIN) --wasm --emcc $(WEB_CC)
+
+test: device-key-test
+web-smoke-test web-canvas-smoke-test: device-key-wasm-test

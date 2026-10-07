@@ -1,0 +1,325 @@
+// Diary's file effects preserve Harmony's per-day JSON and photo files.
+#import "file_linux"
+#import "byte_text_linux"
+#import "c_string"
+#import "vec"
+#import "text"
+#import, file "diary_types.zi";
+#import, file "package_files.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/paths.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../platform/web_storage.zi";
+
+c :: #system_library "c";
+#if #defined(PLATFORM_WEB) {
+    DiaryTime :: (result: *s64) -> s64 #foreign c "time";
+    DiaryLocalTime :: (seconds: *s64) -> *void #foreign c "localtime";
+} else #if #defined(_WIN32) {
+    DiaryTime :: (result: *s64) -> s64 #foreign c "_time64";
+    DiaryLocalTime :: (seconds: *s64) -> *void #foreign c "_localtime64";
+} else {
+    DiaryTime :: (result: *isize) -> isize #foreign c "time";
+    DiaryLocalTime :: (seconds: *isize) -> *void #foreign c "localtime";
+}
+DiaryStrftime :: (out: *u8, size: usize, pattern: *u8, calendar: *void) -> usize #foreign c "strftime";
+DiaryGetenv :: (name: *u8) -> *u8 #foreign c "getenv";
+#if !#defined(_WIN32) {
+    DiaryReadlink :: (path: *u8, output: *u8, size: usize) -> isize #foreign c "readlink";
+}
+
+diary_file_bytes: string;
+diary_lock: FileHandle;
+diary_prepared: bool;
+diary_preview_name: string;
+diary_preview_bytes: string;
+#if !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
+    DiaryLock :: (descriptor: s32, operation: s32) -> s32 #foreign c "flock";
+}
+
+DiaryStorePrepare :: () -> bool {
+    if diary_prepared {
+        return true
+    }
+    if DataTemporary() {
+        return false
+    }
+    directory := DiaryStoreDirectory()
+    defer {
+        PackageFree(directory)
+    }
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 {
+        return false
+    }
+    #if !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
+        path := PackageText(directory, "/.lock")
+        defer {
+            PackageFree(path)
+        }
+        diary_lock = OpenUpdate(path)
+        if !diary_lock.valid {
+            return false
+        }
+        if DiaryLock(diary_lock.fd, 6) != 0 {
+            unused CloseFile(diary_lock)
+            diary_lock = FileHandle.{}
+            return false
+        }
+    }
+    diary_prepared = true
+    // Import is explicit, so an isolated profile never reads owner data.
+    name: [32]u8
+    unused CopyCString("INBE_DIARY_IMPORT", name[:])
+    source := DiaryGetenv(*name[0])
+    if source != null && source[0] != cast(u8)0 {
+        unused DiaryStoreImport(TextFromCString(source))
+    }
+    return true
+}
+diary_clock: [32]u8;
+
+DiaryStoreDirectory :: () -> string {
+    database := storage_db_path()
+    at := database.count - 1
+    while at >= 0 && database[at] != cast(u8)47 && database[at] != cast(u8)92 {
+        at -= 1
+    }
+    if at < 0 {
+        return ""
+    }
+    return PackageText(database[:at + 1], "diary")
+}
+
+DiaryStoreNameValid :: (name: string) -> bool {
+    if name.count < 1 || name.count > 200 || name == "." || name == ".." {
+        return false
+    }
+    for byte: name {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            byte == cast(u8)45 || byte == cast(u8)46) {
+            return false
+        }
+    }
+    return true
+}
+
+DiaryStorePath :: (name: string) -> string {
+    if !DiaryStoreNameValid(name) {
+        return ""
+    }
+    directory := DiaryStoreDirectory()
+    defer {
+        PackageFree(directory)
+    }
+    part := PackageText(directory, "/")
+    defer {
+        PackageFree(part)
+    }
+    return PackageText(part, name)
+}
+
+DiaryStoreRead :: (name: string) -> DiaryFileResult {
+    result: DiaryFileResult
+    if !DiaryStoreNameValid(name) || !DiaryStorePrepare() {
+        return result
+    }
+    path := DiaryStorePath(name)
+    defer {
+        PackageFree(path)
+    }
+    result.missing = !PathExists(path)
+    PackageFree(diary_file_bytes)
+    diary_file_bytes = PackageRead(path, 2147483646)
+    result.data = diary_file_bytes
+    result.succeeded = result.missing || result.data.count > 0
+    return result
+}
+
+DiaryStoreSave :: (name: string, data: string) -> bool {
+    if !DiaryStorePrepare() || !DiaryStoreNameValid(name) || data.count == 0 {
+        return false
+    }
+    directory := DiaryStoreDirectory()
+    defer {
+        PackageFree(directory)
+    }
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 {
+        return false
+    }
+    path := DiaryStorePath(name)
+    defer {
+        PackageFree(path)
+    }
+    return PackageWrite(path, data)
+}
+
+DiaryStoreClock :: () -> string {
+    seconds := DiaryTime(null)
+    calendar := DiaryLocalTime(*seconds)
+    if calendar == null {
+        return ""
+    }
+    pattern: [32]u8
+    unused CopyCString("%Y-%m-%d %H:%M:%S", pattern[:])
+    if DiaryStrftime(*diary_clock[0], 32, *pattern[0], calendar) != 19 {
+        return ""
+    }
+    return TextFromCString(*diary_clock[0])
+}
+
+// An explicitly configured Harmony folder is copied once, without modifying
+// the original. Existing Inbe entries always win. Photos move with entries.
+DiaryStoreImport :: (source: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        unused source
+        return false
+    } else {
+        if source.count == 0 || DataTemporary() {
+            return false
+        }
+        destination := DiaryStoreDirectory()
+        defer {
+            PackageFree(destination)
+        }
+        if storage_ensure_dir(destination) == 0 {
+            return false
+        }
+        cursor := OpenDirectory(source)
+        if !cursor.valid {
+            return false
+        }
+        defer {
+            unused CloseDirectory(*cursor)
+        }
+        while true {
+            entry := NextDirectoryEntry(*cursor)
+            if !entry.valid {
+                break
+            }
+            name := TextFromCString(*entry.name[0])
+            if !DiaryStoreNameValid(name) {
+                continue
+            }
+            target := DiaryStorePath(name)
+            defer {
+                PackageFree(target)
+            }
+            if PathExists(target) {
+                continue
+            }
+            prefix := PackageText(source, "/")
+            path := PackageText(prefix, name)
+            defer {
+                PackageFree(prefix);
+                PackageFree(path)
+            }
+            #if !#defined(_WIN32) {
+                path_bytes: [4096]u8
+                link: u8
+                if !CopyCString(path, path_bytes[:]) || DiaryReadlink(*path_bytes[0], *link, 1) >= 0 {
+                    continue
+                }
+            }
+            value := PackageRead(path, 2147483646)
+            defer {
+                PackageFree(value)
+            }
+            if value.count > 0 && !PackageWrite(target, value) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+DiaryStoreClose :: () {
+    if diary_lock.valid {
+        unused CloseFile(diary_lock)
+    }
+    diary_lock = FileHandle.{}
+    diary_prepared = false
+    PackageFree(diary_file_bytes)
+    diary_file_bytes = ""
+    PackageFree(diary_preview_name)
+    PackageFree(diary_preview_bytes)
+    diary_preview_name = ""
+    diary_preview_bytes = ""
+}
+
+DiaryImageFormat :: (data: string) -> string {
+    if data.count >= 8 && data[0] == cast(u8)137 && data[1:4] == "PNG" &&
+    data[4] == cast(u8)13 && data[5] == cast(u8)10 &&
+    data[6] == cast(u8)26 && data[7] == cast(u8)10 {
+        return "png"
+    }
+    if data.count >= 3 && data[0] == cast(u8)255 && data[1] == cast(u8)216 &&
+    data[2] == cast(u8)255 {
+        return "jpg"
+    }
+    if data.count >= 6 && (data[:6] == "GIF87a" || data[:6] == "GIF89a") {
+        return "gif"
+    }
+    if data.count >= 12 && data[:4] == "RIFF" && data[8:12] == "WEBP" {
+        return "webp"
+    }
+    return ""
+}
+
+DiaryStorePreview :: (name: string) -> string {
+    if !DiaryStoreNameValid(name) || !DiaryStorePrepare() {
+        return ""
+    }
+    if name != diary_preview_name {
+        PackageFree(diary_preview_name)
+        PackageFree(diary_preview_bytes)
+        diary_preview_name = PackageText(name, "")
+        path := DiaryStorePath(name)
+        defer {
+            PackageFree(path)
+        }
+        diary_preview_bytes = PackageRead(path, 16777216)
+    }
+    return diary_preview_bytes
+}
+
+// Only the picker-selected file is copied; the bundle never receives its path.
+DiaryStoreAttach :: (source: string) -> string {
+    if !DiaryStorePrepare() { return "" }
+    data := PackageRead(source, 16777216)
+    defer { PackageFree(data) }
+    if DiaryImageFormat(data).count == 0 { return "" }
+    serial: s32 = 1
+    while serial < 10000 {
+        out: Vec(u8)
+        clock := DiaryStoreClock()
+        // Digits only keep filenames portable across platforms.
+        BuilderPrint(*out, "photo-")
+        for byte: clock {
+            if byte >= cast(u8)48 && byte <= cast(u8)57 {
+                BuilderPrint(*out, "%", cast(s32)byte - 48)
+            }
+        }
+        BuilderPrint(*out, "-%.bin", serial)
+        name := BuilderFinish(out)
+        path := DiaryStorePath(name)
+        defer { PackageFree(path) }
+        if PathExists(path) {
+            PackageFree(name)
+            serial += 1
+            continue
+        }
+        file := OpenExclusivePrivate(path)
+        if !file.valid { PackageFree(name); return "" }
+        ok := WriteTextAt(file, data, 0) == data.count && SyncFile(file)
+        closed := CloseFile(file)
+        if !ok || !closed {
+            unused RemoveFile(path)
+            PackageFree(name)
+            return ""
+        }
+        sync_web_storage()
+        return name
+    }
+    return ""
+}

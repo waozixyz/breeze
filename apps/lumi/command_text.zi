@@ -1,0 +1,140 @@
+#import "text"
+#import "vec"
+#import "utf8"
+
+CommandSpace :: (byte: u8) -> bool {
+    return byte == 32 || byte == 9 || byte == 10 || byte == 13
+}
+
+CommandFold :: (codepoint: u32) -> u32 {
+    if (codepoint >= 65 && codepoint <= 90) || (codepoint >= 192 && codepoint <= 222 && codepoint != 215) ||
+    (codepoint >= 1040 && codepoint <= 1071) {
+        return codepoint + cast(u32)32
+    }
+    if codepoint >= 1024 && codepoint <= 1039 {
+        return codepoint + cast(u32)80
+    }
+    if ((codepoint >= 256 && codepoint <= 311) || (codepoint >= 330 && codepoint <= 375)) && codepoint % cast(u32)2 == 0 {
+        return codepoint + cast(u32)1
+    }
+    if codepoint >= 313 && codepoint <= 328 && codepoint % cast(u32)2 == 1 {
+        return codepoint + cast(u32)1
+    }
+    if codepoint == 376 {
+        return cast(u32)255
+    }
+    return codepoint
+}
+
+CommandEqual :: (left: string, right: string) -> bool {
+    a: s32 = 0
+    b: s32 = 0
+    while a < left.count && b < right.count {
+        x := Decode(left, a)
+        y := Decode(right, b)
+        if CommandFold(x.value) != CommandFold(y.value) {
+            return false
+        }
+        a = x.after
+        b = y.after
+    }
+    return a == left.count && b == right.count
+}
+
+// One insertion, deletion, substitution or adjacent transposition in a command
+// word. Names and IDs never pass through this spelling correction.
+CommandTypo :: (left: string, right: string) -> bool {
+    if CommandEqual(left, right) {
+        return true
+    }
+    if (left.count > 0 && left[0] == cast(u8)47) || (right.count > 0 && right[0] == cast(u8)47) {
+        return false
+    }
+    if left.count < 4 || right.count < 4 || left.count > 32 || right.count > 32 ||
+    left.count > right.count + 1 || right.count > left.count + 1 {
+        return false
+    }
+    for byte: left {
+        if byte >= 128 { return false }
+    }
+    for byte: right {
+        if byte >= 128 { return false }
+    }
+    a: s64 = 0
+    b: s64 = 0
+    edits: s32 = 0
+    while a < left.count && b < right.count {
+        if LowerASCII(left[a]) == LowerASCII(right[b]) {
+            a += 1
+            b += 1
+            continue
+        }
+        edits += 1
+        if edits > 1 { return false }
+        if left.count == right.count && a + 1 < left.count && b + 1 < right.count &&
+        LowerASCII(left[a]) == LowerASCII(right[b + 1]) && LowerASCII(left[a + 1]) == LowerASCII(right[b]) {
+            a += 2
+            b += 2
+        } else if left.count > right.count {
+            a += 1
+        } else if right.count > left.count {
+            b += 1
+        } else {
+            a += 1
+            b += 1
+        }
+    }
+    if a < left.count || b < right.count { edits += 1 }
+    return edits <= 1
+}
+
+CommandPrefixEnd :: (input: string, command: string) -> s32 {
+    a: s32 = 0
+    b: s32 = 0
+    while b < command.count {
+        while a < input.count && CommandSpace(input[a]) { a += 1 }
+        while b < command.count && CommandSpace(command[b]) { b += 1 }
+        if b >= command.count { break }
+        start_a := a
+        start_b := b
+        while a < input.count && !CommandSpace(input[a]) { a += 1 }
+        while b < command.count && !CommandSpace(command[b]) { b += 1 }
+        if !CommandTypo(input[start_a:a], command[start_b:b]) { return -1 }
+    }
+    return a
+}
+
+CommandPhrase :: (input: string, command: string) -> bool {
+    return command.count > 0 && CommandPrefixEnd(input, command) == input.count
+}
+
+CommandNormalize :: (input: string) -> string {
+    words: [10]string = .["start", "meditation", "sun", "salutation", "salutations",
+    "breathing", "patterns", "wim", "hof", "method"]
+    out: Vec(u8)
+    at: s32 = 0
+    while at < input.count {
+        while at < input.count && CommandSpace(input[at]) { at += 1 }
+        start := at
+        while at < input.count && !CommandSpace(input[at]) { at += 1 }
+        if start == at { break }
+        word := input[start:at]
+        matches: s32 = 0
+        replacement := word
+        for candidate: words {
+            if CommandEqual(word, candidate) {
+                replacement = candidate
+                matches = 1
+                break
+            }
+            if CommandTypo(word, candidate) {
+                replacement = candidate
+                matches += 1
+            }
+        }
+        if matches != 1 { replacement = word }
+        if out.count > 0 { BuilderPrint(*out, " ") }
+        BuilderPrint(*out, "%", replacement)
+    }
+    return BuilderFinish(out)
+}

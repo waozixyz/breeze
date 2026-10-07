@@ -1,0 +1,198 @@
+#import "bundle_host"
+#import "byte_text_linux"
+#import, file "../src/cells/module_host.zi";
+#import, file "../src/cells/lumi_types.zi";
+#import, file "../src/cells/lumi_ui_types.zi";
+#import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/value_codec.zi";
+#import, file "../src/cells/widget_codec.zi";
+#import, file "../src/cells/inbe_types.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_core.zi";
+
+using HostValueKind;
+task_codec: WidgetLumiTaskCodec;
+frame_codec: WidgetLumiToolsCodec;
+available_apps: s32 = 15;
+choosing_habit: bool;
+action_codec: WidgetLumiActionCodec;
+action_count: s32;
+last_action: LumiAction;
+last_id: [37]u8;
+last_reply: [1024]u8;
+
+TestLumiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    unused context
+    unused module
+    name := TextFromCString(function)
+    if name == "LumiLocaleHost" && count == 1 {
+        result.* = arguments[0]
+        return 1
+    }
+    if name == "ReadLumiToolsHost" && count == 0 {
+        result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = available_apps,
+                .task_count = 4, .habit_count = 3, .choosing_habit = choosing_habit}, *frame_codec)
+        return 1
+    }
+    if name == "ReadLumiHabitHost" && count == 1 {
+        habits: [3]LumiTask = .[LumiTask.{.id = "water-habit", .title = "Drink water", .done = true},
+        LumiTask.{.id = "tea-habit", .title = "Drink tea"},
+        LumiTask.{.id = "walk-habit", .title = "Walk outside"}]
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index >= 3 {
+            return 0
+        }
+        result.* = WidgetEncodeLumiTask(habits[index], *task_codec)
+        return 1
+    }
+    if name == "SetLumiHabitChoiceHost" && count == 1 {
+        choosing_habit = arguments[0].integer != 0
+        return 1
+    }
+    if name == "LumiTaskCountHost" && count == 0 {
+        result.* = ModuleScalar("s32", 4)
+        return 1
+    }
+    if name == "ReadLumiTaskHost" && count == 1 {
+        tasks: [4]LumiTask = .[LumiTask.{.id = "water", .title = "Drink water"},
+        LumiTask.{.id = "tea", .title = "Drink tea"},
+        LumiTask.{.id = "walk", .title = "Walk outside"},
+        LumiTask.{.id = "done", .title = "Read a book", .done = true}]
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index > 3 {
+            return 0
+        }
+        result.* = WidgetEncodeLumiTask(tasks[index], *task_codec)
+        return 1
+    }
+    if name == "PerformLumiActionHost" && count == 1 && WidgetValidLumiAction(arguments[0]) {
+        last_action = WidgetDecodeLumiAction(arguments[0], *action_codec)
+        unused AppCopyText(last_action.id, last_id[:])
+        action_count += 1
+        result.* = ModuleScalar("bool", 1)
+        return 1
+    }
+    if name == "AppendLumiChatHost" && count == 2 {
+        if arguments[1].integer == 0 {
+            unused AppCopyText(TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length)), last_reply[:])
+        }
+        return 1
+    }
+    return 0
+}
+
+SendLumi :: (input: string) -> bool {
+    CellsUiBegin(TestLumiCall, null)
+    result := LumiRun(LumiMessage.{.action = LUMI_SEND, .input = input})
+    CellsUiEnd()
+    return result.succeeded
+}
+
+CheckLumiConversation :: () -> s32 {
+    if !CellsSetEnabled(APP_ALL) {
+        return 101
+    }
+    action_count = 0
+    if !SendLumi("/done Drink") || action_count != 0 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_ambiguous" {
+        return 102
+    }
+    if !SendLumi("/done Drink water") || action_count != 1 ||
+    AppTextFromCString(*last_id[0], 37) != "water" || last_action.kind != LUMI_COMPLETE_TODO {
+        return 103
+    }
+    if !SendLumi("/done Walk") || action_count != 2 || AppTextFromCString(*last_id[0], 37) != "walk" {
+        return 104
+    }
+    if !SendLumi("/done Unknown") || action_count != 2 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_not_found" {
+        return 105
+    }
+    if !SendLumi("/reopen Read a book") || action_count != 3 || last_action.kind != LUMI_REOPEN_TODO {
+        return 106
+    }
+    if !SendLumi("/todo 水を飲む") || action_count != 4 || last_action.kind != LUMI_ADD_TODO {
+        return 107
+    }
+    if !SendLumi("delete all tasks") || action_count != 4 ||
+    AppTextFromCString(*last_reply[0], 1024)[:9] != "lumi_help" {
+        return 108
+    }
+    if !SendLumi("complete habit Drink") || action_count != 4 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_ambiguous" {
+        return 116
+    }
+    if !SendLumi("complete habit Drink water") || action_count != 5 ||
+    last_action.kind != LUMI_COMPLETE_HABIT || AppTextFromCString(*last_id[0], 37) != "water-habit" {
+        return 117
+    }
+    if !SendLumi("start whm") || action_count != 6 ||
+    last_action.kind != LUMI_START_PRACTICE || last_action.practice != 0 {
+        return 118
+    }
+    available_apps = LUMI_HABITS
+    if !SendLumi("/todo No Lists") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 119
+    }
+    if !SendLumi("/done Drink water") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 120
+    }
+    if !SendLumi("start whm") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 121
+    }
+    available_apps = 15
+    if !SendLumi("COMPLETE HABIT") || !choosing_habit || action_count != 6 {
+        return 122
+    }
+    if !SendLumi("DRINK WATER") || choosing_habit || action_count != 7 ||
+    last_action.kind != LUMI_COMPLETE_HABIT {
+        return 123
+    }
+    // Hiding the shortcut must leave the shipped harness and its tools live.
+    if !CellsSetEnabled(APP_ALL & ~APP_LUMI) ||
+    (CellsInstalledMask() & APP_LUMI) == 0 || !SendLumi("/theme forest") ||
+    action_count != 8 || last_action.kind != LUMI_SET_THEME {
+        return 109
+    }
+    if !CellsSetEnabled(APP_ALL) {
+        return 110
+    }
+    LumiStoreReset()
+    LumiStoreAppend("Tea \"quoted\" \\ 水", true)
+    LumiStoreAppend("Ready", false)
+    if !LumiStoreSave() {
+        return 111
+    }
+    LumiStoreReset()
+    if LumiStoreCount() != 2 || LumiStoreRow(0).text != "Tea \"quoted\" \\ 水" || !LumiStoreRow(0).user {
+        return 112
+    }
+    owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), owner[:])
+    unused AppCopyText("different-user", g_storage.user_id[:])
+    other_count := LumiStoreCount()
+    unused AppCopyText(AppTextFromCString(*owner[0], 64), g_storage.user_id[:])
+    if other_count != 0 || LumiStoreCount() != 2 {
+        return 113
+    }
+    for index: cast(s32)0..cast(s32)64 {
+        LumiStoreAppend("Another message", index % 2 == 0)
+    }
+    if LumiStoreCount() > LUMI_CHAT_MAX || !LumiStoreSave() {
+        return 114
+    }
+    storage_set_setting_text("lumi_chat", "invalid document")
+    LumiStoreReset()
+    if LumiStoreCount() != 0 || LumiStoreSave() ||
+    storage_setting_text_equals("lumi_chat", "invalid document") == 0 {
+        return 115
+    }
+    LumiStoreReset()
+    return 0
+}

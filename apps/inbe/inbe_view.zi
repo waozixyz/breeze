@@ -1,0 +1,159 @@
+#import "button_props"
+#import "button_widget"
+#import "checkbox_props"
+#import "checkbox_widget"
+#import "geometry"
+#import "layout"
+#import "text_props"
+#import "text_widget"
+#import "control_props"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "toggle_props"
+#import "toggle_widget"
+#import, file "../../src/cells/inbe_types.zi";
+#import, file "../../src/cells/inbe_ui_types.zi";
+using ButtonTone;
+using ButtonEmphasis;
+host_api :: #system_library "host_api";
+ReadPickerUiHost :: () -> InbeUiFrame #foreign host_api;
+WritePickerUiHost :: (frame: InbeUiFrame) #foreign host_api;
+PickerLocaleHost :: (key: string) -> string #foreign host_api;
+frame: InbeUiFrame;
+state: InbeMessage;
+
+Scale :: (pixels: s32) -> s32 {
+    return cast(s32)(cast(float32)pixels * frame.scale)
+}
+
+Bit :: (package: s32) -> s32 { return cast(s32)1 << (package - 1) }
+
+Row :: (package: s32) -> AppPackageView {
+    if package == 1 { return frame.lists }
+    if package == 2 { return frame.habits }
+    if package == 3 { return frame.practices }
+    if package == 5 { return frame.lumi }
+    return frame.diary
+}
+
+Status :: (package: s32) -> s32 { return Row(package).status }
+Available :: (package: s32) -> bool { return Row(package).available }
+
+FinishPicker :: () -> InbeMessage {
+    WritePickerUiHost(frame)
+    state.succeeded = true
+    return state
+}
+
+InbePickerView :: (message: InbeMessage) -> InbeMessage {
+    frame = ReadPickerUiHost()
+    state = message
+    column := CenteredColumnFor(frame.width, Scale(420), Scale(16))
+    top := Scale(20)
+    compact := frame.height < Scale(480)
+    scroll_top := ifx compact then Scale(104) else Scale(156)
+    content_height := Scale(548)
+    for package: cast(s32)1..cast(s32)5 {
+        if Status(package) >= 3 {
+            content_height += Scale(16)
+        }
+    }
+    Text(frame.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)top,
+                cast(float32)column.width, cast(float32)(ifx compact then Scale(28) else Scale(40))},
+            .text = PickerLocaleHost("cells_picker_title"), .font = Scale(24)})
+    Text(frame.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(top + (ifx compact then Scale(32) else Scale(48))),
+                cast(float32)column.width, cast(float32)(ifx compact then Scale(44) else Scale(84))},
+            .text = PickerLocaleHost("cells_picker_body"), .font = frame.font})
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)27000,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)scroll_top,
+                cast(float32)column.width, cast(float32)(frame.height - scroll_top - Scale(80))},
+            .content_height = content_height, .scroll_offset = frame.scroll})
+    frame.scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return FinishPicker()
+    }
+    content_width := cast(s32)scroll.content.width
+    row_top := cast(s32)scroll.content.y
+    labels: [5]string = .["Lumi", PickerLocaleHost("tab_habits"), PickerLocaleHost("tab_practices"),
+    PickerLocaleHost("tab_elist"), PickerLocaleHost("tab_diary")]
+    packages: [5]s32 = .[5, 2, 3, 1, 4]
+    index: s32 = 0
+    while index < 5 {
+        if index == 0 || index == 3 {
+            Text(frame.session, TextProps.{.bounds = Rectangle.{cast(float32)column.x,
+                        cast(float32)row_top, cast(float32)content_width, cast(float32)Scale(36)},
+                    .text = PickerLocaleHost(ifx index == 0 then "cells_recommended" else "cells_optional"),
+                    .font = frame.font})
+            row_top += Scale(40)
+        }
+        package := packages[index]
+        bit := Bit(package)
+        checkbox := Checkbox(frame.session, CheckboxProps.{
+                .id = ifx package == 5 then 278 else 270 + package - 1,
+                .bounds = Rectangle.{cast(float32)column.x,
+                    cast(float32)row_top,
+                    cast(float32)content_width, cast(float32)Scale(44)},
+                .label = labels[index], .checked = (state.enabled_apps & bit) != 0})
+        if checkbox.changed {
+            if checkbox.checked {
+                state.enabled_apps |= bit
+            } else {
+                state.enabled_apps &= ~bit
+            }
+        }
+        row_top += Scale(44)
+        {
+            status := Status(package)
+            key := ifx ((frame.installed & bit) != 0 || Available(package)) then "cells_installed" else "cells_download"
+            if status == 1 {
+                key = "update_downloading"
+            }
+            else if status == 3 {
+                key = "cells_download_failed"
+            }
+            else if status == 4 {
+                key = "cells_signing_setup"
+            }
+            Text(frame.session, TextProps.{.bounds = Rectangle.{cast(float32)(column.x + Scale(32)),
+                        cast(float32)row_top, cast(float32)(content_width - Scale(32)),
+                        cast(float32)(ifx status >= 3 then Scale(44) else Scale(28))},
+                    .text = PickerLocaleHost(key), .font = Scale(14)})
+            row_top += ifx status >= 3 then Scale(44) else Scale(28)
+        }
+        index += 1
+    }
+    Text(frame.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(row_top + Scale(12)),
+                cast(float32)(content_width - Scale(80)), cast(float32)Scale(44)},
+            .text = PickerLocaleHost("cells_auto_update"), .font = frame.font})
+    automatic := Toggle(frame.session, ToggleProps.{.id = 276,
+            .bounds = Rectangle.{cast(float32)(column.x + content_width - Scale(64)),
+                cast(float32)(row_top + Scale(12)), cast(float32)Scale(64), cast(float32)Scale(44)},
+            .label = PickerLocaleHost("cells_auto_update"), .value = frame.automatic})
+    if automatic.changed {
+        frame.automatic = automatic.value
+    }
+    row_top += Scale(64)
+    if Button(frame.session, ButtonProps.{.id = 277,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)row_top,
+                cast(float32)content_width, cast(float32)Scale(44)},
+            .label = PickerLocaleHost("cells_check_updates"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        frame.check_updates = true
+    }
+    End(frame.session)
+    if Button(frame.session, ButtonProps.{.id = 274,
+            .bounds = Rectangle.{cast(float32)column.x,
+                cast(float32)(frame.height - Scale(64)), cast(float32)column.width,
+                cast(float32)Scale(44)},
+            .label = PickerLocaleHost("next_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        frame.confirm = true
+    }
+    return FinishPicker()
+}

@@ -8,6 +8,7 @@
 extern int crypto_ed25519_check(const uint8_t *signature,
                                 const uint8_t *public_key,
                                 const uint8_t *message, size_t message_size);
+extern int64_t app_update_now(void);
 
 static char settings[3][129];
 static char scratch[129];
@@ -65,6 +66,7 @@ void OQS_MEM_cleanse(void *output, size_t length)
 
 int main(void)
 {
+    assert(app_update_now() > 1700000000);
     DeviceKeyMaterial generated = {0};
     assert(GenerateDeviceKey(&generated));
     assert(strlen((char *)generated.public_hex) == 64);

@@ -1,0 +1,322 @@
+// The wrapper handles input, storage and existing app tools. Lumi's portable
+// cell owns the chat layout, autocomplete and interpretation of requests.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "text_widget"
+#import "text_props"
+#import "geometry"
+#import, file "../cells/lumi_types.zi";
+#import, file "../cells/inbe_types.zi";
+#import, file "../cells/lumi_ui_types.zi";
+#import, file "../cells/lumi_store.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../cells/widget_codec.zi";
+#import, file "../cells/widget_host.zi";
+#import, file "../cells/value_codec.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/settings_actions.zi";
+#import, file "../core/types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "../storage/state.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../habits/habit_actions.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../habits/habit_sessions.zi";
+#import, file "../habits/habit_linked_rules.zi";
+#import, file "../practices/practice_actions.zi";
+#import, file "elist_types.zi";
+
+using HostValueKind;
+using AppNavRoute;
+lumi_ui: LumiUiFrame;
+lumi_ui_codec: WidgetLumiUiFrameCodec;
+lumi_row_codec: WidgetLumiChatRowCodec;
+lumi_task_codec: WidgetLumiTaskCodec;
+lumi_action_codec: WidgetLumiActionCodec;
+lumi_tools_codec: WidgetLumiToolsCodec;
+lumi_input: [1024]u8;
+lumi_tasks: EListState;
+lumi_pending_route: s32 = -1;
+lumi_pending_practice: s32 = -1;
+lumi_choosing_habit: bool;
+
+#program_export
+app_lumi_input_focused :: (app: *InnerBreeze) -> bool {
+    return app != null && app.breathing.screen == ScreenLumi && lumi_ui.focused
+}
+
+app_lumi_reset :: () {
+    LumiStoreReset()
+    lumi_ui = LumiUiFrame.{}
+    lumi_input[0] = cast(u8)0
+    lumi_tasks = EListState.{}
+    lumi_pending_route = -1
+    lumi_pending_practice = -1
+    lumi_choosing_habit = false
+}
+
+LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) || index < 0 || index >= app.habits.count {
+        return LumiTask.{}
+    }
+    habit := *app.habits.items[index]
+    day := habits_today_index()
+    count := HabitEffectiveDayCount(habit, day, habit_cached_linked_entries(app, index, day))
+    target := ifx habit_counting_enabled(habit) != 0 then habit_counter_target(habit) else 1
+    return LumiTask.{.id = AppTextFromCString(*habit.id[0], HABIT_ID_SIZE),
+        .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE), .done = count >= target}
+}
+
+LumiTaskAt :: (index: s32) -> LumiTask {
+    if index < 0 || index >= lumi_tasks.item_count {
+        return LumiTask.{}
+    }
+    item := *lumi_tasks.items[index]
+    return LumiTask.{.id = AppTextFromCString(*item.id[0], 37),
+        .title = AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE), .done = item.done != 0}
+}
+
+// Every proposed action is checked again against live state at execution.
+LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
+    if app == null || (CellsInstalledMask() & APP_LUMI) == 0 {
+        return false
+    }
+    if action.kind == LUMI_SET_THEME {
+        return AppSetTheme(app, action.title)
+    }
+    if action.kind == LUMI_SET_MODE {
+        return AppSetThemeMode(app, action.route)
+    }
+    if action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS {
+        lumi_pending_route = APP_NAV_ROUTE_SETTINGS
+        if action.practice == 1 {
+            app.settings_tab = SETTINGS_TAB_THEME
+        }
+        return true
+    }
+    if action.kind == LUMI_OPEN {
+        if (action.route != APP_NAV_ROUTE_ELIST && action.route != APP_NAV_ROUTE_HABITS &&
+            action.route != APP_NAV_ROUTE_PRACTICE && action.route != APP_NAV_ROUTE_DIARY) ||
+        !app_nav_route_available(app, action.route) {
+            return false
+        }
+        lumi_pending_route = action.route
+        return true
+    }
+    if action.kind == LUMI_START_PRACTICE {
+        if !app_can_start_practice(app, action.practice) {
+            return false
+        }
+        // Starting can change routes and cell instances. Finish this cell frame
+        // before invoking the native practice, within the same app frame.
+        lumi_pending_practice = action.practice
+        return true
+    }
+    if action.kind == LUMI_COMPLETE_HABIT {
+        if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+            return false
+        }
+        for index: cast(s32)0..app.habits.count - 1 {
+            if LumiHabitAt(app, index).id == action.id && action.id.count > 0 {
+                return habit_complete_day(app, index, habits_today_index())
+            }
+        }
+        return false
+    }
+    if !app_nav_route_available(app, APP_NAV_ROUTE_ELIST) ||
+    storage_elist_load(cast(*void)*lumi_tasks) == 0 {
+        return false
+    }
+    if action.kind == LUMI_ADD_TODO {
+        if action.title.count == 0 || action.title.count >= ELIST_TITLE_SIZE || lumi_tasks.list_count == 0 ||
+        lumi_tasks.item_count >= ELIST_ITEM_MAX {
+            return false
+        }
+        selected := app.elist.selected_list
+        if selected < 0 || selected >= lumi_tasks.list_count {
+            selected = 0
+        }
+        parent := AppTextFromCString(*lumi_tasks.lists[selected].id[0], 37)
+        if storage_elist_create_item(parent, action.title, "", null) == 0 {
+            return false
+        }
+    } else if action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO {
+        found: bool
+        for index: cast(s32)0..lumi_tasks.item_count - 1 {
+            item := *lumi_tasks.items[index]
+            id := AppTextFromCString(*item.id[0], 37)
+            if id != action.id {
+                continue
+            }
+            done: s32 = ifx action.kind == LUMI_COMPLETE_TODO then 1 else 0
+            if item.done == done || storage_elist_update_item(id,
+                AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE),
+                AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE), done, item.sort_order) == 0 {
+                return false
+            }
+            found = true
+            break
+        }
+        if !found {
+            return false
+        }
+    } else {
+        return false
+    }
+    app.elist.loaded = 0
+    app.elist.visibility_valid = false
+    unused storage_elist_load(cast(*void)*lumi_tasks)
+    return true
+}
+
+LumiUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    owner := TextFromCString(module)
+    if owner != "lumi" && owner != "lumi_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadLumiToolsHost" && count == 0 {
+        result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = lumi_ui.available_apps,
+                .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
+                .choosing_habit = lumi_choosing_habit}, *lumi_tools_codec)
+        return 1
+    }
+    if name == "SetLumiHabitChoiceHost" && count == 1 && ModuleScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
+        lumi_choosing_habit = arguments[0].integer != 0
+        return 1
+    }
+    if name == "ReadLumiUiHost" && count == 0 {
+        result.* = WidgetEncodeLumiUiFrame(lumi_ui, *lumi_ui_codec)
+        return 1
+    }
+    if name == "WriteLumiUiHost" && count == 1 && WidgetValidLumiUiFrame(arguments[0]) {
+        frame := WidgetDecodeLumiUiFrame(arguments[0], *lumi_ui_codec)
+        if frame.value.count >= LUMI_INPUT_MAX || !AppCopyText(frame.value, lumi_input[:]) {
+            return 0
+        }
+        lumi_ui.value = AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
+        lumi_ui.cursor = frame.cursor
+        lumi_ui.anchor = frame.anchor
+        lumi_ui.scroll_x = frame.scroll_x
+        lumi_ui.focused = frame.focused
+        lumi_ui.scroll = frame.scroll
+        lumi_ui.follow_end = frame.follow_end
+        if frame.clipboard_write {
+            unused TextInputWriteClipboard(frame.clipboard_text)
+        }
+        return 1
+    }
+    if (name == "LumiLocaleHost" || name == "LumiViewLocaleHost") && count == 1 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = ModuleTextData("string"),
+            .data = ModuleTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    if name == "LumiTaskCountHost" && count == 0 {
+        result.* = ModuleScalar("s32", lumi_tasks.item_count)
+        return 1
+    }
+    if (name == "ReadLumiTaskHost" || name == "ReadLumiSuggestionTaskHost") && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        result.* = WidgetEncodeLumiTask(LumiTaskAt(cast(s32)arguments[0].integer), *lumi_task_codec)
+        return 1
+    }
+    if (name == "ReadLumiHabitHost" || name == "ReadLumiSuggestionHabitHost") && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        result.* = WidgetEncodeLumiTask(LumiHabitAt(cast(*InnerBreeze)context,
+            cast(s32)arguments[0].integer), *lumi_task_codec)
+        return 1
+    }
+    if name == "ReadLumiChatRowHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        row := ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1)
+        column_width := lumi_ui.width - cast(s32)(32.0 * lumi_ui.scale)
+        maximum := cast(s32)(720.0 * lumi_ui.scale)
+        if column_width > maximum {
+            column_width = maximum
+        }
+        prepared := PrepareText(TextProps.{.text = row.text, .font = lumi_ui.font,
+                .bounds = Rectangle.{0.0, 0.0,
+                    cast(float32)(column_width - cast(s32)((ifx row.user then 88.0 else 108.0) * lumi_ui.scale)), 0.0}},
+            DefaultTextFace())
+        row.height = cast(s32)prepared.bounds.height + cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
+        result.* = WidgetEncodeLumiChatRow(row, *lumi_row_codec)
+        return 1
+    }
+    if name == "AppendLumiChatHost" && count == 2 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    ModuleScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
+        text := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        LumiStoreAppend(text, arguments[1].integer != 0)
+        return 1
+    }
+    if name == "PerformLumiActionHost" && count == 1 && WidgetValidLumiAction(arguments[0]) {
+        action := WidgetDecodeLumiAction(arguments[0], *lumi_action_codec)
+        result.* = ModuleScalar("bool", ifx LumiPerform(cast(*InnerBreeze)context, action) then 1 else 0)
+        return 1
+    }
+    return 0
+}
+
+#program_export
+lumi_screen_draw :: (app: *InnerBreeze) {
+    owner_changed := lumi_store_loaded && AppTextFromCString(*lumi_owner[0], 64) !=
+    AppTextFromCString(storage_user_id_buffer(), 64)
+    if owner_changed {
+        app_lumi_reset()
+    }
+    chat_count := LumiStoreCount() + 1
+    if lumi_ui.chat_count == 0 && chat_count > 1 {
+        lumi_ui.scroll = 1000000
+    }
+    lumi_ui.chat_count = chat_count
+    lumi_tasks.item_count = 0
+    if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        unused storage_elist_load(cast(*void)*lumi_tasks)
+    }
+    lumi_ui.task_count = lumi_tasks.item_count
+    lumi_ui.available_apps = app.enabled_apps & CellsInstalledMask()
+    if (lumi_ui.available_apps & APP_HABITS) == 0 {
+        lumi_choosing_habit = false
+    }
+    lumi_ui.choosing_habit = lumi_choosing_habit
+    lumi_ui.habit_count = ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
+    lumi_ui.session = app.ui.session
+    if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {
+        lumi_ui.scroll = 1000000
+    }
+    lumi_ui.width = app.ui.view_width
+    lumi_ui.height = app.ui.view_height
+    lumi_ui.bottom = app_content_bottom_reserved(app)
+    lumi_ui.scale = MetricsScale()
+    lumi_ui.font = AppFontSize()
+    typed: [512]u8
+    lumi_ui.input = SampleTextFieldInput(lumi_ui.focused, typed[:])
+    lumi_pending_route = -1
+    lumi_pending_practice = -1
+    WidgetHostBegin(app.ui.session)
+    CellsUiBegin(LumiUiCall, cast(*void)app)
+    response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
+    CellsUiEnd()
+    WidgetHostEnd()
+    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) {
+        LumiStoreAppend(LocaleText("lumi_unavailable"), false)
+    }
+    if response.succeeded && response.action == LUMI_SEND && !LumiStoreSave() {
+        LumiStoreAppend(LocaleText("results_write_failed"), false)
+    }
+    if lumi_pending_route >= 0 {
+        app_apply_nav_route(app, lumi_pending_route)
+    }
+}

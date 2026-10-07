@@ -22,7 +22,7 @@ class VersionTest(unittest.TestCase):
         paths = (
             "CHANGELOG.md", "Makefile", "mkfile", "update_version.sh",
             "apps/versions.json", "apps/practice/CHANGELOG.md",
-            "src/subapps/versions.zi",
+            "src/cells/versions.zi",
             "scripts/update-package-version.py", "scripts/generate-package-versions.py",
             "src/core/version.h", "src/core/version.zi",
             "src/storage/sync_result.zi",

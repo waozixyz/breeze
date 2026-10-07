@@ -1,116 +1,104 @@
-"""Open Customize Nav with a held pointer and verify the new page stays visible."""
+"""Open cell settings with a held click using an isolated profile on Xvfb."""
 
+import contextlib
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
-from PIL import Image, ImageChops
-
-root = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
-narrow = os.environ.get("INBE_TEST_NARROW") == "1"
-width, height = (390, 844) if narrow else (900, 720)
-output = root / "build/customize-nav-test" / f"{width}x{height}"
-output.mkdir(parents=True, exist_ok=True)
-entry_clicks = ((340, 790), (190, 433)) if narrow else ((110, 670), (320, 325))
-customize_click = (195, 618) if narrow else (650, 576)
-press_seconds = float(os.environ.get("INBE_TEST_PRESS_SECONDS", "0.3"))
-env = os.environ.copy()
-for name in ("WAYLAND_DISPLAY", "GDK_DISPLAY"):
-    env.pop(name, None)
-env.update(APP_NO_TRAY="1", APP_SHOT_WINDOW="1", SDL_AUDIODRIVER="dummy",
-           INBE_DEBUG_ROUTE="1")
+NARROW = os.environ.get("INBE_TEST_NARROW") == "1"
+WIDTH, HEIGHT = (390, 844) if NARROW else (900, 720)
+OUTPUT = ROOT / "build/customize-nav-test" / f"{WIDTH}x{HEIGHT}"
+OUTPUT.mkdir(parents=True, exist_ok=True)
+BINARY = Path(sys.argv[1]).resolve()
+PRESS_SECONDS = float(os.environ.get("INBE_TEST_PRESS_SECONDS", "0.3"))
 
+with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
+    profile = Path(temporary)
+    env = os.environ.copy()
+    env.update(APP_DATA_ROOT=str(profile), APP_NO_TRAY="1",
+               SDL_AUDIODRIVER="dummy", INBE_DEBUG_ROUTE="1", YUE_DESKTOP_RECOVERY="0")
 
-def command(*args):
-    return subprocess.run(args, env=env, check=True, text=True,
-                          capture_output=True, timeout=5).stdout.strip()
+    def command(*args):
+        return subprocess.run(args, env=env, check=True, capture_output=True,
+                              text=True, timeout=5).stdout.strip()
 
-
-def capture(window, name):
-    raw = output / f"{name}.xwd"
-    png = output / f"{name}.png"
-    command("xwd", "-silent", "-id", window, "-out", str(raw))
-    command("convert", str(raw), str(png))
-    raw.unlink()
-    with Image.open(png) as image:
-        return image.convert("RGB").copy()
-
-
-expected_env = env.copy()
-expected_env.pop("APP_SHOT_WINDOW", None)
-expected_result = subprocess.run([
-    sys.argv[1], "--screenshot", str(output / "expected.png"),
-    "--screenshot-scene", "customize_nav", "--screenshot-width", str(width),
-    "--screenshot-height", str(height)], cwd=root, env=expected_env,
-    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-assert expected_result.returncode in (0, 1), expected_result.returncode
-assert (output / "expected.png").is_file(), "expected screenshot was not written"
-log_path = output / "app.log"
-with log_path.open("w") as log:
-    app = subprocess.Popen([
-        sys.argv[1], "--screenshot", str(output / "theme.png"),
-        "--screenshot-scene", "home", "--screenshot-width", str(width),
-        "--screenshot-height", str(height)], cwd=root, env=env, stdout=log,
-        stderr=subprocess.STDOUT, start_new_session=True)
-    try:
-        deadline = time.monotonic() + 10
-        window = ""
-        while time.monotonic() < deadline:
-            assert app.poll() is None, "app exited during startup"
-            found = subprocess.run(
-                ["xdotool", "search", "--onlyvisible", "--pid",
-                 str(app.pid)], env=env, capture_output=True, text=True,
-                timeout=2)
-            if found.returncode == 0 and found.stdout.strip():
-                window = found.stdout.splitlines()[0]
-                break
-            time.sleep(0.1)
-        assert window, "the app did not map its own window"
-        command("xdotool", "windowfocus", window)
-        time.sleep(0.5)
-
-        # Enter through the same navigation path as a normal user. A direct
-        # theme screenshot skips the route state created by those clicks.
-        for x, y in entry_clicks:
-            command("xdotool", "mousemove", "--window", window,
-                    str(x), str(y))
-            command("xdotool", "mousedown", "1")
-            time.sleep(0.08)
-            command("xdotool", "mouseup", "1")
-            time.sleep(0.2)
-
-        # Keep the pointer down across route-change frames. A leaked press must
-        # not activate the back action or any control on Customize Nav.
-        command("xdotool", "mousemove", "--window", window,
-                str(customize_click[0]), str(customize_click[1]))
-        command("xdotool", "mousedown", "1")
-        time.sleep(press_seconds)
-        command("xdotool", "mouseup", "1")
-        time.sleep(0.5)
-        actual = capture(window, "after-click")
-
-        with Image.open(output / "expected.png") as expected_image:
-            expected = expected_image.convert("RGB")
-        difference = ImageChops.difference(actual, expected)
-        histogram = difference.histogram()
-        changed = sum(sum(histogram[channel * 256 + 1:(channel + 1) * 256]) for channel in range(3))
-        changed_ratio = changed / (expected.width * expected.height * 3)
-        assert changed_ratio < 0.002, f"Customize Nav changed after opening: {changed_ratio:.4%}"
-
-        log_text = log_path.read_text()
-        assert "ROUTE request frame=" in log_text, "Customize Nav button did not route"
-        assert "12->" not in log_text, f"Customize Nav closed after opening: {log_text}"
-
-    finally:
-        if app.poll() is None:
-            app.terminate()
+    @contextlib.contextmanager
+    def application(name):
+        log_path = OUTPUT / (name + ".log")
+        with log_path.open("w") as log:
+            app = subprocess.Popen([str(BINARY)], cwd=ROOT, env=env,
+                                   stdout=log, stderr=subprocess.STDOUT)
             try:
-                app.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                app.kill()
-                app.wait(timeout=2)
+                deadline = time.monotonic() + 15
+                window = ""
+                while time.monotonic() < deadline:
+                    assert app.poll() is None, log_path.read_text()
+                    found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
+                                           env=env, capture_output=True, text=True, timeout=2)
+                    if found.returncode == 0 and (profile / "inbe.db").exists():
+                        window = found.stdout.splitlines()[0]
+                        break
+                    time.sleep(.05)
+                assert window, log_path.read_text()
+                command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
+                command("xdotool", "windowmove", window, "0", "0")
+                command("xdotool", "windowfocus", window)
+                time.sleep(.6)
+                yield window, log_path
+                assert app.poll() is None, log_path.read_text()
+                assert "frame rejected" not in log_path.read_text(), log_path.read_text()
+            finally:
+                if app.poll() is None:
+                    app.terminate()
+                app.wait(timeout=5)
 
-print("Customize Nav: opening click stays")
+    def settings():
+        with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
+            return dict(db.execute("SELECT key,value FROM settings"))
+
+    def click(window, x, y, hold=.12):
+        command("xdotool", "mousemove", "--window", window, str(x), str(y))
+        time.sleep(.15)
+        command("xdotool", "mousedown", "1")
+        time.sleep(hold)
+        command("xdotool", "mouseup", "1")
+        time.sleep(.5)
+
+    with application("prepare"):
+        pass
+    with sqlite3.connect(profile / "inbe.db") as db:
+        user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+        values = {"language": "en", "language_system": 0, "language_setup_done": 1,
+                  "apps_setup_done": 1, "enabled_apps": 22, "lumi_introduced": 1,
+                  "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
+                  "navigation_placement": 0 if NARROW else 1, "navigation_collapsed": 0,
+                  "cells_auto_update": 0, "apps_last_update_check": 1900000000,
+                  "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
+                  "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}
+        for key, value in values.items():
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+
+    with application("app") as (window, log):
+        click(window, *( (340, 790) if NARROW else (110, 670) ))
+        click(window, *( (195, 489) if NARROW else (320, 381) ), hold=PRESS_SECONDS)
+        command("import", "-window", window, str(OUTPUT / "after-click.png"))
+        saved = settings()
+        assert saved["bottom_nav_route_count"] == "4", "Opening press changed sidebar entries"
+        assert saved["enabled_apps"] == "22", "Opening press changed cell choices"
+        # Removing the first shortcut proves that the direct entry opened
+        # the cell settings controls, without relying on live download text.
+        click(window, *( (336, 133) if NARROW else (846, 156) ))
+        saved = settings()
+        assert saved["bottom_nav_route_count"] == "3", "Sidebar trash control did not open"
+        assert [saved[f"bottom_nav_route_{i}"] for i in range(3)] == ["12", "2", "4"], saved
+        assert saved["enabled_apps"] == "20", "The removed Habits cell stayed enabled"
+        assert "screen=6->12" not in log.read_text(), log.read_text()
+
+print("Cells & sidebar: direct Settings entry survives a held click; trash removes the chosen cell")

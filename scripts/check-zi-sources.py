@@ -52,6 +52,8 @@ result = subprocess.run(
         "--module-path",
         str(ui.parent / "backend"),
         "--module-path",
+        f"kryon={ui.parent / 'backend'}",
+        "--module-path",
         str(game2d),
         "--module-path",
         str(standard),

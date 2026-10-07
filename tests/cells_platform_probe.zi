@@ -1,0 +1,89 @@
+// Headless target probe: execute the same typed host and exact shipped package.
+#import, file "../src/cells/module_host.zi";
+#import, file "../src/cells/inbe_types.zi";
+#import, file "../src/cells/lists_types.zi";
+#import, file "../src/cells/habits_types.zi";
+#import, file "../src/cells/practice_types.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/app/locale.zi";
+#import, file "cells_locale_behavior.zi";
+c :: #system_library "c";
+ProbeRoot :: () -> string #foreign c;
+ProbeFullRoot :: () -> string #foreign c;
+
+#program_export
+CheckPlatformModules :: () -> s32 {
+    // Locale lookups before the package mounts must not poison its cache.
+    if LocaleText("close_button") != "close_button" {
+        return 12
+    }
+    if !CellsOpenPackage(ProbeRoot()) {
+        return 1
+    }
+    if LocaleLanguageCount() != 12 {
+        return 13
+    }
+    for index: cast(s32)0..LocaleLanguageCount() - 1 {
+        if !PackagedLocaleMatches(LocaleLanguageAt(index).code) {
+            return 14
+        }
+    }
+    if !LocaleUse("ja") || LocaleText("close_button") != "閉じる" {
+        return 15
+    }
+    if CellsInstalledMask() != APP_ALL ||
+    !CellsSetEnabled(APP_ALL) || !InbeAllows(ScreenEList) || !InbeAllows(ScreenDiary) {
+        return 10
+    }
+    if !CellsOpenPackage(ProbeFullRoot()) || CellsInstalledMask() != APP_ALL {
+        return 11
+    }
+    // Reopening the root frees the old catalog storage on native and Android.
+    if LocaleActiveCode() != "ja" || !PackagedLocaleMatches("ja") {
+        return 16
+    }
+    mask: s32 = 0
+    while mask <= APP_ALL {
+        if !CellsSetEnabled(mask) || !CellsReady() {
+            return 2
+        }
+        if !InbeAllows(ScreenLumi) ||
+        InbeAllows(ScreenEList) != ((mask & APP_LISTS) != 0) ||
+        InbeAllows(ScreenHabits) != ((mask & APP_HABITS) != 0) ||
+        InbeAllows(ScreenPatterns) != ((mask & APP_PRACTICE) != 0) ||
+        !InbeAllows(ScreenSettings) {
+            return 3
+        }
+        mask += 1
+    }
+    if !CellsSetEnabled(APP_ALL) {
+        return 4
+    }
+    lists := ListsRun(ListsMessage.{.action = LISTS_SELECT,
+            .index = 1, .list_count = 2})
+    if !lists.succeeded || lists.selected_list != 1 || !lists.reset_input {
+        return 5
+    }
+    habits := HabitsRun(HabitsMessage.{.action = HABITS_HISTORY,
+            .selected = 0, .count = 1})
+    if !habits.succeeded || habits.screen_mode != HABITS_SCREEN_HISTORY {
+        return 6
+    }
+    practice := PracticeRun(PracticeMessage.{.action = PRACTICE_MEDITATION_STEP,
+            .remaining_seconds = 1, .elapsed_ms = 1000})
+    if !practice.succeeded || !practice.completed || practice.remaining_seconds != 0 {
+        return 7
+    }
+    practice.paused = true
+    practice.completed = false
+    practice.remaining_seconds = 1
+    if PracticeRun(practice).remaining_seconds != 1 {
+        return 8
+    }
+    CellsClose()
+    if CellsOpenPackage("invalid") || CellsReady() {
+        return 9
+    }
+    return 0
+}

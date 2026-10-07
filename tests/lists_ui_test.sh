@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ -z "${INBE_UI_TEST_XVFB:-}" ]]; then
-    exec env -u DISPLAY -u WAYLAND_DISPLAY -u SESSION_MANAGER \
-        -u DBUS_SESSION_BUS_ADDRESS xvfb-run -a \
+    exec env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u SESSION_MANAGER \
+        -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 xvfb-run -a \
         env -u WAYLAND_DISPLAY -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
         SDL_VIDEODRIVER=x11 INBE_UI_TEST_XVFB=1 bash "$0" "$@"
 fi
 binary="${1:?native binary required}"
 test_dir="$(mktemp -d /tmp/inbe-lists-ui.XXXXXX)"
 APP_SHOT_WINDOW=1 "$binary" --screenshot "$test_dir/start.png" \
+    --bundle "$(dirname -- "$0")/../build/inbe-full.zib" --feature lists \
     --screenshot-scene lists --screenshot-width 900 --screenshot-height 720 \
     --screenshot-dark 1 > "$test_dir/app.log" 2>&1 &
 app_pid=$!
@@ -38,7 +39,7 @@ xdotool keydown Return sleep 0.15 keyup Return
 sleep 0.5
 import -window "$window" "$test_dir/after-task.png"
 expect "$(sql "SELECT l.title FROM elist_items i JOIN elist_lists l ON i.list_id=l.id WHERE i.title='Weekend task'")" 'Weekend' 'tab selects destination list'
-tap 740 34
+tap 825 34
 tap 300 90
 xdotool type --clearmodifiers 'Travel'
 xdotool keydown Return sleep 0.15 keyup Return

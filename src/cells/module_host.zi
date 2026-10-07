@@ -1,0 +1,1039 @@
+// Independently versioned feature VMs share persistence and platform effects.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "c_string"
+#import, file "module_types.zi";
+#import, file "lists_types.zi";
+#import, file "habits_types.zi";
+#import, file "practice_types.zi";
+#import, file "inbe_types.zi";
+#import, file "value_codec.zi";
+#import, file "diary_types.zi";
+#import, file "lumi_types.zi";
+#import, file "diary_store.zi";
+#import, file "package_manager.zi";
+#import, file "package_files.zi";
+#import, file "catalog.zi";
+#import, file "asset_paths.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../habits/habit_types.zi";
+
+using HostValueKind;
+
+ModuleSlot :: struct {
+    bundle: *void
+    instance: *void
+    kind: s32
+    received: bool
+}
+
+#scope_file
+slots: [6]ModuleSlot;
+lumi_message: LumiMessage;
+lumi_codec: LumiMessageCodec;
+lumi_message_input: [1024]u8;
+diary_message: DiaryMessage;
+diary_codec: DiaryMessageCodec;
+diary_file_codec: DiaryFileResultCodec;
+diary_text: string;
+diary_document: string;
+diary_photo_file: string;
+diary_photo_name: string;
+local_bundle_path: [4096]u8;
+local_bundle_index: s32 = -1;
+inbe_message: InbeMessage;
+inbe_codec: InbeMessageCodec;
+enabled_apps: s32 = APP_RECOMMENDED;
+package_required: bool;
+lists_message: ListsMessage;
+habits_message: HabitsMessage;
+practice_message: PracticeMessage;
+lists_codec: ListsMessageCodec;
+habits_codec: HabitsMessageCodec;
+practice_codec: PracticeMessageCodec;
+mutation_codec: ListsMutationResultCodec;
+created_id: [37]u8;
+lists_id: [37]u8;
+lists_parent: [37]u8;
+lists_selected: [37]u8;
+lists_completing: [37]u8;
+lists_title: [ELIST_TITLE_SIZE]u8;
+lists_comment: [ELIST_COMMENT_SIZE]u8;
+habit_name: [HABIT_NAME_SIZE]u8;
+habit_description: [HABIT_DESCRIPTION_SIZE]u8;
+identifying: bool;
+ui_call: HostCall;
+ui_context: *void;
+ui_active: bool;
+diary_routing: bool;
+diary_route_screen: s32;
+diary_route_allowed: bool;
+
+// Persistence effects are bound by the shared application, not the modules.
+#scope_export
+ListsPersist :: #type (mutation: ListsMutation) -> ListsMutationResult;
+HabitNameExists :: #type (name: string, excluding: s32) -> bool;
+HabitSave :: #type (message: HabitsMessage) -> bool;
+#scope_file
+list_persist: ListsPersist;
+habit_exists: HabitNameExists;
+habit_save: HabitSave;
+
+#scope_export
+#program_export
+CellsBindPersistence :: (lists: ListsPersist, exists: HabitNameExists,
+    save: HabitSave) {
+    list_persist = lists
+    habit_exists = exists
+    habit_save = save
+}
+
+ModuleHostCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    slot := cast(*ModuleSlot)context
+    name := TextFromCString(function)
+    if slot.kind == MODULE_LUMI {
+        if name == "ReadLumiHost" && count == 0 {
+            message := ifx identifying then LumiMessage.{.abi = MODULE_ABI} else lumi_message
+            result.* = EncodeLumiMessage(message, *lumi_codec)
+            return 1
+        }
+        if name == "WriteLumiHost" && count == 1 && !identifying && ValidLumiMessage(arguments[0]) {
+            message := DecodeLumiMessage(arguments[0])
+            if message.input.count >= LUMI_INPUT_MAX || !AppCopyText(message.input, lumi_message_input[:]) {
+                return 0
+            }
+            message.input = AppTextFromCString(*lumi_message_input[0], LUMI_INPUT_MAX)
+            lumi_message = message
+            slot.received = true
+            return 1
+        }
+        if ui_active && !identifying && ui_call != null {
+            return ui_call(ui_context, module, function, arguments, count, result)
+        }
+        return 0
+    }
+    if slot.kind == MODULE_DIARY {
+        if name == "ReadDiaryHost" && count == 0 {
+            message := ifx identifying then DiaryMessage.{.abi = MODULE_ABI} else diary_message
+            if diary_routing && !identifying {
+                message = DiaryMessage.{.abi = MODULE_ABI, .action = DIARY_ROUTE, .screen = diary_route_screen}
+            }
+            result.* = EncodeDiaryMessage(message, *diary_codec)
+            return 1
+        }
+        if name == "WriteDiaryHost" && count == 1 && !identifying {
+            if !ValidDiaryMessage(arguments[0]) {
+                return 0
+            }
+            message := DecodeDiaryMessage(arguments[0])
+            if message.action == DIARY_ROUTE {
+                diary_route_allowed = message.succeeded
+                slot.received = true
+                return 1
+            }
+            next_text := PackageText(message.text, "")
+            next_document := PackageText(message.document, "")
+            next_photo_file := PackageText(message.photo_file, "")
+            next_photo_name := PackageText(message.photo_name, "")
+            PackageFree(diary_photo_file)
+            PackageFree(diary_photo_name)
+            diary_photo_file = next_photo_file
+            diary_photo_name = next_photo_name
+            message.photo_file = diary_photo_file
+            message.photo_name = diary_photo_name
+            message.attachment_file = ""
+            message.attachment_name = ""
+            PackageFree(diary_text)
+            PackageFree(diary_document)
+            diary_text = next_text
+            diary_document = next_document
+            message.text = diary_text
+            message.document = diary_document
+            message.replacement = ""
+            diary_message = message
+            slot.received = true
+            return 1
+        }
+        if name == "ReadDiaryFileHost" && count == 1 && !identifying {
+            if !ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+                return 0
+            }
+            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+            result.* = EncodeDiaryFileResult(DiaryStoreRead(filename), *diary_file_codec)
+            return 1
+        }
+        if name == "SaveDiaryFileHost" && count == 2 && !identifying {
+            if !ModuleScalarValid(arguments[0], "string", cast(s32)HostString) ||
+            !ModuleScalarValid(arguments[1], "string", cast(s32)HostString) {
+                return 0
+            }
+            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+            data := TextFromBytes(BytesFromPointer(arguments[1].data,
+                cast(u64)arguments[1].length))
+            result.* = ModuleScalar("bool", ifx DiaryStoreSave(filename, data) then 1 else 0)
+            return 1
+        }
+        if name == "DiaryClockHost" && count == 0 && !identifying {
+            value := DiaryStoreClock()
+            result.* = HostValue.{.kind = cast(s32)HostString,
+                .type_name = ModuleTextData("string"), .data = ModuleTextData(value),
+                .length = cast(usize)value.count}
+            return 1
+        }
+        if ui_active && !identifying && ui_call != null {
+            return ui_call(ui_context, module, function, arguments, count, result)
+        }
+        return 0
+    }
+    if slot.kind == MODULE_INBE {
+        if name == "ReadInbeHost" && count == 0 {
+            message := ifx identifying then InbeMessage.{.abi = MODULE_ABI} else inbe_message
+            result.* = EncodeInbeMessage(message, *inbe_codec)
+            return 1
+        }
+        if name == "WriteInbeHost" && count == 1 && !identifying {
+            if !ValidInbeMessage(arguments[0]) {
+                return 0
+            }
+            inbe_message = DecodeInbeMessage(arguments[0])
+            slot.received = true
+            return 1
+        }
+        if name == "RouteFeatureHost" && count == 2 && !identifying {
+            if !ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) ||
+            !ModuleScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+                return 0
+            }
+            screen := cast(s32)arguments[1].integer
+            feature := cast(s32)arguments[0].integer
+            allowed: bool = false
+            if feature == APP_LISTS {
+                response := ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = screen})
+                allowed = response.succeeded && response.visible
+            } else if feature == APP_HABITS {
+                allowed = HabitsRun(HabitsMessage.{.action = HABITS_ROUTE, .screen = screen}).succeeded
+            } else if feature == APP_PRACTICE {
+                allowed = PracticeRun(PracticeMessage.{.action = PRACTICE_ROUTE, .screen = screen}).succeeded
+            }
+            else if feature == APP_LUMI {
+                response := LumiRun(LumiMessage.{.action = LUMI_ROUTE, .screen = screen})
+                allowed = response.succeeded
+            }
+            else if feature == APP_DIARY {
+                allowed = DiaryRoute(screen)
+            }
+            result.* = ModuleScalar("bool", ifx allowed then 1 else 0)
+            return 1
+        }
+        if ui_active && !identifying && ui_call != null {
+            return ui_call(ui_context, module, function, arguments, count, result)
+        }
+        return 0
+    }
+    if slot.kind == MODULE_LISTS {
+        if name == "ReadListsHost" && count == 0 {
+            message := ifx identifying then ListsMessage.{.abi = MODULE_ABI} else lists_message
+            result.* = EncodeListsMessage(message, *lists_codec)
+            return 1
+        }
+        if name == "WriteListsHost" && count == 1 && !identifying {
+            if !ValidListsMessage(arguments[0]) {
+                return 0
+            }
+            message := DecodeListsMessage(arguments[0])
+            // VM result strings are borrowed only during this callback.
+            if !AppCopyText(message.id, lists_id[:]) ||
+            !AppCopyText(message.parent_id, lists_parent[:]) ||
+            !AppCopyText(message.selected_id, lists_selected[:]) ||
+            !AppCopyText(message.completing_id, lists_completing[:]) ||
+            !AppCopyText(message.title, lists_title[:]) ||
+            !AppCopyText(message.comment, lists_comment[:]) {
+                return 0
+            }
+            message.id = AppTextFromCString(*lists_id[0], 37)
+            message.parent_id = AppTextFromCString(*lists_parent[0], 37)
+            message.selected_id = AppTextFromCString(*lists_selected[0], 37)
+            message.completing_id = AppTextFromCString(*lists_completing[0], 37)
+            message.title = AppTextFromCString(*lists_title[0], ELIST_TITLE_SIZE)
+            message.comment = AppTextFromCString(*lists_comment[0], ELIST_COMMENT_SIZE)
+            lists_message = message
+            slot.received = true
+            return 1
+        }
+        if name == "PersistListsHost" && count == 1 && !identifying && list_persist != null {
+            if !ValidListsMutation(arguments[0]) {
+                return 0
+            }
+            mutation_result := list_persist(DecodeListsMutation(arguments[0]))
+            if !AppCopyText(mutation_result.created_id, created_id[:]) {
+                return 0
+            }
+            mutation_result.created_id = AppTextFromCString(*created_id[0], 37)
+            result.* = EncodeListsMutationResult(mutation_result, *mutation_codec)
+            return 1
+        }
+    } else if slot.kind == MODULE_HABITS {
+        if name == "ReadHabitsHost" && count == 0 {
+            message := ifx identifying then HabitsMessage.{.abi = MODULE_ABI} else habits_message
+            result.* = EncodeHabitsMessage(message, *habits_codec)
+            return 1
+        }
+        if name == "WriteHabitsHost" && count == 1 && !identifying {
+            if !ValidHabitsMessage(arguments[0]) {
+                return 0
+            }
+            message := DecodeHabitsMessage(arguments[0])
+            if !AppCopyText(message.name, habit_name[:]) ||
+            !AppCopyText(message.description, habit_description[:]) {
+                return 0
+            }
+            message.name = AppTextFromCString(*habit_name[0], HABIT_NAME_SIZE)
+            message.description = AppTextFromCString(*habit_description[0], HABIT_DESCRIPTION_SIZE)
+            habits_message = message
+            slot.received = true
+            return 1
+        }
+        if name == "HabitNameExistsHost" && count == 2 && !identifying && habit_exists != null {
+            if !ModuleScalarValid(arguments[0], "string", cast(s32)HostString) ||
+            !ModuleScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+                return 0
+            }
+            text := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+            result.* = ModuleScalar("bool", ifx habit_exists(text,
+                cast(s32)arguments[1].integer) then 1 else 0)
+            return 1
+        }
+        if name == "SaveHabitHost" && count == 1 && !identifying && habit_save != null {
+            if !ValidHabitsMessage(arguments[0]) {
+                return 0
+            }
+            result.* = ModuleScalar("bool", ifx habit_save(
+                DecodeHabitsMessage(arguments[0])) then 1 else 0)
+            return 1
+        }
+    } else if slot.kind == MODULE_PRACTICE {
+        if name == "ReadPracticeHost" && count == 0 {
+            message := ifx identifying then PracticeMessage.{.abi = MODULE_ABI} else practice_message
+            result.* = EncodePracticeMessage(message, *practice_codec)
+            return 1
+        }
+        if name == "WritePracticeHost" && count == 1 && !identifying {
+            if !ValidPracticeMessage(arguments[0]) {
+                return 0
+            }
+            practice_message = DecodePracticeMessage(arguments[0])
+            slot.received = true
+            return 1
+        }
+    }
+    if ui_active && !identifying && ui_call != null {
+        return ui_call(ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+ModuleWidgetCapability :: (module: string, name: string) -> bool {
+    return (module == "text_widget" && name == "TextHostedHost") ||
+    (module == "image_widget" && name == "ImageHostedHost") ||
+    (module == "button_widget" && name == "ButtonHostedHost") ||
+    (module == "text_area_widget" && name == "TextAreaHostedHost") ||
+    (module == "scroll_widget" && name == "ScrollHostedHost") ||
+    (module == "tree" && name == "EndHostedHost") ||
+    (module == "text_field_widget" && name == "TextFieldHostedHost") ||
+    (module == "tab_bar_widget" && name == "TabBarHostedHost") ||
+    (module == "checkbox_widget" && name == "CheckboxHostedHost") ||
+    (module == "box_widget" && name == "BoxHostedHost")
+}
+
+ModuleCapabilityAllowed :: (kind: s32, name: string) -> bool {
+    if kind == MODULE_LUMI {
+        return name == "ReadLumiHost" || name == "WriteLumiHost" ||
+        name == "ReadLumiTaskHost" || name == "ReadLumiHabitHost" ||
+        name == "ReadLumiToolsHost" || name == "SetLumiHabitChoiceHost" || name == "LumiTaskCountHost" ||
+        name == "PerformLumiActionHost" || name == "AppendLumiChatHost" || name == "LumiLocaleHost"
+    }
+    if kind == MODULE_DIARY {
+        return name == "ReadDiaryHost" || name == "WriteDiaryHost" ||
+        name == "ReadDiaryFileHost" || name == "SaveDiaryFileHost" || name == "DiaryClockHost"
+    }
+    if kind == MODULE_INBE {
+        return name == "ReadInbeHost" || name == "WriteInbeHost" ||
+        name == "RouteFeatureHost"
+    }
+    if kind == MODULE_LISTS {
+        return name == "ReadListsHost" || name == "WriteListsHost" ||
+        name == "PersistListsHost"
+    }
+    if kind == MODULE_HABITS {
+        return name == "ReadHabitsHost" || name == "WriteHabitsHost" ||
+        name == "HabitNameExistsHost" || name == "SaveHabitHost"
+    }
+    return kind == MODULE_PRACTICE &&
+    (name == "ReadPracticeHost" || name == "WritePracticeHost")
+}
+
+#program_export
+CellsReady :: () -> bool {
+    return (!package_required || slots[3].instance != null) &&
+    ((enabled_apps & APP_LISTS) == 0 || slots[0].instance != null) &&
+    ((enabled_apps & APP_HABITS) == 0 || slots[1].instance != null) &&
+    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].instance != null) &&
+    ((enabled_apps & APP_DIARY) == 0 || slots[4].instance != null) &&
+    ((enabled_apps & APP_LUMI) == 0 || slots[5].instance != null)
+}
+
+#program_export
+CellsClose :: () {
+    AssetUnbindProvider()
+    index: s32 = 0
+    while index < PackageCount {
+        CloseBundleInstance(slots[index].instance)
+        CloseBundle(slots[index].bundle)
+        slots[index] = ModuleSlot.{}
+        index += 1
+    }
+    enabled_apps = APP_RECOMMENDED
+    package_required = false
+    PackageFree(diary_text)
+    PackageFree(diary_document)
+    diary_text = ""
+    diary_document = ""
+    PackageFree(diary_photo_file)
+    PackageFree(diary_photo_name)
+    diary_photo_file = ""
+    diary_photo_name = ""
+    DiaryStoreClose()
+}
+
+ModuleRun :: (slot: *ModuleSlot) -> bool {
+    if slot.instance == null {
+        return false
+    }
+    answer: s64
+    has_answer: s32
+    slot.received = false
+    if RunBundleInstance(slot.instance, *answer, *has_answer) == 0 ||
+    has_answer == 0 {
+        return false
+    }
+    if identifying {
+        return answer == cast(s64)slot.kind
+    }
+    return answer == 0 && slot.received
+}
+
+ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
+    slot.kind = kind
+    slot.bundle = OpenBundleBytes(ModuleTextData(bytes), cast(u64)bytes.count)
+    if slot.bundle == null {
+        return false
+    }
+    return ModuleInstantiate(slot)
+}
+
+ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
+    kind := slot.kind
+    count := BundleCapabilities(slot.bundle)
+    if count < 2 || count > 64 {
+        return false
+    }
+    // Packages may add another already supported widget without a wrapper
+    // release. Require their message protocol and check every effect against
+    // the allowlist; an exact capability count would reject those UI updates.
+    bindings: [64]HostBinding
+    has_read: bool
+    has_write: bool
+    index: u64 = 0
+    while index < count {
+        module_name := BundleCapabilityModuleName(slot.bundle, index)
+        name := BundleCapabilityFunctionName(slot.bundle, index)
+        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else ifx kind == MODULE_LUMI then "lumi" else "inbe"
+        allowed := TextFromCString(module_name) == owner && ModuleCapabilityAllowed(kind, TextFromCString(name))
+        if TextFromCString(module_name) == owner {
+            read_name := ifx kind == MODULE_LISTS then "ReadListsHost" else ifx kind == MODULE_HABITS then "ReadHabitsHost" else ifx kind == MODULE_PRACTICE then "ReadPracticeHost" else ifx kind == MODULE_DIARY then "ReadDiaryHost" else ifx kind == MODULE_LUMI then "ReadLumiHost" else "ReadInbeHost"
+            write_name := ifx kind == MODULE_LISTS then "WriteListsHost" else ifx kind == MODULE_HABITS then "WriteHabitsHost" else ifx kind == MODULE_PRACTICE then "WritePracticeHost" else ifx kind == MODULE_DIARY then "WriteDiaryHost" else ifx kind == MODULE_LUMI then "WriteLumiHost" else "WriteInbeHost"
+            has_read = has_read || TextFromCString(name) == read_name
+            has_write = has_write || TextFromCString(name) == write_name
+        }
+        if kind == MODULE_LISTS {
+            allowed = allowed || ModuleWidgetCapability(TextFromCString(module_name), TextFromCString(name)) ||
+            (TextFromCString(module_name) == "lists_view" &&
+                (TextFromCString(name) == "ReadListsUiHost" || TextFromCString(name) == "WriteListsUiHost" ||
+                TextFromCString(name) == "ReadListsRowHost" || TextFromCString(name) == "ListsLocaleHost"))
+        }
+        if kind == MODULE_DIARY {
+            allowed = allowed || ModuleWidgetCapability(TextFromCString(module_name), TextFromCString(name)) ||
+            (TextFromCString(module_name) == "diary_view" &&
+                (TextFromCString(name) == "ReadDiaryUiHost" || TextFromCString(name) == "WriteDiaryUiHost" ||
+                TextFromCString(name) == "DiaryLocaleHost"))
+        }
+        if kind == MODULE_LUMI {
+            allowed = allowed || ModuleWidgetCapability(TextFromCString(module_name), TextFromCString(name)) ||
+            (TextFromCString(module_name) == "lumi_view" &&
+                (TextFromCString(name) == "ReadLumiUiHost" || TextFromCString(name) == "WriteLumiUiHost" ||
+                TextFromCString(name) == "ReadLumiChatRowHost" ||
+                TextFromCString(name) == "ReadLumiSuggestionTaskHost" ||
+                TextFromCString(name) == "ReadLumiSuggestionHabitHost" || TextFromCString(name) == "LumiViewLocaleHost"))
+        }
+        if kind == MODULE_INBE {
+            owner_name := TextFromCString(module_name)
+            function_name := TextFromCString(name)
+            allowed = allowed ||
+            (owner_name == "text_widget" && function_name == "TextHostedHost") ||
+            (owner_name == "button_widget" && function_name == "ButtonHostedHost") ||
+            (owner_name == "scroll_widget" && function_name == "ScrollHostedHost") ||
+            (owner_name == "tree" && function_name == "EndHostedHost") ||
+            (owner_name == "checkbox_widget" && function_name == "CheckboxHostedHost") ||
+            (owner_name == "toggle_widget" && function_name == "ToggleHostedHost") ||
+            (owner_name == "inbe_view" && (function_name == "ReadPickerUiHost" ||
+                function_name == "WritePickerUiHost" || function_name == "PickerLocaleHost"))
+        }
+        if !allowed {
+            return false
+        }
+        bindings[index].module = module_name
+        bindings[index].function = name
+        bindings[index].call = ModuleHostCall
+        bindings[index].context = cast(*void)slot
+        index += 1
+    }
+    if !has_read || !has_write {
+        return false
+    }
+    slot.instance = InstantiateBundle(slot.bundle, *bindings[0], count)
+    LimitBundleSteps(slot.instance, 10000000)
+    return ModuleRun(slot)
+}
+
+#program_export
+CellsOpenBytes :: (lists: string, habits: string, practice: string) -> bool {
+    CellsClose()
+    AssetBindProvider(CellsAsset)
+    lists_message = ListsMessage.{.abi = MODULE_ABI}
+    habits_message = HabitsMessage.{.abi = MODULE_ABI}
+    practice_message = PracticeMessage.{.abi = MODULE_ABI}
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
+    identifying = true
+    ready := ModuleOpen(*slots[0], lists, MODULE_LISTS) &&
+    ModuleOpen(*slots[1], habits, MODULE_HABITS) &&
+    ModuleOpen(*slots[2], practice, MODULE_PRACTICE)
+    identifying = false
+    if !ready {
+        CellsClose()
+    }
+    if ready {
+        enabled_apps = APP_LISTS | APP_HABITS | APP_PRACTICE
+    }
+    return ready
+}
+
+// A desktop owner can run a local package explicitly. Network installs still
+// require a pinned publisher signature; this does not read paths from sync.
+#program_export
+CellsUseFile :: (path: string) -> bool {
+    bytes := PackageRead(path, PackageMaximumBytes)
+    defer {
+        PackageFree(bytes)
+    }
+    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+        if CellsValidatePackage(index, bytes) && CopyCString(path, local_bundle_path[:]) {
+            local_bundle_index = index
+            return true
+        }
+    }
+    return false
+}
+
+#program_export
+CellsLocalFeature :: () -> s32 {
+    return PackageBit(local_bundle_index)
+}
+
+#program_export
+CellsOpen :: () -> bool {
+    if local_bundle_index == 0 {
+        PackageMarkRootActive(false)
+        bytes := PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+        defer {
+            PackageFree(bytes)
+        }
+        return CellsOpenPackage(bytes)
+    }
+    downloaded := PackageInstalledBytes(0)
+    defer {
+        PackageFree(downloaded)
+    }
+    ready := downloaded.count > 0 && CellsOpenPackage(downloaded)
+    downloaded_root := ready
+    if !ready {
+        ready = CellsOpenPackage(AssetRead("inbe.zib").data)
+    }
+    if ready {
+        PackageMarkRootActive(downloaded_root)
+        ready = CellsReloadFeatures(CellsInstalledMask())
+    }
+    if ready && local_bundle_index > 0 {
+        bytes := PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+        defer {
+            PackageFree(bytes)
+        }
+        slot := ModuleSlotForPackage(local_bundle_index)
+        kind := ModuleKindForPackage(local_bundle_index)
+        CloseBundleInstance(slots[slot].instance)
+        CloseBundle(slots[slot].bundle)
+        slots[slot] = ModuleSlot.{}
+        identifying = true
+        ready = ModuleOpen(*slots[slot], bytes, kind)
+        identifying = false
+        enabled_apps = CellsInstalledMask()
+    }
+    return ready
+}
+
+PackageFeature :: (index: s32) -> string {
+    name: string = "cells/practices.zib"
+    if index == 0 {
+        name = "cells/lists.zib"
+    } else if index == 1 {
+        name = "cells/habits.zib"
+    } else if index == 3 {
+        name = "cells/diary.zib"
+    } else if index == 4 {
+        name = "cells/lumi.zib"
+    }
+    asset: u64 = 0
+    while asset < BundleAssets(slots[3].bundle) {
+        if CellBundlePath(TextFromCString(BundleAssetPath(slots[3].bundle, asset))) == name {
+            return TextFromBytes(BytesFromPointer(BundleAssetBytes(slots[3].bundle, asset),
+                BundleAssetLength(slots[3].bundle, asset)))
+        }
+        asset += 1
+    }
+    return ""
+}
+
+// Package assets override bundled defaults. Hosts only expose checked asset
+// names from the active root and independently loaded child packages.
+CellsAssetMime :: (path: string) -> string {
+    if path.count > 4 && path[path.count - 4:] == ".png" { return "image/png" }
+    if path.count > 4 && path[path.count - 4:] == ".ogg" { return "audio/ogg" }
+    if path.count > 4 && path[path.count - 4:] == ".ttf" { return "font/ttf" }
+    if path.count > 4 && path[path.count - 4:] == ".otf" { return "font/otf" }
+    return "text/plain"
+}
+
+CellsAsset :: (path: string) -> AssetView {
+    if path.count > 17 && path[:13] == "diary/photos/" {
+        at := path.count - 1
+        while at > 13 && path[at] != cast(u8)46 {
+            at -= 1
+        }
+        name := path[13:at]
+        data := DiaryStorePreview(name)
+        format := DiaryImageFormat(data)
+        mime: string = "image/png"
+        if format == "jpg" {
+            mime = "image/jpeg"
+        } else if format == "gif" {
+            mime = "image/gif"
+        } else if format == "webp" {
+            mime = "image/webp"
+        }
+        return AssetView.{.data = data, .mime = mime,
+            .found = format.count > 0 && path[at + 1:] == format}
+    }
+    for slot: cast(s32)0..cast(s32)(PackageCount - 1) {
+        if slots[slot].bundle == null { continue }
+        index: u64 = 0
+        while index < BundleAssets(slots[slot].bundle) {
+            if TextFromCString(BundleAssetPath(slots[slot].bundle, index)) == path {
+                return AssetView.{.found = true,
+                    .mime = CellsAssetMime(path),
+                    .data = TextFromBytes(BytesFromPointer(
+                        BundleAssetBytes(slots[slot].bundle, index),
+                        BundleAssetLength(slots[slot].bundle, index)))}
+            }
+            index += 1
+        }
+    }
+    return AssetView.{}
+}
+
+#program_export
+CellsOpenPackage :: (bytes: string) -> bool {
+    CellsClose()
+    AssetBindProvider(CellsAsset)
+    lists_message = ListsMessage.{.abi = MODULE_ABI}
+    habits_message = HabitsMessage.{.abi = MODULE_ABI}
+    practice_message = PracticeMessage.{.abi = MODULE_ABI}
+    inbe_message = InbeMessage.{.abi = MODULE_ABI}
+    identifying = true
+    ready := ModuleOpen(*slots[3], bytes, MODULE_INBE)
+    if ready {
+        ready = ModulePackageAssetsValid(slots[3].bundle)
+    }
+    if ready {
+        index: s32 = 0
+        while ready && index < PackageCount - 1 {
+            feature := PackageFeature(index)
+            // Older root packages may omit Lists and Diary. Current builds
+            // include every cell for offline sidebar changes.
+            if feature.count == 0 {
+                ready = index == 0 || index == 3
+            } else {
+
+                slot := ModuleSlotForPackage(index + 1)
+                kind := ModuleKindForPackage(index + 1)
+                ready = ModuleOpen(*slots[slot], feature, kind)
+            }
+            index += 1
+        }
+    }
+    identifying = false
+    if !ready {
+        CellsClose()
+        return false
+    }
+    package_required = true
+    enabled_apps = CellsInstalledMask()
+    return true
+}
+
+#program_export
+InbeRun :: (message: InbeMessage) -> InbeMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    inbe_message = message
+    if !ModuleRun(*slots[3]) {
+        return message
+    }
+    return inbe_message
+}
+
+#program_export
+InbeUiRun :: (message: InbeMessage) -> InbeMessage {
+    if slots[3].bundle == null { return message }
+    CloseBundleInstance(slots[3].instance)
+    slots[3].instance = null
+    previous := identifying
+    identifying = true
+    ready := ModuleInstantiate(*slots[3])
+    identifying = previous
+    if !ready { return message }
+    return InbeRun(message)
+}
+
+#program_export
+InbeAllows :: (screen: s32) -> bool {
+    result := InbeRun(InbeMessage.{.action = INBE_ROUTE,
+            .enabled_apps = enabled_apps, .screen = screen})
+    return result.succeeded && result.allowed
+}
+
+#program_export
+CellsSetEnabled :: (mask: s32) -> bool {
+    // Lumi is the bundled app harness; its preference only hides the shortcut.
+    mask |= APP_LUMI
+    result := InbeRun(InbeMessage.{.action = INBE_CONFIGURE,
+            .enabled_apps = mask})
+    if !result.succeeded {
+        return false
+    }
+    lists_message = ListsMessage.{.abi = MODULE_ABI}
+    habits_message = HabitsMessage.{.abi = MODULE_ABI}
+    practice_message = PracticeMessage.{.abi = MODULE_ABI}
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
+    identifying = true
+    index: s32 = 0
+    while index < PackageCount - 1 {
+        bit: s32 = cast(s32)1 << index
+        slot := ModuleSlotForPackage(index + 1)
+        if (result.enabled_apps & bit) == 0 {
+            CloseBundleInstance(slots[slot].instance)
+            CloseBundle(slots[slot].bundle)
+            slots[slot] = ModuleSlot.{}
+        } else if slots[slot].instance == null {
+
+            downloaded: string
+            if local_bundle_index == index + 1 {
+                downloaded = PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
+            } else {
+
+                downloaded = PackageInstalledBytes(index + 1)
+            }
+            kind := ModuleKindForPackage(index + 1)
+            ready := downloaded.count > 0 && ModuleOpen(*slots[slot], downloaded, kind)
+            PackageFree(downloaded)
+            if !ready {
+                CloseBundleInstance(slots[slot].instance)
+                CloseBundle(slots[slot].bundle)
+                slots[slot] = ModuleSlot.{}
+                feature := PackageFeature(index)
+                if feature.count > 0 && !ModuleOpen(*slots[slot], feature, kind) {
+                    identifying = false
+                    return false
+                }
+            }
+        }
+        index += 1
+    }
+    identifying = false
+    enabled_apps = result.enabled_apps & CellsInstalledMask()
+    return CellsReady()
+}
+
+#program_export
+CellsInstalledMask :: () -> s32 {
+    mask: s32 = 0
+    if slots[0].instance != null {
+        mask |= APP_LISTS
+    }
+    if slots[1].instance != null {
+        mask |= APP_HABITS
+    }
+    if slots[2].instance != null {
+        mask |= APP_PRACTICE
+    }
+    if slots[4].instance != null {
+        mask |= APP_DIARY
+    }
+    if slots[5].instance != null {
+        mask |= APP_LUMI
+    }
+    return mask
+}
+
+// Validation uses isolated instances and cannot mutate the live messages.
+#program_export
+CellsValidatePackage :: (index: s32, bytes: string) -> bool {
+    if index < 0 || index >= PackageCount {
+        return false
+    }
+    test: ModuleSlot
+    previous := identifying
+    identifying = true
+    kind := ModuleKindForPackage(index)
+    ok := ModuleOpen(*test, bytes, kind)
+    if ok {
+        if index == 0 {
+            ok = ModulePackageAssetsValid(test.bundle)
+        } else {
+
+            ok = BundleAssets(test.bundle) <= cast(u64)8192
+            asset: u64 = 0
+            while ok && asset < BundleAssets(test.bundle) {
+                ok = PackageResourceValid(TextFromCString(BundleAssetPath(test.bundle, asset)), kind)
+                asset += 1
+            }
+        }
+    }
+    identifying = previous
+    CloseBundleInstance(test.instance)
+    CloseBundle(test.bundle)
+    return ok
+}
+
+ModulePackageAssetsValid :: (bundle: *void) -> bool {
+    count := BundleAssets(bundle)
+    if count < cast(u64)2 || count > cast(u64)8192 {
+        return false
+    }
+    found: [5]bool
+    names: [5]string = .["cells/lists.zib", "cells/habits.zib", "cells/practices.zib", "cells/diary.zib", "cells/lumi.zib"]
+    for asset: cast(u64)0..count - cast(u64)1 {
+        matched := false
+        for feature: cast(s32)0..cast(s32)4 {
+            if CellBundlePath(TextFromCString(BundleAssetPath(bundle, asset))) == names[feature] && !found[feature] {
+                bytes := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset), BundleAssetLength(bundle, asset)))
+                if !CellsValidatePackage(feature + 1, bytes) {
+                    return false
+                }
+                found[feature] = true
+                matched = true
+                break
+            }
+        }
+        if !matched && !PackageResourceValid(TextFromCString(BundleAssetPath(bundle, asset)), MODULE_INBE) {
+            return false
+        }
+    }
+    return found[1] && found[2] && found[4]
+}
+
+DiaryRoute :: (screen: s32) -> bool {
+    diary_routing = true
+    diary_route_screen = screen
+    diary_route_allowed = false
+    ok := ModuleRun(*slots[4]) && diary_route_allowed
+    diary_routing = false
+    return ok
+}
+
+#program_export
+CellsUiBegin :: (callback: HostCall, context: *void) {
+    ui_call = callback
+    ui_context = context
+    ui_active = true
+}
+
+#program_export
+CellsUiEnd :: () {
+    ui_active = false
+}
+
+#program_export
+DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    if slots[4].bundle == null {
+        return message
+    }
+    // Diary is stateless across calls; dispose temporary decode/build storage
+    // after each previous call while the host keeps the unsaved editor state.
+    CloseBundleInstance(slots[4].instance)
+    slots[4].instance = null
+    previous := identifying
+    identifying = true
+    diary_message = DiaryMessage.{.abi = MODULE_ABI}
+    ready := ModuleInstantiate(*slots[4])
+    identifying = previous
+    if !ready {
+        return message
+    }
+    diary_message = message
+    if !ModuleRun(*slots[4]) {
+        return message
+    }
+    return diary_message
+}
+
+#program_export
+ListsRun :: (message: ListsMessage) -> ListsMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    lists_message = message
+    if !ModuleRun(*slots[0]) {
+        message.succeeded = false
+        return message
+    }
+    return lists_message
+}
+
+#program_export
+ListsUiRun :: (message: ListsMessage) -> ListsMessage {
+    if slots[0].bundle == null {
+        return ListsMessage.{}
+    }
+    CloseBundleInstance(slots[0].instance)
+    slots[0].instance = null
+    previous := identifying
+    identifying = true
+    ready := ModuleInstantiate(*slots[0])
+    identifying = previous
+    if !ready {
+        return ListsMessage.{}
+    }
+    return ListsRun(message)
+}
+
+#program_export
+HabitsRun :: (message: HabitsMessage) -> HabitsMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    habits_message = message
+    if !ModuleRun(*slots[1]) {
+        message.succeeded = false
+        return message
+    }
+    return habits_message
+}
+
+#program_export
+PracticeRun :: (message: PracticeMessage) -> PracticeMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    practice_message = message
+    if !ModuleRun(*slots[2]) {
+        message.succeeded = false
+        return message
+    }
+    return practice_message
+}
+
+#program_export
+CellsRoute :: (screen: s32) -> bool {
+    lists := ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = screen})
+    habits := HabitsRun(HabitsMessage.{.action = HABITS_ROUTE, .screen = screen})
+    practice := PracticeRun(PracticeMessage.{.action = PRACTICE_ROUTE, .screen = screen})
+    return (lists.succeeded && lists.visible) || habits.succeeded || practice.succeeded
+}
+
+#program_export
+CellsReloadFeatures :: (mask: s32) -> bool {
+    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+        if index == 3 {
+            continue
+        }
+        CloseBundleInstance(slots[index].instance)
+        CloseBundle(slots[index].bundle)
+        slots[index] = ModuleSlot.{}
+    }
+    return CellsSetEnabled(mask)
+}
+
+ModuleSlotForPackage :: (index: s32) -> s32 {
+    if index == 0 {
+        return 3
+    }
+    if index == 4 {
+        return 4
+    }
+    if index == 5 {
+        return 5
+    }
+    return index - 1
+}
+
+ModuleKindForPackage :: (index: s32) -> s32 {
+    if index == 0 {
+        return MODULE_INBE
+    }
+    if index == 4 {
+        return MODULE_DIARY
+    }
+    if index == 5 {
+        return MODULE_LUMI
+    }
+    return index
+}
+
+#program_export
+LumiRun :: (message: LumiMessage) -> LumiMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    if slots[5].bundle == null {
+        return message
+    }
+    if message.action == LUMI_FRAME {
+        CloseBundleInstance(slots[5].instance)
+        slots[5].instance = null
+        previous := identifying
+        identifying = true
+        ready := ModuleInstantiate(*slots[5])
+        identifying = previous
+        if !ready {
+            return message
+        }
+    }
+    lumi_message = message
+    if !ModuleRun(*slots[5]) {
+        return message
+    }
+    return lumi_message
+}

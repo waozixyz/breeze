@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import tarfile
+from io import BytesIO
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -31,12 +32,40 @@ def main():
         private.chmod(0o600)
         public = key.public_key().public_bytes(serialization.Encoding.Raw,
                                               serialization.PublicFormat.Raw).hex()
-        ids = ["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary"]
+        ids = ["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary", "inbe.lumi"]
         publishers = fixtures / "publishers.json"
         publishers.write_text(json.dumps([dict(key_id="test-key", public_key=public, app_ids=ids)]))
         store = fixtures / "store"
         values = release_tool.stage(store, private, "test-key", publishers)
         release_tool.stage(store, private, "test-key", publishers)  # idempotent
+
+        def served(url, timeout):
+            assert timeout == 30
+            prefix = "https://node.example/api/v2/packages/"
+            assert url.startswith(prefix)
+            app_id, filename = url.removeprefix(prefix).split("/")
+            return BytesIO((store / app_id / ("latest-v2.json" if filename == "latest" else filename)).read_bytes())
+
+        release_tool.verify_origin(store, "https://node.example", served)
+        for failure in ("metadata", "hash", "truncated", "oversized"):
+            def damaged(url, timeout):
+                content = served(url, timeout).read()
+                if failure == "metadata" and url.endswith("/latest"):
+                    return BytesIO(b"{}")
+                if url.endswith(".zib"):
+                    if failure == "hash":
+                        content = content[:-1] + bytes([content[-1] ^ 1])
+                    elif failure == "truncated":
+                        content = content[:-1]
+                    elif failure == "oversized":
+                        content += b"extra"
+                return BytesIO(content)
+            try:
+                release_tool.verify_origin(store, "https://node.example", damaged)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"public {failure} was accepted")
         remote = fixtures / "remote-store"
         for attempt in range(2):
             staging = fixtures / f"upload-{attempt}"
@@ -46,7 +75,7 @@ def main():
                 for path in sorted(store.rglob("*")):
                     if path.is_file() and path.name != ".publish.lock":
                         tar.add(path, arcname=str(path.relative_to(store)))
-            release_tool.import_archive(archive, remote)
+            release_tool.import_archive(archive, remote, publishers)
             assert not staging.exists()
             for value in values.values():
                 assert json.loads((remote / value["app_id"] / "latest-v2.json").read_bytes()) == value
@@ -56,7 +85,7 @@ def main():
         with tarfile.open(archive, "w") as tar:
             tar.add(publishers, arcname="../publishers.json")
         try:
-            release_tool.import_archive(archive, remote)
+            release_tool.import_archive(archive, remote, publishers)
         except ValueError:
             pass
         else:
@@ -70,7 +99,7 @@ def main():
             for value in values.values():
                 assert protocol.signing_message(value) == release_tool.signing_message(value)
         (fixtures / "public").write_text(public)
-        names = ("inbe", "lists", "habits", "practices", "diary")
+        names = ("inbe", "lists", "habits", "practices", "diary", "lumi")
         for name in names:
             (fixtures / name).write_text(json.dumps(values[name]))
 
@@ -82,7 +111,7 @@ def main():
             (fixtures / name).write_text(json.dumps(value))
 
         altered("wrong-app", lambda value: value.update(app_id="inbe.diary"))
-        altered("wrong-api", lambda value: value.update(host_api=2))
+        altered("wrong-api", lambda value: value.update(host_api=3))
         altered("bad-signature", lambda value: value.update(version="9.0.0"), False)
         altered("fraction", lambda value: value.update(sequence=1.5))
         altered("negative", lambda value: value.update(sequence=-1))
@@ -96,20 +125,29 @@ def main():
         root_data = (ROOT / "build/inbe.zib").read_bytes()
         (fixtures / "root-bytes").write_bytes(root_data)
         updated_root = json.loads(json.dumps(values["inbe"]))
-        updated_root.update(sequence=2, version="2.1.1")
-        updated_root["dependencies"][0]["version"] = "1.1.0"
-        updated_root["dependencies"][1]["version"] = "1.2.0"
+        root_version = list(map(int, values["inbe"]["version"].split(".")))
+        root_version[2] += 1
+        updated_root.update(sequence=values["inbe"]["sequence"] + 1,
+                            version=".".join(map(str, root_version)))
+        for dependency in updated_root["dependencies"]:
+            if dependency["app_id"] == "inbe.habits":
+                dependency["version"] = "1.1.0"
+            elif dependency["app_id"] == "inbe.practices":
+                dependency["version"] = "1.2.0"
         updated_root["signature"] = key.sign(release_tool.signing_message(updated_root)).hex()
         (fixtures / "root-new").write_text(json.dumps(updated_root))
-        data = (ROOT / "build/subapps/habits.zib").read_bytes()
+        data = (ROOT / "build/cells/habits.zib").read_bytes()
         (fixtures / "habits-bytes").write_bytes(data)
         (fixtures / "corrupt-bytes").write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
-        (fixtures / "diary-bytes").write_bytes((ROOT / "build/subapps/diary.zib").read_bytes())
+        (fixtures / "diary-bytes").write_bytes((ROOT / "build/cells/diary.zib").read_bytes())
         updated = json.loads(json.dumps(values["diary"]))
-        updated.update(sequence=2, version="1.0.1")
+        diary_version = list(map(int, updated["version"].split(".")))
+        diary_version[2] += 1
+        updated.update(sequence=updated["sequence"] + 1, version=".".join(map(str, diary_version)))
         updated["signature"] = key.sign(release_tool.signing_message(updated)).hex()
         (fixtures / "diary-new").write_text(json.dumps(updated))
-        updated["version"] = "1.0.2"
+        diary_version[2] += 1
+        updated["version"] = ".".join(map(str, diary_version))
         (fixtures / "diary-bad").write_text(json.dumps(updated))
         ziran = ROOT / "build/ziran-toolchain/bin/ziran"
         subprocess.run([str(ziran), "build", "--target=c", "--no-main", "--root", str(ROOT / "tests"),

@@ -82,11 +82,11 @@ english_set = set(english)
 check_practice_labels(english, "en.txt")
 
 sources = []
-for directory in (root / "src", root / "build/packages/kryon/src"):
+for directory in (root / "src", root / "apps", root / "build/packages/kryon/src"):
     if directory.is_dir():
         sources += sorted(p for p in directory.rglob("*") if p.suffix in (".zi", ".c", ".h"))
 
-call = re.compile(r'\b(?:LocaleText|GetLocaleText|FormatLocaleText)\(\s*"([^"]*)"')
+call = re.compile(r'\b(?:LocaleText|GetLocaleText|FormatLocaleText|[A-Za-z]+LocaleHost)\(\s*"([^"]*)"')
 used = set(DYNAMIC_KEYS)
 for source in sources:
     text = source.read_text(encoding="utf-8", errors="replace")
