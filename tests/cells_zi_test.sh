@@ -63,7 +63,7 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "$root/build/ziran-toolchain/libziran.a" \
-    -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun \
+    -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun -Wl,--wrap=BundleInstantiate \
     -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d)

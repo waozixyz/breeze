@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.3] - 2026-10-06
+
+- Keep longer conversations responsive when opening, scrolling and typing.
+
+
 ## [1.1.2] - 2026-10-06
 
 - Write to today's Diary from chat, with the current time above each message.

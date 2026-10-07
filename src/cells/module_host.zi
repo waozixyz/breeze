@@ -25,6 +25,7 @@ using HostValueKind;
 ModuleSlot :: struct {
     bundle: *void
     instance: *void
+    failed: bool
     kind: s32
     received: bool
 }
@@ -421,6 +422,7 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
     slot.received = false
     if RunBundleInstance(slot.instance, *answer, *has_answer) == 0 ||
     has_answer == 0 {
+        slot.failed = true
         return false
     }
     if identifying {
@@ -439,6 +441,7 @@ ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
 }
 
 ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
+    slot.failed = false
     kind := slot.kind
     count := BundleCapabilities(slot.bundle)
     if count < 2 || count > 64 {
@@ -510,6 +513,26 @@ ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
     slot.instance = InstantiateBundle(slot.bundle, *bindings[0], count)
     LimitBundleSteps(slot.instance, 10000000)
     return ModuleRun(slot)
+}
+
+// Keep the working instance until its replacement passes the handshake.
+// A failed UI reset must not make CellsReady false and stop every screen.
+ModuleRestart :: (slot: *ModuleSlot) -> bool {
+    previous_instance := slot.instance
+    previous_failed := slot.failed
+    slot.instance = null
+    previous_identifying := identifying
+    identifying = true
+    ready := ModuleInstantiate(slot)
+    identifying = previous_identifying
+    if ready {
+        CloseBundleInstance(previous_instance)
+    } else {
+        CloseBundleInstance(slot.instance)
+        slot.instance = previous_instance
+        slot.failed = previous_failed
+    }
+    return ready
 }
 
 #program_export
@@ -720,13 +743,7 @@ InbeRun :: (message: InbeMessage) -> InbeMessage {
 #program_export
 InbeUiRun :: (message: InbeMessage) -> InbeMessage {
     if slots[3].bundle == null { return message }
-    CloseBundleInstance(slots[3].instance)
-    slots[3].instance = null
-    previous := identifying
-    identifying = true
-    ready := ModuleInstantiate(*slots[3])
-    identifying = previous
-    if !ready { return message }
+    if !ModuleRestart(*slots[3]) { return message }
     return InbeRun(message)
 }
 
@@ -753,13 +770,10 @@ CellsSetEnabled :: (mask: s32) -> bool {
     identifying = true
     index: s32 = 0
     while index < PackageCount - 1 {
-        bit: s32 = cast(s32)1 << index
         slot := ModuleSlotForPackage(index + 1)
-        if (result.enabled_apps & bit) == 0 {
-            CloseBundleInstance(slots[slot].instance)
-            CloseBundle(slots[slot].bundle)
-            slots[slot] = ModuleSlot.{}
-        } else if slots[slot].instance == null {
+        // The mask chooses shortcuts. Keep bundled apps loaded when hidden,
+        // so adding them back needs neither a download nor another VM load.
+        if slots[slot].instance == null {
 
             downloaded: string
             if local_bundle_index == index + 1 {
@@ -897,14 +911,7 @@ DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
     }
     // Diary is stateless across calls; dispose temporary decode/build storage
     // after each previous call while the host keeps the unsaved editor state.
-    CloseBundleInstance(slots[4].instance)
-    slots[4].instance = null
-    previous := identifying
-    identifying = true
-    diary_message = DiaryMessage.{.abi = MODULE_ABI}
-    ready := ModuleInstantiate(*slots[4])
-    identifying = previous
-    if !ready {
+    if !ModuleRestart(*slots[4]) {
         return message
     }
     diary_message = message
@@ -931,13 +938,7 @@ ListsUiRun :: (message: ListsMessage) -> ListsMessage {
     if slots[0].bundle == null {
         return ListsMessage.{}
     }
-    CloseBundleInstance(slots[0].instance)
-    slots[0].instance = null
-    previous := identifying
-    identifying = true
-    ready := ModuleInstantiate(*slots[0])
-    identifying = previous
-    if !ready {
+    if !ModuleRestart(*slots[0]) {
         return ListsMessage.{}
     }
     return ListsRun(message)
@@ -1021,17 +1022,12 @@ LumiRun :: (message: LumiMessage) -> LumiMessage {
     if slots[5].bundle == null {
         return message
     }
-    if message.action == LUMI_FRAME {
-        CloseBundleInstance(slots[5].instance)
-        slots[5].instance = null
-        previous := identifying
-        identifying = true
-        ready := ModuleInstantiate(*slots[5])
-        identifying = previous
-        if !ready {
-            return message
-        }
+    if slots[5].failed && !ModuleRestart(*slots[5]) {
+        return message
     }
+    // Lumi overwrites its frame from host state on every call. The runtime
+    // collects unreachable values, so keep its verified instance and caches
+    // instead of validating and initializing the whole program every frame.
     lumi_message = message
     if !ModuleRun(*slots[5]) {
         return message

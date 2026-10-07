@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.10] - 2026-10-06
+
+- Preserve the selected page during upgrades and add hidden apps instantly offline.
+- Keep the interface responsive when an app cannot reset its view.
+- Open Lumi smoothly and distinguish Lists from Diary with a checkmark icon.
+
+
 ## [2.1.8] - 2026-10-06
 
 - Call sidebar choices Apps in setup and settings, with shorter instructions.

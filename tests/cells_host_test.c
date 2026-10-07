@@ -11,6 +11,31 @@ static size_t sizes[10];
 static int32_t module_runs;
 static bool use_cached_bundles;
 static int32_t cached_reads[6];
+static bool fail_next_instance;
+static bool fail_next_run;
+
+void ModuleTestFailRun(void)
+{
+    fail_next_run = true;
+}
+
+void ModuleTestFailInstantiate(void)
+{
+    fail_next_instance = true;
+}
+
+BundleInstance *__real_BundleInstantiate(const Bundle *bundle,
+    const HostBinding *bindings, size_t count);
+
+BundleInstance *__wrap_BundleInstantiate(const Bundle *bundle,
+    const HostBinding *bindings, size_t count)
+{
+    if(fail_next_instance) {
+        fail_next_instance = false;
+        return NULL;
+    }
+    return __real_BundleInstantiate(bundle, bindings, count);
+}
 
 void ModuleTestUseCache(bool enabled)
 {
@@ -47,6 +72,10 @@ int __wrap_BundleInstanceRun(BundleInstance *instance, long long *result,
                              int *has_result)
 {
     module_runs++;
+    if(fail_next_run) {
+        fail_next_run = false;
+        return 0;
+    }
     return __real_BundleInstanceRun(instance, result, has_result);
 }
 

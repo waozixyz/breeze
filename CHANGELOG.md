@@ -1,4 +1,16 @@
 # Changelog
+## [2.1.10] - 2026-10-06
+### Fixed
+- Open and scroll Lumi smoothly, including longer conversations.
+- Use a checkmark for Lists so it is easy to distinguish from Diary.
+
+## [2.1.9] - 2026-10-06
+### Fixed
+- Keep hidden apps installed so adding them back to the sidebar works immediately offline.
+- Preserve the selected page during upgrades and restore missing shortcuts for selected apps.
+- Keep the interface responsive if an app fails to reset, and reduce repeated work in Lumi chat.
+- Open the Android keyboard correctly when writing to Lumi.
+
 ## [2.1.8] - 2026-10-06
 ### Changed
 - Call sidebar items Apps throughout setup and settings.

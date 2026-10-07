@@ -63,7 +63,8 @@ def scroll_picker(window, bottom):
 
 
 @contextlib.contextmanager
-def application(profile, label, *, mini=False, feature=None, graceful_close=False):
+def application(profile, label, *, mini=False, feature=None, graceful_close=False,
+                mobile=False):
     environment = ENV | {"APP_DATA_ROOT": str(profile)}
     log_path = OUTPUT / f"{label}.log"
     with log_path.open("w") as log:
@@ -87,8 +88,8 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
                     break
                 time.sleep(0.1)
             assert window, (log_path.read_text(), found.stdout, found.stderr, list(profile.iterdir()))
-            width = "400" if mini else "900"
-            command("xdotool", "windowsize", window, width, "720")
+            width = "393" if mobile else "400" if mini else "900"
+            command("xdotool", "windowsize", window, width, "800" if mobile else "720")
             command("xdotool", "windowfocus", window)
             time.sleep(1)
             yield window, log_path
@@ -181,6 +182,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         tap(window, 825, 166)  # Add Habits from the unified list.
         wait_setting(profile, "enabled_apps", 2)
         capture(window, "settings-habits-reenabled")
+    with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("UPDATE settings SET value='1' WHERE key='habits_guide_seen'")
+    with application(profile, "mobile-apps", mobile=True) as (window, log):
+        tap(window, 295, 774)  # Settings in the bottom navigation.
+        tap(window, 196, 486)  # Apps & sidebar in the narrow settings hub.
+        capture(window, "mobile-apps-before")
+        for cycle in range(3):
+            tap(window, 335, 268)  # Add the bundled Diary app.
+            wait_setting(profile, "enabled_apps", 10)
+            tap(window, 335, 156)  # Hide Diary; its package stays installed.
+            wait_setting(profile, "enabled_apps", 2)
+        capture(window, "mobile-apps-after")
     # Mini is explicitly temporary Practice, independently of saved choices.
     for mask in (1, 0):
         with sqlite3.connect(profile / "inbe.db") as db:
@@ -287,16 +300,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
             assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
-    # An existing profile keeps its former features and introduces Lumi first.
+    # Upgrading keeps the selected page and repairs missing selected shortcuts.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("DELETE FROM settings WHERE key IN ('enabled_apps','apps_setup_done') OR key LIKE 'app_used_%'")
         db.execute("DELETE FROM settings WHERE key='lumi_introduced'")
         # This represents an established profile whose existing guides are done.
         db.execute("UPDATE settings SET value='1' WHERE key IN ('tutorial_seen','habits_guide_seen')")
+        db.execute("UPDATE settings SET value='0' WHERE key='main_tab'")
     with application(profile, "existing-profile") as (window, log):
         capture(window, "existing-profile-all-apps")
         wait_setting(profile, "enabled_apps", 23)
-        wait_setting(profile, "main_tab", 4)
+        wait_setting(profile, "main_tab", 0)
+        routes = [int(settings(profile)[f"bottom_nav_route_{index}"])
+                  for index in range(int(settings(profile)["bottom_nav_route_count"]))]
+        assert 12 in routes and routes[-1] == 4, routes
         # Sidebar order survives the earlier choices; open Lists through the
         # same app route rather than assuming a fixed shortcut position.
         command("xprop", "-id", window, "-f", "_HARMONY_APP_FEATURE", "32c",
@@ -317,6 +334,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         mini_expansion_clock_advances=True,
         mini_expansion_explicit_save_and_graceful_quit=True,
         data_and_identity_preserved=True, existing_profile_keeps_all_apps=True,
+        upgrade_keeps_selected_page_and_repairs_shortcuts=True,
+        narrow_layout_repeated_diary_add_remove=True,
     )
 (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 print(json.dumps(result, indent=2))
