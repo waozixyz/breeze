@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.2] - 2026-10-07
+### Changed
+- Load earlier chat messages automatically as you scroll up, preserving your reading position.
+- Move Telegram setup from the chat toolbar into Settings.
+
 ## [1.3.1] - 2026-10-07
 
 - Format bold emphasis in replies and save explicit feature suggestions as feedback offline.

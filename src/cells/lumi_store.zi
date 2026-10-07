@@ -1,5 +1,5 @@
-// Device-local conversation, scoped to the active account. Existing settings
-// storage is reused, so this adds no database schema or sync collection.
+// Durable account conversation. Older messages load as the chat scrolls up;
+// every message remains archived and travels through encrypted account sync.
 #import "json_scan"
 #import "byte_text_linux"
 #import "text"
@@ -11,9 +11,12 @@
 #import, file "../storage/sqlite.zi";
 #import, file "../storage/state.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../storage/db.zi";
 #import, file "../app/text_buffers.zi";
 
-lumi_rows: [64]LumiChatRow;
+lumi_rows: Vec(LumiChatRow);
 lumi_count: s32;
 lumi_owner: [64]u8;
 lumi_store_loaded: bool;
@@ -27,46 +30,79 @@ LumiStoreReset :: () {
         PackageFree(lumi_rows[index].payload)
         lumi_rows[index] = LumiChatRow.{}
     }
+    VecFree(lumi_rows)
     lumi_count = 0
     lumi_owner[0] = cast(u8)0
     lumi_store_loaded = false
     lumi_store_error = false
 }
 
+lumi_storage_revision: s64 = -1;
+lumi_history_limit: s32 = LUMI_CHAT_MAX;
+lumi_has_older: bool;
+lumi_next_message_id: string;
+
 LumiStoreLoad :: () {
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
-    if lumi_store_loaded && owner == AppTextFromCString(*lumi_owner[0], 64) {
+    revision := storage_data_revision()
+    if lumi_store_loaded && owner == AppTextFromCString(*lumi_owner[0], 64) && revision == lumi_storage_revision {
         return
+    }
+    if owner != AppTextFromCString(*lumi_owner[0], 64) {
+        lumi_history_limit = LUMI_CHAT_MAX
     }
     LumiStoreReset()
     unused AppCopyText(owner, lumi_owner[:])
     lumi_store_loaded = true
+    // Migrate the original bounded history once, without dropping any rows.
+    if storage_get_setting_int("lumi_archive_migrated", 0) == 0 {
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key='lumi_chat'", -1, *statement, null) == SQLITE_OK {
+            bind_text(statement, 1, owner)
+            if SqliteStep(statement) == SQLITE_ROW {
+                document := PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 524288), "")
+                defer { PackageFree(document) }
+                count := ArrayCount(document, 0)
+                if count < 0 || count > LUMI_CHAT_MAX {
+                    lumi_store_error = true
+                } else {
+                    for index: cast(s32)0..count - 1 {
+                        at := ElementAt(document, 0, index)
+                        end := ValueEnd(document, at, 0)
+                        if at < 0 || end < 0 { lumi_store_error = true; break }
+                        hash: [65]u8
+                        row := document[at:end]
+                        descriptor := cast(*TextDescriptor)(*row)
+                        storage_sha256_hex(descriptor.data, row.count, *hash[0])
+                        key_out: Vec(u8)
+                        BuilderPrint(*key_out, "cell.lumi.message.legacy-%-%", TextFromCString(*hash[0]), index)
+                        key := BuilderFinish(key_out)
+                        value_out: Vec(u8)
+                        BuilderPrint(*value_out, "{\"time\":%,%", index, row[1:])
+                        value := BuilderFinish(value_out)
+                        if !CellRecordWrite(key, value) { lumi_store_error = true }
+                        PackageFree(key)
+                        PackageFree(value)
+                    }
+                }
+            }
+            SqliteFinalize(statement)
+        } else {
+            lumi_store_error = true
+        }
+        if !lumi_store_error { storage_set_setting_int("lumi_archive_migrated", 1) }
+    }
     statement: *void
-    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key='lumi_chat'",
-        -1, *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
         lumi_store_error = true
         return
     }
-    defer {
-        SqliteFinalize(statement)
-    }
-    unused SqliteBindTextString(statement, 1, owner, cast(s32)owner.count)
-    result := SqliteStep(statement)
-    if result == SQLITE_DONE {
-        return
-    }
-    if result != SQLITE_ROW {
-        lumi_store_error = true
-        return
-    }
-    document := AppTextFromCString(SqliteColumnText(statement, 0), 524288)
-    count := ArrayCount(document, 0)
-    if count < 0 || count > LUMI_CHAT_MAX || ValueEnd(document, 0, 0) != document.count {
-        lumi_store_error = true
-        return
-    }
-    for index: cast(s32)0..count - 1 {
-        element := ElementAt(document, 0, index)
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, owner)
+    SqliteBindInt(statement, 2, lumi_history_limit)
+    while SqliteStep(statement) == SQLITE_ROW {
+        document := AppTextFromCString(SqliteColumnText(statement, 0), 65536)
+        element: s32 = 0
         bytes: [1024]u8
         length := ReadStringText(document, FieldAt(document, element, "text"), bytes[:])
         user := ReadNumber(document, FieldAt(document, element, "user"))
@@ -77,17 +113,17 @@ LumiStoreLoad :: () {
         rich_valid := true
         if kind_at >= 0 {
             number := ReadNumber(document, kind_at)
-            rich_valid = number.valid && number.value >= 0 && number.value <= 2 &&
+            rich_valid = number.valid && number.value >= 0 && number.value <= 3 &&
             number.value == cast(float64)cast(s32)number.value
             if rich_valid {
                 kind = cast(s32)number.value
             }
-            if kind == LUMI_CHAT_PROGRESS {
+            if kind == LUMI_CHAT_PROGRESS || kind == LUMI_CHAT_FEEDBACK {
                 payload_length := ReadStringText(document, FieldAt(document, element, "payload"), payload_bytes[:])
                 rich_valid = rich_valid && payload_length > 0 && payload_length < LUMI_PAYLOAD_MAX
                 if rich_valid {
                     payload = TextFromBytes(payload_bytes[:payload_length])
-                    rich_valid = LumiChartRead(payload).valid
+                    rich_valid = ifx kind == LUMI_CHAT_PROGRESS then LumiChartRead(payload).valid else payload.count == 32
                 }
             }
             rich_valid = rich_valid && (kind == LUMI_CHAT_TEXT || user.value == 0.0)
@@ -100,10 +136,36 @@ LumiStoreLoad :: () {
             lumi_store_error = true
             return
         }
-        lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(TextFromBytes(bytes[0:length]), ""),
+        row := LumiChatRow.{.text = PackageText(TextFromBytes(bytes[0:length]), ""),
             .user = user.value == 1.0, .kind = kind, .payload = PackageText(payload, "")}
+        if !VecPush(lumi_rows, row) {
+            PackageFree(row.text)
+            PackageFree(row.payload)
+            lumi_store_error = true
+            return
+        }
         lumi_count += 1
     }
+    total: *void
+    lumi_has_older = false
+    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%'", -1, *total, null) == SQLITE_OK {
+        bind_text(total, 1, owner)
+        lumi_has_older = SqliteStep(total) == SQLITE_ROW && SqliteColumnInt64(total, 0) > lumi_count
+        SqliteFinalize(total)
+    }
+    lumi_storage_revision = storage_data_revision()
+}
+
+LumiStoreLoadOlder :: () -> bool {
+    LumiStoreLoad()
+    if !lumi_has_older || lumi_store_error {
+        return false
+    }
+    previous := lumi_count
+    lumi_history_limit += LUMI_CHAT_MAX
+    lumi_storage_revision = -1
+    LumiStoreLoad()
+    return !lumi_store_error && lumi_count > previous
 }
 
 LumiJsonString :: (out: *Vec(u8), value: string) {
@@ -127,28 +189,7 @@ LumiJsonString :: (out: *Vec(u8), value: string) {
 }
 
 LumiStoreSave :: () -> bool {
-    if lumi_store_error {
-        return false
-    }
-    out: Vec(u8)
-    BuilderPrint(*out, "[")
-    for index: cast(s32)0..lumi_count - 1 {
-        BuilderPrint(*out, "%{\"user\":%,\"text\":", ifx index == 0 then "" else ",",
-            ifx lumi_rows[index].user then 1 else 0)
-        LumiJsonString(*out, lumi_rows[index].text)
-        if lumi_rows[index].kind != LUMI_CHAT_TEXT {
-            BuilderPrint(*out, ",\"kind\":%,\"payload\":", lumi_rows[index].kind)
-            LumiJsonString(*out, lumi_rows[index].payload)
-        }
-        BuilderPrint(*out, "}")
-    }
-    BuilderPrint(*out, "]")
-    document := BuilderFinish(out)
-    defer {
-        PackageFree(document)
-    }
-    storage_set_setting_text("lumi_chat", document)
-    return storage_setting_text_equals("lumi_chat", document) != 0
+    return !lumi_store_error
 }
 
 LumiStoreAppend :: (text: string, user: bool) {
@@ -159,26 +200,48 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
     if text.count == 0 || text.count >= LUMI_INPUT_MAX {
         return false
     }
-    if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_DONATIONS ||
+    if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_FEEDBACK ||
     (kind != LUMI_CHAT_TEXT && user) ||
     (kind == LUMI_CHAT_PROGRESS && !LumiChartRead(payload).valid) ||
-    (kind != LUMI_CHAT_PROGRESS && payload.count != 0) {
+    (kind == LUMI_CHAT_FEEDBACK && payload.count != 32) ||
+    (kind != LUMI_CHAT_PROGRESS && kind != LUMI_CHAT_FEEDBACK && payload.count != 0) {
         return false
     }
     LumiStoreLoad()
-    if lumi_count == LUMI_CHAT_MAX {
-        // Trim a complete conversation pair, preserving user/reply ordering.
-        PackageFree(lumi_rows[0].text)
-        PackageFree(lumi_rows[1].text)
-        PackageFree(lumi_rows[0].payload)
-        PackageFree(lumi_rows[1].payload)
-        for index: cast(s32)2..lumi_count - 1 {
-            lumi_rows[index - 2] = lumi_rows[index]
-        }
-        lumi_count -= 2
+    if lumi_store_error { return false }
+    nonce: [65]u8
+    if !NativeNonce(null, nonce[:]) { return false }
+    key: string
+    if lumi_next_message_id.count > 0 {
+        key = PackageText("cell.lumi.message.", lumi_next_message_id)
+    } else {
+        key = PackageText("cell.lumi.message.", TextFromCString(*nonce[0]))
     }
-    lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(text, ""), .user = user,
+    defer { PackageFree(key) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"time\":%,\"user\":%,\"kind\":%,\"text\":", CellRecordClock(), ifx user then 1 else 0, kind)
+    LumiJsonString(*out, text)
+    BuilderPrint(*out, ",\"payload\":")
+    LumiJsonString(*out, payload)
+    BuilderPrint(*out, "}")
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    if !CellRecordWrite(key, value) { return false }
+    lumi_next_message_id = ""
+    lumi_storage_revision = storage_data_revision()
+    // Keep the messages already loaded while new replies arrive. Once older
+    // history is expanded, appending never discards the reading position.
+    if lumi_count == lumi_history_limit {
+        lumi_history_limit += 1
+    }
+    row := LumiChatRow.{.text = PackageText(text, ""), .user = user,
         .kind = kind, .payload = PackageText(payload, "")}
+    if !VecPush(lumi_rows, row) {
+        PackageFree(row.text)
+        PackageFree(row.payload)
+        lumi_storage_revision = -1
+        return false
+    }
     lumi_count += 1
     lumi_store_revision += 1
     return true

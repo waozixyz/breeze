@@ -7,86 +7,110 @@
 #import, file "package_files.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/daochi_account.zi";
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/db.zi";
+#import, file "../app/text_buffers.zi";
 
-FeedbackPending :: () -> string {
-    value := storage_get_setting_text("lumi_feedback_pending")
-    if value.count == 0 {
-        return "[]"
-    }
-    return value
-}
-
-FeedbackEnqueue :: (title: string, message: string, context: string) -> string {
+FeedbackDraft :: (title: string, message: string, context: string) -> string {
     if title.count == 0 || title.count > 160 || message.count == 0 || message.count > 4096 || context.count > 2048 {
         return ""
     }
-    pending := FeedbackPending()
-    count := ArrayCount(pending, 0)
-    if count < 0 || count >= 32 || ValueEnd(pending, 0, 0) != pending.count {
-        return ""
-    }
-    id: [65]u8
-    if !NativeNonce(null, id[:]) {
-        return ""
-    }
+    nonce: [65]u8
+    if !NativeNonce(null, nonce[:]) { return "" }
+    id := TextFromCString(*nonce[0])[:32]
+    key := PackageText("cell.feedback.draft.", id)
     out: Vec(u8)
-    BuilderPrint(*out, "%", pending[:pending.count - 1])
-    BuilderPrint(*out, "%{\"id\":\"%\",\"app_id\":\"inbe\",\"title\":",
-        ifx count == 0 then "" else ",", AccountField(*id[0], 65))
+    BuilderPrint(*out, "{\"title\":")
     LumiJsonString(*out, title)
     BuilderPrint(*out, ",\"message\":")
     LumiJsonString(*out, message)
     BuilderPrint(*out, ",\"context\":")
     LumiJsonString(*out, context)
-    BuilderPrint(*out, "}]")
+    BuilderPrint(*out, "}")
+    value := BuilderFinish(out)
+    written := CellRecordWrite(key, value)
+    PackageFree(key)
+    PackageFree(value)
+    if !written { return "" }
+    return PackageText(id, "")
+}
+
+FeedbackChoice :: (id: string, action: s32) -> bool {
+    if id.count != 32 { return false }
+    key := PackageText("cell.feedback.draft.", id)
+    value := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(value) }
+    title: [161]u8
+    message: [4097]u8
+    context: [2049]u8
+    title_count := ReadStringText(value, FieldAt(value, 0, "title"), title[:])
+    message_count := ReadStringText(value, FieldAt(value, 0, "message"), message[:])
+    context_count := ReadStringText(value, FieldAt(value, 0, "context"), context[:])
+    if title_count <= 0 || message_count <= 0 || context_count < 0 { return false }
+    if action == 0 { return true }
+    if action != 1 && action != 2 { return false }
+    if action == 1 {
+        report_id := PackageText(id, id)
+        queued := FeedbackEnqueueID(TextFromBytes(title[:title_count]), TextFromBytes(message[:message_count]),
+            TextFromBytes(context[:context_count]), report_id)
+        PackageFree(report_id)
+        if !queued { return false }
+    }
+    return CellRecordWrite(key, ifx action == 1 then "{\"sent\":true}" else "{\"sent\":false}")
+}
+
+FeedbackEnqueueID :: (title: string, message: string, context: string, id: string) -> bool {
+    if id.count != 64 || title.count == 0 || title.count > 160 ||
+    message.count == 0 || message.count > 4096 || context.count > 2048 {
+        return false
+    }
+    key := PackageText("cell.feedback.pending.", id)
+    defer { PackageFree(key) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"id\":\"%\",\"app_id\":\"inbe\",\"title\":", id)
+    LumiJsonString(*out, title)
+    BuilderPrint(*out, ",\"message\":")
+    LumiJsonString(*out, message)
+    BuilderPrint(*out, ",\"context\":")
+    LumiJsonString(*out, context)
+    BuilderPrint(*out, "}")
     value := BuilderFinish(out)
     defer { PackageFree(value) }
-    storage_set_setting_text("lumi_feedback_pending", value)
-    if storage_setting_text_equals("lumi_feedback_pending", value) == 0 {
-        return ""
-    }
-    return PackageText(AccountField(*id[0], 65), "")
+    return CellRecordWrite(key, value)
+}
+
+// Kept for already-approved callers; chat/tool proposals use FeedbackDraft.
+FeedbackEnqueue :: (title: string, message: string, context: string) -> string {
+    id: [65]u8
+    if !NativeNonce(null, id[:]) { return "" }
+    value := TextFromCString(*id[0])
+    if !FeedbackEnqueueID(title, message, context, value) { return "" }
+    return PackageText(value, "")
 }
 
 FeedbackFirst :: () -> string {
-    pending := FeedbackPending()
-    if ArrayCount(pending, 0) <= 0 {
-        return ""
-    }
-    at := ElementAt(pending, 0, 0)
-    end := ValueEnd(pending, at, 0)
-    if at < 0 || end < 0 {
-        return ""
-    }
-    return PackageText(pending[at:end], "")
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key LIKE 'cell.feedback.pending.%' AND json_extract(value,'$.id') IS NOT NULL ORDER BY updated_at,key LIMIT 1", -1, *statement, null) != SQLITE_OK { return "" }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(statement) != SQLITE_ROW { return "" }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
 }
 
 FeedbackDelivered :: (id: string) -> bool {
-    pending := FeedbackPending()
-    count := ArrayCount(pending, 0)
-    if count <= 0 {
+    if id.count != 64 {
         return false
     }
+    key := PackageText("cell.feedback.pending.", id)
+    defer { PackageFree(key) }
+    current := CellRecordRead(key)
+    defer { PackageFree(current) }
     bytes: [65]u8
-    first := ElementAt(pending, 0, 0)
-    length := ReadStringText(pending, FieldAt(pending, first, "id"), bytes[:])
-    if length != 64 || TextFromBytes(bytes[:length]) != id {
+    count := ReadStringText(current, FieldAt(current, 0, "id"), bytes[:])
+    if count != 64 || TextFromBytes(bytes[:count]) != id {
         return false
     }
-    out: Vec(u8)
-    BuilderPrint(*out, "[")
-    for index: cast(s32)1..count - 1 {
-        at := ElementAt(pending, 0, index)
-        end := ValueEnd(pending, at, 0)
-        if at < 0 || end < 0 {
-            PackageFree(BuilderFinish(out))
-            return false
-        }
-        BuilderPrint(*out, "% %", ifx index == 1 then "" else ",", pending[at:end])
-    }
-    BuilderPrint(*out, "]")
-    value := BuilderFinish(out)
-    defer { PackageFree(value) }
-    storage_set_setting_text("lumi_feedback_pending", value)
-    return storage_setting_text_equals("lumi_feedback_pending", value) != 0
+    return CellRecordWrite(key, "{\"delivered\":true}")
 }

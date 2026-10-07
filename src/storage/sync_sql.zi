@@ -163,3 +163,18 @@ OR (excluded.updated_at = settings.updated_at AND NOT EXISTS (
  AND entity_id=settings.key AND local_date=0
 ))
 SQL
+
+// Local unacknowledged edits win ties; a remote record never queues itself.
+SyncCellRecordsSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),
+ CAST(strftime('%s',json_extract(value,'$.updated_at')) AS INTEGER)
+FROM json_each(?1,'$.changes.cell_records')
+WHERE strftime('%s',json_extract(value,'$.updated_at')) IS NOT NULL
+ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+WHERE excluded.updated_at > settings.updated_at
+OR (excluded.updated_at = settings.updated_at AND NOT EXISTS (
+ SELECT 1 FROM sync_outbox WHERE entity_type='cell_record'
+ AND entity_id=settings.key AND local_date=0
+))
+SQL

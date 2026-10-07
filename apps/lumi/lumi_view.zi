@@ -36,10 +36,15 @@ ReadLumiChatRowHost :: (index: s32) -> LumiChatRow #foreign host_api;
 ReadLumiSuggestionTaskHost :: (index: s32) -> LumiTask #foreign host_api;
 ReadLumiSuggestionHabitHost :: (index: s32) -> LumiTask #foreign host_api;
 LumiViewLocaleHost :: (key: string) -> string #foreign host_api;
+LumiFeedbackChoiceHost :: (id: string, action: s32) -> bool #foreign host_api;
+LumiLoadOlderHost :: () -> bool #foreign host_api;
+LumiFirstVisibleRowHost :: (scroll: s32) -> s32 #foreign host_api;
+LumiRowOffsetHost :: (index: s32) -> s32 #foreign host_api;
 ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
 LumiDonationActionHost :: (coin: s32, action: s32) -> bool #foreign host_api;
 frame: LumiUiFrame;
-chart_selected: [65]s32;
+chart_selected_key: u64;
+chart_selected_point: s32;
 donation_notice: string;
 donation_notice_row: s32 = -1;
 
@@ -87,7 +92,8 @@ ProgressCard :: (row: LumiChatRow, index: s32, x: s32, y: s32, width: s32) {
         return
     }
     key := 330000 + index * 64
-    selected := chart_selected[index]
+    selection_key := KeyHash(row.payload)
+    selected := ifx chart_selected_key == selection_key then chart_selected_point else 0
     if selected < 0 || selected >= chart.count {
         selected = 0
     }
@@ -107,7 +113,8 @@ ProgressCard :: (row: LumiChatRow, index: s32, x: s32, y: s32, width: s32) {
         if Button(frame.session, ButtonProps.{.id = 310000 + index * 32 + point,
                 .bounds = Bounds(left, plot_y, cast(s32)step, plot_height), .invisible = true}) != 0 {
             selected = point
-            chart_selected[index] = point
+            chart_selected_key = selection_key
+            chart_selected_point = point
         }
         Box(frame.session, BoxProps.{.key = cast(u64)(key + point),
                 .bounds = Bounds(left, plot_y + plot_height - bar_height, bar_width, bar_height),
@@ -189,36 +196,26 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         input_height = Scale(144)
     }
     footer := frame.height - frame.bottom - Scale(16) - input_height
-    suggestions_top := footer - Scale(46)
+    suggestions_top := footer - Scale(ifx LumiTrim(frame.value).count > 0 then 46 else 0)
     history_top := Scale(12)
     chat_height := suggestions_top - history_top - Scale(8)
     if chat_height < Scale(60) {
         chat_height = Scale(60)
     }
-    rows: [65]LumiChatRow
-    content_height: s32 = 0
-    for index: cast(s32)0..frame.chat_count - 1 {
-        rows[index] = ReadLumiChatRowHost(index)
-        minimum := Scale(ifx rows[index].user then 54 else 80)
-        if rows[index].height < minimum {
-            rows[index].height = minimum
-        }
-        content_height += rows[index].height
-    }
     history := Scroll(frame.session, ScrollProps.{.key = cast(u64)300100,
             .bounds = Bounds(x, history_top, width, chat_height),
-            .content_height = content_height, .scroll_offset = frame.scroll, .scale = frame.scale})
+            .content_height = frame.history_height, .scroll_offset = frame.scroll, .scale = frame.scale})
     frame.scroll = history.scroll_offset
     frame.follow_end = history.scroll_offset == history.max_scroll
     if history.opened {
-        top := cast(s32)history.content.y
-        for index: cast(s32)0..frame.chat_count - 1 {
-            row := rows[index]
-            row_height := row.height
-            if top + row_height < history_top || top > history_top + chat_height {
-                top += row_height
-                continue
+        first := LumiFirstVisibleRowHost(history.scroll_offset)
+        top := cast(s32)history.content.y + LumiRowOffsetHost(first)
+        for index: first..frame.chat_count - 1 {
+            if top > history_top + chat_height {
+                break
             }
+            row := ReadLumiChatRowHost(index)
+            row_height := row.height
             bubble_width := width - Scale(ifx row.user then 60 else 80)
             left := x + Scale(48)
             if !row.user {
@@ -239,7 +236,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             }
             text_top := Scale(ifx row.user then 12 else 32)
             card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
-                ifx row.kind == LUMI_CHAT_DONATIONS then 500 else 0)
+                ifx row.kind == LUMI_CHAT_DONATIONS then 500 else ifx row.kind == LUMI_CHAT_FEEDBACK then 54 else 0)
             text_height := row_height - text_top - Scale(16) - card_height
             formatted := LumiFormatMessage(row.text, !row.user)
             Text(frame.session, TextProps.{.key = cast(u64)(300403 + index * 4),
@@ -247,12 +244,24 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
                     bubble_width - Scale(28), text_height),
                     .text = TextFromBytes(formatted.bytes[:formatted.count]),
                     .strong = formatted.strong[:formatted.strong_count],
-                    .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+                    .font = frame.font, .selectable = true, .wrap = cast(TextWrap)TextWrapAuto})
             card_top := top + text_top + text_height + Scale(8)
             if row.kind == LUMI_CHAT_PROGRESS {
                 ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))
             } else if row.kind == LUMI_CHAT_DONATIONS {
                 DonationCard(index, left + Scale(14), card_top, bubble_width - Scale(28))
+            } else if row.kind == LUMI_CHAT_FEEDBACK {
+                pending := LumiFeedbackChoiceHost(row.payload, 0)
+                if Button(frame.session, ButtonProps.{.id = 351000 + index * 2,
+                        .bounds = Bounds(left + Scale(14), card_top, Scale(88), Scale(44)),
+                        .label = LumiViewLocaleHost("lumi_feedback_yes"), .disabled = !pending}) != 0 {
+                    unused LumiFeedbackChoiceHost(row.payload, 1)
+                }
+                if Button(frame.session, ButtonProps.{.id = 351001 + index * 2,
+                        .bounds = Bounds(left + Scale(108), card_top, Scale(88), Scale(44)),
+                        .label = LumiViewLocaleHost("lumi_feedback_no"), .disabled = !pending}) != 0 {
+                    unused LumiFeedbackChoiceHost(row.payload, 2)
+                }
             }
             top += row_height
         }
@@ -276,7 +285,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
     if action.kind == 0 && frame.choosing_habit {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = typed}
     }
-    if !frame.choosing_diary && LumiActionAvailable(action, frame.available_apps) &&
+    if typed.count > 0 && !frame.choosing_diary && LumiActionAvailable(action, frame.available_apps) &&
     (action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO || action.kind == LUMI_COMPLETE_HABIT) {
         count := ifx action.kind == LUMI_COMPLETE_HABIT then frame.habit_count else frame.task_count
         for index: cast(s32)0..count - 1 {
@@ -304,7 +313,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         }
     }
     for index: cast(s32)0..cast(s32)19 {
-        if frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit {
+        if typed.count == 0 || frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit {
             break
         }
         candidate_action := LumiIntent(candidates[index], commands)
@@ -376,5 +385,8 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         frame.follow_end = true
     }
     WriteLumiUiHost(frame)
+    if message.action != LUMI_SEND && frame.has_older && !frame.follow_end && frame.scroll <= Scale(96) {
+        unused LumiLoadOlderHost()
+    }
     return message
 }

@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 6, inserts
+    assert len(inserts) == 7, inserts
     return clear + inserts
 
 
@@ -61,6 +61,9 @@ ENTITIES = [
     ("habit", "h1", 0), ("habit", "h2", 0), ("habit_day", "h1", 20260101),
     ("app_preference", "app_used_lists", 0), ("app_preference", "app_used_diary", 0),
     ("session", "s1", 0), ("elist_list", "l1", 0), ("elist_item", "i1", 0),
+    ("cell_record", "cell.lumi.message.history", 0),
+    ("cell_record", "cell.diary.entry.today", 0),
+    ("cell_record", "cell.feedback.report", 0),
 ]
 
 
@@ -79,6 +82,11 @@ def open_database():
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})
+    for key in ("cell.lumi.message.history", "cell.diary.entry.today", "cell.feedback.report"):
+        insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "{}", "updated_at": 2})
+    insert_row(database, "users", {"id": "u2"})
+    insert_row(database, "settings", {"user_id": "u2", "key": "cell.lumi.message.foreign", "value": "{}", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "telegram.sent.local", "value": "1", "updated_at": 2})
     return database
 
 

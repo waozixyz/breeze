@@ -1,0 +1,103 @@
+// Immutable photo/text chunks and a per-file manifest share encrypted sync.
+// A manifest becomes readable only when all chunks and its hash validate.
+#import "json_scan"
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "lumi_store.zi";
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+
+DIARY_CHUNK_BYTES :: 1024
+
+DiaryRecordKey :: (name: string) -> string {
+    return PackageText("cell.diary.file.", name)
+}
+
+DiaryChunkKey :: (hash: string, index: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "cell.diary.chunk.%.%", hash, index)
+    return BuilderFinish(out)
+}
+
+DiaryRecordSave :: (name: string, data: string) -> bool {
+    if data.count <= 0 || data.count > 16777216 {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    hash_bytes: [65]u8
+    storage_sha256_hex(descriptor.data, data.count, *hash_bytes[0])
+    hash := TextFromCString(*hash_bytes[0])
+    count := cast(s32)((data.count + DIARY_CHUNK_BYTES - 1) / DIARY_CHUNK_BYTES)
+    key := DiaryRecordKey(name)
+    defer { PackageFree(key) }
+    previous := CellRecordRead(key)
+    defer { PackageFree(previous) }
+    old_hash: [65]u8
+    length := ReadStringText(previous, FieldAt(previous, 0, "hash"), old_hash[:])
+    if length == 64 && TextFromBytes(old_hash[:length]) == hash {
+        return true
+    }
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    for index: cast(s32)0..count - 1 {
+        start := cast(s64)index * DIARY_CHUNK_BYTES
+        size := data.count - start
+        if size > DIARY_CHUNK_BYTES { size = DIARY_CHUNK_BYTES }
+        encoded: [DIARY_CHUNK_BYTES * 2 + 1]u8
+        if SyncCryptoBytesToHex(*descriptor.data[start], size, *encoded[0], encoded.count) == 0 {
+            return false
+        }
+        chunk_key := DiaryChunkKey(hash, index)
+        written := CellRecordWrite(chunk_key, TextFromCString(*encoded[0]))
+        PackageFree(chunk_key)
+        if !written { return false }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"hash\":\"%\",\"count\":%,\"size\":%}", hash, count, data.count)
+    manifest := BuilderFinish(out)
+    defer { PackageFree(manifest) }
+    return CellRecordWrite(key, manifest)
+}
+
+DiaryRecordRead :: (name: string) -> string {
+    key := DiaryRecordKey(name)
+    manifest := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(manifest) }
+    hash_bytes: [65]u8
+    length := ReadStringText(manifest, FieldAt(manifest, 0, "hash"), hash_bytes[:])
+    parts := ReadNumber(manifest, FieldAt(manifest, 0, "count"))
+    size := ReadNumber(manifest, FieldAt(manifest, 0, "size"))
+    if length != 64 || !parts.valid || !size.valid || size.value < 1 || size.value > 16777216 ||
+    parts.value != cast(float64)((cast(s64)size.value + DIARY_CHUNK_BYTES - 1) / DIARY_CHUNK_BYTES) {
+        return ""
+    }
+    hash := TextFromBytes(hash_bytes[:length])
+    output: Vec(u8)
+    for index: cast(s32)0..cast(s32)parts.value - 1 {
+        chunk_key := DiaryChunkKey(hash, index)
+        encoded := CellRecordRead(chunk_key)
+        decoded: [DIARY_CHUNK_BYTES]u8
+        count := encoded.count / 2
+        valid := encoded.count > 0 && encoded.count % 2 == 0 && count <= DIARY_CHUNK_BYTES &&
+        SyncCryptoHexToBytes(encoded, *decoded[0], count) != 0
+        PackageFree(chunk_key)
+        PackageFree(encoded)
+        if !valid {
+            VecFree(output)
+            return ""
+        }
+        for byte: decoded[:count] { unused VecPush(output, byte) }
+    }
+    value := BuilderFinish(output)
+    descriptor := cast(*TextDescriptor)(*value)
+    actual: [65]u8
+    storage_sha256_hex(descriptor.data, value.count, *actual[0])
+    if value.count != cast(s64)size.value || TextFromCString(*actual[0]) != hash {
+        PackageFree(value)
+        return ""
+    }
+    return value
+}

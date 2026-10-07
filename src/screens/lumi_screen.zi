@@ -6,6 +6,7 @@
 #import "text_props"
 #import "geometry"
 #import "layout"
+#import "vec"
 #import, file "../cells/lumi_types.zi";
 #import, file "../cells/inbe_types.zi";
 #import, file "../cells/lumi_ui_types.zi";
@@ -13,6 +14,8 @@
 #import, file "../cells/lumi_progress.zi";
 #import, file "../cells/lumi_chart.zi";
 #import, file "../cells/lumi_online.zi";
+#import, file "../cells/lumi_telegram.zi";
+#import, file "../app/exercise_types.zi";
 #import, file "../cells/feedback_store.zi";
 #import, file "../cells/app_tools.zi";
 #import, file "../cells/package_files.zi";
@@ -49,6 +52,7 @@
 using HostValueKind;
 using AppNavRoute;
 using TextWrap;
+using ExerciseType;
 lumi_ui: LumiUiFrame;
 lumi_ui_codec: WidgetLumiUiFrameCodec;
 lumi_row_codec: WidgetLumiChatRowCodec;
@@ -59,7 +63,9 @@ lumi_donation_codec: WidgetLumiDonationCodec;
 lumi_input: [1024]u8;
 lumi_tasks: EListState;
 lumi_tasks_revision: s64 = -1;
-lumi_row_heights: [65]s32;
+lumi_row_heights: Vec(s32);
+lumi_history_added_rows: s32;
+lumi_history_loading: bool;
 lumi_rows_revision: u64;
 lumi_rows_width: s32;
 lumi_rows_font: s32;
@@ -83,9 +89,10 @@ app_lumi_reset :: () {
     lumi_input[0] = cast(u8)0
     lumi_tasks = EListState.{}
     lumi_tasks_revision = -1
-    lumi_row_heights = .{}
+    VecFree(lumi_row_heights)
     lumi_pending_route = -1
     lumi_pending_practice = -1
+    lumi_history_loading = false
     lumi_choosing_habit = false
     lumi_choosing_diary = false
 }
@@ -148,9 +155,10 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
             }
             title = title[:end]
         }
-        id := FeedbackEnqueue(title, action.title, context)
+        id := FeedbackDraft(title, action.title, context)
         defer { PackageFree(id) }
-        return id.count != 0
+        return id.count == 32 && LumiStoreAppendCard(LocaleText("lumi_feedback_confirm"),
+            false, LUMI_CHAT_FEEDBACK, id)
     }
     if action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS {
         lumi_pending_route = APP_NAV_ROUTE_SETTINGS
@@ -241,6 +249,44 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
+    if (name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost") && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        requested := cast(s32)arguments[0].integer
+        offset: s32 = 0
+        index: s32 = 0
+        while index < lumi_row_heights.count {
+            if name == "LumiRowOffsetHost" && index >= requested {
+                break
+            }
+            height := lumi_row_heights[index]
+            if name == "LumiFirstVisibleRowHost" && offset + height > requested {
+                break
+            }
+            offset += height
+            index += 1
+        }
+        result.* = ModuleScalar("s32", ifx name == "LumiRowOffsetHost" then offset else index)
+        return 1
+    }
+    if name == "LumiLoadOlderHost" && count == 0 {
+        previous := LumiStoreCount()
+        lumi_history_loading = LumiStoreLoadOlder()
+        lumi_history_added_rows = LumiStoreCount() - previous
+        result.* = ModuleScalar("bool", ifx lumi_history_loading then 1 else 0)
+        return 1
+    }
+    if name == "LumiFeedbackChoiceHost" && count == 2 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    ModuleScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        id := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        action := cast(s32)arguments[1].integer
+        succeeded := FeedbackChoice(id, action)
+        if action != 0 && succeeded {
+            LumiStoreAppend(LocaleText(ifx action == 1 then "lumi_feedback_saved" else "lumi_cancelled"), false)
+        }
+        result.* = ModuleScalar("bool", ifx succeeded then 1 else 0)
+        return 1
+    }
     if name == "ReadLumiDonationHost" && count == 1 &&
     ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         coin := cast(s32)arguments[0].integer
@@ -341,30 +387,10 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     if name == "ReadLumiChatRowHost" && count == 1 &&
     ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         index := cast(s32)arguments[0].integer
-        row := ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1)
-        column_width := lumi_ui.width - cast(s32)(32.0 * lumi_ui.scale)
-        maximum := cast(s32)(720.0 * lumi_ui.scale)
-        if column_width > maximum {
-            column_width = maximum
-        }
-        if index < 0 || index >= 65 {
+        if index < 0 || index >= lumi_ui.chat_count {
             return 0
         }
-        if lumi_row_heights[index] == 0 {
-            formatted := LumiFormatMessage(row.text, !row.user)
-            prepared := PrepareText(TextProps.{.text = TextFromBytes(formatted.bytes[:formatted.count]), .font = lumi_ui.font,
-                    .bounds = Rectangle.{0.0, 0.0,
-                        cast(float32)(column_width - cast(s32)((ifx row.user then 88.0 else 108.0) * lumi_ui.scale)), 0.0}},
-                DefaultTextFace())
-            lumi_row_heights[index] = cast(s32)prepared.bounds.height +
-            cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
-            if row.kind == LUMI_CHAT_PROGRESS {
-                lumi_row_heights[index] += cast(s32)(242.0 * lumi_ui.scale)
-            } else if row.kind == LUMI_CHAT_DONATIONS {
-                lumi_row_heights[index] += cast(s32)(500.0 * lumi_ui.scale)
-            }
-        }
-        row.height = lumi_row_heights[index]
+        row := LumiMeasuredRow(index)
         result.* = WidgetEncodeLumiChatRow(row, *lumi_row_codec)
         return 1
     }
@@ -383,8 +409,34 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     return 0
 }
 
-#program_export
-lumi_screen_draw :: (app: *InnerBreeze) {
+LumiMeasuredRow :: (index: s32) -> LumiChatRow {
+    row := ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1)
+    if index < 0 || index >= lumi_row_heights.count {
+        return row
+    }
+    if lumi_row_heights[index] == 0 {
+        column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
+        formatted := LumiFormatMessage(row.text, !row.user)
+        prepared := PrepareText(TextProps.{.text = TextFromBytes(formatted.bytes[:formatted.count]),
+                .font = lumi_ui.font, .bounds = Rectangle.{0.0, 0.0,
+                    cast(float32)(column_width - cast(s32)((ifx row.user then 88.0 else 108.0) * lumi_ui.scale)), 0.0}},
+            DefaultTextFace())
+        height := cast(s32)prepared.bounds.height + cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
+        if row.kind == LUMI_CHAT_PROGRESS {
+            height += AppScale(242)
+        } else if row.kind == LUMI_CHAT_DONATIONS {
+            height += AppScale(500)
+        } else if row.kind == LUMI_CHAT_FEEDBACK {
+            height += AppScale(54)
+        }
+        minimum := AppScale(ifx row.user then 54 else 80)
+        lumi_row_heights[index] = ifx height < minimum then minimum else height
+    }
+    row.height = lumi_row_heights[index]
+    return row
+}
+
+LumiPrepareTools :: (app: *InnerBreeze) {
     owner_changed := lumi_store_loaded && AppTextFromCString(*lumi_owner[0], 64) !=
     AppTextFromCString(storage_user_id_buffer(), 64)
     if owner_changed {
@@ -417,6 +469,34 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.choosing_diary = lumi_choosing_diary
     lumi_ui.waiting = LumiOnlineWaiting()
     lumi_ui.habit_count = ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
+}
+
+// Telegram and the native composer run the same interpreter against live app
+// state. No render frame or remembered action is needed for a remote message.
+LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
+    if app == null || input.count == 0 || input.count >= LUMI_INPUT_MAX {
+        return false
+    }
+    LumiPrepareTools(app)
+    lumi_pending_route = -1
+    lumi_pending_practice = -1
+    WidgetHostBegin(app.ui.session)
+    CellsUiBegin(LumiUiCall, cast(*void)app)
+    response := LumiRun(LumiMessage.{.action = LUMI_SEND, .input = input})
+    CellsUiEnd()
+    WidgetHostEnd()
+    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) {
+        LumiStoreAppend(LocaleText("lumi_unavailable"), false)
+    }
+    if lumi_pending_route >= 0 {
+        app_apply_nav_route(app, lumi_pending_route)
+    }
+    return response.succeeded
+}
+
+#program_export
+lumi_screen_draw :: (app: *InnerBreeze) {
+    LumiPrepareTools(app)
     lumi_ui.session = app.ui.session
     if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {
         lumi_ui.scroll = 1000000
@@ -427,19 +507,36 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.scale = MetricsScale()
     lumi_ui.font = AppFontSize()
     revision := LumiStoreRevision()
+    history_changed := revision != lumi_rows_revision
     assets := AssetGeneration()
     language := LocaleActiveCode()
     if revision != lumi_rows_revision || lumi_ui.width != lumi_rows_width ||
     lumi_ui.font != lumi_rows_font || lumi_ui.scale != lumi_rows_scale ||
     assets != lumi_rows_assets ||
     language != AppTextFromCString(*lumi_rows_language[0], 32) {
-        lumi_row_heights = .{}
+        VecFree(lumi_row_heights)
+        for index: cast(s32)0..lumi_ui.chat_count - 1 {
+            unused VecPush(lumi_row_heights, cast(s32)0)
+        }
         lumi_rows_revision = revision
         lumi_rows_width = lumi_ui.width
         lumi_rows_font = lumi_ui.font
         lumi_rows_scale = lumi_ui.scale
         lumi_rows_assets = assets
         unused AppCopyText(language, lumi_rows_language[:])
+    }
+    lumi_ui.history_height = 0
+    for index: cast(s32)0..lumi_ui.chat_count - 1 {
+        lumi_ui.history_height += LumiMeasuredRow(index).height
+    }
+    lumi_ui.has_older = lumi_has_older
+    if lumi_history_loading {
+        for index: cast(s32)1..lumi_history_added_rows {
+            lumi_ui.scroll += LumiMeasuredRow(index).height
+        }
+        lumi_history_loading = false
+    } else if lumi_ui.follow_end && history_changed {
+        lumi_ui.scroll = 1000000
     }
     column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
     draft := PrepareText(TextProps.{.text = lumi_ui.value, .font = lumi_ui.font,
@@ -468,4 +565,32 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     if lumi_pending_route >= 0 {
         app_apply_nav_route(app, lumi_pending_route)
     }
+}
+
+#program_export
+app_lumi_session_result :: (app: *InnerBreeze) {
+    if app == null || app.lumi_practice == 0 { return }
+    app.lumi_practice = 0
+    result := app.session_result
+    out: Vec(u8)
+    BuilderPrint(*out, "%\n", LocaleText("lumi_session_complete"))
+    if result.round_count > 0 {
+        BuilderPrint(*out, "%: %\n", LocaleText("lumi_session_rounds"), result.round_count)
+        for index: cast(s32)0..result.round_count - 1 {
+            BuilderPrint(*out, "%: % %\n", index + 1, result.round_values[index], LocaleText("lumi_session_seconds"))
+        }
+    } else {
+        BuilderPrint(*out, "% %", result.primary_value,
+            LocaleText(ifx result.activity == EXERCISE_SUN_SALUTATION then "lumi_session_repetitions" else "lumi_session_seconds"))
+        if result.secondary_value > 0 { BuilderPrint(*out, " · % %", result.secondary_value, LocaleText("lumi_session_cycles")) }
+        BuilderPrint(*out, "\n")
+    }
+    BuilderPrint(*out, "%", LocaleText(ifx result.saved != 0 then "results_saved_status" else "results_unsaved_status"))
+    text := BuilderFinish(out)
+    LumiOnlineAppend(text)
+    PackageFree(text)
+    unused LumiStoreSave()
+    if result.saved != 0 { app.ui.sync_requested = true }
+    app.session_result = SessionResult.{}
+    app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
 }

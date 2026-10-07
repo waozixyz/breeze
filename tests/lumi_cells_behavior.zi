@@ -14,6 +14,9 @@ ModuleTestFailRun :: () #foreign test_runtime;
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/sqlite.zi";
+#import, file "../src/storage/db.zi";
 
 using HostValueKind;
 task_codec: WidgetLumiTaskCodec;
@@ -243,18 +246,19 @@ CheckLumiConversation :: () -> s32 {
     for index: cast(s32)0..cast(s32)64 {
         LumiStoreAppend("Another message", index % 2 == 0)
     }
-    if LumiStoreCount() > LUMI_CHAT_MAX || !LumiStoreSave() {
+    if LumiStoreCount() != 69 || !LumiStoreSave() {
         return 114
     }
     storage_set_setting_text("lumi_chat", "invalid document")
     LumiStoreReset()
-    if LumiStoreCount() != 0 || LumiStoreSave() ||
+    // Once archived, a stale legacy setting cannot replace the conversation.
+    if LumiStoreCount() == 0 || !LumiStoreSave() ||
     storage_setting_text_equals("lumi_chat", "invalid document") == 0 {
         return 115
     }
     LumiStoreReset()
     if !SendLumi("fix switching to Lumi freezes") || last_action.kind != LUMI_REPORT_FEEDBACK ||
-    AppTextFromCString(*last_reply[0], 1024) != "lumi_feedback_saved" {
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_feedback_confirm" {
         return 131
     }
     report_id := FeedbackEnqueue("Lag", "Fix Lumi: 水 \\ and \"quotes\"", "view=lumi")
@@ -273,6 +277,40 @@ CheckLumiConversation :: () -> s32 {
     defer { PackageFree(first_report) }
     if first_report.count != 0 {
         return 134
+    }
+    draft := FeedbackDraft("Consent", "Please fix this", "view=lumi")
+    defer { PackageFree(draft) }
+    pending := FeedbackFirst()
+    defer { PackageFree(pending) }
+    if draft.count != 32 || pending.count != 0 || !FeedbackChoice(draft, 0) ||
+    !FeedbackChoice(draft, 2) || FeedbackChoice(draft, 1) {
+        return 137
+    }
+    approved := FeedbackDraft("Consent", "Please fix this", "view=lumi")
+    defer { PackageFree(approved) }
+    if !FeedbackChoice(approved, 1) || FeedbackChoice(approved, 1) {
+        return 138
+    }
+    queued := FeedbackFirst()
+    defer { PackageFree(queued) }
+    if queued.count == 0 {
+        return 139
+    }
+    // Scrolling prepends older messages without dropping the newest messages.
+    // Appending while reading history preserves the expanded conversation.
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%'", -1, *statement, null) != SQLITE_OK {
+        return 140
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    archived := ifx SqliteStep(statement) == SQLITE_ROW then SqliteColumnInt64(statement, 0) else 0
+    SqliteFinalize(statement)
+    if archived != 69 || !LumiStoreLoadOlder() || LumiStoreCount() != 69 || LumiStoreLoadOlder() {
+        return 141
+    }
+    LumiStoreAppend("Newest after scrolling", false)
+    if LumiStoreCount() != 70 || LumiStoreRow(LumiStoreCount() - 1).text != "Newest after scrolling" {
+        return 142
     }
     return 0
 }

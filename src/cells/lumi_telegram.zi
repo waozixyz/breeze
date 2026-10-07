@@ -1,0 +1,300 @@
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "auth"
+#import, file "lumi_online.zi";
+#import, file "lumi_store.zi";
+#import, file "feedback_store.zi";
+#import, file "lumi_types.zi";
+#import, file "package_files.zi";
+#import, file "module_host.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../practices/practice_actions.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../platform/uri.zi";
+#import, file "../storage/db.zi";
+
+lumi_telegram_operation: StoredOperation;
+using AppNavRoute;
+c :: #system_library "c";
+#if #defined(_WIN32) {
+    TelegramNow :: (out: *s64) -> s64 #foreign c "_time64";
+} else {
+    TelegramNow :: (out: *s64) -> s64 #foreign c "time";
+}
+
+lumi_telegram_session: Session;
+lumi_telegram_transfer: NetworkTransfer;
+lumi_telegram_response: [65536]u8;
+lumi_telegram_owner: [64]u8;
+lumi_telegram_message_key: string;
+lumi_telegram_stage: s32;
+lumi_telegram_retry: s64;
+lumi_telegram_link_requested: bool;
+lumi_telegram_linked: bool;
+lumi_telegram_error: bool;
+lumi_telegram_waiting: bool;
+lumi_telegram_disconnect_requested: bool;
+lumi_telegram_linked_at: s64;
+lumi_telegram_ack: s64;
+
+LumiTelegramLink :: () {
+    lumi_telegram_error = false
+    lumi_telegram_link_requested = true
+}
+
+LumiTelegramDisconnect :: () {
+    lumi_telegram_error = false
+    lumi_telegram_disconnect_requested = true
+}
+
+LumiTelegramBusy :: () -> bool {
+    return lumi_telegram_link_requested || lumi_telegram_disconnect_requested ||
+    (lumi_telegram_operation.active && (lumi_telegram_stage == 1 || lumi_telegram_stage == 5))
+}
+
+LumiTelegramStatusKey :: () -> string {
+    if storage_has_sync_account() == 0 {
+        return "lumi_telegram_account"
+    }
+    if lumi_telegram_error {
+        return "lumi_telegram_error"
+    }
+    if LumiTelegramBusy() || lumi_telegram_waiting {
+        return "lumi_telegram_waiting"
+    }
+    return ifx lumi_telegram_linked then "lumi_telegram_connected" else "lumi_telegram_disconnected"
+}
+
+LumiTelegramRequest :: (method: string, path: string, body: string, stage: s32) -> bool {
+    if BeginStoredRequest(*lumi_telegram_operation, "https://api.waozi.xyz",
+        NetworkTransport(*lumi_telegram_transfer), method, path, body,
+        lumi_telegram_response[:], false, *lumi_telegram_session) {
+        lumi_telegram_stage = stage
+        unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), lumi_telegram_owner[:])
+        return true
+    }
+    return false
+}
+
+LumiTelegramNextMessage :: () -> string {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT key,value FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND CAST(json_extract(value,'$.time') AS INTEGER)>=?2 AND NOT (json_extract(value,'$.user')=1 AND key LIKE 'cell.lumi.message.telegram-%') AND NOT EXISTS(SELECT 1 FROM settings s WHERE s.user_id=?1 AND s.key='telegram.sent.'||settings.key) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key LIMIT 1",
+        -1, *statement, null) != SQLITE_OK { return "" }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    SqliteBindInt64(statement, 2, lumi_telegram_linked_at * 1000000)
+    if SqliteStep(statement) != SQLITE_ROW { return "" }
+    PackageFree(lumi_telegram_message_key)
+    lumi_telegram_message_key = PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 181), "")
+    document := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+    text: [1024]u8
+    payload: [4096]u8
+    length := ReadStringText(document, FieldAt(document, 0, "text"), text[:])
+    payload_length := ReadStringText(document, FieldAt(document, 0, "payload"), payload[:])
+    kind := ReadNumber(document, FieldAt(document, 0, "kind"))
+    user := ReadNumber(document, FieldAt(document, 0, "user"))
+    time := ReadNumber(document, FieldAt(document, 0, "time"))
+    if length <= 0 || !time.valid { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"id\":")
+    LumiJsonString(*out, lumi_telegram_message_key)
+    BuilderPrint(*out, ",\"text\":")
+    if user.valid && user.value == 1 {
+        labelled := PackageText("› ", TextFromBytes(text[:length]))
+        LumiJsonString(*out, labelled)
+        PackageFree(labelled)
+    } else {
+        LumiJsonString(*out, TextFromBytes(text[:length]))
+    }
+    BuilderPrint(*out, ",\"time\":%", cast(s64)time.value)
+    if kind.valid && cast(s32)kind.value == LUMI_CHAT_FEEDBACK && payload_length == 32 &&
+    FeedbackChoice(TextFromBytes(payload[:payload_length]), 0) {
+        BuilderPrint(*out, ",\"draft\":")
+        LumiJsonString(*out, TextFromBytes(payload[:payload_length]))
+    }
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+LumiTelegramApply :: (app: *InnerBreeze, document: string) {
+    linked_at := FieldAt(document, 0, "linked")
+    linked_end := ValueEnd(document, linked_at, 0)
+    lumi_telegram_linked = linked_at >= 0 && linked_end > linked_at && document[linked_at:linked_end] == "true"
+    linked_time := ReadNumber(document, FieldAt(document, 0, "linked_at"))
+    lumi_telegram_linked_at = ifx linked_time.valid then cast(s64)linked_time.value else 0
+    if lumi_telegram_linked {
+        lumi_telegram_waiting = false
+    }
+    at := FieldAt(document, 0, "update")
+    number := ReadNumber(document, FieldAt(document, at, "id"))
+    if !number.valid || number.value == 0 || LumiOnlineWaiting() { return }
+    id := cast(s64)number.value
+    out: Vec(u8)
+    BuilderPrint(*out, "telegram.update.%", id)
+    key := BuilderFinish(out)
+    defer { PackageFree(key) }
+    lumi_telegram_ack = id
+    if storage_get_setting_int(key, 0) != 0 { return }
+    // Persist the execution claim first. A crash cannot silently repeat tools.
+    storage_set_setting_int(key, 1)
+    if storage_get_setting_int(key, 0) != 1 { lumi_telegram_ack = 0; return }
+    kind: [32]u8
+    input: [8192]u8
+    kind_length := ReadStringText(document, FieldAt(document, at, "kind"), kind[:])
+    input_length := ReadStringText(document, FieldAt(document, at, "text"), input[:])
+    if kind_length <= 0 || input_length <= 0 { return }
+    type := TextFromBytes(kind[:kind_length])
+    text := TextFromBytes(input[:input_length])
+    message_id: Vec(u8)
+    BuilderPrint(*message_id, "telegram-%", id)
+    stable_id := BuilderFinish(message_id)
+    defer { PackageFree(stable_id) }
+    lumi_next_message_id = stable_id
+    if type == "feedback" {
+        title: [161]u8
+        report: [4097]u8
+        title_length := ReadStringText(text, FieldAt(text, 0, "title"), title[:])
+        report_length := ReadStringText(text, FieldAt(text, 0, "message"), report[:])
+        if title_length > 0 && report_length > 0 {
+            value: Vec(u8)
+            BuilderPrint(*value, "%\n%\n%", LocaleText("lumi_owner_feedback"),
+                TextFromBytes(title[:title_length]), TextFromBytes(report[:report_length]))
+            content := BuilderFinish(value)
+            LumiOnlineAppend(content)
+            PackageFree(content)
+        }
+    } else if type == "confirmation" {
+        choice := ReadNumber(document, FieldAt(document, at, "choice"))
+        if choice.valid && FeedbackChoice(text, cast(s32)choice.value) {
+            LumiStoreAppend(LocaleText(ifx cast(s32)choice.value == 1 then "lumi_feedback_saved" else "lumi_cancelled"), false)
+        }
+    } else if type == "message" && text.count < LUMI_INPUT_MAX {
+        app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
+        unused LumiSubmit(app, text)
+    }
+    lumi_next_message_id = ""
+    unused LumiStoreSave()
+    app.ui.sync_requested = true
+}
+
+LumiTelegramPump :: (app: *InnerBreeze) {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if lumi_telegram_owner[0] != 0 && owner != TextUntilNul(lumi_telegram_owner[:]) {
+        CancelStoredOperation(*lumi_telegram_operation)
+        lumi_telegram_session = Session.{}
+        lumi_telegram_owner = .{}
+        lumi_telegram_stage = 0
+        lumi_telegram_ack = 0
+        lumi_telegram_linked = false
+        lumi_telegram_linked_at = 0
+        lumi_telegram_link_requested = false
+        lumi_telegram_disconnect_requested = false
+        lumi_telegram_error = false
+        lumi_telegram_waiting = false
+        lumi_telegram_retry = 0
+    }
+    if lumi_telegram_operation.active {
+        if !PollStoredOperation(*lumi_telegram_operation) { return }
+        stage := lumi_telegram_stage
+        lumi_telegram_stage = 0
+        success := lumi_telegram_operation.result == cast(s32)AuthResult.AUTH_OK
+        lumi_telegram_session = lumi_telegram_operation.session
+        if success && stage == 1 {
+            lumi_telegram_error = true
+            url: [256]u8
+            length := ReadStringText(TextUntilNul(lumi_telegram_response[:]),
+                FieldAt(TextUntilNul(lumi_telegram_response[:]), 0, "url"), url[:])
+            if length > 0 {
+                value := TextFromBytes(url[:length])
+                if value.count == 62 && value[:30] == "https://t.me/inlumi_bot?start=" {
+                    lumi_telegram_waiting = OpenUri(value)
+                    lumi_telegram_error = !lumi_telegram_waiting
+                }
+            }
+        } else if success && stage == 2 {
+            lumi_telegram_error = false
+            LumiTelegramApply(app, TextUntilNul(lumi_telegram_response[:]))
+        } else if success && stage == 3 {
+            lumi_telegram_ack = 0
+        } else if success && stage == 4 {
+            key := PackageText("telegram.sent.", lumi_telegram_message_key)
+            storage_set_setting_int(key, 1)
+            PackageFree(key)
+        } else if success && stage == 5 {
+            lumi_telegram_linked = false
+            lumi_telegram_waiting = false
+            lumi_telegram_error = false
+            lumi_telegram_linked_at = 0
+        } else if !success {
+            lumi_telegram_error = true
+            if stage == 1 {
+                lumi_telegram_waiting = false
+            }
+        }
+    }
+    if lumi_telegram_operation.active || storage_has_sync_account() == 0 { return }
+    client := storage_get_setting_text("lumi_telegram_client")
+    if client.count != 64 {
+        bytes: [65]u8
+        if !NativeNonce(null, bytes[:]) {
+            return
+        }
+        storage_set_setting_text("lumi_telegram_client", TextFromCString(*bytes[0]))
+        client = storage_get_setting_text("lumi_telegram_client")
+        if client.count != 64 {
+            return
+        }
+    }
+    if lumi_telegram_disconnect_requested {
+        lumi_telegram_disconnect_requested = false
+        if !LumiTelegramRequest("DELETE", "/api/v1/lumi/telegram/link", "", 5) {
+            lumi_telegram_error = true
+        }
+        return
+    }
+    if lumi_telegram_link_requested {
+        lumi_telegram_link_requested = false
+        if !LumiTelegramRequest("POST", "/api/v1/lumi/telegram/link", "{}", 1) {
+            lumi_telegram_error = true
+        }
+        return
+    }
+    now := TelegramNow(null)
+    if now < lumi_telegram_retry { return }
+    lumi_telegram_retry = now + 5
+    if lumi_telegram_ack != 0 {
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"id\":%,\"client\":\"%\"}", lumi_telegram_ack, client)
+        body := BuilderFinish(out)
+        unused LumiTelegramRequest("POST", "/api/v1/lumi/telegram/ack", body, 3)
+        PackageFree(body)
+        return
+    }
+    if lumi_telegram_linked {
+        message := LumiTelegramNextMessage()
+        if message.count > 0 {
+            unused LumiTelegramRequest("POST", "/api/v1/lumi/telegram/messages", message, 4)
+            PackageFree(message)
+            return
+        }
+    }
+    if !LumiOnlineWaiting() {
+        path := PackageText("/api/v1/lumi/telegram/updates?client=", client)
+        unused LumiTelegramRequest("GET", path, "", 2)
+        PackageFree(path)
+    }
+}

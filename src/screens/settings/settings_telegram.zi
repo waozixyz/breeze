@@ -1,0 +1,72 @@
+#import "geometry"
+#import "text_props"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import, file "../../app/app_types.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../cells/lumi_telegram.zi";
+#import, file "../../storage/storage_core.zi";
+#import, file "../../platform/uri.zi";
+
+using TextWrap;
+using ButtonEmphasis;
+using AppNavRoute;
+
+settings_telegram_text_height :: (key: string, width: s32) -> s32 {
+    prepared := PrepareText(TextProps.{.text = LocaleText(key), .font = AppFontSize(),
+            .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0},
+            .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
+    return cast(s32)prepared.bounds.height + AppScale(16)
+}
+
+settings_telegram_content_height :: (width: s32) -> s32 {
+    return settings_telegram_text_height("lumi_telegram_body", width) +
+    settings_telegram_text_height(LumiTelegramStatusKey(), width) + AppScale(120)
+}
+
+settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
+    keys: [2]string = .["lumi_telegram_body", LumiTelegramStatusKey()]
+    for key: keys {
+        height := settings_telegram_text_height(key, width)
+        Text(app.ui.session, TextProps.{.text = LocaleText(key), .font = AppFontSize(),
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)height},
+                .wrap = cast(TextWrap)TextWrapAuto})
+        y.* += height
+    }
+    has_account := storage_has_sync_account() != 0
+    linked := lumi_telegram_linked && has_account
+    label := "lumi_telegram_connect"
+    if !has_account {
+        label = "sync_connect_account_button"
+    } else if linked {
+        label = "lumi_telegram_open"
+    }
+    if Button(app.ui.session, ButtonProps.{.id = 7650,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
+            .label = LocaleText(label), .disabled = LumiTelegramBusy(), .loading = LumiTelegramBusy()}) != 0 {
+        if !has_account {
+            app_apply_nav_route(app, cast(s32)APP_NAV_ROUTE_PROFILE)
+        } else if linked {
+            if !OpenUri("https://t.me/inlumi_bot") {
+                lumi_telegram_error = true
+            }
+        } else {
+            LumiTelegramLink()
+        }
+    }
+    y.* += AppScale(56)
+    if linked {
+        if Button(app.ui.session, ButtonProps.{.id = 7651,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
+                .label = LocaleText("lumi_telegram_disconnect"), .disabled = LumiTelegramBusy(),
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+            LumiTelegramDisconnect()
+        }
+        y.* += AppScale(56)
+    }
+}

@@ -100,8 +100,9 @@ def state(window):
 
 
 def chat(profile):
-    rows = query(profile, "SELECT value FROM settings WHERE key='lumi_chat'")
-    return json.loads(rows[0][0]) if rows else []
+    rows = query(profile, "SELECT value FROM settings WHERE key LIKE 'cell.lumi.message.%' "
+                 "ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key")
+    return [{key: value for key, value in json.loads(row[0]).items() if key != "time"} for row in rows]
 
 
 def send(window, profile, text, *, button=False):
@@ -130,14 +131,13 @@ def send(window, profile, text, *, button=False):
     def exchange_saved():
         rows = chat(profile)
         return (rows != before and len(rows) >= 2 and
-                rows[-2] == {"user": 1, "text": text.strip()} and
+                rows[-2]["user"] == 1 and rows[-2]["text"] == text.strip() and
                 rows[-1]["user"] == 0)
 
     try:
         wait_for(exchange_saved, "Chat exchange was not saved")
         rows = chat(profile)
-        assert len(rows) <= 64, "Chat history exceeded its bound"
-        assert rows[:-2] in (before, before[2:]), "Chat lost recent conversation"
+        assert rows[:-2] == before, "Chat lost earlier conversation"
     except AssertionError:
         capture(window, "failure")
         (OUTPUT / "failure-exchange.json").write_text(json.dumps({
@@ -220,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         capture(window, "donation-narrow")
     # Keep the original conversation fixtures independent of chart records.
     with sqlite3.connect(profile / "inbe.db") as db:
-        db.execute("UPDATE settings SET value='[]' WHERE key='lumi_chat'")
+        db.execute("DELETE FROM settings WHERE key LIKE 'cell.lumi.message.%'")
         db.execute("DELETE FROM session_rounds WHERE session_id IN ('chart-whm','chart-meditation')")
         db.execute("DELETE FROM sessions WHERE id IN ('chart-whm','chart-meditation')")
     with application(profile, "chat") as window:
@@ -366,7 +366,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "Lists absent", "WHM starts and advances immediately", "Practices and Habits absent", "habit question and name reply",
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
-                    "multiline Diary append", "Diary restart persistence", "bounded history retention",
+                    "multiline Diary append", "Diary restart persistence", "durable history retention",
                     "progress zero and recorded values", "donation address copy", "wallet URI",
                     "official browser donation link", "narrow donation card", "large tool catalog"],
     }, indent=2) + "\n")

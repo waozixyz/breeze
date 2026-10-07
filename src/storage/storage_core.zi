@@ -15,6 +15,7 @@ Scan :: #import "json_scan"
 #import, file "schema.zi";
 #import, file "storage_habit_materialize.zi";
 #import, file "sync_sql.zi";
+#import, file "cell_records.zi";
 #import, file "export_sql.zi";
 #import, file "sync_crypto.zi";
 #import, file "sync_crypto_hmac.zi";
@@ -346,6 +347,7 @@ storage_enqueue_all_sync_state :: () {
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_list',id,0,strftime('%s','now') FROM elist_lists WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_item',id,0,strftime('%s','now') FROM elist_items WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     if owns_transaction != 0 {
         exec_sql("COMMIT")
     }
@@ -644,6 +646,9 @@ storage_set_setting_text :: (key: string, value: string) {
     rc = SqliteStep(stmt)
     SqliteFinalize(stmt)
     if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        if CellRecordValid(key) {
+            unused storage_enqueue_sync_entity("cell_record", key, 0)
+        }
         if AppPreferenceValid(key) {
             unused storage_enqueue_sync_entity("app_preference", key, 0)
         }
@@ -1143,9 +1148,29 @@ storage_append_app_preference_payload_json :: (json: *StorageJsonBuilder, key: s
     return json.ok
 }
 
+storage_append_cell_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !CellRecordValid(key) { return 0 }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,updated_at FROM settings WHERE user_id=?1 AND key=?2", -1, *statement, null) != SQLITE_OK { return 0 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW { return 0 }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "key", key)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), 65536))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(statement, 1))
+    storage_json_builder_append_text(json, "}")
+    return json.ok
+}
+
 storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: string, entity_id: string, local_date: s32) {
     found: s32 = 0
-    if entity_type == "app_preference" {
+    if entity_type == "cell_record" {
+        found = storage_append_cell_payload_json(json, entity_id)
+    } else if entity_type == "app_preference" {
         found = storage_append_app_preference_payload_json(json, entity_id)
     } else if storage_compare_text(entity_type, "habit") == 0 {
 
@@ -1165,6 +1190,9 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
 }
 
 storage_encrypted_collection_for_entity :: (entity_type: string) -> string {
+    if entity_type == "cell_record" {
+        return "private.inbe.v1.cells"
+    }
     if entity_type == "app_preference" {
         return "private.inbe.v1.app-preferences"
     }
@@ -1414,7 +1442,12 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
     if force_zero_day_repair != 0 {
         since_server_version = 0
     }
-    through_seq = storage_sync_outbox_batch_seq(STORAGE_SYNC_OP_BATCH_LIMIT)
+    // Chunked diary photos must stay within the public node's 1 MiB request.
+    batch_limit: s32 = cast(s32)STORAGE_SYNC_OP_BATCH_LIMIT
+    if db_select_int64_text("SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='cell_record')", 0) != 0 {
+        batch_limit = 64
+    }
+    through_seq = storage_sync_outbox_batch_seq(batch_limit)
     storage_state_handle().pending_sync_outbox_seq = through_seq
     json.ok = 1
     protocol_text: [32] u8
@@ -1776,6 +1809,9 @@ storage_apply_sync_social_json :: (response_json: string) -> s32 {
 }
 
 storage_decrypted_array_name :: (collection: string) -> string {
+    if collection == "private.inbe.v1.cells" {
+        return "cell_records"
+    }
     if collection == "private.inbe.v1.app-preferences" {
         return "app_preferences"
     }
@@ -1821,7 +1857,24 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
         storage_json_builder_free(*response)
         return 0
     }
-    if array_name == "app_preferences" {
+    if array_name == "cell_records" {
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "cell_records")
+        if Scan.ArrayCount(record_response, records) != 1 {
+            storage_json_builder_free(*response)
+            return 0
+        }
+        at := Scan.ElementAt(record_response, records, 0)
+        key_bytes: [181]u8
+        value_bytes: [65536]u8
+        key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
+        value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "value"), value_bytes[:])
+        if key_count <= 0 || key_count >= 181 || value_count <= 0 || value_count >= 65536 ||
+        !CellRecordValid(TextFromBytes(key_bytes[:key_count])) {
+            storage_json_builder_free(*response)
+            return 0
+        }
+        ok = storage_exec_json_user_sql(SyncCellRecordsSQL, record_response)
+    } else if array_name == "app_preferences" {
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_preferences")
         count := Scan.ArrayCount(record_response, records)
         if count <= 0 || count > 4 {

@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.14] - 2026-10-07
+### Changed
+- Scroll up through Lumi chat history without Older and Newer buttons, keeping your place when replies arrive.
+- Connect, view connection status and disconnect Telegram from Settings under Sync with Telegram.
+
 ## [2.1.13] - 2026-10-07
 ### Changed
 - Merge sync data directly from the action buttons below the change list, without a separate Apply step.
