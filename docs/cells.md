@@ -1,6 +1,7 @@
 # Inner Breeze cell packages
 
 Inner Breeze has a root package and five cells, including Lumi.
+The interface calls these Apps and presents them in one sidebar settings list.
 All five cells ship with the app and can be added to the sidebar offline.
 Selections are stored per app and synced with the account. Lumi always ships with
 Inner Breeze. Her selection controls her sidebar shortcut, while her harness and
@@ -26,6 +27,8 @@ beside her replies. The conversation has no title bar; navigation uses a
 monochrome outlined firefly, matching the other navigation glyphs. The sidebar
 uses `assets/lumi/sidebar.shape` with the standard button size and foreground;
 navigation bars use the matching transparent `assets/lumi/sidebar.png`.
+The chat avatar is mirrored toward the conversation. Enter sends a message;
+Shift+Enter inserts a new line and the composer grows with the draft.
 
 `apps/lumi/lumi_view.zi` composes the chat and command suggestions with hosted
 Kryon widgets. `apps/lumi/engine.zi` is the first small offline interpreter;
@@ -43,6 +46,11 @@ recognize practice phrases and punctuation after normalization. User item names
 remain exact or uniquely matched prefixes, with Unicode case folding.
 Sending “complete habit” lists the available habits and asks which one; the next
 name reply completes that habit. Conversation choice state resets with accounts.
+“Write this to my diary: TEXT” and `/journal TEXT` append an entry to today's
+Diary with the current local time above the message. A request without text asks
+for it and saves the next reply, preserving line breaks and existing entries.
+Use `/cancel` to cancel that question. Unknown requests receive a brief question;
+command examples appear only when the user asks for help.
 Sending executes only a supported action. Completion chooses an exact match,
 or a unique prefix, and asks for clarification when multiple items match.
 Habit completion reaches today's counter target while preserving higher or

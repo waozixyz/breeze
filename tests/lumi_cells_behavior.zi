@@ -16,6 +16,7 @@ task_codec: WidgetLumiTaskCodec;
 frame_codec: WidgetLumiToolsCodec;
 available_apps: s32 = 15;
 choosing_habit: bool;
+choosing_diary: bool;
 action_codec: WidgetLumiActionCodec;
 action_count: s32;
 last_action: LumiAction;
@@ -33,7 +34,8 @@ TestLumiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ReadLumiToolsHost" && count == 0 {
         result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = available_apps,
-                .task_count = 4, .habit_count = 3, .choosing_habit = choosing_habit}, *frame_codec)
+                .task_count = 4, .habit_count = 3, .choosing_habit = choosing_habit,
+                .choosing_diary = choosing_diary}, *frame_codec)
         return 1
     }
     if name == "ReadLumiHabitHost" && count == 1 {
@@ -49,6 +51,10 @@ TestLumiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "SetLumiHabitChoiceHost" && count == 1 {
         choosing_habit = arguments[0].integer != 0
+        return 1
+    }
+    if name == "SetLumiDiaryChoiceHost" && count == 1 {
+        choosing_diary = arguments[0].integer != 0
         return 1
     }
     if name == "LumiTaskCountHost" && count == 0 {
@@ -118,7 +124,7 @@ CheckLumiConversation :: () -> s32 {
         return 107
     }
     if !SendLumi("delete all tasks") || action_count != 4 ||
-    AppTextFromCString(*last_reply[0], 1024)[:9] != "lumi_help" {
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unknown" {
         return 108
     }
     if !SendLumi("complete habit Drink") || action_count != 4 ||
@@ -163,6 +169,26 @@ CheckLumiConversation :: () -> s32 {
     if !CellsSetEnabled(APP_ALL) {
         return 110
     }
+    if !SendLumi("write this to my diary:") || !choosing_diary || action_count != 8 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_diary_prompt" {
+        return 124
+    }
+    if !SendLumi("/todo This is diary text\nWith a second line") || choosing_diary ||
+    action_count != 9 || last_action.kind != LUMI_WRITE_DIARY ||
+    last_action.title != "/todo This is diary text\nWith a second line" ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_diary_saved" {
+        return 125
+    }
+    if !SendLumi("write this to my diary:") || !choosing_diary ||
+    !SendLumi("/cancel") || choosing_diary || action_count != 9 {
+        return 126
+    }
+    available_apps = LUMI_HABITS
+    if !SendLumi("write this to my diary: Unavailable") || choosing_diary ||
+    action_count != 9 || AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 127
+    }
+    available_apps = 15
     LumiStoreReset()
     LumiStoreAppend("Tea \"quoted\" \\ 水", true)
     LumiStoreAppend("Ready", false)

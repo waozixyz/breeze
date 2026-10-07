@@ -5,6 +5,7 @@
 #import "text_widget"
 #import "text_props"
 #import "geometry"
+#import "layout"
 #import, file "../cells/lumi_types.zi";
 #import, file "../cells/inbe_types.zi";
 #import, file "../cells/lumi_ui_types.zi";
@@ -32,9 +33,11 @@
 #import, file "../habits/habit_linked_rules.zi";
 #import, file "../practices/practice_actions.zi";
 #import, file "elist_types.zi";
+#import, file "diary_screen.zi";
 
 using HostValueKind;
 using AppNavRoute;
+using TextWrap;
 lumi_ui: LumiUiFrame;
 lumi_ui_codec: WidgetLumiUiFrameCodec;
 lumi_row_codec: WidgetLumiChatRowCodec;
@@ -46,6 +49,7 @@ lumi_tasks: EListState;
 lumi_pending_route: s32 = -1;
 lumi_pending_practice: s32 = -1;
 lumi_choosing_habit: bool;
+lumi_choosing_diary: bool;
 
 #program_export
 app_lumi_input_focused :: (app: *InnerBreeze) -> bool {
@@ -60,6 +64,7 @@ app_lumi_reset :: () {
     lumi_pending_route = -1
     lumi_pending_practice = -1
     lumi_choosing_habit = false
+    lumi_choosing_diary = false
 }
 
 LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
@@ -93,6 +98,10 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
     }
     if action.kind == LUMI_SET_MODE {
         return AppSetThemeMode(app, action.route)
+    }
+    if action.kind == LUMI_WRITE_DIARY {
+        return app_nav_route_available(app, APP_NAV_ROUTE_DIARY) &&
+        app_diary_append(action.title)
     }
     if action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS {
         lumi_pending_route = APP_NAV_ROUTE_SETTINGS
@@ -186,11 +195,15 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     if name == "ReadLumiToolsHost" && count == 0 {
         result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = lumi_ui.available_apps,
                 .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
-                .choosing_habit = lumi_choosing_habit}, *lumi_tools_codec)
+                .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary}, *lumi_tools_codec)
         return 1
     }
     if name == "SetLumiHabitChoiceHost" && count == 1 && ModuleScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
         lumi_choosing_habit = arguments[0].integer != 0
+        return 1
+    }
+    if name == "SetLumiDiaryChoiceHost" && count == 1 && ModuleScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
+        lumi_choosing_diary = arguments[0].integer != 0
         return 1
     }
     if name == "ReadLumiUiHost" && count == 0 {
@@ -205,7 +218,10 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         lumi_ui.value = AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
         lumi_ui.cursor = frame.cursor
         lumi_ui.anchor = frame.anchor
-        lumi_ui.scroll_x = frame.scroll_x
+        lumi_ui.input_scroll = frame.input_scroll
+        lumi_ui.selecting = frame.selecting
+        lumi_ui.preferred_x = frame.preferred_x
+        lumi_ui.preferred_x_valid = frame.preferred_x_valid
         lumi_ui.focused = frame.focused
         lumi_ui.scroll = frame.scroll
         lumi_ui.follow_end = frame.follow_end
@@ -287,10 +303,14 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     lumi_ui.task_count = lumi_tasks.item_count
     lumi_ui.available_apps = app.enabled_apps & CellsInstalledMask()
+    if (lumi_ui.available_apps & APP_DIARY) == 0 {
+        lumi_choosing_diary = false
+    }
     if (lumi_ui.available_apps & APP_HABITS) == 0 {
         lumi_choosing_habit = false
     }
     lumi_ui.choosing_habit = lumi_choosing_habit
+    lumi_ui.choosing_diary = lumi_choosing_diary
     lumi_ui.habit_count = ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
     lumi_ui.session = app.ui.session
     if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {
@@ -301,8 +321,17 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.bottom = app_content_bottom_reserved(app)
     lumi_ui.scale = MetricsScale()
     lumi_ui.font = AppFontSize()
+    column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
+    draft := PrepareText(TextProps.{.text = lumi_ui.value, .font = lumi_ui.font,
+            .wrap = cast(TextWrap)TextWrapAuto,
+            .bounds = Rectangle.{0.0, 0.0, cast(float32)(column_width - AppScale(112)), 0.0}},
+        DefaultTextFace())
+    lumi_ui.draft_height = cast(s32)draft.bounds.height
     typed: [512]u8
-    lumi_ui.input = SampleTextFieldInput(lumi_ui.focused, typed[:])
+    lumi_ui.input = SampleTextAreaInput(lumi_ui.focused, typed[:])
+    enter := lumi_ui.input.enter || lumi_ui.input.commit
+    lumi_ui.input.enter = enter && lumi_ui.input.shift
+    lumi_ui.input.commit = enter && !lumi_ui.input.shift
     lumi_pending_route = -1
     lumi_pending_practice = -1
     WidgetHostBegin(app.ui.session)

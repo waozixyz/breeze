@@ -398,6 +398,10 @@ INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zib
 CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
+WIDGET_SCHEMAS := $(addprefix $(KRYON_DIR)/src/ui/,session.zi geometry.zi drawing_props.zi text_props.zi image_props.zi button_props.zi control_props.zi text_input.zi text_input_props.zi scroll.zi scroll_props.zi semantic.zi text_align.zi checkbox_props.zi toggle_props.zi tab_bar_props.zi box_props.zi) $(addprefix src/cells/,diary_ui_types.zi inbe_ui_types.zi lists_ui_types.zi lumi_ui_types.zi lumi_types.zi)
+src/cells/widget_codec.zi: scripts/generate-widget-codecs.py $(WIDGET_SCHEMAS)
+	python3 scripts/generate-widget-codecs.py
+
 .PHONY: cells
 cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 

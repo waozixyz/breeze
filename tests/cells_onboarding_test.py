@@ -176,12 +176,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
             assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
-        tap(window, 650, 254)  # Reopen the chooser from Device settings.
-        assert "screen=6->21" in log.read_text(), log.read_text()
-        tap(window, 260, 290)  # Reenable Habits.
-        tap(window, 450, 676)
+        tap(window, 330, 382)  # Apps & sidebar.
+        capture(window, "apps-sidebar-none")
+        tap(window, 825, 166)  # Add Habits from the unified list.
         wait_setting(profile, "enabled_apps", 2)
-        assert "screen=21->6" in log.read_text(), log.read_text()
         capture(window, "settings-habits-reenabled")
     # Mini is explicitly temporary Practice, independently of saved choices.
     for mask in (1, 0):
@@ -246,10 +244,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             capture(window, f"mini-expanded-{mask}-exited")
             # A real full-app settings action saves the unchanged selection.
             tap(window, 110, 670)
-            tap(window, 650, 254)
-            assert "->21" in log.read_text(), log.read_text()
-            tap(window, 450, 676)
-            assert "screen=21->6" in log.read_text(), log.read_text()
+            tap(window, 330, 382)  # Apps & sidebar retains the selection.
+            capture(window, f"mini-expanded-{mask}-apps")
             assert settings(profile)["enabled_apps"] == str(mask)
             # Ctrl+Q follows the owned window's normal quit and app_destroy
             # path, rather than relying on process termination for this check.
@@ -301,8 +297,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         capture(window, "existing-profile-all-apps")
         wait_setting(profile, "enabled_apps", 23)
         wait_setting(profile, "main_tab", 4)
-        tap(window, 110, 338)
-        assert "->16" in log.read_text(), log.read_text()
+        # Sidebar order survives the earlier choices; open Lists through the
+        # same app route rather than assuming a fixed shortcut position.
+        command("xprop", "-id", window, "-f", "_HARMONY_APP_FEATURE", "32c",
+                "-set", "_HARMONY_APP_FEATURE", "1")
+        wait_for_lists = time.monotonic() + 10
+        while "->16" not in log.read_text():
+            assert time.monotonic() < wait_for_lists, log.read_text()
+            time.sleep(0.1)
         capture(window, "existing-data-lists")
     result.update(
         lumi_first_recommended_default_home=True,

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2] - 2026-10-06
+
+- Write to today's Diary from chat, with the current time above each message.
+- Ask for text when a Diary request has no entry yet, and preserve multiline messages.
+- Insert a new line with Shift+Enter and send with Enter.
+- Keep replies short when a request is unclear.
+- Display the mirrored avatar beside replies.
+
 ## [1.1.1] - 2026-10-06
 
 - Change color themes, light and dark mode directly from chat, and open Settings or Appearance.

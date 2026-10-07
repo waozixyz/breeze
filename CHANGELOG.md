@@ -1,4 +1,13 @@
 # Changelog
+## [2.1.8] - 2026-10-06
+### Changed
+- Call sidebar items Apps throughout setup and settings.
+- Use Shift+Enter for a new line in Lumi chat and Enter to send.
+### Fixed
+- Save Diary entries from Lumi chat with the current time above your message, including multiline text.
+- Ask for the entry text when a Diary request is sent without it, and keep replies short when a request is unclear.
+- Show Lumi’s mirrored avatar beside replies so the companion faces the conversation.
+
 ## [2.1.7] - 2026-10-06
 ### Changed
 - Manage Lumi and all other cells in one compact list with icons, drag handles and add/remove controls.

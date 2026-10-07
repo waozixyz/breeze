@@ -19,6 +19,7 @@ AppendLumiChatHost :: (text: string, user: bool) #foreign host_api;
 LumiLocaleHost :: (key: string) -> string #foreign host_api;
 ReadLumiToolsHost :: () -> LumiTools #foreign host_api;
 SetLumiHabitChoiceHost :: (choosing: bool) #foreign host_api;
+SetLumiDiaryChoiceHost :: (choosing: bool) #foreign host_api;
 
 LumiAskHabit :: (tools: LumiTools) {
     if tools.habit_count == 0 {
@@ -49,6 +50,7 @@ LumiCommandSet :: () -> LumiCommands {
         .start_sun = LumiLocaleHost("lumi_start_sun"), .start_patterns = LumiLocaleHost("lumi_start_patterns"),
         .lists = LumiLocaleHost("lumi_open_lists"), .habits = LumiLocaleHost("lumi_open_habits"),
         .practices = LumiLocaleHost("lumi_open_practices"), .diary = LumiLocaleHost("lumi_open_diary"),
+        .write_diary = LumiLocaleHost("lumi_write_diary"),
         .settings = LumiLocaleHost("lumi_open_settings"), .appearance = LumiLocaleHost("lumi_open_appearance"),
         .theme = LumiLocaleHost("lumi_theme"), .dark = LumiLocaleHost("lumi_dark"),
         .light = LumiLocaleHost("lumi_light"), .system = LumiLocaleHost("lumi_system")}
@@ -60,19 +62,35 @@ LumiRespond :: (input: string) {
         return
     }
     AppendLumiChatHost(input, true)
-    action := LumiIntent(input, LumiCommandSet())
     tools := ReadLumiToolsHost()
     help_requested := LumiEqual(input, "help") || LumiEqual(input, "/help") || LumiEqual(input, "how can you help?")
-    if action.kind == 0 && tools.choosing_habit && !help_requested {
+    if (tools.choosing_diary || tools.choosing_habit) &&
+    (LumiEqual(input, "/cancel") || LumiEqual(input, "cancel") || LumiEqual(input, LumiLocaleHost("cancel_button"))) {
+        SetLumiDiaryChoiceHost(false)
+        SetLumiHabitChoiceHost(false)
+        AppendLumiChatHost(LumiLocaleHost("lumi_cancelled"), false)
+        return
+    }
+    action := LumiIntent(input, LumiCommandSet())
+    if tools.choosing_diary && !help_requested {
+        action = LumiAction.{.kind = LUMI_WRITE_DIARY, .title = input}
+    } else if action.kind == 0 && tools.choosing_habit && !help_requested {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = input}
     }
-    reply := "lumi_help"
+    reply := ifx help_requested then "lumi_help" else "lumi_unknown"
     if action.kind != 0 && !LumiActionAvailable(action, tools.available_apps) {
         action.kind = 0
         reply = "lumi_unavailable"
     }
     if action.kind == LUMI_COMPLETE_HABIT && action.title.count == 0 {
+        SetLumiDiaryChoiceHost(false)
         LumiAskHabit(tools)
+        return
+    }
+    if action.kind == LUMI_WRITE_DIARY && action.title.count == 0 {
+        SetLumiHabitChoiceHost(false)
+        SetLumiDiaryChoiceHost(true)
+        AppendLumiChatHost(LumiLocaleHost("lumi_diary_prompt"), false)
         return
     }
     if action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO || action.kind == LUMI_COMPLETE_HABIT {
@@ -109,6 +127,7 @@ LumiRespond :: (input: string) {
     if action.kind != 0 {
         if PerformLumiActionHost(action) {
             SetLumiHabitChoiceHost(false)
+            SetLumiDiaryChoiceHost(false)
             reply = "lumi_opened"
             if action.kind == LUMI_ADD_TODO {
                 reply = "lumi_added"
@@ -122,6 +141,8 @@ LumiRespond :: (input: string) {
                 reply = "lumi_settings_changed"
             } else if action.kind == LUMI_START_PRACTICE {
                 reply = "lumi_practice_started"
+            } else if action.kind == LUMI_WRITE_DIARY {
+                reply = "lumi_diary_saved"
             }
         } else {
             reply = "lumi_unavailable"
@@ -132,18 +153,16 @@ LumiRespond :: (input: string) {
         BuilderPrint(*out, "%", LumiLocaleHost(reply))
         commands := LumiCommandSet()
         if (tools.available_apps & LUMI_PRACTICES) != 0 {
-            BuilderPrint(*out, "\n• %\n• %\n• %\n• %", commands.start_whm,
-                commands.start_meditation, commands.start_sun, commands.start_patterns)
+            BuilderPrint(*out, "\n%", commands.start_whm)
         }
         if (tools.available_apps & LUMI_HABITS) != 0 {
-            BuilderPrint(*out, "\n• % …\n• %", commands.complete_habit, commands.habits)
+            BuilderPrint(*out, " · %", commands.complete_habit)
         }
         if (tools.available_apps & LUMI_LISTS) != 0 {
-            BuilderPrint(*out, "\n• % …\n• % …\n• % …\n• %", commands.add,
-                commands.complete, commands.reopen, commands.lists)
+            BuilderPrint(*out, " · %", commands.add)
         }
         if (tools.available_apps & LUMI_DIARY) != 0 {
-            BuilderPrint(*out, "\n• %", commands.diary)
+            BuilderPrint(*out, " · %", commands.write_diary)
         }
         AppendLumiChatHost(BuilderFinish(out), false)
     } else {

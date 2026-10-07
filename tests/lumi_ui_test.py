@@ -3,6 +3,7 @@ import ast
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -95,12 +96,20 @@ def chat(profile):
 
 
 def send(window, profile, text, *, button=False):
-    before = len(chat(profile))
+    before = chat(profile)
     tap(window, 490, 676)
     command("xdotool", "keydown", "--clearmodifiers", "ctrl+a")
     time.sleep(0.15)
     command("xdotool", "keyup", "ctrl+a")
-    command("xdotool", "type", "--clearmodifiers", "--delay", "18", text)
+    for index, line in enumerate(text.split("\n")):
+        if index:
+            command("xdotool", "keydown", "--clearmodifiers", "shift+Return")
+            time.sleep(0.15)
+            command("xdotool", "keyup", "shift+Return")
+            time.sleep(0.15)
+            assert chat(profile) == before, "Shift+Enter sent the draft"
+        command("xdotool", "type", "--clearmodifiers", "--delay", "18", line)
+        time.sleep(0.15)
     time.sleep(0.3)
     if button:
         tap(window, 850, 676)
@@ -109,7 +118,9 @@ def send(window, profile, text, *, button=False):
         time.sleep(0.15)
         command("xdotool", "keyup", "Return")
     try:
-        wait_for(lambda: len(chat(profile)) == before + 2, "Chat exchange was not saved")
+        wait_for(lambda: chat(profile) != before and
+                 len(chat(profile)) == min(64, len(before) + 2) and
+                 chat(profile)[-2]["text"] == text.strip(), "Chat exchange was not saved")
     except AssertionError:
         capture(window, "failure")
         raise
@@ -186,6 +197,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         send(window, profile, "READ DAILY")
         assert "habit is complete for today" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT completed,count FROM habit_days WHERE habit_id='lumi-counting-habit'") == [(1, 3)]
+        send(window, profile, "Something you do not understand")
+        assert chat(profile)[-1]["text"] == "What would you like me to do?"
+        send(window, profile, "write this to my diary:")
+        assert chat(profile)[-1]["text"] == "What would you like to write?"
+        send(window, profile, "A calm morning\nThen a walk")
+        assert chat(profile)[-1]["text"] == "Saved to today’s Diary."
+        entry = next((profile / "diary").glob("????-??-??.json"))
+        diary_text = json.loads(entry.read_text())["text"]
+        assert re.fullmatch(r"\*\*\d{2}:\d{2}\*\*\nA calm morning\nThen a walk", diary_text)
+        send(window, profile, "write this to my diary: Another thought\nA second line")
+        diary_text = json.loads(entry.read_text())["text"]
+        assert re.fullmatch(r"\*\*\d{2}:\d{2}\*\*\nA calm morning\nThen a walk"
+                            r"\n\n\*\*\d{2}:\d{2}\*\*\nAnother thought\nA second line", diary_text)
+        capture(window, "diary-chat")
         send(window, profile, "theme forest")
         assert state(window)['settings']['theme'] == 'forest'
         send(window, profile, "/dark")
@@ -198,6 +223,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     with application(profile, "restart") as window:
         capture(window, "restart")
         assert chat(profile) == transcript
+        assert json.loads(entry.read_text())["text"] == diary_text
         assert state(window)['settings']['theme'] == 'forest'
         assert state(window)['settings']['theme_mode'] == 2
     with sqlite3.connect(profile / "inbe.db") as db:
@@ -263,6 +289,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "reopen", "ambiguous completion", "suggestions do not execute", "restart persistence",
                     "habit ambiguity", "habit counter target", "no uncompletion on repeated command",
                     "Lists absent", "WHM starts and advances immediately", "Practices and Habits absent", "habit question and name reply",
-                    "meditation transposition", "case-insensitive commands", "all four practice starts"],
+                    "meditation transposition", "case-insensitive commands", "all four practice starts",
+                    "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
+                    "multiline Diary append", "Diary restart persistence"],
     }, indent=2) + "\n")
 print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")

@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.8] - 2026-10-06
+
+- Call sidebar choices Apps in setup and settings, with shorter instructions.
+
 ## [2.1.7] - 2026-10-06
 
 - Show Lumi alongside every other cell in one compact, reorderable list.

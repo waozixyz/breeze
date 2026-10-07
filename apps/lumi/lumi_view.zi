@@ -7,7 +7,7 @@
 #import "text_widget"
 #import "text_align"
 #import "text_input_props"
-#import "text_field_widget"
+#import "text_area_widget"
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -50,6 +50,9 @@ Suggestion :: (id: s32, text: string, bounds: Rectangle, label: string = "") -> 
         frame.value = text
         frame.cursor = cast(s32)text.count
         frame.anchor = frame.cursor
+        frame.input_scroll = 0
+        frame.selecting = false
+        frame.preferred_x_valid = false
         frame.focused = true
         return true
     }
@@ -61,7 +64,15 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
     column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
     x := column.x
     width := column.width
-    footer := frame.height - frame.bottom - Scale(64)
+    input_height := Scale(48)
+    measured_height := frame.draft_height + Scale(24)
+    if measured_height > input_height {
+        input_height = measured_height
+    }
+    if input_height > Scale(144) {
+        input_height = Scale(144)
+    }
+    footer := frame.height - frame.bottom - Scale(16) - input_height
     suggestions_top := footer - Scale(46)
     history_top := Scale(12)
     chat_height := suggestions_top - history_top - Scale(8)
@@ -112,14 +123,14 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         End(frame.session)
     }
     typed := LumiTrim(frame.value)
-    candidates: [17]string = .[commands.start_whm, commands.complete_habit,
+    candidates: [18]string = .[commands.start_whm, commands.complete_habit,
     commands.start_meditation, commands.start_sun, commands.start_patterns,
     commands.add, commands.complete, commands.reopen,
     commands.lists, commands.habits, commands.practices, commands.diary,
-    commands.settings, commands.appearance, commands.dark, commands.light, commands.system]
-    requirements: [17]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
+    commands.settings, commands.appearance, commands.dark, commands.light, commands.system, commands.write_diary]
+    requirements: [18]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
     LUMI_PRACTICES, LUMI_PRACTICES, LUMI_LISTS, LUMI_LISTS, LUMI_LISTS,
-    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0]
+    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY]
     suggestion_count: s32 = 0
     selected: bool
     limit: s32 = 2
@@ -128,7 +139,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
     if action.kind == 0 && frame.choosing_habit {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = typed}
     }
-    if LumiActionAvailable(action, frame.available_apps) &&
+    if !frame.choosing_diary && LumiActionAvailable(action, frame.available_apps) &&
     (action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO || action.kind == LUMI_COMPLETE_HABIT) {
         count := ifx action.kind == LUMI_COMPLETE_HABIT then frame.habit_count else frame.task_count
         for index: cast(s32)0..count - 1 {
@@ -152,8 +163,8 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             suggestion_count += 1
         }
     }
-    for index: cast(s32)0..cast(s32)16 {
-        if action.kind == LUMI_COMPLETE_HABIT {
+    for index: cast(s32)0..cast(s32)17 {
+        if frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT {
             break
         }
         candidate_action := LumiIntent(candidates[index], commands)
@@ -173,10 +184,12 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             Bounds(x + suggestion_count * (chip_width + Scale(8)), suggestions_top, chip_width, Scale(36))) || selected
         suggestion_count += 1
     }
-    field := TextField(frame.session, TextFieldProps.{.key = cast(u64)300200, .focus_id = 30010,
-            .bounds = Bounds(x, footer, width - Scale(80), Scale(48)),
+    field := TextArea(frame.session, TextAreaProps.{.key = cast(u64)300200, .focus_id = 30010,
+            .bounds = Bounds(x, footer, width - Scale(80), input_height),
             .value = frame.value, .placeholder = LumiViewLocaleHost("lumi_placeholder"), .label = "Lumi",
-            .cursor = frame.cursor, .anchor = frame.anchor, .scroll_x = frame.scroll_x,
+            .cursor = frame.cursor, .anchor = frame.anchor, .scroll_y = frame.input_scroll,
+            .selecting = frame.selecting, .preferred_x = frame.preferred_x,
+            .preferred_x_valid = frame.preferred_x_valid, .wrap = true,
             .focused = frame.focused, .input = frame.input, .max_bytes = LUMI_INPUT_MAX - 1,
             .max_codepoints = LUMI_INPUT_MAX - 1})
     if !selected {
@@ -193,7 +206,10 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         }
         frame.cursor = field.cursor
         frame.anchor = field.anchor
-        frame.scroll_x = field.scroll_x
+        frame.input_scroll = field.scroll_y
+        frame.selecting = field.selecting
+        frame.preferred_x = field.preferred_x
+        frame.preferred_x_valid = field.preferred_x_valid
         frame.focused = field.focused
     }
     frame.clipboard_write = field.clipboard_write
@@ -212,7 +228,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
         frame.value = ""
         frame.cursor = 0
         frame.anchor = 0
-        frame.scroll_x = 0
+        frame.input_scroll = 0
+        frame.selecting = false
+        frame.preferred_x_valid = false
         frame.scroll = 1000000
         frame.follow_end = true
     }

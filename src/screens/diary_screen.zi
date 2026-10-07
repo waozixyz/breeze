@@ -86,6 +86,36 @@ app_diary_save :: () -> bool {
     return diary_state.succeeded && diary_state.saved
 }
 
+app_diary_append :: (text: string) -> bool {
+    if text.count == 0 || !app_diary_save() {
+        return false
+    }
+    clock := DiaryStoreClock()
+    if clock.count < 16 {
+        return false
+    }
+    diary_state = DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
+    diary_loaded = diary_state.succeeded
+    if !diary_loaded || diary_state.load_error {
+        return false
+    }
+    addition: Vec(u8)
+    if diary_state.text.count > 0 {
+        BuilderPrint(*addition, "\n\n")
+    }
+    BuilderPrint(*addition, "**%**\n%", clock[11:16], text)
+    replacement := BuilderFinish(addition)
+    defer { PackageFree(replacement) }
+    diary_state.action = DIARY_EDIT
+    diary_state.edit_start = cast(s32)diary_state.text.count
+    diary_state.edit_end = diary_state.edit_start
+    diary_state.replacement = replacement
+    diary_state = DiaryRun(diary_state)
+    diary_state.replacement = ""
+    diary_state.calendar = false
+    return diary_state.succeeded && app_diary_save()
+}
+
 app_diary_reset :: () {
     diary_loaded = false
     diary_pending = false
