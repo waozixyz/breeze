@@ -22,3 +22,4 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     "$root/tests/audio_runtime_zi_test.c" "$work/audio_runtime.o" \
     -o "$work/test"
 "$work/test"
+sh "$root/tests/audio_first_cue_test.sh" "$bin"

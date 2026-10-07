@@ -1,4 +1,12 @@
 # Changelog
+## [2.1.16] - 2026-10-07
+### Changed
+- Open faster by keeping feature packages loaded and loading language fonts only when needed.
+- Use Android's installed fonts with automatic character fallback where available.
+- Prepare Android audio when first used so it no longer delays opening the app.
+### Added
+- Show a loading indicator on Android until the first app screen is ready.
+
 ## [2.1.15] - 2026-10-07
 ### Fixed
 - Open Telegram sync links on Android when the installed chat app is hidden from app availability checks.

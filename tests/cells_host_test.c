@@ -11,8 +11,27 @@ static size_t sizes[10];
 static int32_t module_runs;
 static bool use_cached_bundles;
 static int32_t cached_reads[6];
+static int32_t bundle_opens;
+static bool corrupt_cached_lists;
 static bool fail_next_instance;
 static bool fail_next_run;
+
+Bundle *__real_BundleOpenBytes(const unsigned char *data, size_t count);
+Bundle *__wrap_BundleOpenBytes(const unsigned char *data, size_t count)
+{
+    bundle_opens++;
+    return __real_BundleOpenBytes(data, count);
+}
+
+int32_t ModuleTestBundleOpens(void)
+{
+    return bundle_opens;
+}
+
+void ModuleTestCorruptCachedLists(bool enabled)
+{
+    corrupt_cached_lists = enabled;
+}
 
 BundleInstance *__real_BundleInstantiate(const Bundle *bundle,
     const HostBinding *bindings, size_t count);
@@ -107,6 +126,7 @@ String __wrap_package_manager_PackageInstalledBytes(int32_t index)
     cached_reads[index]++;
     const int fixture[] = {5, 0, 1, 2, 8, 9};
     int source = fixture[index];
+    if(index == 1 && corrupt_cached_lists) source = 7;
     char *copy = malloc(sizes[source]);
     assert(copy);
     memcpy(copy, payloads[source], sizes[source]);

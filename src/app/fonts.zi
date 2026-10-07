@@ -6,6 +6,8 @@
 
 language_seed: [96]s32;
 language_seed_ready: bool;
+language_fonts_ready: bool;
+system_fonts_ready: bool;
 
 FontExtensionFor :: (path: string) -> string {
     if path == FONT_SC || path == FONT_JP || path == FONT_KR  || path == FONT_TC {
@@ -27,15 +29,6 @@ RegisterFontAsset :: (name: string, path: string,
     return false
 }
 
-RegisterAndroidFontFallbacks :: () {
-    RegisterTypefaceFile("sys-sc", "/system/fonts/NotoSansSC-Regular.otf", null, 0)
-    RegisterTypefaceFile("sys-jp", "/system/fonts/NotoSansJP-Regular.otf", null, 0)
-    RegisterTypefaceFile("sys-kr", "/system/fonts/NotoSansKR-Regular.otf", null, 0)
-    RegisterTypefaceFile("sys-tc", "/system/fonts/NotoSansTC-Regular.otf", null, 0)
-    RegisterTypefaceFile("sys-latin", "/system/fonts/NotoSans-Regular.ttf", null, 0)
-    RegisterTypefaceFile("sys-roboto", "/system/fonts/Roboto-Regular.ttf", null, 0)
-}
-
 LanguageSeed :: () -> *s32 {
     if !language_seed_ready {
         codepoint: s32 = 0x20
@@ -52,6 +45,10 @@ LanguageSeed :: () -> *s32 {
 }
 
 RegisterLanguagePickerFonts :: () {
+    if language_fonts_ready || (AndroidPlatform() != 0 && system_fonts_ready) {
+        return
+    }
+    language_fonts_ready = true
     seed := LanguageSeed()
     RegisterFontAsset("ui-lang-latin", FONT_LATIN, null, 0)
     RegisterFontAsset("ui-lang-ja", FONT_JP, seed, 96)
@@ -106,21 +103,21 @@ LoadLocaleFont :: (app: *InnerBreeze) -> bool {
     if PreviewMode() == 0 {
         ClearTypefaces()
     }
+    language_fonts_ready = false
+    system_fonts_ready = false
 
     system_font: bool = false
-    if DesktopPlatform() != 0 && WindowsPlatform() == 0  && Plan9Platform() == 0 {
+    if AndroidPlatform() != 0 ||
+    (DesktopPlatform() != 0 && WindowsPlatform() == 0 && Plan9Platform() == 0) {
         system_font = RegisterSystemTypeface("ui")
     }
-    if system_font {
+    system_fonts_ready = system_font
+    if system_font && AndroidPlatform() == 0 {
         RegisterFontAsset("ui-locale", path, null, 0)
-    } else if !RegisterFontAsset("ui", path, null, 0) {
+    } else if !system_font && !RegisterFontAsset("ui", path, null, 0) {
         return false
     }
 
-    if AndroidPlatform() != 0 {
-        RegisterAndroidFontFallbacks()
-    }
-    RegisterLanguagePickerFonts()
     if !UseTypeface("ui") {
         if PreviewMode() == 0 {
             ClearTypefaces()
@@ -138,4 +135,6 @@ ReleaseLocaleFont :: (app: *InnerBreeze) {
     if PreviewMode() == 0 {
         ClearTypefaces()
     }
+    language_fonts_ready = false
+    system_fonts_ready = false
 }

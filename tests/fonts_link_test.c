@@ -11,6 +11,7 @@ static int file_count;
 static int clear_count;
 static int system_count;
 static int main_otf;
+static int system_available = 1;
 
 void fixture_platform(int value) { platform = value; }
 void fixture_preview(int value) { preview = value; }
@@ -19,6 +20,7 @@ int fixture_file_count(void) { return file_count; }
 int fixture_clear_count(void) { return clear_count; }
 int fixture_main_otf(void) { return main_otf; }
 int fixture_system_count(void) { return system_count; }
+void fixture_system_available(int value) { system_available = value; }
 
 int app_preview_mode(void) { return preview; }
 int app_desktop_platform(void) { return platform == 1; }
@@ -56,7 +58,7 @@ bool LoadSystemTypeface(String name)
 {
     assert(name.length == 2 && memcmp(name.data, "ui", 2) == 0);
     system_count++;
-    return true;
+    return system_available != 0;
 }
 
 bool SelectTypeface(String name)

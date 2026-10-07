@@ -16,17 +16,23 @@ import android.graphics.Insets;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.widget.Toast;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
 import java.io.File;
 import java.io.FileOutputStream;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.webkit.MimeTypeMap;
 import android.view.DisplayCutout;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Gravity;
 import android.view.ViewTreeObserver;
 import android.util.DisplayMetrics;
 import android.view.WindowInsets;
@@ -45,6 +51,48 @@ import java.util.Arrays;
 
 public class MainActivity extends NativeActivity {
     private final HttpTransport httpTransport = new HttpTransport();
+    private FrameLayout startupView;
+    private boolean firstFrameReady;
+    private long startupStarted;
+
+    private void showStartup() {
+        startupView = new FrameLayout(this);
+        startupView.setBackgroundColor(getResources().getColor(R.color.startup_background));
+        startupView.setClickable(true);
+        int iconSize = Math.round(144 * getResources().getDisplayMetrics().density);
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_launcher_foreground);
+        icon.setContentDescription(getString(R.string.widget_breathe_app));
+        FrameLayout.LayoutParams iconLayout = new FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER);
+        startupView.addView(icon, iconLayout);
+        ProgressBar progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        int progressSize = Math.round(28 * getResources().getDisplayMetrics().density);
+        FrameLayout.LayoutParams progressLayout = new FrameLayout.LayoutParams(progressSize, progressSize, Gravity.CENTER);
+        progressLayout.topMargin = iconSize + progressSize;
+        startupView.addView(progress, progressLayout);
+        addContentView(startupView, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    public void onNativeFirstFrame() {
+        runOnUiThread(() -> {
+            if (firstFrameReady || isFinishing() || isDestroyed()) {
+                return;
+            }
+            firstFrameReady = true;
+            if (startupView != null) {
+                ViewGroup parent = (ViewGroup)startupView.getParent();
+                if (parent != null) {
+                    parent.removeView(startupView);
+                }
+                startupView = null;
+            }
+            reportFullyDrawn();
+            Log.i("InbeStartup", "First native frame ready in "
+                + (SystemClock.elapsedRealtime() - startupStarted) + " ms");
+        });
+    }
 
     public int httpCreate(byte[] method, byte[] url, int capacity, int timeout) {
         return httpTransport.create(method, url, capacity, timeout);
@@ -809,9 +857,11 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        startupStarted = SystemClock.elapsedRealtime();
         configureSystemBars();
         super.onCreate(savedInstanceState);
         configureSystemBars();
+        showStartup();
 
         synchronized (cachedInsets) {
             for (int i = 0; i < cachedInsets.length; i++) {

@@ -69,6 +69,7 @@ OpenStream :: (path: *u8, mode: *u8) -> *void #foreign c "fopen";
 }
 #if #defined(ANDROID_BUILD) {
     android_log :: #system_library "log";
+    AndroidWrite :: (priority: s32, tag: *u8, text: *u8) -> s32 #foreign android_log "__android_log_write";
     #if TRACE_STRUCT_ARGUMENTS {
         AndroidPrint :: (priority: s32, tag: *u8, format: *u8,
             arguments: TraceArguments) -> s32 #foreign android_log "__android_log_vprint";
@@ -131,6 +132,17 @@ FilteredTrace :: (level: s32, format: *u8, arguments: TraceArguments) {
         return
     }
     #if #defined(ANDROID_BUILD) {
+        if level == 3 {
+            message: [1024]u8
+            FormatArguments(*message[0], 1024, format, arguments)
+            message[1023] = 0
+            if TraceStartsWith(*message[0], "APP PROBE:") {
+                tag: [16]u8
+                unused CopyCString("InbeStartup", tag[:])
+                unused AndroidWrite(4, *tag[0], *message[0])
+            }
+            return
+        }
         if level >= 4 {
             tag: [16]u8
             if CopyCString("InnerBreeze", tag[:]) {
@@ -208,7 +220,7 @@ native_install_trace_log_filter :: () {
     #if #defined(KRYON_BACKEND_TERMI) {
         name: [32]u8
         if CopyCString("APP_TERMI_LOG", name[:]) &&
-            GetEnvironment(*name[0]) == null {
+        GetEnvironment(*name[0]) == null {
             SetLogLevel(7)
             return
         }

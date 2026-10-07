@@ -616,7 +616,7 @@ CellsOpen :: () -> bool {
     }
     if ready {
         PackageMarkRootActive(downloaded_root)
-        ready = CellsReloadFeatures(CellsInstalledMask())
+        CellsOpenInstalledFeatures()
     }
     if ready && local_bundle_index > 0 {
         bytes := PackageRead(TextFromCString(*local_bundle_path[0]), PackageMaximumBytes)
@@ -634,6 +634,35 @@ CellsOpen :: () -> bool {
         enabled_apps = CellsInstalledMask()
     }
     return ready
+}
+
+// Keep already checked bundled instances. Only installed overrides require
+// another open, and an invalid override must leave the bundled app usable.
+CellsOpenInstalledFeatures :: () {
+    previous := identifying
+    identifying = true
+    defer {
+        identifying = previous
+    }
+    for index: cast(s32)1..PackageCount - 1 {
+        bytes := PackageInstalledBytes(index)
+        if bytes.count > 0 {
+            replacement: ModuleSlot
+            kind := ModuleKindForPackage(index)
+            if ModuleOpen(*replacement, bytes, kind) &&
+            ModuleFeatureAssetsValid(replacement.bundle, kind) {
+                slot := ModuleSlotForPackage(index)
+                CloseBundleInstance(slots[slot].instance)
+                CloseBundle(slots[slot].bundle)
+                slots[slot] = replacement
+            } else {
+                CloseBundleInstance(replacement.instance)
+                CloseBundle(replacement.bundle)
+            }
+        }
+        PackageFree(bytes)
+    }
+    enabled_apps = CellsInstalledMask()
 }
 
 PackageFeature :: (index: s32) -> string {
@@ -716,7 +745,7 @@ CellsOpenPackage :: (bytes: string) -> bool {
     identifying = true
     ready := ModuleOpen(*slots[3], bytes, MODULE_INBE)
     if ready {
-        ready = ModulePackageAssetsValid(slots[3].bundle)
+        ready = ModulePackageAssetsValid(slots[3].bundle, false)
     }
     if ready {
         index: s32 = 0
@@ -730,7 +759,8 @@ CellsOpenPackage :: (bytes: string) -> bool {
 
                 slot := ModuleSlotForPackage(index + 1)
                 kind := ModuleKindForPackage(index + 1)
-                ready = ModuleOpen(*slots[slot], feature, kind)
+                ready = ModuleOpen(*slots[slot], feature, kind) &&
+                ModuleFeatureAssetsValid(slots[slot].bundle, kind)
             }
             index += 1
         }
@@ -853,15 +883,9 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
     ok := ModuleOpen(*test, bytes, kind)
     if ok {
         if index == 0 {
-            ok = ModulePackageAssetsValid(test.bundle)
+            ok = ModulePackageAssetsValid(test.bundle, true)
         } else {
-
-            ok = BundleAssets(test.bundle) <= cast(u64)8192
-            asset: u64 = 0
-            while ok && asset < BundleAssets(test.bundle) {
-                ok = PackageResourceValid(TextFromCString(BundleAssetPath(test.bundle, asset)), kind)
-                asset += 1
-            }
+            ok = ModuleFeatureAssetsValid(test.bundle, kind)
         }
     }
     identifying = previous
@@ -870,7 +894,23 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
     return ok
 }
 
-ModulePackageAssetsValid :: (bundle: *void) -> bool {
+ModuleFeatureAssetsValid :: (bundle: *void, kind: s32) -> bool {
+    count := BundleAssets(bundle)
+    if count > cast(u64)8192 {
+        return false
+    }
+    if count == 0 {
+        return true
+    }
+    for asset: cast(u64)0..count - cast(u64)1 {
+        if !PackageResourceValid(TextFromCString(BundleAssetPath(bundle, asset)), kind) {
+            return false
+        }
+    }
+    return true
+}
+
+ModulePackageAssetsValid :: (bundle: *void, validate_features: bool) -> bool {
     count := BundleAssets(bundle)
     if count < cast(u64)2 || count > cast(u64)8192 {
         return false
@@ -882,7 +922,7 @@ ModulePackageAssetsValid :: (bundle: *void) -> bool {
         for feature: cast(s32)0..cast(s32)4 {
             if CellBundlePath(TextFromCString(BundleAssetPath(bundle, asset))) == names[feature] && !found[feature] {
                 bytes := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset), BundleAssetLength(bundle, asset)))
-                if !CellsValidatePackage(feature + 1, bytes) {
+                if validate_features && !CellsValidatePackage(feature + 1, bytes) {
                     return false
                 }
                 found[feature] = true
