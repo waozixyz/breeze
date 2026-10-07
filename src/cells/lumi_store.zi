@@ -6,6 +6,7 @@
 #import "vec"
 #import, file "lumi_types.zi";
 #import, file "lumi_ui_types.zi";
+#import, file "lumi_chart.zi";
 #import, file "package_files.zi";
 #import, file "../storage/sqlite.zi";
 #import, file "../storage/state.zi";
@@ -23,6 +24,7 @@ LumiStoreReset :: () {
     lumi_store_revision += 1
     for index: cast(s32)0..lumi_count - 1 {
         PackageFree(lumi_rows[index].text)
+        PackageFree(lumi_rows[index].payload)
         lumi_rows[index] = LumiChatRow.{}
     }
     lumi_count = 0
@@ -57,7 +59,7 @@ LumiStoreLoad :: () {
         lumi_store_error = true
         return
     }
-    document := AppTextFromCString(SqliteColumnText(statement, 0), 131072)
+    document := AppTextFromCString(SqliteColumnText(statement, 0), 524288)
     count := ArrayCount(document, 0)
     if count < 0 || count > LUMI_CHAT_MAX || ValueEnd(document, 0, 0) != document.count {
         lumi_store_error = true
@@ -68,8 +70,30 @@ LumiStoreLoad :: () {
         bytes: [1024]u8
         length := ReadStringText(document, FieldAt(document, element, "text"), bytes[:])
         user := ReadNumber(document, FieldAt(document, element, "user"))
+        kind: s32 = LUMI_CHAT_TEXT
+        kind_at := FieldAt(document, element, "kind")
+        payload_bytes: [4096]u8
+        payload: string
+        rich_valid := true
+        if kind_at >= 0 {
+            number := ReadNumber(document, kind_at)
+            rich_valid = number.valid && number.value >= 0 && number.value <= 2 &&
+            number.value == cast(float64)cast(s32)number.value
+            if rich_valid {
+                kind = cast(s32)number.value
+            }
+            if kind == LUMI_CHAT_PROGRESS {
+                payload_length := ReadStringText(document, FieldAt(document, element, "payload"), payload_bytes[:])
+                rich_valid = rich_valid && payload_length > 0 && payload_length < LUMI_PAYLOAD_MAX
+                if rich_valid {
+                    payload = TextFromBytes(payload_bytes[:payload_length])
+                    rich_valid = LumiChartRead(payload).valid
+                }
+            }
+            rich_valid = rich_valid && (kind == LUMI_CHAT_TEXT || user.value == 0.0)
+        }
         if length <= 0 || length >= LUMI_INPUT_MAX || !user.valid ||
-        (user.value != 0.0 && user.value != 1.0) {
+        (user.value != 0.0 && user.value != 1.0) || !rich_valid {
             LumiStoreReset()
             unused AppCopyText(owner, lumi_owner[:])
             lumi_store_loaded = true
@@ -77,7 +101,7 @@ LumiStoreLoad :: () {
             return
         }
         lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(TextFromBytes(bytes[0:length]), ""),
-            .user = user.value == 1.0}
+            .user = user.value == 1.0, .kind = kind, .payload = PackageText(payload, "")}
         lumi_count += 1
     }
 }
@@ -112,6 +136,10 @@ LumiStoreSave :: () -> bool {
         BuilderPrint(*out, "%{\"user\":%,\"text\":", ifx index == 0 then "" else ",",
             ifx lumi_rows[index].user then 1 else 0)
         LumiJsonString(*out, lumi_rows[index].text)
+        if lumi_rows[index].kind != LUMI_CHAT_TEXT {
+            BuilderPrint(*out, ",\"kind\":%,\"payload\":", lumi_rows[index].kind)
+            LumiJsonString(*out, lumi_rows[index].payload)
+        }
         BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]")
@@ -124,22 +152,36 @@ LumiStoreSave :: () -> bool {
 }
 
 LumiStoreAppend :: (text: string, user: bool) {
+    unused LumiStoreAppendCard(text, user, LUMI_CHAT_TEXT, "")
+}
+
+LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) -> bool {
     if text.count == 0 || text.count >= LUMI_INPUT_MAX {
-        return
+        return false
+    }
+    if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_DONATIONS ||
+    (kind != LUMI_CHAT_TEXT && user) ||
+    (kind == LUMI_CHAT_PROGRESS && !LumiChartRead(payload).valid) ||
+    (kind != LUMI_CHAT_PROGRESS && payload.count != 0) {
+        return false
     }
     LumiStoreLoad()
     if lumi_count == LUMI_CHAT_MAX {
         // Trim a complete conversation pair, preserving user/reply ordering.
         PackageFree(lumi_rows[0].text)
         PackageFree(lumi_rows[1].text)
+        PackageFree(lumi_rows[0].payload)
+        PackageFree(lumi_rows[1].payload)
         for index: cast(s32)2..lumi_count - 1 {
             lumi_rows[index - 2] = lumi_rows[index]
         }
         lumi_count -= 2
     }
-    lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(text, ""), .user = user}
+    lumi_rows[lumi_count] = LumiChatRow.{.text = PackageText(text, ""), .user = user,
+        .kind = kind, .payload = PackageText(payload, "")}
     lumi_count += 1
     lumi_store_revision += 1
+    return true
 }
 
 LumiStoreRevision :: () -> u64 {

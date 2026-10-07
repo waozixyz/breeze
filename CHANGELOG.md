@@ -1,6 +1,7 @@
 # Changelog
 ## [2.1.11] - 2026-10-07
 ### Added
+- Ask Lumi for progress charts and donation links directly in chat.
 - Talk naturally with Lumi online, with a daily account allowance and access to app actions.
 - Save app feedback from chat, send it when connected, and receive developer replies in Lumi.
 ### Fixed

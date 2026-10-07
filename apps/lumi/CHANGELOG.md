@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.0] - 2026-10-07
+
+- Show daily progress charts from saved practices, meditation, breath retention and completed habits.
+- Keep charts in chat, select daily values, and show an empty state when no activity is recorded.
+- Show donation cards with Bitcoin and Monero addresses, wallet links and browser donation links.
+
 ## [1.2.0] - 2026-10-07
 
 - Understand natural conversation online with the same tools in Inner Breeze and Harmony.

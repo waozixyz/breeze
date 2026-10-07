@@ -1,0 +1,69 @@
+// Bounded, device-generated chart snapshots shared by storage and the cell.
+#import "json_scan"
+#import "date_parse"
+#import, file "lumi_types.zi";
+
+LumiChart :: struct {
+    valid: bool
+    metric: s32
+    count: s32
+    dates: [31]s32
+    values: [31]s32
+    maximum: s32
+    total: s32
+}
+
+LumiChartRead :: (document: string) -> LumiChart {
+    chart: LumiChart
+    if document.count == 0 || document.count >= LUMI_PAYLOAD_MAX ||
+    ValueEnd(document, 0, 0) != document.count || document[0] != cast(u8)123 {
+        return chart
+    }
+    metric := ReadNumber(document, FieldAt(document, 0, "metric"))
+    if !metric.valid || metric.value < 0 || metric.value > 3 ||
+    metric.value != cast(float64)cast(s32)metric.value {
+        return chart
+    }
+    chart.metric = cast(s32)metric.value
+    points := FieldAt(document, 0, "points")
+    chart.count = ArrayCount(document, points)
+    if chart.count < 1 || chart.count > LUMI_PROGRESS_MAX_DAYS {
+        return chart
+    }
+    for index: cast(s32)0..chart.count - 1 {
+        at := ElementAt(document, points, index)
+        date := ReadNumber(document, FieldAt(document, at, "date"))
+        value := ReadNumber(document, FieldAt(document, at, "value"))
+        if !date.valid || date.value < 10000101 || date.value > 99991231 ||
+        date.value != cast(float64)cast(s32)date.value || !value.valid ||
+        value.value < 0 || value.value > 1000000 || value.value != cast(float64)cast(s32)value.value {
+            return chart
+        }
+        day := cast(s32)date.value
+        if !DateValid(day / 10000, day / 100 % 100, day % 100) ||
+        (index > 0 && day <= chart.dates[index - 1]) {
+            return chart
+        }
+        chart.dates[index] = day
+        chart.values[index] = cast(s32)value.value
+        chart.total += chart.values[index]
+        if chart.values[index] > chart.maximum {
+            chart.maximum = chart.values[index]
+        }
+    }
+    chart.valid = true
+    return chart
+}
+
+LumiChartTitleKey :: (metric: s32) -> string {
+    if metric == LUMI_PROGRESS_MEDITATION {
+        return "lumi_chart_meditation"
+    }
+    if metric == LUMI_PROGRESS_RETENTION {
+        return "lumi_chart_retention"
+    }
+    if metric == LUMI_PROGRESS_HABITS {
+        return "lumi_chart_habits"
+    }
+    return "lumi_chart_sessions"
+}

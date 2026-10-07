@@ -26,8 +26,9 @@ def command(*args):
 def tap(window, x, y):
     command("xdotool", "windowfocus", window)
     command("xdotool", "mousemove", "--window", window, str(x), str(y))
+    time.sleep(0.15)
     command("xdotool", "mousedown", "1")
-    time.sleep(0.06)
+    time.sleep(0.18)
     command("xdotool", "mouseup", "1")
     time.sleep(0.2)
 
@@ -45,7 +46,8 @@ def application(profile, label, standalone=False, recommended=False):
                      "build/inbe.zib" if recommended else "build/inbe-full.zib")
     with (OUTPUT / f"{label}.log").open("w") as log:
         app = subprocess.Popen([sys.argv[1], "--bundle", str(bundle)], cwd=ROOT,
-                               env=ENV | {"APP_DATA_ROOT": str(profile)},
+                               env=ENV | {"APP_DATA_ROOT": str(profile),
+                                          "INBE_TEST_OPEN_URI_CAPTURE": str(OUTPUT / (label + "-uri.txt"))},
                                stdout=log, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 20
@@ -61,9 +63,15 @@ def application(profile, label, standalone=False, recommended=False):
                 raise AssertionError("Lumi window did not appear")
             command("xdotool", "windowsize", window, "900", "720")
             command("xdotool", "windowfocus", window)
-            time.sleep(1)
+            wait_for(lambda: " = " in command("xprop", "-id", window, "_HARMONY_APP_STATE"),
+                     "Owned app UI did not become ready")
+            time.sleep(0.4)
             yield window
             assert app.poll() is None, "Lumi crashed"
+        except BaseException:
+            if app.poll() is None and 'window' in locals():
+                capture(window, "failure-" + label)
+            raise
         finally:
             if app.poll() is None:
                 app.terminate()
@@ -132,12 +140,17 @@ def send(window, profile, text, *, button=False):
         assert rows[:-2] in (before, before[2:]), "Chat lost recent conversation"
     except AssertionError:
         capture(window, "failure")
+        (OUTPUT / "failure-exchange.json").write_text(json.dumps({
+            "expected": text.strip(), "recent": chat(profile)[-3:]
+        }, indent=2) + "\n")
         raise
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     profile = Path(directory)
     with application(profile, "standalone", standalone=True) as window:
+        tool_names = {tool["name"] for tool in state(window)["mcp"]["tools"]}
+        assert {"show_progress_chart", "show_donation_links"} <= tool_names
         capture(window, "standalone")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
@@ -157,6 +170,59 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         db.execute("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,"
                    "sync_activity,counter_enabled,sort_order,deleted_at,updated_at) "
                    "VALUES('lumi-ambiguous-habit',?,'Read poetry',100,150,100,0,0,0,21,0,1)", (user,))
+    with application(profile, "rich-cards") as window:
+        send(window, profile, "/progress sessions 7")
+        chart_row = chat(profile)[-1]
+        assert chart_row["kind"] == 1
+        chart_data = json.loads(chart_row["payload"])
+        assert chart_data["metric"] == 0 and len(chart_data["points"]) == 7
+        assert all(point["value"] == 0 for point in chart_data["points"])
+        capture(window, "progress-empty")
+        send(window, profile, "/progress habits 30")
+        assert len(json.loads(chat(profile)[-1]["payload"])["points"]) == 30
+        capture(window, "progress-habits")
+        with sqlite3.connect(profile / "inbe.db") as db:
+            today = db.execute("SELECT CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)").fetchone()[0]
+            for identity, activity, seconds in [("chart-whm", 0, 95), ("chart-meditation", 1, 120)]:
+                db.execute("INSERT INTO sessions(id,user_id,started_at,local_date,activity,source,imported_at,rounds_hash) "
+                           "VALUES(?,?,?, ?,?,'test',1,1)", (identity, user, 1 if activity == 0 else 2, today, activity))
+                db.execute("INSERT INTO session_rounds VALUES(?,0,?)", (identity, seconds))
+        for metric, expected in [("sessions", 2), ("meditation", 120), ("retention", 95)]:
+            send(window, profile, f"/progress {metric} 7")
+            points = json.loads(chat(profile)[-1]["payload"])["points"]
+            assert points[-1] == {"date": today, "value": expected}
+            assert sum(point["value"] for point in points[:-1]) == 0
+        time.sleep(0.5)
+        capture(window, "progress-recorded")
+        # Select the latest day in the seven-bar chart.
+        tap(window, 797, 425)
+        time.sleep(0.4)
+        capture(window, "progress-selected")
+        send(window, profile, "/donate")
+        assert chat(profile)[-1]["kind"] == 2
+        time.sleep(0.5)
+        capture(window, "donation-cards")
+        tap(window, 550, 206)
+        expected_address = re.search(r'app_bitcoin_donation_address.*?return "([^"]+)"',
+                                     (ROOT / "src/app/app_donation.zi").read_text(), re.S)[1]
+        assert command("xclip", "-selection", "clipboard", "-o") == expected_address
+        uri_receipt = OUTPUT / "rich-cards-uri.txt"
+        tap(window, 550, 252)
+        wait_for(lambda: uri_receipt.exists(), "Wallet action did not reach the URI host")
+        assert uri_receipt.read_text().startswith("bitcoin:" + expected_address)
+        uri_receipt.unlink()
+        tap(window, 550, 298)
+        wait_for(lambda: uri_receipt.exists(), "Donation link did not reach the URI host")
+        assert uri_receipt.read_text().startswith("https://trocador.app/")
+        assert "address=" + expected_address in uri_receipt.read_text()
+        command("xdotool", "windowsize", window, "390", "720")
+        time.sleep(0.5)
+        capture(window, "donation-narrow")
+    # Keep the original conversation fixtures independent of chart records.
+    with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("UPDATE settings SET value='[]' WHERE key='lumi_chat'")
+        db.execute("DELETE FROM session_rounds WHERE session_id IN ('chart-whm','chart-meditation')")
+        db.execute("DELETE FROM sessions WHERE id IN ('chart-whm','chart-meditation')")
     with application(profile, "chat") as window:
         capture(window, "welcome")
         assert query(profile, "SELECT value FROM settings WHERE key='main_tab'")[0][0] == "4"
@@ -300,6 +366,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "Lists absent", "WHM starts and advances immediately", "Practices and Habits absent", "habit question and name reply",
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
-                    "multiline Diary append", "Diary restart persistence", "bounded history retention"],
+                    "multiline Diary append", "Diary restart persistence", "bounded history retention",
+                    "progress zero and recorded values", "donation address copy", "wallet URI",
+                    "official browser donation link", "narrow donation card", "large tool catalog"],
     }, indent=2) + "\n")
 print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")

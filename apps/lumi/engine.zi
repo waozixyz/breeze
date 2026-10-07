@@ -72,8 +72,68 @@ LumiArgument :: (input: string, command: string) -> string {
     return LumiTrim(input[end:])
 }
 
+LumiProgressIntent :: (input: string, commands: LumiCommands) -> LumiAction {
+    prefixes: [2]string = .[commands.progress, "/progress"]
+    for prefix: prefixes {
+        if prefix.count == 0 {
+            continue
+        }
+        if LumiEqual(input, prefix) {
+            return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = LUMI_PROGRESS_SESSIONS, .route = 7}
+        }
+        argument := LumiArgument(input, prefix)
+        if argument.count == 0 {
+            continue
+        }
+        boundary: s64 = 0
+        while boundary < argument.count && !CommandSpace(argument[boundary]) {
+            boundary += 1
+        }
+        metrics: [4]string = .["sessions", "meditation", "retention", "habits"]
+        for metric: cast(s32)0..cast(s32)3 {
+            if !LumiEqual(argument[:boundary], metrics[metric]) {
+                continue
+            }
+            days_text := LumiTrim(argument[boundary:])
+            days: s32 = 7
+            if days_text.count > 0 {
+                if days_text.count > 2 {
+                    return LumiAction.{}
+                }
+                days = 0
+                for byte: days_text {
+                    if byte < cast(u8)48 || byte > cast(u8)57 {
+                        return LumiAction.{}
+                    }
+                    days = days * 10 + cast(s32)(byte - cast(u8)48)
+                }
+            }
+            if days >= 1 && days <= LUMI_PROGRESS_MAX_DAYS {
+                return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = metric, .route = days}
+            }
+        }
+    }
+    aliases: [4]string = .["show my progress", "show progress", "show progress chart", "progress chart"]
+    for alias: aliases {
+        if CommandPhrase(input, alias) {
+            return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = LUMI_PROGRESS_SESSIONS, .route = 7}
+        }
+    }
+    return LumiAction.{}
+}
+
 LumiIntent :: (input: string, commands: LumiCommands) -> LumiAction {
     input = LumiTrim(input)
+    progress := LumiProgressIntent(input, commands)
+    if progress.kind != 0 {
+        return progress
+    }
+    donation_aliases: [5]string = .[commands.donations, "/donate", "donation links", "show donation links", "how can I donate?"]
+    for alias: donation_aliases {
+        if alias.count > 0 && LumiEqual(input, alias) {
+            return LumiAction.{.kind = LUMI_SHOW_DONATIONS}
+        }
+    }
     // Explicit reports remain usable without a network or a model allowance.
     feedback_prefixes: [5]string = .["/feedback ", "feedback:", "feedback ", "fix ", "please fix "]
     for prefix: feedback_prefixes {
@@ -196,12 +256,14 @@ LumiIntent :: (input: string, commands: LumiCommands) -> LumiAction {
 
 // Both the conversation and autocomplete use the same installed tool policy.
 LumiActionAvailable :: (action: LumiAction, available_apps: s32) -> bool {
-    if action.kind == LUMI_REPORT_FEEDBACK || action.kind == LUMI_SET_THEME || action.kind == LUMI_SET_MODE ||
+    if action.kind == LUMI_SHOW_DONATIONS || action.kind == LUMI_REPORT_FEEDBACK || action.kind == LUMI_SET_THEME || action.kind == LUMI_SET_MODE ||
     (action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS) {
         return true
     }
     bit: s32 = 0
-    if action.kind == LUMI_ADD_TODO || action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO {
+    if action.kind == LUMI_SHOW_PROGRESS {
+        bit = ifx action.practice == LUMI_PROGRESS_HABITS then LUMI_HABITS else LUMI_PRACTICES
+    } else if action.kind == LUMI_ADD_TODO || action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO {
         bit = LUMI_LISTS
     } else if action.kind == LUMI_WRITE_DIARY {
         bit = LUMI_DIARY

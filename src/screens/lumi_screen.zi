@@ -10,6 +10,8 @@
 #import, file "../cells/inbe_types.zi";
 #import, file "../cells/lumi_ui_types.zi";
 #import, file "../cells/lumi_store.zi";
+#import, file "../cells/lumi_progress.zi";
+#import, file "../cells/lumi_chart.zi";
 #import, file "../cells/lumi_online.zi";
 #import, file "../cells/feedback_store.zi";
 #import, file "../cells/app_tools.zi";
@@ -25,6 +27,8 @@
 #import, file "../app/route_types.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/assets.zi";
+#import, file "../app/app_donation.zi";
+#import, file "../platform/uri.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../storage/storage_elist.zi";
@@ -50,6 +54,7 @@ lumi_row_codec: WidgetLumiChatRowCodec;
 lumi_task_codec: WidgetLumiTaskCodec;
 lumi_action_codec: WidgetLumiActionCodec;
 lumi_tools_codec: WidgetLumiToolsCodec;
+lumi_donation_codec: WidgetLumiDonationCodec;
 lumi_input: [1024]u8;
 lumi_tasks: EListState;
 lumi_tasks_revision: s64 = -1;
@@ -109,6 +114,17 @@ LumiTaskAt :: (index: s32) -> LumiTask {
 LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
     if app == null || (CellsInstalledMask() & APP_LUMI) == 0 {
         return false
+    }
+    if action.kind == LUMI_SHOW_PROGRESS {
+        payload := LumiProgressJson(app, action.practice, action.route)
+        defer { PackageFree(payload) }
+        if payload.count == 0 {
+            return false
+        }
+        return LumiStoreAppendCard(LocaleText(LumiChartTitleKey(action.practice)), false, LUMI_CHAT_PROGRESS, payload)
+    }
+    if action.kind == LUMI_SHOW_DONATIONS {
+        return LumiStoreAppendCard(LocaleText("about_donation_message"), false, LUMI_CHAT_DONATIONS, "")
     }
     if action.kind == LUMI_SET_THEME {
         return AppSetTheme(app, action.title)
@@ -224,6 +240,36 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
+    if name == "ReadLumiDonationHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        coin := cast(s32)arguments[0].integer
+        if coin < 0 || coin > 1 {
+            return 0
+        }
+        donation := LumiDonation.{.name = ifx coin == 0 then "Bitcoin" else "Monero",
+            .address = ifx coin == 0 then app_bitcoin_donation_address() else app_monero_donation_address()}
+        result.* = WidgetEncodeLumiDonation(donation, *lumi_donation_codec)
+        return 1
+    }
+    if name == "LumiDonationActionHost" && count == 2 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    ModuleScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        coin := cast(s32)arguments[0].integer
+        action := cast(s32)arguments[1].integer
+        if coin < 0 || coin > 1 || action < 0 || action > 2 {
+            return 0
+        }
+        succeeded: bool
+        if action == 0 {
+            succeeded = TextInputWriteClipboard(ifx coin == 0 then app_bitcoin_donation_address() else app_monero_donation_address())
+        } else if action == 1 {
+            succeeded = OpenUri(ifx coin == 0 then app_bitcoin_wallet_url() else app_monero_wallet_url())
+        } else {
+            succeeded = OpenUri(ifx coin == 0 then app_bitcoin_trocador_url() else app_monero_trocador_url())
+        }
+        result.* = ModuleScalar("bool", ifx succeeded then 1 else 0)
+        return 1
+    }
     if name == "StartLumiOnlineHost" && count == 1 &&
     ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
         input := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
@@ -310,6 +356,11 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
                 DefaultTextFace())
             lumi_row_heights[index] = cast(s32)prepared.bounds.height +
             cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
+            if row.kind == LUMI_CHAT_PROGRESS {
+                lumi_row_heights[index] += cast(s32)(242.0 * lumi_ui.scale)
+            } else if row.kind == LUMI_CHAT_DONATIONS {
+                lumi_row_heights[index] += cast(s32)(500.0 * lumi_ui.scale)
+            }
         }
         row.height = lumi_row_heights[index]
         result.* = WidgetEncodeLumiChatRow(row, *lumi_row_codec)

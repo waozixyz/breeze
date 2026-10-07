@@ -20,6 +20,7 @@
 #import "vec"
 #import, file "../../src/cells/lumi_types.zi";
 #import, file "../../src/cells/lumi_ui_types.zi";
+#import, file "../../src/cells/lumi_chart.zi";
 #import, file "engine.zi";
 
 using ImageFit;
@@ -33,7 +34,12 @@ ReadLumiChatRowHost :: (index: s32) -> LumiChatRow #foreign host_api;
 ReadLumiSuggestionTaskHost :: (index: s32) -> LumiTask #foreign host_api;
 ReadLumiSuggestionHabitHost :: (index: s32) -> LumiTask #foreign host_api;
 LumiViewLocaleHost :: (key: string) -> string #foreign host_api;
+ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
+LumiDonationActionHost :: (coin: s32, action: s32) -> bool #foreign host_api;
 frame: LumiUiFrame;
+chart_selected: [65]s32;
+donation_notice: string;
+donation_notice_row: s32 = -1;
 
 Scale :: (value: s32) -> s32 {
     return cast(s32)(cast(float32)value * frame.scale)
@@ -57,6 +63,114 @@ Suggestion :: (id: s32, text: string, bounds: Rectangle, label: string = "") -> 
         return true
     }
     return false
+}
+
+ChartDate :: (date: s32) -> string {
+    out: Vec(u8)
+    month := date / 100 % 100
+    day := date % 100
+    BuilderPrint(*out, "%-", date / 10000)
+    BuilderPrint(*out, "%", ifx month < 10 then "0" else "")
+    BuilderPrint(*out, "%-", month)
+    BuilderPrint(*out, "%", ifx day < 10 then "0" else "")
+    BuilderPrint(*out, "%", day)
+    // Keep date labels independent of the host's locale and timezone.
+    text := BuilderFinish(out)
+    return text
+}
+
+ProgressCard :: (row: LumiChatRow, index: s32, x: s32, y: s32, width: s32) {
+    chart := LumiChartRead(row.payload)
+    if !chart.valid {
+        return
+    }
+    key := 330000 + index * 64
+    selected := chart_selected[index]
+    if selected < 0 || selected >= chart.count {
+        selected = 0
+    }
+    plot_y := y + Scale(30)
+    plot_height := Scale(130)
+    step := cast(float32)width / cast(float32)chart.count
+    for point: cast(s32)0..chart.count - 1 {
+        left := x + cast(s32)(cast(float32)point * step)
+        bar_width := cast(s32)step - Scale(2)
+        if bar_width < 1 {
+            bar_width = 1
+        }
+        bar_height: s32 = 0
+        if chart.maximum > 0 {
+            bar_height = cast(s32)(cast(float64)chart.values[point] / cast(float64)chart.maximum * cast(float64)plot_height)
+        }
+        if Button(frame.session, ButtonProps.{.id = 310000 + index * 32 + point,
+                .bounds = Bounds(left, plot_y, cast(s32)step, plot_height), .invisible = true}) != 0 {
+            selected = point
+            chart_selected[index] = point
+        }
+        Box(frame.session, BoxProps.{.key = cast(u64)(key + point),
+                .bounds = Bounds(left, plot_y + plot_height - bar_height, bar_width, bar_height),
+                .fill = ifx selected == point then Color.{93, 148, 110, 255} else Color.{156, 188, 143, 200},
+                .radius = cast(float32)Scale(2)})
+    }
+    Box(frame.session, BoxProps.{.key = cast(u64)(key + 31),
+            .bounds = Bounds(x, plot_y + plot_height, width, Scale(1)), .fill = Color.{156, 156, 156, 120}})
+    summary: Vec(u8)
+    BuilderPrint(*summary, "% · %", ChartDate(chart.dates[selected]), chart.values[selected])
+    Text(frame.session, TextProps.{.key = cast(u64)(key + 32),
+            .bounds = Bounds(x, y, width, Scale(24)), .text = BuilderFinish(summary), .font = Scale(14)})
+    half := width / 2
+    Text(frame.session, TextProps.{.key = cast(u64)(key + 33),
+            .bounds = Bounds(x, plot_y + plot_height + Scale(6), half, Scale(22)),
+            .text = ChartDate(chart.dates[0]), .font = Scale(12)})
+    Text(frame.session, TextProps.{.key = cast(u64)(key + 34),
+            .bounds = Bounds(x + half, plot_y + plot_height + Scale(6), width - half, Scale(22)),
+            .text = ChartDate(chart.dates[chart.count - 1]), .font = Scale(12)})
+    if chart.maximum == 0 {
+        Text(frame.session, TextProps.{.key = cast(u64)(key + 35),
+                .bounds = Bounds(x, y + Scale(196), width, Scale(40)),
+                .text = LumiViewLocaleHost("lumi_chart_empty"), .font = Scale(14)})
+    }
+}
+
+DonationCard :: (index: s32, x: s32, y: s32, width: s32) {
+    labels: [3]string = .[LumiViewLocaleHost("copy_address_button"),
+    LumiViewLocaleHost("open_wallet_button"), LumiViewLocaleHost("trocador_button")]
+    for coin: cast(s32)0..cast(s32)1 {
+        donation := ReadLumiDonationHost(coin)
+        address := donation.address
+        if width < Scale(360) && address.count > 42 {
+            abbreviated: Vec(u8)
+            BuilderPrint(*abbreviated, "%…%", address[:16], address[address.count - 12:])
+            address = BuilderFinish(abbreviated)
+        }
+        key := 340000 + index * 16 + coin * 8
+        Text(frame.session, TextProps.{.key = cast(u64)key,
+                .bounds = Bounds(x, y, width, Scale(24)), .text = donation.name, .font = frame.font})
+        Text(frame.session, TextProps.{.key = cast(u64)(key + 1),
+                .bounds = Bounds(x, y + Scale(26), width, Scale(62)),
+                .text = address, .font = Scale(12), .selectable = true})
+        for action: cast(s32)0..cast(s32)2 {
+            if Button(frame.session, ButtonProps.{.id = 320000 + index * 8 + coin * 3 + action,
+                    .bounds = Bounds(x, y + Scale(92 + action * 46), width, Scale(42)),
+                    .label = labels[action], .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                succeeded := LumiDonationActionHost(coin, action)
+                donation_notice_row = index
+                donation_notice = ""
+                if action == 0 && succeeded {
+                    donation_notice = "address_copied"
+                } else if !succeeded {
+                    donation_notice = ifx action == 1 then "wallet_not_installed_toast" else "lumi_unavailable"
+                }
+            }
+        }
+        y += Scale(232)
+    }
+    if donation_notice_row == index && donation_notice.count > 0 {
+        Text(frame.session, TextProps.{.key = cast(u64)(340000 + index * 16 + 15),
+                .bounds = Bounds(x, y, width, Scale(36)),
+                .text = LumiViewLocaleHost(donation_notice), .font = Scale(12)})
+    }
 }
 
 LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
@@ -122,23 +236,34 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
                         bubble_width - Scale(28), Scale(20)), .text = "Lumi", .font = Scale(12)})
             }
             text_top := Scale(ifx row.user then 12 else 32)
+            card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
+                ifx row.kind == LUMI_CHAT_DONATIONS then 500 else 0)
+            text_height := row_height - text_top - Scale(16) - card_height
             Text(frame.session, TextProps.{.key = cast(u64)(300403 + index * 4),
                     .bounds = Bounds(left + Scale(14), top + text_top,
-                    bubble_width - Scale(28), row_height - text_top - Scale(16)),
-                    .text = row.text, .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+                    bubble_width - Scale(28), text_height),
+                    .text = row.text,
+                    .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+            card_top := top + text_top + text_height + Scale(8)
+            if row.kind == LUMI_CHAT_PROGRESS {
+                ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))
+            } else if row.kind == LUMI_CHAT_DONATIONS {
+                DonationCard(index, left + Scale(14), card_top, bubble_width - Scale(28))
+            }
             top += row_height
         }
         End(frame.session)
     }
     typed := LumiTrim(frame.value)
-    candidates: [18]string = .[commands.start_whm, commands.complete_habit,
+    candidates: [20]string = .[commands.start_whm, commands.complete_habit,
     commands.start_meditation, commands.start_sun, commands.start_patterns,
     commands.add, commands.complete, commands.reopen,
     commands.lists, commands.habits, commands.practices, commands.diary,
-    commands.settings, commands.appearance, commands.dark, commands.light, commands.system, commands.write_diary]
-    requirements: [18]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
+    commands.settings, commands.appearance, commands.dark, commands.light, commands.system, commands.write_diary,
+    commands.progress, commands.donations]
+    requirements: [20]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
     LUMI_PRACTICES, LUMI_PRACTICES, LUMI_LISTS, LUMI_LISTS, LUMI_LISTS,
-    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY]
+    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY, LUMI_PRACTICES, 0]
     suggestion_count: s32 = 0
     selected: bool
     limit: s32 = 2
@@ -174,7 +299,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             suggestion_count += 1
         }
     }
-    for index: cast(s32)0..cast(s32)17 {
+    for index: cast(s32)0..cast(s32)19 {
         if frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit {
             break
         }

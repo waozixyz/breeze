@@ -70,6 +70,21 @@ app effects; no database pointers or arbitrary code cross the cell boundary.
 Lumi can open Settings or Appearance, change the app theme with `/theme forest`
 (or another published theme name), and choose light, dark or system mode.
 These actions use the same validation, persistence and refresh path as Settings.
+Lumi can display typed chart and donation cards alongside text replies. Ask
+`/progress sessions 7`, `/progress meditation 30`, `/progress retention 7`, or
+`/progress habits 7` (1–31 days including today). Charts use the active account's
+saved history, omit deleted records, fill empty days with zero, and persist as
+snapshots. Meditation and best daily WHM retention are measured in seconds;
+habits count scheduled habits whose manual or linked activity count reaches the
+target. Select a bar to see its date and value. Online requests use the same
+`show_progress_chart` tool; model-provided data never becomes a chart.
+
+`/donate` and `show_donation_links` show the existing Bitcoin and Monero addresses
+with copy, wallet and Trocador actions. Only a user click opens a destination.
+The host chooses every address and URL from Inbe's donation configuration. Old
+text-only chat history remains readable. Cards persist in the same account-scoped
+local conversation and render with standard Kryon Text, Box and Button widgets.
+
 The app publishes its MCP tool schemas in `assets/mcp/tools.json`, including
 `get_settings`, `set_theme`, `set_theme_mode`, `set_setting`, `open_view` and
 `practice`. Harmony discovers and calls them through `app_mcp`; Lumi is scoped

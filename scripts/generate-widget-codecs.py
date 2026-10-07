@@ -18,7 +18,7 @@ roots = ['TextProps','ImageProps','ButtonProps','TextAreaProps','TextAreaResult'
          'ScrollProps','ScrollResult','DiaryUiFrame','Session','InbeUiFrame',
          'CheckboxProps','CheckboxValueResult','ToggleProps','ToggleValueResult',
          'TextFieldProps','TextFieldResult','Tab','TabBarProps','TabBarResult',
-         'BoxProps','ListsUiFrame','ListsUiRow','LumiUiFrame','LumiChatRow','LumiTask','LumiAction','LumiTools']
+         'BoxProps','ListsUiFrame','ListsUiRow','LumiUiFrame','LumiChatRow','LumiTask','LumiAction','LumiTools','LumiDonation']
 needed = []
 def discover(t):
     if t.startswith('[]'): discover(t[2:]); return

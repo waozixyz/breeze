@@ -15,6 +15,9 @@
 #import, file "lumi_ui_types.zi";
 #import, file "../storage/storage_elist.zi";
 #import, file "lumi_store.zi";
+#import, file "lumi_progress.zi";
+#import, file "lumi_chart.zi";
+#import, file "../app/app_donation.zi";
 #import, file "feedback_store.zi";
 #import, file "../platform/host_actions.zi";
 #import, file "../screens/lumi_screen.zi";
@@ -89,6 +92,43 @@ AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string
     }
     if name == "get_settings" || name == "read_context" {
         return AppToolContext(app)
+    }
+    if name == "show_progress_chart" {
+        metric_bytes: [32]u8
+        metric_text := ToolString(arguments, "metric", metric_bytes[:])
+        metrics: [4]string = .["sessions", "meditation", "retention", "habits"]
+        metric: s32 = -1
+        for index: cast(s32)0..cast(s32)3 {
+            if metric_text == metrics[index] {
+                metric = index
+            }
+        }
+        days := ReadNumber(arguments, FieldAt(arguments, 0, "days"))
+        if !days.valid || days.value < 1 || days.value > LUMI_PROGRESS_MAX_DAYS ||
+        days.value != cast(float64)cast(s32)days.value {
+            return PackageText("{\"ok\":false,\"error\":\"days must be an integer from 1 to 31\"}", "")
+        }
+        payload := LumiProgressJson(app, metric, cast(s32)days.value)
+        defer { PackageFree(payload) }
+        if payload.count == 0 || !LumiStoreAppendCard(LocaleText(LumiChartTitleKey(metric)),
+            false, LUMI_CHAT_PROGRESS, payload) {
+            return PackageText("{\"ok\":false,\"error\":\"progress unavailable\"}", "")
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"ok\":true,\"displayed\":true,\"chart\":%}", payload)
+        return BuilderFinish(out)
+    }
+    if name == "show_donation_links" {
+        if !LumiStoreAppendCard(LocaleText("about_donation_message"), false, LUMI_CHAT_DONATIONS, "") {
+            return PackageText("{\"ok\":false,\"error\":\"donation card unavailable\"}", "")
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"ok\":true,\"displayed\":true,\"donations\":[{\"name\":\"Bitcoin\",\"url\":")
+        LumiJsonString(*out, app_bitcoin_trocador_url())
+        BuilderPrint(*out, "},{\"name\":\"Monero\",\"url\":")
+        LumiJsonString(*out, app_monero_trocador_url())
+        BuilderPrint(*out, "}]}")
+        return BuilderFinish(out)
     }
     if name == "report_feedback" {
         title: [161]u8

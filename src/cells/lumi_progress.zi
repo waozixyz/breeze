@@ -1,0 +1,128 @@
+// Read the active account's recorded history; never manufacture chart data.
+#import "text"
+#import "vec"
+#import, file "lumi_chart.zi";
+#import, file "lumi_types.zi";
+#import, file "lumi_store.zi";
+#import, file "package_files.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/state.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../habits/habit_date.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_days.zi";
+
+using AppNavRoute;
+
+LumiProgressSessionsSql :: #string SQL
+WITH history AS (
+ SELECT s.local_date, s.activity,
+  COALESCE((SELECT MAX(m.duration_seconds) FROM meditation_logs m
+            WHERE m.session_id=s.id AND m.user_id=?1 AND m.duration_seconds>0),
+           (SELECT SUM(r.seconds) FROM session_rounds r WHERE r.session_id=s.id AND r.seconds>0),0) AS seconds,
+  COALESCE((SELECT MAX(r.seconds) FROM session_rounds r WHERE r.session_id=s.id AND r.seconds>0),0) AS best
+ FROM sessions s WHERE s.user_id=?1 AND s.deleted_at=0
+ UNION ALL
+ SELECT CAST(strftime('%Y%m%d',m.completed_at,'unixepoch','localtime') AS INTEGER),1,m.duration_seconds,0
+ FROM meditation_logs m WHERE m.user_id=?1 AND m.duration_seconds>0
+  AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.id=m.session_id)
+)
+SELECT local_date, CASE ?4 WHEN 0 THEN COUNT(*) WHEN 1 THEN SUM(seconds) WHEN 2 THEN MAX(best) END
+FROM history WHERE local_date BETWEEN ?2 AND ?3
+ AND (?4=0 OR (?4=1 AND activity=1) OR (?4=2 AND activity=0))
+GROUP BY local_date
+SQL
+
+// Linked habits count all matching recorded sessions, without the UI cache's
+// bounded recent-history limit. Manual and linked counts use the same maximum
+// rule as HabitEffectiveDayCount.
+LumiProgressLinkedSql :: #string SQL
+SELECT COUNT(*) FROM sessions s
+WHERE s.user_id=?1 AND s.deleted_at=0 AND s.local_date=?2
+ AND EXISTS(SELECT 1 FROM session_rounds r WHERE r.session_id=s.id)
+ AND ?3=1 AND s.activity BETWEEN 0 AND 29 AND ((1 << s.activity) & ?4)<>0
+SQL
+
+LumiProgressJson :: (app: *InnerBreeze, metric: s32, days: s32) -> string {
+    if app == null || metric < 0 || metric > LUMI_PROGRESS_HABITS || days < 1 || days > LUMI_PROGRESS_MAX_DAYS {
+        return ""
+    }
+    route: s32 = ifx metric == LUMI_PROGRESS_HABITS then APP_NAV_ROUTE_HABITS else APP_NAV_ROUTE_PRACTICE
+    if !app_nav_route_available(app, route) {
+        return ""
+    }
+    today := habits_today_index()
+    dates: [31]s32
+    values: [31]s32
+    for index: cast(s32)0..days - 1 {
+        dates[index] = HabitDayIndexAgo(today / 10000, today / 100 % 100, today % 100, days - index - 1)
+    }
+    statement: *void
+    sql := ifx metric == LUMI_PROGRESS_HABITS then LumiProgressLinkedSql else LumiProgressSessionsSql
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    unused SqliteBindTextString(statement, 1, owner, cast(s32)owner.count)
+    if metric == LUMI_PROGRESS_HABITS {
+        for day: cast(s32)0..days - 1 {
+            for index: cast(s32)0..app.habits.count - 1 {
+                habit := *app.habits.items[index]
+                if habit_scheduled_day(habit, dates[day]) == 0 {
+                    continue
+                }
+                count := HabitDayCount(habit, dates[day])
+                if habit_is_linked(habit) != 0 {
+                    unused SqliteReset(statement)
+                    unused SqliteBindInt(statement, 2, dates[day])
+                    unused SqliteBindInt(statement, 3, cast(s32)habit.sync_mode)
+                    unused SqliteBindInt(statement, 4, habit.sync_activity)
+                    if SqliteStep(statement) != SQLITE_ROW {
+                        return ""
+                    }
+                    linked := SqliteColumnInt(statement, 0)
+                    if linked > count {
+                        count = linked
+                    }
+                }
+                target := ifx habit_counting_enabled(habit) != 0 then habit_counter_target(habit) else 1
+                if count >= target {
+                    values[day] += 1
+                }
+            }
+        }
+    } else {
+        unused SqliteBindInt(statement, 2, dates[0])
+        unused SqliteBindInt(statement, 3, today)
+        unused SqliteBindInt(statement, 4, metric)
+        result := SqliteStep(statement)
+        while result == SQLITE_ROW {
+            date := SqliteColumnInt(statement, 0)
+            value := SqliteColumnInt64(statement, 1)
+            if value < 0 || value > 1000000 {
+                return ""
+            }
+            for index: cast(s32)0..days - 1 {
+                if dates[index] == date {
+                    values[index] = cast(s32)value
+                }
+            }
+            result = SqliteStep(statement)
+        }
+        if result != SQLITE_DONE {
+            return ""
+        }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"metric\":%,\"points\":[", metric)
+    for index: cast(s32)0..days - 1 {
+        BuilderPrint(*out, "%{\"date\":%,\"value\":%}", ifx index == 0 then "" else ",", dates[index], values[index])
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
