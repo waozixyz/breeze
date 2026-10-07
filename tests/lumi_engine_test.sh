@@ -18,6 +18,14 @@ result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADD
 printf '%s\n' 'Lumi responses: JSON trailing whitespace accepted; malformed and trailing data rejected'
 printf '%s\n' 'Lumi engine: translated commands, Unicode titles, completion matching and bounded actions passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
+    --module-path "$root/build/packages/kryon/src/ui" \
+    --entry lumi_message_text_behavior:Answer -o "$work/message-text.zib" \
+    "$root/tests/lumi_message_text_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/message-text.zib")
+[ "$result" = 42 ]
+printf '%s\n' 'Lumi emphasis: visible bold ranges, Unicode, escapes, code and literal user messages passed'
+"$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
     --entry lumi_chart_behavior:Answer -o "$work/chart.zib" \
     "$root/tests/lumi_chart_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

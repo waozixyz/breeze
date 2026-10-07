@@ -1,0 +1,90 @@
+// Reply emphasis is presentation only. Stored messages remain verbatim, and
+// typed messages and code keep their literal text.
+#import "text_props"
+#import "byte_text_linux"
+#import, file "../../src/cells/lumi_types.zi";
+
+LumiMessageText :: struct {
+    bytes: [LUMI_INPUT_MAX]u8
+    count: s32
+    strong: [256]TextRange
+    strong_count: s32
+}
+
+LumiTextEscaped :: (value: string, at: s32) -> bool {
+    slashes: s32 = 0
+    at -= 1
+    while at >= 0 && value[at] == cast(u8)92 {
+        slashes += 1
+        at -= 1
+    }
+    return slashes % 2 == 1
+}
+
+LumiTextMarker :: (value: string, at: s32) -> bool {
+    if at < 0 || at + 1 >= value.count || LumiTextEscaped(value, at) {
+        return false
+    }
+    marker := value[at]
+    return (marker == cast(u8)42 || marker == cast(u8)95) && value[at + 1] == marker &&
+    (at == 0 || value[at - 1] != marker) &&
+    (at + 2 >= value.count || value[at + 2] != marker)
+}
+
+LumiTextClosing :: (value: string, at: s32) -> s32 {
+    marker := value[at]
+    start := at + 2
+    if start >= value.count || value[start] <= cast(u8)32 {
+        return -1
+    }
+    code: bool
+    while start + 1 < value.count {
+        if value[start] == cast(u8)96 && !LumiTextEscaped(value, start) {
+            code = !code
+        }
+        if !code && value[start] == marker && LumiTextMarker(value, start) &&
+        start > at + 2 && value[start - 1] > cast(u8)32 {
+            return start
+        }
+        start += 1
+    }
+    return -1
+}
+
+LumiFormatMessage :: (value: string, formatted: bool) -> LumiMessageText {
+    result: LumiMessageText
+    at: s32 = 0
+    code: bool
+    while at < value.count && result.count < LUMI_INPUT_MAX - 1 {
+        byte := value[at]
+        if formatted && byte == cast(u8)96 && !LumiTextEscaped(value, at) {
+            code = !code
+        }
+        if formatted && !code && LumiTextMarker(value, at) && result.strong_count < 256 {
+            end := LumiTextClosing(value, at)
+            if end >= 0 {
+                range := TextRange.{.start = result.count}
+                at += 2
+                while at < end && result.count < LUMI_INPUT_MAX - 1 {
+                    result.bytes[result.count] = value[at]
+                    result.count += 1
+                    at += 1
+                }
+                range.end = result.count
+                result.strong[result.strong_count] = range
+                result.strong_count += 1
+                at = end + 2
+                continue
+            }
+        }
+        if formatted && byte == cast(u8)92 && at + 1 < value.count &&
+        (value[at + 1] == cast(u8)42 || value[at + 1] == cast(u8)95 || value[at + 1] == cast(u8)92) {
+            at += 1
+            byte = value[at]
+        }
+        result.bytes[result.count] = byte
+        result.count += 1
+        at += 1
+    }
+    return result
+}

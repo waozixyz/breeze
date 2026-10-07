@@ -70,9 +70,46 @@ WidgetValidRectangle :: (value: HostValue) -> bool {
     return true
 }
 
+WidgetTextRangeCodec :: struct {
+    fields: [2]HostField
+}
+
+WidgetEncodeTextRange :: (data: TextRange, codec: *WidgetTextRangeCodec) -> HostValue {
+    value: HostValue
+    value.kind = cast(s32)HostRecord
+    value.type_name = ModuleTextData("TextRange")
+    value.fields = *codec.fields[0]
+    value.field_count = 2
+    codec.fields[0].name = ModuleTextData("start")
+    codec.fields[0].value = ModuleScalar("s32", cast(s64)data.start)
+    codec.fields[1].name = ModuleTextData("end")
+    codec.fields[1].value = ModuleScalar("s32", cast(s64)data.end)
+    return value
+}
+
+WidgetDecodeTextRange :: (value: HostValue, codec: *WidgetTextRangeCodec) -> TextRange {
+    data: TextRange
+    data.start = cast(s32)value.fields[0].value.integer
+    data.end = cast(s32)value.fields[1].value.integer
+    return data
+}
+
+WidgetValidTextRange :: (value: HostValue) -> bool {
+    if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "TextRange" ||
+    value.field_count != 2 || value.fields == null { return false }
+    if TextFromCString(value.fields[0].name) != "start" { return false }
+    if !ModuleScalarValid(value.fields[0].value, "s32", cast(s32)HostInteger) { return false }
+    if TextFromCString(value.fields[1].name) != "end" { return false }
+    if !ModuleScalarValid(value.fields[1].value, "s32", cast(s32)HostInteger) { return false }
+    return true
+}
+
 WidgetTextPropsCodec :: struct {
-    fields: [15]HostField
+    fields: [16]HostField
     bounds: WidgetRectangleCodec
+    strong_values: [1024]HostValue
+    strong_codecs: [1024]WidgetTextRangeCodec
+    strong_decoded: [1024]TextRange
 }
 
 WidgetEncodeTextProps :: (data: TextProps, codec: *WidgetTextPropsCodec) -> HostValue {
@@ -80,7 +117,7 @@ WidgetEncodeTextProps :: (data: TextProps, codec: *WidgetTextPropsCodec) -> Host
     value.kind = cast(s32)HostRecord
     value.type_name = ModuleTextData("TextProps")
     value.fields = *codec.fields[0]
-    value.field_count = 15
+    value.field_count = 16
     codec.fields[0].name = ModuleTextData("key")
     codec.fields[0].value = ModuleScalar("u64", cast(s64)data.key)
     codec.fields[1].name = ModuleTextData("bounds")
@@ -111,6 +148,19 @@ WidgetEncodeTextProps :: (data: TextProps, codec: *WidgetTextPropsCodec) -> Host
     codec.fields[13].value = ModuleScalar("bool", ifx data.selectable then 1 else 0)
     codec.fields[14].name = ModuleTextData("strikethrough")
     codec.fields[14].value = ModuleScalar("bool", ifx data.strikethrough then 1 else 0)
+    codec.fields[15].name = ModuleTextData("strong")
+    codec.fields[15].value.kind = cast(s32)HostSlice
+    codec.fields[15].value.type_name = ModuleTextData("[]TextRange")
+    codec.fields[15].value.length = cast(usize)data.strong.count
+    if codec.fields[15].value.length > cast(usize)1024 { codec.fields[15].value.length = cast(usize)1024 }
+    codec.fields[15].value.elements = *codec.strong_values[0]
+    {
+        index: usize = 0
+        while index < codec.fields[15].value.length {
+            codec.strong_values[index] = WidgetEncodeTextRange(data.strong[index], *codec.strong_codecs[index])
+            index += cast(usize)1
+        }
+    }
     return value
 }
 
@@ -131,12 +181,20 @@ WidgetDecodeTextProps :: (value: HostValue, codec: *WidgetTextPropsCodec) -> Tex
     data.disabled = value.fields[12].value.integer != 0
     data.selectable = value.fields[13].value.integer != 0
     data.strikethrough = value.fields[14].value.integer != 0
+    {
+        index: usize = 0
+        while index < value.fields[15].value.length {
+            codec.strong_decoded[index] = WidgetDecodeTextRange(value.fields[15].value.elements[index], *codec.strong_codecs[index])
+            index += cast(usize)1
+        }
+    }
+    // Slice storage is attached by the rendering effect after decoding.
     return data
 }
 
 WidgetValidTextProps :: (value: HostValue) -> bool {
     if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "TextProps" ||
-    value.field_count != 15 || value.fields == null { return false }
+    value.field_count != 16 || value.fields == null { return false }
     if TextFromCString(value.fields[0].name) != "key" { return false }
     if !ModuleScalarValid(value.fields[0].value, "u64", cast(s32)HostUnsigned) { return false }
     if TextFromCString(value.fields[1].name) != "bounds" { return false }
@@ -167,6 +225,16 @@ WidgetValidTextProps :: (value: HostValue) -> bool {
     if !ModuleScalarValid(value.fields[13].value, "bool", cast(s32)HostInteger) { return false }
     if TextFromCString(value.fields[14].name) != "strikethrough" { return false }
     if !ModuleScalarValid(value.fields[14].value, "bool", cast(s32)HostInteger) { return false }
+    if TextFromCString(value.fields[15].name) != "strong" { return false }
+    if value.fields[15].value.kind != cast(s32)HostSlice || TextFromCString(value.fields[15].value.type_name) != "[]TextRange" ||
+        value.fields[15].value.length > cast(usize)1024 || (value.fields[15].value.length > cast(usize)0 && value.fields[15].value.elements == null) { return false }
+    {
+        index: usize = 0
+        while index < value.fields[15].value.length {
+            if !WidgetValidTextRange(value.fields[15].value.elements[index]) { return false }
+            index += cast(usize)1
+        }
+    }
     return true
 }
 

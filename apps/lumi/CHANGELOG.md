@@ -5,6 +5,7 @@
 - Show daily progress charts from saved practices, meditation, breath retention and completed habits.
 - Keep charts in chat, select daily values, and show an empty state when no activity is recorded.
 - Show donation cards with Bitcoin and Monero addresses, wallet links and browser donation links.
+- Format bold emphasis in replies and save explicit feature suggestions as feedback offline.
 
 ## [1.2.0] - 2026-10-07
 
