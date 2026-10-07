@@ -73,6 +73,13 @@ opened = [cmap for cmap in cmaps.values() if cmap is not None]
 if not opened:
     print("FAIL: cannot parse any shipped font cmap", file=sys.stderr)
     sys.exit(1)
+
+# Symbols use the existing cross-font fallback; Noto Sans Latin does not
+# contain every arrow. Keep them in the corpus and require a shipped glyph.
+for cp in sorted(codepoints(root / "assets/fonts/ui_symbols.txt")):
+    if not any(cp in cmap for cmap in opened):
+        print(f"FAIL: UI symbol U+{cp:04X} has no shipped glyph", file=sys.stderr)
+        failures += 1
 before = failures
 for cp in sorted(cjk_needed):
     if not any(cp in cmap for cmap in opened):

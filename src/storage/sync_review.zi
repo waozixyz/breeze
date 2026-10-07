@@ -1007,10 +1007,15 @@ review_append_fields :: (out: *ReviewText, before: string, after: string) {
         }
         if before == "" || after == "" {
             value := ifx after != "" then new_value else old_value
-            if (field == "review_count" || field == "profile_sessions_label") && value == "0" {
+            // Record headings already name the person, practice and date.
+            // Defaults add noise for new/removed records; actual field edits
+            // still show both values, including empty values and zeroes.
+            if field == "habit_name_label" || field == "review_date" ||
+            field == "review_activity" || field == "review_order" {
                 continue
             }
-            if field == "habit_name_label" && value == "" {
+            if value == "" || (value == "0" && field != "review_completed") ||
+            (field == "review_source" && value == "app") {
                 continue
             }
         }
@@ -1121,21 +1126,29 @@ review_plan_for_json :: (json: string, choice: s32, out: **u8,
                 parent = ""
             }
             if parent != next_parent {
-                review_append(*text, "  ")
                 if next_category == "profile_sessions_label" {
+                    review_append(*text, "  ")
                     activity := sqlite3_column_int(statement, 1)
                     review_append(*text, review_activity_name(activity))
-                } else {
+                    review_append(*text, "\n")
+                } else if next_parent.count > 0 &&
+                next_parent != AppTextFromCString(SqliteColumnText(statement, 2), 2147483647) {
+                    review_append(*text, "  ")
                     review_append(*text, next_parent)
+                    review_append(*text, "\n")
                 }
-                review_append(*text, "\n")
                 free(cast(*void)parent_copy)
                 parent_copy = storage_duplicate_cstring(SqliteColumnText(statement, 1))
                 parent = AppTextFromCString(parent_copy, 2147483647)
             }
             review_append(*text, "    ")
-            review_append(*text, LocaleText(AppTextFromCString(SqliteColumnText(statement, 3), 2147483647)))
-            review_append(*text, ": ")
+            if next_action == 0 {
+                review_append(*text, "− ")
+            } else if next_action == 1 {
+                review_append(*text, "↔ ")
+            } else {
+                review_append(*text, "+ ")
+            }
             review_append(*text, AppTextFromCString(SqliteColumnText(statement, 2), 2147483647))
             review_append(*text, "\n")
             review_append_fields(*text,

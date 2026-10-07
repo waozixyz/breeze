@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.13] - 2026-10-07
+
+- Show clean, colored sync changes with translated explanations and complete change symbols.
+
 ## [2.1.12] - 2026-10-07
 
 - Keep all apps working with Lumi's bold formatting and offline feature suggestions.

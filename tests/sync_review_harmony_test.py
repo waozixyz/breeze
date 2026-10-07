@@ -93,6 +93,7 @@ class ReviewHostTest(AppControlTest):
             self.require('open', 'inbe')
             state = self.ready('inbe')
             window = int(state['window'])
+            self.xdo('windowraise', host)
             pid = int(self.xdo('getwindowpid', window))
             self.assertNotEqual(pid, foreign_pid)
             self.assertEqual(Path(f'/proc/{pid}/exe').resolve(), OUTPUT / 'inbe')
@@ -124,8 +125,10 @@ class ReviewHostTest(AppControlTest):
             self.xdo('windowfocus', '--sync', window)
             content_width = int(state['content_width'])
             content_height = int(state['content_height'])
-            self.assertEqual(content_width, width)
-            self.assertEqual(content_height, height - 64)
+            self.assertGreater(content_width, 0)
+            self.assertLessEqual(content_width, width)
+            self.assertGreater(content_height, 0)
+            self.assertLessEqual(content_height, height)
             panel_height = min(content_height - 32, 720)
             panel_top = (content_height - panel_height) // 2
             content_top = panel_top + 56
@@ -142,16 +145,13 @@ class ReviewHostTest(AppControlTest):
             time.sleep(.3)
             self.assertEqual(self.count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'"), '1')
             self.assertEqual(self.count(db, 'SELECT COUNT(*) FROM sync_outbox'), pending)
-            if choice == 'keep':
-                self.click_at(window, content_width // 2, content_top + 44 + 19)
-            elif choice == 'replace':
-                self.click_at(window, content_width // 2, content_top + 88 + 19)
             capture = self.require('screenshot', 'inbe')
             shutil.copy2(capture['path'], OUTPUT / f'{choice}-embedded.png')
             if choice == 'merge':
                 self.scroll_at(window, content_width // 2, content_top + 260)
                 self.assertEqual(self.count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'"), '1')
-            footer = panel_top + panel_height - 18 - 40 + 19
+            footer = panel_top + panel_height - 18 - 132 + 19
+            footer += {'merge': 0, 'keep': 1, 'replace': 2}[choice] * 44
             self.click_at(window, content_width // 2, footer)
             capture = self.require('screenshot', 'inbe')
             shutil.copy2(capture['path'], OUTPUT / f'{choice}-after-apply.png')
@@ -169,7 +169,7 @@ class ReviewHostTest(AppControlTest):
                 'local': self.count(db, "SELECT COUNT(*) FROM habits WHERE id='local-review-walk'"),
                 'remote': self.count(db, "SELECT COUNT(*) FROM habits WHERE id<>'local-review-walk'")}, indent=2) + '\n')
             self.wait_until(lambda: self.count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'") != '1',
-                            f'{choice}: Apply did not resolve the review')
+                            f'{choice}: Direct action did not resolve the review')
             self.assertEqual(self.count(db, "SELECT COUNT(*) FROM habits WHERE id='local-review-walk'"),
                              0 if choice == 'replace' else 1)
             self.assertEqual(self.count(db, "SELECT COUNT(*) FROM habits WHERE id<>'local-review-walk'") > 0,

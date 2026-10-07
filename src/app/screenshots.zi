@@ -567,9 +567,14 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
             return
         }
         statement: *void = null
-        sql := "SELECT json_object('protocol_version',6,'server_version',24,'full_snapshot_required',json('true'),'changes',json_object('encrypted_records',json_extract(?1,'$.encrypted_records')))"
+        social_records := "[]"
+        if scene_text == "sync_review" {
+            social_records = "[{\"kind\":\"friends.list\",\"json\":{\"friends\":[{\"user_id_hash\":\"fixture-a\",\"alias\":\"Alicia\"},{\"user_id_hash\":\"fixture-c\",\"alias\":\"Cara\"}]}},{\"kind\":\"friends.requests\",\"json\":{\"incoming\":[{\"id\":\"fixture-request-d\",\"requester_user_id_hash\":\"fixture-d\",\"requester_alias\":\"Dani\"}],\"outgoing\":[]}}]"
+        }
+        sql := "SELECT json_object('protocol_version',6,'server_version',24,'full_snapshot_required',json('true'),'changes',json_object('encrypted_records',json_extract(?1,'$.encrypted_records'),'social_cache',json(?2)))"
         if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) == SQLITE_OK {
             bind_text(statement, 1, AppTextFromCString(payload, 2147483647))
+            bind_text(statement, 2, social_records)
             if SqliteStep(statement) == SQLITE_ROW {
                 storage_sync_review_write_json(AppTextFromCString(SqliteColumnText(statement, 0), 2147483647))
             }
@@ -579,6 +584,8 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         if scene_text == "sync_review" {
             storage_clear_local_sync_data()
             exec_sql("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('local-review-walk',(SELECT id FROM users LIMIT 1),'Local walk',80,140,100,0,0,1,0,0,1782300000)")
+            exec_sql("INSERT OR REPLACE INTO social_snapshots VALUES((SELECT id FROM users LIMIT 1),'friends.list','{\"friends\":[{\"user_id_hash\":\"fixture-a\",\"alias\":\"Alice\"},{\"user_id_hash\":\"fixture-b\",\"alias\":\"Bob\"}]}',0)")
+            exec_sql("INSERT OR REPLACE INTO social_snapshots VALUES((SELECT id FROM users LIMIT 1),'friends.requests','{\"incoming\":[],\"outgoing\":[]}',0)")
         }
         storage_enqueue_all_sync_state()
         storage_set_sync_enabled(0)

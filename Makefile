@@ -378,7 +378,7 @@ LOCALE_FILES := $(wildcard locales/*.txt)
 IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/characters/*/*.png)
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
-FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt
+FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt
 FONT_FILES := \
 	$(FONT_SUBSET_DIR)/NotoSans-App-Regular.ttf \
 	$(FONT_SUBSET_DIR)/NotoSansSC-App-Regular.otf \
@@ -1228,7 +1228,7 @@ font-bundle-check:
 
 font-subsets:
 	sh $(KRYON_DIR)/scripts/subset-fonts.sh "$(FONT_SUBSET_DIR)" \
-		"$(KRYON_DIR)/fonts/noto" App locales assets/fonts/input_common.txt
+		"$(KRYON_DIR)/fonts/noto" App $(FONT_SUBSET_CORPUS)
 
 
 .PHONY: sync-server-test

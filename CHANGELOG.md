@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.13] - 2026-10-07
+### Changed
+- Merge sync data directly from the action buttons below the change list, without a separate Apply step.
+- Review clearer sync changes with colored additions, removals and edits, and fewer repeated or empty details.
+
 ## [2.1.12] - 2026-10-07
 ### Fixed
 - Display bold emphasis in Lumi replies and recognize app feature suggestions as feedback offline.
