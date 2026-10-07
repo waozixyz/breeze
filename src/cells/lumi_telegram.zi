@@ -60,6 +60,31 @@ LumiTelegramDisconnect :: () {
     lumi_telegram_disconnect_requested = true
 }
 
+LumiTelegramOpen :: (start: string = "") -> bool {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_ANDROID) || #defined(__ANDROID__) {
+        native_link := "tg://resolve?domain=inlumi_bot"
+        if start.count > 0 {
+            native_link = PackageText("tg://resolve?domain=inlumi_bot&start=", start)
+        }
+        native_opened := OpenUri(native_link)
+        if start.count > 0 {
+            PackageFree(native_link)
+        }
+        if native_opened {
+            return true
+        }
+    }
+    web_link := "https://t.me/inlumi_bot"
+    if start.count > 0 {
+        web_link = PackageText("https://t.me/inlumi_bot?start=", start)
+    }
+    opened := OpenUri(web_link)
+    if start.count > 0 {
+        PackageFree(web_link)
+    }
+    return opened
+}
+
 LumiTelegramBusy :: () -> bool {
     return lumi_telegram_link_requested || lumi_telegram_disconnect_requested ||
     (lumi_telegram_operation.active && (lumi_telegram_stage == 1 || lumi_telegram_stage == 5))
@@ -86,6 +111,8 @@ LumiTelegramRequest :: (method: string, path: string, body: string, stage: s32) 
         unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), lumi_telegram_owner[:])
         return true
     }
+    print("LUMI: telegram_request_start_failed stage=% result=%\n", stage,
+        lumi_telegram_operation.result)
     return false
 }
 
@@ -221,7 +248,7 @@ LumiTelegramPump :: (app: *InnerBreeze) {
             if length > 0 {
                 value := TextFromBytes(url[:length])
                 if value.count == 62 && value[:30] == "https://t.me/inlumi_bot?start=" {
-                    lumi_telegram_waiting = OpenUri(value)
+                    lumi_telegram_waiting = LumiTelegramOpen(value[30:])
                     lumi_telegram_error = !lumi_telegram_waiting
                 }
             }
@@ -240,6 +267,8 @@ LumiTelegramPump :: (app: *InnerBreeze) {
             lumi_telegram_error = false
             lumi_telegram_linked_at = 0
         } else if !success {
+            print("LUMI: telegram_request_failed stage=% result=% status=%\n", stage,
+                lumi_telegram_operation.result, lumi_telegram_operation.request.status)
             lumi_telegram_error = true
             if stage == 1 {
                 lumi_telegram_waiting = false

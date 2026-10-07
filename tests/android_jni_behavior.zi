@@ -32,6 +32,7 @@ detach_count: s32;
 frame_count: s32;
 frame_failed: bool;
 exception_pending: u8;
+exception_descriptions: s32;
 method_name: [96]u8;
 java_strings: [40][256]u8;
 string_count: s32;
@@ -45,6 +46,7 @@ native_dark: NativeIntegerFn;
 native_practice: NativePracticeFn;
 native_donation: NativeBooleanFn;
 resolve_available: bool = true;
+launch_available: bool = true;
 network_test: bool;
 network_state: s32 = -1;
 network_length: s32 = 3;
@@ -117,6 +119,7 @@ FakeException :: (env: *JniEnv) -> u8 {
 }
 FakeDescribe :: (env: *JniEnv) {
     unused env
+    exception_descriptions += 1
 }
 FakeClear :: (env: *JniEnv) {
     unused env
@@ -172,6 +175,9 @@ FakeVoid :: (env: *JniEnv, object: *void, method: *void,
     unused object
     unused method
     void_calls += 1
+    if CStringEquals(*method_name[0], "startActivity") && !launch_available {
+        exception_pending = 1
+    }
     if CStringEquals(*method_name[0], "httpCancel") {
         Require(arguments[0].integer == 71, 90)
         network_cancelled += 1
@@ -522,7 +528,12 @@ main :: () -> s32 {
     CopyCString("monero:84abc?tx_amount=0.1", path[:])
     Require(CanOpenURI(*path[0]) == 1 && OpenURI(*path[0]) == 1, 84)
     resolve_available = false
-    Require(CanOpenURI(*path[0]) == 0 && OpenURI(*path[0]) == 0, 85)
+    Require(CanOpenURI(*path[0]) == 0 && OpenURI(*path[0]) == 1, 85)
+    launch_available = false
+    descriptions_before_launch := exception_descriptions
+    Require(OpenURI(*path[0]) == 0 && exception_pending == 0 &&
+        exception_descriptions == descriptions_before_launch, 102)
+    launch_available = true
     Require(frame_count == 0, 86)
     unused CopyCString("zh-Hant-TW;ja-JP", locale_preferences[:])
     Require(app_locale_preferences() == "zh-Hant-TW;ja-JP" && frame_count == 0, 89)

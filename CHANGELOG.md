@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.15] - 2026-10-07
+### Fixed
+- Open Telegram sync links on Android when the installed chat app is hidden from app availability checks.
+- Open Lumi in the installed Telegram app on Android, with a web link available when Telegram is not installed.
+
 ## [2.1.14] - 2026-10-07
 ### Changed
 - Scroll up through Lumi chat history without Older and Newer buttons, keeping your place when replies arrive.
