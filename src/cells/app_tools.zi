@@ -1,0 +1,169 @@
+// Online Lumi and external MCP clients execute the same validated app actions.
+#import "text"
+#import "vec"
+#import "json_scan"
+#import "byte_text_linux"
+#import, file "package_files.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../core/types.zi";
+#import, file "module_host.zi";
+#import, file "lumi_types.zi";
+#import, file "lumi_ui_types.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "lumi_store.zi";
+#import, file "feedback_store.zi";
+#import, file "../platform/host_actions.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../cells/diary_store.zi";
+#import, file "../app/settings_actions.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../practices/practice_registry.zi";
+using AppNavRoute;
+
+AppToolContext :: (app: *InnerBreeze) -> string {
+    out: Vec(u8)
+    active := practice_active(app)
+    BuilderPrint(*out, "{\"app\":\"inbe\",\"locale\":\"%\",\"screen\":%,\"available_apps\":%,\"settings\":{\"theme\":\"%\",\"mode\":%,\"scale\":%,\"navigation\":%,\"style\":%},\"practice\":{\"id\":%,\"paused\":%},\"habits\":[",
+        LocaleActiveCode(), app.breathing.screen, app.enabled_apps & CellsInstalledMask(),
+        AppThemeName(app.theme_id), app.theme_mode, app.ui_scale_tenths,
+        app.navigation_placement, app.style_index,
+        ifx active == null then -1 else cast(s32)active.id, app.session_paused != 0)
+    count := ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
+    if count > 8 { count = 8 }
+    for index: cast(s32)0..count - 1 {
+        habit := LumiHabitAt(app, index)
+        BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
+        LumiJsonString(*out, habit.id)
+        BuilderPrint(*out, ",\"title\":")
+        LumiJsonString(*out, habit.title)
+        BuilderPrint(*out, ",\"done\":%}", habit.done)
+    }
+    BuilderPrint(*out, "],\"tasks\":[")
+    if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        unused storage_elist_load(cast(*void)*lumi_tasks)
+        count = lumi_tasks.item_count
+        if count > 8 { count = 8 }
+        for index: cast(s32)0..count - 1 {
+            task := LumiTaskAt(index)
+            BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
+            LumiJsonString(*out, task.id)
+            BuilderPrint(*out, ",\"title\":")
+            LumiJsonString(*out, task.title)
+            BuilderPrint(*out, ",\"done\":%}", task.done)
+        }
+    }
+    BuilderPrint(*out, "],\"local_time\":")
+    LumiJsonString(*out, DiaryStoreClock())
+    BuilderPrint(*out, ",\"apps\":{\"lists\":%,\"habits\":%,\"practices\":%,\"diary\":%},\"context_item_limit\":8}",
+        app_nav_route_available(app, APP_NAV_ROUTE_ELIST), app_nav_route_available(app, APP_NAV_ROUTE_HABITS),
+        app_nav_route_available(app, APP_NAV_ROUTE_PRACTICE), app_nav_route_available(app, APP_NAV_ROUTE_DIARY))
+    return BuilderFinish(out)
+}
+
+AppFeedbackContext :: (app: *InnerBreeze) -> string {
+    out: Vec(u8)
+    // Reports carry diagnostics without copying diary, task or habit contents.
+    BuilderPrint(*out, "{\"screen\":%,\"apps\":%,\"theme\":\"%\",\"scale\":%}",
+        app.breathing.screen, app.enabled_apps & CellsInstalledMask(), AppThemeName(app.theme_id), app.ui_scale_tenths)
+    return BuilderFinish(out)
+}
+
+ToolString :: (document: string, name: string, output: []u8) -> string {
+    count := ReadStringText(document, FieldAt(document, 0, name), output)
+    if count <= 0 || count >= output.count {
+        return ""
+    }
+    return TextFromBytes(output[:count])
+}
+
+AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string {
+    if ValueEnd(arguments, 0, 0) != arguments.count || arguments.count == 0 || arguments[0] != cast(u8)123 {
+        return PackageText("{\"ok\":false,\"error\":\"invalid arguments\"}", "")
+    }
+    if name == "get_settings" || name == "read_context" {
+        return AppToolContext(app)
+    }
+    if name == "report_feedback" {
+        title: [161]u8
+        message: [4097]u8
+        summary := ToolString(arguments, "title", title[:])
+        report := ToolString(arguments, "message", message[:])
+        context := AppFeedbackContext(app)
+        defer { PackageFree(context) }
+        id := FeedbackEnqueue(summary, report, context)
+        defer { PackageFree(id) }
+        if id.count == 0 {
+            return PackageText("{\"ok\":false,\"error\":\"feedback could not be saved\"}", "")
+        }
+        result: Vec(u8)
+        BuilderPrint(*result, "{\"ok\":true,\"id\":\"%\",\"delivery\":\"queued for developer\"}", id)
+        return BuilderFinish(result)
+    }
+    if name == "read_diary" {
+        if !app_nav_route_available(app, APP_NAV_ROUTE_DIARY) {
+            return PackageText("{\"ok\":false,\"error\":\"diary unavailable\"}", "")
+        }
+        date: [11]u8
+        day := ToolString(arguments, "date", date[:])
+        if day.count != 10 || day[4] != cast(u8)45 || day[7] != cast(u8)45 {
+            return PackageText("{\"ok\":false,\"error\":\"date must be YYYY-MM-DD\"}", "")
+        }
+        for index: cast(s32)0..cast(s32)9 {
+            if index != 4 && index != 7 && (day[index] < cast(u8)48 || day[index] > cast(u8)57) {
+                return PackageText("{\"ok\":false,\"error\":\"invalid date\"}", "")
+            }
+        }
+        if !app_diary_save() {
+            return PackageText("{\"ok\":false,\"error\":\"diary save failed\"}", "")
+        }
+        file := PackageText(day, ".json")
+        defer { PackageFree(file) }
+        value := DiaryStoreRead(file)
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"ok\":%,\"entry\":", value.succeeded)
+        contents := value.data
+        if contents.count > 2048 { contents = contents[:2048] }
+        LumiJsonString(*out, contents)
+        BuilderPrint(*out, "}")
+        return BuilderFinish(out)
+    }
+    succeeded: bool
+    if name == "set_theme" || name == "set_theme_mode" || name == "set_setting" ||
+    name == "open_view" || name == "practice" {
+        succeeded = AppMcpAction(app, name, arguments)
+    } else {
+        title: [1024]u8
+        id: [65]u8
+        field := ifx name == "write_diary" then "text" else "title"
+        title_value := ToolString(arguments, field, title[:])
+        id_value := ToolString(arguments, "id", id[:])
+        action: LumiAction
+        if name == "write_diary" {
+            action.kind = LUMI_WRITE_DIARY
+            action.title = title_value
+        } else if name == "add_todo" {
+            action.kind = LUMI_ADD_TODO
+            action.title = title_value
+        } else if name == "complete_todo" || name == "reopen_todo" || name == "complete_habit" {
+            action.kind = LUMI_REOPEN_TODO
+            if name == "complete_habit" {
+                action.kind = LUMI_COMPLETE_HABIT
+            } else if name == "complete_todo" {
+                action.kind = LUMI_COMPLETE_TODO
+            }
+            action.id = id_value
+        }
+        if action.kind != 0 {
+            succeeded = LumiPerform(app, action)
+        }
+    }
+    return PackageText(ifx succeeded then "{\"ok\":true}" else
+        "{\"ok\":false,\"error\":\"action unavailable or invalid\"}", "")
+}

@@ -17,3 +17,11 @@ result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADD
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi responses: JSON trailing whitespace accepted; malformed and trailing data rejected'
 printf '%s\n' 'Lumi engine: translated commands, Unicode titles, completion matching and bounded actions passed'
+"$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
+    --entry lumi_chart_behavior:Answer -o "$work/chart.zib" \
+    "$root/tests/lumi_chart_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/chart.zib")
+[ "$result" = 42 ]
+python3 "$root/tests/lumi_progress_sql_test.py"
+printf '%s\n' 'Lumi charts: snapshots, validation, leap days, year boundaries and account-scoped history passed'

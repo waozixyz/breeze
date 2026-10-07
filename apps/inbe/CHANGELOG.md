@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.11] - 2026-10-07
+
+- Connect Lumi to online conversation and app actions without blocking the interface.
+- Deliver saved app feedback and show developer replies in chat.
+
 ## [2.1.10] - 2026-10-06
 
 - Preserve the selected page during upgrades and add hidden apps instantly offline.

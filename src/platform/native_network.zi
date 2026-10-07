@@ -1,0 +1,147 @@
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+    // Each transfer owns its request and response until its worker completes.
+    // Cancellation detaches it; no worker can write into a switched account's UI.
+    #import "net_http"
+    #import "net_http_curl_linux"
+    #import "async_client"
+#import "text_buffer"
+#import "text"
+    #import, file "../app/text_buffers.zi";
+    #import, file "../app/sync_worker_host.zi";
+    c :: #system_library "c";
+    NativeAllocate :: (count: usize, size: usize) -> *void #foreign c "calloc";
+    NativeFree :: (pointer: *void) #foreign c "free";
+    NativeEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+
+    NativeNetworkTracing :: () -> bool {
+        name: [24]u8
+        unused AppCopyText("INBE_NETWORK_TRACE", name[:])
+        value := NativeEnvironment(*name[0])
+        return value != null && value[0] == cast(u8)49
+    }
+
+    NativeTransferJob :: struct {
+        method: [32]u8
+        url: [2048]u8
+        token: [8192]u8
+        accept: [128]u8
+        content_type: [128]u8
+        body: [32768]u8
+        names: [16][128]u8
+        values: [16][8192]u8
+        header_count: s32
+        response: [65536]u8
+        result: CurlResult
+        done: bool
+        abandoned: bool
+    }
+    NativeTransfer :: struct {
+        job: *NativeTransferJob
+        output: []u8
+    }
+
+    NativeTransferWork :: (argument: *void) {
+        job := cast(*NativeTransferJob)argument
+        headers: [16]HttpHeader
+        for index: cast(s32)0..job.header_count - 1 {
+            headers[index] = HttpHeader.{.name = TextUntilNul(job.names[index][:]),
+                .value = TextUntilNul(job.values[index][:])}
+        }
+        request := HttpRequest.{.method = TextUntilNul(job.method[:]),
+            .url = TextUntilNul(job.url[:]), .token = TextUntilNul(job.token[:]),
+            .accept = TextUntilNul(job.accept[:]),
+            .content_type = TextUntilNul(job.content_type[:]),
+            .body = TextUntilNul(job.body[:]), .headers = headers[0:job.header_count]}
+        timeout: s32 = ifx ContainsFoldASCII(request.url, "/api/v1/chat/completions") then 45000 else 20000
+        result := SendCurlWithin(request, job.response[:], timeout)
+        if NativeNetworkTracing() {
+            print("NETWORK: method=% status=% code=% truncated=% request_bytes=% response_bytes=%\n",
+                request.method, result.status, result.code, result.truncated,
+                request.body.count, result.length)
+        }
+        SyncLock()
+        job.result = result
+        job.done = true
+        abandoned := job.abandoned
+        SyncUnlock()
+        if abandoned {
+            NativeFree(cast(*void)job)
+        }
+    }
+
+    StartNativeTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+        transfer := cast(*NativeTransfer)context
+        if transfer == null || transfer.job != null || output.count == 0 || request.headers.count > 16 {
+            return false
+        }
+        job := cast(*NativeTransferJob)NativeAllocate(1, size_of(NativeTransferJob))
+        if job == null {
+            return false
+        }
+        if !AppCopyText(request.method, job.method[:]) || !AppCopyText(request.url, job.url[:]) ||
+        !AppCopyText(request.token, job.token[:]) || !AppCopyText(request.body, job.body[:]) ||
+        !AppCopyText(request.accept, job.accept[:]) || !AppCopyText(request.content_type, job.content_type[:]) {
+            NativeFree(cast(*void)job)
+            return false
+        }
+        job.header_count = cast(s32)request.headers.count
+        for index: cast(s32)0..job.header_count - 1 {
+            if !AppCopyText(request.headers[index].name, job.names[index][:]) ||
+            !AppCopyText(request.headers[index].value, job.values[index][:]) {
+                NativeFree(cast(*void)job)
+                return false
+            }
+        }
+        if SyncStart(NativeTransferWork, cast(*void)job) == 0 {
+            NativeFree(cast(*void)job)
+            return false
+        }
+        transfer.job = job
+        transfer.output = output
+        return true
+    }
+
+    PollNativeTransfer :: (context: *void, status: *s32) -> s32 {
+        transfer := cast(*NativeTransfer)context
+        if transfer == null || transfer.job == null || status == null {
+            return 0
+        }
+        job := transfer.job
+        SyncLock()
+        done := job.done
+        SyncUnlock()
+        if !done {
+            return -1
+        }
+        status.* = job.result.status
+        success := job.result.code == 0 && !job.result.truncated &&
+        AppCopyText(TextUntilNul(job.response[:]), transfer.output)
+        NativeFree(cast(*void)job)
+        transfer.job = null
+        transfer.output = transfer.output[0:0]
+        return ifx success then 1 else 0
+    }
+
+    CancelNativeTransfer :: (context: *void) {
+        transfer := cast(*NativeTransfer)context
+        if transfer == null || transfer.job == null {
+            return
+        }
+        job := transfer.job
+        SyncLock()
+        done := job.done
+        job.abandoned = true
+        SyncUnlock()
+        transfer.job = null
+        transfer.output = transfer.output[0:0]
+        if done {
+            NativeFree(cast(*void)job)
+        }
+    }
+
+    NativeTransport :: (transfer: *NativeTransfer) -> AsyncTransport {
+        return AsyncTransport.{.context = cast(*void)transfer, .start = StartNativeTransfer,
+            .poll = PollNativeTransfer, .cancel = CancelNativeTransfer}
+    }
+
+}

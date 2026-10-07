@@ -1,6 +1,7 @@
 #import "sync"
 // Persistent account operations advanced by the application event loop.
 #import "auth"
+Auth :: #import "auth";
 #import "client"
 #import "async_client"
 #import "async_sync"
@@ -34,7 +35,7 @@ StoredOperation :: struct {
     client_id: [128]u8
     method: [16]u8
     path: [1024]u8
-    body: [8192]u8
+    body: [32768]u8
     request: PendingRequest
     sync: PendingSync
     deletion: PendingDeletion
@@ -45,6 +46,7 @@ StoredOperation :: struct {
     is_sync: bool
     is_deletion: bool
     connected_only: bool
+    isolated_session: bool
     result: s32
     changed: s32
 }
@@ -160,9 +162,15 @@ BeginStoredSync :: (operation: *StoredOperation, server: string,
 // until PollStoredOperation completes or CancelStoredOperation returns.
 BeginStoredRequest :: (operation: *StoredOperation, server: string,
     transport: AsyncTransport, method: string, path: string, body: string,
-    output: []u8, connected_only: bool) -> bool {
+    output: []u8, connected_only: bool, session_override: *Auth.Session = null) -> bool {
     if !PrepareStoredOperation(operation, server, connected_only) {
         return false
+    }
+    if session_override != null {
+        if session_override.token[0] != cast(u8)0 {
+            operation.session = session_override.*
+        }
+        operation.isolated_session = true
     }
     operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
     if !AppCopyText(method, operation.method[:]) ||
@@ -247,7 +255,7 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
         }
         operation.result = cast(s32)operation.request.result
     }
-    if !operation.is_deletion {
+    if !operation.is_deletion && !operation.isolated_session {
         SaveSession(*operation.session)
     }
     ReleaseStoredOperation(operation)

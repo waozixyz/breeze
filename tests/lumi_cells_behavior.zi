@@ -6,6 +6,8 @@ ModuleTestFailRun :: () #foreign test_runtime;
 #import, file "../src/cells/lumi_types.zi";
 #import, file "../src/cells/lumi_ui_types.zi";
 #import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/feedback_store.zi";
+#import, file "../src/cells/package_files.zi";
 #import, file "../src/cells/value_codec.zi";
 #import, file "../src/cells/widget_codec.zi";
 #import, file "../src/cells/inbe_types.zi";
@@ -30,6 +32,10 @@ TestLumiCall :: (context: *void, module: *u8, function: *u8,
     unused context
     unused module
     name := TextFromCString(function)
+    if name == "StartLumiOnlineHost" {
+        result.* = ModuleScalar("bool", 0)
+        return 1
+    }
     if name == "LumiLocaleHost" && count == 1 {
         result.* = arguments[0]
         return 1
@@ -235,5 +241,26 @@ CheckLumiConversation :: () -> s32 {
         return 115
     }
     LumiStoreReset()
+    if !SendLumi("fix switching to Lumi freezes") || last_action.kind != LUMI_REPORT_FEEDBACK ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_feedback_saved" {
+        return 131
+    }
+    report_id := FeedbackEnqueue("Lag", "Fix Lumi: 水 \\ and \"quotes\"", "view=lumi")
+    defer { PackageFree(report_id) }
+    if report_id.count != 64 || FeedbackFirst().count == 0 || FeedbackDelivered("wrong-id") {
+        return 132
+    }
+    unused AppCopyText("different-user", g_storage.user_id[:])
+    other_report := FeedbackFirst()
+    defer { PackageFree(other_report) }
+    unused AppCopyText(AppTextFromCString(*owner[0], 64), g_storage.user_id[:])
+    if other_report.count != 0 || !FeedbackDelivered(report_id) {
+        return 133
+    }
+    first_report := FeedbackFirst()
+    defer { PackageFree(first_report) }
+    if first_report.count != 0 {
+        return 134
+    }
     return 0
 }

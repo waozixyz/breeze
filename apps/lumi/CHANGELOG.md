@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.0] - 2026-10-07
+
+- Understand natural conversation online with the same tools in Inner Breeze and Harmony.
+- Save explicit app feedback offline and receive private developer replies in chat.
+
 ## [1.1.3] - 2026-10-06
 
 - Keep longer conversations responsive when opening, scrolling and typing.

@@ -1,0 +1,385 @@
+// The same harness runs in standalone Inbe and its Harmony-hosted window.
+// Only completed authenticated requests reach app tools, on the main thread.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "auth"
+#import, file "lumi_types.zi";
+#import, file "lumi_ui_types.zi";
+#import, file "lumi_response.zi";
+#import, file "package_files.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/assets.zi";
+#import, file "../practices/practice_actions.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/state.zi";
+#import, file "app_tools.zi";
+#import, file "feedback_store.zi";
+#import, file "lumi_store.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../platform/network_transport.zi";
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+    #import, file "../platform/native_network.zi";
+}
+#import, file "../app/locale.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+
+lumi_online_operation: StoredOperation;
+lumi_online_session: Session;
+lumi_online_transfer: NetworkTransfer;
+lumi_online_response: [65536]u8;
+lumi_online_owner: [64]u8;
+lumi_online_messages: string;
+lumi_online_queued: bool;
+lumi_online_stage: s32;
+lumi_online_round: s32;
+lumi_feedback_retry: s64;
+lumi_reply_retry: s64;
+lumi_reply_offset: s32;
+lumi_feedback_id: [65]u8;
+lumi_tool_ids: [12][129]u8;
+lumi_tool_results: [12]string;
+lumi_tool_count: s32;
+c :: #system_library "c";
+#if #defined(_WIN32) {
+    OnlineNow :: (out: *s64) -> s64 #foreign c "_time64";
+} else {
+    OnlineNow :: (out: *s64) -> s64 #foreign c "time";
+}
+
+OnlineField :: (document: string, at: s32, name: string) -> string {
+    start := FieldAt(document, at, name)
+    end := ValueEnd(document, start, 0)
+    if start < 0 || end < 0 {
+        return ""
+    }
+    return document[start:end]
+}
+
+LumiOnlineWaiting :: () -> bool {
+    return lumi_online_queued || lumi_online_stage == 1
+}
+
+LumiOnlineClearTurn :: () {
+    PackageFree(lumi_online_messages)
+    lumi_online_messages = ""
+    for index: cast(s32)0..lumi_tool_count - 1 {
+        PackageFree(lumi_tool_results[index])
+        lumi_tool_results[index] = ""
+    }
+    lumi_tool_count = 0
+    lumi_tool_ids = .{}
+}
+
+LumiOnlineCancel :: () {
+    CancelStoredOperation(*lumi_online_operation)
+    LumiOnlineClearTurn()
+    lumi_online_queued = false
+    lumi_online_stage = 0
+    lumi_online_round = 0
+    lumi_online_session = Session.{}
+    lumi_online_owner = .{}
+    lumi_feedback_retry = 0
+    lumi_reply_retry = 0
+    lumi_reply_offset = 0
+}
+
+LumiOnlineStart :: (input: string) -> bool {
+    unused input
+    if LumiOnlineWaiting() || storage_get_setting_int("lumi_online", 1) == 0 ||
+    storage_has_sync_account() == 0 {
+        return false
+    }
+    if lumi_online_stage == 2 || lumi_online_stage == 3 {
+        // A conversation takes priority over retriable inbox background work.
+        CancelStoredOperation(*lumi_online_operation)
+        lumi_online_stage = 0
+    }
+    LumiOnlineClearTurn()
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    count := LumiStoreCount()
+    first := count - 4
+    if first < 0 { first = 0 }
+    for index: first..count - 1 {
+        row := LumiStoreRow(index)
+        BuilderPrint(*out, "%{\"role\":\"%\",\"content\":",
+            ifx index == first then "" else ",", ifx row.user then "user" else "assistant")
+        LumiJsonString(*out, row.text)
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]")
+    lumi_online_messages = BuilderFinish(out)
+    lumi_online_queued = true
+    lumi_online_round = 0
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), lumi_online_owner[:])
+    return true
+}
+
+OnlineToolSchemas :: (out: *Vec(u8)) {
+    definitions := AssetRead("assets/mcp/tools.json")
+    BuilderPrint(out, "[")
+    if definitions.found {
+        count := ArrayCount(definitions.data, 0)
+        for index: cast(s32)0..count - 1 {
+            at := ElementAt(definitions.data, 0, index)
+            BuilderPrint(out, "%{\"type\":\"function\",\"function\":{\"name\":%,\"description\":%,\"parameters\":%}}",
+                ifx index == 0 then "" else ",", OnlineField(definitions.data, at, "name"),
+                OnlineField(definitions.data, at, "description"), OnlineField(definitions.data, at, "inputSchema"))
+        }
+    }
+    BuilderPrint(out, "]")
+}
+
+LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
+    context := AppToolContext(app)
+    defer { PackageFree(context) }
+    #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+        if NativeNetworkTracing() {
+            print("LUMI: context_bytes=% messages_bytes=%\n", context.count, lumi_online_messages.count)
+        }
+    }
+    if context.count > 8192 {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"messages\":%,\"context\":%,\"tools\":", lumi_online_messages, context)
+    OnlineToolSchemas(*out)
+    BuilderPrint(*out, "}")
+    body := BuilderFinish(out)
+    defer { PackageFree(body) }
+    if !BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
+        NetworkTransport(*lumi_online_transfer), "POST", "/api/v1/chat/completions",
+        body, lumi_online_response[:], false, *lumi_online_session) {
+        #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+            if NativeNetworkTracing() {
+                print("LUMI: request_start_failed result=% body_bytes=%\n", lumi_online_operation.result, body.count)
+            }
+        }
+        return false
+    }
+    lumi_online_stage = 1
+    lumi_online_queued = false
+    return true
+}
+
+LumiOnlineAppend :: (reply: string) {
+    start: s64 = 0
+    while start < reply.count {
+        end := start + LUMI_INPUT_MAX - 1
+        if end > reply.count { end = reply.count }
+        // Split long translated replies only at UTF-8 character boundaries.
+        while end < reply.count && end > start && (reply[end] & cast(u8)192) == cast(u8)128 {
+            end -= 1
+        }
+        if end <= start { return }
+        LumiStoreAppend(reply[start:end], false)
+        start = end
+    }
+    lumi_ui.scroll = 1000000
+    lumi_ui.follow_end = true
+}
+
+LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
+    document := TextUntilNul(lumi_online_response[:])
+    at := LumiResponseMessageAt(document)
+    if at < 0 {
+        return false
+    }
+    calls_at := FieldAt(document, at, "tool_calls")
+    calls := ArrayCount(document, calls_at)
+    if calls <= 0 {
+        text: [4097]u8
+        count := ReadStringText(document, FieldAt(document, at, "content"), text[:])
+        if count <= 0 || count >= text.count {
+            return false
+        }
+        LumiOnlineAppend(TextFromBytes(text[:count]))
+        return true
+    }
+    if calls > 4 || lumi_online_round >= 3 {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%,%", lumi_online_messages[:lumi_online_messages.count - 1],
+        document[at:ValueEnd(document, at, 0)])
+    for index: cast(s32)0..calls - 1 {
+        call_at := ElementAt(document, calls_at, index)
+        function_at := FieldAt(document, call_at, "function")
+        if call_at < 0 || function_at < 0 || ValueEnd(document, function_at, 0) < 0 {
+            PackageFree(BuilderFinish(out))
+            return false
+        }
+        name_bytes: [65]u8
+        id_bytes: [129]u8
+        arguments_bytes: [4097]u8
+        name := ToolString(document[function_at:ValueEnd(document, function_at, 0)], "name", name_bytes[:])
+        arguments := ToolString(document[function_at:ValueEnd(document, function_at, 0)], "arguments", arguments_bytes[:])
+        id := ToolString(document[call_at:ValueEnd(document, call_at, 0)], "id", id_bytes[:])
+        if name.count == 0 || id.count == 0 || arguments.count == 0 || lumi_tool_count >= 12 {
+            PackageFree(BuilderFinish(out))
+            return false
+        }
+        result: string
+        for seen: cast(s32)0..lumi_tool_count - 1 {
+            if id == TextUntilNul(lumi_tool_ids[seen][:]) {
+                result = lumi_tool_results[seen]
+            }
+        }
+        if result.count == 0 {
+            result = AppToolExecute(app, name, arguments)
+            unused AppCopyText(id, lumi_tool_ids[lumi_tool_count][:])
+            lumi_tool_results[lumi_tool_count] = result
+            lumi_tool_count += 1
+        }
+        BuilderPrint(*out, ",{\"role\":\"tool\",\"tool_call_id\":")
+        LumiJsonString(*out, id)
+        BuilderPrint(*out, ",\"content\":")
+        LumiJsonString(*out, result)
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]")
+    PackageFree(lumi_online_messages)
+    lumi_online_messages = BuilderFinish(out)
+    lumi_online_round += 1
+    // The response's text views must end before the next transfer reuses it.
+    lumi_online_queued = true
+    return true
+}
+
+LumiFeedbackStart :: () -> bool {
+    body := FeedbackFirst()
+    defer { PackageFree(body) }
+    if body.count == 0 {
+        return false
+    }
+    id := ToolString(body, "id", lumi_feedback_id[:])
+    if id.count != 64 || !BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
+        NetworkTransport(*lumi_online_transfer), "POST", "/api/v1/feedback",
+        body, lumi_online_response[:], false, *lumi_online_session) {
+        return false
+    }
+    lumi_online_stage = 2
+    return true
+}
+
+LumiFeedbackReplies :: () {
+    document := TextUntilNul(lumi_online_response[:])
+    at := FieldAt(document, 0, "feedback")
+    count := ArrayCount(document, at)
+    seen := storage_get_setting_text("lumi_feedback_replies_seen")
+    out: Vec(u8)
+    BuilderPrint(*out, "%", seen)
+    for index: cast(s32)0..count - 1 {
+        item := ElementAt(document, at, index)
+        id_bytes: [65]u8
+        reply_bytes: [4097]u8
+        id := ToolString(document[item:ValueEnd(document, item, 0)], "id", id_bytes[:])
+        reply := ToolString(document[item:ValueEnd(document, item, 0)], "reply", reply_bytes[:])
+        if id.count != 64 || reply.count == 0 || ContainsFoldASCII(seen, id) {
+            continue
+        }
+        // A developer's reply remains verbatim and is visibly attributed.
+        message: Vec(u8)
+        BuilderPrint(*message, "%\n%", LocaleText("lumi_developer_reply"), reply)
+        value := BuilderFinish(message)
+        LumiOnlineAppend(value)
+        PackageFree(value)
+        BuilderPrint(*out, "%\n", id)
+    }
+    updated := BuilderFinish(out)
+    defer { PackageFree(updated) }
+    if updated.count < 32768 {
+        storage_set_setting_text("lumi_feedback_replies_seen", updated)
+    }
+}
+
+app_lumi_pump :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if lumi_online_owner[0] != cast(u8)0 && owner != TextUntilNul(lumi_online_owner[:]) {
+        LumiOnlineCancel()
+        app_lumi_reset()
+        return
+    }
+    if lumi_online_operation.active {
+        if !PollStoredOperation(*lumi_online_operation) {
+            return
+        }
+        stage := lumi_online_stage
+        lumi_online_stage = 0
+        success := lumi_online_operation.result == cast(s32)AuthResult.AUTH_OK
+        lumi_online_session = lumi_online_operation.session
+        if stage == 1 {
+            lumi_pending_route = -1
+            lumi_pending_practice = -1
+            if !success || !LumiOnlineAnswer(app) {
+                LumiOnlineAppend(LocaleText(ifx lumi_online_operation.request.status == 429 then
+                    "lumi_online_limit" else "lumi_online_unavailable"))
+            }
+            if lumi_pending_practice >= 0 {
+                unused app_start_practice(app, lumi_pending_practice)
+            }
+            if lumi_pending_route >= 0 {
+                app_apply_nav_route(app, lumi_pending_route)
+            }
+            if !LumiOnlineWaiting() {
+                LumiOnlineClearTurn()
+            }
+            unused LumiStoreSave()
+        } else if stage == 2 && success {
+            unused FeedbackDelivered(TextUntilNul(lumi_feedback_id[:]))
+            lumi_feedback_retry = 0
+        } else if stage == 3 && success {
+            LumiFeedbackReplies()
+            unused LumiStoreSave()
+            count := ArrayCount(TextUntilNul(lumi_online_response[:]),
+                FieldAt(TextUntilNul(lumi_online_response[:]), 0, "feedback"))
+            if count == 2 {
+                lumi_reply_offset += 2
+                lumi_reply_retry = 0
+            } else {
+                lumi_reply_offset = 0
+            }
+        }
+    }
+    if lumi_online_stage != 0 {
+        return
+    }
+    if lumi_online_queued {
+        if !LumiOnlineRequest(app) {
+            lumi_online_queued = false
+            LumiOnlineAppend(LocaleText("lumi_online_unavailable"))
+            LumiOnlineClearTurn()
+            unused LumiStoreSave()
+        }
+        return
+    }
+    if storage_has_sync_account() == 0 {
+        return
+    }
+    unused AppCopyText(owner, lumi_online_owner[:])
+    now := OnlineNow(null)
+    if now >= lumi_feedback_retry {
+        lumi_feedback_retry = now + 60
+        if LumiFeedbackStart() { return }
+    }
+    if now >= lumi_reply_retry {
+        lumi_reply_retry = now + 300
+        path_buffer: Vec(u8)
+        BuilderPrint(*path_buffer, "/api/v1/feedback?replies=1&offset=%", lumi_reply_offset)
+        path := BuilderFinish(path_buffer)
+        defer { PackageFree(path) }
+        if BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
+            NetworkTransport(*lumi_online_transfer), "GET", path,
+            "", lumi_online_response[:], false, *lumi_online_session) {
+            lumi_online_stage = 3
+        }
+    }
+}

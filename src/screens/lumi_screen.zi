@@ -10,6 +10,10 @@
 #import, file "../cells/inbe_types.zi";
 #import, file "../cells/lumi_ui_types.zi";
 #import, file "../cells/lumi_store.zi";
+#import, file "../cells/lumi_online.zi";
+#import, file "../cells/feedback_store.zi";
+#import, file "../cells/app_tools.zi";
+#import, file "../cells/package_files.zi";
 #import, file "../cells/module_host.zi";
 #import, file "../cells/widget_codec.zi";
 #import, file "../cells/widget_host.zi";
@@ -67,6 +71,7 @@ app_lumi_input_focused :: (app: *InnerBreeze) -> bool {
 }
 
 app_lumi_reset :: () {
+    LumiOnlineCancel()
     LumiStoreReset()
     lumi_ui = LumiUiFrame.{}
     lumi_input[0] = cast(u8)0
@@ -114,6 +119,21 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
     if action.kind == LUMI_WRITE_DIARY {
         return app_nav_route_available(app, APP_NAV_ROUTE_DIARY) &&
         app_diary_append(action.title)
+    }
+    if action.kind == LUMI_REPORT_FEEDBACK {
+        context := AppFeedbackContext(app)
+        defer { PackageFree(context) }
+        title := action.title
+        if title.count > 160 {
+            end: s64 = 160
+            while end > 0 && (title[end] & cast(u8)192) == cast(u8)128 {
+                end -= 1
+            }
+            title = title[:end]
+        }
+        id := FeedbackEnqueue(title, action.title, context)
+        defer { PackageFree(id) }
+        return id.count != 0
     }
     if action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS {
         lumi_pending_route = APP_NAV_ROUTE_SETTINGS
@@ -204,6 +224,12 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
+    if name == "StartLumiOnlineHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+        input := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        result.* = ModuleScalar("bool", ifx LumiOnlineStart(input) then 1 else 0)
+        return 1
+    }
     if name == "ReadLumiToolsHost" && count == 0 {
         result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = lumi_ui.available_apps,
                 .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
@@ -336,6 +362,7 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     lumi_ui.choosing_habit = lumi_choosing_habit
     lumi_ui.choosing_diary = lumi_choosing_diary
+    lumi_ui.waiting = LumiOnlineWaiting()
     lumi_ui.habit_count = ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
     lumi_ui.session = app.ui.session
     if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {

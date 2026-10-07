@@ -1,4 +1,11 @@
 # Changelog
+## [2.1.11] - 2026-10-07
+### Added
+- Talk naturally with Lumi online, with a daily account allowance and access to app actions.
+- Save app feedback from chat, send it when connected, and receive developer replies in Lumi.
+### Fixed
+- Keep feedback available when online chat is disabled or its allowance runs out.
+
 ## [2.1.10] - 2026-10-06
 ### Fixed
 - Open and scroll Lumi smoothly, including longer conversations.

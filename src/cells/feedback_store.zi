@@ -1,0 +1,92 @@
+// Account-scoped durable feedback outbox. Delivery is separate from chat.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import, file "lumi_store.zi";
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/daochi_account.zi";
+
+FeedbackPending :: () -> string {
+    value := storage_get_setting_text("lumi_feedback_pending")
+    if value.count == 0 {
+        return "[]"
+    }
+    return value
+}
+
+FeedbackEnqueue :: (title: string, message: string, context: string) -> string {
+    if title.count == 0 || title.count > 160 || message.count == 0 || message.count > 4096 || context.count > 2048 {
+        return ""
+    }
+    pending := FeedbackPending()
+    count := ArrayCount(pending, 0)
+    if count < 0 || count >= 32 || ValueEnd(pending, 0, 0) != pending.count {
+        return ""
+    }
+    id: [65]u8
+    if !NativeNonce(null, id[:]) {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", pending[:pending.count - 1])
+    BuilderPrint(*out, "%{\"id\":\"%\",\"app_id\":\"inbe\",\"title\":",
+        ifx count == 0 then "" else ",", AccountField(*id[0], 65))
+    LumiJsonString(*out, title)
+    BuilderPrint(*out, ",\"message\":")
+    LumiJsonString(*out, message)
+    BuilderPrint(*out, ",\"context\":")
+    LumiJsonString(*out, context)
+    BuilderPrint(*out, "}]")
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    storage_set_setting_text("lumi_feedback_pending", value)
+    if storage_setting_text_equals("lumi_feedback_pending", value) == 0 {
+        return ""
+    }
+    return PackageText(AccountField(*id[0], 65), "")
+}
+
+FeedbackFirst :: () -> string {
+    pending := FeedbackPending()
+    if ArrayCount(pending, 0) <= 0 {
+        return ""
+    }
+    at := ElementAt(pending, 0, 0)
+    end := ValueEnd(pending, at, 0)
+    if at < 0 || end < 0 {
+        return ""
+    }
+    return PackageText(pending[at:end], "")
+}
+
+FeedbackDelivered :: (id: string) -> bool {
+    pending := FeedbackPending()
+    count := ArrayCount(pending, 0)
+    if count <= 0 {
+        return false
+    }
+    bytes: [65]u8
+    first := ElementAt(pending, 0, 0)
+    length := ReadStringText(pending, FieldAt(pending, first, "id"), bytes[:])
+    if length != 64 || TextFromBytes(bytes[:length]) != id {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    for index: cast(s32)1..count - 1 {
+        at := ElementAt(pending, 0, index)
+        end := ValueEnd(pending, at, 0)
+        if at < 0 || end < 0 {
+            PackageFree(BuilderFinish(out))
+            return false
+        }
+        BuilderPrint(*out, "% %", ifx index == 1 then "" else ",", pending[at:end])
+    }
+    BuilderPrint(*out, "]")
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    storage_set_setting_text("lumi_feedback_pending", value)
+    return storage_setting_text_equals("lumi_feedback_pending", value) != 0
+}
