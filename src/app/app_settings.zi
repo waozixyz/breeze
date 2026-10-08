@@ -92,22 +92,25 @@ load_bottom_nav_routes :: (app: *InnerBreeze) {
         app.launcher_favorite_count = SettingsCacheInt("launcher_favorite_count", 2)
         app.launcher_favorites[0] = SettingsCacheInt("launcher_favorite_0", APP_NAV_ROUTE_HABITS)
         app.launcher_favorites[1] = SettingsCacheInt("launcher_favorite_1", APP_NAV_ROUTE_PRACTICE)
+        for index: cast(s32)2..cast(s32)app.launcher_favorites.count - 1 {
+            key := SettingsKeyIndexed("launcher_favorite_", index, "")
+            app.launcher_favorites[index] = SettingsCacheIntBytes(
+                key.bytes[0:key.count], APP_NAV_ROUTE_NONE)
+        }
         app.launcher_favorite_count = LauncherSanitizeFavorites(
             app.launcher_favorites[:], app.launcher_favorite_count)
     } else {
-        // Migrate the first two personal shortcuts without changing app choices.
+        // Preserve every personal shortcut without changing app choices.
         app.launcher_favorite_count = 0
         if SettingsCacheContains("bottom_nav_route_count") {
             for index: cast(s32)0..app.bottom_nav_route_count - 1 {
                 route := app.bottom_nav_routes[index]
-                if app.launcher_favorite_count < 2 && route != APP_NAV_ROUTE_SETTINGS &&
-                route != APP_NAV_ROUTE_PROFILE {
-                    app.launcher_favorites[app.launcher_favorite_count] = route
-                    app.launcher_favorite_count += 1
-                }
+                app.launcher_favorite_count = LauncherToggleFavorite(
+                    app.launcher_favorites[:], app.launcher_favorite_count, route)
             }
         } else {
-            app.launcher_favorites = .{APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_PRACTICE}
+            app.launcher_favorites[0] = APP_NAV_ROUTE_HABITS
+            app.launcher_favorites[1] = APP_NAV_ROUTE_PRACTICE
             app.launcher_favorite_count = 2
         }
     }
@@ -205,6 +208,10 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("launcher_favorite_count", app.launcher_favorite_count)
     save_setting_int("launcher_favorite_0", app.launcher_favorites[0])
     save_setting_int("launcher_favorite_1", app.launcher_favorites[1])
+    for index: cast(s32)2..cast(s32)app.launcher_favorites.count - 1 {
+        key := SettingsKeyIndexed("launcher_favorite_", index, "")
+        unused SettingsStoreInt(AppTextFromCString(*key.bytes[0], 48), app.launcher_favorites[index])
+    }
     save_setting_int("profile_picture_icon", app.profile_picture_icon)
     save_setting_int("bottom_nav_route_count", app.bottom_nav_route_count)
     save_setting_int("bottom_nav_route_0", app.bottom_nav_routes[0])

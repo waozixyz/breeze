@@ -143,9 +143,6 @@ with contextlib.ExitStack() as stack:
             apps_point = (325, height - 42) if mobile else (44, 316)
             search_point = (100, 136) if mobile else (180, 104)
             tile_point = (100, 268) if mobile else (220, 220)
-            edit_point = (282, 206) if mobile else (330, 174)
-            first_pin = (167, 250) if mobile else (228, 218)
-            all_first = (100, 444) if mobile else (220, 396)
 
             with application(profile, name, width, height) as (window, log):
                 click(window, *apps_point, hold=.35)
@@ -165,19 +162,68 @@ with contextlib.ExitStack() as stack:
                 # Escape closes the drawer without quitting or changing the selected app.
                 assert settings(profile)["main_tab"] == "3"
                 click(window, *apps_point)
-                click(window, *edit_point)
-                capture(window, name + "-editing")
-                click(window, *all_first)
-                assert favorites(profile) == [1, 2], "A third favorite exceeded the limit"
-                click(window, *first_pin)
-                assert favorites(profile) == [2], "Unpin did not remove only the shortcut"
-                click(window, *all_first)
-                assert favorites(profile) == [2, 11], "Pin did not append Diary"
+                # Holding a search result pins without activating or enabling it.
+                def search_app(label):
+                    click(window, *((348, 138) if mobile else (382, 106)))
+                    click(window, *search_point)
+                    command("xdotool", "type", "--clearmodifiers", "--delay", "50", label)
+                    time.sleep(.3)
+
+                search_app("Diary")
+                click(window, *tile_point, hold=1.8)
+                assert favorites(profile) == [1, 2, 11], "Hold did not append a third favorite exactly once"
+                assert settings(profile)["main_tab"] == "3", "Hold activated an app"
+                capture(window, name + "-held-pin")
+                for label, expected in (("Lists", [1, 2, 11, 3]), ("Lumi", [1, 2, 11, 3, 12])):
+                    search_app(label)
+                    click(window, *tile_point, hold=.85)
+                    assert favorites(profile) == expected, "Hold did not pin " + label
+                    assert settings(profile)["main_tab"] == "3", "Hold opened " + label
                 assert int(settings(profile)["enabled_apps"]) == 30, "Pinning changed app availability"
-                # Remove both favorites and keep an empty dock as a valid saved choice.
-                click(window, *first_pin)
-                click(window, *first_pin)
-                assert favorites(profile) == []
+                # Moving out of a tile cancels a pending hold and its release.
+                command("xdotool", "mousemove", "--window", window, str(tile_point[0]), str(tile_point[1]))
+                command("xdotool", "mousedown", "1")
+                time.sleep(.2)
+                command("xdotool", "mousemove", "--window", window, "10", "80")
+                time.sleep(.85)
+                command("xdotool", "mouseup", "1")
+                time.sleep(.3)
+                assert favorites(profile) == [1, 2, 11, 3, 12], "Cancelled hold changed pins"
+                key(window, "Escape")
+                if mobile:
+                    command("xdotool", "mousemove", "--window", window, "160", str(height - 42))
+                    time.sleep(.3)
+                    before = capture(window, name + "-dock-before-scroll")
+                    command("xdotool", "click", "--repeat", "6", "--delay", "80", "5")
+                    time.sleep(.6)
+                    after = capture(window, name + "-dock-after-scroll")
+                    dock_crop = (12, height - 84, width - 120, height)
+                    assert ImageChops.difference(before.crop(dock_crop), after.crop(dock_crop)).getbbox(), "Pinned dock did not scroll"
+                    apps_crop = (width - 100, height - 84, width, height)
+                    assert ImageChops.difference(before.crop(apps_crop), after.crop(apps_crop)).getbbox() is None, "Scrolling moved Apps"
+                # Apps stays accessible beside the larger, scrollable dock.
+                large_apps = (width - 56, height - 42) if mobile else (44, min(112 + 5 * 84, height - 188) + 36)
+                click(window, *large_apps)
+                capture(window, name + "-all-favorites")
+
+            with application(profile, name + "-pinned-restart", width, height) as (window, log):
+                click(window, *large_apps)
+                assert favorites(profile) == [1, 2, 11, 3, 12], "Restart truncated saved favorites"
+                capture(window, name + "-all-favorites-restart")
+                # Search results stay at a stable position even with several favorite rows.
+                def search_app(label):
+                    click(window, *((348, 138) if mobile else (382, 106)))
+                    click(window, *search_point)
+                    command("xdotool", "type", "--clearmodifiers", "--delay", "50", label)
+                    time.sleep(.3)
+
+                for label, expected in (("Habits", [2, 11, 3, 12]), ("Practice", [11, 3, 12]),
+                                        ("Diary", [3, 12]), ("Lists", [12]), ("Lumi", [])):
+                    search_app(label)
+                    click(window, *tile_point, hold=.85)
+                    assert favorites(profile) == expected, "Hold did not unpin " + label
+                click(window, *((348, 138) if mobile else (382, 106)))
+                time.sleep(.3)
                 capture(window, name + "-empty")
 
             with application(profile, name + "-restart", width, height) as (window, log):
@@ -211,6 +257,9 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["enabled_apps"] == "31", "Bundled apps were not made available"
 
             # Existing navigation preferences migrate in order, and user data is retained.
+            seed(profile, {"bottom_nav_route_count": 6, "bottom_nav_route_0": 12,
+                           "bottom_nav_route_1": 1, "bottom_nav_route_2": 2,
+                           "bottom_nav_route_3": 11, "bottom_nav_route_4": 3, "bottom_nav_route_5": 4})
             with sqlite3.connect(profile / "inbe.db") as db:
                 db.execute("DELETE FROM settings WHERE user_id=? AND key LIKE 'launcher_favorite_%'", (user,))
                 assert db.execute("SELECT title FROM elist_lists WHERE id='launcher-preserved-list'").fetchone()[0] == "Keep this list"
@@ -218,8 +267,8 @@ with contextlib.ExitStack() as stack:
             with application(profile, name + "-migration", width, height) as (window, log):
                 # A navigation action saves the migrated preferences through the normal app path.
                 click(window, *( (70, height - 42) if mobile else (44, 148) ))
-                assert favorites(profile) == [12, 1], "Legacy shortcut order was not migrated"
-            print(name + ": search, app activation, pin limit, empty favorites, restart, utility routes and migration passed")
+                assert favorites(profile) == [12, 1, 2, 11, 3], ("Legacy shortcut order was not fully migrated", favorites(profile))
+            print(name + ": search, app activation, held pins, all favorites, empty favorites, restart, utility routes and migration passed")
 
     # Short windows must scroll the library while keeping navigation visible.
     with tempfile.TemporaryDirectory(prefix="inbe-launcher-short-") as temporary:

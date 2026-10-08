@@ -214,8 +214,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         click(window, 826, 316)  # Pin Diary without changing app choices.
         assert order() == [1, 11], order()
         assert settings()["enabled_apps"] == "22"
-        click(window, 826, 372)  # The third pin remains disabled.
-        assert order() == [1, 11]
+        click(window, 826, 372)  # Pin Lumi as the third favorite.
+        assert order() == [1, 11, 12], order()
+        click(window, 826, 316)  # Pin Lists from the remaining available rows.
+        assert order() == [1, 11, 12, 3], order()
+        click(window, 826, 372)  # Pin Practice: every app may be a favorite.
+        assert order() == [1, 11, 12, 3, 2], order()
+        assert settings()["enabled_apps"] == "22", "Extra pins changed app choices"
         click(window, 620, 204)  # Opening Diary also enables it.
         wait_setting("enabled_apps", 30)
         assert host_state()["screen"] == 22
@@ -224,7 +229,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
             assert db.execute("SELECT name FROM habits WHERE id='settings-preserved-habit'").fetchone() == ("Keep this habit",)
 
     with application("saved-order"):
-        assert order() == [1, 11], "Favorite order did not persist"
+        assert order() == [1, 11, 12, 3, 2], "All favorite positions did not persist"
         assert settings()["enabled_apps"] == "30"
 
-print("Settings: scale commits on release; favorite reordering, pin limits and app tools preserve data")
+print("Settings: scale commits on release; favorite reordering, every app pinned and app tools preserve data")

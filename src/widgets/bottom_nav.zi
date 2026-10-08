@@ -13,8 +13,12 @@
 #import "text_align"
 #import "text_props"
 #import "text_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/app_launcher_state.zi";
+#import, file "../app/launcher_policy.zi";
 #import, file "../cells/module_host.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/draw.zi";
@@ -140,6 +144,30 @@ bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
     return route == APP_NAV_ROUTE_ELIST  && app.breathing.screen == ScreenEList
 }
 
+// Each dock shortcut keeps the ordinary button's hover, focus and press states.
+app_draw_dock_route :: (app: *InnerBreeze, route: s32, bounds: Rectangle) -> bool {
+    button: ButtonProps
+    button.id = 6600 + route
+    button.label = app_nav_route_label(route)
+    button.bounds = bounds
+    button.class_name = KssClassId(KssMakeName("launcher-dock"))
+    button.icon_placement = cast(IconPlacement)IconPlacementAbove
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    button.selected = !app.launcher_open && bottom_nav_route_active(app, route)
+    if route == APP_NAV_ROUTE_APPS {
+        button.selected = app.launcher_open
+        button.icon_shape = "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z"
+    } else {
+        button.image = bottom_nav_route_image(route)
+        button.icon_shape = app_nav_route_shape(route)
+    }
+    button.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
+    if Button(app.ui.session, button) == 0 { return false }
+    if route == APP_NAV_ROUTE_APPS { app_launcher_toggle(app) }
+    else { app_launcher_activate(app, route) }
+    return true
+}
+
 // The same compact dock is composed inside the launcher overlay when open.
 #program_export
 app_draw_favorites_dock :: (app: *InnerBreeze) {
@@ -170,7 +198,7 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
                 cast(float32)AppScale(84)}, 0.0, 4,
             StyleTokenColor("launcher-canvas"))
     }
-    routes: [3]s32
+    routes: [LAUNCHER_APP_COUNT + 1]s32
     count: s32 = 0
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
         route := app.launcher_favorites[index]
@@ -185,35 +213,59 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
     item_width := (app.ui.view_width - AppScale(24) - gap * (count - 1)) / count
     if item_width > AppScale(144) { item_width = AppScale(144) }
     group_x := (app.ui.view_width - count * item_width - gap * (count - 1)) / 2
-    for index: cast(s32)0..count - 1 {
-        route := routes[index]
-        button: ButtonProps
-        button.id = 6600 + route
-        button.label = app_nav_route_label(route)
-        button.bounds = Rectangle.{cast(float32)(group_x + index * (item_width + gap)),
-            cast(float32)(y + AppScale(8)), cast(float32)item_width,
+    // A larger dock scrolls its favorites while Apps and Profile stay reachable.
+    if count > 3 {
+        apps_bounds := Rectangle.{cast(float32)(app.ui.view_width - AppScale(100)),
+            cast(float32)(y + AppScale(8)), cast(float32)AppScale(88),
             cast(float32)AppScale(68)}
+        scroll: ScrollProps
+        scroll.key = KeyHash("inbe/apps/dock")
+        scroll.scroll_offset = app.launcher_dock_scroll
+        scroll.horizontal = !desktop
+        scroll.bounds = Rectangle.{cast(float32)AppScale(12), cast(float32)y,
+            cast(float32)(app.ui.view_width - AppScale(120)), cast(float32)AppScale(84)}
+        scroll.content_width = (count - 1) * AppScale(92) - gap
         if desktop {
-            button.bounds = Rectangle.{cast(float32)(x + AppScale(12)),
-                cast(float32)AppScale(112 + index * 84),
+            apps_y := AppScale(112 + (count - 1) * 84)
+            if apps_y > app.ui.view_height - AppScale(188) {
+                apps_y = app.ui.view_height - AppScale(188)
+            }
+            apps_bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)apps_y,
                 cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
+            scroll.bounds = Rectangle.{cast(float32)x, cast(float32)AppScale(112),
+                cast(float32)dock_width, cast(float32)(apps_y - AppScale(120))}
+            scroll.content_height = (count - 1) * AppScale(84) - gap
         }
-        button.class_name = KssClassId(KssMakeName("launcher-dock"))
-        button.icon_placement = cast(IconPlacement)IconPlacementAbove
-        button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        button.selected = !app.launcher_open && bottom_nav_route_active(app, route)
-        if route == APP_NAV_ROUTE_APPS { button.selected = app.launcher_open }
-        if route == APP_NAV_ROUTE_APPS {
-            button.icon_shape = "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z"
-        } else {
-            button.image = bottom_nav_route_image(route)
-            button.icon_shape = app_nav_route_shape(route)
+        scrolled := Scroll(app.ui.session, scroll)
+        app.launcher_dock_scroll = scrolled.scroll_offset
+        if scrolled.opened {
+            activated := false
+            for index: cast(s32)0..count - 2 {
+                bounds := Rectangle.{scrolled.content.x + cast(float32)AppScale(index * 92),
+                    cast(float32)(y + AppScale(8)), cast(float32)AppScale(84),
+                    cast(float32)AppScale(68)}
+                if desktop {
+                    bounds = Rectangle.{cast(float32)(x + AppScale(12)),
+                        scrolled.content.y + cast(float32)AppScale(index * 84),
+                        cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
+                }
+                if app_draw_dock_route(app, routes[index], bounds) { activated = true }
+            }
+            TreePopScope(app.ui.session)
+            if activated { return }
         }
-        button.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
-        if Button(app.ui.session, button) != 0 {
-            if route == APP_NAV_ROUTE_APPS { app_launcher_toggle(app) }
-            else { app_launcher_activate(app, route) }
-            return
+        if app_draw_dock_route(app, APP_NAV_ROUTE_APPS, apps_bounds) { return }
+    } else {
+        for index: cast(s32)0..count - 1 {
+            bounds := Rectangle.{cast(float32)(group_x + index * (item_width + gap)),
+                cast(float32)(y + AppScale(8)), cast(float32)item_width,
+                cast(float32)AppScale(68)}
+            if desktop {
+                bounds = Rectangle.{cast(float32)(x + AppScale(12)),
+                    cast(float32)AppScale(112 + index * 84),
+                    cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
+            }
+            if app_draw_dock_route(app, routes[index], bounds) { return }
         }
     }
     if desktop {

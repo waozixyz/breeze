@@ -1,6 +1,9 @@
 #import "byte_text_linux"
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/import.zi";
+#import, file "../src/storage/import_types.zi";
+
+using StorageImportMode;
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/path_join.zi";
 #import, file "../src/storage/session_mood.zi";
@@ -125,15 +128,15 @@ test_legacy_database_migration :: () -> s32 {
     result := write_source_database(*root[0])
     if result != 0 { return 10 + result }
     if !make_path(current[:], *root[0], "inbe.db") ||
-       !make_path(old_path[:], *root[0], "breathing.db") ||
-       !AppCopyText(TextFromCString(*current[0]), marker[:]) ||
-       !AppAppendText(".migrated", marker[:]) { return 2 }
+    !make_path(old_path[:], *root[0], "breathing.db") ||
+    !AppCopyText(TextFromCString(*current[0]), marker[:]) ||
+    !AppAppendText(".migrated", marker[:]) { return 2 }
     if rename_path(*current[0], *old_path[0]) != 0 { return 3 }
     if storage_init(TextFromCString(*root[0])) == 0 { return 4 }
     if storage_session_count() != 1 { return 5 }
     storage_close()
     if !file_exists(*current[0]) || !file_exists(*old_path[0]) ||
-       !file_exists(*marker[0]) { return 6 }
+    !file_exists(*marker[0]) { return 6 }
     remove_database_files(*root[0])
     return 0
 }
@@ -147,12 +150,12 @@ test_conflicting_database_names :: () -> s32 {
     result := write_source_database(*root[0])
     if result != 0 { return 10 + result }
     if !make_path(current[:], *root[0], "inbe.db") ||
-       !make_path(old_path[:], *root[0], "breathing.db") { return 2 }
+    !make_path(old_path[:], *root[0], "breathing.db") { return 2 }
     if !write_text_file(*old_path[0], "old data") { return 3 }
     if storage_init(TextFromCString(*root[0])) != 0 { return 4 }
     storage_close()
     if !file_exists(*current[0]) ||
-       !file_holds(*old_path[0], "old data") { return 5 }
+    !file_holds(*old_path[0], "old data") { return 5 }
     remove_database_files(*root[0])
     return 0
 }
@@ -188,11 +191,22 @@ test_zip_round_trip :: () -> s32 {
     if result != 0 { return 10 + result }
     if !make_path(archive[:], *source[0], "export.zip") { return 2 }
     if storage_init(TextFromCString(*source[0])) == 0 { return 3 }
+    favorite_keys: [6]string = .{"launcher_favorite_count", "launcher_favorite_0",
+        "launcher_favorite_1", "launcher_favorite_2", "launcher_favorite_3", "launcher_favorite_4"}
+    favorite_values: [6]string = .{"5", "1", "2", "11", "3", "12"}
+    for index: cast(s32)0..5 {
+        storage_set_setting_text(favorite_keys[index], favorite_values[index])
+    }
+    if setting_key_importable("launcher_favorite_") != 0 ||
+    setting_key_importable("launcher_favorite_2_private") != 0 { return 9 }
     if storage_export_zip(TextFromCString(*archive[0])) == 0 { return 4 }
     storage_close()
     if storage_init(TextFromCString(*destination[0])) == 0 { return 5 }
-    if storage_import_zip(TextFromCString(*archive[0])) == 0 { return 6 }
+    if storage_import_zip_ex(TextFromCString(*archive[0]), cast(StorageImportMode)STORAGE_IMPORT_DATA_AND_SETTINGS) == 0 { return 6 }
     if storage_session_count() != 1 || storage_habit_count() < 1 { return 7 }
+    for index: cast(s32)0..5 {
+        if storage_get_setting_text(favorite_keys[index]) != favorite_values[index] { return 10 + index }
+    }
     storage_close()
     if !file_exists(*archive[0]) { return 8 }
     remove_file(*archive[0])
@@ -219,7 +233,7 @@ test_checkin_round_trip :: () -> s32 {
     saved.energy = 4
     saved.stress = 2
     if !AppCopyText("Quiet morning", saved.note[:]) ||
-       !AppCopyText("morning,home", saved.tags[:]) { return 5 }
+    !AppCopyText("morning,home", saved.tags[:]) { return 5 }
     if storage_save_session_checkin(TextFromCString(*id[0]), *saved) == 0 { return 6 }
     if storage_export_zip(TextFromCString(*archive[0])) == 0 { return 7 }
     storage_close()
@@ -228,9 +242,9 @@ test_checkin_round_trip :: () -> s32 {
     if storage_import_zip(TextFromCString(*archive[0])) == 0 { return 9 }
     if storage_load_session_checkin(TextFromCString(*id[0]), *loaded) == 0 { return 10 }
     if loaded.mood_before != 3 || loaded.mood_after != 5 ||
-       loaded.energy != 4 || loaded.stress != 2 ||
-       TextFromCString(*loaded.note[0]) != "Quiet morning" ||
-       TextFromCString(*loaded.tags[0]) != "morning,home" { return 11 }
+    loaded.energy != 4 || loaded.stress != 2 ||
+    TextFromCString(*loaded.note[0]) != "Quiet morning" ||
+    TextFromCString(*loaded.tags[0]) != "morning,home" { return 11 }
     if storage_session_count() != 1 { return 12 }
     storage_close()
     remove_file(*archive[0])

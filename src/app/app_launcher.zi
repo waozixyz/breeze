@@ -33,6 +33,11 @@
 #import "text_props"
 #import "text_widget"
 #import "tree"
+#import "tree_input"
+#import "widget_kind"
+
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
 
 using AppNavRoute;
 using ButtonEmphasis;
@@ -41,6 +46,32 @@ using ContentAlignment;
 using TextAlign;
 using TextWrap;
 using NavigationPlacement;
+using WidgetKind;
+
+// Retained hit testing keeps holds inside the tile's clipped area and lets
+// scrolling cancel them. Cancel the pointer after pinning so release cannot
+// also open the app or toggle the pin a second time.
+app_launcher_hold_to_pin :: (app: *InnerBreeze, card: ButtonProps, route: s32) {
+    key := cast(u64)card.id
+    previous := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session),
+        key, WidgetKindButton)
+    held := !card.disabled && TreePressedAt(app.ui.session, previous)
+    if !held {
+        if app.launcher_press_key == key { app.launcher_press_key = 0 }
+        return
+    }
+    pointer := PointerSample(app.ui.session)
+    now := GetTime()
+    if pointer.pressed {
+        app.launcher_press_key = key
+        app.launcher_press_started = now
+    }
+    if app.launcher_press_key == key && now - app.launcher_press_started >= 0.6 {
+        TreePointerCancel(app.ui.session)
+        app.launcher_press_key = 0
+        app_launcher_toggle_favorite(app, route)
+    }
+}
 
 // A cell tile composes its open action and independent pin action. Unpinning
 // changes only the dock; it never removes the cell or its data.
@@ -48,7 +79,6 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     bounds: Rectangle, vertical: bool, favorite_section: bool) {
     favorite := app_launcher_is_favorite(app, route)
     blocked := app.blocked_input_frame == app.breathing.frame
-    can_pin := favorite || app.launcher_favorite_count < LAUNCHER_FAVORITE_LIMIT
     card: ButtonProps
     card.id = (ifx favorite_section then 6800 else 6900) + route
     card.bounds = bounds
@@ -60,8 +90,8 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     card.class_name = KssClassId(KssMakeName("launcher-tile"))
     card.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     card.selected = !app.launcher_editing && bottom_nav_route_active(app, route)
-    card.disabled = blocked || (CellsInstalledMask() & app_nav_route_bit(route)) == 0 ||
-    (app.launcher_editing && !can_pin)
+    card.disabled = blocked || (CellsInstalledMask() & app_nav_route_bit(route)) == 0
+    app_launcher_hold_to_pin(app, card, route)
     if Button(app.ui.session, card) != 0 {
         if app.launcher_editing { app_launcher_toggle_favorite(app, route) }
         else { app_launcher_activate(app, route) }
@@ -77,7 +107,7 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         pin.selected = favorite
         pin.class_name = KssClassId(KssMakeName("launcher-pin"))
         pin.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        pin.disabled = blocked || !can_pin
+        pin.disabled = blocked
         if Button(app.ui.session, pin) != 0 { app_launcher_toggle_favorite(app, route) }
     }
 }
@@ -198,7 +228,8 @@ app_draw_launcher :: (app: *InnerBreeze) {
         }
     }
     show_favorites := query.count == 0
-    favorite_height := ifx show_favorites then AppScale(144) else 0
+    favorite_rows := (app.launcher_favorite_count + 1) / 2
+    favorite_height := ifx show_favorites then AppScale(44) + favorite_rows * AppScale(100) else 0
     if show_favorites && (app.launcher_editing || app.launcher_favorite_count == 0) {
         favorite_height += AppScale(28)
     }
@@ -242,19 +273,18 @@ app_draw_launcher :: (app: *InnerBreeze) {
             favorite_width := (width - gap) / 2
             for index: cast(s32)0..app.launcher_favorite_count - 1 {
                 app_launcher_draw_card(app, app.launcher_favorites[index],
-                    Rectangle.{cast(float32)(x + index * (favorite_width + gap)),
-                        cast(float32)(y + AppScale(36)), cast(float32)favorite_width,
+                    Rectangle.{cast(float32)(x + (index % 2) * (favorite_width + gap)),
+                        cast(float32)(y + AppScale(36) + (index / 2) * AppScale(100)), cast(float32)favorite_width,
                         cast(float32)AppScale(88)}, true, true)
             }
             if app.launcher_editing || app.launcher_favorite_count == 0 {
                 Text(app.ui.session, TextProps.{.text = LocaleText("launcher_favorites_hint"),
                         .font = AppScale(12),
-                        .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(128)),
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(36) + favorite_rows * AppScale(100)),
                             cast(float32)width, cast(float32)AppScale(34)},
                         .class_name = KssClassId(KssMakeName("launcher-muted"))})
-                y += AppScale(28)
             }
-            y += AppScale(144)
+            y += favorite_height
         }
         Text(app.ui.session, TextProps.{.text = LocaleText("launcher_all_apps"),
                 .bounds = Rectangle.{cast(float32)x, cast(float32)y,
