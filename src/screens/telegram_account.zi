@@ -14,6 +14,8 @@
 #import "modal_props"
 #import "modal_frame_widget"
 #import "scroll_props"
+#import "scroll"
+#import "style_sheet"
 #import "scroll_widget"
 #import "keys"
 #import "text_buffer"
@@ -26,6 +28,7 @@ Utf8 :: #import "utf8";
 
 using TextWrap;
 using ButtonEmphasis;
+using ButtonState;
 
 TelegramAccountPassword :: struct {
     value: [257]u8
@@ -230,7 +233,6 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
         return 0
     }
     content_width := cast(s32)frame.layout.content.width
-    content_height := AppScale(16)
     message := LocaleText(view.message_key)
     if view.message_key.count == 0 {
         if TelegramAccountActionAllowed(view, 1) {
@@ -245,41 +247,62 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
     if view.restore_failed {
         status = LocaleText("telegram_account_restore_failed")
     }
+    track := ScrollFace(StyleKindScroll(), 0, false,
+        cast(s32)ButtonStateNormal, 10.0)
+    thumb := ScrollFace(StyleKindScrollThumb(), 0, false,
+        cast(s32)ButtonStateNormal, 10.0)
+    scroll_metrics := ScrollMetricsFor(MetricsScale(), track, thumb)
     review_display: [8193]u8
     review := ""
-    if TelegramAccountReviewText(view.details, content_width, review_display[:]) {
-        review = TextUntilNul(review_display[:])
-    }
-    paragraphs: [3]string = .[message, status, review]
+    paragraphs: [3]string = .[message, status, ""]
     if paragraphs[1].count > 1024 {
         paragraphs[1] = ""
     }
     paragraph_heights: [3]s32
-    for index: 0..2 {
-        if paragraphs[index].count > 0 {
-            prepared := PrepareText(TextProps.{.text = paragraphs[index], .font = AppFontSize(),
+    password_label_height: s32 = 0
+    content_height: s32 = 0
+    // The scrollbar narrows the child clip. Measure again at that width before
+    // opening the scroll scope, so wrapping, content height and controls agree.
+    for pass: 0..1 {
+        content_height = AppScale(16)
+        review = ""
+        if TelegramAccountReviewText(view.details, content_width, review_display[:]) {
+            review = TextUntilNul(review_display[:])
+        }
+        paragraphs[2] = review
+        for index: 0..2 {
+            paragraph_heights[index] = 0
+            if paragraphs[index].count > 0 {
+                prepared := PrepareText(TextProps.{.text = paragraphs[index], .font = AppFontSize(),
+                        .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
+                        .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
+                paragraph_heights[index] = cast(s32)prepared.bounds.height + AppScale(16)
+                content_height += paragraph_heights[index]
+            }
+        }
+        if view.password != null {
+            prepared := PrepareText(TextProps.{.text = password_label, .font = AppFontSize(),
                     .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
                     .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
-            paragraph_heights[index] = cast(s32)prepared.bounds.height + AppScale(16)
-            content_height += paragraph_heights[index]
+            password_label_height = cast(s32)prepared.bounds.height + AppScale(8)
+            content_height += password_label_height + AppScale(64)
         }
-    }
-    password_label_height: s32 = 0
-    if view.password != null {
-        prepared := PrepareText(TextProps.{.text = password_label, .font = AppFontSize(),
-                .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
-                .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
-        password_label_height = cast(s32)prepared.bounds.height + AppScale(8)
-        content_height += password_label_height + AppScale(64)
-    }
-    for action: cast(s32)1..7 {
-        if TelegramAccountActionAllowed(view, action) {
-            content_height += AppScale(56)
+        for action: cast(s32)1..7 {
+            if TelegramAccountActionAllowed(view, action) {
+                content_height += AppScale(56)
+            }
+        }
+        if pass == 0 && cast(float32)content_height > frame.layout.content.height {
+            narrowed := ScrollContentBounds(frame.layout.content, true, scroll_metrics)
+            content_width = cast(s32)narrowed.width
+        } else {
+            break
         }
     }
     scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)76601,
             .bounds = frame.layout.content, .content_height = content_height,
-            .scroll_offset = view.scroll_offset, .scale = MetricsScale()})
+            .scroll_offset = view.scroll_offset, .scale = MetricsScale(),
+            .metrics = scroll_metrics})
     view.scroll_offset = scroll.scroll_offset
     result: s32 = 0
     if scroll.opened {

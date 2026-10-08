@@ -3,6 +3,7 @@
 #include "tree.h"
 #include "tree_input.h"
 #include "paint_queue.h"
+#include "scroll_device.h"
 #include "text_buffers.h"
 #include "metrics.h"
 #include <assert.h>
@@ -66,6 +67,7 @@ static int32_t render(InnerBreeze *app, TelegramAccountView *view)
     PaintClear(app->ui.session);
     FrameTextReset(&app->ui.frame_text);
     TreeStart(app->ui.session, 1, (Rectangle){0, 0, app->ui.view_width, app->ui.view_height});
+    BeginScrollFrame(app->ui.session, (Vector2){0, 0}, false, false, false, 0, 1.0);
     int32_t action = telegram_account_DrawTelegramAccount(app, view);
     assert(TreeFinish(app->ui.session));
     for (int32_t i = 0; i < PendingPaintCount(app->ui.session); ++i) {
@@ -217,6 +219,109 @@ static void assert_complete_fingerprint_paint(InnerBreeze *app, TelegramAccountV
     AppMetricsConfigureFont(16);
 }
 
+static void assert_scrolled_review_paint(InnerBreeze *app, TelegramAccountView *view)
+{
+    static const char fingerprint[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    char details[1024];
+    int count = snprintf(details, sizeof(details),
+        "App: inbe\nAccount: %s\nBot: 123456 Telegram user: 700001\n"
+        "Node: %s\nAddress: https://api.waozi.xyz\n"
+        "Read and write only: private.inbe.v2.lumi\n"
+        "Request expires at (Unix seconds): 1791529031\n\n"
+        "Signing key fingerprint: %s\nEncryption key fingerprint: %s",
+        fingerprint, fingerprint, fingerprint, fingerprint);
+    assert(count > 0 && (size_t)count < sizeof(details));
+    static const struct {
+        int32_t width;
+        int32_t height;
+        int32_t font;
+        float scale;
+    } layouts[] = {
+        {320, 360, 16, 1.0f},
+        {400, 360, 24, 1.0f},
+        {900, 500, 24, 1.6f}
+    };
+    view->password = NULL;
+    view->allowed_actions = (1u << 4) | (1u << 6);
+    view->review_complete = true;
+    view->busy = false;
+    view->restore_failed = false;
+    view->details = StringView(details, (size_t)count);
+    for (size_t layout = 0; layout < sizeof(layouts) / sizeof(layouts[0]); ++layout) {
+        app->ui.view_width = layouts[layout].width;
+        app->ui.view_height = layouts[layout].height;
+        AppMetricsConfigure(layouts[layout].scale);
+        AppMetricsConfigureFont(layouts[layout].font);
+        view->review_seen = false;
+        view->scroll_offset = 0;
+        assert(render(app, view) == 0);
+        assert(!view->review_seen);
+        assert(node(app->ui.session, 76616).disabled);
+        int32_t review_node = -1;
+        TreeEntry review_entry = {0};
+        TreeEntry scroll_entry = {0};
+        for (int32_t index = 0; index < TreeCount(app->ui.session); ++index) {
+            TreeEntry entry = TreeNodeAt(app->ui.session, index);
+            if (entry.key == 76601) {
+                scroll_entry = entry;
+            }
+            if (contains(entry.semantic_label, "Signing key fingerprint:")) {
+                review_node = index;
+                review_entry = entry;
+            }
+        }
+        assert(review_node >= 0);
+        assert(scroll_entry.clips_children);
+        assert(scroll_entry.child_clip.width < scroll_entry.bounds.width);
+        assert(review_entry.bounds.x + review_entry.bounds.width <=
+               scroll_entry.child_clip.x + scroll_entry.child_clip.width);
+        size_t digits = 0;
+        for (int32_t index = 0; index < PendingPaintCount(app->ui.session); ++index) {
+            PaintCommand paint = PendingPaintAt(app->ui.session, index);
+            if (paint.node != review_node || paint.value.length == 0) {
+                continue;
+            }
+            assert(paint.x >= scroll_entry.child_clip.x);
+            assert(paint.x + MeasureGlyphWidth(paint.value, paint.font, StringView("", 0)) <=
+                   scroll_entry.child_clip.x + scroll_entry.child_clip.width);
+            size_t offset = 0;
+            while (offset < paint.value.length) {
+                size_t end = offset;
+                while (end < paint.value.length && paint.value.data[end] != ' ') {
+                    ++end;
+                }
+                bool group = end - offset == 4;
+                for (size_t byte = offset; byte < end; ++byte) {
+                    group = group && hex_digit((unsigned char)paint.value.data[byte]);
+                }
+                if (group) {
+                    for (size_t byte = offset; byte < end; ++byte) {
+                        assert(digits < 256);
+                        assert(paint.value.data[byte] == fingerprint[digits % 64]);
+                        ++digits;
+                    }
+                }
+                offset = end + 1;
+            }
+        }
+        assert(digits == 256);
+        assert(view->details.length == (size_t)count);
+        assert(memcmp(view->details.data, details, (size_t)count) == 0);
+        assert(strcmp((char *)view->seen_review_details, details) == 0);
+        view->scroll_offset = 100000;
+        assert(render(app, view) == 0);
+        assert(view->review_seen);
+        TreeEntry approve = node(app->ui.session, 76616);
+        assert(!approve.disabled);
+        assert(approve.bounds.x + approve.bounds.width <= approve.clip.x + approve.clip.width);
+        TreeEntry cancel = node(app->ui.session, 76614);
+        assert(cancel.bounds.x + cancel.bounds.width <= cancel.clip.x + cancel.clip.width);
+    }
+    AppMetricsConfigure(1.0f);
+    AppMetricsConfigureFont(16);
+}
+
 int main(void)
 {
     TelegramAccountPassword password = {0};
@@ -298,6 +403,7 @@ int main(void)
     view.review_complete = false;
     assert(!telegram_account_TelegramAccountApprovalReady(&view, true));
     assert_complete_fingerprint_paint(&app, &view);
+    assert_scrolled_review_paint(&app, &view);
     assert(SessionClose(app.ui.session));
     puts("Telegram account visible label, complete fingerprints, masked passphrase, consent and cancel checks passed");
     return 0;
