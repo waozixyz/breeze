@@ -896,6 +896,8 @@ launcher-policy-test: $(ZI2C_BIN)
 launcher-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/launcher_ui_test.py $(abspath $(TARGET))
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/launcher_ui_test.py $(abspath $(TARGET)) --dock-only
 
 test: launcher-policy-test
 

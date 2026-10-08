@@ -19,6 +19,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
 parser.add_argument("--drag-only", action="store_true")
+parser.add_argument("--dock-only", action="store_true")
 parser.add_argument("--with-tray", action="store_true",
                     help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
@@ -132,6 +133,15 @@ with contextlib.ExitStack() as stack:
                 command("xdotool", "windowmove", window, "0", "0")
                 command("xdotool", "windowfocus", window)
                 time.sleep(.8)
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    image = capture(window, name + "-ready")
+                    extrema = image.getextrema()
+                    if image.size == (width, height) and any(low != high for low, high in extrema):
+                        break
+                    time.sleep(.1)
+                else:
+                    raise AssertionError("App did not render its resized window")
                 yield window, log_path
                 assert app.poll() is None, log_path.read_text()
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
@@ -142,6 +152,69 @@ with contextlib.ExitStack() as stack:
                 raise
             finally:
                 stop(app)
+
+    if arguments.dock_only:
+        with tempfile.TemporaryDirectory(prefix="inbe-dock-") as temporary:
+            profile = Path(temporary)
+            with application(profile, "dock-initialize"):
+                with sqlite3.connect(profile / "inbe.db") as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+            routes = [12, 1, 2, 3, 11]
+            seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
+                           "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                           "main_tab": 3, "tutorial_seen": 1, "habits_guide_seen": 1,
+                           "theme": 9, "theme_source": 0, "theme_mode": 2,
+                           "cells_auto_update": 0, "apps_last_update_check": 1900000000})
+            cases = [(390, 844, 0, 10, count) for count in (3, 4, 5)]
+            cases += [(320, 844, 0, 10, 5), (390, 844, 4, 10, 5),
+                      (390, 844, 0, 15, 5), (900, 500, 1, 10, 5),
+                      (900, 500, 3, 10, 5)]
+            screens = {12: 23, 1: 11, 2: 0, 3: 16, 11: 22}
+            for width, height, placement, zoom, count in cases:
+                name = f"dock-{width}-{height}-{placement}-{zoom}-{count}"
+                seed(profile, {"navigation_placement": placement, "ui_scale": zoom,
+                               "main_tab": 3, "launcher_favorite_count": count} |
+                     {f"launcher_favorite_{i}": route for i, route in enumerate(routes[:count])})
+                with application(profile, name, width, height) as (window, log):
+                    image = capture(window, name)
+                    scale = zoom / 10
+                    vertical = placement in (1, 3)
+                    if vertical:
+                        step = min(int(84 * scale), int((height - 36 * scale) / (count + 1)))
+                        item_height = step * 72 // 84
+                        points = [(44 if placement == 1 else width - 44,
+                                   int(24 * scale + i * step + item_height / 2))
+                                  for i in range(count)]
+                        points.append((points[0][0], int(height - 12 * scale - step + item_height / 2)))
+                    else:
+                        margin = min(int(12 * scale), width // 16)
+                        gap = min(int(8 * scale), (width - margin * 2) // ((count + 1) * 4))
+                        item_width = min(int(144 * scale), (width - margin * 2 - gap * count) // (count + 1))
+                        group_width = (count + 1) * (item_width + gap) - gap
+                        start = (width - group_width) / 2
+                        y = int(42 * scale) if placement == 4 else int(height - 42 * scale)
+                        points = [(int(start + i * (item_width + gap) + item_width / 2), y)
+                                  for i in range(count + 1)]
+                        edge = round(84 * scale) if placement == 4 else height
+                        strip = image.crop((round(12 * scale), edge - max(1, round(5 * scale)),
+                                            width - round(12 * scale), edge))
+                        assert all(low == high for low, high in strip.getextrema()), \
+                            f"{name}: dock still draws an underline or scrollbar"
+                    for route, point in zip(routes[:count], points):
+                        before = len(re.findall(r"ROUTE switch", log.read_text()))
+                        click(window, *point)
+                        transitions = re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())
+                        assert len(transitions) > before and int(transitions[-1]) == screens[route], \
+                            f"{name}: pin {route} is not reachable at {point}: {log.read_text()}"
+                    click(window, *points[-1])
+                    capture(window, name + "-apps")
+                    footer_y = height - (round(84 * scale) if not vertical and placement != 4 else 0) - round(36 * scale)
+                    click(window, 170 if vertical else width // 4, footer_y)
+                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
+                        f"{name}: Apps or its Profile action is unreachable"
+                    assert favorites(profile) == routes[:count], "Dock clicks changed pins"
+            print("Fitted dock: 3–5 pins, narrow windows, zoom, top/bottom and both rails passed")
+        raise SystemExit(0)
 
     layouts = ((900, 720), (390, 844))
     if arguments.layout == "desktop":
