@@ -6,6 +6,11 @@ Auth :: #import "auth";
 #import "async_client"
 #import "async_sync"
 #import "async_account"
+#import "delegated"
+#import "async_delegated"
+#import, file "delegate_store.zi";
+#import, file "delegate_storage_types.zi";
+#import, file "delegate_storage.zi";
 #import "net_http"
 #import "url"
 #import "byte_text_linux"
@@ -28,6 +33,12 @@ AsyncTime :: (out: *s64) -> s64 #foreign c "time";
 AsyncResponseCapacity :: 16777216;
 
 StoredOperation :: struct {
+    account_mode: s32
+    delegate_renewal_only: bool
+    delegate: DelegateMaterial
+    delegate_client: DelegateClient
+    delegate_request: PendingDelegate
+    delegate_batch: DelegateBatch
     account: SyncAccount
     session: Session
     client: Client
@@ -52,7 +63,27 @@ StoredOperation :: struct {
 }
 
 StoredIdentityCurrent :: (operation: *StoredOperation) -> bool {
-    if operation == null ||
+    if operation == null {
+        return false
+    }
+    if operation.account_mode == AccountModeDelegate {
+        if StoredAccountMode() != AccountModeDelegate ||
+            operation.delegate.generation != StoredDelegateGeneration() ||
+            (operation.delegate_renewal_only && StoredDelegateRenewalMatches(operation.delegate_client) == 0) ||
+            (!operation.delegate_renewal_only && StoredDelegateClientMatches(operation.delegate_client) == 0) {
+            return false
+        }
+        if operation.connected_only {
+            normalized: [512]u8
+            if storage_get_setting_int("sync_enabled", 0) == 0 ||
+                !NormalizeUrl(storage_get_setting_text("sync_server_url"), normalized[:]) ||
+                TextUntilNul(normalized[:]) != TextUntilNul(operation.server[:]) {
+                return false
+            }
+        }
+        return true
+    }
+    if operation.account_mode != AccountModeOwner || StoredAccountMode() != AccountModeOwner ||
         storage_get_setting_text("sync_public_id") !=
             AccountField(*operation.account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) {
         return false
@@ -77,6 +108,7 @@ ReleaseStoredOperation :: (operation: *StoredOperation) {
         AsyncFree(cast(*void)operation.response)
         operation.response = null
     }
+    WipeDelegateMaterial(*operation.delegate)
     WipeDeviceKey(*operation.material)
     SyncCryptoWipe(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
     operation.active = false
@@ -86,7 +118,9 @@ CancelStoredOperation :: (operation: *StoredOperation) {
     if operation == null || !operation.active {
         return
     }
-    if operation.is_sync {
+    if operation.account_mode == AccountModeDelegate {
+        CancelDelegate(*operation.delegate_request)
+    } else if operation.is_sync {
         CancelSync(*operation.sync)
     } else if operation.is_deletion {
         CancelDeletion(*operation.deletion)
@@ -98,17 +132,42 @@ CancelStoredOperation :: (operation: *StoredOperation) {
 }
 
 PrepareStoredOperation :: (operation: *StoredOperation, server: string,
-    connected_only: bool) -> bool {
+    connected_only: bool, renewal_only: bool = false) -> bool {
     if operation == null || operation.active {
         return false
     }
     operation.* = StoredOperation.{}
     operation.connected_only = connected_only
+    operation.account_mode = StoredAccountMode()
+    operation.delegate_renewal_only = renewal_only
     operation.result = cast(s32)AuthResult.AUTH_INVALID_URL
     if !NormalizeUrl(server, operation.server[:]) {
         return false
     }
     operation.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    if operation.account_mode == AccountModeDelegate {
+        if renewal_only {
+            if !LoadDelegateForRenewal(*operation.delegate) ||
+                !OpenDelegateRenewalClient(TextUntilNul(operation.server[:]), *operation.delegate,
+                    *operation.delegate_client) || !StoredIdentityCurrent(operation) {
+                ReleaseStoredOperation(operation)
+                return false
+            }
+            // Renewal-only always obtains a fresh server challenge/session;
+            // it cannot reuse an old credential to extend identity expiry.
+            ClearDelegateSession(*operation.delegate.session)
+            operation.active = true
+            return true
+        }
+        if !LoadStoredDelegate(*operation.delegate) ||
+            !OpenDelegateClient(TextUntilNul(operation.server[:]), *operation.delegate,
+                *operation.delegate_client) || !StoredIdentityCurrent(operation) {
+            ReleaseStoredOperation(operation)
+            return false
+        }
+        operation.active = true
+        return true
+    }
     if sync_account_load(*operation.account) == 0 ||
         !AppCopyText(storage_sync_client_id(), operation.client_id[:]) ||
         !OpenAccountClient(TextUntilNul(operation.server[:]), *operation.account,
@@ -131,6 +190,20 @@ BeginStoredSync :: (operation: *StoredOperation, server: string,
         return false
     }
     operation.is_sync = true
+    if operation.account_mode == AccountModeDelegate {
+        operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        operation.payload = BuildDelegateStoragePayload(operation.delegate_client, *operation.delegate_batch)
+        operation.response = cast(*u8)AsyncAllocate(AsyncResponseCapacity)
+        if operation.payload == null || operation.response == null ||
+            !BeginDelegateRequest(*operation.delegate_request, operation.delegate_client,
+                *operation.delegate.session, AsyncTime(null), transport,
+                TextFromCString(operation.payload),
+                BytesFromPointer(operation.response, AsyncResponseCapacity)) {
+            ReleaseStoredOperation(operation)
+            return false
+        }
+        return true
+    }
     operation.result = cast(s32)AuthResult.AUTH_SIGN_FAILED
     if !LoadOrCreateDeviceKey(*operation.material) {
         ReleaseStoredOperation(operation)
@@ -163,6 +236,12 @@ BeginStoredSync :: (operation: *StoredOperation, server: string,
 BeginStoredRequest :: (operation: *StoredOperation, server: string,
     transport: AsyncTransport, method: string, path: string, body: string,
     output: []u8, connected_only: bool, session_override: *Auth.Session = null) -> bool {
+    if StoredAccountMode() == AccountModeDelegate {
+        if operation != null {
+            operation.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        return false
+    }
     if !PrepareStoredOperation(operation, server, connected_only) {
         return false
     }
@@ -192,6 +271,12 @@ BeginStoredRequest :: (operation: *StoredOperation, server: string,
 
 BeginStoredDelete :: (operation: *StoredOperation, server: string,
     transport: AsyncTransport) -> bool {
+    if StoredAccountMode() == AccountModeDelegate {
+        if operation != null {
+            operation.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        return false
+    }
     if !PrepareStoredOperation(operation, server, true) {
         return false
     }
@@ -206,8 +291,19 @@ BeginStoredDelete :: (operation: *StoredOperation, server: string,
 
 BeginStoredSession :: (operation: *StoredOperation, server: string,
     transport: AsyncTransport) -> bool {
-    if !PrepareStoredOperation(operation, server, true) {
+    if !PrepareStoredOperation(operation, server, true, true) {
         return false
+    }
+    if operation.account_mode == AccountModeDelegate {
+        operation.response = cast(*u8)AsyncAllocate(AsyncResponseCapacity)
+        if operation.response == null ||
+            !BeginDelegateSession(*operation.delegate_request, operation.delegate_client,
+                *operation.delegate.session, AsyncTime(null), transport,
+                BytesFromPointer(operation.response, AsyncResponseCapacity)) {
+            ReleaseStoredOperation(operation)
+            return false
+        }
+        return true
     }
     if !BeginSession(*operation.request, operation.client, *operation.session,
         AsyncTime(null), transport) {
@@ -230,11 +326,43 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
         CancelStoredOperation(operation)
         return true
     }
+    if operation.account_mode == AccountModeDelegate {
+        if !PollDelegate(*operation.delegate_request) {
+            return false
+        }
+        operation.result = cast(s32)operation.delegate_request.result
+        // A transport callback may switch context while PollDelegate runs.
+        if !StoredIdentityCurrent(operation) {
+            CancelStoredOperation(operation)
+            return true
+        }
+        if operation.result == cast(s32)AuthResult.AUTH_OK {
+            if !SaveStoredDelegateSession(*operation.delegate) {
+                operation.result = cast(s32)AuthResult.AUTH_FAILED
+            } else if operation.is_sync {
+                if ApplyDelegateStorageResponse(operation.delegate_client,
+                    *operation.delegate_batch, TextUntilNul(
+                        BytesFromPointer(operation.response, AsyncResponseCapacity))) == 0 {
+                    operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+                } else {
+                    operation.changed = storage_last_sync_changed()
+                }
+            }
+        } else if operation.result == cast(s32)AuthResult.AUTH_FAILED {
+            ClearDelegate()
+        }
+        ReleaseStoredOperation(operation)
+        return true
+    }
     if operation.is_sync {
         if !PollSync(*operation.sync) {
             return false
         }
         operation.result = cast(s32)operation.sync.result
+        if !StoredIdentityCurrent(operation) {
+            CancelStoredOperation(operation)
+            return true
+        }
         if operation.result == cast(s32)AuthResult.AUTH_OK {
             if storage_apply_sync_response_json(TextUntilNul(
                 BytesFromPointer(operation.response, AsyncResponseCapacity))) == 0 {
@@ -254,6 +382,11 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
             return false
         }
         operation.result = cast(s32)operation.request.result
+    }
+    // Owner requests can also switch identity inside a transport callback.
+    if !StoredIdentityCurrent(operation) {
+        CancelStoredOperation(operation)
+        return true
     }
     if !operation.is_deletion && !operation.isolated_session {
         SaveSession(*operation.session)

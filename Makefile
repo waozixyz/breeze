@@ -430,7 +430,7 @@ DAOCHI_CLIENT_MODULES := $(wildcard build/packages/daochi-client/*.zi)
 ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
 KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
 KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
-KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c byte_text_linux.c \
+KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c authorization.c authorization_owner.c delegated.c async_delegated.c envelope.c byte_text_linux.c \
 	c_string.c client.c date_parse.c date_time.c events.c json_scan.c net_http_curl_linux.c \
 	net_ws_curl_linux.c social.c sync.c \
 	text.c text_buffer.c transaction.c update.c url.c wire.c)
@@ -605,7 +605,7 @@ WEB_TARGET := $(WEB_DIST_DIR)/index.html
 WEB_APP_SCRIPT := <script>window.__inbeRenderer="canvas";window.__inbeLoadApp("index.js?v=$(WEB_CACHE_BUSTER)")</script>
 WEB_JS_TARGET := $(WEB_DIST_DIR)/index.js
 WEB_BOOT_JS := src/web_boot.js
-WEB_HOST_JS := src/web_host.js scripts/browser_network.js
+WEB_HOST_JS := src/web_host.js scripts/browser_network.js scripts/telegram_host.js
 # Kryon's canvas hosts are Ziran modules on Ziran's web bridge; its runtime is the only JS they need.
 WEB_CANVAS_HOST_JS := $(ZIRAN_DIR)/web/ziran_web.js
 WEB_HOST_JS += $(WEB_CANVAS_HOST_JS)
@@ -798,6 +798,26 @@ sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 		sh tests/sync_account_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
 
 test: sync-account-crypto-zi-test
+
+# Exercise the packaged Ziran crypto API against the exact archive used by
+# Inbe, including ML-KEM round trips, tampering and short-buffer rejection.
+.PHONY: liboqs-crypto-test
+liboqs-crypto-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@rm -rf $(BUILD_DIR)/liboqs-crypto-test/generated
+	@mkdir -p $(BUILD_DIR)/liboqs-crypto-test/generated
+	@$(ZIRAN_BIN) build --target=c --root $(OQS_DIR)/src \
+		--module-path $(OQS_DIR)/tests --module-path $(ZIRAN_DIR)/std \
+		--entry oqs_test:main -o $(BUILD_DIR)/liboqs-crypto-test/generated \
+		$(OQS_DIR)/tests/oqs_test.zi
+	@$(CC) -std=c99 -O2 -I$(ZIRAN_DIR)/include \
+		-I$(BUILD_DIR)/liboqs-crypto-test/generated \
+		$(BUILD_DIR)/liboqs-crypto-test/generated/*.c $(LIBOQS_A) \
+		-lm -lpthread -o $(BUILD_DIR)/liboqs-crypto-test/test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		$(BUILD_DIR)/liboqs-crypto-test/test
+	@echo "Inbe liboqs: ML-DSA-44 and ML-KEM-768 checks passed"
+
+test: liboqs-crypto-test
 
 .PHONY: sync-account-zi-test
 sync-account-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
@@ -3023,3 +3043,39 @@ device-key-wasm-test: $(ZI2C_BIN)
 
 test: device-key-test
 web-smoke-test web-canvas-smoke-test: device-key-wasm-test
+
+.PHONY: telegram-authorization-test telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+
+telegram-bridge-test:
+	@sh tests/telegram_bridge_test.sh
+
+telegram-host-test:
+	@sh tests/telegram_host_test.sh
+
+telegram-entry-protocol-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/telegram_entry_protocol_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+telegram-account-flow-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/telegram_account_flow_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+telegram-account-ui-test: $(ZIRAN_BIN)
+	@sh tests/telegram_account_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/lumi_authorization_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+delegate-account-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/delegate_account_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+delegate-secret-cleanup-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/delegate_secret_cleanup_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+storage-delegate-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/storage_delegate_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/lumi_delegate_scope_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+
+test: telegram-authorization-test

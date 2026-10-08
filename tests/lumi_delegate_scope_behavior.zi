@@ -1,0 +1,222 @@
+#import "authorization"
+#import "delegated"
+#import "envelope"
+#import "auth"
+#import "client"
+#import "async_client"
+#import "net_http"
+#import "wire"
+#import "transaction"
+#import "text_buffer"
+#import "byte_text_linux"
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/device_key.zi";
+#import, file "../src/storage/daochi_account.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account_sign.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/sql_query.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/app/text_buffers.zi";
+
+c :: #system_library "c";
+TestTime :: (out: *s64) -> s64 #foreign c "time";
+NodeID :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+GrantID :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+RequestID :: "cccccccccccccccccccccccccccccccc"
+Server :: "https://node.example"
+CapsuleCapacity :: 65536
+
+owner: SyncAccount;
+material: DelegateMaterial;
+restored: DelegateMaterial;
+answer: [32768]u8;
+capsule: [CapsuleCapacity]u8;
+key: [32]u8;
+
+Expected :: (user: s64) -> DelegateInstallExpectation {
+    result: DelegateInstallExpectation
+    result.request_id = RequestID
+    result.grant_id = GrantID
+    result.app_id = "inbe"
+    result.node_id = NodeID
+    result.audience = Server
+    result.server_url = Server
+    result.bot_id = 42
+    result.telegram_id = user
+    return result
+}
+
+MakeAnswer :: (user: s64) -> bool {
+    now := TestTime(null)
+    grant: Grant
+    grant.version = 1
+    grant.account_id = TextUntilNul(owner.public_id[:])
+    grant.grant_id = GrantID
+    grant.request_id = RequestID
+    grant.app_id = "inbe"
+    grant.client_id = TextUntilNul(material.client_id[:])
+    grant.node_id = NodeID
+    grant.audience = Server
+    grant.signing_key = TextUntilNul(material.signing.public_hex[:])
+    grant.encryption_key = TextUntilNul(material.encryption_hex[:])
+    grant.issued_at = now
+    grant.not_before = now
+    grant.expires_at = now + 3600
+    grant.nonce = "dddddddddddddddddddddddddddddddd"
+    grant.bot_id = 42
+    grant.telegram_id = user
+    scope: [1]GrantScope
+    scope[0] = GrantScope.{LumiPrivateCollection, "private", true, true, LumiPrivateKeyID, ""}
+    envelope: [4096]u8
+    if !SealCollectionKey(grant, scope[0], key[:], envelope[:]) {
+        return false
+    }
+    scope[0].key_envelope = TextUntilNul(envelope[:])
+    grant.scopes = scope[:]
+    message: [8192]u8
+    signature: [4841]u8
+    grant_body: [20000]u8
+    if !BuildGrantMessage(grant, message[:]) ||
+        !SignStoredAccountMessage(cast(*void)*owner, TextUntilNul(message[:]), signature[:]) {
+        return false
+    }
+    grant.signature = TextUntilNul(signature[:])
+    if !BuildGrantBody(grant, grant_body[:]) {
+        return false
+    }
+    writer: Writer = .{answer[:], 0, true}
+    writer = WriteText(writer, "{\"credential\":{\"session_id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"grant_id\":\"")
+    writer = WriteText(writer, GrantID)
+    writer = WriteText(writer, "\",\"challenge\":\"ffffffffffffffffffffffffffffffff\",\"expires_at\":")
+    writer = WriteDecimal(writer, now + 300)
+    writer = WriteText(writer, "},\"grant\":")
+    writer = WriteText(writer, TextUntilNul(grant_body[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "owner_public_key", TextUntilNul(owner.public_key_hex[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    return writer.valid
+}
+
+#import, file "../src/storage/state.zi";
+#import, file "../src/cells/inbe_types.zi";
+#import, file "../src/cells/lumi_ui_types.zi";
+#import, file "../src/cells/lumi_types.zi";
+#import, file "../src/screens/elist_types.zi";
+#import, file "../src/screens/lumi_screen.zi";
+#import, file "../src/cells/lumi_online.zi";
+#import, file "../src/cells/module_host.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/cells/lumi_store.zi";
+
+#program_export
+Check :: () -> s32 {
+    data_init()
+    if storage_db_handle() == null || CreateSyncAccount(*owner) == 0 ||
+        !GenerateDelegateMaterial(*material) ||
+        !SetVerifiedDelegateIdentity(42, 7, TestTime(null) + 300) ||
+        !MakeAnswer(7) || !InstallAuthorizedDelegate(TextUntilNul(answer[:]), Expected(7), *material) {
+        return 1
+    }
+    app: InnerBreeze
+    app.enabled_apps = APP_LUMI | APP_LISTS | APP_HABITS | APP_DIARY | APP_PRACTICE
+    defer {
+        ClearDelegate()
+        WipeDelegateMaterial(*material)
+        SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    }
+    // A same-owner profile can contain unrelated private records. The scope
+    // boundary must leave them untouched and avoid loading them into tools.
+    storage_set_setting_text("cell.diary.2026-10-08", "{\"text\":\"private diary sentinel\"}")
+    storage_set_setting_text("cell.feedback.scope-fixture", "{\"text\":\"private feedback sentinel\"}")
+    rows := db_select_int64_text("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%'", -1)
+    queued := db_select_int64_text("SELECT COUNT(*) FROM sync_outbox", -1)
+    if StoredDelegateAvailable() == 0 || !LumiHistoryAvailable() ||
+        !LumiContextAvailable(*app) || LumiToolsAvailable() {
+        return 2
+    }
+    denied: [18]string = .["ReadLumiTaskHost", "ReadLumiSuggestionTaskHost",
+        "ReadLumiHabitHost", "ReadLumiSuggestionHabitHost", "LumiTaskCountHost",
+        "SetLumiHabitChoiceHost", "SetLumiDiaryChoiceHost", "PerformLumiActionHost",
+        "LumiFeedbackChoiceHost", "ReadLumiDonationHost", "LumiDonationActionHost",
+        "ReadDiaryHost", "DeleteAccountHost", "ExportAccountHost", "PayHost",
+        "ReadLumiProgressHost", "ReadLumiOwnerTokenHost", "unknown"]
+    for name: denied {
+        if LumiDelegateHostAllowed(name) || LumiHostAllowed(*app, name) { return 3 }
+    }
+    allowed: [11]string = .["LumiFirstVisibleRowHost", "LumiRowOffsetHost", "LumiLoadOlderHost",
+        "ReadLumiToolsHost", "ReadLumiUiHost", "WriteLumiUiHost", "LumiLocaleHost",
+        "LumiViewLocaleHost", "ReadLumiChatRowHost", "AppendLumiChatHost", "StartLumiOnlineHost"]
+    for name: allowed {
+        if !LumiDelegateHostAllowed(name) || !LumiHostAllowed(*app, name) { return 4 }
+    }
+    archived := LumiChatRow.{.text = "retained archived card text", .kind = LUMI_CHAT_FEEDBACK,
+        .payload = "private feedback reference"}
+    visible := LumiVisibleRow(archived)
+    if visible.text != archived.text || visible.kind != LUMI_CHAT_TEXT || visible.payload.count != 0 {
+        return 14
+    }
+    lumi_tasks.item_count = 9
+    lumi_choosing_diary = true
+    lumi_choosing_habit = true
+    lumi_online_queued = true
+    LumiPrepareTools(*app)
+    if lumi_ui.available_apps != APP_LUMI || lumi_ui.task_count != 0 || lumi_ui.habit_count != 0 ||
+        lumi_tasks.item_count != 0 || lumi_ui.choosing_habit || lumi_ui.choosing_diary ||
+        lumi_ui.waiting || LumiOnlineWaiting() {
+        return 5
+    }
+    if LumiOnlineStart("synthetic Mini composer message") || lumi_online_queued ||
+        lumi_online_stage != 0 || lumi_online_messages.count != 0 {
+        return 6
+    }
+    app.enabled_apps &= ~APP_LUMI
+    LumiPrepareTools(*app)
+    if LumiContextAvailable(*app) || LumiHostAllowed(*app, "ReadLumiChatRowHost") ||
+        lumi_ui.chat_count != 0 || lumi_ui.available_apps != 0 {
+        return 7
+    }
+    app.enabled_apps |= APP_LUMI
+    stored_delegate.grant.expires_at = TestTime(null) - 1
+    LumiPrepareTools(*app)
+    if LumiHistoryAvailable() || LumiContextAvailable(*app) || LumiHostAllowed(*app, "ReadLumiChatRowHost") || lumi_ui.chat_count != 0 ||
+        lumi_ui.available_apps != 0 || lumi_count != 0 {
+        return 8
+    }
+    visible = LumiVisibleRow(archived)
+    if visible.text.count != 0 || visible.payload.count != 0 {
+        return 16
+    }
+    if db_select_int64_text("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%'", -1) != rows ||
+        db_select_int64_text("SELECT COUNT(*) FROM sync_outbox", -1) != queued {
+        return 9
+    }
+    ClearDelegate()
+    if LumiHostAllowed(*app, "ReadLumiChatRowHost") || LumiToolsAvailable() {
+        return 12
+    }
+    LeaveDelegateMode()
+    if !LumiToolsAvailable() || !LumiHistoryAvailable() || !LumiContextAvailable(*app) {
+        return 10
+    }
+    for name: denied {
+        if !LumiHostAllowed(*app, name) { return 13 }
+    }
+    visible = LumiVisibleRow(archived)
+    if visible.kind != archived.kind || visible.payload != archived.payload || visible.text != archived.text {
+        return 15
+    }
+    LumiPrepareTools(*app)
+    if lumi_ui.available_apps != (app.enabled_apps & CellsInstalledMask()) {
+        return 11
+    }
+    return 0
+}

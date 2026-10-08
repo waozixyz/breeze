@@ -9,11 +9,13 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     "$root/src/platform/android/android_lifecycle.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/gen" "$root/src/platform/android/android_lifecycle.zi" \

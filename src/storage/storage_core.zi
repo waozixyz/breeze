@@ -4,6 +4,7 @@
 #import "byte_text_linux"
 #import "string_range"
 #import "date_parse"
+#import "delegated"
 Scan :: #import "json_scan"
 #import, file "time_parts.zi";
 #import, file "setting_visitor.zi";
@@ -24,6 +25,15 @@ Scan :: #import "json_scan"
 #import, file "sync_crypto_chacha.zi";
 c :: #system_library "c";
 StorageCacheFlush :: (database: *void) -> s32 #foreign c "sqlite3_db_cacheflush";
+StorageDelegateMode :: #type () -> s32;
+StorageDelegateAvailable :: #type () -> s32;
+StorageDelegateKey :: #type (collection: string, key_id: string, out: *u8) -> s32;
+StorageDelegateBinding :: #type (client: DelegateClient) -> s32;
+storage_delegate_mode: StorageDelegateMode;
+storage_delegate_available: StorageDelegateAvailable;
+storage_delegate_key: StorageDelegateKey;
+storage_delegate_binding: StorageDelegateBinding;
+
 StorageSyncStatus :: struct {
     has_account: s32
     enabled: s32
@@ -49,7 +59,6 @@ sqlite3_get_autocommit :: (database: *void) -> s32 #foreign c "sqlite3_get_autoc
 sqlite3_db_mutex :: (database: *void) -> *void #foreign c "sqlite3_db_mutex";
 sqlite3_mutex_enter :: (mutex: *void) #foreign c "sqlite3_mutex_enter";
 sqlite3_mutex_leave :: (mutex: *void) #foreign c "sqlite3_mutex_leave";
-sqlite3_exec :: (database: *void, sql: string, callback: *void, arg: *void, error: **u8) -> s32 #foreign c "sqlite3_exec";
 sqlite3_errmsg :: (database: *void) -> *u8 #foreign c "sqlite3_errmsg";
 sqlite3_free :: (ptr: *void) #foreign c "sqlite3_free";
 sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
@@ -273,7 +282,9 @@ storage_schedule_persist :: () {
         if storage_db_handle() != null {
             StorageCacheFlush(storage_db_handle())
             if sqlite3_get_autocommit(storage_db_handle()) != 0 {
-                sqlite3_exec(storage_db_handle(), "PRAGMA wal_checkpoint(TRUNCATE)", null, null, null)
+                checkpoint: [64]u8
+                unused AppCopyText("PRAGMA wal_checkpoint(TRUNCATE)", checkpoint[:])
+                unused SqliteExec(storage_db_handle(), *checkpoint[0])
                 StorageCacheFlush(storage_db_handle())
             }
         }
@@ -287,9 +298,15 @@ storage_enqueue_sync_entity :: (entity_type: string, entity_id: string, local_da
     if storage_db_handle() == null || entity_type.count == 0 || entity_id.count == 0 {
         return 0
     }
-    sql_cx1: [184] u8
-    AppCopyText("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at", sql_cx1[:])
-    if SqlitePrepare(storage_db_handle(), *sql_cx1[0], -1, *stmt, null) != SQLITE_OK {
+    query := "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at"
+    if entity_type == "cell_record" {
+        // Cell receipts name the exact submitted sequence. Replacing a cell
+        // allocates a fresh sequence even for edits within the same second.
+        // Owner habit/session saves retain their existing queue behaviour.
+        query = "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4)"
+    }
+    if SqlitePrepareText(storage_db_handle(), query,
+        -1, *stmt, null) != SQLITE_OK {
         return 0
     }
     bind_text(stmt, 1, entity_type)
@@ -1285,6 +1302,13 @@ storage_encrypted_record_id :: (entity_type: string, entity_id: string, local_da
 }
 
 storage_private_record_key_for_context :: (context: string, out: *u8) -> s32 {
+    if out == null {
+        return 0
+    }
+    SyncCryptoWipe(out, 32)
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        return 0
+    }
     private_key_hex: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)
     // The whole account private key (an ML-DSA-44 secret key) feeds the HMAC.
     private_key: [(SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2] u8
@@ -1314,6 +1338,17 @@ storage_private_collection_key :: (collection: string, key_id: string, out: *u8)
         return 0
     }
     SyncCryptoWipe(out, 32)
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        if collection != LumiPrivateCollection || key_id != LumiPrivateKeyID ||
+        storage_delegate_key == null {
+            return 0
+        }
+        result := storage_delegate_key(collection, key_id, out)
+        if result == 0 {
+            SyncCryptoWipe(out, 32)
+        }
+        return result
+    }
     if collection == LumiPrivateCollection {
         if key_id != LumiPrivateKeyID {
             return 0
@@ -1699,6 +1734,12 @@ storage_has_orphan_habit_days :: () -> s32 {
 
 #program_export
 storage_has_sync_account :: () -> s32 {
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        if storage_delegate_available == null {
+            return 0
+        }
+        return storage_delegate_available()
+    }
     public_id: string = storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY)
     public_key: string = storage_get_setting_text(STORAGE_SYNC_PUBLIC_KEY_KEY)
     private_key: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)

@@ -1,0 +1,592 @@
+#import "wire"
+#import "authorization"
+#import "transaction"
+#import "text_buffer"
+#import "json_scan"
+#import "byte_text_linux"
+#import, file "../src/app/telegram_entry_protocol.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/storage/device_key.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+
+c :: #system_library "c";
+EntryTestSetClock :: (now: s64) #foreign c;
+EntryTestSetSigningDelay :: (delay: s64) #foreign c;
+EntryCheckSignature :: (signature: *u8, public_key: *u8,
+    message: *u8, length: usize) -> s32 #foreign c "crypto_ed25519_check";
+
+FixtureNow :: 1700000000
+FixtureAudience :: "https://api.waozi.xyz"
+FixtureEntry :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FixtureNode :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+FixtureAccount :: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+FixtureDigest :: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+FixtureRaw :: "user=%7B%22id%22%3A1234%7D&query_id=hello+world&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&signature=test%2Bvalue&auth_date=1700000000"
+
+checks: s32;
+failure: s32;
+material: DelegateMaterial;
+environment: TelegramEnvironment;
+challenge: TelegramEntryChallenge;
+identity: TelegramEntryIdentity;
+
+expect :: (condition: bool) {
+    checks += 1
+    if !condition && failure == 0 {
+        failure = checks
+    }
+}
+
+environment_json :: (output: []u8, audience: string, bot: s64, kind: string) -> string {
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"app_id\":\"inbe\",\"node_id\":")
+    writer = AppendJsonQuoted(writer, FixtureNode)
+    writer = WriteText(writer, ",\"audience\":")
+    writer = AppendJsonQuoted(writer, audience)
+    writer = WriteText(writer, ",\"bot_id\":")
+    writer = WriteDecimal(writer, bot)
+    writer = WriteText(writer, ",\"environment\":")
+    writer = AppendJsonQuoted(writer, kind)
+    writer = WriteByte(writer, cast(u8)125)
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+challenge_json :: (info: *TelegramEntryChallenge, output: []u8) -> string {
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"entry_id\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.entry_id[:]))
+    writer = WriteText(writer, ",\"mode\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.mode[:]))
+    writer = WriteText(writer, ",\"app_id\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.app_id[:]))
+    writer = WriteText(writer, ",\"node_id\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.node_id[:]))
+    writer = WriteText(writer, ",\"audience\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.audience[:]))
+    writer = WriteText(writer, ",\"bot_id\":")
+    writer = WriteDecimal(writer, info.bot_id)
+    writer = WriteText(writer, ",\"challenge\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(info.challenge[:]))
+    writer = WriteText(writer, ",\"expires_at\":")
+    writer = WriteDecimal(writer, info.expires_at)
+    writer = WriteByte(writer, cast(u8)125)
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+identity_json :: (entry: *TelegramEntryIdentity, output: []u8) -> string {
+    info: [4096]u8
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"info\":")
+    writer = WriteText(writer, challenge_json(*entry.info, info[:]))
+    writer = WriteText(writer, ",\"telegram_id\":")
+    writer = WriteDecimal(writer, entry.telegram_id)
+    writer = WriteText(writer, ",\"account_id\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.account_id[:]))
+    writer = WriteText(writer, ",\"status\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.status[:]))
+    writer = WriteText(writer, ",\"client_id\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.client_id[:]))
+    writer = WriteText(writer, ",\"signing_key\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.signing_key[:]))
+    writer = WriteText(writer, ",\"encryption_key\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.encryption_key[:]))
+    writer = WriteText(writer, ",\"init_digest\":")
+    writer = AppendJsonQuoted(writer, TextUntilNul(entry.init_digest[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+read_identity :: (json: string, output: *TelegramEntryIdentity) -> bool {
+    return ReadTelegramEntryIdentity(json, *challenge, TextUntilNul(material.client_id[:]),
+        TextUntilNul(material.signing.public_hex[:]), TextUntilNul(material.encryption_hex[:]),
+        FixtureNow, output)
+}
+
+setup :: () {
+    EntryTestSetClock(FixtureNow)
+    expect(GenerateDelegateMaterial(*material))
+    unused AppCopyText("inbe", environment.app_id[:])
+    unused AppCopyText(FixtureNode, environment.node_id[:])
+    unused AppCopyText(FixtureAudience, environment.audience[:])
+    environment.bot_id = 123456
+    unused AppCopyText(FixtureEntry, challenge.entry_id[:])
+    unused AppCopyText("connect", challenge.mode[:])
+    unused AppCopyText("inbe", challenge.app_id[:])
+    unused AppCopyText(FixtureNode, challenge.node_id[:])
+    unused AppCopyText(FixtureAudience, challenge.audience[:])
+    unused AppCopyText("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", challenge.challenge[:])
+    challenge.bot_id = 123456
+    challenge.expires_at = FixtureNow + 600
+    identity.info = challenge
+    identity.telegram_id = 1234
+    unused AppCopyText("verified", identity.status[:])
+    unused AppCopyText(TextUntilNul(material.client_id[:]), identity.client_id[:])
+    unused AppCopyText(TextUntilNul(material.signing.public_hex[:]), identity.signing_key[:])
+    unused AppCopyText(TextUntilNul(material.encryption_hex[:]), identity.encryption_key[:])
+    unused AppCopyText(FixtureDigest, identity.init_digest[:])
+}
+
+check_environment :: () {
+    json: [4096]u8
+    result: TelegramEnvironment
+    valid := environment_json(json[:], FixtureAudience, 123456, "production")
+    expect(ReadTelegramEnvironment(valid, FixtureAudience, *result))
+    expect(result.bot_id == 123456 && TextUntilNul(result.node_id[:]) == FixtureNode)
+    expect(!ReadTelegramEnvironment(valid, "https://other.invalid", *result))
+    expect(result.bot_id == 0 && result.app_id[0] == cast(u8)0)
+    expect(!ReadTelegramEnvironment(environment_json(json[:], FixtureAudience, 0, "production"), FixtureAudience, *result))
+    expect(!ReadTelegramEnvironment(environment_json(json[:], FixtureAudience, 4503599627370496, "production"), FixtureAudience, *result))
+    expect(!ReadTelegramEnvironment(environment_json(json[:], FixtureAudience, 123456, "test"), FixtureAudience, *result))
+    bad_urls: [12]string = .["http://api.waozi.xyz", "https://user:password@api.waozi.xyz", "https://api.waozi.xyz?key=x",
+    "https://api.waozi.xyz#secret", "https://", "https://.invalid", "https://-host.invalid", "https://host-.invalid",
+    "https://host.invalid:0", "https://host.invalid:65536", "https://host.invalid:bad", "https://host.invalid\\evil"]
+    for url: bad_urls {
+        expect(!ReadTelegramEnvironment(environment_json(json[:], url, 123456, "production"), url, *result))
+    }
+    expect(ReadTelegramEnvironment(environment_json(json[:], "https://host.invalid:8443/api", 123456, "production"),
+        "https://host.invalid:8443/api", *result))
+    base := environment_json(json[:], FixtureAudience, 123456, "production")
+    document: [4096]u8
+    suffixes: [5]string = .[",\"bot_id\":123456}", ",\"BOT_ID\":123456}", ",\"bot_\\u0069d\":123456}",
+    ",\"bot_id\\u0000evil\":123456}", ",\"owner_private\":\"secret\"}"]
+    for suffix: suffixes {
+        writer := Writer.{document[:], 0, true}
+        writer = WriteText(writer, base[0:base.count - 1])
+        writer = WriteText(writer, suffix)
+        expect(!ReadTelegramEnvironment(TextUntilNul(document[:]), FixtureAudience, *result))
+    }
+    expect(!ReadTelegramEnvironment("{} true", FixtureAudience, *result))
+    expect(!ReadTelegramEnvironment("{}", FixtureAudience, *result))
+    expect(!ReadTelegramEnvironment(base, FixtureAudience, null))
+}
+
+check_challenge :: () {
+    json: [4096]u8
+    result: TelegramEntryChallenge
+    modes: [3]string = .["create", "restore", "connect"]
+    for mode: modes {
+        changed := challenge
+        unused AppCopyText(mode, changed.mode[:])
+        expect(ReadTelegramEntryChallenge(challenge_json(*changed, json[:]), FixtureEntry, *environment, FixtureNow, *result))
+    }
+    for index: 0..9 {
+        changed := challenge
+        if index == 0 {
+            changed.entry_id[0] = cast(u8)98
+        }
+        if index == 1 {
+            unused AppCopyText("unknown", changed.mode[:])
+        }
+        if index == 2 {
+            unused AppCopyText("other", changed.app_id[:])
+        }
+        if index == 3 {
+            changed.node_id[0] = cast(u8)99
+        }
+        if index == 4 {
+            unused AppCopyText("https://other.invalid", changed.audience[:])
+        }
+        if index == 5 {
+            changed.bot_id += 1
+        }
+        if index == 6 {
+            changed.challenge[0] = cast(u8)65
+        }
+        if index == 7 {
+            changed.expires_at = FixtureNow
+        }
+        if index == 8 {
+            changed.expires_at = FixtureNow + 601
+        }
+        if index == 9 {
+            changed.expires_at = 9007199254740991
+        }
+        expect(!ReadTelegramEntryChallenge(challenge_json(*changed, json[:]), FixtureEntry, *environment, FixtureNow, *result))
+        expect(result.expires_at == 0 && result.entry_id[0] == cast(u8)0)
+    }
+    valid := challenge_json(*challenge, json[:])
+    expect(!ReadTelegramEntryChallenge(valid, FixtureEntry, null, FixtureNow, *result))
+    expect(!ReadTelegramEntryChallenge(valid, FixtureEntry, *environment, 0, *result))
+    expect(!ReadTelegramEntryChallenge(valid, FixtureEntry, *environment, FixtureNow + 600, *result))
+    expect(!ReadTelegramEntryChallenge(valid, "bad", *environment, FixtureNow, *result))
+}
+
+check_identity :: () {
+    json: [8192]u8
+    result: TelegramEntryIdentity
+    expect(read_identity(identity_json(*identity, json[:]), *result))
+    expect(result.telegram_id == 1234 && TextUntilNul(result.account_id[:]) == "")
+    statuses: [4]string = .["verified", "bound", "consumed", "cancelled"]
+    for status: statuses {
+        changed := identity
+        unused AppCopyText(FixtureAccount, changed.account_id[:])
+        unused AppCopyText(status, changed.status[:])
+        expect(read_identity(identity_json(*changed, json[:]), *result))
+    }
+    for index: 0..14 {
+        changed := identity
+        if index == 0 {
+            changed.info.entry_id[0] = cast(u8)98
+        }
+        if index == 1 {
+            unused AppCopyText("create", changed.info.mode[:])
+        }
+        if index == 2 {
+            unused AppCopyText("other", changed.info.app_id[:])
+        }
+        if index == 3 {
+            changed.info.node_id[0] = cast(u8)99
+        }
+        if index == 4 {
+            unused AppCopyText("https://other.invalid", changed.info.audience[:])
+        }
+        if index == 5 {
+            changed.info.bot_id += 1
+        }
+        if index == 6 {
+            changed.info.challenge[0] = cast(u8)97
+        }
+        if index == 7 {
+            changed.info.expires_at -= 1
+        }
+        if index == 8 {
+            changed.telegram_id = 0
+        }
+        if index == 9 {
+            changed.telegram_id = 4503599627370496
+        }
+        if index == 10 {
+            unused AppCopyText("pending", changed.status[:])
+        }
+        if index == 11 {
+            changed.client_id[0] = ifx changed.client_id[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+        }
+        if index == 12 {
+            changed.signing_key[0] = ifx changed.signing_key[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+        }
+        if index == 13 {
+            changed.encryption_key[0] = ifx changed.encryption_key[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+        }
+        if index == 14 {
+            changed.init_digest[0] = cast(u8)65
+        }
+        expect(!read_identity(identity_json(*changed, json[:]), *result))
+        expect(result.telegram_id == 0 && result.client_id[0] == cast(u8)0)
+    }
+    changed := identity
+    unused AppCopyText("bound", changed.status[:])
+    expect(!read_identity(identity_json(*changed, json[:]), *result))
+}
+
+replace_value :: (json: string, at: s32, replacement: string, output: []u8) -> string {
+    finish := ValueEnd(json, at, 0)
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, json[0:at])
+    writer = WriteText(writer, replacement)
+    writer = WriteText(writer, json[finish:])
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+check_strict_nested_json :: () {
+    source: [8192]u8
+    document: [16384]u8
+    result: TelegramEntryIdentity
+    valid := identity_json(*identity, source[:])
+    info_at := FieldAt(valid, 0, "info")
+    info_end := ValueEnd(valid, info_at, 0)
+    suffixes: [5]string = .[",\"bot_id\":123456}", ",\"BOT_ID\":123456}",
+    ",\"bot_\\u0069d\":123456}", ",\"owner_private\":\"secret\"}", ",\"bot_id\\u0000x\":123456}"]
+    for suffix: suffixes {
+        writer := Writer.{document[:], 0, true}
+        writer = WriteText(writer, valid[0:info_end - 1])
+        writer = WriteText(writer, suffix)
+        writer = WriteText(writer, valid[info_end:])
+        expect(!read_identity(TextUntilNul(document[:]), *result))
+    }
+    outer_suffixes: [4]string = .[",\"telegram_id\":1234}", ",\"TELEGRAM_ID\":1234}",
+    ",\"init_\\u0064igest\":\"x\"}", ",\"recovery_private\":\"secret\"}"]
+    for suffix: outer_suffixes {
+        writer := Writer.{document[:], 0, true}
+        writer = WriteText(writer, valid[0:valid.count - 1])
+        writer = WriteText(writer, suffix)
+        expect(!read_identity(TextUntilNul(document[:]), *result))
+    }
+    wrong_numbers: [7]string = .["1234.0", "1e3", "-1", "\"1234\"", "null", "true", "9007199254740992"]
+    for number: wrong_numbers {
+        expect(!read_identity(replace_value(valid, FieldAt(valid, 0, "telegram_id"), number, document[:]), *result))
+    }
+    bad_strings: [4]string = .["null", "123", "\"verified\\u0000evil\"", "\"verified\\n\""]
+    for text: bad_strings {
+        expect(!read_identity(replace_value(valid, FieldAt(valid, 0, "status"), text, document[:]), *result))
+    }
+    expect(!read_identity(replace_value(valid, info_at, "null", document[:]), *result))
+    expect(!read_identity(replace_value(valid, info_at, "[]", document[:]), *result))
+    expect(!read_identity(replace_value(valid, FieldAt(valid, 0, "account_id"), "\"bad\"", document[:]), *result))
+    expect(!read_identity(replace_value(valid, FieldAt(valid, info_at, "expires_at"), "1700000600.0", document[:]), *result))
+    writer := Writer.{document[:], 0, true}
+    writer = WriteText(writer, valid)
+    writer = WriteText(writer, "{}")
+    expect(!read_identity(TextUntilNul(document[:]), *result))
+    expect(!read_identity(valid[0:valid.count - 1], *result))
+    expect(!read_identity(valid, null))
+    expect(result.telegram_id == 0)
+    // A decoded canonical escaped field is accepted, while its duplicate is
+    // rejected above. This matches the server's decoded-name policy.
+    expect(ReadTelegramEnvironment("{\"app_id\":\"inbe\",\"node_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"audience\":\"https://api.waozi.xyz\",\"bot_\\u0069d\":123456,\"environment\":\"production\"}",
+        FixtureAudience, *environment))
+}
+
+check_digest :: () {
+    digest: [65]u8
+    // Computed independently from the URL-decoded, sorted server fixture.
+    expected := "2732806dfb1792740248cc19516fcfca5f9279c73d02e54b8890d72c465294e2"
+    expect(TelegramRawInitDigest(FixtureRaw, 123456, digest[:]))
+    expect(TextUntilNul(digest[:]) == expected)
+    equivalent := "auth_date=1700000000&signature=test%2bvalue&query_id=hello%20world&user=%7b%22id%22%3a1234%7d&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    expect(TelegramRawInitDigest(equivalent, 123456, digest[:]) && TextUntilNul(digest[:]) == expected)
+    changed := "auth_date=1700000000&signature=other&query_id=hello+world&user=%7B%22id%22%3A1234%7D&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    expect(TelegramRawInitDigest(changed, 123456, digest[:]) && TextUntilNul(digest[:]) != expected)
+    expect(TelegramRawInitDigest(FixtureRaw, 123457, digest[:]) && TextUntilNul(digest[:]) != expected)
+    changed_hash := "auth_date=1700000000&signature=test%2Bvalue&query_id=hello+world&user=%7B%22id%22%3A1234%7D&hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    expect(TelegramRawInitDigest(changed_hash, 123456, digest[:]) && TextUntilNul(digest[:]) == expected)
+    prefixes: [14]string = .["x=%", "x=%0", "x=%gg", "x=%00", "x=%0A", "x=%0d", "%0A=x", "%00=x",
+    "a%3Db=x", "=x", "a=x=y", "user=again", "us%65r=again", "hash=duplicate"]
+    document: [32769]u8
+    for prefix: prefixes {
+        writer := Writer.{document[:], 0, true}
+        writer = WriteText(writer, prefix)
+        writer = WriteByte(writer, cast(u8)38)
+        writer = WriteText(writer, FixtureRaw)
+        digest[0] = cast(u8)120
+        expect(!TelegramRawInitDigest(TextUntilNul(document[:]), 123456, digest[:]) && digest[0] == cast(u8)0)
+    }
+    invalid: [9]string = .["", "a", "&a=b", "a=b&", "a=b", "hash=bad&user=x&auth_date=1",
+    "hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&user=&auth_date=1",
+    "hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&user=x&auth_date=",
+    "hash=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&user=x&auth_date=1"]
+    for raw: invalid {
+        expect(!TelegramRawInitDigest(raw, 123456, digest[:]))
+    }
+    expect(!TelegramRawInitDigest(FixtureRaw, 0, digest[:]))
+    expect(!TelegramRawInitDigest(FixtureRaw, 4503599627370496, digest[:]))
+    tiny: [64]u8
+    expect(!TelegramRawInitDigest(FixtureRaw, 123456, tiny[:]))
+    expect(!TelegramRawInitDigest(FixtureRaw, 123456, tiny[0:0]))
+    writer := Writer.{document[:], 0, true}
+    writer = WriteText(writer, FixtureRaw)
+    writer = WriteText(writer, "&padding=")
+    while writer.cursor < 16384 {
+        writer = WriteByte(writer, cast(u8)120)
+    }
+    expect(TelegramRawInitDigest(TextUntilNul(document[:]), 123456, digest[:]))
+    writer = WriteByte(writer, cast(u8)120)
+    expect(!TelegramRawInitDigest(TextUntilNul(document[:]), 123456, digest[:]))
+}
+
+// These messages independently reproduce the server's Join(fields, "\n")
+// formulas, including the extra separator after ActionMessage for BindMessage.
+server_verify_message :: (digest: string, output: []u8) -> string {
+    fields: [13]string = .["daochi-telegram-entry-verify-v1", FixtureEntry, "connect", "inbe", FixtureNode,
+    FixtureAudience, "123456", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "1700000600",
+    TextUntilNul(material.client_id[:]), TextUntilNul(material.signing.public_hex[:]),
+    TextUntilNul(material.encryption_hex[:]), digest]
+    writer := Writer.{output, 0, true}
+    for field: fields {
+        writer = WriteText(writer, field)
+        writer = WriteByte(writer, cast(u8)10)
+    }
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+server_action_message :: (action: string, expires: s64, nonce: string,
+    account: string, digest: string, output: []u8) -> string {
+    fields: [13]string = .["daochi-telegram-entry-action-v1", action, FixtureEntry, "connect", "inbe", FixtureNode,
+    FixtureAudience, "123456", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "1700000600",
+    TextUntilNul(material.client_id[:]), TextUntilNul(material.signing.public_hex[:]),
+    TextUntilNul(material.encryption_hex[:])]
+    writer := Writer.{output, 0, true}
+    for field: fields {
+        writer = WriteText(writer, field)
+        writer = WriteByte(writer, cast(u8)10)
+    }
+    writer = WriteDecimal(writer, expires)
+    writer = WriteByte(writer, cast(u8)10)
+    writer = WriteText(writer, nonce)
+    writer = WriteByte(writer, cast(u8)10)
+    if action == "bind" {
+        writer = WriteByte(writer, cast(u8)10)
+        writer = WriteText(writer, account)
+        writer = WriteByte(writer, cast(u8)10)
+        writer = WriteText(writer, digest)
+        writer = WriteByte(writer, cast(u8)10)
+    }
+    expect(writer.valid)
+    return TextUntilNul(output)
+}
+
+proof_valid :: (body: string, message: string, public_key: *u8) -> bool {
+    text: [129]u8
+    signature: [64]u8
+    if ReadStringText(body, FieldAt(body, 0, "proof"), text[:]) != 128 ||
+    SyncCryptoHexToBytes(TextUntilNul(text[:]), *signature[0], 64) == 0 {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*message)
+    valid := EntryCheckSignature(*signature[0], public_key, descriptor.data, cast(usize)message.count) == 0
+    SyncCryptoWipe(*signature[0], 64)
+    return valid
+}
+
+check_verify_proof :: () {
+    EntryTestSetClock(FixtureNow)
+    body: [24576]u8
+    message: [4096]u8
+    expect(BuildTelegramEntryVerifyBody(*challenge, *material, FixtureRaw, body[:]))
+    {
+        json := TextUntilNul(body[:])
+        names: [6]string = .["entry_id", "client_id", "signing_key", "encryption_key", "init_data", "proof"]
+        positions: [6]s32
+        expect(WholeJson(json) && ObjectFields(json, 0, names[:], positions[:]))
+        raw: [16385]u8
+        expect(ReadStringText(json, positions[4], raw[:]) == FixtureRaw.count && TextUntilNul(raw[:]) == FixtureRaw)
+        {
+            expected := server_verify_message("2732806dfb1792740248cc19516fcfca5f9279c73d02e54b8890d72c465294e2", message[:])
+            expect(proof_valid(json, expected, *material.signing.public_key[0]))
+            expect(!proof_valid(json, expected[0:expected.count - 1], *material.signing.public_key[0]))
+        }
+        message[0] = cast(u8)68
+        expect(!proof_valid(json, TextUntilNul(message[:]), *material.signing.public_key[0]))
+        other: DeviceKeyMaterial
+        expect(GenerateDeviceKey(*other))
+        expect(!proof_valid(json, server_verify_message("2732806dfb1792740248cc19516fcfca5f9279c73d02e54b8890d72c465294e2", message[:]),
+            *other.public_key[0]))
+        WipeDeviceKey(*other)
+        expect(!proof_valid(json, server_verify_message(FixtureDigest, message[:]), *material.signing.public_key[0]))
+    }
+    tiny: [16]u8
+    tiny[0] = cast(u8)120
+    expect(!BuildTelegramEntryVerifyBody(*challenge, *material, FixtureRaw, tiny[:]) && tiny[0] == cast(u8)0)
+    expect(!BuildTelegramEntryVerifyBody(null, *material, FixtureRaw, body[:]) && body[0] == cast(u8)0)
+    expect(!BuildTelegramEntryVerifyBody(*challenge, null, FixtureRaw, body[:]))
+    expect(!BuildTelegramEntryVerifyBody(*challenge, *material, "", body[:]))
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(1)
+    expect(BuildTelegramEntryVerifyBody(*challenge, *material, FixtureRaw, body[:]))
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(600)
+    expect(!BuildTelegramEntryVerifyBody(*challenge, *material, FixtureRaw, body[:]) && body[0] == cast(u8)0)
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(-1)
+    expect(!BuildTelegramEntryVerifyBody(*challenge, *material, FixtureRaw, body[:]))
+    EntryTestSetClock(FixtureNow)
+}
+
+check_action_proofs :: () {
+    EntryTestSetClock(FixtureNow)
+    body: [8192]u8
+    message: [4096]u8
+    actions: [4]string = .["status", "cancel", "bind", "request"]
+    previous_nonce: [33]u8
+    for action: actions {
+        account := ifx action == "bind" then FixtureAccount else ""
+        expect(BuildTelegramEntryActionBody(*identity, *material, action, account, FixtureNow, body[:]))
+        json := TextUntilNul(body[:])
+        names: [7]string = .["entry_id", "client_id", "signing_key", "encryption_key", "expires_at", "nonce", "proof"]
+        positions: [7]s32
+        expect(WholeJson(json) && ObjectFields(json, 0, names[:], positions[:]))
+        expires: s64
+        nonce: [33]u8
+        expect(ReadInteger(json, positions[4], *expires) && expires == FixtureNow + 30)
+        expect(ReadStringText(json, positions[5], nonce[:]) == 32 && LowerHex(TextUntilNul(nonce[:]), 32))
+        expect(TextUntilNul(nonce[:]) != TextUntilNul(previous_nonce[:]))
+        unused AppCopyText(TextUntilNul(nonce[:]), previous_nonce[:])
+        expected := server_action_message(action, expires, TextUntilNul(nonce[:]), account, FixtureDigest, message[:])
+        expect(proof_valid(json, expected, *material.signing.public_key[0]))
+        expect(!proof_valid(json, expected[0:expected.count - 1], *material.signing.public_key[0]))
+        wrong_action := ifx action == "status" then "cancel" else "status"
+        expect(!proof_valid(json, server_action_message(wrong_action, expires, TextUntilNul(nonce[:]), account, FixtureDigest, message[:]),
+            *material.signing.public_key[0]))
+        expect(!proof_valid(json, server_action_message(action, expires + 1, TextUntilNul(nonce[:]), account, FixtureDigest, message[:]),
+            *material.signing.public_key[0]))
+        nonce[0] = ifx nonce[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+        expect(!proof_valid(json, server_action_message(action, expires, TextUntilNul(nonce[:]), account, FixtureDigest, message[:]),
+            *material.signing.public_key[0]))
+    }
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "login", "", FixtureNow, body[:]))
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "bind", "", FixtureNow, body[:]))
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", FixtureAccount, FixtureNow, body[:]))
+    expect(!BuildTelegramEntryActionBody(null, *material, "status", "", FixtureNow, body[:]))
+    expect(!BuildTelegramEntryActionBody(*identity, null, "status", "", FixtureNow, body[:]))
+    for index: 0..4 {
+        changed := identity
+        if index == 0 {
+            changed.client_id[0] = cast(u8)122
+        }
+        if index == 1 {
+            changed.signing_key[0] = cast(u8)122
+        }
+        if index == 2 {
+            changed.encryption_key[0] = cast(u8)122
+        }
+        if index == 3 {
+            changed.info.expires_at = FixtureNow + 29
+        }
+        if index == 4 {
+            unused AppCopyText("pending", changed.status[:])
+        }
+        expect(!BuildTelegramEntryActionBody(*changed, *material, "status", "", FixtureNow, body[:]) && body[0] == cast(u8)0)
+    }
+    changed := identity
+    unused AppCopyText(FixtureAccount, changed.account_id[:])
+    expect(!BuildTelegramEntryActionBody(*changed, *material, "bind", FixtureNode, FixtureNow, body[:]))
+    expect(BuildTelegramEntryActionBody(*changed, *material, "bind", FixtureAccount, FixtureNow, body[:]))
+    unused AppCopyText("bound", changed.status[:])
+    expect(!BuildTelegramEntryActionBody(*changed, *material, "bind", FixtureAccount, FixtureNow, body[:]))
+    expect(BuildTelegramEntryActionBody(*changed, *material, "cancel", "", FixtureNow, body[:]))
+    unused AppCopyText("cancelled", changed.status[:])
+    expect(!BuildTelegramEntryActionBody(*changed, *material, "cancel", "", FixtureNow, body[:]))
+    expect(!BuildTelegramEntryActionBody(*changed, *material, "request", "", FixtureNow, body[:]))
+    expect(BuildTelegramEntryActionBody(*changed, *material, "status", "", FixtureNow, body[:]))
+    tiny: [16]u8
+    tiny[0] = cast(u8)120
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow, tiny[:]) && tiny[0] == cast(u8)0)
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", 0, body[:]))
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow - 31, body[:]))
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow + 1, body[:]))
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(29)
+    expect(BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow, body[:]))
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(30)
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow, body[:]) && body[0] == cast(u8)0)
+    EntryTestSetClock(FixtureNow)
+    EntryTestSetSigningDelay(-1)
+    expect(!BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow, body[:]))
+    EntryTestSetClock(FixtureNow + 10)
+    expect(BuildTelegramEntryActionBody(*identity, *material, "status", "", FixtureNow + 10, body[:]))
+    expires: s64
+    expect(ReadInteger(TextUntilNul(body[:]), FieldAt(TextUntilNul(body[:]), 0, "expires_at"), *expires) && expires == FixtureNow + 40)
+    EntryTestSetClock(FixtureNow)
+}
+
+#scope_export
+#program_export
+Check :: () -> s32 {
+    setup()
+    check_environment()
+    check_challenge()
+    check_identity()
+    check_strict_nested_json()
+    check_digest()
+    check_verify_proof()
+    check_action_proofs()
+    WipeDelegateMaterial(*material)
+    return failure
+}

@@ -1,5 +1,6 @@
 #import, file "account_types.zi";
 #import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
 #import "byte_text_linux"
 #import "oqs/Oqs"
 
@@ -32,6 +33,12 @@ CopySigningText :: (value: string, output: []u8) -> bool {
 #program_export
 SignSyncAccountHex :: (account: *SyncAccount, message: *u8,
     message_length: s64, output: *u8, output_size: s64) -> s32 {
+    private_key: [AccountSigningKeyBytes]u8
+    signature: [AccountSignatureBytes]u8
+    defer {
+        SyncCryptoWipe(*private_key[0], AccountSigningKeyBytes)
+        SyncCryptoWipe(*signature[0], AccountSignatureBytes)
+    }
     if output == null || output_size <= 0 {
         return 0
     }
@@ -42,13 +49,11 @@ SignSyncAccountHex :: (account: *SyncAccount, message: *u8,
     message_length < 0 || (message == null && message_length > 0) {
         return 0
     }
-    private_key: [AccountSigningKeyBytes]u8
     private_text := SigningKeyText(*account.private_key_hex[0],
         SYNC_PRIVATE_KEY_HEX_SIZE)
     if SyncCryptoHexToBytes(private_text, *private_key[0], AccountSigningKeyBytes) == 0 {
         return 0
     }
-    signature: [AccountSignatureBytes]u8
     if MlDsa44Sign(signature[:], BytesFromPointer(message,
         cast(u64)message_length), private_key[:]) != AccountSignatureBytes {
         return 0
@@ -60,7 +65,7 @@ SignSyncAccountHex :: (account: *SyncAccount, message: *u8,
 // Signs the exact login, registration, or transaction message bytes.
 #scope_export
 #program_export
-SignAccountMessage :: (context: *void, message: string,
+SignStoredAccountMessage :: (context: *void, message: string,
     output: []u8) -> bool {
     if context == null || message.count == 0 ||
     message.count > 9223372036854775807 ||

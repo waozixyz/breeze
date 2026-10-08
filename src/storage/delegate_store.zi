@@ -1,0 +1,695 @@
+// Delegate credentials belong to the host's protected memory/SecureStorage.
+// They are never represented as an owner SyncAccount or written to SQLite.
+#import "authorization"
+#import "wire"
+#import "delegated"
+#import "envelope"
+#import "auth"
+#import "url"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "json_scan"
+#import, file "device_key.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
+#import, file "storage_core.zi";
+#import, file "storage_layout.zi";
+#import, file "sql_query.zi";
+#import, file "db.zi";
+#import, file "state.zi";
+#import, file "../app/text_buffers.zi";
+
+c :: #system_library "c";
+DelegateTime :: (out: *s64) -> s64 #foreign c "time";
+DelegateCredentialMutex :: (database: *void) -> *void #foreign c "sqlite3_db_mutex";
+DelegateCredentialLock :: (mutex: *void) #foreign c "sqlite3_mutex_enter";
+DelegateCredentialUnlock :: (mutex: *void) #foreign c "sqlite3_mutex_leave";
+
+LockStoredDelegate :: () -> *void {
+    database := storage_db_handle()
+    if database == null {
+        return null
+    }
+    mutex := DelegateCredentialMutex(database)
+    if mutex != null {
+        DelegateCredentialLock(mutex)
+    }
+    return mutex
+}
+UnlockStoredDelegate :: (mutex: *void) {
+    if mutex != null {
+        DelegateCredentialUnlock(mutex)
+    }
+}
+
+AccountModeNone :: 0
+AccountModeOwner :: 1
+AccountModeDelegate :: 2
+
+DelegateMaterial :: struct {
+    signing: DeviceKeyMaterial
+    encryption: EncryptionKeys
+    client_id: [65]u8
+    encryption_hex: [2369]u8
+    server: [513]u8
+    owner_public_key: [2625]u8
+    grant: GrantStorage
+    session: DelegateSession
+    lumi_key: [32]u8
+    scopes: [1]RequestedScope
+    generation: s64
+    installed: bool
+}
+
+DelegateInstallExpectation :: struct {
+    request_id: string
+    grant_id: string
+    account_id: string
+    app_id: string
+    node_id: string
+    audience: string
+    server_url: string
+    bot_id: s64
+    telegram_id: s64
+}
+
+stored_delegate: DelegateMaterial;
+delegate_generation: s64 = 1;
+delegate_environment: bool;
+verified_delegate_bot: s64;
+verified_delegate_user: s64;
+verified_delegate_until: s64;
+DelegateCleared :: #type () -> void;
+on_delegate_clear: DelegateCleared;
+
+#scope_export
+CurrentStoredDelegateTime :: (context: *void) -> s64 {
+    unused context
+    return DelegateTime(null)
+}
+
+#scope_export
+DelegateNonce :: (context: *void, output: []u8) -> bool {
+    unused context
+    if output.count < 33 {
+        return false
+    }
+    nonce: [16]u8
+    if SyncCryptoRandom(*nonce[0], 16) == 0 {
+        return false
+    }
+    result := SyncCryptoBytesToHex(*nonce[0], 16, *output[0], output.count) != 0
+    SyncCryptoWipe(*nonce[0], 16)
+    return result
+}
+
+#scope_export
+WipeDelegateMaterial :: (material: *DelegateMaterial) {
+    if material == null {
+        return
+    }
+    WipeDeviceKey(*material.signing)
+    ClearEncryptionKeys(*material.encryption)
+    SyncCryptoWipe(*material.lumi_key[0], 32)
+    material.* = DelegateMaterial.{}
+}
+
+#scope_export
+ClearDelegate :: () {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    WipeDelegateMaterial(*stored_delegate)
+    if on_delegate_clear != null {
+        on_delegate_clear()
+    }
+    delegate_generation += 1
+    if delegate_generation <= 0 {
+        delegate_generation = 1
+    }
+}
+
+#scope_export
+StoredAccountMode :: () -> s32 {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if delegate_environment {
+        return AccountModeDelegate
+    }
+    if storage_get_setting_text("sync_public_id").count != 0 &&
+        storage_get_setting_text("sync_public_key").count != 0 &&
+        storage_get_setting_text("sync_private_key").count != 0 {
+        return AccountModeOwner
+    }
+    return AccountModeNone
+}
+
+#scope_export
+InstallDelegateStorageHooks :: () {
+    storage_delegate_mode = StoredAccountMode
+    storage_delegate_available = StoredDelegateAvailable
+    storage_delegate_key = StoredDelegateKey
+    storage_delegate_binding = StoredDelegateClientMatches
+}
+
+#scope_export
+SetVerifiedDelegateIdentity :: (bot_id: s64, telegram_id: s64,
+    valid_until: s64) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    InstallDelegateStorageHooks()
+    delegate_environment = true
+    now := DelegateTime(null)
+    if now <= 0 || bot_id <= 0 || bot_id > 4503599627370495 ||
+        telegram_id <= 0 || telegram_id > 4503599627370495 ||
+        valid_until <= now || valid_until > now + 300 {
+        ClearDelegate()
+        verified_delegate_bot = 0
+        verified_delegate_user = 0
+        verified_delegate_until = 0
+        return false
+    }
+    if verified_delegate_bot != bot_id || verified_delegate_user != telegram_id {
+        ClearDelegate()
+    }
+    verified_delegate_bot = bot_id
+    verified_delegate_user = telegram_id
+    verified_delegate_until = valid_until
+    return true
+}
+
+// Leaving a hosted context is explicit. Disconnecting inside Telegram keeps
+// delegate mode selected so saved owner credentials can never be a fallback.
+#scope_export
+LeaveDelegateMode :: () {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    ClearDelegate()
+    verified_delegate_bot = 0
+    verified_delegate_user = 0
+    verified_delegate_until = 0
+    delegate_environment = false
+}
+
+VerifiedDelegateIdentityCurrent :: (bot_id: s64, telegram_id: s64) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    now := DelegateTime(null)
+    return delegate_environment && now > 0 && verified_delegate_until > now &&
+        bot_id > 0 && telegram_id > 0 && bot_id == verified_delegate_bot &&
+        telegram_id == verified_delegate_user
+}
+
+#scope_export
+GenerateDelegateMaterial :: (material: *DelegateMaterial) -> bool {
+    if material == null {
+        return false
+    }
+    WipeDelegateMaterial(material)
+    random: [32]u8
+    if !GenerateDeviceKey(*material.signing) ||
+        !CreateEncryptionKeys(*material.encryption) ||
+        !EncryptionPublicHex(*material.encryption, material.encryption_hex[:]) ||
+        SyncCryptoRandom(*random[0], 32) == 0 {
+        SyncCryptoWipe(*random[0], 32)
+        WipeDelegateMaterial(material)
+        return false
+    }
+    SyncCryptoSha256Hex(*random[0], 32, *material.client_id[0])
+    SyncCryptoWipe(*random[0], 32)
+    material.scopes[0] = RequestedScope.{LumiPrivateCollection, true, true}
+    return LowerHex(TextUntilNul(material.client_id[:]), 64)
+}
+
+#scope_export
+DelegateClientFromMaterial :: (material: *DelegateMaterial,
+    output: *DelegateClient) -> bool {
+    if material == null || output == null {
+        return false
+    }
+    output.* = DelegateClient.{}
+    material.scopes[0] = RequestedScope.{LumiPrivateCollection, true, true}
+    output.server_url = TextUntilNul(material.server[:])
+    output.account_id = TextUntilNul(material.grant.account_id[:])
+    output.app_id = TextUntilNul(material.grant.app_id[:])
+    output.client_id = TextUntilNul(material.client_id[:])
+    output.grant_id = TextUntilNul(material.grant.grant_id[:])
+    output.node_id = TextUntilNul(material.grant.node_id[:])
+    output.audience = TextUntilNul(material.grant.audience[:])
+    output.signing_key = TextUntilNul(material.signing.public_hex[:])
+    output.encryption_key = TextUntilNul(material.encryption_hex[:])
+    output.bot_id = material.grant.bot_id
+    output.telegram_id = material.grant.telegram_id
+    output.clock = CurrentStoredDelegateTime
+    output.scopes = material.scopes[:]
+    output.grant = *material.grant
+    output.signing_context = cast(*void)*material.signing
+    output.signer = SignDeviceMessage
+    output.random = DelegateNonce
+    return DelegateClientValid(output.*)
+}
+
+ExpectationMatches :: (grant: *GrantStorage,
+    expected: DelegateInstallExpectation, material: *DelegateMaterial) -> bool {
+    normalized: [513]u8
+    return grant != null && material != null && expected.app_id == "inbe" &&
+        expected.bot_id > 0 && expected.telegram_id > 0 &&
+        VerifiedDelegateIdentityCurrent(expected.bot_id, expected.telegram_id) &&
+        NormalizeUrl(expected.server_url, normalized[:]) &&
+        TextUntilNul(normalized[:]) == expected.audience &&
+        TextUntilNul(grant.request_id[:]) == expected.request_id &&
+        TextUntilNul(grant.grant_id[:]) == expected.grant_id &&
+        (expected.account_id == "" || TextUntilNul(grant.account_id[:]) == expected.account_id) &&
+        TextUntilNul(grant.app_id[:]) == expected.app_id &&
+        TextUntilNul(grant.node_id[:]) == expected.node_id &&
+        TextUntilNul(grant.audience[:]) == expected.audience &&
+        TextUntilNul(grant.client_id[:]) == TextUntilNul(material.client_id[:]) &&
+        TextUntilNul(grant.signing_key[:]) == TextUntilNul(material.signing.public_hex[:]) &&
+        TextUntilNul(grant.encryption_key[:]) == TextUntilNul(material.encryption_hex[:]) &&
+        grant.bot_id == expected.bot_id && grant.telegram_id == expected.telegram_id &&
+        grant.scope_count == 1 &&
+        TextUntilNul(grant.scopes[0].collection[:]) == LumiPrivateCollection &&
+        TextUntilNul(grant.scopes[0].visibility[:]) == "private" &&
+        grant.scopes[0].read && grant.scopes[0].write &&
+        TextUntilNul(grant.scopes[0].key_id[:]) == LumiPrivateKeyID
+}
+
+LocalOwnerAccepts :: (account_id: string) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if storage_db_handle() == null {
+        return false
+    }
+    owner := storage_sync_data_owner_public_id()
+    if owner != "" {
+        return owner == account_id
+    }
+    // A database with unowned history is not an empty profile. Keep all
+    // records intact and require owner recovery instead of attaching it.
+    return db_select_int64_text("SELECT (SELECT COUNT(*) FROM sessions)+(SELECT COUNT(*) FROM habits)+(SELECT COUNT(*) FROM habit_days)+(SELECT COUNT(*) FROM elist_lists)+(SELECT COUNT(*) FROM elist_items)+(SELECT COUNT(*) FROM sync_outbox)+(SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%')", -1) == 0
+}
+
+#scope_export
+InstallAuthorizedDelegate :: (answer: string, expected: DelegateInstallExpectation,
+    material: *DelegateMaterial) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if material == null || material == *stored_delegate || !WholeJson(answer) {
+        return false
+    }
+    candidate: GrantStorage
+    owner_public: [2625]u8
+    positions: [3]s32
+    names: [3]string = .["credential", "grant", "owner_public_key"]
+    if !ObjectFields(answer, 0, names[:], positions[:]) ||
+        !ReadGrantAt(answer, positions[1], *candidate) ||
+        ReadStringText(answer, positions[2], owner_public[:]) < 0 ||
+        !ExpectationMatches(*candidate, expected, material) ||
+        !LocalOwnerAccepts(TextUntilNul(candidate.account_id[:])) {
+        return false
+    }
+    // The candidate identity only creates the expectation passed to the SDK.
+    // AcceptSessionAnswer proves its owner hash/signature before any adoption.
+    material.grant = candidate
+    if !AppCopyText(expected.server_url, material.server[:]) {
+        return false
+    }
+    client: DelegateClient
+    if !DelegateClientFromMaterial(material, *client) ||
+        AcceptSessionAnswer(client, 200, answer, DelegateTime(null), *material.session) !=
+            cast(AuthResult)AuthResult.AUTH_OK {
+        material.grant = GrantStorage.{}
+        ClearDelegateSession(*material.session)
+        return false
+    }
+    scopes: [16]GrantScope
+    grant: Grant
+    if !ViewGrant(*material.grant, scopes[:], *grant) ||
+        !OpenCollectionKey(grant, scopes[0], *material.encryption, material.lumi_key[:]) ||
+        !VerifiedDelegateIdentityCurrent(grant.bot_id, grant.telegram_id) ||
+        !LocalOwnerAccepts(grant.account_id) ||
+        !AppCopyText(TextUntilNul(owner_public[:]), material.owner_public_key[:]) {
+        SyncCryptoWipe(*material.lumi_key[0], 32)
+        ClearDelegateSession(*material.session)
+        return false
+    }
+    ClearDelegate()
+    material.generation = delegate_generation
+    material.installed = true
+    verified_delegate_until = material.session.expires_at
+    stored_delegate = material.*
+    InstallDelegateStorageHooks()
+    if storage_sync_data_owner_public_id() == "" {
+        storage_set_sync_data_owner_public_id(grant.account_id)
+    }
+    storage_set_setting_text("sync_server_url", expected.server_url)
+    storage_set_sync_enabled(1)
+    return true
+}
+
+#scope_export
+StoredDelegateAvailable :: () -> s32 {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    now := DelegateTime(null)
+    if StoredAccountMode() != AccountModeDelegate || !stored_delegate.installed ||
+        stored_delegate.generation != delegate_generation ||
+        !VerifiedDelegateIdentityCurrent(stored_delegate.grant.bot_id, stored_delegate.grant.telegram_id) ||
+        now < stored_delegate.grant.not_before || now >= stored_delegate.grant.expires_at ||
+        storage_sync_data_owner_public_id() != TextUntilNul(stored_delegate.grant.account_id[:]) {
+        return 0
+    }
+    return 1
+}
+
+#scope_export
+StoredDelegateIdentity :: () -> string {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if StoredDelegateAvailable() == 0 {
+        return ""
+    }
+    return TextUntilNul(stored_delegate.grant.account_id[:])
+}
+
+#scope_export
+LoadStoredDelegate :: (material: *DelegateMaterial) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if material == null || material == *stored_delegate {
+        return false
+    }
+    WipeDelegateMaterial(material)
+    if StoredDelegateAvailable() == 0 {
+        return false
+    }
+    material.* = stored_delegate
+    return true
+}
+
+// An expired identity proof may only renew an already installed delegate.
+// It cannot expose a collection key or authorize a data request. A changed
+// identity, owner, node, grant, key or generation still fails immediately.
+StoredDelegateRenewable :: () -> bool {
+    now := DelegateTime(null)
+    return delegate_environment && stored_delegate.installed &&
+        stored_delegate.generation == delegate_generation && now > 0 &&
+        stored_delegate.grant.not_before <= now && now < stored_delegate.grant.expires_at &&
+        verified_delegate_bot > 0 && verified_delegate_user > 0 &&
+        stored_delegate.grant.bot_id == verified_delegate_bot &&
+        stored_delegate.grant.telegram_id == verified_delegate_user &&
+        storage_sync_data_owner_public_id() == TextUntilNul(stored_delegate.grant.account_id[:])
+}
+
+#scope_export
+LoadDelegateForRenewal :: (material: *DelegateMaterial) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if material == null || material == *stored_delegate {
+        return false
+    }
+    WipeDelegateMaterial(material)
+    if !StoredDelegateRenewable() {
+        return false
+    }
+    material.* = stored_delegate
+    SyncCryptoWipe(*material.lumi_key[0], 32)
+    return true
+}
+
+StoredDelegateBindingMatches :: (client: DelegateClient, renewal_only: bool) -> s32 {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if (renewal_only && !StoredDelegateRenewable()) ||
+        (!renewal_only && StoredDelegateAvailable() == 0) || !DelegateClientValid(client) ||
+        client.grant == null || client.grant.scope_count != 1 ||
+        client.scopes.count != 1 {
+        return 0
+    }
+    approved := *stored_delegate.grant
+    if client.account_id != TextUntilNul(approved.account_id[:]) ||
+        client.app_id != TextUntilNul(approved.app_id[:]) ||
+        client.client_id != TextUntilNul(approved.client_id[:]) ||
+        client.grant_id != TextUntilNul(approved.grant_id[:]) ||
+        client.node_id != TextUntilNul(approved.node_id[:]) ||
+        client.audience != TextUntilNul(approved.audience[:]) ||
+        client.server_url != TextUntilNul(stored_delegate.server[:]) ||
+        client.signing_key != TextUntilNul(approved.signing_key[:]) ||
+        client.encryption_key != TextUntilNul(approved.encryption_key[:]) ||
+        client.bot_id != approved.bot_id || client.telegram_id != approved.telegram_id ||
+        client.scopes[0].collection != LumiPrivateCollection ||
+        !client.scopes[0].read || !client.scopes[0].write ||
+        TextUntilNul(client.grant.account_id[:]) != client.account_id ||
+        TextUntilNul(client.grant.grant_id[:]) != client.grant_id ||
+        TextUntilNul(client.grant.request_id[:]) != TextUntilNul(approved.request_id[:]) ||
+        TextUntilNul(client.grant.app_id[:]) != client.app_id ||
+        TextUntilNul(client.grant.client_id[:]) != client.client_id ||
+        TextUntilNul(client.grant.node_id[:]) != client.node_id ||
+        TextUntilNul(client.grant.audience[:]) != client.audience ||
+        TextUntilNul(client.grant.signing_key[:]) != client.signing_key ||
+        TextUntilNul(client.grant.encryption_key[:]) != client.encryption_key ||
+        client.grant.bot_id != client.bot_id || client.grant.telegram_id != client.telegram_id ||
+        client.grant.version != approved.version ||
+        client.grant.issued_at != approved.issued_at ||
+        client.grant.not_before != approved.not_before ||
+        client.grant.expires_at != approved.expires_at ||
+        TextUntilNul(client.grant.nonce[:]) != TextUntilNul(approved.nonce[:]) ||
+        TextUntilNul(client.grant.signature[:]) != TextUntilNul(approved.signature[:]) ||
+        TextUntilNul(client.grant.scopes[0].collection[:]) != LumiPrivateCollection ||
+        TextUntilNul(client.grant.scopes[0].visibility[:]) != "private" ||
+        !client.grant.scopes[0].read || !client.grant.scopes[0].write ||
+        TextUntilNul(client.grant.scopes[0].key_id[:]) != LumiPrivateKeyID ||
+        TextUntilNul(client.grant.scopes[0].key_envelope[:]) != TextUntilNul(approved.scopes[0].key_envelope[:]) {
+        return 0
+    }
+    return 1
+}
+
+#scope_export
+StoredDelegateClientMatches :: (client: DelegateClient) -> s32 {
+    return StoredDelegateBindingMatches(client, false)
+}
+
+#scope_export
+StoredDelegateRenewalMatches :: (client: DelegateClient) -> s32 {
+    return StoredDelegateBindingMatches(client, true)
+}
+
+#scope_export
+SaveStoredDelegateSession :: (material: *DelegateMaterial) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    client: DelegateClient
+    if material == null || material.generation != delegate_generation ||
+        !DelegateClientFromMaterial(material, *client) || StoredDelegateRenewalMatches(client) == 0 {
+        return false
+    }
+    if !SessionValid(client, *material.session, DelegateTime(null)) {
+        return false
+    }
+    stored_delegate.session = material.session
+    verified_delegate_until = material.session.expires_at
+    return true
+}
+
+#scope_export
+StoredDelegateKey :: (collection: string, key_id: string, out: *u8) -> s32 {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if out == null {
+        return 0
+    }
+    SyncCryptoWipe(out, 32)
+    if StoredDelegateAvailable() == 0 || collection != LumiPrivateCollection || key_id != LumiPrivateKeyID {
+        return 0
+    }
+    index: s64 = 0
+    while index < 32 {
+        out[index] = stored_delegate.lumi_key[index]
+        index += 1
+    }
+    return 1
+}
+
+// Host-only serialization for Telegram SecureStorage. The caller scrubs this
+// buffer after use; no storage setting or ordinary file receives it.
+#scope_export
+ExportStoredDelegateCapsule :: (output: []u8) -> bool {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    if output.count == 0 {
+        return false
+    }
+    output[0] = 0
+    if StoredDelegateAvailable() == 0 {
+        return false
+    }
+    private_hex: [129]u8
+    encryption_private: [4801]u8
+    grant_body: [32768]u8
+    defer {
+        SyncCryptoWipe(*private_hex[0], 129)
+        SyncCryptoWipe(*encryption_private[0], 4801)
+    }
+    views: [16]GrantScope
+    grant: Grant
+    if !DevicePrivateHex(*stored_delegate.signing, private_hex[:]) ||
+        SyncCryptoBytesToHex(*stored_delegate.encryption.secret_key[0], 2400,
+            *encryption_private[0], 4801) == 0 ||
+        !ViewGrant(*stored_delegate.grant, views[:], *grant) ||
+        !BuildGrantBody(grant, grant_body[:]) {
+        return false
+    }
+    writer: Writer = .{output, 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, "format", "inbe-delegate-v1")
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "signing_private", TextUntilNul(private_hex[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "encryption_public", TextUntilNul(stored_delegate.encryption_hex[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "encryption_private", TextUntilNul(encryption_private[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "owner_public_key", TextUntilNul(stored_delegate.owner_public_key[:]))
+    writer = WriteText(writer, ",\"grant\":")
+    writer = WriteText(writer, TextUntilNul(grant_body[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid || StoredDelegateAvailable() == 0 {
+        SyncCryptoWipe(*output[0], cast(s64)output.count)
+        return false
+    }
+    return true
+}
+
+// Restoration returns an uninstalled candidate. Only a fresh issuing-node
+// session answer can install it and make its key available to storage.
+#scope_export
+ReadDelegateCapsule :: (capsule: string, expected: DelegateInstallExpectation,
+    material: *DelegateMaterial) -> bool {
+    if material == null {
+        return false
+    }
+    WipeDelegateMaterial(material)
+    success := false
+    defer {
+        if !success {
+            WipeDelegateMaterial(material)
+        }
+    }
+    if capsule.count > 65536 || !WholeJson(capsule) ||
+        !VerifiedDelegateIdentityCurrent(expected.bot_id, expected.telegram_id) {
+        return false
+    }
+    names: [6]string = .["format", "signing_private", "encryption_public",
+        "encryption_private", "owner_public_key", "grant"]
+    positions: [6]s32
+    format: [32]u8
+    private_hex: [129]u8
+    encryption_private: [4801]u8
+    public_bytes: [32]u8
+    signing_id: [65]u8
+    defer {
+        SyncCryptoWipe(*private_hex[0], 129)
+        SyncCryptoWipe(*encryption_private[0], 4801)
+    }
+    if !ObjectFields(capsule, 0, names[:], positions[:]) ||
+        ReadStringText(capsule, positions[0], format[:]) < 0 ||
+        TextUntilNul(format[:]) != "inbe-delegate-v1" ||
+        ReadStringText(capsule, positions[1], private_hex[:]) < 0 ||
+        ReadStringText(capsule, positions[2], material.encryption_hex[:]) < 0 ||
+        ReadStringText(capsule, positions[3], encryption_private[:]) < 0 ||
+        ReadStringText(capsule, positions[4], material.owner_public_key[:]) < 0 ||
+        !ReadGrantAt(capsule, positions[5], *material.grant) ||
+        !AppCopyText(TextUntilNul(material.grant.client_id[:]), material.client_id[:]) ||
+        !AppCopyText(TextUntilNul(material.grant.signing_key[:]), material.signing.public_hex[:]) ||
+        !ExpectationMatches(*material.grant, expected, material) ||
+        !LocalOwnerAccepts(TextUntilNul(material.grant.account_id[:])) {
+        return false
+    }
+    if SyncCryptoHexToBytes(TextUntilNul(material.grant.signing_key[:]), *public_bytes[0], 32) == 0 {
+        return false
+    }
+    SyncCryptoSha256Hex(*public_bytes[0], 32, *signing_id[0])
+    if !LoadDeviceKey(TextUntilNul(private_hex[:]), TextUntilNul(material.grant.signing_key[:]),
+            TextUntilNul(signing_id[:]), *material.signing) ||
+        !LowerHex(TextUntilNul(material.encryption_hex[:]), 2368) ||
+        !LowerHex(TextUntilNul(encryption_private[:]), 4800) ||
+        SyncCryptoHexToBytes(TextUntilNul(material.encryption_hex[:]), *material.encryption.public_key[0], 1184) == 0 ||
+        SyncCryptoHexToBytes(TextUntilNul(encryption_private[:]), *material.encryption.secret_key[0], 2400) == 0 ||
+        !AppCopyText(expected.server_url, material.server[:]) {
+        return false
+    }
+    // LoadDeviceKey supplies the public signing key used by the expectation.
+    if !ExpectationMatches(*material.grant, expected, material) {
+        return false
+    }
+    views: [16]GrantScope
+    grant: Grant
+    if !ViewGrant(*material.grant, views[:], *grant) ||
+        !VerifyGrantSignature(grant, TextUntilNul(material.owner_public_key[:]), DelegateTime(null)) ||
+        !OpenCollectionKey(grant, views[0], *material.encryption, material.lumi_key[:]) ||
+        !VerifiedDelegateIdentityCurrent(expected.bot_id, expected.telegram_id) {
+        return false
+    }
+    material.scopes[0] = RequestedScope.{LumiPrivateCollection, true, true}
+    success = true
+    return true
+}
+
+#scope_export
+PrepareBootstrapDelegateSessionBody :: (challenge: *SessionChallenge,
+    expected: DelegateInstallExpectation, material: *DelegateMaterial, output: []u8) -> bool {
+    now := DelegateTime(null)
+    normalized: [513]u8
+    if challenge == null || material == null || output.count == 0 || now <= 0 ||
+        expected.app_id != "inbe" || !LowerHex(expected.request_id, 32) ||
+        !LowerHex(expected.grant_id, 32) || !LowerHex(expected.node_id, 64) ||
+        !LowerHex(TextUntilNul(material.client_id[:]), 64) ||
+        !LowerHex(TextUntilNul(material.signing.public_hex[:]), 64) ||
+        !LowerHex(TextUntilNul(material.encryption_hex[:]), 2368) ||
+        !VerifiedDelegateIdentityCurrent(expected.bot_id, expected.telegram_id) ||
+        !NormalizeUrl(expected.server_url, normalized[:]) ||
+        TextUntilNul(normalized[:]) != expected.audience ||
+        TextUntilNul(challenge.grant_id[:]) != expected.grant_id ||
+        TextUntilNul(challenge.node_id[:]) != expected.node_id ||
+        TextUntilNul(challenge.audience[:]) != expected.audience ||
+        challenge.expires_at <= now || challenge.expires_at > now + 90 {
+        return false
+    }
+    message: [1024]u8
+    signature: [129]u8
+    if !BuildSessionMessage(challenge, message[:]) ||
+        !SignDeviceMessage(cast(*void)*material.signing, TextUntilNul(message[:]), signature[:]) ||
+        challenge.expires_at <= DelegateTime(null) {
+        return false
+    }
+    writer: Writer = .{output, 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, "grant_id", expected.grant_id)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "challenge", TextUntilNul(challenge.challenge[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "signature", TextUntilNul(signature[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    return writer.valid
+}
+
+#scope_export
+StoredDelegateGeneration :: () -> s64 {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    return delegate_generation
+}
+
+// Select the hosted boundary before any account or data pump. No Telegram
+// identity is trusted until the server verifies the entry proof.
+#scope_export
+EnterPendingDelegateMode :: () {
+    mutex := LockStoredDelegate()
+    defer { UnlockStoredDelegate(mutex) }
+    delegate_environment = true
+    ClearDelegate()
+    verified_delegate_bot = 0
+    verified_delegate_user = 0
+    verified_delegate_until = 0
+    InstallDelegateStorageHooks()
+}

@@ -3,6 +3,11 @@
 #import "client"
 #import "auth"
 #import "sync"
+#import "delegated"
+#import "authorization"
+#import "url"
+#import "text_buffer"
+#import, file "delegate_store.zi";
 #import "net_http"
 #import "byte_text_linux"
 #import, file "account_types.zi";
@@ -48,10 +53,13 @@ NativeNonce :: (context: *void, output: []u8) -> bool {
 
 OpenAccountClient :: (base_url: string, account: *SyncAccount,
     client_id: string, output: *Client) -> bool {
-    if output == null || account == null {
+    if output == null {
         return false
     }
     output.* = Client.{}
+    if StoredAccountMode() == AccountModeDelegate || account == null {
+        return false
+    }
     account_id := AccountField(*account.public_id[0],
         SYNC_PUBLIC_ID_HEX_SIZE)
     public_key := AccountField(*account.public_key_hex[0],
@@ -70,6 +78,84 @@ OpenAccountClient :: (base_url: string, account: *SyncAccount,
     output.app_id = "inbe"
     output.identity = identity
     output.digest = DigestBody
-    output.signer = SignAccountMessage
+    output.signer = SignStoredAccountMessage
+    return true
+}
+
+// The caller owns material and must keep it alive through any async operation.
+OpenDelegateClient :: (base_url: string, material: *DelegateMaterial,
+    output: *DelegateClient) -> bool {
+    normalized: [513]u8
+    if material == null || output == null || !material.installed ||
+        material.generation != StoredDelegateGeneration() ||
+        !NormalizeUrl(base_url, normalized[:]) ||
+        TextUntilNul(normalized[:]) != TextUntilNul(material.grant.audience[:]) ||
+        !DelegateClientFromMaterial(material, output) ||
+        StoredDelegateClientMatches(output.*) == 0 {
+        if output != null {
+            output.* = DelegateClient.{}
+        }
+        return false
+    }
+    return true
+}
+
+// Used only by BeginStoredSession, never by the data-sync preparation path.
+OpenDelegateRenewalClient :: (base_url: string, material: *DelegateMaterial,
+    output: *DelegateClient) -> bool {
+    normalized: [513]u8
+    if material == null || output == null || !material.installed ||
+        material.generation != StoredDelegateGeneration() ||
+        !NormalizeUrl(base_url, normalized[:]) ||
+        TextUntilNul(normalized[:]) != TextUntilNul(material.grant.audience[:]) ||
+        !DelegateClientFromMaterial(material, output) || StoredDelegateRenewalMatches(output.*) == 0 {
+        if output != null {
+            output.* = DelegateClient.{}
+        }
+        return false
+    }
+    return true
+}
+
+// Explicit owner creation/recovery inside the hosted flow. The actual owner
+// material and this client remain in caller-owned memory; global mode stays
+// delegated and no owner credential is saved in SQLite.
+OpenTemporaryOwnerClient :: (base_url: string, account: *SyncAccount,
+    client_id: string, expected_bot: s64, expected_user: s64, output: *Client) -> bool {
+    if output == null {
+        return false
+    }
+    output.* = Client.{}
+    if account == null || StoredAccountMode() != AccountModeDelegate ||
+        !VerifiedDelegateIdentityCurrent(expected_bot, expected_user) ||
+        !LowerHex(client_id, 64) {
+        return false
+    }
+    account_id := AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+    public_key := AccountField(*account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE)
+    private_key := AccountField(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    if !LowerHex(account_id, 64) || !LowerHex(public_key, 2624) || !LowerHex(private_key, 5120) ||
+        !LocalOwnerAccepts(account_id) {
+        return false
+    }
+    public_bytes: [1312]u8
+    public_id: [65]u8
+    normalized: [513]u8
+    if SyncCryptoHexToBytes(public_key, *public_bytes[0], 1312) == 0 ||
+        !NormalizeUrl(base_url, normalized[:]) {
+        return false
+    }
+    SyncCryptoSha256Hex(*public_bytes[0], 1312, *public_id[0])
+    if TextUntilNul(public_id[:]) != account_id {
+        return false
+    }
+    output.server_url = base_url
+    output.app_id = "inbe"
+    output.identity.account_id = account_id
+    output.identity.public_key = public_key
+    output.identity.client_id = client_id
+    output.identity.signing_context = cast(*void)account
+    output.digest = DigestBody
+    output.signer = SignStoredAccountMessage
     return true
 }

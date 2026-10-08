@@ -1,0 +1,312 @@
+// Presentation only. The controller verifies Telegram and owns account keys,
+// ciphertext files, network requests, database changes and action dispatch.
+#import "geometry"
+#import "session"
+#import "tree"
+#import "text_props"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "text_input"
+#import "text_input_props"
+#import "text_field_widget"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "keys"
+#import "text_buffer"
+Utf8 :: #import "utf8";
+#import, file "../app/app_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../platform/raylib_text_input.zi";
+
+using TextWrap;
+using ButtonEmphasis;
+
+TelegramAccountPassword :: struct {
+    value: [257]u8
+    cursor: s32
+    anchor: s32
+    scroll_x: s32
+    focused: bool
+    composition: CompositionState
+}
+
+TelegramAccountView :: struct {
+    visible: bool
+    title_key: string
+    message_key: string
+    status: string
+    restore_failed: bool
+    details: string
+    review_complete: bool
+    review_id: string
+    busy: bool
+    allowed_actions: u32
+    action_labels: [8]string
+    password: *TelegramAccountPassword
+    password_label: string
+    scroll_offset: s32
+    review_seen: bool
+    seen_review_id: [65]u8
+    seen_review_details: [4097]u8
+}
+
+// Controller actions: 1 create, 2 restore protected installation, 3 connect,
+// 4 cancel, 5 encrypted backup, 6 approve, 7 encrypted recovery backup.
+TelegramAccountActionAllowed :: (view: *TelegramAccountView, action: s32) -> bool {
+    return view != null && action >= 1 && action <= 7 &&
+    (view.allowed_actions & (cast(u32)1 << cast(u32)action)) != cast(u32)0
+}
+
+TelegramAccountActionLabel :: (action: s32) -> string {
+    if action < 1 || action > 7 {
+        return ""
+    }
+    if action == 1 {
+        return LocaleText("sync_create_account_button")
+    }
+    if action == 2 {
+        return LocaleText("telegram_account_restore_button")
+    }
+    if action == 3 {
+        return LocaleText("sync_connect_account_button")
+    }
+    if action == 4 {
+        return LocaleText("cancel_button")
+    }
+    if action == 5 {
+        return LocaleText("sync_backup_key_button")
+    }
+    if action == 6 {
+        return LocaleText("lumi_authorization_approve")
+    }
+    return LocaleText("telegram_account_recovery_button")
+}
+
+TelegramAccountClearPassword :: (password: *TelegramAccountPassword) {
+    if password != null {
+        SecureWipe(*password.value[0], 257)
+        password.* = TelegramAccountPassword.{}
+    }
+}
+
+TelegramAccountPasswordMask :: (password: *TelegramAccountPassword, output: []u8) -> bool {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    if password == null || output.count < 257 || password.value[256] != cast(u8)0 {
+        return false
+    }
+    value := AppTextFromCString(*password.value[0], 257)
+    if !Utf8.Valid(value) {
+        return false
+    }
+    count: s32 = 0
+    for byte: value {
+        if byte < cast(u8)32 || byte == cast(u8)127 {
+            return false
+        }
+        if byte < cast(u8)128 || byte >= cast(u8)192 {
+            output[count] = cast(u8)42
+            count += 1
+        }
+    }
+    output[count] = cast(u8)0
+    return true
+}
+
+TelegramAccountApprovalReady :: (view: *TelegramAccountView, retained: bool) -> bool {
+    return view != null && !view.busy && retained && view.review_complete &&
+    view.details.count > 0 && view.details.count <= 4096 &&
+    view.review_id.count > 0 && view.review_id.count <= 64 &&
+    view.review_seen && TextUntilNul(view.seen_review_id[:]) == view.review_id
+}
+
+DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
+    if app == null || view == null || !view.visible || !SessionValid(app.ui.session) {
+        return 0
+    }
+    if TextUntilNul(view.seen_review_id[:]) != view.review_id ||
+    TextUntilNul(view.seen_review_details[:]) != view.details {
+        view.review_seen = false
+        view.scroll_offset = 0
+        unused AppCopyText(view.review_id, view.seen_review_id[:])
+        unused AppCopyText(view.details, view.seen_review_details[:])
+    }
+    width := app.ui.view_width - AppScale(24)
+    if width > AppScale(520) {
+        width = AppScale(520)
+    }
+    height := app.ui.view_height - AppScale(24)
+    if width < AppScale(120) || height < AppScale(120) {
+        return 0
+    }
+    password_label := view.password_label
+    if password_label.count == 0 {
+        password_label = LocaleText("telegram_account_passphrase")
+    }
+    cancel_allowed := TelegramAccountActionAllowed(view, 4)
+    title_key := ifx view.title_key.count > 0 then view.title_key else "telegram_account_title"
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{.key = cast(u64)76600,
+            .title = LocaleText(title_key), .width = width, .height = height,
+            .scale = MetricsScale(), .has_right_action = cancel_allowed,
+            .right_label = LocaleText("cancel_button"), .dismiss_disabled = !cancel_allowed})
+    if frame.dismissed || frame.right_clicked {
+        if cancel_allowed {
+            TelegramAccountClearPassword(view.password)
+            return 4
+        }
+        return 0
+    }
+    if !frame.opened {
+        return 0
+    }
+    content_width := cast(s32)frame.layout.content.width
+    content_height := AppScale(16)
+    message := LocaleText(view.message_key)
+    if view.message_key.count == 0 {
+        if TelegramAccountActionAllowed(view, 1) {
+            message = LocaleText("telegram_account_create_body")
+        } else if TelegramAccountActionAllowed(view, 2) || TelegramAccountActionAllowed(view, 7) {
+            message = LocaleText("telegram_account_restore_body")
+        } else {
+            message = LocaleText("telegram_account_connect_body")
+        }
+    }
+    status := view.status
+    if view.restore_failed {
+        status = LocaleText("telegram_account_restore_failed")
+    }
+    paragraphs: [3]string = .[message, status, view.details]
+    if paragraphs[1].count > 1024 {
+        paragraphs[1] = ""
+    }
+    if paragraphs[2].count > 4096 {
+        paragraphs[2] = ""
+    }
+    paragraph_heights: [3]s32
+    for index: 0..2 {
+        if paragraphs[index].count > 0 {
+            prepared := PrepareText(TextProps.{.text = paragraphs[index], .font = AppFontSize(),
+                    .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
+                    .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
+            paragraph_heights[index] = cast(s32)prepared.bounds.height + AppScale(16)
+            content_height += paragraph_heights[index]
+        }
+    }
+    if view.password != null {
+        content_height += AppScale(64)
+    }
+    for action: cast(s32)1..7 {
+        if TelegramAccountActionAllowed(view, action) {
+            content_height += AppScale(56)
+        }
+    }
+    scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)76601,
+            .bounds = frame.layout.content, .content_height = content_height,
+            .scroll_offset = view.scroll_offset, .scale = MetricsScale()})
+    view.scroll_offset = scroll.scroll_offset
+    result: s32 = 0
+    if scroll.opened {
+        x := cast(s32)scroll.content.x
+        y := cast(s32)scroll.content.y + AppScale(8)
+        review_retained := false
+        for index: 0..2 {
+            if paragraphs[index].count > 0 {
+                held := FrameTextHold(*app.ui.frame_text, paragraphs[index])
+                Text(app.ui.session, TextProps.{.text = held, .font = AppFontSize(),
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                            cast(float32)content_width, cast(float32)paragraph_heights[index]},
+                        .wrap = cast(TextWrap)TextWrapAuto})
+                y += paragraph_heights[index]
+                if index == 2 {
+                    review_retained = held.count == view.details.count && held.count > 0
+                    if review_retained && cast(float32)(y - AppScale(16)) <=
+                    scroll.viewport.y + scroll.viewport.height {
+                        view.review_seen = true
+                    }
+                }
+            }
+        }
+        password_valid := false
+        if view.password != null {
+            password := view.password
+            mask: [257]u8
+            password_valid = TelegramAccountPasswordMask(password, mask[:])
+            if password_valid {
+                typed: [128]u8
+                input := SampleTextFieldInput(password.focused && !view.busy, typed[:])
+                input.copy = false
+                input.cut = false
+                field := TextField(app.ui.session, TextFieldProps.{.key = cast(u64)76602,
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                            cast(float32)content_width, cast(float32)AppScale(48)},
+                        .value = AppTextFromCString(*password.value[0], 257),
+                        .display_value = FrameTextHold(*app.ui.frame_text, TextUntilNul(mask[:])),
+                        .label = password_label, .cursor = password.cursor,
+                        .anchor = password.anchor, .scroll_x = password.scroll_x,
+                        .focused = password.focused, .composition = password.composition,
+                        .focus_id = 76602, .max_bytes = 256, .max_codepoints = 256,
+                        .secure = true, .disabled = view.busy || password_label.count == 0,
+                        .input = input, .scale = MetricsScale()})
+                if field.edit.changed {
+                    unused AppReplaceText(password.value[:], field.edit.start,
+                        field.edit.end, field.edit.replacement)
+                }
+                password.cursor = field.cursor
+                password.anchor = field.anchor
+                password.scroll_x = field.scroll_x
+                password.focused = field.focused
+                // A password's composition is never exposed as visible text.
+                password.composition = field.composition
+                SecureWipe(*typed[0], 128)
+                if field.escaped && cancel_allowed {
+                    TelegramAccountClearPassword(password)
+                    result = 4
+                }
+            }
+            y += AppScale(64)
+        }
+        for action: cast(s32)1..7 {
+            if !TelegramAccountActionAllowed(view, action) {
+                continue
+            }
+            disabled := view.busy && action != 4
+            if action == 6 && !TelegramAccountApprovalReady(view, review_retained) {
+                disabled = true
+            }
+            if view.password != null && (action == 5 || action == 7) &&
+            (!password_valid || view.password.value[0] == cast(u8)0 || password_label.count == 0) {
+                disabled = true
+            }
+            label := TelegramAccountActionLabel(action)
+            if view.action_labels[action].count > 0 {
+                label = FrameTextHold(*app.ui.frame_text, view.action_labels[action])
+                if label.count == 0 {
+                    disabled = true
+                }
+            }
+            if Button(app.ui.session, ButtonProps.{.id = 76610 + action,
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                        cast(float32)content_width, cast(float32)AppScale(48)},
+                    .label = label, .disabled = disabled,
+                    .loading = view.busy && action != 4,
+                    .emphasis = cast(ButtonEmphasis)(ifx action == 4 then ButtonEmphasisGhost else ButtonEmphasisFilled)}) != 0 &&
+            result == 0 && !disabled {
+                result = action
+                if action == 4 {
+                    TelegramAccountClearPassword(view.password)
+                }
+            }
+            y += AppScale(56)
+        }
+        unused End(app.ui.session)
+    }
+    unused End(app.ui.session)
+    return result
+}

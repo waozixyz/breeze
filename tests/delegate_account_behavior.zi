@@ -1,0 +1,348 @@
+#import "authorization"
+#import "delegated"
+#import "envelope"
+#import "auth"
+#import "client"
+#import "async_client"
+#import "net_http"
+#import "wire"
+#import "transaction"
+#import "text_buffer"
+#import "byte_text_linux"
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/device_key.zi";
+#import, file "../src/storage/daochi_account.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account_sign.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/sql_query.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/app/text_buffers.zi";
+
+c :: #system_library "c";
+TestTime :: (out: *s64) -> s64 #foreign c "time";
+NodeID :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+GrantID :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+RequestID :: "cccccccccccccccccccccccccccccccc"
+Server :: "https://node.example"
+CapsuleCapacity :: 65536
+
+owner: SyncAccount;
+material: DelegateMaterial;
+restored: DelegateMaterial;
+answer: [32768]u8;
+capsule: [CapsuleCapacity]u8;
+key: [32]u8;
+operation: StoredOperation;
+transport_calls: s32;
+renewal_stage: s32;
+switch_identity_during_poll: bool;
+
+Expected :: (user: s64) -> DelegateInstallExpectation {
+    result: DelegateInstallExpectation
+    result.request_id = RequestID
+    result.grant_id = GrantID
+    result.app_id = "inbe"
+    result.node_id = NodeID
+    result.audience = Server
+    result.server_url = Server
+    result.bot_id = 42
+    result.telegram_id = user
+    return result
+}
+
+MakeAnswer :: (user: s64) -> bool {
+    now := TestTime(null)
+    grant: Grant
+    grant.version = 1
+    grant.account_id = TextUntilNul(owner.public_id[:])
+    grant.grant_id = GrantID
+    grant.request_id = RequestID
+    grant.app_id = "inbe"
+    grant.client_id = TextUntilNul(material.client_id[:])
+    grant.node_id = NodeID
+    grant.audience = Server
+    grant.signing_key = TextUntilNul(material.signing.public_hex[:])
+    grant.encryption_key = TextUntilNul(material.encryption_hex[:])
+    grant.issued_at = now
+    grant.not_before = now
+    grant.expires_at = now + 3600
+    grant.nonce = "dddddddddddddddddddddddddddddddd"
+    grant.bot_id = 42
+    grant.telegram_id = user
+    scope: [1]GrantScope
+    scope[0] = GrantScope.{LumiPrivateCollection, "private", true, true, LumiPrivateKeyID, ""}
+    envelope: [4096]u8
+    if !SealCollectionKey(grant, scope[0], key[:], envelope[:]) {
+        return false
+    }
+    scope[0].key_envelope = TextUntilNul(envelope[:])
+    grant.scopes = scope[:]
+    message: [8192]u8
+    signature: [4841]u8
+    grant_body: [20000]u8
+    if !BuildGrantMessage(grant, message[:]) ||
+        !SignStoredAccountMessage(cast(*void)*owner, TextUntilNul(message[:]), signature[:]) {
+        return false
+    }
+    grant.signature = TextUntilNul(signature[:])
+    if !BuildGrantBody(grant, grant_body[:]) {
+        return false
+    }
+    writer: Writer = .{answer[:], 0, true}
+    writer = WriteText(writer, "{\"credential\":{\"session_id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"grant_id\":\"")
+    writer = WriteText(writer, GrantID)
+    writer = WriteText(writer, "\",\"challenge\":\"ffffffffffffffffffffffffffffffff\",\"expires_at\":")
+    writer = WriteDecimal(writer, now + 300)
+    writer = WriteText(writer, "},\"grant\":")
+    writer = WriteText(writer, TextUntilNul(grant_body[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "owner_public_key", TextUntilNul(owner.public_key_hex[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    return writer.valid
+}
+
+DeniedStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    unused request
+    unused output
+    transport_calls += 1
+    return false
+}
+DeniedPoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    unused status
+    return 0
+}
+DeniedCancel :: (context: *void) {
+    unused context
+}
+
+RenewalStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    transport_calls += 1
+    if request.token != "" || request.headers.count != 0 {
+        return false
+    }
+    if request.url == "https://node.example/api/v1/authorization/challenge" {
+        renewal_stage = 1
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"grant_id\":\"")
+        writer = WriteText(writer, GrantID)
+        writer = WriteText(writer, "\",\"challenge\":\"ffffffffffffffffffffffffffffffff\",\"node_id\":\"")
+        writer = WriteText(writer, NodeID)
+        writer = WriteText(writer, "\",\"audience\":\"https://node.example\",\"expires_at\":")
+        writer = WriteDecimal(writer, TestTime(null) + 90)
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if request.url == "https://node.example/api/v1/authorization/session" {
+        renewal_stage = 2
+        return AppCopyText(TextUntilNul(answer[:]), output)
+    }
+    return false
+}
+RenewalPoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = 200
+    if switch_identity_during_poll {
+        switch_identity_during_poll = false
+        unused SetVerifiedDelegateIdentity(42, 8, TestTime(null) + 300)
+    }
+    return 1
+}
+
+AllZero :: (value: []u8) -> bool {
+    for byte: value {
+        if byte != cast(u8)0 {
+            return false
+        }
+    }
+    return true
+}
+
+#program_export
+Check :: () -> s32 {
+    data_init()
+    if storage_init(data_root()) == 0 {
+        return 1
+    }
+    defer {
+        ClearDelegate()
+        WipeDelegateMaterial(*material)
+        WipeDelegateMaterial(*restored)
+        SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+        SyncCryptoWipe(*capsule[0], CapsuleCapacity)
+        storage_close()
+    }
+    if CreateSyncAccount(*owner) == 0 || !GenerateDelegateMaterial(*material) {
+        return 2
+    }
+    index: s64 = 0
+    while index < 32 {
+        key[index] = cast(u8)(index + 1)
+        index += 1
+    }
+    EnterPendingDelegateMode()
+    if StoredAccountMode() != AccountModeDelegate || StoredDelegateAvailable() != 0 ||
+        verified_delegate_bot != 0 || verified_delegate_user != 0 {
+        return 26
+    }
+    now := TestTime(null)
+    if !SetVerifiedDelegateIdentity(42, 7, now + 300) || !MakeAnswer(7) {
+        return 3
+    }
+    temporary_owner: Client
+    if !OpenTemporaryOwnerClient(Server, *owner, TextUntilNul(material.client_id[:]), 42, 7, *temporary_owner) ||
+        StoredAccountMode() != AccountModeDelegate || storage_get_setting_text("sync_private_key") != "" ||
+        OpenTemporaryOwnerClient(Server, *owner, TextUntilNul(material.client_id[:]), 42, 8, *temporary_owner) ||
+        temporary_owner.identity.account_id != "" {
+        return 27
+    }
+    // An unowned local Diary record is history, never an empty profile.
+    storage_set_setting_text("cell.diary.test.entry", "synthetic protected history")
+    if InstallAuthorizedDelegate(TextUntilNul(answer[:]), Expected(7), *material) ||
+        storage_sync_data_owner_public_id() != "" ||
+        storage_get_setting_text("cell.diary.test.entry") != "synthetic protected history" ||
+        db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id='cell.diary.test.entry'", -1) != 1 {
+        return 28
+    }
+    // Remove only this synthetic fixture row and receipt for the subsequent
+    // independent empty-profile case; application code never clears them.
+    if exec_sql("DELETE FROM settings WHERE key='cell.diary.test.entry'") == 0 ||
+        exec_sql("DELETE FROM sync_outbox WHERE entity_type='cell_record' AND entity_id='cell.diary.test.entry'") == 0 {
+        return 29
+    }
+    wrong := Expected(8)
+    if InstallAuthorizedDelegate(TextUntilNul(answer[:]), wrong, *material) ||
+        StoredDelegateAvailable() != 0 || storage_sync_data_owner_public_id() != "" {
+        return 4
+    }
+    if !InstallAuthorizedDelegate(TextUntilNul(answer[:]), Expected(7), *material) ||
+        StoredAccountMode() != AccountModeDelegate || StoredDelegateAvailable() != 1 ||
+        storage_has_sync_account() != 1 ||
+        storage_sync_data_owner_public_id() != TextUntilNul(owner.public_id[:]) {
+        return 5
+    }
+    loaded_owner: SyncAccount
+    owner_client: Client
+    if sync_account_load(*loaded_owner) != 0 ||
+        OpenAccountClient(Server, *owner, "test-client", *owner_client) ||
+        storage_get_setting_text("sync_private_key") != "" ||
+        storage_get_setting_text("sync_auth_token") != "" {
+        return 6
+    }
+    opened: DelegateClient
+    if !LoadStoredDelegate(*restored) || !OpenDelegateClient(Server, *restored, *opened) ||
+        StoredDelegateClientMatches(opened) != 1 {
+        return 7
+    }
+    resolved: [32]u8
+    if StoredDelegateKey(LumiPrivateCollection, LumiPrivateKeyID, *resolved[0]) != 1 ||
+        !EqualBytes(*resolved[0], *key[0], 32) {
+        return 8
+    }
+    if StoredDelegateKey(LegacyPrivateCellsCollection, LumiPrivateKeyID, *resolved[0]) != 0 ||
+        !AllZero(resolved[:]) ||
+        StoredDelegateKey(LumiPrivateCollection, "inbe-lumi-2", *resolved[0]) != 0 ||
+        !AllZero(resolved[:]) {
+        return 9
+    }
+    opened.bot_id = 43
+    if StoredDelegateClientMatches(opened) != 0 {
+        return 10
+    }
+    transport: AsyncTransport
+    transport.context = null
+    transport.start = DeniedStart
+    transport.poll = DeniedPoll
+    transport.cancel = DeniedCancel
+    scratch: [8192]u8
+    if BeginStoredRequest(*operation, Server, transport, "POST", "/api/v1/authorization/revoke", "{}", scratch[:], true) ||
+        BeginStoredDelete(*operation, Server, transport) || transport_calls != 0 {
+        return 11
+    }
+    if !ExportStoredDelegateCapsule(capsule[:]) {
+        return 12
+    }
+    ClearDelegate()
+    if StoredDelegateAvailable() != 0 || LoadStoredDelegate(*restored) ||
+        !AllZero(restored.signing.private_key[:]) || !AllZero(restored.encryption.secret_key[:]) ||
+        StoredDelegateKey(LumiPrivateCollection, LumiPrivateKeyID, *resolved[0]) != 0 || !AllZero(resolved[:]) {
+        return 13
+    }
+    // A process restart has no trusted identity, even when the capsule exists.
+    verified_delegate_bot = 0
+    verified_delegate_user = 0
+    verified_delegate_until = 0
+    if ReadDelegateCapsule(TextUntilNul(capsule[:]), Expected(7), *restored) {
+        return 14
+    }
+    if !SetVerifiedDelegateIdentity(42, 8, now + 300) ||
+        ReadDelegateCapsule(TextUntilNul(capsule[:]), Expected(8), *restored) ||
+        !AllZero(restored.signing.private_key[:]) || !AllZero(restored.encryption.secret_key[:]) {
+        return 15
+    }
+    if !SetVerifiedDelegateIdentity(42, 7, now + 300) ||
+        !ReadDelegateCapsule(TextUntilNul(capsule[:]), Expected(7), *restored) ||
+        restored.installed || OpenDelegateClient(Server, *restored, *opened) ||
+        StoredDelegateAvailable() != 0 {
+        return 16
+    }
+    // A fresh answer is required to expose candidate keys to storage.
+    if !InstallAuthorizedDelegate(TextUntilNul(answer[:]), Expected(7), *restored) ||
+        StoredDelegateAvailable() != 1 {
+        return 17
+    }
+    verified_delegate_until = TestTime(null)
+    if StoredDelegateAvailable() != 0 ||
+        StoredDelegateKey(LumiPrivateCollection, LumiPrivateKeyID, *resolved[0]) != 0 || !AllZero(resolved[:]) {
+        return 18
+    }
+    // Expired identity permits only a fresh challenge/session transfer.
+    // No collection key or data payload is exposed while that transfer runs.
+    transport.start = RenewalStart
+    transport.poll = RenewalPoll
+    transport_calls = 0
+    if !BeginStoredSession(*operation, Server, transport) || transport_calls != 1 ||
+        StoredDelegateKey(LumiPrivateCollection, LumiPrivateKeyID, *resolved[0]) != 0 || !AllZero(resolved[:]) {
+        return 19
+    }
+    while !PollStoredOperation(*operation) {
+        if StoredDelegateAvailable() != 0 {
+            return 21
+        }
+    }
+    if operation.result != cast(s32)AuthResult.AUTH_OK || transport_calls != 2 ||
+        StoredDelegateAvailable() != 1 ||
+        StoredDelegateKey(LumiPrivateCollection, LumiPrivateKeyID, *resolved[0]) != 1 {
+        return 22
+    }
+    // A context change inside the transport callback is checked again before
+    // a fresh session can be saved or any response can be applied.
+    verified_delegate_until = TestTime(null)
+    switch_identity_during_poll = true
+    if !BeginStoredSession(*operation, Server, transport) {
+        return 23
+    }
+    while !PollStoredOperation(*operation) {
+    }
+    if operation.result == cast(s32)AuthResult.AUTH_OK || StoredDelegateAvailable() != 0 ||
+        storage_sync_data_owner_public_id() != TextUntilNul(owner.public_id[:]) {
+        return 24
+    }
+    if !SetVerifiedDelegateIdentity(42, 7, TestTime(null) + 300) {
+        return 25
+    }
+    storage_set_sync_data_owner_public_id("1111111111111111111111111111111111111111111111111111111111111111")
+    if InstallAuthorizedDelegate(TextUntilNul(answer[:]), Expected(7), *restored) || StoredDelegateAvailable() != 0 {
+        return 20
+    }
+    return 0
+}

@@ -2,12 +2,15 @@
 #import "text"
 #import "vec"
 #import "text_buffer"
+#import "wire"
+#import "authorization"
 #import "byte_text_linux"
 #import "auth"
 #import, file "lumi_online.zi";
 #import, file "lumi_store.zi";
 #import, file "feedback_store.zi";
 #import, file "lumi_types.zi";
+#import, file "lumi_authorization.zi";
 #import, file "package_files.zi";
 #import, file "module_host.zi";
 #import, file "../screens/lumi_screen.zi";
@@ -57,7 +60,7 @@ LumiTelegramLink :: () {
 
 LumiTelegramDisconnect :: () {
     lumi_telegram_error = false
-    lumi_telegram_disconnect_requested = true
+    LumiAuthorizationRevokeThenDisconnect()
 }
 
 LumiTelegramOpen :: (start: string = "") -> bool {
@@ -86,7 +89,7 @@ LumiTelegramOpen :: (start: string = "") -> bool {
 }
 
 LumiTelegramBusy :: () -> bool {
-    return lumi_telegram_link_requested || lumi_telegram_disconnect_requested ||
+    return LumiAuthorizationBusy() || lumi_telegram_link_requested || lumi_telegram_disconnect_requested ||
     (lumi_telegram_operation.active && (lumi_telegram_stage == 1 || lumi_telegram_stage == 5))
 }
 
@@ -219,6 +222,21 @@ LumiTelegramApply :: (app: *InnerBreeze, document: string) {
 }
 
 LumiTelegramPump :: (app: *InnerBreeze) {
+    LumiAuthorizationPump()
+    if lumi_authorization_intent == 2 {
+        lumi_authorization_intent = 0
+        start: [38]u8
+        writer: Writer = .{start[:], 0, true}
+        writer = WriteText(writer, "auth_")
+        writer = WriteText(writer, TextUntilNul(lumi_authorization_pending.request_id[:]))
+        if !writer.valid || !LumiTelegramOpen(TextUntilNul(start[:])) {
+            lumi_authorization_state = 5
+        }
+    }
+    if lumi_authorization_disconnect_ready {
+        lumi_authorization_disconnect_ready = false
+        lumi_telegram_disconnect_requested = true
+    }
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     if lumi_telegram_owner[0] != 0 && owner != TextUntilNul(lumi_telegram_owner[:]) {
         CancelStoredOperation(*lumi_telegram_operation)

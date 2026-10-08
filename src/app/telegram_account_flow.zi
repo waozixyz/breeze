@@ -1,0 +1,856 @@
+// Device-local Telegram account orchestration. The bot and node never receive
+// an owner secret or recovery passphrase. Only a verified scoped delegate is
+// installed into app storage after the owner signature and envelope validate.
+#import "authorization"
+#import "delegated"
+#import "async_client"
+#import "auth"
+#import "net_http"
+#import "wire"
+#import "text_buffer"
+#import, file "telegram_entry_protocol.zi";
+#import, file "../platform/telegram_bridge.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../storage/device_key.zi";
+#import, file "../storage/sync_crypto_random.zi";
+#import, file "../storage/sync_account_crypto.zi";
+#import, file "../storage/sync_account_encrypted.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_layout.zi";
+#import, file "../cells/lumi_authorization.zi";
+#import, file "../screens/telegram_account.zi";
+#import, file "app_types.zi";
+#import, file "locale.zi";
+#import, file "text_buffers.zi";
+
+TelegramFlowServer :: "https://api.waozi.xyz"
+TelegramAccountFlow :: struct {
+    started: bool
+    hosted: bool
+    waiting: bool
+    phase: s32
+    status: s32
+    retry_at: s64
+    approval_time: s64
+    cleanup_pending: bool
+    sync_renewal: bool
+    protected_phase: s32
+    backup_saved: bool
+    backup_digest: [65]u8
+    cancellation_deadline: s64
+    entry_cancel_waiting: bool
+    entry_cancel_transfer: NetworkTransfer
+    entry_cancel_address: [1025]u8
+    entry_cancel_body: [32768]u8
+    entry_cancel_response: [8193]u8
+    owner_cancel_transfer: NetworkTransfer
+    owner_cancel_body: [1025]u8
+    owner_cancel_response: [8193]u8
+    owner_cancel_operation: OwnerAuthorizationOperation
+    restored: bool
+    temporary_owner: bool
+    entry_id: [33]u8
+    init_data: [16385]u8
+    init_digest: [65]u8
+    address: [1025]u8
+    body: [32768]u8
+    response: [65537]u8
+    capsule: [65537]u8
+    recovery: [17664]u8
+    review: [8192]u8
+    initial_owner: [65]u8
+    environment: TelegramEnvironment
+    challenge: TelegramEntryChallenge
+    identity: TelegramEntryIdentity
+    pending: PublicRendezvous
+    owner_pending: OwnerRendezvous
+    material: DelegateMaterial
+    owner: SyncAccount
+    approved: GrantStorage
+    transfer: NetworkTransfer
+    owner_operation: OwnerAuthorizationOperation
+    protected_operation: TelegramProtectedOperation
+    sync_operation: StoredOperation
+    sync_transfer: NetworkTransfer
+    recovery_input: TelegramAccountPassword
+    view: TelegramAccountView
+}
+telegram_account_flow: TelegramAccountFlow;
+
+TelegramFlowStopOperations :: (flow: *TelegramAccountFlow) {
+    transport := NetworkTransport(*flow.transfer)
+    transport.cancel(transport.context)
+    CancelOwnerAuthorizationOperation(*flow.owner_operation)
+    CancelStoredOperation(*flow.sync_operation)
+    CancelTelegramProtectedOperation(*flow.protected_operation)
+    CancelOwnerAuthorizationOperation(*flow.owner_cancel_operation)
+    if flow.entry_cancel_waiting {
+        cancel_transport := NetworkTransport(*flow.entry_cancel_transfer)
+        cancel_transport.cancel(cancel_transport.context)
+        flow.entry_cancel_waiting = false
+    }
+    SyncCryptoWipe(*flow.owner_cancel_response[0], 8193)
+    SyncCryptoWipe(*flow.owner_cancel_body[0], 1025)
+    SyncCryptoWipe(*flow.entry_cancel_response[0], 8193)
+    SyncCryptoWipe(*flow.entry_cancel_body[0], 32768)
+    flow.cancellation_deadline = 0
+    flow.waiting = false
+}
+
+TelegramFlowWipeSecrets :: (flow: *TelegramAccountFlow) {
+    TelegramAccountClearPassword(*flow.recovery_input)
+    SyncCryptoWipe(*flow.owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SyncCryptoWipe(*flow.init_data[0], 16385)
+    SyncCryptoWipe(*flow.capsule[0], 65537)
+    SyncCryptoWipe(*flow.recovery[0], 17664)
+    SyncCryptoWipe(*flow.body[0], 32768)
+    SyncCryptoWipe(*flow.response[0], 65537)
+    WipeDelegateMaterial(*flow.material)
+}
+
+TelegramFlowClearProtected :: (flow: *TelegramAccountFlow) {
+    flow.cleanup_pending = false
+    flow.protected_phase = 3
+    unused BeginTelegramProtectedOperation(*flow.protected_operation, 3, "", flow.response[:])
+}
+
+TelegramFlowDelegateCleared :: () {
+    // This hook runs under the credential lock. Defer host effects and
+    // cancellation until the next controller pump, after that lock is free.
+    if telegram_account_flow.hosted && telegram_account_flow.phase == 14 {
+        telegram_account_flow.cleanup_pending = true
+    }
+}
+
+// Local denial is immediate. These separate, bounded operations may finish
+// already-authorized cancellation while no application data can be accessed.
+TelegramFlowBeginRemoteCancellation :: (flow: *TelegramAccountFlow) {
+    now := CurrentStoredDelegateTime(null)
+    flow.cancellation_deadline = now + 30
+    if flow.temporary_owner && flow.owner.private_key_hex[0] != cast(u8)0 &&
+    LowerHex(TextUntilNul(flow.owner_pending.request_id[:]), 32) &&
+    TextUntilNul(flow.owner_pending.status[:]) != "approved" {
+        writer: Writer = .{flow.owner_cancel_body[:], 0, true}
+        writer = WriteText(writer, "{\"app_id\":\"inbe\",")
+        writer = JsonTextField(writer, "request_id", TextUntilNul(flow.owner_pending.request_id[:]))
+        writer = WriteByte(writer, cast(u8)125)
+        if writer.valid {
+            unused BeginTemporaryOwnerAuthorizationOperation(*flow.owner_cancel_operation,
+                *flow.owner, flow.environment.bot_id, flow.identity.telegram_id,
+                TelegramFlowServer, NetworkTransport(*flow.owner_cancel_transfer),
+                "/api/v1/authorization/cancel", TextUntilNul(flow.owner_cancel_body[:]),
+                flow.owner_cancel_response[:], true)
+        }
+    }
+    if !BuildTelegramEntryActionBody(*flow.identity, *flow.material, "cancel", "",
+        now, flow.entry_cancel_body[:]) {
+        return
+    }
+    address_writer: Writer = .{flow.entry_cancel_address[:], 0, true}
+    address_writer = WriteText(address_writer, TelegramFlowServer)
+    address_writer = WriteText(address_writer, "/api/v1/telegram/entry/cancel")
+    if !address_writer.valid { return }
+    request: HttpRequest
+    request.method = "POST"
+    request.url = TextUntilNul(flow.entry_cancel_address[:])
+    request.content_type = "application/json"
+    request.accept = "application/json"
+    request.body = TextUntilNul(flow.entry_cancel_body[:])
+    transport := NetworkTransport(*flow.entry_cancel_transfer)
+    flow.entry_cancel_waiting = transport.start(transport.context, request, flow.entry_cancel_response[:])
+}
+
+TelegramFlowPumpRemoteCancellation :: (flow: *TelegramAccountFlow) {
+    if flow.cancellation_deadline <= 0 { return }
+    now := CurrentStoredDelegateTime(null)
+    expired := now <= 0 || now >= flow.cancellation_deadline
+    if flow.owner_cancel_operation.active {
+        if expired {
+            CancelOwnerAuthorizationOperation(*flow.owner_cancel_operation)
+        } else {
+            unused PollOwnerAuthorizationOperation(*flow.owner_cancel_operation)
+        }
+    }
+    if flow.entry_cancel_waiting {
+        transport := NetworkTransport(*flow.entry_cancel_transfer)
+        status: s32
+        if expired {
+            transport.cancel(transport.context)
+            flow.entry_cancel_waiting = false
+        } else {
+            result := transport.poll(transport.context, *status)
+            if result >= 0 { flow.entry_cancel_waiting = false }
+        }
+    }
+    if !flow.owner_cancel_operation.active && !flow.entry_cancel_waiting {
+        SyncCryptoWipe(*flow.owner_cancel_response[0], 8193)
+        SyncCryptoWipe(*flow.owner_cancel_body[0], 1025)
+        SyncCryptoWipe(*flow.entry_cancel_response[0], 8193)
+        SyncCryptoWipe(*flow.entry_cancel_body[0], 32768)
+        flow.cancellation_deadline = 0
+    }
+}
+
+TelegramFlowFail :: (flow: *TelegramAccountFlow) {
+    TelegramFlowStopOperations(flow)
+    flow.phase = 90
+    flow.view.busy = false
+    flow.view.restore_failed = true
+    flow.view.status = LocaleText("telegram_account_restore_failed")
+    flow.view.review_complete = false
+    flow.view.allowed_actions = cast(u32)1 << 4
+    ClearDelegate()
+    flow.cleanup_pending = false
+    TelegramFlowBeginRemoteCancellation(flow)
+    TelegramFlowWipeSecrets(flow)
+    TelegramFlowClearProtected(flow)
+}
+
+TelegramFlowIDBody :: (field: string, value: string, output: []u8) -> bool {
+    writer: Writer = .{output, 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, field, value)
+    writer = WriteByte(writer, cast(u8)125)
+    return writer.valid
+}
+
+TelegramFlowStartRequest :: (flow: *TelegramAccountFlow, path: string,
+    method: string, phase: s32) -> bool {
+    if flow.waiting || flow.owner_operation.active || !TelegramContextCurrent() {
+        return false
+    }
+    writer: Writer = .{flow.address[:], 0, true}
+    writer = WriteText(writer, TelegramFlowServer)
+    writer = WriteText(writer, path)
+    if !writer.valid { return false }
+    flow.response[0] = cast(u8)0
+    transport := NetworkTransport(*flow.transfer)
+    request: HttpRequest
+    request.method = method
+    request.url = TextUntilNul(flow.address[:])
+    request.content_type = "application/json"
+    request.accept = "application/json"
+    request.body = ifx method == "GET" then "" else TextUntilNul(flow.body[:])
+    if !transport.start(transport.context, request, flow.response[:]) { return false }
+    flow.phase = phase
+    flow.waiting = true
+    flow.view.busy = true
+    return true
+}
+
+TelegramFlowOwnerRequest :: (flow: *TelegramAccountFlow, path: string,
+    signed: bool, phase: s32) -> bool {
+    if !flow.temporary_owner || flow.waiting || !TelegramContextCurrent() { return false }
+    if !BeginTemporaryOwnerAuthorizationOperation(*flow.owner_operation, *flow.owner,
+        flow.environment.bot_id, flow.identity.telegram_id, TelegramFlowServer,
+        NetworkTransport(*flow.transfer), path, TextUntilNul(flow.body[:]), flow.response[:], signed) {
+        return false
+    }
+    flow.phase = phase
+    flow.view.busy = true
+    return true
+}
+
+TelegramFlowPublicPending :: (flow: *TelegramAccountFlow, candidate: *PublicRendezvous,
+    initial: bool) -> bool {
+    now := CurrentStoredDelegateTime(null)
+    if candidate == null || TextUntilNul(candidate.app_id[:]) != "inbe" ||
+    TextUntilNul(candidate.node_id[:]) != TextUntilNul(flow.environment.node_id[:]) ||
+    TextUntilNul(candidate.audience[:]) != TelegramFlowServer ||
+    candidate.expires_at <= now || candidate.expires_at > now + 600 {
+        return false
+    }
+    if initial {
+        return TextUntilNul(candidate.status[:]) == "pending"
+    }
+    return TextUntilNul(candidate.request_id[:]) == TextUntilNul(flow.pending.request_id[:]) &&
+    TextUntilNul(candidate.challenge[:]) == TextUntilNul(flow.pending.challenge[:]) &&
+    candidate.expires_at == flow.pending.expires_at
+}
+
+TelegramFlowClaim :: (flow: *TelegramAccountFlow, from_entry: bool) -> bool {
+    message: [8192]u8
+    signature: [129]u8
+    raw := ifx from_entry then "" else TextUntilNul(flow.init_data[:])
+    if !BuildClaimMessage(*flow.pending, TextUntilNul(flow.material.client_id[:]),
+        TextUntilNul(flow.material.signing.public_hex[:]), TextUntilNul(flow.material.encryption_hex[:]),
+        TextUntilNul(flow.init_digest[:]), message[:]) ||
+    !SignDeviceMessage(cast(*void)*flow.material.signing, TextUntilNul(message[:]), signature[:]) ||
+    !BuildClaimBody(TextUntilNul(flow.pending.request_id[:]), TextUntilNul(flow.material.client_id[:]),
+        TextUntilNul(flow.material.signing.public_hex[:]), TextUntilNul(flow.material.encryption_hex[:]),
+        raw, TextUntilNul(signature[:]), flow.body[:]) {
+        return false
+    }
+    if from_entry {
+        text := TextUntilNul(flow.body[:])
+        writer: Writer = .{flow.body[:], cast(s64)text.count - 1, true}
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "entry_id", TextUntilNul(flow.entry_id[:]))
+        writer = WriteByte(writer, cast(u8)125)
+        if !writer.valid { return false }
+    }
+    return TelegramFlowStartRequest(flow, "/api/v1/authorization/claim", "POST", 7)
+}
+
+TelegramFlowReadClaim :: (flow: *TelegramAccountFlow, json: string) -> bool {
+    names: [6]string = .["request_id", "bot_id", "telegram_id", "init_digest", "node_id", "audience"]
+    positions: [6]s32
+    request: [33]u8
+    node: [65]u8
+    audience: [513]u8
+    digest: [65]u8
+    bot: s64
+    user: s64
+    if !WholeJson(json) || !EntryObjectFields(json, 0, names[:], positions[:]) ||
+    !EntryReadText(json, positions[0], request[:]) || !ReadInteger(json, positions[1], *bot) ||
+    !ReadInteger(json, positions[2], *user) || !EntryReadText(json, positions[3], digest[:]) ||
+    !EntryReadText(json, positions[4], node[:]) || !EntryReadText(json, positions[5], audience[:]) ||
+    TextUntilNul(request[:]) != TextUntilNul(flow.pending.request_id[:]) ||
+    bot != flow.environment.bot_id || user <= 0 || user > 4503599627370495 ||
+    TextUntilNul(digest[:]) != TextUntilNul(flow.init_digest[:]) ||
+    TextUntilNul(node[:]) != TextUntilNul(flow.environment.node_id[:]) ||
+    TextUntilNul(audience[:]) != TelegramFlowServer ||
+    (flow.identity.telegram_id != 0 && flow.identity.telegram_id != user) {
+        return false
+    }
+    flow.identity.telegram_id = user
+    return SetVerifiedDelegateIdentity(bot, user, CurrentStoredDelegateTime(null) + 300)
+}
+
+TelegramFlowWriteReview :: (flow: *TelegramAccountFlow, owner: string,
+    expires: s64) -> bool {
+    signing: [65]u8
+    encryption: [65]u8
+    bot: [24]u8
+    user: [24]u8
+    expiry: [24]u8
+    if !HashText(TextUntilNul(flow.material.signing.public_hex[:]), signing[:]) ||
+    !HashText(TextUntilNul(flow.material.encryption_hex[:]), encryption[:]) ||
+    !AppFormatS64(flow.environment.bot_id, bot[:]) ||
+    !AppFormatS64(flow.identity.telegram_id, user[:]) || !AppFormatS64(expires, expiry[:]) {
+        return false
+    }
+    details: [8]string = .["inbe", owner, TextUntilNul(bot[:]), TextUntilNul(user[:]),
+    TextUntilNul(flow.environment.node_id[:]), TelegramFlowServer, LumiPrivateCollection,
+    TextUntilNul(expiry[:])]
+    fingerprints: [2]string = .[TextUntilNul(signing[:]), TextUntilNul(encryption[:])]
+    writer: Writer = .{flow.review[:], 0, true}
+    formats: [2]string = .[LocaleText("lumi_authorization_details"), LocaleText("lumi_authorization_fingerprints")]
+    for part: 0..1 {
+        fields := ifx part == 0 then details[:] else fingerprints[:]
+        index: s32 = 0
+        start: s64 = 0
+        format := formats[part]
+        for cursor: 0..cast(s64)format.count - 1 {
+            if format[cursor] == cast(u8)37 {
+                if index >= fields.count { return false }
+                writer = WriteText(writer, format[start:cursor])
+                writer = WriteText(writer, fields[index])
+                index += 1
+                start = cursor + 1
+            }
+        }
+        if index != fields.count { return false }
+        writer = WriteText(writer, format[start:])
+        writer = WriteText(writer, "\n\n")
+    }
+    flow.view.details = TextUntilNul(flow.review[:])
+    return writer.valid
+}
+
+TelegramFlowChoice :: (flow: *TelegramAccountFlow) {
+    flow.phase = 4
+    flow.view.busy = false
+    mode := TextUntilNul(flow.challenge.mode[:])
+    flow.view.message_key = ifx mode == "create" then "telegram_account_create_body" else ifx mode == "restore" then "telegram_account_restore_body" else "telegram_account_connect_body"
+    flow.view.password = *flow.recovery_input
+    flow.view.password_label = LocaleText("telegram_account_passphrase")
+    flow.view.allowed_actions = (cast(u32)1 << 4) | (cast(u32)1 << 7) | (cast(u32)1 << 3)
+    if flow.capsule[0] != cast(u8)0 { flow.view.allowed_actions |= cast(u32)1 << 2 }
+    if flow.identity.account_id[0] == cast(u8)0 && flow.initial_owner[0] == cast(u8)0 &&
+    storage_sync_data_owner_public_id() == "" {
+        flow.view.allowed_actions |= cast(u32)1 << 1
+    }
+    if !TelegramFlowWriteReview(flow, TextUntilNul(flow.identity.account_id[:]), flow.challenge.expires_at) {
+        TelegramFlowFail(flow)
+    }
+}
+
+TelegramFlowStartChallenge :: (flow: *TelegramAccountFlow) -> bool {
+    return TelegramFlowIDBody("grant_id", TextUntilNul(flow.pending.grant_id[:]), flow.body[:]) &&
+    TelegramFlowStartRequest(flow, "/api/v1/authorization/challenge", "POST", 11)
+}
+
+TelegramFlowStartPolling :: (flow: *TelegramAccountFlow) -> bool {
+    return TelegramFlowIDBody("request_id", TextUntilNul(flow.pending.request_id[:]), flow.body[:]) &&
+    TelegramFlowStartRequest(flow, "/api/v1/authorization/rendezvous", "POST", 10)
+}
+
+TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
+    snapshot: [65537]u8
+    if !AppCopyText(TextUntilNul(flow.response[:]), snapshot[:]) {
+        TelegramFlowFail(flow)
+        return
+    }
+    defer { SyncCryptoWipe(*snapshot[0], 65537) }
+    json := TextUntilNul(snapshot[:])
+    now := CurrentStoredDelegateTime(null)
+    phase := flow.phase
+    flow.waiting = false
+    flow.view.busy = false
+    if phase == 1 {
+        if flow.status != 200 || !ReadTelegramEnvironment(json, TelegramFlowServer, *flow.environment) ||
+        !TelegramRawInitDigest(TextUntilNul(flow.init_data[:]), flow.environment.bot_id, flow.init_digest[:]) ||
+        !TelegramFlowIDBody("entry_id", TextUntilNul(flow.entry_id[:]), flow.body[:]) ||
+        !TelegramFlowStartRequest(flow, "/api/v1/telegram/entry", "POST", 2) {
+            TelegramFlowFail(flow)
+        }
+    } else if phase == 2 {
+        if flow.status == 404 || flow.status == 410 {
+            unused AppCopyText(TextUntilNul(flow.entry_id[:]), flow.pending.request_id[:])
+            if !TelegramFlowStartPolling(flow) { TelegramFlowFail(flow) }
+            return
+        }
+        if flow.status != 200 || !ReadTelegramEntryChallenge(json, TextUntilNul(flow.entry_id[:]),
+            *flow.environment, now, *flow.challenge) ||
+        !BuildTelegramEntryVerifyBody(*flow.challenge, *flow.material, TextUntilNul(flow.init_data[:]), flow.body[:]) ||
+        !TelegramFlowStartRequest(flow, "/api/v1/telegram/entry/verify", "POST", 3) {
+            TelegramFlowFail(flow)
+        }
+    } else if phase == 3 {
+        if flow.status != 200 || !ReadTelegramEntryIdentity(json, *flow.challenge,
+            TextUntilNul(flow.material.client_id[:]), TextUntilNul(flow.material.signing.public_hex[:]),
+            TextUntilNul(flow.material.encryption_hex[:]), now, *flow.identity) ||
+        TextUntilNul(flow.identity.init_digest[:]) != TextUntilNul(flow.init_digest[:]) ||
+        TextUntilNul(flow.identity.status[:]) != "verified" {
+            TelegramFlowFail(flow)
+            return
+        }
+        // A capsule is still opaque and uninstalled here. Its current identity
+        // and owner signature are verified before any key is restored or used.
+        flow.protected_phase = 1
+        if !BeginTelegramProtectedOperation(*flow.protected_operation, 2, "", flow.capsule[:]) {
+            if !SetVerifiedDelegateIdentity(flow.environment.bot_id, flow.identity.telegram_id, now + 300) {
+                TelegramFlowFail(flow)
+            } else { TelegramFlowChoice(flow) }
+        }
+    } else if phase == 5 {
+        bound: TelegramEntryIdentity
+        if flow.status != 200 || !ReadTelegramEntryIdentity(json, *flow.challenge,
+            TextUntilNul(flow.material.client_id[:]), TextUntilNul(flow.material.signing.public_hex[:]),
+            TextUntilNul(flow.material.encryption_hex[:]), now, *bound) ||
+        TextUntilNul(bound.account_id[:]) != AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) ||
+        TextUntilNul(bound.status[:]) != "bound" {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.identity = bound
+        if !AppCopyText("{\"app_id\":\"inbe\",\"telegram\":true,\"scopes\":[{\"collection\":\"private.inbe.v2.lumi\",\"read\":true,\"write\":true}]}", flow.body[:]) ||
+        !TelegramFlowOwnerRequest(flow, "/api/v1/authorization/requests", true, 6) {
+            TelegramFlowFail(flow)
+        }
+    } else if phase == 6 {
+        if flow.status != 200 || !ReadOwnerRendezvous(json, *flow.owner_pending) ||
+        !LumiAuthorizationPendingValid(*flow.owner_pending,
+            AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, false) {
+            TelegramFlowFail(flow)
+            return
+        }
+        if !AppCopyText(TextUntilNul(flow.owner_pending.request_id[:]), flow.pending.request_id[:]) ||
+        !TelegramFlowIDBody("request_id", TextUntilNul(flow.owner_pending.request_id[:]), flow.body[:]) ||
+        !TelegramFlowStartRequest(flow, "/api/v1/authorization/rendezvous", "POST", 10) {
+            TelegramFlowFail(flow)
+        }
+    } else if phase == 7 {
+        if flow.status != 200 || !TelegramFlowReadClaim(flow, json) {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.phase = 10
+        flow.retry_at = now
+    } else if phase == 8 {
+        if flow.status == 202 {
+            flow.phase = 8
+            flow.retry_at = now + 2
+            return
+        }
+        candidate: PublicRendezvous
+        if flow.status != 200 || !ReadPublicRendezvous(json, *candidate) ||
+        !TelegramFlowPublicPending(flow, *candidate, true) {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.pending = candidate
+        if !TelegramFlowClaim(flow, true) { TelegramFlowFail(flow) }
+    } else if phase == 9 {
+        if flow.status != 200 { TelegramFlowFail(flow); return }
+        flow.phase = 10
+        flow.retry_at = now
+    } else if phase == 10 {
+        candidate: PublicRendezvous
+        initial := flow.pending.challenge[0] == cast(u8)0
+        if flow.status != 200 || !ReadPublicRendezvous(json, *candidate) ||
+        !TelegramFlowPublicPending(flow, *candidate, initial) ||
+        TextUntilNul(candidate.request_id[:]) != TextUntilNul(flow.pending.request_id[:]) {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.pending = candidate
+        state := TextUntilNul(candidate.status[:])
+        if initial {
+            if !TelegramFlowClaim(flow, flow.challenge.entry_id[0] != cast(u8)0) {
+                TelegramFlowFail(flow)
+            }
+        } else if state == "approved" {
+            if !TelegramFlowStartChallenge(flow) { TelegramFlowFail(flow) }
+        } else if state != "claimed" {
+            TelegramFlowFail(flow)
+        } else if flow.temporary_owner {
+            flow.owner_pending.status[0] = cast(u8)0
+            if !TelegramFlowIDBody("request_id", TextUntilNul(candidate.request_id[:]), flow.body[:]) ||
+            !TelegramFlowOwnerRequest(flow, "/api/v1/authorization/rendezvous", false, 15) {
+                TelegramFlowFail(flow)
+            }
+        } else {
+            flow.retry_at = now + 2
+            flow.view.message_key = "telegram_account_connect_body"
+            flow.view.status = LocaleText("lumi_authorization_pending")
+        }
+    } else if phase == 11 {
+        expected := DelegateInstallExpectation.{
+            request_id = TextUntilNul(flow.pending.request_id[:]),
+            grant_id = TextUntilNul(flow.pending.grant_id[:]),
+            account_id = TextUntilNul(flow.identity.account_id[:]), app_id = "inbe",
+            node_id = TextUntilNul(flow.environment.node_id[:]),
+            audience = TelegramFlowServer, server_url = TelegramFlowServer,
+            bot_id = flow.environment.bot_id, telegram_id = flow.identity.telegram_id}
+        challenge: SessionChallenge
+        if flow.status != 200 || !ReadChallenge(json, *challenge) ||
+        !PrepareBootstrapDelegateSessionBody(*challenge, expected, *flow.material, flow.body[:]) ||
+        !TelegramFlowStartRequest(flow, "/api/v1/authorization/session", "POST", 12) {
+            TelegramFlowFail(flow)
+        }
+    } else if phase == 12 {
+        expected := DelegateInstallExpectation.{
+            request_id = TextUntilNul(flow.pending.request_id[:]),
+            grant_id = TextUntilNul(flow.pending.grant_id[:]),
+            account_id = TextUntilNul(flow.identity.account_id[:]), app_id = "inbe",
+            node_id = TextUntilNul(flow.environment.node_id[:]),
+            audience = TelegramFlowServer, server_url = TelegramFlowServer,
+            bot_id = flow.environment.bot_id, telegram_id = flow.identity.telegram_id}
+        if flow.status != 200 || !InstallAuthorizedDelegate(json, expected, *flow.material) {
+            TelegramFlowFail(flow)
+            return
+        }
+        SyncCryptoWipe(*flow.owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+        SyncCryptoWipe(*flow.init_data[0], 16385)
+        flow.phase = 14
+        flow.view.visible = false
+        flow.view.busy = false
+        flow.protected_phase = 2
+        if !ExportStoredDelegateCapsule(flow.capsule[:]) ||
+        !BeginTelegramProtectedOperation(*flow.protected_operation, 1,
+            TextUntilNul(flow.capsule[:]), flow.response[:]) {
+            SyncCryptoWipe(*flow.capsule[0], 65537)
+            flow.protected_phase = 0
+        }
+        WipeDelegateMaterial(*flow.material)
+        flow.retry_at = now
+    } else if phase == 15 {
+        if flow.status != 200 || !ReadOwnerRendezvous(json, *flow.owner_pending) ||
+        !LumiAuthorizationPendingValid(*flow.owner_pending,
+            AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, true) ||
+        TextUntilNul(flow.owner_pending.request_id[:]) != TextUntilNul(flow.pending.request_id[:]) ||
+        TextUntilNul(flow.owner_pending.challenge[:]) != TextUntilNul(flow.pending.challenge[:]) ||
+        flow.owner_pending.expires_at != flow.pending.expires_at ||
+        TextUntilNul(flow.owner_pending.client_id[:]) != TextUntilNul(flow.material.client_id[:]) ||
+        TextUntilNul(flow.owner_pending.node_id[:]) != TextUntilNul(flow.environment.node_id[:]) ||
+        TextUntilNul(flow.owner_pending.audience[:]) != TelegramFlowServer ||
+        TextUntilNul(flow.owner_pending.signing_key[:]) != TextUntilNul(flow.material.signing.public_hex[:]) ||
+        TextUntilNul(flow.owner_pending.encryption_key[:]) != TextUntilNul(flow.material.encryption_hex[:]) ||
+        flow.owner_pending.bot_id != flow.environment.bot_id ||
+        flow.owner_pending.telegram_id != flow.identity.telegram_id ||
+        !TelegramFlowWriteReview(flow, TextUntilNul(flow.owner_pending.account_id[:]), now + 86400) {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.approval_time = now
+        flow.phase = 16
+        flow.view.review_complete = flow.backup_saved
+        flow.view.review_id = TextUntilNul(flow.pending.request_id[:])
+        flow.view.allowed_actions = (cast(u32)1 << 4) | (cast(u32)1 << 6)
+        flow.view.message_key = "lumi_authorization_review"
+    }
+}
+
+TelegramAccountFlowOwnsContext :: () -> bool {
+    return telegram_account_flow.hosted
+}
+
+TelegramAccountFlowStart :: () {
+    flow := *telegram_account_flow
+    if flow.started { return }
+    flow.started = true
+    if !TelegramHostPresent() { return }
+    flow.hosted = true
+    unused AppCopyText(storage_sync_data_owner_public_id(), flow.initial_owner[:])
+    EnterPendingDelegateMode()
+    on_delegate_clear = TelegramFlowDelegateCleared
+    flow.view.visible = true
+    flow.view.title_key = "telegram_account_title"
+    flow.view.message_key = "telegram_account_connect_body"
+    flow.view.allowed_actions = cast(u32)1 << 4
+    if !ReadTelegramContext(flow.entry_id[:], flow.init_data[:]) || !GenerateDelegateMaterial(*flow.material) ||
+    !TelegramFlowStartRequest(flow, "/api/v1/telegram/environment", "GET", 1) {
+        TelegramFlowFail(flow)
+    }
+}
+
+TelegramAccountFlowCancel :: () {
+    flow := *telegram_account_flow
+    TelegramFlowStopOperations(flow)
+    flow.view.visible = false
+    ClearDelegate()
+    flow.cleanup_pending = false
+    TelegramFlowBeginRemoteCancellation(flow)
+    TelegramFlowWipeSecrets(flow)
+    TelegramFlowClearProtected(flow)
+    flow.phase = 91
+}
+
+HandleTelegramAccountAction :: (app: *InnerBreeze, action: s32) {
+    unused app
+    flow := *telegram_account_flow
+    if action == 4 { TelegramAccountFlowCancel(); return }
+    if flow.waiting || flow.owner_operation.active || !TelegramContextCurrent() ||
+    !TelegramAccountActionAllowed(*flow.view, action) { return }
+    now := CurrentStoredDelegateTime(null)
+    if action == 1 {
+        if flow.initial_owner[0] != cast(u8)0 || flow.identity.account_id[0] != cast(u8)0 ||
+        storage_sync_data_owner_public_id() != "" || CreateSyncAccount(*flow.owner) == 0 {
+            TelegramFlowFail(flow)
+            return
+        }
+        flow.temporary_owner = true
+        flow.phase = 17
+        flow.view.message_key = "telegram_account_create_body"
+        flow.view.allowed_actions = (cast(u32)1 << 4) | (cast(u32)1 << 5)
+    } else if action == 5 {
+        saved: bool
+        {
+            passphrase := TextUntilNul(flow.recovery_input.value[:])
+            saved = flow.temporary_owner && passphrase.count >= 12 &&
+            ExportSyncAccountTextEncrypted(*flow.owner, passphrase, *flow.recovery[0], 17664) != 0 &&
+            HashText(TextUntilNul(flow.recovery[:]), flow.backup_digest[:]) &&
+            DownloadTelegramRecoveryFile(TextUntilNul(flow.recovery[:]))
+        }
+        if !saved {
+            TelegramAccountClearPassword(*flow.recovery_input)
+            SyncCryptoWipe(*flow.recovery[0], 17664)
+            flow.view.restore_failed = true
+            return
+        }
+        TelegramAccountClearPassword(*flow.recovery_input)
+        SyncCryptoWipe(*flow.recovery[0], 17664)
+        // A browser download click is not evidence of a saved backup. Require
+        // the saved ciphertext to be selected and matched before binding.
+        flow.backup_saved = false
+        flow.view.restore_failed = false
+        flow.view.status = ""
+        flow.phase = 18
+        flow.view.message_key = "telegram_account_verify_backup"
+        flow.view.password = null
+        flow.view.allowed_actions = (cast(u32)1 << 4) | (cast(u32)1 << 7)
+        flow.view.action_labels[7] = LocaleText("sync_import_key_button")
+    } else if action == 7 {
+        flow.protected_phase = ifx flow.phase == 18 then 5 else 4
+        if !BeginTelegramRecoveryFile(*flow.protected_operation, flow.recovery[:]) {
+            flow.view.restore_failed = true
+        } else { flow.view.busy = true }
+    } else if action == 3 {
+        flow.phase = 8
+        flow.view.message_key = "telegram_account_connect_body"
+        flow.view.allowed_actions = cast(u32)1 << 4
+        flow.retry_at = now
+    } else if action == 6 {
+        if !flow.view.review_complete || !flow.view.review_seen || !flow.backup_saved ||
+        flow.approval_time <= 0 || flow.owner_pending.expires_at <= now ||
+        flow.approval_time + 86400 <= now ||
+        !SealAndSignTemporaryLumiGrant(*flow.owner, *flow.owner_pending, flow.approval_time,
+            flow.body[:], *flow.approved) ||
+        !TelegramFlowOwnerRequest(flow, "/api/v1/authorization/approve", false, 9) {
+            TelegramFlowFail(flow)
+        }
+    } else if action == 2 {
+        names: [6]string = .["format", "signing_private", "encryption_public", "encryption_private", "owner_public_key", "grant"]
+        positions: [6]s32
+        grant: GrantStorage
+        capsule := TextUntilNul(flow.capsule[:])
+        if !WholeJson(capsule) || !EntryObjectFields(capsule, 0, names[:], positions[:]) ||
+        !ReadGrantAt(capsule, positions[5], *grant) { flow.view.restore_failed = true; return }
+        expected := DelegateInstallExpectation.{
+            request_id = TextUntilNul(grant.request_id[:]),
+            grant_id = TextUntilNul(grant.grant_id[:]),
+            account_id = TextUntilNul(flow.identity.account_id[:]), app_id = "inbe",
+            node_id = TextUntilNul(flow.environment.node_id[:]),
+            audience = TelegramFlowServer, server_url = TelegramFlowServer,
+            bot_id = flow.environment.bot_id, telegram_id = flow.identity.telegram_id}
+        if !ReadDelegateCapsule(capsule, expected, *flow.material) ||
+        !AppCopyText(expected.request_id, flow.pending.request_id[:]) ||
+        !AppCopyText(expected.grant_id, flow.pending.grant_id[:]) ||
+        !TelegramFlowStartChallenge(flow) {
+            TelegramFlowFail(flow)
+        }
+        SyncCryptoWipe(*flow.capsule[0], 65537)
+    }
+}
+
+TelegramAccountFlowPump :: (app: *InnerBreeze) {
+    unused app
+    TelegramAccountFlowStart()
+    flow := *telegram_account_flow
+    if !flow.hosted { return }
+    TelegramFlowPumpRemoteCancellation(flow)
+    if flow.cleanup_pending {
+        if flow.phase == 14 {
+            flow.view.visible = true
+            TelegramFlowFail(flow)
+        } else {
+            TelegramFlowClearProtected(flow)
+        }
+    }
+    if !TelegramContextCurrent() {
+        if flow.phase != 90 && flow.phase != 91 {
+            flow.view.visible = true
+            TelegramFlowFail(flow)
+        }
+        return
+    }
+    now := CurrentStoredDelegateTime(null)
+    if flow.protected_operation.handle != 0 {
+        result := PollTelegramProtectedOperation(*flow.protected_operation)
+        if !TelegramContextCurrent() {
+            TelegramFlowFail(flow)
+            return
+        }
+        if result == 0 { return }
+        if flow.protected_phase == 1 {
+            if result < 0 { SyncCryptoWipe(*flow.capsule[0], 65537) }
+            if !SetVerifiedDelegateIdentity(flow.environment.bot_id, flow.identity.telegram_id, now + 300) {
+                TelegramFlowFail(flow)
+            } else { TelegramFlowChoice(flow) }
+        } else if flow.protected_phase == 2 {
+            SyncCryptoWipe(*flow.capsule[0], 65537)
+        } else if flow.protected_phase == 5 {
+            flow.view.busy = false
+            digest: [65]u8
+            valid := result > 0 && flow.temporary_owner &&
+            HashText(TextUntilNul(flow.recovery[:]), digest[:]) &&
+            TextUntilNul(digest[:]) == TextUntilNul(flow.backup_digest[:])
+            SyncCryptoWipe(*flow.recovery[0], 17664)
+            if !valid {
+                flow.view.restore_failed = true
+                flow.protected_phase = 0
+                return
+            }
+            flow.backup_saved = true
+            flow.view.restore_failed = false
+            flow.view.status = ""
+            flow.view.action_labels[7] = ""
+            if !BuildTelegramEntryActionBody(*flow.identity, *flow.material, "bind",
+                AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, flow.body[:]) ||
+            !TelegramFlowOwnerRequest(flow, "/api/v1/telegram/account/bind", true, 5) {
+                TelegramFlowFail(flow)
+            }
+        } else if flow.protected_phase == 4 {
+            flow.view.busy = false
+            if result < 0 { TelegramAccountClearPassword(*flow.recovery_input); return }
+            candidate: SyncAccount
+            valid := ParseSyncAccountTextEncrypted(TextUntilNul(flow.recovery[:]),
+                TextUntilNul(flow.recovery_input.value[:]), *candidate) != 0
+            TelegramAccountClearPassword(*flow.recovery_input)
+            SyncCryptoWipe(*flow.recovery[0], 17664)
+            owner := AccountField(*candidate.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+            valid = valid && (flow.identity.account_id[0] == cast(u8)0 ||
+                TextUntilNul(flow.identity.account_id[:]) == owner) &&
+            (storage_sync_data_owner_public_id() == "" || storage_sync_data_owner_public_id() == owner)
+            if !valid {
+                SyncCryptoWipe(*candidate.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+                flow.view.restore_failed = true
+                return
+            }
+            flow.owner = candidate
+            SyncCryptoWipe(*candidate.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+            flow.temporary_owner = true
+            flow.backup_saved = true
+            flow.view.restore_failed = false
+            flow.view.status = ""
+            if !BuildTelegramEntryActionBody(*flow.identity, *flow.material, "bind", owner, now, flow.body[:]) ||
+            !TelegramFlowOwnerRequest(flow, "/api/v1/telegram/account/bind", true, 5) {
+                TelegramFlowFail(flow)
+            }
+        }
+        flow.protected_phase = 0
+    }
+    if flow.owner_operation.active {
+        completed := PollOwnerAuthorizationOperation(*flow.owner_operation)
+        if !TelegramContextCurrent() {
+            TelegramFlowFail(flow)
+            return
+        }
+        if !completed { return }
+        flow.status = flow.owner_operation.status
+        if flow.owner_operation.result != cast(AuthResult)AuthResult.AUTH_OK {
+            TelegramFlowFail(flow)
+        } else { TelegramFlowHandleResponse(flow) }
+        return
+    }
+    if flow.waiting {
+        transport := NetworkTransport(*flow.transfer)
+        polled := transport.poll(transport.context, *flow.status)
+        if !TelegramContextCurrent() {
+            TelegramFlowFail(flow)
+            return
+        }
+        if polled < 0 { return }
+        if polled == 0 { TelegramFlowFail(flow); return }
+        TelegramFlowHandleResponse(flow)
+        return
+    }
+    if flow.phase == 8 && flow.retry_at <= now {
+        flow.retry_at = now + 2
+        if !BuildTelegramEntryActionBody(*flow.identity, *flow.material, "request", "", now, flow.body[:]) ||
+        !TelegramFlowStartRequest(flow, "/api/v1/telegram/entry/rendezvous", "POST", 8) {
+            TelegramFlowFail(flow)
+        }
+    } else if flow.phase == 10 && flow.retry_at <= now {
+        if !TelegramFlowStartPolling(flow) { TelegramFlowFail(flow) }
+    } else if flow.phase == 14 {
+        if flow.sync_operation.active {
+            if PollStoredOperation(*flow.sync_operation) && flow.sync_operation.result != 0 {
+                flow.view.visible = true
+                TelegramFlowFail(flow)
+            }
+        } else if flow.retry_at <= now {
+            flow.retry_at = now + 5
+            flow.sync_renewal = StoredDelegateAvailable() == 0
+            transport := NetworkTransport(*flow.sync_transfer)
+            began := ifx flow.sync_renewal then BeginStoredSession(*flow.sync_operation, TelegramFlowServer, transport) else BeginStoredSync(*flow.sync_operation, TelegramFlowServer, transport)
+            if !began {
+                flow.view.visible = true
+                TelegramFlowFail(flow)
+            }
+        }
+    }
+}
+
+DrawTelegramAccountFlow :: (app: *InnerBreeze) {
+    TelegramAccountFlowStart()
+    if !telegram_account_flow.hosted { return }
+    action := DrawTelegramAccount(app, *telegram_account_flow.view)
+    if action != 0 { HandleTelegramAccountAction(app, action) }
+}

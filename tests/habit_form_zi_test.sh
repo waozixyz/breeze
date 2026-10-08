@@ -35,7 +35,10 @@ C
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
+    -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$root/build/packages/monocypher/src/monocypher.c" \
+    "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/build/ziran-toolchain/libziran.a" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.

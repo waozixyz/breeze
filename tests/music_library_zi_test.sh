@@ -7,11 +7,13 @@ work=$root/build/music-library-zi-test
 mkdir -p "$work/c" "$work/stubs"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     "$root/src/app/music_library.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/c" "$root/src/app/music_library.zi" \
@@ -33,5 +35,7 @@ mkdir -p "$work/c" "$work/stubs"
     "$work/c/locale_parser.c" "$work/c/locale_policy.c" \
     -o "$work/test"
 fixture=$(mktemp -d "$work/fixture.XXXXXX")
-env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+trap 'rm -rf "$fixture"' EXIT HUP INT TERM
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
+    YUE_DESKTOP_RECOVERY=0 \
     APP_DATA_ROOT="$fixture" "$work/test" "$fixture"

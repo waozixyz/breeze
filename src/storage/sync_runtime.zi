@@ -6,6 +6,10 @@
 #import "social"
 #import "sync"
 #import "events"
+#import "delegated"
+#import, file "delegate_store.zi";
+#import, file "delegate_storage_types.zi";
+#import, file "delegate_storage.zi";
 #import "net_ws_curl_linux"
 #import "byte_text_linux"
 #import "text_buffer"
@@ -43,6 +47,9 @@ REMOTE_EVENT_CURRENT :: -1
 
 #program_export
 WaitStoredRemoteEvent :: (base_url: string) -> s32 {
+    if StoredAccountMode() == AccountModeDelegate {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
     account: SyncAccount
     if sync_account_load(*account) == 0 {
         return cast(s32)AuthResult.AUTH_NO_ACCOUNT
@@ -73,6 +80,9 @@ WaitStoredRemoteEvent :: (base_url: string) -> s32 {
 #program_export
 SyncStoredAccount :: (base_url: string) -> s32 {
     if base_url.count == 0 { return cast(s32)AuthResult.AUTH_INVALID_URL }
+    if StoredAccountMode() == AccountModeDelegate {
+        return SyncStoredDelegate(base_url)
+    }
     account: SyncAccount
     if sync_account_load(*account) == 0 {
         return cast(s32)AuthResult.AUTH_NO_ACCOUNT
@@ -117,6 +127,86 @@ SyncStoredAccount :: (base_url: string) -> s32 {
         }
     }
     free(cast(*void)response)
+    return cast(s32)result
+}
+
+// Expired context can perform only this key-bound challenge/session exchange.
+// Data payload construction remains unavailable until the answer is accepted.
+RenewStoredDelegateNative :: (base_url: string) -> AuthResult {
+    material: DelegateMaterial
+    defer { WipeDelegateMaterial(*material) }
+    client: DelegateClient
+    if storage_get_setting_int("sync_enabled", 0) == 0 ||
+        !LoadDelegateForRenewal(*material) ||
+        !OpenDelegateRenewalClient(base_url, *material, *client) {
+        return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    response := cast(*u8)malloc(32768)
+    if response == null {
+        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    defer { free(cast(*void)response) }
+    result := RenewDelegateSession(client, *material.session, time(null), BytesFromPointer(response, 32768))
+    if result == cast(AuthResult)AuthResult.AUTH_OK {
+        if !SaveStoredDelegateSession(*material) {
+            return cast(AuthResult)AuthResult.AUTH_FAILED
+        }
+    } else if result == cast(AuthResult)AuthResult.AUTH_FAILED &&
+        material.generation == StoredDelegateGeneration() {
+        ClearDelegate()
+    }
+    return result
+}
+
+SyncStoredDelegate :: (base_url: string) -> s32 {
+    material: DelegateMaterial
+    defer { WipeDelegateMaterial(*material) }
+    client: DelegateClient
+    if !LoadStoredDelegate(*material) {
+        refreshed := RenewStoredDelegateNative(base_url)
+        if refreshed != cast(AuthResult)AuthResult.AUTH_OK {
+            return cast(s32)refreshed
+        }
+    }
+    if !LoadStoredDelegate(*material) || !OpenDelegateClient(base_url, *material, *client) {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    batch: DelegateBatch
+    payload := BuildDelegateStoragePayload(client, *batch)
+    if payload == null {
+        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    defer { storage_free_sync_payload_json(payload) }
+    response := cast(*u8)malloc(SyncResponseCapacity)
+    if response == null {
+        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+    }
+    defer { free(cast(*void)response) }
+    result: AuthResult = cast(AuthResult)AuthResult.AUTH_OK
+    if !SessionValid(client, *material.session, time(null)) {
+        result = RenewDelegateSession(client, *material.session, time(null),
+            BytesFromPointer(response, SyncResponseCapacity))
+    }
+    if result == cast(AuthResult)AuthResult.AUTH_OK {
+        status: s32
+        result = DelegateRequest(client, *material.session, time(null),
+            TextFromCString(payload), BytesFromPointer(response, SyncResponseCapacity), *status)
+    }
+    if material.generation != StoredDelegateGeneration() || StoredDelegateClientMatches(client) == 0 ||
+        storage_sync_enabled() == 0 || storage_get_setting_text("sync_server_url") != base_url {
+        return cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    }
+    if result == cast(AuthResult)AuthResult.AUTH_OK {
+        if !SaveStoredDelegateSession(*material) ||
+            ApplyDelegateStorageResponse(client, *batch,
+                TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))) == 0 {
+            result = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+    } else if result == cast(AuthResult)AuthResult.AUTH_FAILED {
+        ClearDelegate()
+    }
     return cast(s32)result
 }
 

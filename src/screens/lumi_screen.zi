@@ -37,6 +37,7 @@
 #import, file "../storage/storage_elist.zi";
 #import, file "../storage/state.zi";
 #import, file "../storage/db.zi";
+#import, file "../storage/delegate_store.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../habits/habit_actions.zi";
 #import, file "../habits/habit_types.zi";
@@ -97,7 +98,52 @@ app_lumi_reset :: () {
     lumi_choosing_diary = false
 }
 
+// An installed delegate is restricted to the approved Lumi collection even
+// when this same local profile already contains enabled private apps.
+LumiHistoryAvailable :: () -> bool {
+    return StoredAccountMode() != AccountModeDelegate || StoredDelegateAvailable() != 0
+}
+
+LumiToolsAvailable :: () -> bool {
+    return StoredAccountMode() != AccountModeDelegate
+}
+
+LumiContextAvailable :: (app: *InnerBreeze) -> bool {
+    return app != null && LumiHistoryAvailable() &&
+        (LumiToolsAvailable() || (app.enabled_apps & CellsInstalledMask() & APP_LUMI) != 0)
+}
+
+LumiDelegateHostAllowed :: (name: string) -> bool {
+    return name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost" ||
+        name == "LumiLoadOlderHost" || name == "ReadLumiToolsHost" ||
+        name == "ReadLumiUiHost" || name == "WriteLumiUiHost" ||
+        name == "LumiLocaleHost" || name == "LumiViewLocaleHost" ||
+        name == "ReadLumiChatRowHost" || name == "AppendLumiChatHost" ||
+        name == "StartLumiOnlineHost"
+}
+
+LumiHostAllowed :: (app: *InnerBreeze, name: string) -> bool {
+    return LumiToolsAvailable() || (LumiContextAvailable(app) && LumiDelegateHostAllowed(name))
+}
+
+// Retain archived message text without invoking tools embedded in older
+// progress, donation or feedback cards from the full owner installation.
+LumiVisibleRow :: (row: LumiChatRow) -> LumiChatRow {
+    if !LumiHistoryAvailable() {
+        return LumiChatRow.{}
+    }
+    visible := row
+    if !LumiToolsAvailable() {
+        visible.kind = LUMI_CHAT_TEXT
+        visible.payload = ""
+    }
+    return visible
+}
+
 LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
+    if !LumiToolsAvailable() {
+        return LumiTask.{}
+    }
     if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) || index < 0 || index >= app.habits.count {
         return LumiTask.{}
     }
@@ -110,6 +156,9 @@ LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
 }
 
 LumiTaskAt :: (index: s32) -> LumiTask {
+    if !LumiToolsAvailable() {
+        return LumiTask.{}
+    }
     if index < 0 || index >= lumi_tasks.item_count {
         return LumiTask.{}
     }
@@ -120,6 +169,9 @@ LumiTaskAt :: (index: s32) -> LumiTask {
 
 // Every proposed action is checked again against live state at execution.
 LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
+    if !LumiToolsAvailable() {
+        return false
+    }
     if app == null || (CellsInstalledMask() & APP_LUMI) == 0 {
         return false
     }
@@ -249,6 +301,19 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
+    if StoredAccountMode() == AccountModeDelegate {
+        if !LumiHostAllowed(cast(*InnerBreeze)context, name) {
+            return 0
+        }
+        if name == "StartLumiOnlineHost" && count == 1 &&
+        ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+            // The portable composer interprets true as an already handled
+            // reply. No broad online request or waiting state is created.
+            LumiStoreAppend(LocaleText("lumi_online_unavailable"), false)
+            result.* = ModuleScalar("bool", 1)
+            return 1
+        }
+    }
     if (name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost") && count == 1 &&
     ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         requested := cast(s32)arguments[0].integer
@@ -410,7 +475,7 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
 }
 
 LumiMeasuredRow :: (index: s32) -> LumiChatRow {
-    row := ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1)
+    row := LumiVisibleRow(ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1))
     if index < 0 || index >= lumi_row_heights.count {
         return row
     }
@@ -437,6 +502,27 @@ LumiMeasuredRow :: (index: s32) -> LumiChatRow {
 }
 
 LumiPrepareTools :: (app: *InnerBreeze) {
+    if StoredAccountMode() == AccountModeDelegate {
+        // Validate before loading either chat history or unrelated private
+        // tables. Expiry/revocation also drops cached plaintext UI rows.
+        current := LumiContextAvailable(app)
+        if !current {
+            LumiStoreReset()
+        }
+        lumi_tasks = EListState.{}
+        lumi_tasks_revision = -1
+        lumi_choosing_diary = false
+        lumi_choosing_habit = false
+        lumi_ui.available_apps = ifx current then (app.enabled_apps & CellsInstalledMask() & APP_LUMI) else 0
+        lumi_ui.task_count = 0
+        lumi_ui.habit_count = 0
+        lumi_ui.choosing_habit = false
+        lumi_ui.choosing_diary = false
+        lumi_ui.waiting = false
+        lumi_ui.chat_count = ifx current then LumiStoreCount() + 1 else 0
+        return
+    }
+
     owner_changed := lumi_store_loaded && AppTextFromCString(*lumi_owner[0], 64) !=
     AppTextFromCString(storage_user_id_buffer(), 64)
     if owner_changed {
@@ -474,7 +560,8 @@ LumiPrepareTools :: (app: *InnerBreeze) {
 // Telegram and the native composer run the same interpreter against live app
 // state. No render frame or remembered action is needed for a remote message.
 LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
-    if app == null || input.count == 0 || input.count >= LUMI_INPUT_MAX {
+    if app == null || input.count == 0 || input.count >= LUMI_INPUT_MAX ||
+        !LumiContextAvailable(app) {
         return false
     }
     LumiPrepareTools(app)
@@ -496,6 +583,9 @@ LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
 
 #program_export
 lumi_screen_draw :: (app: *InnerBreeze) {
+    if !LumiContextAvailable(app) {
+        return
+    }
     LumiPrepareTools(app)
     lumi_ui.session = app.ui.session
     if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {

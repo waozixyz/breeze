@@ -1,0 +1,98 @@
+// Telegram host reads raw signed bytes and protected delegate storage only.
+#import "byte_text_linux"
+#import "text_buffer"
+
+TelegramProtectedOperation :: struct {
+    handle: s32
+    persistent: s32
+}
+#if #defined(PLATFORM_WEB) {
+    browser :: #system_library "browser";
+    TelegramContextHost :: (kind: s32, output: *u8, capacity: s32) -> s32 #foreign browser "telegram_context";
+    TelegramHostedHost :: () -> s32 #foreign browser "telegram_hosted";
+    TelegramCurrentHost :: () -> s32 #foreign browser "telegram_current";
+    TelegramStorageStartHost :: (action: s32, input: *u8, length: s32,
+        output: *u8, capacity: s32) -> s32 #foreign browser "telegram_storage_start";
+    TelegramStoragePollHost :: (handle: s32, persistent: *s32) -> s32 #foreign browser "telegram_storage_poll";
+    TelegramRecoveryStartHost :: (output: *u8, capacity: s32) -> s32 #foreign browser "telegram_recovery_start";
+    TelegramRecoveryDownloadHost :: (input: *u8, length: s32) -> s32 #foreign browser "telegram_recovery_download";
+    TelegramStorageCancelHost :: (handle: s32) #foreign browser "telegram_storage_cancel";
+}
+
+ReadTelegramContext :: (entry: []u8, init_data: []u8) -> bool {
+    if entry.count > 0 { entry[0] = cast(u8)0 }
+    if init_data.count > 0 { init_data[0] = cast(u8)0 }
+    #if #defined(PLATFORM_WEB) {
+        return entry.count >= 33 && init_data.count >= 16385 &&
+        TelegramContextHost(1, *entry[0], cast(s32)entry.count) == 32 &&
+        TelegramContextHost(2, *init_data[0], cast(s32)init_data.count) > 0
+    }
+    return false
+}
+
+TelegramHostPresent :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        return TelegramHostedHost() != 0
+    }
+    return false
+}
+
+TelegramContextCurrent :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        return TelegramCurrentHost() != 0
+    }
+    return false
+}
+
+BeginTelegramProtectedOperation :: (operation: *TelegramProtectedOperation,
+    action: s32, input: string, output: []u8) -> bool {
+    if operation == null || operation.handle != 0 || output.count == 0 ||
+    output.count > 65537 || input.count > 65536 || action < 1 || action > 3 {
+        return false
+    }
+    #if #defined(PLATFORM_WEB) {
+        descriptor := cast(*TextDescriptor)(*input)
+        operation.persistent = 0
+        operation.handle = TelegramStorageStartHost(action, descriptor.data,
+            cast(s32)input.count, *output[0], cast(s32)output.count)
+        return operation.handle != 0
+    }
+    unused input
+    return false
+}
+
+PollTelegramProtectedOperation :: (operation: *TelegramProtectedOperation) -> s32 {
+    if operation == null || operation.handle == 0 { return -1 }
+    #if #defined(PLATFORM_WEB) {
+        result := TelegramStoragePollHost(operation.handle, *operation.persistent)
+        if result != 0 { operation.handle = 0 }
+        return result
+    }
+    return -1
+}
+
+CancelTelegramProtectedOperation :: (operation: *TelegramProtectedOperation) {
+    if operation == null { return }
+    #if #defined(PLATFORM_WEB) {
+        if operation.handle != 0 { TelegramStorageCancelHost(operation.handle) }
+    }
+    operation.* = TelegramProtectedOperation.{}
+}
+
+BeginTelegramRecoveryFile :: (operation: *TelegramProtectedOperation, output: []u8) -> bool {
+    if operation == null || operation.handle != 0 || output.count < 17664 { return false }
+    #if #defined(PLATFORM_WEB) {
+        operation.handle = TelegramRecoveryStartHost(*output[0], cast(s32)output.count)
+        return operation.handle != 0
+    }
+    return false
+}
+
+DownloadTelegramRecoveryFile :: (ciphertext: string) -> bool {
+    if ciphertext.count <= 0 || ciphertext.count >= 17664 { return false }
+    #if #defined(PLATFORM_WEB) {
+        descriptor := cast(*TextDescriptor)(*ciphertext)
+        return TelegramRecoveryDownloadHost(descriptor.data, cast(s32)ciphertext.count) != 0
+    }
+    return false
+}

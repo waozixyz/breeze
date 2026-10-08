@@ -1,0 +1,595 @@
+// Telegram entry proofs bind the server challenge to separate delegate keys.
+// These helpers validate wire structure; only the server verifies Telegram.
+#import "authorization"
+#import "wire"
+#import "transaction"
+#import "json_scan"
+#import "text_buffer"
+#import "auth"
+#import, file "../storage/device_key.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "../storage/sync_crypto_random.zi";
+#import, file "../storage/delegate_store.zi";
+
+TelegramEnvironment :: struct {
+    app_id: [65]u8
+    node_id: [65]u8
+    audience: [513]u8
+    bot_id: s64
+}
+TelegramEntryChallenge :: struct {
+    entry_id: [33]u8
+    mode: [16]u8
+    app_id: [65]u8
+    node_id: [65]u8
+    audience: [513]u8
+    bot_id: s64
+    challenge: [33]u8
+    expires_at: s64
+}
+TelegramEntryIdentity :: struct {
+    info: TelegramEntryChallenge
+    telegram_id: s64
+    account_id: [65]u8
+    status: [16]u8
+    client_id: [65]u8
+    signing_key: [65]u8
+    encryption_key: [2369]u8
+    init_digest: [65]u8
+}
+
+// ObjectFields decodes escaped names and detects duplicates. Also compare the
+// decoded length, so an embedded NUL cannot turn an unknown name into an alias.
+EntryObjectFields :: (json: string, at: s32, names: []string,
+    positions: []s32) -> bool {
+    if !ObjectFields(json, at, names, positions) {
+        return false
+    }
+    cursor := Space(json, at) + 1
+    for index: 0..cast(s32)names.count - 1 {
+        cursor = Space(json, cursor)
+        key: [129]u8
+        length := ReadStringText(json, cursor, key[:])
+        if length < 0 || TextUntilNul(key[:]).count != length {
+            return false
+        }
+        name := TextUntilNul(key[:])
+        matched := false
+        for expected: names {
+            if name == expected {
+                matched = true
+            }
+        }
+        if !matched {
+            return false
+        }
+        span := ReadString(json, cursor)
+        cursor = Space(json, span.after) + 1
+        cursor = Space(json, cursor)
+        cursor = ValueEnd(json, cursor, 0)
+        cursor = Space(json, cursor)
+        if index + 1 < names.count {
+            cursor += 1
+        }
+    }
+    return true
+}
+
+EntryReadText :: (json: string, at: s32, output: []u8) -> bool {
+    length := ReadStringText(json, at, output)
+    return length >= 0 && TextUntilNul(output).count == length
+}
+
+EntryAudienceValid :: (audience: string) -> bool {
+    if audience.count <= 8 || audience.count > 512 || audience[0:8] != "https://" {
+        return false
+    }
+    authority_end: s64 = 8
+    for byte: audience {
+        if byte <= cast(u8)32 || byte >= cast(u8)127 ||
+        byte == cast(u8)64 || byte == cast(u8)92 ||
+        byte == cast(u8)63 || byte == cast(u8)35 {
+            return false
+        }
+    }
+    while authority_end < audience.count && audience[authority_end] != cast(u8)47 {
+        authority_end += 1
+    }
+    host_end: s64 = 8
+    while host_end < authority_end && audience[host_end] != cast(u8)58 {
+        host_end += 1
+    }
+    if host_end == 8 || host_end - 8 > 253 {
+        return false
+    }
+    label_start: s64 = 8
+    cursor: s64 = 8
+    while cursor <= host_end {
+        if cursor == host_end || audience[cursor] == cast(u8)46 {
+            if cursor == label_start || cursor - label_start > 63 ||
+            audience[label_start] == cast(u8)45 || audience[cursor - 1] == cast(u8)45 {
+                return false
+            }
+            label_start = cursor + 1
+        } else {
+            byte := audience[cursor]
+            if !((byte >= cast(u8)97 && byte <= cast(u8)122) ||
+                (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)45) {
+                return false
+            }
+        }
+        cursor += 1
+    }
+    if host_end < authority_end {
+        cursor = host_end + 1
+        if cursor == authority_end || audience[cursor] == cast(u8)48 {
+            return false
+        }
+        port: s64 = 0
+        while cursor < authority_end {
+            byte := audience[cursor]
+            if byte < cast(u8)48 || byte > cast(u8)57 {
+                return false
+            }
+            port = port * 10 + cast(s64)(byte - cast(u8)48)
+            if port > 65535 {
+                return false
+            }
+            cursor += 1
+        }
+    }
+    return true
+}
+
+EntryEnvironmentValid :: (environment: *TelegramEnvironment) -> bool {
+    return environment != null && TextUntilNul(environment.app_id[:]) == "inbe" &&
+    LowerHex(TextUntilNul(environment.node_id[:]), 64) &&
+    EntryAudienceValid(TextUntilNul(environment.audience[:])) &&
+    environment.bot_id > 0 && environment.bot_id <= 4503599627370495
+}
+
+#scope_export
+ReadTelegramEnvironment :: (json: string, expectedAudience: string,
+    output: *TelegramEnvironment) -> bool {
+    if output == null {
+        return false
+    }
+    output.* = TelegramEnvironment.{}
+    if json.count > 4096 || !WholeJson(json) || !EntryAudienceValid(expectedAudience) {
+        return false
+    }
+    names: [5]string = .["app_id", "node_id", "audience", "bot_id", "environment"]
+    positions: [5]s32
+    result: TelegramEnvironment
+    kind: [16]u8
+    if !EntryObjectFields(json, 0, names[:], positions[:]) ||
+    !EntryReadText(json, positions[0], result.app_id[:]) ||
+    !EntryReadText(json, positions[1], result.node_id[:]) ||
+    !EntryReadText(json, positions[2], result.audience[:]) ||
+    !ReadInteger(json, positions[3], *result.bot_id) ||
+    !EntryReadText(json, positions[4], kind[:]) || TextUntilNul(kind[:]) != "production" ||
+    TextUntilNul(result.audience[:]) != expectedAudience || !EntryEnvironmentValid(*result) {
+        return false
+    }
+    output.* = result
+    return true
+}
+
+EntryChallengeValid :: (info: *TelegramEntryChallenge, now: s64) -> bool {
+    if info == null || now <= 0 || now > 9007199254740391 {
+        return false
+    }
+    mode := TextUntilNul(info.mode[:])
+    return LowerHex(TextUntilNul(info.entry_id[:]), 32) &&
+    (mode == "create" || mode == "restore" || mode == "connect") &&
+    TextUntilNul(info.app_id[:]) == "inbe" && LowerHex(TextUntilNul(info.node_id[:]), 64) &&
+    EntryAudienceValid(TextUntilNul(info.audience[:])) &&
+    info.bot_id > 0 && info.bot_id <= 4503599627370495 &&
+    LowerHex(TextUntilNul(info.challenge[:]), 32) &&
+    info.expires_at > now && info.expires_at <= now + 600
+}
+
+ReadEntryChallengeAt :: (json: string, at: s32,
+    result: *TelegramEntryChallenge) -> bool {
+    names: [8]string = .["entry_id", "mode", "app_id", "node_id", "audience", "bot_id", "challenge", "expires_at"]
+    positions: [8]s32
+    return EntryObjectFields(json, at, names[:], positions[:]) &&
+    EntryReadText(json, positions[0], result.entry_id[:]) &&
+    EntryReadText(json, positions[1], result.mode[:]) &&
+    EntryReadText(json, positions[2], result.app_id[:]) &&
+    EntryReadText(json, positions[3], result.node_id[:]) &&
+    EntryReadText(json, positions[4], result.audience[:]) &&
+    ReadInteger(json, positions[5], *result.bot_id) &&
+    EntryReadText(json, positions[6], result.challenge[:]) &&
+    ReadInteger(json, positions[7], *result.expires_at)
+}
+
+#scope_export
+ReadTelegramEntryChallenge :: (json: string, entryID: string,
+    environment: *TelegramEnvironment, now: s64, output: *TelegramEntryChallenge) -> bool {
+    if output == null {
+        return false
+    }
+    output.* = TelegramEntryChallenge.{}
+    result: TelegramEntryChallenge
+    if json.count > 4096 || !WholeJson(json) || !LowerHex(entryID, 32) ||
+    !EntryEnvironmentValid(environment) || !ReadEntryChallengeAt(json, 0, *result) ||
+    !EntryChallengeValid(*result, now) || TextUntilNul(result.entry_id[:]) != entryID ||
+    TextUntilNul(result.app_id[:]) != TextUntilNul(environment.app_id[:]) ||
+    TextUntilNul(result.node_id[:]) != TextUntilNul(environment.node_id[:]) ||
+    TextUntilNul(result.audience[:]) != TextUntilNul(environment.audience[:]) ||
+    result.bot_id != environment.bot_id {
+        return false
+    }
+    output.* = result
+    return true
+}
+
+EntrySameChallenge :: (left: *TelegramEntryChallenge, right: *TelegramEntryChallenge) -> bool {
+    return left != null && right != null &&
+    TextUntilNul(left.entry_id[:]) == TextUntilNul(right.entry_id[:]) &&
+    TextUntilNul(left.mode[:]) == TextUntilNul(right.mode[:]) &&
+    TextUntilNul(left.app_id[:]) == TextUntilNul(right.app_id[:]) &&
+    TextUntilNul(left.node_id[:]) == TextUntilNul(right.node_id[:]) &&
+    TextUntilNul(left.audience[:]) == TextUntilNul(right.audience[:]) &&
+    left.bot_id == right.bot_id &&
+    TextUntilNul(left.challenge[:]) == TextUntilNul(right.challenge[:]) &&
+    left.expires_at == right.expires_at
+}
+
+EntryIdentityValid :: (identity: *TelegramEntryIdentity, now: s64) -> bool {
+    if identity == null || !EntryChallengeValid(*identity.info, now) ||
+    identity.telegram_id <= 0 || identity.telegram_id > 4503599627370495 ||
+    !LowerHex(TextUntilNul(identity.client_id[:]), 64) ||
+    !LowerHex(TextUntilNul(identity.signing_key[:]), 64) ||
+    !LowerHex(TextUntilNul(identity.encryption_key[:]), 2368) ||
+    !LowerHex(TextUntilNul(identity.init_digest[:]), 64) {
+        return false
+    }
+    account := TextUntilNul(identity.account_id[:])
+    status := TextUntilNul(identity.status[:])
+    return (account == "" || LowerHex(account, 64)) &&
+    (status == "verified" || status == "cancelled" ||
+        ((status == "bound" || status == "consumed") && LowerHex(account, 64)))
+}
+
+#scope_export
+ReadTelegramEntryIdentity :: (json: string, expectedChallenge: *TelegramEntryChallenge,
+    clientID: string, signingKey: string, encryptionKey: string,
+    now: s64, output: *TelegramEntryIdentity) -> bool {
+    if output == null {
+        return false
+    }
+    output.* = TelegramEntryIdentity.{}
+    if json.count > 8192 || !WholeJson(json) || !EntryChallengeValid(expectedChallenge, now) ||
+    !LowerHex(clientID, 64) || !LowerHex(signingKey, 64) || !LowerHex(encryptionKey, 2368) {
+        return false
+    }
+    names: [8]string = .["info", "telegram_id", "account_id", "status", "client_id", "signing_key", "encryption_key", "init_digest"]
+    positions: [8]s32
+    result: TelegramEntryIdentity
+    if !EntryObjectFields(json, 0, names[:], positions[:]) ||
+    !ReadEntryChallengeAt(json, positions[0], *result.info) ||
+    !ReadInteger(json, positions[1], *result.telegram_id) ||
+    !EntryReadText(json, positions[2], result.account_id[:]) ||
+    !EntryReadText(json, positions[3], result.status[:]) ||
+    !EntryReadText(json, positions[4], result.client_id[:]) ||
+    !EntryReadText(json, positions[5], result.signing_key[:]) ||
+    !EntryReadText(json, positions[6], result.encryption_key[:]) ||
+    !EntryReadText(json, positions[7], result.init_digest[:]) ||
+    !EntryIdentityValid(*result, now) || !EntrySameChallenge(*result.info, expectedChallenge) ||
+    TextUntilNul(result.client_id[:]) != clientID ||
+    TextUntilNul(result.signing_key[:]) != signingKey ||
+    TextUntilNul(result.encryption_key[:]) != encryptionKey {
+        return false
+    }
+    output.* = result
+    return true
+}
+
+EntryHexNibble :: (byte: u8) -> s32 {
+    if byte >= cast(u8)48 && byte <= cast(u8)57 {
+        return cast(s32)byte - 48
+    }
+    if byte >= cast(u8)65 && byte <= cast(u8)70 {
+        return cast(s32)byte - 55
+    }
+    if byte >= cast(u8)97 && byte <= cast(u8)102 {
+        return cast(s32)byte - 87
+    }
+    return -1
+}
+
+EntryDecodeForm :: (raw: string, writer: Writer, name: bool) -> Writer {
+    result := writer
+    cursor: s64 = 0
+    while result.valid && cursor < raw.count {
+        byte := raw[cursor]
+        if byte == cast(u8)37 {
+            if cursor + 2 >= raw.count {
+                result.valid = false
+                return result
+            }
+            high := EntryHexNibble(raw[cursor + 1])
+            low := EntryHexNibble(raw[cursor + 2])
+            if high < 0 || low < 0 {
+                result.valid = false
+                return result
+            }
+            byte = cast(u8)(high * 16 + low)
+            cursor += 2
+        } else if byte == cast(u8)43 {
+            byte = cast(u8)32
+        }
+        if byte == cast(u8)0 || byte == cast(u8)10 || byte == cast(u8)13 ||
+        (name && byte == cast(u8)61) {
+            result.valid = false
+            return result
+        }
+        result = WriteByte(result, byte)
+        cursor += 1
+    }
+    return result
+}
+
+EntryInitField :: struct {
+    name_start: s64
+    name_end: s64
+    value_start: s64
+    value_end: s64
+}
+
+// The replay digest includes signature and excludes only hash. Decoding and
+// sorting precede hashing, so equivalent encodings cannot avoid replay checks.
+#scope_export
+TelegramRawInitDigest :: (rawInit: string, botID: s64, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if output.count < 65 || rawInit.count == 0 || rawInit.count > 16384 ||
+    botID <= 0 || botID > 4503599627370495 {
+        return false
+    }
+    decoded: [32769]u8
+    fields: [8193]EntryInitField
+    count: s32 = 0
+    writer := Writer.{decoded[:], 0, true}
+    cursor: s64 = 0
+    while cursor < rawInit.count {
+        start := cursor
+        equal: s64 = -1
+        while cursor < rawInit.count && rawInit[cursor] != cast(u8)38 {
+            if rawInit[cursor] == cast(u8)61 {
+                if equal >= 0 {
+                    return false
+                }
+                equal = cursor
+            }
+            cursor += 1
+        }
+        if equal < 0 || count >= 8193 {
+            return false
+        }
+        field: EntryInitField
+        field.name_start = writer.cursor
+        writer = EntryDecodeForm(rawInit[start:equal], writer, true)
+        field.name_end = writer.cursor
+        if !writer.valid || field.name_start == field.name_end {
+            return false
+        }
+        writer = WriteByte(writer, cast(u8)0)
+        field.value_start = writer.cursor
+        writer = EntryDecodeForm(rawInit[equal + 1:cursor], writer, false)
+        field.value_end = writer.cursor
+        writer = WriteByte(writer, cast(u8)0)
+        if !writer.valid {
+            return false
+        }
+        // Insertion sort also rejects duplicate decoded names.
+        position := count
+        name := TextView(decoded[field.name_start:field.name_end])
+        while position > 0 {
+            previous := fields[position - 1]
+            compared := CompareText(name, TextView(decoded[previous.name_start:previous.name_end]))
+            if compared == 0 {
+                return false
+            }
+            if compared > 0 {
+                break
+            }
+            fields[position] = previous
+            position -= 1
+        }
+        fields[position] = field
+        count += 1
+        if cursor < rawInit.count {
+            cursor += 1
+            if cursor == rawInit.count {
+                return false
+            }
+        }
+    }
+    // Match the server's required init fields without pretending to verify
+    // Telegram's signature or sender here.
+    has_hash := false
+    has_date := false
+    has_user := false
+    canonical: [32769]u8
+    writer = Writer.{canonical[:], 0, true}
+    writer = WriteDecimal(writer, botID)
+    for index: 0..count - 1 {
+        field := fields[index]
+        name := TextView(decoded[field.name_start:field.name_end])
+        value := TextView(decoded[field.value_start:field.value_end])
+        if name == "hash" {
+            has_hash = LowerHex(value, 64)
+        } else {
+            if name == "auth_date" {
+                has_date = value.count > 0
+            }
+            if name == "user" {
+                has_user = value.count > 0
+            }
+            writer = WriteByte(writer, cast(u8)10)
+            writer = WriteText(writer, name)
+            writer = WriteByte(writer, cast(u8)61)
+            writer = WriteText(writer, value)
+        }
+    }
+    if !has_hash || !has_date || !has_user || !writer.valid {
+        return false
+    }
+    SyncCryptoSha256Hex(*canonical[0], writer.cursor, *output[0])
+    return LowerHex(TextUntilNul(output), 64)
+}
+
+EntryWriteLine :: (writer: Writer, text: string) -> Writer {
+    return WriteByte(WriteText(writer, text), cast(u8)10)
+}
+
+EntryWriteChallenge :: (writer: Writer, info: *TelegramEntryChallenge) -> Writer {
+    result := EntryWriteLine(writer, TextUntilNul(info.entry_id[:]))
+    result = EntryWriteLine(result, TextUntilNul(info.mode[:]))
+    result = EntryWriteLine(result, TextUntilNul(info.app_id[:]))
+    result = EntryWriteLine(result, TextUntilNul(info.node_id[:]))
+    result = EntryWriteLine(result, TextUntilNul(info.audience[:]))
+    result = WriteByte(WriteDecimal(result, info.bot_id), cast(u8)10)
+    result = EntryWriteLine(result, TextUntilNul(info.challenge[:]))
+    return WriteByte(WriteDecimal(result, info.expires_at), cast(u8)10)
+}
+
+EntryMaterialValid :: (material: *DelegateMaterial) -> bool {
+    return material != null && LowerHex(TextUntilNul(material.client_id[:]), 64) &&
+    LowerHex(TextUntilNul(material.signing.public_hex[:]), 64) &&
+    LowerHex(TextUntilNul(material.encryption_hex[:]), 2368)
+}
+
+EntryWriteKeys :: (writer: Writer, material: *DelegateMaterial) -> Writer {
+    result := EntryWriteLine(writer, TextUntilNul(material.client_id[:]))
+    result = EntryWriteLine(result, TextUntilNul(material.signing.public_hex[:]))
+    return EntryWriteLine(result, TextUntilNul(material.encryption_hex[:]))
+}
+
+EntryJsonKeys :: (writer: Writer, info: *TelegramEntryChallenge,
+    material: *DelegateMaterial) -> Writer {
+    result := WriteByte(writer, cast(u8)123)
+    result = JsonTextField(result, "entry_id", TextUntilNul(info.entry_id[:]))
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "client_id", TextUntilNul(material.client_id[:]))
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "signing_key", TextUntilNul(material.signing.public_hex[:]))
+    result = WriteByte(result, cast(u8)44)
+    return JsonTextField(result, "encryption_key", TextUntilNul(material.encryption_hex[:]))
+}
+
+#scope_export
+BuildTelegramEntryVerifyBody :: (challenge: *TelegramEntryChallenge,
+    material: *DelegateMaterial, rawInit: string, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    now := CurrentStoredDelegateTime(null)
+    digest: [65]u8
+    if !EntryChallengeValid(challenge, now) || !EntryMaterialValid(material) ||
+    !TelegramRawInitDigest(rawInit, challenge.bot_id, digest[:]) {
+        return false
+    }
+    message: [4096]u8
+    signature: [129]u8
+    defer { SyncCryptoWipe(*signature[0], 129) }
+    writer := Writer.{message[:], 0, true}
+    writer = EntryWriteLine(writer, "daochi-telegram-entry-verify-v1")
+    writer = EntryWriteChallenge(writer, challenge)
+    writer = EntryWriteKeys(writer, material)
+    writer = EntryWriteLine(writer, TextUntilNul(digest[:]))
+    if !writer.valid || !SignDeviceMessage(cast(*void)*material.signing,
+        TextUntilNul(message[:]), signature[:]) {
+        return false
+    }
+    finished := CurrentStoredDelegateTime(null)
+    if finished < now || !EntryChallengeValid(challenge, finished) {
+        return false
+    }
+    writer = EntryJsonKeys(Writer.{output, 0, true}, challenge, material)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "init_data", rawInit)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "proof", TextUntilNul(signature[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
+        output[0] = cast(u8)0
+    }
+    return writer.valid
+}
+
+#scope_export
+BuildTelegramEntryActionBody :: (identity: *TelegramEntryIdentity,
+    material: *DelegateMaterial, action: string, accountID: string,
+    now: s64, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if !EntryIdentityValid(identity, now) || !EntryMaterialValid(material) ||
+    (action != "status" && action != "cancel" && action != "bind" && action != "request") ||
+    TextUntilNul(identity.client_id[:]) != TextUntilNul(material.client_id[:]) ||
+    TextUntilNul(identity.signing_key[:]) != TextUntilNul(material.signing.public_hex[:]) ||
+    TextUntilNul(identity.encryption_key[:]) != TextUntilNul(material.encryption_hex[:]) ||
+    now + 30 > identity.info.expires_at {
+        return false
+    }
+    status := TextUntilNul(identity.status[:])
+    if action == "bind" {
+        existing := TextUntilNul(identity.account_id[:])
+        if status != "verified" || !LowerHex(accountID, 64) ||
+        (existing != "" && existing != accountID) {
+            return false
+        }
+    } else if accountID != "" ||
+    ((action == "cancel" || action == "request") && status != "verified" && status != "bound") {
+        return false
+    }
+    expires := now + 30
+    nonce: [33]u8
+    if !DelegateNonce(null, nonce[:]) {
+        return false
+    }
+    message: [4096]u8
+    signature: [129]u8
+    defer { SyncCryptoWipe(*signature[0], 129) }
+    writer := Writer.{message[:], 0, true}
+    writer = EntryWriteLine(writer, "daochi-telegram-entry-action-v1")
+    writer = EntryWriteLine(writer, action)
+    writer = EntryWriteChallenge(writer, *identity.info)
+    writer = EntryWriteKeys(writer, material)
+    writer = WriteByte(WriteDecimal(writer, expires), cast(u8)10)
+    writer = EntryWriteLine(writer, TextUntilNul(nonce[:]))
+    if action == "bind" {
+        // The server joins an already terminated ActionMessage with '\n'.
+        writer = WriteByte(writer, cast(u8)10)
+        writer = EntryWriteLine(writer, accountID)
+        writer = EntryWriteLine(writer, TextUntilNul(identity.init_digest[:]))
+    }
+    if !writer.valid || !SignDeviceMessage(cast(*void)*material.signing,
+        TextUntilNul(message[:]), signature[:]) {
+        return false
+    }
+    finished := CurrentStoredDelegateTime(null)
+    if finished < now || finished >= expires || !EntryIdentityValid(identity, finished) {
+        return false
+    }
+    writer = EntryJsonKeys(Writer.{output, 0, true}, *identity.info, material)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "expires_at", expires)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "nonce", TextUntilNul(nonce[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "proof", TextUntilNul(signature[:]))
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid {
+        output[0] = cast(u8)0
+    }
+    return writer.valid
+}

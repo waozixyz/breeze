@@ -1,0 +1,423 @@
+#import "authorization"
+#import "envelope"
+#import "auth"
+#import "async_client"
+#import "net_http"
+#import "text_buffer"
+#import "wire"
+#import "transaction"
+#import "json_scan"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/cells/lumi_authorization.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/daochi_account.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/storage/device_key.zi";
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/storage/sync_crypto_hmac.zi";
+#import, file "../src/storage/sync_crypto.zi";
+
+c :: #system_library "c";
+TestNow :: (out: *s64) -> s64 #foreign c "time";
+TestSleep :: (microseconds: u32) -> s32 #foreign c "usleep";
+using SyncAccountLocalDataChoice;
+using SyncAccountSaveResult;
+
+owner_account: SyncAccount;
+recipient: EncryptionKeys;
+delegate_signer: DeviceKeyMaterial;
+claim: OwnerRendezvous;
+approval: GrantStorage;
+
+fill_hex :: (output: []u8, byte: u8, length: s32) {
+    for index: 0..length - 1 {
+        output[index] = byte
+    }
+    output[length] = cast(u8)0
+}
+
+make_claim :: () {
+    claim = OwnerRendezvous.{}
+    claim.expires_at = TestNow(null) + 600
+    claim.bot_id = 123456789
+    claim.telegram_id = 456789012
+    claim.scope_count = 1
+    claim.scopes[0].read = true
+    claim.scopes[0].write = true
+    unused AppCopyText(AccountField(*owner_account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), claim.account_id[:])
+    unused AppCopyText("inbe", claim.app_id[:])
+    unused AppCopyText(AuthorizationAudience, claim.audience[:])
+    unused AppCopyText(LumiPrivateCollection, claim.scopes[0].collection[:])
+    unused AppCopyText("claimed", claim.status[:])
+    fill_hex(claim.request_id[:], cast(u8)97, 32)
+    fill_hex(claim.challenge[:], cast(u8)98, 32)
+    fill_hex(claim.node_id[:], cast(u8)99, 64)
+    fill_hex(claim.client_id[:], cast(u8)100, 64)
+    unused AppCopyText(TextUntilNul(delegate_signer.public_hex[:]), claim.signing_key[:])
+    unused EncryptionPublicHex(*recipient, claim.encryption_key[:])
+}
+
+check_rejections :: () {
+    owner := TextUntilNul(owner_account.public_id[:])
+    now := TestNow(null)
+    check_true("verified claim", LumiAuthorizationPendingValid(*claim, owner, AuthorizationAudience, now, true))
+    bad := claim
+    bad.account_id[0] = ifx owner[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    check_true("wrong account", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    unused AppCopyText("other", bad.app_id[:])
+    check_true("wrong app", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    unused AppCopyText("https://other.invalid", bad.audience[:])
+    check_true("wrong node audience", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    bad.telegram_id = 0
+    check_true("missing numeric user", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    bad.bot_id = 0
+    check_true("missing bot", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    bad.expires_at = now
+    check_true("expired request", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    bad = claim
+    bad.expires_at = now + 601
+    check_true("unbounded request", !LumiAuthorizationPendingValid(*bad, owner, AuthorizationAudience, now, true))
+    legacy: [4]string = .["private.inbe.v1.cells", "private.inbe.v1.sessions", "private.inbe.v1.habits", "private.inbe.v1.app-preferences"]
+    for collection: legacy {
+        bad = claim
+        unused AppCopyText(collection, bad.scopes[0].collection[:])
+        check_true("legacy global key scope refused", !LumiAuthorizationBuildGrant(*bad, owner, now, *approval))
+    }
+    bad = claim
+    bad.scope_count = 2
+    check_true("scope expansion", !LumiAuthorizationBuildGrant(*bad, owner, now, *approval))
+    bad = claim
+    bad.scopes[0].write = false
+    check_true("changed operation scope", !LumiAuthorizationBuildGrant(*bad, owner, now, *approval))
+    bad = claim
+    bad.node_id[0] = cast(u8)100
+    check_true("changed issuing node", !LumiAuthorizationSamePending(*claim, *bad, true))
+    bad = claim
+    bad.telegram_id += 1
+    check_true("changed verified user", !LumiAuthorizationSamePending(*claim, *bad, true))
+    bad = claim
+    bad.bot_id += 1
+    check_true("changed bot", !LumiAuthorizationSamePending(*claim, *bad, true))
+    bad = claim
+    bad.signing_key[0] = ifx bad.signing_key[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    check_true("changed signing key", !LumiAuthorizationSamePending(*claim, *bad, true))
+    bad = claim
+    bad.encryption_key[0] = ifx bad.encryption_key[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    check_true("changed encryption key", !LumiAuthorizationSamePending(*claim, *bad, true))
+    bad = claim
+    unused AppCopyText("cancelled", bad.status[:])
+    check_true("cancelled request", !LumiAuthorizationBuildGrant(*bad, owner, now, *approval))
+}
+
+check_envelope :: () {
+    key: [32]u8
+    check_true("isolated owner Lumi key", storage_private_collection_key(LumiPrivateCollection,
+        LumiPrivateKeyID, *key[0]) != 0)
+    legacy_key: [32]u8
+    check_true("legacy owner read remains", storage_private_collection_key("private.inbe.v1.sessions",
+        "breathing-main-1", *legacy_key[0]) != 0)
+    rejected: [32768]u8
+    rejected[0] = cast(u8)120
+    check_true("legacy global key never sealed", !LumiAuthorizationSealAndSign(*owner_account, *claim,
+        TestNow(null), legacy_key[:], rejected[:], *approval) && rejected[0] == cast(u8)0)
+    SyncCryptoWipe(*legacy_key[0], 32)
+    body: [32768]u8
+    now := TestNow(null)
+    check_true("owner signs sealed Lumi grant", LumiAuthorizationSealAndSign(*owner_account, *claim,
+        now, key[:], body[:], *approval))
+    parsed: GrantStorage
+    check_true("approved body parses", ReadGrantAt(TextUntilNul(body[:]), 0, *parsed))
+    scopes: [1]GrantScope
+    grant: Grant
+    check_true("approved view", ViewGrant(*parsed, scopes[:], *grant))
+    check_true("real owner ML-DSA signature", VerifyGrantSignature(grant, TextUntilNul(owner_account.public_key_hex[:]), now))
+    check_true("finite 24 hour grant", grant.expires_at - grant.issued_at == 86400)
+    check_true("verified numeric identity bound", grant.bot_id == claim.bot_id && grant.telegram_id == claim.telegram_id)
+    check_true("only v2 Lumi generation", grant.scopes.count == 1 && scopes[0].collection == LumiPrivateCollection &&
+        scopes[0].key_id == LumiPrivateKeyID && scopes[0].visibility == "private" && scopes[0].read && scopes[0].write)
+    check_true("separate signing key", grant.signing_key == TextUntilNul(delegate_signer.public_hex[:]))
+    opened: [32]u8
+    check_true("separate recipient opens", OpenCollectionKey(grant, scopes[0], *recipient, opened[:]))
+    check_true("collection key exact", EqualBytes(*opened[0], *key[0], 32))
+    other: EncryptionKeys
+    check_true("other recipient generated", CreateEncryptionKeys(*other))
+    check_true("wrong recipient fails", !OpenCollectionKey(grant, scopes[0], *other, opened[:]))
+    zeros: [32]u8
+    check_true("failed envelope clears key", EqualBytes(*opened[0], *zeros[0], 32))
+    altered := scopes[0]
+    altered.key_id = "inbe-lumi-2"
+    check_true("wrong key generation fails", !OpenCollectionKey(grant, altered, *recipient, opened[:]))
+    altered = scopes[0]
+    altered.collection = "private.inbe.v2.diary"
+    check_true("Diary excluded cryptographically", !OpenCollectionKey(grant, altered, *recipient, opened[:]))
+    ClearEncryptionKeys(*other)
+    SyncCryptoWipe(*key[0], 32)
+    SyncCryptoWipe(*opened[0], 32)
+}
+
+FakeTransport :: struct {
+    phase: s32
+    cancelled: s32
+    output: []u8
+    final_body: [32768]u8
+    header: [8192]u8
+    request_time: s64
+}
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    fake := cast(*FakeTransport)context
+    fake.phase += 1
+    fake.output = output
+    if fake.phase == 1 {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if fake.phase == 2 {
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-owner-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, TestNow(null))
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if fake.phase == 3 {
+        check_true("registered owner device", request.url == "https://api.waozi.xyz/api/v1/account/devices")
+        return AppCopyText("true", output)
+    }
+    fake.request_time = TestNow(null)
+    unused AppCopyText(request.body, fake.final_body[:])
+    for header: request.headers {
+        if header.name == "X-Daochi-Tx" {
+            unused AppCopyText(header.value, fake.header[:])
+        }
+    }
+    return AppCopyText("true", output)
+}
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = 200
+    return 1
+}
+FakeCancel :: (context: *void) {
+    fake := cast(*FakeTransport)context
+    fake.cancelled += 1
+}
+
+check_operation :: () {
+    output: [65536]u8
+    fake: FakeTransport
+    transport := AsyncTransport.{cast(*void)*fake, FakeStart, FakePoll, FakeCancel}
+    operation: OwnerAuthorizationOperation
+    storage_set_setting_text("sync_auth_token", "")
+    check_true("begin owner v6 request", BeginOwnerAuthorizationOperation(*operation, AuthorizationAudience,
+        transport, "/api/v1/authorization/requests", "{\"app_id\":\"inbe\"}", output[:], true))
+    started := TestNow(null)
+    unused TestSleep(1100000)
+    while operation.active {
+        unused PollOwnerAuthorizationOperation(*operation)
+    }
+    check_true("fresh login receipt clock", operation.session.login_local_time > started)
+    check_true("v6 request completes", operation.result == cast(AuthResult)AuthResult.AUTH_OK && fake.phase == 4)
+    {
+        document := TextUntilNul(fake.header[:])
+        expires := ReadNumber(document, FieldAt(document, 0, "expires_at"))
+        check_true("fresh signed stage expiry", expires.valid && cast(s64)expires.value >= fake.request_time + 299)
+        check_true("v6 owner route bound", FieldText(document, "path", output[:]) &&
+            TextUntilNul(output[:]) == "/api/v1/authorization/requests")
+    }
+    check_true("private owner memory wiped", operation.account.private_key_hex[0] == cast(u8)0)
+    fake = FakeTransport.{}
+    storage_set_setting_text("sync_auth_token", "")
+    check_true("begin cancellation fixture", BeginOwnerAuthorizationOperation(*operation, AuthorizationAudience,
+        transport, "/api/v1/authorization/cancel", "{\"request_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"app_id\":\"inbe\"}", output[:], true))
+    CancelOwnerAuthorizationOperation(*operation)
+    check_true("cancel owns only its network call", !operation.active && fake.cancelled == 1)
+    fake = FakeTransport.{}
+    storage_set_setting_text("sync_auth_token", "")
+    check_true("begin account switch fixture", BeginOwnerAuthorizationOperation(*operation, AuthorizationAudience,
+        transport, "/api/v1/authorization/revoke", "{\"grant_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"app_id\":\"inbe\"}", output[:], true))
+    original_id := TextUntilNul(owner_account.public_id[:])
+    storage_set_setting_text("sync_public_id", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+    unused PollOwnerAuthorizationOperation(*operation)
+    check_true("wrong account cancels before next stage", !operation.active && fake.cancelled == 1 && fake.phase == 1)
+    storage_set_setting_text("sync_public_id", original_id)
+    check_true("broad route refused", !BeginOwnerAuthorizationOperation(*operation, AuthorizationAudience,
+        transport, "/api/v1/account/delete", "{}", output[:], true))
+}
+
+check_temporary_operation :: () {
+    // A hosted owner must not replace the installed identity or write either
+    // its temporary owner key, owner bearer or owner device to SQLite.
+    storage_set_setting_text("sync_public_id", "")
+    storage_set_setting_text("sync_public_key", "")
+    storage_set_setting_text("sync_private_key", "")
+    storage_set_setting_text("sync_auth_token", "")
+    storage_set_setting_text("sync_auth_token_expires_at", "")
+    storage_set_setting_text("sync_device_private_key", "")
+    storage_set_setting_text("sync_device_public_key", "")
+    storage_set_setting_text("sync_device_key_id", "")
+    EnterPendingDelegateMode()
+    check_true("fresh server verified Telegram identity", SetVerifiedDelegateIdentity(
+        claim.bot_id, claim.telegram_id, TestNow(null) + 300))
+    output: [65536]u8
+    fake: FakeTransport
+    transport := AsyncTransport.{cast(*void)*fake, FakeStart, FakePoll, FakeCancel}
+    operation: OwnerAuthorizationOperation
+    check_true("temporary real owner begins exact bind", BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/telegram/account/bind", "{}", output[:], true))
+    started := TestNow(null)
+    unused TestSleep(1100000)
+    while operation.active {
+        unused PollOwnerAuthorizationOperation(*operation)
+        check_true("temporary owner never persisted", storage_get_setting_text("sync_private_key") == "" &&
+            storage_get_setting_text("sync_public_id") == "" && storage_get_setting_text("sync_public_key") == "")
+        check_true("temporary bearer never persisted", storage_get_setting_text("sync_auth_token") == "")
+        check_true("temporary device never persisted", storage_get_setting_text("sync_device_private_key") == "" &&
+            storage_get_setting_text("sync_device_public_key") == "" && storage_get_setting_text("sync_device_key_id") == "")
+        if operation.active && operation.stage == 2 {
+            check_true("temporary owner device separate from delegate", TextUntilNul(operation.material.public_hex[:]) !=
+                TextUntilNul(delegate_signer.public_hex[:]))
+        }
+    }
+    check_true("temporary bind v6 completes", operation.result == cast(AuthResult)AuthResult.AUTH_OK && fake.phase == 4)
+    check_true("temporary clock refresh", operation.session.login_local_time > started)
+    {
+        document := TextUntilNul(fake.header[:])
+        check_true("exact bind v6 header", FieldText(document, "path", output[:]) &&
+            TextUntilNul(output[:]) == "/api/v1/telegram/account/bind")
+    }
+    zeros: [4096]u8
+    check_true("temporary bearer fully wiped", EqualBytes(*operation.session.token[0], *zeros[0], 4096))
+    check_true("temporary owner copy wiped", operation.account.private_key_hex[0] == cast(u8)0)
+    check_true("caller actual owner remains", owner_account.private_key_hex[0] != cast(u8)0)
+    check_true("host stays delegate mode", StoredAccountMode() == AccountModeDelegate)
+    fake = FakeTransport.{}
+    check_true("temporary cancellation begins", BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/authorization/cancel", "{}", output[:], true))
+    CancelOwnerAuthorizationOperation(*operation)
+    check_true("temporary cancellation wipes private and bearer", !operation.active && fake.cancelled == 1 &&
+        operation.account.private_key_hex[0] == cast(u8)0 && operation.session.token[0] == cast(u8)0)
+    fake = FakeTransport.{}
+    check_true("temporary context fixture begins", BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/authorization/requests", "{}", output[:], true))
+    ClearDelegate()
+    unused PollOwnerAuthorizationOperation(*operation)
+    check_true("changed hosted context cancels before next call", !operation.active && fake.phase == 1 && fake.cancelled == 1)
+    check_true("fresh current Telegram pin restored", SetVerifiedDelegateIdentity(claim.bot_id,
+        claim.telegram_id, TestNow(null) + 300))
+    check_true("wrong numeric Telegram user cannot authorize", !BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id + 1, AuthorizationAudience,
+        transport, "/api/v1/telegram/account/bind", "{}", output[:], true))
+    bad_owner := owner_account
+    bad_owner.public_id[0] = ifx bad_owner.public_id[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    check_true("wrong temporary owner hash rejected", !BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *bad_owner, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/telegram/account/bind", "{}", output[:], true))
+    SyncCryptoWipe(*bad_owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    check_true("temporary broad owner route refused", !BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/account/delete", "{}", output[:], true))
+    check_true("temporary wrong audience refused", !BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, "https://other.invalid",
+        transport, "/api/v1/telegram/account/bind", "{}", output[:], true))
+    fake = FakeTransport.{}
+    check_true("short Telegram pin", SetVerifiedDelegateIdentity(claim.bot_id, claim.telegram_id, TestNow(null) + 1))
+    check_true("expiring context fixture begins", BeginTemporaryOwnerAuthorizationOperation(
+        *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
+        transport, "/api/v1/authorization/cancel", "{}", output[:], true))
+    unused TestSleep(1100000)
+    unused PollOwnerAuthorizationOperation(*operation)
+    check_true("expired pin cancels before owner login", !operation.active && fake.phase == 1 && fake.cancelled == 1)
+    check_true("fresh pin after expiry", SetVerifiedDelegateIdentity(claim.bot_id, claim.telegram_id, TestNow(null) + 300))
+}
+
+check_temporary_envelope :: () {
+    body: [32768]u8
+    now := TestNow(null)
+    claim.expires_at = now + 600
+    check_true("memory owner signs Lumi envelope", SealAndSignTemporaryLumiGrant(*owner_account, *claim,
+        now, body[:], *approval))
+    parsed: GrantStorage
+    check_true("temporary body parses", ReadGrantAt(TextUntilNul(body[:]), 0, *parsed))
+    scopes: [1]GrantScope
+    grant: Grant
+    check_true("temporary grant view", ViewGrant(*parsed, scopes[:], *grant))
+    check_true("temporary real owner signature", VerifyGrantSignature(grant,
+        TextUntilNul(owner_account.public_key_hex[:]), now))
+    key: [32]u8
+    secret: [2560]u8
+    check_true("actual owner secret decoded", SyncCryptoHexToBytes(TextUntilNul(owner_account.private_key_hex[:]),
+        *secret[0], 2560) != 0)
+    check_true("direct V2 owner key derivation", SyncCryptoHmacSha256Text(*secret[0], 2560,
+        LumiPrivateKeyContext, *key[0]) != 0)
+    SyncCryptoWipe(*secret[0], 2560)
+    opened: [32]u8
+    check_true("temporary recipient opens exact V2 key", OpenCollectionKey(grant, scopes[0], *recipient,
+        opened[:]) && EqualBytes(*opened[0], *key[0], 32))
+    check_true("temporary signing never stored owner key", storage_get_setting_text("sync_private_key") == "")
+    check_true("installed owner guard stays separate", !LumiAuthorizationSealAndSign(*owner_account, *claim,
+        now, key[:], body[:], *approval))
+    bad := claim
+    bad.telegram_id += 1
+    body[0] = cast(u8)120
+    check_true("temporary wrong user envelope rejected and cleared", !SealAndSignTemporaryLumiGrant(
+        *owner_account, *bad, now, body[:], *approval) && body[0] == cast(u8)0)
+    bad = claim
+    unused AppCopyText("private.inbe.v1.sessions", bad.scopes[0].collection[:])
+    check_true("temporary global key scope refused", !SealAndSignTemporaryLumiGrant(
+        *owner_account, *bad, now, body[:], *approval))
+    bad = claim
+    bad.node_id[0] = cast(u8)122
+    check_true("temporary malformed node refused", !SealAndSignTemporaryLumiGrant(
+        *owner_account, *bad, now, body[:], *approval))
+    unused AppCopyText("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", bad.account_id[:])
+    check_true("temporary account mismatch refused", !SealAndSignTemporaryLumiGrant(
+        *owner_account, *bad, now, body[:], *approval))
+    check_true("different verified user updates pin", SetVerifiedDelegateIdentity(claim.bot_id,
+        claim.telegram_id + 1, TestNow(null) + 300))
+    check_true("identity switch blocks previous envelope", !SealAndSignTemporaryLumiGrant(
+        *owner_account, *claim, now, body[:], *approval))
+    SyncCryptoWipe(*key[0], 32)
+    SyncCryptoWipe(*opened[0], 32)
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-lumi-authorization-test/")
+    if guard != 0 {
+        return guard
+    }
+    install_english_catalog()
+    root := "/tmp/inbe-lumi-authorization-test/data"
+    check_true("test database", storage_init(root) != 0)
+    check_true("real owner created", CreateSyncAccount(*owner_account) != 0)
+    check_true("owner saved", sync_account_save(*owner_account,
+        cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_MERGE) == cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK)
+    check_true("separate signing key generated", GenerateDeviceKey(*delegate_signer))
+    check_true("separate encryption key generated", CreateEncryptionKeys(*recipient))
+    make_claim()
+    check_rejections()
+    check_envelope()
+    check_operation()
+    check_temporary_operation()
+    check_temporary_envelope()
+    ClearEncryptionKeys(*recipient)
+    WipeDeviceKey(*delegate_signer)
+    SyncCryptoWipe(*owner_account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    storage_close()
+    remove_tree("/tmp/inbe-lumi-authorization-test/")
+    return failures
+}

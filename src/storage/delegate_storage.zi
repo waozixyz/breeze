@@ -1,0 +1,407 @@
+// Delegated sync touches only the approved Lumi collection and exact outbox
+// receipts. Credential installation and signature verification belong to the
+// account adapter; the binding callback checks that current installation.
+#import "delegated"
+#import "authorization"
+#import "text_buffer"
+Scan :: #import "json_scan";
+#import "byte_text_linux"
+#import, file "storage_core.zi";
+#import, file "delegate_storage_types.zi";
+#import, file "state.zi";
+#import, file "json.zi";
+#import, file "db.zi";
+#import, file "storage_layout.zi";
+#import, file "cell_records.zi";
+#import, file "sql_query.zi";
+#import, file "sqlite.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
+c :: #system_library "c";
+DelegateStorageMutex :: (database: *void) -> *void #foreign c "sqlite3_db_mutex";
+DelegateStorageLock :: (mutex: *void) #foreign c "sqlite3_mutex_enter";
+DelegateStorageUnlock :: (mutex: *void) #foreign c "sqlite3_mutex_leave";
+#import, file "../app/text_buffers.zi";
+#import, file "../platform/web_storage.zi";
+
+DelegateStorageClientValid :: (client: DelegateClient) -> bool {
+    if storage_db_handle() == null || storage_delegate_mode == null ||
+    storage_delegate_mode() != 2 || storage_delegate_available == null ||
+    storage_delegate_available() == 0 || storage_delegate_binding == null ||
+    storage_delegate_binding(client) == 0 || !DelegateClientValid(client) ||
+    client.app_id != "inbe" || client.grant.scope_count != 1 ||
+    client.scopes.count != 1 || storage_sync_data_owner_public_id() != client.account_id {
+        return false
+    }
+    now := CurrentDelegateTime(client)
+    grant := client.grant
+    scope := *grant.scopes[0]
+    return now > 0 && grant.version == 1 && grant.not_before <= now &&
+        grant.expires_at > now && TextUntilNul(grant.account_id[:]) == client.account_id &&
+        TextUntilNul(grant.grant_id[:]) == client.grant_id &&
+        TextUntilNul(grant.app_id[:]) == client.app_id &&
+        TextUntilNul(grant.client_id[:]) == client.client_id &&
+        TextUntilNul(grant.node_id[:]) == client.node_id &&
+        TextUntilNul(grant.audience[:]) == client.audience &&
+        TextUntilNul(grant.signing_key[:]) == client.signing_key &&
+        TextUntilNul(grant.encryption_key[:]) == client.encryption_key &&
+        grant.bot_id == client.bot_id && grant.telegram_id == client.telegram_id &&
+        TextUntilNul(scope.collection[:]) == LumiPrivateCollection &&
+        TextUntilNul(scope.visibility[:]) == "private" && scope.read &&
+        TextUntilNul(scope.key_id[:]) == LumiPrivateKeyID &&
+        client.scopes[0].collection == LumiPrivateCollection && client.scopes[0].read &&
+        client.scopes[0].write == scope.write
+}
+
+DelegateStorageBinding :: (client: DelegateClient, output: []u8) -> bool {
+    if output.count < 65 || client.grant == null {
+        return false
+    }
+    output[0] = 0
+    binding: StorageJsonBuilder
+    binding.ok = 1
+    storage_json_builder_append_text(*binding, "inbe-delegate-storage-v1\n")
+    storage_json_builder_append_text(*binding, client.account_id)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.grant_id)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.node_id)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.audience)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.client_id)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.signing_key)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, client.encryption_key)
+    storage_json_builder_append_text(*binding, "\n")
+    storage_json_builder_append_text(*binding, TextUntilNul(client.grant.signature[:]))
+    if binding.ok == 0 || binding.data == null {
+        storage_json_builder_free(*binding)
+        return false
+    }
+    storage_sha256_hex(binding.data, binding.len, *output[0])
+    storage_json_builder_free(*binding)
+    return output[0] != 0
+}
+
+DelegateStorageCursorKey :: (binding: []u8, output: []u8) -> bool {
+    prefix := "delegate_lumi_cursor."
+    if binding.count < 65 || output.count < prefix.count + 33 {
+        return false
+    }
+    output[0] = 0
+    if !AppCopyText(prefix, output) {
+        return false
+    }
+    for index: 0..31 {
+        output[prefix.count + index] = binding[index]
+    }
+    output[prefix.count + 32] = 0
+    return true
+}
+
+DelegateStorageReceiptKey :: (batch: *DelegateBatch, output: []u8) -> bool {
+    if batch == null || batch.count <= 0 || batch.count > 64 || output.count < 64 {
+        return false
+    }
+    receipt: StorageJsonBuilder
+    receipt.ok = 1
+    storage_json_builder_append_text(*receipt, TextUntilNul(batch.binding[:]))
+    for index: 0..batch.count - 1 {
+        digits: [24]u8
+        if !AppFormatS64(batch.sequences[index], digits[:]) {
+            receipt.ok = 0
+            break
+        }
+        storage_json_builder_append_text(*receipt, "\n")
+        storage_json_builder_append_text(*receipt, TextUntilNul(digits[:]))
+        storage_json_builder_append_text(*receipt, ":")
+        storage_json_builder_append_text(*receipt, TextUntilNul(batch.ids[index][:]))
+    }
+    if receipt.ok == 0 || receipt.data == null {
+        storage_json_builder_free(*receipt)
+        return false
+    }
+    hash: [65]u8
+    storage_sha256_hex(receipt.data, receipt.len, *hash[0])
+    storage_json_builder_free(*receipt)
+    prefix := "delegate_lumi_applied."
+    if !AppCopyText(prefix, output) {
+        return false
+    }
+    for index: 0..31 {
+        output[prefix.count + index] = hash[index]
+    }
+    output[prefix.count + 32] = 0
+    return true
+}
+
+DelegateStorageBatchValid :: (client: DelegateClient, batch: *DelegateBatch) -> bool {
+    binding: [65]u8
+    if batch == null || batch.count < 0 || batch.count > 64 || batch.since_version < 0 ||
+    !DelegateStorageBinding(client, binding[:]) ||
+    TextUntilNul(batch.binding[:]) != TextUntilNul(binding[:]) {
+        return false
+    }
+    previous: s64 = 0
+    for index: 0..batch.count - 1 {
+        id := TextUntilNul(batch.ids[index][:])
+        if batch.sequences[index] <= previous || id.count > 160 || !LumiCellRecordValid(id) {
+            return false
+        }
+        for earlier: 0..index - 1 {
+            if TextUntilNul(batch.ids[earlier][:]) == id {
+                return false
+            }
+        }
+        previous = batch.sequences[index]
+    }
+    return true
+}
+
+DelegateStorageAppendRecord :: (output: *StorageJsonBuilder, key: *u8,
+    id: string, queued_at: s64) -> s32 {
+    record: StorageJsonBuilder
+    record.ok = 1
+    if storage_append_encrypted_record_json(*record, key, LumiPrivateCollection,
+        LumiPrivateKeyID, id, "cell_record", id, 0, queued_at, 0) == 0 ||
+        record.data == null || record.len <= 1 {
+        storage_json_builder_free(*record)
+        return 0
+    }
+    if output.len + record.len + 32 > 1048000 {
+        storage_json_builder_free(*record)
+        return 2
+    }
+    // The shared SDK requires this canonical member even for root records.
+    storage_json_builder_append_text(output, AppTextFromCString(record.data,
+        cast(s32)(record.len + 1))[0:record.len - 1])
+    storage_json_builder_append_text(output, ",\"parent_id\":\"\"}")
+    storage_json_builder_free(*record)
+    return output.ok
+}
+
+#scope_export
+BuildDelegateStoragePayload :: (client: DelegateClient, batch: *DelegateBatch) -> *u8 {
+    if batch == null {
+        return null
+    }
+    batch.* = DelegateBatch.{}
+    if !DelegateStorageClientValid(client) {
+        return null
+    }
+    database := storage_db_handle()
+    mutex := DelegateStorageMutex(database)
+    DelegateStorageLock(mutex)
+    defer { DelegateStorageUnlock(mutex) }
+    if !DelegateStorageClientValid(client) ||
+    !DelegateStorageBinding(client, batch.binding[:]) {
+        return null
+    }
+    cursor_key: [64]u8
+    if !DelegateStorageCursorKey(batch.binding[:], cursor_key[:]) {
+        batch.* = DelegateBatch.{}
+        return null
+    }
+    batch.since_version = storage_meta_int64(TextUntilNul(cursor_key[:]), 0)
+    if batch.since_version < 0 {
+        batch.* = DelegateBatch.{}
+        return null
+    }
+    key: [32]u8
+    if storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *key[0]) == 0 {
+        batch.* = DelegateBatch.{}
+        return null
+    }
+    defer { SyncCryptoWipe(*key[0], 32) }
+    payload: StorageJsonBuilder
+    payload.ok = 1
+    storage_json_builder_append_text(*payload, "{")
+    storage_json_builder_key_value_text(*payload, "collection", LumiPrivateCollection)
+    storage_json_builder_append_text(*payload, ",\"read\":true,\"since_version\":")
+    cursor_digits: [24]u8
+    if !AppFormatS64(batch.since_version, cursor_digits[:]) {
+        payload.ok = 0
+    } else {
+        storage_json_builder_append_text(*payload, TextUntilNul(cursor_digits[:]))
+    }
+    storage_json_builder_append_text(*payload, ",\"limit\":200,\"sync\":{")
+    storage_json_builder_key_value_text(*payload, "user_id_hash", client.account_id)
+    storage_json_builder_append_text(*payload, ",")
+    storage_json_builder_key_value_text(*payload, "client_id", client.client_id)
+    storage_json_builder_append_text(*payload, ",\"app_id\":\"inbe\",\"protocol_version\":6,\"encrypted_records\":[")
+    statement: *void = null
+    if client.grant.scopes[0].write {
+        query := "SELECT o.seq,o.entity_id,o.queued_at FROM sync_outbox o JOIN settings s ON s.key=o.entity_id AND s.user_id=?1 WHERE o.entity_type='cell_record' AND o.local_date=0 AND o.entity_id GLOB 'cell.lumi.*' AND length(o.entity_id) BETWEEN 12 AND 160 AND o.entity_id NOT GLOB '*[^a-z0-9.-]*' AND length(s.value)>0 ORDER BY o.seq LIMIT 64"
+        if SqlitePrepareText(database, query, -1, *statement, null) != SQLITE_OK {
+            payload.ok = 0
+        } else {
+            bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+            while true {
+                step := SqliteStep(statement)
+                if step == SQLITE_DONE {
+                    break
+                }
+                if step != SQLITE_ROW || batch.count >= 64 {
+                    payload.ok = 0
+                    break
+                }
+                id := AppTextFromCString(SqliteColumnText(statement, 1), 8192)
+                sequence := SqliteColumnInt64(statement, 0)
+                queued_at := SqliteColumnInt64(statement, 2)
+                if sequence <= 0 || queued_at <= 0 || id.count > 160 ||
+                !LumiCellRecordValid(id) || !AppCopyText(id, batch.ids[batch.count][:]) {
+                    payload.ok = 0
+                    break
+                }
+                record_start := payload.len
+                if batch.count > 0 {
+                    storage_json_builder_append_text(*payload, ",")
+                }
+                appended := DelegateStorageAppendRecord(*payload, *key[0], id, queued_at)
+                if appended == 2 {
+                    payload.len = record_start
+                    payload.data[record_start] = 0
+                    break
+                }
+                if appended == 0 {
+                    payload.ok = 0
+                    break
+                }
+                batch.sequences[batch.count] = sequence
+                batch.count += 1
+            }
+            SqliteFinalize(statement)
+        }
+    }
+    storage_json_builder_append_text(*payload, "]}}")
+    if payload.ok == 0 || payload.data == null || !DelegateStorageClientValid(client) ||
+    !DelegatedSyncBodyValid(client, AppTextFromCString(payload.data, cast(s32)(payload.len + 1))) {
+        storage_json_builder_free(*payload)
+        batch.* = DelegateBatch.{}
+        return null
+    }
+    // The builder allocation uses the same free function as owner payloads.
+    return payload.data
+}
+
+DelegateStorageAck :: (batch: *DelegateBatch) -> bool {
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "DELETE FROM sync_outbox WHERE seq=?1 AND entity_type='cell_record' AND entity_id=?2 AND local_date=0",
+        -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    for index: 0..batch.count - 1 {
+        unused SqliteReset(statement)
+        unused SqliteClearBindings(statement)
+        if SqliteBindInt64(statement, 1, batch.sequences[index]) != SQLITE_OK ||
+        bind_text(statement, 2, TextUntilNul(batch.ids[index][:])) == 0 ||
+        SqliteStep(statement) != SQLITE_DONE {
+            return false
+        }
+    }
+    return true
+}
+
+DelegateStorageWriteCursor :: (key: string, version: s64) -> bool {
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    if bind_text(statement, 1, key) == 0 ||
+    SqliteBindInt64(statement, 2, version) != SQLITE_OK {
+        return false
+    }
+    return SqliteStep(statement) == SQLITE_DONE
+}
+
+DelegateStorageRecordsValid :: (response: string, info: *DelegatedResponseInfo) -> bool {
+    if info.record_count > 200 {
+        return false
+    }
+    for index: 0..info.record_count - 1 {
+        at := Scan.ElementAt(response, info.records_at, index)
+        id: [161]u8
+        count := Scan.ReadStringText(response, Scan.FieldAt(response, at, "id"), id[:])
+        if count <= 0 || count > 160 || !LumiCellRecordValid(TextUntilNul(id[:])) {
+            return false
+        }
+        // This path has no delete capability and cannot erase received history.
+        deleted := Scan.FieldAt(response, at, "deleted_at")
+        if deleted >= 0 {
+            value: s64
+            if !ReadInteger(response, deleted, *value) || value != 0 {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+#scope_export
+ApplyDelegateStorageResponse :: (client: DelegateClient, batch: *DelegateBatch,
+    response: string) -> s32 {
+    if response.count == 0 || response.count > 33554432 ||
+    !DelegateStorageClientValid(client) || !DelegateStorageBatchValid(client, batch) {
+        return 0
+    }
+    info: DelegatedResponseInfo
+    if !ReadDelegatedSyncResponse(client, response, LumiPrivateCollection, *info) ||
+    info.applied < 0 || info.applied > batch.count || info.next_version < batch.since_version ||
+    !DelegateStorageRecordsValid(response, *info) {
+        return 0
+    }
+    records_end := Scan.ValueEnd(response, info.records_at, 0)
+    if records_end <= info.records_at {
+        return 0
+    }
+    wrapper: StorageJsonBuilder
+    wrapper.ok = 1
+    storage_json_builder_append_text(*wrapper, "{\"changes\":{\"encrypted_records\":")
+    storage_json_builder_append_text(*wrapper, response[info.records_at:records_end])
+    storage_json_builder_append_text(*wrapper, "}}")
+    defer { storage_json_builder_free(*wrapper) }
+    if wrapper.ok == 0 || wrapper.data == null {
+        return 0
+    }
+    database := storage_db_handle()
+    mutex := DelegateStorageMutex(database)
+    DelegateStorageLock(mutex)
+    defer { DelegateStorageUnlock(mutex) }
+    cursor_key: [64]u8
+    receipt_key: [64]u8
+    if !DelegateStorageClientValid(client) || !DelegateStorageBatchValid(client, batch) ||
+    !DelegateStorageCursorKey(batch.binding[:], cursor_key[:]) ||
+    info.next_version < storage_meta_int64(TextUntilNul(cursor_key[:]), 0) ||
+    (batch.count > 0 && (!DelegateStorageReceiptKey(batch, receipt_key[:]) ||
+        storage_meta_int64(TextUntilNul(receipt_key[:]), 0) != 0)) ||
+    exec_sql("SAVEPOINT delegate_storage_apply") == 0 {
+        return 0
+    }
+    if !DelegateStorageAck(batch) ||
+    storage_apply_encrypted_records(AppTextFromCString(wrapper.data, cast(s32)(wrapper.len + 1))) == 0 ||
+    !DelegateStorageClientValid(client) ||
+    !DelegateStorageWriteCursor(TextUntilNul(cursor_key[:]), info.next_version) ||
+    (batch.count > 0 && !DelegateStorageWriteCursor(TextUntilNul(receipt_key[:]), 1)) {
+        unused exec_sql("ROLLBACK TO delegate_storage_apply")
+        unused exec_sql("RELEASE delegate_storage_apply")
+        return 0
+    }
+    if exec_sql("RELEASE delegate_storage_apply") == 0 {
+        unused exec_sql("ROLLBACK TO delegate_storage_apply")
+        unused exec_sql("RELEASE delegate_storage_apply")
+        return 0
+    }
+    if info.record_count > 0 {
+        storage_state_handle().last_sync_changed = 1
+    }
+    batch.* = DelegateBatch.{}
+    storage_schedule_persist()
+    return 1
+}

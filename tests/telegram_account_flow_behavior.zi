@@ -1,0 +1,797 @@
+#import "authorization"
+#import "envelope"
+#import "delegated"
+#import "auth"
+#import "async_client"
+#import "net_http"
+#import "wire"
+#import "text_buffer"
+#import "json_scan"
+#import "transaction"
+#import "byte_text_linux"
+#import, file "telegram_account_flow_host.zi";
+#import, file "../src/app/telegram_account_flow.zi";
+#import, file "../src/app/telegram_entry_protocol.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/daochi_account.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account_encrypted.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/platform/network_transport.zi";
+#import, file "../src/screens/telegram_account.zi";
+#import, file "../src/storage/sync_crypto_hmac.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/sql_query.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/cells/lumi_authorization.zi";
+
+c :: #system_library "c";
+FlowTime :: (out: *s64) -> s64 #foreign c "time";
+FlowWrite :: (descriptor: s32, bytes: *void, count: usize) -> s64 #foreign c "write";
+FlowNode :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+FlowRequest :: "cccccccccccccccccccccccccccccccc"
+FlowGrant :: "dddddddddddddddddddddddddddddddd"
+FlowChallenge :: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+FlowSession :: "ffffffffffffffffffffffffffffffff"
+FlowBot :: 42
+FlowUser :: 7
+failures: s32;
+fixture_mode: string = "create";
+fixture_account: SyncAccount;
+fixture_owner: SyncAccount;
+fixture_grant: GrantStorage;
+fixture_claimed: bool;
+fixture_approved: bool;
+fixture_revoked: bool;
+fixture_bound: bool;
+fixture_wrong_owner: bool;
+fixture_bad_node: bool;
+fixture_verified_status: string = "verified";
+fixture_bound_status: string = "bound";
+fixture_entry_cancels: s32;
+fixture_owner_cancels: s32;
+fixture_telegram_user: s64 = FlowUser;
+fixture_challenge_calls: s32;
+fixture_request_expiry: s64;
+fixture_backup: [17664]u8;
+fixture_body: [32768]u8;
+fixture_db_open: bool;
+
+Expect :: (label: string, result: bool) {
+    if result {
+        return
+    }
+    failures += 1
+    prefix := "Controller fixture failed: "
+    newline := "\n"
+    unused FlowWrite(2, cast(*void)FlowPointer(prefix), cast(usize)prefix.count)
+    unused FlowWrite(2, cast(*void)FlowPointer(label), cast(usize)label.count)
+    unused FlowWrite(2, cast(*void)FlowPointer(newline), 1)
+}
+
+WriteInfo :: (writer: Writer) -> Writer {
+    result := WriteByte(writer, cast(u8)123)
+    result = JsonTextField(result, "entry_id", flow_host_entry)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "mode", fixture_mode)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "app_id", "inbe")
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "node_id", FlowNode)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "audience", TelegramFlowServer)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonNumberField(result, "bot_id", FlowBot)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonTextField(result, "challenge", FlowChallenge)
+    result = WriteByte(result, cast(u8)44)
+    result = JsonNumberField(result, "expires_at", fixture_request_expiry)
+    return WriteByte(result, cast(u8)125)
+}
+
+WriteIdentity :: (output: []u8, bound: bool) -> bool {
+    flow := *telegram_account_flow
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"info\":")
+    writer = WriteInfo(writer)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "telegram_id", fixture_telegram_user)
+    writer = WriteByte(writer, cast(u8)44)
+    account: string = ""
+    if bound {
+        account = TextUntilNul(flow.owner.public_id[:])
+    } else if fixture_mode != "create" {
+        account = TextUntilNul(fixture_account.public_id[:])
+    }
+    writer = JsonTextField(writer, "account_id", account)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "status", ifx bound then fixture_bound_status else fixture_verified_status)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "client_id", TextUntilNul(flow.material.client_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "signing_key", TextUntilNul(flow.material.signing.public_hex[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "encryption_key", TextUntilNul(flow.material.encryption_hex[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "init_digest", TextUntilNul(flow.init_digest[:]))
+    return WriteByte(writer, cast(u8)125).valid
+}
+
+FillOwnerPending :: (pending: *OwnerRendezvous, claimed: bool) {
+    flow := *telegram_account_flow
+    pending.* = OwnerRendezvous.{}
+    pending.bot_id = FlowBot
+    pending.telegram_id = fixture_telegram_user
+    pending.expires_at = fixture_request_expiry
+    pending.scope_count = 1
+    pending.scopes[0].read = true
+    pending.scopes[0].write = true
+    unused AppCopyText(FlowRequest, pending.request_id[:])
+    unused AppCopyText(FlowChallenge, pending.challenge[:])
+    unused AppCopyText(FlowNode, pending.node_id[:])
+    unused AppCopyText(TelegramFlowServer, pending.audience[:])
+    unused AppCopyText("inbe", pending.app_id[:])
+    owner := ifx flow.temporary_owner then TextUntilNul(flow.owner.public_id[:]) else TextUntilNul(fixture_account.public_id[:])
+    unused AppCopyText(owner, pending.account_id[:])
+    unused AppCopyText(LumiPrivateCollection, pending.scopes[0].collection[:])
+    unused AppCopyText(ifx claimed then "claimed" else "pending", pending.status[:])
+    if claimed {
+        unused AppCopyText(TextUntilNul(flow.material.client_id[:]), pending.client_id[:])
+        unused AppCopyText(TextUntilNul(flow.material.signing.public_hex[:]), pending.signing_key[:])
+        unused AppCopyText(TextUntilNul(flow.material.encryption_hex[:]), pending.encryption_key[:])
+    }
+    if fixture_bad_node {
+        pending.node_id[0] = cast(u8)97
+    }
+}
+
+WritePending :: (output: []u8, owner: bool) -> bool {
+    pending: OwnerRendezvous
+    FillOwnerPending(*pending, fixture_claimed)
+    writer := Writer.{output, 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, "request_id", FlowRequest)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "grant_id", ifx fixture_approved then TextUntilNul(fixture_grant.grant_id[:]) else "")
+    if owner {
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "account_id", TextUntilNul(pending.account_id[:]))
+    }
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "app_id", "inbe")
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "node_id", TextUntilNul(pending.node_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "audience", TelegramFlowServer)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "expires_at", fixture_request_expiry)
+    if owner {
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonNumberField(writer, "bot_id", FlowBot)
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonNumberField(writer, "telegram_id", fixture_telegram_user)
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "client_id", TextUntilNul(pending.client_id[:]))
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "signing_key", TextUntilNul(pending.signing_key[:]))
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "encryption_key", TextUntilNul(pending.encryption_key[:]))
+    }
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "challenge", FlowChallenge)
+    writer = WriteByte(writer, cast(u8)44)
+    state := ifx fixture_approved then "approved" else ifx fixture_claimed then "claimed" else "pending"
+    writer = JsonTextField(writer, "status", state)
+    if owner {
+        writer = WriteText(writer, ",\"scopes\":[{\"collection\":\"private.inbe.v2.lumi\",\"read\":true,\"write\":true}]")
+    }
+    return WriteByte(writer, cast(u8)125).valid
+}
+
+WriteSession :: (output: []u8) -> bool {
+    flow := *telegram_account_flow
+    scopes: [1]GrantScope
+    grant: Grant
+    if !ViewGrant(*fixture_grant, scopes[:], *grant) || !BuildGrantBody(grant, fixture_body[:]) {
+        Expect("synthetic session grant is serializable", false)
+        return false
+    }
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"credential\":{")
+    writer = JsonTextField(writer, "session_id", FlowSession)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "grant_id", grant.grant_id)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "challenge", FlowChallenge)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "expires_at", FlowTime(null) + 300)
+    writer = WriteText(writer, "},\"grant\":")
+    writer = WriteText(writer, TextUntilNul(fixture_body[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    public := ifx flow.temporary_owner then TextUntilNul(flow.owner.public_key_hex[:]) else TextUntilNul(fixture_account.public_key_hex[:])
+    if fixture_wrong_owner {
+        public = TextUntilNul(fixture_owner.public_key_hex[:])
+    }
+    writer = JsonTextField(writer, "owner_public_key", public)
+    writer = WriteByte(writer, cast(u8)125)
+    parsed: GrantStorage
+    positions: [3]s32
+    names: [3]string = .["credential", "grant", "owner_public_key"]
+    Expect("synthetic session strict shape", WholeJson(TextUntilNul(output)) &&
+        ObjectFields(TextUntilNul(output), 0, names[:], positions[:]) &&
+        ReadGrantAt(TextUntilNul(output), positions[1], *parsed))
+    Expect("synthetic session real owner signature", VerifyGrantSignature(grant, public, FlowTime(null)))
+    return writer.valid
+}
+
+Reply :: (request: HttpRequest, output: []u8, status: *s32) -> bool {
+    flow := *telegram_account_flow
+    path := request.url[TelegramFlowServer.count:]
+    status.* = 200
+    if path == "/api/v1/telegram/environment" {
+        writer := Writer.{output, 0, true}
+        writer = WriteText(writer, "{\"app_id\":\"inbe\",\"node_id\":")
+        writer = AppendJsonQuoted(writer, FlowNode)
+        writer = WriteText(writer, ",\"audience\":\"https://api.waozi.xyz\",\"bot_id\":42,\"environment\":\"production\"}")
+        return writer.valid
+    }
+    if path == "/api/v1/telegram/entry" {
+        return WriteInfo(Writer.{output, 0, true}).valid
+    }
+    if path == "/api/v1/telegram/entry/verify" {
+        return WriteIdentity(output, false)
+    }
+    challenge_path := "/api/v1/sync/challenge?"
+    if path.count >= challenge_path.count && path[0:challenge_path.count] == challenge_path {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if path == "/api/v1/sync/login" {
+        writer := Writer.{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-memory-owner-only\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, FlowTime(null))
+        return WriteByte(writer, cast(u8)125).valid
+    }
+    if path == "/api/v1/account/devices" {
+        Expect("owner device distinct from delegate", !FlowContains(request.body, TextUntilNul(flow.material.signing.public_hex[:])))
+        return AppCopyText("true", output)
+    }
+    if path == "/api/v1/telegram/entry/cancel" {
+        fixture_entry_cancels += 1
+        Expect("entry cancel is delegate proof bound", FlowContains(request.body, "\"entry_id\":") &&
+            FlowContains(request.body, "\"proof\":") && !FlowContains(request.body, "\"account_id\":"))
+        return AppCopyText("{}", output)
+    }
+    if path == "/api/v1/authorization/cancel" {
+        fixture_owner_cancels += 1
+        Expect("owner cancellation remains signed v6", flow_host_transaction[0] != cast(u8)0 &&
+            FlowContains(request.body, "\"app_id\":\"inbe\""))
+        return AppCopyText("{}", output)
+    }
+    if path == "/api/v1/telegram/account/bind" {
+        Expect("encrypted recovery backup saved before owner bind", flow.backup_saved)
+        Expect("owner bind retains protocol v6", flow_host_transaction[0] != cast(u8)0)
+        fixture_bound = true
+        return WriteIdentity(output, true)
+    }
+    if path == "/api/v1/authorization/requests" {
+        Expect("request is exact migrated Lumi scope", request.body == "{\"app_id\":\"inbe\",\"telegram\":true,\"scopes\":[{\"collection\":\"private.inbe.v2.lumi\",\"read\":true,\"write\":true}]}")
+        return WritePending(output, true)
+    }
+    if path == "/api/v1/telegram/entry/rendezvous" {
+        return WritePending(output, false)
+    }
+    if path == "/api/v1/authorization/rendezvous" {
+        return WritePending(output, flow_host_authorization[0] != cast(u8)0)
+    }
+    if path == "/api/v1/authorization/claim" {
+        fixture_claimed = true
+        writer := Writer.{output, 0, true}
+        writer = WriteText(writer, "{\"request_id\":")
+        writer = AppendJsonQuoted(writer, FlowRequest)
+        writer = WriteText(writer, ",\"bot_id\":42,\"telegram_id\":7,\"init_digest\":")
+        writer = AppendJsonQuoted(writer, TextUntilNul(flow.init_digest[:]))
+        writer = WriteText(writer, ",\"node_id\":")
+        writer = AppendJsonQuoted(writer, FlowNode)
+        writer = WriteText(writer, ",\"audience\":\"https://api.waozi.xyz\"}")
+        return writer.valid
+    }
+    if path == "/api/v1/authorization/approve" {
+        Expect("actual owner grant received", ReadGrantAt(request.body, 0, *fixture_grant))
+        scopes: [1]GrantScope
+        grant: Grant
+        public := TextUntilNul(flow.owner.public_key_hex[:])
+        Expect("actual ML-DSA approval signature", ViewGrant(*fixture_grant, scopes[:], *grant) &&
+            VerifyGrantSignature(grant, public, FlowTime(null)))
+        fixture_approved = true
+        return AppCopyText("true", output)
+    }
+    if path == "/api/v1/delegated/sync" {
+        Expect("scoped sync contains no Diary or feedback queue", !FlowContains(request.body, "private.inbe.v1") &&
+            !FlowContains(request.body, "cell.diary") && !FlowContains(request.body, "cell.feedback"))
+        Expect("scoped sync uses key-bound credential", flow_host_authorization[0] != cast(u8)0 &&
+            !FlowContains(TextUntilNul(flow_host_authorization[:]), "Bearer "))
+        if fixture_revoked {
+            status.* = 403
+            return AppCopyText("{}", output)
+        }
+        return AppCopyText("{\"collection\":\"private.inbe.v2.lumi\",\"records\":[],\"next_version\":0,\"truncated\":false,\"applied\":0}", output)
+    }
+    if path == "/api/v1/authorization/challenge" {
+        fixture_challenge_calls += 1
+        if fixture_revoked {
+            status.* = 403
+            return AppCopyText("{}", output)
+        }
+        writer := Writer.{output, 0, true}
+        writer = WriteText(writer, "{\"grant_id\":")
+        writer = AppendJsonQuoted(writer, TextUntilNul(fixture_grant.grant_id[:]))
+        writer = WriteText(writer, ",\"challenge\":")
+        writer = AppendJsonQuoted(writer, FlowChallenge)
+        writer = WriteText(writer, ",\"node_id\":")
+        writer = AppendJsonQuoted(writer, FlowNode)
+        writer = WriteText(writer, ",\"audience\":\"https://api.waozi.xyz\",\"expires_at\":")
+        writer = WriteDecimal(writer, FlowTime(null) + 90)
+        return WriteByte(writer, cast(u8)125).valid
+    }
+    if path == "/api/v1/authorization/session" {
+        if fixture_revoked {
+            status.* = 403
+            return AppCopyText("{}", output)
+        }
+        return WriteSession(output)
+    }
+    safe_path := path
+    for cursor: cast(s64)0..cast(s64)path.count - 1 {
+        if path[cursor] == cast(u8)63 {
+            safe_path = path[0:cursor]
+            break
+        }
+    }
+    Expect(safe_path, false)
+    Expect("unlisted route never used", false)
+    return false
+}
+
+FixtureCleared :: () {
+}
+
+StartFixture :: (name: string, mode: string) -> bool {
+    if fixture_db_open {
+        TelegramAccountFlowCancel()
+        ClearDelegate()
+        storage_close()
+    }
+    delegate_environment = false
+    on_delegate_clear = FixtureCleared
+    telegram_account_flow = TelegramAccountFlow.{}
+    FlowHostReset()
+    FlowSetClock(1700000000)
+    flow_host_reply = Reply
+    fixture_mode = mode
+    fixture_claimed = false
+    fixture_approved = false
+    fixture_revoked = false
+    fixture_bound = false
+    fixture_wrong_owner = false
+    fixture_bad_node = false
+    fixture_verified_status = "verified"
+    fixture_bound_status = "bound"
+    fixture_entry_cancels = 0
+    fixture_owner_cancels = 0
+    fixture_telegram_user = FlowUser
+    fixture_challenge_calls = 0
+    fixture_request_expiry = FlowTime(null) + 600
+    fixture_grant = GrantStorage.{}
+    root: [512]u8
+    variable: [14]u8
+    unused AppCopyText("APP_DATA_ROOT", variable[:])
+    base := FlowTestEnvironment(*variable[0])
+    if base == null || !AppCopyText(AppTextFromCString(base, 512), root[:]) ||
+    !AppAppendText("/", root[:]) || !AppAppendText(name, root[:]) ||
+    !AppCopyText(TextUntilNul(root[:]), g_data_root[:]) || storage_init(TextUntilNul(root[:])) == 0 {
+        return false
+    }
+    fixture_db_open = true
+    return true
+}
+
+PumpUntil :: (phase: s32) -> bool {
+    for iteration: 0..149 {
+        TelegramAccountFlowPump(null)
+        if telegram_account_flow.phase == phase {
+            return true
+        }
+        if telegram_account_flow.phase >= 90 {
+            phase_text: [24]u8
+            unused AppFormatS32(phase, phase_text[:])
+            Expect(TextUntilNul(phase_text[:]), false)
+            address := TextUntilNul(flow_host_url[:])
+            for cursor: cast(s64)0..cast(s64)address.count - 1 {
+                if address[cursor] == cast(u8)63 {
+                    address = address[0:cursor]
+                    break
+                }
+            }
+            Expect(address, false)
+            return false
+        }
+        FlowAdvanceClock(1)
+    }
+    return false
+}
+
+SeedHistory :: () {
+    storage_set_setting_text("cell.diary.fixture", "preserved-private-history")
+    storage_set_setting_text("cell.feedback.fixture", "preserved-private-feedback")
+    unused exec_sql("INSERT OR IGNORE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('cell_record','cell.diary.fixture',0,1700000000)")
+}
+HistoryCount :: () -> s64 {
+    return db_select_int64_text("SELECT COUNT(*) FROM settings WHERE key IN ('cell.diary.fixture','cell.feedback.fixture')", -1)
+}
+OutboxCount :: () -> s64 {
+    return db_select_int64_text("SELECT COUNT(*) FROM sync_outbox", -1)
+}
+
+CheckCreatePreservesOwner :: () {
+    Expect("owner fixture opens", StartFixture("existing-owner", "create"))
+    storage_set_setting_text("sync_public_id", TextUntilNul(fixture_account.public_id[:]))
+    storage_set_setting_text("sync_public_key", TextUntilNul(fixture_account.public_key_hex[:]))
+    storage_set_setting_text("sync_private_key", TextUntilNul(fixture_account.private_key_hex[:]))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("existing owner reaches verified choice", PumpUntil(4))
+    Expect("create unavailable for existing owner", !TelegramAccountActionAllowed(*telegram_account_flow.view, 1))
+    HandleTelegramAccountAction(null, 1)
+    Expect("attempted create never replaces owner", storage_get_setting_text("sync_public_id") ==
+        TextUntilNul(fixture_account.public_id[:]) && storage_get_setting_text("sync_private_key") ==
+        TextUntilNul(fixture_account.private_key_hex[:]))
+    Expect("create preserves existing history and pending outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    TelegramAccountFlowCancel()
+}
+
+CheckCreate :: () {
+    Expect("empty create fixture opens", StartFixture("create", "create"))
+    flow_host_delay = 2
+    TelegramAccountFlowPump(null)
+    Expect("initial async request remains pending", telegram_account_flow.phase == 1 && telegram_account_flow.waiting)
+    TelegramAccountFlowPump(null)
+    Expect("delayed poll does not fail", telegram_account_flow.phase == 1 && telegram_account_flow.waiting)
+    Expect("create reaches verified choice", PumpUntil(4))
+    HandleTelegramAccountAction(null, 1)
+    Expect("owner generated only on device", telegram_account_flow.phase == 17 && telegram_account_flow.owner.private_key_hex[0] != cast(u8)0)
+    fixture_owner = telegram_account_flow.owner
+    unused AppCopyText(TextUntilNul(fixture_owner.private_key_hex[:]), flow_host_owner_secret[:])
+    before_backup := flow_host_calls
+    Expect("no owner bind or grant before encrypted backup", !fixture_bound && !fixture_approved &&
+        telegram_account_flow.view.allowed_actions == ((cast(u32)1 << 4) | (cast(u32)1 << 5)))
+    unused AppCopyText("short", telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 5)
+    Expect("short backup passphrase cannot bind", !fixture_bound && flow_host_calls == before_backup)
+    flow_host_download_ok = false
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 5)
+    Expect("failed backup save cannot bind", !fixture_bound && !telegram_account_flow.backup_saved)
+    flow_host_download_ok = true
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 5)
+    Expect("backup is encrypted and excludes raw secret", flow_host_downloads == 1 &&
+        !FlowContains(TextUntilNul(flow_host_download[:]), TextUntilNul(fixture_owner.private_key_hex[:])) &&
+        !FlowContains(TextUntilNul(flow_host_download[:]), flow_host_passphrase))
+    Expect("download click alone never binds", telegram_account_flow.phase == 18 &&
+        !fixture_bound && !telegram_account_flow.backup_saved && telegram_account_flow.view.password == null)
+    Expect("download clears passphrase and local ciphertext", telegram_account_flow.recovery_input.value[0] == cast(u8)0 &&
+        telegram_account_flow.recovery[0] == cast(u8)0)
+    flow_host_protected_result = -1
+    unused AppCopyText(TextUntilNul(flow_host_download[:]), flow_host_recovery[:])
+    HandleTelegramAccountAction(null, 7)
+    TelegramAccountFlowPump(null)
+    Expect("cancelled backup picker cannot bind", telegram_account_flow.phase == 18 && !fixture_bound &&
+        !telegram_account_flow.backup_saved && telegram_account_flow.view.restore_failed)
+    flow_host_protected_result = 1
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    HandleTelegramAccountAction(null, 7)
+    TelegramAccountFlowPump(null)
+    Expect("different encrypted backup cannot bind", telegram_account_flow.phase == 18 && !fixture_bound &&
+        !telegram_account_flow.backup_saved && telegram_account_flow.recovery[0] == cast(u8)0)
+    unused AppCopyText(TextUntilNul(flow_host_download[:]), flow_host_recovery[:])
+    HandleTelegramAccountAction(null, 7)
+    Expect("matching encrypted backup opens local verification only", telegram_account_flow.phase == 18 &&
+        !fixture_bound && !telegram_account_flow.backup_saved)
+    Expect("create reaches explicit consent", PumpUntil(16))
+    Expect("no grant approval before explicit action", !fixture_approved && telegram_account_flow.view.review_complete)
+    Expect("temporary owner not saved to profile", storage_get_setting_text("sync_private_key") == "" &&
+        storage_get_setting_text("sync_auth_token") == "" && StoredAccountMode() == AccountModeDelegate)
+    telegram_account_flow.view.review_seen = true
+    HandleTelegramAccountAction(null, 6)
+    Expect("created owner delegate session installed", PumpUntil(14) && StoredDelegateAvailable() == 1)
+    Expect("owner wiped after delegate install", telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
+    TelegramAccountFlowPump(null)
+    TelegramAccountFlowPump(null)
+    Expect("successful install survives subsequent pumps", telegram_account_flow.phase == 14 && StoredDelegateAvailable() == 1)
+    Expect("only delegate capsule persisted", flow_host_storage_calls >= 2 && !flow_host_secret_leak)
+    fixture_revoked = true
+    telegram_account_flow.retry_at = FlowTime(null)
+    TelegramAccountFlowPump(null)
+    Expect("revoked renewal closes delegate", PumpUntil(90) && StoredDelegateAvailable() == 0)
+    before_fallback := flow_host_calls
+    operation: StoredOperation
+    transfer: NetworkTransfer
+    Expect("revoked cannot use broad owner request", !BeginStoredRequest(*operation, TelegramFlowServer,
+        NetworkTransport(*transfer), "GET", "/api/v1/account", "", telegram_account_flow.response[:], true))
+    Expect("no broad request transport fallback", flow_host_calls == before_fallback)
+}
+
+CheckRestorePreserves :: () {
+    Expect("restore fixture opens", StartFixture("restore", "restore"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("restore choice", PumpUntil(4))
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    unused AppCopyText("wrong-local-passphrase", telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    TelegramAccountFlowPump(null)
+    Expect("wrong passphrase does not bind", !fixture_bound && telegram_account_flow.view.restore_failed &&
+        telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
+    Expect("wrong passphrase preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    other_backup: [17664]u8
+    Expect("other owner encrypted backup", ExportSyncAccountTextEncrypted(*fixture_owner, flow_host_passphrase,
+        *other_backup[0], other_backup.count) != 0)
+    unused AppCopyText(TextUntilNul(other_backup[:]), flow_host_recovery[:])
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    TelegramAccountFlowPump(null)
+    Expect("wrong account recovery does not bind", !fixture_bound && telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
+    Expect("wrong account recovery preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    flow_host_protected_delay = 2
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    HandleTelegramAccountAction(null, 4)
+    Expect("cancel recovery owns pending host operation", flow_host_storage_cancelled > 0 &&
+        telegram_account_flow.recovery_input.value[0] == cast(u8)0 && telegram_account_flow.recovery[0] == cast(u8)0)
+    Expect("cancel preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    Expect("no restore secret request leaks", !flow_host_secret_leak)
+    SyncCryptoWipe(*other_backup[0], 17664)
+}
+
+CheckConnect :: () {
+    Expect("connect fixture opens", StartFixture("connect", "connect"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("connect choice", PumpUntil(4))
+    HandleTelegramAccountAction(null, 3)
+    TelegramAccountFlowPump(null)
+    Expect("claim waits for existing-device owner approval", PumpUntil(10) && fixture_claimed && !fixture_approved)
+    pending: OwnerRendezvous
+    FillOwnerPending(*pending, true)
+    Expect("existing device signs scoped owner grant", SealAndSignTemporaryLumiGrant(*fixture_account, *pending,
+        FlowTime(null), fixture_body[:], *fixture_grant))
+    Expect("existing device approval serialized signature", ReadGrantAt(TextUntilNul(fixture_body[:]), 0, *fixture_grant))
+    fixture_approved = true
+    FlowAdvanceClock(3)
+    Expect("connect acquires key-bound session", PumpUntil(14) && StoredDelegateAvailable() == 1)
+    TelegramAccountFlowPump(null)
+    TelegramAccountFlowPump(null)
+    Expect("connect survives installation cleanup callback", telegram_account_flow.phase == 14 && StoredDelegateAvailable() == 1)
+    Expect("connect preserves Diary feedback and queued outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    Expect("connect stores no owner credential", storage_get_setting_text("sync_private_key") == "" && storage_get_setting_text("sync_auth_token") == "")
+    CheckProtectedRestart()
+    FlowAdvanceClock(86401)
+    Expect("expired grant fails renewal", PumpUntil(90) && StoredDelegateAvailable() == 0)
+}
+
+CheckProtectedRestart :: () {
+    saved_grant := fixture_grant
+    saved_capsule := flow_host_capsule
+    saved_time := FlowTime(null)
+    outbox := OutboxCount()
+    Expect("authorized delegate capsule saved", saved_capsule[0] != cast(u8)0)
+    Expect("protected restart opens same owned database", StartFixture("connect", "restore"))
+    FlowSetClock(saved_time + 1)
+    fixture_request_expiry = FlowTime(null) + 600
+    fixture_grant = saved_grant
+    flow_host_capsule = saved_capsule
+    Expect("protected installation offered after verified identity", PumpUntil(4) &&
+        TelegramAccountActionAllowed(*telegram_account_flow.view, 2))
+    HandleTelegramAccountAction(null, 2)
+    Expect("protected installation requires fresh key-bound session", PumpUntil(14) &&
+        StoredDelegateAvailable() == 1 && fixture_challenge_calls == 1)
+    TelegramAccountFlowPump(null)
+    TelegramAccountFlowPump(null)
+    Expect("protected restart keeps scoped delegate through cleanup", telegram_account_flow.phase == 14 &&
+        StoredDelegateAvailable() == 1 && !fixture_bound && !fixture_claimed && !fixture_approved)
+    Expect("protected restart preserves data/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    SyncCryptoWipe(*saved_capsule[0], 65537)
+}
+
+CheckDifferentTelegramUser :: () {
+    Expect("identity capsule fixture opens", StartFixture("user-capsule", "connect"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("first user reaches verified choice", PumpUntil(4))
+    HandleTelegramAccountAction(null, 3)
+    TelegramAccountFlowPump(null)
+    Expect("first user claims pending grant", PumpUntil(10) && fixture_claimed)
+    pending: OwnerRendezvous
+    FillOwnerPending(*pending, true)
+    Expect("first user owner approval", SealAndSignTemporaryLumiGrant(*fixture_account, *pending,
+        FlowTime(null), fixture_body[:], *fixture_grant) &&
+        ReadGrantAt(TextUntilNul(fixture_body[:]), 0, *fixture_grant))
+    fixture_approved = true
+    FlowAdvanceClock(3)
+    Expect("first user installed capsule", PumpUntil(14))
+    TelegramAccountFlowPump(null)
+    TelegramAccountFlowPump(null)
+    saved_grant := fixture_grant
+    saved_capsule := flow_host_capsule
+    saved_time := FlowTime(null)
+    Expect("second user opens same owned database", StartFixture("user-capsule", "restore"))
+    FlowSetClock(saved_time + 1)
+    fixture_request_expiry = FlowTime(null) + 600
+    fixture_telegram_user = FlowUser + 1
+    flow_host_raw = "auth_date=1700000000&user=%7B%22id%22%3A8%7D&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    fixture_grant = saved_grant
+    flow_host_capsule = saved_capsule
+    Expect("second user verified independently", PumpUntil(4))
+    HandleTelegramAccountAction(null, 2)
+    Expect("different Telegram user capsule rejected before session", telegram_account_flow.phase == 90 &&
+        StoredDelegateAvailable() == 0 && fixture_challenge_calls == 0)
+    TelegramAccountFlowPump(null)
+    Expect("different user clears protected capsule", flow_host_capsule[0] == cast(u8)0 &&
+        telegram_account_flow.capsule[0] == cast(u8)0)
+    Expect("different user preserves data/outbox without owner fallback", HistoryCount() == 2 &&
+        OutboxCount() == outbox && storage_get_setting_text("sync_private_key") == "" &&
+        !flow_host_secret_leak)
+    SyncCryptoWipe(*saved_capsule[0], 65537)
+}
+
+CheckContextCancel :: () {
+    Expect("context fixture opens", StartFixture("changed-context", "create"))
+    flow_host_delay = 5
+    TelegramAccountFlowPump(null)
+    flow_host_current = false
+    TelegramAccountFlowPump(null)
+    Expect("changed context cancels active network", telegram_account_flow.phase == 90 &&
+        flow_host_cancelled == 1 && !flow_host_active)
+    Expect("changed context wipes all raw host credentials", telegram_account_flow.init_data[0] == cast(u8)0 &&
+        telegram_account_flow.body[0] == cast(u8)0 && telegram_account_flow.response[0] == cast(u8)0)
+    Expect("changed context never installs owner/delegate", StoredDelegateAvailable() == 0 &&
+        storage_get_setting_text("sync_private_key") == "")
+}
+
+PumpCleanup :: () -> bool {
+    for iteration: 0..79 {
+        TelegramAccountFlowPump(null)
+        if telegram_account_flow.cancellation_deadline == 0 &&
+        telegram_account_flow.protected_operation.handle == 0 {
+            return true
+        }
+        FlowAdvanceClock(1)
+    }
+    return false
+}
+
+CheckStatusTamper :: () {
+    Expect("verified-status fixture opens", StartFixture("verify-status", "create"))
+    fixture_verified_status = "cancelled"
+    Expect("cancelled identity cannot become a choice", PumpUntil(90) &&
+        !fixture_bound && !fixture_approved && StoredDelegateAvailable() == 0 &&
+        telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
+    Expect("bound-status fixture opens", StartFixture("bound-status", "restore"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("bound-status restore choice", PumpUntil(4))
+    fixture_bound_status = "verified"
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    Expect("verified status cannot substitute for owner binding", PumpUntil(90) &&
+        !fixture_approved && StoredDelegateAvailable() == 0)
+    Expect("rejected binding preserves data and owner secrecy", HistoryCount() == 2 && OutboxCount() == outbox &&
+        storage_get_setting_text("sync_private_key") == "" && !flow_host_secret_leak)
+}
+
+CheckWrongNode :: () {
+    Expect("wrong-node fixture opens", StartFixture("wrong-node", "connect"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("wrong-node choice", PumpUntil(4))
+    fixture_bad_node = true
+    HandleTelegramAccountAction(null, 3)
+    Expect("issuing node change rejected before claim", PumpUntil(90) &&
+        !fixture_claimed && !fixture_approved && StoredDelegateAvailable() == 0)
+    Expect("node rejection preserves history and outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+}
+
+CheckOwnerCancellation :: () {
+    Expect("owner-cancel fixture opens", StartFixture("owner-cancel", "restore"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("owner-cancel restore choice", PumpUntil(4))
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    Expect("owner-cancel reaches consent", PumpUntil(16))
+    HandleTelegramAccountAction(null, 4)
+    Expect("cancel immediately denies local authorization", telegram_account_flow.phase == 91 &&
+        !fixture_approved && StoredDelegateAvailable() == 0 &&
+        telegram_account_flow.owner.private_key_hex[0] == cast(u8)0 &&
+        telegram_account_flow.recovery_input.value[0] == cast(u8)0)
+    Expect("cancel retains separate bounded requests", telegram_account_flow.owner_cancel_operation.active &&
+        telegram_account_flow.entry_cancel_waiting)
+    Expect("signed owner and entry cancellation complete", PumpCleanup() && fixture_owner_cancels == 1 &&
+        fixture_entry_cancels == 1)
+    Expect("cancellation copies wiped after completion", telegram_account_flow.owner_cancel_operation.account.private_key_hex[0] == cast(u8)0 &&
+        telegram_account_flow.owner_cancel_operation.session.token[0] == cast(u8)0 &&
+        telegram_account_flow.owner_cancel_body[0] == cast(u8)0 &&
+        telegram_account_flow.entry_cancel_body[0] == cast(u8)0 && !flow_host_secret_leak)
+    Expect("owner cancellation preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+}
+
+CheckCallbackContext :: () {
+    Expect("HTTP callback-context fixture opens", StartFixture("http-context", "create"))
+    TelegramAccountFlowPump(null)
+    flow_host_change_context_on_http_poll = true
+    TelegramAccountFlowPump(null)
+    Expect("identity change within HTTP poll denies response", telegram_account_flow.phase == 90 &&
+        telegram_account_flow.owner.private_key_hex[0] == cast(u8)0 &&
+        StoredDelegateAvailable() == 0 && telegram_account_flow.response[0] == cast(u8)0)
+    Expect("recovery callback-context fixture opens", StartFixture("recovery-context", "restore"))
+    storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
+    SeedHistory()
+    outbox := OutboxCount()
+    Expect("callback-context restore choice", PumpUntil(4))
+    unused AppCopyText(TextUntilNul(fixture_backup[:]), flow_host_recovery[:])
+    unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
+    HandleTelegramAccountAction(null, 7)
+    flow_host_change_context_on_protected_poll = true
+    TelegramAccountFlowPump(null)
+    Expect("identity change within recovery callback denies owner", telegram_account_flow.phase == 90 &&
+        !fixture_bound && telegram_account_flow.owner.private_key_hex[0] == cast(u8)0 &&
+        telegram_account_flow.recovery[0] == cast(u8)0 &&
+        telegram_account_flow.recovery_input.value[0] == cast(u8)0)
+    Expect("callback rejection preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox && !flow_host_secret_leak)
+}
+
+#program_export
+Check :: () -> s32 {
+    FlowHostReset()
+    FlowSetClock(1700000000)
+    if CreateSyncAccount(*fixture_account) == 0 || CreateSyncAccount(*fixture_owner) == 0 ||
+    ExportSyncAccountTextEncrypted(*fixture_account, flow_host_passphrase, *fixture_backup[0], fixture_backup.count) == 0 {
+        return 1
+    }
+    CheckCreatePreservesOwner()
+    CheckCreate()
+    CheckRestorePreserves()
+    CheckConnect()
+    CheckContextCancel()
+    CheckStatusTamper()
+    CheckWrongNode()
+    CheckOwnerCancellation()
+    CheckCallbackContext()
+    CheckDifferentTelegramUser()
+    if fixture_db_open {
+        TelegramAccountFlowCancel()
+        storage_close()
+    }
+    ClearDelegate()
+    SyncCryptoWipe(*fixture_account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SyncCryptoWipe(*fixture_owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SyncCryptoWipe(*fixture_backup[0], 17664)
+    return failures
+}

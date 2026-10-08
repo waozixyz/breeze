@@ -1,0 +1,725 @@
+// Owner approval is separate from linking a Telegram chat. Only Lumi v2 keys
+// may leave this owner installation, sealed to the reviewed delegate key.
+#import "authorization"
+#import "authorization_owner"
+#import "envelope"
+#import "async_client"
+#import "auth"
+#import "client"
+#import "sync"
+#import "net_http"
+#import "url"
+#import "text_buffer"
+#import "wire"
+#import "byte_text_linux"
+#import, file "../storage/account_types.zi";
+#import, file "../storage/sync_account.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../storage/device_key_store.zi";
+#import, file "../storage/device_key.zi";
+#import, file "../storage/sync_session.zi";
+#import, file "../storage/sync_crypto_random.zi";
+#import, file "../storage/sync_crypto_hmac.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_layout.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/text_buffers.zi";
+
+c :: #system_library "c";
+#if #defined(_WIN32) {
+    AuthorizationNow :: (output: *s64) -> s64 #foreign c "_time64";
+} else {
+    AuthorizationNow :: (output: *s64) -> s64 #foreign c "time";
+}
+AuthorizationAudience :: "https://api.waozi.xyz"
+AuthorizationGrantLifetime :: 86400
+
+OwnerAuthorizationOperation :: struct {
+    account: SyncAccount
+    client: Client
+    session: Session
+    material: DeviceKeyMaterial
+    request: PendingRequest
+    transport: AsyncTransport
+    server: [513]u8
+    client_id: [129]u8
+    path: [1025]u8
+    body: [32768]u8
+    registration: [6144]u8
+    registration_response: [2048]u8
+    transaction_header: [8192]u8
+    output: []u8
+    signed: bool
+    temporary: bool
+    expected_bot: s64
+    expected_user: s64
+    delegate_generation: s64
+    active: bool
+    stage: s32
+    status: s32
+    result: AuthResult
+}
+
+OwnerAuthorizationCurrent :: (operation: *OwnerAuthorizationOperation) -> bool {
+    if operation == null || operation.account.private_key_hex[0] == cast(u8)0 {
+        return false
+    }
+    if operation.temporary {
+        current: Client
+        return operation.delegate_generation == StoredDelegateGeneration() &&
+        OpenTemporaryOwnerClient(TextUntilNul(operation.server[:]), *operation.account,
+            TextUntilNul(operation.client_id[:]), operation.expected_bot,
+            operation.expected_user, *current)
+    }
+    return operation != null && operation.account.private_key_hex[0] != cast(u8)0 &&
+    storage_get_setting_text("sync_public_id") ==
+    AccountField(*operation.account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) &&
+    storage_get_setting_text("sync_private_key") ==
+    AccountField(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+}
+
+FinishOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
+    result: AuthResult) {
+    operation.result = result
+    if !operation.temporary && OwnerAuthorizationCurrent(operation) {
+        SaveSession(*operation.session)
+    }
+    WipeDeviceKey(*operation.material)
+    SyncCryptoWipe(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    if operation.temporary {
+        // Only the server clock remains useful to the controller. No temporary
+        // owner bearer or login receipt survives completion or cancellation.
+        SyncCryptoWipe(*operation.session.token[0], 4096)
+        operation.session.expires_at_local = 0
+        operation.session.expires_in_seconds = 0
+        SyncCryptoWipe(*operation.request.login_response[0], 8192)
+        operation.request = PendingRequest.{}
+        operation.client = Client.{}
+    }
+    operation.active = false
+}
+
+CancelOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation) {
+    if operation == null || !operation.active {
+        return
+    }
+    CancelRequest(*operation.request)
+    FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+}
+
+// Request strings and signing material remain owned until completion. A caller
+// may provide only these authorization routes; owner broad routes stay separate.
+BeginOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
+    server: string, transport: AsyncTransport, path: string, body: string,
+    output: []u8, signed: bool) -> bool {
+    if operation == null || operation.active || output.count == 0 ||
+    transport.start == null || transport.poll == null || transport.cancel == null ||
+    (signed && !OwnerAuthorizationRoute(path)) ||
+    (!signed && path != "/api/v1/authorization/rendezvous" &&
+        path != "/api/v1/authorization/approve") {
+        return false
+    }
+    operation.* = OwnerAuthorizationOperation.{}
+    operation.result = cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    if !NormalizeUrl(server, operation.server[:]) ||
+    TextUntilNul(operation.server[:]) != AuthorizationAudience ||
+    sync_account_load(*operation.account) == 0 ||
+    !AppCopyText(storage_sync_client_id(), operation.client_id[:]) ||
+    !OpenAccountClient(TextUntilNul(operation.server[:]), *operation.account,
+        TextUntilNul(operation.client_id[:]), *operation.client) ||
+    !AppCopyText(path, operation.path[:]) || !AppCopyText(body, operation.body[:]) ||
+    !OwnerAuthorizationCurrent(operation) {
+        FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT)
+        return false
+    }
+    operation.transport = transport
+    operation.output = output
+    operation.signed = signed
+    operation.stage = 1
+    operation.active = true
+    LoadSavedSession(*operation.session, AuthorizationNow(null))
+    if !BeginSession(*operation.request, operation.client, *operation.session,
+        AuthorizationNow(null), transport) {
+        FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        return false
+    }
+    return true
+}
+
+// Create/recovery owners live only in this bounded operation. Hosted mode
+// remains delegated; no owner account, bearer or device key is saved locally.
+BeginTemporaryOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
+    account: *SyncAccount, expected_bot: s64, expected_user: s64,
+    server: string, transport: AsyncTransport, path: string, body: string,
+    output: []u8, signed: bool) -> bool {
+    if operation == null || operation.active || account == null || output.count == 0 ||
+    transport.start == null || transport.poll == null || transport.cancel == null ||
+    (signed && !OwnerAuthorizationRoute(path)) ||
+    (!signed && path != "/api/v1/authorization/rendezvous" &&
+        path != "/api/v1/authorization/approve") {
+        return false
+    }
+    operation.* = OwnerAuthorizationOperation.{}
+    operation.temporary = true
+    operation.expected_bot = expected_bot
+    operation.expected_user = expected_user
+    operation.delegate_generation = StoredDelegateGeneration()
+    operation.result = cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
+    operation.account = account.*
+    if !NormalizeUrl(server, operation.server[:]) ||
+    TextUntilNul(operation.server[:]) != AuthorizationAudience ||
+    !NativeNonce(null, operation.client_id[:]) ||
+    !OpenTemporaryOwnerClient(TextUntilNul(operation.server[:]), *operation.account,
+        TextUntilNul(operation.client_id[:]), expected_bot, expected_user, *operation.client) ||
+    !AppCopyText(path, operation.path[:]) || !AppCopyText(body, operation.body[:]) ||
+    !OwnerAuthorizationCurrent(operation) {
+        FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT)
+        return false
+    }
+    operation.transport = transport
+    operation.output = output
+    operation.signed = signed
+    operation.stage = 1
+    operation.active = true
+    if !BeginSession(*operation.request, operation.client, *operation.session,
+        AuthorizationNow(null), transport) {
+        FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        return false
+    }
+    return true
+}
+
+StartOwnerAuthorizationRequest :: (operation: *OwnerAuthorizationOperation) -> bool {
+    extra: [1]HttpHeader
+    count: s32 = 0
+    if operation.signed {
+        prepared := PrepareOwnerAuthorizationHeader(operation.client, *operation.session,
+            DeviceFromKey(*operation.material), AuthorizationNow(null), null, NativeNonce,
+            TextUntilNul(operation.path[:]), TextUntilNul(operation.body[:]),
+            operation.transaction_header[:])
+        if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+            FinishOwnerAuthorizationOperation(operation, prepared)
+            return false
+        }
+        extra[0].name = "X-Daochi-Tx"
+        extra[0].value = TextUntilNul(operation.transaction_header[:])
+        count = 1
+    }
+    operation.stage = 3
+    if !BeginRequest(*operation.request, operation.client, *operation.session,
+        AuthorizationNow(null), operation.transport, "POST", TextUntilNul(operation.path[:]),
+        TextUntilNul(operation.body[:]), operation.output, extra[0:count]) {
+        FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        return false
+    }
+    return true
+}
+
+PollOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation) -> bool {
+    if operation == null || !operation.active {
+        return true
+    }
+    if !OwnerAuthorizationCurrent(operation) {
+        CancelOwnerAuthorizationOperation(operation)
+        return true
+    }
+    // Login receipt, registration and transaction expiry use the current stage
+    // clock, rather than the instant at which the first network call began.
+    operation.request.now = AuthorizationNow(null)
+    if !PollRequest(*operation.request) {
+        return false
+    }
+    operation.status = operation.request.status
+    if operation.request.result != cast(AuthResult)AuthResult.AUTH_OK {
+        FinishOwnerAuthorizationOperation(operation, operation.request.result)
+        return true
+    }
+    if operation.stage == 1 && operation.signed {
+        generated := false
+        if operation.temporary {
+            generated = GenerateDeviceKey(*operation.material)
+        } else {
+            generated = LoadOrCreateDeviceKey(*operation.material)
+        }
+        if !generated {
+            FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_SIGN_FAILED)
+            return true
+        }
+        prepared := PrepareDeviceRegistration(operation.client, *operation.session,
+            DeviceFromKey(*operation.material), AuthorizationNow(null), null, NativeNonce,
+            operation.registration[:])
+        if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+            FinishOwnerAuthorizationOperation(operation, prepared)
+            return true
+        }
+        extra: [1]HttpHeader
+        operation.stage = 2
+        if !BeginRequest(*operation.request, operation.client, *operation.session,
+            AuthorizationNow(null), operation.transport, "POST", "/api/v1/account/devices",
+            TextUntilNul(operation.registration[:]), operation.registration_response[:], extra[0:0]) {
+            FinishOwnerAuthorizationOperation(operation, cast(AuthResult)AuthResult.AUTH_REQUEST_FAILED)
+        }
+    } else if operation.stage == 1 || operation.stage == 2 {
+        unused StartOwnerAuthorizationRequest(operation)
+    } else {
+        FinishOwnerAuthorizationOperation(operation, operation.request.result)
+    }
+    return !operation.active
+}
+
+LumiAuthorizationPendingValid :: (pending: *OwnerRendezvous, owner: string,
+    audience: string, now: s64, claimed: bool) -> bool {
+    if pending == null || !LowerHex(owner, 64) ||
+    TextUntilNul(pending.account_id[:]) != owner ||
+    TextUntilNul(pending.app_id[:]) != "inbe" ||
+    TextUntilNul(pending.audience[:]) != audience || audience != AuthorizationAudience ||
+    !LowerHex(TextUntilNul(pending.request_id[:]), 32) ||
+    !LowerHex(TextUntilNul(pending.node_id[:]), 64) ||
+    !LowerHex(TextUntilNul(pending.challenge[:]), 32) ||
+    pending.bot_id <= 0 || pending.bot_id > 9007199254740991 ||
+    pending.telegram_id <= 0 || pending.telegram_id > 4503599627370495 ||
+    pending.expires_at <= now || pending.expires_at > now + 600 ||
+    pending.scope_count != 1 ||
+    TextUntilNul(pending.scopes[0].collection[:]) != LumiPrivateCollection ||
+    !pending.scopes[0].read || !pending.scopes[0].write {
+        return false
+    }
+    state := TextUntilNul(pending.status[:])
+    if claimed {
+        return state == "claimed" &&
+        LowerHex(TextUntilNul(pending.client_id[:]), 64) &&
+        LowerHex(TextUntilNul(pending.signing_key[:]), 64) &&
+        LowerHex(TextUntilNul(pending.encryption_key[:]), 2368) &&
+        pending.grant_id[0] == cast(u8)0
+    }
+    return state == "pending" && pending.client_id[0] == cast(u8)0 &&
+    pending.signing_key[0] == cast(u8)0 && pending.encryption_key[0] == cast(u8)0 &&
+    pending.grant_id[0] == cast(u8)0
+}
+
+LumiAuthorizationSamePending :: (left: *OwnerRendezvous, right: *OwnerRendezvous,
+    keys: bool) -> bool {
+    if left == null || right == null {
+        return false
+    }
+    same := TextUntilNul(left.request_id[:]) == TextUntilNul(right.request_id[:]) &&
+    TextUntilNul(left.account_id[:]) == TextUntilNul(right.account_id[:]) &&
+    TextUntilNul(left.app_id[:]) == TextUntilNul(right.app_id[:]) &&
+    TextUntilNul(left.node_id[:]) == TextUntilNul(right.node_id[:]) &&
+    TextUntilNul(left.audience[:]) == TextUntilNul(right.audience[:]) &&
+    TextUntilNul(left.challenge[:]) == TextUntilNul(right.challenge[:]) &&
+    left.expires_at == right.expires_at && left.bot_id == right.bot_id &&
+    left.telegram_id == right.telegram_id && left.scope_count == 1 && right.scope_count == 1 &&
+    TextUntilNul(left.scopes[0].collection[:]) == LumiPrivateCollection &&
+    TextUntilNul(right.scopes[0].collection[:]) == LumiPrivateCollection &&
+    left.scopes[0].read && left.scopes[0].write && right.scopes[0].read && right.scopes[0].write
+    if !same || !keys {
+        return same
+    }
+    return TextUntilNul(left.client_id[:]) == TextUntilNul(right.client_id[:]) &&
+    TextUntilNul(left.signing_key[:]) == TextUntilNul(right.signing_key[:]) &&
+    TextUntilNul(left.encryption_key[:]) == TextUntilNul(right.encryption_key[:])
+}
+
+LumiAuthorizationBuildGrant :: (pending: *OwnerRendezvous, owner: string,
+    now: s64, output: *GrantStorage) -> bool {
+    if output == null {
+        return false
+    }
+    output.* = GrantStorage.{}
+    if !LumiAuthorizationPendingValid(pending, owner, AuthorizationAudience, now, true) {
+        return false
+    }
+    random_id: [65]u8
+    random_nonce: [65]u8
+    if !NativeNonce(null, random_id[:]) || !NativeNonce(null, random_nonce[:]) {
+        return false
+    }
+    output.version = 1
+    output.issued_at = now
+    output.not_before = now
+    output.expires_at = now + AuthorizationGrantLifetime
+    output.bot_id = pending.bot_id
+    output.telegram_id = pending.telegram_id
+    output.scope_count = 1
+    scope := *output.scopes[0]
+    scope.read = true
+    scope.write = true
+    return AppCopyText(owner, output.account_id[:]) &&
+    AppCopyText(TextUntilNul(random_id[:])[0:32], output.grant_id[:]) &&
+    AppCopyText(TextUntilNul(random_nonce[:])[0:32], output.nonce[:]) &&
+    AppCopyText(TextUntilNul(pending.request_id[:]), output.request_id[:]) &&
+    AppCopyText("inbe", output.app_id[:]) &&
+    AppCopyText(TextUntilNul(pending.client_id[:]), output.client_id[:]) &&
+    AppCopyText(TextUntilNul(pending.node_id[:]), output.node_id[:]) &&
+    AppCopyText(AuthorizationAudience, output.audience[:]) &&
+    AppCopyText(TextUntilNul(pending.signing_key[:]), output.signing_key[:]) &&
+    AppCopyText(TextUntilNul(pending.encryption_key[:]), output.encryption_key[:]) &&
+    AppCopyText(LumiPrivateCollection, scope.collection[:]) &&
+    AppCopyText("private", scope.visibility[:]) && AppCopyText(LumiPrivateKeyID, scope.key_id[:])
+}
+
+LumiAuthorizationSealAndSign :: (account: *SyncAccount, pending: *OwnerRendezvous,
+    now: s64, collection_key: []u8, output: []u8, storage: *GrantStorage) -> bool {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    if account == null || storage == null || collection_key.count != 32 ||
+    account.private_key_hex[0] == cast(u8)0 ||
+    !LumiAuthorizationBuildGrant(pending,
+        AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, storage) {
+        return false
+    }
+    // Match the installed owner's isolated collection key before sealing. A
+    // caller cannot accidentally pass the legacy key shared by other data.
+    expected_key: [32]u8
+    defer {
+        SyncCryptoWipe(*expected_key[0], 32)
+    }
+    if storage_get_setting_text("sync_public_id") !=
+    AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) ||
+    storage_get_setting_text("sync_private_key") !=
+    AccountField(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) ||
+    storage_migrate_lumi_collection() == 0 ||
+    storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *expected_key[0]) == 0 ||
+    !EqualBytes(*expected_key[0], *collection_key[0], 32) {
+        return false
+    }
+    client: Client
+    if !OpenAccountClient(AuthorizationAudience, account,
+        TextUntilNul(pending.client_id[:]), *client) {
+        return false
+    }
+    scopes: [1]GrantScope
+    grant: Grant
+    if !ViewGrant(storage, scopes[:], *grant) ||
+    !SealCollectionKey(grant, scopes[0], collection_key, storage.scopes[0].key_envelope[:]) ||
+    !ViewGrant(storage, scopes[:], *grant) ||
+    PrepareGrantApproval(client, grant, output) != cast(AuthResult)AuthResult.AUTH_OK {
+        if output.count > 0 {
+            output[0] = cast(u8)0
+        }
+        return false
+    }
+    return true
+}
+
+// Seal only the independently derived Lumi v2 key from the actual local
+// owner. The hosted profile never saves this owner or reads its legacy key.
+SealAndSignTemporaryLumiGrant :: (account: *SyncAccount, pending: *OwnerRendezvous,
+    now: s64, output: []u8, storage: *GrantStorage) -> bool {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    if storage != null {
+        storage.* = GrantStorage.{}
+    }
+    if account == null || pending == null || storage == null || output.count == 0 {
+        return false
+    }
+    generation := StoredDelegateGeneration()
+    client: Client
+    if !OpenTemporaryOwnerClient(AuthorizationAudience, account,
+        TextUntilNul(pending.client_id[:]), pending.bot_id, pending.telegram_id, *client) ||
+    !LumiAuthorizationBuildGrant(pending,
+        AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, storage) {
+        return false
+    }
+    owner_secret: [(SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2]u8
+    collection_key: [32]u8
+    defer {
+        SyncCryptoWipe(*owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2)
+        SyncCryptoWipe(*collection_key[0], 32)
+    }
+    scopes: [1]GrantScope
+    grant: Grant
+    if SyncCryptoHexToBytes(AccountField(*account.private_key_hex[0],
+        SYNC_PRIVATE_KEY_HEX_SIZE), *owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2) == 0 ||
+    SyncCryptoHmacSha256Text(*owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2,
+        LumiPrivateKeyContext, *collection_key[0]) == 0 ||
+    !ViewGrant(storage, scopes[:], *grant) ||
+    !SealCollectionKey(grant, scopes[0], collection_key[:], storage.scopes[0].key_envelope[:]) ||
+    !ViewGrant(storage, scopes[:], *grant) ||
+    PrepareGrantApproval(client, grant, output) != cast(AuthResult)AuthResult.AUTH_OK ||
+    generation != StoredDelegateGeneration() ||
+    !VerifiedDelegateIdentityCurrent(pending.bot_id, pending.telegram_id) ||
+    !LocalOwnerAccepts(grant.account_id) {
+        output[0] = cast(u8)0
+        storage.* = GrantStorage.{}
+        return false
+    }
+    return true
+}
+
+lumi_authorization_operation: OwnerAuthorizationOperation;
+lumi_authorization_transfer: NetworkTransfer;
+lumi_authorization_response: [65536]u8;
+lumi_authorization_pending: OwnerRendezvous;
+lumi_authorization_grant: GrantStorage;
+lumi_authorization_owner: [65]u8;
+lumi_authorization_state: s32;
+lumi_authorization_action: s32;
+lumi_authorization_intent: s32;
+lumi_authorization_retry: s64;
+lumi_authorization_loaded: bool;
+lumi_authorization_ready: bool;
+lumi_authorization_claimed: bool;
+lumi_authorization_disconnect_ready: bool;
+
+LumiAuthorizationBusy :: () -> bool {
+    return lumi_authorization_operation.active || lumi_authorization_intent != 0
+}
+
+LumiAuthorizationStatusKey :: () -> string {
+    if lumi_authorization_state == 1 {
+        return "lumi_authorization_pending"
+    }
+    if lumi_authorization_state == 2 {
+        return "lumi_authorization_review"
+    }
+    if lumi_authorization_state == 3 {
+        return "lumi_authorization_approved"
+    }
+    if lumi_authorization_state == 4 {
+        return "lumi_authorization_expired"
+    }
+    if lumi_authorization_state == 5 {
+        return "lumi_authorization_error"
+    }
+    return "lumi_authorization_body"
+}
+
+LumiAuthorizationHasGrant :: () -> bool {
+    return LowerHex(storage_get_setting_text("lumi_authorization_grant_id"), 32) &&
+    storage_get_setting_text("lumi_authorization_grant_owner") == storage_get_setting_text("sync_public_id") &&
+    ParsePositiveSeconds(storage_get_setting_text("lumi_authorization_grant_expires")) > AuthorizationNow(null)
+}
+
+LumiAuthorizationRequest :: () {
+    if !LumiAuthorizationBusy() && !lumi_authorization_ready &&
+    lumi_authorization_pending.request_id[0] == cast(u8)0 && !LumiAuthorizationHasGrant() {
+        lumi_authorization_intent = 1
+    }
+}
+
+LumiAuthorizationApprove :: () {
+    if lumi_authorization_ready && !LumiAuthorizationBusy() {
+        lumi_authorization_intent = 3
+    }
+}
+
+LumiAuthorizationCancel :: () {
+    if !LumiAuthorizationBusy() && lumi_authorization_pending.request_id[0] != cast(u8)0 {
+        lumi_authorization_ready = false
+        lumi_authorization_intent = 4
+    }
+}
+
+LumiAuthorizationRevokeThenDisconnect :: () {
+    lumi_authorization_ready = false
+    lumi_authorization_intent = 5
+}
+
+LumiAuthorizationBegin :: (path: string, body: string, signed: bool,
+    action: s32) -> bool {
+    if !BeginOwnerAuthorizationOperation(*lumi_authorization_operation, AuthorizationAudience,
+        NetworkTransport(*lumi_authorization_transfer), path, body,
+        lumi_authorization_response[:], signed) {
+        lumi_authorization_state = 5
+        return false
+    }
+    lumi_authorization_action = action
+    return true
+}
+
+LumiAuthorizationClearPending :: () {
+    lumi_authorization_pending = OwnerRendezvous.{}
+    lumi_authorization_ready = false
+    lumi_authorization_claimed = false
+    storage_set_setting_text("lumi_authorization_pending", "")
+}
+
+LumiAuthorizationPump :: () {
+    owner := storage_get_setting_text("sync_public_id")
+    if TextUntilNul(lumi_authorization_owner[:]) != owner {
+        CancelOwnerAuthorizationOperation(*lumi_authorization_operation)
+        lumi_authorization_pending = OwnerRendezvous.{}
+        lumi_authorization_grant = GrantStorage.{}
+        lumi_authorization_ready = false
+        lumi_authorization_claimed = false
+        lumi_authorization_loaded = false
+        lumi_authorization_intent = 0
+        lumi_authorization_state = 0
+        lumi_authorization_action = 0
+        lumi_authorization_retry = 0
+        lumi_authorization_disconnect_ready = false
+        unused AppCopyText(owner, lumi_authorization_owner[:])
+    }
+    if !LowerHex(owner, 64) || storage_get_setting_text("sync_private_key").count == 0 {
+        return
+    }
+    now := AuthorizationNow(null)
+    if !lumi_authorization_loaded {
+        lumi_authorization_loaded = true
+        saved := storage_get_setting_text("lumi_authorization_pending")
+        restored: OwnerRendezvous
+        if saved.count > 0 && ReadOwnerRendezvous(saved, *restored) &&
+        (LumiAuthorizationPendingValid(*restored, owner, AuthorizationAudience, now, false) ||
+            LumiAuthorizationPendingValid(*restored, owner, AuthorizationAudience, now, true)) {
+            lumi_authorization_pending = restored
+            lumi_authorization_claimed = TextUntilNul(restored.status[:]) == "claimed"
+            lumi_authorization_state = 1
+        } else if LumiAuthorizationHasGrant() {
+            lumi_authorization_state = 3
+        }
+    }
+    if lumi_authorization_state == 3 && !LumiAuthorizationHasGrant() {
+        lumi_authorization_state = 4
+    }
+    if lumi_authorization_operation.active {
+        if !PollOwnerAuthorizationOperation(*lumi_authorization_operation) {
+            return
+        }
+        action := lumi_authorization_action
+        lumi_authorization_action = 0
+        success := lumi_authorization_operation.result == cast(AuthResult)AuthResult.AUTH_OK
+        server_now := ServerNow(*lumi_authorization_operation.session, now)
+        if !success {
+            lumi_authorization_ready = false
+            lumi_authorization_state = ifx lumi_authorization_operation.status == 410 then 4 else 5
+            return
+        }
+        if action == 1 || action == 2 {
+            candidate: OwnerRendezvous
+            claimed := false
+            document := TextUntilNul(lumi_authorization_response[:])
+            valid := ReadOwnerRendezvous(document, *candidate)
+            if valid {
+                claimed = TextUntilNul(candidate.status[:]) == "claimed"
+                valid = LumiAuthorizationPendingValid(*candidate, owner, AuthorizationAudience,
+                    server_now, claimed)
+            }
+            if valid && action == 2 {
+                valid = LumiAuthorizationSamePending(*lumi_authorization_pending, *candidate,
+                    lumi_authorization_claimed)
+            }
+            if !valid {
+                lumi_authorization_state = 5
+                lumi_authorization_ready = false
+                return
+            }
+            lumi_authorization_pending = candidate
+            storage_set_setting_text("lumi_authorization_pending", document)
+            lumi_authorization_ready = claimed
+            lumi_authorization_claimed = claimed
+            lumi_authorization_state = ifx claimed then 2 else 1
+            if action == 1 {
+                // The bot-open intent is consumed by LumiTelegramPump.
+                lumi_authorization_intent = 2
+            }
+        } else if action == 3 {
+            storage_set_setting_text("lumi_authorization_grant_id",
+                TextUntilNul(lumi_authorization_grant.grant_id[:]))
+            storage_set_setting_text("lumi_authorization_grant_owner", owner)
+            expiry: [24]u8
+            if AppFormatS64(lumi_authorization_grant.expires_at, expiry[:]) {
+                storage_set_setting_text("lumi_authorization_grant_expires", TextUntilNul(expiry[:]))
+            }
+            LumiAuthorizationClearPending()
+            lumi_authorization_state = 3
+        } else if action == 4 {
+            LumiAuthorizationClearPending()
+            lumi_authorization_state = 0
+        } else if action == 5 {
+            storage_set_setting_text("lumi_authorization_grant_id", "")
+            storage_set_setting_text("lumi_authorization_grant_owner", "")
+            storage_set_setting_text("lumi_authorization_grant_expires", "")
+            lumi_authorization_disconnect_ready = true
+            lumi_authorization_state = 0
+        }
+    }
+    if lumi_authorization_intent == 2 {
+        return
+    }
+    if lumi_authorization_intent == 5 {
+        if lumi_authorization_pending.request_id[0] != cast(u8)0 {
+            body: [256]u8
+            if BuildIDBody("request_id", TextUntilNul(lumi_authorization_pending.request_id[:]),
+                "inbe", body[:]) {
+                unused LumiAuthorizationBegin("/api/v1/authorization/cancel", TextUntilNul(body[:]), true, 4)
+            }
+            return
+        }
+        lumi_authorization_intent = 0
+        grant_id := storage_get_setting_text("lumi_authorization_grant_id")
+        if LowerHex(grant_id, 32) && storage_get_setting_text("lumi_authorization_grant_owner") == owner {
+            body: [256]u8
+            if BuildIDBody("grant_id", grant_id, "inbe", body[:]) {
+                unused LumiAuthorizationBegin("/api/v1/authorization/revoke", TextUntilNul(body[:]), true, 5)
+            }
+        } else {
+            lumi_authorization_disconnect_ready = true
+        }
+        return
+    }
+    if lumi_authorization_intent == 1 {
+        lumi_authorization_intent = 0
+        scopes: [1]RequestedScope = .[RequestedScope.{LumiPrivateCollection, true, true}]
+        body: [512]u8
+        if storage_migrate_lumi_collection() == 0 ||
+        !BuildAuthorizationRequest("inbe", true, scopes[:], body[:]) ||
+        !LumiAuthorizationBegin("/api/v1/authorization/requests", TextUntilNul(body[:]), true, 1) {
+            lumi_authorization_state = 5
+        }
+        return
+    }
+    if lumi_authorization_intent == 4 {
+        lumi_authorization_intent = 0
+        body: [256]u8
+        if BuildIDBody("request_id", TextUntilNul(lumi_authorization_pending.request_id[:]),
+            "inbe", body[:]) {
+            unused LumiAuthorizationBegin("/api/v1/authorization/cancel", TextUntilNul(body[:]), true, 4)
+        }
+        return
+    }
+    if lumi_authorization_intent == 3 {
+        lumi_authorization_intent = 0
+        account: SyncAccount
+        key: [32]u8
+        body: [32768]u8
+        approved_now := ServerNow(*lumi_authorization_operation.session, AuthorizationNow(null))
+        ok := lumi_authorization_ready && sync_account_load(*account) != 0 &&
+        storage_migrate_lumi_collection() != 0 &&
+        storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *key[0]) != 0 &&
+        LumiAuthorizationSealAndSign(*account, *lumi_authorization_pending, approved_now,
+            key[:], body[:], *lumi_authorization_grant)
+        SyncCryptoWipe(*key[0], 32)
+        SyncCryptoWipe(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+        if !ok || !LumiAuthorizationBegin("/api/v1/authorization/approve", TextUntilNul(body[:]), false, 3) {
+            lumi_authorization_state = 5
+            lumi_authorization_ready = false
+        }
+        return
+    }
+    if lumi_authorization_pending.request_id[0] == cast(u8)0 || now < lumi_authorization_retry {
+        return
+    }
+    if lumi_authorization_pending.expires_at <= now {
+        lumi_authorization_state = 4
+        lumi_authorization_ready = false
+        return
+    }
+    // Freeze the displayed delegate claim until the owner approves or cancels.
+    // Continual polls can otherwise keep buttons permanently busy on slow links.
+    // Approval still revalidates the immutable claim and live scopes server-side.
+    if lumi_authorization_ready {
+        return
+    }
+    lumi_authorization_retry = now + 2
+    body: [256]u8
+    if BuildIDBody("request_id", TextUntilNul(lumi_authorization_pending.request_id[:]), "", body[:]) {
+        unused LumiAuthorizationBegin("/api/v1/authorization/rendezvous", TextUntilNul(body[:]), false, 2)
+    }
+}

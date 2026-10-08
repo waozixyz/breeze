@@ -1,0 +1,366 @@
+// Synthetic browser boundary for the actual Telegram account controller.
+// Requests and recovery bytes remain in this test process and never get logged.
+#import "net_http"
+#import "text_buffer"
+#import "byte_text_linux"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/storage/storage_thread_buffers.zi";
+#import, file "../src/storage/legacy_session_files.zi";
+#import, file "../src/storage/legacy_session_time.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/meta.zi";
+#import, file "../src/storage/sql_query.zi";
+
+c :: #system_library "c";
+FlowEnvironment :: (name: *u8) -> *u8 #foreign c "getenv";
+FlowClockSet :: (now: s64) #foreign c;
+FlowClockAdvance :: (seconds: s64) #foreign c;
+FlowReply :: #type (request: HttpRequest, output: []u8, status: *s32) -> bool;
+
+FlowPointer :: (value: string) -> *u8 {
+    copy := value
+    descriptor := cast(*TextDescriptor)(*copy)
+    return descriptor.data
+}
+FlowSetClock :: (now: s64) {
+    FlowClockSet(now)
+}
+FlowAdvanceClock :: (seconds: s64) {
+    FlowClockAdvance(seconds)
+}
+FlowTestEnvironment :: (name: *u8) -> *u8 {
+    return FlowEnvironment(name)
+}
+
+FlowHttpOperation :: struct {
+    handle: s32
+    active: bool
+    output: []u8
+    status: s32
+    url: [2049]u8
+    method: [33]u8
+    body: [32769]u8
+    authorization: [8193]u8
+    transaction: [8193]u8
+}
+flow_host_operations: [8]FlowHttpOperation;
+flow_host_reply: FlowReply;
+flow_host_current: bool = true;
+flow_host_change_context_on_http_poll: bool;
+flow_host_change_context_on_protected_poll: bool;
+flow_host_delay: s32;
+flow_host_calls: s32;
+flow_host_cancelled: s32;
+flow_host_storage_cancelled: s32;
+flow_host_downloads: s32;
+flow_host_download_ok: bool = true;
+flow_host_storage_calls: s32;
+flow_host_secret_leak: bool;
+flow_host_owner_secret: [5121]u8;
+flow_host_recovery: [17664]u8;
+flow_host_download: [17664]u8;
+flow_host_capsule: [65537]u8;
+flow_host_url: [2049]u8;
+flow_host_method: [33]u8;
+flow_host_body: [32769]u8;
+flow_host_authorization: [8193]u8;
+flow_host_transaction: [8193]u8;
+flow_host_active: bool;
+flow_host_handle: s32;
+flow_host_protected_handle: s32;
+flow_host_protected_pending: bool;
+flow_host_protected_delay: s32;
+flow_host_protected_result: s32 = 1;
+flow_host_raw: string = "auth_date=1700000000&user=%7B%22id%22%3A7%7D&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+flow_host_entry :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+flow_host_passphrase :: "Recovery-passphrase-sentinel";
+flow_host_catalog :: "[lumi_authorization_details]\nApp: %\nAccount: %\nBot: % User: %\nNode: %\nAudience: %\nRead and write: %\nExpires: %\n---\n[lumi_authorization_fingerprints]\nSigning: %\nEncryption: %\n---\n";
+flow_host_asset: EmbeddedAssetEntry;
+flow_host_asset_path: [15]u8;
+flow_host_asset_mime: [1]u8;
+
+FlowContains :: (value: string, needle: string) -> bool {
+    if needle.count == 0 || needle.count > value.count {
+        return false
+    }
+    for start: cast(s64)0..cast(s64)(value.count - needle.count) {
+        if value[start:start + needle.count] == needle {
+            return true
+        }
+    }
+    return false
+}
+
+FlowObserve :: (value: string) {
+    secret := TextUntilNul(flow_host_owner_secret[:])
+    if FlowContains(value, flow_host_passphrase) ||
+    (secret.count > 0 && FlowContains(value, secret)) {
+        flow_host_secret_leak = true
+    }
+}
+
+FlowBytes :: (bytes: *u8, length: s32) -> string {
+    if bytes == null || length < 0 {
+        return ""
+    }
+    return AppTextFromCString(bytes, length + 1)[0:length]
+}
+
+FlowHostReset :: () {
+    flow_host_current = true
+    flow_host_change_context_on_http_poll = false
+    flow_host_change_context_on_protected_poll = false
+    flow_host_delay = 0
+    flow_host_calls = 0
+    flow_host_cancelled = 0
+    flow_host_storage_cancelled = 0
+    flow_host_downloads = 0
+    flow_host_download_ok = true
+    flow_host_storage_calls = 0
+    flow_host_secret_leak = false
+    flow_host_raw = "auth_date=1700000000&user=%7B%22id%22%3A7%7D&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    flow_host_active = false
+    flow_host_operations = .{}
+    flow_host_handle = 0
+    flow_host_protected_handle = 0
+    flow_host_protected_pending = false
+    flow_host_protected_delay = 0
+    flow_host_protected_result = 1
+    flow_host_owner_secret = .{}
+    flow_host_recovery = .{}
+    flow_host_download = .{}
+    flow_host_capsule = .{}
+    unused AppCopyText("locales/en.txt", flow_host_asset_path[:])
+    flow_host_asset.path = *flow_host_asset_path[0]
+    flow_host_asset.mime = *flow_host_asset_mime[0]
+    flow_host_asset.data = FlowPointer(flow_host_catalog)
+    flow_host_asset.size = cast(usize)flow_host_catalog.count
+}
+
+#program_export "app_getenv_bytes"
+FlowGetEnvironment :: (name: *u8) -> *u8 {
+    return FlowEnvironment(name)
+}
+#program_export "app_web_platform"
+FlowStoragePlatform :: () -> s32 {
+    // SQLite really runs in the disposable fixture, rather than an IDBFS host.
+    return 0
+}
+#program_export "asset_entry_at"
+FlowAsset :: (index: usize) -> *EmbeddedAssetEntry {
+    return ifx index == 0 then *flow_host_asset else null
+}
+#program_export "asset_entry_total"
+FlowAssetCount :: () -> usize {
+    return 1
+}
+
+#program_export "telegram_context"
+FlowTelegramContext :: (kind: s32, output: *u8, capacity: s32) -> s32 {
+    text := ifx kind == 1 then flow_host_entry else flow_host_raw
+    if output == null || capacity <= text.count || (kind != 1 && kind != 2) {
+        return 0
+    }
+    return ifx AppCopyText(text, BytesFromPointer(output, cast(u64)capacity)) then cast(s32)text.count else 0
+}
+#program_export "telegram_hosted"
+FlowTelegramHosted :: () -> s32 {
+    return 1
+}
+#program_export "telegram_current"
+FlowTelegramCurrent :: () -> s32 {
+    return ifx flow_host_current then 1 else 0
+}
+#program_export "telegram_storage_start"
+FlowProtectedStart :: (action: s32, input: *u8, length: s32, output: *u8, capacity: s32) -> s32 {
+    if flow_host_protected_pending || output == null || capacity <= 0 {
+        return 0
+    }
+    flow_host_storage_calls += 1
+    if action == 1 {
+        if !AppCopyText(FlowBytes(input, length), flow_host_capsule[:]) {
+            return 0
+        }
+    } else if action == 2 {
+        if !AppCopyText(TextUntilNul(flow_host_capsule[:]), BytesFromPointer(output, cast(u64)capacity)) {
+            return 0
+        }
+    } else if action == 3 {
+        flow_host_capsule = .{}
+    } else {
+        return 0
+    }
+    flow_host_protected_handle += 1
+    flow_host_protected_pending = true
+    return flow_host_protected_handle
+}
+#program_export "telegram_storage_poll"
+FlowProtectedPoll :: (handle: s32, persistent: *s32) -> s32 {
+    if !flow_host_protected_pending || handle != flow_host_protected_handle {
+        return -1
+    }
+    if flow_host_protected_delay > 0 {
+        flow_host_protected_delay -= 1
+        return 0
+    }
+    persistent.* = 1
+    flow_host_protected_pending = false
+    if flow_host_change_context_on_protected_poll {
+        flow_host_current = false
+        flow_host_change_context_on_protected_poll = false
+    }
+    return flow_host_protected_result
+}
+#program_export "telegram_storage_cancel"
+FlowProtectedCancel :: (handle: s32) {
+    if handle == flow_host_protected_handle && flow_host_protected_pending {
+        flow_host_storage_cancelled += 1
+        flow_host_protected_pending = false
+    }
+}
+#program_export "telegram_recovery_start"
+FlowRecoveryStart :: (output: *u8, capacity: s32) -> s32 {
+    if flow_host_protected_pending || output == null || capacity < 17664 ||
+    !AppCopyText(TextUntilNul(flow_host_recovery[:]), BytesFromPointer(output, cast(u64)capacity)) {
+        return 0
+    }
+    flow_host_protected_handle += 1
+    flow_host_protected_pending = true
+    return flow_host_protected_handle
+}
+#program_export "telegram_recovery_download"
+FlowRecoveryDownload :: (input: *u8, length: s32) -> s32 {
+    if length <= 0 || length >= 17664 || !flow_host_download_ok ||
+    !AppCopyText(FlowBytes(input, length), flow_host_download[:]) {
+        return 0
+    }
+    flow_host_downloads += 1
+    return 1
+}
+
+FlowFindOperation :: (handle: s32) -> *FlowHttpOperation {
+    for index: 0..7 {
+        if flow_host_operations[index].active && flow_host_operations[index].handle == handle {
+            return *flow_host_operations[index]
+        }
+    }
+    return null
+}
+
+FlowUpdateActive :: () {
+    flow_host_active = false
+    for index: 0..7 {
+        if flow_host_operations[index].active {
+            flow_host_active = true
+        }
+    }
+}
+
+#program_export "browser_http_create"
+FlowHttpCreate :: (method: *u8, method_length: s32, url: *u8, url_length: s32,
+    output: *u8, capacity: s32, timeout: s32) -> s32 {
+    unused timeout
+    if output == null || capacity <= 0 {
+        return 0
+    }
+    operation: *FlowHttpOperation
+    for index: 0..7 {
+        if !flow_host_operations[index].active {
+            operation = *flow_host_operations[index]
+            break
+        }
+    }
+    if operation == null {
+        return 0
+    }
+    operation.* = FlowHttpOperation.{}
+    if !AppCopyText(FlowBytes(method, method_length), operation.method[:]) ||
+    !AppCopyText(FlowBytes(url, url_length), operation.url[:]) {
+        return 0
+    }
+    FlowObserve(TextUntilNul(operation.method[:]))
+    FlowObserve(TextUntilNul(operation.url[:]))
+    operation.output = BytesFromPointer(output, cast(u64)capacity)
+    flow_host_handle += 1
+    operation.handle = flow_host_handle
+    operation.active = true
+    FlowUpdateActive()
+    return operation.handle
+}
+#program_export "browser_http_header"
+FlowHttpHeader :: (handle: s32, name: *u8, name_length: s32,
+    value: *u8, value_length: s32) -> s32 {
+    operation := FlowFindOperation(handle)
+    if operation == null {
+        return 0
+    }
+    key := FlowBytes(name, name_length)
+    text := FlowBytes(value, value_length)
+    FlowObserve(key)
+    FlowObserve(text)
+    if key == "Authorization" && !AppCopyText(text, operation.authorization[:]) {
+        return 0
+    }
+    if key == "X-Daochi-Tx" && !AppCopyText(text, operation.transaction[:]) {
+        return 0
+    }
+    return 1
+}
+#program_export "browser_http_send"
+FlowHttpSend :: (handle: s32, body: *u8, length: s32) -> s32 {
+    operation := FlowFindOperation(handle)
+    if operation == null || flow_host_reply == null ||
+    !AppCopyText(FlowBytes(body, length), operation.body[:]) {
+        return 0
+    }
+    FlowObserve(TextUntilNul(operation.body[:]))
+    flow_host_calls += 1
+    // Last-request snapshots are synthetic diagnostics only. Each asynchronous
+    // response remains bound to its separate retained host operation.
+    flow_host_url = operation.url
+    flow_host_method = operation.method
+    flow_host_body = operation.body
+    flow_host_authorization = operation.authorization
+    flow_host_transaction = operation.transaction
+    request: HttpRequest
+    request.url = TextUntilNul(operation.url[:])
+    request.method = TextUntilNul(operation.method[:])
+    request.body = TextUntilNul(operation.body[:])
+    return ifx flow_host_reply(request, operation.output, *operation.status) then 1 else 0
+}
+#program_export "browser_http_poll"
+FlowHttpPoll :: (handle: s32, status: *s32) -> s32 {
+    operation := FlowFindOperation(handle)
+    if operation == null {
+        return 0
+    }
+    if flow_host_delay > 0 {
+        flow_host_delay -= 1
+        FlowClockAdvance(1)
+        return -1
+    }
+    if flow_host_change_context_on_http_poll {
+        flow_host_current = false
+        flow_host_change_context_on_http_poll = false
+    }
+    status.* = operation.status
+    operation.active = false
+    FlowUpdateActive()
+    return 1
+}
+#program_export "browser_http_cancel"
+FlowHttpCancel :: (handle: s32) {
+    operation := FlowFindOperation(handle)
+    if operation != null {
+        operation.active = false
+        flow_host_cancelled += 1
+        FlowUpdateActive()
+    }
+}
+
+#program_export "browser_storage_schedule"
+FlowStorageSchedule :: (delay: s32, log: s32) {
+    unused delay
+    unused log
+}

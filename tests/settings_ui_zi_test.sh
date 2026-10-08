@@ -10,11 +10,13 @@ mkdir -p "$work/c"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_ui.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
 set -- "$root/tests/settings_ui_link_test.c"
@@ -29,11 +31,13 @@ mkdir -p "$work/device"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_device.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/device" "$root/src/screens/settings/settings_device.zi"
 "${CC:-cc}" -std=c11 -Wno-unused-function \
@@ -44,11 +48,13 @@ mkdir -p "$work/breaks"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_breaks.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/breaks" "$root/src/screens/settings/settings_breaks.zi"
 "${CC:-cc}" -std=c11 -Wno-unused-function -Wno-unused-variable \
@@ -59,11 +65,13 @@ mkdir -p "$work/notifications"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_notifications.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/notifications" \
     "$root/src/screens/settings/settings_notifications.zi"

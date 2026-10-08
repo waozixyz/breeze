@@ -1,0 +1,446 @@
+#import "byte_text_linux"
+#import "delegated"
+#import "authorization"
+#import "text_buffer"
+Scan :: #import "json_scan";
+#import, file "storage_test_support.zi";
+#import, file "../src/storage/delegate_storage.zi";
+#import, file "../src/storage/delegate_storage_types.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/json.zi";
+#import, file "../src/storage/sql_query.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/cells/package_files.zi";
+
+fixture_mode: s32 = 2;
+fixture_available: s32 = 1;
+fixture_key_failure: s32;
+fixture_now: s64 = 1782300000;
+fixture_key: [32]u8;
+fixture_encryption_text :: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+fixture_grant: GrantStorage;
+fixture_scopes: [1]RequestedScope = .[RequestedScope.{collection = "private.inbe.v2.lumi", read = true, write = true}];
+fixture_readonly_scopes: [1]RequestedScope = .[RequestedScope.{collection = "private.inbe.v2.lumi", read = true, write = false}];
+fixture_client: DelegateClient;
+fixture_payload: string;
+fixture_response: string;
+
+TestClock :: (context: *void) -> s64 {
+    unused context
+    return fixture_now
+}
+TestSigner :: (context: *void, message: string, output: []u8) -> bool {
+    unused context
+    unused message
+    unused output
+    return false
+}
+TestRandom :: (context: *void, output: []u8) -> bool {
+    unused context
+    unused output
+    return false
+}
+TestMode :: () -> s32 {
+    return fixture_mode
+}
+TestAvailable :: () -> s32 {
+    return fixture_available
+}
+TestKey :: (collection: string, key_id: string, output: *u8) -> s32 {
+    if output == null {
+        return 0
+    }
+    for index: 0..31 {
+        output[index] = fixture_key[index]
+    }
+    if fixture_key_failure != 0 || fixture_available == 0 ||
+    collection != LumiPrivateCollection || key_id != LumiPrivateKeyID {
+        return 0
+    }
+    return 1
+}
+TestBinding :: (client: DelegateClient) -> s32 {
+    if fixture_available == 0 || client.account_id != fixture_client.account_id ||
+    client.grant_id != fixture_client.grant_id || client.node_id != fixture_client.node_id ||
+    client.audience != fixture_client.audience || client.client_id != fixture_client.client_id ||
+    client.signing_key != fixture_client.signing_key || client.encryption_key != fixture_client.encryption_key ||
+    client.bot_id != fixture_client.bot_id || client.telegram_id != fixture_client.telegram_id {
+        return 0
+    }
+    return 1
+}
+FillHex :: (output: []u8, byte: u8) {
+    for index: 0..cast(s32)output.count - 2 {
+        output[index] = byte
+    }
+    output[output.count - 1] = 0
+}
+ConfigureClient :: () {
+    fixture_client = DelegateClient.{server_url = "https://node.example",
+        account_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", app_id = "inbe",
+        client_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        grant_id = "dddddddddddddddddddddddddddddddd",
+        node_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        audience = "https://node.example",
+        signing_key = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        encryption_key = fixture_encryption_text,
+        scopes = ifx fixture_grant.scopes[0].write then fixture_scopes[:] else fixture_readonly_scopes[:],
+        grant = *fixture_grant, clock = TestClock, signer = TestSigner, random = TestRandom}
+}
+Fixture :: (name: string) -> string {
+    fixture_mode = 2
+    fixture_available = 1
+    fixture_key_failure = 0
+    fixture_now = 1782300000
+    fixture_client = DelegateClient.{}
+    fixture_grant = GrantStorage.{}
+    fixture_grant.version = 1
+    fixture_grant.not_before = fixture_now - 1
+    fixture_grant.expires_at = fixture_now + 3600
+    fixture_grant.scope_count = 1
+    FillHex(fixture_grant.account_id[:], cast(u8)97)
+    FillHex(fixture_grant.grant_id[:], cast(u8)100)
+    FillHex(fixture_grant.request_id[:], cast(u8)100)
+    FillHex(fixture_grant.client_id[:], cast(u8)98)
+    FillHex(fixture_grant.node_id[:], cast(u8)101)
+    FillHex(fixture_grant.signing_key[:], cast(u8)102)
+    FillHex(fixture_grant.encryption_key[:], cast(u8)99)
+    unused AppCopyText("inbe", fixture_grant.app_id[:])
+    unused AppCopyText("https://node.example", fixture_grant.audience[:])
+    unused AppCopyText("private", fixture_grant.scopes[0].visibility[:])
+    unused AppCopyText(LumiPrivateCollection, fixture_grant.scopes[0].collection[:])
+    unused AppCopyText(LumiPrivateKeyID, fixture_grant.scopes[0].key_id[:])
+    fixture_grant.scopes[0].read = true
+    fixture_grant.scopes[0].write = true
+    ConfigureClient()
+    for index: 0..31 {
+        fixture_key[index] = cast(u8)93
+    }
+    storage_delegate_mode = TestMode
+    storage_delegate_available = TestAvailable
+    storage_delegate_key = TestKey
+    storage_delegate_binding = TestBinding
+    root := make_root(name)
+    check_true("delegate fixture opens", storage_init(root) != 0)
+    storage_set_sync_data_owner_public_id(fixture_client.account_id)
+    unused exec_sql("DELETE FROM sync_outbox;INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','123');")
+    return root
+}
+Build :: (batch: *DelegateBatch) -> bool {
+    PackageFree(fixture_payload)
+    fixture_payload = ""
+    payload := BuildDelegateStoragePayload(fixture_client, batch)
+    if payload == null {
+        check_true("SDK delegate client shape valid", DelegateClientValid(fixture_client))
+        check_true("stored delegate client gate valid", DelegateStorageClientValid(fixture_client))
+        return false
+    }
+    fixture_payload = PackageText(TextFromCString(payload), "")
+    storage_free_sync_payload_json(payload)
+    return true
+}
+Response :: (records: string, version: s64, applied: s64) -> string {
+    PackageFree(fixture_response)
+    json: StorageJsonBuilder
+    json.ok = 1
+    storage_json_builder_append_text(*json, "{")
+    storage_json_builder_key_value_text(*json, "collection", LumiPrivateCollection)
+    storage_json_builder_append_text(*json, ",\"records\":")
+    storage_json_builder_append_text(*json, records)
+    storage_json_append_int_field(*json, "next_version", version)
+    storage_json_builder_append_text(*json, ",\"truncated\":false")
+    storage_json_append_int_field(*json, "applied", applied)
+    storage_json_builder_append_text(*json, "}")
+    fixture_response = PackageText(TextFromCString(json.data), "")
+    storage_json_builder_free(*json)
+    return fixture_response
+}
+PayloadRecords :: () -> string {
+    if fixture_payload.count == 0 {
+        return "[]"
+    }
+    at := Scan.FieldAt(fixture_payload, Scan.FieldAt(fixture_payload, 0, "sync"), "encrypted_records")
+    finish := Scan.ValueEnd(fixture_payload, at, 0)
+    return fixture_payload[at:finish]
+}
+AllZero :: (key: []u8) -> bool {
+    for byte: key {
+        if byte != 0 {
+            return false
+        }
+    }
+    return true
+}
+
+TestKeyIsolation :: () {
+    unused Fixture("delegate-key-isolation")
+    storage_set_setting_text("sync_private_key", "4242424242424242424242424242424242424242424242424242424242424242")
+    key: [32]u8
+    for index: 0..31 { key[index] = 255 }
+    check_true("delegate v1 key refused", storage_private_collection_key(LegacyPrivateCellsCollection,
+        STORAGE_SYNC_RECORD_KEY_ID, *key[0]) == 0 && AllZero(key[:]))
+    for index: 0..31 { key[index] = 255 }
+    check_true("delegate global key refused", storage_private_record_key(*key[0]) == 0 && AllZero(key[:]))
+    for index: 0..31 { key[index] = 255 }
+    check_true("wrong Lumi generation refused", storage_private_collection_key(LumiPrivateCollection,
+        "inbe-lumi-2", *key[0]) == 0 && AllZero(key[:]))
+    fixture_key_failure = 1
+    check_true("failed provider bytes wiped", storage_private_collection_key(LumiPrivateCollection,
+        LumiPrivateKeyID, *key[0]) == 0 && AllZero(key[:]))
+    fixture_key_failure = 0
+    check_true("approved isolated key resolves", storage_private_collection_key(LumiPrivateCollection,
+        LumiPrivateKeyID, *key[0]) != 0 && key[0] == 93)
+    storage_close()
+}
+
+TestExactAckAndNewerLocalEdit :: () {
+    unused Fixture("delegate-exact-ack")
+    storage_set_setting_text("cell.lumi.message.first", "first")
+    storage_set_setting_text("cell.lumi.message.second", "second")
+    storage_set_setting_text("cell.diary.file.secret", "Diary secret")
+    storage_set_setting_text("cell.feedback.user.secret", "Feedback secret")
+    unused storage_enqueue_sync_entity("session", "pending-owner-session", 0)
+    storage_state_handle().pending_sync_outbox_seq = 777
+    batch: DelegateBatch
+    check_true("delegate payload builds", Build(*batch))
+    check_true("only two Lumi rows submitted", batch.count == 2)
+    check_true("shared SDK accepts body", DelegatedSyncBodyValid(fixture_client, fixture_payload))
+    check_true("Lumi collection selected", Scan.FieldAt(fixture_payload, 0, "collection") >= 0)
+    check_true("owner capabilities omitted", Scan.FieldAt(fixture_payload, Scan.FieldAt(fixture_payload, 0, "sync"), "caps") < 0 &&
+        Scan.FieldAt(fixture_payload, Scan.FieldAt(fixture_payload, 0, "sync"), "full") < 0 &&
+        Scan.FieldAt(fixture_payload, Scan.FieldAt(fixture_payload, 0, "sync"), "public_key") < 0)
+    old_sequence := batch.sequences[0]
+    unused storage_enqueue_sync_entity("cell_record", "cell.lumi.message.first", 0)
+    check_true("same-second edit gets new sequence", db_select_int64_text(
+        "SELECT seq FROM sync_outbox WHERE entity_id='cell.lumi.message.first'", 0) > old_sequence)
+    unused exec_sql("UPDATE settings SET value='newer local' WHERE key='cell.lumi.message.first';")
+    copied := batch
+    response := Response(PayloadRecords(), 10, 2)
+    check_true("delegate response applies", ApplyDelegateStorageResponse(fixture_client, *batch, response) != 0)
+    check_true("newer local pending row preserved", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.first'") == 1)
+    check_true("newer local plaintext preserved", storage_get_setting_text("cell.lumi.message.first") == "newer local")
+    check_true("unchanged submitted row acknowledged", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.second'") == 0)
+    check_true("Diary feedback session queues preserved", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id IN ('cell.diary.file.secret','cell.feedback.user.secret','pending-owner-session')") == 3)
+    check_true("owner pending sequence preserved", storage_state_handle().pending_sync_outbox_seq == 777)
+    check_true("owner cursor preserved", storage_meta_int64("sync_last_server_version", 0) == 123)
+    check_true("receipt prevents copied replay", ApplyDelegateStorageResponse(fixture_client, *copied, response) == 0)
+    check_true("next body uses scoped cursor", Build(*batch) && batch.since_version == 10 && batch.count == 1)
+    storage_close()
+}
+
+TestInvalidResponseAndAtomicRollback :: () {
+    unused Fixture("delegate-rollback")
+    storage_set_setting_text("cell.lumi.message.pending", "pending")
+    batch: DelegateBatch
+    check_true("rollback fixture builds", Build(*batch))
+    malformed := "{\"collection\":\"private.inbe.v1.cells\",\"records\":[],\"next_version\":10,\"truncated\":false,\"applied\":1}"
+    check_true("legacy collection response refused", ApplyDelegateStorageResponse(fixture_client, *batch, malformed) == 0)
+    check_true("bad collection keeps outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    response := Response(PayloadRecords(), 10, 1)
+    copied := batch
+    fixture_available = 0
+    check_true("cleared provider blocks future apply", ApplyDelegateStorageResponse(fixture_client, *batch, response) == 0)
+    check_true("revocation preserves history", storage_get_setting_text("cell.lumi.message.pending") == "pending")
+    check_true("revocation preserves pending queue", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    fixture_available = 1
+    unused exec_sql("CREATE TRIGGER block_delegate_cursor BEFORE INSERT ON meta WHEN NEW.key GLOB 'delegate_lumi_cursor.*' BEGIN SELECT RAISE(ABORT,'synthetic cursor failure');END;")
+    check_true("cursor failure rolls back acknowledgement", ApplyDelegateStorageResponse(fixture_client, *batch, response) == 0)
+    check_true("cursor failure keeps queue", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    check_true("cursor failure writes no receipt", read_db_count("SELECT COUNT(*) FROM meta WHERE key GLOB 'delegate_lumi_applied.*'") == 0)
+    unused exec_sql("DROP TRIGGER block_delegate_cursor;")
+    check_true("failed receipt can retry", ApplyDelegateStorageResponse(fixture_client, *copied, response) != 0)
+    storage_close()
+}
+
+TestReadOnlyAndWrongOwner :: () {
+    unused Fixture("delegate-read-only")
+    storage_set_setting_text("cell.lumi.message.pending", "pending")
+    fixture_client = DelegateClient.{}
+    fixture_grant.scopes[0].write = false
+    ConfigureClient()
+    batch: DelegateBatch
+    check_true("read-only body builds without writes", Build(*batch) && batch.count == 0)
+    check_true("read-only pending edit retained", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    check_true("read-only empty response applies", ApplyDelegateStorageResponse(fixture_client, *batch, Response("[]", 10, 0)) != 0)
+    wrong := fixture_client
+    wrong.account_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    changes := storage_connection_changes()
+    check_true("wrong owner cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    check_true("wrong owner cannot apply", ApplyDelegateStorageResponse(wrong, *batch, Response("[]", 20, 0)) == 0)
+    check_true("wrong owner makes no database change", storage_connection_changes() == changes)
+    check_true("wrong owner keeps pending history", storage_get_setting_text("cell.lumi.message.pending") == "pending")
+    storage_close()
+}
+
+TestClientBindingAndGrantLifetime :: () {
+    unused Fixture("delegate-binding-lifetime")
+    storage_set_setting_text("cell.lumi.message.pending", "pending")
+    fixture_grant.bot_id = 123
+    fixture_grant.telegram_id = 456
+    ConfigureClient()
+    batch: DelegateBatch
+    changes := storage_connection_changes()
+    wrong := fixture_client
+    wrong.node_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    check_true("wrong issuing node cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.audience = "https://other.example"
+    check_true("wrong audience cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.app_id = "diary"
+    check_true("wrong app cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.client_id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    check_true("wrong registered client cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.signing_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    check_true("wrong signing key cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.bot_id = 124
+    check_true("wrong verified bot cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    wrong = fixture_client
+    wrong.telegram_id = 457
+    check_true("wrong verified user cannot build", BuildDelegateStoragePayload(wrong, *batch) == null)
+    fixture_grant.expires_at = fixture_now
+    check_true("expired grant cannot build", BuildDelegateStoragePayload(fixture_client, *batch) == null)
+    fixture_grant.expires_at = fixture_now + 3600
+    fixture_grant.not_before = fixture_now + 1
+    check_true("future grant cannot build", BuildDelegateStoragePayload(fixture_client, *batch) == null)
+    fixture_grant.not_before = fixture_now - 1
+    unused AppCopyText("inbe-lumi-2", fixture_grant.scopes[0].key_id[:])
+    check_true("unapproved key generation cannot build", BuildDelegateStoragePayload(fixture_client, *batch) == null)
+    unused AppCopyText(LumiPrivateKeyID, fixture_grant.scopes[0].key_id[:])
+    fixture_available = 0
+    check_true("cleared provider cannot build", BuildDelegateStoragePayload(fixture_client, *batch) == null)
+    check_true("rejected bindings make no database change", storage_connection_changes() == changes)
+    check_true("rejected bindings preserve queue", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    check_true("rejected bindings preserve plaintext", storage_get_setting_text("cell.lumi.message.pending") == "pending")
+    storage_close()
+}
+
+TestBatchCapAndRestart :: () {
+    root := Fixture("delegate-batch-restart")
+    unused exec_sql("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<70) INSERT INTO settings(user_id,key,value,updated_at) SELECT (SELECT id FROM users LIMIT 1),'cell.lumi.message.'||i,'value',1782300000 FROM n;")
+    unused exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,1782300000 FROM settings WHERE key GLOB 'cell.lumi.*';")
+    batch: DelegateBatch
+    check_true("batch stops at 64", Build(*batch) && batch.count == 64)
+    copied := batch
+    response := PackageText(Response("[]", 25, 64), "")
+    check_true("bounded acknowledgement applies", ApplyDelegateStorageResponse(fixture_client, *batch, response) != 0)
+    check_true("unsubmitted rows retained", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record'") == 6)
+    storage_close()
+    check_true("delegate fixture restarts", storage_init(root) != 0)
+    check_true("restart keeps scoped cursor", Build(*batch) && batch.since_version == 25 && batch.count == 6)
+    check_true("restart rejects copied receipt replay", ApplyDelegateStorageResponse(fixture_client, *copied, response) == 0)
+    PackageFree(response)
+    storage_close()
+}
+
+RecordFixture :: (outer_id: string, inner_id: string, collection: string,
+    key_id: string) -> string {
+    record: StorageJsonBuilder
+    record.ok = 1
+    check_true("synthetic encrypted record seals", storage_append_encrypted_record_json(*record,
+        *fixture_key[0], collection, key_id, outer_id, "cell_record", inner_id, 0, 1782300000, 0) != 0)
+    result := PackageText(TextFromCString(record.data), "")
+    storage_json_builder_free(*record)
+    return result
+}
+RecordArray :: (first: string, second: string) -> string {
+    records: StorageJsonBuilder
+    records.ok = 1
+    storage_json_builder_append_text(*records, "[")
+    storage_json_builder_append_text(*records, first)
+    if second.count > 0 {
+        storage_json_builder_append_text(*records, ",")
+        storage_json_builder_append_text(*records, second)
+    }
+    storage_json_builder_append_text(*records, "]")
+    result := PackageText(TextFromCString(records.data), "")
+    storage_json_builder_free(*records)
+    return result
+}
+TestDecryptionBindingAndRollback :: () {
+    unused Fixture("delegate-outer-id")
+    storage_set_setting_text("cell.lumi.message.pending", "pending")
+    batch: DelegateBatch
+    check_true("identity fixture builds", Build(*batch))
+    storage_set_setting_text("cell.lumi.message.remote-b", "remote value")
+    storage_set_setting_text("cell.diary.file.secret", "Diary private")
+    valid := RecordFixture("cell.lumi.message.remote-b", "cell.lumi.message.remote-b",
+        LumiPrivateCollection, LumiPrivateKeyID)
+    mismatch := RecordFixture("cell.lumi.message.remote-a", "cell.lumi.message.remote-b",
+        LumiPrivateCollection, LumiPrivateKeyID)
+    wrong_key := RecordFixture("cell.lumi.message.remote-b", "cell.lumi.message.remote-b",
+        LumiPrivateCollection, "inbe-lumi-2")
+    diary := RecordFixture("cell.diary.file.secret", "cell.diary.file.secret",
+        LumiPrivateCollection, LumiPrivateKeyID)
+    unused exec_sql("DELETE FROM settings WHERE key='cell.lumi.message.remote-b';DELETE FROM sync_outbox WHERE entity_id='cell.lumi.message.remote-b';")
+    records := RecordArray(valid, mismatch)
+    check_true("authenticated outer ID mismatch rejects entire response",
+        ApplyDelegateStorageResponse(fixture_client, *batch, Response(records, 10, 1)) == 0)
+    check_true("previous valid record rolled back", storage_get_setting_text("cell.lumi.message.remote-b").count == 0)
+    check_true("identity mismatch preserves ack queue", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.pending'") == 1)
+    check_true("identity mismatch preserves cursor", read_db_count("SELECT COUNT(*) FROM meta WHERE key GLOB 'delegate_lumi_cursor.*'") == 0)
+    PackageFree(records)
+    records = RecordArray(wrong_key, "")
+    check_true("rotated generation rejected before decrypt",
+        ApplyDelegateStorageResponse(fixture_client, *batch, Response(records, 10, 1)) == 0)
+    PackageFree(records)
+    records = RecordArray(diary, "")
+    check_true("Diary record refused even under approved Lumi key",
+        ApplyDelegateStorageResponse(fixture_client, *batch, Response(records, 10, 1)) == 0)
+    check_true("Diary history preserved", storage_get_setting_text("cell.diary.file.secret") == "Diary private")
+    PackageFree(records)
+    records = RecordArray(valid, "")
+    check_true("matching encrypted outer ID accepted",
+        ApplyDelegateStorageResponse(fixture_client, *batch, Response(records, 10, 1)) != 0)
+    check_true("approved remote Lumi plaintext applied", storage_get_setting_text("cell.lumi.message.remote-b") == "remote value")
+    check_true("approved remote records do not queue themselves", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.remote-b'") == 0)
+    PackageFree(records)
+    PackageFree(valid)
+    PackageFree(mismatch)
+    PackageFree(wrong_key)
+    PackageFree(diary)
+    storage_close()
+}
+
+TestPacketByteBoundAndUnsupportedRows :: () {
+    unused Fixture("delegate-packet-bytes")
+    unused exec_sql("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<9) INSERT INTO settings(user_id,key,value,updated_at) SELECT (SELECT id FROM users LIMIT 1),'cell.lumi.photo.'||i,printf('%065500d',0),1782300000 FROM n;")
+    unused exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,1782300000 FROM settings WHERE key GLOB 'cell.lumi.*';")
+    storage_set_setting_text("cell.lumi.message.empty", "")
+    unused storage_enqueue_sync_entity("cell_record", "cell.lumi.message.removed", 0)
+    unused storage_enqueue_sync_entity("cell_record", "cell.lumi.INVALID", 0)
+    batch: DelegateBatch
+    check_true("photo packet fits shared SDK bound", Build(*batch) && fixture_payload.count < 1048576 &&
+        batch.count > 0 && batch.count < 9 && DelegatedSyncBodyValid(fixture_client, fixture_payload))
+    uploaded := batch.count
+    check_true("bounded photo packet acknowledged", ApplyDelegateStorageResponse(fixture_client, *batch,
+        Response("[]", 15, cast(s64)uploaded)) != 0)
+    check_true("unsubmitted large photos retained", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id GLOB 'cell.lumi.photo.*'") == 9 - uploaded)
+    check_true("empty removed malformed rows never acknowledged", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id IN ('cell.lumi.message.empty','cell.lumi.message.removed','cell.lumi.INVALID')") == 3)
+    storage_close()
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-storage-delegate-zi-test/")
+    if guard != 0 {
+        return guard
+    }
+    TestKeyIsolation()
+    TestExactAckAndNewerLocalEdit()
+    TestInvalidResponseAndAtomicRollback()
+    TestReadOnlyAndWrongOwner()
+    TestClientBindingAndGrantLifetime()
+    TestBatchCapAndRestart()
+    TestDecryptionBindingAndRollback()
+    TestPacketByteBoundAndUnsupportedRows()
+    PackageFree(fixture_payload)
+    PackageFree(fixture_response)
+    return failures
+}

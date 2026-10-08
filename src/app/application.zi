@@ -61,6 +61,9 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../screens/settings/settings_status.zi";
 
 #import, file "app_sync.zi";
+#import, file "telegram_account_flow.zi";
+#import, file "../platform/telegram_bridge.zi";
+#import, file "../storage/delegate_store.zi";
 #import, file "app_route_state.zi";
 #import, file "app_route_url.zi";
 #import, file "app_donation.zi";
@@ -441,7 +444,9 @@ app_reload_after_import :: (app: *InnerBreeze, reload_settings: s32) {
         reset_settings_preview(app)
         practice_update_session_sounds(app)
     }
-    habits_init_with_defaults(*app.habits, app.language_selected)
+    if !TelegramAccountFlowOwnsContext() {
+        habits_init_with_defaults(*app.habits, app.language_selected)
+    }
     if reload_settings != 0 {
         app_restore_habits_view_settings(app)
     }
@@ -677,6 +682,7 @@ app_init :: (vapp: *void) {
         app.break_sounds_enabled = 0
     }
     data_init()
+    TelegramAccountFlowStart()
     if !CellsStart(app) {
         TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
         app.request_quit = 1
@@ -737,7 +743,9 @@ app_init :: (vapp: *void) {
         save_settings(app)
         app.language_needs_save = 0
     }
-    habits_init_with_defaults(*app.habits, app.language_selected)
+    if !TelegramAccountFlowOwnsContext() {
+        habits_init_with_defaults(*app.habits, app.language_selected)
+    }
     app_restore_habits_view_settings(app)
     app.habit_detail_index = -1
     elist_state: *EListState = *app.elist
@@ -1019,6 +1027,21 @@ updateapp :: (app: *InnerBreeze) {
     habits_guide_active: s32 = 0
     practice_fullscreen_modal: bool = false
     global_modal_drawn: bool = false
+    if TelegramAccountFlowOwnsContext() {
+        // Host identity must still be current before exposing any cached
+        // plaintext or actions, rather than waiting until the post-draw pump.
+        if !TelegramContextCurrent() && telegram_account_flow.phase != 90 &&
+        telegram_account_flow.phase != 91 {
+            TelegramFlowFail(*telegram_account_flow)
+        }
+        if TelegramContextCurrent() && StoredDelegateAvailable() != 0 &&
+        (app.enabled_apps & APP_LUMI) != 0 {
+            lumi_screen_draw(app)
+        }
+        DrawTelegramAccountFlow(app)
+        app.breathing.frame += 1
+        return
+    }
     app_sync_route_from_url(app)
     frame_route = app_current_route(app)
     #if #defined(ANDROID_BUILD) {
@@ -1471,6 +1494,11 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     if app.request_quit != 0 {
         return
     }
+    if TelegramAccountFlowOwnsContext() {
+        TelegramAccountFlowPump(app)
+        app_profile_frame_end(profile_frame_start)
+        return
+    }
     app_flush_habits_after_frame(app)
     app_profile_record_habits(profile_habits_start)
     profile_sync_start = app_profile_now()
@@ -1513,6 +1541,14 @@ app_destroy :: (vapp: *void) {
     if !CellsReady() {
         CellsClose()
         return
+    }
+    if TelegramAccountFlowOwnsContext() {
+        // Closing preserves the protected delegate for an explicitly verified
+        // Restore on the next launch; only Cancel or revocation clears it.
+        TelegramFlowStopOperations(*telegram_account_flow)
+        TelegramFlowWipeSecrets(*telegram_account_flow)
+        telegram_account_flow.hosted = false
+        ClearDelegate()
     }
     CloseBreakWindows()
     ReleaseRuntimeAssetDownload(*app.meditation.music_download)
