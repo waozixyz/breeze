@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,12 +18,12 @@ output.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 data = Path(tempfile.mkdtemp(prefix="inbe-zoom-", dir=output))
 env = os.environ.copy()
-for name in ("WAYLAND_DISPLAY", "GDK_DISPLAY"):
+for name in ("WAYLAND_DISPLAY", "GDK_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
     env.pop(name, None)
 env["APP_NO_TRAY"] = "1"
-env["HOME"] = str(data / "home")
 env["XDG_DATA_HOME"] = str(data / "data")
-os.makedirs(env["HOME"])
+env["XDG_CONFIG_HOME"] = str(data / "config")
+env["XDG_CACHE_HOME"] = str(data / "cache")
 os.makedirs(env["XDG_DATA_HOME"])
 
 
@@ -124,7 +125,14 @@ with log_path.open("w") as log:
         # The limits match the Appearance slider: 50% to 250%.
         wheel(window, -1, 20)
         assert wait_for_scale(5), f"the low limit is {saved_scale()}"
-        wheel(window, +1, 40)
+        capture(window, "scale-50")
+        # Every supported scale must remain usable, including fractional ones.
+        for tenths in range(6, 26):
+            wheel(window, +1, 1)
+            assert wait_for_scale(tenths), f"expected {tenths}, got {saved_scale()}"
+            if tenths in (7, 10, 13, 17, 20, 25):
+                capture(window, f"scale-{tenths * 10}")
+        wheel(window, +1, 3)
         assert wait_for_scale(25), f"the high limit is {saved_scale()}"
 
         # Ctrl+0 resets to 100%.
@@ -146,5 +154,6 @@ with log_path.open("w") as log:
             except subprocess.TimeoutExpired:
                 app.kill()
                 app.wait(timeout=2)
+        shutil.rmtree(data)
 
-print("Native zoom: Ctrl+wheel and Ctrl+0 rescale the app, save the scale, and stop at its limits")
+print("Native zoom: every scale from 50% to 250%, Ctrl+wheel persistence, limits and Ctrl+0 passed")
