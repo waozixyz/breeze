@@ -28,6 +28,7 @@ app_force_dark_mode :: () -> bool #foreign c;
 #import, file "../cells/catalog.zi";
 #import, file "profile_picture_policy.zi";
 #import, file "../platform/environment.zi";
+#import, file "../platform/telegram_bridge.zi";
 #import, file "../platform/web_storage.zi";
 #import "layout"
 
@@ -337,12 +338,17 @@ save_settings :: (app: *InnerBreeze) {
         SettingsStoreText("language", empty_language[:])
     }
     save_setting_int("language_setup_done", ifx app.language_selected != 0 then 1 else 0)
-    save_setting_int("enabled_apps", app.enabled_apps)
-    save_setting_int("apps_setup_done", app.apps_selected)
-    if app.apps_selected != 0 {
-        for index: cast(s32)1..cast(s32)(PackageCount - 1) {
-            save_setting_int(PackagePreferenceKey(index),
-                ifx (app.enabled_apps & PackageBit(index)) != 0 then 1 else 0)
+    // A Telegram delegate cannot change the owner's app preferences. In a
+    // fresh hosted profile, these writes would also queue unowned changes
+    // before explicit account creation or recovery has been approved.
+    if !TelegramHostPresent() {
+        save_setting_int("enabled_apps", app.enabled_apps)
+        save_setting_int("apps_setup_done", app.apps_selected)
+        if app.apps_selected != 0 {
+            for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+                save_setting_int(PackagePreferenceKey(index),
+                    ifx (app.enabled_apps & PackageBit(index)) != 0 then 1 else 0)
+            }
         }
     }
     SettingsEndWrite()
@@ -716,7 +722,9 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
             }
         }
     }
-    if !SettingsCacheContains("lumi_introduced") {
+    // Ordinary profiles migrate their saved app choices. A hosted delegate
+    // reads those choices without creating owner preference outbox rows.
+    if !TelegramHostPresent() && !SettingsCacheContains("lumi_introduced") {
         if !SettingsCacheContains("app_used_lumi") {
             app.enabled_apps |= APP_LUMI
             save_setting_int("app_used_lumi", 1)

@@ -11,6 +11,9 @@
 #import "byte_text_linux"
 #import, file "telegram_account_flow_host.zi";
 #import, file "../src/app/telegram_account_flow.zi";
+#import, file "../src/app/app_settings.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/cells/inbe_types.zi";
 #import, file "../src/app/telegram_entry_protocol.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/account_types.zi";
@@ -63,6 +66,7 @@ fixture_request_expiry: s64;
 fixture_backup: [17664]u8;
 fixture_body: [32768]u8;
 fixture_db_open: bool;
+fixture_settings_app: InnerBreeze;
 
 Expect :: (label: string, result: bool) {
     if result {
@@ -439,6 +443,55 @@ OutboxCount :: () -> s64 {
     return db_select_int64_text("SELECT COUNT(*) FROM sync_outbox", -1)
 }
 
+CheckHostedSettings :: () {
+    Expect("hosted startup fixture opens", StartFixture("hosted-settings", "create"))
+    TelegramAccountFlowStart()
+    fixture_settings_app = InnerBreeze.{}
+    unused app_load_settings(*fixture_settings_app)
+    save_settings(*fixture_settings_app)
+    // Exercise the later owner preference branch too, without granting it.
+    fixture_settings_app.apps_selected = 1
+    fixture_settings_app.enabled_apps = APP_ALL
+    save_settings(*fixture_settings_app)
+    Expect("hosted startup leaves owner preferences absent",
+        db_select_int64_text("SELECT COUNT(*) FROM settings WHERE key LIKE 'app_used_%'", -1) == 0 &&
+        storage_get_setting_text("lumi_introduced") == "")
+    Expect("hosted startup leaves fresh outbox empty", OutboxCount() == 0)
+    Expect("fresh hosted profile still accepts temporary owner",
+        LocalOwnerAccepts(TextUntilNul(fixture_account.public_id[:])))
+    // An existing pending owner preference remains protected, even when no
+    // private history exists. Never clear it to make creation succeed.
+    storage_set_setting_int("app_used_diary", 1)
+    outbox := OutboxCount()
+    fixture_settings_app = InnerBreeze.{}
+    unused app_load_settings(*fixture_settings_app)
+    fixture_settings_app.apps_selected = 1
+    fixture_settings_app.enabled_apps = APP_LUMI
+    save_settings(*fixture_settings_app)
+    Expect("hosted saves preserve owner preference and pending row",
+        storage_get_setting_int("app_used_diary", -1) == 1 && outbox == 1 && OutboxCount() == outbox)
+    Expect("unowned pending preference still denies temporary owner",
+        !LocalOwnerAccepts(TextUntilNul(fixture_account.public_id[:])))
+    TelegramAccountFlowCancel()
+}
+
+CheckOrdinarySettings :: () {
+    Expect("ordinary web settings fixture opens", StartFixture("ordinary-settings", "create"))
+    flow_host_hosted = false
+    fixture_settings_app = InnerBreeze.{}
+    unused app_load_settings(*fixture_settings_app)
+    Expect("ordinary profile still introduces Lumi",
+        storage_get_setting_int("app_used_lumi", 0) == 1 &&
+        storage_get_setting_int("lumi_introduced", 0) == 1 && OutboxCount() == 1)
+    fixture_settings_app.apps_selected = 1
+    fixture_settings_app.enabled_apps = APP_LUMI
+    save_settings(*fixture_settings_app)
+    Expect("ordinary profile still saves full owner app preferences",
+        db_select_int64_text("SELECT COUNT(*) FROM settings WHERE key LIKE 'app_used_%'", -1) == 5 &&
+        storage_get_setting_int("app_used_diary", -1) == 0 &&
+        storage_get_setting_int("app_used_lumi", -1) == 1 && OutboxCount() == 5)
+}
+
 CheckCreatePreservesOwner :: () {
     Expect("owner fixture opens", StartFixture("existing-owner", "create"))
     storage_set_setting_text("sync_public_id", TextUntilNul(fixture_account.public_id[:]))
@@ -460,6 +513,11 @@ CheckCreatePreservesOwner :: () {
 CheckCreate :: () {
     Expect("empty create fixture opens", StartFixture("create", "create"))
     flow_host_delay = 2
+    TelegramAccountFlowStart()
+    fixture_settings_app = InnerBreeze.{}
+    unused app_load_settings(*fixture_settings_app)
+    save_settings(*fixture_settings_app)
+    Expect("create startup keeps pending outbox empty", OutboxCount() == 0)
     TelegramAccountFlowPump(null)
     Expect("initial async request remains pending", telegram_account_flow.phase == 1 && telegram_account_flow.waiting)
     TelegramAccountFlowPump(null)
@@ -775,6 +833,8 @@ Check :: () -> s32 {
     ExportSyncAccountTextEncrypted(*fixture_account, flow_host_passphrase, *fixture_backup[0], fixture_backup.count) == 0 {
         return 1
     }
+    CheckHostedSettings()
+    CheckOrdinarySettings()
     CheckCreatePreservesOwner()
     CheckCreate()
     CheckRestorePreserves()
