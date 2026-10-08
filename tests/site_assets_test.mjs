@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
+import { Script } from 'node:vm';
 
 const root = resolve(import.meta.dirname, '..');
 const temporary = mkdtempSync(join(tmpdir(), 'inbe-site-assets-'));
@@ -33,7 +34,95 @@ async function serve(path, options = {}) {
   return worker.fetch(new Request('https://inbe.example' + path + '?v=test', options), { ASSETS: assets });
 }
 
+
+function verifyTelegramBootstrap() {
+  const generator = readFileSync(join(root, 'site/build.sh'), 'utf8');
+  const start = generator.indexOf('write_telegram_web_app_html() {');
+  const end = generator.indexOf('\nrequire_output() {', start);
+  assert.ok(start >= 0 && end > start, 'Mini App generator function missing');
+  const input = join(temporary, 'bootstrap-input.html');
+  const output = join(temporary, 'bootstrap-output.html');
+  writeFileSync(input, `<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<style>body { margin: 0; }</style>
+</head>
+<body>
+<script>
+window.originalBootstrapRan = true;
+</script>
+</body>
+</html>
+`);
+  const environment = { ...process.env };
+  for (const name of ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS']) {
+    delete environment[name];
+  }
+  environment.YUE_DESKTOP_RECOVERY = '0';
+  const generated = spawnSync('sh', ['-c',
+    generator.slice(start, end) + '\nwrite_telegram_web_app_html "$1" "$2"\n',
+    'telegram-bootstrap-test', input, output], { encoding: 'utf8', env: environment });
+  assert.equal(generated.status, 0, generated.stderr);
+  const html = readFileSync(output, 'utf8');
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
+    .filter(match => !/\bsrc\s*=/.test(match[1]) && match[2].trim())
+    .map(match => new Script(match[2], { filename: 'generated-miniapp-bootstrap.js' }));
+  assert.equal(scripts.length, 2);
+  assert.ok(html.indexOf('telegram-web-app.js') < html.indexOf('telegram-bridge.js'));
+  assert.ok(html.indexOf('telegram-bridge.js') < html.indexOf('window.originalBootstrapRan'));
+  assert.ok(html.includes('viewport-fit=cover'));
+  assert.equal(generated.stderr, '', 'Generator emitted an escaping diagnostic');
+
+  for (const mode of ['absent', 'minimal', 'default-theme', 'provided-theme']) {
+    const calls = [];
+    const events = new Map();
+    const app = {
+      ready() {
+        calls.push(['ready']);
+      },
+      expand() {
+        calls.push(['expand']);
+      },
+    };
+    if (mode === 'default-theme' || mode === 'provided-theme') {
+      app.disableVerticalSwipes = () => calls.push(['disableVerticalSwipes']);
+      app.setBackgroundColor = color => calls.push(['background', color]);
+      app.setHeaderColor = color => calls.push(['header', color]);
+      app.themeParams = mode === 'provided-theme' ? { bg_color: '#abcdef' } : {};
+    }
+    const context = {
+      window: mode === 'absent' ? {} : { Telegram: { WebApp: app } },
+      document: {
+        addEventListener(name, handler, options) {
+          assert.ok(!events.has(name));
+          events.set(name, { handler, options });
+        },
+      },
+    };
+    for (const script of scripts) {
+      script.runInNewContext(context, { timeout: 1000 });
+    }
+    assert.equal(context.window.originalBootstrapRan, true);
+    const expected = mode === 'absent' ? [] : [['ready'], ['expand']];
+    if (mode === 'default-theme' || mode === 'provided-theme') {
+      const color = mode === 'provided-theme' ? '#abcdef' : '#181818';
+      expected.push(['disableVerticalSwipes'], ['background', color], ['header', color]);
+    }
+    assert.deepEqual(calls, expected);
+    assert.equal(events.size, 2);
+    assert.equal(events.get('touchmove').options.passive, false);
+    for (const name of ['touchmove', 'gesturestart']) {
+      let prevented = false;
+      events.get(name).handler({ preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+    }
+  }
+  console.log('Mini App generated bootstrap: syntax, SDK absence/older features, theme and gestures passed');
+}
+
 try {
+  verifyTelegramBootstrap();
   for (const app of ['web', 'telegram']) {
     const directory = join(temporary, 'build', app);
     mkdirSync(directory, { recursive: true });
