@@ -71,10 +71,6 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
   await resize(1280, 1600);
   await callHook('app_web_test_save_onboarding_state');
   await evaluate(`(async () => {
-    const bundle = await fetch('/__test_cells__/lists.zib');
-    if (!bundle.ok) throw new Error('Lists test fixture is unavailable');
-    Module.FS.writeFile('/tmp/inbe-navigation-lists.zib',
-      new Uint8Array(await bundle.arrayBuffer()));
     const sampleRate = 24000;
     const frames = sampleRate * 40;
     const bytes = new Uint8Array(44 + frames * 2);
@@ -105,6 +101,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
 
   async function button(action) {
     await settle();
+    const scrollableAction = action === 0 || action === 1 || (action >= 2 && action <= 5) || action === 8;
     let point;
     for (let attempt = 0; attempt < 4; attempt++) {
       // Entering Audio can suspend the first draw while cue files decode.
@@ -127,7 +124,11 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
         await delay(100);
       } while (Date.now() < deadline);
       if (!point.busy && point.rawX < 0 && action >= 2 && action <= 5 && attempt === 0) {
-        await button(10);
+        await button(12);
+        continue;
+      }
+      if (!point.busy && point.rawX < 0 && action >= 6 && action <= 10 && attempt === 0) {
+        await button(13);
         continue;
       }
       if (!point.busy && point.rawX < 0 && (action === 0 || action === 1)) {
@@ -136,7 +137,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
         continue;
       }
       if (point.rawX < 0 || point.rawY < 0 ||
-          ((action !== 0 && action !== 1) || point.y <= point.bottom * 0.75)) break;
+          (!scrollableAction || point.y <= point.bottom * 0.75)) break;
       await scroll(point.x, point.bottom * 0.6, point.y - point.bottom * 0.65 + 100);
       await delay(600);
     }
