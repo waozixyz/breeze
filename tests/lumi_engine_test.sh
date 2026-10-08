@@ -26,6 +26,14 @@ result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADD
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi emphasis: visible bold ranges, Unicode, escapes, code and literal user messages passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
+    --module-path "$root/build/packages/kryon/src/ui" --define KRYON_HOSTED_UI \
+    --entry lumi_reply_cache_behavior:Answer -o "$work/reply-cache.zib" \
+    "$root/tests/lumi_reply_cache_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/reply-cache.zib")
+[ "$result" = 42 ]
+printf '%s\n' 'Lumi reply cache: edited text, Unicode emphasis and slot eviction passed'
+"$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
     --entry lumi_chart_behavior:Answer -o "$work/chart.zib" \
     "$root/tests/lumi_chart_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

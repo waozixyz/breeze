@@ -18,6 +18,7 @@
 #import "tree"
 #import "text"
 #import "byte_text_linux"
+#import "c_string"
 #import "vec"
 #import, file "../../src/cells/lumi_types.zi";
 #import, file "../../src/cells/lumi_ui_types.zi";
@@ -47,6 +48,28 @@ chart_selected_key: u64;
 chart_selected_point: s32;
 donation_notice: string;
 donation_notice_row: s32 = -1;
+
+// Visible replies are unchanged between frames. Keep a bounded copy so
+// scrolling, account changes and edited rows cannot reuse borrowed host text.
+LumiReplyText :: struct {
+    source: [LUMI_INPUT_MAX]u8
+    count: s32
+    formatted: LumiMessageText
+}
+
+reply_text: [8]LumiReplyText;
+
+ReplyText :: (index: s32, value: string) -> *LumiMessageText {
+    slot := *reply_text[index % cast(s32)reply_text.count]
+    if value != TextFromBytes(slot.source[:slot.count]) {
+        slot.formatted = LumiFormatMessage(value, true)
+        slot.count = 0
+        if CopyCString(value, slot.source[:]) {
+            slot.count = cast(s32)value.count
+        }
+    }
+    return *slot.formatted
+}
 
 Scale :: (value: s32) -> s32 {
     return cast(s32)(cast(float32)value * frame.scale)
@@ -238,13 +261,17 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
                 ifx row.kind == LUMI_CHAT_DONATIONS then 500 else ifx row.kind == LUMI_CHAT_FEEDBACK then 54 else 0)
             text_height := row_height - text_top - Scale(16) - card_height
-            formatted := LumiFormatMessage(row.text, !row.user)
-            Text(frame.session, TextProps.{.key = cast(u64)(300403 + index * 4),
-                    .bounds = Bounds(left + Scale(14), top + text_top,
+            props := TextProps.{.key = cast(u64)(300403 + index * 4),
+                .bounds = Bounds(left + Scale(14), top + text_top,
                     bubble_width - Scale(28), text_height),
-                    .text = TextFromBytes(formatted.bytes[:formatted.count]),
-                    .strong = formatted.strong[:formatted.strong_count],
-                    .font = frame.font, .selectable = true, .wrap = cast(TextWrap)TextWrapAuto})
+                .text = row.text, .font = frame.font, .selectable = true,
+                .wrap = cast(TextWrap)TextWrapAuto}
+            if !row.user {
+                formatted := ReplyText(index, row.text)
+                props.text = TextFromBytes(formatted.bytes[:formatted.count])
+                props.strong = formatted.strong[:formatted.strong_count]
+            }
+            Text(frame.session, props)
             card_top := top + text_top + text_height + Scale(8)
             if row.kind == LUMI_CHAT_PROGRESS {
                 ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))

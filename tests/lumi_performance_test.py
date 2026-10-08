@@ -1,5 +1,6 @@
 """Measure a full Lumi history using only an owned private display/profile."""
 import contextlib
+import ast
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_AD
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 BINARY = Path(sys.argv[1]).resolve()
 LABEL = sys.argv[2]
+MOBILE = "--mobile" in sys.argv[3:]
+WIDTH, HEIGHT = (390, 844) if MOBILE else (900, 720)
 
 
 def stop(process):
@@ -37,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                SDL_VIDEODRIVER="x11", LIBGL_ALWAYS_SOFTWARE="1",
                APP_DATA_ROOT=str(profile), APP_PROFILE="1", INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / (LABEL + "-display.log")).open("w"))
-    server = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "900x720x24",
+    server = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "900x900x24",
                                "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, server)
     number = server.stdout.readline().decode().strip()
@@ -66,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                         break
                     time.sleep(.1)
                 assert window, "Owned test window did not appear"
-                command("xdotool", "windowsize", window, "900", "720")
+                command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
                 command("xdotool", "windowfocus", window)
                 time.sleep(1)
                 yield app, window, log_path
@@ -83,7 +86,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                   "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                   "cells_auto_update": 0, "apps_last_update_check": 1900000000,
                   "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
-                  "navigation_placement": 1, "navigation_collapsed": 0,
+                  "navigation_placement": 0 if MOBILE else 1, "navigation_collapsed": 0,
+                  "launcher_favorite_count": 5,
+                  **{f"launcher_favorite_{index}": route
+                     for index, route in enumerate((12, 1, 2, 3, 11))},
                   "main_tab": 4, "lumi_chat": json.dumps(history)}
         for key, value in values.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
@@ -94,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
         deadline = time.monotonic() + 28
         while time.monotonic() < deadline:
             assert app.poll() is None, "Lumi exited during sustained rendering"
-            command("xdotool", "mousemove", "--window", window, "600", str(300 + len(samples) % 2))
+            command("xdotool", "mousemove", "--window", window, str(WIDTH // 2), str(300 + len(samples) % 2))
             if len(samples) % 5 == 0:
                 command("xdotool", "click", "5" if len(samples) % 10 == 0 else "4")
             status = Path(f"/proc/{app.pid}/status").read_text()
@@ -110,5 +116,33 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
         result = {"history_messages": 64, "frame_ms": statistics.median(reports[1:]),
                   "rss_initial_kib": initial_memory, "rss_final_kib": final_memory,
                   "reports": len(reports), "private_display": True}
+        if MOBILE:
+            # Exercise a focused composer and viewport changes before opening
+            # Apps. A second action must complete promptly through the overlay.
+            for height in (HEIGHT, 500, HEIGHT):
+                command("xdotool", "windowsize", window, str(WIDTH), str(height))
+                time.sleep(.25)
+            command("xdotool", "mousemove", "--window", window, "150", str(HEIGHT - 118))
+            command("xdotool", "mousedown", "1")
+            time.sleep(.12)
+            command("xdotool", "mouseup", "1")
+            command("xdotool", "type", "--clearmodifiers", "--delay", "20", "a draft to keep")
+            started = time.monotonic()
+            for x, y in ((356, HEIGHT - 42), (100, HEIGHT - 120)):
+                command("xdotool", "mousemove", "--window", window, str(x), str(y))
+                command("xdotool", "mousedown", "1")
+                time.sleep(.15)
+                command("xdotool", "mouseup", "1")
+                time.sleep(.15)
+            deadline = started + 2
+            while True:
+                prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
+                state = json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
+                if state["screen"] == 10:
+                    break
+                assert time.monotonic() < deadline, "Lumi → Apps → Profile stopped responding"
+                time.sleep(.05)
+            result["lumi_apps_profile_ms"] = round((time.monotonic() - started) * 1000)
+            result["mobile_viewport"] = [WIDTH, HEIGHT]
         (OUTPUT / (LABEL + ".json")).write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))

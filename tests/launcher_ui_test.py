@@ -274,6 +274,10 @@ with contextlib.ExitStack() as stack:
                     assert log.read_text().count("screen=") == before.count("screen="), "Profile still has a root back button"
                 click(window, *apps_point, hold=.35)
                 capture(window, name + "-apps")
+                click(window, width - 42, 44)
+                click(window, 100 if mobile else 170, height - (120 if mobile else 36))
+                assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "The Apps title corner still dismisses the page"
+                click(window, *apps_point)
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
                 if not mobile:
                     # The second column occupies the page, beyond the old drawer.
