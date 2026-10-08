@@ -26,6 +26,7 @@ using HostValueKind;
 ModuleSlot :: struct {
     bundle: *void
     instance: *void
+    bundle_bytes: s64
     failed: bool
     kind: s32
     received: bool
@@ -444,11 +445,16 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
 
 ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
     slot.kind = kind
+    slot.bundle_bytes = 0
     slot.bundle = OpenBundleBytes(ModuleTextData(bytes), cast(u64)bytes.count)
     if slot.bundle == null {
         return false
     }
-    return ModuleInstantiate(slot)
+    if !ModuleInstantiate(slot) {
+        return false
+    }
+    slot.bundle_bytes = bytes.count
+    return true
 }
 
 ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
@@ -847,6 +853,20 @@ CellsSetEnabled :: (mask: s32) -> bool {
     identifying = false
     enabled_apps = result.enabled_apps & CellsInstalledMask()
     return CellsReady()
+}
+
+// Sizes follow the loaded slots, so bundled, downloaded and local packages
+// all report their actual payload without reading files during UI frames.
+#program_export
+CellsPackageSize :: (index: s32) -> s64 {
+    if index < 0 || index >= PackageCount {
+        return 0
+    }
+    slot := ModuleSlotForPackage(index)
+    if slots[slot].instance == null {
+        return 0
+    }
+    return slots[slot].bundle_bytes
 }
 
 #program_export
