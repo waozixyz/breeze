@@ -51,10 +51,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh api repos/waozixyz/inbe/releases/latest --jq .tag_name)
-          version=${tag#v}
-          python3 -c 'import re, sys; assert re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", sys.argv[1]), "Invalid published release version"' "$version"
-          echo "SITE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          gh api repos/waozixyz/inbe/releases/latest > "$RUNNER_TEMP/inbe-published-release.json"
+          python3 - "$RUNNER_TEMP/inbe-published-release.json" >> "$GITHUB_ENV" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          release = json.loads(Path(sys.argv[1]).read_text())
+          tag = release["tag_name"]
+          version = tag.removeprefix("v")
+          assert re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version), "Invalid published release version"
+          assets = {asset["name"] for asset in release["assets"]}
+          candidates = [f"inbe-{version}-arm64-v8a.apk", f"inbe-{version}.apk"]
+          android = next((name for name in candidates if name in assets), None)
+          assert android is not None, "Published release has no compatible Android APK"
+          print(f"SITE_RELEASE_VERSION={version}")
+          print(f"SITE_ANDROID_APK_ASSET={android}")
+          PY
 
       - name: Install Packages
         if: ${{ !inputs.released_web }}

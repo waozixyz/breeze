@@ -46,6 +46,8 @@ expand_template_file() {
 	sed \
 		-e "s#\\\${version}#$version#g" \
 		-e "s#\\\${asset_version}#$asset_version#g" \
+		-e "s#\\\${android_apk_asset}#$android_apk_asset#g" \
+		-e "s#\\\${android_apk_label}#$android_apk_label#g" \
 		"$src" > "$dst"
 }
 
@@ -182,6 +184,20 @@ version=$(python3 "$root_dir/scripts/check-version.py" --print-version) || {
 }
 release_version=${SITE_RELEASE_VERSION:-$version}
 python3 -c 'import re, sys; assert re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", sys.argv[1]), "Invalid download release version"' "$release_version"
+# Pages selects from the published release; local builds use the universal APK.
+android_apk_asset=${SITE_ANDROID_APK_ASSET:-"inbe-$release_version.apk"}
+case "$android_apk_asset" in
+	"inbe-$release_version-arm64-v8a.apk")
+		android_apk_label="ARM64 APK"
+		;;
+	"inbe-$release_version.apk")
+		android_apk_label="Universal APK"
+		;;
+	*)
+		printf 'Error: invalid Android download asset for this release\n' >&2
+		exit 1
+		;;
+esac
 asset_version=${SITE_ASSET_VERSION:-}
 if [ -z "$asset_version" ]; then
 	if git -C "$root_dir" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
@@ -199,6 +215,10 @@ copy_path "$script_dir/themes/inbe.css" "$out_dir/theme.css"
 write_site_imports "$asset_version"
 copy_template_dir "$script_dir/static" "$out_dir" "$version" "$asset_version"
 expand_template_file "$script_dir/index.html" "$out_dir/index.html" "$release_version" "$asset_version"
+if [ "$android_apk_asset" = "inbe-$release_version.apk" ]; then
+	sed '/data-universal-apk/d' "$out_dir/index.html" > "$out_dir/index.html.tmp"
+	mv "$out_dir/index.html.tmp" "$out_dir/index.html"
+fi
 mkdir -p "$out_dir/legacy-converter"
 cp "$out_dir/legacy-converter.html" "$out_dir/legacy-converter/index.html"
 
