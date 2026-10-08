@@ -1,4 +1,13 @@
 # Changelog
+## [2.1.19] - 2026-10-08
+### Added
+- Create or restore an account in Telegram's Mini App, with an encrypted recovery backup saved on your device.
+- Connect Telegram with approved, expiring Lumi access without sharing your account's private key.
+### Changed
+- Keep Telegram access limited to Lumi and let you revoke it from Inbe.
+### Fixed
+- Preserve existing account data when account setup or recovery is cancelled or fails.
+
 ## [2.1.18] - 2026-10-08
 ### Changed
 - Show each app's bundle size in Apps and favorites.
