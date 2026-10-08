@@ -1305,7 +1305,7 @@ patterns-session-zi-test: $(ZI2C_BIN)
 test: patterns-session-zi-test
 
 .PHONY: session-results-zi-test
-session-results-zi-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+session-results-zi-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi

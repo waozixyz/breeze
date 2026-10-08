@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-launcher=${ZIRAN_BIN:-ziran}
+compiler=${1:-"${ZIRAN_BIN:-"$root/build/ziran-toolchain/bin/ziran"}"}
+launcher=$compiler
 ziran_dir=$(cd "$root" && "$launcher" pkg path ziran)
 monocypher=$(cd "$root" && "$launcher" pkg path monocypher)
-compiler=${1:-"$ziran_dir/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$(mktemp -d /tmp/inbe-delegate-cleanup-test.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
