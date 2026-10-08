@@ -1,12 +1,12 @@
 """Exercise the app launcher with disposable data on a private Xvfb display."""
 
 import contextlib
+import argparse
 import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
-import sys
 import tempfile
 import time
 
@@ -15,7 +15,12 @@ from PIL import Image, ImageChops
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/launcher-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
-BINARY = Path(sys.argv[1]).resolve()
+parser = argparse.ArgumentParser()
+parser.add_argument("binary")
+parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
+parser.add_argument("--drag-only", action="store_true")
+arguments = parser.parse_args()
+BINARY = Path(arguments.binary).resolve()
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
 
@@ -68,6 +73,19 @@ with contextlib.ExitStack() as stack:
         command("xdotool", "keyup", name)
         time.sleep(.4)
 
+    def drag(window, start, end, name):
+        command("xdotool", "mousemove", "--window", window, *map(str, start))
+        time.sleep(.12)
+        command("xdotool", "mousedown", "1")
+        time.sleep(.12)
+        for step in range(1, 13):
+            point = [round(a + (b - a) * step / 12) for a, b in zip(start, end)]
+            command("xdotool", "mousemove", "--window", window, *map(str, point))
+            time.sleep(.035)
+        capture(window, name + "-dragging")
+        command("xdotool", "mouseup", "1")
+        time.sleep(.4)
+
     def settings(profile):
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             return dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
@@ -117,7 +135,12 @@ with contextlib.ExitStack() as stack:
             finally:
                 stop(app)
 
-    for width, height in ((900, 720), (390, 844)):
+    layouts = ((900, 720), (390, 844))
+    if arguments.layout == "desktop":
+        layouts = layouts[:1]
+    elif arguments.layout == "mobile":
+        layouts = layouts[1:]
+    for width, height in layouts:
         mobile = width < 500
         name = "mobile" if mobile else "desktop"
         with tempfile.TemporaryDirectory(prefix="inbe-launcher-") as temporary:
@@ -149,6 +172,23 @@ with contextlib.ExitStack() as stack:
                 capture(window, name + "-launcher")
                 assert favorites(profile) == [1, 2], "Opening changed favorites"
                 assert settings(profile)["enabled_apps"] == "22", "Opening changed available apps"
+                first_favorite = (90, 260) if mobile else (170, 226)
+                second_favorite = (260, 260) if mobile else (320, 226)
+                drag(window, first_favorite, second_favorite, name + "-reorder")
+                assert favorites(profile) == [2, 1], "Horizontal drag did not reorder favorites"
+                assert settings(profile)["main_tab"] == "1", "Dragging opened an app"
+                drag(window, second_favorite, first_favorite, name + "-restore")
+                assert favorites(profile) == [1, 2], "Reverse drag did not restore favorite order"
+                outside = (380, 80) if mobile else (700, 80)
+                drag(window, first_favorite, outside, name + "-cancel")
+                assert favorites(profile) == [1, 2], "Drop outside favorites changed pins"
+                assert settings(profile)["enabled_apps"] == "22", "Dragging changed app availability"
+                click(window, *first_favorite)
+                assert settings(profile)["main_tab"] == "0", "Clicking a draggable favorite did not open it"
+                click(window, *apps_point)
+                if arguments.drag_only:
+                    print(name + ": whole-tile dragging, horizontal order, cancel and ordinary clicks passed")
+                    continue
                 click(window, *search_point)
                 command("xdotool", "type", "--clearmodifiers", "--delay", "70", "DIaRy")
                 time.sleep(.4)
@@ -226,6 +266,20 @@ with contextlib.ExitStack() as stack:
                 time.sleep(.3)
                 capture(window, name + "-empty")
 
+                # The whole All apps tile can be dropped into an empty Favorites
+                # section, without opening it or losing the existing app data.
+                click(window, *search_point)
+                command("xdotool", "type", "--clearmodifiers", "--delay", "50", "Diary")
+                time.sleep(.3)
+                source = tile_point
+                destination = (270, 268) if mobile else (300, 170)
+                drag(window, source, destination, name + "-add-favorite")
+                assert favorites(profile) == [11], "Dropping an app did not add its favorite"
+                assert settings(profile)["main_tab"] == "3", "Dropping an app also activated it"
+                click(window, *((348, 138) if mobile else (382, 106)))
+                click(window, *((100, 260) if mobile else (180, 226)), hold=.85)
+                assert favorites(profile) == [], "A dragged favorite could not be unpinned"
+
             with application(profile, name + "-restart", width, height) as (window, log):
                 assert favorites(profile) == [], "Restart restored unwanted default shortcuts"
                 assert settings(profile)["main_tab"] == "3", "An unpinned app did not survive restart"
@@ -268,6 +322,12 @@ with contextlib.ExitStack() as stack:
                 # A navigation action saves the migrated preferences through the normal app path.
                 click(window, *( (70, height - 42) if mobile else (44, 148) ))
                 assert favorites(profile) == [12, 1, 2, 11, 3], ("Legacy shortcut order was not fully migrated", favorites(profile))
+            with application(profile, name + "-save-drag", width, height) as (window, log):
+                click(window, *large_apps)
+                drag(window, first_favorite, second_favorite, name + "-save-drag")
+                assert favorites(profile) == [1, 12, 2, 11, 3], "Drag order was not saved"
+            with application(profile, name + "-drag-restart", width, height) as (window, log):
+                assert favorites(profile) == [1, 12, 2, 11, 3], "Restart lost the dragged order"
             print(name + ": search, app activation, held pins, all favorites, empty favorites, restart, utility routes and migration passed")
 
     # Short windows must scroll the library while keeping navigation visible.
