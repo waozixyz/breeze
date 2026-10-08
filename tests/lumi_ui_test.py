@@ -1,6 +1,8 @@
 """Exercise Lumi's real cell chat against a disposable, account-scoped profile."""
 import ast
 import contextlib
+import csv
+import io
 import json
 import os
 import re
@@ -38,6 +40,24 @@ def capture(window, label):
     command("xwd", "-silent", "-id", window, "-out", str(raw))
     command("convert", str(raw), str(OUTPUT / f"{label}.png"))
     raw.unlink()
+
+
+def tap_rendered_button(window, label):
+    """Find an action's one-word label in the owned window, after layout."""
+    capture(window, "action-" + label.lower())
+    result = command("tesseract", str(OUTPUT / ("action-" + label.lower() + ".png")),
+                     "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1")
+    lines = {}
+    for word in csv.DictReader(io.StringIO(result), delimiter="\t"):
+        if (word.get("text") or "").strip():
+            key = (word["block_num"], word["par_num"], word["line_num"])
+            lines.setdefault(key, []).append(word)
+    matches = [words[0] for words in lines.values()
+               if len(words) == 1 and words[0]["text"].lower() == label.lower()]
+    assert matches, f"No rendered {label} button in the owned Lumi window"
+    word = min(matches, key=lambda item: int(item["top"]))
+    tap(window, int(word["left"]) + int(word["width"]) // 2,
+        int(word["top"]) + int(word["height"]) // 2)
 
 
 @contextlib.contextmanager
@@ -202,16 +222,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert chat(profile)[-1]["kind"] == 2
         time.sleep(0.5)
         capture(window, "donation-cards")
-        tap(window, 550, 206)
+        tap_rendered_button(window, "Copy")
         expected_address = re.search(r'app_bitcoin_donation_address.*?return "([^"]+)"',
                                      (ROOT / "src/app/app_donation.zi").read_text(), re.S)[1]
         assert command("xclip", "-selection", "clipboard", "-o") == expected_address
         uri_receipt = OUTPUT / "rich-cards-uri.txt"
-        tap(window, 550, 252)
+        tap_rendered_button(window, "Wallet")
         wait_for(lambda: uri_receipt.exists(), "Wallet action did not reach the URI host")
         assert uri_receipt.read_text().startswith("bitcoin:" + expected_address)
         uri_receipt.unlink()
-        tap(window, 550, 298)
+        tap_rendered_button(window, "Trocador")
         wait_for(lambda: uri_receipt.exists(), "Donation link did not reach the URI host")
         assert uri_receipt.read_text().startswith("https://trocador.app/")
         assert "address=" + expected_address in uri_receipt.read_text()
@@ -278,7 +298,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert chat(profile)[-1]["text"] == "What would you like to write?"
         send(window, profile, "A calm morning\nThen a walk")
         assert chat(profile)[-1]["text"] == "Saved to today’s Diary."
-        entry = next((profile / "diary").glob("????-??-??.json"))
+        # Entries belong to the active account, rather than the legacy shared
+        # directory. Reading that exact directory also catches cross-account writes.
+        entry = next((profile / "diary" / user).glob("????-??-??.json"))
         diary_text = json.loads(entry.read_text())["text"]
         assert re.fullmatch(r"\*\*\d{2}:\d{2}\*\*\nA calm morning\nThen a walk", diary_text)
         send(window, profile, "write this to my diary: Another thought\nA second line")

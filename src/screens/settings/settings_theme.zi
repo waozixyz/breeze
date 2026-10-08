@@ -62,9 +62,24 @@ WEB :: #defined(PLATFORM_WEB)
     android_device_set_app_icon :: (icon: s32) -> s32 #foreign c;
 }
 
-settings_theme_scale_row_height :: () -> s32 {
-    return AppScale(10) + AppScale(22) + AppScale(6) + AppScale(36) +
-    AppScale(12)
+settings_theme_scale_label_height :: (width: s32) -> s32 {
+    height := AppParagraphHeight(LocaleText("appearance_scale_label"),
+        width, AppFontSize(), 0)
+    if height < AppScale(22) { height = AppScale(22) }
+    return height
+}
+
+settings_theme_scale_stacked :: (width: s32) -> bool {
+    return AppTextWidth(LocaleText("appearance_scale_label"), AppFontSize()) +
+    AppScale(80) > width
+}
+
+settings_theme_scale_row_height :: (width: s32) -> s32 {
+    height := AppScale(86)
+    if settings_theme_scale_stacked(width) {
+        height += settings_theme_scale_label_height(width) + AppScale(6)
+    }
+    return height
 }
 
 settings_theme_button_row_height :: () -> s32 {
@@ -92,7 +107,7 @@ settings_theme_theme_body :: (app: *InnerBreeze, width: s32) -> s32 {
 }
 
 settings_theme_layout_body :: (app: *InnerBreeze, width: s32) -> s32 {
-    height := settings_theme_scale_row_height()
+    height := settings_theme_scale_row_height(width)
     height += settings_choice_row_height(LocaleText("navigation_placement"),
         width)
     return height
@@ -405,15 +420,25 @@ draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32,
     value := FrameTextHold(*app.ui.frame_text,
         AppTextFromCString(*percentage[0], size_of(type_of(percentage))))
     value_width := AppScale(64)
+    label_height := AppScale(22)
+    label_width := w - value_width
+    value_y := y.* + AppScale(10)
+    slider_y := y.* + AppScale(38)
+    if settings_theme_scale_stacked(w) {
+        label_width = w
+        label_height = settings_theme_scale_label_height(w)
+        value_y += label_height + AppScale(6)
+        slider_y += label_height + AppScale(6)
+    }
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)(y.* + AppScale(10)),
-                cast(float32)(w - value_width), cast(float32)AppScale(22)},
+                cast(float32)label_width, cast(float32)label_height},
             .text = label,
-            .wrap = cast(TextWrap)TextWrapNone
+            .wrap = cast(TextWrap)TextWrapAuto
         })
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)(x + w - value_width),
-                cast(float32)(y.* + AppScale(10)),
+                cast(float32)value_y,
                 cast(float32)value_width, cast(float32)AppScale(22)},
             .text = value,
             .align = cast(TextAlign)TextAlignEnd,
@@ -422,7 +447,7 @@ draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32,
     slider: DiscreteSliderProps
     slider.id = 140
     slider.bounds = Rectangle.{cast(float32)x,
-        cast(float32)(y.* + AppScale(38)), cast(float32)w,
+        cast(float32)slider_y, cast(float32)w,
         cast(float32)AppScale(36)}
     slider.semantic_label = label
     slider.value = state.scale_preview
@@ -443,7 +468,7 @@ draw_scale_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32,
         app_block_current_click(app)
         save_settings(app)
     }
-    y.* += settings_theme_scale_row_height()
+    y.* += settings_theme_scale_row_height(w)
 }
 
 #program_export

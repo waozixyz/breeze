@@ -53,6 +53,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             return dict(db.execute("SELECT key,value FROM settings"))
 
+    def settled_sidebar(window):
+        # Keep the exact pixel assertion, but let the selected/pressed
+        # transition finish before using it as the drag reference.
+        deadline = time.monotonic() + 3
+        previous = capture(window, "drag-started")
+        stable_frames = 0
+        while time.monotonic() < deadline:
+            time.sleep(.15)
+            current = capture(window, "drag-started")
+            difference = ImageChops.difference(previous.crop((0, 0, 344, 720)),
+                                              current.crop((0, 0, 344, 720)))
+            stable_frames = stable_frames + 1 if difference.getbbox() is None else 0
+            if stable_frames == 3:
+                return current
+            previous = current
+        raise AssertionError("Settings sidebars never settled before the slider drag")
+
     def wait_setting(key, expected):
         deadline = time.monotonic() + 5
         while settings().get(key) != str(expected):
@@ -122,23 +139,29 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
     with application("gestures") as (window, log):
         capture(window, "initial")
         click(window, 44, 228)  # Apps follows the two saved favorites.
-        click(window, 330, 684)  # Settings beside Profile in the drawer.
-        capture(window, "settings-hub")
+        click(window, 690, 684)  # Settings is the right footer card beside Profile.
+        hub = capture(window, "settings-hub")
+        hub.crop((88, 0, 900, 60)).save(OUTPUT / "settings-title.png")
+        text = command("tesseract", str(OUTPUT / "settings-title.png"), "stdout", "--psm", "7")
+        assert "Settings" in text, "The Settings fixture opened a different app"
         click(window, 200, 325)  # Appearance.
         before = capture(window, "appearance")
+        text = command("tesseract", str(OUTPUT / "appearance.png"), "stdout")
+        assert "Scale factor" in text, "Appearance did not open before the slider gesture"
         # Coordinates come from the 900x720 rendered Appearance panel.
         command("xdotool", "mousemove", "--window", window, "650", "420")
         time.sleep(.15)
         command("xdotool", "mousedown", "1")
         time.sleep(.3)
-        before = capture(window, "drag-started")
+        before = settled_sidebar(window)
         for x, y in ((550, 430), (860, 440), (580, 410), (845, 425)):
             command("xdotool", "mousemove", "--window", window, str(x), str(y))
             time.sleep(.12)
             assert settings()["ui_scale"] == "10", "Scale changed while the slider was held"
             held = capture(window, f"held-{x}")
-            assert ImageChops.difference(before.crop((0, 0, 344, 720)),
-                                         held.crop((0, 0, 344, 720))).getbbox() is None, "Sidebars moved during drag"
+            difference = ImageChops.difference(before.crop((0, 0, 344, 720)),
+                                              held.crop((0, 0, 344, 720))).getbbox()
+            assert difference is None, f"Sidebars moved during drag: {difference}"
         command("xdotool", "mouseup", "1")
         time.sleep(.5)
         assert settings()["ui_scale"] != "10", "Release did not commit the scale"

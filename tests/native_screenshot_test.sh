@@ -8,6 +8,7 @@ mkdir -p "$output"
 # Home exercises the layered crescent that previously drew forever because
 # its inner loop never advanced. Run the whole app on an isolated display.
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+    -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
     APP_NO_TRAY=1 timeout 30s xvfb-run -a -n 300 -e /dev/stderr \
     -s '-screen 0 1280x900x24' "$binary" \
     --screenshot "$output/home.png" --screenshot-scene home \

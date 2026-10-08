@@ -1,4 +1,4 @@
-"""First-run cell choices and Quit on an owned private display/profile."""
+"""First-run Apps, saved preferences and Quit on a private display/profile."""
 import contextlib
 import json
 import os
@@ -8,6 +8,9 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from PIL import Image
+from native_visual_test import read_text
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/startup-quit-test"
@@ -86,8 +89,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 stop(app)
 
     receipts = {}
-    # The shipped picker completes immediately with all five offline cells.
-    # Both root artifacts keep every shortcut and Settings fixed last.
+    # Both root artifacts open the ready-to-use Apps library and migrate old
+    # navigation settings without rewriting an owner's saved app preferences.
     for full in (False, True):
         profile = Path(temporary) / ("full" if full else "base")
         args = ["--bundle", str(ROOT / "build/inbe-full.zib")] if full else []
@@ -106,43 +109,40 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
         with application(profile, profile.name + "-all", *args) as (app, window, log):
-            click(window, 260, 474)  # Lists.
-            time.sleep(.2)
-            click(window, 260, 546)  # Diary.
-            time.sleep(.2)
             command("import", "-window", window, str(OUTPUT / (profile.name + "-checked.png")))
-            click(window, 450, 676)  # Next.
+            with Image.open(OUTPUT / (profile.name + "-checked.png")) as image:
+                text = read_text(image, profile.name + "-startup")
+            for label in ("apps", "lumi", "habits", "practice", "lists", "diary", "profile", "settings"):
+                assert label in text, f"{profile.name}: Apps omitted {label}"
+            # Opening the first app completes setup; the library itself does
+            # not require a separate Next button or overwrite preferences.
+            click(window, 44, 218)  # Practice, the third favorite.
             deadline = time.monotonic() + 2
             while settings(profile).get("apps_setup_done") != "1":
-                assert time.monotonic() < deadline, "All checked: Next was ignored\n" + log.read_text()
+                assert time.monotonic() < deadline, "Apps setup did not complete\n" + log.read_text()
                 time.sleep(.05)
             saved = settings(profile)
-            assert saved["enabled_apps"] == "31", saved
-            order = [int(saved[f"bottom_nav_route_{i}"]) for i in range(int(saved["bottom_nav_route_count"]))]
-            assert order[-1] == 4, "Settings must stay last: " + str(order)
-            assert set(order) == {0, 1, 2, 3, 4, 11, 12}, "A selected cell was omitted: " + str(order)
-            time.sleep(.4)
-            assert "screen=21->23" in log.read_text(), log.read_text()
-            # All five cells fit alongside a previously saved Profile
-            # shortcut; Practices and Diary both remain usable.
-            rail = [route for route in order if route not in (0, 4)]
-            click(window, 110, 146 + rail.index(2) * 64)
+            assert saved["enabled_apps"] == "22", "Startup changed saved app preferences"
+            order = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
+            assert order == [12, 1, 2, 3, 11], "Desktop defaults omitted an installed app: " + str(order)
             deadline = time.monotonic() + 2
-            while "screen=23->0" not in log.read_text():
+            while "->0" not in log.read_text():
                 assert time.monotonic() < deadline, "Practices click was ignored\n" + log.read_text()
                 time.sleep(.05)
             command("import", "-window", window, str(OUTPUT / "practices-open.png"))
-            diary_index = rail.index(11)
-            click(window, 110, 146 + diary_index * 64)
+            click(window, 44, 386)  # Diary, the fifth favorite.
             deadline = time.monotonic() + 2
             while "screen=0->22" not in log.read_text():
                 assert time.monotonic() < deadline, "Diary click was ignored\n" + log.read_text()
                 time.sleep(.05)
             command("import", "-window", window, str(OUTPUT / "diary-open.png"))
-            receipts[profile.name] = dict(selection=int(saved["enabled_apps"]), order=order)
+            selected = settings(profile)
+            assert selected["enabled_apps"] == "30", "Opening Diary changed unrelated app choices"
+            receipts[profile.name] = dict(selection=int(selected["enabled_apps"]), order=order)
         with application(profile, profile.name + "-restart", *args):
             saved = settings(profile)
-            restored = [int(saved[f"bottom_nav_route_{i}"]) for i in range(int(saved["bottom_nav_route_count"]))]
+            assert saved["enabled_apps"] == "30", "Restart lost the explicit Diary choice"
+            restored = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
             assert restored == order, "Restart lost a selected cell: " + str(restored)
 
     # Preview windows used to discard the close dialog result forever.

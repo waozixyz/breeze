@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
             assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.message.%'").fetchone()[0] == 140
         action(window, "settings")
         capture(window, "settings")
-        command("xdotool", "mousemove", "--window", window, "330", "435")
+        command("xdotool", "mousemove", "--window", window, "200", "381")
         command("xdotool", "mousedown", "1")
         time.sleep(.15)
         command("xdotool", "mouseup", "1")

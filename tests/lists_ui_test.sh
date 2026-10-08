@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ -z "${INBE_UI_TEST_XVFB:-}" ]]; then
-    exec env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u SESSION_MANAGER \
+    exec env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY -u SESSION_MANAGER \
         -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 xvfb-run -a \
         env -u WAYLAND_DISPLAY -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
         SDL_VIDEODRIVER=x11 INBE_UI_TEST_XVFB=1 bash "$0" "$@"
 fi
 binary="${1:?native binary required}"
-test_dir="$(mktemp -d /tmp/inbe-lists-ui.XXXXXX)"
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+test_dir="$root/build/lists-ui-test"
+mkdir -p "$test_dir"
+exec 9>"$test_dir/lock"
+flock 9
 APP_SHOT_WINDOW=1 "$binary" --screenshot "$test_dir/start.png" \
     --bundle "$(dirname -- "$0")/../build/inbe-full.zib" --feature lists \
     --screenshot-scene lists --screenshot-width 900 --screenshot-height 720 \
     --screenshot-dark 1 > "$test_dir/app.log" 2>&1 &
 app_pid=$!
-trap 'kill "$app_pid" 2>/dev/null || true' EXIT
 db="/tmp/inbe-screenshot-$app_pid/inbe.db"
+cleanup() {
+    kill "$app_pid" 2>/dev/null || true
+    wait "$app_pid" 2>/dev/null || true
+    rm -rf "/tmp/inbe-screenshot-$app_pid"
+}
+trap cleanup EXIT
 window=""
 for attempt in {1..80}; do
     window="$(xdotool search --onlyvisible --pid "$app_pid" 2>/dev/null | head -1 || true)"

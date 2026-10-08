@@ -35,11 +35,7 @@ separate proof tool is needed. The build host needs Python 3 and the platform's
 native build dependencies. See [build laws](docs/build-laws-plan.md) for the
 checked behavior.
 
-Initialize the submodules once:
-
-```bash
-git submodule update --init --recursive
-```
+Build commands fetch the dependencies pinned in `ziran.lock`.
 
 Build and run the desktop app:
 
@@ -73,7 +69,18 @@ Run the test suite:
 
 ```bash
 make test
+make visual-test
 ```
+
+CI and releases require the visual gate. It uses disposable profiles and
+private Xvfb displays to check glyph pixels, every zoom from 50% to 250%,
+selected navigation and app cards in all 13 palettes and both color modes,
+enlarged Appearance labels, shipped locales, and page interactions. It keeps
+screenshots and logs under `build/`; CI uploads them even when a check fails.
+Every visual suite runs even if an earlier suite fails. The complete result,
+including hashes of the tested binary and bundles, is in
+`build/visual-test/results.json`; changing an artifact during the gate fails it.
+Its system tools are listed in `.github/apt/test-packages.txt`.
 
 To test sync and recovery against an isolated local server:
 

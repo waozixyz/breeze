@@ -11,10 +11,13 @@ import time
 
 from PIL import Image, ImageChops
 
+from native_visual_test import contrast, read_text, OUTPUT as VISUAL_OUTPUT
+
 
 root = Path(__file__).resolve().parent.parent
 output = root / "build/native-zoom-test"
 output.mkdir(parents=True, exist_ok=True)
+VISUAL_OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 data = Path(tempfile.mkdtemp(prefix="inbe-zoom-", dir=output))
 env = os.environ.copy()
@@ -49,6 +52,20 @@ def content_width(image):
     box = drawn.point(lambda value: 255 if value > 24 else 0).getbbox()
     assert box, "nothing was drawn"
     return box[2] - box[0]
+
+
+def check_title(image, percent):
+    title = image.crop((0, 0, image.width, 130))
+    recognized = read_text(title, f"zoom-title-{percent}", single_line=True)
+    # OCR confuses the small font's single-storey g with q at 80%.
+    recognized = recognized.replace("lanquage", "language")
+    assert "choose language" in recognized, f"{percent}%: title is unreadable: {recognized}"
+    colors = title.getcolors(title.width * title.height)
+    _, background = max(colors)
+    _, ink = max(colors, key=lambda entry: contrast(entry[1], background))
+    ink_count = sum(count for count, color in colors if contrast(color, background) >= 4.5)
+    assert ink_count >= 8, f"{percent}%: title lost readable glyph interiors"
+    assert contrast(ink, background) >= 4.5, f"{percent}%: title contrast is too low"
 
 
 def saved_scale():
@@ -103,6 +120,7 @@ with log_path.open("w") as log:
         assert wait_for_scale(10, 10), f"default scale is {saved_scale()}"
         time.sleep(1.0)
         normal = capture(window, "normal")
+        check_title(normal, 100)
 
         # Ctrl and the wheel rescale the whole window and move the setting.
         wheel(window, +1, 3)
@@ -125,13 +143,12 @@ with log_path.open("w") as log:
         # The limits match the Appearance slider: 50% to 250%.
         wheel(window, -1, 20)
         assert wait_for_scale(5), f"the low limit is {saved_scale()}"
-        capture(window, "scale-50")
+        check_title(capture(window, "scale-50"), 50)
         # Every supported scale must remain usable, including fractional ones.
         for tenths in range(6, 26):
             wheel(window, +1, 1)
             assert wait_for_scale(tenths), f"expected {tenths}, got {saved_scale()}"
-            if tenths in (7, 10, 13, 17, 20, 25):
-                capture(window, f"scale-{tenths * 10}")
+            check_title(capture(window, f"scale-{tenths * 10}"), tenths * 10)
         wheel(window, +1, 3)
         assert wait_for_scale(25), f"the high limit is {saved_scale()}"
 
@@ -156,4 +173,4 @@ with log_path.open("w") as log:
                 app.wait(timeout=2)
         shutil.rmtree(data)
 
-print("Native zoom: every scale from 50% to 250%, Ctrl+wheel persistence, limits and Ctrl+0 passed")
+print("Native zoom: readable title pixels at every scale from 50% to 250%, Ctrl+wheel persistence, limits and Ctrl+0 passed")

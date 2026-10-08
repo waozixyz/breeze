@@ -1,4 +1,12 @@
 # Changelog
+## [2.1.21] - 2026-10-08
+### Changed
+- Clearly mark the selected app in navigation and Apps, including while hovering or pressing.
+### Fixed
+- Keep text sharp and stable throughout the zoom range.
+- Keep Appearance labels readable at large zoom by wrapping them above their controls.
+- Keep the selected navigation shortcut visible when changing apps or zooming on narrow screens.
+
 ## [2.1.20] - 2026-10-08
 ### Changed
 - Keep Apps beside your desktop favorites without a large empty gap.
