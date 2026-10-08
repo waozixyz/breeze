@@ -242,17 +242,22 @@ for path in \
 	build/web/index.html \
 	build/web/index.js \
 	build/web/index.wasm \
-	build/web/index.data \
 	build/telegram/index.html \
 	build/telegram/index.js \
 	build/telegram/index.wasm \
-	build/telegram/index.data \
 	site-icons/favicon-32x32.png \
 	css/base.css \
 	css/components.css \
 	theme.css
 do
 	require_output "$path"
+done
+
+# External preload packages are required only when the generated loader uses them.
+for app in web telegram; do
+	if grep -Fq 'index.data' "$out_dir/build/$app/index.js"; then
+		require_output "build/$app/index.data"
+	fi
 done
 
 printf 'built Inbe site at %s\n' "$out_dir"
