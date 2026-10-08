@@ -58,6 +58,10 @@ MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#def
     sdl :: #system_library "SDL2";
     CurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
     GrabWindow :: (window: *void, grab: s32) #foreign sdl "SDL_SetWindowGrab";
+    IconSurface :: (pixels: *void, width: s32, height: s32, depth: s32,
+        pitch: s32, red: u32, green: u32, blue: u32, alpha: u32) -> *void #foreign sdl "SDL_CreateRGBSurfaceFrom";
+    ApplyIconSurface :: (window: *void, surface: *void) #foreign sdl "SDL_SetWindowIcon";
+    FreeIconSurface :: (surface: *void) #foreign sdl "SDL_FreeSurface";
 }
 
 #if #defined(ANDROID_BUILD) {
@@ -167,7 +171,27 @@ SetDesktopWindowIcon :: (path: *u8) {
             return
         }
         FormatWindowIcon(*icon, 7)
-        SetWindowIconImage(icon)
+        #if MAIN_SDL {
+            // SDL masks describe native integer bits; raylib's masks reverse
+            // RGBA bytes on little-endian desktops, including the alpha byte.
+            endian: u32 = 1
+            little := cast(*u8)*endian
+            red: u32 = ifx little.* == 1 then 0x000000ff else 0xff000000
+            green: u32 = ifx little.* == 1 then 0x0000ff00 else 0x00ff0000
+            blue: u32 = ifx little.* == 1 then 0x00ff0000 else 0x0000ff00
+            alpha: u32 = ifx little.* == 1 then 0xff000000 else 0x000000ff
+            surface := IconSurface(icon.data, icon.width, icon.height, 32,
+                icon.width * 4, red, green, blue, alpha)
+            window := CurrentWindow()
+            if surface != null {
+                if window != null {
+                    ApplyIconSurface(window, surface)
+                }
+                FreeIconSurface(surface)
+            }
+        } else {
+            SetWindowIconImage(icon)
+        }
         FreeWindowIcon(icon)
     }
     unused path
