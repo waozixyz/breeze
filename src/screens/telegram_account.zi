@@ -120,6 +120,69 @@ TelegramAccountPasswordMask :: (password: *TelegramAccountPassword, output: []u8
     return true
 }
 
+TelegramAccountHexDigit :: (byte: u8) -> bool {
+    return (byte >= cast(u8)48 && byte <= cast(u8)57) ||
+    (byte >= cast(u8)97 && byte <= cast(u8)102) ||
+    (byte >= cast(u8)65 && byte <= cast(u8)70)
+}
+
+// Public fingerprints are grouped for comparison, so ordinary word wrapping
+// can show every digit. The verified identity and signed values stay intact.
+TelegramAccountReviewText :: (value: string, width: s32, output: []u8) -> bool {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    if value.count > 4096 || output.count < value.count * 2 + 1 ||
+    width <= 0 || !Utf8.Valid(value) {
+        return false
+    }
+    digits := "0123456789abcdefABCDEF"
+    widest: s32 = 0
+    for index: 0..cast(s32)digits.count - 1 {
+        measured := AppTextWidth(digits[index:index + 1], AppFontSize())
+        if measured > widest {
+            widest = measured
+        }
+    }
+    group: s32 = 4
+    while group > 1 && group * widest > width {
+        group -= 1
+    }
+    if group * widest > width {
+        return false
+    }
+    index: s32 = 0
+    used: s32 = 0
+    while index < cast(s32)value.count {
+        if value[index] == cast(u8)0 {
+            output[0] = cast(u8)0
+            return false
+        }
+        end := index
+        while end < cast(s32)value.count && TelegramAccountHexDigit(value[end]) {
+            end += 1
+        }
+        if end == index {
+            output[used] = value[index]
+            used += 1
+            index += 1
+            continue
+        }
+        start := index
+        while index < end {
+            if end - start >= 32 && index > start && (index - start) % group == 0 {
+                output[used] = cast(u8)32
+                used += 1
+            }
+            output[used] = value[index]
+            used += 1
+            index += 1
+        }
+    }
+    output[used] = cast(u8)0
+    return true
+}
+
 TelegramAccountApprovalReady :: (view: *TelegramAccountView, retained: bool) -> bool {
     return view != null && !view.busy && retained && view.review_complete &&
     view.details.count > 0 && view.details.count <= 4096 &&
@@ -182,12 +245,14 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
     if view.restore_failed {
         status = LocaleText("telegram_account_restore_failed")
     }
-    paragraphs: [3]string = .[message, status, view.details]
+    review_display: [8193]u8
+    review := ""
+    if TelegramAccountReviewText(view.details, content_width, review_display[:]) {
+        review = TextUntilNul(review_display[:])
+    }
+    paragraphs: [3]string = .[message, status, review]
     if paragraphs[1].count > 1024 {
         paragraphs[1] = ""
-    }
-    if paragraphs[2].count > 4096 {
-        paragraphs[2] = ""
     }
     paragraph_heights: [3]s32
     for index: 0..2 {
@@ -199,8 +264,13 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
             content_height += paragraph_heights[index]
         }
     }
+    password_label_height: s32 = 0
     if view.password != null {
-        content_height += AppScale(64)
+        prepared := PrepareText(TextProps.{.text = password_label, .font = AppFontSize(),
+                .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
+                .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
+        password_label_height = cast(s32)prepared.bounds.height + AppScale(8)
+        content_height += password_label_height + AppScale(64)
     }
     for action: cast(s32)1..7 {
         if TelegramAccountActionAllowed(view, action) {
@@ -225,7 +295,7 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
                         .wrap = cast(TextWrap)TextWrapAuto})
                 y += paragraph_heights[index]
                 if index == 2 {
-                    review_retained = held.count == view.details.count && held.count > 0
+                    review_retained = held.count == review.count && held.count > 0
                     if review_retained && cast(float32)(y - AppScale(16)) <=
                     scroll.viewport.y + scroll.viewport.height {
                         view.review_seen = true
@@ -235,9 +305,16 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
         }
         password_valid := false
         if view.password != null {
+            held_label := FrameTextHold(*app.ui.frame_text, password_label)
+            Text(app.ui.session, TextProps.{.text = held_label, .font = AppFontSize(),
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                        cast(float32)content_width, cast(float32)password_label_height},
+                    .wrap = cast(TextWrap)TextWrapAuto})
+            y += password_label_height
             password := view.password
             mask: [257]u8
-            password_valid = TelegramAccountPasswordMask(password, mask[:])
+            password_valid = held_label.count == password_label.count && held_label.count > 0 &&
+            TelegramAccountPasswordMask(password, mask[:])
             if password_valid {
                 typed: [128]u8
                 input := SampleTextFieldInput(password.focused && !view.busy, typed[:])
@@ -248,11 +325,11 @@ DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
                             cast(float32)content_width, cast(float32)AppScale(48)},
                         .value = AppTextFromCString(*password.value[0], 257),
                         .display_value = FrameTextHold(*app.ui.frame_text, TextUntilNul(mask[:])),
-                        .label = password_label, .cursor = password.cursor,
+                        .label = held_label, .cursor = password.cursor,
                         .anchor = password.anchor, .scroll_x = password.scroll_x,
                         .focused = password.focused, .composition = password.composition,
                         .focus_id = 76602, .max_bytes = 256, .max_codepoints = 256,
-                        .secure = true, .disabled = view.busy || password_label.count == 0,
+                        .secure = true, .disabled = view.busy || held_label.count != password_label.count || held_label.count == 0,
                         .input = input, .scale = MetricsScale()})
                 if field.edit.changed {
                     unused AppReplaceText(password.value[:], field.edit.start,

@@ -63,6 +63,7 @@ void UnloadFileData(unsigned char *data) { (void)data; }
 
 static int32_t render(InnerBreeze *app, TelegramAccountView *view)
 {
+    PaintClear(app->ui.session);
     FrameTextReset(&app->ui.frame_text);
     TreeStart(app->ui.session, 1, (Rectangle){0, 0, app->ui.view_width, app->ui.view_height});
     int32_t action = telegram_account_DrawTelegramAccount(app, view);
@@ -90,6 +91,132 @@ static void click(Session session, TreeEntry entry)
     TreePointerUpdate(session, (PointerFrame){x, y, false, false, true});
     TreePointerUpdate(session, (PointerFrame){x, y, false, false, false});
 }
+static bool hex_digit(unsigned char value)
+{
+    return (value >= '0' && value <= '9') ||
+           (value >= 'a' && value <= 'f') ||
+           (value >= 'A' && value <= 'F');
+}
+
+static void assert_visible_password_label(InnerBreeze *app)
+{
+    TreeEntry field = node(app->ui.session, 76602);
+    bool visible = false;
+    for (int32_t i = 0; i < PendingPaintCount(app->ui.session); ++i) {
+        PaintCommand paint = PendingPaintAt(app->ui.session, i);
+        if (paint.value.length != 19 ||
+            memcmp(paint.value.data, "Recovery passphrase", 19) != 0) {
+            continue;
+        }
+        assert(paint.y >= paint.clip.y);
+        assert(paint.y + paint.font <= field.bounds.y);
+        assert(paint.x >= paint.clip.x);
+        assert(paint.x + MeasureGlyphWidth(paint.value, paint.font, StringView("", 0)) <=
+               paint.clip.x + paint.clip.width);
+        visible = true;
+    }
+    assert(visible);
+}
+
+static void assert_grouped_review_text(void)
+{
+    static const char fingerprint[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    unsigned char output[8193];
+    memset(output, 0xff, sizeof(output));
+    assert(telegram_account_TelegramAccountReviewText(
+        StringView(fingerprint, 64), 320, (Slice){output, sizeof(output)}));
+    assert(strlen((char *)output) == 79);
+    assert(output[4] == ' ');
+    size_t digits = 0;
+    for (size_t i = 0; output[i]; ++i) {
+        if (output[i] != ' ') {
+            assert(output[i] == (unsigned char)fingerprint[digits++]);
+        }
+    }
+    assert(digits == 64);
+    assert(!telegram_account_TelegramAccountReviewText(
+        StringView(fingerprint, 64), 320, (Slice){output, 64}));
+    assert(output[0] == 0);
+    assert(!telegram_account_TelegramAccountReviewText(
+        StringView("bad\0review", 10), 320, (Slice){output, sizeof(output)}));
+    assert(output[0] == 0);
+    assert(!telegram_account_TelegramAccountReviewText(
+        StringView("\xff", 1), 320, (Slice){output, sizeof(output)}));
+    assert(output[0] == 0);
+    assert(!telegram_account_TelegramAccountReviewText(
+        StringView(fingerprint, 64), 1, (Slice){output, sizeof(output)}));
+    assert(output[0] == 0);
+    char maximum[4097];
+    memset(maximum, 'a', sizeof(maximum));
+    assert(telegram_account_TelegramAccountReviewText(
+        StringView(maximum, 4096), 320, (Slice){output, sizeof(output)}));
+    assert(strlen((char *)output) == 5119);
+    assert(!telegram_account_TelegramAccountReviewText(
+        StringView(maximum, sizeof(maximum)), 320, (Slice){output, sizeof(output)}));
+    assert(output[0] == 0);
+}
+
+static void assert_complete_fingerprint_paint(InnerBreeze *app, TelegramAccountView *view)
+{
+    static const char *fingerprints[] = {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+        "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+    };
+    static const struct {
+        int32_t width;
+        int32_t font;
+    } layouts[] = {
+        {320, 16}, {400, 24}, {900, 16}, {180, 48}
+    };
+    view->password = NULL;
+    view->allowed_actions = 0;
+    view->busy = false;
+    view->restore_failed = false;
+    app->ui.view_height = 2000;
+    for (size_t layout = 0; layout < sizeof(layouts) / sizeof(layouts[0]); ++layout) {
+        app->ui.view_width = layouts[layout].width;
+        AppMetricsConfigureFont(layouts[layout].font);
+        for (size_t key = 0; key < sizeof(fingerprints) / sizeof(fingerprints[0]); ++key) {
+            view->details = StringView(fingerprints[key], 64);
+            assert(render(app, view) == 0);
+            assert(view->details.length == 64);
+            assert(memcmp(view->details.data, fingerprints[key], 64) == 0);
+            assert(strlen((char *)view->seen_review_details) == 64);
+            assert(memcmp(view->seen_review_details, fingerprints[key], 64) == 0);
+            assert(strlen((char *)view->seen_review_id) == view->review_id.length);
+            assert(memcmp(view->seen_review_id, view->review_id.data, view->review_id.length) == 0);
+            size_t digits = 0;
+            for (int32_t i = 0; i < PendingPaintCount(app->ui.session); ++i) {
+                PaintCommand paint = PendingPaintAt(app->ui.session, i);
+                bool fingerprint_line = paint.value.length > 0;
+                for (size_t j = 0; j < paint.value.length; ++j) {
+                    if (!hex_digit((unsigned char)paint.value.data[j]) && paint.value.data[j] != ' ') {
+                        fingerprint_line = false;
+                    }
+                }
+                if (!fingerprint_line) {
+                    continue;
+                }
+                assert(paint.x >= paint.clip.x);
+                assert(paint.x + MeasureGlyphWidth(paint.value, paint.font, StringView("", 0)) <=
+                       paint.clip.x + paint.clip.width);
+                assert(paint.y >= paint.clip.y);
+                assert(paint.y + paint.font <= paint.clip.y + paint.clip.height);
+                for (size_t j = 0; j < paint.value.length; ++j) {
+                    if (paint.value.data[j] != ' ') {
+                        assert(digits < 64);
+                        assert(paint.value.data[j] == fingerprints[key][digits++]);
+                    }
+                }
+            }
+            assert(digits == 64);
+        }
+    }
+    AppMetricsConfigureFont(16);
+}
+
 int main(void)
 {
     TelegramAccountPassword password = {0};
@@ -108,6 +235,7 @@ int main(void)
     app.ui.view_width = 400;
     app.ui.view_height = 360;
     AppMetricsConfigure(1.0f);
+    assert_grouped_review_text();
     TelegramAccountView view = {0};
     assert(telegram_account_DrawTelegramAccount(&app, &view) == 0);
     assert(!telegram_account_TelegramAccountActionAllowed(&view, 0));
@@ -140,6 +268,7 @@ int main(void)
     view.scroll_offset = 100000;
     assert(render(&app, &view) == 0);
     assert(view.review_seen);
+    assert_visible_password_label(&app);
     assert(!node(app.ui.session, 76616).disabled);
     click(app.ui.session, node(app.ui.session, 76616));
     assert(render(&app, &view) == 6);
@@ -168,7 +297,8 @@ int main(void)
     assert(!telegram_account_TelegramAccountApprovalReady(&view, false));
     view.review_complete = false;
     assert(!telegram_account_TelegramAccountApprovalReady(&view, true));
+    assert_complete_fingerprint_paint(&app, &view);
     assert(SessionClose(app.ui.session));
-    puts("Telegram account retained UI, masked passphrase, consent and cancel checks passed");
+    puts("Telegram account visible label, complete fingerprints, masked passphrase, consent and cancel checks passed");
     return 0;
 }
