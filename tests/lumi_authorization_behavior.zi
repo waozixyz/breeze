@@ -174,6 +174,9 @@ FakeTransport :: struct {
     final_body: [32768]u8
     header: [8192]u8
     request_time: s64
+    response: [4096]u8
+    final_url: [129]u8
+    final_status: s32
 }
 
 FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -195,17 +198,35 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         return AppCopyText("true", output)
     }
     fake.request_time = TestNow(null)
+    unused AppCopyText(request.url, fake.final_url[:])
     unused AppCopyText(request.body, fake.final_body[:])
     for header: request.headers {
         if header.name == "X-Daochi-Tx" {
             unused AppCopyText(header.value, fake.header[:])
         }
     }
+    if fake.response[0] != cast(u8)0 {
+        count: s32 = 0
+        while count < 4096 && fake.response[count] != cast(u8)0 {
+            count += 1
+        }
+        if count == 4096 || count >= output.count {
+            return false
+        }
+        for i: 0..count {
+            output[i] = fake.response[i]
+        }
+        output[count] = cast(u8)0
+        return true
+    }
     return AppCopyText("true", output)
 }
 FakePoll :: (context: *void, status: *s32) -> s32 {
-    unused context
+    fake := cast(*FakeTransport)context
     status.* = 200
+    if fake.phase >= 4 && fake.final_status != 0 {
+        status.* = fake.final_status
+    }
     return 1
 }
 FakeCancel :: (context: *void) {
@@ -253,6 +274,135 @@ check_operation :: () {
     storage_set_setting_text("sync_public_id", original_id)
     check_true("broad route refused", !BeginOwnerAuthorizationOperation(*operation, AuthorizationAudience,
         transport, "/api/v1/account/delete", "{}", output[:], true))
+}
+
+owner_pump_fake: FakeTransport;
+
+// The runner wraps only the native network boundary. Pump, SQLite, the owner
+// operation, v6 signing, session save and storage scratch buffers remain real.
+#program_export
+OwnerPumpTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{cast(*void)*owner_pump_fake, FakeStart, FakePoll, FakeCancel}
+}
+
+write_pending_response :: (output: []u8) -> bool {
+    writer: Writer = .{output, 0, true}
+    writer = WriteText(writer, "{\"request_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"grant_id\":\"\",\"account_id\":\"")
+    writer = WriteText(writer, TextUntilNul(owner_account.public_id[:]))
+    writer = WriteText(writer, "\",\"app_id\":\"inbe\",\"node_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"audience\":\"https://api.waozi.xyz\",\"expires_at\":")
+    writer = WriteDecimal(writer, TestNow(null) + 590)
+    writer = WriteText(writer, ",\"bot_id\":123456789,\"telegram_id\":456789012,\"client_id\":\"\",\"signing_key\":\"\",\"encryption_key\":\"\",\"challenge\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"status\":\"pending\",\"scopes\":[{\"collection\":\"private.inbe.v2.lumi\",\"read\":true,\"write\":true}]}")
+    return writer.valid
+}
+
+reset_owner_pump :: () {
+    CancelOwnerAuthorizationOperation(*lumi_authorization_operation)
+    lumi_authorization_operation = OwnerAuthorizationOperation.{}
+    lumi_authorization_pending = OwnerRendezvous.{}
+    lumi_authorization_grant = GrantStorage.{}
+    lumi_authorization_ready = false
+    lumi_authorization_claimed = false
+    lumi_authorization_loaded = true
+    lumi_authorization_state = 0
+    lumi_authorization_action = 0
+    lumi_authorization_intent = 0
+    lumi_authorization_retry = 0
+    lumi_authorization_disconnect_ready = false
+    check_true("pump owner pin copied", AppCopyText(TextUntilNul(owner_account.public_id[:]),
+        lumi_authorization_owner[:]))
+    storage_set_setting_text("sync_auth_token", "")
+    storage_set_setting_text("sync_auth_token_expires_at", "")
+    owner_pump_fake = FakeTransport.{}
+}
+
+check_owner_pump_storage :: () {
+    owner := TextUntilNul(owner_account.public_id[:])
+    reset_owner_pump()
+    check_true("pending wire fixture", write_pending_response(owner_pump_fake.response[:]))
+    check_true("actual owner pump operation begins", BeginOwnerAuthorizationOperation(
+        *lumi_authorization_operation, AuthorizationAudience, OwnerPumpTestTransport(),
+        "/api/v1/authorization/requests", "{\"app_id\":\"inbe\"}", lumi_authorization_response[:], true))
+    lumi_authorization_action = 1
+    steps: s32 = 0
+    while lumi_authorization_operation.active && steps < 10 {
+        LumiAuthorizationPump()
+        steps += 1
+    }
+    check_true("actual owner pump completes", !lumi_authorization_operation.active && owner_pump_fake.phase == 4)
+    check_true("pending accepted after private-key and session scratch writes",
+        lumi_authorization_state == 1 && lumi_authorization_intent == 2 &&
+        TextUntilNul(lumi_authorization_pending.account_id[:]) == owner &&
+        TextUntilNul(lumi_authorization_pending.request_id[:]) == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    check_true("session actually saved by pump", storage_get_setting_text("sync_auth_token") == "synthetic-owner-token")
+    saved: [4096]u8
+    check_true("pending persisted fully", AppCopyText(storage_get_setting_text("lumi_authorization_pending"), saved[:]) &&
+        TextUntilNul(saved[:]) == TextUntilNul(owner_pump_fake.response[:]))
+
+    reset_owner_pump()
+    lumi_authorization_loaded = false
+    lumi_authorization_retry = TestNow(null) + 60
+    storage_set_setting_text("lumi_authorization_pending", TextUntilNul(saved[:]))
+    LumiAuthorizationPump()
+    check_true("saved pending survives real storage scratch reads", lumi_authorization_loaded &&
+        lumi_authorization_state == 1 && TextUntilNul(lumi_authorization_pending.account_id[:]) == owner &&
+        TextUntilNul(lumi_authorization_pending.request_id[:]) == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    check_true("restore did not send a request", owner_pump_fake.phase == 0)
+    storage_set_setting_text("lumi_authorization_pending", "")
+
+    grant_id := "dddddddddddddddddddddddddddddddd"
+    wrong_owner: [65]u8
+    check_true("wrong grant owner copied", AppCopyText(owner, wrong_owner[:]))
+    wrong_owner[0] = ifx owner[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    expiry: [24]u8
+    check_true("grant expiry formatted", AppFormatS64(TestNow(null) + 300, expiry[:]))
+    storage_set_setting_text("lumi_authorization_grant_id", grant_id)
+    storage_set_setting_text("lumi_authorization_grant_owner", TextUntilNul(wrong_owner[:]))
+    storage_set_setting_text("lumi_authorization_grant_expires", TextUntilNul(expiry[:]))
+    check_true("same scratch buffer cannot make wrong grant owner match", !LumiAuthorizationHasGrant())
+    reset_owner_pump()
+    LumiAuthorizationRevokeThenDisconnect()
+    LumiAuthorizationPump()
+    check_true("wrong owner cannot send grant revocation", !lumi_authorization_operation.active &&
+        owner_pump_fake.phase == 0 && storage_get_setting_text("lumi_authorization_grant_id") == grant_id)
+    storage_set_setting_text("lumi_authorization_grant_owner", owner)
+    check_true("correct live owner grant recognized", LumiAuthorizationHasGrant())
+
+    reset_owner_pump()
+    owner_pump_fake.final_status = 403
+    LumiAuthorizationRevokeThenDisconnect()
+    LumiAuthorizationPump()
+    steps = 0
+    while lumi_authorization_operation.active && steps < 10 {
+        LumiAuthorizationPump()
+        steps += 1
+    }
+    check_true("failed revoke preserves grant and denies disconnect", !lumi_authorization_operation.active &&
+        owner_pump_fake.phase == 4 && lumi_authorization_state == 5 &&
+        !lumi_authorization_disconnect_ready && storage_get_setting_text("lumi_authorization_grant_id") == grant_id)
+
+    reset_owner_pump()
+    LumiAuthorizationRevokeThenDisconnect()
+    LumiAuthorizationPump()
+    parsed_id: [65]u8
+    check_true("revoke exact route", TextUntilNul(lumi_authorization_operation.path[:]) == "/api/v1/authorization/revoke")
+    check_true("revoke preserves grant id across owner scratch read", FieldText(
+        TextUntilNul(lumi_authorization_operation.body[:]), "grant_id", parsed_id[:]) &&
+        TextUntilNul(parsed_id[:]) == grant_id)
+    steps = 0
+    while lumi_authorization_operation.active && steps < 10 {
+        LumiAuthorizationPump()
+        steps += 1
+    }
+    check_true("actual revoke operation completes", !lumi_authorization_operation.active && owner_pump_fake.phase == 4)
+    check_true("actual revoke sends exact grant", TextUntilNul(owner_pump_fake.final_url[:]) ==
+        "https://api.waozi.xyz/api/v1/authorization/revoke" && FieldText(
+        TextUntilNul(owner_pump_fake.final_body[:]), "grant_id", parsed_id[:]) &&
+        TextUntilNul(parsed_id[:]) == grant_id)
+    check_true("revoke clears local grant only after success", lumi_authorization_disconnect_ready &&
+        storage_get_setting_text("lumi_authorization_grant_id") == "" &&
+        storage_get_setting_text("lumi_authorization_grant_owner") == "" &&
+        storage_get_setting_text("lumi_authorization_grant_expires") == "")
+    reset_owner_pump()
 }
 
 check_temporary_operation :: () {
@@ -412,6 +562,7 @@ Check :: () -> s32 {
     check_rejections()
     check_envelope()
     check_operation()
+    check_owner_pump_storage()
     check_temporary_operation()
     check_temporary_envelope()
     ClearEncryptionKeys(*recipient)

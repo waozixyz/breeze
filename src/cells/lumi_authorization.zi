@@ -492,8 +492,15 @@ LumiAuthorizationStatusKey :: () -> string {
 }
 
 LumiAuthorizationHasGrant :: () -> bool {
-    return LowerHex(storage_get_setting_text("lumi_authorization_grant_id"), 32) &&
-    storage_get_setting_text("lumi_authorization_grant_owner") == storage_get_setting_text("sync_public_id") &&
+    if !LowerHex(storage_get_setting_text("lumi_authorization_grant_id"), 32) {
+        return false
+    }
+    grant_owner: [65]u8
+    if !AppCopyText(storage_get_setting_text("lumi_authorization_grant_owner"), grant_owner[:]) {
+        return false
+    }
+    owner := TextUntilNul(grant_owner[:])
+    return LowerHex(owner, 64) && owner == storage_get_setting_text("sync_public_id") &&
     ParsePositiveSeconds(storage_get_setting_text("lumi_authorization_grant_expires")) > AuthorizationNow(null)
 }
 
@@ -542,7 +549,13 @@ LumiAuthorizationClearPending :: () {
 }
 
 LumiAuthorizationPump :: () {
-    owner := storage_get_setting_text("sync_public_id")
+    // Storage text uses one scratch buffer. Keep the owner stable across
+    // further setting reads, operation polling and session persistence.
+    owner_snapshot: [65]u8
+    if !AppCopyText(storage_get_setting_text("sync_public_id"), owner_snapshot[:]) {
+        owner_snapshot[0] = cast(u8)0
+    }
+    owner := TextUntilNul(owner_snapshot[:])
     if TextUntilNul(lumi_authorization_owner[:]) != owner {
         CancelOwnerAuthorizationOperation(*lumi_authorization_operation)
         lumi_authorization_pending = OwnerRendezvous.{}
@@ -653,8 +666,10 @@ LumiAuthorizationPump :: () {
             return
         }
         lumi_authorization_intent = 0
-        grant_id := storage_get_setting_text("lumi_authorization_grant_id")
-        if LowerHex(grant_id, 32) && storage_get_setting_text("lumi_authorization_grant_owner") == owner {
+        grant_snapshot: [33]u8
+        copied := AppCopyText(storage_get_setting_text("lumi_authorization_grant_id"), grant_snapshot[:])
+        grant_id := TextUntilNul(grant_snapshot[:])
+        if copied && LowerHex(grant_id, 32) && storage_get_setting_text("lumi_authorization_grant_owner") == owner {
             body: [256]u8
             if BuildIDBody("grant_id", grant_id, "inbe", body[:]) {
                 unused LumiAuthorizationBegin("/api/v1/authorization/revoke", TextUntilNul(body[:]), true, 5)
