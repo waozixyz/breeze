@@ -19,6 +19,7 @@
 #import, file "../../app/text_buffers.zi";
 #import, file "../../storage/storage_core.zi";
 #import, file "../../platform/uri.zi";
+#import, file "../telegram_account.zi";
 
 using TextWrap;
 using ButtonEmphasis;
@@ -55,7 +56,7 @@ settings_telegram_format_fields :: (format: string, fields: []string) -> string 
     return BuilderFinish(out)
 }
 
-settings_telegram_review_text :: () -> string {
+settings_telegram_review_text :: (width: s32) -> string {
     if !lumi_authorization_ready {
         return ""
     }
@@ -86,7 +87,16 @@ settings_telegram_review_text :: () -> string {
     BuilderPrint(*out, "%\n\n%", identity_text, keys_text)
     PackageFree(identity_text)
     PackageFree(keys_text)
-    return BuilderFinish(out)
+    raw_review := BuilderFinish(out)
+    display: [8193]u8
+    complete := TelegramAccountReviewText(raw_review, width, display[:])
+    PackageFree(raw_review)
+    if !complete {
+        return ""
+    }
+    formatted: Vec(u8)
+    BuilderPrint(*formatted, "%", TextUntilNul(display[:]))
+    return BuilderFinish(formatted)
 }
 
 settings_telegram_content_height :: (width: s32) -> s32 {
@@ -96,7 +106,7 @@ settings_telegram_content_height :: (width: s32) -> s32 {
         return height
     }
     height += settings_telegram_text_height(LumiAuthorizationStatusKey(), width) + AppScale(112)
-    review := settings_telegram_review_text()
+    review := settings_telegram_review_text(width)
     if review.count > 0 {
         prepared := PrepareText(TextProps.{.text = review, .font = AppFontSize(),
                 .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0},
@@ -146,14 +156,14 @@ settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
                 .wrap = cast(TextWrap)TextWrapAuto})
         y.* += status_height
         review_visible := false
-        review := settings_telegram_review_text()
+        review := settings_telegram_review_text(width)
         if review.count > 0 {
             prepared := PrepareText(TextProps.{.text = review, .font = AppFontSize(),
                     .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0},
                     .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
             review_height := cast(s32)prepared.bounds.height + AppScale(16)
             held_review := FrameTextHold(*app.ui.frame_text, review)
-            review_visible = held_review.count > 0
+            review_visible = held_review.count == review.count && held_review.count > 0
             Text(app.ui.session, TextProps.{.text = held_review, .font = AppFontSize(),
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)review_height},
                     .wrap = cast(TextWrap)TextWrapAuto})

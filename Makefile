@@ -3044,7 +3044,7 @@ device-key-wasm-test: $(ZI2C_BIN)
 test: device-key-test
 web-smoke-test web-canvas-smoke-test: device-key-wasm-test
 
-.PHONY: telegram-authorization-test telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+.PHONY: telegram-authorization-test telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
 
 telegram-bridge-test:
 	@sh tests/telegram_bridge_test.sh
@@ -3061,6 +3061,9 @@ telegram-account-flow-test: $(ZIRAN_BIN) $(LIBOQS_A)
 telegram-account-ui-test: $(ZIRAN_BIN)
 	@sh tests/telegram_account_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
+settings-telegram-ui-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/settings_telegram_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
+
 lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/lumi_authorization_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
@@ -3076,6 +3079,6 @@ storage-delegate-test: $(ZIRAN_BIN) $(LIBOQS_A)
 lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/lumi_delegate_scope_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
 
 test: telegram-authorization-test
