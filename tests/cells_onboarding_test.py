@@ -110,21 +110,24 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
 result = {"display": os.environ["DISPLAY"], "deployment": False}
 with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     profile = Path(temporary)
-    # First start opens the Apps library directly; system language is selected.
+    # First start requires language confirmation before opening the Apps library.
     with application(profile, "fresh-apps") as (window, log):
+        capture(window, "fresh-language")
+        assert settings(profile)["language_setup_done"] == "0"
+        tap(window, 450, 423)
         capture(window, "fresh-apps")
         saved = settings(profile)
         assert saved["apps_setup_done"] == "0"
         assert saved["language_setup_done"] == "1"
         assert saved["enabled_apps"] == "31"
-        assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
+        assert [int(saved[f"launcher_favorite_{i}"]) for i in range(5)] == [12, 1, 2, 3, 11]
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
         capture(window, "resumed-apps")
-        tap(window, 100, 104)
+        tap(window, 180, 104)
         command("xdotool", "type", "--clearmodifiers", "Lists")
         time.sleep(.3)
-        tap(window, 100, 236)
+        tap(window, 180, 228)
         wait_setting(profile, "apps_setup_done", 1)
         wait_setting(profile, "main_tab", 2)
         assert "screen=21->16" in log.read_text(), log.read_text()

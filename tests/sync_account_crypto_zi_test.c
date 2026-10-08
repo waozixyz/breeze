@@ -147,7 +147,7 @@ main(void)
     }
     for(size_t index = 0; index < sizeof(known_salt); index++)
         known_salt[index] = (uint8_t)index;
-    if(!AccountDerivePassphraseKey(StringView("correct horse battery staple", 28),
+    if(!DeriveEncryptedAccountKey(StringView("correct horse battery staple", 28),
                                    known_salt, derived_key, 600000) ||
        !SyncCryptoBytesToHex(derived_key, sizeof(derived_key),
                              derived_hex, sizeof(derived_hex)) ||

@@ -1,3 +1,7 @@
+#import "navigation_bar_props"
+#import "navigation_bar_widget"
+#import, file "../app/app_launcher.zi";
+#import, file "../app/app_settings.zi";
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -144,54 +148,40 @@ bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
     return route == APP_NAV_ROUTE_ELIST  && app.breathing.screen == ScreenEList
 }
 
-// Each dock shortcut keeps the ordinary button's hover, focus and press states.
-app_draw_dock_route :: (app: *InnerBreeze, route: s32, bounds: Rectangle) -> bool {
-    button: ButtonProps
-    button.id = 6600 + route
-    button.label = app_nav_route_label(route)
-    button.bounds = bounds
-    button.class_name = KssClassId(KssMakeName("launcher-dock"))
-    button.icon_placement = cast(IconPlacement)IconPlacementAbove
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    button.selected = !app.launcher_open && bottom_nav_route_active(app, route)
-    if route == APP_NAV_ROUTE_APPS {
-        button.selected = app.launcher_open
-        button.icon_shape = "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z"
-    } else {
-        button.image = bottom_nav_route_image(route)
-        button.icon_shape = app_nav_route_shape(route)
-    }
-    button.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
-    if Button(app.ui.session, button) == 0 { return false }
-    if route == APP_NAV_ROUTE_APPS { app_launcher_toggle(app) }
-    else { app_launcher_activate(app, route) }
-    return true
-}
-
-// The same compact dock is composed inside the launcher overlay when open.
+// App routes and imagery remain in Inbe; Kryon owns dock composition,
+// scrolling, button interaction, drag observations and anchored actions.
 #program_export
 app_draw_favorites_dock :: (app: *InnerBreeze) {
     desktop := app_nav_desktop_rail_enabled(app) != 0
     dock_width := app_nav_desktop_rail_width(app)
-    x: s32 = 0
-    y := app.ui.view_height - AppScale(84)
-    if app_navigation_placement(app) == NAVIGATION_TOP { y = -AppScale(84) }
+    props: NavigationBarProps
+    props.key = KeyHash("inbe/apps/dock")
+    props.id = 6600
+    props.compact = true
+    props.vertical = desktop
+    props.scale = cast(float32)AppScale(100) / 100.0
+    props.item_class_name = KssClassId(KssMakeName("launcher-dock"))
+    props.class_name = props.item_class_name
+    props.scroll_offset = app.launcher_dock_scroll
+    props.draggable = true
+    props.dragging = app.launcher_drag_moving
+    props.drag_position = app.launcher_drag_pointer
+    props.footer_count = ifx desktop then 2 else 1
+    props.bounds = Rectangle.{0.0,
+        cast(float32)(app.ui.view_height - AppScale(84)),
+        cast(float32)app.ui.view_width, cast(float32)AppScale(84)}
+    if app_navigation_placement(app) == NAVIGATION_TOP {
+        props.bounds.y = -cast(float32)AppScale(84)
+    }
     if desktop {
-        x = -dock_width - app.launcher_drawer_width
+        x := -dock_width - app.launcher_drawer_width
         if app_navigation_placement(app) == NAVIGATION_RIGHT {
             x = app.ui.view_width + app.launcher_drawer_width
         }
-        PaintRoundedFill(app.ui.session, -1,
-            Rectangle.{cast(float32)x, 0.0, cast(float32)dock_width,
-                cast(float32)app.ui.view_height}, 0.0, 4,
-            StyleTokenColor("launcher-canvas"))
-    } else {
-        PaintRoundedFill(app.ui.session, -1,
-            Rectangle.{0.0, cast(float32)y, cast(float32)app.ui.view_width,
-                cast(float32)AppScale(84)}, 0.0, 4,
-            StyleTokenColor("launcher-canvas"))
+        props.bounds = Rectangle.{cast(float32)x, 0.0,
+            cast(float32)dock_width, cast(float32)app.ui.view_height}
     }
-    routes: [LAUNCHER_APP_COUNT + 1]s32
+    routes: [LAUNCHER_APP_COUNT + 2]s32
     count: s32 = 0
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
         route := app.launcher_favorites[index]
@@ -202,82 +192,63 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
     }
     routes[count] = APP_NAV_ROUTE_APPS
     count += 1
-    gap := AppScale(8)
-    item_width := (app.ui.view_width - AppScale(24) - gap * (count - 1)) / count
-    if item_width > AppScale(144) { item_width = AppScale(144) }
-    group_x := (app.ui.view_width - count * item_width - gap * (count - 1)) / 2
-    // A larger dock scrolls its favorites while Apps and Profile stay reachable.
-    if count > 3 {
-        apps_bounds := Rectangle.{cast(float32)(app.ui.view_width - AppScale(100)),
-            cast(float32)(y + AppScale(8)), cast(float32)AppScale(88),
-            cast(float32)AppScale(68)}
-        scroll: ScrollProps
-        scroll.key = KeyHash("inbe/apps/dock")
-        scroll.scroll_offset = app.launcher_dock_scroll
-        scroll.horizontal = !desktop
-        scroll.bounds = Rectangle.{cast(float32)AppScale(12), cast(float32)y,
-            cast(float32)(app.ui.view_width - AppScale(120)), cast(float32)AppScale(84)}
-        scroll.content_width = (count - 1) * AppScale(92) - gap
-        if desktop {
-            apps_y := AppScale(112 + (count - 1) * 84)
-            if apps_y > app.ui.view_height - AppScale(188) {
-                apps_y = app.ui.view_height - AppScale(188)
-            }
-            apps_bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)apps_y,
-                cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
-            scroll.bounds = Rectangle.{cast(float32)x, cast(float32)AppScale(112),
-                cast(float32)dock_width, cast(float32)(apps_y - AppScale(120))}
-            scroll.content_height = (count - 1) * AppScale(84) - gap
+    if desktop {
+        routes[count] = APP_NAV_ROUTE_PROFILE
+        count += 1
+    }
+    items: [LAUNCHER_APP_COUNT + 2]NavigationBarItem
+    for index: cast(s32)0..count - 1 {
+        route := routes[index]
+        items[index].key = cast(u64)(6600 + route)
+        items[index].route = route
+        items[index].label = app_nav_route_label(route)
+        items[index].image = bottom_nav_route_image(route)
+        items[index].icon_shape = app_nav_route_shape(route)
+        items[index].active = !app.launcher_open && bottom_nav_route_active(app, route)
+        if route == APP_NAV_ROUTE_PROFILE {
+            items[index].active = !app.launcher_open && app.breathing.screen == ScreenProfile
         }
-        scrolled := Scroll(app.ui.session, scroll)
-        app.launcher_dock_scroll = scrolled.scroll_offset
-        if scrolled.opened {
-            activated := false
-            for index: cast(s32)0..count - 2 {
-                bounds := Rectangle.{scrolled.content.x + cast(float32)AppScale(index * 92),
-                    cast(float32)(y + AppScale(8)), cast(float32)AppScale(84),
-                    cast(float32)AppScale(68)}
-                if desktop {
-                    bounds = Rectangle.{cast(float32)(x + AppScale(12)),
-                        scrolled.content.y + cast(float32)AppScale(index * 84),
-                        cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
-                }
-                if app_draw_dock_route(app, routes[index], bounds) { activated = true }
-            }
-            TreePopScope(app.ui.session)
-            if activated { return }
-        }
-        if app_draw_dock_route(app, APP_NAV_ROUTE_APPS, apps_bounds) { return }
-    } else {
-        for index: cast(s32)0..count - 1 {
-            bounds := Rectangle.{cast(float32)(group_x + index * (item_width + gap)),
-                cast(float32)(y + AppScale(8)), cast(float32)item_width,
-                cast(float32)AppScale(68)}
-            if desktop {
-                bounds = Rectangle.{cast(float32)(x + AppScale(12)),
-                    cast(float32)AppScale(112 + index * 84),
-                    cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
-            }
-            if app_draw_dock_route(app, routes[index], bounds) { return }
+        items[index].disabled = app.modal.active != 0 ||
+        app.blocked_input_frame == app.breathing.frame
+        if route == APP_NAV_ROUTE_APPS {
+            items[index].active = app.launcher_open
+            items[index].image = ImageProps.{}
+            items[index].icon_shape = "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z"
         }
     }
-    if desktop {
-        profile: ButtonProps
-        profile.id = 6690
-        profile.label = app_nav_route_label(APP_NAV_ROUTE_PROFILE)
-        profile.image = bottom_nav_route_image(APP_NAV_ROUTE_PROFILE)
-        profile.icon_shape = app_nav_route_shape(APP_NAV_ROUTE_PROFILE)
-        profile.icon_placement = cast(IconPlacement)IconPlacementAbove
-        profile.class_name = KssClassId(KssMakeName("launcher-dock"))
-        profile.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        profile.selected = !app.launcher_open && app.breathing.screen == ScreenProfile
-        profile.bounds = Rectangle.{cast(float32)(x + AppScale(12)),
-            cast(float32)(app.ui.view_height - AppScale(88)),
-            cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
-        profile.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
-        if Button(app.ui.session, profile) != 0 {
-            app_launcher_activate(app, APP_NAV_ROUTE_PROFILE)
+    result := NavigationBar(app.ui.session, props, items[0:count])
+    app.launcher_dock_scroll = result.scroll_offset
+    app.launcher_dock_drop_index = result.drop_index
+    if result.drag.started {
+        app.launcher_drag_key = cast(u64)(6600 + result.drag_route)
+        app.launcher_drag_route = result.drag_route
+        app.launcher_drag_bounds = result.drag_bounds
+        app.launcher_drag_origin = Vector2.{result.drag.x, result.drag.y}
+        app.launcher_drag_grab = Vector2.{result.drag.grab_x, result.drag.grab_y}
+        app.launcher_drag_vertical = true
+        app.launcher_drag_moving = false
+    }
+    if result.drag.active || result.drag.ended {
+        app_launcher_update_drag(app, Vector2.{result.drag.x, result.drag.y})
+        app.launcher_drag_released = result.drag.ended
+    }
+    if result.clicked_route >= 0 && !app.launcher_drag_moving {
+        if result.clicked_route == APP_NAV_ROUTE_APPS {
+            app_launcher_toggle(app)
+        } else {
+            app_launcher_activate(app, result.clicked_route)
         }
+    }
+    if !app.launcher_open && app.launcher_drag_released {
+        if app.launcher_drag_moving && result.drop_index >= 0 {
+            app.launcher_favorite_count = LauncherPlaceFavorite(
+                app.launcher_favorites[:], app.launcher_favorite_count,
+                app.launcher_drag_route, result.drop_index)
+            save_settings(app)
+        }
+        app.launcher_drag_key = 0
+        app.launcher_drag_moving = false
+        app.launcher_drag_released = false
     }
 }
 

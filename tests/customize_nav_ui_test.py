@@ -1,4 +1,4 @@
-"""Edit favorites directly in Apps with a held click on a private display."""
+"""Arrange pinned cards with dragging on a private display."""
 
 import contextlib
 import os
@@ -87,18 +87,26 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
 
     with application("app") as (window, log):
-        click(window, *( (325, 802) if NARROW else (44, 316) ))
-        click(window, *( (290, 169) if NARROW else (310, 169) ), hold=PRESS_SECONDS)
-        command("import", "-window", window, str(OUTPUT / "after-click.png"))
+        click(window, *((330, HEIGHT - 42) if NARROW else (44, HEIGHT - 144)), hold=PRESS_SECONDS)
+        command("import", "-window", window, str(OUTPUT / "after-open.png"))
         saved = settings()
-        assert saved["launcher_favorite_count"] == "2", "Opening press changed favorites"
-        assert saved["enabled_apps"] == "22", "Opening press changed cell choices"
-        # Unpinning uses the pin control in the Apps favorite tile.
-        click(window, *( (170, 207) if NARROW else (210, 207) ))
+        assert saved["launcher_favorite_count"] == "2", "Opening Apps changed pins"
+        assert saved["enabled_apps"] == "22", "Opening Apps changed app choices"
+        # A card moves from Pinned to More; no separate editing or pin control.
+        start = (100, 228) if NARROW else (170, 228)
+        end = (100, 312) if NARROW else (170, 312)
+        command("xdotool", "mousemove", "--window", window, *map(str, start))
+        command("xdotool", "mousedown", "1")
+        time.sleep(.2)
+        for step in range(1, 13):
+            point = [round(a + (b - a) * step / 12) for a, b in zip(start, end)]
+            command("xdotool", "mousemove", "--window", window, *map(str, point))
+            time.sleep(.04)
+        command("xdotool", "mouseup", "1")
+        time.sleep(.5)
         saved = settings()
-        assert saved["launcher_favorite_count"] == "1", "Unpin control did not open"
+        assert saved["launcher_favorite_count"] == "1", "Dragging to More did not remove the pin"
         assert saved["launcher_favorite_0"] == "1", saved
-        assert saved["enabled_apps"] == "22", "Unpinning changed app choices"
-        assert "screen=6->12" not in log.read_text(), log.read_text()
-
-print("Apps: a held edit action keeps favorites; unpin preserves app choices")
+        assert saved["enabled_apps"] == "22", "Dragging changed app choices"
+        command("import", "-window", window, str(OUTPUT / "after-drag.png"))
+print("Apps: dragging arranges pins and preserves app choices")

@@ -177,9 +177,11 @@ main(void)
     assert(font_loads == 4 && refreshes == 4 && saves == 2);
 
     app.language_system = 0;
+    app.language_selected = 0;
     app.habits.selected = 5;
     app_accept_language_selection(&app);
     assert(saves == 3 && seeds == 1 && web_flushes == 0);
+    assert(app.language_selected == 1 && strcmp((char *)app.language, "en") == 0);
     assert(app.habits.screen_mode == HABITS_SCREEN_STATISTICS);
     assert(app.habits.tab == HABIT_TAB_WEEKLY);
     assert(app.habits.view_mode == HABIT_VIEW_WEEKLY);
