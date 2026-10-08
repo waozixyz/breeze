@@ -32,7 +32,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/build/packages/ziran/include" -I"$work/gen" \
+    -I"$root/build/packages/ziran/include" -I"$work/gen" -I"$work/gen/app" \
     "$root/tests/app_nav_state_link_test.c" \
     "$work/gen/app/app_nav_state.c" \
     "$work/gen/bottom_nav_policy.c" "$work/gen/route_list.c" -o "$work/test"

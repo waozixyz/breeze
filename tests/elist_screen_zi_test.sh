@@ -30,6 +30,9 @@ mkdir -p "$work/c"
     "$work/c/screens/elist_screen.c" "$work/c/text_buffers.c" \
     "$work/c/byte_text_linux.c" \
     "$work/c/module_host.c" "$work/c/value_codec.c" \
+    "$work/c/package_files.c" "$work/c/format.c" \
+    "$work/c/asset_paths.c" "$work/c/assets.c" \
+    "$work/c/sun_salutation_inventory.c" \
     "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
     "$root/build/ziran-toolchain/libziran.a" -lm \
     -o "$work/test"

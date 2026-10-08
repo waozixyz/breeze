@@ -1,6 +1,7 @@
 #include "screens/elist_screen.h"
 #include "module_host.h"
 #include "lists_visibility.h"
+#include "diary_types.h"
 
 #include <assert.h>
 #include <string.h>
@@ -11,6 +12,53 @@ static int save_succeeds = 1;
 static int sync_calls;
 static int saved_done;
 static char saved_comment[ELIST_COMMENT_SIZE];
+
+/* The Lists fixture must never invoke another app's private file effects. */
+DiaryFileResult
+diary_store_DiaryStoreRead(String name)
+{
+    (void)name;
+    assert(!"Lists requested Diary read access");
+    return (DiaryFileResult){0};
+}
+
+bool
+diary_store_DiaryStoreSave(String name, String data)
+{
+    (void)name;
+    (void)data;
+    assert(!"Lists requested Diary write access");
+    return false;
+}
+
+String
+diary_store_DiaryStoreClock(void)
+{
+    assert(!"Lists requested Diary clock access");
+    return StringLiteral("");
+}
+
+String
+diary_store_DiaryStorePreview(String name)
+{
+    (void)name;
+    assert(!"Lists requested Diary preview access");
+    return StringLiteral("");
+}
+
+String
+diary_store_DiaryImageFormat(String data)
+{
+    (void)data;
+    assert(!"Lists requested Diary image access");
+    return StringLiteral("");
+}
+
+void
+diary_store_DiaryStoreClose(void)
+{
+    /* Closing the shared module host is allowed; no Diary was opened. */
+}
 
 
 int32_t
