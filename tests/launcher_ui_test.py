@@ -175,14 +175,21 @@ with contextlib.ExitStack() as stack:
                            "apps_last_update_check": 1900000000,
                            "launcher_favorite_count": 2, "launcher_favorite_0": 1,
                            "launcher_favorite_1": 2})
-            apps_point = (330, height - 42) if mobile else (44, height - 144)
+            apps_point = (330, height - 42) if mobile else (44, 228)
             pinned_first = (100, 228) if mobile else (170, 228)
             more_first = (100, 364) if mobile else (170, 364)
             with application(profile, name, width, height) as (window, log):
                 page = capture(window, name + "-practice")
                 if not mobile:
                     assert page.getpixel((3, height - 80)) == page.getpixel((width - 3, height - 80)), "Navigation and page use different default palettes"
+                    before = log.read_text()
                     click(window, 44, height - 60)
+                    assert log.read_text().count("ROUTE switch") == before.count("ROUTE switch"), "Profile remains hard-pinned at the bottom"
+                    # Profile is an Apps action on both desktop and mobile.
+                    click(window, *apps_point)
+                    capture(window, name + "-profile-entry")
+                    click(window, 170, height - 36)
+                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Apps did not open Profile"
                     capture(window, name + "-profile")
                     before = log.read_text()
                     click(window, 110, 28)
@@ -206,14 +213,38 @@ with contextlib.ExitStack() as stack:
                 assert favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it"
                 capture(window, name + "-dock-placed")
                 if not mobile:
-                    # Footer actions remain at the bottom after favorites change.
-                    click(window, 44, height - 60)
+                    # Profile stays in Apps after favorite changes.
+                    click(window, 170, height - 36)
+                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Favorite changes hid Profile"
                     assert not "frame rejected" in log.read_text()
                     capture(window, name + "-profile-after-drag")
                 else:
-                    key(window, "Escape")
+                    click(window, 100, height - 120)
+                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Mobile Apps did not open Profile"
+                    capture(window, name + "-profile")
             with application(profile, name + "-restart", width, height) as (window, log):
                 assert favorites(profile) == [11, 1, 2], "Restart changed personal pins"
                 assert settings(profile)["language_setup_done"] == "1"
                 capture(window, name + "-preserved-pins")
+            if not mobile:
+                # Overflow must leave Apps reachable on either side.
+                all_favorites = [12, 1, 2, 3, 11]
+                for placement, side in ((1, "left"), (3, "right")):
+                    seed(profile, {"navigation_placement": placement,
+                                   "launcher_favorite_count": len(all_favorites)} |
+                         {f"launcher_favorite_{i}": route for i, route in enumerate(all_favorites)})
+                    with application(profile, name + "-short-" + side, width, 500) as (window, log):
+                        capture(window, name + "-short-" + side)
+                        click(window, 44 if placement == 1 else width - 44, 440)
+                        capture(window, name + "-short-apps-" + side)
+                        click(window, 170 if placement == 1 else width - 330, 464)
+                        assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Overflow hid Profile in Apps"
+                        assert favorites(profile) == all_favorites
+                seed(profile, {"navigation_placement": 1, "launcher_favorite_count": 0})
+                with application(profile, name + "-empty", width, height) as (window, log):
+                    capture(window, name + "-empty")
+                    click(window, 44, 68)
+                    click(window, 170, height - 36)
+                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Empty favorites hid Apps or Profile"
+                    assert favorites(profile) == []
     print("Launcher: first-run language, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")

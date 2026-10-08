@@ -1,5 +1,6 @@
 #import "navigation_bar_props"
 #import "navigation_bar_widget"
+#import "navigation_bar"
 #import, file "../app/app_launcher.zi";
 #import, file "../app/app_settings.zi";
 #import "button_props"
@@ -166,7 +167,7 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
     props.draggable = true
     props.dragging = app.launcher_drag_moving
     props.drag_position = app.launcher_drag_pointer
-    props.footer_count = ifx desktop then 2 else 1
+    props.footer_count = 1
     props.bounds = Rectangle.{0.0,
         cast(float32)(app.ui.view_height - AppScale(84)),
         cast(float32)app.ui.view_width, cast(float32)AppScale(84)}
@@ -181,7 +182,7 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
         props.bounds = Rectangle.{cast(float32)x, 0.0,
             cast(float32)dock_width, cast(float32)app.ui.view_height}
     }
-    routes: [LAUNCHER_APP_COUNT + 2]s32
+    routes: [LAUNCHER_APP_COUNT + 1]s32
     count: s32 = 0
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
         route := app.launcher_favorites[index]
@@ -193,10 +194,19 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
     routes[count] = APP_NAV_ROUTE_APPS
     count += 1
     if desktop {
-        routes[count] = APP_NAV_ROUTE_PROFILE
-        count += 1
+        PaintRoundedFill(app.ui.session, -1, props.bounds, 0.0, 4,
+            StyleTokenColor("launcher-canvas"))
+        // Keep Apps beside the favorites instead of across an empty rail.
+        // When they overflow, the footer remains reachable while pins scroll.
+        layout := NavigationBarDockLayoutFor(props.bounds, true, count,
+            props.footer_count, props.scale)
+        extra_space := layout.scroll_bounds.height -
+        cast(float32)layout.content_extent
+        if extra_space > 0.0 {
+            props.bounds.height -= extra_space
+        }
     }
-    items: [LAUNCHER_APP_COUNT + 2]NavigationBarItem
+    items: [LAUNCHER_APP_COUNT + 1]NavigationBarItem
     for index: cast(s32)0..count - 1 {
         route := routes[index]
         items[index].key = cast(u64)(6600 + route)
@@ -205,9 +215,6 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
         items[index].image = bottom_nav_route_image(route)
         items[index].icon_shape = app_nav_route_shape(route)
         items[index].active = !app.launcher_open && bottom_nav_route_active(app, route)
-        if route == APP_NAV_ROUTE_PROFILE {
-            items[index].active = !app.launcher_open && app.breathing.screen == ScreenProfile
-        }
         items[index].disabled = app.modal.active != 0 ||
         app.blocked_input_frame == app.breathing.frame
         if route == APP_NAV_ROUTE_APPS {

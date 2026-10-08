@@ -121,8 +121,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
 
     with application("gestures") as (window, log):
         capture(window, "initial")
-        click(window, 44, 316)  # Apps in the compact dock.
-        click(window, 220, 684)  # Settings in the drawer.
+        click(window, 44, 228)  # Apps follows the two saved favorites.
+        click(window, 330, 684)  # Settings beside Profile in the drawer.
         capture(window, "settings-hub")
         click(window, 200, 325)  # Appearance.
         before = capture(window, "appearance")

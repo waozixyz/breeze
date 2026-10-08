@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.20] - 2026-10-08
+### Changed
+- Keep Apps beside your desktop favorites without a large empty gap.
+- Open Profile beside Settings in Apps, without a fixed desktop Profile shortcut.
+
 ## [2.1.19] - 2026-10-08
 ### Added
 - Create or restore an account in Telegram's Mini App, with an encrypted recovery backup saved on your device.
