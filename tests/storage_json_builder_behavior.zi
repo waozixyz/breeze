@@ -1,4 +1,5 @@
 #import, file "../src/storage/json.zi";
+#import "byte_text_linux"
 
 CStringEquals :: (actual: *u8, expected: string) -> bool {
     if actual == null {
@@ -57,6 +58,28 @@ Answer :: () -> s32 {
     if json.ok == 0 ||
         !CStringEquals(json.data, "\"2000-01-01T00:00:00Z\"") {
         return 6
+    }
+    storage_json_builder_free(*json)
+
+    // Encrypted photo chunks exceed the old 4095-byte temporary buffer.
+    large: [5000]u8
+    for index: cast(s32)0..cast(s32)4999 {
+        large[index] = cast(u8)120
+    }
+    json.ok = 1
+    storage_json_builder_key_value_text(*json, "ciphertext", TextFromBytes(large[:]))
+    if json.ok == 0 || json.len != 5015 || json.data[13] != cast(u8)34 ||
+    json.data[14] != cast(u8)120 || json.data[5013] != cast(u8)120 ||
+    json.data[5014] != cast(u8)34 || json.data[5015] != cast(u8)0 {
+        return 7
+    }
+    storage_json_builder_free(*json)
+
+    binary: [3]u8 = .[97, 0, 98]
+    json.ok = 1
+    storage_json_builder_key_value_text(*json, "binary", TextFromBytes(binary[:]))
+    if json.ok == 0 || !CStringEquals(json.data, "\"binary\":\"a\\u0000b\"") {
+        return 8
     }
     storage_json_builder_free(*json)
     return 0

@@ -171,4 +171,14 @@ mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
     's/^PreviousDatabaseEntry :: .*/PreviousDatabaseEntry :: "inbe-data\/inbe.db"/' \
     HistoricalEntryStaysImportable
 
+mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
+    's/^LumiPrivateCollection :: .*/LumiPrivateCollection :: "private.inbe.v1.cells"/' \
+    LumiCollectionIsIsolated
+mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
+    's/^LumiPrivateKeyContext :: .*/LumiPrivateKeyContext :: "breathing-private-record-key-v1"/' \
+    LumiKeyIsSeparate
+mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
+    's/^LumiPrivateKeyID :: .*/LumiPrivateKeyID :: "breathing-main-1"/' \
+    LumiKeyIsSeparate
+
 echo "law mutation test passed"

@@ -9,6 +9,10 @@
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/session_mood.zi";
 #import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/json.zi";
+#import, file "../src/storage/storage_layout.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
 #import, file "../src/storage/storage_sessions.zi";
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_memory.zi";
@@ -42,20 +46,20 @@ set_account :: () {
     storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
 }
 
-payload_text: TextBuffer;
+payload_text: string;
 
 // Builds the sync payload into `payload_text`; false when none is produced.
 build_payload :: () -> bool {
     payload := storage_build_sync_payload_json("test-public-id", "test-public-key")
     if payload == null { return false }
-    payload_text = TextBuffer.{}
-    append(*payload_text, TextFromCString(payload))
+    PackageFree(payload_text)
+    payload_text = PackageText(TextFromCString(payload), "")
     storage_free_sync_payload_json(payload)
     return true
 }
 
 payload :: () -> string {
-    return TextFromCString(*payload_text.bytes[0])
+    return payload_text
 }
 
 record_count :: () -> s32 {
@@ -98,20 +102,22 @@ records_array :: () -> string {
     return text[begin:end]
 }
 
-response_buffer: TextBuffer;
+response_buffer: StorageJsonBuilder;
 
 // A v6 server response carrying `records` for a device to apply.
 response_with :: (version: s32, records: string) -> string {
     part: [24]u8
-    response_buffer = TextBuffer.{}
-    append(*response_buffer, "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":")
-    append(*response_buffer, FormatInteger(cast(s64)version, part[:]))
-    append(*response_buffer, ",\"server_clock\":")
-    append(*response_buffer, FormatInteger(cast(s64)version, part[:]))
-    append(*response_buffer, ",\"changes\":{\"encrypted_records\":")
-    append(*response_buffer, records)
-    append(*response_buffer, "}}")
-    return TextFromCString(*response_buffer.bytes[0])
+    storage_json_builder_free(*response_buffer)
+    response_buffer = StorageJsonBuilder.{}
+    response_buffer.ok = 1
+    storage_json_builder_append_text(*response_buffer, "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":")
+    storage_json_builder_append_text(*response_buffer, FormatInteger(cast(s64)version, part[:]))
+    storage_json_builder_append_text(*response_buffer, ",\"server_clock\":")
+    storage_json_builder_append_text(*response_buffer, FormatInteger(cast(s64)version, part[:]))
+    storage_json_builder_append_text(*response_buffer, ",\"changes\":{\"encrypted_records\":")
+    storage_json_builder_append_text(*response_buffer, records)
+    storage_json_builder_append_text(*response_buffer, "}}")
+    return AppTextFromCString(response_buffer.data, cast(s32)(response_buffer.len + 1))
 }
 
 empty_response :: (version: s32) -> string {
@@ -1076,6 +1082,274 @@ test_review_completion_changes :: () {
     storage_close()
 }
 
+// Real encrypted fixtures for the historical owner collection and isolated
+// Lumi collection. They use the same account seed on two synthetic devices.
+cell_record_id_fixture :: (collection: string, key_id: string, record_id: string, cell_key: string) -> string {
+    key: [32]u8
+    fixture: StorageJsonBuilder
+    fixture.ok = 1
+    if storage_private_collection_key(collection, key_id, *key[0]) == 0 {
+        return ""
+    }
+    storage_json_builder_append_text(*fixture, "[")
+    ok := storage_append_encrypted_record_json(*fixture, *key[0], collection,
+        key_id, record_id, "cell_record", cell_key, 0, now_seconds(), 0)
+    SyncCryptoWipe(*key[0], 32)
+    storage_json_builder_append_text(*fixture, "]")
+    result: string = ""
+    if ok != 0 && fixture.ok != 0 {
+        result = PackageText(AppTextFromCString(fixture.data, cast(s32)(fixture.len + 1)), "")
+    }
+    storage_json_builder_free(*fixture)
+    return result
+}
+
+cell_record_fixture :: (collection: string, key_id: string, cell_key: string) -> string {
+    return cell_record_id_fixture(collection, key_id, cell_key, cell_key)
+}
+
+test_cell_record_identity :: () {
+    source := make_root("sync-cell-identity-source")
+    target := make_root("sync-cell-identity-target")
+    outer := "cell.lumi.message.outer"
+    inner := "cell.lumi.message.inner"
+    check_true("init record identity source", storage_init(source) != 0)
+    set_account()
+    check_true("seed encrypted cell identity fixture", CellRecordWrite(inner, "Bound history"))
+    wrong_lumi := cell_record_id_fixture(LumiPrivateCollection, LumiPrivateKeyID, outer, inner)
+    wrong_legacy := cell_record_id_fixture(LegacyPrivateCellsCollection, STORAGE_SYNC_RECORD_KEY_ID, outer, inner)
+    correct_lumi := cell_record_fixture(LumiPrivateCollection, LumiPrivateKeyID, inner)
+    defer {
+        PackageFree(wrong_lumi)
+        PackageFree(wrong_legacy)
+        PackageFree(correct_lumi)
+    }
+    storage_close()
+    check_true("init record identity target", storage_init(target) != 0)
+    set_account()
+    check_true("authenticated Lumi outer ID cannot write different embedded key",
+        storage_apply_sync_response_json(response_with(1, wrong_lumi)) == 0)
+    check_true("authenticated legacy outer ID cannot write different embedded key",
+        storage_apply_sync_response_json(response_with(1, wrong_legacy)) == 0)
+    check_int("identity mismatch changes no cell", read_db_count("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.*'"), 0)
+    check_int("identity mismatch queues no record", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 0)
+    check_int("identity mismatch preserves cursor", cast(s32)storage_meta_int64("sync_last_server_version", 0), 0)
+    check_true("matching authenticated ID still restores",
+        storage_apply_sync_response_json(response_with(1, correct_lumi)) != 0)
+    check_true("matching record data survives", storage_get_setting_text(inner) == "Bound history")
+    storage_close()
+}
+
+test_cell_plaintext_single_record :: () {
+    root := make_root("sync-cell-single-record")
+    check_true("init single cell record fixture", storage_init(root) != 0)
+    set_account()
+    record_id := "cell.lumi.message.bound"
+    cases: [11]string = .[
+        "{\"key\":\"cell.lumi.message.other\",\"value\":\"wrong key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"updated_at\":\"2026-10-07T00:00:00Z\"},{\"key\":\"cell.lumi.message.other\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"key\":\"cell.lumi.message.other\",\"value\":\"duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"\\u006bey\":\"cell.lumi.message.other\",\"value\":\"escaped duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"timestamp ambiguity\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"updated_at\":\"2026-10-08T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":{\"nested\":\"not a string\"},\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"missing timestamp\"}",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"unknown field\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"extra\":1}",
+        "[{\"key\":\"cell.lumi.message.bound\",\"value\":\"nested record\",\"updated_at\":\"2026-10-07T00:00:00Z\"}]",
+        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"trailing object\",\"updated_at\":\"2026-10-07T00:00:00Z\"}{}"
+    ]
+    for plaintext: cases {
+        check_true("malformed single-cell plaintext rejected before storage",
+            storage_apply_decrypted_record(LumiPrivateCollection, record_id, plaintext) == 0)
+    }
+    check_true("cell record requires authenticated outer ID",
+        storage_apply_decrypted_record(LumiPrivateCollection, "", "{\"key\":\"cell.lumi.message.bound\",\"value\":\"unbound\",\"updated_at\":\"2026-10-07T00:00:00Z\"}") == 0)
+    check_true("matching outer ID cannot admit Diary to Lumi",
+        storage_apply_decrypted_record(LumiPrivateCollection, "cell.diary.file.bound", "{\"key\":\"cell.diary.file.bound\",\"value\":\"wrong scope\",\"updated_at\":\"2026-10-07T00:00:00Z\"}") == 0)
+    check_int("malformed plaintext changes no cell", read_db_count("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.*'"), 0)
+    check_int("malformed plaintext queues no record", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 0)
+    check_true("one matching cell record remains valid",
+        storage_apply_decrypted_record(LumiPrivateCollection, record_id, "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one valid record\",\"updated_at\":\"2026-10-07T00:00:00Z\"}") != 0)
+    check_true("valid single record data applied", storage_get_setting_text(record_id) == "one valid record")
+    storage_close()
+}
+
+test_lumi_collection_keys :: () {
+    root := make_root("sync-lumi-keys")
+    check_true("init isolated key device", storage_init(root) != 0)
+    legacy: [32]u8
+    lumi: [32]u8
+    legacy_hex: [65]u8
+    lumi_hex: [65]u8
+    check_true("Lumi key needs owner material",
+        storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *lumi[0]) == 0)
+    set_account()
+    check_true("legacy cell key remains available to owner",
+        storage_private_collection_key(LegacyPrivateCellsCollection, STORAGE_SYNC_RECORD_KEY_ID, *legacy[0]) != 0)
+    check_true("separate Lumi key is available to owner",
+        storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *lumi[0]) != 0)
+    unused SyncCryptoBytesToHex(*legacy[0], 32, *legacy_hex[0], 65)
+    unused SyncCryptoBytesToHex(*lumi[0], 32, *lumi_hex[0], 65)
+    check_true("Lumi key differs from global legacy key",
+        TextFromCString(*legacy_hex[0]) != TextFromCString(*lumi_hex[0]))
+    check_true("legacy generation is rejected for Lumi",
+        storage_private_collection_key(LumiPrivateCollection, STORAGE_SYNC_RECORD_KEY_ID, *lumi[0]) == 0)
+    check_true("Lumi generation is rejected for old cells",
+        storage_private_collection_key(LegacyPrivateCellsCollection, LumiPrivateKeyID, *legacy[0]) == 0)
+    check_true("Lumi generation is rejected for session history",
+        storage_private_collection_key("private.inbe.v1.sessions", LumiPrivateKeyID, *legacy[0]) == 0)
+    check_true("unapproved generation is rejected",
+        storage_private_collection_key(LumiPrivateCollection, "inbe-lumi-2", *lumi[0]) == 0)
+    check_true("legacy session key remains available",
+        storage_private_collection_key("private.inbe.v1.sessions", STORAGE_SYNC_RECORD_KEY_ID, *legacy[0]) != 0)
+    SyncCryptoWipe(*legacy[0], 32)
+    SyncCryptoWipe(*lumi[0], 32)
+    SyncCryptoWipe(*legacy_hex[0], 65)
+    SyncCryptoWipe(*lumi_hex[0], 65)
+    storage_close()
+}
+
+test_lumi_collection_migration :: () {
+    root := make_root("sync-lumi-older-layout")
+    check_true("init old collection fixture", storage_init(root) != 0)
+    set_account()
+    check_true("seed old Lumi history", CellRecordWrite("cell.lumi.message.old", "{\"text\":\"Earlier chat\",\"time\":1,\"user\":1}"))
+    check_true("seed old Diary history", CellRecordWrite("cell.diary.file.old", "Earlier diary"))
+    check_true("seed old feedback history", CellRecordWrite("cell.feedback.message.old", "Earlier feedback"))
+    storage_set_setting_text("lumi_pending_action", "preserved pending command")
+    storage_close()
+    // This fixture has the pre-upgrade sync layout: the v1 upload/backfill
+    // markers are complete and Lumi has no v2 marker or queued copy.
+    raw_exec(root, "DELETE FROM sync_outbox;DELETE FROM meta WHERE key='sync_lumi_collection_v2_done';INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1'),('sync_backfill_v2_done','1');INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('cell_record','cell.diary.file.old',0,123);INSERT INTO settings(user_id,key,value,updated_at) SELECT id,'cell.lumi.INVALID','ignored malformed old key',1 FROM users LIMIT 1;")
+    check_true("upgrade old collection fixture", storage_init(root) != 0)
+    check_int("Lumi migration marker saved", cast(s32)storage_meta_int64(LumiCollectionMigrationKey, 0), 1)
+    check_int("only valid old Lumi history queued", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id GLOB 'cell.lumi.*'"), 1)
+    check_int("existing Diary pending upload preserved", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.diary.file.old' AND queued_at=123"), 1)
+    check_true("old Lumi plaintext remains intact", storage_get_setting_text("cell.lumi.message.old") == "{\"text\":\"Earlier chat\",\"time\":1,\"user\":1}")
+    LumiStoreReset()
+    check_int("old conversation remains loadable after migration", LumiStoreCount(), 1)
+    check_true("old conversation text remains loadable", LumiStoreRow(0).text == "Earlier chat")
+    check_true("old Diary remains intact", storage_get_setting_text("cell.diary.file.old") == "Earlier diary")
+    check_true("old feedback remains intact", storage_get_setting_text("cell.feedback.message.old") == "Earlier feedback")
+    check_true("pending command remains intact", storage_get_setting_text("lumi_pending_action") == "preserved pending command")
+    queued_seq := read_db_count("SELECT MAX(seq) FROM sync_outbox")
+    check_true("new-key copies can be uploaded", build_payload())
+    check_true("migration payload uses Lumi v2", contains(payload(), "private.inbe.v2.lumi") && contains(payload(), "inbe-lumi-1"))
+    check_true("migration keeps Diary in owner collection", contains(payload(), "private.inbe.v1.cells") && contains(payload(), "breathing-main-1"))
+    storage_close()
+    check_true("restart migrated device", storage_init(root) != 0)
+    LumiStoreReset()
+    check_int("old conversation remains loadable after restart", LumiStoreCount(), 1)
+    check_int("restart does not change queued copies", read_db_count("SELECT MAX(seq) FROM sync_outbox"), queued_seq)
+    check_int("restart does not duplicate migration", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 2)
+    exec_db_sql("DELETE FROM sync_outbox;")
+    storage_close()
+    check_true("restart after migration acknowledgement", storage_init(root) != 0)
+    check_int("acknowledged migration stays complete", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 0)
+    storage_close()
+}
+
+test_lumi_collection_migration_rollback :: () {
+    root := make_root("sync-lumi-migration-rollback")
+    check_true("init interrupted migration fixture", storage_init(root) != 0)
+    set_account()
+    check_true("seed interrupted old Lumi", CellRecordWrite("cell.lumi.message.interrupted", "Older history"))
+    exec_db_sql("DELETE FROM sync_outbox;CREATE TRIGGER block_lumi_marker BEFORE INSERT ON meta WHEN NEW.key='sync_lumi_collection_v2_done' BEGIN SELECT RAISE(ABORT,'synthetic marker failure');END;")
+    check_true("migration reports marker failure", storage_migrate_lumi_collection() == 0)
+    check_int("failed migration rolls back queued copies", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 0)
+    check_int("failed migration does not save marker", cast(s32)storage_meta_int64(LumiCollectionMigrationKey, 0), 0)
+    check_true("failed migration retains old history", storage_get_setting_text("cell.lumi.message.interrupted") == "Older history")
+    exec_db_sql("DROP TRIGGER block_lumi_marker;")
+    storage_close()
+    check_true("restart retries interrupted migration", storage_init(root) != 0)
+    check_int("retried migration queues one copy", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 1)
+    check_int("retried migration saves marker", cast(s32)storage_meta_int64(LumiCollectionMigrationKey, 0), 1)
+    storage_close()
+}
+
+test_legacy_cells_and_lumi_scope :: () {
+    first := make_root("sync-lumi-legacy-source")
+    second := make_root("sync-lumi-legacy-restore")
+    check_true("init old encrypted record source", storage_init(first) != 0)
+    set_account()
+    check_true("seed historical combined Lumi", CellRecordWrite("cell.lumi.message.historical", "Historical chat"))
+    check_true("seed historical combined Diary", CellRecordWrite("cell.diary.file.historical", "Historical diary"))
+    check_true("seed historical combined feedback", CellRecordWrite("cell.feedback.message.historical", "Historical feedback"))
+    legacy_lumi := cell_record_fixture(LegacyPrivateCellsCollection, STORAGE_SYNC_RECORD_KEY_ID, "cell.lumi.message.historical")
+    legacy_diary := cell_record_fixture(LegacyPrivateCellsCollection, STORAGE_SYNC_RECORD_KEY_ID, "cell.diary.file.historical")
+    legacy_feedback := cell_record_fixture(LegacyPrivateCellsCollection, STORAGE_SYNC_RECORD_KEY_ID, "cell.feedback.message.historical")
+    forbidden_diary := cell_record_fixture(LumiPrivateCollection, LumiPrivateKeyID, "cell.diary.file.historical")
+    forbidden_feedback := cell_record_fixture(LumiPrivateCollection, LumiPrivateKeyID, "cell.feedback.message.historical")
+    defer {
+        PackageFree(legacy_lumi)
+        PackageFree(legacy_diary)
+        PackageFree(legacy_feedback)
+        PackageFree(forbidden_diary)
+        PackageFree(forbidden_feedback)
+    }
+    storage_close()
+    check_true("init historical restore device", storage_init(second) != 0)
+    set_account()
+    check_true("legacy global-key Lumi remains decryptable", storage_apply_sync_response_json(response_with(1, legacy_lumi)) != 0)
+    check_true("legacy global-key Diary remains decryptable", storage_apply_sync_response_json(response_with(2, legacy_diary)) != 0)
+    check_true("legacy global-key feedback remains decryptable", storage_apply_sync_response_json(response_with(3, legacy_feedback)) != 0)
+    check_true("legacy Lumi restored intact", storage_get_setting_text("cell.lumi.message.historical") == "Historical chat")
+    check_true("legacy Diary restored intact", storage_get_setting_text("cell.diary.file.historical") == "Historical diary")
+    check_true("legacy feedback restored intact", storage_get_setting_text("cell.feedback.message.historical") == "Historical feedback")
+    check_int("late legacy Lumi queues a new-key copy", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.lumi.message.historical'"), 1)
+    check_true("migration payload after legacy restore builds", build_payload())
+    check_true("legacy Lumi reuploads only to its isolated collection", contains(payload(), "private.inbe.v2.lumi") && !contains(payload(), "private.inbe.v1.cells"))
+    check_true("cryptographically valid Diary is rejected in Lumi collection", storage_apply_sync_response_json(response_with(4, forbidden_diary)) == 0)
+    check_true("cryptographically valid feedback is rejected in Lumi collection", storage_apply_sync_response_json(response_with(4, forbidden_feedback)) == 0)
+    check_int("rejected foreign records do not advance sync cursor", cast(s32)storage_meta_int64("sync_last_server_version", 0), 3)
+    storage_close()
+}
+
+test_cell_records_round_trip :: () {
+    first := make_root("sync-cells-a")
+    second := make_root("sync-cells-b")
+    check_true("init cell device a", storage_init(first) != 0)
+    set_account()
+    LumiStoreReset()
+    LumiStoreAppend("Private conversation 水", true)
+    LumiStoreAppend("Private reply", false)
+    check_true("save private diary", DiaryRecordSave("2026-10-07.json", "{\"text\":\"Private diary 水\"}"))
+    photo: [4097]u8
+    for index: cast(s32)0..cast(s32)4096 {
+        photo[index] = cast(u8)(index % 256)
+    }
+    check_true("save binary diary photo", DiaryRecordSave("photo-test.png", TextFromBytes(photo[:])))
+    check_true("cell payload builds", build_payload())
+    check_true("Lumi uses separate encrypted collection", contains(payload(), "private.inbe.v2.lumi"))
+    check_true("Diary retains legacy owner collection", contains(payload(), "private.inbe.v1.cells"))
+    check_true("private chat is absent on wire", !contains(payload(), "Private conversation"))
+    check_true("private diary is absent on wire", !contains(payload(), "Private diary"))
+    records := records_array()
+    check_true("photo fixture exceeds the old bounded payload buffer", payload().count > 16384)
+    check_true("full cell payload is valid JSON", storage_json_valid(payload()) != 0)
+    check_true("cell record array is valid JSON", storage_json_valid(records) != 0)
+    storage_close()
+
+    check_true("init cell device b", storage_init(second) != 0)
+    set_account()
+    response := response_with(5, records)
+    check_true("full cell response is valid JSON", storage_json_valid(response) != 0)
+    check_true("encrypted cell restore", storage_apply_sync_response_json(response) != 0)
+    LumiStoreReset()
+    check_int("conversation restored", LumiStoreCount(), 2)
+    check_true("chat text survives", LumiStoreRow(0).text == "Private conversation 水")
+    diary := DiaryRecordRead("2026-10-07.json")
+    check_true("diary text survives", diary == "{\"text\":\"Private diary 水\"}")
+    PackageFree(diary)
+    restored := DiaryRecordRead("photo-test.png")
+    check_true("binary photo survives", restored == TextFromBytes(photo[:]))
+    PackageFree(restored)
+    check_int("restore does not requeue cells", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record'"), 0)
+    check_true("cell collection cannot overwrite signing key",
+        storage_apply_decrypted_record("private.inbe.v1.cells", "sync_private_key", "{\"key\":\"sync_private_key\",\"value\":\"forged\",\"updated_at\":\"2026-10-07T00:00:00Z\"}") == 0)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -1093,6 +1367,12 @@ Check :: () -> s32 {
     test_habit_name_repair_runs_once()
     test_records_round_trip_between_devices()
     test_cell_records_round_trip()
+    test_cell_record_identity()
+    test_cell_plaintext_single_record()
+    test_lumi_collection_keys()
+    test_lumi_collection_migration()
+    test_lumi_collection_migration_rollback()
+    test_legacy_cells_and_lumi_scope()
     test_deletion_round_trip()
     test_counter_counts_apply()
     test_queued_edit_beats_equal_time_remote()

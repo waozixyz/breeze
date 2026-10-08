@@ -45,3 +45,25 @@ meditation audio stay inside their respective profile directories. `PREFIX`
 can be set explicitly for a system installation; it does not change the
 production data location. Debug and production windows have separate desktop
 identities and single-instance locks.
+
+## Private Lumi sync collection
+
+New Lumi records use `private.inbe.v2.lumi` and key generation `inbe-lumi-1`.
+Only validated `cell.lumi.*` records belong to that collection. Its key is
+HMAC-SHA-256 of the owner's full ML-DSA private key with the distinct context
+`inbe-private-lumi-record-key-v2`, using the existing record encryption format.
+Diary, feedback, sessions and other private records retain their existing
+owner-only collections and legacy key context. A Lumi delegate must receive
+only the approved Lumi key; the legacy global key and combined
+`private.inbe.v1.cells` collection must never be delegated.
+
+Opening an owner profile queues existing Lumi settings for upload under the
+new collection and saves `sync_lumi_collection_v2_done` in the same SQLite
+savepoint. Existing settings, history and pending outbox entries are retained.
+The marker makes restarts idempotent; a failed marker write rolls back the
+queued copies so a restart can retry. A legacy Lumi record received later is
+still decrypted with the old key, preserved locally, and queued under the new
+key. The old combined collection remains readable by the owner so historical
+Diary and feedback records continue to restore. Grant revocation cannot erase
+plaintext or keys already received by a delegate; new grants and key generations
+must be approved separately.

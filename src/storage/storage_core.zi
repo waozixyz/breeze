@@ -16,6 +16,7 @@ Scan :: #import "json_scan"
 #import, file "storage_habit_materialize.zi";
 #import, file "sync_sql.zi";
 #import, file "cell_records.zi";
+#import, file "storage_layout.zi";
 #import, file "export_sql.zi";
 #import, file "sync_crypto.zi";
 #import, file "sync_crypto_hmac.zi";
@@ -351,6 +352,39 @@ storage_enqueue_all_sync_state :: () {
     if owns_transaction != 0 {
         exec_sql("COMMIT")
     }
+}
+
+#program_export
+// The outbox and marker commit together. The old settings and server history
+// remain intact; new writes and queued copies use the separate Lumi scope.
+storage_migrate_lumi_collection :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    if storage_meta_int64(LumiCollectionMigrationKey, 0) != 0 ||
+    storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY).count == 0 {
+        return 1
+    }
+    if exec_sql("SAVEPOINT inbe_lumi_collection_migration") == 0 {
+        return 0
+    }
+    queued := exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.lumi.*' AND length(key) BETWEEN 12 AND 180 AND key NOT GLOB '*[^a-z0-9.-]*' ON CONFLICT(entity_type,entity_id,local_date) DO NOTHING")
+    marked: s32 = 0
+    if queued != 0 {
+        marked = exec_sql("INSERT INTO meta(key,value) VALUES('sync_lumi_collection_v2_done','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    }
+    if queued == 0 || marked == 0 {
+        unused exec_sql("ROLLBACK TO inbe_lumi_collection_migration")
+        unused exec_sql("RELEASE inbe_lumi_collection_migration")
+        return 0
+    }
+    if exec_sql("RELEASE inbe_lumi_collection_migration") == 0 {
+        unused exec_sql("ROLLBACK TO inbe_lumi_collection_migration")
+        unused exec_sql("RELEASE inbe_lumi_collection_migration")
+        return 0
+    }
+    storage_schedule_persist()
+    return 1
 }
 
 #program_export
@@ -1189,9 +1223,15 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
     }
 }
 
-storage_encrypted_collection_for_entity :: (entity_type: string) -> string {
+storage_encrypted_collection_for_entity :: (entity_type: string, entity_id: string) -> string {
     if entity_type == "cell_record" {
-        return "private.inbe.v1.cells"
+        if LumiCellRecordValid(entity_id) {
+            return LumiPrivateCollection
+        }
+        if !CellRecordValid(entity_id) {
+            return ""
+        }
+        return LegacyPrivateCellsCollection
     }
     if entity_type == "app_preference" {
         return "private.inbe.v1.app-preferences"
@@ -1266,6 +1306,34 @@ storage_private_record_key :: (out: *u8) -> s32 {
         out)
 }
 
+// The collection and generation must agree. In particular, no legacy key can
+// decrypt Lumi v2, and the Lumi key cannot decrypt Diary, feedback or sessions.
+#program_export
+storage_private_collection_key :: (collection: string, key_id: string, out: *u8) -> s32 {
+    if out == null {
+        return 0
+    }
+    SyncCryptoWipe(out, 32)
+    if collection == LumiPrivateCollection {
+        if key_id != LumiPrivateKeyID {
+            return 0
+        }
+        return storage_private_record_key_for_context(LumiPrivateKeyContext, out)
+    }
+    if key_id != STORAGE_SYNC_RECORD_KEY_ID ||
+    storage_decrypted_array_name(collection).count == 0 {
+        return 0
+    }
+    return storage_private_record_key(out)
+}
+
+storage_encrypted_collection_key_id :: (collection: string) -> string {
+    if collection == LumiPrivateCollection {
+        return LumiPrivateKeyID
+    }
+    return STORAGE_SYNC_RECORD_KEY_ID
+}
+
 storage_encrypted_record_cleanup :: (plain: *StorageJsonBuilder, aad: *StorageJsonBuilder,
     sealed: *u8, sealed_hex: *u8, ok: s32) -> s32 {
     storage_json_builder_free(plain)
@@ -1275,7 +1343,7 @@ storage_encrypted_record_cleanup :: (plain: *StorageJsonBuilder, aad: *StorageJs
     return ok
 }
 
-storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
+storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
     plain: StorageJsonBuilder
     aad: StorageJsonBuilder
     nonce: [12] u8
@@ -1285,7 +1353,7 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     content_hash: [SYNC_PUBLIC_ID_HEX_SIZE] u8
     sealed_len: s64
     ok: s32 = 0
-    if collection.count == 0 || record_id.count == 0 {
+    if collection.count == 0 || key_id.count == 0 || record_id.count == 0 {
         return 0
     }
     plain.ok = 1
@@ -1305,7 +1373,7 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     storage_json_builder_append_text(*aad, "\n")
     storage_json_builder_append_text(*aad, record_id)
     storage_json_builder_append_text(*aad, "\n")
-    storage_json_builder_append_text(*aad, STORAGE_SYNC_RECORD_KEY_ID)
+    storage_json_builder_append_text(*aad, key_id)
     if aad.ok == 0 || aad.data == null {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
@@ -1325,7 +1393,7 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "id", record_id)
     storage_json_builder_append_text(json, ",")
-    storage_json_builder_key_value_text(json, "key_id", STORAGE_SYNC_RECORD_KEY_ID)
+    storage_json_builder_key_value_text(json, "key_id", key_id)
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "nonce", AppTextFromCString(*nonce_hex[0], 25))
     storage_json_builder_append_text(json, ",")
@@ -1347,12 +1415,10 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
 storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq: s64) {
     stmt: *void = null
     key: [32] u8
-    has_key: s32
     first: s32 = 1
     step_result: s32 = SQLITE_DONE
     storage_json_builder_append_text(json, "\"encrypted_records\":[")
-    has_key = storage_private_record_key(*key[0])
-    if has_key == 0 || storage_db_handle() == null {
+    if storage_db_handle() == null {
         json.ok = 0
     } else {
         sql_cx13: [98] u8
@@ -1368,7 +1434,8 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                 entity_id: string = AppTextFromCString(SqliteColumnText(stmt, 2), 8192)
                 local_date: s32 = sqlite3_column_int(stmt, 3)
                 queued_at: s64 = SqliteColumnInt64(stmt, 4)
-                collection: string = storage_encrypted_collection_for_entity(entity_type)
+                collection: string = storage_encrypted_collection_for_entity(entity_type, entity_id)
+                key_id: string = storage_encrypted_collection_key_id(collection)
                 is_delete: s32 = storage_sync_op_is_delete(entity_type, entity_id, local_date)
                 record_id: [180] u8
                 if collection.count == 0  || storage_encrypted_record_id(entity_type, entity_id, local_date,
@@ -1380,12 +1447,18 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                     storage_json_builder_append_text(json, ",")
                 }
                 first = 0
-                if storage_append_encrypted_record_json(json, *key[0], collection, AppTextFromCString(*record_id[0], 180),
-                    entity_type, entity_id, local_date,
-                    queued_at, is_delete) == 0 {
+                if storage_private_collection_key(collection, key_id, *key[0]) == 0 {
                     json.ok = 0
                     break
                 }
+                if storage_append_encrypted_record_json(json, *key[0], collection, key_id, AppTextFromCString(*record_id[0], 180),
+                    entity_type, entity_id, local_date,
+                    queued_at, is_delete) == 0 {
+                    SyncCryptoWipe(*key[0], 32)
+                    json.ok = 0
+                    break
+                }
+                SyncCryptoWipe(*key[0], 32)
             }
             if step_result != SQLITE_DONE {
                 json.ok = 0
@@ -1413,7 +1486,7 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
     if storage_db_handle() == null || user_id_hash.count == 0 {
         return null
     }
-    if migrate_schema() == 0 {
+    if migrate_schema() == 0 || storage_migrate_lumi_collection() == 0 {
         return null
     }
     if storage_materialize_session_habit_days() == 0 {
@@ -1809,7 +1882,7 @@ storage_apply_sync_social_json :: (response_json: string) -> s32 {
 }
 
 storage_decrypted_array_name :: (collection: string) -> string {
-    if collection == "private.inbe.v1.cells" {
+    if collection == LegacyPrivateCellsCollection || collection == LumiPrivateCollection {
         return "cell_records"
     }
     if collection == "private.inbe.v1.app-preferences" {
@@ -1833,7 +1906,66 @@ storage_decrypted_array_name :: (collection: string) -> string {
     return ""
 }
 
-storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32 {
+// Cell plaintext has one object with one occurrence of each known string
+// field. Decode member names when checking uniqueness, including escapes.
+storage_cell_plaintext_fields_valid :: (plaintext: string) -> bool {
+    cursor := Scan.Space(plaintext, 0)
+    if cursor < 0 || cursor >= cast(s32)plaintext.count ||
+    plaintext[cursor] != cast(u8)123 {
+        return false
+    }
+    cursor = Scan.Space(plaintext, cursor + 1)
+    seen: s32 = 0
+    while cursor < cast(s32)plaintext.count {
+        field_bytes: [32]u8
+        field_count := Scan.ReadStringText(plaintext, cursor, field_bytes[:])
+        field_span := Scan.ReadString(plaintext, cursor)
+        if field_count <= 0 || !field_span.valid {
+            return false
+        }
+        field := TextFromBytes(field_bytes[:field_count])
+        flag: s32 = 0
+        if field == "key" {
+            flag = 1
+        } else if field == "value" {
+            flag = 2
+        } else if field == "updated_at" {
+            flag = 4
+        } else {
+            return false
+        }
+        if (seen & flag) != 0 {
+            return false
+        }
+        seen = seen | flag
+        cursor = Scan.Space(plaintext, field_span.after)
+        if cursor >= cast(s32)plaintext.count || plaintext[cursor] != cast(u8)58 {
+            return false
+        }
+        cursor = Scan.Space(plaintext, cursor + 1)
+        if cursor >= cast(s32)plaintext.count || plaintext[cursor] != cast(u8)34 {
+            return false
+        }
+        value_span := Scan.ReadString(plaintext, cursor)
+        if !value_span.valid {
+            return false
+        }
+        cursor = Scan.Space(plaintext, value_span.after)
+        if cursor >= cast(s32)plaintext.count {
+            return false
+        }
+        if plaintext[cursor] == cast(u8)125 {
+            return seen == 7 && Scan.Space(plaintext, cursor + 1) == cast(s32)plaintext.count
+        }
+        if plaintext[cursor] != cast(u8)44 {
+            return false
+        }
+        cursor = Scan.Space(plaintext, cursor + 1)
+    }
+    return false
+}
+
+storage_apply_decrypted_record :: (collection: string, record_id: string, plaintext: string) -> s32 {
     array_name: string = storage_decrypted_array_name(collection)
     response: StorageJsonBuilder = StorageJsonBuilder.{}
     record_response: string
@@ -1858,6 +1990,10 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
         return 0
     }
     if array_name == "cell_records" {
+        if record_id.count == 0 || !storage_cell_plaintext_fields_valid(plaintext) {
+            storage_json_builder_free(*response)
+            return 0
+        }
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "cell_records")
         if Scan.ArrayCount(record_response, records) != 1 {
             storage_json_builder_free(*response)
@@ -1869,11 +2005,19 @@ storage_apply_decrypted_record :: (collection: string, plaintext: string) -> s32
         key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
         value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "value"), value_bytes[:])
         if key_count <= 0 || key_count >= 181 || value_count <= 0 || value_count >= 65536 ||
-        !CellRecordValid(TextFromBytes(key_bytes[:key_count])) {
+        TextFromBytes(key_bytes[:key_count]) != record_id ||
+        !CellRecordValid(TextFromBytes(key_bytes[:key_count])) ||
+        (collection == LumiPrivateCollection && !LumiCellRecordValid(TextFromBytes(key_bytes[:key_count]))) {
             storage_json_builder_free(*response)
             return 0
         }
         ok = storage_exec_json_user_sql(SyncCellRecordsSQL, record_response)
+        if ok != 0 && collection == LegacyPrivateCellsCollection &&
+        LumiCellRecordValid(TextFromBytes(key_bytes[:key_count])) {
+            // An older device may upload legacy Lumi after the local migration.
+            // Preserve its record and queue a copy under the isolated key.
+            ok = storage_enqueue_sync_entity("cell_record", TextFromBytes(key_bytes[:key_count]), 0)
+        }
     } else if array_name == "app_preferences" {
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_preferences")
         count := Scan.ArrayCount(record_response, records)
@@ -1931,7 +2075,6 @@ storage_decrypted_record_cleanup :: (aad: *StorageJsonBuilder, sealed: *u8,
 }
 
 storage_decrypt_record :: (collection: string, record_id: string, key_id: string, nonce_hex: string, ciphertext_hex: string, content_hash: string, plaintext_out: **u8) -> s32 {
-    context: string
     aad: StorageJsonBuilder = StorageJsonBuilder.{}
     key: [32] u8
     nonce: [12] u8
@@ -1940,11 +2083,7 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
     actual_hash: [SYNC_PUBLIC_ID_HEX_SIZE] u8
     sealed_len: s64
     plaintext_out.* = null
-    if storage_compare_text(key_id, STORAGE_SYNC_RECORD_KEY_ID) != 0 {
-        return 0
-    }
-    context = STORAGE_SYNC_RECORD_KEY_CONTEXT
-    if ciphertext_hex.count < 32 || ciphertext_hex.count % 2 != 0  || SyncCryptoHexToBytes(nonce_hex, *nonce[0], size_of(type_of(nonce))) == 0  || storage_private_record_key_for_context(context, *key[0]) == 0 {
+    if ciphertext_hex.count < 32 || ciphertext_hex.count % 2 != 0  || SyncCryptoHexToBytes(nonce_hex, *nonce[0], size_of(type_of(nonce))) == 0  || storage_private_collection_key(collection, key_id, *key[0]) == 0 {
         return 0
     }
     sealed_len = cast(s64)ciphertext_hex.count / 2
@@ -2076,7 +2215,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
                 habit_batch_count += 1
                 habit_batch_collection = collection
             } else {
-                ok = storage_apply_decrypted_record(collection,
+                ok = storage_apply_decrypted_record(collection, record_id,
                     AppTextFromCString(plaintext, 2147483647))
                 if ok == 0 {
                     LogStorageText(LOG_WARNING, "SYNC: encrypted record apply failed: ",
@@ -2087,7 +2226,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
             index += 1
         }
         if ok != 0 && habit_batch_count > 0 && habit_batch.ok != 0 && habit_batch.data != null {
-            ok = storage_apply_decrypted_record(habit_batch_collection,
+            ok = storage_apply_decrypted_record(habit_batch_collection, "",
                 AppTextFromCString(habit_batch.data, cast(s32)(habit_batch.len + 1)))
             if ok == 0 {
                 LogStorage(LOG_WARNING, "SYNC: encrypted habit records apply failed")

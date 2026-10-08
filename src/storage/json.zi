@@ -180,11 +180,10 @@ JsonEscapeLength :: (text: string) -> s64 {
     return length
 }
 
-#program_export
-storage_json_builder_append_string :: (json: *StorageJsonBuilder,
-    value: *u8) {
+// Escape the complete slice, including embedded NUL bytes. The builder's
+// checked capacity is the limit; fields are never silently omitted.
+JsonAppendStringText :: (json: *StorageJsonBuilder, text: string) {
     if json == null || json.ok == 0 { return }
-    text: string = json_cstring_view(value)
     length := JsonEscapeLength(text)
     if length < 0 || storage_json_builder_reserve(json, length + 1) == 0 {
         json.ok = 0
@@ -248,25 +247,16 @@ storage_json_builder_append_string :: (json: *StorageJsonBuilder,
 }
 
 #program_export
+storage_json_builder_append_string :: (json: *StorageJsonBuilder,
+    value: *u8) {
+    JsonAppendStringText(json, json_cstring_view(value))
+}
+
+#program_export
 storage_json_builder_key_value_text :: (json: *StorageJsonBuilder, key: string, value: string) {
-    key_buf: [256] u8
-    value_buf: [4096] u8
-    if key.count >= 256 || value.count >= 4096 {
-        return
-    }
-    index: s32 = 0
-    while index < cast(s32)key.count {
-        key_buf[index] = key[index]
-        index += 1
-    }
-    key_buf[index] = cast(u8)0
-    index = 0
-    while index < cast(s32)value.count {
-        value_buf[index] = value[index]
-        index += 1
-    }
-    value_buf[index] = cast(u8)0
-    storage_json_builder_append_key_string(json, *key_buf[0], *value_buf[0])
+    JsonAppendStringText(json, key)
+    JsonAppendSlice(json, ":")
+    JsonAppendStringText(json, value)
 }
 
 #program_export
