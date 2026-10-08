@@ -202,6 +202,14 @@ with contextlib.ExitStack() as stack:
                 click(window, *apps_point, hold=.35)
                 capture(window, name + "-apps")
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
+                if not mobile:
+                    # The second column occupies the page, beyond the old drawer.
+                    click(window, width - 170, 228)
+                    assert settings(profile)["main_tab"] == "1", "Apps did not fill the desktop content area"
+                    click(window, *apps_point)
+                    key(window, "Escape")
+                    assert settings(profile)["main_tab"] == "1", "Closing Apps changed the current page"
+                    click(window, *apps_point)
                 # Holding is an ordinary click. It opens the app and never pins it.
                 click(window, *more_first, hold=.85)
                 assert favorites(profile) == [1, 2], "Holding an app changed its pin"
@@ -242,7 +250,7 @@ with contextlib.ExitStack() as stack:
                         capture(window, name + "-short-" + side)
                         click(window, 44 if placement == 1 else width - 44, 440)
                         capture(window, name + "-short-apps-" + side)
-                        click(window, 170 if placement == 1 else width - 330, 464)
+                        click(window, 170, 464)
                         assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Overflow hid Profile in Apps"
                         assert favorites(profile) == all_favorites
                 seed(profile, {"navigation_placement": 1, "launcher_favorite_count": 0})
