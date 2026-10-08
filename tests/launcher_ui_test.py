@@ -19,6 +19,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
 parser.add_argument("--drag-only", action="store_true")
+parser.add_argument("--with-tray", action="store_true",
+                    help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
 BINARY = Path(arguments.binary).resolve()
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
@@ -39,6 +41,8 @@ with contextlib.ExitStack() as stack:
     env = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV}
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
                INBE_DEBUG_ROUTE="1")
+    if arguments.with_tray:
+        env.pop("APP_NO_TRAY", None)
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
     display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
@@ -131,6 +135,7 @@ with contextlib.ExitStack() as stack:
                 yield window, log_path
                 assert app.poll() is None, log_path.read_text()
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
+                assert "portable subset" not in log_path.read_text(), log_path.read_text()
             except BaseException:
                 if window and app.poll() is None:
                     capture(window, name + "-failure")

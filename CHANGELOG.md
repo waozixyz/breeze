@@ -3,6 +3,8 @@
 ### Changed
 - Keep Apps beside your desktop favorites without a large empty gap.
 - Open Profile beside Settings in Apps, without a fixed desktop Profile shortcut.
+### Fixed
+- Fix blank desktop pages when regional settings use comma decimals.
 
 ## [2.1.19] - 2026-10-08
 ### Added
