@@ -869,6 +869,16 @@ test: profile-host-test
 
 native: $(TARGET)
 
+.PHONY: launcher-policy-test launcher-ui-test
+launcher-policy-test: $(ZI2C_BIN)
+	sh tests/launcher_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+launcher-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/launcher_ui_test.py $(abspath $(TARGET))
+
+test: launcher-policy-test
+
 .PHONY: native-screenshot-test
 native-screenshot-test: $(TARGET)
 	sh tests/native_screenshot_test.sh $(abspath $(TARGET))

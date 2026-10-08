@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.17] - 2026-10-07
+
+- Find every app in a searchable library and keep up to two favorites in the compact dock.
+- Preserve saved app data when changing favorites and keep Profile and Settings close by.
+
 ## [2.1.13] - 2026-10-07
 
 - Show clean, colored sync changes with translated explanations and complete change symbols.

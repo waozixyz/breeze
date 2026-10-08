@@ -1,4 +1,4 @@
-"""Exercise scale dragging, cell choices and saved sidebar order on owned Xvfb."""
+"""Exercise scale dragging and saved favorites on owned private windows."""
 import ast
 import contextlib
 import json
@@ -61,13 +61,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
 
     def order():
         saved = settings()
-        return [int(saved[f"bottom_nav_route_{i}"]) for i in range(int(saved["bottom_nav_route_count"]))]
+        return [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
 
-    def click(window, x, y):
+    def click(window, x, y, hold=.12):
         command("xdotool", "mousemove", "--window", window, str(x), str(y))
         time.sleep(.15)
         command("xdotool", "mousedown", "1")
-        time.sleep(.12)
+        time.sleep(hold)
         command("xdotool", "mouseup", "1")
         time.sleep(.5)
 
@@ -108,6 +108,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
                   "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10, "navigation_placement": 1,
                   "navigation_collapsed": 0, "cells_auto_update": 0,
                   "apps_last_update_check": 1900000000,
+                  "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,
                   "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
                   "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}
         for key, value in values.items():
@@ -120,9 +121,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
 
     with application("gestures") as (window, log):
         capture(window, "initial")
-        click(window, 110, 670)  # Settings in the app rail.
+        click(window, 44, 316)  # Apps in the compact dock.
+        click(window, 220, 684)  # Settings in the drawer.
         capture(window, "settings-hub")
-        click(window, 320, 325)  # Appearance.
+        click(window, 200, 325)  # Appearance.
         before = capture(window, "appearance")
         # Coordinates come from the 900x720 rendered Appearance panel.
         command("xdotool", "mousemove", "--window", window, "650", "420")
@@ -135,8 +137,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
             time.sleep(.12)
             assert settings()["ui_scale"] == "10", "Scale changed while the slider was held"
             held = capture(window, f"held-{x}")
-            assert ImageChops.difference(before.crop((0, 0, 430, 720)),
-                                         held.crop((0, 0, 430, 720))).getbbox() is None, "Sidebars moved during drag"
+            assert ImageChops.difference(before.crop((0, 0, 344, 720)),
+                                         held.crop((0, 0, 344, 720))).getbbox() is None, "Sidebars moved during drag"
         command("xdotool", "mouseup", "1")
         time.sleep(.5)
         assert settings()["ui_scale"] != "10", "Release did not commit the scale"
@@ -148,52 +150,37 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         command("xdotool", "keyup", "0", "ctrl")
         wait_setting("ui_scale", 10)
         time.sleep(.5)
-        click(window, 320, 381)  # Direct Cells & sidebar entry.
-        capture(window, "cells-sidebar")
-        command("xdotool", "mousemove", "--window", window, "478", "122")
+        click(window, 200, 381)  # Apps and favorites.
+        capture(window, "apps-favorites")
+        assert order() == [12, 1]
+        command("xdotool", "mousemove", "--window", window, "396", "148")
         time.sleep(.15)
         command("xdotool", "mousedown", "1")
         time.sleep(.2)
-        command("xdotool", "mousemove", "--window", window, "478", "254")
+        command("xdotool", "mousemove", "--window", window, "396", "224")
         time.sleep(.3)
-        capture(window, "sidebar-reordering")
+        capture(window, "favorites-reordering")
         command("xdotool", "mouseup", "1")
         time.sleep(.4)
-        assert order() == [1, 2, 12, 4], order()  # Lumi moves with the other cells.
-        click(window, 826, 122)  # Remove Habits from the first compact row.
-        assert order() == [2, 12, 4], order()
-        wait_setting("enabled_apps", 20)
-        assert order() == [2, 12, 4], order()
-        capture(window, "cell-removed")
+        assert order() == [1, 12], order()
+        click(window, 826, 148)  # Unpin Habits.
+        assert order() == [12], order()
+        wait_setting("enabled_apps", 22)
+        capture(window, "favorite-unpinned")
 
     with application("restart") as (window, log):
-        assert order() == [2, 12, 4], "Restart restored removed or reordered shortcuts"
-        click(window, 110, 670)
-        click(window, 320, 381)
-        # All five cells appear once, with hidden cells after active rows.
-        # Adding Habits uses bundled bytes without a network request.
-        capture(window, "available-cells")
-        started = time.monotonic()
-        click(window, 826, 290)  # Add Habits from the hidden rows.
-        wait_setting("enabled_apps", 22)
-        assert time.monotonic() - started < 2, "Cached reinstall waited for a download"
-        assert order() == [2, 12, 1, 4], order()
-        capture(window, "cell-reinstalled")
-        click(window, 620, 122)  # The Practices cell name is also a destination.
-        deadline = time.monotonic() + 3
-        while "screen=6->0" not in log.read_text():
-            assert time.monotonic() < deadline, "Clicking the installed cell did not open it"
-            time.sleep(.05)
-        with sqlite3.connect(profile / "inbe.db") as db:
-            assert db.execute("SELECT title FROM elist_lists WHERE id='settings-preserved-list'").fetchone() == ("Keep this saved list",)
-            assert db.execute("SELECT name FROM habits WHERE id='settings-preserved-habit'").fetchone() == ("Keep this habit",)
-
-    with application("hidden-lumi") as (window, log):
-        click(window, 110, 670)
-        click(window, 320, 381)
-        click(window, 826, 178)  # Hide Lumi in the same list.
-        wait_setting("enabled_apps", 6)
-        assert order() == [2, 1, 4], order()
+        assert order() == [12], "Restart restored an unpinned shortcut"
+        click(window, 44, 232)  # Apps follows the one favorite.
+        click(window, 220, 684)
+        click(window, 200, 381, hold=.35)
+        assert order() == [12], "Opening settings with a held click changed favorites"
+        assert settings()["enabled_apps"] == "22"
+        click(window, 826, 260)  # Pin Habits from the available rows.
+        assert order() == [12, 1], order()
+        click(window, 826, 148)  # Unpin Lumi.
+        assert order() == [1], order()
+        assert settings()["enabled_apps"] == "22", "Unpinning disabled an app"
+        capture(window, "lumi-unpinned")
 
         def host_state():
             value = command("xprop", "-id", window, "_HARMONY_APP_STATE")
@@ -201,22 +188,22 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
 
         for control, arguments in (("mcp.set_theme", {"theme": "forest"}),
                                    ("mcp.open_view", {"view": "lumi"})):
-            request = "hidden-" + control.replace(".", "-")
+            request = "unpinned-" + control.replace(".", "-")
             command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
                     "_HARMONY_APP_ACTION", json.dumps(dict(control=control,
                     request_id=request, arguments=arguments)))
             deadline = time.monotonic() + 3
             while host_state()["last_request_id"] != request:
-                assert time.monotonic() < deadline, "Hidden Lumi stopped accepting app tools"
+                assert time.monotonic() < deadline, "Unpinned Lumi stopped accepting app tools"
                 time.sleep(.05)
             assert host_state()["last_request_ok"]
         assert host_state()["screen"] == 23
         assert host_state()["settings"]["theme"] == "forest"
-        assert settings()["enabled_apps"] == "6"
-        assert order() == [2, 1, 4], "Opening Lumi restored its hidden shortcut"
-        capture(window, "hidden-lumi-tools")
+        assert settings()["enabled_apps"] == "22"
+        assert order() == [1], "Opening Lumi added an unwanted shortcut"
+        capture(window, "unpinned-lumi-tools")
 
-        request = "hidden-open-settings"
+        request = "unpinned-open-settings"
         command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
                 "_HARMONY_APP_ACTION", json.dumps(dict(control="mcp.open_view",
                 request_id=request, arguments={"view": "settings"})))
@@ -224,12 +211,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         while host_state()["last_request_id"] != request:
             assert time.monotonic() < deadline
             time.sleep(.05)
-        for y, mask in ((234, 7), (290, 15), (346, 31)):
-            started = time.monotonic()
-            click(window, 826, y)
-            wait_setting("enabled_apps", mask)
-            assert time.monotonic() - started < 2, "Adding a bundled cell waited for a download"
-        assert order() == [2, 1, 3, 11, 12, 4], order()
-        capture(window, "all-cells-unified")
+        click(window, 826, 316)  # Pin Diary without changing app choices.
+        assert order() == [1, 11], order()
+        assert settings()["enabled_apps"] == "22"
+        click(window, 826, 372)  # The third pin remains disabled.
+        assert order() == [1, 11]
+        click(window, 620, 204)  # Opening Diary also enables it.
+        wait_setting("enabled_apps", 30)
+        assert host_state()["screen"] == 22
+        with sqlite3.connect(profile / "inbe.db") as db:
+            assert db.execute("SELECT title FROM elist_lists WHERE id='settings-preserved-list'").fetchone() == ("Keep this saved list",)
+            assert db.execute("SELECT name FROM habits WHERE id='settings-preserved-habit'").fetchone() == ("Keep this habit",)
 
-print("Settings: held scale keeps both sidebars fixed; release commits; order and removals survive restart")
+    with application("saved-order"):
+        assert order() == [1, 11], "Favorite order did not persist"
+        assert settings()["enabled_apps"] == "30"
+
+print("Settings: scale commits on release; favorite reordering, pin limits and app tools preserve data")

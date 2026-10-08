@@ -6,8 +6,6 @@
 #import "image_props"
 #import "image_widget"
 #import "layout"
-#import "navigation_bar_props"
-#import "navigation_bar_widget"
 #import "paint_queue"
 #import "session"
 #import "style"
@@ -16,6 +14,9 @@
 #import "text_props"
 #import "text_widget"
 #import, file "../app/app_nav_state.zi";
+#import, file "../app/app_launcher_state.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../app/locale.zi";
 #import, file "../app/draw.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/assets.zi";
@@ -33,17 +34,9 @@ using ButtonEmphasis;
 using ButtonTone;
 using ModalType;
 using NavigationPlacement;
+using IconPlacement;
 using TextWrap;
 using TextAlign;
-
-DesktopRailLayout :: struct {
-    x: s32
-    width: s32
-    route_y: s32
-    gap: s32
-    item_height: s32
-    footer_y: s32
-}
 
 bottom_nav_route_image :: (route: s32) -> ImageProps {
     image: ImageProps
@@ -83,6 +76,33 @@ bottom_nav_route_image :: (route: s32) -> ImageProps {
     return image
 }
 
+// App navigation uses full-size outline marks, rather than scaling the
+// padded atlas cells down to tiny glyphs in the compact dock.
+app_nav_route_shape :: (route: s32) -> string {
+    if route == APP_NAV_ROUTE_HABITS {
+        return "S1.6rr:M5 19C2 10 10 5 20 4C19 14 12 21 5 19ZM5 19L16 8"
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        return "S1.6rr:M12 21C7 14 7 8 12 3C17 8 17 14 12 21ZM11 21C5 20 2 15 3 8C9 9 12 14 11 21ZM13 21C19 20 22 15 21 8C15 9 12 14 13 21ZM6 21H18"
+    }
+    if route == APP_NAV_ROUTE_DIARY {
+        return "S1.6rr:M12 6C9 4 6 4 3 5V20C6 19 9 19 12 21C15 19 18 19 21 20V5C18 4 15 4 12 6ZM12 6V21"
+    }
+    if route == APP_NAV_ROUTE_ELIST {
+        return "S1.6rr:M8 6H21M8 12H21M8 18H21M3 6H3.1M3 12H3.1M3 18H3.1"
+    }
+    if route == APP_NAV_ROUTE_PROFILE {
+        return "S1.6rr:M12 12C15 12 17 10 17 7C17 4 15 2 12 2C9 2 7 4 7 7C7 10 9 12 12 12ZM3 22V20C3 15 7 14 12 14C17 14 21 15 21 20V22"
+    }
+    if route == APP_NAV_ROUTE_SETTINGS {
+        return "S1.6rr:M10 3H14L15 6L18 6L21 10L19 12L21 15L18 19L15 18L14 21H10L9 18L6 19L3 15L5 12L3 10L6 6L9 6ZM16 12C16 17 8 17 8 12C8 7 16 7 16 12Z"
+    }
+    if route == APP_NAV_ROUTE_LUMI {
+        return AssetRead("assets/lumi/sidebar.shape").data
+    }
+    return ""
+}
+
 bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
     if app == null {
         return false
@@ -120,250 +140,107 @@ bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
     return route == APP_NAV_ROUTE_ELIST  && app.breathing.screen == ScreenEList
 }
 
-bottom_nav_should_draw :: (app: *InnerBreeze) -> bool {
-    if app == null || AppMiniMode() || app_nav_desktop_rail_enabled(app) != 0  || app.breathing.screen == ScreenHabitEdit  || app.file_dialog_active != 0 {
-        return false
-    }
-    if app_navigation_height(app) == 0 {
-        return false
-    }
-    if app.modal.active != 0  && app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
-        return false
-    }
-    return app_current_nav_route(app) != APP_NAV_ROUTE_NONE  || (app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_NONE)
-}
-
-desktop_rail_layout :: (app: *InnerBreeze) -> DesktopRailLayout {
-    layout: DesktopRailLayout
-    if app == null || app_nav_desktop_rail_enabled(app) == 0 {
-        return layout
-    }
-    layout.width = app_nav_desktop_rail_width(app)
-    layout.x = -layout.width
-    if app_navigation_placement(app) == NAVIGATION_RIGHT {
-        layout.x = app.ui.view_width
-    }
-    layout.route_y = AppScale(120)
-    layout.gap = AppScale(12)
-    layout.item_height = AppScale(52)
-    layout.footer_y = app.ui.view_height - AppScale(24) -         layout.item_height
-    minimum := layout.route_y +         3 * (layout.item_height + layout.gap) + AppScale(16)
-    if layout.footer_y < minimum {
-        layout.footer_y = minimum
-    }
-    return layout
-}
-
-desktop_rail_button :: (app: *InnerBreeze, route: s32,
-    layout: DesktopRailLayout, y: s32) -> bool {
-    margin := AppScale(16)
-    button: ButtonProps
-    button.id = cast(s32)6600 + route
-    button.bounds = Rectangle.{cast(float32)(layout.x + margin),
-        cast(float32)y, cast(float32)(layout.width - margin * 2),
-        cast(float32)layout.item_height
-    }
-    button.label = app_nav_route_label(route)
-    button.image = bottom_nav_route_image(route)
-    if route == APP_NAV_ROUTE_LUMI {
-        button.icon_shape = AssetRead("assets/lumi/sidebar.shape").data
-    }
-    button.icon_only = app.nav_rail_collapsed != 0
-    button.tone = cast(ButtonTone)ButtonToneNeutral
-    if bottom_nav_route_active(app, route) {
-        button.tone = cast(ButtonTone)ButtonToneAccent
-    }
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    button.selected = bottom_nav_route_active(app, route)
-    button.disabled = app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
-    if Button(app.ui.session, button) == 0 {
-        return false
-    }
-    app_apply_nav_route(app, route)
-    return true
-}
-
-desktop_rail_profile_button :: (app: *InnerBreeze,
-    layout: DesktopRailLayout) -> bool {
-    label_bytes: [96]u8
-    subtitle_bytes: [96]u8
-    app_nav_profile_identity(app, label_bytes[:], 96,
-        subtitle_bytes[:], 96)
-    label := FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*label_bytes[0], 96))
-    subtitle := FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*subtitle_bytes[0], 96))
-    margin := AppScale(16)
-    y := AppScale(16)
-    height := AppScale(88)
-    button: ButtonProps
-    button.id = 6690
-    button.bounds = Rectangle.{cast(float32)(layout.x + margin),
-        cast(float32)y, cast(float32)(layout.width - margin * 2),
-        cast(float32)height
-    }
-    // The separately measured name and username form the button's content.
-    button.class_name = KssClassId(KssMakeName("profile-header"))
-    button.tone = cast(ButtonTone)ButtonToneNeutral
-    if app.breathing.screen == ScreenProfile {
-        button.tone = cast(ButtonTone)ButtonToneAccent
-    }
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    button.selected = app.breathing.screen == ScreenProfile
-    button.disabled = app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
-    clicked := Button(app.ui.session, button) != 0
-
-    avatar_size := AppScale(52)
-    avatar_x := layout.x + margin + AppScale(12)
-    if app.nav_rail_collapsed != 0 {
-        avatar_x = layout.x + (layout.width - avatar_size) / 2
-    }
-    avatar_y := y + (height - avatar_size) / 2
-    avatar_background := LightenColor(StyleTokenColor("accent"), 30)
-    PaintRoundedFill(app.ui.session, -1,
-        Rectangle.{cast(float32)avatar_x, cast(float32)avatar_y,
-            cast(float32)avatar_size, cast(float32)avatar_size},
-        cast(float32)(avatar_size / 2), 24, avatar_background)
-    avatar_image := ProfilePictureImage(app.profile_picture_icon, label)
-    avatar_image.bounds = Rectangle.{cast(float32)avatar_x,
-        cast(float32)avatar_y, cast(float32)avatar_size,
-        cast(float32)avatar_size
-    }
-    Image(app.ui.session, avatar_image)
-
-    if app.nav_rail_collapsed == 0 {
-        text_x := avatar_x + avatar_size + AppScale(12)
-        text_width := layout.x + layout.width - margin - AppScale(12) - text_x
-        label_props: TextProps
-        label_props.text = label
-        label_props.font = AppFitFontSize(label, text_width - AppScale(4),
-            AppScale(Text20), AppScale(Text14))
-        label_props.class_name = KssClassId(KssMakeName("profile-name"))
-        label_props.bounds = Rectangle.{cast(float32)text_x,
-            0.0, cast(float32)text_width, 0.0
+// The same compact dock is composed inside the launcher overlay when open.
+#program_export
+app_draw_favorites_dock :: (app: *InnerBreeze) {
+    desktop := app_nav_desktop_rail_enabled(app) != 0
+    dock_width := app_nav_desktop_rail_width(app)
+    x: s32 = 0
+    y := app.ui.view_height - AppScale(84)
+    if app_navigation_placement(app) == NAVIGATION_TOP { y = -AppScale(84) }
+    if desktop {
+        x = -dock_width - app.launcher_drawer_width
+        if app_navigation_placement(app) == NAVIGATION_RIGHT {
+            x = app.ui.view_width + app.launcher_drawer_width
         }
-        label_props.wrap = cast(TextWrap)TextWrapNone
-        label_props.vertical_align = cast(TextAlign)TextAlignCenter
-        label_plan := PrepareText(label_props,
-            TextFaceFor(label_props, DefaultTextFace()))
-        label_props.bounds.height = label_plan.bounds.height + cast(float32)AppScale(6)
-        text_props: TextProps
-        text_props.text = subtitle
-        text_props.font = AppFitFontSize(subtitle, text_width - AppScale(4),
-            AppScale(Text14), AppScale(Text12))
-        text_props.class_name = KssClassId(KssMakeName("profile-username"))
-        text_props.bounds = Rectangle.{
-            cast(float32)text_x, 0.0, cast(float32)text_width, 0.0
-        }
-        text_props.wrap = cast(TextWrap)TextWrapNone
-        text_props.vertical_align = cast(TextAlign)TextAlignCenter
-        text_h: float32 = 0.0
-        gap: float32 = 0.0
-        if subtitle.count > 0 {
-            text_plan := PrepareText(text_props,
-                TextFaceFor(text_props, DefaultTextFace()))
-            text_h = text_plan.bounds.height + cast(float32)AppScale(6)
-            gap = cast(float32)AppScale(2)
-        }
-        text_y := cast(float32)y +
-        (cast(float32)height - label_props.bounds.height - gap - text_h) * 0.5f
-        label_props.bounds.y = text_y
-        Text(app.ui.session, label_props)
-        if subtitle.count > 0 {
-            text_props.bounds.y = text_y + label_props.bounds.height + gap
-            text_props.bounds.height = text_h
-            Text(app.ui.session, text_props)
+        PaintRoundedFill(app.ui.session, -1,
+            Rectangle.{cast(float32)x, 0.0, cast(float32)dock_width,
+                cast(float32)app.ui.view_height}, 0.0, 4,
+            StyleTokenColor("launcher-canvas"))
+        Text(app.ui.session, TextProps.{
+                .text = "Inbe", .font = AppScale(18),
+                .class_name = KssClassId(KssMakeName("launcher-heading")),
+                .bounds = Rectangle.{cast(float32)x, 0.0,
+                    cast(float32)dock_width, cast(float32)AppScale(88)},
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+    } else {
+        PaintRoundedFill(app.ui.session, -1,
+            Rectangle.{0.0, cast(float32)y, cast(float32)app.ui.view_width,
+                cast(float32)AppScale(84)}, 0.0, 4,
+            StyleTokenColor("launcher-canvas"))
+    }
+    routes: [3]s32
+    count: s32 = 0
+    for index: cast(s32)0..app.launcher_favorite_count - 1 {
+        route := app.launcher_favorites[index]
+        if (app_nav_route_bit(route) & CellsInstalledMask()) != 0 {
+            routes[count] = route
+            count += 1
         }
     }
-    if clicked {
-        app_apply_nav_route(app, APP_NAV_ROUTE_PROFILE)
-    }
-    return clicked
-}
-
-app_draw_desktop_nav_rail :: (app: *InnerBreeze) {
-    layout := desktop_rail_layout(app)
-    if layout.width <= 0 {
-        return
-    }
-    background := Rectangle.{cast(float32)layout.x, 0.0,
-        cast(float32)layout.width, cast(float32)app.ui.view_height
-    }
-    rail_background := DarkenColor(StyleTokenColor("canvas"), 9)
-    DrawRectangle(cast(s32)background.x, 0,
-        cast(s32)background.width, cast(s32)background.height,
-        rail_background)
-    divider_color := Fade(StyleTokenColor("text"), 0.12)
-    divider_x := cast(s32)(background.x + background.width - 1)
-    if app_navigation_placement(app) == NAVIGATION_RIGHT {
-        divider_x = cast(s32)background.x
-    }
-    DrawLine(divider_x, 0, divider_x, app.ui.view_height, divider_color)
-    app_sanitize_bottom_nav_routes(app)
-    if desktop_rail_profile_button(app, layout) {
-        return
-    }
-    route_y := layout.route_y
-    for i: 0..(cast(int)app.bottom_nav_route_count - 1) {
-        route := app.bottom_nav_routes[i]
-        if !app_nav_route_available(app, route) {
-            continue
+    routes[count] = APP_NAV_ROUTE_APPS
+    count += 1
+    gap := AppScale(8)
+    item_width := (app.ui.view_width - AppScale(24) - gap * (count - 1)) / count
+    if item_width > AppScale(144) { item_width = AppScale(144) }
+    group_x := (app.ui.view_width - count * item_width - gap * (count - 1)) / 2
+    for index: cast(s32)0..count - 1 {
+        route := routes[index]
+        button: ButtonProps
+        button.id = 6600 + route
+        button.label = app_nav_route_label(route)
+        button.bounds = Rectangle.{cast(float32)(group_x + index * (item_width + gap)),
+            cast(float32)(y + AppScale(8)), cast(float32)item_width,
+            cast(float32)AppScale(68)}
+        if desktop {
+            button.bounds = Rectangle.{cast(float32)(x + AppScale(12)),
+                cast(float32)AppScale(112 + index * 84),
+                cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
         }
-        if route == APP_NAV_ROUTE_SETTINGS  || route == APP_NAV_ROUTE_PROFILE {
-            continue
+        button.class_name = KssClassId(KssMakeName("launcher-dock"))
+        button.icon_placement = cast(IconPlacement)IconPlacementAbove
+        button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        button.selected = !app.launcher_open && bottom_nav_route_active(app, route)
+        if route == APP_NAV_ROUTE_APPS { button.selected = app.launcher_open }
+        if route == APP_NAV_ROUTE_APPS {
+            button.icon_shape = "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z"
+        } else {
+            button.image = bottom_nav_route_image(route)
+            button.icon_shape = app_nav_route_shape(route)
         }
-        if desktop_rail_button(app, route, layout, route_y) {
+        button.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
+        if Button(app.ui.session, button) != 0 {
+            if route == APP_NAV_ROUTE_APPS { app_launcher_toggle(app) }
+            else { app_launcher_activate(app, route) }
             return
         }
-        route_y += layout.item_height + layout.gap
     }
-    unused desktop_rail_button(app, APP_NAV_ROUTE_SETTINGS,
-        layout, layout.footer_y)
+    if desktop {
+        profile: ButtonProps
+        profile.id = 6690
+        profile.label = app_nav_route_label(APP_NAV_ROUTE_PROFILE)
+        profile.image = bottom_nav_route_image(APP_NAV_ROUTE_PROFILE)
+        profile.icon_shape = app_nav_route_shape(APP_NAV_ROUTE_PROFILE)
+        profile.icon_placement = cast(IconPlacement)IconPlacementAbove
+        profile.class_name = KssClassId(KssMakeName("launcher-dock"))
+        profile.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        profile.selected = !app.launcher_open && app.breathing.screen == ScreenProfile
+        profile.bounds = Rectangle.{cast(float32)(x + AppScale(12)),
+            cast(float32)(app.ui.view_height - AppScale(88)),
+            cast(float32)(dock_width - AppScale(24)), cast(float32)AppScale(72)}
+        profile.disabled = app.modal.active != 0 || app.blocked_input_frame == app.breathing.frame
+        if Button(app.ui.session, profile) != 0 {
+            app_launcher_activate(app, APP_NAV_ROUTE_PROFILE)
+        }
+    }
 }
 
 #program_export
 app_draw_bottom_nav :: (app: *InnerBreeze) {
-    if app == null || app.host_feature != 0 || !SessionValid(app.ui.session) {
-        return
-    }
-    if app_nav_desktop_rail_enabled(app) != 0 {
-        app_draw_desktop_nav_rail(app)
-        return
-    }
-    if !bottom_nav_should_draw(app) {
-        return
-    }
-    app_sanitize_bottom_nav_routes(app)
-    source_count := app.bottom_nav_route_count
-    if source_count <= 0 {
-        return
-    }
-    items: [APP_BOTTOM_NAV_CONTENT_MAX]NavigationBarItem
-    blocked := app.modal.active != 0  || app.blocked_input_frame == app.breathing.frame
-    count: s32 = 0
-    for i: 0..(cast(int)source_count - 1) {
-        route := app.bottom_nav_routes[i]
-        if !app_nav_route_available(app, route) {
-            continue
-        }
-        items[count].key = cast(u64)(6600 + route)
-        items[count].route = route
-        items[count].label = app_nav_route_label(route)
-        items[count].image = bottom_nav_route_image(route)
-        items[count].active = bottom_nav_route_active(app, route)
-        items[count].disabled = blocked
-        count += 1
-    }
-    props: NavigationBarProps
-    props.key = KeyHash("inbe/navigation")
-    props.id = 6500
-    props.view_width = app.ui.view_width
-    props.view_height = app.ui.view_height
-    if app_navigation_placement(app) == NAVIGATION_TOP {
-        props.view_height = 1
-    }
-    result := NavigationBar(app.ui.session, props, items[0:count])
-    if !blocked && result.clicked_route != APP_NAV_ROUTE_NONE {
-        app_apply_nav_route(app, result.clicked_route)
-    }
+    if app == null || AppMiniMode() || app.host_feature != 0 ||
+    app.launcher_open || app.file_dialog_active != 0 ||
+    !SessionValid(app.ui.session) { return }
+    if app_nav_desktop_rail_enabled(app) == 0 && app_navigation_height(app) == 0 { return }
+    app_draw_favorites_dock(app)
 }

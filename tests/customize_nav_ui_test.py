@@ -79,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                   "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
                   "navigation_placement": 0 if NARROW else 1, "navigation_collapsed": 0,
                   "cells_auto_update": 0, "apps_last_update_check": 1900000000,
+                  "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,
                   "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
                   "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}
         for key, value in values.items():
@@ -86,19 +87,19 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
 
     with application("app") as (window, log):
-        click(window, *( (340, 790) if NARROW else (110, 670) ))
-        click(window, *( (195, 489) if NARROW else (320, 381) ), hold=PRESS_SECONDS)
+        click(window, *( (325, 802) if NARROW else (44, 316) ))
+        click(window, *( (282, 724) if NARROW else (220, 684) ))
+        click(window, *( (195, 489) if NARROW else (200, 381) ), hold=PRESS_SECONDS)
         command("import", "-window", window, str(OUTPUT / "after-click.png"))
         saved = settings()
-        assert saved["bottom_nav_route_count"] == "4", "Opening press changed sidebar entries"
+        assert saved["launcher_favorite_count"] == "2", "Opening press changed favorites"
         assert saved["enabled_apps"] == "22", "Opening press changed cell choices"
-        # Removing the first shortcut proves that the direct entry opened
-        # the cell settings controls, without relying on live download text.
-        click(window, *( (336, 133) if NARROW else (846, 156) ))
+        # Unpinning proves that the direct entry opened favorites settings.
+        click(window, *( (336, 130) if NARROW else (826, 148) ))
         saved = settings()
-        assert saved["bottom_nav_route_count"] == "3", "Sidebar trash control did not open"
-        assert [saved[f"bottom_nav_route_{i}"] for i in range(3)] == ["12", "2", "4"], saved
-        assert saved["enabled_apps"] == "20", "The removed Habits cell stayed enabled"
+        assert saved["launcher_favorite_count"] == "1", "Unpin control did not open"
+        assert saved["launcher_favorite_0"] == "1", saved
+        assert saved["enabled_apps"] == "22", "Unpinning changed app choices"
         assert "screen=6->12" not in log.read_text(), log.read_text()
 
-print("Cells & sidebar: direct Settings entry survives a held click; trash removes the chosen cell")
+print("Apps and favorites: a held Settings entry keeps favorites; unpin preserves app choices")

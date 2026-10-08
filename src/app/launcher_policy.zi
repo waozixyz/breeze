@@ -1,0 +1,71 @@
+#import, file "route_types.zi";
+#import, file "route_list.zi";
+#import "std/utf8"
+
+using AppNavRoute;
+
+LAUNCHER_FAVORITE_LIMIT :: 2
+
+LauncherRoutes :: () -> [5]s32 {
+    return .{APP_NAV_ROUTE_DIARY, APP_NAV_ROUTE_HABITS,
+        APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_LUMI, APP_NAV_ROUTE_PRACTICE}
+}
+
+LauncherSanitizeFavorites :: (routes: []s32, count: s32) -> s32 {
+    allowed := LauncherRoutes()
+    count = RouteListSanitize(routes, count, allowed[:])
+    if count > LAUNCHER_FAVORITE_LIMIT { count = LAUNCHER_FAVORITE_LIMIT }
+    return count
+}
+
+LauncherToggleFavorite :: (routes: []s32, count: s32, route: s32) -> s32 {
+    count = LauncherSanitizeFavorites(routes, count)
+    allowed := LauncherRoutes()
+    if !RouteListContains(allowed[:], 5, route) { return count }
+    for index: cast(s32)0..count - 1 {
+        if routes[index] == route {
+            for next: index..count - 2 { routes[next] = routes[next + 1] }
+            return count - 1
+        }
+    }
+    if count < LAUNCHER_FAVORITE_LIMIT && count < routes.count {
+        routes[count] = route
+        count += 1
+    }
+    return count
+}
+
+// The app's supported Latin and Cyrillic alphabets, with UTF-8 boundaries
+// retained for Japanese, Chinese and Korean names.
+LauncherFold :: (value: u32) -> u32 {
+    if (value >= 65 && value <= 90) ||
+    (value >= 192 && value <= 222 && value != 215) ||
+    (value >= 1040 && value <= 1071) { return value + cast(u32)32 }
+    if value >= 1024 && value <= 1039 { return value + cast(u32)80 }
+    if ((value >= 256 && value <= 311) || (value >= 330 && value <= 375)) &&
+    value % cast(u32)2 == 0 { return value + cast(u32)1 }
+    if value >= 313 && value <= 328 && value % cast(u32)2 == 1 {
+        return value + cast(u32)1
+    }
+    if value == 376 { return cast(u32)255 }
+    return value
+}
+
+LauncherMatches :: (name: string, query: string) -> bool {
+    if query.count == 0 { return true }
+    start: s32 = 0
+    while start < name.count {
+        left := start
+        right: s32 = 0
+        while left < name.count && right < query.count {
+            a := Decode(name, left)
+            b := Decode(query, right)
+            if LauncherFold(a.value) != LauncherFold(b.value) { break }
+            left = a.after
+            right = b.after
+        }
+        if right == query.count { return true }
+        start = Decode(name, start).after
+    }
+    return false
+}

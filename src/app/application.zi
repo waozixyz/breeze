@@ -52,6 +52,9 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../storage/data.zi";
 #import, file "audio.zi";
 #import, file "app_nav.zi";
+#import, file "app_launcher.zi";
+#import, file "app_launcher_state.zi";
+#import "tree_input"
 #import, file "../screens/habits/edit.zi";
 #import, file "../screens/habits_screen.zi";
 #import, file "../screens/elist_screen.zi";
@@ -1089,14 +1092,17 @@ updateapp :: (app: *InnerBreeze) {
     if app_nav_desktop_rail_enabled(app) != 0 {
         app_draw_bottom_nav(app)
     }
-    back_requested := IsKeyPressed(APP_KEY_BACK)
+    back_requested := IsKeyPressed(APP_KEY_BACK) ||
+    (app.launcher_open && IsKeyPressed(APP_KEY_ESCAPE))
     #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
         if IsKeyPressed(KEY_BACKSPACE)  && ((app.breathing.screen == ScreenStart && app.practice_tab != PRACTICE_TAB_PLAY)  || app.breathing.screen == ScreenSession || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation || app.breathing.screen == ScreenPatterns) {
             back_requested = true
         }
     }
     if back_requested {
-        if app.close_prompt_open != 0 {
+        if app.launcher_open {
+            app_launcher_close(app)
+        } else if app.close_prompt_open != 0 {
             app.close_prompt_open = 0
         } else if first_run_guide_active != 0 || habits_guide_active != 0 {
             if first_run_guide_active != 0 {
@@ -1115,7 +1121,7 @@ updateapp :: (app: *InnerBreeze) {
         // Ctrl+Q quits from any screen; Esc quits only from idle home.
         if IsKeyPressed(KEY_Q)  && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
             app_request_desktop_quit(app)
-        } else if IsKeyPressed(APP_KEY_ESCAPE) &&
+        } else if !back_requested && IsKeyPressed(APP_KEY_ESCAPE) &&
         app.breathing.screen == ScreenStart &&
         app.practice_tab == PRACTICE_TAB_PLAY &&
         app.modal.active == 0 && first_run_guide_active == 0 &&
@@ -1123,8 +1129,13 @@ updateapp :: (app: *InnerBreeze) {
             app_request_desktop_quit(app)
         }
     }
+    launcher_input: InputSnapshot
+    launcher_owns_input := app.launcher_open
+    if launcher_owns_input { launcher_input = TreeInputSuspend(app.ui.session) }
     handled_screen: bool = false
-    if app.breathing.screen == ScreenSettings {
+    if app.launcher_open && app_nav_desktop_rail_enabled(app) == 0 {
+        handled_screen = true
+    } else if app.breathing.screen == ScreenSettings {
         settings_screen_draw(app)
         handled_screen = true
     } else if app.breathing.screen == ScreenProfile {
@@ -1229,6 +1240,7 @@ updateapp :: (app: *InnerBreeze) {
         draw_global_modal(app)
         global_modal_drawn = true
     }
+    if launcher_owns_input { unused TreeInputResume(app.ui.session, launcher_input) }
     view_height = frame_view_height
     // The desktop rail has already submitted its widgets before the page.
     if app_nav_desktop_rail_enabled(app) == 0 {
@@ -1241,6 +1253,7 @@ updateapp :: (app: *InnerBreeze) {
         draw_global_modal(app)
     }
     app_draw_close_prompt(app)
+    app_draw_launcher(app)
     app_flush_deferred_settings(app)
     app_observe_direct_route_change(app, frame_route)
     app.breathing.frame += 1
@@ -1349,7 +1362,19 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app.ui.view_height = view_height
     // Freeze responsive navigation from the full viewport before narrowing content.
     app_capture_navigation_viewport(app, view_width, view_height)
+    app.launcher_drawer_width = 0
     rail_width = ifx (app_nav_desktop_rail_enabled(app) != 0) then (app_nav_desktop_rail_width(app)) else (0)
+    if app.launcher_open && rail_width > 0 {
+        app.launcher_drawer_width = AppScale(336)
+        maximum_drawer := layout_width - rail_width - AppScale(280)
+        if app.launcher_drawer_width > maximum_drawer {
+            app.launcher_drawer_width = maximum_drawer
+        }
+        if app.launcher_drawer_width < AppScale(240) {
+            app.launcher_drawer_width = AppScale(240)
+        }
+        rail_width += app.launcher_drawer_width
+    }
     layout_content_x = ifx (app_navigation_placement(app) == NAVIGATION_LEFT) then (rail_width) else (0)
     layout_content_w = layout_width - rail_width
     if layout_content_w < 1 {

@@ -112,7 +112,7 @@ def main():
 
         altered("wrong-app", lambda value: value.update(app_id="inbe.diary"))
         altered("wrong-api", lambda value: value.update(host_api=value["host_api"] + 1))
-        altered("old-api", lambda value: value.update(host_api=2))
+        altered("old-api", lambda value: value.update(host_api=value["host_api"] - 1))
         altered("bad-signature", lambda value: value.update(version="9.0.0"), False)
         altered("fraction", lambda value: value.update(sequence=1.5))
         altered("negative", lambda value: value.update(sequence=-1))

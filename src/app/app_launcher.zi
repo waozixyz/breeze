@@ -1,0 +1,300 @@
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_route_state.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_launcher_state.zi";
+#import, file "launcher_policy.zi";
+#import, file "app_nav_state.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "text_buffers.zi";
+#import, file "assets.zi";
+#import, file "../widgets/bottom_nav.zi";
+#import, file "../cells/module_host.zi";
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "drawing_props"
+#import "layout"
+#import "kss_parser"
+#import "layout_widget"
+#import "overlay_props"
+#import "overlay_widget"
+#import "paint_queue"
+#import "scroll_props"
+#import "scroll_widget"
+#import "style"
+#import "text_align"
+#import "text_input_props"
+#import "text_field_widget"
+#import, file "../platform/raylib_text_input.zi";
+#import "text_props"
+#import "text_widget"
+#import "tree"
+
+using AppNavRoute;
+using ButtonEmphasis;
+using IconPlacement;
+using ContentAlignment;
+using TextAlign;
+using TextWrap;
+using NavigationPlacement;
+
+// A cell tile composes its open action and independent pin action. Unpinning
+// changes only the dock; it never removes the cell or its data.
+app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
+    bounds: Rectangle, vertical: bool, favorite_section: bool) {
+    favorite := app_launcher_is_favorite(app, route)
+    blocked := app.blocked_input_frame == app.breathing.frame
+    can_pin := favorite || app.launcher_favorite_count < LAUNCHER_FAVORITE_LIMIT
+    card: ButtonProps
+    card.id = (ifx favorite_section then 6800 else 6900) + route
+    card.bounds = bounds
+    card.label = app_nav_route_label(route)
+    card.image = bottom_nav_route_image(route)
+    card.icon_shape = app_nav_route_shape(route)
+    if vertical { card.icon_placement = cast(IconPlacement)IconPlacementAbove }
+    else { card.content_alignment = cast(ContentAlignment)ContentAlignmentStart }
+    card.class_name = KssClassId(KssMakeName("launcher-tile"))
+    card.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    card.selected = !app.launcher_editing && bottom_nav_route_active(app, route)
+    card.disabled = blocked || (CellsInstalledMask() & app_nav_route_bit(route)) == 0 ||
+    (app.launcher_editing && !can_pin)
+    if Button(app.ui.session, card) != 0 {
+        if app.launcher_editing { app_launcher_toggle_favorite(app, route) }
+        else { app_launcher_activate(app, route) }
+    }
+    if app.launcher_editing || favorite_section {
+        pin: ButtonProps
+        pin.id = (ifx favorite_section then 7000 else 7100) + route
+        pin.bounds = Rectangle.{bounds.x + bounds.width - cast(float32)AppScale(44),
+            bounds.y, cast(float32)AppScale(44), cast(float32)AppScale(44)}
+        pin.label = LocaleText(ifx favorite then "launcher_unpin" else "launcher_pin")
+        pin.icon_shape = "S1.6rr:M9 3H15L14 10L18 14H6L10 10ZM12 14V21"
+        pin.icon_only = true
+        pin.selected = favorite
+        pin.class_name = KssClassId(KssMakeName("launcher-pin"))
+        pin.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        pin.disabled = blocked || !can_pin
+        if Button(app.ui.session, pin) != 0 { app_launcher_toggle_favorite(app, route) }
+    }
+}
+
+#program_export
+app_draw_launcher :: (app: *InnerBreeze) {
+    if !app.launcher_open || app.host_feature != 0 { return }
+    if app.modal.active != 0 {
+        app_launcher_close(app)
+        return
+    }
+    desktop := app_nav_desktop_rail_enabled(app) != 0
+    panel := Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+        cast(float32)app.ui.view_height}
+    union_bounds := TreeRootBounds(app.ui.session)
+    if desktop {
+        panel.x = -cast(float32)app.launcher_drawer_width
+        panel.width = cast(float32)app.launcher_drawer_width
+        union_bounds = panel
+        union_bounds.x -= cast(float32)app_nav_desktop_rail_width(app)
+        union_bounds.width += cast(float32)app_nav_desktop_rail_width(app)
+        if app_navigation_placement(app) == NAVIGATION_RIGHT {
+            panel.x = cast(float32)app.ui.view_width
+            union_bounds.x = panel.x
+        }
+    }
+    overlay: DismissibleOverlayProps
+    overlay.key = KeyHash("inbe/apps/overlay")
+    overlay.bounds = union_bounds
+    result := DismissibleOverlay(app.ui.session, overlay)
+    if result.closed {
+        app_launcher_close(app)
+        return
+    }
+    if result.panel_node < 0 || !TreePushScope(app.ui.session, result.panel_node) { return }
+    PaintRoundedFill(app.ui.session, result.panel_node, panel, 0.0, 4,
+        StyleTokenColor("launcher-canvas"))
+    margin := AppScale(20)
+    x := cast(s32)panel.x + margin
+    width := cast(s32)panel.width - margin * 2
+    compact := app.ui.view_height < AppScale(520)
+    title_y := AppScale(ifx desktop || compact then 24 else 56)
+    if !desktop && !compact {
+        Text(app.ui.session, TextProps.{.text = "Inbe", .font = AppScale(18),
+                .bounds = Rectangle.{cast(float32)x, cast(float32)AppScale(18),
+                    cast(float32)width, cast(float32)AppScale(28)},
+                .class_name = KssClassId(KssMakeName("launcher-heading"))})
+    }
+    Text(app.ui.session, TextProps.{.text = LocaleText("launcher_title"),
+            .font = AppScale(28), .wrap = cast(TextWrap)TextWrapNone,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)title_y,
+                cast(float32)(width - AppScale(48)), cast(float32)AppScale(40)},
+            .class_name = KssClassId(KssMakeName("launcher-title"))})
+    close: ButtonProps
+    close.id = 6790
+    close.label = LocaleText("close_button")
+    close.icon_shape = "S1.6rr:M6 6L18 18M18 6L6 18"
+    close.icon_only = true
+    close.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    close.class_name = KssClassId(KssMakeName("launcher-pin"))
+    close.bounds = Rectangle.{cast(float32)(x + width - AppScale(44)),
+        cast(float32)(title_y - AppScale(2)), cast(float32)AppScale(44), cast(float32)AppScale(44)}
+    if Button(app.ui.session, close) != 0 { app_launcher_close(app) }
+    search_y := title_y + AppScale(56)
+    typed: [128]u8
+    field: TextFieldProps
+    field.focus_id = 6791
+    field.value = AppTextFromCString(*app.launcher_search[0], 128)
+    field.placeholder = LocaleText("launcher_search")
+    field.label = LocaleText("launcher_search")
+    field.cursor = app.launcher_search_cursor
+    field.anchor = app.launcher_search_anchor
+    field.scroll_x = app.launcher_search_scroll
+    field.focused = app.launcher_search_focused
+    field.max_bytes = 127
+    field.max_codepoints = 80
+    field.class_name = KssClassId(KssMakeName("launcher-search"))
+    field.bounds = Rectangle.{cast(float32)x, cast(float32)search_y,
+        cast(float32)(width - AppScale(48)), cast(float32)AppScale(48)}
+    field.input = SampleTextFieldInput(app.launcher_search_focused, typed[:])
+    searched := TextField(app.ui.session, field)
+    if searched.edit.changed {
+        unused AppReplaceText(app.launcher_search[:], searched.edit.start,
+            searched.edit.end, searched.edit.replacement)
+        app.launcher_scroll = 0
+    }
+    app.launcher_search_cursor = searched.cursor
+    app.launcher_search_anchor = searched.anchor
+    app.launcher_search_scroll = searched.scroll_x
+    app.launcher_search_focused = searched.focused
+    if searched.clipboard_write { unused TextInputWriteClipboard(searched.clipboard_text) }
+    clear: ButtonProps
+    clear.id = 6792
+    clear.label = LocaleText("launcher_clear_search")
+    clear.icon_shape = "S1.6rr:M6 6L18 18M18 6L6 18"
+    clear.icon_only = true
+    clear.disabled = app.launcher_search[0] == 0
+    clear.class_name = KssClassId(KssMakeName("launcher-pin"))
+    clear.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    clear.bounds = Rectangle.{cast(float32)(x + width - AppScale(44)),
+        cast(float32)(search_y + AppScale(2)), cast(float32)AppScale(44), cast(float32)AppScale(44)}
+    if Button(app.ui.session, clear) != 0 {
+        app.launcher_search[0] = 0
+        app.launcher_search_cursor = 0
+        app.launcher_search_anchor = 0
+        app.launcher_scroll = 0
+    }
+    query := AppTextFromCString(*app.launcher_search[0], 128)
+    routes := LauncherRoutes()
+    canonical: [5]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice"}
+    matches: [5]s32
+    match_count: s32 = 0
+    for index: cast(s32)0..4 {
+        if LauncherMatches(app_nav_route_label(routes[index]), query) ||
+        LauncherMatches(canonical[index], query) {
+            matches[match_count] = routes[index]
+            match_count += 1
+        }
+    }
+    show_favorites := query.count == 0
+    favorite_height := ifx show_favorites then AppScale(144) else 0
+    if show_favorites && (app.launcher_editing || app.launcher_favorite_count == 0) {
+        favorite_height += AppScale(28)
+    }
+    tile_height := AppScale(ifx desktop then 52 else 88)
+    gap := AppScale(ifx desktop then 8 else 12)
+    rows := ifx desktop then match_count else (match_count + 1) / 2
+    content_height := favorite_height + AppScale(36) + rows * (tile_height + gap)
+    if match_count == 0 { content_height += AppScale(64) }
+    bottom_dock := ifx !desktop && app_navigation_placement(app) != NAVIGATION_TOP then AppScale(84) else 0
+    footer_y := app.ui.view_height - bottom_dock - AppScale(72)
+    body_y := search_y + AppScale(68)
+    scroll: ScrollProps
+    scroll.key = KeyHash("inbe/apps/library")
+    scroll.bounds = Rectangle.{cast(float32)x, cast(float32)body_y,
+        cast(float32)width, cast(float32)(footer_y - body_y - AppScale(8))}
+    scroll.content_height = content_height
+    scroll.scroll_offset = app.launcher_scroll
+    scrolled := Scroll(app.ui.session, scroll)
+    app.launcher_scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        // Scroll reserves room for its thumb; cards stay inside that content
+        // width so their rounded borders and pin actions remain visible.
+        width = cast(s32)scrolled.content.width
+        y := cast(s32)scrolled.content.y
+        if show_favorites {
+            Text(app.ui.session, TextProps.{.text = LocaleText("launcher_favorites"),
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                        cast(float32)width, cast(float32)AppScale(28)},
+                    .class_name = KssClassId(KssMakeName("launcher-heading"))})
+            edit: ButtonProps
+            edit.id = 6793
+            edit.label = LocaleText(ifx app.launcher_editing then "done_button" else "launcher_edit_favorites")
+            edit.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+            edit.class_name = KssClassId(KssMakeName("launcher-edit"))
+            edit.bounds = Rectangle.{cast(float32)(x + width / 2), cast(float32)(y - AppScale(8)),
+                cast(float32)(width / 2), cast(float32)AppScale(44)}
+            if Button(app.ui.session, edit) != 0 {
+                app.launcher_editing = !app.launcher_editing
+                app_block_current_click(app)
+            }
+            favorite_width := (width - gap) / 2
+            for index: cast(s32)0..app.launcher_favorite_count - 1 {
+                app_launcher_draw_card(app, app.launcher_favorites[index],
+                    Rectangle.{cast(float32)(x + index * (favorite_width + gap)),
+                        cast(float32)(y + AppScale(36)), cast(float32)favorite_width,
+                        cast(float32)AppScale(88)}, true, true)
+            }
+            if app.launcher_editing || app.launcher_favorite_count == 0 {
+                Text(app.ui.session, TextProps.{.text = LocaleText("launcher_favorites_hint"),
+                        .font = AppScale(12),
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(128)),
+                            cast(float32)width, cast(float32)AppScale(34)},
+                        .class_name = KssClassId(KssMakeName("launcher-muted"))})
+                y += AppScale(28)
+            }
+            y += AppScale(144)
+        }
+        Text(app.ui.session, TextProps.{.text = LocaleText("launcher_all_apps"),
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                    cast(float32)width, cast(float32)AppScale(28)},
+                .class_name = KssClassId(KssMakeName("launcher-heading"))})
+        y += AppScale(36)
+        item_width := ifx desktop then width else (width - gap) / 2
+        for index: cast(s32)0..match_count - 1 {
+            column := ifx desktop then 0 else index % 2
+            row := ifx desktop then index else index / 2
+            app_launcher_draw_card(app, matches[index],
+                Rectangle.{cast(float32)(x + column * (item_width + gap)),
+                    cast(float32)(y + row * (tile_height + gap)),
+                    cast(float32)item_width, cast(float32)tile_height}, !desktop, false)
+        }
+        if match_count == 0 {
+            Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                        cast(float32)width, cast(float32)AppScale(56)},
+                    .class_name = KssClassId(KssMakeName("launcher-muted"))})
+        }
+        unused End(app.ui.session)
+    }
+    footer_routes: [2]s32 = .{APP_NAV_ROUTE_PROFILE, APP_NAV_ROUTE_SETTINGS}
+    footer_count := ifx desktop then 1 else 2
+    footer_width := (width - gap * (footer_count - 1)) / footer_count
+    for index: cast(s32)0..footer_count - 1 {
+        route := footer_routes[ifx desktop then 1 else index]
+        footer: ButtonProps
+        footer.id = 7200 + route
+        footer.label = app_nav_route_label(route)
+        if desktop { footer.content_alignment = cast(ContentAlignment)ContentAlignmentStart }
+        footer.image = bottom_nav_route_image(route)
+        footer.icon_shape = app_nav_route_shape(route)
+        footer.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        footer.class_name = KssClassId(KssMakeName("launcher-tile"))
+        footer.bounds = Rectangle.{cast(float32)(x + index * (footer_width + gap)),
+            cast(float32)(footer_y + AppScale(12)), cast(float32)footer_width, cast(float32)AppScale(48)}
+        if Button(app.ui.session, footer) != 0 { app_launcher_activate(app, route) }
+    }
+    app_draw_favorites_dock(app)
+    unused End(app.ui.session)
+}

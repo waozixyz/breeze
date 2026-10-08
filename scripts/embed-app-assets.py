@@ -48,12 +48,15 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
         "",
     ]
     for index, (_, (data, _)) in enumerate(sorted(entries.items())):
-        lines.append(f"static const unsigned char asset_{index}[] = {{")
-        for offset in range(0, len(data), 16):
-            lines.append("    " + ", ".join(f"0x{byte:02x}" for byte in data[offset:offset + 16]) + ",")
+        # String literals preserve the bytes while avoiding millions of
+        # initializer-expression nodes in the native compiler's memory.
+        lines.append(f"static const unsigned char asset_{index}[] =")
+        for offset in range(0, len(data), 2048):
+            literal = "".join(f"\\x{byte:02x}" for byte in data[offset:offset + 2048])
+            lines.append('    "' + literal + '"')
         if not data:
-            lines.append("    0x00,")
-        lines.append("};")
+            lines.append('    ""')
+        lines.append(";")
     lines.extend(["", "const AssetEntry asset_entries[] = {"])
     for index, (path, (data, mime)) in enumerate(sorted(entries.items())):
         lines.append(

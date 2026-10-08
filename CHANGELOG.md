@@ -1,4 +1,10 @@
 # Changelog
+## [2.1.17] - 2026-10-07
+### Changed
+- Choose apps from a searchable library with a compact favorites dock on mobile and desktop.
+- Pin up to two favorites without removing other apps or their saved data.
+- Open Profile and Settings from the app library, with a Profile shortcut on desktop.
+
 ## [2.1.16] - 2026-10-07
 ### Changed
 - Open faster by keeping feature packages loaded and loading language fonts only when needed.

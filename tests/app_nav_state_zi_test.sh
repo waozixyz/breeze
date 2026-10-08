@@ -9,11 +9,23 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/game2d/src" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     "$root/src/app/app_nav_state.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/game2d/src" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/gen" "$root/src/app/app_nav_state.zi"
@@ -23,6 +35,6 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     -I"$root/build/packages/ziran/include" -I"$work/gen" \
     "$root/tests/app_nav_state_link_test.c" \
     "$work/gen/app/app_nav_state.c" \
-    "$work/gen/bottom_nav_policy.c" -o "$work/test"
+    "$work/gen/bottom_nav_policy.c" "$work/gen/route_list.c" -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe navigation state source and generated C behavior passed"
