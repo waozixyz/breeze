@@ -1,4 +1,4 @@
-"""Exercise scale dragging and saved favorites on owned private windows."""
+"""Verify Settings scale gestures and removal of the former favorites panel."""
 import ast
 import contextlib
 import json
@@ -150,86 +150,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         command("xdotool", "keyup", "0", "ctrl")
         wait_setting("ui_scale", 10)
         time.sleep(.5)
-        click(window, 200, 381)  # Apps and favorites.
-        capture(window, "apps-favorites")
-        assert order() == [12, 1]
-        command("xdotool", "mousemove", "--window", window, "396", "148")
-        time.sleep(.15)
-        command("xdotool", "mousedown", "1")
-        time.sleep(.2)
-        command("xdotool", "mousemove", "--window", window, "396", "224")
-        time.sleep(.3)
-        capture(window, "favorites-reordering")
-        command("xdotool", "mouseup", "1")
-        time.sleep(.4)
-        assert order() == [1, 12], order()
-        click(window, 826, 148)  # Unpin Habits.
-        assert order() == [12], order()
-        wait_setting("enabled_apps", 22)
-        capture(window, "favorite-unpinned")
+        image = capture(window, "settings-without-apps-panel")
+        image.save(OUTPUT / "settings-without-apps-panel.png")
+        text = command("tesseract", str(OUTPUT / "settings-without-apps-panel.png"), "stdout")
+        assert "Apps and favorites" not in text, "Removed panel remains in Settings"
+        assert order() == [12, 1], "Settings changed the favorite order"
+        assert settings()["enabled_apps"] == "22"
 
     with application("restart") as (window, log):
-        assert order() == [12], "Restart restored an unpinned shortcut"
-        click(window, 44, 232)  # Apps follows the one favorite.
-        click(window, 220, 684)
-        click(window, 200, 381, hold=.35)
-        assert order() == [12], "Opening settings with a held click changed favorites"
+        assert order() == [12, 1], "Settings changes altered saved favorites"
         assert settings()["enabled_apps"] == "22"
-        click(window, 826, 260)  # Pin Habits from the available rows.
-        assert order() == [12, 1], order()
-        click(window, 826, 148)  # Unpin Lumi.
-        assert order() == [1], order()
-        assert settings()["enabled_apps"] == "22", "Unpinning disabled an app"
-        capture(window, "lumi-unpinned")
-
-        def host_state():
-            value = command("xprop", "-id", window, "_HARMONY_APP_STATE")
-            return json.loads(ast.literal_eval(value.split(" = ", 1)[1]))
-
-        for control, arguments in (("mcp.set_theme", {"theme": "forest"}),
-                                   ("mcp.open_view", {"view": "lumi"})):
-            request = "unpinned-" + control.replace(".", "-")
-            command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
-                    "_HARMONY_APP_ACTION", json.dumps(dict(control=control,
-                    request_id=request, arguments=arguments)))
-            deadline = time.monotonic() + 3
-            while host_state()["last_request_id"] != request:
-                assert time.monotonic() < deadline, "Unpinned Lumi stopped accepting app tools"
-                time.sleep(.05)
-            assert host_state()["last_request_ok"]
-        assert host_state()["screen"] == 23
-        assert host_state()["settings"]["theme"] == "forest"
-        assert settings()["enabled_apps"] == "22"
-        assert order() == [1], "Opening Lumi added an unwanted shortcut"
-        capture(window, "unpinned-lumi-tools")
-
-        request = "unpinned-open-settings"
-        command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
-                "_HARMONY_APP_ACTION", json.dumps(dict(control="mcp.open_view",
-                request_id=request, arguments={"view": "settings"})))
-        deadline = time.monotonic() + 3
-        while host_state()["last_request_id"] != request:
-            assert time.monotonic() < deadline
-            time.sleep(.05)
-        click(window, 826, 316)  # Pin Diary without changing app choices.
-        assert order() == [1, 11], order()
-        assert settings()["enabled_apps"] == "22"
-        click(window, 826, 372)  # Pin Lumi as the third favorite.
-        assert order() == [1, 11, 12], order()
-        click(window, 826, 316)  # Pin Lists from the remaining available rows.
-        assert order() == [1, 11, 12, 3], order()
-        click(window, 826, 372)  # Pin Practice: every app may be a favorite.
-        assert order() == [1, 11, 12, 3, 2], order()
-        assert settings()["enabled_apps"] == "22", "Extra pins changed app choices"
-        click(window, 620, 204)  # Opening Diary also enables it.
-        wait_setting("enabled_apps", 30)
-        assert host_state()["screen"] == 22
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT title FROM elist_lists WHERE id='settings-preserved-list'").fetchone() == ("Keep this saved list",)
             assert db.execute("SELECT name FROM habits WHERE id='settings-preserved-habit'").fetchone() == ("Keep this habit",)
 
-    with application("saved-order"):
-        assert order() == [1, 11, 12, 3, 2], "All favorite positions did not persist"
-        assert settings()["enabled_apps"] == "30"
-
-print("Settings: scale commits on release; favorite reordering, every app pinned and app tools preserve data")
+print("Settings: scale commits on release; Apps and Favorites removed; saved data preserved")

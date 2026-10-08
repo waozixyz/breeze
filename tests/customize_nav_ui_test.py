@@ -1,4 +1,4 @@
-"""Open cell settings with a held click using an isolated profile on Xvfb."""
+"""Edit favorites directly in Apps with a held click on a private display."""
 
 import contextlib
 import os
@@ -88,18 +88,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
 
     with application("app") as (window, log):
         click(window, *( (325, 802) if NARROW else (44, 316) ))
-        click(window, *( (282, 724) if NARROW else (220, 684) ))
-        click(window, *( (195, 489) if NARROW else (200, 381) ), hold=PRESS_SECONDS)
+        click(window, *( (290, 169) if NARROW else (310, 169) ), hold=PRESS_SECONDS)
         command("import", "-window", window, str(OUTPUT / "after-click.png"))
         saved = settings()
         assert saved["launcher_favorite_count"] == "2", "Opening press changed favorites"
         assert saved["enabled_apps"] == "22", "Opening press changed cell choices"
-        # Unpinning proves that the direct entry opened favorites settings.
-        click(window, *( (336, 130) if NARROW else (826, 148) ))
+        # Unpinning uses the pin control in the Apps favorite tile.
+        click(window, *( (170, 207) if NARROW else (210, 207) ))
         saved = settings()
         assert saved["launcher_favorite_count"] == "1", "Unpin control did not open"
         assert saved["launcher_favorite_0"] == "1", saved
         assert saved["enabled_apps"] == "22", "Unpinning changed app choices"
         assert "screen=6->12" not in log.read_text(), log.read_text()
 
-print("Apps and favorites: a held Settings entry keeps favorites; unpin preserves app choices")
+print("Apps: a held edit action keeps favorites; unpin preserves app choices")

@@ -1,4 +1,12 @@
 # Changelog
+## [2.1.18] - 2026-10-08
+### Changed
+- Show each app's bundle size in Apps and favorites.
+- Start with the searchable Apps screen and ready-to-use apps, without an install chooser.
+- Give new users Lumi, Habits and Practices as their first three favorites.
+- Arrange favorites by dragging app tiles in Apps, with no separate Apps and Favorites settings page.
+- Remove the extra Inbe heading above Apps.
+
 ## [2.1.17] - 2026-10-07
 ### Changed
 - Choose apps from a searchable library with a compact favorites dock on mobile and desktop.

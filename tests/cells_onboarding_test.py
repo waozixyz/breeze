@@ -1,4 +1,4 @@
-"""Verify real onboarding choices and restarts on a private display/profile."""
+"""Verify first-start Apps, existing profiles and temporary mini practices."""
 
 import contextlib
 import json
@@ -110,90 +110,33 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
 result = {"display": os.environ["DISPLAY"], "deployment": False}
 with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     profile = Path(temporary)
-    # Keep package-network timing out of layout and selection assertions.
-    for prepared in (profile, profile / "recommended"):
-        with application(prepared, "prepare-" + prepared.name) as (window, log):
-            with sqlite3.connect(prepared / "inbe.db") as db:
-                user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
-                db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                           "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
-                           (user, "apps_last_update_check", "1900000000"))
-    with application(profile / "recommended", "fresh-recommended") as (window, log):
-        tap(window, 450, 425)
-        wait_setting(profile / "recommended", "language_setup_done", 1)
-        capture(window, "recommended-cells")
-        tap(window, 450, 676)
-        wait_setting(profile / "recommended", "enabled_apps", 22)
-        wait_setting(profile / "recommended", "main_tab", 4)
-        assert "screen=21->23" in log.read_text(), log.read_text()
-        time.sleep(1)
-        assert "screen=23->21" not in log.read_text(), "Router restored the chooser after opening Lumi"
-        capture(window, "recommended-lumi-home")
-    with application(profile, "fresh-language") as (window, log):
-        capture(window, "fresh-language")
-        assert settings(profile)["apps_setup_done"] == "0"
-        tap(window, 450, 425)
-        wait_setting(profile, "language_setup_done", 1)
-        assert "screen=8->21" in log.read_text(), log.read_text()
-        assert settings(profile)["apps_setup_done"] == "0"
-        capture(window, "after-language-apps")
-        scroll_picker(window, True)
-        tap(window, 618, 566)
-        wait_setting(profile, "cells_auto_update", 0)
-    # Restart between language and app selection must still show the chooser.
-    with application(profile, "resume-chooser") as (window, log):
+    # First start opens the Apps library directly; system language is selected.
+    with application(profile, "fresh-apps") as (window, log):
+        capture(window, "fresh-apps")
+        saved = settings(profile)
+        assert saved["apps_setup_done"] == "0"
+        assert saved["language_setup_done"] == "1"
+        assert saved["enabled_apps"] == "31"
+        assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
+    # Closing before opening a tile keeps first-start Apps on restart.
+    with application(profile, "resume-apps") as (window, log):
         capture(window, "resumed-apps")
-        assert settings(profile)["cells_auto_update"] == "0"
-        scroll_picker(window, True)
-        tap(window, 618, 566)
-        wait_setting(profile, "cells_auto_update", 1)
-        scroll_picker(window, False)
-        tap(window, 260, 218)  # Lumi off
-        tap(window, 260, 290)  # Habits off
-        tap(window, 260, 362)  # Practices off
-        tap(window, 260, 474)  # Optional Lists on
-        tap(window, 450, 676)
-        wait_setting(profile, "enabled_apps", 1)
+        tap(window, 100, 104)
+        command("xdotool", "type", "--clearmodifiers", "Lists")
+        time.sleep(.3)
+        tap(window, 100, 236)
         wait_setting(profile, "apps_setup_done", 1)
+        wait_setting(profile, "main_tab", 2)
         assert "screen=21->16" in log.read_text(), log.read_text()
-        capture(window, "lists-only")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0]
-        db.execute(
-            "INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?,?,?,0,0,1)",
-            ("choice-preserved-list", user, "Saved while Lists is enabled"),
-        )
-        db.execute("UPDATE settings SET value='0' WHERE key='apps_setup_done'")
-    # The chooser can select no apps; Settings remains usable and data is kept.
-    with application(profile, "choose-none") as (window, log):
-        tap(window, 260, 474)  # Lists off
-        tap(window, 450, 676)
-        wait_setting(profile, "enabled_apps", 0)
-        assert "screen=21->6" in log.read_text(), log.read_text()
-        capture(window, "settings-no-apps")
-    with application(profile, "restart-none") as (window, log):
-        capture(window, "restart-settings-no-apps")
-        assert settings(profile)["enabled_apps"] == "0"
-        with sqlite3.connect(profile / "inbe.db") as db:
-            assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
-            assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
-        tap(window, 330, 382)  # Apps & sidebar.
-        capture(window, "apps-sidebar-none")
-        tap(window, 825, 166)  # Add Habits from the unified list.
-        wait_setting(profile, "enabled_apps", 2)
-        capture(window, "settings-habits-reenabled")
-    with sqlite3.connect(profile / "inbe.db") as db:
-        db.execute("UPDATE settings SET value='1' WHERE key='habits_guide_seen'")
-    with application(profile, "mobile-apps", mobile=True) as (window, log):
-        tap(window, 295, 774)  # Settings in the bottom navigation.
-        tap(window, 196, 486)  # Apps & sidebar in the narrow settings hub.
-        capture(window, "mobile-apps-before")
-        for cycle in range(3):
-            tap(window, 335, 268)  # Add the bundled Diary app.
-            wait_setting(profile, "enabled_apps", 10)
-            tap(window, 335, 156)  # Hide Diary; its package stays installed.
-            wait_setting(profile, "enabled_apps", 2)
-        capture(window, "mobile-apps-after")
+        db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?,?,?,0,0,1)",
+                   ("choice-preserved-list", user, "Saved while Lists is enabled"))
+        values = {"habits_guide_seen": 1, "tutorial_seen": 1, "cells_auto_update": 0,
+                  "apps_last_update_check": 1900000000}
+        for key, value in values.items():
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
     # Mini is explicitly temporary Practice, independently of saved choices.
     for mask in (1, 0):
         with sqlite3.connect(profile / "inbe.db") as db:
@@ -257,7 +200,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             capture(window, f"mini-expanded-{mask}-exited")
             # A real full-app settings action saves the unchanged selection.
             tap(window, 110, 670)
-            tap(window, 330, 382)  # Apps & sidebar retains the selection.
             capture(window, f"mini-expanded-{mask}-apps")
             assert settings(profile)["enabled_apps"] == str(mask)
             # Ctrl+Q follows the owned window's normal quit and app_destroy
@@ -324,18 +266,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             time.sleep(0.1)
         capture(window, "existing-data-lists")
     result.update(
-        lumi_first_recommended_default_home=True,
-        language_then_apps=True, restart_in_onboarding=True,
-        auto_update_switch_persists=True,
-        lists_only=True, zero_apps_settings=True, restart_choices=True,
-        settings_reenable=True, explicit_feature_cli=True, same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,
+        first_start_apps_library=True, system_language=True,
+        default_favorites_lumi_habits_practices=True, restart_in_onboarding=True,
+        open_tile_completes_setup=True, explicit_feature_cli=True,
+        same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,
         mini_starts_practice_without_profile_writes=True,
         mini_expansion_preserves_selection_and_session=True,
         mini_expansion_clock_advances=True,
         mini_expansion_explicit_save_and_graceful_quit=True,
         data_and_identity_preserved=True, existing_profile_keeps_all_apps=True,
         upgrade_keeps_selected_page_and_repairs_shortcuts=True,
-        narrow_layout_repeated_diary_add_remove=True,
     )
 (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 print(json.dumps(result, indent=2))

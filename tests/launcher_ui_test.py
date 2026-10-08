@@ -96,6 +96,9 @@ with contextlib.ExitStack() as stack:
                 for i in range(int(saved["launcher_favorite_count"]))]
 
     def seed(profile, values):
+        if "enabled_apps" in values:
+            for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi")):
+                values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             for name, value in values.items():
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
@@ -115,7 +118,7 @@ with contextlib.ExitStack() as stack:
                 while time.monotonic() < deadline:
                     assert app.poll() is None, log_path.read_text()
                     found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
-                                           env=env, capture_output=True, text=True, timeout=2)
+                                           env=env, capture_output=True, text=True, timeout=5)
                     if found.returncode == 0 and (profile / "inbe.db").exists():
                         window = found.stdout.splitlines()[0]
                         break
@@ -145,8 +148,24 @@ with contextlib.ExitStack() as stack:
         name = "mobile" if mobile else "desktop"
         with tempfile.TemporaryDirectory(prefix="inbe-launcher-") as temporary:
             profile = Path(temporary)
-            with application(profile, name + "-prepare", width, height):
-                pass
+            with application(profile, name + "-prepare", width, height) as (window, log):
+                capture(window, name + "-first-start")
+                with sqlite3.connect(profile / "inbe.db") as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+                assert favorites(profile) == [12, 1, 2], "New users did not get Lumi, Habits, Practices"
+                assert settings(profile)["apps_setup_done"] == "0", "Setup finished before choosing an app"
+                assert settings(profile)["enabled_apps"] == "31", "Bundled apps unavailable on first start"
+                key(window, "Escape")
+                # First start has the same searchable Apps library, without a chooser.
+                click(window, 100, 104)
+                command("xdotool", "type", "--clearmodifiers", "--delay", "50", "Diary")
+                time.sleep(.3)
+                click(window, 100, 236)
+                assert settings(profile)["main_tab"] == "3", "First-start Apps did not open Diary"
+                assert settings(profile)["apps_setup_done"] == "1", "Opening an app did not complete setup"
+            with application(profile, name + "-first-restart", width, height) as (window, log):
+                assert settings(profile)["main_tab"] == "3", "First selected app was lost on restart"
+                assert favorites(profile) == [12, 1, 2], "Restart changed new-user favorites"
             with sqlite3.connect(profile / "inbe.db") as db:
                 user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
                 db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) "
@@ -164,16 +183,16 @@ with contextlib.ExitStack() as stack:
                            "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4,
                            "launcher_favorite_count": 2, "launcher_favorite_0": 1, "launcher_favorite_1": 2})
             apps_point = (325, height - 42) if mobile else (44, 316)
-            search_point = (100, 136) if mobile else (180, 104)
-            tile_point = (100, 268) if mobile else (220, 220)
+            search_point = (100, 104) if mobile else (180, 104)
+            tile_point = (100, 236) if mobile else (220, 220)
 
             with application(profile, name, width, height) as (window, log):
                 click(window, *apps_point, hold=.35)
                 capture(window, name + "-launcher")
                 assert favorites(profile) == [1, 2], "Opening changed favorites"
                 assert settings(profile)["enabled_apps"] == "22", "Opening changed available apps"
-                first_favorite = (90, 260) if mobile else (170, 226)
-                second_favorite = (260, 260) if mobile else (320, 226)
+                first_favorite = (90, 228) if mobile else (170, 226)
+                second_favorite = (260, 228) if mobile else (320, 226)
                 drag(window, first_favorite, second_favorite, name + "-reorder")
                 assert favorites(profile) == [2, 1], "Horizontal drag did not reorder favorites"
                 assert settings(profile)["main_tab"] == "1", "Dragging opened an app"
@@ -204,7 +223,7 @@ with contextlib.ExitStack() as stack:
                 click(window, *apps_point)
                 # Holding a search result pins without activating or enabling it.
                 def search_app(label):
-                    click(window, *((348, 138) if mobile else (382, 106)))
+                    click(window, *((348, 106) if mobile else (382, 106)))
                     click(window, *search_point)
                     command("xdotool", "type", "--clearmodifiers", "--delay", "50", label)
                     time.sleep(.3)
@@ -252,7 +271,7 @@ with contextlib.ExitStack() as stack:
                 capture(window, name + "-all-favorites-restart")
                 # Search results stay at a stable position even with several favorite rows.
                 def search_app(label):
-                    click(window, *((348, 138) if mobile else (382, 106)))
+                    click(window, *((348, 106) if mobile else (382, 106)))
                     click(window, *search_point)
                     command("xdotool", "type", "--clearmodifiers", "--delay", "50", label)
                     time.sleep(.3)
@@ -262,7 +281,7 @@ with contextlib.ExitStack() as stack:
                     search_app(label)
                     click(window, *tile_point, hold=.85)
                     assert favorites(profile) == expected, "Hold did not unpin " + label
-                click(window, *((348, 138) if mobile else (382, 106)))
+                click(window, *((348, 106) if mobile else (382, 106)))
                 time.sleep(.3)
                 capture(window, name + "-empty")
 
@@ -272,12 +291,12 @@ with contextlib.ExitStack() as stack:
                 command("xdotool", "type", "--clearmodifiers", "--delay", "50", "Diary")
                 time.sleep(.3)
                 source = tile_point
-                destination = (270, 268) if mobile else (300, 170)
+                destination = (270, 236) if mobile else (300, 170)
                 drag(window, source, destination, name + "-add-favorite")
                 assert favorites(profile) == [11], "Dropping an app did not add its favorite"
                 assert settings(profile)["main_tab"] == "3", "Dropping an app also activated it"
-                click(window, *((348, 138) if mobile else (382, 106)))
-                click(window, *((100, 260) if mobile else (180, 226)), hold=.85)
+                click(window, *((348, 106) if mobile else (382, 106)))
+                click(window, *((100, 228) if mobile else (180, 226)), hold=.85)
                 assert favorites(profile) == [], "A dragged favorite could not be unpinned"
 
             with application(profile, name + "-restart", width, height) as (window, log):
@@ -289,7 +308,7 @@ with contextlib.ExitStack() as stack:
                 command("xdotool", "type", "--clearmodifiers", "--delay", "50", "no-such-app")
                 time.sleep(.3)
                 capture(window, name + "-no-results")
-                click(window, *( (348, 138) if mobile else (382, 106) ))
+                click(window, *( (348, 106) if mobile else (382, 106) ))
                 capture(window, name + "-cleared")
                 # Profile and Settings remain reachable without any favorite.
                 footer_y = height - (84 if mobile else 0) - 36
