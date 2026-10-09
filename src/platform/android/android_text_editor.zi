@@ -1,0 +1,304 @@
+// Android IMEs edit UTF-8 snapshots through Kryon's existing TextRequest API.
+// Java owns composing spans; widgets validate edits and retain app ownership.
+#import, file "activity_jni.zi";
+#import, file "android_mutex.zi";
+#import "session"
+#import "tree"
+#import "tree_input"
+#import "text_host"
+#import "text_request"
+#import "widget_kind"
+#import "byte_text_linux"
+#import "text_input_platform"
+using WidgetKind;
+
+#if #defined(ANDROID_BUILD) {
+    Utf8 :: #import "std/utf8";
+    Grapheme :: #import "std/grapheme";
+    editor_mutex: AndroidMutex;
+    editor_owner: Session;
+    editor_target: s64;
+    editor_generation: u64;
+    editor_revision: s64;
+    editor_pending: bool;
+    editor_pending_bytes: [65536]u8;
+    editor_pending_count: s32;
+    editor_pending_cursor: s32;
+    editor_pending_anchor: s32;
+    editor_stage_bytes: [65536]u8;
+    editor_stage_count: s32;
+    editor_stage_generation: u64;
+    editor_stage_cursor: s32;
+    editor_stage_anchor: s32;
+    editor_stage_secure: bool;
+    editor_stage_multiline: bool;
+    editor_stage_edited: bool;
+    editor_stage_ready: bool;
+    editor_sent_bytes: [65536]u8;
+    editor_sent_count: s32 = -1;
+    editor_sent_cursor: s32;
+    editor_sent_anchor: s32;
+    editor_sent_revision: s64 = -1;
+    editor_sent_secure: bool;
+    editor_sent_multiline: bool;
+
+    AndroidTextEditorPresent :: (session: Session, index: s32, value: string,
+        cursor: s32, anchor: s32, secure: bool, read_only: bool, edited: bool) {
+        if !TextInputOwnerMatches(editor_owner, session) || read_only ||
+        value.count > editor_stage_bytes.count {
+            return
+        }
+        node := TreeSubmittedNodeAt(session, index)
+        if !node.selected || node.disabled || !node.has_text {
+            return
+        }
+        for byte: cast(s32)0..cast(s32)value.count - 1 {
+            editor_stage_bytes[byte] = value[byte]
+        }
+        editor_stage_count = cast(s32)value.count
+        editor_stage_generation = node.identity_generation
+        editor_stage_cursor = cursor
+        editor_stage_anchor = anchor
+        editor_stage_secure = secure
+        editor_stage_multiline = node.kind == WidgetKindTextArea
+        editor_stage_edited = edited
+        editor_stage_ready = true
+    }
+
+    AndroidTextEditorPublish :: (target: s64, revision: s64) -> bool {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return false
+        }
+        defer activity_jni_detach(*session)
+        method := JniMethod(*session, "setTextInputState", "(JJ[BIIZZ)V")
+        if method == null {
+            return false
+        }
+        env := session.env
+        bytes := env.functions.NewByteArray(env, editor_stage_count)
+        if bytes == null {
+            return false
+        }
+        if editor_stage_count > 0 {
+            env.functions.SetByteArrayRegion(env, bytes, 0, editor_stage_count,
+                *editor_stage_bytes[0])
+        }
+        arguments: [7]JniValue
+        arguments[0].long_integer = target
+        arguments[1].long_integer = revision
+        arguments[2].reference = bytes
+        arguments[3].integer = editor_stage_cursor
+        arguments[4].integer = editor_stage_anchor
+        arguments[5].boolean = cast(u8)editor_stage_secure
+        arguments[6].boolean = cast(u8)editor_stage_multiline
+        env.functions.CallVoidMethodA(env, session.activity, method, *arguments[0])
+        return env.functions.ExceptionCheck(env) == 0
+    }
+}
+
+AndroidTextEditorOpen :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*editor_mutex)
+        editor_owner = session
+        editor_target += 1
+        editor_generation = 0
+        editor_revision = 0
+        editor_pending = false
+        AndroidMutexUnlock(*editor_mutex)
+        editor_stage_ready = false
+        editor_sent_count = -1
+        TextHostInstall(AndroidTextEditorPresent)
+    }
+    unused session
+}
+
+AndroidTextEditorClose :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*editor_mutex)
+        owned := TextInputOwnerMatches(editor_owner, session)
+        if owned {
+            editor_owner = .{}
+            editor_target += 1
+            editor_generation = 0
+            editor_pending = false
+            editor_pending_count = 0
+        }
+        AndroidMutexUnlock(*editor_mutex)
+        if owned {
+            editor_stage_ready = false
+            editor_stage_bytes = .{}
+            editor_sent_bytes = .{}
+            TextHostClear()
+            TextRequestClear(session)
+        }
+    }
+    unused session
+}
+
+// Latest complete snapshots coalesce composing updates without losing edits.
+#program_export
+AndroidTextEditorUpdate :: (target: s64, revision: s64, value: string,
+    cursor: s32, anchor: s32) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        if value.count > editor_pending_bytes.count || !Utf8.Valid(value) ||
+        cursor < 0 || anchor < 0 || cursor > value.count || anchor > value.count {
+            return false
+        }
+        AndroidMutexLock(*editor_mutex)
+        defer AndroidMutexUnlock(*editor_mutex)
+        if !SessionValid(editor_owner) || editor_generation == 0 ||
+        target != editor_target || revision <= editor_revision {
+            return false
+        }
+        for byte: cast(s32)0..cast(s32)value.count - 1 {
+            editor_pending_bytes[byte] = value[byte]
+        }
+        editor_pending_count = cast(s32)value.count
+        editor_pending_cursor = Grapheme.Boundary(value, cursor)
+        editor_pending_anchor = Grapheme.Boundary(value, anchor)
+        editor_revision = revision
+        editor_pending = true
+        return true
+    }
+    unused target
+    unused revision
+    unused value
+    unused cursor
+    unused anchor
+    return false
+}
+
+#program_export
+android_device_native_text_input_state :: (env: *JniEnv, activity: *void,
+    target: s64, revision: s64, bytes: *void, cursor: s32, anchor: s32) {
+    unused activity
+    #if #defined(ANDROID_BUILD) {
+        if env == null || bytes == null {
+            return
+        }
+        count := env.functions.GetArrayLength(env, bytes)
+        if count < 0 || count > 65536 {
+            return
+        }
+        buffer: [65536]u8
+        if count > 0 {
+            env.functions.GetByteArrayRegion(env, bytes, 0, count, *buffer[0])
+        }
+        if env.functions.ExceptionCheck(env) == 0 {
+            unused AndroidTextEditorUpdate(target, revision,
+                TextView(buffer[:count]), cursor, anchor)
+        }
+    }
+    unused env
+    unused target
+    unused revision
+    unused bytes
+    unused cursor
+    unused anchor
+}
+
+AndroidTextEditorBeginFrame :: (session: Session) {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*editor_mutex)
+        if TextInputOwnerMatches(editor_owner, session) && editor_pending {
+            for index: cast(s32)1..TreeCount(session) - 1 {
+                if TreeNodeAt(session, index).identity_generation == editor_generation &&
+                TreeNodeAt(session, index).selected && TreeInputAllowedAt(session, index) &&
+                (!TreeHasFocus(session) || TreeFocusedAt(session, index)) {
+                    unused TextRequestSend(session, index,
+                        TextView(editor_pending_bytes[:editor_pending_count]), true,
+                        editor_pending_cursor, editor_pending_anchor)
+                    break
+                }
+            }
+            editor_pending = false
+        }
+        AndroidMutexUnlock(*editor_mutex)
+        editor_stage_ready = false
+    }
+    unused session
+}
+
+AndroidTextEditorWantsKeyboard :: (session: Session) -> bool {
+    #if #defined(ANDROID_BUILD) {
+        pointer := PointerSample(session)
+        if !pointer.pressed || !editor_stage_ready {
+            return false
+        }
+        for index: cast(s32)1..TreeCount(session) - 1 {
+            node := TreeNodeAt(session, index)
+            if node.identity_generation == editor_stage_generation && node.selected &&
+            TreeInputAllowedAt(session, index) &&
+            pointer.x >= node.bounds.x && pointer.x <= node.bounds.x + node.bounds.width &&
+            pointer.y >= node.bounds.y && pointer.y <= node.bounds.y + node.bounds.height {
+                return true
+            }
+        }
+    }
+    unused session
+    return false
+}
+
+AndroidTextEditorFrame :: (session: Session, active: bool) {
+    #if #defined(ANDROID_BUILD) {
+        focused := false
+        if active && editor_stage_ready {
+            for index: cast(s32)1..TreeCount(session) - 1 {
+                node := TreeNodeAt(session, index)
+                if node.identity_generation == editor_stage_generation &&
+                node.selected && TreeInputAllowedAt(session, index) {
+                    focused = true
+                    break
+                }
+            }
+        }
+        AndroidMutexLock(*editor_mutex)
+        if !TextInputOwnerMatches(editor_owner, session) {
+            AndroidMutexUnlock(*editor_mutex)
+            return
+        }
+        generation := ifx focused then editor_stage_generation else cast(u64)0
+        if editor_generation != generation {
+            editor_target += 1
+            editor_generation = generation
+            editor_revision = 0
+            editor_pending = false
+            editor_sent_count = -1
+        }
+        target := editor_target
+        revision := editor_revision
+        pending := editor_pending
+        AndroidMutexUnlock(*editor_mutex)
+        // A widget's edit is applied by its caller after presentation; publish
+        // that value next frame, so an acknowledgement never restores old text.
+        if !focused || pending || editor_stage_edited {
+            return
+        }
+        unchanged := false
+        {
+            value := TextView(editor_stage_bytes[:editor_stage_count])
+            sent := TextView(editor_sent_bytes[:ifx editor_sent_count < 0 then 0 else editor_sent_count])
+            unchanged = editor_sent_count == editor_stage_count && sent == value &&
+            editor_sent_cursor == editor_stage_cursor && editor_sent_anchor == editor_stage_anchor &&
+            editor_sent_secure == editor_stage_secure && editor_sent_multiline == editor_stage_multiline &&
+            editor_sent_revision == revision
+        }
+        if unchanged {
+            return
+        }
+        if AndroidTextEditorPublish(target, revision) {
+            for byte: cast(s32)0..editor_stage_count - 1 {
+                editor_sent_bytes[byte] = editor_stage_bytes[byte]
+            }
+            editor_sent_count = editor_stage_count
+            editor_sent_cursor = editor_stage_cursor
+            editor_sent_anchor = editor_stage_anchor
+            editor_sent_revision = revision
+            editor_sent_secure = editor_stage_secure
+            editor_sent_multiline = editor_stage_multiline
+        }
+    }
+    unused session
+    unused active
+}

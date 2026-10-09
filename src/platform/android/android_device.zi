@@ -1,5 +1,6 @@
 #import, file "activity_jni.zi";
 #import, file "android_mutex.zi";
+#import, file "android_text_editor.zi";
 #import "session"
 #import "text_input_platform"
 
@@ -265,6 +266,7 @@ android_text_input_open :: (session: Session) {
         }
         AndroidMutexUnlock(*device_mutex)
         TextKeyboardBind(session)
+        AndroidTextEditorOpen(session)
     }
     unused session
 }
@@ -274,6 +276,7 @@ android_text_input_close :: (session: Session) {
     #if #defined(ANDROID_BUILD) {
         // Hide while the callback can still validate its native owner.
         TextKeyboardRelease(session)
+        AndroidTextEditorClose(session)
         AndroidMutexLock(*device_mutex)
         if device_text_owner.slot == session.slot &&
         device_text_owner.epoch == session.epoch {
@@ -309,6 +312,7 @@ SetPlatformTextKeyboardVisible :: (session: Session, visible: bool) {
 #program_export
 android_text_input_begin_frame :: (session: Session) {
     #if #defined(ANDROID_BUILD) {
+        AndroidTextEditorBeginFrame(session)
         AndroidMutexLock(*device_mutex)
         device_text_frame_kind = 0
         device_text_frame_key = 0
@@ -344,7 +348,11 @@ android_text_input_frame :: (session: Session, active: bool) {
         }
         AndroidMutexUnlock(*device_mutex)
         if owned {
+            AndroidTextEditorFrame(session, active)
             TextKeyboardSetVisible(session, active)
+            if active && AndroidTextEditorWantsKeyboard(session) {
+                android_device_set_soft_keyboard_visible(1)
+            }
         }
     }
     unused session

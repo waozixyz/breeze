@@ -54,6 +54,8 @@ public class MainActivity extends NativeActivity {
     private FrameLayout startupView;
     private boolean firstFrameReady;
     private long startupStarted;
+    private TextInputView textInputView;
+    private boolean textInputVisible;
 
     private void showStartup() {
         startupView = new FrameLayout(this);
@@ -174,6 +176,7 @@ public class MainActivity extends NativeActivity {
     private native void nativeTextInputCommit(int codepoint);
     private native void nativeTextInputBackspace();
     private native void nativeTextInputEnter();
+    private native void nativeTextInputState(long target, long revision, byte[] value, int cursor, int anchor);
     private native void nativeInvalidateGraphicsResources();
     private native boolean nativeStartPractice(int practiceId);
     private native boolean nativeDebugImportMusicForPractice(String path, int practiceId);
@@ -255,21 +258,35 @@ public class MainActivity extends NativeActivity {
             @Override
             public void run() {
                 InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-                View view = getWindow() != null ? getWindow().getDecorView() : null;
+                View view = textInputView;
                 if (imm == null || view == null) return;
-
+                textInputVisible = visible;
                 if (visible) {
                     view.requestFocus();
                     imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT);
                 } else {
                     imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+                    textInputView.deactivate();
                 }
+            }
+        });
+    }
+
+    public void setTextInputState(final long target, final long revision, final byte[] value,
+                                 final int cursor, final int anchor,
+                                 final boolean secure, final boolean multiline) {
+        runOnUiThread(() -> {
+            if (textInputView != null && !isFinishing() && !isDestroyed()) {
+                textInputView.update(target, revision, value, cursor, anchor, secure, multiline);
             }
         });
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (textInputVisible && textInputView != null && textInputView.hasFocus()) {
+            return super.dispatchKeyEvent(event);
+        }
         if (event != null && event.getAction() == KeyEvent.ACTION_DOWN) {
             int keyCode = event.getKeyCode();
             if (keyCode == KeyEvent.KEYCODE_DEL) {
@@ -849,6 +866,15 @@ public class MainActivity extends NativeActivity {
         configureSystemBars();
         super.onCreate(savedInstanceState);
         configureSystemBars();
+        textInputView = new TextInputView(this, new TextInputView.Listener() {
+            @Override public void changed(long target, long revision, byte[] value, int cursor, int anchor) {
+                nativeTextInputState(target, revision, value, cursor, anchor);
+            }
+            @Override public void enter() {
+                nativeTextInputEnter();
+            }
+        });
+        addContentView(textInputView, new ViewGroup.LayoutParams(1, 1));
         showStartup();
 
         synchronized (cachedInsets) {

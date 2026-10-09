@@ -1,10 +1,32 @@
 #import, file "../src/platform/android/android_device.zi";
+#import, file "../src/platform/android/android_text_editor.zi";
 #import, file "../src/platform/android/activity_jni.zi";
 #import, file "../src/platform/raylib_text_input.zi";
 #import, file "../src/app/host_services.zi";
 #import "session"
 #import "text_input_props"
 #import "text_input_platform"
+#import "tree"
+#import "tree_input"
+#import "text_host"
+#import "text_request"
+#import "widget_kind"
+using WidgetKind;
+
+EditorFrame :: (session: Session, key: u64, value: string) -> s32 {
+    TreeStart(session, 1, .{0.0, 0.0, 400.0, 600.0})
+    node := TreeSubmitCurrent(session, key, WidgetKindTextArea, .{10.0, 20.0, 300.0, 50.0})
+    TreeSetInteractive(session, node, false, false, 1)
+    TreeSetSelected(session, node, true)
+    TreeSetTextValue(session, node, value, cast(s32)value.count, cast(s32)value.count, false, false)
+    TextHostPresent(session, node, value, cast(s32)value.count, cast(s32)value.count, false, false, false)
+    if !TreeFinish(session) {
+        return -1
+    }
+    unused TreeFocusAt(session, node)
+    android_text_input_frame(session, true)
+    return node
+}
 
 // No Java activity or display is used by this transport test.
 #program_export
@@ -106,5 +128,38 @@ main :: () -> s32 {
     }
     android_text_input_close(replacement)
     SessionClose(replacement)
+    editor := SessionOpen()
+    android_text_input_open(editor)
+    node := EditorFrame(editor, 100, "")
+    if node < 0 || !AndroidTextEditorUpdate(6, 1, "hel", 3, 3) {
+        return 11
+    }
+    if !AndroidTextEditorUpdate(6, 2, "hello 水😀", 13, 13) ||
+    AndroidTextEditorUpdate(6, 1, "old", 3, 3) {
+        return 12
+    }
+    android_text_input_begin_frame(editor)
+    request := TextRequestTake(editor, node)
+    if !request.pending || !request.replace || request.value != "hello 水😀" || request.cursor != 13 {
+        return 13
+    }
+    // Replacing a focused field changes its identity. Late IME callbacks from
+    // the preceding editor must never overwrite the new field.
+    node = EditorFrame(editor, 101, "saved draft")
+    if AndroidTextEditorUpdate(6, 3, "late", 4, 4) ||
+    !AndroidTextEditorUpdate(7, 1, "new", 3, 3) {
+        return 14
+    }
+    android_text_input_begin_frame(editor)
+    request = TextRequestTake(editor, node)
+    if !request.pending || request.value != "new" {
+        return 15
+    }
+    android_text_input_frame(editor, false)
+    if AndroidTextEditorUpdate(7, 2, "after blur", 10, 10) {
+        return 16
+    }
+    android_text_input_close(editor)
+    SessionClose(editor)
     return 0
 }

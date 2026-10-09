@@ -3,6 +3,7 @@
 ### Fixed
 - Keep Diary updates opening correctly and preserve existing entries in the same account as Habits.
 - Keep practices and their sound running when you switch apps or lock the screen.
+- Support swipe typing, word corrections and Unicode text from Android keyboards in Lumi and other text fields.
 - Keep bottom navigation visible on the practice home screen and keep practice swipes above it.
 - Reduce pauses when opening Lists, Diary and app settings by retaining loaded apps between frames.
 
