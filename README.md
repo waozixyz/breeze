@@ -82,6 +82,46 @@ including hashes of the tested binary and bundles, is in
 `build/visual-test/results.json`; changing an artifact during the gate fails it.
 Its system tools are listed in `.github/apt/test-packages.txt`.
 
+Store captures cover Apps, Lumi, Practices, Habits, Lists, Diary, Appearance,
+and supporting pages in phone, 7-inch tablet, 10-inch tablet, and Chromebook
+layouts. Capture runs use disposable profiles on private Xvfb displays and
+check viewport sizes, nonblank rendering, and expected screen text. They do
+not copy images into the store listing until visual review is recorded:
+
+```bash
+make native cells PACKAGE_FLAGS=--locked
+make screenshot
+# Inspect build/screenshots/review-*.jpg and the full-size PNGs.
+make screenshot-review REVIEWER="your name"
+make screenshot-export
+make play-preflight
+python3 scripts/upload-play-screenshots.py
+```
+
+The scene list in `scripts/screenshot-scenes.json` selects eight store images
+per phone/tablet type while retaining all 64 captures for review. Changing
+source, scene definitions, Kryon, binaries, bundles, or screenshot bytes
+invalidates publishing preflight. A historical capture can still be visually
+reviewed and used for a review video; Play requires a fresh capture of the
+current locked build. Local Kryon preview builds cannot pass Play preflight.
+Keep credentials in the ignored `.env.play` using `.env.play.example`.
+The uploader defaults to validating and discarding its remote edit. After
+review, `PLAY_COMMIT=1 python3 scripts/upload-play-screenshots.py` validates
+and commits the listing; a failed edit is discarded. This updates listing
+assets only. App releases follow the numeric changelog, `update_version.sh`,
+and the existing release workflow, which builds and publishes the signed
+Google Play AAB and owns release tags. A local build or commit is not a Play
+deployment.
+
+`make lumi-promo` renders a 30-second portrait review MP4 from the exact
+reviewed phone captures and the generated artwork in `design/lumi-promo/`.
+Lumi flies between screens with light trails and original synthesized bells.
+The chat example runs real local theme actions; the surrounding forest and
+glow are marketing effects. Inspect `build/lumi-promo/storyboard.jpg` and
+`build/lumi-promo/inner-breeze-lumi-review.mp4` before using it publicly.
+Google Play's preview video field takes a YouTube URL, so the MP4 needs an
+approved YouTube upload before it can be added to the listing.
+
 To test sync and recovery against an isolated local server:
 
 ```bash

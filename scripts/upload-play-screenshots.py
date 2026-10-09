@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import base64
+import argparse
+import importlib.util
+import hashlib
 import json
 import mimetypes
 import os
@@ -177,9 +180,10 @@ def upload_listing_texts(package_name, edit_id, metadata_root, token):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Preflight, validate, or publish reviewed Play listing assets.")
+    parser.add_argument("--preflight-only", action="store_true", help="Check local assets without credentials or network access")
+    args = parser.parse_args()
     load_env_file(ROOT / ".env.play")
-    package_name = required_env("PLAY_PACKAGE_NAME")
-    service_account = required_env("PLAY_SERVICE_ACCOUNT_JSON")
     language = os.environ.get("PLAY_LANGUAGE", "en-US")
     images_root = pathlib.Path(
         os.environ.get(
@@ -201,6 +205,36 @@ def main():
     commit = os.environ.get("PLAY_COMMIT", "0") == "1"
     delete_existing = os.environ.get("PLAY_DELETE_EXISTING", "1") != "0"
 
+    spec = importlib.util.spec_from_file_location("screenshot_harness", ROOT / "scripts/screenshot-harness.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+    harness.store_preflight(images_root)
+    if listing_text:
+        for locale, text in listing_texts(metadata_root).items():
+            if len(text["shortDescription"]) > 80 or len(text["fullDescription"]) > 4000:
+                raise SystemExit(f"{locale} description is over Play's length limit")
+    allowed_types = {"phoneScreenshots", "sevenInchScreenshots", "tenInchScreenshots"}
+    if not image_types or not set(image_types) <= allowed_types:
+        raise SystemExit("PLAY_IMAGE_TYPES must name reviewed phone/tablet screenshot types")
+    if args.preflight_only:
+        print("Local listing preflight passed; no Google Play edit was created.")
+        return
+
+    reviewed_hashes = {item["file"]: item["sha256"] for item in
+                       json.loads((images_root / "screenshot-review.json").read_text())["files"]}
+    image_payloads = {}
+    for image_type in image_types:
+        image_payloads[image_type] = []
+        for path in list_images(images_root, image_type):
+            data = path.read_bytes()
+            relative = str(path.relative_to(images_root))
+            if hashlib.sha256(data).hexdigest() != reviewed_hashes.get(relative):
+                raise SystemExit(f"Store image changed after preflight: {path}")
+            image_payloads[image_type].append((path, data))
+
+    package_name = required_env("PLAY_PACKAGE_NAME")
+    service_account = required_env("PLAY_SERVICE_ACCOUNT_JSON")
+
     token = service_account_token(service_account)
     edit = json.loads(http_request("POST", api_url(package_name, "/edits"), token=token))
     edit_id = edit["id"]
@@ -210,16 +244,15 @@ def main():
         if listing_text:
             upload_listing_texts(package_name, edit_id, metadata_root, token)
         for image_type in image_types:
-            files = list_images(images_root, image_type)
+            files = image_payloads[image_type]
             if not files:
                 continue
             listing_path = f"/edits/{edit_id}/listings/{language}/{image_type}"
             if delete_existing:
                 http_request("DELETE", api_url(package_name, listing_path), token=token)
                 print(f"Cleared {language}/{image_type}")
-            for path in files:
+            for path, data in files:
                 mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-                data = path.read_bytes()
                 url = upload_url(package_name, listing_path) + "?uploadType=media"
                 http_request(
                     "POST",
@@ -230,21 +263,25 @@ def main():
                 )
                 print(f"Uploaded {image_type}/{path.name}")
 
-        action = "commit" if commit else "validate"
-        http_request("POST", api_url(package_name, f"/edits/{edit_id}:{action}"), token=token)
+        harness.store_preflight(images_root)
+        http_request("POST", api_url(package_name, f"/edits/{edit_id}:validate"), token=token)
         if commit:
+            http_request("POST", api_url(package_name, f"/edits/{edit_id}:commit"), token=token)
             print("Committed the store listing to Google Play.")
         else:
             http_request("DELETE", api_url(package_name, f"/edits/{edit_id}"), token=token)
             print("Validated the store listing and deleted the draft edit. Set PLAY_COMMIT=1 to publish.")
-    except Exception:
+    except BaseException:
         try:
             http_request("DELETE", api_url(package_name, f"/edits/{edit_id}"), token=token)
             print(f"Deleted failed edit: {edit_id}", file=sys.stderr)
-        except Exception:
+        except BaseException:
             pass
         raise
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, FileNotFoundError) as error:
+        raise SystemExit(f"Play preflight blocked: {error}") from None

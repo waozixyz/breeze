@@ -1173,6 +1173,22 @@ social-post-dry-run:
 screenshot: $(TARGET)
 	./scripts/generate-screenshots.sh "$(TARGET)"
 
+.PHONY: screenshot-verify screenshot-review screenshot-export play-preflight lumi-promo
+screenshot-verify:
+	python3 scripts/screenshot-harness.py verify
+
+screenshot-review:
+	python3 scripts/screenshot-harness.py review --reviewer "$(REVIEWER)"
+
+screenshot-export:
+	python3 scripts/screenshot-harness.py export
+
+play-preflight:
+	python3 scripts/upload-play-screenshots.py --preflight-only
+
+lumi-promo:
+	python3 scripts/render-lumi-promo.py
+
 test-tui-screenshot test-termi-screenshot:
 	@$(MAKE) --no-print-directory KRYON_BACKEND=termi test-termi-screenshot-direct
 
@@ -3045,6 +3061,12 @@ package-version-test:
 	python3 tests/package_versions_test.py
 
 test: package-version-test
+
+.PHONY: play-screenshots-test
+play-screenshots-test:
+	python3 tests/play_screenshots_test.py
+
+test: play-screenshots-test
 
 .PHONY: package-workflow-test
 package-workflow-test:
