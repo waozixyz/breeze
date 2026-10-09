@@ -1,4 +1,5 @@
 // SDL presentation for the application's own secondary windows.
+#import "c_string"
 SECONDARY_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD)
 
 SecondaryColor :: struct {
@@ -53,6 +54,8 @@ SecondaryWindowState :: struct {
     dragged: bool
     clicked: bool
     right_clicked: bool
+    close_requested: bool
+    resizable: bool
 }
 
 SecondaryWindowSlot :: struct {
@@ -97,7 +100,7 @@ SecondaryMotionEvent :: struct {
     relative_y: s32
 }
 
-secondary_windows: [2]SecondaryWindowSlot;
+secondary_windows: [3]SecondaryWindowSlot;
 secondary_window_count: s32;
 secondary_watching_events: bool;
 secondary_active_window: *SecondaryWindowState;
@@ -109,6 +112,8 @@ secondary_render_context: *void;
     sdl :: #system_library "SDL2";
     raylib :: #system_library "raylib";
     SecondaryEventWatch :: #type (*void, *void) -> s32 #c_call;
+    secondary_previous_filter: SecondaryEventWatch;
+    secondary_previous_filter_argument: *void;
     SecondaryAllocate :: (count: usize, size: usize) -> *void #foreign c "calloc";
     SecondaryFree :: (value: *void) #foreign c "free";
     SecondaryWindowReady :: () -> bool #foreign raylib "IsWindowReady";
@@ -122,6 +127,7 @@ secondary_render_context: *void;
     SecondaryFlipImage :: (image: *SecondaryImage) #foreign raylib "ImageFlipVertical";
     SecondaryUnloadImage :: (image: SecondaryImage) #foreign raylib "UnloadImage";
     SecondarySDLInitialized :: (flags: u32) -> u32 #foreign sdl "SDL_WasInit";
+    SecondarySetHint :: (name: *u8, value: *u8) -> s32 #foreign sdl "SDL_SetHint";
     SecondaryCurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
     SecondaryCurrentContext :: () -> *void #foreign sdl "SDL_GL_GetCurrentContext";
     SecondaryMakeCurrent :: (window: *void, context: *void) -> s32 #foreign sdl "SDL_GL_MakeCurrent";
@@ -132,9 +138,12 @@ secondary_render_context: *void;
     SecondaryShowWindow :: (window: *void) #foreign sdl "SDL_ShowWindow";
     SecondaryWindowId :: (window: *void) -> u32 #foreign sdl "SDL_GetWindowID";
     SecondaryGetPosition :: (window: *void, x: *s32, y: *s32) #foreign sdl "SDL_GetWindowPosition";
+    SecondaryGetSize :: (window: *void, width: *s32, height: *s32) #foreign sdl "SDL_GetWindowSize";
+    SecondaryMinimumSize :: (window: *void, width: s32, height: s32) #foreign sdl "SDL_SetWindowMinimumSize";
     SecondarySetPosition :: (window: *void, x: s32, y: s32) #foreign sdl "SDL_SetWindowPosition";
-    SecondaryAddWatch :: (watch: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_AddEventWatch";
-    SecondaryRemoveWatch :: (watch: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_DelEventWatch";
+    SecondaryGetFilter :: (filter: *SecondaryEventWatch, argument: **void) -> s32 #foreign sdl "SDL_GetEventFilter";
+    SecondarySetFilter :: (filter: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_SetEventFilter";
+    SecondaryFilterQueued :: (filter: SecondaryEventWatch, argument: *void) #foreign sdl "SDL_FilterEvents";
     SecondaryWindowSurface :: (window: *void) -> *void #foreign sdl "SDL_GetWindowSurface";
     SecondaryImageSurface :: (pixels: *void, width: s32, height: s32,
         depth: s32, pitch: s32, format: u32) -> *void #foreign sdl "SDL_CreateRGBSurfaceWithFormatFrom";
@@ -147,8 +156,8 @@ secondary_render_context: *void;
 
     RestoreSecondaryRenderContext :: () {
         if secondary_render_window != null && secondary_render_context != null &&
-            (SecondaryCurrentWindow() != secondary_render_window ||
-             SecondaryCurrentContext() != secondary_render_context) {
+        (SecondaryCurrentWindow() != secondary_render_window ||
+            SecondaryCurrentContext() != secondary_render_context) {
             unused SecondaryMakeCurrent(secondary_render_window, secondary_render_context)
         }
     }
@@ -159,18 +168,27 @@ secondary_render_context: *void;
             return 1
         }
         event := cast(*SecondaryEventHeader)event_data
-        if event.event_type != 0x401 && event.event_type != 0x402 &&
-            event.event_type != 0x400 {
+        if event.event_type != 0x200 &&
+        (event.event_type < 0x300 || event.event_type > 0x303) &&
+        (event.event_type < 0x400 || event.event_type > 0x403) {
             return 1
         }
         window := SecondaryWindowForId(event.window_id)
         if window == null {
             return 1
         }
+        // SDL_WINDOWEVENT_CLOSE belongs only to the registered window.
+        if event.event_type == 0x200 {
+            bytes := cast(*u8)event_data
+            if bytes[12] == cast(u8)14 {
+                window.close_requested = true
+            }
+            return 0
+        }
         if event.event_type == 0x401 {
             button := cast(*SecondaryButtonEvent)event_data
             if button.button == cast(u8)1 {
-                window.drag_active = true
+                window.drag_active = !window.resizable
                 window.release_seen = false
                 window.dragged = false
                 window.clicked = false
@@ -180,7 +198,7 @@ secondary_render_context: *void;
                 window.drag_anchor_x = button.x
                 window.drag_anchor_y = button.y
             }
-            return 1
+            return 0
         }
         if event.event_type == 0x400 && window.drag_active {
             motion := cast(*SecondaryMotionEvent)event_data
@@ -188,10 +206,10 @@ secondary_render_context: *void;
                 window.drag_motion_x = motion.x
                 window.drag_motion_y = motion.y
                 window.drag_pending = true
-                return 1
+                return 0
             }
             window.release_seen = true
-            return 1
+            return 0
         }
         if event.event_type == 0x402 {
             button := cast(*SecondaryButtonEvent)event_data
@@ -201,8 +219,22 @@ secondary_render_context: *void;
                 window.right_clicked = true
             }
             if button.button == cast(u8)1 {
-                window.release_seen = true
+                if window.resizable {
+                    window.clicked = true
+                } else {
+                    window.release_seen = true
+                }
             }
+        }
+        return 0
+    }
+
+    SecondaryFilterEvent :: (argument: *void, event_data: *void) -> s32 {
+        if SecondaryObserveEvent(argument, event_data) == 0 {
+            return 0
+        }
+        if secondary_previous_filter != null {
+            return secondary_previous_filter(secondary_previous_filter_argument, event_data)
         }
         return 1
     }
@@ -223,8 +255,13 @@ secondary_render_context: *void;
             index += 1
         }
         if secondary_window_count == 0 && secondary_watching_events {
-            watch: SecondaryEventWatch = SecondaryObserveEvent
-            SecondaryRemoveWatch(watch, null)
+            filter: SecondaryEventWatch = SecondaryFilterEvent
+            installed: SecondaryEventWatch = SecondaryObserveEvent
+            argument: *void
+            unused SecondaryGetFilter(*installed, *argument)
+            if installed == filter {
+                SecondarySetFilter(secondary_previous_filter, secondary_previous_filter_argument)
+            }
             secondary_watching_events = false
         }
     }
@@ -274,7 +311,7 @@ app_secondary_window_open :: (title: *u8, x: s32, y: s32, width: s32,
     unused scale
     #if SECONDARY_SDL {
         if !SecondaryWindowReady() || SecondarySDLInitialized(cast(u32)32) == 0 ||
-            title == null || width <= 0 || height <= 0 || secondary_window_count >= 2 {
+        title == null || width <= 0 || height <= 0 || secondary_window_count >= 3 {
             return null
         }
         window_flags: u32 = 8
@@ -286,6 +323,9 @@ app_secondary_window_open :: (title: *u8, x: s32, y: s32, width: s32,
         }
         if (flags & 4) != 0 {
             window_flags |= cast(u32)65536
+        }
+        if (flags & 32) != 0 {
+            window_flags |= cast(u32)32
         }
         if (flags & 24) != 0 {
             area: SecondaryArea
@@ -306,6 +346,13 @@ app_secondary_window_open :: (title: *u8, x: s32, y: s32, width: s32,
             return null
         }
         if secondary_window_count == 0 {
+            // SDL's accelerated window surface can create a second GL context
+            // and invalidate the main renderer's framebuffer state.
+            hint: [64]u8
+            value: [2]u8 = .[48, 0]
+            if CopyCString("SDL_FRAMEBUFFER_ACCELERATION", hint[:]) {
+                unused SecondarySetHint(*hint[0], *value[0])
+            }
             secondary_render_window = SecondaryCurrentWindow()
             secondary_render_context = SecondaryCurrentContext()
             if secondary_render_window == null || secondary_render_context == null {
@@ -332,15 +379,22 @@ app_secondary_window_open :: (title: *u8, x: s32, y: s32, width: s32,
         window.window_id = SecondaryWindowId(window.window)
         window.width = width
         window.height = height
+        window.resizable = (flags & 32) != 0
+        if window.resizable {
+            SecondaryMinimumSize(window.window, 160, 196)
+        }
         window.background = SecondaryColor.{red, green, blue, alpha}
         SecondaryGetPosition(window.window, *window.x, *window.y)
         secondary_windows[secondary_window_count].state = window
         secondary_window_count += 1
         if !secondary_watching_events {
-            watch: SecondaryEventWatch = SecondaryObserveEvent
-            SecondaryAddWatch(watch, null)
+            unused SecondaryGetFilter(*secondary_previous_filter, *secondary_previous_filter_argument)
+            filter: SecondaryEventWatch = SecondaryFilterEvent
+            SecondarySetFilter(filter, null)
             secondary_watching_events = true
         }
+        filter_queued: SecondaryEventWatch = SecondaryObserveEvent
+        SecondaryFilterQueued(filter_queued, null)
         SecondaryShowWindow(window.window)
         RestoreSecondaryRenderContext()
         return cast(*void)window
@@ -369,10 +423,12 @@ app_secondary_window_close :: (handle: *void) {
             SecondaryEndTarget()
             secondary_active_window = null
         }
-        ForgetSecondaryWindow(window)
+        // Destruction emits SDL window events too. Keep this ID registered
+        // until they have been filtered, so they cannot hide the main window.
         SecondaryDestroyWindow(window.window)
         RestoreSecondaryRenderContext()
         SecondaryUnloadTarget(window.target)
+        ForgetSecondaryWindow(window)
         SecondaryFree(cast(*void)window)
         if secondary_window_count == 0 {
             secondary_render_window = null
@@ -390,6 +446,20 @@ app_secondary_window_begin :: (handle: *void) -> bool {
             return false
         }
         RestoreSecondaryRenderContext()
+        width: s32
+        height: s32
+        SecondaryGetSize(window.window, *width, *height)
+        if width > 0 && height > 0 &&
+        (width != window.width || height != window.height) {
+            target := SecondaryLoadTarget(width, height)
+            if target.id == 0 {
+                return false
+            }
+            SecondaryUnloadTarget(window.target)
+            window.target = target
+            window.width = width
+            window.height = height
+        }
         secondary_active_window = window
         SecondaryBeginTarget(window.target)
         SecondaryClear(window.background)
@@ -462,7 +532,7 @@ app_secondary_window_pump :: () {
                     window.drag_total_y += dy
                     SecondarySetPosition(window.window, window.x, window.y)
                     if window.drag_total_x > 2 || window.drag_total_x < -2 ||
-                        window.drag_total_y > 2 || window.drag_total_y < -2 {
+                    window.drag_total_y > 2 || window.drag_total_y < -2 {
                         window.dragged = true
                     }
                 }
@@ -486,6 +556,27 @@ app_secondary_window_clicked :: (handle: *void) -> bool {
     }
     window.clicked = false
     return true
+}
+
+#program_export
+app_secondary_window_take_close :: (handle: *void) -> bool {
+    window := OwnedSecondaryWindow(handle)
+    if window == null || !window.close_requested {
+        return false
+    }
+    window.close_requested = false
+    return true
+}
+
+#program_export
+app_secondary_window_size :: (handle: *void, width: *s32, height: *s32) {
+    window := OwnedSecondaryWindow(handle)
+    if width != null {
+        width[0] = ifx window != null then window.width else 0
+    }
+    if height != null {
+        height[0] = ifx window != null then window.height else 0
+    }
 }
 
 #program_export

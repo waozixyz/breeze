@@ -17,6 +17,8 @@ extern bool app_secondary_window_clicked(void *handle);
 extern bool app_secondary_window_dragged(void *handle);
 extern bool app_secondary_window_keyboard_grab(void *handle, bool enabled);
 extern void app_secondary_window_position(void *handle, int *x, int *y);
+extern void app_secondary_window_size(void *handle, int *width, int *height);
+extern bool app_secondary_window_take_close(void *handle);
 
 static SDL_Window *
 secondary_sdl_window(SDL_Window *main_window)
@@ -168,6 +170,57 @@ main(void)
     app_secondary_window_pump();
     if(app_secondary_window_clicked(handle))
         return 17;
+
+    // A detached resizable window must not resize, click or close the main
+    // raylib window. Three owned windows can coexist with the break displays.
+    handle = app_secondary_window_open((const uint8_t *)"detached-practice",
+        20, 20, 200, 248, 2 | 32, 0, 0, 0, 255, 1.0f);
+    if(handle == NULL)
+        return 18;
+    secondary = secondary_sdl_window(main_window);
+    void *second = app_secondary_window_open((const uint8_t *)"break",
+        0, 0, 40, 40, 1, 0, 0, 0, 255, 1.0f);
+    void *third = app_secondary_window_open((const uint8_t *)"hud",
+        0, 0, 40, 40, 1, 0, 0, 0, 255, 1.0f);
+    if(second == NULL || third == NULL)
+        return 19;
+    SDL_SetWindowSize(secondary, 240, 300);
+    SDL_PumpEvents();
+    event = (SDL_Event){0};
+    event.type = SDL_WINDOWEVENT;
+    event.window.windowID = SDL_GetWindowID(secondary);
+    event.window.event = SDL_WINDOWEVENT_SIZE_CHANGED;
+    event.window.data1 = 240;
+    event.window.data2 = 300;
+    SDL_PushEvent(&event);
+    event.window.event = SDL_WINDOWEVENT_CLOSE;
+    SDL_PushEvent(&event);
+    event = (SDL_Event){0};
+    event.type = SDL_MOUSEBUTTONUP;
+    event.button.windowID = SDL_GetWindowID(secondary);
+    event.button.button = SDL_BUTTON_LEFT;
+    SDL_PushEvent(&event);
+    BeginDrawing();
+    EndDrawing();
+    if(GetScreenWidth() != 100 || GetScreenHeight() != 100 ||
+       WindowShouldClose() || IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+        return 20;
+    if(!app_secondary_window_take_close(handle) ||
+       app_secondary_window_take_close(handle) || !app_secondary_window_clicked(handle))
+        return 21;
+    if(!app_secondary_window_begin(handle))
+        return 22;
+    int width = 0, height = 0;
+    app_secondary_window_size(handle, &width, &height);
+    if(width != 240 || height != 300 || !app_secondary_window_end(handle))
+        return 23;
+    app_secondary_window_close(third);
+    app_secondary_window_close(second);
+    app_secondary_window_close(handle);
+    BeginDrawing();
+    EndDrawing();
+    if(IsWindowHidden() || IsWindowMinimized() || WindowShouldClose())
+        return 24;
     CloseWindow();
     return 0;
 }

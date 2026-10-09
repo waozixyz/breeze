@@ -56,6 +56,8 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "app_launcher_state.zi";
 #import, file "session_window.zi";
 #import, file "session_window_view.zi";
+#import, file "../platform/practice_window_host.zi";
+#import, file "../platform/android/android_picture_window.zi";
 #import, file "account_activity.zi";
 #import, file "account_activity_view.zi";
 #import "tree_input"
@@ -1392,6 +1394,21 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     if !app_reload_graphics_resources(app) {
         return
     }
+    #if #defined(ANDROID_BUILD) {
+        picture_state := AndroidPictureWindowState()
+        app.session_window.system_available = (picture_state & 1) != 0
+        app.session_window.system_visible = (picture_state & 2) != 0
+        generation := picture_state >> 2
+        if generation != app.session_window.system_generation {
+            app.session_window.system_generation = generation
+            app.session_window.system_last_tick = GetTime()
+        }
+        if app.session_window.system_visible {
+            app_draw_android_picture_window(app, viewport)
+            return
+        }
+        app.session_window.system_last_tick = GetTime()
+    }
     full_width = cast(s32)viewport.width
     full_height = cast(s32)viewport.height
     view_width = full_width
@@ -1554,6 +1571,50 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app_profile_frame_end(profile_frame_start)
 }
 
+// Android supplies the floating activity surface. Draw only the live practice,
+// with a stable 200-unit layout while the OS moves and resizes it.
+app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
+    #if #defined(ANDROID_BUILD) {
+        now := GetTime()
+        elapsed := now - app.session_window.system_last_tick
+        app.session_window.system_last_tick = now
+        // The in-app card must not replay the whole PiP interval on return.
+        app.session_window.last_tick = now
+        practice := practice_active(app)
+        if practice != null {
+            screen := app.session_window.screen
+            if screen == ScreenStart {
+                screen = app.breathing.screen
+            }
+            app.session_window.system_screen = screen
+            if app.backgrounded == 0 && elapsed > 0.0 && practice.advance_elapsed != null {
+                total := elapsed * 1000.0 + app.session_window.system_elapsed_carry
+                milliseconds := cast(s32)total
+                app.session_window.system_elapsed_carry = total - cast(float64)milliseconds
+                practice.advance_elapsed(app, milliseconds)
+            }
+        }
+        scale := viewport.width / 200.0
+        bounds := Rectangle.{0.0, 0.0, 200.0, viewport.height / scale}
+        camera: Camera
+        camera.zoom = scale
+        camera.offset = Vector2.{viewport.x, viewport.y}
+        AppMetricsConfigure(1.0)
+        DirectDrawFrameBegin(viewport)
+        DrawRectangleRec(viewport, StyleTokenColor("surface"))
+        if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/picture-window"), bounds) == 0 {
+            BeginMode2D(camera)
+            app_session_window_picture(app, app.session_window.system_screen, bounds, 0.0)
+            app_finish_frame(app)
+            EndMode2D()
+        }
+        ActivityPump(app)
+        app_sync_pump(app)
+    }
+    unused app
+    unused viewport
+}
+
 #program_export
 app_destroy :: (vapp: *void) {
     app: *InnerBreeze = cast(*InnerBreeze)vapp
@@ -1574,6 +1635,7 @@ app_destroy :: (vapp: *void) {
         ClearDelegate()
     }
     CloseBreakWindows()
+    ClosePracticeWindow(app)
     ReleaseRuntimeAssetDownload(*app.meditation.music_download)
     unused app_diary_save()
     PackageCancel()

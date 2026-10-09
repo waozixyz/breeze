@@ -47,6 +47,7 @@ SESSION_WINDOW_CARD_ID :: 7480
 SESSION_WINDOW_CLOSE_ID :: 7481
 SESSION_WINDOW_MAXIMIZE_ID :: 7482
 SESSION_WINDOW_RESIZE_ID :: 7483
+SESSION_WINDOW_DETACH_ID :: 7484
 // Units: the window's starting and smallest sizes, its inner margin, the
 // row holding its buttons, the lines below the picture and the corner that
 // resizes it.
@@ -113,6 +114,19 @@ session_window_exit_prompt :: (app: *InnerBreeze) -> bool {
 // Advances the practice in its small window by the time since the last
 // frame. In the background the platform timer advances it instead.
 app_session_window_tick :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // Native window input arrives between frames. Apply its practice actions
+    // inside the main frame, alongside the app's own card controls.
+    if app.session_window.restore_requested {
+        app.session_window.restore_requested = false
+        unused app_session_window_restore(app)
+    }
+    if app.session_window.close_requested {
+        app.session_window.close_requested = false
+        app_session_window_close(app)
+    }
     app_session_window_take_minimize(app)
     app_session_window_note_page(app)
     if app == null || app.session_window.screen == ScreenStart {
@@ -124,7 +138,7 @@ app_session_window_tick :: (app: *InnerBreeze) {
     // A finished practice shows its results; a practice shown again by any
     // other way leaves its window.
     if app.breathing.screen == ScreenResults ||
-        app.breathing.screen == app.session_window.screen {
+    app.breathing.screen == app.session_window.screen {
         app.session_window.screen = ScreenStart
         return
     }
@@ -263,8 +277,12 @@ session_window_resize :: (app: *InnerBreeze, bounds: Rectangle) {
 // move, and the X asks to end the practice over the open page.
 app_session_window_draw :: (app: *InnerBreeze) {
     if app == null || app.session_window.screen == ScreenStart ||
-        app.launcher_open || app_is_session_screen(app.breathing.screen) ||
-        !SessionValid(app.ui.session) {
+    app.launcher_open || app_is_session_screen(app.breathing.screen) ||
+    !SessionValid(app.ui.session) {
+        return
+    }
+    if app.session_window.detached {
+        unused session_window_exit_prompt(app)
         return
     }
     window := *app.session_window
@@ -293,37 +311,9 @@ app_session_window_draw :: (app: *InnerBreeze) {
             .bounds = bounds, .fill = StyleTokenColor("surface"),
             .border = Fade(StyleTokenColor("accent"), 0.35f), .radius = radius})
 
-    // The practice's live picture fills the window between its buttons and
-    // the lines below it.
-    padding := cast(float32)AppScale(SESSION_WINDOW_PADDING)
-    button_row := cast(float32)AppScale(SESSION_WINDOW_BUTTON_ROW)
-    text_height := cast(float32)AppScale(SESSION_WINDOW_TEXT_HEIGHT)
-    picture := Rectangle.{bounds.x + padding, bounds.y + button_row,
-        width - padding * 2.0, height - button_row - text_height - padding}
-    practice := practice_get(session_window_practice(window.screen))
-    status_text: [64]u8
-    status_text[0] = 0
-    status: string
-    if practice != null && practice.draw_window != null {
-        status = practice.draw_window(app, picture, status_text[:])
-    }
+    app_session_window_picture(app, window.screen, bounds,
+        cast(float32)AppScale(SESSION_WINDOW_BUTTON_ROW))
     name := practice_label(session_window_practice(window.screen))
-    text_y := picture.y + picture.height + cast(float32)AppScale(4)
-    Text(session, TextProps.{.key = KeyHash("inbe/session-window/name"),
-            .bounds = Rectangle.{bounds.x + padding, text_y, width - padding * 2.0,
-                cast(float32)AppScale(20)},
-            .text = FrameTextHold(*app.ui.frame_text, name), .font = AppScale(15),
-            .wrap = cast(TextWrap)TextWrapNone,
-            .align = cast(TextAlign)TextAlignCenter})
-    if status.count > 0 {
-        Text(session, TextProps.{.key = KeyHash("inbe/session-window/status"),
-                .bounds = Rectangle.{bounds.x + padding, text_y + cast(float32)AppScale(20),
-                    width - padding * 2.0, cast(float32)AppScale(18)},
-                .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(13),
-                .wrap = cast(TextWrap)TextWrapNone,
-                .align = cast(TextAlign)TextAlignCenter,
-                .class_name = KssClassId(KssMakeName("launcher-muted"))})
-    }
 
     // The whole card returns to the practice and drags the window; the
     // buttons and the corner handle are submitted after it so their taps
@@ -359,8 +349,24 @@ app_session_window_draw :: (app: *InnerBreeze) {
     TreeSetDragCapture(session, node, true)
     session_window_resize(app, bounds)
 
-    // Maximize returns to the practice; the X asks to end it right here.
     button_size := cast(float32)AppScale(36)
+    if app.session_window.system_available {
+        detach: ButtonProps
+        detach.id = SESSION_WINDOW_DETACH_ID
+        detach.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(114),
+            bounds.y + cast(float32)AppScale(2), button_size, button_size}
+        detach.label = LocaleText("session_detach_button")
+        detach.icon_only = true
+        detach.icon_shape = "S1.8rr:M13 4H20V11M20 4L11 13M10 5H4V20H19V14"
+        detach.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        detach.class_name = KssClassId(KssMakeName("launcher-action"))
+        if Button(session, detach) != 0 {
+            window.detach_requested = true
+            return
+        }
+    }
+
+    // Maximize returns to the practice; the X asks to end it right here.
     maximize: ButtonProps
     maximize.id = SESSION_WINDOW_MAXIMIZE_ID
     maximize.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(78),
@@ -393,4 +399,41 @@ app_session_window_draw :: (app: *InnerBreeze) {
     if activated && !window.drag_moved {
         unused app_session_window_restore(app)
     }
+}
+
+// Shared content for the in-app card, detached desktop window and Android PiP.
+app_session_window_picture :: (app: *InnerBreeze, screen: s32,
+    bounds: Rectangle, button_row: float32) {
+    session := app.ui.session
+    width := bounds.width
+    height := bounds.height
+    padding := cast(float32)AppScale(SESSION_WINDOW_PADDING)
+    text_height := cast(float32)AppScale(SESSION_WINDOW_TEXT_HEIGHT)
+    picture := Rectangle.{bounds.x + padding, bounds.y + button_row,
+        width - padding * 2.0, height - button_row - text_height - padding}
+    practice := practice_get(session_window_practice(screen))
+    status_text: [64]u8
+    status_text[0] = 0
+    status: string
+    if practice != null && practice.draw_window != null {
+        status = practice.draw_window(app, picture, status_text[:])
+    }
+    name := practice_label(session_window_practice(screen))
+    text_y := picture.y + picture.height + cast(float32)AppScale(4)
+    Text(session, TextProps.{.key = KeyHash("inbe/session-window/name"),
+            .bounds = Rectangle.{bounds.x + padding, text_y, width - padding * 2.0,
+                cast(float32)AppScale(20)},
+            .text = FrameTextHold(*app.ui.frame_text, name), .font = AppScale(15),
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter})
+    if status.count > 0 {
+        Text(session, TextProps.{.key = KeyHash("inbe/session-window/status"),
+                .bounds = Rectangle.{bounds.x + padding, text_y + cast(float32)AppScale(20),
+                    width - padding * 2.0, cast(float32)AppScale(18)},
+                .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(13),
+                .wrap = cast(TextWrap)TextWrapNone,
+                .align = cast(TextAlign)TextAlignCenter,
+                .class_name = KssClassId(KssMakeName("launcher-muted"))})
+    }
+
 }

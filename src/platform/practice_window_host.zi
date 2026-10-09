@@ -1,0 +1,143 @@
+// Presentation of the existing practice in an application-owned OS window.
+#import, file "../app/app_types.zi";
+#import, file "../core/types.zi";
+#import, file "../app/session_window.zi";
+#import, file "../app/session_window_view.zi";
+#import, file "../app/session_screen.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "secondary_window.zi";
+#import, file "android/android_picture_window.zi";
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "geometry"
+#import "layout"
+#import "session"
+
+using ButtonEmphasis;
+
+#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    raylib :: #system_library "raylib";
+    RestoreWindow :: () #foreign raylib;
+    SetWindowFocused :: () #foreign raylib;
+    PracticeClearWindowState :: (flags: u32) #foreign raylib "ClearWindowState";
+}
+
+practice_window: SecondaryWindow;
+practice_window_session: Session;
+
+ClosePracticeWindow :: (app: *InnerBreeze) {
+    CloseSecondaryWindow(practice_window)
+    practice_window = SecondaryWindow.{}
+    CloseSecondarySession(practice_window_session)
+    practice_window_session = Session.{}
+    if app != null {
+        app.session_window.detached = false
+    }
+}
+
+FocusPracticeApp :: () {
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        // Clear both flags immediately; RestoreWindow alone waits for a later
+        // SDL event, after the no-tray loop has already checked them.
+        PracticeClearWindowState(cast(u32)(128 + 512))
+        RestoreWindow()
+        SetWindowFocused()
+    }
+}
+
+UpdatePracticeWindow :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    #if #defined(ANDROID_BUILD) {
+        active := practice_active(app) != null && app.session_paused == 0
+        AndroidPictureWindowUpdate(active, app.session_window.detach_requested)
+        app.session_window.detach_requested = false
+    } else {
+        #if #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) {
+            app.session_window.system_available = true
+            if app.session_window.screen == ScreenStart {
+                ClosePracticeWindow(app)
+                app.session_window.detach_requested = false
+                return
+            }
+            if app.session_window.detach_requested {
+                app.session_window.detach_requested = false
+                if practice_window.handle == null {
+                    // A normal movable, resizable window, kept above other apps.
+                    practice_window = OpenSecondaryWindow("Inner Breeze", 24, 72,
+                        260, 320, 2 + 8 + 32, StyleTokenColor("surface"), 1.0)
+                    if practice_window.handle != null {
+                        practice_window_session = SessionOpen()
+                        if !SessionValid(practice_window_session) {
+                            ClosePracticeWindow(app)
+                        }
+                    }
+                }
+                app.session_window.detached = practice_window.handle != null
+            }
+            if !app.session_window.detached {
+                return
+            }
+            if TakeSecondaryWindowClose(practice_window) {
+                ClosePracticeWindow(app)
+                FocusPracticeApp()
+                return
+            }
+            if !BeginSecondaryWindow(practice_window) {
+                ClosePracticeWindow(app)
+                return
+            }
+            width: s32
+            height: s32
+            GetSecondaryWindowSize(practice_window, *width, *height)
+            main_session := app.ui.session
+            app.ui.session = practice_window_session
+            if BeginSecondaryFrame(practice_window_session, width, height) {
+                bounds := Rectangle.{0.0, 0.0, cast(float32)width, cast(float32)height}
+                app_session_window_picture(app, app.session_window.screen, bounds, 40.0)
+                names: [3]string = .[LocaleText("session_attach_button"),
+                LocaleText("session_maximize_button"), LocaleText("close_button")]
+                icons: [3]string = .["S1.8rr:M4 4H20V20H4ZM11 11H18V18H11Z",
+                "S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13",
+                "S1.8rr:M6 6L18 18M18 6L6 18"]
+                for index: cast(s32)0..cast(s32)2 {
+                    button: ButtonProps
+                    button.id = SESSION_WINDOW_DETACH_ID + index
+                    button.bounds = Rectangle.{cast(float32)(width - 114 + index * 36),
+                        2.0, 36.0, 36.0}
+                    button.label = names[index]
+                    button.icon_only = true
+                    button.icon_shape = icons[index]
+                    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+                    unused Button(practice_window_session, button)
+                }
+                EndSecondaryFrame(practice_window_session)
+            }
+            app.ui.session = main_session
+            if !EndSecondaryWindow(practice_window) {
+                ClosePracticeWindow(app)
+                return
+            }
+            if IsSecondaryWindowClicked(practice_window) {
+                x: s32
+                y: s32
+                GetSecondaryWindowClickPosition(practice_window, *x, *y)
+                ClosePracticeWindow(app)
+                FocusPracticeApp()
+                if y >= 2 && y < 38 && x >= width - 114 && x < width - 78 {
+                    return
+                }
+                if y >= 2 && y < 38 && x >= width - 42 {
+                    app.session_window.close_requested = true
+                } else {
+                    app.session_window.restore_requested = true
+                }
+            }
+        }
+    }
+}

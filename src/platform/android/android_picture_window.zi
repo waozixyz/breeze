@@ -1,0 +1,49 @@
+#import, file "activity_jni.zi";
+
+picture_window_state_sent: bool;
+picture_window_enabled_sent: bool;
+
+// Java owns the Android PiP lifecycle. Native reads its volatile snapshot;
+// activity callbacks never write practice state from the UI thread.
+AndroidPictureWindowState :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return 0
+        }
+        defer activity_jni_detach(*session)
+        method := JniMethod(*session, "pictureWindowState", "()I")
+        if method != null {
+            return session.env.functions.CallIntMethodA(session.env,
+                session.activity, method, null)
+        }
+    }
+    return 0
+}
+
+AndroidPictureWindowUpdate :: (enabled: bool, requested: bool) {
+    #if #defined(ANDROID_BUILD) {
+        if picture_window_state_sent && enabled == picture_window_enabled_sent && !requested {
+            return
+        }
+        session: ActivityJniSession
+        if activity_jni_attach(*session) == 0 {
+            return
+        }
+        defer activity_jni_detach(*session)
+        method := JniMethod(*session, "updatePictureWindow", "(ZZ)V")
+        if method != null {
+            arguments: [2]JniValue
+            arguments[0].boolean = cast(u8)enabled
+            arguments[1].boolean = cast(u8)requested
+            session.env.functions.CallVoidMethodA(session.env,
+                session.activity, method, *arguments[0])
+            if session.env.functions.ExceptionCheck(session.env) == 0 {
+                picture_window_state_sent = true
+                picture_window_enabled_sent = enabled
+            }
+        }
+    }
+    unused enabled
+    unused requested
+}

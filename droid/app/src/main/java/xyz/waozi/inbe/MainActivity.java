@@ -5,6 +5,8 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.NativeActivity;
+import android.app.AppOpsManager;
+import android.app.PictureInPictureParams;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.pm.ActivityInfo;
@@ -27,6 +29,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.util.Rational;
 import android.webkit.MimeTypeMap;
 import android.view.DisplayCutout;
 import android.view.KeyEvent;
@@ -56,6 +59,107 @@ public class MainActivity extends NativeActivity {
     private long startupStarted;
     private TextInputView textInputView;
     private boolean textInputVisible;
+    private volatile int pictureWindowState;
+    private volatile boolean pictureWindowEnabled;
+    private boolean pictureWindowEntering;
+    private boolean activityStopped;
+    private int pictureWindowGeneration;
+
+    // Called by the native frame thread. A volatile snapshot avoids changing
+    // practice state from Android's UI callbacks.
+    public int pictureWindowState() {
+        return pictureWindowState;
+    }
+
+    private boolean supportsPictureWindow() {
+        return Build.VERSION.SDK_INT >= 26 && getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    private boolean allowsPictureWindow() {
+        if (!supportsPictureWindow()) {
+            return false;
+        }
+        AppOpsManager operations = (AppOpsManager)getSystemService(APP_OPS_SERVICE);
+        return operations != null && operations.checkOpNoThrow(
+                AppOpsManager.OPSTR_PICTURE_IN_PICTURE, android.os.Process.myUid(),
+                getPackageName()) == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private void refreshPictureWindowState() {
+        pictureWindowGeneration = (pictureWindowGeneration + 1) & 0x1fffffff;
+        pictureWindowState = (pictureWindowGeneration << 2) | (supportsPictureWindow() ? 1 : 0)
+                | (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()
+                    && !activityStopped ? 2 : 0);
+    }
+
+    private PictureInPictureParams pictureWindowParams() {
+        PictureInPictureParams.Builder params = new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(4, 5));
+        if (Build.VERSION.SDK_INT >= 31) {
+            params.setAutoEnterEnabled(pictureWindowEnabled && allowsPictureWindow());
+        }
+        return params.build();
+    }
+
+    public void updatePictureWindow(boolean enabled, boolean requested) {
+        if (enabled == pictureWindowEnabled && !requested) {
+            return;
+        }
+        pictureWindowEnabled = enabled;
+        runOnUiThread(() -> {
+            if (!supportsPictureWindow() || isFinishing() || isDestroyed()) {
+                return;
+            }
+            setPictureInPictureParams(pictureWindowParams());
+            if (requested && enabled) {
+                enterPictureWindow(true);
+            }
+        });
+    }
+
+    private void enterPictureWindow(boolean explicit) {
+        if (!supportsPictureWindow() || !pictureWindowEnabled ||
+                isInPictureInPictureMode() || isFinishing()) {
+            return;
+        }
+        if (!allowsPictureWindow()) {
+            if (explicit) {
+                Intent settings = new Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS",
+                        Uri.parse("package:" + getPackageName()));
+                if (settings.resolveActivity(getPackageManager()) != null) {
+                    startActivity(settings);
+                }
+            }
+            return;
+        }
+        pictureWindowEntering = true;
+        try {
+            if (!enterPictureInPictureMode(pictureWindowParams())) {
+                pictureWindowEntering = false;
+            }
+        } catch (IllegalStateException | IllegalArgumentException error) {
+            pictureWindowEntering = false;
+            Log.w(TAG, "Picture-in-picture is unavailable", error);
+        }
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (Build.VERSION.SDK_INT >= 26 && Build.VERSION.SDK_INT < 31) {
+            enterPictureWindow(false);
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean visible, Configuration configuration) {
+        super.onPictureInPictureModeChanged(visible, configuration);
+        pictureWindowEntering = false;
+        refreshPictureWindowState();
+        requestInsetRefresh();
+        syncLifecycleState("onPictureInPictureModeChanged");
+    }
 
     private void showStartup() {
         startupView = new FrameLayout(this);
@@ -1106,14 +1210,16 @@ public class MainActivity extends NativeActivity {
 
     private void syncLifecycleState(String reason) {
         boolean indicatorVisible = SessionForegroundService.hasVisibleIndicator(this);
-        backgroundExecutionActive = nativeSyncLifecycleState(activityPaused, indicatorVisible) != 0;
+        boolean pictureVisible = pictureWindowEntering || (pictureWindowState & 2) != 0;
+        backgroundExecutionActive = nativeSyncLifecycleState(
+                activityPaused && !pictureVisible, indicatorVisible) != 0;
 
         Log.d(TAG, reason + ": activityPaused=" + activityPaused
             + " indicatorVisible=" + indicatorVisible
             + " windowFocused=" + windowFocused
             + " backgroundActive=" + backgroundExecutionActive);
 
-        if (activityPaused && !backgroundExecutionActive) {
+        if (activityPaused && !pictureVisible && !backgroundExecutionActive) {
             stopService(new Intent(this, SessionForegroundService.class));
         }
     }
@@ -1127,10 +1233,32 @@ public class MainActivity extends NativeActivity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        activityStopped = false;
+        refreshPictureWindowState();
+        syncLifecycleState("onStart");
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        activityStopped = true;
+        pictureWindowEntering = false;
+        refreshPictureWindowState();
+        syncLifecycleState("onStop");
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         NotificationPresence.setActivityVisible(true);
         activityPaused = false;
+        pictureWindowEntering = false;
+        refreshPictureWindowState();
+        if (supportsPictureWindow()) {
+            setPictureInPictureParams(pictureWindowParams());
+        }
         configureSystemBars();
         nativeInvalidateGraphicsResources();
         requestInsetRefresh();

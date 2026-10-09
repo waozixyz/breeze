@@ -79,6 +79,8 @@ SetTargetFPS :: (fps: s32) #foreign raylib;
 #import, file "../app/theme_catalog.zi";
 #import, file "../breaks/app_breaks.zi";
 #import, file "secondary_window.zi";
+#import, file "practice_window_host.zi";
+#import, file "android/android_picture_window.zi";
 #import "drawing_props"
 #if #defined(PLATFORM_WEB) {
     #import "web_window"
@@ -119,6 +121,8 @@ native_update_apply_at_exit :: () -> s32 #foreign c;
 #if #defined(ANDROID_BUILD) {
     #import "android_surface"
     #import, file "android/android_device.zi";
+    SetWindowState :: (flags: u32) #foreign raylib;
+    ClearWindowState :: (flags: u32) #foreign raylib;
     native_android_frame_viewport :: (viewport: *AndroidViewport) -> s32 #foreign c;
     #if #defined(ANDROID_DEBUG) {
         #import, file "../practices/practice_registry.zi";
@@ -255,6 +259,13 @@ app_frame_probe_count: s32;
 
 #program_export
 app_frame :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if (AndroidPictureWindowState() & 2) != 0 {
+            SetWindowState(FLAG_WINDOW_ALWAYS_RUN)
+        } else {
+            ClearWindowState(FLAG_WINDOW_ALWAYS_RUN)
+        }
+    }
     requested_feature := TakeHostFeatureRequest()
     if requested_feature >= 0 {
         if app_open_feature(cast(*void)app, requested_feature) != 0 {
@@ -399,7 +410,10 @@ app_frame :: (app: *InnerBreeze) {
     }
     #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
         app.ui.retained_target_active = false
-        if BeginRetainedFrame(width, height) {
+        // The detached SDL surface has its own presentation state. Draw the
+        // main window directly while it is open, avoiding failed framebuffer
+        // allocations on each animation frame.
+        if !app.session_window.detached && BeginRetainedFrame(width, height) {
             app.ui.retained_target_active = true
             if first_frame {
                 TraceLog(LOG_INFO, "APP PROBE: drawing begun")
@@ -481,6 +495,7 @@ app_frame :: (app: *InnerBreeze) {
         }
     }
     PumpSecondaryWindows()
+    UpdatePracticeWindow(app)
     if app.ui.frame_target_changed {
         SetTargetFPS(app.ui.frame_target_fps)
         app.ui.frame_target_changed = false

@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.26] - 2026-10-09
+### Added
+- Detach a running practice into its own movable, resizable desktop window, then return it to the app.
+- Keep the practice visible over other Android apps with automatic picture-in-picture when your phone allows it.
+
 ## [2.1.25] - 2026-10-09
 ### Changed
 - Minimized practices show their live circle or figure in a resizable window and return to the page you started them from.

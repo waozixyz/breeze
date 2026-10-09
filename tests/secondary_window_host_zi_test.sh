@@ -18,9 +18,9 @@ export PKG_CONFIG_PATH="/home/wao/.local/sdl2/lib/pkgconfig${PKG_CONFIG_PATH:+:$
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
     -I"$root/build/packages/raylib/src" $(pkg-config --cflags sdl2) \
     "$root/tests/secondary_window_host_test.c" \
-    "$work/c/platform/secondary_window_host.c" "$raylib" \
+    "$work/c/platform/secondary_window_host.c" "$work/c/c_string.c" "$raylib" \
     $(pkg-config --libs sdl2) -lGL -lm -ldl -lpthread -o "$work/test"
 
-env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
     xvfb-run -a -n 200 -e /dev/stderr -s '-screen 0 800x600x24' "$work/test"
 echo "Inbe Ziran secondary window host test passed"
