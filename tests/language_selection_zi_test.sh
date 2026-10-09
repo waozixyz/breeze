@@ -10,11 +10,13 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/daochi-client" \
     "$root/src/app/language_selection.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/src/app/language_selection.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \
