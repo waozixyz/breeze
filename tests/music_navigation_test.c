@@ -25,6 +25,8 @@ static int stream_count;
 static int bell_calls;
 static InnerBreeze app;
 
+void session_start(InnerBreeze *state);
+
 static TestStream *stream_for(NativeMusic music)
 {
     TestStream *stream = music.ctx_data;
@@ -145,6 +147,11 @@ int main(int argc, char **argv)
         sizeof(app.audio_custom_music[0].title), "Navigation test track");
     int track = AUDIO_BUILTIN_MUSIC_COUNT;
 
+    /* An imported track plays without the built-in music download, so
+       Customize offers Test instead of "not installed" and Download. */
+    assert(meditation_music_meditation_music_track_installed(&app, track) == 1);
+    assert(meditation_music_meditation_music_track_installed(&app, track + 1) == 0);
+
     settings_tab(SETTINGS_TAB_AUDIO);
     settings_audio_settings_audio_toggle_music_preview(&app, track);
     assert(stream_count == 1);
@@ -195,6 +202,17 @@ int main(int argc, char **argv)
     meditation_session_meditation_start_seconds(&app, 60);
     assert(preview->unloaded && !preview->playing && bell_calls == 1);
     meditation_music_meditation_music_stop(&app);
+
+    /* A Wim Hof session keeps the breathing animation chosen in Customize. */
+    app.exercise_type = ExerciseType_EXERCISE_WIM_HOF;
+    for (int animation = 0; animation <= 1; animation++) {
+        app.breathing.breath_animation = animation;
+        session_start(&app);
+        assert(app.breathing.breath_animation == animation);
+        meditation_music_meditation_music_stop(&app);
+    }
+    app_open_main_tab(&app, AppMainTab_APP_MAIN_TAB_PRACTICE, 0);
+    app.exercise_type = ExerciseType_EXERCISE_MEDITATION;
 
     /* Leaving Customize and visiting other tabs keeps practice previews alive. */
     app_open_main_tab(&app, AppMainTab_APP_MAIN_TAB_PRACTICE, 0);

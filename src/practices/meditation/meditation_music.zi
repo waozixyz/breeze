@@ -387,6 +387,23 @@ meditation_music_available :: (app: *InnerBreeze) -> s32 {
     return 1
 }
 
+// Whether this track can play now. An imported file needs no download, and
+// a built-in track needs only its own file, not the whole download.
+meditation_music_track_installed :: (app: *InnerBreeze, track: s32) -> s32 {
+    path: [FS_PATH_MAX] u8
+
+    if app == null || track < 0 || track >= app_audio_music_count(app) {
+        return 0
+    }
+    if !app_audio_music_path(app, track, path[:]) {
+        return 0
+    }
+    if !app_audio_music_file_valid(AppTextFromCString(*path[0], size_of(type_of(path)))) {
+        return 0
+    }
+    return 1
+}
+
 meditation_music_selected_label :: (app: *InnerBreeze) -> string {
     track: s32
 
@@ -687,9 +704,15 @@ meditation_music_draw_practice_settings :: (app: *InnerBreeze,
     if selection < 0 || selection > track_count {
         selection = 0
     }
+    // Dropdown is controlled: its open menu persists through app.ui.
+    menu := app.ui.practice_music_menus[practice]
     dropdown_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = cast(s32)451 + practice,
             .bounds = Rectangle.{cast(float32)content_x, cast(float32)(y.* + AppScale(26)), cast(float32)content_w, cast(float32)AppScale(48)},
-            .selected_index = selection}, track_options[:track_count + 1])
+            .selected_index = selection,
+            .open = menu.open,
+            .highlight_index = menu.highlight_index,
+            .scroll_offset = menu.scroll_offset}, track_options[:track_count + 1])
+    app.ui.practice_music_menus[practice] = dropdown_pick
     if dropdown_pick.changed {
         selection = dropdown_pick.selected_index
         if selection <= 0 {
@@ -712,7 +735,8 @@ meditation_music_draw_practice_settings :: (app: *InnerBreeze,
         return
     }
 
-    installed = meditation_music_available(app)
+    installed = meditation_music_track_installed(app, selected_track)
+    built_in := selected_track < AUDIO_BUILTIN_MUSIC_COUNT
     if installed != 0 {
         if app.meditation.music_playing != 0 {
             test_label = LocaleText("meditation_music_stop_test_button")
@@ -737,7 +761,8 @@ meditation_music_draw_practice_settings :: (app: *InnerBreeze,
         y.* += button_h + AppScale(12)
     }
 
-    if installed == 0 || show_installed_download != 0 {
+    // The download only brings the built-in tracks.
+    if built_in && (installed == 0 || show_installed_download != 0) {
         download_label: string
 
         if installed != 0 {
@@ -808,11 +833,11 @@ meditation_music_measure_practice_settings :: (app: *InnerBreeze,
         return h
     }
 
-    installed = meditation_music_available(app)
+    installed = meditation_music_track_installed(app, selected_track)
     if installed != 0 {
         h += AppScale(60)
     }
-    if installed == 0 || show_installed_download != 0 {
+    if selected_track < AUDIO_BUILTIN_MUSIC_COUNT && (installed == 0 || show_installed_download != 0) {
         h += AppScale(60)
     }
 
