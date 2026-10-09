@@ -3165,3 +3165,9 @@ lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A)
 telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
 
 test: telegram-authorization-test
+
+.PHONY: android-geometry-probe-test
+android-geometry-probe-test:
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS sh tests/android_geometry_probe_test.sh
+
+test: android-geometry-probe-test

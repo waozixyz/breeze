@@ -74,6 +74,14 @@ MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#def
     AndroidWrite :: (priority: s32, tag: *u8,
         message: *u8) -> s32 #foreign android_log "__android_log_write";
     last_viewport: AndroidViewport = .{-1, -1, -1, -1, .{-1, -1, -1, -1}, -1};
+    #if #defined(ANDROID_DEBUG) {
+        geometry_time: float64 = -1.0;
+        geometry_sequence: s32;
+        geometry_launch_width: s32;
+        geometry_launch_height: s32;
+        geometry_viewport: AndroidViewport;
+        GeometryTime :: () -> float64 #foreign raylib "GetTime";
+    }
 }
 
 #if #defined(PLATFORM_WEB) {
@@ -386,6 +394,56 @@ native_update_apply_at_exit :: () -> s32 {
         a.height == b.height && a.insets.left == b.insets.left &&
         a.insets.top == b.insets.top && a.insets.right == b.insets.right &&
         a.insets.bottom == b.insets.bottom && a.ready == b.ready
+    }
+    #if #defined(ANDROID_DEBUG) {
+        // Debug-only metadata goes directly to logcat. The ordinary Android
+        // trace filter intentionally suppresses informational frame messages.
+        #program_export
+        native_android_report_geometry :: (viewport: AndroidViewport,
+            layout_width: s32, layout_height: s32, render_scale: float32,
+            practice: s32, paused: s32) {
+            now := GeometryTime()
+            if ViewportEqual(viewport, geometry_viewport) &&
+            geometry_time >= 0.0 && now - geometry_time < 1.0 {
+                return
+            }
+            geometry_time = now
+            geometry_viewport = viewport
+            geometry_sequence += 1
+            transform: AndroidSurfaceTransform
+            tag: [32]u8
+            format: [512]u8
+            message: [1024]u8
+            if !CopyCString("InbeGeometry", tag[:]) {
+                return
+            }
+            if !ReadAndroidSurfaceTransform(*transform) {
+                if CopyCString("ANDROID_GEOMETRY: ready=0", message[:]) {
+                    unused AndroidWrite(4, *tag[0], *message[0])
+                }
+                return
+            }
+            if geometry_launch_width == 0 {
+                geometry_launch_width = transform.screen_width
+                geometry_launch_height = transform.screen_height
+            }
+            if !CopyCString("ANDROID_GEOMETRY: ready=1 sample=%d launch=%dx%d screen=%dx%d render=%dx%d viewport=%d,%d,%dx%d offset=%d,%d scale=%.6f,%.6f projection=%.9f,%.9f layout=%dx%d render_scale=%.6f practice=%d paused=%d", format[:]) {
+                return
+            }
+            if FormatText(*message[0], 1024, *format[0], geometry_sequence,
+                geometry_launch_width, geometry_launch_height,
+                transform.screen_width, transform.screen_height,
+                transform.render_width, transform.render_height,
+                viewport.x, viewport.y, viewport.width, viewport.height,
+                transform.offset_x, transform.offset_y,
+                cast(float64)transform.scale_x, cast(float64)transform.scale_y,
+                cast(float64)transform.projection_x,
+                cast(float64)transform.projection_y,
+                layout_width, layout_height, cast(float64)render_scale,
+                practice, paused) > 0 {
+                unused AndroidWrite(4, *tag[0], *message[0])
+            }
+        }
     }
     #program_export
     native_android_frame_viewport :: (viewport: *AndroidViewport) -> s32 {

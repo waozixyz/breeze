@@ -1,0 +1,84 @@
+#import, file "../src/platform/main_platform.zi";
+#import "android_surface"
+#import "c_string"
+
+core: RaylibWindowState;
+clock: float64;
+logged: s32;
+message: [1024]u8;
+projection_width: float32 = 1080.0;
+projection_height: float32 = 2220.0;
+
+#program_export
+GetTime :: () -> float64 {
+    return clock
+}
+#program_export
+rlGetMatrixProjection :: () -> SurfaceMatrix {
+    result: SurfaceMatrix
+    result.values[0] = 2.0 / projection_width
+    result.values[5] = -2.0 / projection_height
+    return result
+}
+#program_export "__android_log_write"
+CaptureGeometry :: (priority: s32, tag: *u8, value: *u8) -> s32 {
+    if priority != 4 || !CStringEquals(tag, "InbeGeometry") {
+        return -1
+    }
+    logged += 1
+    index: s32 = 0
+    while index < 1023 && value[index] != cast(u8)0 {
+        message[index] = value[index]
+        index += 1
+    }
+    message[index] = cast(u8)0
+    return 1
+}
+
+#program_export
+main :: () -> s32 {
+    raylib_window_state = *core
+    core.screen = RaylibWindowSize.{1080, 2220}
+    core.render = core.screen
+    core.screen_scale[0] = 1.0
+    core.screen_scale[5] = 1.0
+    viewport := AndroidViewport.{0, 66, 1080, 2088, .{0, 66, 0, 66}, 1}
+    native_android_report_geometry(viewport, 360, 696, 3.0, -1, 0)
+    if logged != 1 || !Contains("ANDROID_GEOMETRY: ready=1 sample=1 launch=1080x2220") ||
+    !Contains("screen=1080x2220 render=1080x2220") ||
+    !Contains("layout=360x696 render_scale=3.000000 practice=-1 paused=0") {
+        return 1
+    }
+    native_android_report_geometry(viewport, 360, 696, 3.0, -1, 0)
+    if logged != 1 { return 2 }
+    clock = 1.1
+    native_android_report_geometry(viewport, 360, 696, 3.0, 0, 1)
+    if logged != 2 || !Contains("practice=0 paused=1") {
+        return 3
+    }
+    core.screen = RaylibWindowSize.{2220, 1080}
+    core.render = core.screen
+    projection_width = 2220.0
+    projection_height = 1080.0
+    viewport = AndroidViewport.{0, 0, 2220, 1080, .{0, 0, 0, 0}, 1}
+    native_android_report_geometry(viewport, 740, 360, 3.0, -1, 0)
+    if logged != 3 || !Contains("launch=1080x2220 screen=2220x1080 render=2220x1080") {
+        return 4
+    }
+    return 0
+}
+
+CStringEquals :: (text: *u8, expected: string) -> bool {
+    for index: 0..expected.count - 1 {
+        if text[index] != expected[index] { return false }
+    }
+    return text[expected.count] == cast(u8)0
+}
+
+Contains :: (text: string) -> bool {
+    needle: [256]u8
+    if !CopyCString(text, needle[:]) { return false }
+    return ProbeFind(*message[0], *needle[0]) != null
+}
+probe_c :: #system_library "c";
+ProbeFind :: (text: *u8, needle: *u8) -> *u8 #foreign probe_c "strstr";
