@@ -1,0 +1,294 @@
+// The running practice in its small window: advancing it while another
+// app is open, and the window that returns to it or ends it.
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "session_screen.zi";
+#import, file "session_window.zi";
+#import, file "app_nav_state.zi";
+#import, file "exercise_types.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "text_buffers.zi";
+#import, file "draw.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../core/breath_timing.zi";
+#import "box_props"
+#import "box_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "drawing_props"
+#import "geometry"
+#import "kss_parser"
+#import "paint_queue"
+#import "layout"
+#import "session"
+#import "style"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import "tree_input"
+#import "widget_kind"
+
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
+
+using ButtonEmphasis;
+using ExerciseType;
+using TextWrap;
+using WidgetKind;
+
+SESSION_WINDOW_CARD_ID :: 7480
+SESSION_WINDOW_CLOSE_ID :: 7481
+
+session_window_practice :: (screen: s32) -> s32 {
+    if screen == ScreenMeditation {
+        return cast(s32)EXERCISE_MEDITATION
+    }
+    if screen == ScreenSunSalutation {
+        return cast(s32)EXERCISE_SUN_SALUTATION
+    }
+    if screen == ScreenPatterns {
+        return cast(s32)EXERCISE_PATTERNS
+    }
+    return cast(s32)EXERCISE_WIM_HOF
+}
+
+// Ends the practice from its small window the way leaving its screen does:
+// it asks first, with the practice's own choices for the time so far.
+app_session_window_close :: (app: *InnerBreeze) {
+    if !app_session_window_restore(app) {
+        return
+    }
+    practice := practice_get(session_window_practice(app.breathing.screen))
+    if practice != null && practice.request_exit != null {
+        practice.request_exit(app)
+    }
+}
+
+// Advances the practice in its small window by the time since the last
+// frame. In the background the platform timer advances it instead.
+app_session_window_tick :: (app: *InnerBreeze) {
+    app_session_window_take_minimize(app)
+    if app == null || app.session_window.screen == ScreenStart {
+        return
+    }
+    now := GetTime()
+    elapsed := now - app.session_window.last_tick
+    app.session_window.last_tick = now
+    // A finished practice shows its results; a practice shown again by any
+    // other way leaves its window.
+    if app.breathing.screen == ScreenResults ||
+        app.breathing.screen == app.session_window.screen {
+        app.session_window.screen = ScreenStart
+        return
+    }
+    if app.backgrounded != 0 || elapsed <= 0.0 {
+        return
+    }
+    practice := practice_get(session_window_practice(app.session_window.screen))
+    if practice == null || practice.advance_elapsed == null {
+        return
+    }
+    practice.advance_elapsed(app, cast(s32)(elapsed * 1000.0 + 0.5))
+    if app.breathing.screen == ScreenResults {
+        app.session_window.screen = ScreenStart
+    }
+}
+
+session_window_clock :: (seconds: s32, output: []u8) -> string {
+    value := seconds
+    if value < 0 {
+        value = 0
+    }
+    minutes := value / 60
+    rest := value % 60
+    digits: [12]u8 = .[48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48]
+    count: s32 = 0
+    if minutes >= 100 {
+        digits[count] = cast(u8)(48 + minutes / 100 % 10)
+        count += 1
+    }
+    if minutes >= 10 {
+        digits[count] = cast(u8)(48 + minutes / 10 % 10)
+        count += 1
+    }
+    digits[count] = cast(u8)(48 + minutes % 10)
+    digits[count + 1] = cast(u8)58
+    digits[count + 2] = cast(u8)(48 + rest / 10)
+    digits[count + 3] = cast(u8)(48 + rest % 10)
+    count += 4
+    index: s32 = 0
+    while index < count && index < cast(s32)output.count - 1 {
+        output[index] = digits[index]
+        index += 1
+    }
+    output[index] = 0
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// What the practice is doing now, as its screen shows it.
+session_window_status :: (app: *InnerBreeze, output: []u8) -> string {
+    screen := app.session_window.screen
+    if screen == ScreenMeditation {
+        return session_window_clock(app.meditation.remaining_seconds, output)
+    }
+    if screen == ScreenPatterns {
+        seconds := app.patterns.elapsed_seconds
+        if app.patterns.duration_minutes > 0 {
+            seconds = app.patterns.duration_minutes * 60 - app.patterns.elapsed_seconds
+        }
+        return session_window_clock(seconds, output)
+    }
+    if screen == ScreenSession {
+        round: [32]u8
+        unused FormatNumberTemplate(LocaleText("session_round_label"),
+            app.breathing.round + 1, round[:])
+        count := BreathDigitsRead(app.breathing.count[:])
+        number: [16]u8
+        unused AppFormatS32(count, number[:])
+        text := AppTextFromCString(*round[0], 32)
+        value := AppTextFromCString(*number[0], 16)
+        used: s32 = 0
+        for byte: text {
+            if used < cast(s32)output.count - 1 {
+                output[used] = byte
+                used += 1
+            }
+        }
+        separator: [5]u8 = .[32, 194, 183, 32, 0]
+        for index: 0..3 {
+            if used < cast(s32)output.count - 1 {
+                output[used] = separator[index]
+                used += 1
+            }
+        }
+        for byte: value {
+            if used < cast(s32)output.count - 1 {
+                output[used] = byte
+                used += 1
+            }
+        }
+        output[used] = 0
+        return AppTextFromCString(*output[0], cast(s32)output.count)
+    }
+    output[0] = 0
+    return ""
+}
+
+session_window_clamp :: (app: *InnerBreeze, width: float32, height: float32) {
+    margin := cast(float32)AppScale(8)
+    right := cast(float32)app.ui.view_width - width - margin
+    bottom := cast(float32)(app.ui.view_height - app_content_bottom_reserved(app)) - height - margin
+    if app.session_window.position.x > right {
+        app.session_window.position.x = right
+    }
+    if app.session_window.position.y > bottom {
+        app.session_window.position.y = bottom
+    }
+    if app.session_window.position.x < margin {
+        app.session_window.position.x = margin
+    }
+    if app.session_window.position.y < margin {
+        app.session_window.position.y = margin
+    }
+}
+
+// The running practice's small window: tap to return, drag to move, and
+// the X ends the practice.
+app_session_window_draw :: (app: *InnerBreeze) {
+    if app == null || app.session_window.screen == ScreenStart ||
+        app.launcher_open || app_is_session_screen(app.breathing.screen) ||
+        !SessionValid(app.ui.session) {
+        return
+    }
+    window := *app.session_window
+    width := cast(float32)AppScale(212)
+    height := cast(float32)AppScale(64)
+    // It starts at the top right, clear of page titles and of the message
+    // fields and actions along the bottom, and stays where it is dragged.
+    if !window.placed {
+        window.position = Vector2.{cast(float32)app.ui.view_width - width,
+            cast(float32)AppScale(72)}
+        window.placed = true
+    }
+    session_window_clamp(app, width, height)
+    bounds := Rectangle.{window.position.x, window.position.y, width, height}
+    session := app.ui.session
+    radius := cast(float32)AppScale(16)
+    // The window floats above the page it covers.
+    shadow := Rectangle.{bounds.x + cast(float32)AppScale(2), bounds.y + cast(float32)AppScale(5),
+        width, height}
+    PaintRoundedFill(session, -1, shadow, radius, 12, Color.{0, 0, 0, 72})
+    Box(session, BoxProps.{.key = KeyHash("inbe/session-window/card"),
+            .bounds = bounds, .fill = StyleTokenColor("surface"),
+            .border = Fade(StyleTokenColor("accent"), 0.7f), .radius = radius})
+    name := practice_label(session_window_practice(window.screen))
+    status_text: [48]u8
+    status := session_window_status(app, status_text[:])
+    text_x := bounds.x + cast(float32)AppScale(14)
+    text_w := width - cast(float32)AppScale(58)
+    name_y := bounds.y + cast(float32)AppScale(ifx status.count > 0 then 10 else 21)
+    Text(session, TextProps.{.key = KeyHash("inbe/session-window/name"),
+            .bounds = Rectangle.{text_x, name_y, text_w, cast(float32)AppScale(20)},
+            .text = FrameTextHold(*app.ui.frame_text, name), .font = AppScale(14),
+            .wrap = cast(TextWrap)TextWrapNone})
+    if status.count > 0 {
+        Text(session, TextProps.{.key = KeyHash("inbe/session-window/status"),
+                .bounds = Rectangle.{text_x, bounds.y + cast(float32)AppScale(34),
+                    text_w, cast(float32)AppScale(18)},
+                .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(12),
+                .wrap = cast(TextWrap)TextWrapNone,
+                .class_name = KssClassId(KssMakeName("launcher-muted"))})
+    }
+
+    // The whole card returns to the practice and drags the window; the
+    // close button is submitted after it so its taps stay its own.
+    card: ButtonProps
+    card.id = SESSION_WINDOW_CARD_ID
+    card.bounds = bounds
+    card.invisible = true
+    card.label = name
+    key := cast(u64)card.id
+    previous := TreePrevious(session, TreeCurrentParent(session), key, WidgetKindButton)
+    drag := TreeTakeDragAt(session, previous)
+    if drag.started {
+        window.drag_moved = false
+        window.drag_origin = Vector2.{drag.x, drag.y}
+        window.drag_start = window.position
+    }
+    if drag.active || drag.ended {
+        dx := drag.x - window.drag_origin.x
+        dy := drag.y - window.drag_origin.y
+        threshold := cast(float32)AppScale(6)
+        if dx * dx + dy * dy >= threshold * threshold {
+            window.drag_moved = true
+        }
+        if window.drag_moved {
+            window.position = Vector2.{window.drag_start.x + dx, window.drag_start.y + dy}
+            session_window_clamp(app, width, height)
+        }
+    }
+    tapped := drag.ended && !window.drag_moved && TreeHoveredAt(session, previous)
+    activated := Button(session, card) != 0 || tapped
+    node := TreeSubmitted(session, TreeCurrentParent(session), key, WidgetKindButton)
+    TreeSetDragCapture(session, node, true)
+
+    close: ButtonProps
+    close.id = SESSION_WINDOW_CLOSE_ID
+    close.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(42),
+        bounds.y + cast(float32)AppScale(6), cast(float32)AppScale(36),
+        cast(float32)AppScale(36)}
+    close.label = LocaleText("close_button")
+    close.icon_only = true
+    close.icon_shape = "S1.8rr:M6 6L18 18M18 6L6 18"
+    close.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    close.class_name = KssClassId(KssMakeName("launcher-action"))
+    if Button(session, close) != 0 {
+        app_session_window_close(app)
+        return
+    }
+    if activated && !window.drag_moved {
+        unused app_session_window_restore(app)
+    }
+}

@@ -1,0 +1,179 @@
+// A running practice keeps going in a small window while another app is
+// open, and the navigation slides out of the way while a practice runs.
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "session_screen.zi";
+#import, file "app_route_state.zi";
+#import, file "app_nav_state.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_launcher_state.zi";
+#import, file "route_types.zi";
+#import, file "metrics.zi";
+#import "drawing_props"
+#import "geometry"
+
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
+
+using AppMainTab;
+using AppNavRoute;
+using NavigationPlacement;
+
+// Seconds the navigation takes to slide fully in or out.
+SESSION_NAV_SLIDE_SECONDS :: 0.18
+
+// Keeps the running practice going in its small window. Returns false when
+// no practice is on screen.
+app_session_window_open :: (app: *InnerBreeze) -> bool {
+    if app == null || !app_is_session_screen(app.breathing.screen) {
+        return false
+    }
+    app.session_window.screen = app.breathing.screen
+    app.session_window.last_tick = GetTime()
+    return true
+}
+
+// Shows the practice from its small window again.
+app_session_window_restore :: (app: *InnerBreeze) -> bool {
+    if app == null || app.session_window.screen == ScreenStart {
+        return false
+    }
+    screen := app.session_window.screen
+    app.session_window.screen = ScreenStart
+    if app.launcher_open {
+        app_launcher_close(app)
+    }
+    app.main_tab = APP_MAIN_TAB_PRACTICE
+    app_switch_screen(app, screen)
+    app_block_current_click(app)
+    return true
+}
+
+// Opening Practice returns to the running practice; another app keeps it
+// running in its small window. Returns true when the route is handled.
+app_session_window_route :: (app: *InnerBreeze, route: s32) -> bool {
+    if app == null {
+        return false
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        if app_is_session_screen(app.breathing.screen) {
+                    return true
+        }
+        return app_session_window_restore(app)
+    }
+    unused app_session_window_open(app)
+    return false
+}
+
+// The navigation as a sidebar while a practice hides it.
+app_session_nav_rail :: (app: *InnerBreeze) -> bool {
+    placement := app_navigation_placement(app)
+    return (placement == NAVIGATION_LEFT || placement == NAVIGATION_RIGHT) &&
+        app.ui.view_height >= AppScale(476)
+}
+
+// Slides the navigation toward where it belongs: shown on app pages and
+// hidden while a practice runs.
+app_session_nav_update :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    window := *app.session_window
+    now := GetTime()
+    step := cast(float32)(now - window.nav_frame_time)
+    window.nav_frame_time = now
+    if step < 0.0 || step > 0.1 {
+        step = 0.1
+    }
+    target: float32 = ifx app_is_session_screen(app.breathing.screen) then 0.0 else 1.0
+    rate := step / cast(float32)SESSION_NAV_SLIDE_SECONDS
+    if window.nav_shown < target {
+        window.nav_shown += rate
+        if window.nav_shown > target {
+            window.nav_shown = target
+        }
+    } else if window.nav_shown > target {
+        window.nav_shown -= rate
+        if window.nav_shown < target {
+            window.nav_shown = target
+        }
+    }
+}
+
+// The app a minimized practice gives way to: Lumi when the practice was
+// started from it, otherwise the first pinned app that is not Practice.
+session_window_return_route :: (app: *InnerBreeze) -> s32 {
+    if app.lumi_practice != 0 && app_nav_route_available(app, APP_NAV_ROUTE_LUMI) {
+        return APP_NAV_ROUTE_LUMI
+    }
+    for index: cast(s32)0..app.launcher_favorite_count - 1 {
+        route := app.launcher_favorites[index]
+        if route != APP_NAV_ROUTE_PRACTICE && app_nav_route_available(app, route) {
+            return route
+        }
+    }
+    others: [4]s32 = .[APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_DIARY, APP_NAV_ROUTE_LUMI]
+    for route: others {
+        if app_nav_route_available(app, route) {
+            return route
+        }
+    }
+    return APP_NAV_ROUTE_APPS
+}
+
+// The minimize button shrinks the practice into its small window and
+// opens another app, or Apps when no other app is installed.
+app_session_window_take_minimize :: (app: *InnerBreeze) {
+    if app == null || !app.session_window.minimize_requested {
+        return
+    }
+    app.session_window.minimize_requested = false
+    if !app_session_window_open(app) {
+        return
+    }
+    route := session_window_return_route(app)
+    if route == APP_NAV_ROUTE_APPS {
+        app.main_tab = APP_MAIN_TAB_NONE
+        app_launcher_toggle(app)
+        return
+    }
+    app_apply_nav_route(app, route)
+}
+
+// Where the navigation sits when fully shown over a practice.
+app_session_nav_bounds :: (app: *InnerBreeze) -> Rectangle {
+    if app_session_nav_rail(app) {
+        width := cast(float32)app_nav_desktop_rail_width(app)
+        x: float32 = 0.0
+        if app_navigation_placement(app) == NAVIGATION_RIGHT {
+            x = cast(float32)app.ui.view_width - width
+        }
+        return Rectangle.{x, 0.0, width, cast(float32)app.ui.view_height}
+    }
+    height := cast(float32)app_dock_height(app)
+    y := cast(float32)app.ui.view_height - height
+    if app_navigation_placement(app) == NAVIGATION_TOP {
+        y = 0.0
+    }
+    return Rectangle.{0.0, y, cast(float32)app.ui.view_width, height}
+}
+
+// How far the navigation has slid toward its edge, out of the given
+// bounds, for its current share on screen.
+app_session_nav_slide :: (app: *InnerBreeze, bounds: Rectangle,
+    rail: bool) -> Rectangle {
+    hidden := 1.0 - app.session_window.nav_shown
+    if hidden <= 0.0 {
+        return bounds
+    }
+    placement := app_navigation_placement(app)
+    moved := bounds
+    if rail {
+        distance := bounds.width * hidden
+        moved.x += ifx placement == NAVIGATION_RIGHT then distance else 0.0 - distance
+        return moved
+    }
+    distance := bounds.height * hidden
+    moved.y += ifx placement == NAVIGATION_TOP then 0.0 - distance else distance
+    return moved
+}

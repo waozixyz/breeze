@@ -418,6 +418,11 @@ lumi-history-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		python3 tests/lumi_history_ui_test.py $(abspath $(TARGET))
 
+.PHONY: session-window-ui-test
+session-window-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/session_window_ui_test.py $(abspath $(TARGET))
+
 $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 

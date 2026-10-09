@@ -36,6 +36,8 @@
 #import, file "../core/types.zi";
 #import, file "../app/modal_rules.zi";
 #import, file "../app/mini_mode.zi";
+#import, file "../app/session_window.zi";
+#import, file "../app/session_screen.zi";
 
 using AppMainTab;
 using AppNavRoute;
@@ -153,7 +155,16 @@ bottom_nav_route_active :: (app: *InnerBreeze, route: s32) -> bool {
 // scrolling, button interaction, drag observations and anchored actions.
 #program_export
 app_draw_favorites_dock :: (app: *InnerBreeze) {
+    app_draw_dock(app, false)
+}
+
+// The dock slides with the navigation's share on screen. Over a practice
+// it sits on the practice's edge without moving the practice.
+app_draw_dock :: (app: *InnerBreeze, over_practice: bool) {
     desktop := app_nav_desktop_rail_enabled(app) != 0
+    if over_practice {
+        desktop = app_session_nav_rail(app)
+    }
     dock_width := app_nav_desktop_rail_width(app)
     props: NavigationBarProps
     props.key = KeyHash("inbe/apps/dock")
@@ -184,6 +195,10 @@ app_draw_favorites_dock :: (app: *InnerBreeze) {
         props.bounds = Rectangle.{cast(float32)x, 0.0,
             cast(float32)dock_width, cast(float32)app.ui.view_height}
     }
+    if over_practice {
+        props.bounds = app_session_nav_bounds(app)
+    }
+    props.bounds = app_session_nav_slide(app, props.bounds, desktop)
     routes: [LAUNCHER_APP_COUNT + 1]s32
     count: s32 = 0
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
@@ -268,4 +283,16 @@ app_draw_bottom_nav :: (app: *InnerBreeze) {
     !SessionValid(app.ui.session) { return }
     if app_nav_desktop_rail_enabled(app) == 0 && app_navigation_height(app) == 0 { return }
     app_draw_favorites_dock(app)
+}
+
+// The navigation a practice reveals from its edge, drawn over the practice
+// after its page so its taps come first.
+app_draw_session_nav :: (app: *InnerBreeze) {
+    if app == null || AppMiniMode() || app.host_feature != 0 ||
+    app.launcher_open || app.file_dialog_active != 0 ||
+    !SessionValid(app.ui.session) || !app_is_session_screen(app.breathing.screen) ||
+    app.session_window.nav_shown <= 0.01 {
+        return
+    }
+    app_draw_dock(app, true)
 }
