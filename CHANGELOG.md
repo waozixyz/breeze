@@ -1,4 +1,9 @@
 # Changelog
+## [2.1.22] - 2026-10-08
+### Fixed
+- Keep bottom navigation visible on the practice home screen and keep practice swipes above it.
+- Reduce pauses when opening Lists, Diary and app settings by retaining loaded apps between frames.
+
 ## [2.1.21] - 2026-10-08
 ### Changed
 - Clearly mark the selected app in navigation and Apps, including while hovering or pressing.

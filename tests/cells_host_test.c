@@ -12,6 +12,7 @@ static int32_t module_runs;
 static bool use_cached_bundles;
 static int32_t cached_reads[6];
 static int32_t bundle_opens;
+static int32_t instance_opens;
 static bool corrupt_cached_lists;
 static bool fail_next_instance;
 static bool fail_next_run;
@@ -26,6 +27,11 @@ Bundle *__wrap_BundleOpenBytes(const unsigned char *data, size_t count)
 int32_t ModuleTestBundleOpens(void)
 {
     return bundle_opens;
+}
+
+int32_t ModuleTestInstanceOpens(void)
+{
+    return instance_opens;
 }
 
 void ModuleTestCorruptCachedLists(bool enabled)
@@ -97,6 +103,7 @@ void ModuleTestFailInstantiate(void)
 BundleInstance *__wrap_BundleInstantiate(const Bundle *bundle,
     const HostBinding *bindings, size_t count)
 {
+    instance_opens++;
     if(fail_next_instance) {
         fail_next_instance = false;
         return NULL;

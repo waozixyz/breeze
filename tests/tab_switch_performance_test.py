@@ -12,6 +12,8 @@ import sys
 import tempfile
 import time
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/tab-switch-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -40,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
                SDL_VIDEODRIVER="x11", LIBGL_ALWAYS_SOFTWARE="1",
                APP_DATA_ROOT=str(profile), APP_PROFILE="1", INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / (LABEL + "-display.log")).open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1000x900x24",
+    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()
@@ -65,13 +67,36 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
                     found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                            env=env, capture_output=True, text=True, timeout=2)
                     if found.returncode == 0 and found.stdout.strip():
-                        window = found.stdout.splitlines()[0]
-                        break
+                        for candidate in found.stdout.splitlines():
+                            property_text = command("xprop", "-id", candidate, "_HARMONY_APP_STATE")
+                            if "harmony.app-state.v1" in property_text:
+                                window = candidate
+                                break
+                        if window:
+                            break
                     time.sleep(.05)
                 assert window, "Owned test window did not appear"
-                command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
-                command("xdotool", "windowfocus", window)
-                time.sleep(1)
+                deadline = time.monotonic() + 20
+                while "APP PROBE: drawing ended" not in log_path.read_text():
+                    assert app.poll() is None, log_path.read_text()[-3000:]
+                    assert time.monotonic() < deadline, "App did not draw its first frame"
+                    time.sleep(.05)
+                if name != "prepare":
+                    command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
+                    command("xdotool", "windowmove", window, "0", "0")
+                    deadline = time.monotonic() + 20
+                    ready = OUTPUT / (LABEL + "-" + name + "-ready.png")
+                    while True:
+                        assert app.poll() is None, log_path.read_text()[-3000:]
+                        command("import", "-window", window, str(ready))
+                        with Image.open(ready) as image:
+                            if image.size == (WIDTH, HEIGHT) and any(
+                                    high - low > 24 for low, high in image.convert("RGB").getextrema()):
+                                break
+                        assert time.monotonic() < deadline, "App did not render the requested viewport"
+                        time.sleep(.05)
+                    command("xdotool", "windowfocus", window)
+                    time.sleep(.2)
                 yield app, window, log_path
             finally:
                 stop(app)
@@ -129,6 +154,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
                     assert int(saved_tab) == expected_tab, f"{name}: saved tab {saved_tab}, expected {expected_tab}"
                 samples.append({"cycle": cycle, "tab": name, "response_ms": round(elapsed, 2)})
                 print(json.dumps(samples[-1]), flush=True)
+                if name == "practices" and cycle == 0:
+                    time.sleep(.18)
+                    screenshot = OUTPUT / (LABEL + "-practices.png")
+                    command("import", "-window", window, str(screenshot))
+                    with Image.open(screenshot) as image:
+                        if WIDTH < 500:
+                            apps = image.crop((WIDTH - 74, HEIGHT - 48, WIDTH - 14, HEIGHT - 4))
+                        else:
+                            apps = image.crop((14, 465, 74, 495))
+                        assert any(high - low > 24 for low, high in apps.convert("RGB").getextrema()), \
+                            "Practice content covered the Apps shortcut"
                 if not RAPID:
                     time.sleep(.16)
         # Finish on Lists so restart cannot pass by returning to the default tab.

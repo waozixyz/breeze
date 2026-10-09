@@ -1,49 +1,3 @@
-    today := Dates.ParseDate(DiaryStoreClock()[:10])
-    tomorrow := Dates.Next(today, 1)
-    future := DiaryRun(DiaryMessage.{.action = DIARY_LOAD,
-            .year = tomorrow.year, .month = tomorrow.month, .day = tomorrow.day})
-    Expect(!future.succeeded, 410)
-    current := DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
-    current.action = DIARY_EDIT
-    current.replacement = "Today's unsaved entry"
-    current = DiaryRun(current)
-    current.action = DIARY_CONTROL
-    current.control = 29002
-    current = DiaryRun(current)
-    Expect(!current.succeeded && current.day == today.day &&
-        current.month == today.month && current.year == today.year &&
-        current.text == "Today's unsaved entry" && !current.saved, 411)
-    current.control = 29003
-    current = DiaryRun(current)
-    current.control = 29012
-    current = DiaryRun(current)
-    Expect(!current.succeeded && current.calendar &&
-        current.month_year == today.year && current.month_number == today.month, 412)
-    if tomorrow.month == today.month {
-        current.control = 29100 + tomorrow.day
-        current = DiaryRun(current)
-        Expect(!current.succeeded && current.calendar && current.day == today.day, 413)
-    }
-    Expect(Dates.OnOrBefore(Dates.Date.{2024, 2, 29}, Dates.Date.{2024, 3, 1}) &&
-        !Dates.OnOrBefore(Dates.Date.{2024, 3, 1}, Dates.Date.{2024, 2, 29}) &&
-        !Dates.OnOrBefore(Dates.Date.{2023, 2, 29}, Dates.Date.{2024, 3, 1}) &&
-        Dates.OnOrBefore(Dates.Date.{2025, 12, 31}, Dates.Date.{2026, 1, 1}), 414)
-    current.action = DIARY_SAVE
-    current = DiaryRun(current)
-    Expect(current.saved && current.succeeded, 415)
-    original_owner := PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
-    legacy := DiaryLegacyDirectory()
-    other: string = "different-diary-account"
-    AppCopyText(other, g_storage.user_id[:])
-    Expect(DiaryStoreRead("2024-02-28.json").missing, 416)
-    Expect(!DiaryStoreImportOwned(legacy), 417)
-    AppCopyText(original_owner, g_storage.user_id[:])
-    Expect(DiaryStoreRead("2024-02-28.json").data.count > 0, 418)
-    PackageFree(original_owner)
-    PackageFree(legacy)
-
-#import, file "../src/cells/package_files.zi";
-Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "lumi_cells_behavior.zi";
 #import, file "cells_locale_behavior.zi";
 #import, file "../src/cells/module_host.zi";
@@ -53,8 +7,10 @@ c_cache :: #system_library "c";
 ModuleTestUseCache :: (enabled: bool) #foreign c_cache;
 ModuleTestCachedReads :: (index: s32) -> s32 #foreign c_cache;
 ModuleTestBundleOpens :: () -> s32 #foreign c_cache;
+ModuleTestInstanceOpens :: () -> s32 #foreign c_cache;
 ModuleTestCorruptCachedLists :: (enabled: bool) #foreign c_cache;
 ModuleTestFailInstantiate :: () #foreign c_cache;
+ModuleTestFailRun :: () #foreign c_cache;
 #import, file "../src/cells/shared_state.zi";
 #import, file "../src/cells/lists_types.zi";
 #import, file "../src/cells/lists_visibility.zi";
@@ -62,7 +18,9 @@ ModuleTestFailInstantiate :: () #foreign c_cache;
 #import, file "../src/cells/practice_types.zi";
 #import, file "../src/cells/inbe_types.zi";
 #import, file "../src/cells/diary_types.zi";
+Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/cells/diary_store.zi";
+#import, file "../src/cells/package_files.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/core/types.zi";
 #import, file "../src/core/breath_timing.zi";
@@ -223,9 +181,23 @@ CheckRootConfiguration :: () {
     toggle.app = APP_LISTS | APP_HABITS
     Expect(!InbeRun(toggle).succeeded, 71)
     Expect(CellsSetEnabled(APP_ALL), 72)
+    instances := ModuleTestInstanceOpens()
+    for frame: 0..199 {
+        unused frame
+        ready := ListsUiRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList})
+        root := InbeUiRun(InbeMessage.{.action = INBE_ROUTE, .screen = ScreenEList,
+                .enabled_apps = APP_ALL})
+        Expect(ready.succeeded && root.succeeded && root.allowed, 235)
+    }
+    Expect(ModuleTestInstanceOpens() == instances, 236)
+    ModuleTestFailRun()
+    failed := ListsUiRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList})
+    Expect(!failed.succeeded, 237)
     ModuleTestFailInstantiate()
     reset := ListsUiRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList})
-    Expect(!reset.succeeded && CellsReady() && InbeAllows(ScreenEList), 220)
+    Expect(!reset.succeeded && CellsReady(), 220)
+    recovered := ListsUiRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList})
+    Expect(recovered.succeeded && InbeAllows(ScreenEList), 238)
     Expect(CellsPackageSize(1) == ModuleTestText("lists").count, 234)
     runs := ModuleTestRuns()
     Expect(InbeAllows(ScreenEList) && ModuleTestRuns() == runs + 2, 73)
@@ -234,6 +206,14 @@ CheckRootConfiguration :: () {
 CheckDiary :: () {
     Expect(CellsValidatePackage(4, ModuleTestText("diary")), 80)
     Expect(!CellsValidatePackage(4, ModuleTestText("habits")), 81)
+    instances := ModuleTestInstanceOpens()
+    for frame: 0..49 {
+        unused frame
+        loaded := DiaryRun(DiaryMessage.{.action = DIARY_LOAD,
+                .year = 2024, .month = 2, .day = 28})
+        Expect(loaded.succeeded, 239)
+    }
+    Expect(ModuleTestInstanceOpens() == instances, 240)
     state := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 2, .day = 28})
     Expect(state.succeeded && state.saved && !state.load_error && state.text == "", 82)
     state.action = DIARY_EDIT
@@ -293,6 +273,50 @@ CheckDiary :: () {
     bad.action = DIARY_SAVE
     Expect(bad.load_error && !DiaryRun(bad).succeeded, 93)
     Expect(DiaryStoreRead("2024-03-02.json").data == "damaged", 94)
+    today := Dates.ParseDate(DiaryStoreClock()[:10])
+    tomorrow := Dates.Next(today, 1)
+    future := DiaryRun(DiaryMessage.{.action = DIARY_LOAD,
+            .year = tomorrow.year, .month = tomorrow.month, .day = tomorrow.day})
+    Expect(!future.succeeded, 410)
+    current := DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
+    current.action = DIARY_EDIT
+    current.replacement = "Today's unsaved entry"
+    current = DiaryRun(current)
+    current.action = DIARY_CONTROL
+    current.control = 29002
+    current = DiaryRun(current)
+    Expect(!current.succeeded && current.day == today.day &&
+        current.month == today.month && current.year == today.year &&
+        current.text == "Today's unsaved entry" && !current.saved, 411)
+    current.control = 29003
+    current = DiaryRun(current)
+    current.control = 29012
+    current = DiaryRun(current)
+    Expect(!current.succeeded && current.calendar &&
+        current.month_year == today.year && current.month_number == today.month, 412)
+    if tomorrow.month == today.month {
+        current.control = 29100 + tomorrow.day
+        current = DiaryRun(current)
+        Expect(!current.succeeded && current.calendar && current.day == today.day, 413)
+    }
+    Expect(Dates.OnOrBefore(Dates.Date.{2024, 2, 29}, Dates.Date.{2024, 3, 1}) &&
+        !Dates.OnOrBefore(Dates.Date.{2024, 3, 1}, Dates.Date.{2024, 2, 29}) &&
+        !Dates.OnOrBefore(Dates.Date.{2023, 2, 29}, Dates.Date.{2024, 3, 1}) &&
+        Dates.OnOrBefore(Dates.Date.{2025, 12, 31}, Dates.Date.{2026, 1, 1}), 414)
+    current.action = DIARY_SAVE
+    current = DiaryRun(current)
+    Expect(current.saved && current.succeeded, 415)
+    original_owner := PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
+    legacy := DiaryLegacyDirectory()
+    other: string = "different-diary-account"
+    AppCopyText(other, g_storage.user_id[:])
+    Expect(DiaryStoreRead("2024-02-28.json").missing, 416)
+    Expect(!DiaryStoreImportOwned(legacy), 417)
+    AppCopyText(original_owner, g_storage.user_id[:])
+    Expect(DiaryStoreRead("2024-02-28.json").data.count > 0, 418)
+    PackageFree(original_owner)
+    PackageFree(legacy)
+
 }
 
 CheckPackagedLocales :: () {
