@@ -18,6 +18,7 @@
 #import, file "../app/text_buffers.zi";
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/route_types.zi";
+#import, file "../app/session_screen.zi";
 #import, file "../app/locale.zi";
 #import, file "../practices/practice_actions.zi";
 #import, file "../platform/network_transport.zi";
@@ -41,6 +42,9 @@ c :: #system_library "c";
 // Telegram messages reach the app within this interval while Inbe is open.
 LUMI_TELEGRAM_POLL_SECONDS :: 2
 LUMI_TELEGRAM_RETRY_SECONDS :: 5
+// While a practice runs, requests on Android and the web share its frame
+// thread, so idle polls slow down to keep the animation smooth.
+LUMI_TELEGRAM_PRACTICE_POLL_SECONDS :: 10
 
 lumi_telegram_session: Session;
 lumi_telegram_transfer: NetworkTransfer;
@@ -357,7 +361,11 @@ LumiTelegramPump :: (app: *InnerBreeze) {
     }
     now := TelegramNow(null)
     if now < lumi_telegram_retry { return }
-    lumi_telegram_retry = now + LUMI_TELEGRAM_POLL_SECONDS
+    poll_seconds := LUMI_TELEGRAM_POLL_SECONDS
+    if app_is_session_screen(app_session_screen(app)) {
+        poll_seconds = LUMI_TELEGRAM_PRACTICE_POLL_SECONDS
+    }
+    lumi_telegram_retry = now + poll_seconds
     if lumi_telegram_ack != 0 {
         out: Vec(u8)
         BuilderPrint(*out, "{\"id\":%,\"client\":\"%\"}", lumi_telegram_ack, client)

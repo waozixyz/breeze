@@ -28,12 +28,36 @@
 
 using AppNavRoute;
 
+// Seconds since the running device shared this snapshot. Snapshots arrive
+// every few seconds, so clocks count on between them.
+ActivityLiveSeconds :: (value: AccountActivity) -> s32 {
+    if value.paused != 0 || value.time <= 0 {
+        return 0
+    }
+    offset := ActivityCurrentTime() - value.time
+    if offset < 0 {
+        return 0
+    }
+    if offset > ActivityFreshSeconds {
+        offset = ActivityFreshSeconds
+    }
+    return cast(s32)offset
+}
+
+ActivityCountDown :: (seconds: s32, live: s32) -> s32 {
+    if seconds <= live {
+        return 0
+    }
+    return seconds - live
+}
+
 ActivityStatus :: (value: AccountActivity, output: []u8) -> string {
+    live := ActivityLiveSeconds(value)
     if value.screen == ScreenMeditation {
-        return session_window_clock(value.remaining, output)
+        return session_window_clock(ActivityCountDown(value.remaining, live), output)
     }
     if value.screen == ScreenPatterns {
-        return session_window_clock(ifx value.duration > 0 then value.remaining else value.elapsed, output)
+        return session_window_clock(ifx value.duration > 0 then ActivityCountDown(value.remaining, live) else value.elapsed + live, output)
     }
     if value.screen == ScreenSession {
         key := "notification_starting_seconds"
@@ -46,8 +70,14 @@ ActivityStatus :: (value: AccountActivity, output: []u8) -> string {
         } else if value.phase == BreathPhaseNext {
             key = "session_round_label"
         }
+        count := value.count
+        if value.phase == BreathPhaseHold {
+            count += live
+        } else if value.phase == BreathPhaseStarting {
+            count = ActivityCountDown(count, live)
+        }
         unused FormatNumberTemplate(LocaleText(key),
-            ifx value.phase == BreathPhaseNext then value.round else value.count, output)
+            ifx value.phase == BreathPhaseNext then value.round else count, output)
         return TextUntilNul(output)
     }
     unused FormatNumberTemplate(LocaleText("session_round_label"), value.round, output)

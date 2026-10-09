@@ -10,6 +10,7 @@
 #import, file "../core/breath_timing.zi";
 #import, file "../storage/cell_records.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/db.zi";
 #import, file "../storage/sync_crypto_random.zi";
 #import, file "../storage/sync_crypto.zi";
 #import, file "../storage/delegate_store.zi";
@@ -32,6 +33,8 @@ ActivityState :: struct {
     local: AccountActivity
     remote: AccountActivity
     last_poll: float64
+    last_read: float64
+    read_revision: s64
     last_publish: s64
     was_running: bool
     last_paused: s32
@@ -180,9 +183,16 @@ ActivityPump :: (app: *InnerBreeze) {
     }
     state.last_poll = clock
     now := ActivityNow(null)
-    document := CellRecordRead(ActivityRecordKey)
-    unused ActivityRead(document, *state.remote)
-    PackageFree(document)
+    // Read the shared record only after stored data changed, such as a sync
+    // applying another device's update, with a slow fallback.
+    revision := storage_data_revision()
+    if revision != state.read_revision || clock < state.last_read || clock - state.last_read >= 2.0 {
+        state.read_revision = revision
+        state.last_read = clock
+        document := CellRecordRead(ActivityRecordKey)
+        unused ActivityRead(document, *state.remote)
+        PackageFree(document)
+    }
     if ActivityRemoteVisible() &&
     TextUntilNul(state.observed_session[:]) != TextUntilNul(state.remote.session_id[:]) {
         state.observed_session = state.remote.session_id
