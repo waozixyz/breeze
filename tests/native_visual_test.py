@@ -40,6 +40,20 @@ def contrast(first, second):
     return (light + .05) / (dark + .05)
 
 
+def ocr_has_label(recognized, label):
+    """Whether OCR found a label. CI's tesseract 5.3.4 sometimes reads one
+    letter of a large single word wrong ("materlal"), so a one-word label
+    also matches a word of the same length with one different letter."""
+    if label in recognized:
+        return True
+    if " " in label or len(label) < 5:
+        return False
+    for word in recognized.split():
+        if len(word) == len(label) and sum(a != b for a, b in zip(word, label)) == 1:
+            return True
+    return False
+
+
 def read_text(image, name, single_line=False):
     # Normalize the OCR input only; assertions inspect the original pixels.
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -285,7 +299,7 @@ def run_cases(arguments, evidence):
                     time.sleep(.15)
                 recognized = " ".join(texts)
                 for label in labels:
-                    assert label in recognized, f"{name}: {label} label is clipped, missing or unreachable: {recognized}"
+                    assert ocr_has_label(recognized, label), f"{name}: {label} label is clipped, missing or unreachable: {recognized}"
                 evidence.append({"case": name, "labels": recognized, "scroll_frames": len(texts)})
 
 

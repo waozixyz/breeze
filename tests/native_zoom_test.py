@@ -72,8 +72,12 @@ def saved_scale():
     database = Path(env["XDG_DATA_HOME"]) / "inbe/inbe.db"
     if not database.exists():
         return None
-    with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=2) as db:
-        row = db.execute("select value from settings where key = 'ui_scale'").fetchone()
+    # The file can exist before the app creates its tables on a slow runner.
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=2) as db:
+            row = db.execute("select value from settings where key = 'ui_scale'").fetchone()
+    except sqlite3.OperationalError:
+        return None
     return int(row[0]) if row else None
 
 
