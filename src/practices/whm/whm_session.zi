@@ -240,10 +240,12 @@ remember_sound_state :: (app: *InnerBreeze) {
         return
     }
 
-    if app.breathing.screen != ScreenSession  || app.breathing.phase != BreathPhaseHold {
+    // The practice may run in its small window while another app is open.
+    screen := app_session_screen(app)
+    if screen != ScreenSession  || app.breathing.phase != BreathPhaseHold {
         app.retention_marker_last_bucket = 0
     }
-    app.sound_last_screen = app.breathing.screen
+    app.sound_last_screen = screen
     app.sound_last_phase = app.breathing.phase
     app.sound_last_dir = app.breathing.dir
     app.sound_last_count[0] = app.breathing.count[0]
@@ -311,7 +313,7 @@ session_update_notification :: (app: *InnerBreeze) {
 
     if app.breathing.screen == ScreenResults {
         FormatLocaleText(text[:], "notification_results")
-    } else if app.breathing.screen == ScreenSession {
+    } else if app_session_screen(app) == ScreenSession {
         count = BreathDigitsRead(app.breathing.count[:])
         if app.breathing.phase == BreathPhaseBreathe {
             FormatLocaleCount(text[:], "notification_breathing_count", count)
@@ -345,7 +347,8 @@ update_session_sounds :: (app: *InnerBreeze) {
         return
     }
 
-    if app.breathing.screen != ScreenSession ||
+    // Cues also play while the practice runs in its small window.
+    if app_session_screen(app) != ScreenSession ||
     (app.session_paused != 0 &&
         !(app.backgrounded != 0 && app.breathing.play_in_background != 0)) {
         remember_sound_state(app)
@@ -936,6 +939,24 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
     }
 }
 
+// The breathing circle's share of its range right now, for the practice's
+// small window: 0 at the smallest and 1 at the largest radius.
+whm_session_breath_share :: (app: *InnerBreeze) -> float32 {
+    span := app.breathing.rmax - app.breathing.rmin
+    if span <= 0 {
+        return 0.5
+    }
+    radius := BreathDrawRadiusAt(app.breathing, cast(float32)whm_elapsed_remainder)
+    share := (radius - cast(float32)app.breathing.rmin) / cast(float32)span
+    if share < 0.0 {
+        return 0.0
+    }
+    if share > 1.0 {
+        return 1.0
+    }
+    return share
+}
+
 session_draw_inbe :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     radius: float32 = BreathDrawRadiusAt(app.breathing,
         cast(float32)whm_elapsed_remainder)
@@ -1064,6 +1085,7 @@ session_handle_exit_modal :: (app: *InnerBreeze) -> s32 {
         practice_active_background_stop(app)
         app_close_modal(app)
         app_init(cast(*void)app)
+        return 2
     }
     return 1
 }

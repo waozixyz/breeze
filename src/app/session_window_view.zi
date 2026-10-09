@@ -4,6 +4,9 @@
 #import, file "../core/types.zi";
 #import, file "session_screen.zi";
 #import, file "session_window.zi";
+#import, file "app_route_state.zi";
+#import, file "modal_rules.zi";
+#import, file "app_modal_state.zi";
 #import, file "app_nav_state.zi";
 #import, file "exercise_types.zi";
 #import, file "locale.zi";
@@ -11,6 +14,7 @@
 #import, file "text_buffers.zi";
 #import, file "draw.zi";
 #import, file "../practices/practice_registry.zi";
+#import, file "../practices/whm/whm_session.zi";
 #import, file "../core/breath_timing.zi";
 #import "box_props"
 #import "box_widget"
@@ -34,12 +38,16 @@ c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 
 using ButtonEmphasis;
+using ModalType;
 using ExerciseType;
 using TextWrap;
 using WidgetKind;
 
 SESSION_WINDOW_CARD_ID :: 7480
 SESSION_WINDOW_CLOSE_ID :: 7481
+SESSION_WINDOW_MAXIMIZE_ID :: 7482
+SESSION_WINDOW_WIDTH :: 240
+SESSION_WINDOW_HEIGHT :: 96
 
 session_window_practice :: (screen: s32) -> s32 {
     if screen == ScreenMeditation {
@@ -54,16 +62,61 @@ session_window_practice :: (screen: s32) -> s32 {
     return cast(s32)EXERCISE_WIM_HOF
 }
 
-// Ends the practice from its small window the way leaving its screen does:
-// it asks first, with the practice's own choices for the time so far.
+// Ends the practice from its small window the way leaving its screen does,
+// over the page that is open: it asks first, with the practice's own
+// choices for the time so far.
 app_session_window_close :: (app: *InnerBreeze) {
-    if !app_session_window_restore(app) {
+    if app == null || app.session_window.screen == ScreenStart {
         return
     }
-    practice := practice_get(session_window_practice(app.breathing.screen))
-    if practice != null && practice.request_exit != null {
-        practice.request_exit(app)
+    practice := practice_get(session_window_practice(app.session_window.screen))
+    if practice == null || practice.request_exit == null {
+        return
     }
+    route := app_current_route(app)
+    practice.request_exit(app)
+    // A paused practice ends without asking; the open page stays.
+    if app.modal.active == 0 {
+        app.session_window.screen = ScreenStart
+        app_switch_route(app, route)
+    }
+}
+
+// Draws the running practice's exit prompt over the open page.
+session_window_exit_prompt :: (app: *InnerBreeze) -> bool {
+    if app.modal.active == 0 || app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        return false
+    }
+    practice := practice_get(session_window_practice(app.session_window.screen))
+    if practice == null || practice.exit_prompt == null {
+        return false
+    }
+    route := app_current_route(app)
+    // Ending the practice closes its window and keeps the open page.
+    if practice.exit_prompt(app) == PRACTICE_EXIT_ENDED {
+        app.session_window.screen = ScreenStart
+        app_switch_route(app, route)
+    }
+    return true
+}
+
+// The breathing circle in the small window follows the practice's own
+// circle; other practices show a resting circle.
+session_window_circle :: (app: *InnerBreeze, bounds: Rectangle) {
+    area := bounds.height - cast(float32)AppScale(20)
+    largest := area * 0.5
+    smallest := largest * 0.45
+    share: float32 = 0.6
+    if app.session_window.screen == ScreenSession {
+        share = whm_session_breath_share(app)
+    }
+    radius := smallest + (largest - smallest) * share
+    center := Vector2.{bounds.x + cast(float32)AppScale(10) + largest,
+        bounds.y + bounds.height * 0.5}
+    Box(app.ui.session, BoxProps.{.key = KeyHash("inbe/session-window/circle"),
+            .bounds = Rectangle.{center.x - radius, center.y - radius, radius * 2.0, radius * 2.0},
+            .fill = Fade(StyleTokenColor("accent"), 0.35f),
+            .border = StyleTokenColor("accent"), .radius = radius})
 }
 
 // Advances the practice in its small window by the time since the last
@@ -194,8 +247,8 @@ session_window_clamp :: (app: *InnerBreeze, width: float32, height: float32) {
     }
 }
 
-// The running practice's small window: tap to return, drag to move, and
-// the X ends the practice.
+// The running practice's small window: tap or maximize to return, drag to
+// move, and the X asks to end the practice over the open page.
 app_session_window_draw :: (app: *InnerBreeze) {
     if app == null || app.session_window.screen == ScreenStart ||
         app.launcher_open || app_is_session_screen(app.breathing.screen) ||
@@ -203,8 +256,8 @@ app_session_window_draw :: (app: *InnerBreeze) {
         return
     }
     window := *app.session_window
-    width := cast(float32)AppScale(212)
-    height := cast(float32)AppScale(64)
+    width := cast(float32)AppScale(SESSION_WINDOW_WIDTH)
+    height := cast(float32)AppScale(SESSION_WINDOW_HEIGHT)
     // It starts at the top right, clear of page titles and of the message
     // fields and actions along the bottom, and stays where it is dragged.
     if !window.placed {
@@ -223,21 +276,22 @@ app_session_window_draw :: (app: *InnerBreeze) {
     Box(session, BoxProps.{.key = KeyHash("inbe/session-window/card"),
             .bounds = bounds, .fill = StyleTokenColor("surface"),
             .border = Fade(StyleTokenColor("accent"), 0.7f), .radius = radius})
+    session_window_circle(app, bounds)
     name := practice_label(session_window_practice(window.screen))
     status_text: [48]u8
     status := session_window_status(app, status_text[:])
-    text_x := bounds.x + cast(float32)AppScale(14)
-    text_w := width - cast(float32)AppScale(58)
-    name_y := bounds.y + cast(float32)AppScale(ifx status.count > 0 then 10 else 21)
+    text_x := bounds.x + height - cast(float32)AppScale(4)
+    text_w := bounds.x + width - text_x - cast(float32)AppScale(8)
+    name_y := bounds.y + cast(float32)AppScale(ifx status.count > 0 then 42 else 54)
     Text(session, TextProps.{.key = KeyHash("inbe/session-window/name"),
-            .bounds = Rectangle.{text_x, name_y, text_w, cast(float32)AppScale(20)},
-            .text = FrameTextHold(*app.ui.frame_text, name), .font = AppScale(14),
+            .bounds = Rectangle.{text_x, name_y, text_w, cast(float32)AppScale(22)},
+            .text = FrameTextHold(*app.ui.frame_text, name), .font = AppScale(16),
             .wrap = cast(TextWrap)TextWrapNone})
     if status.count > 0 {
         Text(session, TextProps.{.key = KeyHash("inbe/session-window/status"),
-                .bounds = Rectangle.{text_x, bounds.y + cast(float32)AppScale(34),
-                    text_w, cast(float32)AppScale(18)},
-                .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(12),
+                .bounds = Rectangle.{text_x, bounds.y + cast(float32)AppScale(68),
+                    text_w, cast(float32)AppScale(20)},
+                .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(14),
                 .wrap = cast(TextWrap)TextWrapNone,
                 .class_name = KssClassId(KssMakeName("launcher-muted"))})
     }
@@ -274,6 +328,17 @@ app_session_window_draw :: (app: *InnerBreeze) {
     node := TreeSubmitted(session, TreeCurrentParent(session), key, WidgetKindButton)
     TreeSetDragCapture(session, node, true)
 
+    // Maximize returns to the practice; the X asks to end it right here.
+    maximize: ButtonProps
+    maximize.id = SESSION_WINDOW_MAXIMIZE_ID
+    maximize.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(82),
+        bounds.y + cast(float32)AppScale(6), cast(float32)AppScale(36),
+        cast(float32)AppScale(36)}
+    maximize.label = LocaleText("session_maximize_button")
+    maximize.icon_only = true
+    maximize.icon_shape = "S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13"
+    maximize.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    maximize.class_name = KssClassId(KssMakeName("launcher-action"))
     close: ButtonProps
     close.id = SESSION_WINDOW_CLOSE_ID
     close.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(42),
@@ -284,8 +349,15 @@ app_session_window_draw :: (app: *InnerBreeze) {
     close.icon_shape = "S1.8rr:M6 6L18 18M18 6L6 18"
     close.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
     close.class_name = KssClassId(KssMakeName("launcher-action"))
+    if Button(session, maximize) != 0 {
+        unused app_session_window_restore(app)
+        return
+    }
     if Button(session, close) != 0 {
         app_session_window_close(app)
+        return
+    }
+    if session_window_exit_prompt(app) {
         return
     }
     if activated && !window.drag_moved {

@@ -19,7 +19,7 @@ WRAPPED_FUNCTIONS = (
     "LoadMusicStream", "IsMusicValid", "PlayMusicStream", "StopMusicStream",
     "UnloadMusicStream", "PauseMusicStream", "ResumeMusicStream",
     "IsMusicStreamPlaying", "UpdateMusicStream", "SetMusicVolume",
-    "update_check_start", "app_play_bell_cue",
+    "update_check_start", "app_play_bell_cue", "app_play_breath_cue",
 )
 
 objects = shlex.split((ROOT / sys.argv[4]).read_text())

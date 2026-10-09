@@ -17,7 +17,11 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 BINARY = Path(sys.argv[1]).resolve()
-SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 1, 11, 23
+SCREEN_START, SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 0, 1, 11, 23
+# The small window is 240 by 96 units; its round line starts 92 units in
+# and 68 down, and its maximize and close buttons are centered 64 and 24
+# units from its right edge, 24 units down.
+WINDOW_TEXT_X, WINDOW_ROUND_Y, WINDOW_WIDTH = 92, 68, 240
 
 
 def stop(process):
@@ -103,9 +107,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
         return json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
 
-    def action(window, control, request):
+    def action(window, control, request, arguments=None):
         command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
-                "_HARMONY_APP_ACTION", json.dumps(dict(control=control, request_id=request, arguments={})))
+                "_HARMONY_APP_ACTION", json.dumps(dict(control=control, request_id=request,
+                                                       arguments=arguments or {})))
         deadline = time.monotonic() + 10
         while state(window)["last_request_id"] != request:
             assert time.monotonic() < deadline, "Action was not handled: " + control
@@ -192,19 +197,69 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         wait_screen(window, SCREEN_SESSION, "Tapping the window did not return to the practice")
         assert state(window)["practice_running"]
 
-        # The X asks before ending the practice, from its own screen.
-        click(window, 308, 38)
-        wait_screen(window, SCREEN_HABITS, "Minimize did not work a second time")
-        card = find(window, "habits-window", "Wim")
-        assert card, "The practice window is not shown after minimizing again"
-        name_left, name_top = card[2], card[3]
-        click(window, name_left - 14 + 212 - 24, name_top - 10 + 24)
-        wait_screen(window, SCREEN_SESSION, "The X did not return to the practice to end it")
+        def minimize(label):
+            click(window, 308, 38)
+            wait_screen(window, SCREEN_HABITS, "Minimize did not open Habits " + label)
+            round_line = find(window, label + "-window", "ROUND")
+            assert round_line, "The practice window is not shown after minimizing " + label
+            left = round_line[2] - WINDOW_TEXT_X
+            top = round_line[3] - WINDOW_ROUND_Y
+            return left, top
+
+        # Practice opens its home while the practice keeps running in the
+        # window, and Start returns to that practice instead of a new one.
+        minimize("practice")
+        action(window, "mcp.open_view", "open-practice", {"view": "practices"})
+        wait_screen(window, SCREEN_START, "Practice did not open its home while minimized")
+        assert state(window)["practice_running"], "Opening Practice ended the minimized practice"
+        assert find(window, "practice-home-window", "ROUND"), "The window is missing on Practice"
+        # OCR misses dark text on the light button; it spans the content width.
+        start = (find(window, "practice-home", "Start") or
+                 find(window, "practice-home-label", "Practice", lambda x, y: 500 < y < 600) or
+                 (195, 550))
+        click(window, start[0], start[1])
+        wait_screen(window, SCREEN_SESSION, "Start did not return to the running practice")
+        assert state(window)["practice_running"]
+
+        # Maximize returns to the practice.
+        left, top = minimize("maximize")
+        click(window, left + WINDOW_WIDTH - 64, top + 24)
+        wait_screen(window, SCREEN_SESSION, "Maximize did not return to the practice")
+
+        # The X asks right over the open app; Cancel keeps the practice.
+        left, top = minimize("close")
+        click(window, left + WINDOW_WIDTH - 24, top + 24)
         deadline = time.monotonic() + 4
-        while not (find(window, "exit", "Cancel") or find(window, "exit", "Session?")):
+        title = None
+        while not title:
+            title = find(window, "exit", "Session?") or find(window, "exit", "progress")
             assert time.monotonic() < deadline, "Ending from the window did not ask first"
             time.sleep(.3)
+        assert state(window)["screen"] == SCREEN_HABITS, "The X left the open app to ask"
         assert state(window)["practice_running"], "The practice ended before the answer"
+        # Cancel sits left of Exit, below the centered prompt's title.
+        cancel = find(window, "exit-cancel", "Cancel") or (147, 400)
+        click(window, cancel[0], cancel[1])
+        time.sleep(.5)
+        assert state(window)["screen"] == SCREEN_HABITS and state(window)["practice_running"], \
+            ("Cancel did not keep the practice running over Habits", state(window))
+        assert find(window, "after-cancel", "ROUND"), "The window is missing after Cancel"
+
+        # Exit ends the practice and keeps the open app.
+        round_line = find(window, "before-exit", "ROUND")
+        click(window, round_line[2] - WINDOW_TEXT_X + WINDOW_WIDTH - 24,
+              round_line[3] - WINDOW_ROUND_Y + 24)
+        deadline = time.monotonic() + 4
+        while not (find(window, "exit-again", "Session?") or find(window, "exit-again", "progress")):
+            assert time.monotonic() < deadline, "The X did not ask a second time"
+            time.sleep(.3)
+        click(window, 243, 400)
+        deadline = time.monotonic() + 4
+        while state(window)["practice_running"]:
+            assert time.monotonic() < deadline, "Exit did not end the practice"
+            time.sleep(.2)
+        assert state(window)["screen"] == SCREEN_HABITS, ("Ending left the open app", state(window))
+        assert not find(window, "after-exit", "ROUND"), "The window stayed after the practice ended"
 
     rail = lambda x, y: x < 100
     with application("desktop", 900, 720) as window:

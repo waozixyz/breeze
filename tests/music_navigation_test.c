@@ -23,9 +23,12 @@ typedef struct {
 static TestStream streams[16];
 static int stream_count;
 static int bell_calls;
+static int breath_cues;
 static InnerBreeze app;
 
 void session_start(InnerBreeze *state);
+bool session_window_app_session_window_open(InnerBreeze *state);
+void whm_session_session_advance_elapsed(InnerBreeze *state, int32_t elapsed_ms);
 
 static TestStream *stream_for(NativeMusic music)
 {
@@ -38,6 +41,13 @@ void __wrap_InitAudioDevice(void) {}
 bool __wrap_IsAudioDeviceReady(void) { return false; }
 void __wrap_CloseAudioDevice(void) {}
 void __wrap_update_check_start(void) {}
+
+void __wrap_app_play_breath_cue(InnerBreeze *state, int32_t direction)
+{
+    (void)state;
+    (void)direction;
+    breath_cues++;
+}
 
 void __wrap_app_play_bell_cue(InnerBreeze *state, float scale)
 {
@@ -211,6 +221,17 @@ int main(int argc, char **argv)
         assert(app.breathing.breath_animation == animation);
         meditation_music_meditation_music_stop(&app);
     }
+
+    /* Breath cues keep playing while the practice runs in its small window
+       behind another app. */
+    assert(session_window_app_session_window_open(&app));
+    app.breathing.screen = ScreenHabits;
+    int cues_before = breath_cues;
+    for (int step = 0; step < 300; step++) {
+        whm_session_session_advance_elapsed(&app, 50);
+    }
+    assert(breath_cues > cues_before);
+    app.session_window.screen = ScreenStart;
     app_open_main_tab(&app, AppMainTab_APP_MAIN_TAB_PRACTICE, 0);
     app.exercise_type = ExerciseType_EXERCISE_MEDITATION;
 
