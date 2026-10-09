@@ -1,9 +1,13 @@
 # Changelog
 ## [2.1.25] - 2026-10-09
+### Changed
+- Show a minimized practice in a larger window with its breathing circle and a maximize button; end it right where you are.
 ### Fixed
-- Animate the Wim Hof breathing circle smoothly between timer ticks, including its Customize preview.
-- Keep Wim Hof timing accurate when the display frame rate varies.
-- Avoid repeating account activity and sync queue checks on unchanged animation frames.
+- Stop syncing from pausing the breathing circle while you practice.
+- Keep breath sounds playing while a practice is minimized.
+- Animate the Wim Hof breathing circle smoothly, including its Customize preview.
+- Keep Wim Hof timing accurate when the frame rate varies.
+- Skip repeated account checks on unchanged animation frames.
 
 ## [2.1.24] - 2026-10-09
 ### Fixed
