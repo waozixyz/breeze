@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         time.sleep(.5)
         text = capture(window, "telegram")
         normalized = " ".join(text.split())
-        assert "Continue your Lumi chat" in normalized and "Connect your sync account first" in normalized, text
+        assert "Telegram input" in normalized and "Connect your sync account first" in normalized, text
         command("xdotool", "windowsize", window, "390", "720")
         time.sleep(.5)
         text = capture(window, "telegram-narrow")

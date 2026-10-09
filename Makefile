@@ -3129,6 +3129,12 @@ telegram-bridge-test:
 telegram-host-test:
 	@sh tests/telegram_host_test.sh
 
+.PHONY: lumi-telegram-input-test
+lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/lumi_telegram_input_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: lumi-telegram-input-test
+
 telegram-entry-protocol-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/telegram_entry_protocol_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 

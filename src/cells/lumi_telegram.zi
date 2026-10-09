@@ -24,10 +24,8 @@
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/sync_async.zi";
 #import, file "../storage/state.zi";
-#import, file "../storage/sqlite.zi";
 #import, file "../storage/daochi_account.zi";
 #import, file "../platform/uri.zi";
-#import, file "../storage/db.zi";
 #import, file "../storage/storage_elist.zi";
 #import, file "../screens/elist_types.zi";
 
@@ -48,7 +46,6 @@ lumi_telegram_session: Session;
 lumi_telegram_transfer: NetworkTransfer;
 lumi_telegram_response: [65536]u8;
 lumi_telegram_owner: [64]u8;
-lumi_telegram_message_key: string;
 lumi_telegram_stage: s32;
 lumi_telegram_retry: s64;
 lumi_telegram_link_requested: bool;
@@ -123,47 +120,6 @@ LumiTelegramRequest :: (method: string, path: string, body: string, stage: s32) 
     print("LUMI: telegram_request_start_failed stage=% result=%\n", stage,
         lumi_telegram_operation.result)
     return false
-}
-
-LumiTelegramNextMessage :: () -> string {
-    statement: *void
-    if SqlitePrepareText(storage_db_handle(),
-        "SELECT key,value FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND CAST(json_extract(value,'$.time') AS INTEGER)>=?2 AND NOT (json_extract(value,'$.user')=1 AND key LIKE 'cell.lumi.message.telegram-%') AND NOT EXISTS(SELECT 1 FROM settings s WHERE s.user_id=?1 AND s.key='telegram.sent.'||settings.key) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key LIMIT 1",
-        -1, *statement, null) != SQLITE_OK { return "" }
-    defer { SqliteFinalize(statement) }
-    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
-    SqliteBindInt64(statement, 2, lumi_telegram_linked_at * 1000000)
-    if SqliteStep(statement) != SQLITE_ROW { return "" }
-    PackageFree(lumi_telegram_message_key)
-    lumi_telegram_message_key = PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 181), "")
-    document := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
-    text: [1024]u8
-    payload: [4096]u8
-    length := ReadStringText(document, FieldAt(document, 0, "text"), text[:])
-    payload_length := ReadStringText(document, FieldAt(document, 0, "payload"), payload[:])
-    kind := ReadNumber(document, FieldAt(document, 0, "kind"))
-    user := ReadNumber(document, FieldAt(document, 0, "user"))
-    time := ReadNumber(document, FieldAt(document, 0, "time"))
-    if length <= 0 || !time.valid { return "" }
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"id\":")
-    LumiJsonString(*out, lumi_telegram_message_key)
-    BuilderPrint(*out, ",\"text\":")
-    if user.valid && user.value == 1 {
-        labelled := PackageText("› ", TextFromBytes(text[:length]))
-        LumiJsonString(*out, labelled)
-        PackageFree(labelled)
-    } else {
-        LumiJsonString(*out, TextFromBytes(text[:length]))
-    }
-    BuilderPrint(*out, ",\"time\":%", cast(s64)time.value)
-    if kind.valid && cast(s32)kind.value == LUMI_CHAT_FEEDBACK && payload_length == 32 &&
-    FeedbackChoice(TextFromBytes(payload[:payload_length]), 0) {
-        BuilderPrint(*out, ",\"draft\":")
-        LumiJsonString(*out, TextFromBytes(payload[:payload_length]))
-    }
-    BuilderPrint(*out, "}")
-    return BuilderFinish(out)
 }
 
 // Telegram cannot show an Inner Breeze screen, so the commands that open
@@ -334,8 +290,8 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         lumi_telegram_stage = 0
         success := lumi_telegram_operation.result == cast(s32)AuthResult.AUTH_OK
         lumi_telegram_session = lumi_telegram_operation.session
-        if success && (stage == 3 || stage == 4 || (stage == 2 && lumi_telegram_ack != 0)) {
-            // Acknowledge, deliver and fetch queued work back to back. Only an
+        if success && (stage == 3 || (stage == 2 && lumi_telegram_ack != 0)) {
+            // Acknowledge and fetch queued input back to back. Only an
             // idle poll waits before asking again.
             lumi_telegram_retry = 0
         } else if !success {
@@ -358,10 +314,6 @@ LumiTelegramPump :: (app: *InnerBreeze) {
             LumiTelegramApply(app, TextUntilNul(lumi_telegram_response[:]))
         } else if success && stage == 3 {
             lumi_telegram_ack = 0
-        } else if success && stage == 4 {
-            key := PackageText("telegram.sent.", lumi_telegram_message_key)
-            storage_set_setting_int(key, 1)
-            PackageFree(key)
         } else if success && stage == 5 {
             lumi_telegram_linked = false
             lumi_telegram_waiting = false
@@ -414,14 +366,8 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         PackageFree(body)
         return
     }
-    if lumi_telegram_linked {
-        message := LumiTelegramNextMessage()
-        if message.count > 0 {
-            unused LumiTelegramRequest("POST", "/api/v1/lumi/telegram/messages", message, 4)
-            PackageFree(message)
-            return
-        }
-    }
+    // Telegram only supplies input. The complete conversation stays in
+    // LumiStore and the encrypted account-sync outbox; never upload it to the bot.
     if !LumiOnlineWaiting() {
         path := PackageText("/api/v1/lumi/telegram/updates?client=", client)
         unused LumiTelegramRequest("GET", path, "", 2)

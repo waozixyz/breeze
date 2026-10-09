@@ -1,0 +1,135 @@
+#import, file "../src/storage/db.zi";
+#import "transaction"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/cells/inbe_types.zi";
+#import, file "../src/cells/lumi_online.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import "auth"
+#import "async_client"
+#import "net_http"
+#import "text_buffer"
+#import "wire"
+#import, file "storage_test_support.zi";
+#import, file "../src/cells/lumi_telegram.zi";
+#import, file "../src/cells/lumi_store.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/account_types.zi";
+
+c :: #system_library "c";
+TestNow :: (out: *s64) -> s64 #foreign c "time";
+owner: SyncAccount;
+mirrors: s32;
+polls: s32;
+acks: s32;
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    challenge_url := "https://api.waozi.xyz/api/v1/sync/challenge?user_id="
+    if request.url.count == challenge_url.count + 64 && request.url[:challenge_url.count] == challenge_url {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/sync/login" {
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-input-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, TestNow(null))
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/account/devices" {
+        return AppCopyText("true", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/lumi/telegram/messages" {
+        mirrors += 1
+        return AppCopyText("true", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/lumi/telegram/ack" {
+        acks += 1
+        return AppCopyText("true", output)
+    }
+    poll_url := "https://api.waozi.xyz/api/v1/lumi/telegram/updates?client="
+    check_true("only input poll reaches transport", request.method == "GET" &&
+        request.url.count == poll_url.count + 64 && request.url[:poll_url.count] == poll_url)
+    polls += 1
+    return AppCopyText("{\"linked\":true,\"linked_at\":1,\"update\":{\"id\":17,\"kind\":\"message\",\"text\":\"/habits\"}}", output)
+}
+
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = 200
+    return 1
+}
+
+FakeCancel :: (context: *void) {
+    unused context
+}
+
+#program_export
+InputTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{null, FakeStart, FakePoll, FakeCancel}
+}
+
+#program_export
+Check :: () -> s32 {
+    transport := InputTestTransport()
+    check_true("fixture transport available", transport.start != null)
+    guard := support_begin("/tmp/inbe-lumi-telegram-input-test/")
+    if guard != 0 {
+        return guard
+    }
+    english_catalog = "[lumi_habits_empty]\nNo habits yet.\n---\n"
+    install_english_catalog()
+    root := "/tmp/inbe-lumi-telegram-input-test/data"
+    check_true("fixture database initialized", storage_init(root) != 0)
+    check_true("owner created", CreateSyncAccount(*owner) != 0)
+    check_true("owner saved", sync_account_save(*owner,
+        cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
+        cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    for index: cast(s32)1..140 {
+        text: [64]u8
+        check_true("archive text formatted", AppFormatS64(index, text[:]))
+        LumiStoreAppend(TextUntilNul(text[:]), true)
+    }
+    LumiStoreAppend("App message", true)
+    LumiOnlineAppend("App response")
+    expected := LumiStoreCount() + 2
+    check_int("full preexisting archive", expected, 144)
+    app: InnerBreeze
+    app.enabled_apps = APP_LUMI | APP_HABITS
+    lumi_telegram_linked = true
+    lumi_telegram_linked_at = 1
+    // Exercise persisted post-link history, inbound execution, acknowledgement,
+    // and duplicate input replays through the actual pump and real SQLite.
+    for step: cast(s32)0..29 {
+        lumi_telegram_retry = 0
+        LumiTelegramPump(*app)
+    }
+    check_int("app history never posts to Telegram", mirrors, 0)
+    check_true("input polling retained", polls > 0)
+    check_true("input acknowledged", acks > 0)
+    check_true("incoming message archived", contains(storage_get_setting_text("cell.lumi.message.telegram-17"), "/habits"))
+    check_true("incoming execution claim retained", storage_get_setting_int("telegram.update.17", 0) == 1)
+    check_true("input schedules regular account sync", app.ui.sync_requested)
+    check_int("input and its response appended once", LumiStoreCount(), expected)
+    check_true("Lumi response retained", LumiStoreRow(expected - 1).text == "No habits yet." && !LumiStoreRow(expected - 1).user)
+    check_int("all history still enters account outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id LIKE 'cell.lumi.message.%'"), expected)
+    CancelStoredOperation(*lumi_telegram_operation)
+    LumiStoreReset()
+    storage_close()
+    check_true("database reopens", storage_init(root) != 0)
+    LumiStoreLoad()
+    while LumiStoreLoadOlder() {}
+    check_int("old archive and mixed input history survive reopening", LumiStoreCount(), expected)
+    check_true("oldest history stays visible", LumiStoreRow(0).text == "1")
+    check_true("app conversation stays visible", LumiStoreRow(140).text == "App message" && LumiStoreRow(141).text == "App response")
+    check_true("incoming history stays visible", LumiStoreRow(142).text == "/habits" && LumiStoreRow(143).text == "No habits yet.")
+    check_int("complete account outbox survives reopening", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id LIKE 'cell.lumi.message.%'"), expected)
+    SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    storage_close()
+    remove_tree("/tmp/inbe-lumi-telegram-input-test/")
+    return failures
+}
