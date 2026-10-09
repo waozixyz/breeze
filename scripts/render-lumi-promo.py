@@ -20,6 +20,7 @@ OUTPUT = ROOT / "build/lumi-promo"
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FLIGHT_SECONDS = 1.35
+WING_FRAMES_PER_SECOND = 16
 FLIGHT_TARGETS = [(.5, .48), (.85, .66), (.85, .54), (.85, .66),
                   (.85, .58), (.85, .65), (.5, .48)]
 STORY = [
@@ -202,7 +203,6 @@ def main():
                         card = Image.blend(cards["09-lumi-light"], cards[scene], ease((local / (end - start) - .43) / .14))
                     left = (width - card_width) // 2
                     top = int(410 * scale)
-                    top += int((1 - ease(local / .7)) * 130 * scale)
                     shadow = Image.new("RGBA", canvas.size)
                     ImageDraw.Draw(shadow).rounded_rectangle((left - 12, top - 12, left + card_width + 12, top + card_height + 12), radius=int(48 * scale), fill=(193, 218, 150, 115))
                     canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(int(22 * scale))))
@@ -217,9 +217,9 @@ def main():
                     if math.hypot(px - center_x, py - center_y) > 8 * scale:
                         radius = (1 + age / len(trail) * 2) * scale
                         draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=(255, 222, 122, int(100 * age / len(trail))))
-                phase = (time * 12) % len(sprites)
+                phase = (time * WING_FRAMES_PER_SECOND) % len(sprites)
                 pose = int(phase)
-                character = Image.blend(sprites[pose], sprites[(pose + 1) % len(sprites)], ease(phase - pose))
+                character = sprites[pose]
                 facing = flight_facing(index, local)
                 if facing < 0:
                     character = ImageOps.mirror(character)
@@ -231,9 +231,6 @@ def main():
                 glow_draw.ellipse((center_x - radius, center_y - radius, center_x + radius, center_y + radius), fill=(255, 212, 105, 75))
                 canvas = Image.alpha_composite(canvas, glow.filter(ImageFilter.GaussianBlur(int(42 * scale))))
                 canvas.alpha_composite(character, (int(center_x - character.width / 2), int(center_y - character.height / 2)))
-                if index == 4 and local < 1.6:
-                    thumbnail = cards["06-lists"].resize((int(width * .33), int(height * .33)), Image.Resampling.LANCZOS)
-                    canvas.alpha_composite(thumbnail, (int(width * .03), int(height * .5)))
                 if index == 5:
                     draw = ImageDraw.Draw(canvas, "RGBA")
                     pill = "theme forest" if local / (end - start) < .5 else "/dark"
@@ -286,6 +283,8 @@ def main():
         narrator=dict(provider=narration["provider"], model=narration["model"],
                       voice=narration["voice"]),
         animation_frames=len(sprites),
+        wing_frames_per_second=WING_FRAMES_PER_SECOND,
+        screen_motion="Fixed card position; one app screen per scene",
         facing="Flight direction while traveling; inward toward the app while settled on its right",
         renderer_sha256=harness.digest(Path(__file__)),
         story=story,
