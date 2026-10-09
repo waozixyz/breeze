@@ -115,9 +115,14 @@ and the existing release workflow, which builds and publishes the signed
 Google Play AAB and owns release tags. A local build or commit is not a Play
 deployment.
 
-`make lumi-promo` renders a 30-second portrait review MP4 from the exact
+`make lumi-promo` renders a narrated portrait review MP4 from the exact
 reviewed phone captures and the generated artwork in `design/lumi-promo/`.
-Lumi flies between screens with light trails and original synthesized bells.
+Lumi uses eight generated wing-flapping frames, flies to each screen and settles
+while a narrator explains it. The audio contains speech only, without music or
+sound effects. Scene timings expand to fit the complete spoken lines.
+`make lumi-narration` generates the stored narrator clips through OpenRouter
+using a locally configured `OPENROUTER_API_KEY`; unchanged clips are reused.
+The voice, script and provider options are in `design/lumi-promo/narration.json`.
 The chat example runs real local theme actions; the surrounding forest and
 glow are marketing effects. Inspect `build/lumi-promo/storyboard.jpg` and
 `build/lumi-promo/inner-breeze-lumi-review.mp4` before using it publicly.

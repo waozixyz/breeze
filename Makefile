@@ -1173,7 +1173,7 @@ social-post-dry-run:
 screenshot: $(TARGET)
 	./scripts/generate-screenshots.sh "$(TARGET)"
 
-.PHONY: screenshot-verify screenshot-review screenshot-export screenshot-source-check play-preflight lumi-promo
+.PHONY: screenshot-verify screenshot-review screenshot-export screenshot-source-check play-preflight lumi-promo lumi-narration
 screenshot-source-check: $(ZI2C_BIN) | build-laws
 	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KSS_DIR)/src
 
@@ -1191,6 +1191,9 @@ play-preflight:
 
 lumi-promo:
 	python3 scripts/render-lumi-promo.py
+
+lumi-narration:
+	python3 scripts/generate-lumi-narration.py
 
 test-tui-screenshot test-termi-screenshot:
 	@$(MAKE) --no-print-directory KRYON_BACKEND=termi test-termi-screenshot-direct

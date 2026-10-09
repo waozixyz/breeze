@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render a captioned Lumi tour using the exact visually reviewed captures."""
 import argparse
+from collections import deque
 import hashlib
 import importlib.util
 import json
@@ -11,7 +12,7 @@ import subprocess
 import wave
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "design/lumi-promo"
@@ -39,23 +40,82 @@ def ease(value):
     return value * value * (3 - 2 * value)
 
 
-def soundtrack(path, seconds):
-    """An original quiet bell bed, synthesized here; no licensed music."""
+def narrated_story(path):
+    """Leave each spoken line enough time; never trim speech to fit a card."""
+    config_path = ASSETS / "narration.json"
+    narration = json.loads((ASSETS / "narration/receipt.json").read_text())
+    assert narration["config_sha256"] == hashlib.sha256(config_path.read_bytes()).hexdigest()
+    assert len(narration["clips"]) == len(STORY)
     rate = 48000
-    time = np.arange(seconds * rate) / rate
-    sound = np.zeros_like(time)
-    for at, frequency in [(0, 261.63), (4, 329.63), (8, 392), (12, 523.25), (16, 392), (20, 329.63), (23, 523.25), (26, 261.63), (27, 392)]:
-        offset = time - at
-        active = offset >= 0
-        envelope = np.exp(-np.maximum(offset, 0) / 2.7) * np.minimum(np.maximum(offset, 0) * 12, 1)
-        sound += active * envelope * (np.sin(2 * math.pi * frequency * offset) + .22 * np.sin(2 * math.pi * frequency * 2.01 * offset)) * .075
-    sound *= np.minimum(time, 1) * np.minimum(np.maximum(seconds - time, 0), 1)
-    stereo = np.stack([sound, sound * .94], axis=1)
+    story = []
+    clips = []
+    start = 0.0
+    for beat, row in zip(STORY, narration["clips"]):
+        audio = ASSETS / "narration" / row["file"]
+        assert hashlib.sha256(audio.read_bytes()).hexdigest() == row["sha256"], "Narration changed; regenerate its receipt"
+        raw = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-i", str(audio), "-af",
+            "loudnorm=I=-16:TP=-1.5:LRA=7", "-ar", str(rate), "-ac", "1",
+            "-f", "f32le", "pipe:1"])
+        samples = np.frombuffer(raw, dtype="<f4")
+        end = start + max(beat[1] - beat[0], len(samples) / rate + .65)
+        story.append((start, end, *beat[2:]))
+        clips.append((round((start + .25) * rate), samples))
+        start = end
+    sound = np.zeros(math.ceil(start * rate), dtype=np.float32)
+    for offset, samples in clips:
+        sound[offset:offset + len(samples)] = samples
     with wave.open(str(path), "wb") as stream:
-        stream.setnchannels(2)
+        stream.setnchannels(1)
         stream.setsampwidth(2)
         stream.setframerate(rate)
-        stream.writeframes((stereo * 32767).astype("<i2").tobytes())
+        stream.writeframes((np.clip(sound, -1, 1) * 32767).astype("<i2").tobytes())
+    return story, start, narration
+
+
+def animation_frames():
+    """Slice the generated cycle and align eyes to avoid registration jitter."""
+    atlas = Image.open(ASSETS / "lumi-flight-cycle.png").convert("RGBA")
+    assert atlas.getchannel("A").getextrema() == (0, 255), "Lumi needs true transparency"
+    tiles = []
+    anchors = []
+    side = round(atlas.width / 4)
+    for index in range(8):
+        column, row = index % 4, index // 4
+        box = (round(column * atlas.width / 4), round(row * atlas.height / 2),
+               round((column + 1) * atlas.width / 4), round((row + 1) * atlas.height / 2))
+        tile = atlas.crop(box).resize((side, side), Image.Resampling.LANCZOS)
+        pixels = np.asarray(tile)
+        eyes = ((pixels[:, :, 0] < 65) & (pixels[:, :, 1] < 65) &
+                (pixels[:, :, 2] < 60) & (pixels[:, :, 3] > 220))
+        eyes[:int(side * .28)] = False
+        eyes[int(side * .66):] = False
+        eyes[:, :int(side * .38)] = False
+        eyes[:, int(side * .81):] = False
+        ys, xs = np.nonzero(eyes)
+        assert len(xs) > 100, "Animation frame has no stable eye anchor"
+        anchors.append((float(xs.mean()), float(ys.mean())))
+        tiles.append(tile)
+    target = np.mean(anchors, axis=0)
+    aligned = []
+    for tile, anchor in zip(tiles, anchors):
+        canvas = Image.new("RGBA", tile.size)
+        canvas.alpha_composite(tile, (round(target[0] - anchor[0]), round(target[1] - anchor[1])))
+        aligned.append(canvas)
+    return aligned
+
+
+def flight_position(index, local, width, height):
+    """Fly to a destination, settle there, then move when the scene changes."""
+    targets = [(.5, .48), (.85, .66), (.85, .54), (.85, .66),
+               (.85, .58), (.85, .65), (.5, .48)]
+    origin = (-.3, .58) if index == 0 else targets[index - 1]
+    target = targets[index]
+    progress = ease(local / 1.35)
+    x = origin[0] + (target[0] - origin[0]) * progress
+    y = origin[1] + (target[1] - origin[1]) * progress
+    y -= math.sin(progress * math.pi) * .045
+    return x * width, y * height, progress
 
 
 def main():
@@ -74,12 +134,10 @@ def main():
     width, height = args.width, args.height
     scale = width / 1080
     background = Image.open(ASSETS / "forest.png").convert("RGB")
-    from PIL import ImageOps
     background = ImageOps.fit(background, (width, height)).convert("RGBA")
     shade = Image.new("RGBA", (width, height), (3, 19, 20, 90))
     background = Image.alpha_composite(background, shade)
-    lumi = Image.open(ASSETS / "lumi-flight.png").convert("RGBA")
-    assert lumi.getchannel("A").getextrema() == (0, 255), "Lumi needs true transparency"
+    sprites = animation_frames()
     title_font = ImageFont.truetype(BOLD, int(54 * scale))
     small_font = ImageFont.truetype(FONT, int(29 * scale))
     brand_font = ImageFont.truetype(FONT, int(23 * scale))
@@ -94,17 +152,20 @@ def main():
         cards[name] = picture
     randomizer = random.Random(42)
     motes = [(randomizer.random(), randomizer.random(), randomizer.uniform(.4, 1.4), randomizer.random() * math.tau) for _ in range(70)]
-    audio = OUTPUT / "lumi-bells.wav"
-    soundtrack(audio, 30)
+    audio = OUTPUT / "lumi-narration.wav"
+    story, seconds, narration = narrated_story(audio)
     destination = OUTPUT / "inner-breeze-lumi-review.mp4"
-    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", f"{width}x{height}", "-framerate", str(args.fps), "-i", "pipe:0", "-i", str(audio), "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-shortest", str(destination)]
+    staged = OUTPUT / "inner-breeze-lumi-rendering.mp4"
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", f"{width}x{height}", "-framerate", str(args.fps), "-i", "pipe:0", "-i", str(audio), "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-shortest", str(staged)]
     review_frames = []
+    trail = deque(maxlen=24)
     with (OUTPUT / "render.log").open("w") as log:
         encoder = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=log)
         try:
-            for frame in range(30 * args.fps):
+            for frame in range(math.ceil(seconds * args.fps)):
                 time = frame / args.fps
-                start, end, title, subtitle, scene = next(beat for beat in STORY if beat[0] <= time < beat[1])
+                index, beat = next((i, beat) for i, beat in enumerate(story) if beat[0] <= time < beat[1])
+                start, end, title, subtitle, scene = beat
                 local = time - start
                 canvas = background.copy()
                 draw = ImageDraw.Draw(canvas, "RGBA")
@@ -119,70 +180,67 @@ def main():
                 text_center(draw, subtitle, int(290 * scale), small_font, "#dfe9d8", width)
                 if scene:
                     card = cards[scene]
-                    if start == 20:
-                        card = Image.blend(cards["09-lumi-light"], cards[scene], ease((local - 2.5) / .8))
+                    if index == 5:
+                        card = Image.blend(cards["09-lumi-light"], cards[scene], ease((local / (end - start) - .43) / .14))
                     left = (width - card_width) // 2
-                    top = int(410 * scale + 12 * scale * math.sin(time * .8))
+                    top = int(410 * scale)
                     top += int((1 - ease(local / .7)) * 130 * scale)
                     shadow = Image.new("RGBA", canvas.size)
                     ImageDraw.Draw(shadow).rounded_rectangle((left - 12, top - 12, left + card_width + 12, top + card_height + 12), radius=int(48 * scale), fill=(193, 218, 150, 115))
                     canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(int(22 * scale))))
                     canvas.alpha_composite(card, (left, top))
-                    # An orbiting guide and a glowing trail reveal each screen.
-                    progress = min(local / (end - start), 1)
-                    center_x = width * (.79 - .13 * math.sin(progress * math.pi))
-                    center_y = height * (.72 - .37 * progress)
-                    character_size = int(260 * scale)
-                else:
-                    center_x = width * .5 + width * .13 * math.sin(local * 1.05)
-                    center_y = height * (.48 + .025 * math.sin(time * 2.2))
-                    character_size = int((570 if start == 0 else 500) * scale)
+                center_x, center_y, progress = flight_position(index, local, width, height)
+                previous_size = 570 if index <= 1 else 285
+                target_size = 570 if index in (0, 6) else 285
+                character_size = int((previous_size + (target_size - previous_size) * progress) * scale)
                 draw = ImageDraw.Draw(canvas, "RGBA")
-                for tail in range(32, 0, -1):
-                    px = center_x - tail * 5 * scale
-                    py = center_y + math.sin(time * 4 - tail * .14) * 18 * scale + tail * scale
-                    radius = (4 - tail / 12) * scale
-                    draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=(255, 222, 122, int(120 * (1 - tail / 33))))
-                character = lumi.resize((character_size, character_size), Image.Resampling.LANCZOS)
-                character = character.rotate(5 * math.sin(time * 3), resample=Image.Resampling.BICUBIC, expand=True)
+                trail.append((center_x, center_y))
+                for age, (px, py) in enumerate(trail):
+                    if math.hypot(px - center_x, py - center_y) > 8 * scale:
+                        radius = (1 + age / len(trail) * 2) * scale
+                        draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=(255, 222, 122, int(100 * age / len(trail))))
+                phase = (time * 12) % len(sprites)
+                pose = int(phase)
+                character = Image.blend(sprites[pose], sprites[(pose + 1) % len(sprites)], ease(phase - pose))
+                character = character.resize((character_size, character_size), Image.Resampling.LANCZOS)
                 glow = Image.new("RGBA", canvas.size)
                 glow_draw = ImageDraw.Draw(glow)
                 radius = character_size * .31
                 glow_draw.ellipse((center_x - radius, center_y - radius, center_x + radius, center_y + radius), fill=(255, 212, 105, 75))
                 canvas = Image.alpha_composite(canvas, glow.filter(ImageFilter.GaussianBlur(int(42 * scale))))
                 canvas.alpha_composite(character, (int(center_x - character.width / 2), int(center_y - character.height / 2)))
-                if start == 16 and local < 1.6:
+                if index == 4 and local < 1.6:
                     thumbnail = cards["06-lists"].resize((int(width * .33), int(height * .33)), Image.Resampling.LANCZOS)
                     canvas.alpha_composite(thumbnail, (int(width * .03), int(height * .5)))
-                if start == 20:
+                if index == 5:
                     draw = ImageDraw.Draw(canvas, "RGBA")
-                    pill = "theme forest" if local < 3 else "/dark"
+                    pill = "theme forest" if local / (end - start) < .5 else "/dark"
                     label_font = ImageFont.truetype(BOLD, int(32 * scale))
                     pill_width = int(draw.textlength(pill, font=label_font) + 70 * scale)
                     left = (width - pill_width) // 2
                     draw.rounded_rectangle((left, int(1670 * scale), left + pill_width, int(1760 * scale)), radius=int(35 * scale), fill=(231, 239, 210, 245))
                     text_center(draw, pill, int(1693 * scale), label_font, "#214332", width)
-                if start == 26:
+                if index == 6:
                     draw = ImageDraw.Draw(canvas, "RGBA")
                     text_center(draw, "Breathe · Grow · Make it yours", int(1390 * scale), small_font, "#fff0c2", width)
-                fade = min(ease(time / .5), ease((30 - time) / .8))
+                fade = min(ease(time / .5), ease((seconds - time) / .8))
                 if fade < 1:
                     canvas = Image.blend(Image.new("RGBA", canvas.size, "#071c1b"), canvas, fade)
                 if abs(local - 1.5) < .5 / args.fps:
-                    path = OUTPUT / f"review-{start:02}.jpg"
+                    path = OUTPUT / f"review-{index:02}.jpg"
                     canvas.convert("RGB").save(path, quality=93)
                     review_frames.append(path)
                 encoder.stdin.write(canvas.convert("RGB").tobytes())
                 if frame % (args.fps * 4) == 0:
-                    print(f"Rendered {time:.0f}/30 seconds", flush=True)
+                    print(f"Rendered {time:.0f}/{seconds:.1f} seconds", flush=True)
         finally:
             encoder.stdin.close()
         assert encoder.wait() == 0, "video encoding failed; inspect render.log"
     harness.verify(reviewed=True, current=False)
-    probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(destination)], text=True))
+    probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(staged)], text=True))
     video = next(stream for stream in probe["streams"] if stream["codec_type"] == "video")
     assert (video["width"], video["height"]) == (width, height) and video["codec_name"] == "h264"
-    assert abs(float(probe["format"]["duration"]) - 30) < .2
+    assert abs(float(probe["format"]["duration"]) - seconds) < .2
     assert any(stream["codec_type"] == "audio" for stream in probe["streams"])
     sheet = Image.new("RGB", (280 * len(review_frames), 500), "#09221d")
     for index, path in enumerate(review_frames):
@@ -190,7 +248,8 @@ def main():
         picture.thumbnail((280, 500))
         sheet.paste(picture, (index * 280, 0))
     sheet.save(OUTPUT / "storyboard.jpg", quality=95)
-    receipt = dict(capture_sha256=harness.digest(harness.OUTPUT / "capture.json"), artwork={name: harness.digest(ASSETS / name) for name in ("lumi-flight.png", "forest.png")}, video_sha256=harness.digest(destination), seconds=30, width=width, height=height, fps=args.fps, status="owner-review", soundtrack="original synthesized bells", story=STORY)
+    staged.replace(destination)
+    receipt = dict(capture_sha256=harness.digest(harness.OUTPUT / "capture.json"), artwork={name: harness.digest(ASSETS / name) for name in ("lumi-flight-cycle.png", "forest.png")}, video_sha256=harness.digest(destination), seconds=seconds, width=width, height=height, fps=args.fps, status="owner-review", soundtrack="OpenRouter narrator only; no music or sound effects", narration_sha256=harness.digest(ASSETS / "narration/receipt.json"), narrator=dict(provider=narration["provider"], model=narration["model"], voice=narration["voice"]), animation_frames=len(sprites), story=story)
     harness.write_json(OUTPUT / "render-receipt.json", receipt)
     audio.unlink()
     print(f"Review video saved: {destination}")
