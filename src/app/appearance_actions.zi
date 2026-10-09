@@ -1,0 +1,359 @@
+// The Appearance editor, Lumi and external app tools share these operations.
+#import "vec"
+#import "std/json_scan"
+#import "kss_formatter"
+#import "byte_text_linux"
+#import "kss_parser"
+#import "style_parse"
+#import "style_sheet"
+#import "style"
+#import "control_props"
+#import "drawing_props"
+#import, file "text_buffers.zi";
+#import, file "settings_store.zi";
+#import, file "mini_mode.zi";
+#import, file "theme_catalog.zi";
+#import, file "assets.zi";
+#import, file "../cells/package_files.zi";
+#import, file "app_style.zi";
+#import, file "style_customization.zi";
+#import, file "app_types.zi";
+#import, file "../storage/temporary_data.zi";
+
+c :: #system_library "c";
+using ButtonState;
+using ButtonTone;
+using ButtonEmphasis;
+using ControlSize;
+using KssStatus;
+storage_get_setting_text :: (key: string) -> string #foreign c;
+storage_set_setting_text :: (key: string, value: string) #foreign c;
+
+StyleCachePublished :: (app: *InnerBreeze, scope: s32) {
+    style_installed = true
+    style_installed_theme = app.theme_id
+    style_installed_dark = app.dark_mode != 0
+    style_installed_index = app.style_index
+    style_installed_waozi = AppWaoziTheme()
+    style_installed_revision = style_revision
+    style_installed_scope = scope
+}
+
+AppearancePreview :: (app: *InnerBreeze, scope: s32) -> bool {
+    if app == null || scope < 0 || scope >= StyleScopeCount {
+        return false
+    }
+    all_source := ifx scope == 0 then StyleDraftSource(0) else StyleAppliedSource(0)
+    scoped_source := ifx scope == 0 then "" else StyleDraftSource(scope)
+    catalog := ThemeCatalogLoad(app.theme_id, app.dark_mode != 0)
+    if !StyleCompileSources(catalog, app.dark_mode != 0,
+        app.style_index, all_source, scoped_source, true) {
+        // Keep the prior complete preview while the draft is incomplete.
+        style_installed_revision = style_revision
+        return false
+    }
+    unused AppCopyText(StyleDraftSource(scope), style_documents[scope].applied[:])
+    StyleClearError()
+    StyleCachePublished(app, scope)
+    return true
+}
+
+AppearanceEdit :: (app: *InnerBreeze, scope: s32, source: string) -> bool {
+    if !StyleSetDraft(scope, source) {
+        unused AppCopyText("KSS must contain fewer than 8192 bytes and no NUL characters.", style_error[:])
+        return false
+    }
+    return AppearancePreview(app, scope)
+}
+
+AppearanceSave :: (app: *InnerBreeze, scope: s32) -> bool {
+    if !AppearancePreview(app, scope) {
+        return false
+    }
+    source := StyleDraftSource(scope)
+    if !DataTemporary() {
+        storage_set_setting_text(StyleSettingKey(scope), source)
+        if storage_get_setting_text(StyleSettingKey(scope)) != source {
+            unused AppCopyText("Could not save custom KSS. The preview remains available.", style_error[:])
+            return false
+        }
+    }
+    unused AppCopyText(source, style_documents[scope].saved[:])
+    return true
+}
+
+AppearanceDiscard :: (app: *InnerBreeze, scope: s32) -> bool {
+    return AppearanceEdit(app, scope, StyleSavedSource(scope))
+}
+
+AppearanceReset :: (app: *InnerBreeze, scope: s32) -> bool {
+    if !StyleSetDraft(scope, "") {
+        return false
+    }
+    return AppearanceSave(app, scope)
+}
+
+AppearanceUndo :: (app: *InnerBreeze, scope: s32) -> bool {
+    if !StyleUndoDraft(scope) {
+        return false
+    }
+    return AppearancePreview(app, scope)
+}
+
+AppearanceFormat :: (app: *InnerBreeze, scope: s32) -> bool {
+    source := StyleDraftSource(scope)
+    formatted := KssFormat(source)
+    if !formatted.ok {
+        unused AppCopyText(TextFromBytes(formatted.diagnostic[:formatted.diagnostic_length]),
+            style_error[:])
+        return false
+    }
+    output: Vec(u8)
+    for index: cast(s32)0..formatted.count - 1 {
+        segment := formatted.segments[index]
+        if segment.kind == 0 {
+            unused BuilderAppend(output, source[segment.start:segment.start + segment.length])
+        } else if segment.kind == 1 {
+            unused VecPush(output, segment.atom)
+        } else {
+            unused VecPush(output, cast(u8)10)
+            for space: cast(s32)0..segment.length - 1 {
+                unused VecPush(output, cast(u8)32)
+            }
+        }
+    }
+    text := BuilderFinish(output)
+    defer { PackageFree(text) }
+    return AppearanceEdit(app, scope, text)
+}
+
+AppearanceJsonString :: (output: *Vec(u8), source: string) {
+    unused VecPush(output.*, cast(u8)34)
+    for byte: source {
+        if byte == cast(u8)34 || byte == cast(u8)92 {
+            unused VecPush(output.*, cast(u8)92)
+            unused VecPush(output.*, byte)
+        } else if byte == cast(u8)10 {
+            unused BuilderAppend(output.*, "\\n")
+        } else if byte == cast(u8)13 {
+            unused BuilderAppend(output.*, "\\r")
+        } else if byte == cast(u8)9 {
+            unused BuilderAppend(output.*, "\\t")
+        } else if byte >= cast(u8)32 {
+            unused VecPush(output.*, byte)
+        }
+    }
+    unused VecPush(output.*, cast(u8)34)
+}
+
+AppearanceWidgetKind :: (name: string) -> s32 {
+    if name == "Button" {
+        return StyleKindButton()
+    }
+    if name == "Text" {
+        return StyleKindText()
+    }
+    if name == "Card" {
+        return StyleKindCard()
+    }
+    if name == "TextArea" {
+        return StyleKindTextArea()
+    }
+    if name == "TextField" {
+        return StyleKindTextField()
+    }
+    if name == "NavigationBar" {
+        return StyleKindNavigationBar()
+    }
+    if name == "NavigationBarItem" {
+        return StyleKindNavigationBarItem()
+    }
+    if name == "Image" {
+        return StyleKindImage()
+    }
+    if name == "Surface" {
+        return StyleKindSurface()
+    }
+    if name == "App" {
+        return StyleKindApp()
+    }
+    return 0
+}
+
+AppearanceState :: (name: string) -> s32 {
+    if name == "normal" {
+        return cast(s32)ButtonStateNormal
+    }
+    if name == "hover" {
+        return cast(s32)ButtonStateHover
+    }
+    if name == "pressed" {
+        return cast(s32)ButtonStatePressed
+    }
+    if name == "focus" {
+        return cast(s32)ButtonStateFocus
+    }
+    if name == "selected" {
+        return cast(s32)ButtonStateSelected
+    }
+    if name == "disabled" {
+        return cast(s32)ButtonStateDisabled
+    }
+    return -1
+}
+
+AppearanceFacts :: (widget: string, class_name: string, state: s32) -> StyleFacts {
+    facts := StyleDefaultFacts(AppearanceWidgetKind(widget))
+    if class_name.count > 0 {
+        facts.class_name = KssClassId(KssMakeName(class_name))
+    }
+    facts.tone = cast(s32)ButtonToneNeutral
+    facts.emphasis = cast(s32)ButtonEmphasisSoft
+    facts.size = cast(s32)ControlSizeMedium
+    facts.role = 0
+    facts.state = state
+    return facts
+}
+
+AppearanceInspection :: (widget: string, class_name: string, state_name: string) -> string {
+    rules := ActiveStyleRules()
+    return AppearanceInspectionFor(rules, style_sources[:style_source_count], widget, class_name, state_name)
+}
+
+AppearanceInspectionFor :: (rules: StyleRules, sources: []StyleRuleSource,
+    widget: string, class_name: string, state_name: string) -> string {
+    state := AppearanceState(state_name)
+    facts := AppearanceFacts(widget, class_name, state)
+    base: StyleData
+    face := ResolveStyleRules(rules, base, facts, state)
+    output: Vec(u8)
+    BuilderPrint(*output, "% % :%\n", widget, class_name, state_name)
+    colors: [3]u32 = .[face.background, face.foreground, face.border]
+    names: [3]string = .["background", "foreground", "border"]
+    digits := "0123456789abcdef"
+    for index: cast(s32)0..cast(s32)2 {
+        BuilderPrint(*output, "%: #", names[index])
+        shift: s32 = 28
+        while shift >= 0 {
+            unused VecPush(output, digits[cast(s32)((colors[index] >> cast(u32)shift) & cast(u32)15)])
+            shift -= 4
+        }
+        unused VecPush(output, cast(u8)10)
+    }
+    BuilderPrint(*output, "radius: %\nfont-size: %\npadding-x: %\npadding-y: %\ngap: %\n\n",
+        face.radius, face.font_size, face.padding_x, face.padding_y, face.gap)
+    for index: cast(s32)0..rules.count - 1 {
+        if StyleRuleMatchesState(rules.items[index].state, state) &&
+        StyleSelectorMatches(rules.items[index].selector, facts) && index < sources.count {
+            origin := sources[index]
+            BuilderPrint(*output, "%:%:%  %\n",
+                AppTextFromCString(*origin.path[0], 64), origin.line, origin.column,
+                AppTextFromCString(*origin.selector[0], 160))
+        }
+    }
+    return BuilderFinish(output)
+}
+
+AppearanceInspectTool :: (app: *InnerBreeze, scope: s32, arguments: string) -> string {
+    widget_bytes: [64]u8
+    class_bytes: [64]u8
+    state_bytes: [32]u8
+    widget_count := ReadStringText(arguments, FieldAt(arguments, 0, "widget"), widget_bytes[:])
+    class_field := FieldAt(arguments, 0, "class")
+    class_count := ifx class_field < 0 then 0 else ReadStringText(arguments, class_field, class_bytes[:])
+    state_count := ReadStringText(arguments, FieldAt(arguments, 0, "state"), state_bytes[:])
+    if widget_count <= 0 || widget_count >= 64 || class_count < 0 || class_count >= 64 ||
+    state_count <= 0 || state_count >= 32 {
+        return PackageText("{\"ok\":false,\"error\":\"Provide widget and state; class is optional.\"}", "")
+    }
+    widget := TextFromBytes(widget_bytes[:widget_count])
+    class_name := TextFromBytes(class_bytes[:class_count])
+    state_name := TextFromBytes(state_bytes[:state_count])
+    if AppearanceWidgetKind(widget) == 0 || AppearanceState(state_name) < 0 {
+        return PackageText("{\"ok\":false,\"error\":\"Unknown widget or state.\"}", "")
+    }
+    catalog := ThemeCatalogLoad(app.theme_id, app.dark_mode != 0)
+    if !StyleCompileSources(catalog, app.dark_mode != 0, app.style_index,
+        StyleAppliedSource(0), ifx scope == 0 then "" else StyleAppliedSource(scope), false) {
+        return PackageText("{\"ok\":false,\"error\":\"The selected scope cannot be inspected.\"}", "")
+    }
+    inspection := AppearanceInspectionFor(style_inspection_rules,
+        style_parse_sources[:style_parse_source_count], widget, class_name, state_name)
+    defer { PackageFree(inspection) }
+    output: Vec(u8)
+    BuilderPrint(*output, "{\"ok\":true,\"revision\":%,\"inspection\":", style_revision)
+    AppearanceJsonString(*output, inspection)
+    BuilderPrint(*output, "}")
+    return BuilderFinish(output)
+}
+
+AppearanceRead :: (app: *InnerBreeze, scope: s32) -> string {
+    output: Vec(u8)
+    BuilderPrint(*output, "{\"ok\":true,\"revision\":%,\"scope\":", style_revision)
+    AppearanceJsonString(*output, StyleScopeName(scope))
+    BuilderPrint(*output, ",\"pack\":")
+    AppearanceJsonString(*output, style_pack_id(app.style_index))
+    BuilderPrint(*output, ",\"source\":")
+    AppearanceJsonString(*output, StyleDraftSource(scope))
+    BuilderPrint(*output, ",\"saved_source\":")
+    AppearanceJsonString(*output, StyleSavedSource(scope))
+    BuilderPrint(*output, ",\"preview_source\":")
+    AppearanceJsonString(*output, StyleAppliedSource(scope))
+    BuilderPrint(*output, ",\"app_defaults\":")
+    defaults := AssetRead("assets/styles/inbe.kss")
+    AppearanceJsonString(*output, defaults.data)
+    BuilderPrint(*output, ",\"pack_defaults\":")
+    pack := StyleImport(KssMakeName(style_pack_id(app.style_index)))
+    AppearanceJsonString(*output, pack.data)
+    BuilderPrint(*output, ",\"precedence\":[\"shared pack and app defaults\",\"all apps customization\",\"selected app customization\"],\"source_limit\":8191,\"rule_limit\":512,\"error\":")
+    AppearanceJsonString(*output, AppTextFromCString(*style_error[0], 256))
+    BuilderPrint(*output, ",\"line\":%,\"column\":%}", style_error_line, style_error_column)
+    return BuilderFinish(output)
+}
+
+AppearanceTool :: (app: *InnerBreeze, name: string, arguments: string) -> string {
+    scope_bytes: [32]u8
+    count := ReadStringText(arguments, FieldAt(arguments, 0, "scope"), scope_bytes[:])
+    scope := StyleScopeIndex(TextFromBytes(scope_bytes[:ifx count > 0 && count < 32 then count else 0]))
+    if app == null || scope < 0 {
+        return PackageText("{\"ok\":false,\"error\":\"scope must be all, lists, habits, practices, diary or lumi\"}", "")
+    }
+    if name == "read_style" {
+        return AppearanceRead(app, scope)
+    }
+    if name == "inspect_style" {
+        return AppearanceInspectTool(app, scope, arguments)
+    }
+    revision := ReadNumber(arguments, FieldAt(arguments, 0, "revision"))
+    if !revision.valid || revision.value != cast(float64)style_revision {
+        return PackageText("{\"ok\":false,\"error\":\"Style changed. Read it again before editing.\"}", "")
+    }
+    ok: bool
+    if name == "preview_style" {
+        source_bytes: [StyleSourceCapacity]u8
+        field := FieldAt(arguments, 0, "source")
+        source_count := ReadStringText(arguments, field, source_bytes[:])
+        if field < 0 || field >= arguments.count || arguments[field] != cast(u8)34 ||
+        source_count < 0 || source_count >= StyleSourceCapacity {
+            return PackageText("{\"ok\":false,\"error\":\"source must be a KSS string of at most 8191 bytes\"}", "")
+        }
+        ok = AppearanceEdit(app, scope, TextFromBytes(source_bytes[:source_count]))
+    } else if name == "save_style" {
+        ok = AppearanceSave(app, scope)
+    } else if name == "reset_style" {
+        ok = AppearanceReset(app, scope)
+    } else if name == "undo_style" {
+        ok = AppearanceUndo(app, scope)
+    } else if name == "discard_style" {
+        ok = AppearanceDiscard(app, scope)
+    } else if name == "format_style" {
+        ok = AppearanceFormat(app, scope)
+    } else {
+        return PackageText("{\"ok\":false,\"error\":\"unknown appearance tool\"}", "")
+    }
+    output: Vec(u8)
+    BuilderPrint(*output, "{\"ok\":%,\"revision\":%,\"error\":", ok, style_revision)
+    AppearanceJsonString(*output, AppTextFromCString(*style_error[0], 256))
+    BuilderPrint(*output, ",\"line\":%,\"column\":%}", style_error_line, style_error_column)
+    return BuilderFinish(output)
+}

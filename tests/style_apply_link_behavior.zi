@@ -2,9 +2,17 @@
 #import, file "../src/app/app_types.zi";
 #import, file "../src/app/metrics.zi";
 #import, file "../src/app/theme_catalog.zi";
+#import, file "../src/app/appearance_actions.zi";
+#import, file "../src/app/style_customization.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/core/types.zi";
+#import "vec"
+#import "control_props"
 #import "drawing_props"
 #import "style_sheet"
 #import "style"
+using ButtonState;
 
 #program_export
 StartupStyleCheck :: () -> s32 {
@@ -17,6 +25,131 @@ StartupStyleCheck :: () -> s32 {
                 return 101 + cast(s32)theme * 10 + cast(s32)style * 2
             }
         }
+    }
+    return 42
+}
+
+CustomButtonRadius :: () -> float32 {
+    base: StyleData
+    facts := AppearanceFacts("Button", "", cast(s32)ButtonStateNormal)
+    return ResolveInstalledStyleRules(base, facts, cast(s32)ButtonStateNormal).radius
+}
+
+#program_export
+AccountStylesCheck :: (all_source: string, lumi_source: string) -> s32 {
+    StyleCustomizationLoad()
+    if StyleSavedSource(0) != all_source || StyleDraftSource(0) != all_source ||
+    StyleSavedSource(5) != lumi_source || StyleDraftSource(5) != lumi_source ||
+    style_undo_count != 0 || style_editor_open || style_error[0] != cast(u8)0 {
+        return 1
+    }
+    for scope: cast(s32)1..cast(s32)4 {
+        if StyleDraftSource(scope).count != 0 {
+            return 2
+        }
+    }
+    return 42
+}
+
+#program_export
+CustomizationCheck :: () -> s32 {
+    StyleCustomizationLoad()
+    app: InnerBreeze
+    app.style_index = 1
+    app.theme_id = 0
+    if !AppearanceEdit(*app, 0, "Button { radius: 24; }") || CustomButtonRadius() != 24.0 {
+        return 1
+    }
+    if StyleSavedSource(0).count != 0 {
+        return 2
+    }
+    color := StyleTokenColor("canvas")
+    if AppearanceEdit(*app, 0, "Button { radius: unknown; }") || CustomButtonRadius() != 24.0 ||
+    StyleTokenColor("canvas").r != color.r || AppearanceSave(*app, 0) {
+        return 3
+    }
+    if !AppearanceUndo(*app, 0) || CustomButtonRadius() != 24.0 {
+        return 4
+    }
+    if !AppearanceSave(*app, 0) || StyleSavedSource(0) != "Button { radius: 24; }" {
+        return 5
+    }
+    StyleCustomizationLoad()
+    if StyleDraftSource(0) != "Button { radius: 24; }" || !app_apply_style(*app) {
+        return 6
+    }
+    if !AppearanceEdit(*app, 5, "Button { radius: 7; }") {
+        return 7
+    }
+    app.breathing.screen = ScreenLumi
+    if !app_apply_style(*app) || CustomButtonRadius() != 7.0 {
+        return 8
+    }
+    app.breathing.screen = ScreenHabits
+    if !app_apply_style(*app) || CustomButtonRadius() != 24.0 {
+        return 9
+    }
+    if !AppearanceReset(*app, 5) || StyleSavedSource(5).count != 0 || CustomButtonRadius() != 24.0 {
+        return 10
+    }
+    if !AppearanceEdit(*app, 0,
+        "tokens { length { radius: 22; } color { canvas: #102030; } }") {
+        return 11
+    }
+    color = StyleTokenColor("canvas")
+    if color.r != 16 || color.g != 32 || color.b != 48 {
+        return 12
+    }
+    base: StyleData
+    app_face := ResolveInstalledStyleRules(base, StyleDefaultFacts(StyleKindApp()), 1)
+    if app_face.background != cast(u32)0x102030ff {
+        return 13
+    }
+    if !AppearanceDiscard(*app, 0) || CustomButtonRadius() != 24.0 {
+        return 14
+    }
+    if AppearanceEdit(*app, 0, "@import <outside>;") || CustomButtonRadius() != 24.0 {
+        return 15
+    }
+    if !AppearanceDiscard(*app, 0) || !AppearanceFormat(*app, 0) || CustomButtonRadius() != 24.0 {
+        return 16
+    }
+    current_revision := style_revision
+    args: Vec(u8)
+    BuilderPrint(*args, "{\"scope\":\"all\",\"revision\":%}", current_revision - 1)
+    arguments := BuilderFinish(args)
+    result := AppearanceTool(*app, "reset_style", arguments)
+    if result == "" || StyleDraftSource(0).count == 0 || style_revision != current_revision {
+        return 17
+    }
+    PackageFree(result)
+    PackageFree(arguments)
+    result = AppearanceTool(*app, "inspect_style", "{\"scope\":\"all\",\"widget\":\"Button\",\"state\":\"normal\"}")
+    if result.count < 80 {
+        return 18
+    }
+    PackageFree(result)
+    result = AppearanceTool(*app, "read_style", "{\"scope\":\"all\"}")
+    if result.count < 1000 {
+        return 19
+    }
+    PackageFree(result)
+    overflow: Vec(u8)
+    for index: cast(s32)0..cast(s32)StyleRuleCapacity {
+        unused BuilderAppend(overflow, "Button{radius:1;}")
+    }
+    source := BuilderFinish(overflow)
+    if AppearanceEdit(*app, 0, source) || CustomButtonRadius() != 24.0 {
+        return 20
+    }
+    PackageFree(source)
+    if !AppearanceReset(*app, 0) || StyleSavedSource(0).count != 0 ||
+    StyleDraftSource(0).count != 0 || CustomButtonRadius() == 24.0 {
+        return 21
+    }
+    StyleCustomizationLoad()
+    if StyleDraftSource(0).count != 0 || StyleDraftSource(5).count != 0 {
+        return 22
     }
     return 42
 }

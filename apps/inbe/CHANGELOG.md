@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.20] - 2026-10-09
+
+- Customize each app in Appearance using live KSS editing, inspection, undo, and reset to defaults.
+- Ask Lumi to preview and save your appearance changes.
+
 ## [2.1.19] - 2026-10-08
 
 - Deliver the updated Diary to existing Inbe installations with today as its latest date.

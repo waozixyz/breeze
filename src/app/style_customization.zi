@@ -1,0 +1,179 @@
+// Account-owned custom KSS. Drafts and previews never overwrite shipped assets.
+#import "style_sheet"
+#import, file "text_buffers.zi";
+#import, file "settings_store.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/temporary_data.zi";
+
+StyleSourceCapacity :: 8192
+StyleScopeCount :: 6
+StyleUndoCapacity :: 16
+
+StyleDocument :: struct {
+    saved: [StyleSourceCapacity]u8
+    draft: [StyleSourceCapacity]u8
+    applied: [StyleSourceCapacity]u8
+}
+
+StyleUndoEntry :: struct {
+    scope: s32
+    source: [StyleSourceCapacity]u8
+}
+
+StyleRuleSource :: struct {
+    selector: [160]u8
+    path: [64]u8
+    line: s32
+    column: s32
+}
+
+style_documents: [StyleScopeCount]StyleDocument;
+style_undo: [StyleUndoCapacity]StyleUndoEntry;
+style_undo_count: s32;
+style_revision: s32;
+style_editor_open: bool;
+style_editor_scope: s32;
+style_error: [256]u8;
+style_error_path: [64]u8;
+style_error_line: s32;
+style_error_column: s32;
+style_sources: [StyleRuleCapacity]StyleRuleSource;
+style_source_count: s32;
+
+StyleScopeName :: (scope: s32) -> string {
+    names: [StyleScopeCount]string = .["all", "lists", "habits", "practices", "diary", "lumi"]
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return names[scope]
+}
+
+StyleScopeIndex :: (name: string) -> s32 {
+    for scope: cast(s32)0..StyleScopeCount - 1 {
+        if StyleScopeName(scope) == name {
+            return scope
+        }
+    }
+    return -1
+}
+
+StyleSettingKey :: (scope: s32) -> string {
+    keys: [StyleScopeCount]string = .["appearance.kss.all", "appearance.kss.lists",
+    "appearance.kss.habits", "appearance.kss.practices",
+    "appearance.kss.diary", "appearance.kss.lumi"]
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return keys[scope]
+}
+
+StyleSavedSource :: (scope: s32) -> string {
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return AppTextFromCString(*style_documents[scope].saved[0], StyleSourceCapacity)
+}
+
+StyleDraftSource :: (scope: s32) -> string {
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return AppTextFromCString(*style_documents[scope].draft[0], StyleSourceCapacity)
+}
+
+StyleAppliedSource :: (scope: s32) -> string {
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return AppTextFromCString(*style_documents[scope].applied[0], StyleSourceCapacity)
+}
+
+StyleCustomizationCollect :: (key: string, value: string, user: s64) {
+    unused user
+    for scope: cast(s32)0..StyleScopeCount - 1 {
+        if key == StyleSettingKey(scope) {
+            // Oversize or embedded-NUL data remains unapplied rather than truncated.
+            buffer: [StyleSourceCapacity]u8
+            if !AppCopyText(value, buffer[:]) {
+                unused AppCopyText("Saved KSS exceeds the source limit.", style_error[:])
+                return
+            }
+            style_documents[scope].saved = buffer
+            style_documents[scope].draft = buffer
+            style_documents[scope].applied = buffer
+            return
+        }
+    }
+}
+
+StyleCustomizationLoad :: () {
+    for scope: cast(s32)0..StyleScopeCount - 1 {
+        style_documents[scope] = StyleDocument.{}
+    }
+    style_undo_count = 0
+    style_editor_open = false
+    style_editor_scope = 0
+    style_error[0] = cast(u8)0
+    style_error_path[0] = cast(u8)0
+    style_error_line = 0
+    style_error_column = 0
+    style_revision += 1
+    if !DataTemporary() {
+        unused storage_list_settings(StyleCustomizationCollect, null)
+    }
+}
+
+StyleRememberDraft :: (scope: s32) {
+    if style_undo_count == StyleUndoCapacity {
+        for index: cast(s32)0..StyleUndoCapacity - 2 {
+            style_undo[index] = style_undo[index + 1]
+        }
+        style_undo_count -= 1
+    }
+    style_undo[style_undo_count].scope = scope
+    unused AppCopyText(StyleDraftSource(scope), style_undo[style_undo_count].source[:])
+    style_undo_count += 1
+}
+
+StyleSetDraft :: (scope: s32, source: string) -> bool {
+    if scope < 0 || scope >= StyleScopeCount || source.count >= StyleSourceCapacity {
+        return false
+    }
+    for byte: source {
+        if byte == cast(u8)0 {
+            return false
+        }
+    }
+    if source == StyleDraftSource(scope) {
+        return true
+    }
+    StyleRememberDraft(scope)
+    style_revision += 1
+    return AppCopyText(source, style_documents[scope].draft[:])
+}
+
+StyleUndoDraft :: (scope: s32) -> bool {
+    index := style_undo_count - 1
+    while index >= 0 {
+        if style_undo[index].scope == scope {
+            unused AppCopyText(AppTextFromCString(*style_undo[index].source[0],
+                StyleSourceCapacity), style_documents[scope].draft[:])
+            while index + 1 < style_undo_count {
+                style_undo[index] = style_undo[index + 1]
+                index += 1
+            }
+            style_undo_count -= 1
+            style_revision += 1
+            return true
+        }
+        index -= 1
+    }
+    return false
+}
+
+StyleClearError :: () {
+    style_error[0] = cast(u8)0
+    style_error_path[0] = cast(u8)0
+    style_error_line = 0
+    style_error_column = 0
+}

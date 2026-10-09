@@ -71,6 +71,9 @@ make site
 
 Run the test suite:
 
+[Custom appearance](docs/appearance.md) describes live KSS editing, per-app
+customizations, reset, and Lumi's appearance tools.
+
 ```bash
 make test
 make visual-test

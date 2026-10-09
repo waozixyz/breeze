@@ -8,6 +8,7 @@ work=$root/build/style-apply-zi-test
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/style_apply_link_behavior.zi"
@@ -21,6 +22,8 @@ python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/assets/styles/inbe.kss"
 "${CC:-cc}" -std=c11 -Os -pthread -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
+    -Wl,--wrap=storage_set_setting_text -Wl,--wrap=storage_get_setting_text \
+    -Wl,--wrap=storage_list_settings \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/style_apply_link_test.c" \
     "$work/assets.c" "$work/c"/*.c -o "$work/test"

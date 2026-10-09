@@ -7,6 +7,10 @@
 #import, file "theme_catalog.zi";
 #import, file "mini_mode.zi";
 #import, file "metrics.zi";
+#import, file "style_customization.zi";
+#import, file "../core/types.zi";
+#import, file "text_buffers.zi";
+#import "byte_text_linux"
 #import "text_style"
 #import "text_props"
 #import "style"
@@ -248,52 +252,283 @@ style_installed_theme: s32;
 style_installed_dark: bool;
 style_installed_index: s32;
 style_installed_waozi: bool;
+style_installed_revision: s32 = -1;
+style_installed_scope: s32 = -1;
+style_generation: s32;
+style_parse_sources: [StyleRuleCapacity]StyleRuleSource;
+style_parse_source_count: s32;
+style_compile_tokens: [128]KssToken;
+style_compile_token_count: s32;
+style_inspection_rules: StyleRules;
+
+StyleRecordRule :: (parsed: *StyleRulesParse) {
+    index := parsed.rules.count - 1
+    if index < 0 || index >= StyleRuleCapacity {
+        return
+    }
+    origin := parsed.parser.origin
+    span := parsed.parser.rule_span
+    source := parsed.parser.cursor.source
+    style_parse_sources[index] = StyleRuleSource.{}
+    if span.selector_start >= 0 && span.selector_length > 0 &&
+    span.selector_start + span.selector_length <= source.count {
+        selector := source[span.selector_start:span.selector_start + span.selector_length]
+        CopyTextToBuffer(*style_parse_sources[index].selector[0], 160, selector)
+    }
+    if origin.file >= 0 && origin.file < parsed.parser.file_count {
+        file := parsed.parser.files[origin.file]
+        CopyTextToBuffer(*style_parse_sources[index].path[0], 64,
+            TextFromBytes(file.name[:file.length]))
+    }
+    style_parse_sources[index].line = origin.line
+    style_parse_sources[index].column = origin.column
+    style_parse_source_count = parsed.rules.count
+}
+
+StyleCompileSources :: (catalog: ThemeCatalog, dark: bool, style_index: s32,
+    all_source: string, scoped_source: string,
+    install: bool) -> bool {
+    env := KssEnvironmentWithNames(KssDefaultEnvironment(),
+        ifx dark then "dark" else "light", "", "", "", "", "")
+    root := StyleRootFor(style_index)
+    if all_source.count > 0 || scoped_source.count > 0 {
+        if style_index == 2 {
+            root = "@import <classic>; @import <inbe>; @import <user>; @import <scope>;"
+        } else if style_index == 3 {
+            root = "@import <lightfield>; @import <inbe>; @import <user>; @import <scope>;"
+        } else {
+            root = "@import <material>; @import <inbe>; @import <user>; @import <scope>;"
+        }
+    }
+    parsed: StyleRulesParse
+    for pass: cast(s32)0..cast(s32)1 {
+        parsed = BeginStyleRules(root, "styles/inbe-root.kss", env)
+        if !catalog.complete {
+            parsed.parser = KssFail(parsed.parser, "Could not load the selected theme.")
+            StyleParseError(*parsed)
+            return false
+        }
+        parsed.parser = StyleOverrides(parsed.parser, StyleColorsFor(catalog, dark), style_index)
+        if pass == 1 && style_compile_token_count > 0 {
+            for index: cast(s32)0..style_compile_token_count - 1 {
+                token := style_compile_tokens[index]
+                if token.file >= 0 {
+                    parsed.parser = KssAddTokenOverride(parsed.parser, token)
+                }
+            }
+        }
+        custom_file: s32 = -1
+        scoped_file: s32 = -1
+        style_parse_source_count = 0
+        while !parsed.overflow &&
+        parsed.parser.status != cast(s32)KssStatusDone &&
+        parsed.parser.status != cast(s32)KssStatusError {
+            // Keep the rule table in this frame. Passing the whole parse value to
+            // StepStyleRules adds a second large table on small Android stacks.
+            parsed.parser = KssStep(parsed.parser)
+            if parsed.parser.status == cast(s32)KssStatusRule {
+                if parsed.rules.count >= StyleRuleCapacity {
+                    parsed.overflow = true
+                } else {
+                    parsed.rules.items[parsed.rules.count] = parsed.parser.rule
+                    parsed.rules.count += 1
+                }
+            }
+            if !parsed.overflow && parsed.parser.status == cast(s32)KssStatusRule {
+                rule_index := parsed.rules.count - 1
+                if parsed.parser.origin.file == custom_file {
+                    parsed.rules.items[rule_index].layer += 100
+                } else if parsed.parser.origin.file == scoped_file {
+                    parsed.rules.items[rule_index].layer += 200
+                }
+                StyleRecordRule(*parsed)
+            }
+            if parsed.parser.status != cast(s32)KssStatusNeedImport {
+                continue
+            }
+            name := parsed.parser.pending_import
+            if parsed.parser.cursor.file != 0 {
+                parsed.parser = KssFail(parsed.parser,
+                    "Custom sheets cannot import files. Shared styles are supplied by the app.")
+                break
+            }
+            if KssNameEquals(name, "user") {
+                custom_file = parsed.parser.file_count
+                parsed.parser.override_count = 0
+                for index: cast(s32)0..parsed.parser.token_count - 1 {
+                    parsed.parser.tokens[index].file = -1
+                }
+                parsed = ProvideStyleRulesImport(parsed, all_source, "appearance/all.kss")
+            } else if KssNameEquals(name, "scope") {
+                scoped_file = parsed.parser.file_count
+                parsed = ProvideStyleRulesImport(parsed, scoped_source, "appearance/app.kss")
+            } else {
+                asset := StyleImport(name)
+                if !asset.found {
+                    parsed = FailStyleRulesImport(parsed)
+                    break
+                }
+                path := ifx KssNameEquals(name, "inbe") then "assets/styles/inbe.kss" else style_pack_id(style_index)
+                parsed = ProvideStyleRulesImport(parsed, asset.data, path)
+            }
+        }
+        if pass == 0 && StyleCollectCustomTokens(*parsed) {
+            continue
+        }
+        break
+    }
+    if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone {
+        StyleParseError(*parsed)
+        return false
+    }
+    if install {
+        return StylePublish(*parsed)
+    }
+    style_inspection_rules.count = parsed.rules.count
+    for index: cast(s32)0..parsed.rules.count - 1 {
+        style_inspection_rules.items[index] = StyleRule.{
+            .selector = parsed.rules.items[index].selector,
+            .state = parsed.rules.items[index].state,
+            .layer = parsed.rules.items[index].layer,
+            .order = parsed.rules.items[index].order,
+            .style = StyleWithoutTypeface(parsed.rules.items[index].style)}
+    }
+    return true
+}
+
+StyleCollectCustomTokens :: (parsed: *StyleRulesParse) -> bool {
+    style_compile_token_count = 0
+    if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone ||
+    parsed.parser.file_count <= 3 {
+        return false
+    }
+    for index: cast(s32)0..parsed.parser.token_count - 1 {
+        if parsed.parser.tokens[index].file >= 0 {
+            style_compile_tokens[style_compile_token_count] = parsed.parser.tokens[index]
+            style_compile_token_count += 1
+        }
+    }
+    return style_compile_token_count > 0
+}
+
+StyleParseError :: (parsed: *StyleRulesParse) {
+    StyleClearError()
+    if parsed.overflow {
+        unused AppCopyText("The combined stylesheet exceeds 512 rules.", style_error[:])
+    } else {
+        unused AppCopyText(TextFromBytes(parsed.parser.diagnostic[:
+            parsed.parser.diagnostic_length]), style_error[:])
+    }
+    style_error_line = parsed.parser.cursor.line
+    style_error_column = parsed.parser.cursor.column
+    file_index := parsed.parser.cursor.file
+    if file_index >= 0 && file_index < parsed.parser.file_count {
+        file := parsed.parser.files[file_index]
+        CopyTextToBuffer(*style_error_path[0], 64, TextFromBytes(file.name[:file.length]))
+    }
+}
+
+StylePublish :: (parsed: *StyleRulesParse) -> bool {
+    if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone {
+        StyleParseError(parsed)
+        return false
+    }
+    if !InstallParsedStyleRules(parsed.*) {
+        unused AppCopyText("Could not install the stylesheet.", style_error[:])
+        return false
+    }
+    for index: cast(s32)0..style_parse_source_count - 1 {
+        style_sources[index] = style_parse_sources[index]
+    }
+    style_source_count = style_parse_source_count
+    style_generation += 1
+    body: StyleData
+    body.font_size = cast(float32)Text16
+    AppMetricsConfigureFont(cast(s32)(TextStyleFor(TextStyleRequest.{}, body).font_size + 0.5))
+    return true
+}
 
 #program_export
 StyleInstall :: (theme_id: s32, dark: bool, style_index: s32) -> bool {
     if style_installed && style_installed_theme == theme_id &&
     style_installed_dark == dark && style_installed_index == style_index &&
-    style_installed_waozi == AppWaoziTheme() {
+    style_installed_waozi == AppWaoziTheme() &&
+    style_installed_revision == style_revision && style_installed_scope == 0 {
         return true
     }
     style_installed = false
     catalog := ThemeCatalogLoad(theme_id, dark)
-    if !catalog.complete { return false }
-    env := KssEnvironmentWithNames(KssDefaultEnvironment(),
-        ifx dark then "dark" else "light", "", "", "", "", "")
-    parsed := BeginStyleRules(StyleRootFor(style_index),
-        "styles/inbe-root.kss", env)
-    parsed.parser = StyleOverrides(parsed.parser,
-        StyleColorsFor(catalog, dark), style_index)
-    imports: s32 = 0
-    while imports < 4 {
-        parsed = ParseStyleRules(parsed)
-        if parsed.parser.status != cast(s32)KssStatusNeedImport { break }
-        asset := StyleImport(parsed.parser.pending_import)
-        if !asset.found { return false }
-        parsed = ProvideStyleRulesImport(parsed, asset.data,
-            ifx KssNameEquals(parsed.parser.pending_import, "inbe") then
-            "inbe" else style_pack_id(style_index))
-        imports += 1
+    if !StyleCompileSources(catalog, dark, style_index, StyleAppliedSource(0), "", true) {
+        // A damaged stored preference must never leave startup without a UI.
+        style_documents[0].applied[0] = cast(u8)0
+        if !StyleCompileSources(catalog, dark, style_index, "", "", true) {
+            return false
+        }
     }
-    if parsed.overflow || parsed.parser.status != cast(s32)KssStatusDone {
-        return false
-    }
-    if !InstallParsedStyleRules(parsed) { return false }
-    body: StyleData
-    body.font_size = cast(float32)Text16
-    AppMetricsConfigureFont(cast(s32)(TextStyleFor(TextStyleRequest.{},
-        body).font_size + 0.5))
     style_installed = true
     style_installed_theme = theme_id
     style_installed_dark = dark
     style_installed_index = style_index
     style_installed_waozi = AppWaoziTheme()
+    style_installed_revision = style_revision
+    style_installed_scope = 0
     return true
 }
 
 #program_export
 app_apply_style :: (app: *InnerBreeze) -> bool {
     if app == null { return false }
-    return StyleInstall(app.theme_id, app.dark_mode != 0, app.style_index)
+    scope := StyleActiveScope(app)
+    if scope == 0 {
+        return StyleInstall(app.theme_id, app.dark_mode != 0, app.style_index)
+    }
+    if style_installed && style_installed_theme == app.theme_id &&
+    style_installed_dark == (app.dark_mode != 0) &&
+    style_installed_index == app.style_index &&
+    style_installed_waozi == AppWaoziTheme() &&
+    style_installed_revision == style_revision && style_installed_scope == scope {
+        return true
+    }
+    catalog := ThemeCatalogLoad(app.theme_id, app.dark_mode != 0)
+    if !StyleCompileSources(catalog, app.dark_mode != 0, app.style_index,
+        StyleAppliedSource(0), StyleAppliedSource(scope), true) {
+        style_documents[scope].applied[0] = cast(u8)0
+        if !StyleCompileSources(catalog, app.dark_mode != 0, app.style_index,
+            StyleAppliedSource(0), "", true) {
+            return false
+        }
+    }
+    style_installed = true
+    style_installed_theme = app.theme_id
+    style_installed_dark = app.dark_mode != 0
+    style_installed_index = app.style_index
+    style_installed_waozi = AppWaoziTheme()
+    style_installed_revision = style_revision
+    style_installed_scope = scope
+    return true
+}
+
+StyleActiveScope :: (app: *InnerBreeze) -> s32 {
+    screen := app.breathing.screen
+    if screen == ScreenSettings && app.settings_tab == SETTINGS_TAB_THEME && style_editor_open {
+        return style_editor_scope
+    }
+    if screen == ScreenEList {
+        return 1
+    }
+    if screen == ScreenHabits || screen == ScreenHabitEdit || screen == ScreenHabitSessionEdit {
+        return 2
+    }
+    if screen == ScreenDiary {
+        return 4
+    }
+    if screen == ScreenLumi {
+        return 5
+    }
+    if screen == ScreenStart || screen == ScreenSession || screen == ScreenMeditation ||
+    screen == ScreenSunSalutation || screen == ScreenPatterns || screen == ScreenResults ||
+    screen == ScreenPracticeConfig {
+        return 3
+    }
+    return 0
 }

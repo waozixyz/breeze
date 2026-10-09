@@ -1895,6 +1895,10 @@ style-apply-zi-test: $(ZI2C_BIN)
 
 test: style-apply-zi-test
 
+.PHONY: appearance-ui-test
+appearance-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	sh tests/appearance_ui_test.sh $(abspath $(TARGET))
+
 .PHONY: audio-settings-test
 audio-settings-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \

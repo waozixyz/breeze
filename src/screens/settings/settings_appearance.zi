@@ -1,0 +1,323 @@
+#import "geometry"
+#import "control_props"
+#import "button_props"
+#import "button_widget"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "text_props"
+#import "text_widget"
+#import "text_input_props"
+#import "text_area_widget"
+#import "text_input"
+#import "style_sheet"
+#import "drawing_props"
+#import "kss_parser"
+#import "vec"
+#import, file "../../platform/raylib_text_input.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_style.zi";
+#import, file "../../app/appearance_actions.zi";
+#import, file "../../app/style_customization.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/assets.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../screens/lumi_screen.zi";
+#import, file "../../cells/package_files.zi";
+#import, file "settings_types.zi";
+#import, file "settings_ui.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+using AppNavRoute;
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
+
+appearance_inspector: [8192]u8;
+appearance_inspector_revision: s32 = -1;
+appearance_inspector_target: s32 = -1;
+appearance_inspector_state: s32 = -1;
+appearance_inspector_scope: s32 = -1;
+
+AppearanceActionColumns :: (width: s32) -> s32 {
+    minimum := AppTextWidth(LocaleText("reset_to_defaults_label"), AppFontSize()) + AppScale(32)
+    columns := width / minimum
+    if columns < 1 {
+        columns = 1
+    }
+    if columns > 3 {
+        columns = 3
+    }
+    return columns
+}
+
+settings_appearance_height :: (width: s32) -> s32 {
+    height := AppScale(64)
+    if style_editor_open {
+        height += AppParagraphHeight(LocaleText("appearance_kss_hint"), width, AppFontSize(), 0) + AppScale(16)
+        height += settings_choice_row_height(LocaleText("appearance_kss_scope"), width)
+        height += settings_choice_row_height(LocaleText("appearance_kss_source"), width)
+        height += AppScale(300 + 12 + 74 + 210 + 24)
+        height += ((6 + AppearanceActionColumns(width) - 1) / AppearanceActionColumns(width)) * AppScale(52)
+        height += settings_choice_row_height(LocaleText("appearance_kss_inspect"), width)
+        height += settings_choice_row_height(LocaleText("appearance_kss_state"), width)
+    }
+    return height
+}
+
+AppearanceTarget :: (index: s32) -> string {
+    targets: [10]string = .["Button", "Text", "Card", "TextArea", "TextField",
+    "NavigationBarItem", "Button", "Button", "Button", "Image"]
+    if index < 0 || index >= 10 {
+        return "Button"
+    }
+    return targets[index]
+}
+
+AppearanceTargetClass :: (index: s32) -> string {
+    classes: [10]string = .["", "", "", "", "", "launcher-dock",
+    "profile-header", "practice-pager", "launcher-tile", "pose-muted"]
+    if index < 0 || index >= 10 {
+        return ""
+    }
+    return classes[index]
+}
+
+AppearanceTargetState :: (index: s32) -> string {
+    states: [6]string = .["normal", "hover", "pressed", "focus", "selected", "disabled"]
+    if index < 0 || index >= 6 {
+        return "normal"
+    }
+    return states[index]
+}
+
+settings_appearance_draw :: (app: *InnerBreeze, x: s32, width: s32,
+    y: *s32, state: *SettingsThemeState) {
+    if Button(app.ui.session, ButtonProps.{
+            .id = 7850,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
+            .label = LocaleText("appearance_kss_advanced"),
+            .selected = style_editor_open,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+            .disabled = app.modal.active != 0}) != 0 {
+        style_editor_open = !style_editor_open
+        state.custom_focused = false
+        unused app_apply_style(app)
+    }
+    y.* += AppScale(64)
+    if !style_editor_open {
+        return
+    }
+    hint_height := AppParagraphHeight(LocaleText("appearance_kss_hint"), width, AppFontSize(), 0)
+    unused Text(app.ui.session, TextProps.{
+            .text = LocaleText("appearance_kss_hint"), .font = AppFontSize(),
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)hint_height},
+            .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += hint_height + AppScale(16)
+
+    scopes: [StyleScopeCount]DropdownOption
+    scopes[0].label = LocaleText("appearance_kss_all")
+    scopes[1].label = LocaleText("tab_elist")
+    scopes[2].label = LocaleText("tab_habits")
+    scopes[3].label = LocaleText("tab_practices")
+    scopes[4].label = LocaleText("tab_diary")
+    scopes[5].label = "Lumi"
+    scope_props: DropdownProps
+    scope_props.id = 7851
+    scope_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_kss_scope"))
+    scope_props.selected_index = style_editor_scope
+    scope_props.open = state.custom_scope_menu.open
+    scope_props.highlight_index = state.custom_scope_menu.highlight_index
+    scope_props.scroll_offset = state.custom_scope_menu.scroll_offset
+    state.custom_scope_menu = Dropdown(app.ui.session, scope_props, scopes[:])
+    if state.custom_scope_menu.changed {
+        style_editor_scope = state.custom_scope_menu.selected_index
+        state.custom_cursor = 0
+        state.custom_anchor = 0
+        state.custom_scroll = 0
+        state.custom_focused = false
+        state.custom_pending = false
+        unused app_apply_style(app)
+    }
+    sources: [3]DropdownOption
+    sources[0].label = LocaleText("appearance_kss_custom")
+    sources[1].label = LocaleText("appearance_kss_defaults")
+    sources[2].label = LocaleText("appearance_kss_pack")
+    source_props: DropdownProps
+    source_props.id = 7852
+    source_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_kss_source"))
+    source_props.selected_index = state.custom_source_view
+    source_props.open = state.custom_source_menu.open
+    source_props.highlight_index = state.custom_source_menu.highlight_index
+    source_props.scroll_offset = state.custom_source_menu.scroll_offset
+    state.custom_source_menu = Dropdown(app.ui.session, source_props, sources[:])
+    if state.custom_source_menu.changed {
+        state.custom_source_view = state.custom_source_menu.selected_index
+        state.custom_cursor = 0
+        state.custom_anchor = 0
+        state.custom_scroll = 0
+    }
+    source := StyleDraftSource(style_editor_scope)
+    if state.custom_source_view == 1 {
+        source = AssetRead("assets/styles/inbe.kss").data
+    } else if state.custom_source_view == 2 {
+        source = StyleImport(KssMakeName(style_pack_id(app.style_index))).data
+    }
+    typed: [128]u8
+    area: TextAreaProps
+    area.key = cast(u64)785300
+    area.focus_id = 7853
+    area.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(300)}
+    area.value = source
+    if state.custom_source_view == 0 {
+        area.value = FrameTextHold(*app.ui.frame_text, source)
+    }
+    area.label = LocaleText("appearance_kss_custom")
+    area.placeholder = "Button { radius: 24; }"
+    area.cursor = state.custom_cursor
+    area.anchor = state.custom_anchor
+    area.scroll_y = state.custom_scroll
+    area.focused = state.custom_focused
+    area.selecting = state.custom_selecting
+    area.preferred_x = state.custom_preferred_x
+    area.preferred_x_valid = state.custom_preferred_x_valid
+    area.wrap = true
+    area.read_only = state.custom_source_view != 0
+    area.max_bytes = StyleSourceCapacity - 1
+    area.max_codepoints = StyleSourceCapacity - 1
+    area.input = SampleTextAreaInput(area.focused, typed[:])
+    edited := TextArea(app.ui.session, area)
+    state.custom_cursor = edited.cursor
+    state.custom_anchor = edited.anchor
+    state.custom_scroll = edited.scroll_y
+    state.custom_focused = edited.focused
+    state.custom_selecting = edited.selecting
+    state.custom_preferred_x = edited.preferred_x
+    state.custom_preferred_x_valid = edited.preferred_x_valid
+    if edited.clipboard_write {
+        unused TextInputWriteClipboard(edited.clipboard_text)
+    }
+    if edited.edit.changed && state.custom_source_view == 0 {
+        bytes: [StyleSourceCapacity]u8
+        unused AppCopyText(source, bytes[:])
+        if AppReplaceText(bytes[:], edited.edit.start, edited.edit.end, edited.edit.replacement) {
+            unused StyleSetDraft(style_editor_scope, AppTextFromCString(*bytes[0], StyleSourceCapacity))
+            state.custom_pending = true
+            state.custom_preview_at = GetTime() + 0.25
+        }
+    }
+    if state.custom_pending && GetTime() >= state.custom_preview_at {
+        unused AppearancePreview(app, style_editor_scope)
+        state.custom_pending = false
+    }
+    y.* += AppScale(312)
+    error := AppTextFromCString(*style_error[0], 256)
+    status := ifx StyleDraftSource(style_editor_scope) == StyleSavedSource(style_editor_scope) then LocaleText("appearance_kss_saved") else LocaleText("appearance_kss_preview")
+    if error.count > 0 {
+        message: Vec(u8)
+        BuilderPrint(*message, "%:%:%  %", AppTextFromCString(*style_error_path[0], 64),
+            style_error_line, style_error_column, error)
+        details := BuilderFinish(message)
+        status = FrameTextHold(*app.ui.frame_text, details)
+        PackageFree(details)
+    }
+    unused Text(app.ui.session, TextProps.{.text = status,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(66)},
+            .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += AppScale(74)
+
+    labels: [6]string = .[LocaleText("save_button"), LocaleText("appearance_kss_format"),
+    LocaleText("appearance_kss_undo"), LocaleText("discard_button"),
+    LocaleText("reset_to_defaults_label"), LocaleText("appearance_kss_lumi")]
+    columns := AppearanceActionColumns(width)
+    gap := AppScale(8)
+    button_width := (width - gap * (columns - 1)) / columns
+    for index: cast(s32)0..cast(s32)5 {
+        if Button(app.ui.session, ButtonProps.{.id = 7860 + index,
+                .bounds = Rectangle.{cast(float32)(x + (index % columns) * (button_width + gap)),
+                    cast(float32)(y.* + (index / columns) * AppScale(52)),
+                    cast(float32)button_width, cast(float32)AppScale(44)},
+                .label = labels[index], .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = app.modal.active != 0}) != 0 {
+            if index == 0 {
+                unused AppearanceSave(app, style_editor_scope)
+            } else if index == 1 {
+                unused AppearanceFormat(app, style_editor_scope)
+            } else if index == 2 {
+                unused AppearanceUndo(app, style_editor_scope)
+            } else if index == 3 {
+                unused AppearanceDiscard(app, style_editor_scope)
+            } else if index == 4 {
+                unused AppearanceReset(app, style_editor_scope)
+            } else {
+                AppearanceAskLumi(app, StyleScopeName(style_editor_scope))
+            }
+            state.custom_pending = false
+        }
+    }
+    y.* += ((6 + columns - 1) / columns) * AppScale(52)
+
+    targets: [10]DropdownOption
+    labels_target: [10]string = .["Button", "Text", "Card", "TextArea", "TextField",
+    "NavigationBarItem.launcher-dock", "Button.profile-header",
+    "Button.practice-pager", "Button.launcher-tile", "Image.pose-muted"]
+    for index: cast(s32)0..cast(s32)9 {
+        targets[index].label = labels_target[index]
+    }
+    target_props: DropdownProps
+    target_props.id = 7870
+    target_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_kss_inspect"))
+    target_props.selected_index = state.custom_target
+    target_props.open = state.custom_target_menu.open
+    target_props.highlight_index = state.custom_target_menu.highlight_index
+    target_props.scroll_offset = state.custom_target_menu.scroll_offset
+    state.custom_target_menu = Dropdown(app.ui.session, target_props, targets[:])
+    if state.custom_target_menu.changed {
+        state.custom_target = state.custom_target_menu.selected_index
+    }
+    states: [6]DropdownOption
+    for index: cast(s32)0..cast(s32)5 {
+        states[index].label = AppearanceTargetState(index)
+    }
+    state_props: DropdownProps
+    state_props.id = 7871
+    state_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_kss_state"))
+    state_props.selected_index = state.custom_state
+    state_props.open = state.custom_state_menu.open
+    state_props.highlight_index = state.custom_state_menu.highlight_index
+    state_props.scroll_offset = state.custom_state_menu.scroll_offset
+    state.custom_state_menu = Dropdown(app.ui.session, state_props, states[:])
+    if state.custom_state_menu.changed {
+        state.custom_state = state.custom_state_menu.selected_index
+    }
+    if appearance_inspector_revision != style_generation ||
+    appearance_inspector_target != state.custom_target ||
+    appearance_inspector_state != state.custom_state ||
+    appearance_inspector_scope != style_editor_scope {
+        report := AppearanceInspection(AppearanceTarget(state.custom_target),
+            AppearanceTargetClass(state.custom_target), AppearanceTargetState(state.custom_state))
+        CopyTextToBuffer(*appearance_inspector[0], 8192, report)
+        PackageFree(report)
+        appearance_inspector_revision = style_generation
+        appearance_inspector_target = state.custom_target
+        appearance_inspector_state = state.custom_state
+        appearance_inspector_scope = style_editor_scope
+    }
+    inspection: TextAreaProps
+    inspection.key = cast(u64)787200
+    inspection.focus_id = 7872
+    inspection.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(210)}
+    inspection.value = AppTextFromCString(*appearance_inspector[0], 8192)
+    inspection.label = LocaleText("appearance_kss_inspect")
+    inspection.read_only = true
+    inspection.wrap = true
+    inspection.scroll_y = state.custom_inspector_scroll
+    result := TextArea(app.ui.session, inspection)
+    state.custom_inspector_scroll = result.scroll_y
+    y.* += AppScale(234)
+}

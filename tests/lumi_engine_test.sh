@@ -4,6 +4,13 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work="$root/build/lumi-engine-test"
 mkdir -p "$work"
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
+    --entry lumi_tool_budget_behavior:Answer -o "$work/tool-budget.zib" \
+    "$root/tests/lumi_tool_budget_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/tool-budget.zib")
+[ "$result" = 42 ]
+printf '%s\n' 'Lumi tools: complete appearance workflow and bounded continuations passed'
+"$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
     --entry lumi_engine_behavior:Answer -o "$work/engine.zib" \
     "$root/tests/lumi_engine_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

@@ -3,6 +3,7 @@
 #scope_file
 #import "std/text"
 #import "std/json_scan"
+#import "std/text_buffer"
 #import "byte_text_linux"
 #import "text_buffer"
 #import, file "feature_request.zi";
@@ -11,6 +12,10 @@
 #import, file "../app/account_activity_model.zi";
 #import, file "../core/types.zi";
 #import, file "../app/settings_actions.zi";
+#import, file "../app/appearance_actions.zi";
+#import, file "../app/style_customization.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../cells/app_tools.zi";
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/assets.zi";
 #import, file "../app/exercise_types.zi";
@@ -31,12 +36,21 @@ host_c :: #system_library "c";
 HostFree :: (bytes: *u8) #foreign host_c "free";
 app_close_modal :: (app: *InnerBreeze) #foreign host_c;
 HostDescriptor :: struct { data: *u8; count: s64 }
-HostReceipt :: struct { request: [65]u8; control: [96]u8; payload: [2048]u8; ok: bool }
+HostActionCapacity :: 65536
+HostReceipt :: struct {
+    request: [65]u8
+    control: [96]u8
+    payload: [HostActionCapacity]u8
+    result: string
+    ok: bool
+}
 receipts: [32]HostReceipt;
 receipt_next: s32;
 last_request: [65]u8;
 last_ok: bool;
 published: string;
+last_tool_result: string;
+pending_tool_result: string;
 
 HostIdentifier :: (value: string) -> bool {
     if value.count == 0 { return false }
@@ -59,6 +73,15 @@ HostArgument :: (arguments: string, field: string, output: []u8) -> string {
 
 HostAction :: (app: *InnerBreeze, control: string, arguments: string) -> bool {
     text: [96]u8
+    if control == "mcp.read_style" || control == "mcp.inspect_style" ||
+    control == "mcp.preview_style" || control == "mcp.save_style" ||
+    control == "mcp.reset_style" || control == "mcp.undo_style" ||
+    control == "mcp.discard_style" || control == "mcp.format_style" {
+        pending_tool_result = AppearanceTool(app, control[4:], arguments)
+        ok_at := FieldAt(pending_tool_result, 0, "ok")
+        return ok_at >= 0 && ok_at + 4 <= pending_tool_result.count &&
+        pending_tool_result[ok_at:ok_at + 4] == "true"
+    }
     if control == "mcp.set_theme" {
         return AppSetTheme(app, HostArgument(arguments, "theme", text[:]))
     }
@@ -159,7 +182,7 @@ AppMcpAction :: (app: *InnerBreeze, name: string, arguments: string) -> bool {
 
 PollHostActions :: (app: *InnerBreeze) {
     if app == null { return }
-    bytes: [2048]u8
+    bytes: [HostActionCapacity]u8
     size := ReadHostAction(bytes[:])
     if size <= 0 { return }
     value := TextFromBytes(bytes[:size])
@@ -184,14 +207,29 @@ PollHostActions :: (app: *InnerBreeze) {
     for receipt: receipts {
         if AppTextFromCString(*receipt.request[0], 65) == TextFromBytes(request[:rn]) {
             last_ok = AppTextFromCString(*receipt.control[0], 96) == TextFromBytes(control[:cn]) &&
-            AppTextFromCString(*receipt.payload[0], 2048) == value && receipt.ok
+            AppTextFromCString(*receipt.payload[0], HostActionCapacity) == value && receipt.ok
+            last_tool_result = receipt.result
             return
         }
     }
-    last_ok = HostAction(app, TextFromBytes(control[:cn]), arguments)
-    payload: [2048]u8
+    control_name := TextFromBytes(control[:cn])
+    if control_name.count > 4 && control_name[:4] == "mcp." {
+        pending_tool_result = AppToolExecute(app, control_name[4:], arguments)
+        ok_at := FieldAt(pending_tool_result, 0, "ok")
+        last_ok = ok_at >= 0 && ok_at + 4 <= pending_tool_result.count &&
+        pending_tool_result[ok_at:ok_at + 4] == "true"
+        if control_name == "mcp.read_context" {
+            last_ok = pending_tool_result.count > 0
+        }
+    } else {
+        last_ok = HostAction(app, control_name, arguments)
+    }
+    payload: [HostActionCapacity]u8
     unused AppCopyText(value, payload[:])
-    receipts[receipt_next] = .{request, control, payload, last_ok}
+    PackageFree(receipts[receipt_next].result)
+    receipts[receipt_next] = .{request, control, payload, pending_tool_result, last_ok}
+    last_tool_result = pending_tool_result
+    pending_tool_result = ""
     receipt_next = (receipt_next + 1) % 32
 }
 
@@ -234,11 +272,20 @@ ReportHostState :: (app: *InnerBreeze) {
     tools := AssetRead("assets/mcp/tools.json")
     activity: [2048]u8
     unused ActivityContext(activity[:])
-    BuilderPrint(*out, "],\"account_activity\":%,\"account_activity_fresh\":%,\"settings\":{\"theme\":\"%\",\"theme_id\":%,\"theme_mode\":%,\"theme_source\":%,\"style\":%,\"scale\":%,\"navigation\":%,\"sidebar_compact\":%},\"mcp\":{\"tools\":%}}",
+    BuilderPrint(*out, "],\"account_activity\":%,\"account_activity_fresh\":%,\"settings\":{\"theme\":\"%\",\"theme_id\":%,\"theme_mode\":%,\"theme_source\":%,\"style\":%,\"scale\":%,\"navigation\":%,\"sidebar_compact\":%},\"mcp\":{\"tools\":%}",
         TextUntilNul(activity[:]), remote_fresh || (account_activity.was_running && ActivityAvailable()),
         AppThemeName(app.theme_id), app.theme_id, app.theme_mode, app.theme_source,
         app.style_index, app.ui_scale_tenths, app.navigation_placement,
         app.nav_rail_collapsed, ifx tools.found then tools.data else "[]")
+    // Results are published on this application's own window for its harness.
+    BuilderPrint(*out, ",\"appearance\":{\"revision\":%,\"scope\":%,\"open\":%,\"source\":",
+        style_revision, style_editor_scope, style_editor_open)
+    AppearanceJsonString(*out, StyleDraftSource(style_editor_scope))
+    BuilderPrint(*out, ",\"saved\":")
+    AppearanceJsonString(*out, StyleSavedSource(style_editor_scope))
+    BuilderPrint(*out, ",\"error\":")
+    AppearanceJsonString(*out, AppTextFromCString(*style_error[0], 256))
+    BuilderPrint(*out, "},\"tool_result\":%}", ifx last_tool_result.count > 0 then last_tool_result else "null")
     state := BuilderFinish(out)
     if state == published {
         descriptor := cast(*HostDescriptor)(*state)
