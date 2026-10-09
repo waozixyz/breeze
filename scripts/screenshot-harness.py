@@ -51,6 +51,41 @@ def dependency_digest(root):
     return result.hexdigest()
 
 
+def check_locked_sources():
+    """Check pins and compile afresh, without trusting incremental stamps."""
+    lock = json.loads((ROOT / "ziran.lock").read_text())
+    aliases = {package_id: name.replace("_", "-")
+               for name, package_id in lock["root"]["dependencies"].items()}
+    packages = [(aliases.get(package["id"], package["name"].casefold()),
+                 package["commit"]) for package in lock["packages"]]
+    packages.append(("ziran", lock["toolchain"]["commit"]))
+    for name, commit in packages:
+        path = ROOT / "build/packages" / name
+        require(path.is_dir(), f"missing locked package: {name}")
+        head = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        require(head == commit, f"package {name} does not match ziran.lock")
+        changed = subprocess.check_output(
+            ["git", "-C", str(path), "status", "--porcelain",
+             "--ignore-submodules=none"], text=True).strip()
+        require(not changed, f"modified locked package: {name}")
+    env = dict(os.environ)
+    for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
+                 "DBUS_SESSION_BUS_ADDRESS", "MAKEFLAGS", "MFLAGS",
+                 "MAKEOVERRIDES"):
+        env.pop(name, None)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "screenshot-source-check",
+         "PACKAGE_FLAGS=--locked", "KRYON_DIR=build/packages/kryon",
+         "KSS_DIR=build/packages/kss", "ZIRAN_DIR=build/packages/ziran"],
+        cwd=ROOT, env=env, capture_output=True,
+        text=True, timeout=120)
+    require(result.returncode == 0,
+            "current source does not compile against locked packages; "
+            "finish dependency updates before Play publishing:\n" +
+            result.stdout.strip() + "\n" + result.stderr.strip())
+
+
 def config():
     value = json.loads(CONFIG.read_text())
     scenes = value["scenes"]
@@ -231,6 +266,7 @@ def export():
 def store_preflight(images_root=IMAGES):
     value = verify(reviewed=True)
     require(Path(value["kryon_source"]).resolve() == (ROOT / "build/packages/kryon").resolve(), "captures used a local Kryon preview; rebuild and recapture with locked packages before Play publishing")
+    check_locked_sources()
     receipt = json.loads((images_root / "screenshot-review.json").read_text())
     require(receipt["capture_sha256"] == digest(OUTPUT / "capture.json"), "store assets are from a different capture")
     selected = [row for row in value["rows"] if row["store"] and row["store_dir"]]

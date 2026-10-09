@@ -1173,7 +1173,10 @@ social-post-dry-run:
 screenshot: $(TARGET)
 	./scripts/generate-screenshots.sh "$(TARGET)"
 
-.PHONY: screenshot-verify screenshot-review screenshot-export play-preflight lumi-promo
+.PHONY: screenshot-verify screenshot-review screenshot-export screenshot-source-check play-preflight lumi-promo
+screenshot-source-check: $(ZI2C_BIN) | build-laws
+	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KSS_DIR)/src
+
 screenshot-verify:
 	python3 scripts/screenshot-harness.py verify
 

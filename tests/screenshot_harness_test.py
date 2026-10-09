@@ -24,6 +24,44 @@ def rejects(operation, message):
     raise AssertionError(message)
 
 
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    for name in ("kryon", "daochi-client", "ziran"):
+        (root / "build/packages" / name).mkdir(parents=True)
+    (root / "build/zi-check").mkdir()
+    (root / "build/zi-check/native.fresh").touch()
+    (root / "ziran.lock").write_text(json.dumps(dict(
+        root=dict(dependencies=dict(kryon="ui", daochi_client="client")),
+        packages=[dict(id="ui", name="Kryon", commit="pinned"),
+                  dict(id="client", name="DaochiClient", commit="pinned")],
+        toolchain=dict(commit="pinned"))))
+    def git_result(command, **kwargs):
+        return "pinned\n" if "rev-parse" in command else ""
+    environment = dict(DISPLAY=":0", WAYLAND_DISPLAY="wayland-0",
+                       XAUTHORITY="owner", DBUS_SESSION_BUS_ADDRESS="owner",
+                       MAKEFLAGS="KRYON_DIR=preview")
+    with patch.object(harness, "ROOT", root), patch.object(harness.subprocess,
+        "check_output", side_effect=git_result), patch.dict(os.environ, environment), \
+        patch.object(harness.subprocess, "run", return_value=subprocess.CompletedProcess(
+            [], 0, "checked", "")) as compiler:
+        harness.check_locked_sources()
+        assert compiler.call_count == 1, "an incremental stamp skipped the fresh check"
+        assert "screenshot-source-check" in compiler.call_args.args[0]
+        assert "KRYON_DIR=build/packages/kryon" in compiler.call_args.args[0]
+        assert not any(name in compiler.call_args.kwargs["env"] for name in environment)
+        compiler.return_value = subprocess.CompletedProcess([], 1, "", "missing import")
+        rejects(harness.check_locked_sources, "missing locked import passed preflight")
+    for head, status in (("other commit\n", ""),
+                         ("pinned\n", " M src/ui/scroll.zi\n")):
+        def changed_git_result(command, **kwargs):
+            return head if "rev-parse" in command else status
+        with patch.object(harness, "ROOT", root), patch.object(harness.subprocess,
+            "check_output", side_effect=changed_git_result), patch.object(harness.subprocess,
+            "run") as compiler:
+            rejects(harness.check_locked_sources, "wrong or dirty pin passed preflight")
+            assert not compiler.called, "a wrong dependency reached the compiler"
+
+
 definition = harness.config()
 assert len(definition["scenes"]) == 16 and len(definition["buckets"]) == 4
 assert next(b for b in definition["buckets"] if b["name"] == "phone")["scale"] == 25
@@ -76,4 +114,4 @@ with tempfile.TemporaryDirectory() as temporary:
         manifest["source_sha256"] = "old"
         harness.write_json(output / "capture.json", manifest)
         rejects(lambda: harness.verify(output), "stale source passed")
-print("PASS screenshot coverage and release gates: blank, dimensions, review, tampering, build, completeness and source")
+print("PASS screenshot coverage and release gates: locked imports, pins, blank, dimensions, review, tampering, build, completeness and source")

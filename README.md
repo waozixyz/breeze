@@ -104,6 +104,8 @@ source, scene definitions, Kryon, binaries, bundles, or screenshot bytes
 invalidates publishing preflight. A historical capture can still be visually
 reviewed and used for a review video; Play requires a fresh capture of the
 current locked build. Local Kryon preview builds cannot pass Play preflight.
+Preflight checks every dependency against its locked commit and runs a fresh
+source check, so reused incremental preview outputs cannot hide missing imports.
 Keep credentials in the ignored `.env.play` using `.env.play.example`.
 The uploader defaults to validating and discarding its remote edit. After
 review, `PLAY_COMMIT=1 python3 scripts/upload-play-screenshots.py` validates
