@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.test.InstrumentationTestCase;
 import android.view.KeyEvent;
@@ -15,6 +16,8 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import java.lang.reflect.Field;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 
 /** Physical Pixel check: never sends a message and restores the original draft. */
 public class PixelLumiKeyboardTest extends InstrumentationTestCase {
@@ -27,8 +30,32 @@ public class PixelLumiKeyboardTest extends InstrumentationTestCase {
             owner.equals("xyz.waozi.inbe.debug") || owner.equals("com.google.android.inputmethod.latin"));
         MotionEvent event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, x, y, 0);
         event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        assertTrue("Keyboard touch was rejected", getInstrumentation().getUiAutomation().injectInputEvent(event, true));
-        event.recycle();
+        try {
+            assertTrue("Keyboard touch was rejected", getInstrumentation().getUiAutomation().injectInputEvent(event, true));
+        } finally {
+            event.recycle();
+        }
+    }
+
+    private void glide(Rect first, Rect second) throws Exception {
+        AccessibilityNodeInfo root = getInstrumentation().getUiAutomation().getRootInActiveWindow();
+        assertNotNull("No foreground window for Gboard check", root);
+        String owner = String.valueOf(root.getPackageName());
+        root.recycle();
+        assertTrue("Another app took the foreground; stopping input",
+            owner.equals("xyz.waozi.inbe.debug") || owner.equals("com.google.android.inputmethod.latin"));
+        String command = "input touchscreen swipe " + first.centerX() + " " + first.centerY() +
+            " " + second.centerX() + " " + second.centerY() + " 400";
+        ParcelFileDescriptor pipe = getInstrumentation().getUiAutomation().executeShellCommand(command);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (InputStream stream = new ParcelFileDescriptor.AutoCloseInputStream(pipe)) {
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = stream.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+        }
+        assertEquals("Shell keyboard gesture failed", "", output.toString("UTF-8").trim());
     }
 
     private void focus(MainActivity activity) {
@@ -149,16 +176,7 @@ public class PixelLumiKeyboardTest extends InstrumentationTestCase {
             Rect second = key("e");
             assertNotNull("Gboard W key unavailable", first);
             assertNotNull("Gboard E key unavailable", second);
-            long start = SystemClock.uptimeMillis();
-            pointer(MotionEvent.ACTION_DOWN, start, first.centerX(), first.centerY());
-            for (int index = 1; index <= 12; index++) {
-                SystemClock.sleep(25);
-                float fraction = index / 12f;
-                pointer(MotionEvent.ACTION_MOVE, start,
-                    first.centerX() + (second.centerX() - first.centerX()) * fraction,
-                    first.centerY() + (second.centerY() - first.centerY()) * fraction);
-            }
-            pointer(MotionEvent.ACTION_UP, start, second.centerX(), second.centerY());
+            glide(first, second);
             SystemClock.sleep(1500);
             boolean[] typed = new boolean[1];
             getInstrumentation().runOnMainSync(() -> typed[0] = input.length() > 0);
