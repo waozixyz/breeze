@@ -77,7 +77,9 @@ def open_practice(window, name, width, height):
     click_word(window, words[0])
     command("import", "-window", window, str(path))
     with Image.open(path) as image:
-        dock = image.crop((0, 0, 88, height)) if width >= 640 else image.crop((0, height - 84, width, height))
+        # On phones read only the label row: CI's tesseract 5.3.4 misreads
+        # the dock when its icons and the selection outline are included.
+        dock = image.crop((0, 0, 88, height)) if width >= 640 else image.crop((0, height - 24, width, height - 4))
         assert "practice" in read_text(dock, name + "-selected-navigation"), \
             "Selecting Practice did not reveal its complete navigation label"
 
