@@ -48,7 +48,14 @@ drag() {
 }
 order() { sql "SELECT group_concat(name,'|') FROM (SELECT name FROM habits WHERE deleted_at=0 ORDER BY sort_order)"; }
 day_count() { sql "SELECT COALESCE(SUM(completed),0) FROM habit_days WHERE habit_id=(SELECT id FROM habits WHERE name='Yoga')"; }
-baseline="$(order)"
+# The screenshot scene seeds its habits after the window and database
+# appear; wait for the seed instead of assuming a fixed startup time.
+baseline=""
+for attempt in $(seq 1 100); do
+  baseline="$(order 2>/dev/null || true)"
+  if [[ -n "$baseline" ]]; then break; fi
+  sleep 0.1
+done
 expect "$baseline" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'initial order'
 import -window "$window" "$test_dir/overview.png"
 read -r today_x today_y < <(python3 "$root/tests/habits_rendered_controls.py" "$test_dir/overview.png" day)
