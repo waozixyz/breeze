@@ -2,6 +2,7 @@
 ## [2.1.22] - 2026-10-08
 ### Fixed
 - Keep Diary updates opening correctly and preserve existing entries in the same account as Habits.
+- Keep breathing, meditation and other practices playing with sound when you switch apps or lock the screen, even with the session notification hidden.
 - Keep bottom navigation visible on the practice home screen and keep practice swipes above it.
 - Reduce pauses when opening Lists, Diary and app settings by retaining loaded apps between frames.
 
