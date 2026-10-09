@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.4] - 2026-10-08
+
+- Keep date limits working when Diary updates on existing Inbe installations.
+
 ## [1.1.3] - 2026-10-08
 
 - Keep the journal on today or earlier dates and show an empty editor without a writing prompt.

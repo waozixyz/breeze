@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.19] - 2026-10-08
+
+- Deliver the updated Diary to existing Inbe installations with today as its latest date.
+
 ## [2.1.18] - 2026-10-08
 
 - Keep Diary in the same account as Habits, including existing entries and photos.
