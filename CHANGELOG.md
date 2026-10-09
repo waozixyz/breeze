@@ -1,4 +1,10 @@
 # Changelog
+## [2.1.25] - 2026-10-09
+### Fixed
+- Animate the Wim Hof breathing circle smoothly between timer ticks, including its Customize preview.
+- Keep Wim Hof timing accurate when the display frame rate varies.
+- Avoid repeating account activity and sync queue checks on unchanged animation frames.
+
 ## [2.1.24] - 2026-10-09
 ### Fixed
 - Open the breathing animation, background music and other menus reliably again.

@@ -18,6 +18,6 @@ void update_session_sounds(InnerBreeze*app);
 void session_background_start(InnerBreeze*app);
 void session_advance_elapsed(InnerBreeze*app, int elapsed_ms);
 void update_preview_bounds(BreathSession *breathing, int content_w, int max_h);
-void draw_breath_preview(BreathSession *breathing, int center_x, int center_y);
+void draw_breath_preview(BreathSession *breathing, int center_x, int center_y, float fraction);
 
 #endif

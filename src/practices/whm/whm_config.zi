@@ -51,8 +51,8 @@ using TextWrap;
 using ButtonTone;
 using ButtonEmphasis;
 
-whm_config_preview_remainder: s32 = 0;
-whm_start_speed_preview_remainder: s32 = 0;
+whm_config_preview_remainder: float64 = 0.0;
+whm_start_speed_preview_remainder: float64 = 0.0;
 WhmAnimationOptionCount :: 2
 
 WhmConfigClamp :: (value: s32, minimum: s32, maximum: s32) -> s32 {
@@ -83,7 +83,7 @@ whm_preview_needs_reset :: (preview: *BreathSession, speed: s32, max_rounds: s32
 whm_preview_reset :: (preview: *BreathSession, speed: s32, max_rounds: s32,
     max_breaths: s32, pause_seconds: s32,
     animation: s32, content_w: s32, content_h: s32,
-    remainder: *s32) {
+    remainder: *float64) {
     if preview == null {
         return
     }
@@ -99,39 +99,20 @@ whm_preview_reset :: (preview: *BreathSession, speed: s32, max_rounds: s32,
     }
 }
 
-whm_preview_step_elapsed :: (preview: *BreathSession, remainder: *s32) {
-    elapsed_ms := cast(s32)(GetFrameTime() * 1000.0f + 0.5f)
-    total: s32
-    frames: s32
-
+whm_preview_step_elapsed :: (preview: *BreathSession, remainder: *float64) {
     if preview == null {
         return
     }
-    if elapsed_ms < 1 {
-        elapsed_ms = 17
-    }
-    if elapsed_ms > 120 {
-        elapsed_ms = 120
-    }
-
-    if remainder == null {
-        preview.* = BreathSessionStep(preview.*)
-        return
-    }
-
-    total = elapsed_ms * 60 + remainder.*
-    frames = total / 1000
-    remainder.* = total % 1000
-    if frames < 1 {
-        frames = 1
-    }
-    if frames > 8 {
-        frames = 8
-    }
+    seconds := cast(float64)GetFrameTime()
+    if seconds > 0.12 { seconds = 0.12 }
+    fraction: float64 = 0.0
+    if remainder != null { fraction = remainder.* }
+    clock := BreathClockAdvance(seconds, fraction)
+    if remainder != null { remainder.* = clock.remainder }
 
     {
         i: s32 = 0
-        while i < frames {
+        while i < clock.ticks {
             preview.* = BreathSessionStep(preview.*)
             if preview.phase != BreathPhaseBreathe {
                 return
@@ -146,7 +127,7 @@ whm_draw_exact_speed_preview :: (preview: *BreathSession, preview_speed: *s32,
     pause_seconds: s32, animation: s32,
     content_w: s32, content_h: s32,
     center_x: s32, center_y: s32,
-    remainder: *s32) {
+    remainder: *float64) {
     if preview == null || preview_speed == null {
         return
     }
@@ -162,7 +143,9 @@ whm_draw_exact_speed_preview :: (preview: *BreathSession, preview_speed: *s32,
     }
 
     whm_preview_step_elapsed(preview, remainder)
-    draw_breath_preview(preview, center_x, center_y)
+    fraction: float32 = 0.0
+    if remainder != null { fraction = cast(float32)remainder.* }
+    draw_breath_preview(preview, center_x, center_y, fraction)
 }
 
 whm_draw_progressive_start_speed_editor :: (app: *InnerBreeze) {
@@ -328,7 +311,7 @@ whm_config_draw_breath_card :: (app: *InnerBreeze, content_x: s32, content_w: s3
     }
     draw_breath_preview(*app.settings_preview,
         inner_x + inner_w / 2,
-        inner_y + preview_h / 2)
+        inner_y + preview_h / 2, cast(float32)whm_config_preview_remainder)
     inner_y += preview_h + AppScale(20)
 
     if commit_slider_row(app, 1, inner_x, inner_w, *inner_y, AppScale(78),

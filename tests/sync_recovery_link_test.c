@@ -13,6 +13,7 @@ static int enabled = 1;
 static int64_t queued;
 static int repair;
 static int full_upload;
+static int status_reads;
 
 bool storage_sync_node_failover(void) { return false; }
 int32_t app_preview_mode(void) { return 0; }
@@ -60,6 +61,7 @@ storage_sync_enabled(void)
 int32_t
 storage_sync_status(StorageSyncStatus *status)
 {
+    status_reads++;
     memset(status, 0, sizeof(*status));
     status->has_account = 1;
     status->enabled = enabled;
@@ -68,6 +70,8 @@ storage_sync_status(StorageSyncStatus *status)
     status->queued_changes = queued;
     return 1;
 }
+
+int32_t recovery_status_reads(void) { return status_reads; }
 
 void
 recovery_set_time(double seconds)

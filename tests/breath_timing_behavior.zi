@@ -145,5 +145,67 @@ Answer :: () -> s32 {
     if state.completed != 0 {
         return -18
     }
+    // Every render can move by a fraction of a layout unit, including
+    // between simulation ticks and on both sides of a breath boundary.
+    smooth := BreathSessionInit()
+    smooth.phase = BreathPhaseBreathe
+    smooth.progressive_speed = 0
+    smooth.speed_level = 3
+    smooth.rmin = 80
+    smooth.rmax = 160
+    smooth.breath_frame = 1
+    first_radius := BreathDrawRadius(smooth)
+    second_radius := BreathDrawRadiusAt(smooth, 0.5)
+    if !(first_radius > 80.5 && first_radius < 80.6 &&
+        second_radius > first_radius && second_radius < 81.0) { return -25 }
+    smooth.dir = 1
+    if !(BreathDrawRadiusAt(smooth, 0.5) < BreathDrawRadius(smooth)) { return -26 }
+    smooth.breath_frame = 0
+    if BreathDrawRadius(smooth) != 160.0 { return -27 }
+    smooth.dir = 0
+    smooth.breath_animation = BreathAnimationInOut
+    smooth.breath_frame = 36
+    if BreathDrawRadius(smooth) != 92.5 { return -28 }
+    smooth.phase = BreathPhaseHold
+    smooth.r = 80
+    if BreathDrawRadiusAt(smooth, 0.9) != 80.0 { return -29 }
+    smooth.phase = BreathPhaseRecover
+    smooth.breath_half_ticks = 120
+    smooth.breath_frame = 60
+    if BreathDrawRadiusAt(smooth, 0.0) != 120.0 { return -30 }
+    smooth.r = 160
+    smooth.breath_frame = 0
+    if BreathDrawRadiusAt(smooth, 0.5) != 160.0 { return -31 }
+    smooth.phase = BreathPhaseNext
+    smooth.breath_frame = 60
+    if BreathDrawRadius(smooth) != 120.0 { return -32 }
+
+    // Equal elapsed time must produce equal ticks at high, low and
+    // irregular rendering rates. The old millisecond carry ran too fast.
+    clock: BreathClockStep
+    total_ticks: s32 = 0
+    for index: cast(s32)0..cast(s32)599 {
+        clock = BreathClockAdvance(0.016, clock.remainder)
+        total_ticks += clock.ticks
+    }
+    if total_ticks != 576 || clock.remainder > 0.000001 { return -33 }
+    total_ticks = 0
+    clock = BreathClockStep.{}
+    for index: cast(s32)0..cast(s32)599 {
+        clock = BreathClockAdvance(0.017, clock.remainder)
+        total_ticks += clock.ticks
+    }
+    if total_ticks != 612 || clock.remainder > 0.000001 { return -34 }
+    total_ticks = 0
+    clock = BreathClockStep.{}
+    for index: cast(s32)0..cast(s32)1439 {
+        clock = BreathClockAdvance(1.0 / 144.0, clock.remainder)
+        total_ticks += clock.ticks
+    }
+    if total_ticks != 600 || clock.remainder > 0.000001 { return -35 }
+    clock = BreathClockAdvance(0.0, 0.5)
+    if clock.ticks != 0 || clock.remainder != 0.5 { return -36 }
+    clock = BreathClockAdvance(301.0, 0.0)
+    if clock.ticks != 18000 || clock.remainder != 0.0 { return -37 }
     return 42
 }

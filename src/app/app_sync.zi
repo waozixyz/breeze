@@ -1113,6 +1113,26 @@ app_sync_review_pending :: () -> s32 {
     return sync_review_cache
 }
 
+sync_queue_cache: SyncStatus;
+sync_queue_cache_valid: bool;
+sync_queue_cache_revision: s64 = -1;
+sync_queue_cache_checked: float64 = -1.0;
+
+// The queue changes with stored data, not the render rate. A bounded
+// fallback also picks up metadata changed outside the writing connection.
+app_sync_queue_status :: (status: *SyncStatus, now: float64) -> bool {
+    if status == null { return false }
+    revision := storage_data_revision()
+    if revision != sync_queue_cache_revision || now < sync_queue_cache_checked ||
+    now - sync_queue_cache_checked >= 0.25 {
+        sync_queue_cache_revision = revision
+        sync_queue_cache_checked = now
+        sync_queue_cache_valid = SyncStatusRead(*sync_queue_cache)
+    }
+    status.* = sync_queue_cache
+    return sync_queue_cache_valid
+}
+
 app_sync_pump :: (app: *InnerBreeze) {
     now: float64
     should_sync: s32 = 0
@@ -1160,7 +1180,7 @@ app_sync_pump :: (app: *InnerBreeze) {
         should_sync = 1
         dirty_due = 1
     }
-    if SyncStatusRead(*sync_status)  && sync_status.has_account != 0  && sync_status.enabled != 0  && (sync_status.queued_changes > 0 || sync_status.full_upload_done == 0  || sync_status.repair_pending != 0)  && (g_sync.dirty_sync_at <= 0.0 || now >= g_sync.dirty_sync_at) {
+    if app_sync_queue_status(*sync_status, now)  && sync_status.has_account != 0  && sync_status.enabled != 0  && (sync_status.queued_changes > 0 || sync_status.full_upload_done == 0  || sync_status.repair_pending != 0)  && (g_sync.dirty_sync_at <= 0.0 || now >= g_sync.dirty_sync_at) {
         should_sync = 1
         if sync_status.repair_pending != 0 {
             repair_due = 1

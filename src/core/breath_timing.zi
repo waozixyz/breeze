@@ -153,7 +153,58 @@ BreathAnimatedSpan :: (session: BreathSession, span: s32,
 
 #program_export
 BreathDrawRadius :: (session: BreathSession) -> float32 {
-    return cast(float32)session.r
+    return BreathDrawRadiusAt(session, 0.0)
+}
+
+// Keep the portable session's integer fields, but paint its continuous
+// curve rather than snapping the radius to whole layout units.
+#program_export
+BreathDrawRadiusAt :: (session: BreathSession, fraction: float32) -> float32 {
+    span := session.rmax - session.rmin
+    half_ticks := session.breath_half_ticks
+    shrinking := session.phase == BreathPhaseNext
+    if session.phase == BreathPhaseBreathe {
+        half_ticks = BreathEffectiveHalfTicks(session)
+        shrinking = session.dir != 0
+    } else if session.phase != BreathPhaseNext &&
+    (session.phase != BreathPhaseRecover || session.r >= session.rmax) {
+        return cast(float32)session.r
+    }
+    if span <= 0 || half_ticks <= 0 {
+        return cast(float32)session.r
+    }
+    if !(fraction >= 0.0) { fraction = 0.0 }
+    if fraction > 1.0 { fraction = 1.0 }
+    amount := (cast(float32)session.breath_frame + fraction) /
+        cast(float32)half_ticks
+    if amount < 0.0 { amount = 0.0 }
+    if amount > 1.0 { amount = 1.0 }
+    if session.breath_animation != BreathAnimationLinear {
+        amount = BreathSmoothstep(amount)
+    }
+    if shrinking { amount = 1.0 - amount }
+    return cast(float32)session.rmin + cast(float32)span * amount
+}
+
+BreathClockStep :: struct {
+    ticks: s32
+    remainder: float64
+}
+
+// Carry fractional ticks directly. Converting each 60 Hz tick back to a
+// truncated number of milliseconds makes the clock run too fast.
+#program_export
+BreathClockAdvance :: (seconds: float64, remainder: float64) -> BreathClockStep {
+    result: BreathClockStep
+    if !(remainder >= 0.0) || remainder >= 1.0 { remainder = 0.0 }
+    result.remainder = remainder
+    if !(seconds > 0.0) { return result }
+    if seconds > 300.0 { seconds = 300.0 }
+    ticks := seconds * 60.0 + remainder
+    result.ticks = cast(s32)(ticks + 0.000000001)
+    result.remainder = ticks - cast(float64)result.ticks
+    if result.remainder < 0.0 { result.remainder = 0.0 }
+    return result
 }
 
 #program_export

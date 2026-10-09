@@ -7,6 +7,11 @@ c :: #system_library "c";
 ProfileGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
 ProfileClock :: () -> float64 #foreign c "app_monotonic_seconds";
 ProfileLogInfo :: (line: *u8) #foreign c "app_log_line";
+#if #defined(ANDROID_DEBUG) {
+    android_log :: #system_library "log";
+    ProfileLogAndroid :: (priority: s32, tag: *u8, line: *u8) -> s32
+        #foreign android_log "__android_log_write";
+}
 
 #scope_export
 #program_export
@@ -16,6 +21,9 @@ app_profile_env_enabled :: () -> bool {
         return false
     }
     value: *u8 = ProfileGetEnv(*name[0])
+    #if #defined(ANDROID_DEBUG) {
+        if value == null { return true }
+    }
     return value != null && value[0] != cast(u8)0 && value[0] != cast(u8)48
 }
 
@@ -76,7 +84,7 @@ ProfileAppendTwoDecimals :: (output: []u8, used: *s32, number: float64) -> bool 
 app_profile_report :: (frame_avg: float64, frame_max: float64,
     update_avg: float64, update_max: float64,
     habits_avg: float64, habits_max: float64,
-    sync_avg: float64, sync_max: float64) {
+    sync_avg: float64, sync_max: float64, fps: float64) {
     line: [256]u8
     used: s32 = 0
     if !ProfileAppend(line[:], *used, "PROFILE: frame avg=") ||
@@ -94,17 +102,27 @@ app_profile_report :: (frame_avg: float64, frame_max: float64,
     !ProfileAppend(line[:], *used, " sync avg=") ||
     !ProfileAppendTwoDecimals(line[:], *used, sync_avg) ||
     !ProfileAppend(line[:], *used, " max=") ||
-    !ProfileAppendTwoDecimals(line[:], *used, sync_max) {
+    !ProfileAppendTwoDecimals(line[:], *used, sync_max) ||
+    !ProfileAppend(line[:], *used, " fps=") ||
+    !ProfileAppendTwoDecimals(line[:], *used, fps) {
         return
     }
     line[used] = cast(u8)0
-    ProfileLogInfo(*line[0])
+    #if #defined(ANDROID_DEBUG) {
+        tag: [16]u8
+        if CopyCString("InbePerformance", tag[:]) {
+            unused ProfileLogAndroid(4, *tag[0], *line[0])
+        }
+    } else {
+        ProfileLogInfo(*line[0])
+    }
 }
 
 ProfileStats :: struct {
     initialized: s32
     enabled: s32
     frames: s32
+    report_started: float64
     frame_total: float64
     frame_max: float64
     update_total: float64
@@ -168,17 +186,21 @@ app_profile_record_sync :: (start: float64) {
 #program_export
 app_profile_frame_end :: (start: float64) {
     if !enabled() || start <= 0.0 { return }
-    elapsed := (ProfileClock() - start) * 1000.0
+    now := ProfileClock()
+    if stats.report_started <= 0.0 { stats.report_started = start }
+    elapsed := (now - start) * 1000.0
     stats.frame_total += elapsed
     if elapsed > stats.frame_max { stats.frame_max = elapsed }
     stats.frames += 1
     if stats.frames < 120 { return }
 
     count := cast(float64)stats.frames
+    fps: float64 = 0.0
+    if now > stats.report_started { fps = count / (now - stats.report_started) }
     app_profile_report(stats.frame_total / count, stats.frame_max,
         stats.update_total / count, stats.update_max,
         stats.habits_total / count, stats.habits_max,
-        stats.sync_total / count, stats.sync_max)
+        stats.sync_total / count, stats.sync_max, fps)
     stats = ProfileStats.{0 }
     stats.initialized = 1
     stats.enabled = 1

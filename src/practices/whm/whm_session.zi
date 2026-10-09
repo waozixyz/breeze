@@ -98,7 +98,7 @@ whm_log :: (level: s32, message: string) {
     }
 }
 
-whm_background_remainder_ms: s32 = 0;
+whm_elapsed_remainder: float64 = 0.0;
 whm_last_notification_text: [96] u8;
 text_color_for_background :: (background: Color) -> Color {
     luma: s32 = cast(s32)background.r * 299 + cast(s32)background.g * 587 + cast(s32)background.b * 114
@@ -384,33 +384,30 @@ session_background_start :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    whm_background_remainder_ms = 0
+    whm_elapsed_remainder = 0.0
     whm_last_notification_text[0] = cast(u8)0
     remember_sound_state(app)
 }
 
 session_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
-    elapsed_total: s32
-    frame_count: s32
+    session_advance_seconds(app, cast(float64)elapsed_ms / 1000.0)
+}
 
-    if app == null || elapsed_ms <= 0 {
+session_advance_seconds :: (app: *InnerBreeze, seconds: float64) {
+
+    if app == null || !(seconds > 0.0) {
         return
     }
     if app_session_screen(app) != ScreenSession || app.session_paused != 0 {
         return
     }
 
-    elapsed_total = elapsed_ms + whm_background_remainder_ms
-    if elapsed_total > 5 * 60 * 1000 {
-        elapsed_total = 5 * 60 * 1000
-    }
-
-    frame_count = (elapsed_total * 60) / 1000
-    whm_background_remainder_ms = elapsed_total - (frame_count * 1000) / 60
+    clock := BreathClockAdvance(seconds, whm_elapsed_remainder)
+    whm_elapsed_remainder = clock.remainder
 
     {
         i: s32 = 0
-        while i < frame_count && app_session_screen(app) == ScreenSession {
+        while i < clock.ticks && app_session_screen(app) == ScreenSession {
             step := PracticeRun(PracticeStepFor(app, PRACTICE_BREATH_STEP))
             if !step.succeeded {
                 app.request_quit = 1
@@ -435,11 +432,7 @@ session_advance_visible_frame :: (app: *InnerBreeze) {
         return
     }
 
-    elapsed_ms: s32 = cast(s32)(GetFrameTime() * 1000.0f + 0.5f)
-    if elapsed_ms < 1 {
-        elapsed_ms = 1
-    }
-    session_advance_elapsed(app, elapsed_ms)
+    session_advance_seconds(app, cast(float64)GetFrameTime())
 }
 
 #program_export
@@ -455,6 +448,7 @@ session_start :: (app: *InnerBreeze) {
 
     // A fresh session keeps every choice made in Customize.
     app.breathing = BreathSessionInit()
+    whm_elapsed_remainder = 0.0
     app.breathing.progressive_speed = progressive_speed
     app.breathing.progressive_start_speed = progressive_start_speed
     app.breathing.play_in_background = play_in_background
@@ -943,7 +937,8 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
 }
 
 session_draw_inbe :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    radius: float32 = BreathDrawRadius(app.breathing)
+    radius: float32 = BreathDrawRadiusAt(app.breathing,
+        cast(float32)whm_elapsed_remainder)
 
     draw_session_progress_circle(app, center_x, center_y, radius)
     draw_session_counter(app, center_x, center_y)
@@ -1013,10 +1008,11 @@ session_draw_round_title_bar :: (app: *InnerBreeze, title: string, height: s32) 
 #program_export
 // Painted into the current widget scope, so the preview stays above a modal
 // panel and inside a scrolled page's clip.
-draw_breath_preview :: (breathing: *BreathSession, center_x: s32, center_y: s32) {
+draw_breath_preview :: (breathing: *BreathSession, center_x: s32, center_y: s32,
+    fraction: float32) {
     r: float32 = 0.0f
     if breathing != null {
-        r = BreathDrawRadius(breathing.*) * 0.72f
+        r = BreathDrawRadiusAt(breathing.*, fraction) * 0.72f
     }
     if r <= 0.0f {
         return

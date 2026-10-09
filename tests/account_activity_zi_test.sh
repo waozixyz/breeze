@@ -23,14 +23,26 @@ cat > "$work/generated/main.c" <<'C'
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
 static int64_t fixture_now = 1791540000;
+static double fixture_clock = 10.0;
 static int schedules;
+static int queries;
 time_t __wrap_time(time_t *output) {
     if (output) *output = fixture_now;
     return fixture_now;
 }
-double GetTime(void) { return (double)(fixture_now - 1791539990); }
-void FixtureAdvance(int64_t seconds) { fixture_now += seconds; }
+double GetTime(void) { return fixture_clock; }
+void FixtureAdvance(int64_t seconds) { fixture_now += seconds; fixture_clock += seconds; }
+void FixtureFrame(void) { fixture_clock += 1.0 / 60.0; }
+int32_t FixtureQueries(void) { return queries; }
+int __real_sqlite3_prepare_v2(sqlite3 *, const char *, int, sqlite3_stmt **, const char **);
+int __wrap_sqlite3_prepare_v2(sqlite3 *db, const char *sql, int length,
+    sqlite3_stmt **statement, const char **tail) {
+    queries++;
+    return __real_sqlite3_prepare_v2(db, sql, length, statement, tail);
+}
 int32_t FixtureSchedules(void) { return schedules; }
 int32_t app_auto_sync(void *app) { (void)app; schedules++; return 1; }
 int main(void) {
@@ -46,6 +58,7 @@ monocypher=$root/build/packages/monocypher/src
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" "$liboqs" \
-    -Wl,--gc-sections -Wl,--wrap=time -ldl -lpthread -lz -lm -o "$work/test"
+    -Wl,--gc-sections -Wl,--wrap=time -Wl,--wrap=sqlite3_prepare_v2 \
+    -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT="$data" "$work/test"
 printf '%s\n' 'Account activity, private outbox, controls, freshness and account switching passed'

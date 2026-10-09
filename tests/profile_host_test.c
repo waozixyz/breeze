@@ -64,7 +64,7 @@ int main(int argc, char **argv)
     app_profile_frame_end(10.0);
     if(log_count != 1 ||
        strcmp(log_text,
-              "PROFILE: frame avg=10.00 max=10.00 update avg=0.08 max=10.00 habits avg=0.08 max=10.00 sync avg=0.08 max=10.00"))
+              "PROFILE: frame avg=10.00 max=10.00 update avg=0.08 max=10.00 habits avg=0.08 max=10.00 sync avg=0.08 max=10.00 fps=12000.00"))
         return 6;
     app_profile_frame_end(10.0);
     if(log_count != 1)

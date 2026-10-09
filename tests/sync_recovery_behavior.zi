@@ -3,6 +3,7 @@
 #import, file "../src/app/sync_safety.zi";
 #import, file "../src/app/sync_retry.zi";
 #import, file "../src/app/app_types.zi";
+#import, file "../src/storage/sync_status.zi";
 
 // Host state the C side provides: the clock, the account switch, and the
 // queue the status key reads.
@@ -10,6 +11,7 @@ recovery_c :: #system_library "c";
 recovery_set_time :: (seconds: float64) #foreign recovery_c;
 recovery_set_enabled :: (enabled: s32) #foreign recovery_c;
 recovery_set_queue :: (queued: s64, repair: s32, full_upload: s32) #foreign recovery_c;
+recovery_status_reads :: () -> s32 #foreign recovery_c;
 
 Retry :: (attempt: s32) -> bool {
     return SettingsStoreInt("sync_retry_attempt", attempt)
@@ -130,5 +132,21 @@ Answer :: () -> s32 {
     g_sync.retry_requested = false
     recovery_set_enabled(0)
     if app_request_sync(*app) != 0 || g_sync.retry_requested { return 40 }
+    recovery_set_enabled(1)
+    recovery_set_queue(1, 0, 1)
+    status: SyncStatus
+    if !app_sync_queue_status(*status, now) || status.queued_changes != 1 { return 41 }
+    reads := recovery_status_reads()
+    for frame: cast(s32)0..cast(s32)119 {
+        if !app_sync_queue_status(*status, now) { return 42 }
+    }
+    if recovery_status_reads() != reads { return 43 }
+    recovery_set_queue(2, 0, 1)
+    if !app_sync_queue_status(*status, now + 0.26) || status.queued_changes != 2 ||
+        recovery_status_reads() != reads + 1 { return 44 }
+    // A data revision, including disconnect, invalidates immediately.
+    recovery_set_enabled(0)
+    if !app_sync_queue_status(*status, now + 0.27) || status.enabled != 0 ||
+        recovery_status_reads() != reads + 2 { return 45 }
     return 0
 }
