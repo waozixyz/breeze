@@ -1,4 +1,11 @@
 # Changelog
+## [2.1.24] - 2026-10-09
+### Fixed
+- Open the breathing animation, background music and other menus reliably again.
+- Use the In / Out breathing animation you choose in Wim Hof sessions.
+- Offer Test for your own imported music instead of "Audio not installed".
+- Keep the breathing circle smooth on phones signed in to an account.
+
 ## [2.1.23] - 2026-10-09
 ### Added
 - Customize KSS in Appearance with live preview, per-app styles, an inspector, undo, and reset to defaults.
