@@ -1,13 +1,20 @@
 # Changelog
+## [2.1.23] - 2026-10-09
+### Added
+- Customize KSS in Appearance with live preview, per-app styles, an inspector, undo, and reset to defaults.
+- Ask Lumi to read, preview, and save appearance changes while preserving your existing customizations.
+
 ## [2.1.22] - 2026-10-08
+### Added
+- Minimize a running practice into a small window and keep using the app.
 ### Fixed
 - Keep Diary opening with existing entries in the same account.
-- Keep practices and sound running when you switch apps or lock the screen.
-- Support swipe typing, corrections and Unicode text from Android keyboards.
+- Keep practices and sound running in the background.
+- Support swipe typing and corrections from Android keyboards.
 - Stop repeated Lumi chat uploads.
-- Keep bottom navigation visible on the practice home screen and keep practice swipes above it.
-- Reduce pauses when opening Lists, Diary and app settings.
-- Lumi in Telegram replies within seconds and lists your open tasks and habits.
+- Keep navigation visible on the practice home screen.
+- Open Lists, Diary and settings faster.
+- Lumi in Telegram replies in seconds and shows your tasks and habits.
 
 ## [2.1.21] - 2026-10-08
 ### Changed
