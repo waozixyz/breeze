@@ -337,16 +337,18 @@ with contextlib.ExitStack() as stack:
                 with sqlite3.connect(profile / "inbe.db") as db:
                     habit_count = db.execute("SELECT COUNT(*) FROM habits").fetchone()[0]
                 selected_tab = settings(profile)["main_tab"]
-                # Habits is the second pinned card. Its trash action removes
-                # only the installation and shortcut, retaining local data.
-                click(window, width - 42, 228)
+                # Habits is the second pinned card. The trash symbol in its
+                # top-right corner removes only the installation and shortcut,
+                # retaining local data.
+                click(window, width - 42, 206)
                 assert settings(profile)["app_used_habits"] == "0", "Trash did not uninstall Habits"
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with sqlite3.connect(profile / "inbe.db") as db:
                     assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
                 capture(window, name + "-uninstalled")
-                # The same app is now first in More, with an Install action.
-                click(window, 154 if mobile else 452, 364)
+                # The same app is now first in More, with an install symbol in
+                # the same corner of its card.
+                click(window, 168 if mobile else 466, 342)
                 assert settings(profile)["app_used_habits"] == "1", "Install did not restore Habits"
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
                 assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
