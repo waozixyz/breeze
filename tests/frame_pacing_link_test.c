@@ -57,5 +57,16 @@ main(void)
     app.breathing.screen = ScreenMeditation;
     decision = app_update_frame_pacing(&app, sample);
     assert(decision.apply_target && decision.state.target_fps == 60);
+
+    /* A practice running in its small window over another app keeps the
+       active rate. */
+    app.breathing.screen = ScreenHabits;
+    for (int frame = 0; frame < 14; frame++) {
+        decision = app_update_frame_pacing(&app, sample);
+    }
+    assert(decision.state.target_fps == 15);
+    app.session_window.screen = ScreenSession;
+    decision = app_update_frame_pacing(&app, sample);
+    assert(decision.apply_target && decision.state.target_fps == 60);
     return 0;
 }

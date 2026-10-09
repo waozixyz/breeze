@@ -19,7 +19,8 @@ mkdir -p "$work/c"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/app" \
     "$root/tests/frame_pacing_link_test.c" \
-    "$work/c/app/app_frame_pacing.c" "$work/c/frame_activity.c" \
+    "$work/c/app/app_frame_pacing.c" "$work/c/session_screen.c" \
+    "$work/c/frame_activity.c" \
     "$work/c/frame_pacing.c" -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe frame pacing Ziran/native link test passed"
