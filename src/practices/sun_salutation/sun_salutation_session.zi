@@ -8,6 +8,7 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "../../app/modal_rules.zi";
 #import, file "../../core/types.zi";
 #import, file "../../app/app_types.zi";
+#import, file "../../app/session_screen.zi";
 #import "layout"
 #import "layout_props"
 #import "layout_widget"
@@ -134,13 +135,9 @@ step_forward :: (app: *InnerBreeze) {
     }
 }
 
-update_timer :: (app: *InnerBreeze) {
-    if app == null || app.breathing.screen != ScreenSunSalutation ||
-    app.session_paused != 0 {
-        return
-    }
+advance_seconds :: (app: *InnerBreeze, seconds: float64) {
     message := PracticeStepFor(app, PRACTICE_SALUTATION_STEP)
-    message.elapsed = cast(float64)GetFrameTime()
+    message.elapsed = seconds
     next := PracticeRun(message)
     if !next.succeeded {
         app.request_quit = 1
@@ -152,22 +149,56 @@ update_timer :: (app: *InnerBreeze) {
     }
 }
 
-// The selected character moving into the current step's pose, then holding it.
-draw_pose :: (app: *InnerBreeze, step: s32, ticks_per_step: s32,
-    top_y: s32, bottom_y: s32) {
-    if app == null || bottom_y <= top_y {
+update_timer :: (app: *InnerBreeze) {
+    if app == null || app.breathing.screen != ScreenSunSalutation ||
+    app.session_paused != 0 {
         return
     }
-    frame := SalutationFrameAt(app.sun_salutation.step_ticks, ticks_per_step,
+    advance_seconds(app, cast(float64)GetFrameTime())
+}
+
+// Keeps the poses moving while the practice runs in its small window.
+sun_salutation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
+    if app == null || app_session_screen(app) != ScreenSunSalutation ||
+    app.session_paused != 0 {
+        return
+    }
+    advance_seconds(app, cast(float64)elapsed_ms / 1000.0)
+}
+
+// How many ticks the current step lasts.
+step_ticks_total :: (app: *InnerBreeze) -> s32 {
+    ticks := SalutationStepSeconds(app.sun_salutation) * 60
+    if ticks <= 0 {
+        ticks = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
+    }
+    return ticks
+}
+
+// The selected character moving into the current step's pose, then
+// holding it, fitted into the area.
+draw_pose :: (app: *InnerBreeze, area: Rectangle) {
+    if app == null || area.width <= 0.0 || area.height <= 0.0 {
+        return
+    }
+    step := app.sun_salutation.step
+    frame := SalutationFrameAt(app.sun_salutation.step_ticks, step_ticks_total(app),
         SunSalutationFrameCount(step), SUN_SALUTATION_TRANSITION_FRAMES,
         SUN_SALUTATION_FRAME_FPS)
-    stage := SunSalutationStage(Rectangle.{cast(float32)AppScale(24),
-            cast(float32)top_y, cast(float32)(app.ui.view_width - AppScale(48)),
-            cast(float32)(bottom_y - top_y)})
     picture := SunSalutationFrameImage(app.sun_salutation.character, step,
-        frame, stage)
+        frame, SunSalutationStage(area))
     picture.alt_text = LocaleText("exercise_sun_salutation")
     Image(CurrentApp().ui.session, picture)
+}
+
+// The moving figure in the practice's small window, with the pose's name
+// below it.
+sun_salutation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
+    app.sun_salutation = SalutationNormalizeDraw(app.sun_salutation)
+    draw_pose(app, picture)
+    status[0] = 0
+    unused AppAppendText(SunSalutationStepTitle(app.sun_salutation.step), status)
+    return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
 draw_pose_timer :: (app: *InnerBreeze, seconds: s32, top_y: s32, bottom_y: s32) {
@@ -213,7 +244,6 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
     repetition: s32
     repetitions: s32
     current_step_seconds: s32
-    ticks_per_step: s32
     pause_icon: ActionIcon
     title_h := PracticeTitleBarHeight()
     content_top := title_h + AppScale(8)
@@ -233,10 +263,6 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
     repetitions = app.sun_salutation.repetitions
 
     current_step_seconds = SalutationStepSeconds(app.sun_salutation)
-    ticks_per_step = current_step_seconds * 60
-    if ticks_per_step <= 0 {
-        ticks_per_step = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
-    }
 
     step_label = SunSalutationStepTitle(step)
     if PracticeTitleBar(app, step_label, title_h) {
@@ -269,7 +295,10 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
 
     image_bottom = row.y - AppScale(18)
     draw_pose_timer(app, current_step_seconds, content_top, image_bottom)
-    draw_pose(app, step, ticks_per_step, content_top + AppScale(28), image_bottom)
+    pose_top := content_top + AppScale(28)
+    draw_pose(app, Rectangle.{cast(float32)AppScale(24), cast(float32)pose_top,
+            cast(float32)(app.ui.view_width - AppScale(48)),
+            cast(float32)(image_bottom - pose_top)})
 
     if row.clicked_index == {
         case 0;

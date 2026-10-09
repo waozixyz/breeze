@@ -47,6 +47,7 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "../../app/metrics.zi";
 #import, file "../../app/draw.zi";
 #import, file "../../app/current_app.zi";
+#import, file "../practice_window.zi";
 #import "button_widget"
 #import "text_widget"
 #import "drawing_props"
@@ -387,8 +388,57 @@ patterns_draw_session_title_bar :: (app: *InnerBreeze, title: string, height: s3
     return ifx PracticeTitleBar(app, title, height) then 1 else 0
 }
 
-patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+// How far the pattern's circle has grown along the current phase: 0.25 at
+// its smallest and 1 at its largest.
+patterns_circle_fraction :: (app: *InnerBreeze) -> float32 {
     ratio: [4] s32
+    pattern_ratio(app, *ratio[0])
+    phase_len := ratio[app.patterns.phase]
+    if phase_len <= 0 {
+        phase_len = 1
+    }
+    progress := (cast(float32)app.patterns.phase_second +
+        cast(float32)app.patterns.second_accumulator) / cast(float32)phase_len
+    if progress < 0.0 {
+        progress = 0.0
+    }
+    if progress > 1.0 {
+        progress = 1.0
+    }
+    if app.patterns.phase == {
+        case PATTERNS_PHASE_INHALE;
+        return 0.25 + progress * 0.75
+        case PATTERNS_PHASE_EXHALE;
+        return 1.0 - progress * 0.75
+        case PATTERNS_PHASE_HOLD_IN;
+        return 1.0
+    }
+    return 0.25
+}
+
+// The pattern's circle in the practice's small window, with the phase and
+// the time below it.
+patterns_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
+    // The screen's smallest circle is 38 percent of its largest.
+    PracticeWindowCircle(CurrentApp().ui.session, picture,
+        patterns_circle_fraction(app), 0.38, DarkenColor(StyleTokenColor("canvas"), 8))
+    seconds := app.patterns.elapsed_seconds
+    if app.patterns.duration_minutes > 0 {
+        seconds = app.patterns.duration_minutes * 60 - app.patterns.elapsed_seconds
+    }
+    if seconds < 0 {
+        seconds = 0
+    }
+    parts: [3]FormatArg = .[
+        FormatArg.{.text = LocaleText(patterns_phase_label_key(app.patterns.phase)), .is_text = true},
+        FormatArg.{.number = seconds / 60},
+        FormatArg.{.number = seconds % 60}
+    ]
+    FormatTemplate("%s · %d:%02d", parts[:], status)
+    return AppTextFromCString(*status[0], cast(s32)status.count)
+}
+
+patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     cycle_text: [32] u8
     time_text: [32] u8
 
@@ -416,28 +466,7 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         center_y = (session_top + session_bottom) / 2 + AppScale(8)
     }
 
-    pattern_ratio(app, *ratio[0])
-    phase_len := ratio[app.patterns.phase]
-    if phase_len <= 0 {
-        phase_len = 1
-    }
-    progress := (cast(float32)app.patterns.phase_second +                  cast(float32)app.patterns.second_accumulator) / cast(float32)phase_len
-    if progress < 0.0 {
-        progress = 0.0
-    }
-    if progress > 1.0 {
-        progress = 1.0
-    }
-    if app.patterns.phase == {
-        case PATTERNS_PHASE_INHALE;
-        pattern_circle_draw(app, center_x, center_y, 0.25 + progress * 0.75)
-        case PATTERNS_PHASE_EXHALE;
-        pattern_circle_draw(app, center_x, center_y, 1.0 - progress * 0.75)
-        case PATTERNS_PHASE_HOLD_IN;
-        pattern_circle_draw(app, center_x, center_y, 1.0)
-        case;
-        pattern_circle_draw(app, center_x, center_y, 0.25)
-    }
+    pattern_circle_draw(app, center_x, center_y, patterns_circle_fraction(app))
 
     label := LocaleText(patterns_phase_label_key(app.patterns.phase))
     instruction_font: s32 = AppScale(Text32)

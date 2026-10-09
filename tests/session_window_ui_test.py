@@ -1,5 +1,5 @@
-"""A practice's minimize button keeps it running in a small window while another
-app is open, on an owned private display."""
+"""A practice's minimize button keeps it running in a small window over the page
+it was started from, on an owned private display."""
 import ast
 import contextlib
 import json
@@ -11,6 +11,8 @@ import sys
 import tempfile
 import time
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/session-window-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -18,10 +20,20 @@ DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_AD
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 BINARY = Path(sys.argv[1]).resolve()
 SCREEN_START, SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 0, 1, 11, 23
-# The small window is 240 by 96 units; its round line starts 92 units in
-# and 68 down, and its maximize and close buttons are centered 64 and 24
-# units from its right edge, 24 units down.
-WINDOW_TEXT_X, WINDOW_ROUND_Y, WINDOW_WIDTH = 92, 68, 240
+PRACTICES = {"whm": 1, "meditation": 2, "sun_salutation": 3, "patterns": 4}
+# The window starts 200 by 248 units at the top right of the 390-unit phone
+# page, 8 units in and 72 down. Its picture sits below a 40-unit button row
+# with an 8-unit margin and 46 units of text below; maximize and close are
+# centered 60 and 24 units from its right edge, 20 down, and its resize
+# corner 16 units in from the bottom right.
+WINDOW = (182, 72, 200, 248)
+MINIMIZE = (308, 38)
+
+
+def window_parts(left, top, width, height):
+    return dict(picture=(left + 8, top + 40, width - 16, height - 94),
+                maximize=(left + width - 60, top + 20), close=(left + width - 24, top + 20),
+                grip=(left + width - 16, top + height - 16), card=(left + 12, top + 12))
 
 
 def stop(process):
@@ -97,6 +109,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         (OUTPUT / (label + ".txt")).write_text("\n".join(f"{w} {l:.0f},{t:.0f}" for w, l, t, *_ in found))
         return found
 
+    def line_middle(window, label, text):
+        """The center of the text line holding the word, from its first word to its last."""
+        found = words(window, label)
+        anchor = next((item for item in found if text.lower() in item[0].lower()), None)
+        if not anchor:
+            return None
+        row = [item for item in found if abs(item[2] - anchor[2]) < 6]
+        left = min(item[1] for item in row)
+        right = max(item[1] + item[3] for item in row)
+        return (left + right) / 2, anchor[2] + anchor[4] / 2
+
     def find(window, label, text, region=lambda x, y: True):
         for word, left, top, width, height in words(window, label):
             if text.lower() in word.lower() and region(left, top):
@@ -142,31 +165,82 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         command(*args, "sleep", "0.05", "mouseup", "1")
         time.sleep(.8)
 
+    def region(window, label, box):
+        left, top, width, height = box
+        with Image.open(capture(window, label)) as image:
+            return image.convert("RGB").crop((left, top, left + width, top + height))
+
+    def differing(image, color):
+        data = image.tobytes()
+        return sum(1 for index in range(0, len(data), 3)
+                   if max(abs(data[index + channel] - color[channel]) for channel in range(3)) > 24)
+
+    def changed(first, second):
+        one, two = first.tobytes(), second.tobytes()
+        return sum(1 for index in range(0, len(one), 3)
+                   if max(abs(one[index + channel] - two[index + channel]) for channel in range(3)) > 24)
+
+    def wait_running(window, why):
+        assert state(window)["practice_running"], (why, state(window))
+
     with application("initialize", 390, 720):
         pass
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        # Lumi is pinned first: a practice must still minimize to the page it
+        # was started from, not to the first pinned app.
         values = dict(enabled_apps="31", main_tab="1", language="en", language_setup_done="1",
                       apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
                       cells_auto_update="0", habits_guide_seen="1", launcher_favorite_count="3",
-                      launcher_favorite_0="1", launcher_favorite_1="2", launcher_favorite_2="12")
+                      launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2")
         values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
         for key, value in values.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
 
+    # Every practice minimizes to Practice, where it was started, and keeps
+    # its live picture moving in the window until maximize returns to it.
+    parts = window_parts(*WINDOW)
+    for practice, screen in PRACTICES.items():
+        with application(practice, 390, 720) as window:
+            action(window, "mcp.open_view", "open-" + practice, {"view": "practices"})
+            action(window, f"practice.{practice}.start", "start-" + practice)
+            wait_screen(window, screen, practice + " did not start")
+            click(window, *MINIMIZE)
+            wait_screen(window, SCREEN_START, practice + " did not minimize to Practice")
+            wait_running(window, practice + " stopped when minimized")
+            with Image.open(capture(window, practice + "-card")) as image:
+                card = image.convert("RGB").getpixel(parts["card"])
+            picture = region(window, practice + "-picture", parts["picture"])
+            drawn = differing(picture, card)
+            assert drawn > picture.width * picture.height * 0.03, (practice, "shows no picture", drawn)
+            # Sun Salutation holds each pose for seconds before moving on.
+            first = region(window, practice + "-first", WINDOW)
+            deadline = time.monotonic() + 15
+            while True:
+                time.sleep(1)
+                later = region(window, practice + "-later", WINDOW)
+                if changed(first, later) > 40:
+                    break
+                assert time.monotonic() < deadline, practice + " stopped moving in its window"
+            assert state(window)["screen"] == SCREEN_START
+            wait_running(window, practice + " stopped in its window")
+            click(window, *parts["maximize"])
+            wait_screen(window, screen, "Maximize did not return to " + practice)
+            wait_running(window, practice + " ended when maximized")
+
     phone_dock = lambda x, y: y > 640
     with application("phone", 390, 720) as window:
+        # Started from Habits, the practice minimizes back to Habits.
+        action(window, "mcp.open_view", "open-habits", {"view": "habits"})
+        wait_screen(window, SCREEN_HABITS, "Habits did not open")
         action(window, "practice.whm.start", "start-whm")
         wait_screen(window, SCREEN_SESSION, "Breathing did not start")
         assert find(window, "practice", "Lumi", phone_dock) is None, "Navigation shows during a practice"
-
-        # Minimize, beside the close button, opens the first pinned app with
-        # the practice still running in its small window.
-        click(window, 308, 38)
-        wait_screen(window, SCREEN_HABITS, "Minimize did not open the first pinned app")
+        click(window, *MINIMIZE)
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits")
         first = state(window)
-        assert first["practice_running"] and first["practice"] == 0, first
+        wait_running(window, "Minimizing ended the practice")
         deadline = time.monotonic() + 20
         later = state(window)
         while (later["round"], later["breath"]) <= (first["round"], first["breath"]):
@@ -174,81 +248,84 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
             assert time.monotonic() < deadline, ("Breathing stopped behind Habits", first["breath"], later["breath"])
             time.sleep(.5)
             later = state(window)
-        card = find(window, "window", "Hof")
-        assert card, "The practice window is not shown over Habits"
-        assert card[1] < 200, ("The window does not start at the top", card)
-        assert find(window, "window-round", "ROUND"), "The practice window does not show the round"
+        round_line = find(window, "window", "ROUND")
+        assert round_line and WINDOW[1] < round_line[3] < WINDOW[1] + WINDOW[3], \
+            ("The window does not show the round below its circle", round_line)
 
-        # The window stays while moving between apps.
-        lumi = find(window, "dock", "Lumi", phone_dock)
-        assert lumi, "The navigation is missing beside the practice window"
-        click(window, lumi[0], lumi[1])
-        wait_screen(window, SCREEN_LUMI, "Lumi did not open")
-        assert state(window)["practice_running"]
-        card = find(window, "lumi-window", "Hof")
-        assert card, "The practice window did not stay over Lumi"
-
-        # The window moves with a drag and returns to the practice on a tap.
-        swipe(window, (card[0], card[1] + 12), (card[0] - 120, card[1] + 300))
-        moved = find(window, "moved", "Hof")
-        assert moved and moved[1] > card[1] + 200, ("The window did not follow the drag", card, moved)
-        assert state(window)["screen"] == SCREEN_LUMI, "Dragging the window opened the practice"
-        click(window, moved[0], moved[1] + 12)
-        wait_screen(window, SCREEN_SESSION, "Tapping the window did not return to the practice")
-        assert state(window)["practice_running"]
-
-        def minimize(label):
-            click(window, 308, 38)
-            wait_screen(window, SCREEN_HABITS, "Minimize did not open Habits " + label)
-            round_line = find(window, label + "-window", "ROUND")
-            assert round_line, "The practice window is not shown after minimizing " + label
-            left = round_line[2] - WINDOW_TEXT_X
-            top = round_line[3] - WINDOW_ROUND_Y
-            return left, top
+        # Maximize returns to the practice.
+        click(window, *parts["maximize"])
+        wait_screen(window, SCREEN_SESSION, "Maximize did not return to the practice")
 
         # Practice opens its home while the practice keeps running in the
         # window, and Start returns to that practice instead of a new one.
-        minimize("practice")
+        click(window, *MINIMIZE)
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits again")
         action(window, "mcp.open_view", "open-practice", {"view": "practices"})
         wait_screen(window, SCREEN_START, "Practice did not open its home while minimized")
-        assert state(window)["practice_running"], "Opening Practice ended the minimized practice"
+        wait_running(window, "Opening Practice ended the minimized practice")
         assert find(window, "practice-home-window", "ROUND"), "The window is missing on Practice"
         # OCR misses dark text on the light button; it spans the content width.
-        start = (find(window, "practice-home", "Start") or
+        start = (find(window, "practice-home", "Start", lambda x, y: y > 400) or
                  find(window, "practice-home-label", "Practice", lambda x, y: 500 < y < 600) or
                  (195, 550))
         click(window, start[0], start[1])
         wait_screen(window, SCREEN_SESSION, "Start did not return to the running practice")
-        assert state(window)["practice_running"]
-
-        # Maximize returns to the practice.
-        left, top = minimize("maximize")
-        click(window, left + WINDOW_WIDTH - 64, top + 24)
-        wait_screen(window, SCREEN_SESSION, "Maximize did not return to the practice")
+        wait_running(window, "Start ended the running practice")
 
         # The X asks right over the open app; Cancel keeps the practice.
-        left, top = minimize("close")
-        click(window, left + WINDOW_WIDTH - 24, top + 24)
+        click(window, *MINIMIZE)
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits for the X")
+        click(window, *parts["close"])
         deadline = time.monotonic() + 4
-        title = None
-        while not title:
-            title = find(window, "exit", "Session?") or find(window, "exit", "progress")
+        while not (find(window, "exit", "Session?") or find(window, "exit", "progress")):
             assert time.monotonic() < deadline, "Ending from the window did not ask first"
             time.sleep(.3)
         assert state(window)["screen"] == SCREEN_HABITS, "The X left the open app to ask"
-        assert state(window)["practice_running"], "The practice ended before the answer"
+        wait_running(window, "The practice ended before the answer")
         # Cancel sits left of Exit, below the centered prompt's title.
         cancel = find(window, "exit-cancel", "Cancel") or (147, 400)
         click(window, cancel[0], cancel[1])
         time.sleep(.5)
         assert state(window)["screen"] == SCREEN_HABITS and state(window)["practice_running"], \
             ("Cancel did not keep the practice running over Habits", state(window))
-        assert find(window, "after-cancel", "ROUND"), "The window is missing after Cancel"
+
+        # The corner handle makes the window taller; its round line moves
+        # down with the window's bottom.
+        before = find(window, "before-resize", "ROUND")
+        swipe(window, parts["grip"], (parts["grip"][0], parts["grip"][1] + 100))
+        after = find(window, "after-resize", "ROUND")
+        assert before and after and 80 < after[3] - before[3] < 120, ("The window did not resize", before, after)
+        assert state(window)["screen"] == SCREEN_HABITS, "Resizing opened the practice"
+        height = WINDOW[3] + after[3] - before[3]
+
+        # The window stays while moving between apps.
+        lumi = find(window, "dock", "Lumi", phone_dock)
+        assert lumi, "The navigation is missing beside the practice window"
+        click(window, lumi[0], lumi[1])
+        wait_screen(window, SCREEN_LUMI, "Lumi did not open")
+        wait_running(window, "Opening Lumi ended the practice")
+        assert find(window, "lumi-window", "ROUND"), "The practice window did not stay over Lumi"
+
+        # The window moves with a drag and returns to the practice on a tap.
+        picture = window_parts(WINDOW[0], WINDOW[1], WINDOW[2], height)["picture"]
+        middle = (picture[0] + picture[2] / 2, picture[1] + picture[3] / 2)
+        swipe(window, middle, (middle[0] - 120, middle[1] + 200))
+        moved = find(window, "moved", "ROUND")
+        assert moved and moved[3] > after[3] + 150, ("The window did not follow the drag", after, moved)
+        assert state(window)["screen"] == SCREEN_LUMI, "Dragging the window opened the practice"
+        click(window, moved[0], moved[1] - 60)
+        wait_screen(window, SCREEN_SESSION, "Tapping the window did not return to the practice")
+        wait_running(window, "Tapping the window ended the practice")
 
         # Exit ends the practice and keeps the open app.
-        round_line = find(window, "before-exit", "ROUND")
-        click(window, round_line[2] - WINDOW_TEXT_X + WINDOW_WIDTH - 24,
-              round_line[3] - WINDOW_ROUND_Y + 24)
+        click(window, *MINIMIZE)
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits at the end")
+        # The round line is centered in the window, 21 units above its bottom.
+        middle = line_middle(window, "before-exit", "ROUND")
+        assert middle, "The window is missing before the X"
+        left = middle[0] - WINDOW[2] / 2
+        top = middle[1] - (height - 21)
+        click(window, *window_parts(left, top, WINDOW[2], height)["close"])
         deadline = time.monotonic() + 4
         while not (find(window, "exit-again", "Session?") or find(window, "exit-again", "progress")):
             assert time.monotonic() < deadline, "The X did not ask a second time"
@@ -263,13 +340,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
 
     rail = lambda x, y: x < 100
     with application("desktop", 900, 720) as window:
+        action(window, "mcp.open_view", "open-habits-desktop", {"view": "habits"})
         action(window, "practice.whm.start", "start-whm-desktop")
         wait_screen(window, SCREEN_SESSION, "Breathing did not start on desktop")
         assert find(window, "desktop-practice", "Lumi", rail) is None, "The sidebar shows during a practice"
         click(window, 818, 38)
-        wait_screen(window, SCREEN_HABITS, "Minimize did not open the first pinned app on desktop")
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits on desktop")
         assert find(window, "desktop-minimized", "Lumi", rail), "The sidebar did not return"
-        assert find(window, "desktop-window", "Hof"), "The practice window is not shown on desktop"
-        assert state(window)["practice_running"]
+        assert find(window, "desktop-window", "ROUND"), "The practice window is not shown on desktop"
+        wait_running(window, "Minimizing ended the practice on desktop")
 
-print("Session window: minimize keeps a practice running in a draggable window that returns or asks to end")
+print("Session window: every practice minimizes to its page and keeps its live picture "
+      "in a window that resizes, moves, returns or asks to end")

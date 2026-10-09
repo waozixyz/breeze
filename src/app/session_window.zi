@@ -105,29 +105,38 @@ app_session_nav_update :: (app: *InnerBreeze) {
     }
 }
 
-// The app a minimized practice gives way to: Lumi when the practice was
-// started from it, otherwise the first pinned app that is not Practice.
+// Remembers the app page shown while no practice runs, so a practice
+// minimizes back to the page it was started from.
+app_session_window_note_page :: (app: *InnerBreeze) {
+    if app == null || app.session_window.screen != ScreenStart ||
+        app_is_session_screen(app.breathing.screen) {
+        return
+    }
+    route := app_current_nav_route(app)
+    if route == APP_NAV_ROUTE_NONE {
+        return
+    }
+    app.session_window.origin_route = route
+    app.session_window.origin_known = true
+}
+
+// The app a minimized practice gives way to: the page it was started from,
+// which is already drawn, so the switch costs no cold page. Lumi only when
+// the practice was started from Lumi's chat.
 session_window_return_route :: (app: *InnerBreeze) -> s32 {
     if app.lumi_practice != 0 && app_nav_route_available(app, APP_NAV_ROUTE_LUMI) {
         return APP_NAV_ROUTE_LUMI
     }
-    for index: cast(s32)0..app.launcher_favorite_count - 1 {
-        route := app.launcher_favorites[index]
-        if route != APP_NAV_ROUTE_PRACTICE && app_nav_route_available(app, route) {
-            return route
-        }
+    origin := app.session_window.origin_route
+    if app.session_window.origin_known && origin != APP_NAV_ROUTE_LUMI &&
+        app_nav_route_available(app, origin) {
+        return origin
     }
-    others: [4]s32 = .[APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_DIARY, APP_NAV_ROUTE_LUMI]
-    for route: others {
-        if app_nav_route_available(app, route) {
-            return route
-        }
-    }
-    return APP_NAV_ROUTE_APPS
+    return APP_NAV_ROUTE_PRACTICE
 }
 
 // The minimize button shrinks the practice into its small window and
-// opens another app, or Apps when no other app is installed.
+// returns to the page the practice was started from.
 app_session_window_take_minimize :: (app: *InnerBreeze) {
     if app == null || !app.session_window.minimize_requested {
         return
@@ -136,13 +145,7 @@ app_session_window_take_minimize :: (app: *InnerBreeze) {
     if !app_session_window_open(app) {
         return
     }
-    route := session_window_return_route(app)
-    if route == APP_NAV_ROUTE_APPS {
-        app.main_tab = APP_MAIN_TAB_NONE
-        app_launcher_toggle(app)
-        return
-    }
-    app_apply_nav_route(app, route)
+    app_apply_nav_route(app, session_window_return_route(app))
 }
 
 // Where the navigation sits when fully shown over a practice.

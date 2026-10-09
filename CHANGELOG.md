@@ -1,7 +1,7 @@
 # Changelog
 ## [2.1.25] - 2026-10-09
 ### Changed
-- Show a minimized practice in a larger window with its breathing circle and a maximize button; end it right where you are.
+- Minimized practices show their live circle or figure in a resizable window and return to the page you started them from.
 ### Fixed
 - Stop syncing from pausing the breathing circle while you practice.
 - Keep breath sounds playing while a practice is minimized.

@@ -58,6 +58,7 @@ GetTime :: () -> float64 #foreign c;
 #import, file "../meditation/meditation_music.zi";
 #import, file "../practice_audio_controls.zi";
 #import, file "../session_results.zi";
+#import, file "../practice_window.zi";
 #import "control_props"
 #import "text_align"
 #import "text_props"
@@ -939,8 +940,8 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
     }
 }
 
-// The breathing circle's share of its range right now, for the practice's
-// small window: 0 at the smallest and 1 at the largest radius.
+// The breathing circle's share of its range right now: 0 at the smallest
+// and 1 at the largest radius.
 whm_session_breath_share :: (app: *InnerBreeze) -> float32 {
     span := app.breathing.rmax - app.breathing.rmin
     if span <= 0 {
@@ -955,6 +956,28 @@ whm_session_breath_share :: (app: *InnerBreeze) -> float32 {
         return 1.0
     }
     return share
+}
+
+// The breathing circle in the practice's small window, breathing as it does
+// on the practice's screen, with the round and breath count below it.
+session_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
+    smallest: float32 = 0.5
+    if app.breathing.rmax > 0 {
+        smallest = cast(float32)app.breathing.rmin / cast(float32)app.breathing.rmax
+    }
+    PracticeWindowCircle(CurrentApp().ui.session, picture,
+        whm_session_breath_share(app), smallest, Color.{0, 0, 0, 0})
+    round: [32]u8
+    unused FormatNumberTemplate(LocaleText("session_round_label"),
+        app.breathing.round + 1, round[:])
+    count: [16]u8
+    unused AppFormatS32(BreathDigitsRead(app.breathing.count[:]), count[:])
+    parts: [2]FormatArg = .[
+        FormatArg.{.text = AppTextFromCString(*round[0], 32), .is_text = true},
+        FormatArg.{.text = AppTextFromCString(*count[0], 16), .is_text = true}
+    ]
+    FormatTemplate("%s · %s", parts[:], status)
+    return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
 session_draw_inbe :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
