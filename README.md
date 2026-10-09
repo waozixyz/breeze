@@ -130,7 +130,14 @@ The chat example runs real local theme actions; the surrounding forest and
 glow are marketing effects. Inspect `build/lumi-promo/storyboard.jpg` and
 `build/lumi-promo/inner-breeze-lumi-review.mp4` before using it publicly.
 Google Play's preview video field takes a YouTube URL, so the MP4 needs an
-approved YouTube upload before it can be added to the listing.
+approved public or unlisted YouTube upload with embedding enabled before it can
+be added to the listing. Pass `--video-url https://www.youtube.com/watch?v=VIDEO_ID`
+to the listing uploader, or configure `PLAY_VIDEO_URL`. To update only the
+video, use `PLAY_COMMIT=1 python3 scripts/upload-play-screenshots.py --video-only --video-url URL`.
+The approved [Lumi preview](https://www.youtube.com/watch?v=XESpbMRaz4o) is
+available on YouTube and configured in the English Google Play listing.
+Screenshot publishing still requires the complete current
+capture, visual review, export and locked build preflight.
 
 To test sync and recovery against an isolated local server:
 

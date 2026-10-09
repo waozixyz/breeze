@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -126,6 +127,35 @@ def upload_url(package_name, path):
     return f"{UPLOAD_BASE}/applications/{package}{path}"
 
 
+def youtube_video_url(value):
+    parsed = urllib.parse.urlsplit(value.strip())
+    if parsed.scheme != "https" or parsed.netloc not in {
+        "youtube.com", "www.youtube.com", "youtu.be"
+    }:
+        raise ValueError("The Play preview video must use an HTTPS YouTube URL")
+    if parsed.netloc == "youtu.be":
+        video_id = parsed.path.removeprefix("/")
+    elif parsed.path == "/watch":
+        values = urllib.parse.parse_qs(parsed.query).get("v", [])
+        video_id = values[0] if len(values) == 1 else ""
+    else:
+        video_id = ""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise ValueError("The Play preview video URL must identify one YouTube video")
+    return "https://www.youtube.com/watch?v=" + video_id
+
+
+def upload_listing_video(package_name, edit_id, language, video_url, token):
+    http_request(
+        "PATCH",
+        api_url(package_name, f"/edits/{edit_id}/listings/{language}"),
+        body=json.dumps({"video": video_url}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        token=token,
+    )
+    print(f"Updated {language} preview video: {video_url}")
+
+
 def list_images(images_root, image_type):
     folder = images_root / image_type
     if not folder.is_dir():
@@ -182,6 +212,8 @@ def upload_listing_texts(package_name, edit_id, metadata_root, token):
 def main():
     parser = argparse.ArgumentParser(description="Preflight, validate, or publish reviewed Play listing assets.")
     parser.add_argument("--preflight-only", action="store_true", help="Check local assets without credentials or network access")
+    parser.add_argument("--video-url", help="Public or unlisted, embeddable YouTube preview video")
+    parser.add_argument("--video-only", action="store_true", help="Update only the preview video; leave listing text and screenshots unchanged")
     args = parser.parse_args()
     load_env_file(ROOT / ".env.play")
     language = os.environ.get("PLAY_LANGUAGE", "en-US")
@@ -204,24 +236,36 @@ def main():
     listing_text = os.environ.get("PLAY_LISTING_TEXT", "1") != "0"
     commit = os.environ.get("PLAY_COMMIT", "0") == "1"
     delete_existing = os.environ.get("PLAY_DELETE_EXISTING", "1") != "0"
+    video_url = args.video_url or os.environ.get("PLAY_VIDEO_URL", "")
+    if video_url:
+        video_url = youtube_video_url(video_url)
+    if args.video_only and not video_url:
+        raise SystemExit("--video-only requires --video-url or PLAY_VIDEO_URL")
+    if args.video_only:
+        listing_text = False
+        image_types = []
 
-    spec = importlib.util.spec_from_file_location("screenshot_harness", ROOT / "scripts/screenshot-harness.py")
-    harness = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(harness)
-    harness.store_preflight(images_root)
+    harness = None
+    if not args.video_only:
+        spec = importlib.util.spec_from_file_location("screenshot_harness", ROOT / "scripts/screenshot-harness.py")
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        harness.store_preflight(images_root)
     if listing_text:
         for locale, text in listing_texts(metadata_root).items():
             if len(text["shortDescription"]) > 80 or len(text["fullDescription"]) > 4000:
                 raise SystemExit(f"{locale} description is over Play's length limit")
     allowed_types = {"phoneScreenshots", "sevenInchScreenshots", "tenInchScreenshots"}
-    if not image_types or not set(image_types) <= allowed_types:
+    if not args.video_only and (not image_types or not set(image_types) <= allowed_types):
         raise SystemExit("PLAY_IMAGE_TYPES must name reviewed phone/tablet screenshot types")
     if args.preflight_only:
         print("Local listing preflight passed; no Google Play edit was created.")
         return
 
-    reviewed_hashes = {item["file"]: item["sha256"] for item in
-                       json.loads((images_root / "screenshot-review.json").read_text())["files"]}
+    reviewed_hashes = {}
+    if image_types:
+        reviewed_hashes = {item["file"]: item["sha256"] for item in
+                           json.loads((images_root / "screenshot-review.json").read_text())["files"]}
     image_payloads = {}
     for image_type in image_types:
         image_payloads[image_type] = []
@@ -243,6 +287,8 @@ def main():
     try:
         if listing_text:
             upload_listing_texts(package_name, edit_id, metadata_root, token)
+        if video_url:
+            upload_listing_video(package_name, edit_id, language, video_url, token)
         for image_type in image_types:
             files = image_payloads[image_type]
             if not files:
@@ -263,7 +309,8 @@ def main():
                 )
                 print(f"Uploaded {image_type}/{path.name}")
 
-        harness.store_preflight(images_root)
+        if harness is not None:
+            harness.store_preflight(images_root)
         http_request("POST", api_url(package_name, f"/edits/{edit_id}:validate"), token=token)
         if commit:
             http_request("POST", api_url(package_name, f"/edits/{edit_id}:commit"), token=token)
