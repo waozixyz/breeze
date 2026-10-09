@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Back from navigation Data exits once; Profile Data returns to its hub."""
+"""Back from navigation Data exits once; Profile Data returns to its hub, whose Back returns to Apps."""
 import csv
 import io
 import os
@@ -38,9 +38,9 @@ def capture_title(window, name, width):
         return read_text(image.crop((left, 0, width, 64)), name)
 
 
-def open_practice(window, name, width, height):
-    path = output / (name + "-navigation.png")
-    ocr_path = output / (name + "-navigation-ocr.png")
+def screen_words(window, path, width, height):
+    """Rendered words with positions at three times the window size."""
+    ocr_path = path.with_name(path.stem + "-ocr.png")
     command("import", "-window", window, str(path))
     with Image.open(path) as image:
         gray = ImageOps.autocontrast(ImageOps.grayscale(image))
@@ -48,16 +48,33 @@ def open_practice(window, name, width, height):
     text = command("tesseract", str(ocr_path), "stdout", "--psm", "11",
                    "-c", "tessedit_create_tsv=1")
     ocr_path.unlink()
-    words = [word for word in csv.DictReader(io.StringIO(text), delimiter="\t")
+    return list(csv.DictReader(io.StringIO(text), delimiter="\t"))
+
+
+def click_word(window, word):
+    click(window, (int(word["left"]) + int(word["width"]) // 2) // 3,
+          (int(word["top"]) + int(word["height"]) // 2) // 3)
+
+
+def open_settings_data(window, name, width, height):
+    # Find the rendered Data row instead of a fixed offset, so the test
+    # follows the Settings order.
+    words = [word for word in screen_words(window, output / (name + "-overview.png"), width, height)
+             if word.get("text", "").lower() == "data"]
+    assert len(words) == 1, "The rendered Settings Data row is missing or ambiguous"
+    click_word(window, words[0])
+
+
+def open_practice(window, name, width, height):
+    path = output / (name + "-navigation.png")
+    words = [word for word in screen_words(window, path, width, height)
              # An unselected favorite can be partially offscreen in the
              # scrolling dock. Selecting it must then reveal the whole label.
              if word.get("text", "").lower().startswith("pract")
              and (int(word["left"]) < 88 * 3 if width >= 640
                   else int(word["top"]) > (height - 84) * 3)]
     assert len(words) == 1, "The rendered Practice navigation shortcut is missing or ambiguous"
-    word = words[0]
-    click(window, (int(word["left"]) + int(word["width"]) // 2) // 3,
-          (int(word["top"]) + int(word["height"]) // 2) // 3)
+    click_word(window, words[0])
     command("import", "-window", window, str(path))
     with Image.open(path) as image:
         dock = image.crop((0, 0, 88, height)) if width >= 640 else image.crop((0, height - 84, width, height))
@@ -97,7 +114,7 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                 time.sleep(0.5)
                 if scene == "settings_overview":
                     assert "settings" in capture_title(window, name + "-initial", width)
-                    click(window, width // 2, 156)
+                    open_settings_data(window, name, width, height)
                     assert "screen=6->10" in logfile.read_text(), "Settings Data did not open"
                 title = capture_title(window, name + "-data", width)
                 assert "data" in title, (name, "Data did not render before Back", title)
@@ -115,15 +132,16 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     assert switches == [], (name, "Profile Data skipped its parent", switches)
                     command("import", "-window", window, str(output / f"{name}-hub.png"))
                     assert "profile" in capture_title(window, name + "-parent", width)
-                    # The Profile hub has no leading Back action. A second
-                    # click in its former location must not skip the hub.
+                    # The Profile hub's Back returns to Apps: one switch
+                    # leaves Profile, and Data was not skipped on the way.
                     click(window, back_x, 24)
-                    assert not re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)",
-                                          logfile.read_text()[baseline:]), "Profile hub kept a hidden Back action"
+                    left = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)",
+                                      logfile.read_text()[baseline:])
+                    assert len(left) == 1 and left[0][0] == "10", (name, "Profile hub Back did not leave Profile once", left)
                     open_practice(window, name, width, height)
                     after = logfile.read_text()[baseline:]
                     switches = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)", after)
-                    assert switches == [("10", "0")], (name, switches, after[-1200:])
+                    assert switches[-1][1] == "0", (name, switches, after[-1200:])
                 time.sleep(0.5)
                 command("import", "-window", window, str(output / f"{name}-after.png"))
                 assert "APP: frame rejected with status" not in logfile.read_text()
@@ -135,4 +153,4 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     app.kill()
                     app.wait(timeout=5)
                 shutil.rmtree(Path('/tmp') / f'inbe-screenshot-{app.pid}', ignore_errors=True)
-print("Data Back: navigation exits once; Profile Data returns to its hub; Settings Data returns to Settings")
+print("Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings Data returns to Settings")

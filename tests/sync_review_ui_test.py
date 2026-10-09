@@ -77,7 +77,10 @@ for choice, width, height, dark in [('merge', 900, 720, 0), ('replace', 411, 813
             body = Image.open(initial).convert('RGB').crop((
                 (width - panel_width) // 2 + 18, content_top,
                 (width + panel_width) // 2 - 18, footer_start - 8))
-            palette = list(body.get_flattened_data())
+            # tobytes() works on every Pillow release; CI's Pillow predates
+            # get_flattened_data().
+            raw = body.tobytes()
+            palette = [tuple(raw[index:index + 3]) for index in range(0, len(raw), 3)]
             expected_colors = ([(134, 220, 165), (255, 163, 163), (255, 212, 119)] if dark
                                else [(23, 102, 58), (179, 38, 30), (128, 80, 0)])
             for color in expected_colors:
