@@ -1,9 +1,4 @@
 # Changelog
-## [2.1.23] - 2026-10-09
-### Added
-- Customize KSS in Appearance with live preview, per-app styles, an inspector, undo, and reset to defaults.
-- Ask Lumi to read, preview, and save appearance changes while preserving your existing customizations.
-
 ## [2.1.22] - 2026-10-08
 ### Added
 - Minimize a running practice into a small window and keep using the app.
