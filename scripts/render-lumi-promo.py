@@ -19,6 +19,9 @@ ASSETS = ROOT / "design/lumi-promo"
 OUTPUT = ROOT / "build/lumi-promo"
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FLIGHT_SECONDS = 1.35
+FLIGHT_TARGETS = [(.5, .48), (.85, .66), (.85, .54), (.85, .66),
+                  (.85, .58), (.85, .65), (.5, .48)]
 STORY = [
     (0, 4, "Hi, I’m Lumi.", "Follow a little light.", None),
     (4, 8, "A world of your own", "Your apps. Your daily rhythm.", "01-apps"),
@@ -107,15 +110,30 @@ def animation_frames():
 
 def flight_position(index, local, width, height):
     """Fly to a destination, settle there, then move when the scene changes."""
-    targets = [(.5, .48), (.85, .66), (.85, .54), (.85, .66),
-               (.85, .58), (.85, .65), (.5, .48)]
-    origin = (-.3, .58) if index == 0 else targets[index - 1]
-    target = targets[index]
-    progress = ease(local / 1.35)
+    origin = (-.3, .58) if index == 0 else FLIGHT_TARGETS[index - 1]
+    target = FLIGHT_TARGETS[index]
+    progress = ease(local / FLIGHT_SECONDS)
     x = origin[0] + (target[0] - origin[0]) * progress
     y = origin[1] + (target[1] - origin[1]) * progress
     y -= math.sin(progress * math.pi) * .045
     return x * width, y * height, progress
+
+
+def flight_facing(index, local):
+    """Face the flight direction, then turn inward beside the app screen."""
+    origin_x = -.3 if index == 0 else FLIGHT_TARGETS[index - 1][0]
+    target_x = FLIGHT_TARGETS[index][0]
+    previous = -1.0 if origin_x > .5 else 1.0
+    if target_x > origin_x:
+        traveling = 1.0
+    elif target_x < origin_x:
+        traveling = -1.0
+    else:
+        traveling = previous
+    settled = -1.0 if target_x > .5 else traveling
+    facing = previous + (traveling - previous) * ease(local / .28)
+    turn = ease((local - FLIGHT_SECONDS) / .28)
+    return facing + (settled - facing) * turn
 
 
 def main():
@@ -202,7 +220,11 @@ def main():
                 phase = (time * 12) % len(sprites)
                 pose = int(phase)
                 character = Image.blend(sprites[pose], sprites[(pose + 1) % len(sprites)], ease(phase - pose))
-                character = character.resize((character_size, character_size), Image.Resampling.LANCZOS)
+                facing = flight_facing(index, local)
+                if facing < 0:
+                    character = ImageOps.mirror(character)
+                character_width = max(2, round(character_size * abs(facing)))
+                character = character.resize((character_width, character_size), Image.Resampling.LANCZOS)
                 glow = Image.new("RGBA", canvas.size)
                 glow_draw = ImageDraw.Draw(glow)
                 radius = character_size * .31
@@ -226,7 +248,7 @@ def main():
                 fade = min(ease(time / .5), ease((seconds - time) / .8))
                 if fade < 1:
                     canvas = Image.blend(Image.new("RGBA", canvas.size, "#071c1b"), canvas, fade)
-                if abs(local - 1.5) < .5 / args.fps:
+                if abs(local - 1.8) < .5 / args.fps:
                     path = OUTPUT / f"review-{index:02}.jpg"
                     canvas.convert("RGB").save(path, quality=93)
                     review_frames.append(path)
@@ -249,7 +271,25 @@ def main():
         sheet.paste(picture, (index * 280, 0))
     sheet.save(OUTPUT / "storyboard.jpg", quality=95)
     staged.replace(destination)
-    receipt = dict(capture_sha256=harness.digest(harness.OUTPUT / "capture.json"), artwork={name: harness.digest(ASSETS / name) for name in ("lumi-flight-cycle.png", "forest.png")}, video_sha256=harness.digest(destination), seconds=seconds, width=width, height=height, fps=args.fps, status="owner-review", soundtrack="OpenRouter narrator only; no music or sound effects", narration_sha256=harness.digest(ASSETS / "narration/receipt.json"), narrator=dict(provider=narration["provider"], model=narration["model"], voice=narration["voice"]), animation_frames=len(sprites), story=story)
+    receipt = dict(
+        capture_sha256=harness.digest(harness.OUTPUT / "capture.json"),
+        artwork={name: harness.digest(ASSETS / name)
+                 for name in ("lumi-flight-cycle.png", "forest.png")},
+        video_sha256=harness.digest(destination),
+        seconds=seconds,
+        width=width,
+        height=height,
+        fps=args.fps,
+        status="owner-review",
+        soundtrack="OpenRouter narrator only; no music or sound effects",
+        narration_sha256=harness.digest(ASSETS / "narration/receipt.json"),
+        narrator=dict(provider=narration["provider"], model=narration["model"],
+                      voice=narration["voice"]),
+        animation_frames=len(sprites),
+        facing="Flight direction while traveling; inward toward the app while settled on its right",
+        renderer_sha256=harness.digest(Path(__file__)),
+        story=story,
+    )
     harness.write_json(OUTPUT / "render-receipt.json", receipt)
     audio.unlink()
     print(f"Review video saved: {destination}")

@@ -118,8 +118,9 @@ deployment.
 `make lumi-promo` renders a narrated portrait review MP4 from the exact
 reviewed phone captures and the generated artwork in `design/lumi-promo/`.
 Lumi uses eight generated wing-flapping frames, flies to each screen and settles
-while a narrator explains it. The audio contains speech only, without music or
-sound effects. Scene timings expand to fit the complete spoken lines.
+facing the app while a narrator explains it. Lumi turns with the flight direction
+and flips inward after arriving on the right. The audio contains speech only,
+without music or sound effects. Scene timings expand to fit the complete spoken lines.
 `make lumi-narration` generates the stored narrator clips through OpenRouter
 using a locally configured `OPENROUTER_API_KEY`; unchanged clips are reused.
 The voice, script and provider options are in `design/lumi-promo/narration.json`.
