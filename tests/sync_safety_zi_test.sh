@@ -76,5 +76,6 @@ cmp "$work/source/safety.zib" "$work/saved/safety.zib"
     "$root/tests/sync_safety_link_test.c" \
     "$work/native/app/sync_safety.c" \
     "$work/native/sync_safety_policy.c" \
+    "$work/native/session_screen.c" \
     -o "$work/native/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/native/test"

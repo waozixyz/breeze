@@ -1,6 +1,31 @@
 #import, file "app_types.zi";
 #import, file "../core/types.zi";
 #import, file "sync_safety_policy.zi";
+#import, file "session_screen.zi";
+
+// Android and the web run sync on the frame thread instead of a worker.
+SyncOnFrameThread :: () -> bool {
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        return true
+    }
+    return false
+}
+
+// The practice drawn on screen, also in its small window. While the app is
+// in the background nothing is drawn, so no practice holds work back.
+app_visible_practice_screen :: (app: *InnerBreeze) -> s32 {
+    if app == null || app.backgrounded != 0 {
+        return ScreenStart
+    }
+    return app_session_screen(app)
+}
+
+// A visible practice animates every frame, so frame-thread work that can
+// outlast a frame (finishing a request, applying its records, package
+// updates) waits until the practice ends.
+app_practice_holds_frame_work :: (app: *InnerBreeze) -> bool {
+    return SyncScreenBlocksRefresh(app_visible_practice_screen(app))
+}
 
 #program_export
 app_background_sync_safe :: (app: *InnerBreeze) -> s32 {
@@ -8,7 +33,8 @@ app_background_sync_safe :: (app: *InnerBreeze) -> s32 {
     return ifx BackgroundSyncSafeFields(
         app.modal.active, app.habit_edit.active,
         app.sync_server_url_focused, app.sync_alias_focused,
-        app.profile_friend_input_focused, app.breathing.screen) then 1 else 0
+        app.profile_friend_input_focused, app.breathing.screen,
+        app_visible_practice_screen(app), SyncOnFrameThread()) then 1 else 0
 }
 
 SyncUiUpdateSafe :: (app: *InnerBreeze, now: float64,

@@ -9,6 +9,10 @@ SyncSafetyState :: struct {
     alias_focused: s32
     friend_input_focused: s32
     screen: s32
+    // The running practice, also while it shows in its small window.
+    practice_screen: s32
+    // Android and the web run sync on the frame thread, not a worker.
+    frame_thread_transport: bool
 }
 
 SyncScreenBlocksRefresh :: (screen: s32) -> bool {
@@ -21,14 +25,20 @@ SyncInputBlocksRefresh :: (state: SyncSafetyState) -> bool {
 }
 
 BackgroundSyncSafe :: (state: SyncSafetyState) -> bool {
-    // Transport may exchange encrypted records during a practice. Refreshing
-    // its settings or screen remains a separate, deferred operation.
+    // A sync started on the frame thread stops every frame while it builds
+    // and applies encrypted records, so a running practice waits until it
+    // ends. A worker-thread transport may exchange records during a
+    // practice; refreshing settings or the screen stays deferred.
+    if state.frame_thread_transport && SyncScreenBlocksRefresh(state.practice_screen) {
+        return false
+    }
     return state.modal_active == 0 && !SyncInputBlocksRefresh(state)
 }
 
 BackgroundSyncSafeFields :: (modal_active: s32, habit_edit_active: s32,
     server_url_focused: s32, alias_focused: s32,
-    friend_input_focused: s32, screen: s32) -> bool {
+    friend_input_focused: s32, screen: s32, practice_screen: s32,
+    frame_thread_transport: bool) -> bool {
     state: SyncSafetyState
     state.modal_active = modal_active
     state.habit_edit_active = habit_edit_active
@@ -36,6 +46,8 @@ BackgroundSyncSafeFields :: (modal_active: s32, habit_edit_active: s32,
     state.alias_focused = alias_focused
     state.friend_input_focused = friend_input_focused
     state.screen = screen
+    state.practice_screen = practice_screen
+    state.frame_thread_transport = frame_thread_transport
     return BackgroundSyncSafe(state)
 }
 
