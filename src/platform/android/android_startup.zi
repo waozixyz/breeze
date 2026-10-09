@@ -1,5 +1,82 @@
 #import, file "activity_jni.zi";
 
+#if #defined(ANDROID_BUILD) {
+    android :: #system_library "android";
+    c :: #system_library "c";
+    raylib :: #system_library "raylib";
+    StartupGetAndroidApp :: () -> *NativeAndroidApp #foreign raylib "GetAndroidApp";
+    AndroidProcessSourceFn :: #type (*NativeAndroidApp, *AndroidPollSource) -> void #c_call;
+    AndroidPollSource :: struct {
+        id: s32
+        app: *NativeAndroidApp
+        process: AndroidProcessSourceFn
+    }
+    StartupPollOnce :: (timeout_ms: s32, descriptor: *s32,
+        events: *s32, source: **AndroidPollSource) -> s32 #foreign android "ALooper_pollOnce";
+    StartupReadCommand :: (app: *NativeAndroidApp) -> s8 #foreign c "android_app_read_cmd";
+    StartupPreCommand :: (app: *NativeAndroidApp, command: s8) #foreign c "android_app_pre_exec_cmd";
+    StartupPostCommand :: (app: *NativeAndroidApp, command: s8) #foreign c "android_app_post_exec_cmd";
+    LOOPER_ID_MAIN :: 1
+    ALOOPER_POLL_ERROR :: -4
+    APP_CMD_INIT_WINDOW :: 1
+    APP_CMD_GAINED_FOCUS :: 6
+    APP_CMD_LOST_FOCUS :: 7
+    #if #defined(__arm__) || #defined(__i386__) {
+        StartupWrite :: (descriptor: s32, data: *s8, count: u32) -> s32 #foreign c "write";
+    } else {
+        StartupWrite :: (descriptor: s32, data: *s8, count: u64) -> s64 #foreign c "write";
+    }
+
+    // NativeActivity can start while the display is off. Acknowledge its
+    // lifecycle commands with a blocking looper before entering raylib's
+    // zero-timeout window initialization loop. A destroyed activity must
+    // return without ever creating a renderer.
+    AndroidWaitForWindow :: () -> bool {
+        app := StartupGetAndroidApp()
+        if app == null {
+            return false
+        }
+        focus: s8 = -1
+        while app.destroy_requested == 0 {
+            source: *AndroidPollSource = null
+            events: s32 = 0
+            result := StartupPollOnce(-1, null, *events, *source)
+            if result == ALOOPER_POLL_ERROR {
+                return false
+            }
+            if result == LOOPER_ID_MAIN {
+                command := StartupReadCommand(app)
+                if command < 0 {
+                    return false
+                }
+                if command == APP_CMD_INIT_WINDOW {
+                    // Surface creation is synchronous: the activity thread
+                    // waits for this command's acknowledgement. Put it back
+                    // before acknowledging it, so raylib handles the first
+                    // surface itself with its graphics callback installed.
+                    if StartupWrite(app.command_write, *command, 1) != 1 {
+                        StartupPreCommand(app, command)
+                        StartupPostCommand(app, command)
+                        return false
+                    }
+                    if focus >= 0 && StartupWrite(app.command_write, *focus, 1) != 1 {
+                        return false
+                    }
+                    return true
+                }
+                if command == APP_CMD_GAINED_FOCUS || command == APP_CMD_LOST_FOCUS {
+                    focus = command
+                }
+                StartupPreCommand(app, command)
+                StartupPostCommand(app, command)
+            } else if source != null {
+                source.process(app, source)
+            }
+        }
+        return false
+    }
+}
+
 // Notify the activity only after the native renderer submits its first frame.
 AndroidStartupComplete :: () {
     session: ActivityJniSession

@@ -54,6 +54,16 @@ network_length: s32 = 3;
 network_cancelled: s32;
 network_header_failed: bool;
 locale_preferences: [64]u8;
+startup_commands: [16]s8;
+startup_command_count: s32;
+startup_command_index: s32;
+startup_poll_count: s32;
+startup_pre_count: s32;
+startup_post_count: s32;
+startup_wake: bool;
+startup_write_failed: bool;
+startup_written: [4]s8;
+startup_written_count: s32;
 
 Require :: (condition: bool, code: s32) {
     if !condition {
@@ -337,6 +347,105 @@ GetAndroidApp :: () -> *NativeAndroidApp {
     }
     return *app
 }
+
+#program_export
+ALooper_pollOnce :: (timeout_ms: s32, descriptor: *s32,
+    events: *s32, source: **AndroidPollSource) -> s32 {
+    Require(timeout_ms == -1 && descriptor == null, 104)
+    events[0] = 1
+    source[0] = null
+    startup_poll_count += 1
+    if startup_wake {
+        startup_wake = false
+        return -1
+    }
+    if startup_command_index >= startup_command_count {
+        return -4
+    }
+    return 1
+}
+
+#program_export
+android_app_read_cmd :: (native_app: *NativeAndroidApp) -> s8 {
+    Require(native_app == *app, 105)
+    command := startup_commands[startup_command_index]
+    startup_command_index += 1
+    return command
+}
+
+#program_export
+android_app_pre_exec_cmd :: (native_app: *NativeAndroidApp, command: s8) {
+    Require(native_app == *app, 106)
+    startup_pre_count += 1
+    if command == 15 {
+        app.destroy_requested = 1
+    } else if command >= 10 && command <= 14 {
+        app.activity_state = command
+    }
+}
+
+#program_export
+android_app_post_exec_cmd :: (native_app: *NativeAndroidApp, command: s8) {
+    Require(native_app == *app && (command != 1 || startup_write_failed), 107)
+    startup_post_count += 1
+}
+
+#program_export "__wrap_write"
+StartupTestWrite :: (descriptor: s32, data: *s8, count: u64) -> s64 {
+    Require(descriptor == 78 && count == 1 && startup_written_count < 4, 108)
+    if startup_write_failed {
+        return -1
+    }
+    startup_written[startup_written_count] = data[0]
+    startup_written_count += 1
+    return 1
+}
+
+TestWindowStartup :: () {
+    activity_ready = true
+    app.command_write = 78
+    startup_commands[0] = 10
+    startup_commands[1] = 11
+    startup_commands[2] = 0
+    startup_commands[3] = 6
+    startup_commands[4] = 7
+    startup_commands[5] = 1
+    startup_command_count = 6
+    startup_wake = true
+    Require(AndroidWaitForWindow(), 109)
+    Require(startup_poll_count == 7 && startup_pre_count == 5 &&
+        startup_post_count == 5 && startup_written_count == 2 &&
+        startup_written[0] == 1 && startup_written[1] == 7 &&
+        app.activity_state == 11, 110)
+
+    startup_command_index = 0
+    startup_command_count = 4
+    startup_commands[0] = 10
+    startup_commands[1] = 13
+    startup_commands[2] = 14
+    startup_commands[3] = 15
+    startup_written_count = 0
+    Require(!AndroidWaitForWindow() && app.destroy_requested == 1 &&
+        startup_command_index == 4 && startup_written_count == 0, 111)
+    previous_polls := startup_poll_count
+    Require(!AndroidWaitForWindow() && startup_poll_count == previous_polls, 112)
+
+    app.destroy_requested = 0
+    startup_command_count = 0
+    startup_command_index = 0
+    Require(!AndroidWaitForWindow() && startup_poll_count == previous_polls + 1, 113)
+    startup_command_count = 1
+    startup_commands[0] = 1
+    startup_write_failed = true
+    before_pre := startup_pre_count
+    before_post := startup_post_count
+    Require(!AndroidWaitForWindow() && startup_pre_count == before_pre + 1 &&
+        startup_post_count == before_post + 1 && startup_written_count == 0, 115)
+    startup_write_failed = false
+    activity_ready = false
+    previous_polls = startup_poll_count
+    Require(!AndroidWaitForWindow() && startup_poll_count == previous_polls, 114)
+}
 #program_export
 android_lifecycle_reset :: () {
 }
@@ -576,5 +685,6 @@ main :: () -> s32 {
     Require(void_calls == before_startup_calls + 1 && frame_count == 0, 103)
     Require(!health_connect_send_host(*path[0]), 82)
     Require(frame_count == 0, 83)
+    TestWindowStartup()
     return 0
 }

@@ -138,6 +138,30 @@ NativeAndroidApp :: struct {
     command_callback: *void
     input_callback: *void
     activity: *NativeActivity
+    configuration: *void
+    saved_state: *void
+    #if #defined(__arm__) || #defined(__i386__) {
+        saved_state_size: u32
+    } else {
+        saved_state_size: u64
+    }
+    looper: *void
+    input_queue: *void
+    window: *void
+    content_rect: [4]s32
+    activity_state: s32
+    destroy_requested: s32
+    // Bionic's opaque pthread storage. Keep the command pipe offsets checked
+    // against android_native_app_glue.h for every supported Android ABI.
+    #if #defined(__arm__) || #defined(__i386__) {
+        mutex_storage: [1]s32
+        condition_storage: [1]s32
+    } else {
+        mutex_storage: [10]s32
+        condition_storage: [12]s32
+    }
+    command_read: s32
+    command_write: s32
 }
 
 ActivityJniSession :: struct {
@@ -166,7 +190,7 @@ JniAttach :: (session: *ActivityJniSession, vm: *JniVm,
     result := vm.functions.GetEnv(vm, *session.env, JniVersion)
     if result == -2 {
         if vm.functions.AttachCurrentThread(vm, *session.env, null) != 0 ||
-            session.env == null {
+        session.env == null {
             return false
         }
         session.attached = 1
@@ -241,7 +265,7 @@ JniMethod :: (session: *ActivityJniSession, name: string,
     method_name: [96]u8
     method_signature: [192]u8
     if !CopyCString(name, method_name[:]) ||
-        !CopyCString(signature, method_signature[:]) {
+    !CopyCString(signature, method_signature[:]) {
         return null
     }
     return env.functions.GetMethodID(env, klass, *method_name[0],
