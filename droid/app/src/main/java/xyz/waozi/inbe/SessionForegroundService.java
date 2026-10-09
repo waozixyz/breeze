@@ -61,10 +61,10 @@ public class SessionForegroundService extends Service {
     }
 
     private void startSession() {
+        // The session keeps running even when notifications are disabled:
+        // Android still runs the foreground service and only hides its card.
         if (!canShowIndicator(this)) {
-            Log.w(TAG, "Session indicator unavailable; refusing background service");
-            stopSelf();
-            return;
+            Log.w(TAG, "Session notification hidden; continuing in the background");
         }
         currentStatusText = "";
         Notification notification = buildNotification();

@@ -158,14 +158,6 @@ public class MainActivity extends NativeActivity {
     private boolean pendingDebugDonationReminder = false;
     private int pendingDebugDonationReminderRetries = 0;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Runnable checkSessionIndicator = new Runnable() {
-        @Override
-        public void run() {
-            if (backgroundExecutionActive) {
-                syncLifecycleState("indicator check");
-            }
-        }
-    };
 
     private native void nativeSetInsets(int left, int top, int right, int bottom, int imeBottom,
         int cutoutLeft, int cutoutTop, int cutoutRight, int cutoutBottom);
@@ -787,10 +779,6 @@ public class MainActivity extends NativeActivity {
 
     public void acquireWakeLock() {
         requestNotificationPermissionIfNeeded();
-        if (!SessionForegroundService.canShowIndicator(this)) {
-            Log.w(TAG, "Session indicator unavailable; background service not started");
-            return;
-        }
         Log.d(TAG, "Starting session foreground service");
         Intent intent = new Intent(this, SessionForegroundService.class);
         intent.setAction(SessionForegroundService.ACTION_START);
@@ -1102,11 +1090,6 @@ public class MainActivity extends NativeActivity {
         if (activityPaused && !backgroundExecutionActive) {
             stopService(new Intent(this, SessionForegroundService.class));
         }
-
-        mainHandler.removeCallbacks(checkSessionIndicator);
-        if (backgroundExecutionActive) {
-            mainHandler.postDelayed(checkSessionIndicator, 2000);
-        }
     }
 
     @Override
@@ -1163,7 +1146,6 @@ public class MainActivity extends NativeActivity {
     protected void onDestroy() {
         httpTransport.close();
         NotificationPresence.setActivityVisible(false);
-        mainHandler.removeCallbacks(checkSessionIndicator);
         super.onDestroy();
         Log.d(TAG, "onDestroy called - releasing wake lock");
         allowScreenOff();

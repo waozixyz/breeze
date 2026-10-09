@@ -100,13 +100,24 @@ int main(void)
     assert(android_sync_lifecycle(1, 1) == 1);
     assert(timer_activations == 1);
 
-    assert(android_sync_lifecycle(1, 0) == 0);
-    assert(timer_deactivations == 1);
-    assert(app.session_paused == 1);
+    /* A hidden or dismissed session notification never pauses practice. */
+    assert(android_sync_lifecycle(1, 0) == 1);
+    assert(timer_deactivations == 0);
+    assert(app.session_paused == 0);
     assert(app.backgrounded == 1);
     assert(android_sync_lifecycle(0, 0) == 0);
+    assert(timer_deactivations == 1);
     assert(app.session_paused == 0);
     assert(app.backgrounded == 0);
+
+    /* Turning background play on ends a pause the lifecycle made. */
+    app.breathing.play_in_background = 0;
+    assert(android_sync_lifecycle(1, 0) == 0);
+    assert(app.session_paused == 1);
+    app.breathing.play_in_background = 1;
+    assert(android_sync_lifecycle(1, 0) == 1);
+    assert(app.session_paused == 0);
+    assert(android_sync_lifecycle(0, 0) == 0);
 
     android_invalidate_graphics_resources();
     assert(app.graphics_reload_requested == 1);

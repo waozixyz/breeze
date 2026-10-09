@@ -88,7 +88,11 @@ mutate $lifecycle app/practice_lifecycle_laws.zi \
     's/LifecycleDecision.{background_active, 0, 0, 0, auto_paused}/LifecycleDecision.{background_active, 0, 1, 0, 1}/' \
     DesktopNeverPauses
 mutate $lifecycle app/practice_lifecycle_laws.zi \
-    's/ \&\& indicator_visible != 0 {/ {/' BackgroundWithoutIndicatorPauses
+    's/if play_in_background != 0 \&\& activity_paused != 0 {/if play_in_background != 0 \&\& activity_paused != 0 \&\& background_active != 0 {/' \
+    BackgroundPlayKeepsRunning
+mutate $lifecycle app/practice_lifecycle_laws.zi \
+    's/if play_in_background != 0 \&\& activity_paused != 0 {/if activity_paused != 0 {/' \
+    BackgroundPlayOffPauses
 mutate $lifecycle app/practice_lifecycle_laws.zi \
     's/if run != background_active {/if run == background_active {/' \
     ChangeMatchesState
