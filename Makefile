@@ -909,10 +909,18 @@ native-screenshot-test: $(TARGET)
 native-navigation-test: $(TARGET)
 	sh tests/native_navigation_test.sh $(abspath $(TARGET))
 
+.PHONY: tab-switch-performance-test
+tab-switch-performance-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/tab_switch_performance_test.py $(abspath $(TARGET)) desktop-rapid --rapid
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/tab_switch_performance_test.py $(abspath $(TARGET)) mobile-rapid --mobile --rapid
+
 .PHONY: music-navigation-test
 music-navigation-test: $(TARGET)
 	@python3 tests/music_navigation_test.py '$(CC)' '$(NATIVE_COMPILE_FLAGS)' \
-		'$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(KRYON_NATIVE_BACKEND_LIBS) $(LIBOQS_A) $(KRYON_NATIVE_BACKEND_LDLIBS) $(RUNTIME_ASSET_LDLIBS) $(NATIVE_SYSTEM_LDLIBS) $(LDFLAGS)'
+		'$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(ZIRAN_BUILD_DIR)/libziran.a $(KRYON_NATIVE_BACKEND_LIBS) $(LIBOQS_A) $(KRYON_NATIVE_BACKEND_LDLIBS) $(RUNTIME_ASSET_LDLIBS) $(NATIVE_SYSTEM_LDLIBS) $(LDFLAGS)' \
+		'$(NATIVE_OBJ_DIR)/objects.rsp'
 
 .PHONY: native-zoom-test
 native-zoom-test: $(TARGET)

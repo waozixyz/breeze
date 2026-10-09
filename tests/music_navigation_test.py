@@ -10,8 +10,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = dict(os.environ)
-for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY"):
+for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
     ENV.pop(name, None)
+ENV["YUE_DESKTOP_RECOVERY"] = "0"
 
 WRAPPED_FUNCTIONS = (
     "InitAudioDevice", "IsAudioDeviceReady", "CloseAudioDevice",
@@ -21,7 +22,7 @@ WRAPPED_FUNCTIONS = (
     "update_check_start", "app_play_bell_cue",
 )
 
-objects = shlex.split((ROOT / "build/obj/native/objects.rsp").read_text())
+objects = shlex.split((ROOT / sys.argv[4]).read_text())
 main_objects = [path for path in objects if path.endswith("/generated/src/main.o")]
 assert len(main_objects) == 1, "the native response file must have one app main"
 

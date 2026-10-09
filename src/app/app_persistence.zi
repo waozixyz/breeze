@@ -3,11 +3,33 @@ c :: #system_library "c";
 
 #import, file "app.zi";
 #import, file "../habits/habit_types.zi";
+#import, file "settings_store.zi";
+#import, file "../platform/web_storage.zi";
 
 // These implementations live in Inbe's settings and habits modules. Keeping
 // their declarations here avoids importing unrelated UI and storage bodies.
 save_settings :: (app: *InnerBreeze) #foreign c;
 habits_flush_save :: (app: *InnerBreeze) #foreign c;
+
+#program_export
+app_save_navigation :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.settings_dirty != 0 {
+        save_settings(app)
+        return
+    }
+    // Navigation changes four preferences, rather than the full settings
+    // catalog. Keep the batch atomic and preserve the web persistence hook.
+    SettingsBeginWrite()
+    unused SettingsStoreInt("main_tab", app.main_tab)
+    unused SettingsStoreInt("habits_screen_mode", app.habits.screen_mode)
+    unused SettingsStoreInt("habits_tab", app.habits.tab)
+    unused SettingsStoreInt("habits_view_mode", app.habits.view_mode)
+    SettingsEndWrite()
+    sync_web_storage()
+}
 
 #program_export
 app_flush_deferred_settings :: (app: *InnerBreeze) {

@@ -4,6 +4,8 @@
 #include "meditation_session.h"
 #include "settings_audio.h"
 #include "src/platform/audio_runtime.h"
+#include "storage_core.h"
+#include "raylib_runtime.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,6 +160,13 @@ int main(int argc, char **argv)
         AppNavRoute_APP_NAV_ROUTE_PROFILE, AppNavRoute_APP_NAV_ROUTE_SETTINGS};
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         app_apply_nav_route(&app, routes[i]);
+        if (i < 3) {
+            int saved = storage_get_setting_int(StringLiteral("main_tab"), -99);
+            fprintf(stderr, "Navigation persistence: memory=%d saved=%d depth=%d\n",
+                    app.main_tab, saved, storage_state_handle()->settings_write_depth);
+            assert(saved == app.main_tab);
+            assert(storage_state_handle()->settings_write_depth == 0);
+        }
         check_playing_frames(preview);
     }
     app.music_volume = 35;
@@ -222,7 +231,7 @@ int main(int argc, char **argv)
     app_destroy(&app);
     assert(closing_preview->unloaded && !closing_preview->playing);
     SetCurrentApp(NULL);
-    HostRaylibCloseWindow();
+    CloseRaylib();
     app_host_Shutdown();
     puts("Music navigation: settings and app tabs, Customize, pause/resume, fade and shutdown passed");
     return 0;
