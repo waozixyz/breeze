@@ -91,9 +91,10 @@ def main():
     def guard():
         if adb("shell", "pidof", args.package) != pid:
             raise RuntimeError("Inbe restarted; stopping the geometry check")
-        focus = adb("shell", "dumpsys", "window", "windows")
+        focus = adb("shell", "dumpsys", "window")
         current = next((line for line in focus.splitlines() if "mCurrentFocus=" in line), "")
-        if args.package + "/xyz.waozi.inbe.MainActivity" not in current:
+        if not any(args.package + "/xyz.waozi.inbe." + component in current
+                   for component in ("MainActivity", "SkyCradleLauncher")):
             raise RuntimeError("Inbe is not the focused application; refusing changes")
 
     last_sample = -1
