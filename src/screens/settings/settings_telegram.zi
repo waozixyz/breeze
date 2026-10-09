@@ -99,10 +99,18 @@ settings_telegram_review_text :: (width: s32) -> string {
     return BuilderFinish(formatted)
 }
 
+// Mini App approval appears only while a request waits for this device.
+settings_telegram_authorization_active :: () -> bool {
+    return lumi_authorization_ready || lumi_authorization_pending.request_id[0] != cast(u8)0
+}
+
 settings_telegram_content_height :: (width: s32) -> s32 {
-    height := settings_telegram_text_height("lumi_telegram_body", width) +
-    settings_telegram_text_height(LumiTelegramStatusKey(), width) + AppScale(120)
+    height := settings_telegram_text_height(LumiTelegramStatusKey(), width) + AppScale(64)
     if storage_get_setting_text("sync_private_key").count == 0 || !lumi_telegram_linked {
+        return height
+    }
+    height += AppScale(56)
+    if !settings_telegram_authorization_active() {
         return height
     }
     height += settings_telegram_text_height(LumiAuthorizationStatusKey(), width) + AppScale(112)
@@ -117,15 +125,14 @@ settings_telegram_content_height :: (width: s32) -> s32 {
     return height
 }
 
+// One line says what to do next and one button does it.
 settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
-    keys: [2]string = .["lumi_telegram_body", LumiTelegramStatusKey()]
-    for key: keys {
-        height := settings_telegram_text_height(key, width)
-        Text(app.ui.session, TextProps.{.text = LocaleText(key), .font = AppFontSize(),
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)height},
-                .wrap = cast(TextWrap)TextWrapAuto})
-        y.* += height
-    }
+    key := LumiTelegramStatusKey()
+    height := settings_telegram_text_height(key, width)
+    Text(app.ui.session, TextProps.{.text = LocaleText(key), .font = AppFontSize(),
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)height},
+            .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += height
     has_account := storage_has_sync_account() != 0 &&
     storage_get_setting_text("sync_private_key").count > 0
     linked := lumi_telegram_linked && has_account
@@ -149,7 +156,7 @@ settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
         }
     }
     y.* += AppScale(56)
-    if linked {
+    if linked && settings_telegram_authorization_active() {
         status_height := settings_telegram_text_height(LumiAuthorizationStatusKey(), width)
         Text(app.ui.session, TextProps.{.text = LocaleText(LumiAuthorizationStatusKey()), .font = AppFontSize(),
                 .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)status_height},
@@ -179,14 +186,6 @@ settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
                 LumiAuthorizationApprove()
             }
             y.* += AppScale(56)
-        } else if lumi_authorization_pending.request_id[0] == cast(u8)0 && !LumiAuthorizationHasGrant() {
-            if Button(app.ui.session, ButtonProps.{.id = 7653,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                    .label = LocaleText("lumi_authorization_request"), .disabled = LumiAuthorizationBusy(),
-                    .loading = LumiAuthorizationBusy()}) != 0 {
-                LumiAuthorizationRequest()
-            }
-            y.* += AppScale(56)
         }
         if lumi_authorization_pending.request_id[0] != cast(u8)0 {
             if Button(app.ui.session, ButtonProps.{.id = 7654,
@@ -197,9 +196,12 @@ settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
             }
             y.* += AppScale(56)
         }
+    }
+    if linked {
+        // Disconnecting also revokes any Mini App access.
         if Button(app.ui.session, ButtonProps.{.id = 7651,
                 .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText(ifx LumiAuthorizationHasGrant() then "lumi_authorization_revoke" else "lumi_telegram_disconnect"),
+                .label = LocaleText("lumi_telegram_disconnect"),
                 .disabled = LumiTelegramBusy(),
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
             LumiTelegramDisconnect()

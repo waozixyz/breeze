@@ -229,6 +229,15 @@ static TreeEntry focused(InnerBreeze *app, int32_t focus)
     assert(0);
     return (TreeEntry){0};
 }
+static bool has_focus(InnerBreeze *app, int32_t focus)
+{
+    for (int32_t index = 0; index < TreeCount(app->ui.session); ++index) {
+        if (TreeNodeAt(app->ui.session, index).focus_id == focus) {
+            return true;
+        }
+    }
+    return false;
+}
 static ScrollResult render(InnerBreeze *app, int32_t offset, bool exhausted)
 {
     PaintClear(app->ui.session);
@@ -391,6 +400,18 @@ int main(void)
         truncated_review = false;
     }
     assert(lumi_authorization_intent == 0);
+
+    /* A connected chat without a waiting Mini App request shows one action
+       and a quiet disconnect, without Mini App controls. */
+    lumi_authorization_ready = false;
+    lumi_authorization_state = 0;
+    memset(lumi_authorization_pending.request_id, 0, sizeof(lumi_authorization_pending.request_id));
+    render(&app, 0, false);
+    assert(has_focus(&app, 7650));
+    assert(has_focus(&app, 7651));
+    assert(!has_focus(&app, 7652));
+    assert(!has_focus(&app, 7653));
+    assert(!has_focus(&app, 7654));
     assert(SessionClose(app.ui.session));
     puts("Settings complete identifiers, fingerprints, active clipped paint and retained review checks passed");
     return 0;

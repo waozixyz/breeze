@@ -28,6 +28,8 @@
 #import, file "../storage/daochi_account.zi";
 #import, file "../platform/uri.zi";
 #import, file "../storage/db.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "../screens/elist_types.zi";
 
 lumi_telegram_operation: StoredOperation;
 using AppNavRoute;
@@ -37,6 +39,10 @@ c :: #system_library "c";
 } else {
     TelegramNow :: (out: *s64) -> s64 #foreign c "time";
 }
+
+// Telegram messages reach the app within this interval while Inbe is open.
+LUMI_TELEGRAM_POLL_SECONDS :: 2
+LUMI_TELEGRAM_RETRY_SECONDS :: 5
 
 lumi_telegram_session: Session;
 lumi_telegram_transfer: NetworkTransfer;
@@ -103,7 +109,7 @@ LumiTelegramStatusKey :: () -> string {
     if LumiTelegramBusy() || lumi_telegram_waiting {
         return "lumi_telegram_waiting"
     }
-    return ifx lumi_telegram_linked then "lumi_telegram_connected" else "lumi_telegram_disconnected"
+    return ifx lumi_telegram_linked then "lumi_telegram_connected" else "lumi_telegram_body"
 }
 
 LumiTelegramRequest :: (method: string, path: string, body: string, stage: s32) -> bool {
@@ -160,6 +166,69 @@ LumiTelegramNextMessage :: () -> string {
     return BuilderFinish(out)
 }
 
+// Telegram cannot show an Inner Breeze screen, so the commands that open
+// Lists or Habits answer with their current content instead.
+LumiTelegramOverview :: (app: *InnerBreeze, command: string) -> string {
+    out: Vec(u8)
+    if command == "/lists" {
+        if !app_nav_route_available(app, APP_NAV_ROUTE_ELIST) ||
+        storage_elist_load(cast(*void)*lumi_tasks) == 0 {
+            return ""
+        }
+        for list_index: cast(s32)0..lumi_tasks.list_count - 1 {
+            list := *lumi_tasks.lists[list_index]
+            list_id := AppTextFromCString(*list.id[0], 37)
+            if out.count > 0 {
+                BuilderPrint(*out, "\n\n")
+            }
+            BuilderPrint(*out, "%", AppTextFromCString(*list.title[0], ELIST_TITLE_SIZE))
+            open: s32 = 0
+            for item_index: cast(s32)0..lumi_tasks.item_count - 1 {
+                item := *lumi_tasks.items[item_index]
+                if item.done != 0 || AppTextFromCString(*item.list_id[0], 37) != list_id {
+                    continue
+                }
+                BuilderPrint(*out, "\n- %", AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE))
+                open += 1
+            }
+            if open == 0 {
+                BuilderPrint(*out, "\n%", LocaleText("lumi_list_nothing_open"))
+            }
+        }
+        if out.count == 0 {
+            BuilderPrint(*out, "%", LocaleText("lumi_lists_empty"))
+        }
+        return BuilderFinish(out)
+    }
+    if command == "/habits" {
+        if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+            return ""
+        }
+        for done: cast(s32)0..1 {
+            heading := false
+            for index: cast(s32)0..app.habits.count - 1 {
+                habit := LumiHabitAt(app, index)
+                if habit.title.count == 0 || habit.done != (done == 1) {
+                    continue
+                }
+                if !heading {
+                    if out.count > 0 {
+                        BuilderPrint(*out, "\n\n")
+                    }
+                    BuilderPrint(*out, "%", LocaleText(ifx done == 1 then "lumi_habits_done" else "lumi_habits_open"))
+                    heading = true
+                }
+                BuilderPrint(*out, "\n- %", habit.title)
+            }
+        }
+        if out.count == 0 {
+            BuilderPrint(*out, "%", LocaleText("lumi_habits_empty"))
+        }
+        return BuilderFinish(out)
+    }
+    return ""
+}
+
 LumiTelegramApply :: (app: *InnerBreeze, document: string) {
     linked_at := FieldAt(document, 0, "linked")
     linked_end := ValueEnd(document, linked_at, 0)
@@ -213,8 +282,15 @@ LumiTelegramApply :: (app: *InnerBreeze, document: string) {
             LumiStoreAppend(LocaleText(ifx cast(s32)choice.value == 1 then "lumi_feedback_saved" else "lumi_cancelled"), false)
         }
     } else if type == "message" && text.count < LUMI_INPUT_MAX {
-        app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
-        unused LumiSubmit(app, text)
+        // A remote message never moves this device's screen to Lumi.
+        overview := LumiTelegramOverview(app, text)
+        if overview.count > 0 {
+            LumiStoreAppend(text, true)
+            LumiOnlineAppend(overview)
+            PackageFree(overview)
+        } else {
+            unused LumiSubmit(app, text)
+        }
     }
     lumi_next_message_id = ""
     unused LumiStoreSave()
@@ -258,6 +334,13 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         lumi_telegram_stage = 0
         success := lumi_telegram_operation.result == cast(s32)AuthResult.AUTH_OK
         lumi_telegram_session = lumi_telegram_operation.session
+        if success && (stage == 3 || stage == 4 || (stage == 2 && lumi_telegram_ack != 0)) {
+            // Acknowledge, deliver and fetch queued work back to back. Only an
+            // idle poll waits before asking again.
+            lumi_telegram_retry = 0
+        } else if !success {
+            lumi_telegram_retry = TelegramNow(null) + LUMI_TELEGRAM_RETRY_SECONDS
+        }
         if success && stage == 1 {
             lumi_telegram_error = true
             url: [256]u8
@@ -322,7 +405,7 @@ LumiTelegramPump :: (app: *InnerBreeze) {
     }
     now := TelegramNow(null)
     if now < lumi_telegram_retry { return }
-    lumi_telegram_retry = now + 5
+    lumi_telegram_retry = now + LUMI_TELEGRAM_POLL_SECONDS
     if lumi_telegram_ack != 0 {
         out: Vec(u8)
         BuilderPrint(*out, "{\"id\":%,\"client\":\"%\"}", lumi_telegram_ack, client)
