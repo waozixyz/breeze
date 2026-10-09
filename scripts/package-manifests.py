@@ -85,14 +85,12 @@ def manifest_for(component, existing, key_id, public):
                           if key in item and (item[key] or key in REQUIRED[field])}
                          for item in values[field]]
     previous_version = existing.get("manifest_version", 0)
-    if not isinstance(previous_version, int) or previous_version < 0:
-        raise ValueError("invalid previous manifest version")
-    values["manifest_version"] = max(1, previous_version)
-    manifest = {key: values[key] for key in FIELDS if key in values}
-    previous = {key: existing[key] for key in FIELDS if existing.get(key)}
-    if previous_version and canonical_bytes(previous) != canonical_bytes(manifest):
-        manifest["manifest_version"] = previous_version + 1
-    return manifest
+    if type(previous_version) is not int or previous_version not in (0, 1):
+        raise ValueError("unsupported previous manifest version")
+    # This is the registry protocol version, not an app release counter.
+    # Client versions and signed package sequences advance independently.
+    values["manifest_version"] = 1
+    return {key: values[key] for key in FIELDS if key in values}
 
 
 def signed_registration(manifest, publisher, authority):

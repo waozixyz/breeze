@@ -219,7 +219,8 @@ key must match `registry-public-key.hex`. The package publisher cannot approve
 itself: registration requires the separate node operator key. Existing account
 collections, capabilities, token policies and other publisher keys are retained;
 suspended, revoked and node-restricted registrations are not replaced. Repeating
-the preparation keeps unchanged manifest versions and advances changed ones.
+the preparation retains the registry protocol version and existing scopes while
+updating the app's client version.
 
 The wrapper release workflow requires public pins covering all six app IDs,
 so each included cell has a configured publisher for its updates.

@@ -60,11 +60,18 @@ class RegistrationTest(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 self.manifest(dict(self.existing, **{field: value}))
 
-    def test_idempotent_manifests_and_increasing_version(self):
+    def test_app_updates_retain_the_registry_protocol_version(self):
         existing = self.manifest()
         self.assertEqual(self.manifest(existing), existing)
         self.component["version"] = "2.1.3"
-        self.assertEqual(self.manifest(existing)["manifest_version"], 2)
+        updated = self.manifest(existing)
+        self.assertEqual(updated["manifest_version"], 1)
+        self.assertEqual(updated["current_client_version"], "2.1.3")
+        self.assertEqual(updated["collections"], existing["collections"])
+        self.assertEqual(updated["keys"], existing["keys"])
+        for version in (2, -1, True):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                self.manifest(dict(existing, manifest_version=version))
 
     def test_optional_apps_do_not_claim_root_account_collections(self):
         self.component = dict(name="lists", id="inbe.lists", version="1.0.1")
