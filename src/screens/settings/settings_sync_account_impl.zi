@@ -7,6 +7,7 @@
 #import, file "../../app/locale.zi";
 #import, file "../../app/metrics.zi";
 #import, file "../../app/text_buffers.zi";
+#import, file "../../cells/package_files.zi";
 #import, file "../../platform/raylib_text_input.zi";
 #import, file "../../storage/account_types.zi";
 #import, file "../../storage/sync_account.zi";
@@ -20,6 +21,7 @@
     #import, file "../../storage/sync_runtime.zi";
 }
 #import, file "../../storage/sync_result.zi";
+#import, file "../../storage/sync_nodes.zi";
 #import, file "../../storage/storage_core.zi";
 #import, file "../../storage/storage_habits.zi";
 #import, file "../../storage/storage_sessions.zi";
@@ -63,6 +65,7 @@ save_dialog_callback: SettingsSyncKeySaveDialog;
 import_dialog_callback: SettingsSyncKeyImportDialog;
 server_anchor: s32;
 server_scroll_x: s32;
+sync_account_details: bool;
 alias_anchor: s32;
 alias_scroll_x: s32;
 
@@ -97,7 +100,7 @@ settings_sync_account_pump :: (app: *InnerBreeze) {
             return
         }
         if !request.deleting &&
-            (app.modal.active == 0 || app.modal.type != cast(ModalType)ModalSyncAlias) {
+        (app.modal.active == 0 || app.modal.type != cast(ModalType)ModalSyncAlias) {
             settings_sync_account_cancel(app)
             return
         }
@@ -245,13 +248,18 @@ SettingsSyncServerNormalize :: (app: *InnerBreeze,
 
 SettingsSyncServerSave :: (app: *InnerBreeze) {
     normalized: [256]u8
-    if !SettingsSyncServerNormalize(app, normalized[:]) {
+    if !SyncNodeAddress(AppTextFromCString(*app.sync_server_url[0], 256), normalized[:]) {
         settings_screen_set_status_error(LocaleText("sync_server_url_invalid"))
         return
     }
     url := AppTextFromCString(*normalized[0], 256)
-    storage_set_setting_text(sync_server_url_key, url)
-    storage_set_sync_enabled(0)
+    if !SyncNodeAdd(url) {
+        settings_screen_set_status_error(LocaleText("sync_nodes_limit"))
+        return
+    }
+    app.sync_server_url[0] = cast(u8)0
+    app.sync_server_url_cursor = 0
+    app.sync_server_url_focused = 0
     settings_screen_set_status_success(LocaleText("sync_server_saved"), "")
 }
 
@@ -335,17 +343,11 @@ SettingsSyncCreate :: (app: *InnerBreeze) -> s32 {
 
 SettingsSyncConnected :: (app: *InnerBreeze) -> bool {
     account: SyncAccount
-    current: [256]u8
     saved: [256]u8
     if sync_account_load(*account) == 0 || storage_sync_enabled() == 0 {
         return false
     }
-    if !NormalizeUrl(AppTextFromCString(*app.sync_server_url[0], 256),
-        current[:]) { return false }
-    if !NormalizeUrl(storage_get_setting_text(sync_server_url_key),
-        saved[:]) { return false }
-    return AppTextFromCString(*current[0], 256) ==
-    AppTextFromCString(*saved[0], 256)
+    return NormalizeUrl(storage_get_setting_text(sync_server_url_key), saved[:])
 }
 
 #program_export
@@ -414,14 +416,20 @@ SettingsSyncField :: (app: *InnerBreeze, value: []u8,
     return result.committed
 }
 
+SettingsSyncNodeHintHeight :: (width: s32) -> s32 {
+    hint_props: TextProps = SettingsSyncTextProps(LocaleText("sync_nodes_hint"), 0, 0, width, 0, true)
+    hint_props.wrap = cast(TextWrap)TextWrapAuto
+    return cast(s32)PrepareText(hint_props, DefaultTextFace()).bounds.height
+}
+
 #program_export
 settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
-    unused content_w
     account: SyncAccount
     if sync_account_load(*account) == 0 {
         return AppScale(176)
     }
-    return AppScale(680)
+    hint_height := SettingsSyncNodeHintHeight(content_w)
+    return AppScale(384 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height
 }
 
 #program_export
@@ -429,14 +437,6 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
     x: s32, width: s32, y: *s32) {
     if app == null || y == null {
         return
-    }
-    if app.sync_server_url[0] == cast(u8)0 {
-        saved := storage_get_setting_text(sync_server_url_key)
-        if saved.count == 0 {
-            saved = sync_server_url_default
-        }
-        unused AppCopyText(saved, app.sync_server_url[:])
-        app.sync_server_url_cursor = cast(s32)saved.count
     }
     account: SyncAccount
     has_account := sync_account_load(*account) != 0
@@ -462,6 +462,9 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
             return
         }
     }
+    if SyncNodeCount() == 0 {
+        unused SyncNodeAdd(sync_server_url_default)
+    }
     account_id := SettingsSyncAccountId(*account)
     alias := storage_get_setting_text(sync_account_alias_key)
     display_id := account_id
@@ -470,6 +473,12 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
         alias_label[0] = #char "@"
         unused AppCopyText(alias, alias_label[1:])
         display_id = AppTextFromCString(*alias_label[0], 96)
+    } else if account_id.count >= 16 {
+        out: Vec(u8)
+        BuilderPrint(*out, "%…%", account_id[:8], account_id[account_id.count - 8:])
+        shortened := BuilderFinish(out)
+        display_id = FrameTextHold(*app.ui.frame_text, shortened)
+        PackageFree(shortened)
     }
     Text(app.ui.session, SettingsSyncTextProps(
         LocaleText("sync_account_title"),
@@ -484,23 +493,81 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
         LocaleText("sync_step_account_connected"),
         x, y.*, width, AppScale(24), true))
     y.* += AppScale(27)
-    step: string = "sync_step_automatic_on"
-    if sync_status.server_version > 0 {
-        step = "sync_step_data_restored"
-    }
+    step := app_sync_status_key()
     Text(app.ui.session, SettingsSyncTextProps(LocaleText(step),
         x, y.*, width, AppScale(24), true))
     y.* += AppScale(32)
+    sync_now := SettingsSyncButtonProps(LocaleText("sync_now_button"),
+        x, y.*, width, button_h, 5204, true)
+    if Button(app.ui.session, sync_now) != 0 {
+        storage_set_sync_enabled(1)
+        unused app_auto_sync(app)
+    }
+    y.* += button_h + gap
+    Text(app.ui.session, SettingsSyncTextProps(LocaleText("sync_nodes_title"),
+        x, y.*, width, AppScale(28), false))
+    y.* += AppScale(30)
+    hint_height := SettingsSyncNodeHintHeight(width)
+    hint_props: TextProps = SettingsSyncTextProps(LocaleText("sync_nodes_hint"),
+        x, y.*, width, hint_height, true)
+    hint_props.wrap = cast(TextWrap)TextWrapAuto
+    Text(app.ui.session, hint_props)
+    y.* += hint_height + AppScale(8)
+    active := PackageText(storage_get_setting_text(sync_server_url_key), "")
+    preferred := PackageText(storage_get_setting_text("sync_preferred_node"), "")
+    defer {
+        PackageFree(active)
+        PackageFree(preferred)
+    }
+    if preferred.count == 0 { preferred = PackageText(active, "") }
+    busy := app_sync_loading() != 0
+    for index: cast(s32)0..SyncNodeCount() - 1 {
+        address := SyncNodeAt(index)
+        defer { PackageFree(address) }
+        node := SettingsSyncButtonProps(address, x, y.*, width - AppScale(48),
+            AppScale(52), 5250 + index, address == preferred)
+        node.disabled = busy
+        node.fit_content = true
+        if address == preferred { node.icon_shape = "S1.6rr:M12 3L15 9L22 10L17 15L18 22L12 18L6 22L7 15L2 10L9 9Z" }
+        if Button(app.ui.session, node) != 0 && SyncNodePrefer(address) {
+            storage_set_sync_enabled(1)
+            unused app_auto_sync(app)
+        }
+        remove := SettingsSyncButtonProps(LocaleText("launcher_uninstall"),
+            x + width - AppScale(44), y.*, AppScale(44), AppScale(52), 5260 + index, false)
+        remove.icon_only = true
+        remove.icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+        remove.disabled = busy || SyncNodeCount() <= 1
+        if Button(app.ui.session, remove) != 0 {
+            unused SyncNodeRemove(index)
+            break
+        }
+        y.* += AppScale(60)
+    }
+    Text(app.ui.session, SettingsSyncTextProps(LocaleText("sync_remote_label"),
+        x, y.*, width, AppScale(24), true))
+    y.* += AppScale(25)
+    if SettingsSyncField(app, app.sync_server_url[:],
+        *app.sync_server_url_cursor, *app.sync_server_url_focused,
+        *server_anchor, *server_scroll_x,
+        x, y.*, width - AppScale(84), 5207, 255) && !busy { SettingsSyncServerSave(app) }
+    add := SettingsSyncButtonProps(LocaleText("sync_nodes_add"),
+        x + width - AppScale(78), y.*, AppScale(78), button_h, 5208, false)
+    add.disabled = busy
+    if Button(app.ui.session, add) != 0 { SettingsSyncServerSave(app) }
+    y.* += button_h + AppScale(20)
+    details := SettingsSyncButtonProps(LocaleText("sync_account_options"),
+        x, y.*, width, button_h, 5240, false)
+    if Button(app.ui.session, details) != 0 { sync_account_details = !sync_account_details }
+    y.* += button_h + gap
+    if !sync_account_details {
+        settings_screen_draw_status_reserved(x, y, AppScale(42))
+        return
+    }
     backup := SettingsSyncButtonProps(LocaleText("sync_backup_key_button"),
         x, y.*, width, button_h, 5203, false)
     if Button(app.ui.session, backup) != 0 {
         app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
-    }
-    y.* += button_h + gap
-    sync_now := SettingsSyncButtonProps(LocaleText("sync_now_button"),
-        x, y.*, width, button_h, 5204, true)
-    if Button(app.ui.session, sync_now) != 0 {
-        SettingsSyncRunConnect(app)
     }
     y.* += button_h + gap
     copy_id := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
@@ -514,21 +581,6 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
         x, y.*, width, button_h, 5206, false)
     if Button(app.ui.session, alias_button) != 0 {
         SettingsSyncOpenAlias(app, 0)
-    }
-    y.* += button_h + gap
-    Text(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_remote_label"),
-        x, y.*, width, AppScale(24), true))
-    y.* += AppScale(25)
-    if SettingsSyncField(app, app.sync_server_url[:],
-        *app.sync_server_url_cursor, *app.sync_server_url_focused,
-        *server_anchor, *server_scroll_x,
-        x, y.*, width, 5207, 255) { SettingsSyncServerSave(app) }
-    y.* += AppScale(38) + gap
-    save := SettingsSyncButtonProps(LocaleText("save_button"),
-        x, y.*, width, button_h, 5208, false)
-    if Button(app.ui.session, save) != 0 {
-        SettingsSyncServerSave(app)
     }
     y.* += button_h + gap
     logout := SettingsSyncButtonProps(LocaleText("sync_logout_button"),
@@ -682,7 +734,7 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
     SettingsSyncAliasValid(alias) && alias != stored {
         url: [256]u8
         if !SettingsSyncConnected(app) ||
-            !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
+        !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
             result = 2
         } else {
             #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {

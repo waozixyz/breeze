@@ -9,6 +9,10 @@ liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/storage-sync-zi-test
 include=$root/build/packages/ziran/include
 
+# Serialize concurrent checks before replacing the stable generated output.
+exec 9>"$work.lock"
+flock 9
+
 rm -rf "$work"
 mkdir -p "$work/generated"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \

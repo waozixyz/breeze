@@ -19,7 +19,28 @@ app_launcher_is_favorite :: (app: *InnerBreeze, route: s32) -> bool {
         app.launcher_favorite_count, route)
 }
 
+app_launcher_uninstall :: (app: *InnerBreeze, route: s32) {
+    bit := app_nav_route_bit(route)
+    if bit == 0 { return }
+    mask := app.enabled_apps & ~bit
+    if !CellsSetEnabled(mask) { return }
+    app.enabled_apps = mask
+    if app_launcher_is_favorite(app, route) {
+        app.launcher_favorite_count = LauncherToggleFavorite(
+            app.launcher_favorites[:], app.launcher_favorite_count, route)
+    }
+    app.launcher_drag_key = 0
+    app.launcher_drag_moving = false
+    app_update_app_navigation(app)
+    save_settings(app)
+    app_block_current_click(app)
+}
+
 app_launcher_close :: (app: *InnerBreeze) {
+    if app.launcher_open && app.launcher_guide_seen == 0 {
+        app.launcher_guide_seen = 1
+        save_settings(app)
+    }
     app.launcher_open = false
     app.launcher_search_focused = false
     app.launcher_drag_key = 0
@@ -50,10 +71,10 @@ app_launcher_toggle :: (app: *InnerBreeze) {
     app_block_current_click(app)
 }
 
-app_launcher_activate :: (app: *InnerBreeze, route: s32) {
+app_launcher_install :: (app: *InnerBreeze, route: s32) -> bool {
     bit := app_nav_route_bit(route)
     if bit != 0 && (app.enabled_apps & bit) == 0 {
-        if !CellsSetEnabled(app.enabled_apps | bit) { return }
+        if !CellsSetEnabled(app.enabled_apps | bit) { return false }
         app.enabled_apps |= bit
         app.apps_selected = 1
         app_update_app_navigation(app)
@@ -63,9 +84,13 @@ app_launcher_activate :: (app: *InnerBreeze, route: s32) {
         for index: cast(s32)1..PackageCount - 1 {
             if PackageBit(index) == bit { PackageRequest(index) }
         }
-        return
+        return false
     }
-    if !app_nav_route_available(app, route) { return }
+    return app_nav_route_available(app, route)
+}
+
+app_launcher_activate :: (app: *InnerBreeze, route: s32) {
+    if !app_launcher_install(app, route) { return }
     if app.apps_selected == 0 {
         app.apps_selected = 1
         save_settings(app)

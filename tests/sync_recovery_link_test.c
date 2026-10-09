@@ -13,6 +13,8 @@ static int64_t queued;
 static int repair;
 static int full_upload;
 
+bool storage_sync_node_failover(void) { return false; }
+
 double
 GetTime(void)
 {

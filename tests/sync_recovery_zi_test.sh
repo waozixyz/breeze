@@ -5,6 +5,10 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$root/build/sync-recovery-zi-test
 
+# Serialize concurrent checks before replacing the stable generated output.
+exec 9>"$work.lock"
+flock 9
+
 rm -rf "$work"
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \

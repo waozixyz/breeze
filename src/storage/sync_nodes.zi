@@ -1,0 +1,180 @@
+// Node addresses and cursors belong to this device. Each node has its own
+// version, state hash and clock; account data remains in the shared outbox.
+#import "url"
+#import "auth"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import, file "storage_core.zi";
+Core :: #import, file "storage_core.zi";
+#import, file "sync_session.zi";
+#import, file "sync_crypto.zi";
+#import, file "delegate_store.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../app/text_buffers.zi";
+
+SYNC_NODE_LIMIT :: 8
+
+SyncNodeAddress :: (address: string, output: []u8) -> bool {
+    start: s64 = 0
+    end := address.count
+    while start < end && (address[start] == cast(u8)32 || address[start] == cast(u8)10 || address[start] == cast(u8)13) { start += 1 }
+    while end > start && (address[end - 1] == cast(u8)32 || address[end - 1] == cast(u8)10 || address[end - 1] == cast(u8)13 || address[end - 1] == cast(u8)47) { end -= 1 }
+    if !NormalizeUrl(address[start:end], output) { return false }
+    value := AppTextFromCString(*output[0], cast(s32)output.count)
+    authority := ifx value[:7] == "http://" then 7 else 8
+    for byte: value[authority:] {
+        if !((byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) ||
+            (byte >= 97 && byte <= 122) || byte == 46 || byte == 45 ||
+            byte == 58 || byte == 91 || byte == 93) { return false }
+    }
+    return value.count > authority
+}
+
+SyncNodeKey :: (index: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "sync_node_%", index)
+    return BuilderFinish(out)
+}
+
+SyncNodeCount :: () -> s32 {
+    count := storage_get_setting_int("sync_node_count", 0)
+    if count < 0 || count > SYNC_NODE_LIMIT { return 0 }
+    return ifx count == 0 && storage_get_setting_text("sync_server_url").count > 0 then 1 else count
+}
+
+SyncNodeAt :: (index: s32) -> string {
+    if index < 0 || index >= SyncNodeCount() { return "" }
+    if storage_get_setting_int("sync_node_count", 0) == 0 {
+        return PackageText(storage_get_setting_text("sync_server_url"), "")
+    }
+    key := SyncNodeKey(index)
+    defer { PackageFree(key) }
+    return PackageText(storage_get_setting_text(key), "")
+}
+
+SyncNodeAdd :: (address: string) -> bool {
+    normalized: [256]u8
+    if !SyncNodeAddress(address, normalized[:]) { return false }
+    value := AppTextFromCString(*normalized[0], 256)
+    count := SyncNodeCount()
+    for index: cast(s32)0..count - 1 {
+        current := SyncNodeAt(index)
+        defer { PackageFree(current) }
+        if current == value { return true }
+    }
+    if count >= SYNC_NODE_LIMIT { return false }
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    if count == 1 && storage_get_setting_int("sync_node_count", 0) == 0 {
+        storage_set_setting_text("sync_node_0", storage_get_setting_text("sync_server_url"))
+    }
+    key := SyncNodeKey(count)
+    defer { PackageFree(key) }
+    storage_set_setting_text(key, value)
+    storage_set_setting_int("sync_node_count", count + 1)
+    if count == 0 { storage_set_setting_text("sync_server_url", value) }
+    return true
+}
+
+SyncNodeCursorKey :: (address: string, field: string) -> string {
+    identity: Vec(u8)
+    BuilderPrint(*identity, "%\n%", storage_get_setting_text("sync_public_id"), address)
+    identity_text := BuilderFinish(identity)
+    defer { PackageFree(identity_text) }
+    bytes := cast(*TextDescriptor)(*identity_text)
+    hash: [65]u8
+    storage_sha256_hex(bytes.data, identity_text.count, *hash[0])
+    out: Vec(u8)
+    BuilderPrint(*out, "sync_node_%.%", AppTextFromCString(*hash[0], 65), field)
+    return BuilderFinish(out)
+}
+
+SyncNodeActivate :: (address: string) -> bool {
+    normalized: [256]u8
+    if StoredAccountMode() == AccountModeDelegate ||
+    !SyncNodeAddress(address, normalized[:]) { return false }
+    next := AppTextFromCString(*normalized[0], 256)
+    previous := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer { PackageFree(previous) }
+    if previous == next { return true }
+    fields: [4]string = .["sync_last_server_version", "sync_seen_server_version",
+    "sync_server_clock", "sync_last_server_state_hash"]
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    for field: fields {
+        if previous.count > 0 {
+            key := SyncNodeCursorKey(previous, field)
+            // Copy before another meta lookup replaces its borrowed buffer.
+            value := PackageText(storage_meta_text(field), "")
+            storage_set_setting_text(key, value)
+            PackageFree(value)
+            PackageFree(key)
+        }
+        key := SyncNodeCursorKey(next, field)
+        value := PackageText(storage_get_setting_text(key), "")
+        Core.set_meta_buf(field, value)
+        PackageFree(value)
+        PackageFree(key)
+    }
+    storage_set_setting_text("sync_server_url", next)
+    storage_set_meta_int64("sync_full_upload_done", 0)
+    storage_set_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 0)
+    // Republish the latest local state to a node that may not yet have every
+    // mesh record. Pending changes and local Diary originals stay intact.
+    storage_enqueue_all_sync_state()
+    session: Session
+    SaveSession(*session)
+    return true
+}
+
+#program_export "storage_sync_node_failover"
+SyncNodeFailover :: () -> bool {
+    count := SyncNodeCount()
+    if count < 2 || StoredAccountMode() == AccountModeDelegate { return false }
+    current := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer { PackageFree(current) }
+    for index: cast(s32)0..count - 1 {
+        address := SyncNodeAt(index)
+        same := address == current
+        PackageFree(address)
+        if same {
+            next := SyncNodeAt((index + 1) % count)
+            defer { PackageFree(next) }
+            return SyncNodeActivate(next)
+        }
+    }
+    return false
+}
+
+SyncNodePrefer :: (address: string) -> bool {
+    if !SyncNodeActivate(address) { return false }
+    storage_set_setting_text("sync_preferred_node", address)
+    return true
+}
+
+SyncNodeRemove :: (index: s32) -> bool {
+    count := SyncNodeCount()
+    if count <= 1 || index < 0 || index >= count { return false }
+    removed := SyncNodeAt(index)
+    defer { PackageFree(removed) }
+    if removed == storage_get_setting_text("sync_server_url") {
+        replacement := SyncNodeAt(ifx index == 0 then 1 else 0)
+        defer { PackageFree(replacement) }
+        if !SyncNodeActivate(replacement) { return false }
+    }
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    for at: index..count - 2 {
+        address := SyncNodeAt(at + 1)
+        key := SyncNodeKey(at)
+        storage_set_setting_text(key, address)
+        PackageFree(address)
+        PackageFree(key)
+    }
+    storage_set_setting_int("sync_node_count", count - 1)
+    if removed == storage_get_setting_text("sync_preferred_node") {
+        storage_set_setting_text("sync_preferred_node", storage_get_setting_text("sync_server_url"))
+    }
+    return true
+}

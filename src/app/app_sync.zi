@@ -60,6 +60,7 @@ using ModalType;
 #import, file "exercise_types.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/db.zi";
+AppSyncNodeFailover :: () -> bool #foreign c "storage_sync_node_failover";
 #import, file "../storage/temporary_data.zi";
 using ExerciseType;
 
@@ -159,6 +160,9 @@ sync_unlock :: () {
 
 app_sync_record_result :: (result: s32) {
     SettingsStoreInt("sync_last_result", result)
+    if retry_is_temporary(result) && AppSyncNodeFailover() {
+        g_sync.dirty_sync_at = GetTime() + 1.0
+    }
     decision := sync_retry_decision(result,
         SettingsReadInt("sync_retry_attempt", 0))
     g_sync.retry_at = 0.0
@@ -273,68 +277,68 @@ app_social_push_action :: (action: string, value: string) -> s32 {
 }
 
 #if !ASYNC {
-app_social_fetch :: (url: string, practice: string, metric: string,
-    action: string, action_value: string,
-    requests_json: *u8, requests_size: s64,
-    friends_json: *u8, friends_size: s64,
-    leaderboard_json: *u8, leaderboard_size: s64) -> SyncResult {
-    result: SyncResult = cast(SyncResult)SYNC_INVALID_URL
-    friends_result: SyncResult = cast(SyncResult)SYNC_REQUEST_FAILED
-    leaderboard_result: SyncResult = cast(SyncResult)SYNC_REQUEST_FAILED
+    app_social_fetch :: (url: string, practice: string, metric: string,
+        action: string, action_value: string,
+        requests_json: *u8, requests_size: s64,
+        friends_json: *u8, friends_size: s64,
+        leaderboard_json: *u8, leaderboard_size: s64) -> SyncResult {
+        result: SyncResult = cast(SyncResult)SYNC_INVALID_URL
+        friends_result: SyncResult = cast(SyncResult)SYNC_REQUEST_FAILED
+        leaderboard_result: SyncResult = cast(SyncResult)SYNC_REQUEST_FAILED
 
-    if requests_json != null && requests_size > 0 {
-        SyncCopyText(requests_json, requests_size, "{\"incoming\":[],\"outgoing\":[]}")
-    }
-    if friends_json != null && friends_size > 0 {
-        SyncCopyText(friends_json, friends_size, "{\"friends\":[]}")
-    }
-    if leaderboard_json != null && leaderboard_size > 0 {
-        SyncCopyText(leaderboard_json, leaderboard_size, "{\"rows\":[]}")
-    }
-    if url.count == 0 {
-        return cast(SyncResult)SYNC_INVALID_URL
-    }
+        if requests_json != null && requests_size > 0 {
+            SyncCopyText(requests_json, requests_size, "{\"incoming\":[],\"outgoing\":[]}")
+        }
+        if friends_json != null && friends_size > 0 {
+            SyncCopyText(friends_json, friends_size, "{\"friends\":[]}")
+        }
+        if leaderboard_json != null && leaderboard_size > 0 {
+            SyncCopyText(leaderboard_json, leaderboard_size, "{\"rows\":[]}")
+        }
+        if url.count == 0 {
+            return cast(SyncResult)SYNC_INVALID_URL
+        }
 
-    if action.count > 0 && action == "send" {
-        result = cast(SyncResult)SendFriendRequestStored(url, action_value)
-        if result != cast(SyncResult)SYNC_OK {
-            return result
+        if action.count > 0 && action == "send" {
+            result = cast(SyncResult)SendFriendRequestStored(url, action_value)
+            if result != cast(SyncResult)SYNC_OK {
+                return result
+            }
+        } else if action.count > 0 && action == "accept" {
+            result = cast(SyncResult)AcceptFriendRequestStored(url, action_value)
+            if result != cast(SyncResult)SYNC_OK {
+                return result
+            }
+        } else if action.count > 0 && action == "decline" {
+            result = cast(SyncResult)DeclineFriendRequestStored(url, action_value)
+            if result != cast(SyncResult)SYNC_OK {
+                return result
+            }
+        } else if action.count > 0 && action == "remove" {
+            result = cast(SyncResult)RemoveFriendStored(url, action_value)
+            if result != cast(SyncResult)SYNC_OK {
+                return result
+            }
         }
-    } else if action.count > 0 && action == "accept" {
-        result = cast(SyncResult)AcceptFriendRequestStored(url, action_value)
-        if result != cast(SyncResult)SYNC_OK {
-            return result
-        }
-    } else if action.count > 0 && action == "decline" {
-        result = cast(SyncResult)DeclineFriendRequestStored(url, action_value)
-        if result != cast(SyncResult)SYNC_OK {
-            return result
-        }
-    } else if action.count > 0 && action == "remove" {
-        result = cast(SyncResult)RemoveFriendStored(url, action_value)
-        if result != cast(SyncResult)SYNC_OK {
-            return result
-        }
-    }
 
-    result = cast(SyncResult)FetchFriendRequests(url,
-        BytesFromPointer(requests_json, cast(u64)requests_size))
-    if result != cast(SyncResult)SYNC_OK {
-        return result
-    }
-    friends_result = cast(SyncResult)FetchFriends(url,
-        BytesFromPointer(friends_json, cast(u64)friends_size))
-    if friends_result != cast(SyncResult)SYNC_OK {
-        return friends_result
-    }
-    leaderboard_result = cast(SyncResult)FetchFriendStats(url, practice,
-        metric, BytesFromPointer(leaderboard_json,
+        result = cast(SyncResult)FetchFriendRequests(url,
+            BytesFromPointer(requests_json, cast(u64)requests_size))
+        if result != cast(SyncResult)SYNC_OK {
+            return result
+        }
+        friends_result = cast(SyncResult)FetchFriends(url,
+            BytesFromPointer(friends_json, cast(u64)friends_size))
+        if friends_result != cast(SyncResult)SYNC_OK {
+            return friends_result
+        }
+        leaderboard_result = cast(SyncResult)FetchFriendStats(url, practice,
+            metric, BytesFromPointer(leaderboard_json,
             cast(u64)leaderboard_size))
-    if leaderboard_result != cast(SyncResult)SYNC_OK && leaderboard_size > 0 {
-        leaderboard_json[0] = cast(u8)0
+        if leaderboard_result != cast(SyncResult)SYNC_OK && leaderboard_size > 0 {
+            leaderboard_json[0] = cast(u8)0
+        }
+        return cast(SyncResult)SYNC_OK
     }
-    return cast(SyncResult)SYNC_OK
-}
 
 }
 
@@ -617,7 +621,7 @@ app_ensure_sync_events :: (url: string) {
     #if #defined(ANDROID_BUILD) {
         now := GetTime()
         if AppTextFromCString(*g_sync_events_url[0], 512) != url ||
-            now >= g_sync_events_retry_at {
+        now >= g_sync_events_retry_at {
             unused AppCopyText(url, g_sync_events_url[:])
             g_sync.remote_sync_due = 1
             g_sync_events_retry_at = now + 30.0
@@ -1053,7 +1057,7 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 {
     url: [256] u8
 
     if app == null || PreviewMode() != 0 || DataTemporary() ||
-        app_sync_url(*url[0], size_of(type_of(url))) == 0 {
+    app_sync_url(*url[0], size_of(type_of(url))) == 0 {
         return 0
     }
     now = GetTime()

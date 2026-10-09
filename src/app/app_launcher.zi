@@ -12,6 +12,7 @@
 #import, file "text_buffers.zi";
 #import, file "app_size.zi";
 #import, file "assets.zi";
+#import, file "widgets.zi";
 #import, file "../widgets/bottom_nav.zi";
 #import, file "../cells/module_host.zi";
 #import, file "../cells/catalog.zi";
@@ -109,6 +110,10 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         card.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
     }
     card.disabled = blocked
+    card.fit_content = true
+    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0
+    action_width := AppScale(ifx installed then 44 else 72)
+    card.bounds.width -= cast(float32)action_width
     tapped := !card.disabled && app_launcher_drag_card(app, card, route, vertical)
     activated := Button(app.ui.session, card) != 0 || tapped
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
@@ -121,7 +126,7 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         }
         size_text: [32]u8
         if AppBundleSizeText(CellsPackageSize(index), size_text[:]) {
-            size_bounds := bounds
+            size_bounds := card.bounds
             size_bounds.x += cast(float32)AppScale(ifx vertical then 8 else 48)
             size_bounds.y += bounds.height - cast(float32)AppScale(16)
             size_bounds.width -= cast(float32)AppScale(ifx vertical then 16 else 56)
@@ -139,7 +144,23 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     if activated && !app.launcher_drag_moving {
         app_launcher_activate(app, route)
     }
-
+    action: ButtonProps
+    action.id = 7300 + route
+    action.bounds = Rectangle.{bounds.x + bounds.width - cast(float32)action_width,
+        bounds.y + (bounds.height - cast(float32)AppScale(44)) / 2.0,
+        cast(float32)action_width, cast(float32)AppScale(44)}
+    action.label = LocaleText(ifx installed then "launcher_uninstall" else "launcher_install")
+    action.icon_only = installed
+    if installed {
+        action.icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+    }
+    action.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    action.fit_content = true
+    action.disabled = blocked
+    if Button(app.ui.session, action) != 0 {
+        if installed { app_launcher_uninstall(app, route) }
+        else { unused app_launcher_install(app, route) }
+    }
 }
 
 #program_export
@@ -250,7 +271,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
     if more_count == 0 { more_height += AppScale(64) }
     content_height := pinned_height + more_height
     if match_count == 0 { content_height += AppScale(64) }
-    bottom_dock := ifx !desktop && app_navigation_placement(app) != NAVIGATION_TOP then AppScale(84) else 0
+    bottom_dock := app_content_bottom_reserved(app)
     footer_y := app.ui.view_height - bottom_dock - AppScale(72)
     body_y := search_y + AppScale(68)
     scroll: ScrollProps
@@ -339,10 +360,12 @@ app_draw_launcher :: (app: *InnerBreeze) {
         }
         if app.launcher_drag_released {
             if target >= 0 {
-                app.launcher_favorite_count = LauncherPlaceFavorite(
-                    app.launcher_favorites[:], app.launcher_favorite_count,
-                    app.launcher_drag_route, target)
-                save_settings(app)
+                if app_launcher_install(app, app.launcher_drag_route) {
+                    app.launcher_favorite_count = LauncherPlaceFavorite(
+                        app.launcher_favorites[:], app.launcher_favorite_count,
+                        app.launcher_drag_route, target)
+                    save_settings(app)
+                }
             } else if query.count == 0 && scrolled.opened &&
             PointInBounds(point.x, point.y, scrolled.viewport) &&
             PointInBounds(point.x, point.y, more_bounds) &&
@@ -391,4 +414,29 @@ app_draw_launcher :: (app: *InnerBreeze) {
         app.launcher_drag_key = 0
     }
     unused End(app.ui.session)
+    if app.launcher_guide_seen == 0 {
+        steps: [3]GuideOverlayStep
+        steps[0] = GuideOverlayStep.{field.bounds, LocaleText("launcher_guide_find")}
+        steps[1] = GuideOverlayStep.{scroll.bounds, LocaleText("launcher_guide_manage")}
+        steps[2] = GuideOverlayStep.{Rectangle.{cast(float32)x, cast(float32)footer_y,
+                cast(float32)width, cast(float32)AppScale(72)}, LocaleText("launcher_guide_profile")}
+        guide: GuideOverlayProps
+        guide.steps = *steps[0]
+        guide.count = 3
+        guide.step = *app.launcher_guide_step
+        guide.view_width = app.ui.view_width
+        guide.view_height = app.ui.view_height
+        guide.reserved_bottom = bottom_dock
+        guide.max_width = AppScale(320)
+        guide.paragraph_font = AppFontSize()
+        guide.previous_requested = app.ui.manual_previous
+        guide.next_requested = app.ui.manual_next
+        guide.close_requested = app.ui.manual_close
+        result := GuideOverlay(guide)
+        if result.finished != 0 || result.closed != 0 {
+            app.launcher_guide_seen = 1
+            save_settings(app)
+            app_block_current_click(app)
+        }
+    }
 }

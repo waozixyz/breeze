@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/launcher-ui-test"
@@ -101,6 +101,7 @@ with contextlib.ExitStack() as stack:
                 for i in range(int(saved["launcher_favorite_count"]))]
 
     def seed(profile, values):
+        values.setdefault("launcher_guide_seen", 1)
         if "enabled_apps" in values:
             for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi")):
                 values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
@@ -192,12 +193,20 @@ with contextlib.ExitStack() as stack:
                         item_width = min(int(144 * scale), (width - margin * 2 - gap * count) // (count + 1))
                         group_width = (count + 1) * (item_width + gap) - gap
                         start = (width - group_width) / 2
-                        y = int(42 * scale) if placement == 4 else int(height - 42 * scale)
+                        dock_height = round((52 if count + 1 > 4 else 56) * scale)
+                        y = dock_height // 2 if placement == 4 else height - dock_height // 2
                         points = [(int(start + i * (item_width + gap) + item_width / 2), y)
                                   for i in range(count + 1)]
-                        edge = round(84 * scale) if placement == 4 else height
+                        edge = dock_height if placement == 4 else height
                         strip = image.crop((round(12 * scale), edge - max(1, round(5 * scale)),
                                             width - round(12 * scale), edge))
+                        if 11 in routes[:count]:
+                            active = routes[:count].index(11)
+                            center = points[active][0] - round(12 * scale)
+                            radius = item_width / 2 + round(4 * scale)
+                            ImageDraw.Draw(strip).rectangle(
+                                (round(center - radius), 0, round(center + radius), strip.height),
+                                fill=strip.getpixel((0, 0)))
                         assert all(low == high for low, high in strip.getextrema()), \
                             f"{name}: dock still draws an underline or scrollbar"
                     for route, point in zip(routes[:count], points):
@@ -208,7 +217,7 @@ with contextlib.ExitStack() as stack:
                             f"{name}: pin {route} is not reachable at {point}: {log.read_text()}"
                     click(window, *points[-1])
                     capture(window, name + "-apps")
-                    footer_y = height - (round(84 * scale) if not vertical and placement != 4 else 0) - round(36 * scale)
+                    footer_y = height - (dock_height if not vertical and placement != 4 else 0) - round(36 * scale)
                     click(window, 170 if vertical else width // 4, footer_y)
                     assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
                         f"{name}: Apps or its Profile action is unreachable"
@@ -241,6 +250,11 @@ with contextlib.ExitStack() as stack:
                 click(window, width // 2, height // 2 + 63)
                 assert settings(profile)["language_setup_done"] == "1", log.read_text()
                 capture(window, name + "-first-apps")
+                assert settings(profile).get("launcher_guide_seen", "0") == "0"
+                for step in range(3):
+                    capture(window, name + f"-apps-guide-{step + 1}")
+                    key(window, "Right")
+                assert settings(profile)["launcher_guide_seen"] == "1", "Apps guide did not finish"
                 # Practices is the third pinned card in the same grid as the rest.
                 click(window, 170 if not mobile else 100, 328)
                 assert settings(profile)["apps_setup_done"] == "1", log.read_text()
@@ -271,11 +285,13 @@ with contextlib.ExitStack() as stack:
                     capture(window, name + "-profile")
                     before = log.read_text()
                     click(window, 110, 28)
-                    assert log.read_text().count("screen=") == before.count("screen="), "Profile still has a root back button"
+                    assert settings(profile)["main_tab"] == "1", "Profile Back changed the selected app"
+                    capture(window, name + "-profile-back-to-apps")
+                    click(window, 170, height - 36)
                 click(window, *apps_point, hold=.35)
                 capture(window, name + "-apps")
                 click(window, width - 42, 44)
-                click(window, 100 if mobile else 170, height - (120 if mobile else 36))
+                click(window, 100 if mobile else 170, height - (92 if mobile else 36))
                 assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "The Apps title corner still dismisses the page"
                 click(window, *apps_point)
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
@@ -309,13 +325,32 @@ with contextlib.ExitStack() as stack:
                     assert not "frame rejected" in log.read_text()
                     capture(window, name + "-profile-after-drag")
                 else:
-                    click(window, 100, height - 120)
+                    click(window, 100, height - 92)
                     assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Mobile Apps did not open Profile"
                     capture(window, name + "-profile")
             with application(profile, name + "-restart", width, height) as (window, log):
                 assert favorites(profile) == [11, 1, 2], "Restart changed personal pins"
                 assert settings(profile)["language_setup_done"] == "1"
                 capture(window, name + "-preserved-pins")
+            with application(profile, name + "-manage", width, height) as (window, log):
+                click(window, *((330, height - 28) if mobile else (44, 312)))
+                with sqlite3.connect(profile / "inbe.db") as db:
+                    habit_count = db.execute("SELECT COUNT(*) FROM habits").fetchone()[0]
+                selected_tab = settings(profile)["main_tab"]
+                # Habits is the second pinned card. Its trash action removes
+                # only the installation and shortcut, retaining local data.
+                click(window, width - 42, 228)
+                assert settings(profile)["app_used_habits"] == "0", "Trash did not uninstall Habits"
+                assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
+                with sqlite3.connect(profile / "inbe.db") as db:
+                    assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
+                capture(window, name + "-uninstalled")
+                # The same app is now first in More, with an Install action.
+                click(window, 154 if mobile else 452, 364)
+                assert settings(profile)["app_used_habits"] == "1", "Install did not restore Habits"
+                assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
+                assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
+                capture(window, name + "-reinstalled")
             if not mobile:
                 # Overflow must leave Apps reachable on either side.
                 all_favorites = [12, 1, 2, 3, 11]

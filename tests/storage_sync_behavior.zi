@@ -23,6 +23,50 @@
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/sync_nodes.zi";
+Core :: #import, file "../src/storage/storage_core.zi";
+
+test_node_cursors :: () {
+    root := make_root("sync-nodes")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_set_setting_text("sync_server_url", "https://one.example")
+    check_true("save another node", SyncNodeAdd("https://two.example"))
+    check_true("migrate the original node", SyncNodeCount() == 2)
+    check_true("normalize duplicate node", SyncNodeAdd("https://two.example/"))
+    check_true("do not duplicate a node", SyncNodeCount() == 2)
+    storage_set_meta_int64("sync_last_server_version", 41)
+    storage_set_meta_int64("sync_server_clock", 12)
+    Core.set_meta_buf("sync_last_server_state_hash", "node-one-hash")
+    storage_set_setting_text("sync_auth_token", "old-node-token")
+    check_true("queue local diary", CellRecordWrite("cell.diary.file.2026-10-08.json", "pending-entry"))
+    check_true("switch node", SyncNodeActivate("https://two.example"))
+    check_true("new node starts with its own cursor", storage_meta_int64("sync_last_server_version", 0) == 0)
+    check_true("discard the old node session", storage_get_setting_text("sync_auth_token").count == 0)
+    check_true("keep queued diary data", storage_has_pending_sync_outbox() != 0)
+    storage_set_meta_int64("sync_last_server_version", 9)
+    check_true("return to original node", SyncNodeActivate("https://one.example"))
+    check_true("restore original node version", storage_meta_int64("sync_last_server_version", 0) == 41)
+    check_true("restore original node clock", storage_meta_int64("sync_server_clock", 0) == 12)
+    check_true("restore original node hash", storage_meta_text("sync_last_server_state_hash") == "node-one-hash")
+    check_true("choose a preferred node", SyncNodePrefer("https://one.example"))
+    check_true("fail over to another node", SyncNodeFailover())
+    check_true("failover restores the other node cursor", storage_meta_int64("sync_last_server_version", 0) == 9)
+    check_true("failover keeps the preferred node", storage_get_setting_text("sync_preferred_node") == "https://one.example")
+    check_true("prefer the other node", SyncNodePrefer("https://two.example"))
+    check_true("remove the active node", SyncNodeRemove(1))
+    check_true("keep the remaining node", SyncNodeCount() == 1)
+    check_true("replace a removed preference", storage_get_setting_text("sync_preferred_node") == "https://one.example")
+    check_true("keep one usable node", !SyncNodeRemove(0))
+    storage_set_setting_text("sync_public_id", "another-account")
+    storage_reset_sync_state()
+    check_true("add another account's node", SyncNodeAdd("https://two.example"))
+    check_true("switch another account's node", SyncNodeActivate("https://two.example"))
+    check_true("do not reuse another account's cursor", storage_meta_int64("sync_last_server_version", 0) == 0)
+    check_true("return with another account", SyncNodeActivate("https://one.example"))
+    check_true("keep account cursors separate", storage_meta_int64("sync_last_server_version", 0) == 0)
+    storage_close()
+}
 
 c :: #system_library "c";
 sqlite_free :: (memory: *void) #foreign c "free";
@@ -1146,17 +1190,17 @@ test_cell_plaintext_single_record :: () {
     set_account()
     record_id := "cell.lumi.message.bound"
     cases: [11]string = .[
-        "{\"key\":\"cell.lumi.message.other\",\"value\":\"wrong key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"updated_at\":\"2026-10-07T00:00:00Z\"},{\"key\":\"cell.lumi.message.other\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"key\":\"cell.lumi.message.other\",\"value\":\"duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"\\u006bey\":\"cell.lumi.message.other\",\"value\":\"escaped duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"timestamp ambiguity\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"updated_at\":\"2026-10-08T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":{\"nested\":\"not a string\"},\"updated_at\":\"2026-10-07T00:00:00Z\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"missing timestamp\"}",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"unknown field\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"extra\":1}",
-        "[{\"key\":\"cell.lumi.message.bound\",\"value\":\"nested record\",\"updated_at\":\"2026-10-07T00:00:00Z\"}]",
-        "{\"key\":\"cell.lumi.message.bound\",\"value\":\"trailing object\",\"updated_at\":\"2026-10-07T00:00:00Z\"}{}"
+    "{\"key\":\"cell.lumi.message.other\",\"value\":\"wrong key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"updated_at\":\"2026-10-07T00:00:00Z\"},{\"key\":\"cell.lumi.message.other\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"key\":\"cell.lumi.message.other\",\"value\":\"duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"\\u006bey\":\"cell.lumi.message.other\",\"value\":\"escaped duplicate key\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"one\",\"value\":\"two\",\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"timestamp ambiguity\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"updated_at\":\"2026-10-08T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":{\"nested\":\"not a string\"},\"updated_at\":\"2026-10-07T00:00:00Z\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"missing timestamp\"}",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"unknown field\",\"updated_at\":\"2026-10-07T00:00:00Z\",\"extra\":1}",
+    "[{\"key\":\"cell.lumi.message.bound\",\"value\":\"nested record\",\"updated_at\":\"2026-10-07T00:00:00Z\"}]",
+    "{\"key\":\"cell.lumi.message.bound\",\"value\":\"trailing object\",\"updated_at\":\"2026-10-07T00:00:00Z\"}{}"
     ]
     for plaintext: cases {
         check_true("malformed single-cell plaintext rejected before storage",
@@ -1354,6 +1398,7 @@ test_cell_records_round_trip :: () {
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
+    test_node_cursors()
     test_payload_after_upload_marker()
     test_backfill_includes_existing_habits()
     test_payload_excludes_local_settings()

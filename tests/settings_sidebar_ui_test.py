@@ -121,7 +121,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         values = {"language": "en", "language_system": 0, "language_setup_done": 1,
-                  "apps_setup_done": 1, "enabled_apps": 22, "lumi_introduced": 1,
+                  "apps_setup_done": 1, "launcher_guide_seen": 1,
+                  "enabled_apps": 22, "lumi_introduced": 1,
                   "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10, "navigation_placement": 1,
                   "navigation_collapsed": 0, "cells_auto_update": 0,
                   "apps_last_update_check": 1900000000,
@@ -149,12 +150,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         text = command("tesseract", str(OUTPUT / "appearance.png"), "stdout")
         assert "Scale factor" in text, "Appearance did not open before the slider gesture"
         # Coordinates come from the 900x720 rendered Appearance panel.
-        command("xdotool", "mousemove", "--window", window, "650", "420")
+        command("xdotool", "mousemove", "--window", window, "650", "388")
         time.sleep(.15)
         command("xdotool", "mousedown", "1")
         time.sleep(.3)
         before = settled_sidebar(window)
-        for x, y in ((550, 430), (860, 440), (580, 410), (845, 425)):
+        for x, y in ((550, 398), (860, 400), (580, 380), (845, 393)):
             command("xdotool", "mousemove", "--window", window, str(x), str(y))
             time.sleep(.12)
             assert settings()["ui_scale"] == "10", "Scale changed while the slider was held"

@@ -38,21 +38,29 @@ DiarySaveDue :: () -> bool {
 }
 
 DateTitle :: (year: s32, month: s32, day: s32) -> string {
-    bytes: [10]u8
-    numbers: [3]s32 = .[year, month, day]
-    positions: [3]s32 = .[0, 5, 8]
-    lengths: [3]s32 = .[4, 2, 2]
-    bytes[4] = cast(u8)45
-    bytes[7] = cast(u8)45
-    for index: cast(s32)0..cast(s32)2 {
-        number := numbers[index]
-        for digit: cast(s32)0..lengths[index] - 1 {
-            bytes[positions[index] + lengths[index] - digit - 1] = cast(u8)(48 + number % 10)
-            number /= 10
+    if month < 1 || month > 12 { return "" }
+    keys: [12]string = .["habit_month_1", "habit_month_2", "habit_month_3",
+    "habit_month_4", "habit_month_5", "habit_month_6", "habit_month_7",
+    "habit_month_8", "habit_month_9", "habit_month_10", "habit_month_11", "habit_month_12"]
+    month_text := DiaryLocaleHost(keys[month - 1])
+    title: Vec(u8)
+    eastern := month_text.count >= 2 && month_text[:2] == "%d"
+    if day > 0 && !eastern { BuilderPrint(*title, "% ", day) }
+    index: s64 = 0
+    while index < month_text.count {
+        if index + 1 < month_text.count && month_text[index:index + 2] == "%d" {
+            BuilderPrint(*title, "%", year)
+            index += 2
+        } else {
+            BuilderPrint(*title, "%", month_text[index:index + 1])
+            index += 1
         }
     }
-    title: Vec(u8)
-    BuilderPrint(*title, "%", TextFromBytes(bytes[:ifx day == 0 then 7 else 10]))
+    if day > 0 && eastern {
+        BuilderPrint(*title, "%", day)
+        suffix := ifx month_text[month_text.count - 3:] == "월" then "일" else "日"
+        BuilderPrint(*title, "%", suffix)
+    }
     return BuilderFinish(title)
 }
 
@@ -193,10 +201,12 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
         frame.clipboard_text = edited.clipboard_text
     }
 
-    status := ifx frame.photo_error then "diary_photo_error" else ifx state.load_error then "diary_read_error" else ifx state.saved then "diary_saved" else "diary_save_pending"
-    Text(frame.session, TextProps.{.bounds = Rectangle.{left,
-                area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
-            .text = DiaryLocaleHost(status), .font = frame.font})
+    if frame.photo_error || state.load_error || !state.saved {
+        status := ifx frame.photo_error then "diary_photo_error" else ifx state.load_error then "diary_read_error" else "diary_save_pending"
+        Text(frame.session, TextProps.{.bounds = Rectangle.{left,
+                    area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
+                .text = DiaryLocaleHost(status), .font = frame.font})
+    }
     if state.photo_count > 0 {
         photo_top := area.bounds.y + area.bounds.height + cast(float32)Scale(60)
         path: Vec(u8)
