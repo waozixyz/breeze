@@ -17,6 +17,7 @@ assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 ENV = os.environ.copy()
 ENV.update(APP_NO_TRAY="1", YUE_DESKTOP_RECOVERY="0")
 ENV.pop("INBE_DIARY_IMPORT", None)
+ENV.pop("HARMONY_DATA_ROOT", None)
 
 
 def command(*args):
@@ -83,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         command("xdotool", "type", "--clearmodifiers", "A saved Diary entry")
         deadline = time.monotonic() + 10
         while True:
-            entries = list((profile / "diary").glob("????-??-??.json"))
+            entries = list((profile / "diary").glob("*/????-??-??.json"))
             if entries and json.loads(entries[0].read_text())["text"] == "A saved Diary entry":
                 entry = entries[0]
                 break
@@ -102,7 +103,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         capture(window, "restored")
         assert json.loads(entry.read_text()) == saved
         tap(window, 745, 96)  # Next day saves before changing selection.
-        capture(window, "next-day")
+        capture(window, "today-limit")
+        assert list((profile / "diary").glob("*/????-??-??.json")) == [entry]
         assert json.loads(entry.read_text()) == saved
     source = profile / "harmony-fixture"
     source.mkdir()
@@ -114,7 +116,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     (source / "photo-link.bin").symlink_to(source / "photo-local.bin")
     migrated = profile / "migrated-profile"
     with application(migrated, "migration", source) as window:
-        target = migrated / "diary" / entry.name
+        targets = list((migrated / "diary").glob("*/" + entry.name))
+        assert len(targets) == 1
+        target = targets[0]
         assert json.loads(target.read_text()) == original
         assert (target.parent / "photo-local.bin").read_bytes() == photo_bytes
         assert not (target.parent / "photo-link.bin").exists()

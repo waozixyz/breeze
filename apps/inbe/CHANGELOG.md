@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.18] - 2026-10-08
+
+- Keep Diary in the same account as Habits, including existing entries and photos.
+- Limit Diary to today and earlier dates and open a blank editor without a writing prompt.
+
 ## [2.1.17] - 2026-10-07
 
 - Find every app in a searchable library and keep up to two favorites in the compact dock.

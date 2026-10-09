@@ -1,0 +1,124 @@
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+
+Date :: struct {
+    year: s32;
+    month: s32;
+    day: s32;
+}
+
+Leap :: (year: s32) -> bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+Days :: (year: s32, month: s32) -> s32 {
+    lengths: [12]s32 = .[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if month < 1 || month > 12 {
+        return 0
+    }
+    if month == 2 && Leap(year) {
+        return 29
+    }
+    return lengths[month - 1]
+}
+
+Valid :: (date: Date) -> bool {
+    return date.year >= 1 && date.year <= 9999 && date.month >= 1 &&
+    date.month <= 12 && date.day >= 1 && date.day <= Days(date.year, date.month)
+}
+
+Next :: (date: Date, delta: s32) -> Date {
+    value := date
+    if delta > 0 {
+        value.day += 1
+        if value.day > Days(value.year, value.month) {
+            value.day = 1
+            value.month += 1
+            if value.month > 12 {
+                value.month = 1;
+                value.year += 1
+            }
+        }
+    }
+    if delta < 0 {
+        value.day -= 1
+        if value.day < 1 {
+            value.month -= 1
+            if value.month < 1 {
+                value.month = 12;
+                value.year -= 1
+            }
+            value.day = Days(value.year, value.month)
+        }
+    }
+    return ifx Valid(value) then value else date
+}
+
+Weekday :: (date: Date) -> s32 {
+    year := date.year
+    if date.month < 3 {
+        year -= 1
+    }
+    offsets: [12]s32 = .[0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    return (year + year / 4 - year / 100 + year / 400 +
+        offsets[date.month - 1] + date.day + 6) % 7
+}
+
+ISO :: (date: Date) -> string {
+    bytes: [10]u8
+    values: [3]s32 = .[date.year, date.month, date.day]
+    starts: [3]s32 = .[0, 5, 8]
+    lengths: [3]s32 = .[4, 2, 2]
+    bytes[4] = cast(u8)45
+    bytes[7] = cast(u8)45
+    for index: cast(s32)0..cast(s32)2 {
+        number := values[index]
+        for digit: cast(s32)0..lengths[index] - 1 {
+            bytes[starts[index] + lengths[index] - digit - 1] = cast(u8)(48 + number % 10)
+            number /= 10
+        }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextFromBytes(bytes[:]))
+    return BuilderFinish(out)
+}
+
+ParseDate :: (value: string) -> Date {
+    date: Date
+    if value.count != 10 || value[4] != cast(u8)45 || value[7] != cast(u8)45 {
+        return date
+    }
+    for index: cast(s32)0..cast(s32)9 {
+        if index == 4 || index == 7 {
+            continue
+        }
+        if value[index] < cast(u8)48 || value[index] > cast(u8)57 {
+            return Date.{}
+        }
+        number := cast(s32)value[index] - 48
+        if index < 4 {
+            date.year = date.year * 10 + number
+        }
+        else if index < 7 {
+            date.month = date.month * 10 + number
+        }
+        else {
+            date.day = date.day * 10 + number
+        }
+    }
+    return ifx Valid(date) then date else Date.{}
+}
+
+OnOrBefore :: (date: Date, limit: Date) -> bool {
+    if !Valid(date) || !Valid(limit) {
+        return false
+    }
+    if date.year != limit.year {
+        return date.year < limit.year
+    }
+    if date.month != limit.month {
+        return date.month < limit.month
+    }
+    return date.day <= limit.day
+}

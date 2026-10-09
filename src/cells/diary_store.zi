@@ -77,19 +77,10 @@ DiaryStorePrepare :: () -> bool {
     }
     diary_prepared = true
     diary_account = PackageText(account, "")
-    // Bind legacy files to their original account once. Another account never
-    // reads them, and the original files remain recoverable.
+    // The first account adopts the old unscoped files once; originals stay
+    // recoverable and switching accounts never imports another owner's data.
     legacy := DiaryLegacyDirectory()
-    marker := PackageText(legacy, "/.owner")
-    first_owner := PackageRead(marker, 64)
-    if first_owner.count == 0 {
-        unused PackageWrite(marker, account)
-        PackageFree(first_owner)
-        first_owner = PackageText(account, "")
-    }
-    if first_owner == account { unused DiaryStoreImport(legacy) }
-    PackageFree(first_owner)
-    PackageFree(marker)
+    unused DiaryStoreImportOwned(legacy)
     PackageFree(legacy)
     cursor := OpenDirectory(directory)
     if cursor.valid {
@@ -112,12 +103,21 @@ DiaryStorePrepare :: () -> bool {
         }
         unused CloseDirectory(*cursor)
     }
-    // Import is explicit, so an isolated profile never reads owner data.
+    // Harmony supplies its own data root only to supervised child apps.
+    // Standalone and isolated test profiles never discover owner directories.
     name: [32]u8
     unused CopyCString("INBE_DIARY_IMPORT", name[:])
     source := DiaryGetenv(*name[0])
     if source != null && source[0] != cast(u8)0 {
-        unused DiaryStoreImport(TextFromCString(source))
+        unused DiaryStoreImportOwned(TextFromCString(source))
+    } else {
+        unused CopyCString("HARMONY_DATA_ROOT", name[:])
+        host_root := DiaryGetenv(*name[0])
+        if host_root != null && host_root[0] != cast(u8)0 {
+            host_diary := PackageText(TextFromCString(host_root), "/diary")
+            unused DiaryStoreImportOwned(host_diary)
+            PackageFree(host_diary)
+        }
     }
     return true
 }
@@ -246,8 +246,31 @@ DiaryStoreClock :: () -> string {
     return TextFromCString(*diary_clock[0])
 }
 
-// An explicitly configured Harmony folder is copied once, without modifying
-// the original. Existing Inbe entries always win. Photos move with entries.
+// Preserve legacy entries and photos while binding their import to one
+// account. Existing Inbe entries always win; original files remain intact.
+DiaryStoreImportOwned :: (source: string) -> bool {
+    if source.count == 0 || DataTemporary() || !PathExists(source) {
+        return false
+    }
+    account := AppTextFromCString(storage_user_id_buffer(), 64)
+    if account.count == 0 {
+        return false
+    }
+    marker := PackageText(source, "/.owner")
+    first_owner := PackageRead(marker, 64)
+    defer {
+        PackageFree(marker)
+        PackageFree(first_owner)
+    }
+    if first_owner.count > 0 && first_owner != account {
+        return false
+    }
+    if first_owner.count == 0 && !PackageWrite(marker, account) {
+        return false
+    }
+    return DiaryStoreImport(source)
+}
+
 DiaryStoreImport :: (source: string) -> bool {
     #if #defined(PLATFORM_WEB) {
         unused source
@@ -276,7 +299,15 @@ DiaryStoreImport :: (source: string) -> bool {
                 break
             }
             name := TextFromCString(*entry.name[0])
-            if !DiaryStoreNameValid(name) {
+            if !DiaryStoreNameValid(name) || name[0] == cast(u8)46 {
+                continue
+            }
+            key := DiaryRecordKey(name)
+            existing := CellRecordRead(key)
+            PackageFree(key)
+            present := existing.count > 0
+            PackageFree(existing)
+            if present {
                 continue
             }
             target := DiaryStorePath(name)
@@ -303,7 +334,8 @@ DiaryStoreImport :: (source: string) -> bool {
             defer {
                 PackageFree(value)
             }
-            if value.count > 0 && !PackageWrite(target, value) {
+            if value.count > 0 &&
+            (!DiaryRecordSave(name, value) || !PackageWrite(target, value)) {
                 return false
             }
         }

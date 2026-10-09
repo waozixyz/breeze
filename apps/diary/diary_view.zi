@@ -1,4 +1,5 @@
 #import "geometry"
+#import, file "diary_date.zi";
 #import "image_props"
 #import "image_widget"
 #import "layout"
@@ -24,6 +25,7 @@ using ButtonEmphasis;
 host_api :: #system_library "host_api";
 ReadDiaryUiHost :: () -> DiaryUiFrame #foreign host_api;
 WriteDiaryUiHost :: (frame: DiaryUiFrame) #foreign host_api;
+DiaryClockHost :: () -> string #foreign host_api;
 DiaryLocaleHost :: (key: string) -> string #foreign host_api;
 state: DiaryMessage;
 frame: DiaryUiFrame;
@@ -73,9 +75,9 @@ FinishView :: () -> DiaryMessage {
     return state
 }
 
-DiaryAction :: ( id: s32, label: string, bounds: Rectangle) {
+DiaryAction :: ( id: s32, label: string, bounds: Rectangle, enabled: bool = true) {
     if Button(frame.session, ButtonProps.{.id = id, .bounds = bounds,
-            .label = label, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .label = label, .disabled = !enabled, .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
         if id == 29005 {
             frame.photo_requested = true
@@ -93,6 +95,8 @@ DiaryAction :: ( id: s32, label: string, bounds: Rectangle) {
 DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
     state = message
     frame = observed
+    clock := DiaryClockHost()
+    today := ifx clock.count >= 10 then ParseDate(clock[:10]) else Date.{}
     column := CenteredColumnFor(frame.width, Scale(640), Scale(16))
     left := cast(float32)column.x
     width := cast(float32)column.width
@@ -105,7 +109,9 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
     DiaryAction(29004, DiaryLocaleHost("diary_today"), Rectangle.{left + part + cast(float32)Scale(6),
             top, part, cast(float32)Scale(44)})
     DiaryAction(29002, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
-            top, part, cast(float32)Scale(44)})
+            top, part, cast(float32)Scale(44)},
+        OnOrBefore(Next(Date.{state.year, state.month, state.day}, 1), today) &&
+        !OnOrBefore(today, Date.{state.year, state.month, state.day}))
     DiaryAction(29003, DiaryLocaleHost("tab_diary_calendar"),
         Rectangle.{left, top + cast(float32)Scale(52), width, cast(float32)Scale(44)})
     if state.calendar {
@@ -120,7 +126,9 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
         origin := scroll.content.y
         DiaryAction(29011, "‹", Rectangle.{left, origin, part, cast(float32)Scale(44)})
         DiaryAction(29012, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
-                origin, part, cast(float32)Scale(44)})
+                origin, part, cast(float32)Scale(44)},
+            state.month_year < today.year ||
+            (state.month_year == today.year && state.month_number < today.month))
         Text(frame.session, TextProps.{.bounds = Rectangle.{left + part,
                     origin + cast(float32)Scale(8), part, cast(float32)Scale(32)},
                 .text = DateTitle(state.month_year, state.month_number, 0), .font = frame.font})
@@ -141,7 +149,8 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
             DiaryAction(29100 + day, day_title,
                 Rectangle.{left + cast(float32)(position % 7) * cell,
                     origin + cast(float32)Scale(80 + (position / 7) * 44), cell - 2.0,
-                    cast(float32)Scale(42)})
+                    cast(float32)Scale(42)},
+                OnOrBefore(Date.{state.month_year, state.month_number, day}, today))
         }
         End(frame.session)
         return FinishView()
@@ -170,7 +179,6 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame) -> DiaryMessage {
     area.bounds = Rectangle.{left, page.content.y + cast(float32)Scale(56), width,
         cast(float32)editor_height}
     area.value = state.text
-    area.placeholder = DiaryLocaleHost("diary_placeholder")
     area.label = DiaryLocaleHost("tab_diary")
     area.wrap = true
     area.cursor = state.cursor

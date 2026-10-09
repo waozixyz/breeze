@@ -239,7 +239,8 @@ Pending local choices win equal timestamps; newer remote choices win.
 Invalid keys, values and timestamps cannot alter preferences. Versions, package
 paths, release sequence floors and the automatic-update preference stay local.
 All apps share the existing account, SQLite database and outbox. Diary entries
-currently remain device-local, as they were in Harmony.
+and photos use the owner-only encrypted cell collection on that same sync
+account. Per-account files provide a local cache; they are not the only copy.
 
 ## Diary and standalone use
 
@@ -252,10 +253,11 @@ lock and atomic writes.
 
 For explicit migration, set `INBE_DIARY_IMPORT=/absolute/harmony/diary` when
 opening Diary. The importer copies safe regular filenames and skips existing
-Inbe files and symlinks. It leaves Harmony originals untouched. There is no
-automatic migration from an unrelated live profile. Harmony's Diary catalog
-entry now opens the Inbe child inside the existing supervised parent window
-and passes its own Diary folder for a safe import. Old saved native-renderer
+Inbe files and symlinks. It preserves Harmony entries and photos and binds each legacy folder to the
+first importing account with an owner marker. There is no automatic migration
+from an unrelated live profile. Harmony's Diary catalog entry opens the Inbe
+child inside the existing supervised parent window and passes its own data
+root as `HARMONY_DATA_ROOT` for a safe import. Old saved native-renderer
 metadata does not restore a second Diary engine. Inbe's Diary package includes
 photo attachment, previews, navigation and removal; removal retains original
 photo bytes. Native and Android use their ordinary file pickers.

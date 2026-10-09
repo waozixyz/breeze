@@ -1,3 +1,49 @@
+    today := Dates.ParseDate(DiaryStoreClock()[:10])
+    tomorrow := Dates.Next(today, 1)
+    future := DiaryRun(DiaryMessage.{.action = DIARY_LOAD,
+            .year = tomorrow.year, .month = tomorrow.month, .day = tomorrow.day})
+    Expect(!future.succeeded, 410)
+    current := DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
+    current.action = DIARY_EDIT
+    current.replacement = "Today's unsaved entry"
+    current = DiaryRun(current)
+    current.action = DIARY_CONTROL
+    current.control = 29002
+    current = DiaryRun(current)
+    Expect(!current.succeeded && current.day == today.day &&
+        current.month == today.month && current.year == today.year &&
+        current.text == "Today's unsaved entry" && !current.saved, 411)
+    current.control = 29003
+    current = DiaryRun(current)
+    current.control = 29012
+    current = DiaryRun(current)
+    Expect(!current.succeeded && current.calendar &&
+        current.month_year == today.year && current.month_number == today.month, 412)
+    if tomorrow.month == today.month {
+        current.control = 29100 + tomorrow.day
+        current = DiaryRun(current)
+        Expect(!current.succeeded && current.calendar && current.day == today.day, 413)
+    }
+    Expect(Dates.OnOrBefore(Dates.Date.{2024, 2, 29}, Dates.Date.{2024, 3, 1}) &&
+        !Dates.OnOrBefore(Dates.Date.{2024, 3, 1}, Dates.Date.{2024, 2, 29}) &&
+        !Dates.OnOrBefore(Dates.Date.{2023, 2, 29}, Dates.Date.{2024, 3, 1}) &&
+        Dates.OnOrBefore(Dates.Date.{2025, 12, 31}, Dates.Date.{2026, 1, 1}), 414)
+    current.action = DIARY_SAVE
+    current = DiaryRun(current)
+    Expect(current.saved && current.succeeded, 415)
+    original_owner := PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
+    legacy := DiaryLegacyDirectory()
+    other: string = "different-diary-account"
+    AppCopyText(other, g_storage.user_id[:])
+    Expect(DiaryStoreRead("2024-02-28.json").missing, 416)
+    Expect(!DiaryStoreImportOwned(legacy), 417)
+    AppCopyText(original_owner, g_storage.user_id[:])
+    Expect(DiaryStoreRead("2024-02-28.json").data.count > 0, 418)
+    PackageFree(original_owner)
+    PackageFree(legacy)
+
+#import, file "../src/cells/package_files.zi";
+Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "lumi_cells_behavior.zi";
 #import, file "cells_locale_behavior.zi";
 #import, file "../src/cells/module_host.zi";
