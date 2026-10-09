@@ -96,6 +96,7 @@ SyncCoordinator :: struct {
     social_refresh_pending: s32
     social_refresh_running: s32
     remote_sync_due: s32
+    retry_requested: bool
 }
 
 SyncWorkerArgs :: struct {
@@ -237,6 +238,7 @@ app_clear_disconnected_sync_work :: () {
     g_sync.retry_at = 0.0
     g_sync.dirty_sync_at = 0.0
     g_sync.remote_sync_due = 0
+    g_sync.retry_requested = false
     g_sync.social_retry_at = 0.0
     g_sync.social_retry_attempt = 0
     g_sync.social_refresh_pending = 0
@@ -1070,6 +1072,34 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 {
     return 1
 }
 
+// Connecting, restarting the app, and pressing Sync now each request one
+// fresh attempt. A failure from that attempt still follows the retry policy.
+#program_export
+app_request_sync :: (app: *InnerBreeze) -> s32 {
+    if app_auto_sync(app) == 0 {
+        return 0
+    }
+    g_sync.retry_requested = true
+    return 1
+}
+
+app_sync_retry_ready :: (result: s32, now: float64) -> bool {
+    if g_sync.retry_requested {
+        return true
+    }
+    if app_sync_failure_needs_action(result) != 0 {
+        return false
+    }
+    if result != SYNC_OK {
+        if g_sync.retry_at <= 0.0 {
+            g_sync.retry_at = now + app_sync_retry_delay(
+                SettingsReadInt("sync_retry_attempt", 1))
+        }
+        return now >= g_sync.retry_at
+    }
+    return true
+}
+
 sync_review_cache: s32;
 sync_review_cache_revision: s64 = -1;
 
@@ -1119,17 +1149,10 @@ app_sync_pump :: (app: *InnerBreeze) {
         return
     }
     last_result := SettingsReadInt("sync_last_result", SYNC_OK)
-    if app_sync_failure_needs_action(last_result) != 0 {
+    if !app_sync_retry_ready(last_result, now) {
         return
     }
-    if last_result != SYNC_OK {
-        if g_sync.retry_at <= 0.0 {
-            g_sync.retry_at = now + app_sync_retry_delay(
-                SettingsReadInt("sync_retry_attempt", 1))
-        }
-        if now < g_sync.retry_at {
-            return
-        }
+    if last_result != SYNC_OK || g_sync.retry_requested {
         should_sync = 1
     }
     app_ensure_sync_events(AppTextFromCString(*url[0], 256))
@@ -1171,9 +1194,10 @@ app_sync_pump :: (app: *InnerBreeze) {
         return
     }
     if app_sync_now(app) != 0 {
-        if dirty_due != 0 || repair_due != 0 {
+        if dirty_due != 0 || repair_due != 0 || g_sync.retry_requested {
             g_sync.dirty_sync_at = 0.0
         }
+        g_sync.retry_requested = false
         SyncLog(LOG_INFO, "SYNC: dispatched")
     } else if dirty_due != 0 || repair_due != 0 {
         g_sync.dirty_sync_at = now + sync_input_quiet_seconds

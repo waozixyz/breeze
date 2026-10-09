@@ -2,6 +2,7 @@
 #import, file "../src/app/settings_store.zi";
 #import, file "../src/app/sync_safety.zi";
 #import, file "../src/app/sync_retry.zi";
+#import, file "../src/app/app_types.zi";
 
 // Host state the C side provides: the clock, the account switch, and the
 // queue the status key reads.
@@ -106,5 +107,28 @@ Answer :: () -> s32 {
     if app_sync_status_key() != "sync_status_local_queued" { return 26 }
     recovery_set_queue(0, 1, 1)
     if app_sync_status_key() != "sync_status_ready" { return 27 }
+
+    // A saved payload error must not prevent a fresh startup/Sync now request.
+    // Ordinary edits keep the actionable error stopped, and requesting a
+    // retry does not misreport the old failure as a successful sync.
+    app: InnerBreeze
+    app_sync_record_result(3)
+    if app_sync_retry_ready(3, now) { return 30 }
+    if app_auto_sync(*app) == 0 || g_sync.retry_requested { return 31 }
+    if app_sync_retry_ready(3, now + 1.0) { return 32 }
+    if app_request_sync(*app) == 0 || !g_sync.retry_requested { return 33 }
+    if !app_sync_retry_ready(3, now) { return 34 }
+    if SettingsReadInt("sync_last_result", 0) != 3 { return 35 }
+    if app_sync_status_key() != "sync_failed" { return 36 }
+    // Dispatch consumes that single request; another payload failure stops.
+    g_sync.retry_requested = false
+    app_sync_record_result(3)
+    if app_sync_retry_ready(3, now + 1000.0) { return 37 }
+    app_sync_record_result(6)
+    if app_sync_retry_ready(6, now) { return 38 }
+    if app_request_sync(*app) == 0 || !app_sync_retry_ready(6, now) { return 39 }
+    g_sync.retry_requested = false
+    recovery_set_enabled(0)
+    if app_request_sync(*app) != 0 || g_sync.retry_requested { return 40 }
     return 0
 }
