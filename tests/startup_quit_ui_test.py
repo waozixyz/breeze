@@ -101,7 +101,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                       "apps_setup_done": 0, "enabled_apps": 22, "lumi_introduced": 1,
                       "cells_auto_update": 0, "apps_last_update_check": 1900000000,
-                      "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
+                      "tutorial_seen": 1, "habits_guide_seen": 1, "launcher_guide_seen": 1,
+                      "ui_scale": 10,
                       "navigation_placement": 1, "navigation_collapsed": 0,
                       "bottom_nav_route_count": 2, "bottom_nav_route_0": 0,
                       "bottom_nav_route_1": 4}
@@ -130,7 +131,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 assert time.monotonic() < deadline, "Practices click was ignored\n" + log.read_text()
                 time.sleep(.05)
             command("import", "-window", window, str(OUTPUT / "practices-open.png"))
-            click(window, 44, 386)  # Diary, the fifth favorite.
+            # Diary is pinned but not installed, so the dock leaves it out;
+            # its card in the Apps library installs and opens it.
+            click(window, 44, 310)  # Apps, after the three installed favorites.
+            time.sleep(.4)
+            click(window, 297, 427)  # Diary, the fifth pinned card.
             deadline = time.monotonic() + 2
             while "screen=0->22" not in log.read_text():
                 assert time.monotonic() < deadline, "Diary click was ignored\n" + log.read_text()

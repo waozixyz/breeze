@@ -127,7 +127,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         time.sleep(.6)
 
     def swipe(window, start, end):
-        args = ["xdotool", "mousemove", "--window", window, str(int(start[0])), str(int(start[1])), "mousedown", "1"]
+        # Hold the press for a frame first, so the app sees it where it starts.
+        args = ["xdotool", "mousemove", "--window", window, str(int(start[0])), str(int(start[1])),
+                "mousedown", "1", "sleep", "0.15"]
         for step in range(1, 9):
             x = start[0] + (end[0] - start[0]) * step / 8
             y = start[1] + (end[1] - start[1]) * step / 8

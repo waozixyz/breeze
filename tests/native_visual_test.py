@@ -58,7 +58,7 @@ def read_text(image, name, single_line=False):
     return " ".join(re.findall(r"[a-z0-9%]+", result.stdout.lower()))
 
 
-def assert_selection(image, bounds, name, expected="apps"):
+def assert_selection(image, bounds, name, expected="apps", below_label=12):
     tile = image.crop(bounds)
     width, height = tile.size
     # Sample the flat fill, top outline and surrounding page separately.
@@ -67,7 +67,7 @@ def assert_selection(image, bounds, name, expected="apps"):
     edge = tile.getpixel((width // 2, 1))
     assert fill != outside, f"{name}: active app has no visible fill"
     assert contrast(edge, outside) >= 3, f"{name}: active outline blends into the page"
-    label = tile.crop((8, height // 2 + 5, width - 8, height - 12))
+    label = tile.crop((8, height // 2 + 5, width - 8, height - below_label))
     colors = label.getcolors(label.width * label.height)
     _, ink = max(colors, key=lambda entry: contrast(entry[1], fill))
     ink_count = sum(count for count, color in colors if contrast(color, fill) >= 3)
@@ -215,7 +215,9 @@ def run_cases(arguments, evidence):
             for theme in ([9] if arguments.quick else range(13)):
                 for dark in (0, 1):
                     name = f"selection-{layout}-{theme}-{dark}"
-                    bounds = (12, 192, 76, 264) if layout == "desktop" else (261, 768, 377, 836)
+                    # The phone's compact dock is 56 units tall at the bottom edge.
+                    bounds = (12, 192, 76, 264) if layout == "desktop" else (261, 788, 377, 843)
+                    below_label = 12 if layout == "desktop" else 6
                     with application(name, "launcher", width, height, theme=theme, dark=dark) as (window, capture):
                         for state in ("idle", "hover", "pressed"):
                             if state != "idle":
@@ -225,7 +227,8 @@ def run_cases(arguments, evidence):
                                 command("xdotool", "mousedown", "1")
                             time.sleep(.25)
                             image = capture("-" + state)
-                            metrics = assert_selection(image, bounds, name + "-" + state)
+                            metrics = assert_selection(image, bounds, name + "-" + state,
+                                                       below_label=below_label)
                             evidence.append({"case": name, "state": state, **metrics})
                             if (layout == "desktop" and dark == 0 and state == "idle"
                                     and theme == (9 if arguments.quick else 0)):
@@ -247,7 +250,10 @@ def run_cases(arguments, evidence):
                                 command("xdotool", "mousedown", "1")
                             time.sleep(.25)
                             image = capture("-card-" + state)
-                            metrics = assert_selection(image, card, name + "-card-" + state, "practice")
+                            # App cards show their download size on a muted line just
+                            # below the name; read the name above that line.
+                            metrics = assert_selection(image, card, name + "-card-" + state, "practice",
+                                                       below_label=17)
                             evidence.append({"case": name, "state": "card-" + state, **metrics})
                         # Finish the held press outside the card so it cannot open
                         # a route before the fixture's last frame is checked.
