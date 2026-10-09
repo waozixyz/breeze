@@ -1937,6 +1937,16 @@ sync-safety-test: $(ZI2C_BIN)
 
 test: sync-safety-test
 
+.PHONY: account-activity-test
+account-activity-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@sh tests/account_activity_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: account-activity-test
+
+.PHONY: account-activity-ui-test
+account-activity-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) account-activity-test
+	sh tests/account_activity_ui_test.sh $(abspath $(TARGET))
+
 .PHONY: sync-status-policy-test
 sync-status-policy-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \

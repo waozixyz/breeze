@@ -53,6 +53,8 @@ fixture_grant: GrantStorage;
 fixture_claimed: bool;
 fixture_approved: bool;
 fixture_revoked: bool;
+fixture_sync_unavailable: bool;
+fixture_bootstrap_failure: s32;
 fixture_bound: bool;
 fixture_wrong_owner: bool;
 fixture_bad_node: bool;
@@ -239,6 +241,10 @@ Reply :: (request: HttpRequest, output: []u8, status: *s32) -> bool {
     flow := *telegram_account_flow
     path := request.url[TelegramFlowServer.count:]
     status.* = 200
+    if fixture_bootstrap_failure != 0 && path == "/api/v1/telegram/environment" {
+        status.* = fixture_bootstrap_failure
+        return ifx fixture_bootstrap_failure == 1 then false else AppCopyText("{}", output)
+    }
     if path == "/api/v1/telegram/environment" {
         writer := Writer.{output, 0, true}
         writer = WriteText(writer, "{\"app_id\":\"inbe\",\"node_id\":")
@@ -325,6 +331,10 @@ Reply :: (request: HttpRequest, output: []u8, status: *s32) -> bool {
             status.* = 403
             return AppCopyText("{}", output)
         }
+        if fixture_sync_unavailable {
+            status.* = 503
+            return AppCopyText("{}", output)
+        }
         return AppCopyText("{\"collection\":\"private.inbe.v2.lumi\",\"records\":[],\"next_version\":0,\"truncated\":false,\"applied\":0}", output)
     }
     if path == "/api/v1/authorization/challenge" {
@@ -382,6 +392,8 @@ StartFixture :: (name: string, mode: string) -> bool {
     fixture_claimed = false
     fixture_approved = false
     fixture_revoked = false
+    fixture_sync_unavailable = false
+    fixture_bootstrap_failure = 0
     fixture_bound = false
     fixture_wrong_owner = false
     fixture_bad_node = false
@@ -659,16 +671,49 @@ CheckProtectedRestart :: () {
     fixture_request_expiry = FlowTime(null) + 600
     fixture_grant = saved_grant
     flow_host_capsule = saved_capsule
-    Expect("protected installation offered after verified identity", PumpUntil(4) &&
-        TelegramAccountActionAllowed(*telegram_account_flow.view, 2))
-    HandleTelegramAccountAction(null, 2)
-    Expect("protected installation requires fresh key-bound session", PumpUntil(14) &&
+    Expect("protected restart automatically obtains fresh key-bound session", PumpUntil(14) &&
         StoredDelegateAvailable() == 1 && fixture_challenge_calls == 1)
     TelegramAccountFlowPump(null)
     TelegramAccountFlowPump(null)
     Expect("protected restart keeps scoped delegate through cleanup", telegram_account_flow.phase == 14 &&
         StoredDelegateAvailable() == 1 && !fixture_bound && !fixture_claimed && !fixture_approved)
     Expect("protected restart preserves data/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
+    fixture_sync_unavailable = true
+    FlowAdvanceClock(6)
+    for attempt: cast(s32)0..15 {
+        TelegramAccountFlowPump(null)
+    }
+    Expect("temporary sync outage retains account and protected access", telegram_account_flow.phase == 14 &&
+        StoredDelegateAvailable() == 1 && flow_host_capsule[0] != cast(u8)0)
+    fixture_sync_unavailable = false
+    FlowAdvanceClock(6)
+    for attempt: cast(s32)0..15 {
+        TelegramAccountFlowPump(null)
+    }
+    Expect("account resumes sync after outage", telegram_account_flow.phase == 14 && StoredDelegateAvailable() == 1)
+    for failure: cast(s32)0..1 {
+        Expect("offline reopening fixture opens", StartFixture("connect", "restore"))
+        FlowSetClock(saved_time + 2)
+        fixture_request_expiry = FlowTime(null) + 600
+        fixture_grant = saved_grant
+        flow_host_capsule = saved_capsule
+        fixture_bootstrap_failure = ifx failure == 0 then 1 else 503
+        Expect("offline reopening denies unverified access", PumpUntil(90) && StoredDelegateAvailable() == 0)
+        TelegramAccountFlowPump(null)
+        Expect("offline reopening keeps protected account for next launch",
+            TextUntilNul(flow_host_capsule[:]) == TextUntilNul(saved_capsule[:]))
+        Expect("offline reopening does not retain plaintext credentials", telegram_account_flow.capsule[0] == cast(u8)0 &&
+            telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
+        HandleTelegramAccountAction(null, 4)
+        Expect("dismissing connection error preserves saved access", telegram_account_flow.phase == 91 &&
+            TextUntilNul(flow_host_capsule[:]) == TextUntilNul(saved_capsule[:]))
+    }
+    Expect("online reopening after offline failure opens", StartFixture("connect", "restore"))
+    FlowSetClock(saved_time + 3)
+    fixture_request_expiry = FlowTime(null) + 600
+    fixture_grant = saved_grant
+    flow_host_capsule = saved_capsule
+    Expect("online reopening after outage restores same account", PumpUntil(14) && StoredDelegateAvailable() == 1)
     SyncCryptoWipe(*saved_capsule[0], 65537)
 }
 
@@ -701,8 +746,7 @@ CheckDifferentTelegramUser :: () {
     flow_host_raw = "auth_date=1700000000&user=%7B%22id%22%3A8%7D&hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     fixture_grant = saved_grant
     flow_host_capsule = saved_capsule
-    Expect("second user verified independently", PumpUntil(4))
-    HandleTelegramAccountAction(null, 2)
+    Expect("second user verified and mismatched saved grant rejected", PumpUntil(90))
     Expect("different Telegram user capsule rejected before session", telegram_account_flow.phase == 90 &&
         StoredDelegateAvailable() == 0 && fixture_challenge_calls == 0)
     TelegramAccountFlowPump(null)

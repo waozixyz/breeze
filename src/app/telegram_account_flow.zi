@@ -26,12 +26,15 @@
 #import, file "app_types.zi";
 #import, file "locale.zi";
 #import, file "text_buffers.zi";
+#import, file "sync_retry.zi";
 
 TelegramFlowServer :: "https://api.waozi.xyz"
 TelegramAccountFlow :: struct {
     started: bool
     hosted: bool
     waiting: bool
+    request_transport_failed: bool
+    preserve_protected: bool
     phase: s32
     status: s32
     retry_at: s64
@@ -195,19 +198,25 @@ TelegramFlowPumpRemoteCancellation :: (flow: *TelegramAccountFlow) {
     }
 }
 
-TelegramFlowFail :: (flow: *TelegramAccountFlow) {
+TelegramFlowFail :: (flow: *TelegramAccountFlow, preserve_protected: bool = false) {
+    keep_saved := TelegramContextCurrent() && (preserve_protected || flow.request_transport_failed)
+    flow.preserve_protected = keep_saved
     TelegramFlowStopOperations(flow)
     flow.phase = 90
     flow.view.busy = false
     flow.view.restore_failed = true
-    flow.view.status = LocaleText("telegram_account_restore_failed")
+    flow.view.status = LocaleText(ifx keep_saved then "lumi_telegram_error" else "telegram_account_restore_failed")
     flow.view.review_complete = false
     flow.view.allowed_actions = cast(u32)1 << 4
     ClearDelegate()
     flow.cleanup_pending = false
     TelegramFlowBeginRemoteCancellation(flow)
     TelegramFlowWipeSecrets(flow)
-    TelegramFlowClearProtected(flow)
+    // A transport failure says nothing about the saved signed grant. Deny
+    // access in this launch, but retain protected storage for the next one.
+    if !keep_saved {
+        TelegramFlowClearProtected(flow)
+    }
 }
 
 TelegramFlowIDBody :: (field: string, value: string, output: []u8) -> bool {
@@ -220,6 +229,7 @@ TelegramFlowIDBody :: (field: string, value: string, output: []u8) -> bool {
 
 TelegramFlowStartRequest :: (flow: *TelegramAccountFlow, path: string,
     method: string, phase: s32) -> bool {
+    flow.request_transport_failed = false
     if flow.waiting || flow.owner_operation.active || !TelegramContextCurrent() {
         return false
     }
@@ -235,7 +245,10 @@ TelegramFlowStartRequest :: (flow: *TelegramAccountFlow, path: string,
     request.content_type = "application/json"
     request.accept = "application/json"
     request.body = ifx method == "GET" then "" else TextUntilNul(flow.body[:])
-    if !transport.start(transport.context, request, flow.response[:]) { return false }
+    if !transport.start(transport.context, request, flow.response[:]) {
+        flow.request_transport_failed = true
+        return false
+    }
     flow.phase = phase
     flow.waiting = true
     flow.view.busy = true
@@ -402,6 +415,10 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
     phase := flow.phase
     flow.waiting = false
     flow.view.busy = false
+    if flow.status == 408 || flow.status == 429 || flow.status >= 500 {
+        TelegramFlowFail(flow, true)
+        return
+    }
     if phase == 1 {
         if flow.status != 200 || !ReadTelegramEnvironment(json, TelegramFlowServer, *flow.environment) ||
         !TelegramRawInitDigest(TextUntilNul(flow.init_data[:]), flow.environment.bot_id, flow.init_digest[:]) ||
@@ -618,7 +635,9 @@ TelegramAccountFlowCancel :: () {
     flow.cleanup_pending = false
     TelegramFlowBeginRemoteCancellation(flow)
     TelegramFlowWipeSecrets(flow)
-    TelegramFlowClearProtected(flow)
+    if !flow.preserve_protected {
+        TelegramFlowClearProtected(flow)
+    }
     flow.phase = 91
 }
 
@@ -742,7 +761,16 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
             if result < 0 { SyncCryptoWipe(*flow.capsule[0], 65537) }
             if !SetVerifiedDelegateIdentity(flow.environment.bot_id, flow.identity.telegram_id, now + 300) {
                 TelegramFlowFail(flow)
-            } else { TelegramFlowChoice(flow) }
+            } else {
+                TelegramFlowChoice(flow)
+                // Reopening the same verified Telegram account resumes its
+                // saved grant without another account picker. The capsule
+                // still passes the owner signature, identity and node checks,
+                // then obtains a fresh key-bound session from the server.
+                if flow.capsule[0] != cast(u8)0 && flow.phase == 4 {
+                    HandleTelegramAccountAction(app, 2)
+                }
+            }
         } else if flow.protected_phase == 2 {
             SyncCryptoWipe(*flow.capsule[0], 65537)
         } else if flow.protected_phase == 5 {
@@ -805,7 +833,7 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
         if !completed { return }
         flow.status = flow.owner_operation.status
         if flow.owner_operation.result != cast(AuthResult)AuthResult.AUTH_OK {
-            TelegramFlowFail(flow)
+            TelegramFlowFail(flow, retry_is_temporary(cast(s32)flow.owner_operation.result))
         } else { TelegramFlowHandleResponse(flow) }
         return
     }
@@ -817,7 +845,10 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
             return
         }
         if polled < 0 { return }
-        if polled == 0 { TelegramFlowFail(flow); return }
+        if polled == 0 {
+            TelegramFlowFail(flow, true)
+            return
+        }
         TelegramFlowHandleResponse(flow)
         return
     }
@@ -831,12 +862,17 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
         if !TelegramFlowStartPolling(flow) { TelegramFlowFail(flow) }
     } else if flow.phase == 14 {
         if flow.sync_operation.active {
-            if PollStoredOperation(*flow.sync_operation) && flow.sync_operation.result != 0 {
-                flow.view.visible = true
-                TelegramFlowFail(flow)
+            if PollStoredOperation(*flow.sync_operation) {
+                if retry_is_temporary(cast(s32)flow.sync_operation.result) {
+                    // A lost connection must not erase saved account access.
+                    flow.retry_at = now + 5
+                } else if flow.sync_operation.result != 0 {
+                    flow.view.visible = true
+                    TelegramFlowFail(flow)
+                }
             }
         } else if flow.retry_at <= now {
-            flow.retry_at = now + 5
+            flow.retry_at = now + 2
             flow.sync_renewal = StoredDelegateAvailable() == 0
             transport := NetworkTransport(*flow.sync_transfer)
             began := ifx flow.sync_renewal then BeginStoredSession(*flow.sync_operation, TelegramFlowServer, transport) else BeginStoredSync(*flow.sync_operation, TelegramFlowServer, transport)

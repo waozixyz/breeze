@@ -1,0 +1,169 @@
+#import "text_buffer"
+#import "byte_text_linux"
+#import "authorization"
+#import "wire"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/account_activity.zi";
+#import, file "../src/app/account_activity_model.zi";
+#import, file "../src/app/activity_start.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/core/types.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/sql_query.zi";
+#import, file "../src/storage/delegate_store.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/app/text_buffers.zi";
+
+c :: #system_library "c";
+FixtureAdvance :: (seconds: s64) #foreign c;
+FixtureSchedules :: () -> s32 #foreign c;
+fixture_app: InnerBreeze;
+
+WriteControl :: (activity: AccountActivity, id: string, revision: s64, now: s64) {
+    document: [1024]u8
+    writer := Writer.{document[:], 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, "id", id)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "session_id", TextUntilNul(activity.session_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "device_id", TextUntilNul(activity.device_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "time", now)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "revision", revision)
+    writer = WriteText(writer, ",\"paused\":1}")
+    check_true("write control", writer.valid && CellRecordWrite(ActivityControlKey, TextUntilNul(document[:])))
+}
+
+ReadStored :: () -> AccountActivity {
+    value: AccountActivity
+    document := CellRecordRead(ActivityRecordKey)
+    check_true("read activity record", ActivityRead(document, *value))
+    PackageFree(document)
+    return value
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-account-activity.")
+    if guard != 0 {
+        return guard
+    }
+    root := make_root("runner")
+    check_true("open activity fixture", storage_init(root) != 0)
+    account: SyncAccount
+    check_true("generate owner", sync_account_generate(*account) != 0)
+    check_true("save owner", sync_account_save(*account,
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) == SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    storage_set_sync_enabled(1)
+    fixture_app.breathing.screen = ScreenMeditation
+    fixture_app.meditation.duration_seconds = 600
+    fixture_app.meditation.remaining_seconds = 480
+    ActivityPump(*fixture_app)
+    first := ReadStored()
+    check_true("meditation snapshot", first.active == 1 && first.duration == 600 &&
+        first.remaining == 480 && first.elapsed == 120 && first.paused == 0)
+    check_true("private activity queued", db_select_int64_text(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id='cell.lumi.activity.current'", 0) == 1)
+    check_true("sync scheduled", FixtureSchedules() > 0)
+    check_true("own session is not remote", !ActivityRemoteVisible())
+    check_true("fresh activity", ActivityFresh(first, ActivityCurrentTime()))
+    check_true("stale activity is not fresh", !ActivityFresh(first, first.time + ActivityFreshSeconds + 1))
+    check_true("future activity is not fresh", !ActivityFresh(first, first.time - 6))
+    fixture_app.breathing.screen = ScreenSunSalutation
+    fixture_app.sun_salutation.repetitions = 3
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    sun := ReadStored()
+    check_true("direct practice switch gets a new session", sun.screen == ScreenSunSalutation &&
+        TextUntilNul(sun.session_id[:]) != TextUntilNul(first.session_id[:]))
+    fixture_app.sun_salutation.step = 1
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    step := ReadStored()
+    check_true("phase boundary publishes before periodic heartbeat", step.phase == 1 && step.time == sun.time + 1)
+    fixture_app.breathing.screen = ScreenMeditation
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    first = ReadStored()
+    invalid: AccountActivity
+    check_true("malformed record rejected", !ActivityRead("{\"active\":true}", *invalid))
+    control_id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    WriteControl(first, control_id, first.revision, first.time)
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    paused := ReadStored()
+    check_true("remote pause applied to originating session", fixture_app.session_paused == 1 && paused.paused == 1 &&
+        paused.revision == first.revision + 1 && TextUntilNul(paused.control_id[:]) == control_id)
+    FixtureAdvance(3)
+    ActivityPump(*fixture_app)
+    repeated := ReadStored()
+    check_true("control replay ignored", repeated.revision == paused.revision)
+    fixture_app.session_paused = 0
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    resumed := ReadStored()
+    WriteControl(resumed, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", paused.revision, resumed.time)
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    check_true("control for old state ignored", fixture_app.session_paused == 0)
+    WriteControl(resumed, "cccccccccccccccccccccccccccccccc", resumed.revision,
+        ActivityCurrentTime() - ActivityFreshSeconds - 1)
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    check_true("delayed offline control ignored", fixture_app.session_paused == 0)
+    fixture_app.breathing.screen = ScreenStart
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    ended := ReadStored()
+    check_true("completion clears active state", ended.active == 0 && TextUntilNul(ended.session_id[:]) == TextUntilNul(first.session_id[:]))
+    check_int("observer never writes a practice result", storage_session_count(), 0)
+    fixture_app.breathing.screen = ScreenPatterns
+    fixture_app.patterns.elapsed_seconds = 91
+    fixture_app.patterns.duration_minutes = 5
+    fixture_app.patterns.phase = 2
+    fixture_app.patterns.cycle = 7
+    fixture_app.patterns.paused = 1
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    patterns := ReadStored()
+    check_true("patterns snapshot retains phase, cycles and pause", patterns.phase == 2 && patterns.cycles == 7 &&
+        patterns.elapsed == 91 && patterns.remaining == 209 && patterns.paused == 1)
+    check_true("replacement session has a new identity", TextUntilNul(patterns.session_id[:]) != TextUntilNul(first.session_id[:]))
+    WriteControl(first, "dddddddddddddddddddddddddddddddd", patterns.revision, ActivityCurrentTime())
+    FixtureAdvance(1)
+    fixture_app.patterns.paused = 0
+    ActivityPump(*fixture_app)
+    check_true("control cannot reach replacement practice", fixture_app.patterns.paused == 0)
+    fixture_app.breathing.screen = ScreenStart
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    remote := first
+    remote.time = ActivityCurrentTime()
+    remote.device_id[0] = ifx remote.device_id[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
+    output: [2048]u8
+    check_true("serialize remote record", ActivityWrite(remote, output[:]))
+    check_true("receive remote record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    check_true("remote session visible", ActivityRemoteVisible() && !ActivityStartAllowed())
+    check_true("remote request queued", ActivityRequestPause(*fixture_app, 1))
+    check_true("duplicate pending control not sent", !ActivityRequestPause(*fixture_app, 1))
+    FixtureAdvance(ActivityFreshSeconds + 1)
+    ActivityPump(*fixture_app)
+    check_true("stale remote session cannot receive control", !ActivityRequestPause(*fixture_app, 0))
+    storage_set_sync_data_owner_public_id("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+    check_true("switch clears prior remote account", ActivityInitialize() && account_activity.remote.active == 0)
+    storage_set_sync_enabled(0)
+    check_true("disconnect removes activity access", !ActivityInitialize() && !ActivityRemoteVisible())
+    storage_close()
+    return failures
+}

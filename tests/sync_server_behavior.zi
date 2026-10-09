@@ -20,6 +20,13 @@
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/app/account_activity_model.zi";
+#import, file "../src/storage/cell_records.zi";
+#import "text_buffer"
+#import "wire"
+#import "authorization"
+#import, file "../src/core/types.zi";
+#import, file "../src/cells/package_files.zi";
 
 // Two clients, a friend, and fresh installs syncing through a real Daochi
 // server (with a proxy that drops one response), from the first upload to
@@ -236,6 +243,71 @@ Check :: () -> s32 {
     check_int("session reaches the second device", storage_session_count(), 1)
     expect_habit(AlbumHabitId(), habit_name, 20260919)
     expect_list(list_text, item_text, "Travel", "Passport", 0)
+    // Private live activity uses the same authenticated, encrypted account
+    // transport as Lumi history, without creating another completed result.
+    open_client(a)
+    live: AccountActivity
+    unused AppCopyText("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", live.session_id[:])
+    unused AppCopyText("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", live.device_id[:])
+    live.active = 1
+    live.screen = ScreenMeditation
+    live.time = CellRecordClock() / 1000000
+    live.revision = 1
+    live.duration = 600
+    live.remaining = 480
+    live.elapsed = 120
+    live_payload: [2048]u8
+    check_true("serialize running activity", ActivityWrite(live, live_payload[:]))
+    check_true("queue private running activity", CellRecordWrite(ActivityRecordKey, TextUntilNul(live_payload[:])))
+    synchronize(url)
+    open_client(b)
+    synchronize(url)
+    observed: AccountActivity
+    live_document := CellRecordRead(ActivityRecordKey)
+    check_true("same running activity reaches another device", ActivityRead(live_document, *observed) &&
+        observed.remaining == 480 && observed.active == 1 &&
+        TextUntilNul(observed.session_id[:]) == TextUntilNul(live.session_id[:]))
+    PackageFree(live_document)
+    command: [1024]u8
+    writer := Writer.{command[:], 0, true}
+    writer = WriteText(writer, "{\"id\":\"cccccccccccccccccccccccccccccccc\",\"session_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"device_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"paused\":1,\"revision\":1,")
+    writer = JsonNumberField(writer, "time", CellRecordClock() / 1000000)
+    writer = WriteByte(writer, cast(u8)125)
+    check_true("queue private pause request", writer.valid && CellRecordWrite(ActivityControlKey, TextUntilNul(command[:])))
+    synchronize(url)
+    open_client(a)
+    synchronize(url)
+    requested: ActivityControl
+    command_document := CellRecordRead(ActivityControlKey)
+    live.time = CellRecordClock() / 1000000
+    check_true("pause request reaches originating session", ActivityControlRead(command_document, *requested) &&
+        ActivityControlMatches(requested, live, live.time))
+    PackageFree(command_document)
+    live.paused = 1
+    live.revision = 2
+    live.control_id = requested.id
+    check_true("serialize acknowledged pause", ActivityWrite(live, live_payload[:]))
+    check_true("queue acknowledged pause", CellRecordWrite(ActivityRecordKey, TextUntilNul(live_payload[:])))
+    synchronize(url)
+    open_client(b)
+    synchronize(url)
+    live_document = CellRecordRead(ActivityRecordKey)
+    check_true("pause acknowledgement returns to observer", ActivityRead(live_document, *observed) &&
+        observed.paused == 1 && TextUntilNul(observed.control_id[:]) == TextUntilNul(requested.id[:]))
+    PackageFree(live_document)
+    open_client(a)
+    live.active = 0
+    live.revision = 3
+    live.time = CellRecordClock() / 1000000
+    check_true("serialize completed activity", ActivityWrite(live, live_payload[:]))
+    check_true("queue completed activity", CellRecordWrite(ActivityRecordKey, TextUntilNul(live_payload[:])))
+    synchronize(url)
+    open_client(b)
+    synchronize(url)
+    live_document = CellRecordRead(ActivityRecordKey)
+    check_true("completion reaches other device", ActivityRead(live_document, *observed) && observed.active == 0)
+    PackageFree(live_document)
+    check_int("live activity does not duplicate results", storage_session_count(), 1)
     check_true("complete the item", storage_elist_update_item(item_text, "Pack bag", "Passport", 1, 0) != 0)
     synchronize(url)
     open_client(a)

@@ -7,7 +7,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
-work=$root/build/sync-server-zi-test
+work=${SYNC_SERVER_TEST_WORK:-$root/build/sync-server-zi-test}
 include=$root/build/packages/ziran/include
 # The system library, linked by name where there is no development symlink.
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}

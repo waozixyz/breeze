@@ -4,8 +4,11 @@
 #import "std/text"
 #import "std/json_scan"
 #import "byte_text_linux"
+#import "text_buffer"
 #import, file "feature_request.zi";
 #import, file "../app/app_types.zi";
+#import, file "../app/account_activity.zi";
+#import, file "../app/account_activity_model.zi";
 #import, file "../core/types.zi";
 #import, file "../app/settings_actions.zi";
 #import, file "../app/app_nav_state.zi";
@@ -122,8 +125,13 @@ HostAction :: (app: *InnerBreeze, control: string, arguments: string) -> bool {
     }
     active := practice_active(app)
     if control == "practice.pause" || control == "practice.resume" {
-        if active == null { return false }
+        if active == null {
+            return ActivityRequestPause(app, ifx control == "practice.pause" then 1 else 0)
+        }
         app.session_paused = ifx control == "practice.pause" then 1 else 0
+        if active.id == ExerciseType.EXERCISE_PATTERNS {
+            app.patterns.paused = app.session_paused
+        }
         return true
     }
     names: [4]string = .{"practice.whm.start", "practice.meditation.start",
@@ -197,6 +205,8 @@ ReportHostState :: (app: *InnerBreeze) {
     if app.main_tab == APP_MAIN_TAB_DIARY { feature = 8 }
     active := practice_active(app)
     active_id := ifx active != null then cast(s32)active.id else -1
+    remote_fresh := ActivityRemoteVisible() && ActivityFresh(account_activity.remote, ActivityCurrentTime())
+    remote_control_ready := remote_fresh && account_activity.pending_control[0] == cast(u8)0
     out: Vec(u8)
     BuilderPrint(*out, "{\"interface\":\"harmony.app-state.v1\",\"feature\":%,\"host_feature\":%,\"screen\":%,\"practice\":%,\"practice_running\":%,\"paused\":%,\"round\":%,\"breath\":%,\"last_request_id\":\"%\",\"last_request_ok\":%,\"controls\":[", feature, app.host_feature, app.breathing.screen, active_id, active != null, app.session_paused != 0, app.breathing.round, BreathCountValue(app.breathing), AppTextFromCString(*last_request[0], 65), last_ok)
     names: [11]string = .{"open.practices", "open.habits", "open.lists",
@@ -206,15 +216,26 @@ ReportHostState :: (app: *InnerBreeze) {
         "Start meditation", "Start Sun Salutation", "Start breathing patterns", "Pause practice", "Resume practice", "Lumi", "Diary"}
     for i: 0..10 {
         enabled := !AppMiniMode()
-        if i >= 3 && i <= 6 { enabled = enabled && (active == null || active_id == i - 3) }
-        if i == 7 { enabled = active != null && app.session_paused == 0 }
-        if i == 8 { enabled = active != null && app.session_paused != 0 }
+        if i >= 3 && i <= 6 {
+            enabled = enabled && !remote_fresh && (active == null || active_id == i - 3)
+        }
+        if i == 7 {
+            enabled = (active != null && app.session_paused == 0) ||
+            (active == null && remote_control_ready && account_activity.remote.paused == 0)
+        }
+        if i == 8 {
+            enabled = (active != null && app.session_paused != 0) ||
+            (active == null && remote_control_ready && account_activity.remote.paused != 0)
+        }
         if i == 9 { enabled = enabled && (CellsInstalledMask() & 16) != 0 }
         if i == 10 { enabled = enabled && (app.enabled_apps & CellsInstalledMask() & 8) != 0 }
         BuilderPrint(*out, "%{\"control\":\"%\",\"label\":\"%\",\"enabled\":%}", ifx i == 0 then "" else ",", names[i], labels[i], enabled)
     }
     tools := AssetRead("assets/mcp/tools.json")
-    BuilderPrint(*out, "],\"settings\":{\"theme\":\"%\",\"theme_id\":%,\"theme_mode\":%,\"theme_source\":%,\"style\":%,\"scale\":%,\"navigation\":%,\"sidebar_compact\":%},\"mcp\":{\"tools\":%}}",
+    activity: [2048]u8
+    unused ActivityContext(activity[:])
+    BuilderPrint(*out, "],\"account_activity\":%,\"account_activity_fresh\":%,\"settings\":{\"theme\":\"%\",\"theme_id\":%,\"theme_mode\":%,\"theme_source\":%,\"style\":%,\"scale\":%,\"navigation\":%,\"sidebar_compact\":%},\"mcp\":{\"tools\":%}}",
+        TextUntilNul(activity[:]), remote_fresh || (account_activity.was_running && ActivityAvailable()),
         AppThemeName(app.theme_id), app.theme_id, app.theme_mode, app.theme_source,
         app.style_index, app.ui_scale_tenths, app.navigation_placement,
         app.nav_rail_collapsed, ifx tools.found then tools.data else "[]")

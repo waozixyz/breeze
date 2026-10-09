@@ -1019,6 +1019,7 @@ draw_global_modal :: (app: *InnerBreeze) {
 }
 
 updateapp :: (app: *InnerBreeze) {
+    ActivityPump(app)
     hover: s32 = 0
     center_x: s32 = view_width / 2
     frame_view_height: s32 = view_height
@@ -1038,7 +1039,12 @@ updateapp :: (app: *InnerBreeze) {
         }
         if TelegramContextCurrent() && StoredDelegateAvailable() != 0 &&
         (app.enabled_apps & APP_LUMI) != 0 {
-            lumi_screen_draw(app)
+            if account_activity.view_open && ActivityRemoteVisible() {
+                unused ActivityDrawRemote(app, true)
+            } else {
+                lumi_screen_draw(app)
+                ActivityDrawIndicator(app, true)
+            }
         }
         DrawTelegramAccountFlow(app)
         app.breathing.frame += 1
@@ -1279,6 +1285,7 @@ updateapp :: (app: *InnerBreeze) {
     view_height = frame_view_height
     app_draw_session_nav(app)
     app_session_window_draw(app)
+    ActivityDrawIndicator(app)
     app_draw_mini_expand_button(app)
     practice_screen_draw_first_run_guide(app)
     habits_screen_draw_first_run_guide(app)
@@ -1290,6 +1297,19 @@ updateapp :: (app: *InnerBreeze) {
     app_flush_deferred_settings(app)
     app_observe_direct_route_change(app, frame_route)
     app.breathing.frame += 1
+}
+
+// Android's existing practice timer owns the same app-state mutex as the
+// foreground frame. Exchange live records while background practice continues;
+// drawing and result ownership remain on their existing paths.
+#program_export
+app_activity_background_sync :: (vapp: *void) {
+    app := cast(*InnerBreeze)vapp
+    if app == null {
+        return
+    }
+    ActivityPump(app)
+    app_sync_pump(app)
 }
 
 app_update_draw_last_full_w: s32 = -1;
@@ -1355,6 +1375,8 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     }
     profile_frame_start = app_profile_now()
     FrameTextReset(*app.ui.frame_text)
+    // Styles follow the current app route, with cached parsing between edits.
+    unused app_apply_style(app)
     frame_sample: FrameActivitySample
     frame_sample.mouse_x = app.ui.mouse_x
     frame_sample.mouse_y = app.ui.mouse_y
@@ -1489,6 +1511,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     }
     if TelegramAccountFlowOwnsContext() {
         TelegramAccountFlowPump(app)
+        ActivityPump(app)
         app_profile_frame_end(profile_frame_start)
         return
     }
@@ -1496,6 +1519,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app_profile_record_habits(profile_habits_start)
     profile_sync_start = app_profile_now()
     settings_sync_account_pump(app)
+    ActivityPump(app)
     app_sync_pump(app)
     app_lumi_pump(app)
     PackagePump(app.enabled_apps, cast(s32)PackageNow())

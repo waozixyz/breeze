@@ -1,0 +1,169 @@
+// Live activity is a private account record. Only its originating device runs
+// the practice and saves results; other devices observe and request controls.
+#import "json_scan"
+#import "text_buffer"
+#import "wire"
+#import "authorization"
+#import, file "../core/types.zi";
+
+ActivityRecordKey :: "cell.lumi.activity.current"
+ActivityControlKey :: "cell.lumi.activity.control"
+ActivityFreshSeconds :: 20
+ActivityPublishSeconds :: 2
+
+AccountActivity :: struct {
+    session_id: [33]u8
+    device_id: [65]u8
+    control_id: [33]u8
+    time: s64
+    revision: s64
+    active: s32
+    paused: s32
+    screen: s32
+    phase: s32
+    round: s32
+    count: s32
+    elapsed: s32
+    remaining: s32
+    duration: s32
+    cycles: s32
+    total: s32
+}
+
+ActivityControl :: struct {
+    id: [33]u8
+    session_id: [33]u8
+    device_id: [65]u8
+    time: s64
+    revision: s64
+    paused: s32
+}
+
+ActivityHex :: (value: string, length: s32) -> bool {
+    if value.count != length {
+        return false
+    }
+    for byte: value {
+        if !((byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)) {
+            return false
+        }
+    }
+    return true
+}
+
+ActivityInteger :: (json: string, field: string, maximum: s64, output: *s64) -> bool {
+    number := ReadNumber(json, FieldAt(json, 0, field))
+    if !number.valid || number.value < 0 || number.value > cast(float64)maximum ||
+    number.value != cast(float64)cast(s64)number.value {
+        return false
+    }
+    output.* = cast(s64)number.value
+    return true
+}
+
+ActivityRead :: (json: string, output: *AccountActivity) -> bool {
+    output.* = AccountActivity.{}
+    if json.count == 0 || json.count > 2048 || json[0] != cast(u8)123 ||
+    ValueEnd(json, 0, 0) != json.count {
+        return false
+    }
+    value: AccountActivity
+    if ReadStringText(json, FieldAt(json, 0, "session_id"), value.session_id[:]) != 32 ||
+    ReadStringText(json, FieldAt(json, 0, "device_id"), value.device_id[:]) != 64 ||
+    !ActivityHex(TextUntilNul(value.session_id[:]), 32) ||
+    !ActivityHex(TextUntilNul(value.device_id[:]), 64) {
+        return false
+    }
+    control_count := ReadStringText(json, FieldAt(json, 0, "control_id"), value.control_id[:])
+    if control_count != 0 && (control_count != 32 || !ActivityHex(TextUntilNul(value.control_id[:]), 32)) {
+        return false
+    }
+    names: [14]string = .["time", "revision", "active", "paused", "screen", "phase", "round",
+    "count", "elapsed", "remaining", "duration", "cycles", "total", "version"]
+    values: [14]s64
+    for index: cast(s32)0..13 {
+        maximum: s64 = ifx index == 0 then 4503599627370495 else 2147483647
+        if !ActivityInteger(json, names[index], maximum, *values[index]) {
+            return false
+        }
+    }
+    if values[13] != 1 || values[0] == 0 || values[1] == 0 || values[2] > 1 || values[3] > 1 ||
+    values[4] < ScreenSession || values[4] > ScreenPatterns || values[5] > 12 ||
+    values[6] > 12 || values[8] > 86400 || values[9] > 86400 || values[10] > 86400 {
+        return false
+    }
+    value.time = values[0]
+    value.revision = values[1]
+    value.active = cast(s32)values[2]
+    value.paused = cast(s32)values[3]
+    value.screen = cast(s32)values[4]
+    value.phase = cast(s32)values[5]
+    value.round = cast(s32)values[6]
+    value.count = cast(s32)values[7]
+    value.elapsed = cast(s32)values[8]
+    value.remaining = cast(s32)values[9]
+    value.duration = cast(s32)values[10]
+    value.cycles = cast(s32)values[11]
+    value.total = cast(s32)values[12]
+    output.* = value
+    return true
+}
+
+ActivityWrite :: (value: AccountActivity, output: []u8) -> bool {
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"version\":1,")
+    writer = JsonTextField(writer, "session_id", TextUntilNul(value.session_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "device_id", TextUntilNul(value.device_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "control_id", TextUntilNul(value.control_id[:]))
+    names: [13]string = .["time", "revision", "active", "paused", "screen", "phase", "round",
+    "count", "elapsed", "remaining", "duration", "cycles", "total"]
+    values: [13]s64 = .[value.time, value.revision, cast(s64)value.active, cast(s64)value.paused,
+    cast(s64)value.screen, cast(s64)value.phase, cast(s64)value.round, cast(s64)value.count,
+    cast(s64)value.elapsed, cast(s64)value.remaining, cast(s64)value.duration,
+    cast(s64)value.cycles, cast(s64)value.total]
+    for index: cast(s32)0..12 {
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonNumberField(writer, names[index], values[index])
+    }
+    return WriteByte(writer, cast(u8)125).valid
+}
+
+ActivityFresh :: (value: AccountActivity, now: s64) -> bool {
+    return value.active == 1 && now > 0 && value.time <= now + 5 &&
+    value.time >= now - ActivityFreshSeconds
+}
+
+ActivityControlRead :: (json: string, output: *ActivityControl) -> bool {
+    output.* = ActivityControl.{}
+    if json.count == 0 || json.count > 1024 || json[0] != cast(u8)123 ||
+    ValueEnd(json, 0, 0) != json.count {
+        return false
+    }
+    value: ActivityControl
+    paused: s64
+    if ReadStringText(json, FieldAt(json, 0, "id"), value.id[:]) != 32 ||
+    ReadStringText(json, FieldAt(json, 0, "session_id"), value.session_id[:]) != 32 ||
+    ReadStringText(json, FieldAt(json, 0, "device_id"), value.device_id[:]) != 64 ||
+    !ActivityHex(TextUntilNul(value.id[:]), 32) ||
+    !ActivityHex(TextUntilNul(value.session_id[:]), 32) ||
+    !ActivityHex(TextUntilNul(value.device_id[:]), 64) ||
+    !ActivityInteger(json, "time", 4503599627370495, *value.time) ||
+    !ActivityInteger(json, "revision", 2147483647, *value.revision) ||
+    !ActivityInteger(json, "paused", 1, *paused) {
+        return false
+    }
+    value.paused = cast(s32)paused
+    output.* = value
+    return true
+}
+
+ActivityControlMatches :: (control: ActivityControl, activity: AccountActivity, now: s64) -> bool {
+    return ActivityFresh(activity, now) && control.time > 0 &&
+    control.time <= now + 5 && control.time >= now - ActivityFreshSeconds &&
+    control.revision == activity.revision &&
+    TextUntilNul(control.session_id[:]) == TextUntilNul(activity.session_id[:]) &&
+    TextUntilNul(control.device_id[:]) == TextUntilNul(activity.device_id[:]) &&
+    TextUntilNul(control.id[:]) != TextUntilNul(activity.control_id[:])
+}

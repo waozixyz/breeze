@@ -8,12 +8,23 @@
 static pthread_mutex_t callback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t callback_ready = PTHREAD_COND_INITIALIZER;
 static int callback_count;
+static int sync_count;
 static int self_stop_at;
 static int self_stop_returned;
 static int app_value;
 
 int32_t TimerElapsedMillis(int64_t previous_nanoseconds,
                            int64_t now_nanoseconds);
+
+void
+app_activity_background_sync(void *app)
+{
+    assert(app == &app_value);
+    pthread_mutex_lock(&callback_mutex);
+    sync_count++;
+    assert(sync_count <= callback_count);
+    pthread_mutex_unlock(&callback_mutex);
+}
 
 void
 practice_active_advance_elapsed(void *app, int32_t elapsed_ms)
@@ -104,5 +115,6 @@ main(void)
     android_timer_activate();
     wait_for_callbacks(self_stop_at + 1);
     android_timer_stop();
+    assert(sync_count == callback_count);
     return 0;
 }

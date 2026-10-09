@@ -1,0 +1,173 @@
+#import, file "account_activity.zi";
+#import, file "account_activity_model.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "metrics.zi";
+#import, file "locale.zi";
+#import, file "text_buffers.zi";
+#import, file "session_window_view.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../practices/sun_salutation/sun_salutation_labels.zi";
+#import, file "../practices/patterns/patterns_rules.zi";
+#import "text_props"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "geometry"
+#import "tree"
+#import "session"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import "layout"
+#import, file "session_screen.zi";
+#import, file "app_nav_state.zi";
+#import, file "route_types.zi";
+#import, file "app_chrome.zi";
+#import, file "../cells/package_files.zi";
+
+using AppNavRoute;
+
+ActivityStatus :: (value: AccountActivity, output: []u8) -> string {
+    if value.screen == ScreenMeditation {
+        return session_window_clock(value.remaining, output)
+    }
+    if value.screen == ScreenPatterns {
+        return session_window_clock(ifx value.duration > 0 then value.remaining else value.elapsed, output)
+    }
+    if value.screen == ScreenSession {
+        key := "notification_starting_seconds"
+        if value.phase == BreathPhaseBreathe {
+            key = "notification_breathing_count"
+        } else if value.phase == BreathPhaseHold {
+            key = "notification_hold_seconds"
+        } else if value.phase == BreathPhaseRecover {
+            key = "notification_breath_in_seconds"
+        } else if value.phase == BreathPhaseNext {
+            key = "session_round_label"
+        }
+        unused FormatNumberTemplate(LocaleText(key),
+            ifx value.phase == BreathPhaseNext then value.round else value.count, output)
+        return TextUntilNul(output)
+    }
+    unused FormatNumberTemplate(LocaleText("session_round_label"), value.round, output)
+    return TextUntilNul(output)
+}
+
+ActivityDescription :: () -> string {
+    if !ActivityRemoteVisible() {
+        return ""
+    }
+    value := account_activity.remote
+    status: [160]u8
+    summary := ActivityStatus(value, status[:])
+    out: Vec(u8)
+    state_key := "activity_remote_running"
+    if !ActivityFresh(value, ActivityCurrentTime()) {
+        state_key = "activity_remote_stale"
+    } else if value.paused != 0 {
+        state_key = "activity_remote_paused"
+    }
+    BuilderPrint(*out, "% · %\n%", practice_label(session_window_practice(value.screen)),
+        LocaleText(state_key), summary)
+    return BuilderFinish(out)
+}
+
+// The account's running practice occupies the Practice page on observers.
+// Its controls request an action; the acknowledged state comes from the runner.
+ActivityDrawRemote :: (app: *InnerBreeze, hosted: bool = false) -> bool {
+    if app == null || !ActivityRemoteVisible() {
+        return false
+    }
+    value := account_activity.remote
+    session := app.ui.session
+    left := AppScale(24)
+    width := app.ui.view_width - left * 2
+    top := app_content_top_reserved(app) + AppScale(24)
+    name := practice_label(session_window_practice(value.screen))
+    Text(session, TextProps.{.key = KeyHash("inbe/activity/name"),
+            .bounds = Rectangle.{cast(float32)left, cast(float32)top, cast(float32)width, cast(float32)AppScale(56)},
+            .text = name, .font = AppScale(28)})
+    fresh := ActivityFresh(value, ActivityCurrentTime())
+    state_key := "activity_remote_running"
+    if !fresh {
+        state_key = "activity_remote_stale"
+    } else if value.paused != 0 {
+        state_key = "activity_remote_paused"
+    }
+    Text(session, TextProps.{.key = KeyHash("inbe/activity/state"),
+            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(72)),
+                cast(float32)width, cast(float32)AppScale(72)},
+            .text = LocaleText(state_key), .font = AppFontSize()})
+    status_buffer: [160]u8
+    status := ActivityStatus(value, status_buffer[:])
+    Text(session, TextProps.{.key = KeyHash("inbe/activity/progress"),
+            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(148)),
+                cast(float32)width, cast(float32)AppScale(76)},
+            .text = FrameTextHold(*app.ui.frame_text, status), .font = AppScale(32)})
+    phase: string
+    if value.screen == ScreenPatterns {
+        phase = LocaleText(patterns_phase_label_key(value.phase))
+    } else if value.screen == ScreenSunSalutation {
+        phase = SunSalutationStepTitle(value.phase)
+    } else if value.screen == ScreenSession {
+        round: [64]u8
+        unused FormatNumberTemplate(LocaleText("session_round_label"), value.round, round[:])
+        phase = FrameTextHold(*app.ui.frame_text, TextUntilNul(round[:]))
+    }
+    if phase.count > 0 {
+        Text(session, TextProps.{.key = KeyHash("inbe/activity/phase"),
+                .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(232)),
+                    cast(float32)width, cast(float32)AppScale(60)},
+                .text = phase, .font = AppFontSize()})
+    }
+    pending := account_activity.pending_control[0] != cast(u8)0
+    label := "pause_button"
+    if pending {
+        label = "activity_control_pending"
+    } else if value.paused != 0 {
+        label = "play_button"
+    }
+    if Button(session, ButtonProps.{.key = KeyHash("inbe/activity/pause"),
+            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(308)),
+                cast(float32)width, cast(float32)AppScale(48)},
+            .label = LocaleText(label), .disabled = !fresh || pending, .loading = pending}) != 0 {
+        unused ActivityRequestPause(app, ifx value.paused != 0 then 0 else 1)
+    }
+    if hosted && Button(session, ButtonProps.{.key = KeyHash("inbe/activity/lumi"),
+            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(372)),
+                cast(float32)width, cast(float32)AppScale(44)}, .label = "Lumi"}) != 0 {
+        account_activity.view_open = false
+    }
+    return true
+}
+
+ActivityDrawIndicator :: (app: *InnerBreeze, hosted: bool = false) {
+    if app == null || !ActivityRemoteVisible() || app.launcher_open ||
+    app_is_session_screen(app_session_screen(app)) ||
+    (!hosted && app.breathing.screen == ScreenStart &&
+        app.main_tab == cast(s32)AppMainTab.APP_MAIN_TAB_PRACTICE) {
+        return
+    }
+    status_buffer: [160]u8
+    value := account_activity.remote
+    status := ActivityStatus(value, status_buffer[:])
+    summary: Vec(u8)
+    BuilderPrint(*summary, "% · %", practice_label(session_window_practice(value.screen)), status)
+    text := BuilderFinish(summary)
+    defer { PackageFree(text) }
+    width := AppScale(240)
+    if width > app.ui.view_width - AppScale(16) {
+        width = app.ui.view_width - AppScale(16)
+    }
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("inbe/activity/open"),
+            .bounds = Rectangle.{cast(float32)(app.ui.view_width - width - AppScale(8)),
+                cast(float32)AppScale(72), cast(float32)width, cast(float32)AppScale(56)},
+            .label = FrameTextHold(*app.ui.frame_text, text)}) != 0 {
+        if hosted {
+            account_activity.view_open = true
+        } else {
+            app_apply_nav_route(app, APP_NAV_ROUTE_PRACTICE)
+        }
+    }
+}

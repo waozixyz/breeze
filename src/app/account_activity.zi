@@ -1,0 +1,284 @@
+#import "text_buffer"
+#import "wire"
+#import "authorization"
+#import, file "../core/types.zi";
+#import, file "account_activity_model.zi";
+#import, file "activity_start.zi";
+#import, file "app_types.zi";
+#import, file "session_screen.zi";
+#import, file "text_buffers.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_crypto_random.zi";
+#import, file "../storage/sync_crypto.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../platform/environment.zi";
+
+c :: #system_library "c";
+#if #defined(_WIN32) {
+    ActivityNow :: (out: *s64) -> s64 #foreign c "_time64";
+} else {
+    ActivityNow :: (out: *s64) -> s64 #foreign c "time";
+}
+ActivityFrameTime :: () -> float64 #foreign c "GetTime";
+ActivityScheduleSync :: (app: *InnerBreeze) -> s32 #foreign c "app_auto_sync";
+
+ActivityState :: struct {
+    owner: [65]u8
+    device: [65]u8
+    local: AccountActivity
+    remote: AccountActivity
+    last_poll: float64
+    last_publish: s64
+    was_running: bool
+    last_paused: s32
+    pending_control: [33]u8
+    pending_at: s64
+    view_open: bool
+    observed_session: [33]u8
+}
+account_activity: ActivityState;
+
+ActivityCurrentTime :: () -> s64 {
+    return ActivityNow(null)
+}
+
+ActivityRandomID :: (output: []u8, byte_count: s32) -> bool {
+    bytes: [32]u8
+    if byte_count < 1 || byte_count > 32 || output.count < byte_count * 2 + 1 ||
+    SyncCryptoRandom(*bytes[0], byte_count) == 0 {
+        return false
+    }
+    result := SyncCryptoBytesToHex(*bytes[0], byte_count, *output[0], output.count) != 0
+    SyncCryptoWipe(*bytes[0], 32)
+    return result
+}
+
+ActivityAvailable :: () -> bool {
+    return PreviewMode() == 0 && !DataTemporary() && storage_sync_enabled() != 0 &&
+    storage_has_sync_account() != 0 &&
+    (StoredAccountMode() != AccountModeDelegate || StoredDelegateAvailable() != 0)
+}
+
+ActivityInitialize :: () -> bool {
+    if !ActivityAvailable() {
+        account_activity = ActivityState.{}
+        return false
+    }
+    owner := storage_sync_data_owner_public_id()
+    if owner.count != 64 {
+        return false
+    }
+    state := *account_activity
+    if owner != TextUntilNul(state.owner[:]) {
+        state.* = ActivityState.{}
+        unused AppCopyText(owner, state.owner[:])
+    }
+    if state.device[0] == cast(u8)0 {
+        saved := storage_get_setting_text("activity_device_id")
+        if ActivityHex(saved, 64) {
+            unused AppCopyText(saved, state.device[:])
+        } else {
+            if !ActivityRandomID(state.device[:], 32) {
+                return false
+            }
+            storage_set_setting_text("activity_device_id", TextUntilNul(state.device[:]))
+        }
+    }
+    return true
+}
+
+ActivityRemoteVisible :: () -> bool {
+    return ActivityAvailable() && account_activity.remote.active == 1 &&
+    TextUntilNul(account_activity.remote.device_id[:]) != TextUntilNul(account_activity.device[:])
+}
+
+ActivityCanStart :: () -> bool {
+    return !ActivityRemoteVisible() || !ActivityFresh(account_activity.remote, ActivityNow(null))
+}
+
+ActivitySample :: (app: *InnerBreeze, previous: AccountActivity, now: s64) -> AccountActivity {
+    value := previous
+    value.time = now
+    value.active = 1
+    value.screen = app_session_screen(app)
+    value.paused = ifx app.session_paused != 0 then 1 else 0
+    value.phase = 0
+    value.round = 0
+    value.count = 0
+    value.elapsed = 0
+    value.remaining = 0
+    value.duration = 0
+    value.cycles = 0
+    value.total = 0
+    if value.screen == ScreenSession {
+        value.phase = app.breathing.phase
+        value.round = app.breathing.round + 1
+        value.count = BreathDigitsRead(app.breathing.count[:])
+        if value.phase == BreathPhaseStarting {
+            value.count = BreathPauseSeconds(app.breathing) - app.breathing.sectick / 60
+            if value.count < 0 {
+                value.count = 0
+            }
+        }
+        value.total = app.breathing.max_rounds
+    } else if value.screen == ScreenMeditation {
+        value.duration = app.meditation.duration_seconds
+        value.remaining = app.meditation.remaining_seconds
+        value.elapsed = value.duration - value.remaining
+    } else if value.screen == ScreenPatterns {
+        value.paused = ifx app.patterns.paused != 0 then 1 else 0
+        value.phase = app.patterns.phase
+        value.elapsed = app.patterns.elapsed_seconds
+        value.duration = app.patterns.duration_minutes * 60
+        value.remaining = ifx value.duration > value.elapsed then value.duration - value.elapsed else 0
+        value.count = app.patterns.phase_second
+        value.cycles = app.patterns.cycle
+    } else if value.screen == ScreenSunSalutation {
+        value.phase = app.sun_salutation.step
+        value.round = app.sun_salutation.repetition + 1
+        value.total = app.sun_salutation.repetitions
+        value.count = app.sun_salutation.step_ticks / 60
+    }
+    return value
+}
+
+// No remote device advances the originating session or saves a second result.
+// An acknowledged control can never apply to a replacement session or replay.
+ActivityApplyControl :: (app: *InnerBreeze, now: s64) -> bool {
+    document := CellRecordRead(ActivityControlKey)
+    defer { PackageFree(document) }
+    command: ActivityControl
+    state := *account_activity
+    if !ActivityControlRead(document, *command) ||
+    !ActivityControlMatches(command, state.local, now) {
+        return false
+    }
+    app.session_paused = command.paused
+    if state.local.screen == ScreenPatterns {
+        app.patterns.paused = command.paused
+    }
+    state.local.control_id = command.id
+    state.local.revision += 1
+    state.local.paused = command.paused
+    state.last_paused = command.paused
+    return true
+}
+
+ActivityPump :: (app: *InnerBreeze) {
+    activity_start_check = ActivityCanStart
+    if app == null || !ActivityInitialize() {
+        return
+    }
+    state := *account_activity
+    clock := ActivityFrameTime()
+    if clock >= state.last_poll && clock - state.last_poll < 0.25 {
+        return
+    }
+    state.last_poll = clock
+    now := ActivityNow(null)
+    document := CellRecordRead(ActivityRecordKey)
+    unused ActivityRead(document, *state.remote)
+    PackageFree(document)
+    if ActivityRemoteVisible() &&
+    TextUntilNul(state.observed_session[:]) != TextUntilNul(state.remote.session_id[:]) {
+        state.observed_session = state.remote.session_id
+        state.view_open = true
+    }
+    if state.pending_control[0] != cast(u8)0 &&
+    (TextUntilNul(state.remote.control_id[:]) == TextUntilNul(state.pending_control[:]) ||
+        now - state.pending_at >= ActivityFreshSeconds) {
+        state.pending_control = .{}
+    }
+    running := app_is_session_screen(app_session_screen(app))
+    if !running && !state.was_running {
+        return
+    }
+    replaced := running && state.was_running && app_session_screen(app) != state.local.screen
+    if running && (!state.was_running || replaced) {
+        state.local = AccountActivity.{}
+        if !ActivityRandomID(state.local.session_id[:], 16) {
+            return
+        }
+        state.local.device_id = state.device
+        state.local.revision = 1
+        state.last_publish = 0
+    }
+    changed := running != state.was_running || replaced
+    if running {
+        previous := state.local
+        state.local = ActivitySample(app, state.local, now)
+        // Publish boundaries immediately so observers see the new phase or
+        // round without waiting for the periodic timer snapshot.
+        if state.local.phase != previous.phase || state.local.round != previous.round {
+            changed = true
+        }
+        if state.was_running && state.local.paused != state.last_paused {
+            state.local.revision += 1
+            changed = true
+        }
+        state.last_paused = state.local.paused
+        if ActivityApplyControl(app, now) {
+            changed = true
+        }
+    } else {
+        state.local.active = 0
+        state.local.time = now
+        state.local.revision += 1
+    }
+    if !changed && now >= state.last_publish && now - state.last_publish < ActivityPublishSeconds {
+        return
+    }
+    payload: [2048]u8
+    if ActivityWrite(state.local, payload[:]) && CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+        state.last_publish = now
+        state.was_running = running
+        unused ActivityScheduleSync(app)
+    }
+}
+
+ActivityRequestPause :: (app: *InnerBreeze, paused: s32) -> bool {
+    state := *account_activity
+    now := ActivityNow(null)
+    if app == null || !ActivityRemoteVisible() || !ActivityFresh(state.remote, now) ||
+    state.pending_control[0] != cast(u8)0 || (paused != 0 && paused != 1) {
+        return false
+    }
+    id: [33]u8
+    if !ActivityRandomID(id[:], 16) {
+        return false
+    }
+    output: [1024]u8
+    writer := Writer.{output[:], 0, true}
+    writer = WriteByte(writer, cast(u8)123)
+    writer = JsonTextField(writer, "id", TextUntilNul(id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "session_id", TextUntilNul(state.remote.session_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonTextField(writer, "device_id", TextUntilNul(state.remote.device_id[:]))
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "time", now)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "revision", state.remote.revision)
+    writer = WriteByte(writer, cast(u8)44)
+    writer = JsonNumberField(writer, "paused", paused)
+    writer = WriteByte(writer, cast(u8)125)
+    if !writer.valid || !CellRecordWrite(ActivityControlKey, TextUntilNul(output[:])) {
+        return false
+    }
+    state.pending_control = id
+    state.pending_at = now
+    unused ActivityScheduleSync(app)
+    return true
+}
+
+ActivityContext :: (output: []u8) -> bool {
+    value := ifx account_activity.was_running then account_activity.local else account_activity.remote
+    if !ActivityAvailable() || value.session_id[0] == cast(u8)0 || value.active != 1 {
+        return AppCopyText("null", output)
+    }
+    return ActivityWrite(value, output)
+}

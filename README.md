@@ -17,6 +17,10 @@ Inner Breeze is a free, open-source practice app for breathing, meditation, and
 habit tracking. It works offline, stores data locally in SQLite, and can
 optionally sync user-owned data through a Daochi-compatible sync server.
 
+[Account activity](docs/ACCOUNT_ACTIVITY.md) explains persistent Telegram linking,
+reopening an authorized installation, and seeing and controlling the running
+practice from another device connected to the same account.
+
 ## Features
 
 - Lumi, a local firefly companion with private chat, habit completion, practice starts, and optional todo tools
