@@ -74,7 +74,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
     def capture(window, label):
         path = OUTPUT / (label + ".png")
         command("import", "-window", window, str(path))
-        text = command("tesseract", str(path), "stdout", "-l", "eng", "--psm", "6")
+        ocr = OUTPUT / "ocr.png"
+        command("convert", str(path), "-resize", "200%", str(ocr))
+        text = command("tesseract", str(ocr), "stdout", "-l", "eng", "--psm", "6")
         (OUTPUT / (label + ".txt")).write_text(text)
         return text
 
@@ -99,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
         settings = dict(enabled_apps="31", main_tab="4", language="en", language_setup_done="1",
-                        apps_setup_done="1", lumi_introduced="1", tutorial_seen="1",
+                        apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
                         cells_auto_update="0", lumi_archive_migrated="1")
         settings.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
         for key, value in settings.items():

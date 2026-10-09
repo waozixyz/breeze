@@ -17,6 +17,9 @@ LumiTaskCountHost :: () -> s32 #foreign host_api;
 PerformLumiActionHost :: (action: LumiAction) -> bool #foreign host_api;
 AppendLumiChatHost :: (text: string, user: bool) #foreign host_api;
 LumiLocaleHost :: (key: string) -> string #foreign host_api;
+LumiLocaleRevisionHost :: () -> s64 #foreign host_api;
+command_revision: s64 = -1;
+command_cache: LumiCommands;
 ReadLumiToolsHost :: () -> LumiTools #foreign host_api;
 SetLumiHabitChoiceHost :: (choosing: bool) #foreign host_api;
 SetLumiDiaryChoiceHost :: (choosing: bool) #foreign host_api;
@@ -43,7 +46,10 @@ LumiAskHabit :: (tools: LumiTools) {
 }
 
 LumiCommandSet :: () -> LumiCommands {
-    return LumiCommands.{.add = LumiLocaleHost("lumi_add"),
+    revision := LumiLocaleRevisionHost()
+    if revision == command_revision { return command_cache }
+    command_revision = revision
+    command_cache = LumiCommands.{.add = LumiLocaleHost("lumi_add"),
         .complete = LumiLocaleHost("lumi_complete"), .reopen = LumiLocaleHost("lumi_reopen"),
         .complete_habit = LumiLocaleHost("lumi_complete_habit"),
         .start_whm = LumiLocaleHost("lumi_start_whm"),
@@ -56,6 +62,7 @@ LumiCommandSet :: () -> LumiCommands {
         .theme = LumiLocaleHost("lumi_theme"), .dark = LumiLocaleHost("lumi_dark"),
         .light = LumiLocaleHost("lumi_light"), .system = LumiLocaleHost("lumi_system"),
         .progress = LumiLocaleHost("lumi_show_progress"), .donations = LumiLocaleHost("lumi_show_donations")}
+    return command_cache
 }
 
 LumiRespond :: (input: string) {
@@ -201,7 +208,8 @@ Main :: () -> s32 {
     if message.action == LUMI_ROUTE {
         message.succeeded = message.screen == ScreenLumi
     } else if message.action == LUMI_FRAME {
-        message = LumiView(message, LumiCommandSet())
+        commands := LumiCommandSet()
+        message = LumiView(message, commands, command_revision)
         if message.action == LUMI_SEND {
             LumiRespond(message.input)
         }

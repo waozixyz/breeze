@@ -65,6 +65,16 @@ lumi_input: [1024]u8;
 lumi_tasks: EListState;
 lumi_tasks_revision: s64 = -1;
 lumi_row_heights: Vec(s32);
+lumi_row_offsets: Vec(s32);
+lumi_draft: [LUMI_INPUT_MAX]u8;
+lumi_draft_width: s32;
+lumi_draft_font: s32;
+lumi_draft_assets: u64;
+lumi_draft_height: s32;
+lumi_draft_language: [32]u8;
+lumi_locale_revision: s64;
+lumi_locale_assets: u64;
+lumi_locale_language: [32]u8;
 lumi_history_added_rows: s32;
 lumi_history_loading: bool;
 lumi_rows_revision: u64;
@@ -91,6 +101,8 @@ app_lumi_reset :: () {
     lumi_tasks = EListState.{}
     lumi_tasks_revision = -1
     VecFree(lumi_row_heights)
+    VecFree(lumi_row_offsets)
+    lumi_draft_width = 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
     lumi_history_loading = false
@@ -110,16 +122,17 @@ LumiToolsAvailable :: () -> bool {
 
 LumiContextAvailable :: (app: *InnerBreeze) -> bool {
     return app != null && LumiHistoryAvailable() &&
-        (LumiToolsAvailable() || (app.enabled_apps & CellsInstalledMask() & APP_LUMI) != 0)
+    (LumiToolsAvailable() || (app.enabled_apps & CellsInstalledMask() & APP_LUMI) != 0)
 }
 
 LumiDelegateHostAllowed :: (name: string) -> bool {
     return name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost" ||
-        name == "LumiLoadOlderHost" || name == "ReadLumiToolsHost" ||
-        name == "ReadLumiUiHost" || name == "WriteLumiUiHost" ||
-        name == "LumiLocaleHost" || name == "LumiViewLocaleHost" ||
-        name == "ReadLumiChatRowHost" || name == "AppendLumiChatHost" ||
-        name == "StartLumiOnlineHost"
+    name == "LumiLoadOlderHost" || name == "ReadLumiToolsHost" ||
+    name == "ReadLumiUiHost" || name == "WriteLumiUiHost" ||
+    name == "LumiLocaleHost" || name == "LumiViewLocaleHost" ||
+    name == "LumiLocaleRevisionHost" ||
+    name == "ReadLumiChatRowHost" || name == "AppendLumiChatHost" ||
+    name == "StartLumiOnlineHost"
 }
 
 LumiHostAllowed :: (app: *InnerBreeze, name: string) -> bool {
@@ -314,22 +327,36 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
             return 1
         }
     }
+    if name == "LumiLocaleRevisionHost" && count == 0 {
+        language := LocaleActiveCode()
+        assets := AssetGeneration()
+        if language != AppTextFromCString(*lumi_locale_language[0], 32) || assets != lumi_locale_assets {
+            unused AppCopyText(language, lumi_locale_language[:])
+            lumi_locale_assets = assets
+            lumi_locale_revision += 1
+        }
+        result.* = ModuleScalar("s64", lumi_locale_revision)
+        return 1
+    }
     if (name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost") && count == 1 &&
     ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         requested := cast(s32)arguments[0].integer
-        offset: s32 = 0
         index: s32 = 0
-        while index < lumi_row_heights.count {
-            if name == "LumiRowOffsetHost" && index >= requested {
-                break
+        if name == "LumiRowOffsetHost" {
+            index = requested
+            if index < 0 { index = 0 }
+            if index >= lumi_row_offsets.count { index = cast(s32)lumi_row_offsets.count - 1 }
+        } else {
+            low: s32 = 0
+            high := cast(s32)lumi_row_heights.count
+            while low < high {
+                middle := low + (high - low) / 2
+                if lumi_row_offsets[middle + 1] <= requested { low = middle + 1 }
+                else { high = middle }
             }
-            height := lumi_row_heights[index]
-            if name == "LumiFirstVisibleRowHost" && offset + height > requested {
-                break
-            }
-            offset += height
-            index += 1
+            index = low
         }
+        offset := ifx index >= 0 && index < lumi_row_offsets.count then lumi_row_offsets[index] else 0
         result.* = ModuleScalar("s32", ifx name == "LumiRowOffsetHost" then offset else index)
         return 1
     }
@@ -561,7 +588,7 @@ LumiPrepareTools :: (app: *InnerBreeze) {
 // state. No render frame or remembered action is needed for a remote message.
 LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
     if app == null || input.count == 0 || input.count >= LUMI_INPUT_MAX ||
-        !LumiContextAvailable(app) {
+    !LumiContextAvailable(app) {
         return false
     }
     LumiPrepareTools(app)
@@ -614,11 +641,15 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_rows_scale = lumi_ui.scale
         lumi_rows_assets = assets
         unused AppCopyText(language, lumi_rows_language[:])
+        VecFree(lumi_row_offsets)
+        unused VecPush(lumi_row_offsets, cast(s32)0)
+        total: s32 = 0
+        for index: cast(s32)0..lumi_ui.chat_count - 1 {
+            total += LumiMeasuredRow(index).height
+            unused VecPush(lumi_row_offsets, total)
+        }
     }
-    lumi_ui.history_height = 0
-    for index: cast(s32)0..lumi_ui.chat_count - 1 {
-        lumi_ui.history_height += LumiMeasuredRow(index).height
-    }
+    lumi_ui.history_height = ifx lumi_row_offsets.count > 0 then lumi_row_offsets[lumi_row_offsets.count - 1] else 0
     lumi_ui.has_older = lumi_has_older
     if lumi_history_loading {
         for index: cast(s32)1..lumi_history_added_rows {
@@ -629,11 +660,22 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_ui.scroll = 1000000
     }
     column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
-    draft := PrepareText(TextProps.{.text = lumi_ui.value, .font = lumi_ui.font,
-            .wrap = cast(TextWrap)TextWrapAuto,
-            .bounds = Rectangle.{0.0, 0.0, cast(float32)(column_width - AppScale(112)), 0.0}},
-        DefaultTextFace())
-    lumi_ui.draft_height = cast(s32)draft.bounds.height
+    draft_width := column_width - AppScale(112)
+    if lumi_ui.value != AppTextFromCString(*lumi_draft[0], LUMI_INPUT_MAX) ||
+    draft_width != lumi_draft_width || lumi_ui.font != lumi_draft_font || assets != lumi_draft_assets ||
+    language != AppTextFromCString(*lumi_draft_language[0], 32) {
+        unused AppCopyText(lumi_ui.value, lumi_draft[:])
+        lumi_draft_width = draft_width
+        lumi_draft_font = lumi_ui.font
+        lumi_draft_assets = assets
+        unused AppCopyText(language, lumi_draft_language[:])
+        draft := PrepareText(TextProps.{.text = lumi_ui.value, .font = lumi_ui.font,
+                .wrap = cast(TextWrap)TextWrapAuto,
+                .bounds = Rectangle.{0.0, 0.0, cast(float32)draft_width, 0.0}},
+            DefaultTextFace())
+        lumi_draft_height = cast(s32)draft.bounds.height
+    }
+    lumi_ui.draft_height = lumi_draft_height
     typed: [512]u8
     lumi_ui.input = SampleTextAreaInput(lumi_ui.focused, typed[:])
     enter := lumi_ui.input.enter || lumi_ui.input.commit

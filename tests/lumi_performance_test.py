@@ -83,7 +83,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         values = {"language": "en", "language_system": 0, "language_setup_done": 1,
-                  "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                  "apps_setup_done": 1, "launcher_guide_seen": 1,
+                  "enabled_apps": 31, "lumi_introduced": 1,
                   "cells_auto_update": 0, "apps_last_update_check": 1900000000,
                   "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
                   "navigation_placement": 0 if MOBILE else 1, "navigation_collapsed": 0,
@@ -122,13 +123,34 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
             for height in (HEIGHT, 500, HEIGHT):
                 command("xdotool", "windowsize", window, str(WIDTH), str(height))
                 time.sleep(.25)
-            command("xdotool", "mousemove", "--window", window, "150", str(HEIGHT - 118))
+            command("xdotool", "mousemove", "--window", window, "150", str(HEIGHT - 92))
             command("xdotool", "mousedown", "1")
             time.sleep(.12)
             command("xdotool", "mouseup", "1")
-            command("xdotool", "type", "--clearmodifiers", "--delay", "20", "a draft to keep")
+            draft = "a draft to keep " + "typing should remain smooth with a long conversation. " * 14
+            report_start = len(re.findall(r"PROFILE: frame avg=([\d.]+)", log_path.read_text()))
+            started_typing = time.monotonic()
+            subprocess.run(["xdotool", "type", "--clearmodifiers", "--delay", "10", draft],
+                           env=env, check=True, timeout=20)
+            time.sleep(.3)
+            result["typing_characters"] = len(draft)
+            result["typing_duration_ms"] = round((time.monotonic() - started_typing) * 1000)
+            typing_reports = [float(value) for value in re.findall(
+                r"PROFILE: frame avg=([\d.]+)", log_path.read_text())][report_start:]
+            assert len(typing_reports) >= 2, "Typing did not finish enough frames to measure"
+            result["typing_frame_ms"] = statistics.median(typing_reports)
+            result["typing_worst_report_ms"] = max(typing_reports)
+            for key in ("ctrl+a", "ctrl+c"):
+                command("xdotool", "keydown", "--clearmodifiers", key)
+                time.sleep(.12)
+                command("xdotool", "keyup", key)
+            time.sleep(.2)
+            copied = subprocess.check_output(["xclip", "-selection", "clipboard", "-o"],
+                                             env=env, text=True, timeout=3)
+            assert copied == draft, "Lumi dropped or reordered typed characters"
+            result["typing_characters_verified"] = True
             started = time.monotonic()
-            for x, y in ((356, HEIGHT - 42), (100, HEIGHT - 120)):
+            for x, y in ((356, HEIGHT - 26), (100, HEIGHT - 88)):
                 command("xdotool", "mousemove", "--window", window, str(x), str(y))
                 command("xdotool", "mousedown", "1")
                 time.sleep(.15)

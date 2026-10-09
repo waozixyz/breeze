@@ -58,6 +58,35 @@ LumiReplyText :: struct {
 }
 
 reply_text: [8]LumiReplyText;
+draft_intent_source: [LUMI_INPUT_MAX]u8;
+draft_intent_count: s32;
+draft_intent_revision: s64 = -1;
+draft_intent: LumiAction;
+draft_intent_title_count: s32;
+candidate_revision: s64 = -1;
+candidate_actions: [20]LumiAction;
+
+// Interpretation depends on the draft and translated command set. Cursor
+// blinking, scrolling and unchanged frames reuse the result, while sending
+// still validates the request against the current tools in LumiRespond.
+DraftIntent :: (value: string, commands: LumiCommands, revision: s64) -> LumiAction {
+    if revision != draft_intent_revision ||
+    value != TextFromBytes(draft_intent_source[:draft_intent_count]) {
+        draft_intent_count = 0
+        if CopyCString(value, draft_intent_source[:]) {
+            draft_intent_count = cast(s32)value.count
+        }
+        draft_intent_revision = revision
+        action := LumiIntent(value, commands)
+        draft_intent = LumiAction.{.kind = action.kind, .route = action.route, .practice = action.practice}
+        draft_intent_title_count = cast(s32)action.title.count
+    }
+    action := draft_intent
+    // Intent titles are suffixes of the trimmed request. Retain their length,
+    // then return a view of this frame's value rather than a cached text view.
+    action.title = value[value.count - draft_intent_title_count:]
+    return action
+}
 
 ReplyText :: (index: s32, value: string) -> *LumiMessageText {
     slot := *reply_text[index % cast(s32)reply_text.count]
@@ -205,7 +234,7 @@ DonationCard :: (index: s32, x: s32, y: s32, width: s32) {
     }
 }
 
-LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
+LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> LumiMessage {
     frame = ReadLumiUiHost()
     column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
     x := column.x
@@ -224,6 +253,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
     chat_height := suggestions_top - history_top - Scale(8)
     if chat_height < Scale(60) {
         chat_height = Scale(60)
+    }
+    if frame.follow_end {
+        frame.scroll = 1000000
     }
     history := Scroll(frame.session, ScrollProps.{.key = cast(u64)300100,
             .bounds = Bounds(x, history_top, width, chat_height),
@@ -308,7 +340,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
     selected: bool
     limit: s32 = 2
     chip_width := (width - Scale(8)) / limit
-    action := LumiIntent(typed, commands)
+    action := DraftIntent(typed, commands, revision)
     if action.kind == 0 && frame.choosing_habit {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = typed}
     }
@@ -339,11 +371,17 @@ LumiView :: (message: LumiMessage, commands: LumiCommands) -> LumiMessage {
             suggestion_count += 1
         }
     }
+    if revision != candidate_revision {
+        for index: cast(s32)0..cast(s32)19 {
+            candidate_actions[index] = LumiIntent(candidates[index], commands)
+        }
+        candidate_revision = revision
+    }
     for index: cast(s32)0..cast(s32)19 {
         if typed.count == 0 || frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit {
             break
         }
-        candidate_action := LumiIntent(candidates[index], commands)
+        candidate_action := candidate_actions[index]
         practice_match := action.kind == LUMI_START_PRACTICE && candidate_action.kind == LUMI_START_PRACTICE &&
         action.practice == candidate_action.practice
         if (requirements[index] != 0 && (frame.available_apps & requirements[index]) == 0) || suggestion_count >= limit ||

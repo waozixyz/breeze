@@ -11,6 +11,11 @@ main(void)
     app.breathing.screen = ScreenHabits;
     assert(app_background_sync_safe(&app) == 1);
     assert(sync_safety_SyncUiUpdateSafe(&app, 2.5, 1.0, false));
+    app.breathing.screen = ScreenLumi;
+    app.ui.text_input_active = true;
+    assert(!sync_safety_SyncUiUpdateSafe(&app, 20.0, 1.0, false));
+    app.ui.text_input_active = false;
+    assert(sync_safety_SyncUiUpdateSafe(&app, 20.0, 1.0, false));
 
     app.modal.active = 1;
     assert(app_background_sync_safe(&app) == 0);
