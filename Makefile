@@ -3176,3 +3176,9 @@ android-geometry-probe-test:
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS sh tests/android_geometry_probe_test.sh
 
 test: android-geometry-probe-test
+
+.PHONY: lumi-feedback-delivery-test
+lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: lumi-feedback-delivery-test

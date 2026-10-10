@@ -70,6 +70,13 @@ app effects; no database pointers or arbitrary code cross the cell boundary.
 Lumi can open Settings or Appearance, change the app theme with `/theme forest`
 (or another published theme name), and choose light, dark or system mode.
 These actions use the same validation, persistence and refresh path as Settings.
+Bug reports and suggestions still require the feedback card's Yes. The first
+acknowledgement means the report is queued on this device; delivery requires an
+Inner Breeze account and internet access. Lumi confirms receipt by the private
+developer inbox only after Daochi returns the matching report ID. A failed or
+invalid acknowledgement leaves the approved report queued for retry and adds a
+failure notice once, including across restarts. Inbox receipt does not mean a
+developer has reviewed the report or started a fix.
 Lumi can display typed chart and donation cards alongside text replies. Ask
 `/progress sessions 7`, `/progress meditation 30`, `/progress retention 7`, or
 `/progress habits 7` (1–31 days including today). Charts use the active account's

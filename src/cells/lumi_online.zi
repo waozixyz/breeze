@@ -17,6 +17,7 @@
 #import, file "../app/assets.zi";
 #import, file "../practices/practice_actions.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/cell_records.zi";
 #import, file "../storage/state.zi";
 #import, file "../storage/delegate_store.zi";
 #import, file "app_tools.zi";
@@ -268,6 +269,49 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
     return true
 }
 
+// A stable history key makes failure and receipt notices account-scoped and
+// idempotent across retries and restarts, using the existing Lumi archive.
+LumiFeedbackNotice :: (id: string, delivered: bool) -> bool {
+    if id.count != 64 {
+        return false
+    }
+    notice_id := PackageText("feedback-", id)
+    defer { PackageFree(notice_id) }
+    message_id := PackageText(notice_id, ifx delivered then "-delivered" else "-failed")
+    defer { PackageFree(message_id) }
+    message_key := PackageText("cell.lumi.message.", message_id)
+    defer { PackageFree(message_key) }
+    existing := CellRecordRead(message_key)
+    defer { PackageFree(existing) }
+    if existing.count != 0 {
+        return true
+    }
+    report_key := PackageText("cell.feedback.pending.", id)
+    defer { PackageFree(report_key) }
+    report := CellRecordRead(report_key)
+    defer { PackageFree(report) }
+    bytes: [161]u8
+    title := ToolString(report, "title", bytes[:])
+    if title.count == 0 {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%\n%", LocaleText(ifx delivered then
+        "lumi_feedback_delivered" else "lumi_feedback_unavailable"), title)
+    message := BuilderFinish(out)
+    defer { PackageFree(message) }
+    if lumi_next_message_id.count != 0 {
+        return false
+    }
+    lumi_next_message_id = message_id
+    saved := LumiStoreAppendCard(message, false, LUMI_CHAT_TEXT, "")
+    lumi_next_message_id = ""
+    if saved && lumi_ui.follow_end {
+        lumi_ui.scroll = 1000000
+    }
+    return saved
+}
+
 LumiFeedbackStart :: () -> bool {
     if StoredAccountMode() == AccountModeDelegate {
         return false
@@ -278,9 +322,13 @@ LumiFeedbackStart :: () -> bool {
         return false
     }
     id := ToolString(body, "id", lumi_feedback_id[:])
-    if id.count != 64 || !BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
+    if id.count != 64 {
+        return false
+    }
+    if !BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
         NetworkTransport(*lumi_online_transfer), "POST", "/api/v1/feedback",
         body, lumi_online_response[:], false, *lumi_online_session) {
+        unused LumiFeedbackNotice(id, false)
         return false
     }
     lumi_online_stage = 2
@@ -340,6 +388,13 @@ app_lumi_pump :: (app: *InnerBreeze) {
         if !PollStoredOperation(*lumi_online_operation) {
             return
         }
+        // A transport callback can switch accounts while polling. Never write
+        // the old account's receipt or notice into the new account's archive.
+        if owner != AppTextFromCString(storage_user_id_buffer(), 64) {
+            LumiOnlineCancel()
+            app_lumi_reset()
+            return
+        }
         stage := lumi_online_stage
         lumi_online_stage = 0
         success := lumi_online_operation.result == cast(s32)AuthResult.AUTH_OK
@@ -361,9 +416,19 @@ app_lumi_pump :: (app: *InnerBreeze) {
                 LumiOnlineClearTurn()
             }
             unused LumiStoreSave()
-        } else if stage == 2 && success {
-            unused FeedbackDelivered(TextUntilNul(lumi_feedback_id[:]))
-            lumi_feedback_retry = 0
+        } else if stage == 2 {
+            id := TextUntilNul(lumi_feedback_id[:])
+            confirmed := success && LumiFeedbackReceiptMatches(
+                TextUntilNul(lumi_online_response[:]), id)
+            if confirmed {
+                // Persist the receipt notice before removing the outbox item.
+                // A local write failure leaves delivery safe to retry.
+                if LumiFeedbackNotice(id, true) && FeedbackDelivered(id) {
+                    lumi_feedback_retry = 0
+                }
+            } else {
+                unused LumiFeedbackNotice(id, false)
+            }
         } else if stage == 3 && success {
             LumiFeedbackReplies()
             unused LumiStoreSave()

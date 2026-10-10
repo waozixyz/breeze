@@ -1,0 +1,204 @@
+// Real account storage and feedback pump; only the HTTP transport is synthetic.
+#import, file "../src/cells/lumi_online.zi";
+#import, file "../src/cells/feedback_store.zi";
+#import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "storage_test_support.zi";
+#import "async_client"
+#import "net_http"
+#import "text_buffer"
+#import "wire"
+#import "transaction"
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+TestNow :: (out: *s64) -> s64 #foreign c "time";
+
+owner: SyncAccount;
+feedback_status: s32 = 503;
+feedback_response: string = "{\"error\":\"feedback unavailable\"}";
+submissions: s32;
+start_fails: bool;
+switch_in_poll: bool;
+switch_report: string;
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    challenge_url := "https://api.waozi.xyz/api/v1/sync/challenge?user_id="
+    if request.url.count == challenge_url.count + 64 && request.url[:challenge_url.count] == challenge_url {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/sync/login" {
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-feedback-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, TestNow(null))
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/account/devices" {
+        return AppCopyText("true", output)
+    }
+    check_true("only approved feedback reaches HTTP", request.method == "POST" &&
+        request.url == "https://api.waozi.xyz/api/v1/feedback")
+    submissions += 1
+    if start_fails {
+        return false
+    }
+    return AppCopyText(feedback_response, output)
+}
+
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = ifx lumi_online_operation.request.stage == 3 then feedback_status else 200
+    if switch_in_poll && lumi_online_operation.request.stage == 3 {
+        switch_in_poll = false
+        unused AppCopyText("different-account", g_storage.user_id[:])
+        check_true("other account queues its own report", FeedbackEnqueueID(
+            "Other account", "A different account's feedback", "", switch_report))
+    }
+    return 1
+}
+
+FakeCancel :: (context: *void) {
+    unused context
+}
+
+#program_export
+FeedbackTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{null, FakeStart, FakePoll, FakeCancel}
+}
+
+Attempt :: (app: *InnerBreeze) {
+    lumi_feedback_retry = 0
+    lumi_reply_retry = TestNow(null) + 3600
+    app_lumi_pump(app)
+    for step: cast(s32)0..19 {
+        if !lumi_online_operation.active {
+            break
+        }
+        app_lumi_pump(app)
+    }
+    check_true("feedback attempt completes", !lumi_online_operation.active)
+}
+
+Pending :: () -> bool {
+    value := FeedbackFirst()
+    defer { PackageFree(value) }
+    return value.count != 0
+}
+
+#program_export
+Check :: () -> s32 {
+    transport := FeedbackTestTransport()
+    check_true("fixture transport available", transport.start != null)
+    guard := support_begin("/tmp/inbe-lumi-feedback-test/")
+    if guard != 0 {
+        return guard
+    }
+    english_catalog = "[lumi_feedback_delivered]\nThe developer inbox received your feedback.\n---\n[lumi_feedback_unavailable]\nDelivery to the developer inbox is not confirmed. Your feedback is saved on this device and will retry.\n---\n"
+    install_english_catalog()
+    root := "/tmp/inbe-lumi-feedback-test/data"
+    check_true("fixture database initialized", storage_init(root) != 0)
+    check_true("owner created", CreateSyncAccount(*owner) != 0)
+    check_true("owner saved", sync_account_save(*owner,
+        cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
+        cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    draft := FeedbackDraft("Lumi freezes", "Please fix Lumi freezing", "view=lumi")
+    defer { PackageFree(draft) }
+    app: InnerBreeze
+    Attempt(*app)
+    check_int("draft never submits before approval", submissions, 0)
+    check_true("draft is not in approved outbox", !Pending())
+    check_true("Yes queues report", FeedbackChoice(draft, 1))
+    check_true("duplicate Yes stays rejected", !FeedbackChoice(draft, 1))
+    report_id := PackageText(draft, draft)
+    defer { PackageFree(report_id) }
+
+    Attempt(*app)
+    check_true("HTTP failure retains report", Pending())
+    check_true("HTTP failure is visible", LumiStoreCount() == 1 &&
+        contains(LumiStoreRow(0).text, "is not confirmed"))
+    Attempt(*app)
+    check_int("repeat failure does not flood history", LumiStoreCount(), 1)
+
+    LumiOnlineCancel()
+    LumiStoreReset()
+    storage_close()
+    check_true("database reopens", storage_init(root) != 0)
+    check_true("approved report survives restart", Pending())
+    Attempt(*app)
+    check_int("failure notice survives restart without duplication", LumiStoreCount(), 1)
+
+    feedback_status = 200
+    feedback_response = "true"
+    Attempt(*app)
+    check_true("unrelated HTTP success never loses report", Pending())
+    feedback_response = "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\""
+    Attempt(*app)
+    check_true("another report's receipt never loses report", Pending())
+    receipt: Vec(u8)
+    LumiJsonString(*receipt, report_id)
+    correct := BuilderFinish(receipt)
+    defer { PackageFree(correct) }
+    feedback_response = PackageText(correct, "garbage")
+    Attempt(*app)
+    check_true("trailing receipt data never loses report", Pending())
+    PackageFree(feedback_response)
+    feedback_response = correct
+    start_fails = true
+    Attempt(*app)
+    check_true("transport start failure retains report", Pending())
+    check_int("transport errors do not flood history", LumiStoreCount(), 1)
+    start_fails = false
+    feedback_response = PackageText(correct, " \r\n\t")
+    Attempt(*app)
+    check_true("matching receipt completes delivery", !Pending())
+    check_int("matching receipt adds confirmation", LumiStoreCount(), 2)
+    check_true("confirmation names the report", contains(LumiStoreRow(1).text,
+        "developer inbox received") && contains(LumiStoreRow(1).text, "Lumi freezes"))
+    PackageFree(feedback_response)
+    Attempt(*app)
+    check_int("completed delivery never repeats confirmation", LumiStoreCount(), 2)
+    LumiOnlineCancel()
+    LumiStoreReset()
+    storage_close()
+    check_true("confirmed database reopens", storage_init(root) != 0)
+    check_true("completion survives restart", !Pending())
+    check_int("delivery history persists", LumiStoreCount(), 2)
+    switch_report = FeedbackEnqueue("Account switch", "Keep each account's report private", "")
+    defer { PackageFree(switch_report) }
+    receipt = .{}
+    LumiJsonString(*receipt, switch_report)
+    feedback_response = BuilderFinish(receipt)
+    defer { PackageFree(feedback_response) }
+    saved_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
+    switch_in_poll = true
+    Attempt(*app)
+    check_true("new account's pending report is preserved", Pending())
+    check_int("old account's notice never enters new history", LumiStoreCount(), 0)
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("original account's report is preserved", Pending())
+    check_int("canceled receipt adds no false notice", LumiStoreCount(), 2)
+    Attempt(*app)
+    check_true("original account can still confirm its report", !Pending())
+    check_int("separate report receives its own confirmation", LumiStoreCount(), 3)
+    LumiOnlineCancel()
+    SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    storage_close()
+    remove_tree("/tmp/inbe-lumi-feedback-test/")
+    return failures
+}

@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-emphasis-') as directory:
         reports = json.loads(query(profile, "SELECT value FROM settings WHERE key='lumi_feedback_pending'")[0][0])
         assert len(reports) == 1 and reports[0]['message'] == suggestion
         assert reports[0]['title'] == suggestion
-        assert chat(profile)[-1]['text'].strip() == 'Saved your feedback for the developer.', chat(profile)[-1]
+        assert chat(profile)[-1]['text'].strip() == 'Saved on this device, waiting to send to the developer inbox. Delivery needs an Inner Breeze account and internet access.', chat(profile)[-1]
         capture(window, 'suggestion-feedback')
     with application(profile, 'emphasis-restart'):
         reports = json.loads(query(profile, "SELECT value FROM settings WHERE key='lumi_feedback_pending'")[0][0])
