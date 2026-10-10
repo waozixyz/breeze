@@ -2,9 +2,9 @@
 ## [2.1.26] - 2026-10-09
 ### Added
 - Detach a running practice into its own movable, resizable desktop window, then return it to the app.
-- Keep the practice visible over other Android apps with automatic picture-in-picture when your phone allows it.
+- Keep the practice visible over other Android apps with picture-in-picture, which you can turn off in Settings.
 ### Changed
-- The minimized practice window opens taller and previews the practice itself: the breath count, the time left or the current phase inside its circle.
+- The minimized practice window opens taller and shows the breath count, time left or phase inside its circle.
 
 ## [2.1.25] - 2026-10-09
 ### Changed
