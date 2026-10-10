@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.22] - 2026-10-10
+
+- Say which app, device and system details Lumi feedback includes before you send it.
+
 ## [2.1.21] - 2026-10-10
 
 - Explain when approved Lumi feedback is still waiting to send and when the developer inbox has received it.
