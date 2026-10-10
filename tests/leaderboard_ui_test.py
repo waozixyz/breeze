@@ -89,7 +89,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         settings = {"language": "en", "language_system": 0, "language_setup_done": 1,
                     "apps_setup_done": 1, "main_tab": 5, "tutorial_seen": 1,
                     "habits_guide_seen": 1, "launcher_guide_seen": 1, "cells_auto_update": 0,
-                    "apps_last_update_check": 1900000000}
+                    "apps_last_update_check": 1900000000,
+                    # Pinned here, so the page has no "back to Apps" bar and
+                    # the controls keep fixed positions.
+                    "launcher_favorite_count": 4, "launcher_favorite_0": 12,
+                    "launcher_favorite_1": 1, "launcher_favorite_2": 2,
+                    "launcher_favorite_3": LEADERBOARD_ROUTE}
         for key, value in settings.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
@@ -132,4 +137,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         assert app.poll() is None, log
     finally:
         stop(app)
-print("Leaderboard: unpinned install, saved ranks, average hold, meditation time and patterns passed")
+# About lists every app's version, so it must cover the seventh one too.
+with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
+    shot = output / "about.png"
+    shot.unlink(missing_ok=True)
+    about = subprocess.run([str(binary), "--screenshot", str(shot), "--screenshot-scene", "settings_about",
+                            "--screenshot-width", "900", "--screenshot-height", "720"], cwd=root,
+                           env=os.environ | {"APP_DATA_ROOT": directory}, capture_output=True, text=True,
+                           timeout=60)
+    assert about.returncode == 0 and shot.exists(), about.stdout[-4000:] + about.stderr[-2000:]
+    assert "out of bounds" not in about.stdout + about.stderr, about.stdout[-4000:]
+print("Leaderboard: unpinned install, saved ranks, average hold, meditation time, patterns and About passed")
