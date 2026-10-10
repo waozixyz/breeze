@@ -11,8 +11,6 @@
 #import "button_props"
 #import "button_widget"
 #import "control_props"
-#import "tab_bar_props"
-#import "tab_bar_widget"
 #import "scroll_props"
 #import "scroll_widget"
 #import "box_props"
@@ -75,29 +73,28 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     width := frame.width - x * 2
     y := Scale(12)
 
-    tabs: [PRACTICE_COUNT]Tab
-    selected: s32 = 0
+    // Every practice stays visible: two per row on phones, four when wide.
+    per_row: s32 = ifx width >= Scale(600) then PRACTICE_COUNT else 2
+    gap := Scale(8)
+    choice_width := (width - gap * (per_row - 1)) / per_row
     for index: cast(s32)0..PRACTICE_COUNT - 1 {
         practice := PracticeAt(index)
-        tabs[index] = Tab.{.key = cast(u64)(7100 + index), .label = PracticeLabel(practice)}
-        if practice == state.practice {
-            selected = index
+        chosen := practice == state.practice
+        choice_x := x + (index % per_row) * (choice_width + gap)
+        choice_y := y + (index / per_row) * (Scale(40) + gap)
+        if Button(frame.session, ButtonProps.{.id = 7100 + index,
+                .bounds = Bounds(choice_x, choice_y, choice_width, Scale(40)),
+                .label = PracticeLabel(practice), .selected = chosen, .fit_content = true,
+                .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 && !chosen {
+            state.practice = practice
+            state.metric = LEADERBOARD_STREAK
+            state.refresh = true
+            frame.scroll = 0
+            return Finish()
         }
     }
-    chosen := TabBar(frame.session, TabBarProps.{.id = 7100,
-            .bounds = Bounds(x, y, width, Scale(44)), .selected_index = selected,
-            .min_tab_width = Scale(96), .max_tab_width = width,
-            .scroll_offset = frame.practice_scroll}, tabs[:])
-    frame.practice_scroll = chosen.scroll_offset
-    if chosen.selected_index != selected && chosen.selected_index >= 0 &&
-    chosen.selected_index < PRACTICE_COUNT {
-        state.practice = PracticeAt(chosen.selected_index)
-        state.metric = LEADERBOARD_STREAK
-        state.refresh = true
-        frame.scroll = 0
-        return Finish()
-    }
-    y += Scale(56)
+    y += (PRACTICE_COUNT / per_row) * (Scale(40) + gap) + Scale(8)
 
     // The name column is wider when only the streak is ranked.
     columns: s32 = ifx state.has_average then 3 else 2
@@ -114,6 +111,7 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
         if Button(frame.session, ButtonProps.{.id = 7110 + column,
                 .bounds = Bounds(header_x, y, column_width, Scale(36)),
                 .label = labels[column], .disabled = column == 0, .selected = active,
+                .fit_content = true,
                 .tone = cast(ButtonTone)(ifx active then ButtonToneAccent else ButtonToneNeutral),
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 &&
         column > 0 && !active {

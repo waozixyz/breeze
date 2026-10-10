@@ -42,7 +42,7 @@ def rows(window, name):
     path = output / (name + ".png")
     command("import", "-window", window, str(path))
     with Image.open(path) as image:
-        text = read_text(image.crop((16, 112, 374, 400)), name)
+        text = read_text(image.crop((16, 160, 374, 450)), name)
     return [word for word in text.split() if word in ("maple", "river", "cedar")], text
 
 
@@ -117,14 +117,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     try:
         names, text = rows(window, "streak")
         assert names == ["maple", "river", "cedar"], f"streak order: {text}"
-        click(window, 329, 86)
+        click(window, 329, 134)
         names, text = rows(window, "average")
         assert names == ["river", "maple", "cedar"], f"average hold order: {text}"
-        # Meditation is the third practice tab; its average time is shown.
-        click(window, 352, 34)
+        # Practices are a two-column grid on phones; meditation is third.
+        click(window, 100, 80)
         names, text = rows(window, "meditation")
         assert names == ["river", "cedar"] and "0" in text and "15" in text, f"meditation: {text}"
-        click(window, 235, 34)
+        click(window, 290, 32)
         names, text = rows(window, "patterns")
         assert sorted(names) == ["cedar", "river"], f"breathing patterns: {text}"
         log = (output / "board.log").read_text()
