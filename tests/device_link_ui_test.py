@@ -8,6 +8,8 @@ so they are checked as scannable images. Desktops have no camera; a scanned
 code reaches a window through INBE_TEST_DEVICE_LINK_SCAN."""
 
 import contextlib
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -70,10 +72,27 @@ def scan(window, label):
     return wait_for(read, f"No connection code on {label}")
 
 
+def tap_label(window, label, word, region):
+    """Taps a rendered word inside region (left, top, right, bottom), so the
+    test follows layout changes such as where the rail places Apps."""
+    path = capture(window, label)
+    left, top, right, bottom = region
+    command("convert", str(path), "-crop", f"{right - left}x{bottom - top}+{left}+{top}",
+            "+repage", "-colorspace", "Gray", "-normalize", "-resize", "300%", str(path))
+    text = command("tesseract", str(path), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1")
+    found = [row for row in csv.DictReader(io.StringIO(text), delimiter="\t")
+             if row.get("text", "").strip().lower() == word]
+    assert len(found) == 1, f"{word} is missing or ambiguous on {label}"
+    row = found[0]
+    tap(window, left + (int(row["left"]) + int(row["width"]) // 2) // 3,
+        top + (int(row["top"]) + int(row["height"]) // 2) // 3)
+
+
 def digits(window, label):
     path = capture(window, label)
     text = command("tesseract", str(path), "stdout", "--psm", "11")
-    found = re.findall(r"\b(\d{3}) (\d{3})\b", text)
+    # OCR may drop the gap between the two groups of three.
+    found = re.findall(r"\b(\d{3}) ?(\d{3})\b", text)
     return found[0][0] + found[0][1] if found else ""
 
 
@@ -121,7 +140,7 @@ def application(profile, label, left, scan_file):
             command("xdotool", "windowmove", window, str(left), "0")
             time.sleep(1.5)
             # Apps, Profile, then the account view.
-            tap(window, 44, 480)
+            tap_label(window, f"{label}-rail", "apps", (0, 0, 88, 720))
             tap(window, 297, 683)
             tap(window, 541, 195)
             time.sleep(0.6)

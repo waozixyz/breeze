@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Back from navigation Data exits once; Profile Data returns to its hub, whose Back returns to Apps."""
+"""Back from navigation Data exits once; Profile Data returns to its hub, whose Back returns to Apps.
+Data lives in Profile, so the Settings hub no longer lists it."""
 import csv
 import io
 import os
@@ -56,13 +57,9 @@ def click_word(window, word):
           (int(word["top"]) + int(word["height"]) // 2) // 3)
 
 
-def open_settings_data(window, name, width, height):
-    # Find the rendered Data row instead of a fixed offset, so the test
-    # follows the Settings order.
-    words = [word for word in screen_words(window, output / (name + "-overview.png"), width, height)
-             if word.get("text", "").lower() == "data"]
-    assert len(words) == 1, "The rendered Settings Data row is missing or ambiguous"
-    click_word(window, words[0])
+def settings_lists_data(window, name, width, height):
+    return any(word.get("text", "").lower() == "data"
+               for word in screen_words(window, output / (name + "-overview.png"), width, height))
 
 
 def open_practice(window, name, width, height):
@@ -116,8 +113,8 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                 time.sleep(0.5)
                 if scene == "settings_overview":
                     assert "settings" in capture_title(window, name + "-initial", width)
-                    open_settings_data(window, name, width, height)
-                    assert "screen=6->10" in logfile.read_text(), "Settings Data did not open"
+                    assert not settings_lists_data(window, name, width, height), "Settings still lists Data"
+                    continue
                 title = capture_title(window, name + "-data", width)
                 assert "data" in title, (name, "Data did not render before Back", title)
                 baseline = len(logfile.read_text())
@@ -127,9 +124,6 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                 switches = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)", after)
                 if scene == "data_from_navigation":
                     assert switches == [("10", "16")], (name, switches, after[-1200:])
-                elif scene == "settings_overview":
-                    assert switches == [("10", "6")], (name, switches, after[-1200:])
-                    assert "settings" in capture_title(window, name + "-parent", width)
                 else:
                     assert switches == [], (name, "Profile Data skipped its parent", switches)
                     command("import", "-window", window, str(output / f"{name}-hub.png"))
@@ -155,4 +149,4 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     app.kill()
                     app.wait(timeout=5)
                 shutil.rmtree(Path('/tmp') / f'inbe-screenshot-{app.pid}', ignore_errors=True)
-print("Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings Data returns to Settings")
+print("Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings lists no Data")
