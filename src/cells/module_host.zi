@@ -771,19 +771,65 @@ CellsAsset :: (path: string) -> AssetView {
         return AssetView.{.data = data, .mime = mime,
             .found = format.count > 0 && path[at + 1:] == format}
     }
+    // Frames read a few assets each time, and Practices holds thousands.
+    // Search the package that owns the path first, then the others.
+    owner := CellsAssetOwner(path)
+    found := CellsAssetIn(owner, path)
+    if found.found {
+        return found
+    }
     for slot: cast(s32)0..cast(s32)(PackageCount - 1) {
-        if slots[slot].bundle == null { continue }
-        index: u64 = 0
-        while index < BundleAssets(slots[slot].bundle) {
-            if TextFromCString(BundleAssetPath(slots[slot].bundle, index)) == path {
-                return AssetView.{.found = true,
-                    .mime = CellsAssetMime(path),
-                    .data = TextFromBytes(BytesFromPointer(
-                        BundleAssetBytes(slots[slot].bundle, index),
-                        BundleAssetLength(slots[slot].bundle, index)))}
-            }
-            index += 1
+        if slot == owner { continue }
+        found = CellsAssetIn(slot, path)
+        if found.found {
+            return found
         }
+    }
+    return AssetView.{}
+}
+
+// The slot whose package may supply the path, as PackageResourceValid allows.
+CellsAssetOwner :: (path: string) -> s32 {
+    prefixes: [7]string = .["assets/lists/", "assets/habits/", "assets/practices/",
+    "assets/sounds/", "assets/diary/", "assets/lumi/", "assets/leaderboard/"]
+    owners: [7]s32 = .[0, 1, 2, 2, 4, 5, 6]
+    for index: cast(s32)0..cast(s32)6 {
+        prefix := prefixes[index]
+        if path.count > prefix.count && path[:prefix.count] == prefix {
+            return owners[index]
+        }
+    }
+    return 3
+}
+
+// Compare bytes in place; most names differ early, so no length scan is needed.
+CellsAssetNamed :: (name: *u8, path: string) -> bool {
+    if name == null {
+        return false
+    }
+    for index: cast(s64)0..path.count - 1 {
+        if name[index] != path[index] {
+            return false
+        }
+    }
+    return name[path.count] == cast(u8)0
+}
+
+CellsAssetIn :: (slot: s32, path: string) -> AssetView {
+    if slot < 0 || slot >= PackageCount || slots[slot].bundle == null {
+        return AssetView.{}
+    }
+    count := BundleAssets(slots[slot].bundle)
+    index: u64 = 0
+    while index < count {
+        if CellsAssetNamed(BundleAssetPath(slots[slot].bundle, index), path) {
+            return AssetView.{.found = true,
+                .mime = CellsAssetMime(path),
+                .data = TextFromBytes(BytesFromPointer(
+                    BundleAssetBytes(slots[slot].bundle, index),
+                    BundleAssetLength(slots[slot].bundle, index)))}
+        }
+        index += 1
     }
     return AssetView.{}
 }
