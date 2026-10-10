@@ -96,4 +96,4 @@ monocypher="$root/build/packages/monocypher/src"
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=practice_actions_app_start_practice \
     -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT=/tmp/inbe-lumi-feedback-test/data "$work/test"
-printf '%s\n' 'Lumi feedback approval, HTTP failure, receipt verification, retries and restart checks passed'
+printf '%s\n' 'Lumi feedback approval, HTTP failure, receipt verification, retries, restart and older outbox upgrade checks passed'

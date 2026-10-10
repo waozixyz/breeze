@@ -90,7 +90,87 @@ FeedbackEnqueue :: (title: string, message: string, context: string) -> string {
     return PackageText(value, "")
 }
 
+// Earlier hosts stored already-queued reports together in this account's
+// setting. Keep their IDs and existing delivery tombstones when upgrading.
+FeedbackMigratePending :: () -> bool {
+    owner := PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
+    defer { PackageFree(owner) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value FROM settings WHERE user_id=?1 AND key='lumi_feedback_pending'",
+        -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    bind_text(statement, 1, owner)
+    document: string
+    if SqliteStep(statement) == SQLITE_ROW {
+        // Read the whole SQLite value, including older multi-report queues
+        // larger than the general setting getter's text buffer.
+        document = PackageText(TextFromCString(SqliteColumnText(statement, 0)), "")
+    }
+    SqliteFinalize(statement)
+    defer { PackageFree(document) }
+    if document.count == 0 {
+        return true
+    }
+    count := ArrayCount(document, 0)
+    end := ValueEnd(document, 0, 0)
+    if count < 0 || end < 0 || Space(document, end) != document.count {
+        return false
+    }
+    if count == 0 {
+        return true
+    }
+    for index: cast(s32)0..count - 1 {
+        if owner != AppTextFromCString(storage_user_id_buffer(), 64) {
+            return false
+        }
+        at := ElementAt(document, 0, index)
+        id_bytes: [65]u8
+        app_bytes: [16]u8
+        id_count := ReadStringText(document, FieldAt(document, at, "id"), id_bytes[:])
+        app_count := ReadStringText(document, FieldAt(document, at, "app_id"), app_bytes[:])
+        if id_count != 64 || app_count != 4 || TextFromBytes(app_bytes[:app_count]) != "inbe" {
+            return false
+        }
+        id := TextFromBytes(id_bytes[:id_count])
+        key := PackageText("cell.feedback.pending.", id)
+        existing := CellRecordRead(key)
+        defer { PackageFree(key); PackageFree(existing) }
+        if existing.count != 0 {
+            if existing == "{\"delivered\":true}" {
+                continue
+            }
+            saved_id: [65]u8
+            saved_count := ReadStringText(existing, FieldAt(existing, 0, "id"), saved_id[:])
+            if saved_count != 64 || TextFromBytes(saved_id[:saved_count]) != id {
+                return false
+            }
+            continue
+        }
+        title: [161]u8
+        message: [4097]u8
+        context: [2049]u8
+        title_count := ReadStringText(document, FieldAt(document, at, "title"), title[:])
+        message_count := ReadStringText(document, FieldAt(document, at, "message"), message[:])
+        context_count := ReadStringText(document, FieldAt(document, at, "context"), context[:])
+        if title_count <= 0 || message_count <= 0 || context_count < 0 ||
+            !FeedbackEnqueueID(TextFromBytes(title[:title_count]),
+                TextFromBytes(message[:message_count]), TextFromBytes(context[:context_count]), id) {
+            return false
+        }
+    }
+    if owner != AppTextFromCString(storage_user_id_buffer(), 64) {
+        return false
+    }
+    // A restart after a partial upgrade can safely resume with the same IDs.
+    // Retain the original queue whenever any row could not be preserved.
+    storage_set_setting_text("lumi_feedback_pending", "[]")
+    return storage_setting_text_equals("lumi_feedback_pending", "[]") != 0
+}
+
 FeedbackFirst :: () -> string {
+    unused FeedbackMigratePending()
     statement: *void
     if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key LIKE 'cell.feedback.pending.%' AND json_extract(value,'$.id') IS NOT NULL ORDER BY updated_at,key LIMIT 1", -1, *statement, null) != SQLITE_OK { return "" }
     defer { SqliteFinalize(statement) }

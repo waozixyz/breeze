@@ -9,6 +9,7 @@
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/cell_records.zi";
 #import, file "../src/storage/sync_async.zi";
 #import, file "../src/storage/sync_crypto_random.zi";
 #import, file "../src/storage/sync_crypto.zi";
@@ -98,6 +99,98 @@ Pending :: () -> bool {
     value := FeedbackFirst()
     defer { PackageFree(value) }
     return value.count != 0
+}
+
+LegacyReport :: (out: *Vec(u8), id: string, title: string, message: string, context: string) {
+    BuilderPrint(out, "{\"id\":")
+    LumiJsonString(out, id)
+    BuilderPrint(out, ",\"app_id\":\"inbe\",\"title\":")
+    LumiJsonString(out, title)
+    BuilderPrint(out, ",\"message\":")
+    LumiJsonString(out, message)
+    BuilderPrint(out, ",\"context\":")
+    LumiJsonString(out, context)
+    BuilderPrint(out, "}")
+}
+
+LegacyOutboxChecks :: (root: string, delivered_id: string) {
+    first_id := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    second_id := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    foreign_id := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    message_out: Vec(u8)
+    for index: cast(s32)0..4095 {
+        BuilderPrint(*message_out, "m")
+    }
+    message := BuilderFinish(message_out)
+    defer { PackageFree(message) }
+    context_out: Vec(u8)
+    for index: cast(s32)0..2047 {
+        BuilderPrint(*context_out, "c")
+    }
+    context := BuilderFinish(context_out)
+    defer { PackageFree(context) }
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    LegacyReport(*out, delivered_id, "Already received", "Do not send twice", "")
+    BuilderPrint(*out, ",")
+    LegacyReport(*out, first_id, "Earlier queued report", message, context)
+    BuilderPrint(*out, ",")
+    LegacyReport(*out, second_id, "Another queued report", message, context)
+    BuilderPrint(*out, "]")
+    legacy := BuilderFinish(out)
+    defer { PackageFree(legacy) }
+    check_true("older outbox exceeds the general getter buffer", legacy.count > 8192)
+    storage_set_setting_text("lumi_feedback_pending", legacy)
+    check_true("older database fixture saves the complete outbox",
+        storage_setting_text_equals("lumi_feedback_pending", legacy) != 0)
+    LumiStoreReset()
+    storage_close()
+    check_true("older database reopens", storage_init(root) != 0)
+    check_true("older queued feedback is recovered", Pending())
+    check_true("legacy outbox clears only after preserving all rows",
+        storage_setting_text_equals("lumi_feedback_pending", "[]") != 0)
+    first_key := PackageText("cell.feedback.pending.", first_id)
+    second_key := PackageText("cell.feedback.pending.", second_id)
+    delivered_key := PackageText("cell.feedback.pending.", delivered_id)
+    defer { PackageFree(first_key); PackageFree(second_key); PackageFree(delivered_key) }
+    first := CellRecordRead(first_key)
+    second := CellRecordRead(second_key)
+    delivered := CellRecordRead(delivered_key)
+    defer { PackageFree(first); PackageFree(second); PackageFree(delivered) }
+    check_true("large reports retain their IDs, message and context",
+        contains(first, first_id) && contains(first, message) && contains(first, context) &&
+        contains(second, second_id) && contains(second, message) && contains(second, context))
+    check_true("upgrade never resurrects received feedback", delivered == "{\"delivered\":true}")
+    check_true("recovered report can be marked received", FeedbackDelivered(first_id))
+    storage_set_setting_text("lumi_feedback_pending", legacy)
+    check_true("replayed legacy data keeps the remaining pending report", Pending())
+    tombstone := CellRecordRead(first_key)
+    defer { PackageFree(tombstone) }
+    check_true("retry and replay preserve delivery tombstones", tombstone == "{\"delivered\":true}")
+    check_true("remaining recovered report can complete", FeedbackDelivered(second_id))
+
+    saved_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
+    unused AppCopyText("legacy-other-account", g_storage.user_id[:])
+    foreign_out: Vec(u8)
+    BuilderPrint(*foreign_out, "[")
+    LegacyReport(*foreign_out, foreign_id, "Other account's report", "Keep this account scoped", "")
+    BuilderPrint(*foreign_out, "]")
+    foreign := BuilderFinish(foreign_out)
+    defer { PackageFree(foreign) }
+    storage_set_setting_text("lumi_feedback_pending", foreign)
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("upgrade does not read another account's legacy queue", !Pending())
+    unused AppCopyText("legacy-other-account", g_storage.user_id[:])
+    check_true("other account recovers only its own older report", Pending())
+    check_true("other account's recovered report completes", FeedbackDelivered(foreign_id))
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("accounts remain isolated after upgrading", !Pending())
+    damaged := "[{\"id\":\"incomplete\"}]"
+    storage_set_setting_text("lumi_feedback_pending", damaged)
+    check_true("invalid older records are not queued", !Pending())
+    check_true("invalid older data is retained for recovery",
+        storage_setting_text_equals("lumi_feedback_pending", damaged) != 0)
 }
 
 #program_export
@@ -197,6 +290,7 @@ Check :: () -> s32 {
     check_true("original account can still confirm its report", !Pending())
     check_int("separate report receives its own confirmation", LumiStoreCount(), 3)
     LumiOnlineCancel()
+    LegacyOutboxChecks(root, report_id)
     SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
     storage_close()
     remove_tree("/tmp/inbe-lumi-feedback-test/")
