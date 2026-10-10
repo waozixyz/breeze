@@ -22,12 +22,12 @@ BINARY = Path(sys.argv[1]).resolve()
 DESKTOP_ONLY = "--desktop-only" in sys.argv[2:]
 SCREEN_START, SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 0, 1, 11, 23
 PRACTICES = {"whm": 1, "meditation": 2, "sun_salutation": 3, "patterns": 4}
-# The window starts 200 by 248 units at the top right of the 390-unit phone
+# The window starts 220 by 320 units at the top right of the 390-unit phone
 # page, 8 units in and 72 down. Its picture sits below a 40-unit button row
 # with an 8-unit margin and 46 units of text below; maximize and close are
 # centered 60 and 24 units from its right edge, 20 down, and its resize
 # corner 16 units in from the bottom right.
-WINDOW = (182, 72, 200, 248)
+WINDOW = (162, 72, 220, 320)
 MINIMIZE = (308, 38)
 
 
@@ -294,9 +294,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
             # The corner handle makes the window taller; its round line moves
             # down with the window's bottom.
             before = find(window, "before-resize", "ROUND")
-            swipe(window, parts["grip"], (parts["grip"][0], parts["grip"][1] + 100))
+            swipe(window, parts["grip"], (parts["grip"][0], parts["grip"][1] + 60))
             after = find(window, "after-resize", "ROUND")
-            assert before and after and 80 < after[3] - before[3] < 120, ("The window did not resize", before, after)
+            assert before and after and 40 < after[3] - before[3] < 80, ("The window did not resize", before, after)
             assert state(window)["screen"] == SCREEN_HABITS, "Resizing opened the practice"
             height = WINDOW[3] + after[3] - before[3]
 

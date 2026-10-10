@@ -1,18 +1,27 @@
 // A practice's live picture in its small window, shared by the practices
 // whose screens show a breathing circle.
 #import, file "../app/app_types.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
 #import "box_props"
 #import "box_widget"
 #import "drawing_props"
 #import "geometry"
 #import "layout"
 #import "session"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+
+using TextAlign;
+using TextWrap;
 
 // Draws a solid accent circle centered in the bounds. `share` places its
 // radius between `smallest` (a fraction of the largest radius) and the
 // largest radius that fits. A backdrop shows the largest size behind it.
+// Returns the circle's bounds as drawn.
 PracticeWindowCircle :: (session: Session, bounds: Rectangle, share: float32,
-    smallest: float32, backdrop: Color) {
+    smallest: float32, backdrop: Color) -> Rectangle {
     largest := bounds.width * 0.5
     if bounds.height < bounds.width {
         largest = bounds.height * 0.5
@@ -33,8 +42,64 @@ PracticeWindowCircle :: (session: Session, bounds: Rectangle, share: float32,
                     largest * 2.0, largest * 2.0},
                 .fill = backdrop, .radius = largest})
     }
+    circle := Rectangle.{center.x - radius, center.y - radius, radius * 2.0, radius * 2.0}
     Box(session, BoxProps.{.key = KeyHash("inbe/practice-window/circle"),
-            .bounds = Rectangle.{center.x - radius, center.y - radius,
-                radius * 2.0, radius * 2.0},
-            .fill = StyleTokenColor("accent"), .radius = radius})
+            .bounds = circle, .fill = StyleTokenColor("accent"), .radius = radius})
+    return circle
+}
+
+// The band just inside the circle's edge, as the breathing screen draws
+// around its count, in the circle's contrast color.
+PracticeWindowBand :: (session: Session, circle: Rectangle, contrast: Color) {
+    radius := circle.width * 0.5
+    // The screen's band is 10 units wide, 5 units inside a circle of about
+    // 130 units.
+    gap := radius * 0.04
+    band := radius * 0.08
+    if gap < 1.0 {
+        gap = 1.0
+    }
+    if band < 2.0 {
+        band = 2.0
+    }
+    outer := radius - gap
+    inner := outer - band
+    if inner <= 0.0 {
+        return
+    }
+    center := Vector2.{circle.x + radius, circle.y + radius}
+    line := contrast
+    line.a = 175
+    fill := contrast
+    fill.a = 30
+    Box(session, BoxProps.{.key = KeyHash("inbe/practice-window/band"),
+            .bounds = Rectangle.{center.x - outer, center.y - outer, outer * 2.0, outer * 2.0},
+            .fill = fill, .border = line, .radius = outer})
+    Box(session, BoxProps.{.key = KeyHash("inbe/practice-window/band-inner"),
+            .bounds = Rectangle.{center.x - inner, center.y - inner, inner * 2.0, inner * 2.0},
+            .fill = StyleTokenColor("accent"), .border = line, .radius = inner})
+}
+
+// The practice's own reading inside its circle: the breath count, the time
+// left or the phase, as large as the circle allows.
+PracticeWindowLabel :: (app: *InnerBreeze, circle: Rectangle, text: string) {
+    if text.count == 0 {
+        return
+    }
+    width := cast(s32)(circle.width * 0.78)
+    largest := cast(s32)(circle.height * 0.36)
+    if largest > AppScale(Text48) {
+        largest = AppScale(Text48)
+    }
+    smallest := AppScale(11)
+    if largest < smallest {
+        largest = smallest
+    }
+    font := AppFitFontSize(text, width, largest, smallest)
+    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/practice-window/label"),
+            .text = FrameTextHold(*app.ui.frame_text, text),
+            .bounds = circle, .font = font,
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
 }

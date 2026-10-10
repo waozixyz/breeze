@@ -728,14 +728,10 @@ session_step_forward :: (app: *InnerBreeze) {
     }
 }
 
-draw_session_counter :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    text: [16] u8
+// The number the breathing circle shows: the seconds before the round,
+// the breath count, or the recovery hold's seconds left.
+session_counter_value :: (app: *InnerBreeze) -> s32 {
     display_count: s32 = 0
-    display_text: string
-    font: s32
-    max_w: s32
-    radius: s32
-
     if app.breathing.phase == BreathPhaseStarting {
         total_seconds: s32 = BreathPauseSeconds(app.breathing)
         remaining: s32
@@ -766,8 +762,17 @@ draw_session_counter :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     } else {
         display_count = BreathDigitsRead(app.breathing.count[:])
     }
+    return display_count
+}
 
-    AppFormatS32(display_count, text[:])
+draw_session_counter :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    text: [16] u8
+    display_text: string
+    font: s32
+    max_w: s32
+    radius: s32
+
+    AppFormatS32(session_counter_value(app), text[:])
     display_text = AppTextFromCString(*text[0], 16)
     radius = cast(s32)BreathDrawRadius(app.breathing)
     max_w = cast(s32)(cast(float32)radius * 1.12f)
@@ -959,24 +964,23 @@ whm_session_breath_share :: (app: *InnerBreeze) -> float32 {
 }
 
 // The breathing circle in the practice's small window, breathing as it does
-// on the practice's screen, with the round and breath count below it.
+// on the practice's screen with its band and count, and the round below
+// it.
 session_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
     smallest: float32 = 0.5
     if app.breathing.rmax > 0 {
         smallest = cast(float32)app.breathing.rmin / cast(float32)app.breathing.rmax
     }
-    PracticeWindowCircle(CurrentApp().ui.session, picture,
+    session := CurrentApp().ui.session
+    circle := PracticeWindowCircle(session, picture,
         whm_session_breath_share(app), smallest, Color.{0, 0, 0, 0})
-    round: [32]u8
+    PracticeWindowBand(session, circle,
+        text_color_for_background(StyleTokenColor("accent")))
+    counter: [16]u8
+    unused AppFormatS32(session_counter_value(app), counter[:])
+    PracticeWindowLabel(app, circle, AppTextFromCString(*counter[0], 16))
     unused FormatNumberTemplate(LocaleText("session_round_label"),
-        app.breathing.round + 1, round[:])
-    count: [16]u8
-    unused AppFormatS32(BreathDigitsRead(app.breathing.count[:]), count[:])
-    parts: [2]FormatArg = .[
-        FormatArg.{.text = AppTextFromCString(*round[0], 32), .is_text = true},
-        FormatArg.{.text = AppTextFromCString(*count[0], 16), .is_text = true}
-    ]
-    FormatTemplate("%s · %s", parts[:], status)
+        app.breathing.round + 1, status)
     return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
