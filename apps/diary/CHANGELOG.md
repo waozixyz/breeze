@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.5] - 2026-10-10
+### Changed
+- Save your writing quietly, without a "Waiting to save…" note below the entry.
+
 ## [1.1.4] - 2026-10-08
 
 - Keep date limits working when Diary updates on existing Inbe installations.

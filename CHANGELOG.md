@@ -1,10 +1,11 @@
 # Changelog
 ## [2.1.26] - 2026-10-09
 ### Added
-- Detach a running practice into its own movable, resizable desktop window, then return it to the app.
+- Detach a running practice into its own resizable desktop window.
 - Keep the practice visible over other Android apps with picture-in-picture, which you can turn off in Settings.
 ### Changed
-- The minimized practice window opens taller and shows the breath count, time left or phase inside its circle.
+- The minimized practice window is taller and shows the breath count, time left or phase.
+- Diary saves quietly, without a "Waiting to save" note.
 ### Fixed
 - Show the keyboard in Diary on Android.
 - Keep the practice window over Apps.
