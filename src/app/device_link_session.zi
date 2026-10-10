@@ -16,6 +16,7 @@
 #import, file "../storage/sync_account.zi";
 #import, file "../storage/sync_nodes.zi";
 #import, file "../cells/package_files.zi";
+#import, file "../platform/trace_log.zi";
 
 c :: #system_library "c";
 DeviceLinkClock :: () -> float64 #foreign c "GetTime";
@@ -50,6 +51,7 @@ DEVICE_LINK_CLOSE :: 5
 // Links expire on the node after ten minutes.
 DEVICE_LINK_LIFETIME :: 590.0
 DEVICE_LINK_POLL :: 1.0
+DEVICE_LINK_LOG_WARNING :: 4
 
 DeviceLinkSession :: struct {
     stage: DeviceLinkStage
@@ -100,6 +102,16 @@ DeviceLinkFail :: (error: string) {
     device_link_pending = DeviceLinkAccount.{}
     device_link.stage = cast(DeviceLinkStage)DeviceLinkFailed
     device_link.error = error
+}
+
+// Names the step that failed in the log, without keys or account data.
+DeviceLinkFailAt :: (error: string, step: string, status: s32) {
+    out: Vec(u8)
+    BuilderPrint(*out, "DEVICE LINK: % at % (request %, status %)", error, step, device_link.request, status)
+    line := BuilderFinish(out)
+    TraceLog(DEVICE_LINK_LOG_WARNING, line)
+    PackageFree(line)
+    DeviceLinkFail(error)
 }
 
 DeviceLinkServer :: (output: []u8) -> bool {
@@ -260,21 +272,23 @@ DeviceLinkSend :: (request: s32) {
 DeviceLinkFinished :: (status: s32) {
     request := device_link.request
     response := TextUntilNul(device_link_output[:])
+    polling := request == DEVICE_LINK_GET_REQUEST || request == DEVICE_LINK_GET_RESPONSE
+    // A poll that gets no answer, or reaches a node that is restarting or
+    // busy (5xx, 429), is retried until the link expires.
+    if polling && (status == 0 || status == 429 || status >= 500) {
+        return
+    }
     if status == 0 {
-        if request == DEVICE_LINK_GET_REQUEST || request == DEVICE_LINK_GET_RESPONSE {
-            // A dropped poll is retried until the link expires.
-            return
-        }
-        DeviceLinkFail("device_link_offline")
+        DeviceLinkFailAt("device_link_offline", "no response", status)
         return
     }
     if request == DEVICE_LINK_PUT_REQUEST {
-        if status != 200 { DeviceLinkFail("device_link_failed") }
+        if status != 200 { DeviceLinkFailAt("device_link_failed", "sending the key", status) }
         return
     }
     if request == DEVICE_LINK_PUT_RESPONSE {
         if status != 200 {
-            DeviceLinkFail("device_link_failed")
+            DeviceLinkFailAt("device_link_failed", "sending the account", status)
             return
         }
         // Both devices now hold the account; the receiver closes the link.
@@ -286,7 +300,7 @@ DeviceLinkFinished :: (status: s32) {
         return
     }
     if status != 200 {
-        DeviceLinkFail("device_link_failed")
+        DeviceLinkFailAt("device_link_failed", "polling", status)
         return
     }
     length := ReadStringText(response, FieldAt(response, 0, "data"), device_link_message_in[:])
@@ -294,7 +308,7 @@ DeviceLinkFinished :: (status: s32) {
     if request == DEVICE_LINK_GET_REQUEST {
         // The scanner's key: compare digits before sending the account.
         if length != DEVICE_LINK_KEY * 2 || SyncCryptoHexToBytes(message, *device_link.other[0], DEVICE_LINK_KEY) == 0 {
-            DeviceLinkFail("device_link_failed")
+            DeviceLinkFailAt("device_link_failed", "reading the key", status)
             return
         }
         device_link.confirmation = DeviceLinkConfirmation(*device_link.keys.public[0], *device_link.other[0])
@@ -308,11 +322,11 @@ DeviceLinkFinished :: (status: s32) {
         device_link.shows, expected)
     DeviceLinkForget(*device_link.keys)
     if !device_link_pending.valid {
-        DeviceLinkFail("device_link_failed")
+        DeviceLinkFailAt("device_link_failed", "opening the account", status)
         return
     }
     if !DeviceLinkUseServer() {
-        DeviceLinkFail("device_link_failed")
+        DeviceLinkFailAt("device_link_failed", "using the account's node", status)
         return
     }
     device_link.stage = cast(DeviceLinkStage)DeviceLinkReceived

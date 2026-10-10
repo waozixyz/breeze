@@ -1,7 +1,8 @@
 """A local stand-in for Daochi's device link mailbox, for UI tests.
 
 It follows the node's rules: 32-hex link IDs, request and response slots that
-are written once, 404 while waiting, and a 16384-byte message limit."""
+are written once, 404 while waiting, and a 16384-byte message limit. Setting
+outage answers that many polls with 502, like a node that is restarting."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -18,6 +19,7 @@ class Mailbox:
         self.requests = []
         # Every message sent, to check what the relay could see.
         self.messages = []
+        self.outage = 0
 
 
 def handler_for(mailbox):
@@ -56,6 +58,9 @@ def handler_for(mailbox):
                     mailbox.messages.append(data)
                     return self.reply(200, {"ok": True})
                 if self.path == "/api/v1/link/get":
+                    if mailbox.outage > 0:
+                        mailbox.outage -= 1
+                        return self.reply(502, {"error": "bad gateway"})
                     if slot not in entry:
                         return self.reply(404, {"error": "device link waiting"})
                     return self.reply(200, {"data": entry[slot]})

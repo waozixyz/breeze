@@ -195,6 +195,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-link-") as directory:
             tap(b, 494, 278)
             code = scan(b, "b-code")
             assert code.endswith(":r:" + address), code
+            # B keeps polling through a node restart.
+            mailbox.outage = 3
             scans["a"].write_text(code)
             wait_for(lambda: not scans["a"].exists(), "A did not read the scanned code")
             time.sleep(1)
@@ -202,6 +204,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-link-") as directory:
             tap(a, 380, 355)
             wait_for(lambda: setting(profiles["b"], "sync_public_id") == account,
                      "B did not receive A's account")
+            assert mailbox.outage == 0, "B stopped polling during the outage"
             time.sleep(1)
             capture(b, "b-connected")
     # Private keys never pass through the mailbox in the clear.
@@ -212,5 +215,6 @@ server.shutdown()
 (OUTPUT / "result.json").write_text(json.dumps({"passed": True, "checked": [
     "showing device with account", "scanned code read from the screen", "matching six digits",
     "account sent after confirming", "link closed", "showing device without account",
-    "scanner confirms and sends", "receiving devices hold the same account"]}, indent=2) + "\n")
+    "scanner confirms and sends", "polling survives a node restart",
+    "receiving devices hold the same account"]}, indent=2) + "\n")
 print("Device link UI: both directions connected by QR code")
