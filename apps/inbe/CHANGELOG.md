@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.21] - 2026-10-10
+
+- Explain when approved Lumi feedback is still waiting to send and when the developer inbox has received it.
+
 ## [2.1.20] - 2026-10-09
 
 - Customize each app in Appearance using live KSS editing, inspection, undo, and reset to defaults.
