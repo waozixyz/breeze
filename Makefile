@@ -1292,6 +1292,11 @@ hooks-install:
 embedded-image-assets-check: $(EMBEDDED_ASSETS_C)
 	bash ./tests/embedded_image_assets_test.sh
 
+# An icon from a Kryon sheet Inbe does not ship shows "Missing image".
+.PHONY: icon-sheets-check
+icon-sheets-check: $(PACKAGES_MK)
+	python3 tests/icon_sheets_test.py $(KRYON_DIR)/src/ui/icon.zi
+
 .PHONY: habits-cards-ui-test
 habits-cards-ui-test: $(TARGET)
 	bash tests/habits_cards_ui_test.sh "$(abspath $(TARGET))"
@@ -1305,7 +1310,7 @@ storage-literals-check:
 	python3 tests/storage_literals_test.py
 	bash ./scripts/check-storage-literals.sh
 
-test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check
+test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check icon-sheets-check
 test: screenshot-scene-test
 
 .PHONY: screenshot-scene-test
