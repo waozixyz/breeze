@@ -12,6 +12,7 @@ import tempfile
 import time
 
 from PIL import Image
+from Xlib import X, display as xdisplay, protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/session-window-ui-test"
@@ -235,7 +236,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     values = dict(enabled_apps="31", main_tab="1", language="en", language_setup_done="1",
                   apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
                   cells_auto_update="0", habits_guide_seen="1", launcher_favorite_count="3",
-                  launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2")
+                  launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2",
+                  picture_in_picture="0")
     values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
     save_settings(values)
 
@@ -460,7 +462,22 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     save_settings(dict(advanced_session_controls="0", double_tap_to_breathe="0"))
 
     rail = lambda x, y: x < 100
+    # On desktop, minimizing opens the practice in its own window, never the
+    # in-app card, unless picture-in-picture is turned off.
+    save_settings(dict(picture_in_picture="1"))
     with application("desktop", 900, 720) as window:
+        def practice_window():
+            deadline = time.monotonic() + 8
+            while True:
+                candidates = command("xdotool", "search", "--onlyvisible", "--name", "Inner Breeze").splitlines()
+                main_pid = command("xprop", "-id", window, "_NET_WM_PID").split(" = ")[-1]
+                for candidate in candidates:
+                    if candidate != window and \
+                            command("xprop", "-id", candidate, "_NET_WM_PID").split(" = ")[-1] == main_pid:
+                        return candidate
+                assert time.monotonic() < deadline, "Minimize did not open an owned desktop window"
+                time.sleep(.1)
+
         action(window, "mcp.open_view", "open-habits-desktop", {"view": "habits"})
         action(window, "practice.whm.start", "start-whm-desktop")
         wait_screen(window, SCREEN_SESSION, "Breathing did not start on desktop")
@@ -468,63 +485,56 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         click(window, 818, 38)
         wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits on desktop")
         assert find(window, "desktop-minimized", "Lumi", rail), "The sidebar did not return"
-        assert find(window, "desktop-window", "ROUND"), "The practice window is not shown on desktop"
         wait_running(window, "Minimizing ended the practice on desktop")
+        detached = practice_window()
+        assert find(window, "desktop-no-card", "ROUND") is None, "Desktop still shows the in-app card"
 
-        # Detach into an actual process-owned window. Its resize and input
-        # must never reach the main application's page.
-        assert find(window, "desktop-card", "ROUND"), "The desktop practice card is missing"
-        # The card's right edge stays eight units inside the 900-unit viewport.
-        click(window, 900 - 8 - 96, 72 + 20)
-        deadline = time.monotonic() + 8
-        detached = None
-        while detached is None:
-            candidates = command("xdotool", "search", "--onlyvisible", "--name", "Inner Breeze").splitlines()
-            for candidate in candidates:
-                if candidate != window:
-                    main_pid = command("xprop", "-id", window, "_NET_WM_PID").split(" = ")[-1]
-                    other_pid = command("xprop", "-id", candidate, "_NET_WM_PID").split(" = ")[-1]
-                    if main_pid == other_pid:
-                        detached = candidate
-                        break
-            assert time.monotonic() < deadline, "Detach did not create an owned desktop window"
-            time.sleep(.1)
-        assert find(detached, "detached-live", "Breathing"), "Detached window has no live practice"
-        wait_running(window, "Detaching ended the practice")
+        # Its resize and input must never reach the main application's page.
+        assert find(detached, "detached-live", "Breathing"), "The practice window has no live practice"
         first = region(detached, "detached-picture-first", (8, 40, 244, 226))
-        time.sleep(.5)
-        second = region(detached, "detached-picture-second", (8, 40, 244, 226))
-        assert changed(first, second) > 100, "Detached breathing picture stopped animating"
+        deadline = time.monotonic() + 5
+        while True:
+            time.sleep(.5)
+            second = region(detached, "detached-picture-second", (8, 40, 244, 226))
+            if changed(first, second) > 100:
+                break
+            assert time.monotonic() < deadline, "The practice window stopped animating"
         command("xdotool", "windowsize", detached, "340", "400")
         time.sleep(.5)
         geometry = command("xdotool", "getwindowgeometry", "--shell", window)
         assert "WIDTH=900" in geometry and "HEIGHT=720" in geometry, geometry
-        wait_screen(window, SCREEN_HABITS, "Detached resize changed the main page")
+        wait_screen(window, SCREEN_HABITS, "Resizing the practice window changed the main page")
         assert find(detached, "detached-resized", "Breathing"), "Resizing lost the live picture"
 
-        # The detached window remains active when the main window is hidden,
+        # The practice window stays active when the main window is hidden,
         # including profiles without a tray icon.
         command("xdotool", "windowunmap", window)
         time.sleep(.4)
-        wait_running(window, "Hiding the main window ended the detached practice")
+        wait_running(window, "Hiding the main window ended the practice")
+        command("xdotool", "windowmap", window)
+        time.sleep(.4)
 
-        # The attach control returns only the small card to the open page.
-        click(detached, 340 - 96, 20)
-        time.sleep(.5)
-        wait_screen(window, SCREEN_HABITS, "Attaching changed the open page")
-        wait_running(window, "Attaching ended the practice")
-        assert find(window, "desktop-attached", "ROUND"), "Attaching did not restore the card"
+        # Closing the window, as a window manager asks it to, brings the
+        # practice back to the app.
+        connection = xdisplay.Display(env["DISPLAY"])
+        target = connection.create_resource_object("window", int(detached))
+        target.send_event(protocol.event.ClientMessage(window=target,
+            client_type=connection.intern_atom("WM_PROTOCOLS"),
+            data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])),
+            event_mask=X.NoEventMask)
+        connection.close()
+        wait_screen(window, SCREEN_SESSION, "Closing the practice window did not return the practice")
+        wait_running(window, "Closing the practice window ended the practice")
 
-        # A second detach followed by a picture tap restores the full practice.
-        click(window, 900 - 8 - 96, 72 + 20)
-        time.sleep(.5)
-        candidates = command("xdotool", "search", "--onlyvisible", "--name", "Inner Breeze").splitlines()
-        detached = next(candidate for candidate in candidates if candidate != window)
+        # A picture tap in a reopened window also restores the full practice.
+        click(window, 818, 38)
+        wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits again")
+        detached = practice_window()
         click(detached, 130, 140)
-        wait_screen(window, SCREEN_SESSION, "Detached picture tap did not restore the practice")
-        wait_running(window, "Restoring from the detached window ended the practice")
+        wait_screen(window, SCREEN_SESSION, "A picture tap did not restore the practice")
+        wait_running(window, "Restoring from the practice window ended the practice")
 
 if DESKTOP_ONLY:
-    print("Desktop practice window: detach, animate, resize, hide main window, attach and restore passed")
+    print("Desktop practice window: open on minimize, animate, resize, hide main window, close and restore passed")
 else:
     print("Session window: all practice pictures, card controls and detached desktop windows passed")

@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.24] - 2026-10-10
+
+- Remove the text of practice window buttons that are no longer shown.
+
 ## [2.1.23] - 2026-10-10
 
 - Translate the descriptions in Lumi's command list.
