@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.23] - 2026-10-10
+
+- Translate the descriptions in Lumi's command list.
+
 ## [2.1.22] - 2026-10-10
 
 - Say which app, device and system details Lumi feedback includes before you send it.

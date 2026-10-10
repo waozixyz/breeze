@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.4] - 2026-10-10
+### Added
+- Tap the / button or type / to see Lumi's commands, as in Telegram. The list narrows as you type; tap a command or press Enter to use it, and commands that need text wait for it in the message box.
+### Changed
+- Send with an arrow button.
+
 ## [1.3.3] - 2026-10-10
 ### Fixed
 - Open the chat without a pause by preparing command suggestions only while you type.

@@ -23,11 +23,13 @@
 #import, file "../../src/cells/lumi_types.zi";
 #import, file "../../src/cells/lumi_ui_types.zi";
 #import, file "../../src/cells/lumi_chart.zi";
+#import, file "command_text.zi";
 #import, file "engine.zi";
 #import, file "message_text.zi";
 
 using ImageFit;
 using TextWrap;
+using TextAlign;
 using ButtonTone;
 using ButtonEmphasis;
 host_api :: #system_library "host_api";
@@ -69,6 +71,100 @@ candidate_actions: [20]LumiAction;
 candidate_ready: s32;
 // Reading a command takes many text matches, so typing reads one per frame.
 LUMI_CANDIDATES_PER_FRAME :: 1
+
+// Typing "/" lists Lumi's commands as in Telegram. The list matches the
+// command menu of Lumi's Telegram bot, without its Telegram-only commands.
+LumiMenuCommand :: struct {
+    name: string
+    description: string
+    // These commands insert "/name " for the text instead of sending.
+    needs_text: bool
+    requirement: s32
+    // Shown only while Lumi waits for a Diary text or a habit name.
+    choice_only: bool
+}
+
+LUMI_MENU_COMMANDS :: 16
+menu_revision: s64 = -1;
+menu_commands: [LUMI_MENU_COMMANDS]LumiMenuCommand;
+menu_scroll: s32;
+focus_request: s32;
+// A rounded square with a slash, and a paper plane, in Kryon's 24 x 24 icon
+// shape format.
+LUMI_COMMANDS_ICON :: "S1.8rr:M7 3H17C19.2091 3 21 4.79086 21 7V17C21 19.2091 19.2091 21 17 21H7C4.79086 21 3 19.2091 3 17V7C3 4.79086 4.79086 3 7 3Z|S1.8rr:M14.5 7.5L9.5 16.5"
+LUMI_SEND_ICON :: "F:M3.4 20.6L21.2 12.9C21.94 12.58 21.94 11.42 21.2 11.1L3.4 3.4C2.66 3.08 1.9 3.8 2.14 4.57L4.2 11L13 12L4.2 13L2.14 19.43C1.9 20.2 2.66 20.92 3.4 20.6Z"
+
+MenuCommands :: (revision: s64) -> []LumiMenuCommand {
+    if revision != menu_revision {
+        menu_revision = revision
+        table: [LUMI_MENU_COMMANDS]LumiMenuCommand = .[
+            LumiMenuCommand.{.name = "/help", .description = LumiViewLocaleHost("lumi_command_help")},
+            LumiMenuCommand.{.name = "/todo", .description = LumiViewLocaleHost("lumi_add"),
+                .needs_text = true, .requirement = LUMI_LISTS},
+            LumiMenuCommand.{.name = "/done", .description = LumiViewLocaleHost("lumi_complete"),
+                .needs_text = true, .requirement = LUMI_LISTS},
+            LumiMenuCommand.{.name = "/reopen", .description = LumiViewLocaleHost("lumi_reopen"),
+                .needs_text = true, .requirement = LUMI_LISTS},
+            LumiMenuCommand.{.name = "/lists", .description = LumiViewLocaleHost("lumi_open_lists"),
+                .requirement = LUMI_LISTS},
+            LumiMenuCommand.{.name = "/habit", .description = LumiViewLocaleHost("lumi_complete_habit"),
+                .requirement = LUMI_HABITS},
+            LumiMenuCommand.{.name = "/habits", .description = LumiViewLocaleHost("lumi_open_habits"),
+                .requirement = LUMI_HABITS},
+            LumiMenuCommand.{.name = "/journal", .description = LumiViewLocaleHost("lumi_write_diary"),
+                .requirement = LUMI_DIARY},
+            LumiMenuCommand.{.name = "/diary", .description = LumiViewLocaleHost("lumi_open_diary"),
+                .requirement = LUMI_DIARY},
+            LumiMenuCommand.{.name = "/meditate", .description = LumiViewLocaleHost("lumi_start_meditation"),
+                .requirement = LUMI_PRACTICES},
+            LumiMenuCommand.{.name = "/whm", .description = LumiViewLocaleHost("lumi_start_whm"),
+                .requirement = LUMI_PRACTICES},
+            LumiMenuCommand.{.name = "/practices", .description = LumiViewLocaleHost("lumi_open_practices"),
+                .requirement = LUMI_PRACTICES},
+            LumiMenuCommand.{.name = "/progress", .description = LumiViewLocaleHost("lumi_show_progress"),
+                .requirement = LUMI_PRACTICES},
+            LumiMenuCommand.{.name = "/feedback", .description = LumiViewLocaleHost("lumi_command_feedback"),
+                .needs_text = true},
+            LumiMenuCommand.{.name = "/donate", .description = LumiViewLocaleHost("lumi_show_donations")},
+            LumiMenuCommand.{.name = "/cancel", .description = LumiViewLocaleHost("cancel_button"),
+                .choice_only = true}]
+        menu_commands = table
+    }
+    return menu_commands[:]
+}
+
+// A draft of "/" and a command name opens the list; a space closes it,
+// since the command then takes its text.
+MenuOpen :: (value: string) -> bool {
+    if value.count == 0 || value[0] != cast(u8)47 {
+        return false
+    }
+    for byte: value {
+        if CommandSpace(byte) {
+            return false
+        }
+    }
+    return true
+}
+
+CommandText :: (command: LumiMenuCommand) -> string {
+    if !command.needs_text {
+        return command.name
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "% ", command.name)
+    return BuilderFinish(out)
+}
+
+FillDraft :: (text: string) {
+    frame.value = text
+    frame.cursor = cast(s32)text.count
+    frame.anchor = frame.cursor
+    frame.input_scroll = 0
+    frame.selecting = false
+    frame.preferred_x_valid = false
+    frame.focused = true
+}
 
 // Interpretation depends on the draft and translated command set. Cursor
 // blinking, scrolling and unchanged frames reuse the result, while sending
@@ -116,13 +212,7 @@ Suggestion :: (id: s32, text: string, bounds: Rectangle, label: string = "") -> 
     if Button(frame.session, ButtonProps.{.id = id, .bounds = bounds,
             .label = ifx label.count > 0 then label else text, .pill = true, .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        frame.value = text
-        frame.cursor = cast(s32)text.count
-        frame.anchor = frame.cursor
-        frame.input_scroll = 0
-        frame.selecting = false
-        frame.preferred_x_valid = false
-        frame.focused = true
+        FillDraft(text)
         return true
     }
     return false
@@ -254,6 +344,44 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     footer := frame.height - frame.bottom - Scale(16) - input_height
     suggestions_top := footer - Scale(ifx LumiTrim(frame.value).count > 0 then 46 else 0)
     history_top := Scale(12)
+    menu := MenuCommands(revision)
+    menu_matches: [LUMI_MENU_COMMANDS]s32
+    menu_count: s32 = 0
+    // Enter chooses the exact command, otherwise the first one listed.
+    menu_target: s32 = -1
+    if MenuOpen(frame.value) {
+        for index: cast(s32)0..LUMI_MENU_COMMANDS - 1 {
+            command := menu[index]
+            if (command.requirement != 0 && (frame.available_apps & command.requirement) == 0) ||
+            (command.choice_only && !frame.choosing_habit && !frame.choosing_diary) ||
+            !LumiStarts(command.name, frame.value) {
+                continue
+            }
+            if menu_target < 0 || LumiEqual(command.name, frame.value) {
+                menu_target = menu_count
+            }
+            menu_matches[menu_count] = index
+            menu_count += 1
+        }
+    }
+    menu_row := Scale(44)
+    menu_height := menu_count * menu_row
+    // Four and a half rows show that a longer list scrolls.
+    if menu_height > menu_row * 9 / 2 {
+        menu_height = menu_row * 9 / 2
+    }
+    if menu_count > 0 && footer - Scale(8) - menu_height - history_top < Scale(68) {
+        menu_height = footer - Scale(8) - history_top - Scale(68)
+        if menu_height < menu_row {
+            menu_height = menu_row
+        }
+    }
+    menu_top := footer - Scale(8) - menu_height
+    if menu_count > 0 {
+        suggestions_top = menu_top
+    } else {
+        menu_scroll = 0
+    }
     chat_height := suggestions_top - history_top - Scale(8)
     if chat_height < Scale(60) {
         chat_height = Scale(60)
@@ -342,8 +470,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY, LUMI_PRACTICES, 0]
     suggestion_count: s32 = 0
     selected: bool
-    limit: s32 = 2
-    chip_width := (width - Scale(8)) / limit
+    // The command list replaces the suggestion chips while it is open.
+    limit: s32 = ifx menu_count > 0 then 0 else 2
+    chip_width := (width - Scale(8)) / 2
     action := DraftIntent(typed, commands, revision)
     if action.kind == 0 && frame.choosing_habit {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = typed}
@@ -411,13 +540,79 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             Bounds(x + suggestion_count * (chip_width + Scale(8)), suggestions_top, chip_width, Scale(36))) || selected
         suggestion_count += 1
     }
+    chosen: s32 = -1
+    if menu_count > 0 {
+        Box(frame.session, BoxProps.{.key = cast(u64)360000,
+                .bounds = Bounds(x, menu_top, width, menu_height),
+                .fill = Color.{156, 156, 156, 24}, .radius = cast(float32)Scale(12)})
+        menu_list := Scroll(frame.session, ScrollProps.{.key = cast(u64)360001,
+                .bounds = Bounds(x, menu_top, width, menu_height),
+                .content_height = menu_count * menu_row, .scroll_offset = menu_scroll, .scale = frame.scale})
+        menu_scroll = menu_list.scroll_offset
+        if menu_list.opened {
+            name_width := Scale(104)
+            for row: cast(s32)0..menu_count - 1 {
+                top := cast(s32)menu_list.content.y + row * menu_row
+                if top + menu_row < menu_top || top > menu_top + menu_height {
+                    continue
+                }
+                index := menu_matches[row]
+                command := menu[index]
+                key := 360100 + index * 4
+                if row == menu_target {
+                    Box(frame.session, BoxProps.{.key = cast(u64)key,
+                            .bounds = Bounds(x, top, width, menu_row),
+                            .fill = Color.{156, 188, 143, 48}, .radius = cast(float32)Scale(12)})
+                }
+                if Button(frame.session, ButtonProps.{.id = 360200 + index,
+                        .bounds = Bounds(x, top, width, menu_row), .invisible = true,
+                        .label = command.description}) != 0 {
+                    chosen = index
+                }
+                strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)command.name.count}]
+                Text(frame.session, TextProps.{.key = cast(u64)(key + 1),
+                        .bounds = Bounds(x + Scale(16), top, name_width, menu_row),
+                        .text = command.name, .font = frame.font, .strong = strong[:],
+                        .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter})
+                // Long translations wrap to a second line on narrow phones.
+                Text(frame.session, TextProps.{.key = cast(u64)(key + 2),
+                        .bounds = Bounds(x + Scale(16) + name_width, top,
+                        width - Scale(32) - name_width, menu_row),
+                        .text = command.description, .font = Scale(14),
+                        .wrap = cast(TextWrap)TextWrapAuto, .vertical_align = cast(TextAlign)TextAlignCenter})
+            }
+            End(frame.session)
+        }
+    }
+    // As in Telegram, an empty draft offers the command button and a draft
+    // offers Send. A pending answer keeps Send visible as its progress.
+    show_commands := LumiTrim(frame.value).count == 0 && !frame.waiting
+    if show_commands && Button(frame.session, ButtonProps.{.id = 30012,
+            .bounds = Bounds(x + width - Scale(48), footer, Scale(48), Scale(48)),
+            .label = LumiViewLocaleHost("lumi_commands"), .icon_shape = LUMI_COMMANDS_ICON, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        FillDraft("/")
+        selected = true
+    }
+    // The command button and the list keep typing in the draft, as Telegram
+    // does, rather than leaving the focus on the pressed button. Apps built
+    // before Kryon's focus fix give the focus back to that button on the
+    // next frame, so the request lasts two frames.
+    if selected || chosen >= 0 {
+        focus_request = 2
+    }
+    field_input := frame.input
+    if focus_request > 0 {
+        field_input.focus = true
+        focus_request -= 1
+    }
     field := TextArea(frame.session, TextAreaProps.{.key = cast(u64)300200, .focus_id = 30010,
-            .bounds = Bounds(x, footer, width - Scale(80), input_height),
+            .bounds = Bounds(x, footer, width - Scale(56), input_height),
             .value = frame.value, .placeholder = LumiViewLocaleHost("lumi_placeholder"), .label = "Lumi",
             .cursor = frame.cursor, .anchor = frame.anchor, .scroll_y = frame.input_scroll,
             .selecting = frame.selecting, .preferred_x = frame.preferred_x,
             .preferred_x_valid = frame.preferred_x_valid, .wrap = true,
-            .focused = frame.focused, .input = frame.input, .max_bytes = LUMI_INPUT_MAX - 1,
+            .focused = frame.focused, .input = field_input, .max_bytes = LUMI_INPUT_MAX - 1,
             .max_codepoints = LUMI_INPUT_MAX - 1})
     if !selected {
         if field.edit.changed && field.edit.start >= 0 && field.edit.end >= field.edit.start &&
@@ -441,17 +636,33 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     }
     frame.clipboard_write = field.clipboard_write
     frame.clipboard_text = field.clipboard_text
-    send := Button(frame.session, ButtonProps.{.id = 30011,
-            .bounds = Bounds(x + width - Scale(72), footer, Scale(72), Scale(48)),
-            .label = LumiViewLocaleHost("lumi_send"), .disabled = frame.waiting,
-            .loading = frame.waiting, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
-    if !frame.waiting && (send || field.committed) && LumiTrim(frame.value).count > 0 && !selected {
+    send := !show_commands && Button(frame.session, ButtonProps.{.id = 30011,
+            .bounds = Bounds(x + width - Scale(48), footer, Scale(48), Scale(48)),
+            .label = LumiViewLocaleHost("lumi_send"), .icon_shape = LUMI_SEND_ICON, .icon_only = true,
+            .disabled = frame.waiting, .loading = frame.waiting, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0
+    if chosen < 0 && field.committed && !send && menu_target >= 0 && !frame.waiting && !selected {
+        chosen = menu_matches[menu_target]
+    }
+    submit := ""
+    if chosen >= 0 {
+        // A command that needs text, or one chosen while Lumi is answering,
+        // waits in the draft.
+        text := CommandText(menu[chosen])
+        if menu[chosen].needs_text || frame.waiting {
+            FillDraft(text)
+        } else {
+            submit = text
+        }
+    } else if !frame.waiting && (send || field.committed) && LumiTrim(frame.value).count > 0 && !selected {
+        submit = frame.value
+    }
+    if submit.count > 0 {
         message.action = LUMI_SEND
         // The host owns the draft buffer. Keep the submitted text before
         // WriteLumiUiHost clears that buffer for the next message.
         submitted: Vec(u8)
-        BuilderPrint(*submitted, "%", frame.value)
+        BuilderPrint(*submitted, "%", submit)
         message.input = BuilderFinish(submitted)
         frame.value = ""
         frame.cursor = 0

@@ -35,6 +35,12 @@ def tap(window, x, y):
     time.sleep(0.2)
 
 
+def press(key):
+    command("xdotool", "keydown", "--clearmodifiers", key)
+    time.sleep(0.15)
+    command("xdotool", "keyup", key)
+
+
 def capture(window, label):
     raw = OUTPUT / f"{label}.xwd"
     command("xwd", "-silent", "-id", window, "-out", str(raw))
@@ -246,6 +252,35 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     with application(profile, "chat") as window:
         capture(window, "welcome")
         assert query(profile, "SELECT value FROM settings WHERE key='main_tab'")[0][0] == "4"
+        # As in Telegram, the empty draft offers a command button whose list
+        # narrows while typing. Enter picks the highlighted command, and one
+        # that needs text waits in the draft with the keyboard still in it.
+        before = len(chat(profile))
+        tap(window, 830, 680)
+        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "h")
+        time.sleep(0.4)
+        capture(window, "command-list")
+        press("Return")
+        wait_for(lambda: len(chat(profile)) == before + 2, "Enter did not send the highlighted command")
+        assert chat(profile)[-2]["text"] == "/help" and "I can help" in chat(profile)[-1]["text"]
+        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/to")
+        time.sleep(0.4)
+        press("Return")
+        time.sleep(0.4)
+        assert len(chat(profile)) == before + 2, "A command that needs text was sent without it"
+        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "Water plants")
+        time.sleep(0.3)
+        press("Return")
+        wait_for(lambda: len(chat(profile)) == before + 4, "The completed command was not sent")
+        assert chat(profile)[-2]["text"] == "/todo Water plants"
+        assert query(profile, "SELECT done FROM elist_items WHERE title='Water plants'") == [(0,)]
+        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/do")
+        time.sleep(0.4)
+        capture(window, "command-filter")
+        # /done, then /donate: tap the second row.
+        tap(window, 490, 626)
+        wait_for(lambda: len(chat(profile)) == before + 6, "A tapped command was not sent")
+        assert chat(profile)[-2]["text"] == "/donate" and chat(profile)[-1]["kind"] == 2
         send(window, profile, "/todo Read five pages", button=True)
         assert query(profile, "SELECT done FROM elist_items WHERE title='Read five pages'") == [(0,)]
         send(window, profile, "/done Read five")
@@ -390,6 +425,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
                     "multiline Diary append", "Diary restart persistence", "durable history retention",
                     "progress zero and recorded values", "donation address copy", "wallet URI",
-                    "official browser donation link", "narrow donation card", "large tool catalog"],
+                    "official browser donation link", "narrow donation card", "large tool catalog",
+                    "command button and list", "Enter picks a command", "command waits for its text",
+                    "tapped command"],
     }, indent=2) + "\n")
 print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")
