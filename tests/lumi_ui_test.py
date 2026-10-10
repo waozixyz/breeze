@@ -359,7 +359,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert state(window)['settings']['theme'] == 'forest'
         assert state(window)['settings']['theme_mode'] == 2
     with sqlite3.connect(profile / "inbe.db") as db:
-        for key, value in {"enabled_apps": "22", "app_used_lists": "0", "app_used_diary": "0"}.items():
+        for key, value in {"enabled_apps": "22", "app_used_lists": "0", "app_used_diary": "0",
+                           "app_used_leaderboard": "0"}.items():
             db.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
     before_todos = query(profile, "SELECT id,title,done FROM elist_items ORDER BY id")
     with application(profile, "recommended-only", recommended=True) as window:
@@ -401,7 +402,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             capture(window, label)
     with sqlite3.connect(profile / "inbe.db") as db:
         for key, value in {"enabled_apps": "16", "app_used_habits": "0", "app_used_practices": "0",
-                           "main_tab": "4"}.items():
+                           "app_used_leaderboard": "0", "main_tab": "4"}.items():
             db.execute("UPDATE settings SET value=? WHERE key=?", (value, key))
     before_habits = query(profile, "SELECT habit_id,local_date,completed,count FROM habit_days ORDER BY habit_id,local_date")
     with application(profile, "lumi-only", standalone=True) as window:
