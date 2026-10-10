@@ -1,13 +1,14 @@
 # Changelog
 ## [2.1.27] - 2026-10-10
 ### Added
-- End a held breath from the minimized practice window with Breath, or a double tap.
-- Feedback sent through Lumi includes the app version, device and system version, so the developer can tell you when an update already fixes it.
+- End a held breath from the minimized practice window with Breath or a double tap.
+- Lumi feedback includes the app version, device and system.
 ### Fixed
-- Picture-in-picture opens when you leave for another app or launcher during a practice.
-- Opening the picture-in-picture window returns to the running practice.
-- Lumi distinguishes feedback saved on your device from feedback received by the developer inbox.
-- Keep feedback saved for retry when delivery cannot be confirmed.
+- Picture-in-picture opens when you leave Inbe during a practice and returns to it.
+- Lumi keeps answers that arrive during picture-in-picture.
+- Lumi says whether feedback reached the developer and keeps it to retry.
+- Feedback saved by older versions is now sent.
+- Fix a startup crash on 32-bit Android phones.
 
 ## [2.1.26] - 2026-10-09
 ### Added
