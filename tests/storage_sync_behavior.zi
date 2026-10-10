@@ -24,6 +24,8 @@
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/storage/cell_records.zi";
 #import, file "../src/storage/sync_nodes.zi";
+#import, file "../src/storage/sync_node_storage.zi";
+#import "json_scan"
 Core :: #import, file "../src/storage/storage_core.zi";
 
 test_node_cursors :: () {
@@ -66,6 +68,142 @@ test_node_cursors :: () {
     check_true("return with another account", SyncNodeActivate("https://one.example"))
     check_true("keep account cursors separate", storage_meta_int64("sync_last_server_version", 0) == 0)
     storage_close()
+}
+
+// Bytes a node stores for one Diary file in the payload, counted like
+// Daochi's account storage: every stored field of each encrypted record.
+payload_file_bytes :: (name: string, hash: string, chunks_only: bool) -> s64 {
+    records := records_array()
+    total: s64 = 0
+    count := ArrayCount(records, 0)
+    fields: [7]string = .["collection", "id", "key_id", "nonce", "ciphertext", "content_hash", "parent_id"]
+    chunk_prefix := join("cell.diary.chunk.", hash)
+    chunk_prefix = PackageText(chunk_prefix, "")
+    defer {
+        PackageFree(chunk_prefix)
+    }
+    entry := PackageText("cell.diary.file.", name)
+    defer {
+        PackageFree(entry)
+    }
+    for index: cast(s32)0..count - 1 {
+        record := ElementAt(records, 0, index)
+        id: [256]u8
+        id_length := ReadStringText(records, FieldAt(records, record, "id"), id[:])
+        if id_length <= 0 {
+            continue
+        }
+        identifier := TextFromBytes(id[:id_length])
+        chunk := identifier.count > chunk_prefix.count && identifier[:chunk_prefix.count] == chunk_prefix
+        if !chunk && (chunks_only || identifier != entry) {
+            continue
+        }
+        for field: fields {
+            value: [8192]u8
+            length := ReadStringText(records, FieldAt(records, record, field), value[:])
+            if length > 0 {
+                total += cast(s64)length
+            }
+        }
+    }
+    return total
+}
+
+queued_diary_chunks :: () -> s32 {
+    return read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id GLOB 'cell.diary.chunk.*'")
+}
+
+format_bytes :: (bytes: s64) -> string {
+    output: [32]u8
+    if !SyncStorageFormatBytes(bytes, output[:]) {
+        return ""
+    }
+    return PackageText(TextFromCString(*output[0]), "")
+}
+
+// A node set not to store photos receives each Diary file entry and the day
+// documents, never photo chunks. Reports, limits and the photo estimate.
+test_node_storage_and_media :: () {
+    root := make_root("sync-node-media")
+    check_true("init media device", storage_init(root) != 0)
+    set_account()
+    storage_set_sync_enabled(1)
+    node := "https://api.waozi.xyz"
+    storage_set_setting_text("sync_server_url", node)
+    check_true("save diary day", DiaryRecordSave("2026-10-10.json", "{\"text\":\"Entry with a photo\"}"))
+    photo: [3000]u8
+    for index: cast(s32)0..cast(s32)2999 {
+        photo[index] = cast(u8)(index % 251)
+    }
+    check_true("save diary photo", DiaryRecordSave("photo-1-1.bin", TextFromBytes(photo[:])))
+    check_int("day and photo chunks queue", queued_diary_chunks(), 4)
+    check_true("photos upload by default", SyncNodeMediaUpload(node))
+    check_true("payload with photos builds", build_payload())
+    check_int("file entries and every chunk upload", record_count(), 6)
+
+    photo_hash := PackageText(read_db_text("SELECT json_extract(value,'$.hash') FROM settings WHERE key='cell.diary.file.photo-1-1.bin'"), "")
+    check_int("photo entry names its content", cast(s32)photo_hash.count, 64)
+    check_true("local photo bytes equal the node's chunk bytes",
+        SyncMediaLocalBytes() == payload_file_bytes("photo-1-1.bin", photo_hash, true))
+    estimate := SyncMediaNodeBytes(3000)
+    actual := payload_file_bytes("photo-1-1.bin", photo_hash, false)
+    check_true("photo estimate covers its chunks", estimate >= SyncMediaLocalBytes())
+    check_true("photo estimate stays within five percent of a node's bytes",
+        estimate * 100 <= actual * 105 && estimate * 100 >= actual * 95)
+    PackageFree(photo_hash)
+
+    check_true("turn photos off for the node", SyncNodeSetMediaUpload(node, false))
+    check_true("photo setting is stored", !SyncNodeMediaUpload("https://api.waozi.xyz/"))
+    check_true("other nodes keep photos on", SyncNodeMediaUpload("https://other.example"))
+    check_int("photo chunks leave the queue", queued_diary_chunks(), 1)
+    check_true("payload without photos builds", build_payload())
+    check_int("only entries and the day chunk upload", record_count(), 3)
+    check_true("photo entry still syncs", contains(payload(), "cell.diary.file.photo-1-1.bin"))
+    storage_enqueue_all_sync_state()
+    check_true("backfill payload builds", build_payload())
+    check_int("a backfill does not send photos", record_count(), 3)
+    check_true("photo room is unlimited without photo upload", SyncNodeMediaFits(100000000).fits)
+    check_true("turn photos back on", SyncNodeSetMediaUpload(node, true))
+    check_int("photos queue again", queued_diary_chunks(), 4)
+
+    check_true("unknown usage before a sync", !SyncNodeStorageRead(node).known)
+    check_true("unknown limit leaves room", SyncNodeMediaFits(100000000).fits)
+    SyncNodeStorageRecordResponse(node, "{\"status\":\"ok\",\"account_storage\":{\"used_bytes\":9437184,\"limit_bytes\":10485760}}")
+    storage := SyncNodeStorageRead("https://api.waozi.xyz/")
+    check_true("usage is known", storage.known && !storage.full)
+    check_true("usage is read", storage.used_bytes == 9437184 && storage.limit_bytes == 10485760)
+    check_int("usage percent", SyncNodeStoragePercent(storage), 90)
+    check_true("ninety percent is nearly full", SyncNodeStorageNearlyFull(storage))
+    check_true("a small photo fits", SyncNodeMediaFits(3000).fits)
+    room := SyncNodeMediaFits(1000000)
+    check_true("a large photo does not fit", !room.fits)
+    check_true("free space counts queued photos",
+        room.free_bytes == 10485760 - 9437184 - SyncMediaPendingBytes())
+    check_true("other 413 replies are not storage full",
+        !SyncNodeStorageRecordFull(node, "{\"error\":\"encrypted payload quota exceeded\"}"))
+    check_true("storage full is recorded",
+        SyncNodeStorageRecordFull(node, "{\"error\":\"account storage limit reached\",\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":10485000,\"limit_bytes\":10485760}}"))
+    storage = SyncNodeStorageRead(node)
+    check_true("full node keeps its usage", storage.full && storage.used_bytes == 10485000)
+    SyncNodeStorageRecordResponse(node, "{\"status\":\"ok\"}")
+    check_true("a reply without usage keeps the report", SyncNodeStorageRead(node).full)
+    SyncNodeStorageRecordResponse(node, "{\"status\":\"ok\",\"account_storage\":{\"used_bytes\":2048}}")
+    storage = SyncNodeStorageRead(node)
+    check_true("a sync clears full", !storage.full && storage.used_bytes == 2048)
+    check_true("an unlimited node has no limit", storage.limit_bytes == 0 && !SyncNodeStorageNearlyFull(storage))
+    storage_set_setting_text("sync_public_id", "another-account")
+    check_true("reports belong to one account", !SyncNodeStorageRead(node).known)
+    check_true("photo settings belong to one account", SyncNodeMediaUpload(node))
+    storage_close()
+
+    sizes: [6]s64 = .[0, 1023, 1536, 5557452, 10485760, 157286400]
+    expected: [6]string = .["0 B", "1023 B", "2 KB", "5.3 MB", "10 MB", "150 MB"]
+    for index: cast(s32)0..cast(s32)5 {
+        formatted := format_bytes(sizes[index])
+        check_true("storage size reads naturally", formatted == expected[index])
+        PackageFree(formatted)
+    }
+    check_true("node names drop the scheme", SyncNodeDisplayName("https://api.waozi.xyz/") == "api.waozi.xyz")
 }
 
 c :: #system_library "c";
@@ -1411,6 +1549,7 @@ Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
     test_node_cursors()
+    test_node_storage_and_media()
     test_payload_after_upload_marker()
     test_backfill_includes_existing_habits()
     test_payload_excludes_local_settings()

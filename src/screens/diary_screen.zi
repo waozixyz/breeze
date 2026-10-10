@@ -33,6 +33,8 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/diary_types.zi";
 #import, file "../cells/package_files.zi";
+#import, file "../storage/sync_node_storage.zi";
+#import, file "../storage/storage_core.zi";
 
 using AndroidImportKind;
 using AndroidImportResult;
@@ -56,6 +58,8 @@ diary_photo_year: s32;
 diary_photo_month: s32;
 diary_photo_day: s32;
 diary_photo_error: bool;
+// The host words a refused photo itself; the Diary app shows its photo error.
+diary_photo_no_room: [320]u8;
 diary_pending_replacement: string;
 diary_frame_text: string;
 c :: #system_library "c";
@@ -137,7 +141,13 @@ DiaryAcceptPhoto :: (path: string) {
     }
     filename := DiaryStoreAttach(path)
     defer { PackageFree(filename) }
-    if filename.count == 0 { diary_photo_error = true; return }
+    if filename.count == 0 {
+        diary_photo_error = true
+        if !diary_attach_room.fits {
+            DiaryDescribeNoRoom()
+        }
+        return
+    }
     at := path.count - 1
     while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 { at -= 1 }
     diary_state.action = DIARY_ATTACH
@@ -145,6 +155,17 @@ DiaryAcceptPhoto :: (path: string) {
     diary_state.attachment_name = path[at + 1:]
     diary_state = DiaryRun(diary_state)
     diary_photo_error = !diary_state.succeeded
+}
+
+DiaryDescribeNoRoom :: () {
+    address := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(address)
+    }
+    args: [1]FormatArg = .[FormatArg.{.text = SyncNodeDisplayName(address), .is_text = true}]
+    if !FormatTemplate(LocaleText("diary_photo_no_room"), args[:], diary_photo_no_room[:]) {
+        diary_photo_no_room[0] = cast(u8)0
+    }
 }
 
 DiaryPhotoPicker :: (app: *InnerBreeze) {
@@ -162,6 +183,7 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
     if !diary_photo_requested { return }
     diary_photo_requested = false
     diary_photo_error = false
+    diary_photo_no_room[0] = cast(u8)0
     diary_photo_year = diary_state.year
     diary_photo_month = diary_state.month
     diary_photo_day = diary_state.day
@@ -216,6 +238,9 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
     ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
         key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
         text := LocaleText(key)
+        if key == "diary_photo_error" && diary_photo_no_room[0] != cast(u8)0 {
+            text = AppTextFromCString(*diary_photo_no_room[0], 320)
+        }
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = ModuleTextData("string"),
             .data = ModuleTextData(text), .length = cast(usize)text.count}
         return 1

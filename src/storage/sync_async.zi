@@ -25,6 +25,8 @@ Auth :: #import "auth";
 #import, file "storage_core.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../app/sync_recovery_policy.zi";
+#import, file "sync_node_storage.zi";
+#import, file "sync_result.zi";
 
 c :: #system_library "c";
 AsyncAllocate :: (size: usize) -> *void #foreign c "malloc";
@@ -363,14 +365,18 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
             CancelStoredOperation(operation)
             return true
         }
+        response := TextUntilNul(BytesFromPointer(operation.response, AsyncResponseCapacity))
+        server := TextUntilNul(operation.server[:])
         if operation.result == cast(s32)AuthResult.AUTH_OK {
-            if storage_apply_sync_response_json(TextUntilNul(
-                BytesFromPointer(operation.response, AsyncResponseCapacity))) == 0 {
+            if storage_apply_sync_response_json(response) == 0 {
                 operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
             } else {
                 storage_purge_synced_deleted_data()
                 operation.changed = storage_last_sync_changed()
+                SyncNodeStorageRecordResponse(server, response)
             }
+        } else if operation.sync.status == 413 && SyncNodeStorageRecordFull(server, response) {
+            operation.result = cast(s32)SyncResult.SYNC_STORAGE_FULL
         }
     } else if operation.is_deletion {
         if !PollDeletion(*operation.deletion) {

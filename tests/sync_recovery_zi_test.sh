@@ -22,7 +22,8 @@ mkdir -p "$work/c"
 "${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
-    "$root/tests/sync_recovery_link_test.c" $(ls "$work/c"/*.c | grep -v '/storage_core.c$') \
+    "$root/tests/sync_recovery_link_test.c" \
+    $(ls "$work/c"/*.c | grep -v -e '/storage_core.c$' -e '/sync_nodes.c$') \
     -lpthread -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "sync recovery Ziran/native test passed"

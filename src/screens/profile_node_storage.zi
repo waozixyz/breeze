@@ -1,0 +1,328 @@
+// Profile → Data: how much each sync node stores for this account, how close
+// it is to the node's limit, and whether Diary photos and videos upload there.
+#import "geometry"
+#import "box_props"
+#import "box_widget"
+#import "drawing_props"
+#import "kss_parser"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "toggle_props"
+#import "toggle_widget"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_sync.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_account.zi";
+#import, file "../storage/sync_nodes.zi";
+#import, file "../storage/sync_node_storage.zi";
+#import, file "settings/settings_status.zi";
+
+using TextAlign;
+using TextWrap;
+
+ProfileNodeCard :: struct {
+    storage: SyncNodeStorage
+    media: bool
+    active: bool
+    usage: string
+    percent: string
+    status: string
+    status_class: string
+    photos: string
+    height: s32
+}
+
+ProfileNodeStoragePad :: () -> s32 {
+    return AppScale(14)
+}
+
+ProfileNodeStorageVisible :: () -> bool {
+    account: SyncAccount
+    return sync_account_load(*account) != 0 && SyncNodeCount() > 0
+}
+
+ProfileNodeStorageHold :: (app: *InnerBreeze, text: string) -> string {
+    return FrameTextHold(*app.ui.frame_text, text)
+}
+
+ProfileNodeStorageSize :: (bytes: s64, output: []u8) -> string {
+    unused SyncStorageFormatBytes(bytes, output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// Texts and height of one node's card; drawing and measuring share it.
+ProfileNodeCardFor :: (app: *InnerBreeze, address: string, active: string,
+    media_bytes: s64, width: s32) -> ProfileNodeCard {
+    card: ProfileNodeCard
+    card.storage = SyncNodeStorageRead(address)
+    card.media = SyncNodeMediaUpload(address)
+    card.active = SyncNodeSameAddress(address, active)
+    used: [32]u8
+    limit: [32]u8
+    line: [192]u8
+    storage := card.storage
+    if !storage.known {
+        card.usage = LocaleText("profile_node_storage_unknown")
+    } else if storage.limit_bytes > 0 {
+        args: [2]FormatArg = .[
+            FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true},
+            FormatArg.{.text = ProfileNodeStorageSize(storage.limit_bytes, limit[:]), .is_text = true}]
+        unused FormatTemplate(LocaleText("profile_node_storage_used_of"), args[:], line[:])
+        card.usage = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
+        percent: [16]u8
+        unused FormatNumberTemplate("%d%%", SyncNodeStoragePercent(storage), percent[:])
+        card.percent = ProfileNodeStorageHold(app, AppTextFromCString(*percent[0], 16))
+    } else {
+        args: [1]FormatArg = .[
+            FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true}]
+        unused FormatTemplate(LocaleText("profile_node_storage_used_unlimited"), args[:], line[:])
+        card.usage = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
+    }
+    if storage.full || (storage.limit_bytes > 0 && storage.used_bytes >= storage.limit_bytes) {
+        card.status = LocaleText("profile_node_storage_full")
+        card.status_class = "storage-full"
+    } else if SyncNodeStorageNearlyFull(storage) {
+        card.status = LocaleText(ifx card.media then "profile_node_storage_nearly_full_media"
+            else "profile_node_storage_nearly_full")
+        card.status_class = "storage-warning"
+    }
+    if card.media && media_bytes > 0 {
+        photos: [32]u8
+        args: [1]FormatArg = .[
+            FormatArg.{.text = ProfileNodeStorageSize(media_bytes, photos[:]), .is_text = true}]
+        unused FormatTemplate(LocaleText("profile_node_storage_photos"), args[:], line[:])
+        card.photos = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
+    }
+    inner := width - ProfileNodeStoragePad() * 2
+    small := AppSmallFontSize()
+    height := ProfileNodeStoragePad() + AppScale(28)
+    if storage.known && storage.limit_bytes > 0 {
+        height += AppScale(18)
+    }
+    height += AppParagraphHeight(card.usage, inner - AppScale(48), small, 0) + AppScale(6)
+    if card.status.count > 0 {
+        height += AppParagraphHeight(card.status, inner, small, 0) + AppScale(6)
+    }
+    if card.photos.count > 0 {
+        height += AppParagraphHeight(card.photos, inner, small, 0) + AppScale(6)
+    }
+    height += AppScale(12) + AppScale(44)
+    hint := LocaleText(ifx card.media then "profile_node_storage_media_on"
+        else "profile_node_storage_media_off")
+    height += AppParagraphHeight(hint, inner, small, 0) + AppScale(4)
+    card.height = height + ProfileNodeStoragePad()
+    return card
+}
+
+#program_export
+profile_node_storage_height :: (app: *InnerBreeze, width: s32) -> s32 {
+    if app == null || !ProfileNodeStorageVisible() {
+        return 0
+    }
+    active := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(active)
+    }
+    media_bytes := SyncMediaLocalBytes()
+    height := AppScale(30) + AppParagraphHeight(LocaleText("profile_node_storage_hint"),
+        width, AppSmallFontSize(), 0) + AppScale(10)
+    for index: cast(s32)0..SyncNodeCount() - 1 {
+        address := SyncNodeAt(index)
+        card := ProfileNodeCardFor(app, address, active, media_bytes, width)
+        PackageFree(address)
+        height += card.height + AppScale(10)
+    }
+    return height + AppScale(8)
+}
+
+ProfileNodeStorageText :: (app: *InnerBreeze, text: string, x: s32, y: s32,
+    width: s32, height: s32, font: s32, class_name: string, align: TextAlign) {
+    props: TextProps
+    props.text = text
+    props.font = font
+    props.wrap = cast(TextWrap)TextWrapAuto
+    props.align = align
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+    if class_name.count > 0 {
+        props.class_name = KssClassId(KssMakeName(class_name))
+    }
+    Text(app.ui.session, props)
+}
+
+ProfileNodeStorageBarColor :: (card: ProfileNodeCard) -> Color {
+    if card.status_class == "storage-full" {
+        return StyleTokenColorOr("storage-full", Color.{179, 38, 30, 255})
+    }
+    if card.status_class == "storage-warning" {
+        return StyleTokenColorOr("storage-warning", Color.{163, 98, 0, 255})
+    }
+    return StyleTokenColor("accent")
+}
+
+ProfileDrawNodeCard :: (app: *InnerBreeze, index: s32, address: string,
+    card: ProfileNodeCard, x: s32, y: s32, width: s32) {
+    pad := ProfileNodeStoragePad()
+    inner := width - pad * 2
+    small := AppSmallFontSize()
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)card.height},
+            .fill = DarkenColor(StyleTokenColor("canvas"), 7),
+            .radius = cast(float32)AppScale(12)})
+    left := x + pad
+    top := y + pad
+    badge_w: s32 = 0
+    if card.active {
+        badge := LocaleText("profile_node_storage_active")
+        badge_w = AppTextWidth(badge, small) + AppScale(16)
+        Box(app.ui.session, BoxProps.{
+                .bounds = Rectangle.{cast(float32)(left + inner - badge_w), cast(float32)(top + AppScale(2)),
+                    cast(float32)badge_w, cast(float32)AppScale(22)},
+                .fill = Fade(StyleTokenColor("accent"), 0.22),
+                .radius = cast(float32)AppScale(11)})
+        ProfileNodeStorageText(app, badge, left + inner - badge_w, top + AppScale(2),
+            badge_w, AppScale(22), small, "", cast(TextAlign)TextAlignCenter)
+    }
+    name := ProfileNodeStorageHold(app, SyncNodeDisplayName(address))
+    name_props: TextProps
+    name_props.text = name
+    name_props.font = AppFontSize()
+    name_props.wrap = cast(TextWrap)TextWrapNone
+    name_props.bounds = Rectangle.{cast(float32)left, cast(float32)top,
+        cast(float32)(inner - badge_w - AppScale(8)), cast(float32)AppScale(26)}
+    Text(app.ui.session, name_props)
+    top += AppScale(28)
+    storage := card.storage
+    if storage.known && storage.limit_bytes > 0 {
+        bar_h := AppScale(8)
+        Box(app.ui.session, BoxProps.{
+                .bounds = Rectangle.{cast(float32)left, cast(float32)top,
+                    cast(float32)inner, cast(float32)bar_h},
+                .fill = DarkenColor(StyleTokenColor("canvas"), 18),
+                .radius = cast(float32)bar_h / 2.0})
+        fill_w := cast(s32)(cast(s64)inner * cast(s64)SyncNodeStoragePercent(storage) / 100)
+        if storage.used_bytes > 0 && fill_w < bar_h {
+            fill_w = bar_h
+        }
+        if fill_w > 0 {
+            Box(app.ui.session, BoxProps.{
+                    .bounds = Rectangle.{cast(float32)left, cast(float32)top,
+                        cast(float32)fill_w, cast(float32)bar_h},
+                    .fill = ProfileNodeStorageBarColor(card),
+                    .radius = cast(float32)bar_h / 2.0})
+        }
+        top += AppScale(18)
+    }
+    usage_h := AppParagraphHeight(card.usage, inner - AppScale(48), small, 0)
+    ProfileNodeStorageText(app, card.usage, left, top, inner - AppScale(48), usage_h, small,
+        ifx storage.known then "" else "storage-detail", cast(TextAlign)TextAlignStart)
+    if card.percent.count > 0 {
+        ProfileNodeStorageText(app, card.percent, left + inner - AppScale(48), top,
+            AppScale(48), usage_h, small, card.status_class, cast(TextAlign)TextAlignEnd)
+    }
+    top += usage_h + AppScale(6)
+    if card.status.count > 0 {
+        status_h := AppParagraphHeight(card.status, inner, small, 0)
+        ProfileNodeStorageText(app, card.status, left, top, inner, status_h, small,
+            card.status_class, cast(TextAlign)TextAlignStart)
+        top += status_h + AppScale(6)
+    }
+    if card.photos.count > 0 {
+        photos_h := AppParagraphHeight(card.photos, inner, small, 0)
+        ProfileNodeStorageText(app, card.photos, left, top, inner, photos_h, small,
+            "storage-detail", cast(TextAlign)TextAlignStart)
+        top += photos_h + AppScale(6)
+    }
+    top += AppScale(6)
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)left, cast(float32)top,
+                cast(float32)inner, cast(float32)AppScale(1)},
+            .fill = Fade(StyleTokenColor("text"), 0.10)})
+    top += AppScale(6)
+    toggle_w := AppScale(50)
+    toggle_h := AppScale(28)
+    label := LocaleText("profile_node_storage_media")
+    label_props: TextProps
+    label_props.text = label
+    label_props.font = AppFontSize()
+    label_props.wrap = cast(TextWrap)TextWrapAuto
+    label_props.vertical_align = cast(TextAlign)TextAlignCenter
+    label_props.bounds = Rectangle.{cast(float32)left, cast(float32)top,
+        cast(float32)(inner - toggle_w - AppScale(12)), cast(float32)AppScale(44)}
+    Text(app.ui.session, label_props)
+    toggle: ToggleProps
+    toggle.id = 63000 + index
+    toggle.bounds = Rectangle.{cast(float32)(left + inner - toggle_w),
+        cast(float32)(top + (AppScale(44) - toggle_h) / 2),
+        cast(float32)toggle_w, cast(float32)toggle_h}
+    toggle.value = card.media
+    toggle.label = label
+    toggle.disabled = app_sync_loading() != 0
+    result := Toggle(app.ui.session, toggle)
+    if result.changed {
+        ProfileNodeStorageSetMedia(app, address, result.value, card.active)
+    }
+    top += AppScale(44)
+    hint := LocaleText(ifx card.media then "profile_node_storage_media_on"
+        else "profile_node_storage_media_off")
+    ProfileNodeStorageText(app, hint, left, top, inner,
+        AppParagraphHeight(hint, inner, small, 0), small, "storage-detail",
+        cast(TextAlign)TextAlignStart)
+}
+
+// Turning photo upload off for a full node lets its other changes sync
+// again, so the active node syncs at once either way.
+ProfileNodeStorageSetMedia :: (app: *InnerBreeze, address: string, enabled: bool,
+    active: bool) {
+    if !SyncNodeSetMediaUpload(address, enabled) {
+        settings_screen_set_status_error(LocaleText("profile_node_storage_media_failed"))
+        return
+    }
+    if active {
+        storage_set_sync_enabled(1)
+        unused app_request_sync(app)
+    }
+}
+
+#program_export
+profile_draw_node_storage :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
+    if app == null || y == null || !ProfileNodeStorageVisible() {
+        return
+    }
+    title: TextProps
+    title.text = LocaleText("profile_node_storage_title")
+    title.font = AppFontSize()
+    title.wrap = cast(TextWrap)TextWrapNone
+    title.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width,
+        cast(float32)AppScale(26)}
+    Text(app.ui.session, title)
+    y.* += AppScale(30)
+    hint := LocaleText("profile_node_storage_hint")
+    hint_h := AppParagraphHeight(hint, width, AppSmallFontSize(), 0)
+    ProfileNodeStorageText(app, hint, x, y.*, width, hint_h, AppSmallFontSize(),
+        "storage-detail", cast(TextAlign)TextAlignStart)
+    y.* += hint_h + AppScale(10)
+    active := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(active)
+    }
+    media_bytes := SyncMediaLocalBytes()
+    for index: cast(s32)0..SyncNodeCount() - 1 {
+        address := SyncNodeAt(index)
+        defer {
+            PackageFree(address)
+        }
+        card := ProfileNodeCardFor(app, address, active, media_bytes, width)
+        ProfileDrawNodeCard(app, index, address, card, x, y.*, width)
+        y.* += card.height + AppScale(10)
+    }
+    y.* += AppScale(8)
+}

@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.7] - 2026-10-10
+
+### Changed
+- When a photo is not on this device, for example because your sync node does not store photos, the entry shows where the photo is instead of an empty space.
+
 ## [1.1.6] - 2026-10-10
 
 ### Changed

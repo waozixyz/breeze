@@ -1,0 +1,368 @@
+// Each node reports the bytes this account stores there and its limit, if
+// any. This device keeps the last report per account and node, and whether
+// Diary photos and videos upload to that node. A Diary file entry always
+// syncs, so other devices see that a photo exists even where its bytes are
+// withheld; only the photo's chunks stay off the node.
+#import "json_scan"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import, file "storage_core.zi";
+#import, file "sync_nodes.zi";
+#import, file "db.zi";
+#import, file "sql_query.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+SyncNodeStorage :: struct {
+    known: bool
+    used_bytes: s64
+    limit_bytes: s64
+    checked_at: s64
+    full: bool
+}
+
+SyncNodeMediaRoom :: struct {
+    fits: bool
+    needed_bytes: s64
+    free_bytes: s64
+}
+
+// A node at or above this share of its limit is reported as nearly full.
+SYNC_NODE_STORAGE_WARNING_PERCENT :: 80
+
+// Bytes a node stores for one Diary record beyond its key and hex value:
+// collection, key id, nonce and content hash, plus the sealed JSON wrapper
+// and tag, which the hex ciphertext doubles. See storage_core's encryption.
+SYNC_MEDIA_RECORD_OVERHEAD :: 125
+SYNC_MEDIA_SEALED_OVERHEAD :: 73
+SYNC_MEDIA_CHUNK_BYTES :: 1024
+SYNC_MEDIA_CHUNK_KEY_BYTES :: 86
+SYNC_MEDIA_MANIFEST_BYTES :: 610
+
+// Diary day documents are YYYY-MM-DD.json; every other Diary file is media.
+SyncMediaWithholdSQL :: #string SQL_END
+DELETE FROM sync_outbox
+WHERE entity_type='cell_record' AND entity_id IN (
+  SELECT key FROM settings
+  WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
+    AND substr(key,18,64) IN (
+      SELECT json_extract(value,'$.hash') FROM settings
+      WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+        AND key NOT GLOB '*.json' AND json_valid(value)))
+SQL_END;
+
+SyncMediaRequeueSQL :: #string SQL_END
+INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at)
+SELECT 'cell_record',key,0,updated_at FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
+  AND substr(key,18,64) IN (
+    SELECT json_extract(value,'$.hash') FROM settings
+    WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+      AND key NOT GLOB '*.json' AND json_valid(value))
+ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at
+SQL_END;
+
+SyncMediaLocalBytesSQL :: #string SQL_END
+SELECT COALESCE(SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)),0) FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
+  AND substr(key,18,64) IN (
+    SELECT json_extract(value,'$.hash') FROM settings
+    WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+      AND key NOT GLOB '*.json' AND json_valid(value))
+SQL_END;
+
+SyncMediaPendingBytesSQL :: #string SQL_END
+SELECT COALESCE(SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)),0) FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
+  AND key IN (SELECT entity_id FROM sync_outbox WHERE entity_type='cell_record')
+  AND substr(key,18,64) IN (
+    SELECT json_extract(value,'$.hash') FROM settings
+    WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+      AND key NOT GLOB '*.json' AND json_valid(value))
+SQL_END;
+
+// Keys follow the node's normalized address, so a report and a setting made
+// from differently spelled addresses of one node meet.
+SyncNodeStorageKey :: (address: string, field: string) -> string {
+    normalized: [256]u8
+    if !SyncNodeAddress(address, normalized[:]) {
+        return ""
+    }
+    return SyncNodeCursorKey(AppTextFromCString(*normalized[0], 256), field)
+}
+
+SyncNodeStorageParseNumber :: (text: string, start: *s64) -> s64 {
+    value: s64 = 0
+    while start.* < text.count && text[start.*] >= cast(u8)48 && text[start.*] <= cast(u8)57 {
+        value = value * 10 + cast(s64)(text[start.*] - cast(u8)48)
+        start.* += 1
+    }
+    if start.* < text.count && text[start.*] == cast(u8)44 {
+        start.* += 1
+    }
+    return value
+}
+
+SyncNodeStorageRead :: (address: string) -> SyncNodeStorage {
+    result: SyncNodeStorage
+    key := SyncNodeStorageKey(address, "storage")
+    defer {
+        PackageFree(key)
+    }
+    if key.count == 0 {
+        return result
+    }
+    value := PackageText(storage_get_setting_text(key), "")
+    defer {
+        PackageFree(value)
+    }
+    if value.count == 0 {
+        return result
+    }
+    at: s64 = 0
+    result.used_bytes = SyncNodeStorageParseNumber(value, *at)
+    result.limit_bytes = SyncNodeStorageParseNumber(value, *at)
+    result.checked_at = SyncNodeStorageParseNumber(value, *at)
+    result.full = SyncNodeStorageParseNumber(value, *at) != 0
+    result.known = result.checked_at > 0
+    return result
+}
+
+SyncNodeStorageWrite :: (address: string, storage: SyncNodeStorage) {
+    key := SyncNodeStorageKey(address, "storage")
+    defer {
+        PackageFree(key)
+    }
+    if key.count == 0 {
+        return
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%,%,%,%", storage.used_bytes, storage.limit_bytes,
+        storage.checked_at, ifx storage.full then 1 else 0)
+    value := BuilderFinish(out)
+    defer {
+        PackageFree(value)
+    }
+    storage_set_setting_text(key, value)
+}
+
+// Reads {"used_bytes":N,"limit_bytes":N} from a sync or storage_full reply.
+SyncNodeStorageFromJson :: (json: string, storage: *SyncNodeStorage) -> bool {
+    report := FieldAt(json, 0, "account_storage")
+    if report < 0 {
+        return false
+    }
+    used := ReadNumber(json, FieldAt(json, report, "used_bytes"))
+    if !used.valid || used.value < 0.0 {
+        return false
+    }
+    storage.used_bytes = cast(s64)used.value
+    storage.limit_bytes = 0
+    limit := ReadNumber(json, FieldAt(json, report, "limit_bytes"))
+    if limit.valid && limit.value > 0.0 {
+        storage.limit_bytes = cast(s64)limit.value
+    }
+    storage.checked_at = now_seconds()
+    storage.known = true
+    return true
+}
+
+// A successful sync replaces the node's report and clears a full state.
+SyncNodeStorageRecordResponse :: (address: string, response: string) {
+    storage: SyncNodeStorage
+    if !SyncNodeStorageFromJson(response, *storage) {
+        return
+    }
+    storage.full = false
+    SyncNodeStorageWrite(address, storage)
+}
+
+// A refused upload reports code storage_full and the usage before it.
+SyncNodeStorageRecordFull :: (address: string, response: string) -> bool {
+    code: [32]u8
+    length := ReadStringText(response, FieldAt(response, 0, "code"), code[:])
+    if length <= 0 || TextFromBytes(code[:length]) != "storage_full" {
+        return false
+    }
+    storage := SyncNodeStorageRead(address)
+    unused SyncNodeStorageFromJson(response, *storage)
+    storage.full = true
+    storage.checked_at = now_seconds()
+    storage.known = true
+    SyncNodeStorageWrite(address, storage)
+    return true
+}
+
+SyncNodeStoragePercent :: (storage: SyncNodeStorage) -> s32 {
+    if storage.limit_bytes <= 0 {
+        return 0
+    }
+    percent := (storage.used_bytes * 100 + storage.limit_bytes - 1) / storage.limit_bytes
+    if percent > 100 {
+        return 100
+    }
+    return cast(s32)percent
+}
+
+SyncNodeStorageNearlyFull :: (storage: SyncNodeStorage) -> bool {
+    return storage.limit_bytes > 0 &&
+        SyncNodeStoragePercent(storage) >= SYNC_NODE_STORAGE_WARNING_PERCENT
+}
+
+SyncNodeMediaUpload :: (address: string) -> bool {
+    key := SyncNodeStorageKey(address, "media_upload")
+    defer {
+        PackageFree(key)
+    }
+    if key.count == 0 {
+        return true
+    }
+    return storage_get_setting_text(key) != "0"
+}
+
+// Turning media off for the active node drops its queued photo chunks;
+// turning it on queues the device's photos for that node again.
+SyncNodeSetMediaUpload :: (address: string, enabled: bool) -> bool {
+    key := SyncNodeStorageKey(address, "media_upload")
+    defer {
+        PackageFree(key)
+    }
+    if key.count == 0 {
+        return false
+    }
+    storage_settings_begin_write()
+    defer {
+        storage_settings_end_write()
+    }
+    storage_set_setting_text(key, ifx enabled then "1" else "0")
+    active := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(active)
+    }
+    if !SyncNodeSameAddress(address, active) {
+        return true
+    }
+    if enabled {
+        return exec_sql(SyncMediaRequeueSQL) != 0
+    }
+    return exec_sql(SyncMediaWithholdSQL) != 0
+}
+
+SyncNodeSameAddress :: (first: string, second: string) -> bool {
+    left: [256]u8
+    right: [256]u8
+    if !SyncNodeAddress(first, left[:]) || !SyncNodeAddress(second, right[:]) {
+        return false
+    }
+    return AppTextFromCString(*left[0], 256) == AppTextFromCString(*right[0], 256)
+}
+
+// Called before each upload: a node without media upload never receives
+// photo chunks, whatever queued them (a backfill, a node switch, a new photo).
+#program_export
+storage_withhold_node_media :: () -> s32 {
+    active := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(active)
+    }
+    if active.count == 0 || SyncNodeMediaUpload(active) {
+        return 1
+    }
+    return exec_sql(SyncMediaWithholdSQL)
+}
+
+// Bytes a node stores for a new media file of this size, including its
+// file entry. Hex chunks inside hex ciphertext make this about four times
+// the file size.
+SyncMediaNodeBytes :: (file_bytes: s64) -> s64 {
+    if file_bytes <= 0 {
+        return 0
+    }
+    chunks := (file_bytes + SYNC_MEDIA_CHUNK_BYTES - 1) / SYNC_MEDIA_CHUNK_BYTES
+    per_chunk := SYNC_MEDIA_RECORD_OVERHEAD + SYNC_MEDIA_CHUNK_KEY_BYTES +
+        2 * (SYNC_MEDIA_CHUNK_KEY_BYTES + SYNC_MEDIA_SEALED_OVERHEAD)
+    return chunks * per_chunk + file_bytes * 4 + SYNC_MEDIA_MANIFEST_BYTES
+}
+
+// Bytes this device's photos and videos take on a node that stores them.
+SyncMediaLocalBytes :: () -> s64 {
+    return db_select_int64_text(SyncMediaLocalBytesSQL, cast(s64)0)
+}
+
+SyncMediaPendingBytes :: () -> s64 {
+    return db_select_int64_text(SyncMediaPendingBytesSQL, cast(s64)0)
+}
+
+// Whether a new media file still fits on the active node. Nodes without a
+// known limit, and nodes that do not store media, always have room.
+SyncNodeMediaFits :: (file_bytes: s64) -> SyncNodeMediaRoom {
+    result: SyncNodeMediaRoom
+    result.fits = true
+    result.needed_bytes = SyncMediaNodeBytes(file_bytes)
+    active := PackageText(storage_get_setting_text("sync_server_url"), "")
+    defer {
+        PackageFree(active)
+    }
+    if active.count == 0 || storage_sync_enabled() == 0 || !SyncNodeMediaUpload(active) {
+        return result
+    }
+    storage := SyncNodeStorageRead(active)
+    if !storage.known || storage.limit_bytes <= 0 {
+        return result
+    }
+    result.free_bytes = storage.limit_bytes - storage.used_bytes - SyncMediaPendingBytes()
+    if result.free_bytes < 0 {
+        result.free_bytes = 0
+    }
+    result.fits = result.needed_bytes <= result.free_bytes
+    return result
+}
+
+// Sizes read like file sizes elsewhere in the app: B, KB, then MB with one
+// decimal below 100 MB ("5.3 MB", "10 MB").
+SyncStorageFormatBytes :: (bytes: s64, output: []u8) -> bool {
+    if output.count == 0 {
+        return false
+    }
+    output[0] = cast(u8)0
+    if bytes < 0 {
+        bytes = 0
+    }
+    out: Vec(u8)
+    megabyte: s64 = 1024 * 1024
+    if bytes < 1024 {
+        BuilderPrint(*out, "% B", bytes)
+    } else if bytes < megabyte {
+        BuilderPrint(*out, "% KB", (bytes + 512) / 1024)
+    } else if bytes < 100 * megabyte {
+        tenths := (bytes * 10 + megabyte / 2) / megabyte
+        if tenths % 10 == 0 {
+            BuilderPrint(*out, "% MB", tenths / 10)
+        } else {
+            BuilderPrint(*out, "%.% MB", tenths / 10, tenths % 10)
+        }
+    } else {
+        BuilderPrint(*out, "% MB", (bytes + megabyte / 2) / megabyte)
+    }
+    text := BuilderFinish(out)
+    defer {
+        PackageFree(text)
+    }
+    return AppCopyText(text, output)
+}
+
+// The address as people read it: no scheme and no trailing slash.
+SyncNodeDisplayName :: (address: string) -> string {
+    start: s64 = 0
+    if address.count > 8 && address[:8] == "https://" {
+        start = 8
+    } else if address.count > 7 && address[:7] == "http://" {
+        start = 7
+    }
+    end := address.count
+    while end > start && address[end - 1] == cast(u8)47 {
+        end -= 1
+    }
+    return address[start:end]
+}
