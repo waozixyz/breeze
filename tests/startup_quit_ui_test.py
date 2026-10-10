@@ -150,18 +150,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             restored = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
             assert restored == order, "Restart lost a selected cell: " + str(restored)
 
-    # Preview windows used to discard the close dialog result forever.
-    with application(Path(temporary) / "quit", "quit-modal", "--screenshot", str(OUTPUT / "prompt.png"),
-                     "--screenshot-scene", "close_prompt", "--screenshot-width", "900",
-                     "--screenshot-height", "720", preview=True) as (app, window, log):
-        command("import", "-window", window, str(OUTPUT / "quit-before.png"))
-        started = time.monotonic()
-        click(window, 526, 414)
-        try:
-            status = app.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            raise AssertionError("A single Quit click did not exit promptly\n" + log.read_text())
-        assert status == 0, log.read_text()
-        receipts["quit_seconds"] = round(time.monotonic() - started, 3)
+    # Preview windows used to discard the close dialog result forever. The
+    # prompt must also appear and work above the Apps overlay.
+    for scene in ("close_prompt", "close_prompt_over_apps"):
+        with application(Path(temporary) / scene, "quit-" + scene, "--screenshot",
+                         str(OUTPUT / (scene + ".png")), "--screenshot-scene", scene,
+                         "--screenshot-width", "900", "--screenshot-height", "720",
+                         preview=True) as (app, window, log):
+            command("import", "-window", window, str(OUTPUT / (scene + "-before.png")))
+            started = time.monotonic()
+            click(window, 526, 414)
+            try:
+                status = app.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                raise AssertionError(scene + ": a single Quit click did not exit promptly\n" + log.read_text())
+            assert status == 0, log.read_text()
+            receipts[scene + "_quit_seconds"] = round(time.monotonic() - started, 3)
     (OUTPUT / "receipt.json").write_text(json.dumps(receipts, indent=2) + "\n")
     print(json.dumps(receipts))
