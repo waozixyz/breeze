@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
 
     with application("gestures") as (window, log):
         capture(window, "initial")
-        click(window, 44, 228)  # Apps follows the two saved favorites.
+        click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
         click(window, 690, 684)  # Settings is the right footer card beside Profile.
         hub = capture(window, "settings-hub")
         hub.crop((88, 0, 900, 60)).save(OUTPUT / "settings-title.png")

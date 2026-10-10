@@ -170,6 +170,9 @@ with contextlib.ExitStack() as stack:
             cases += [(320, 844, 0, 10, 5), (390, 844, 4, 10, 5),
                       (390, 844, 0, 15, 5), (900, 500, 1, 10, 5),
                       (900, 500, 3, 10, 5)]
+            # With three pins, Diary (main_tab 3) opens unpinned under its
+            # return bar; the bar must not move the sidebar's pins or Apps.
+            cases += [(900, 500, 1, 10, 3), (900, 500, 3, 10, 3)]
             screens = {12: 23, 1: 11, 2: 0, 3: 16, 11: 22}
             for width, height, placement, zoom, count in cases:
                 name = f"dock-{width}-{height}-{placement}-{zoom}-{count}"
@@ -222,6 +225,17 @@ with contextlib.ExitStack() as stack:
                     assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
                         f"{name}: Apps or its Profile action is unreachable"
                     assert favorites(profile) == routes[:count], "Dock clicks changed pins"
+                if vertical and count == 3:
+                    # The pins above were reached under Diary's return bar;
+                    # its Back arrow opening Apps proves the bar was shown.
+                    seed(profile, {"main_tab": 3})
+                    with application(profile, name + "-back", width, height) as (window, log):
+                        content_left = round(88 * scale) if placement == 1 else 0
+                        click(window, content_left + round(24 * scale), round(24 * scale))
+                        capture(window, name + "-back-apps")
+                        click(window, 170, height - round(36 * scale))
+                        assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
+                            f"{name}: Diary's return bar did not lead to Apps"
             print("Fitted dock: 3–5 pins, narrow windows, zoom, top/bottom and both rails passed")
         raise SystemExit(0)
 
@@ -267,7 +281,8 @@ with contextlib.ExitStack() as stack:
                            "apps_last_update_check": 1900000000,
                            "launcher_favorite_count": 2, "launcher_favorite_0": 1,
                            "launcher_favorite_1": 2})
-            apps_point = (330, height - 42) if mobile else (44, 228)
+            # Desktop keeps Apps in the sidebar's bottom corner.
+            apps_point = (330, height - 42) if mobile else (44, height - 60)
             pinned_first = (100, 228) if mobile else (170, 228)
             more_first = (100, 364) if mobile else (170, 364)
             with application(profile, name, width, height) as (window, log):
@@ -275,10 +290,10 @@ with contextlib.ExitStack() as stack:
                 if not mobile:
                     assert page.getpixel((3, height - 80)) == page.getpixel((width - 3, height - 80)), "Navigation and page use different default palettes"
                     before = log.read_text()
-                    click(window, 44, height - 60)
-                    assert log.read_text().count("ROUTE switch") == before.count("ROUTE switch"), "Profile remains hard-pinned at the bottom"
-                    # Profile is an Apps action on both desktop and mobile.
+                    # The bottom corner opens Apps; Profile is no longer
+                    # hard-pinned there and is an Apps action instead.
                     click(window, *apps_point)
+                    assert log.read_text().count("ROUTE switch") == before.count("ROUTE switch"), "Profile remains hard-pinned at the bottom"
                     capture(window, name + "-profile-entry")
                     click(window, 170, height - 36)
                     assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Apps did not open Profile"
@@ -333,7 +348,7 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["language_setup_done"] == "1"
                 capture(window, name + "-preserved-pins")
             with application(profile, name + "-manage", width, height) as (window, log):
-                click(window, *((330, height - 28) if mobile else (44, 312)))
+                click(window, *((330, height - 28) if mobile else apps_point))
                 with sqlite3.connect(profile / "inbe.db") as db:
                     habit_count = db.execute("SELECT COUNT(*) FROM habits").fetchone()[0]
                 selected_tab = settings(profile)["main_tab"]
@@ -370,7 +385,7 @@ with contextlib.ExitStack() as stack:
                 seed(profile, {"navigation_placement": 1, "launcher_favorite_count": 0})
                 with application(profile, name + "-empty", width, height) as (window, log):
                     capture(window, name + "-empty")
-                    click(window, 44, 68)
+                    click(window, *apps_point)
                     click(window, 170, height - 36)
                     assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Empty favorites hid Apps or Profile"
                     assert favorites(profile) == []

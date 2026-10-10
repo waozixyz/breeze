@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             command("import", "-window", window, str(OUTPUT / "practices-open.png"))
             # Diary is pinned but not installed, so the dock leaves it out;
             # its card in the Apps library installs and opens it.
-            click(window, 44, 310)  # Apps, after the three installed favorites.
+            click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
             time.sleep(.4)
             click(window, 297, 427)  # Diary, the fifth pinned card.
             deadline = time.monotonic() + 2

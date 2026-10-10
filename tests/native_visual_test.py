@@ -229,8 +229,9 @@ def run_cases(arguments, evidence):
             for theme in ([9] if arguments.quick else range(13)):
                 for dark in (0, 1):
                     name = f"selection-{layout}-{theme}-{dark}"
-                    # The phone's compact dock is 56 units tall at the bottom edge.
-                    bounds = (12, 192, 76, 264) if layout == "desktop" else (261, 788, 377, 843)
+                    # Desktop Apps sits in the sidebar's bottom corner; the
+                    # phone's compact dock is 56 units tall at the bottom edge.
+                    bounds = (12, 624, 76, 696) if layout == "desktop" else (261, 788, 377, 843)
                     below_label = 12 if layout == "desktop" else 6
                     with application(name, "launcher", width, height, theme=theme, dark=dark) as (window, capture):
                         for state in ("idle", "hover", "pressed"):
