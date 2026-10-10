@@ -1,0 +1,89 @@
+// Connecting a device by QR code: the code's contents, the six digits both
+// screens compare, and sealing the account in both directions.
+#import "byte_text_linux"
+#import "text"
+#import "text_buffer"
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/device_link.zi";
+
+shower: DeviceLinkKeys;
+scanner: DeviceLinkKeys;
+other: DeviceLinkKeys;
+account: SyncAccount;
+
+FillHex :: (output: []u8, count: s32, seed: s32) {
+    digits := "0123456789abcdef"
+    for index: cast(s32)0..count - 1 {
+        output[index] = digits[(index * 7 + seed) % 16]
+    }
+    output[count] = cast(u8)0
+}
+
+SameAccount :: (left: *SyncAccount, right: *SyncAccount) -> bool {
+    return TextUntilNul(left.public_id[:]) == TextUntilNul(right.public_id[:]) &&
+        TextUntilNul(left.public_key_hex[:]) == TextUntilNul(right.public_key_hex[:]) &&
+        TextUntilNul(left.private_key_hex[:]) == TextUntilNul(right.private_key_hex[:])
+}
+
+#program_export
+Check :: () -> s32 {
+    FillHex(account.public_id[:], 64, 1)
+    FillHex(account.public_key_hex[:], 2624, 3)
+    FillHex(account.private_key_hex[:], 5120, 5)
+    if !DeviceLinkNewKeys(*shower) || !DeviceLinkNewKeys(*scanner) || !DeviceLinkNewKeys(*other) { return 1 }
+    id_bytes: [33]u8
+    if !DeviceLinkNewID(id_bytes[:]) { return 2 }
+    id := TextUntilNul(id_bytes[:])
+    if id.count != 32 { return 3 }
+    server := "https://api.waozi.xyz"
+
+    // The code carries the link, the showing device's key, its role and server.
+    text := DeviceLinkCodeText(id, *shower, true, server)
+    code := DeviceLinkParse(text)
+    if !code.valid || !code.sends || TextUntilNul(code.id[:]) != id ||
+        TextUntilNul(code.server[:]) != server { return 4 }
+    for index: cast(s32)0..cast(s32)31 {
+        if code.public[index] != shower.public[index] { return 5 }
+    }
+    receiving := DeviceLinkParse(DeviceLinkCodeText(id, *shower, false, server))
+    if !receiving.valid || receiving.sends { return 6 }
+    // Foreign or damaged codes are not links.
+    if DeviceLinkParse("https://example.com").valid { return 7 }
+    if DeviceLinkParse(DeviceLinkCodeText(id, *shower, true, "http://evil.example")).valid { return 8 }
+    if DeviceLinkParse(DeviceLinkCodeText("0123456789ABCDEF0123456789ABCDEF", *shower, true, server)).valid { return 9 }
+    if DeviceLinkParse(text[:text.count - server.count - 1]).valid { return 10 }
+
+    // Both screens compute the same six digits from both keys.
+    shown := DeviceLinkConfirmation(*shower.public[0], *scanner.public[0])
+    seen := DeviceLinkConfirmation(*shower.public[0], *scanner.public[0])
+    swapped := DeviceLinkConfirmation(*shower.public[0], *other.public[0])
+    if shown != seen || shown < 0 || shown > 999999 || shown == swapped { return 11 }
+
+    // A device without an account shows the code; the scanner seals to it.
+    sealed := DeviceLinkSeal(*account, server, id, *scanner, *shower.public[0], false)
+    if sealed.count == 0 { return 12 }
+    opened := DeviceLinkOpen(sealed, id, *shower, true, null)
+    if !opened.valid || !SameAccount(*opened.account, *account) ||
+        TextUntilNul(opened.server[:]) != server { return 13 }
+    // Another link ID, another receiver or a changed byte cannot open it.
+    other_id := "fedcba9876543210fedcba9876543210"
+    if DeviceLinkOpen(sealed, other_id, *shower, true, null).valid { return 14 }
+    if DeviceLinkOpen(sealed, id, *other, true, null).valid { return 15 }
+    damaged: [DEVICE_LINK_MESSAGE_MAX]u8
+    for byte, index: sealed { damaged[index] = byte }
+    damaged[sealed.count - 3] = ifx damaged[sealed.count - 3] == cast(u8)48 then cast(u8)49 else cast(u8)48
+    if DeviceLinkOpen(TextFromBytes(damaged[:sealed.count]), id, *shower, true, null).valid { return 16 }
+
+    // A device with the account shows the code and seals to the scanner,
+    // which accepts only the key it read from the code.
+    sent := DeviceLinkSeal(*account, server, id, *shower, *scanner.public[0], true)
+    received := DeviceLinkOpen(sent, id, *scanner, false, *code.public[0])
+    if !received.valid || !SameAccount(*received.account, *account) { return 17 }
+    forged := DeviceLinkSeal(*account, server, id, *other, *scanner.public[0], true)
+    if DeviceLinkOpen(forged, id, *scanner, false, *code.public[0]).valid { return 18 }
+    DeviceLinkForget(*shower)
+    for byte: shower.secret {
+        if byte != cast(u8)0 { return 19 }
+    }
+    return 0
+}

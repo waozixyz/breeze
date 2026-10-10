@@ -28,8 +28,13 @@
 #import, file "../../storage/storage_elist.zi";
 #import, file "../../screens/profile_social.zi";
 #import, file "settings_status.zi";
+#import, file "../qr_code_view.zi";
+#import, file "../../app/device_link_session.zi";
+#import, file "../../platform/android/android_import.zi";
+#import, file "../../platform/environment.zi";
 #import, file "settings_status_view.zi";
 #import "url"
+#import "byte_text_linux"
 #import "geometry"
 #import "session"
 #import "layout"
@@ -54,6 +59,9 @@ using ModalType;
 using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
+using DeviceLinkStage;
+using AndroidImportKind;
+using AndroidImportResult;
 
 SettingsSyncKeySaveDialog :: #type (app: *InnerBreeze, value: string) -> s32;
 SettingsSyncKeyImportDialog :: #type (app: *InnerBreeze) -> s32;
@@ -422,14 +430,167 @@ SettingsSyncNodeHintHeight :: (width: s32) -> s32 {
     return cast(s32)PrepareText(hint_props, DefaultTextFace()).bounds.height
 }
 
+// Connecting another device by QR code. Every device can show a code; a
+// phone can also scan one. The section shows the current step while active.
+SettingsDeviceLinkCodeSide :: (width: s32) -> s32 {
+    side := width
+    if side > AppScale(300) {
+        side = AppScale(300)
+    }
+    return side
+}
+
+SettingsDeviceLinkHeight :: (width: s32) -> s32 {
+    stage := device_link.stage
+    if stage == cast(DeviceLinkStage)DeviceLinkShowing {
+        return AppScale(30 + 56 + 58) + SettingsDeviceLinkCodeSide(width)
+    }
+    if stage == cast(DeviceLinkStage)DeviceLinkConfirm || stage == cast(DeviceLinkStage)DeviceLinkWaiting {
+        return AppScale(30 + 52 + 60 + 48 + 10)
+    }
+    if stage == cast(DeviceLinkStage)DeviceLinkIdle {
+        return AppScale(30 + 52 + 48 + 10)
+    }
+    return AppScale(30 + 52 + 48 + 10)
+}
+
+SettingsDeviceLinkDigits :: (value: s32) -> string {
+    // Six digits in two groups, as 042 917.
+    digits: [7]u8
+    remaining := value
+    index: s32 = 6
+    while index >= 0 {
+        if index == 3 {
+            digits[index] = cast(u8)32
+        } else {
+            digits[index] = cast(u8)(48 + remaining % 10)
+            remaining = remaining / 10
+        }
+        index -= 1
+    }
+    return PackageText(TextFromBytes(digits[:]), "")
+}
+
+SettingsDeviceLinkText :: (app: *InnerBreeze, value: string, x: s32, y: *s32, width: s32, height: s32) {
+    props: TextProps = SettingsSyncTextProps(value, x, y.*, width, height, true)
+    props.wrap = cast(TextWrap)TextWrapAuto
+    Text(app.ui.session, props)
+    y.* += height
+}
+
+SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_account: bool) {
+    DeviceLinkPump()
+    DeviceLinkTestScan()
+    // A code scanned by the camera arrives like an imported file.
+    scanned: [512]u8
+    if android_import_poll_result_for(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, *scanned[0], 512) ==
+        cast(s32)ANDROID_IMPORT_RESULT_SELECTED {
+        unused DeviceLinkScan(AppTextFromCString(*scanned[0], 512))
+    }
+    received := DeviceLinkAccountReceived()
+    if received != null {
+        if settings_sync_account_save_prepared(app, received,
+            cast(PendingSyncAccountAction)PendingSyncAccountImport,
+            cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK) != 0 {
+            storage_set_sync_enabled(1)
+            unused app_request_sync(app)
+        }
+        DeviceLinkImported()
+    }
+    button_h := AppScale(48)
+    half := (width - AppScale(10)) / 2
+    Text(app.ui.session, SettingsSyncTextProps(LocaleText("device_link_title"),
+        x, y.*, width, AppScale(28), false))
+    y.* += AppScale(30)
+    stage := device_link.stage
+    if stage == cast(DeviceLinkStage)DeviceLinkShowing {
+        hint := ifx device_link.sends then "device_link_show_hint_send" else "device_link_show_hint_receive"
+        SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(56))
+        side := SettingsDeviceLinkCodeSide(width)
+        unused DrawQrCode(app.ui.session, DeviceLinkCodeShown(),
+            Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)side})
+        y.* += side + AppScale(10)
+        cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x, y.*, width, button_h, 5280, false)
+        if Button(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
+        y.* += button_h
+        return
+    }
+    if stage == cast(DeviceLinkStage)DeviceLinkConfirm || stage == cast(DeviceLinkStage)DeviceLinkWaiting {
+        hint := ifx stage == cast(DeviceLinkStage)DeviceLinkConfirm then "device_link_compare" else "device_link_waiting_compare"
+        SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(52))
+        digits := SettingsDeviceLinkDigits(device_link.confirmation)
+        number: TextProps = SettingsSyncTextProps(FrameTextHold(*app.ui.frame_text, digits), x, y.*, width, AppScale(56), false)
+        number.font = AppScale(40)
+        Text(app.ui.session, number)
+        PackageFree(digits)
+        y.* += AppScale(60)
+        if stage == cast(DeviceLinkStage)DeviceLinkConfirm {
+            connect := SettingsSyncButtonProps(LocaleText("device_link_connect"), x, y.*, half, button_h, 5281, true)
+            if Button(app.ui.session, connect) != 0 { DeviceLinkAccept() }
+            cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x + half + AppScale(10), y.*, half,
+                button_h, 5282, false)
+            if Button(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
+        } else {
+            cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x, y.*, width, button_h, 5282, false)
+            if Button(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
+        }
+        y.* += button_h + AppScale(10)
+        return
+    }
+    if stage == cast(DeviceLinkStage)DeviceLinkAsk {
+        SettingsDeviceLinkText(app, LocaleText("device_link_ask"), x, y, width, AppScale(52))
+        connect := SettingsSyncButtonProps(LocaleText("device_link_connect"), x, y.*, half, button_h, 5283, true)
+        if Button(app.ui.session, connect) != 0 { DeviceLinkAccept() }
+        cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x + half + AppScale(10), y.*, half,
+            button_h, 5284, false)
+        if Button(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
+        y.* += button_h + AppScale(10)
+        return
+    }
+    if stage == cast(DeviceLinkStage)DeviceLinkWorking || stage == cast(DeviceLinkStage)DeviceLinkReceived ||
+        stage == cast(DeviceLinkStage)DeviceLinkConnected || stage == cast(DeviceLinkStage)DeviceLinkFailed {
+        message := "device_link_working"
+        if stage == cast(DeviceLinkStage)DeviceLinkConnected { message = "device_link_connected" }
+        if stage == cast(DeviceLinkStage)DeviceLinkFailed { message = device_link.error }
+        SettingsDeviceLinkText(app, LocaleText(message), x, y, width, AppScale(52))
+        if stage == cast(DeviceLinkStage)DeviceLinkWorking || stage == cast(DeviceLinkStage)DeviceLinkReceived {
+            y.* += button_h + AppScale(10)
+            return
+        }
+        done := SettingsSyncButtonProps(LocaleText("done_button"), x, y.*, width, button_h, 5285, false)
+        if Button(app.ui.session, done) != 0 { DeviceLinkCancel() }
+        y.* += button_h + AppScale(10)
+        return
+    }
+    hint := ifx has_account then "device_link_intro_send" else "device_link_intro_receive"
+    SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(52))
+    scan_supported := AndroidPlatform() != 0
+    show_width := ifx scan_supported then half else width
+    show := SettingsSyncButtonProps(LocaleText("device_link_show"), x, y.*, show_width, button_h, 5286, !scan_supported)
+    if Button(app.ui.session, show) != 0 { unused DeviceLinkShow() }
+    if scan_supported {
+        scan := SettingsSyncButtonProps(LocaleText("device_link_scan"), x + half + AppScale(10), y.*, half,
+            button_h, 5287, true)
+        if Button(app.ui.session, scan) != 0 {
+            prompt: [256]u8
+            unused AppCopyText(LocaleText("device_link_scan_prompt"), prompt[:])
+            if android_qr_scan_open(*prompt[0]) == 0 {
+                settings_screen_set_status_error(LocaleText("device_link_failed"))
+            }
+        }
+    }
+    y.* += button_h + AppScale(10)
+}
+
 #program_export
 settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
     account: SyncAccount
+    link := SettingsDeviceLinkHeight(content_w)
     if sync_account_load(*account) == 0 {
-        return AppScale(176)
+        return AppScale(176) + link
     }
     hint_height := SettingsSyncNodeHintHeight(content_w)
-    return AppScale(384 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height
+    return AppScale(384 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height + link
 }
 
 #program_export
@@ -457,6 +618,11 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
             }
         }
         y.* += button_h + gap
+        if !has_account {
+            y.* += AppScale(8)
+            SettingsDeviceLinkDraw(app, x, width, y, false)
+            has_account = sync_account_load(*account) != 0
+        }
         if !has_account {
             settings_screen_draw_status_reserved(x, y, AppScale(42))
             return
@@ -503,7 +669,9 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
         storage_set_sync_enabled(1)
         unused app_request_sync(app)
     }
-    y.* += button_h + gap
+    y.* += button_h + gap + AppScale(8)
+    SettingsDeviceLinkDraw(app, x, width, y, true)
+    y.* += AppScale(8)
     Text(app.ui.session, SettingsSyncTextProps(LocaleText("sync_nodes_title"),
         x, y.*, width, AppScale(28), false))
     y.* += AppScale(30)

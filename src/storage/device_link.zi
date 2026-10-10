@@ -1,0 +1,291 @@
+// Connecting a device by QR code. The device showing the code holds a fresh
+// X25519 key whose public half travels only in the code. When the showing
+// device has no account, the scanning device seals its account to that key.
+// When the showing device holds the account, the scanning device sends its
+// own key, both screens show a code to compare, and the showing device seals
+// the account to the scanner. Daochi relays the sealed messages unread.
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import, file "account_types.zi";
+#import, file "sync_crypto.zi";
+#import, file "sync_crypto_random.zi";
+#import, file "../cells/package_files.zi";
+
+c :: #system_library "c";
+LinkPublicKey :: (public_key: *u8, secret_key: *u8) #foreign c "crypto_x25519_public_key";
+LinkSharedSecret :: (shared: *u8, secret_key: *u8, public_key: *u8) #foreign c "crypto_x25519";
+LinkHash :: (hash: *u8, hash_size: usize, message: *u8, message_size: usize) #foreign c "crypto_blake2b";
+LinkLock :: (cipher: *u8, mac: *u8, key: *u8, nonce: *u8, ad: *u8, ad_size: usize,
+    plain: *u8, size: usize) #foreign c "crypto_aead_lock";
+LinkUnlock :: (plain: *u8, mac: *u8, key: *u8, nonce: *u8, ad: *u8, ad_size: usize,
+    cipher: *u8, size: usize) -> s32 #foreign c "crypto_aead_unlock";
+LinkWipe :: (secret: *void, size: usize) #foreign c "crypto_wipe";
+
+DEVICE_LINK_ID_HEX :: 32
+DEVICE_LINK_KEY :: 32
+DEVICE_LINK_NONCE :: 24
+DEVICE_LINK_MAC :: 16
+DEVICE_LINK_SERVER_MAX :: 511
+DEVICE_LINK_PUBLIC_ID :: 32
+DEVICE_LINK_PUBLIC_KEY :: 1312
+DEVICE_LINK_PRIVATE_KEY :: 2560
+// Version byte, the account's public ID, public and private keys, then the
+// server address.
+DEVICE_LINK_ACCOUNT :: 1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY + DEVICE_LINK_PRIVATE_KEY
+DEVICE_LINK_PLAIN_MAX :: DEVICE_LINK_ACCOUNT + DEVICE_LINK_SERVER_MAX
+DEVICE_LINK_SEALED_MAX :: DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC + DEVICE_LINK_PLAIN_MAX
+DEVICE_LINK_MESSAGE_MAX :: DEVICE_LINK_SEALED_MAX * 2 + 1
+DEVICE_LINK_CODE_MAX :: 640
+
+DeviceLinkKeys :: struct {
+    secret: [DEVICE_LINK_KEY]u8
+    public: [DEVICE_LINK_KEY]u8
+}
+
+// What a scanned code says.
+DeviceLinkCode :: struct {
+    valid: bool
+    id: [DEVICE_LINK_ID_HEX + 1]u8
+    public: [DEVICE_LINK_KEY]u8
+    // The showing device holds the account and will send it.
+    sends: bool
+    server: [DEVICE_LINK_SERVER_MAX + 1]u8
+}
+
+DeviceLinkAccount :: struct {
+    valid: bool
+    account: SyncAccount
+    server: [DEVICE_LINK_SERVER_MAX + 1]u8
+}
+
+device_link_plain: [DEVICE_LINK_PLAIN_MAX]u8;
+device_link_sealed: [DEVICE_LINK_SEALED_MAX]u8;
+device_link_message: [DEVICE_LINK_MESSAGE_MAX]u8;
+
+DeviceLinkBytes :: (value: string) -> *u8 {
+    descriptor := cast(*TextDescriptor)(*value)
+    return descriptor.data
+}
+
+DeviceLinkNewKeys :: (keys: *DeviceLinkKeys) -> bool {
+    if SyncCryptoRandom(*keys.secret[0], DEVICE_LINK_KEY) == 0 {
+        return false
+    }
+    LinkPublicKey(*keys.public[0], *keys.secret[0])
+    return true
+}
+
+DeviceLinkForget :: (keys: *DeviceLinkKeys) {
+    LinkWipe(cast(*void)*keys.secret[0], cast(usize)DEVICE_LINK_KEY)
+}
+
+// A random 128-bit link ID as 32 lowercase hex characters.
+DeviceLinkNewID :: (output: []u8) -> bool {
+    random: [16]u8
+    if output.count < DEVICE_LINK_ID_HEX + 1 || SyncCryptoRandom(*random[0], 16) == 0 {
+        return false
+    }
+    return SyncCryptoBytesToHex(*random[0], 16, *output[0], cast(s64)output.count) != 0
+}
+
+// inbe-link:1:<link ID>:<public key>:<s or r>:<server>
+DeviceLinkCodeText :: (id: string, keys: *DeviceLinkKeys, sends: bool, server: string) -> string {
+    public: [DEVICE_LINK_KEY * 2 + 1]u8
+    if SyncCryptoBytesToHex(*keys.public[0], DEVICE_LINK_KEY, *public[0], public.count) == 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "inbe-link:1:%:%:%:%", id, TextUntilNul(public[:]),
+        ifx sends then "s" else "r", server)
+    return BuilderFinish(out)
+}
+
+DeviceLinkHexValid :: (value: string, length: s64) -> bool {
+    if value.count != length {
+        return false
+    }
+    for byte: value {
+        digit := byte >= cast(u8)48 && byte <= cast(u8)57
+        letter := byte >= cast(u8)97 && byte <= cast(u8)102
+        if !digit && !letter {
+            return false
+        }
+    }
+    return true
+}
+
+DeviceLinkServerValid :: (server: string) -> bool {
+    if server.count < 8 || server.count > DEVICE_LINK_SERVER_MAX {
+        return false
+    }
+    if server[:8] != "https://" && (server.count < 16 || server[:16] != "http://127.0.0.1") {
+        return false
+    }
+    for byte: server {
+        if byte <= cast(u8)32 || byte >= cast(u8)127 {
+            return false
+        }
+    }
+    return true
+}
+
+DeviceLinkParse :: (text: string) -> DeviceLinkCode {
+    code: DeviceLinkCode
+    prefix := "inbe-link:1:"
+    // ID, colon, public key, colon, mode, colon.
+    fixed := prefix.count + DEVICE_LINK_ID_HEX + 1 + DEVICE_LINK_KEY * 2 + 1 + 2
+    if text.count <= fixed || text.count > DEVICE_LINK_CODE_MAX || text[:prefix.count] != prefix {
+        return code
+    }
+    at := prefix.count
+    id := text[at:at + DEVICE_LINK_ID_HEX]
+    at += DEVICE_LINK_ID_HEX
+    if text[at] != cast(u8)58 { return code }
+    at += 1
+    public := text[at:at + DEVICE_LINK_KEY * 2]
+    at += DEVICE_LINK_KEY * 2
+    if text[at] != cast(u8)58 { return code }
+    mode := text[at + 1]
+    if text[at + 2] != cast(u8)58 || (mode != cast(u8)115 && mode != cast(u8)114) { return code }
+    server := text[at + 3:]
+    if !DeviceLinkHexValid(id, DEVICE_LINK_ID_HEX) || !DeviceLinkHexValid(public, DEVICE_LINK_KEY * 2) ||
+        !DeviceLinkServerValid(server) ||
+        SyncCryptoHexToBytes(public, *code.public[0], DEVICE_LINK_KEY) == 0 {
+        return code
+    }
+    for byte, index: id { code.id[index] = byte }
+    for byte, index: server { code.server[index] = byte }
+    code.sends = mode == cast(u8)115
+    code.valid = true
+    return code
+}
+
+// Six digits both screens show when the showing device sends its account,
+// so a relay that replaced the scanner's key would show a different code.
+DeviceLinkConfirmation :: (shower: *u8, scanner: *u8) -> s32 {
+    input: [16 + DEVICE_LINK_KEY * 2]u8
+    label := "inbe-link-code-1"
+    for byte, index: label { input[index] = byte }
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) {
+        input[16 + index] = shower[index]
+        input[16 + DEVICE_LINK_KEY + index] = scanner[index]
+    }
+    hash: [32]u8
+    LinkHash(*hash[0], 32, *input[0], cast(usize)input.count)
+    value := (cast(u32)hash[0] << 24) | (cast(u32)hash[1] << 16) | (cast(u32)hash[2] << 8) | cast(u32)hash[3]
+    return cast(s32)(value % cast(u32)1000000)
+}
+
+// The sealing key binds the shared secret to both public keys.
+DeviceLinkKey :: (secret: *u8, other: *u8, shower: *u8, scanner: *u8, key: *u8) {
+    shared: [DEVICE_LINK_KEY]u8
+    LinkSharedSecret(*shared[0], secret, other)
+    input: [16 + DEVICE_LINK_KEY * 3]u8
+    label := "inbe-link-key-1\n"
+    for byte, index: label { input[index] = byte }
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) {
+        input[16 + index] = shared[index]
+        input[16 + DEVICE_LINK_KEY + index] = shower[index]
+        input[16 + DEVICE_LINK_KEY * 2 + index] = scanner[index]
+    }
+    LinkHash(key, cast(usize)DEVICE_LINK_KEY, *input[0], cast(usize)input.count)
+    LinkWipe(cast(*void)*shared[0], cast(usize)DEVICE_LINK_KEY)
+    LinkWipe(cast(*void)*input[0], cast(usize)input.count)
+}
+
+// Seals the account for the other device. sender holds this device's link
+// keys; the message starts with its public key, then nonce, MAC and text.
+DeviceLinkSeal :: (account: *SyncAccount, server: string, id: string, sender: *DeviceLinkKeys,
+    other: *u8, sender_shows: bool) -> string {
+    if server.count > DEVICE_LINK_SERVER_MAX {
+        return ""
+    }
+    plain := *device_link_plain[0]
+    plain[0] = cast(u8)1
+    if SyncCryptoHexToBytes(TextUntilNul(account.public_id[:]), *plain[1], DEVICE_LINK_PUBLIC_ID) == 0 ||
+        SyncCryptoHexToBytes(TextUntilNul(account.public_key_hex[:]), *plain[1 + DEVICE_LINK_PUBLIC_ID],
+            DEVICE_LINK_PUBLIC_KEY) == 0 ||
+        SyncCryptoHexToBytes(TextUntilNul(account.private_key_hex[:]),
+            *plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY) == 0 {
+        LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+        return ""
+    }
+    for byte, index: server { plain[DEVICE_LINK_ACCOUNT + index] = byte }
+    size := DEVICE_LINK_ACCOUNT + cast(s32)server.count
+    sealed := *device_link_sealed[0]
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) { sealed[index] = sender.public[index] }
+    nonce := *sealed[DEVICE_LINK_KEY]
+    mac := *sealed[DEVICE_LINK_KEY + DEVICE_LINK_NONCE]
+    cipher := *sealed[DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC]
+    key: [DEVICE_LINK_KEY]u8
+    shower := ifx sender_shows then *sender.public[0] else other
+    scanner := ifx sender_shows then other else *sender.public[0]
+    if SyncCryptoRandom(nonce, DEVICE_LINK_NONCE) == 0 {
+        LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+        return ""
+    }
+    DeviceLinkKey(*sender.secret[0], other, shower, scanner, *key[0])
+    LinkLock(cipher, mac, *key[0], nonce, DeviceLinkBytes(id), cast(usize)id.count, plain, cast(usize)size)
+    LinkWipe(cast(*void)*key[0], cast(usize)DEVICE_LINK_KEY)
+    LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+    total := DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC + size
+    if SyncCryptoBytesToHex(sealed, total, *device_link_message[0], DEVICE_LINK_MESSAGE_MAX) == 0 {
+        return ""
+    }
+    return PackageText(TextUntilNul(device_link_message[:]), "")
+}
+
+// Opens a sealed account. expected, when not null, is the public key the
+// sender must have: the scanner knows the showing device's key from the code.
+DeviceLinkOpen :: (message: string, id: string, receiver: *DeviceLinkKeys, receiver_shows: bool,
+    expected: *u8) -> DeviceLinkAccount {
+    result: DeviceLinkAccount
+    header := DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC
+    if message.count % 2 != 0 || message.count < (header + DEVICE_LINK_ACCOUNT) * 2 ||
+        message.count > DEVICE_LINK_SEALED_MAX * 2 {
+        return result
+    }
+    total := cast(s32)message.count / 2
+    sealed := *device_link_sealed[0]
+    if SyncCryptoHexToBytes(message, sealed, total) == 0 {
+        return result
+    }
+    sender := sealed
+    if expected != null {
+        for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) {
+            if sender[index] != expected[index] {
+                return result
+            }
+        }
+    }
+    shower := ifx receiver_shows then *receiver.public[0] else sender
+    scanner := ifx receiver_shows then sender else *receiver.public[0]
+    key: [DEVICE_LINK_KEY]u8
+    DeviceLinkKey(*receiver.secret[0], sender, shower, scanner, *key[0])
+    size := total - header
+    plain := *device_link_plain[0]
+    opened := LinkUnlock(plain, *sealed[DEVICE_LINK_KEY + DEVICE_LINK_NONCE], *key[0],
+        *sealed[DEVICE_LINK_KEY], DeviceLinkBytes(id), cast(usize)id.count, *sealed[header], cast(usize)size)
+    LinkWipe(cast(*void)*key[0], cast(usize)DEVICE_LINK_KEY)
+    if opened != 0 || plain[0] != cast(u8)1 {
+        LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+        return result
+    }
+    ok := SyncCryptoBytesToHex(*plain[1], DEVICE_LINK_PUBLIC_ID, *result.account.public_id[0],
+            SYNC_PUBLIC_ID_HEX_SIZE) != 0 &&
+        SyncCryptoBytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID], DEVICE_LINK_PUBLIC_KEY,
+            *result.account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE) != 0 &&
+        SyncCryptoBytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY,
+            *result.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) != 0
+    server_size := size - DEVICE_LINK_ACCOUNT
+    for index: cast(s32)0..server_size - 1 { result.server[index] = plain[DEVICE_LINK_ACCOUNT + index] }
+    result.server[server_size] = cast(u8)0
+    LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+    result.valid = ok && (server_size == 0 || DeviceLinkServerValid(TextUntilNul(result.server[:])))
+    if !result.valid {
+        LinkWipe(cast(*void)*result.account.private_key_hex[0], cast(usize)SYNC_PRIVATE_KEY_HEX_SIZE)
+    }
+    return result
+}

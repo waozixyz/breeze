@@ -236,6 +236,7 @@ public class MainActivity extends NativeActivity {
     private static final String TAG = "MainActivity";
     private static final int REQUEST_IMPORT_ZIP = 1001;
     private static final int REQUEST_POST_NOTIFICATIONS = 1002;
+    private static final int REQUEST_QR_SCAN = 1003;
     private static final int REQUEST_HEALTH_CONNECT = HealthConnectExport.REQUEST_CODE;
     private static final String DOWNLOAD_CHANNEL_ID = "runtime_downloads";
     private static final int DOWNLOAD_NOTIFICATION_ID = 2001;
@@ -260,6 +261,7 @@ public class MainActivity extends NativeActivity {
     private boolean notificationPermissionRequestInFlight = false;
     private int lastDeleteRepeatCount = -1;
     private int pendingImportKind = 0;
+    private int pendingQrScanKind = 5;
     String lastHealthConnectPath = null;
     private boolean pendingStartPractice = false;
     private int pendingStartPracticeId = -1;
@@ -551,6 +553,30 @@ public class MainActivity extends NativeActivity {
         return SyncNetwork.webSocketWait(TAG, urlText, headers);
     }
 
+    // Scans a QR code with ZXing's camera screen. The text returns through the
+    // import result channel under `kind`.
+    public void openQrScanner(final String prompt, final int kind) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    com.google.zxing.integration.android.IntentIntegrator integrator =
+                            new com.google.zxing.integration.android.IntentIntegrator(MainActivity.this);
+                    integrator.setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE);
+                    integrator.setPrompt(prompt == null ? "" : prompt);
+                    integrator.setBeepEnabled(false);
+                    integrator.setOrientationLocked(false);
+                    integrator.setRequestCode(REQUEST_QR_SCAN);
+                    pendingQrScanKind = kind;
+                    integrator.initiateScan();
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to open QR scanner", e);
+                    nativeImportCancelled(kind);
+                }
+            }
+        });
+    }
+
     public void openImportPicker(final String mimeTypesCsv, final int kind) {
         runOnUiThread(new Runnable() {
             @Override
@@ -794,6 +820,18 @@ public class MainActivity extends NativeActivity {
 
         if (requestCode == REQUEST_HEALTH_CONNECT) {
             HealthConnectExport.handleResult(this, resultCode, data, lastHealthConnectPath);
+            return;
+        }
+
+        if (requestCode == REQUEST_QR_SCAN) {
+            com.google.zxing.integration.android.IntentResult scanned =
+                    com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(resultCode, data);
+            String contents = scanned == null ? null : scanned.getContents();
+            if (contents == null || contents.isEmpty()) {
+                nativeImportCancelled(pendingQrScanKind);
+            } else {
+                nativeImportSelectedFile(pendingQrScanKind, contents);
+            }
             return;
         }
 

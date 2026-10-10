@@ -1,0 +1,85 @@
+// Draws text as a scannable QR code: dark modules on white with the standard
+// four-module light border, whatever the theme. Modules are whole pixels so
+// cameras read crisp edges.
+#import "qrcode/qrcode"
+#import "geometry"
+#import "session"
+#import "drawing_props"
+#import "paint_queue"
+#import "text_buffer"
+
+using QrEcc;
+
+QR_VIEW_TEXT_MAX :: 1024
+QR_VIEW_QUIET :: 4
+
+// A QrCode is about 70 KB, so the view keeps one encoded code.
+qr_view_code: QrCode;
+qr_view_text: [QR_VIEW_TEXT_MAX]u8;
+qr_view_ok: bool;
+
+QrViewEncode :: (text: string) -> bool {
+    if text.count == 0 || text.count >= QR_VIEW_TEXT_MAX {
+        return false
+    }
+    if text == TextUntilNul(qr_view_text[:]) {
+        return qr_view_ok
+    }
+    for byte, index: text { qr_view_text[index] = byte }
+    qr_view_text[text.count] = cast(u8)0
+    qr_view_ok = QrEncodeText(text, cast(QrEcc)QrEccMedium, *qr_view_code)
+    return qr_view_ok
+}
+
+// The square side the code takes inside a box of `limit` pixels.
+QrViewSize :: (text: string, limit: s32) -> s32 {
+    if !QrViewEncode(text) {
+        return 0
+    }
+    modules := qr_view_code.size + QR_VIEW_QUIET * 2
+    cell := limit / modules
+    if cell < 1 {
+        return 0
+    }
+    return cell * modules
+}
+
+// Paints the code centered in bounds. Returns false when it cannot fit or
+// the text cannot be encoded.
+DrawQrCode :: (session: Session, text: string, bounds: Rectangle) -> bool {
+    limit := cast(s32)bounds.width
+    if cast(s32)bounds.height < limit {
+        limit = cast(s32)bounds.height
+    }
+    side := QrViewSize(text, limit)
+    if side == 0 {
+        return false
+    }
+    modules := qr_view_code.size + QR_VIEW_QUIET * 2
+    cell := side / modules
+    left := cast(s32)bounds.x + (cast(s32)bounds.width - side) / 2
+    top := cast(s32)bounds.y + (cast(s32)bounds.height - side) / 2
+    PaintRoundedFill(session, -1, Rectangle.{cast(float32)left, cast(float32)top,
+        cast(float32)side, cast(float32)side}, 0.0, 4, Color.{255, 255, 255, 255})
+    dark := Color.{0, 0, 0, 255}
+    origin_x := left + QR_VIEW_QUIET * cell
+    origin_y := top + QR_VIEW_QUIET * cell
+    // Each row paints its runs of dark modules as single rectangles.
+    for y: 0..qr_view_code.size - 1 {
+        x: s32 = 0
+        while x < qr_view_code.size {
+            if !QrModule(*qr_view_code, x, y) {
+                x += 1
+                continue
+            }
+            start := x
+            while x < qr_view_code.size && QrModule(*qr_view_code, x, y) {
+                x += 1
+            }
+            PaintRoundedFill(session, -1, Rectangle.{cast(float32)(origin_x + start * cell),
+                cast(float32)(origin_y + y * cell), cast(float32)((x - start) * cell), cast(float32)cell},
+                0.0, 4, dark)
+        }
+    }
+    return true
+}

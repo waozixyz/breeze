@@ -56,6 +56,8 @@ result = subprocess.run(
         "--module-path",
         str(game2d),
         "--module-path",
+        f"qrcode={root / 'build/packages/qrcode/src'}",
+        "--module-path",
         str(standard),
         "--module-path",
         str(client),
