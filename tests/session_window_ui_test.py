@@ -21,6 +21,7 @@ assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop 
 BINARY = Path(sys.argv[1]).resolve()
 DESKTOP_ONLY = "--desktop-only" in sys.argv[2:]
 SCREEN_START, SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 0, 1, 11, 23
+SCREEN_SETTINGS, SCREEN_LISTS, SCREEN_DIARY = 6, 16, 22
 PRACTICES = {"whm": 1, "meditation": 2, "sun_salutation": 3, "patterns": 4}
 # The window starts 220 by 320 units at the top right of the 390-unit phone
 # page, 8 units in and 72 down. Its picture sits below a 40-unit button row
@@ -314,6 +315,30 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
             wait_screen(window, SCREEN_LUMI, "Lumi did not open")
             wait_running(window, "Opening Lumi ended the practice")
             assert find(window, "lumi-window", "ROUND"), "The practice window did not stay over Lumi"
+
+            # It stays over every other page too, including the Apps screen
+            # that covers the page.
+            for view, screen in (("lists", SCREEN_LISTS), ("diary", SCREEN_DIARY),
+                                 ("settings", SCREEN_SETTINGS)):
+                action(window, "mcp.open_view", "open-" + view + "-window", {"view": view})
+                wait_screen(window, screen, view + " did not open")
+                wait_running(window, "Opening " + view + " ended the practice")
+                assert find(window, view + "-window", "ROUND"), "The practice window did not stay over " + view
+            apps = find(window, "apps-dock", "Apps", phone_dock)
+            assert apps, "The Apps button is missing beside the practice window"
+            click(window, apps[0], apps[1])
+            assert find(window, "apps-screen", "Find"), "The Apps screen did not open"
+            wait_running(window, "Opening Apps ended the practice")
+            assert find(window, "apps-window", "ROUND"), "The practice window did not stay over Apps"
+            # Its buttons work there too: maximize leaves Apps for the practice.
+            click(window, *parts["maximize"])
+            wait_screen(window, SCREEN_SESSION, "Maximize over Apps did not return to the practice")
+            wait_running(window, "Maximize over Apps ended the practice")
+            assert not find(window, "apps-maximized", "Find"), "Apps stayed open over the practice"
+            click(window, *MINIMIZE)
+            wait_running(window, "Minimizing after Apps ended the practice")
+            action(window, "mcp.open_view", "open-lumi-again", {"view": "lumi"})
+            wait_screen(window, SCREEN_LUMI, "Lumi did not open after Apps")
 
             # The window moves with a drag and returns to the practice on a tap.
             picture = window_parts(WINDOW[0], WINDOW[1], WINDOW[2], height)["picture"]
