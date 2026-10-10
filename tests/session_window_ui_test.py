@@ -128,8 +128,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         return None
 
     def state(window):
-        prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
-        return json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
+        # A loaded machine can show the window a few frames before the app
+        # publishes its first state.
+        deadline = time.monotonic() + 10
+        while True:
+            prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
+            if " = " in prop:
+                return json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
+            assert time.monotonic() < deadline, "The app did not publish its state"
+            time.sleep(.2)
 
     def action(window, control, request, arguments=None):
         command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",

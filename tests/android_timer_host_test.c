@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -72,11 +73,41 @@ count_callbacks(void)
     return count;
 }
 
+/* Another thread's attempt to exchange sync and activity requests. It ends
+ * its own exchange, since only the holding thread may release the mutex. */
+static void *
+try_network_pump(void *unused)
+{
+    bool began;
+    (void)unused;
+    began = android_network_pump_begin();
+    if (began) {
+        android_network_pump_end();
+    }
+    return began ? &app_value : NULL;
+}
+
+static bool
+network_pump_from_other_thread(void)
+{
+    pthread_t thread;
+    void *result = NULL;
+    assert(pthread_create(&thread, NULL, try_network_pump, NULL) == 0);
+    assert(pthread_join(thread, &result) == 0);
+    return result != NULL;
+}
+
 int
 main(void)
 {
     struct timespec quiet = {0, 200000000};
     int count;
+
+    /* The frame and the background timer never exchange at the same time. */
+    assert(android_network_pump_begin());
+    assert(!network_pump_from_other_thread());
+    android_network_pump_end();
+    assert(network_pump_from_other_thread());
 
     android_timer_set_app(&app_value);
     android_timer_start();

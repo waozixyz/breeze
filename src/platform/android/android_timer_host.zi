@@ -27,6 +27,10 @@
     timer_mutex: AndroidMutex;
     timer_stopped: [8]u64;
     app_state_mutex: AndroidMutex;
+    // Held while sync and activity requests are exchanged. The frame and
+    // this timer both exchange them while a practice moves in and out of
+    // picture-in-picture, and they share one pending sync.
+    network_mutex: AndroidMutex;
     timer_running: bool;
     timer_stopping: bool;
     timer_active: bool;
@@ -107,6 +111,24 @@ android_timer_get_mutex :: () -> *void {
         return cast(*void)*app_state_mutex
     }
     return null
+}
+
+// Starts exchanging sync and activity requests. Returns false while another
+// thread exchanges them; that thread finishes them and this one tries again
+// on its next frame or tick.
+#program_export
+android_network_pump_begin :: () -> bool {
+    #if #defined(ANDROID_BUILD) {
+        return AndroidMutexTryLock(*network_mutex)
+    }
+    return true
+}
+
+#program_export
+android_network_pump_end :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexUnlock(*network_mutex)
+    }
 }
 
 #program_export

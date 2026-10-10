@@ -170,6 +170,8 @@ EndScissorMode :: () #foreign raylib_log "EndScissorMode";
 #if #defined(ANDROID_BUILD) {
     #import, file "../platform/android/android_wakelock.zi";
     #import, file "../platform/android/android_insets.zi";
+    android_network_pump_begin :: () -> bool #foreign c;
+    android_network_pump_end :: () #foreign c;
 }
 
 #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
@@ -1024,7 +1026,7 @@ draw_global_modal :: (app: *InnerBreeze) {
 }
 
 updateapp :: (app: *InnerBreeze) {
-    ActivityPump(app)
+    app_activity_pump(app)
     hover: s32 = 0
     center_x: s32 = view_width / 2
     frame_view_height: s32 = view_height
@@ -1304,17 +1306,46 @@ updateapp :: (app: *InnerBreeze) {
     app.breathing.frame += 1
 }
 
-// Android's existing practice timer owns the same app-state mutex as the
-// foreground frame. Exchange live records while background practice continues;
-// drawing and result ownership remain on their existing paths.
+// Exchanges live activity records and sync. On Android the frame and the
+// background practice timer both call this, and around picture-in-picture
+// both run at once: only one exchanges at a time, so a finished sync is
+// applied and released by one thread only.
+app_network_pump :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if !android_network_pump_begin() {
+            return
+        }
+    }
+    ActivityPump(app)
+    app_sync_pump(app)
+    #if #defined(ANDROID_BUILD) {
+        android_network_pump_end()
+    }
+}
+
+// Exchanges live activity records alone, under the same one-thread rule.
+app_activity_pump :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if !android_network_pump_begin() {
+            return
+        }
+    }
+    ActivityPump(app)
+    #if #defined(ANDROID_BUILD) {
+        android_network_pump_end()
+    }
+}
+
+// Android's practice timer exchanges live records while a practice continues
+// in the background; drawing and result ownership remain on their existing
+// paths.
 #program_export
 app_activity_background_sync :: (vapp: *void) {
     app := cast(*InnerBreeze)vapp
     if app == null {
         return
     }
-    ActivityPump(app)
-    app_sync_pump(app)
+    app_network_pump(app)
 }
 
 app_update_draw_last_full_w: s32 = -1;
@@ -1531,7 +1562,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     }
     if TelegramAccountFlowOwnsContext() {
         TelegramAccountFlowPump(app)
-        ActivityPump(app)
+        app_activity_pump(app)
         app_profile_frame_end(profile_frame_start)
         return
     }
@@ -1539,8 +1570,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app_profile_record_habits(profile_habits_start)
     profile_sync_start = app_profile_now()
     settings_sync_account_pump(app)
-    ActivityPump(app)
-    app_sync_pump(app)
+    app_network_pump(app)
     // Lumi and package requests run on the frame thread on every platform.
     if !app_practice_holds_frame_work(app) {
         app_lumi_pump(app)
@@ -1608,8 +1638,7 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
             app_finish_frame(app)
             EndMode2D()
         }
-        ActivityPump(app)
-        app_sync_pump(app)
+        app_network_pump(app)
     }
     unused app
     unused viewport
