@@ -17,6 +17,9 @@ mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/generated" "$root/src/storage/legacy_session_zip.zi"
+"${CC:-cc}" -std=c11 -fsyntax-only -I"$root/build/packages/ziran/include" \
+    -I"$work/generated" -I"$root/build/packages/raylib/src" \
+    "$root/tests/legacy_session_paths_abi_test.c"
 "${CC:-cc}" -std=c11 -O0 -I"$root/build/packages/ziran/include" \
     -I"$work/generated" "$root/tests/legacy_session_zi_test.c" \
     "$work/generated/c_string.c" \
