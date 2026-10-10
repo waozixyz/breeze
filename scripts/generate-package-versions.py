@@ -6,7 +6,7 @@ import re
 
 root = Path(__file__).resolve().parent.parent
 ledger = json.loads((root / "apps/versions.json").read_text())
-names = ("inbe", "lists", "habits", "practices", "diary", "lumi")
+names = ("inbe", "lists", "habits", "practices", "diary", "lumi", "leaderboard")
 apps = ledger["apps"]
 for name in names:
     value = apps[name]
@@ -16,12 +16,12 @@ for name in names:
         raise SystemExit(f"invalid {name} sequence")
 lines = ["// Generated from apps/versions.json; module releases are independent.",
          "PackageBundledVersion :: (index: s32) -> string {",
-         "    if index < 0 || index >= 6 {", "        return \"\"", "    }",
-         "    versions: [6]string = .[" + ", ".join(json.dumps(apps[n]["version"]) for n in names) + "]",
+         f"    if index < 0 || index >= {len(names)} {{", "        return \"\"", "    }",
+         f"    versions: [{len(names)}]string = .[" + ", ".join(json.dumps(apps[n]["version"]) for n in names) + "]",
          "    return versions[index]", "}", "",
          "PackageBundledSequence :: (index: s32) -> s32 {",
-         "    if index < 0 || index >= 6 {", "        return 0", "    }",
-         "    sequences: [6]s32 = .[" + ", ".join(str(apps[n]["sequence"] if apps[n]["bundled"] else 0) for n in names) + "]",
+         f"    if index < 0 || index >= {len(names)} {{", "        return 0", "    }",
+         f"    sequences: [{len(names)}]s32 = .[" + ", ".join(str(apps[n]["sequence"] if apps[n]["bundled"] else 0) for n in names) + "]",
          "    return sequences[index]", "}", ""]
 path = root / "src/cells/versions.zi"
 content = "\n".join(lines)

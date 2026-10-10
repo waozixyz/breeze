@@ -10,7 +10,7 @@ _, _, unique_animation = inventory()
 unique_animation = set(unique_animation)
 if OUTPUT.exists():
     shutil.rmtree(OUTPUT)
-for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi'):
+for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard'):
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',

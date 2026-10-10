@@ -1,14 +1,16 @@
 # Inner Breeze cell packages
 
-Inner Breeze has a root package and five cells, including Lumi.
+Inner Breeze has a root package and six cells, including Lumi and Leaderboard.
 The interface calls these Apps and presents them in one sidebar settings list.
-All five cells ship with the app and can be added to the sidebar offline.
+All six cells ship with the app and can be added to the sidebar offline.
+Leaderboard is installed for every profile but is not pinned by default.
 Selections are stored per app and synced with the account. Lumi always ships with
 Inner Breeze. Her selection controls her sidebar shortcut, while her harness and
 tools remain available.
 The root contains shared fonts, translations, themes and icons; Practices owns
 its images and sounds. Each feature can add private package resources under
-`assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/` or `assets/diary/`.
+`assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/`, `assets/diary/`
+or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
 standard Kryon widgets inside their ZIBs. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
@@ -102,9 +104,9 @@ Enable chat / Disable chat control preserves the agent and saved conversation.
 
 `make cells` produces:
 
-- `build/inbe.zib`, containing `cells/lumi.zib`, `cells/habits.zib` and `cells/practices.zib`.
-- Independent `build/cells/{lumi,habits,practices,lists,diary}.zib` files.
-- `build/inbe-full.zib`, a local development and test bundle containing all five.
+- `build/inbe.zib`, containing every cell under `cells/`.
+- Independent `build/cells/{lumi,habits,practices,lists,diary,leaderboard}.zib` files.
+- `build/inbe-full.zib`, a local development and test bundle containing all six.
 
 Native and browser builds embed the base root. Android stores `inbe.zib`
 once in APK assets and opens its bytes through the NDK asset manager. Each
@@ -193,9 +195,9 @@ configured. Incomplete configuration produces downloadable build artifacts
 without claiming publication. When only the signing configuration is present,
 the archived artifacts include signed releases ready to import on the node.
 
-1. Register the six app IDs and an active Ed25519 publisher key in Daochi.
-2. Add the public key to `apps/publishers.json`, scoped to the six app IDs:
-   `[{"key_id":"<registered ID>","public_key":"<64 lowercase hex digits>","app_ids":["inbe","inbe.habits","inbe.practices","inbe.lists","inbe.diary","inbe.lumi"]}]`.
+1. Register the seven app IDs and an active Ed25519 publisher key in Daochi.
+2. Add the public key to `apps/publishers.json`, scoped to the seven app IDs:
+   `[{"key_id":"<registered ID>","public_key":"<64 lowercase hex digits>","app_ids":["inbe","inbe.habits","inbe.practices","inbe.lists","inbe.diary","inbe.lumi","inbe.leaderboard"]}]`.
 3. Configure repository secrets `INBE_PACKAGE_SIGNING_KEY` (PEM Ed25519 key)
    and `INBE_NODE_SSH_KEY` (deployment SSH key), plus
    `INBE_NODE_KNOWN_HOSTS`, `INBE_NODE_SSH_TARGET` and
@@ -229,9 +231,9 @@ suspended, revoked and node-restricted registrations are not replaced. Repeating
 the preparation retains the registry protocol version and existing scopes while
 updating the app's client version.
 
-The wrapper release workflow requires public pins covering all six app IDs,
+The wrapper release workflow requires public pins covering all seven app IDs,
 so each included cell has a configured publisher for its updates.
-The public pin `inbe-2026-10` covers the root and all five apps. The private
+The public pin `inbe-2026-10` covers the root and all six apps. The private
 signing key is kept in an ignored local backup and is excluded from every
 package artifact. Optional production installation requires registering this
 public key on the node and publishing the signed packages. Automatic server
@@ -240,7 +242,7 @@ configuration above; a checked build does not establish that configuration.
 
 ## Account app choices
 
-Sync v6 uses `private.inbe.v1.app-preferences`. Each of the five `app_used_*`
+Sync v6 uses `private.inbe.v1.app-preferences`. Each of the six `app_used_*`
 keys is a separate timestamped record, including explicit zero values for
 removals. Independent changes merge without overwriting unrelated selections.
 Pending local choices win equal timestamps; newer remote choices win.

@@ -393,12 +393,12 @@ IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zib habits.zib practices.zib diary.zib lumi.zib)
+CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zib habits.zib practices.zib diary.zib lumi.zib leaderboard.zib)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zib
 CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
-WIDGET_SCHEMAS := $(addprefix $(KRYON_DIR)/src/ui/,session.zi geometry.zi drawing_props.zi text_props.zi image_props.zi button_props.zi control_props.zi text_input.zi text_input_props.zi scroll.zi scroll_props.zi semantic.zi text_align.zi checkbox_props.zi toggle_props.zi tab_bar_props.zi box_props.zi) $(addprefix src/cells/,diary_ui_types.zi inbe_ui_types.zi lists_ui_types.zi lumi_ui_types.zi lumi_types.zi)
+WIDGET_SCHEMAS := $(addprefix $(KRYON_DIR)/src/ui/,session.zi geometry.zi drawing_props.zi text_props.zi image_props.zi button_props.zi control_props.zi text_input.zi text_input_props.zi scroll.zi scroll_props.zi semantic.zi text_align.zi checkbox_props.zi toggle_props.zi tab_bar_props.zi box_props.zi) $(addprefix src/cells/,diary_ui_types.zi inbe_ui_types.zi lists_ui_types.zi lumi_ui_types.zi lumi_types.zi leaderboard_ui_types.zi)
 src/cells/widget_codec.zi: scripts/generate-widget-codecs.py $(WIDGET_SCHEMAS)
 	python3 scripts/generate-widget-codecs.py
 
@@ -950,7 +950,7 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-cards-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
+VISUAL_TEST_TARGETS := leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-cards-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
@@ -3066,6 +3066,10 @@ app-click-block-zi-test: $(ZI2C_BIN)
 
 data-back-ui-test: $(TARGET)
 	@sh tests/data_back_ui_test.sh $(abspath $(TARGET))
+
+.PHONY: leaderboard-ui-test
+leaderboard-ui-test: $(TARGET)
+	@sh tests/leaderboard_ui_test.sh $(abspath $(TARGET))
 
 test: app-click-block-zi-test
 

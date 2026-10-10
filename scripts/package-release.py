@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parent.parent
-NAMES = ("habits", "practices", "lumi", "lists", "diary", "inbe")
+NAMES = ("habits", "practices", "lumi", "lists", "diary", "leaderboard", "inbe")
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}\Z")
 VERSION = re.compile(r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\Z")
 
@@ -83,7 +83,7 @@ def stage(store, key_path, key_id, publishers_path=None):
         artifact = dict(variant="module", sha256=sha256(data).hexdigest(), size=len(data))
         dependencies = []
         if name == "inbe":
-            for child in ("habits", "practices", "lumi", "lists", "diary"):
+            for child in (name for name in NAMES if name != "inbe"):
                 release = releases[child]
                 nested = payloads[child]
                 if data.count(nested) != 1:
@@ -210,7 +210,7 @@ def verify_origin(store, origin, open_url=open_public_url):
                 checksum.update(block)
         if size != artifact["size"] or checksum.hexdigest() != digest:
             raise ValueError(f"{app_id}: public package hash or size differs from the signed publication")
-    print("Verified public signed metadata and package bytes for the root and all five cells")
+    print("Verified public signed metadata and package bytes for the root and all six cells")
 
 
 def validate_release(value, app_id, publishers):
@@ -235,6 +235,10 @@ def validate_release(value, app_id, publishers):
         raise ValueError("invalid module artifact")
     dependencies = value["dependencies"]
     expected = sorted("inbe." + name for name in NAMES if name != "inbe") if app_id == "inbe" else []
+    # Roots built before Leaderboard became an app have no dependency on it.
+    if app_id == "inbe" and isinstance(dependencies, list) and \
+            len(dependencies) == len(expected) - 1:
+        expected.remove("inbe.leaderboard")
     if not isinstance(dependencies, list) or len(dependencies) != len(expected):
         raise ValueError("invalid root dependencies")
     for dependency, expected_id in zip(dependencies, expected):
@@ -261,7 +265,8 @@ def import_archive(archive, store, publishers_path=None):
     """Node-side merge. Daochi still checks registry/key status on every GET."""
     import tarfile
     publishers = json.loads((publishers_path or ROOT / "apps/publishers.json").read_text())
-    ids = {"inbe", "inbe.habits", "inbe.practices", "inbe.lists", "inbe.diary", "inbe.lumi"}
+    ids = {"inbe", "inbe.habits", "inbe.practices", "inbe.lists", "inbe.diary", "inbe.lumi",
+           "inbe.leaderboard"}
     entries = {}
     total = 0
     with tarfile.open(archive) as tar:
@@ -272,12 +277,17 @@ def import_archive(archive, store, publishers_path=None):
             if member.name in entries:
                 raise ValueError("duplicate archive member")
             total += member.size
-            if len(entries) >= 24 or total > 6 * 64 * 1024 * 1024 + 1024 * 1024:
+            if len(entries) >= 28 or total > 7 * 64 * 1024 * 1024 + 1024 * 1024:
                 raise ValueError("archive exceeds the release size limit")
             entries[member.name] = tar.extractfile(member).read()
+    # The node accepts archives built before and after Leaderboard became an
+    # app, so the importer and the app can be updated in either order.
+    present = {name.split("/")[0] for name in entries}
+    if present != ids and present != ids - {"inbe.leaderboard"}:
+        raise ValueError("archive must contain the root and every cell")
     with ExitStack() as stack:
         releases = {}
-        for app_id in sorted(ids):
+        for app_id in sorted(present):
             directory = store / app_id
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             lock = stack.enter_context((directory / ".publish.lock").open("a+b"))
@@ -312,7 +322,7 @@ def import_archive(archive, store, publishers_path=None):
                                   sha256=artifact["sha256"], size=artifact["size"]) or root[2].count(payload) != 1:
                 raise ValueError("root does not contain its exact signed cell dependency")
         # Dependencies go first. Publishing the root is the final step.
-        for app_id in sorted(ids, key=lambda value: value == "inbe"):
+        for app_id in sorted(present, key=lambda value: value == "inbe"):
             value, encoded, data = releases[app_id]
             directory = store / app_id
             payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
@@ -332,7 +342,7 @@ def receive_archive(store, publishers_path):
         raise ValueError("upload key permits only publication to its configured package store")
     with tempfile.TemporaryDirectory(prefix="inbe-receive-") as directory:
         archive = Path(directory) / "packages.tar"
-        maximum = 5 * 64 * 1024 * 1024 + 1024 * 1024
+        maximum = 7 * 64 * 1024 * 1024 + 1024 * 1024
         total = 0
         with archive.open("wb") as output:
             while True:

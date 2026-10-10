@@ -18,7 +18,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parent.parent
 NAMES = {"inbe": "Inner Breeze", "habits": "Habits", "practices": "Practices",
-         "lists": "Lists", "diary": "Diary", "lumi": "Lumi"}
+         "lists": "Lists", "diary": "Diary", "lumi": "Lumi",
+         "leaderboard": "Leaderboard"}
 # Declaration order is part of Daochi's Go JSON signature contract.
 FIELDS = ("manifest_version", "app_id", "display_name", "description",
           "homepage_url", "source_url", "status", "expires_at", "lan_only",
@@ -116,7 +117,7 @@ def registrations(origin, key_path, approval_path, key_id, output, open_url=urlo
     pin = next((pin for pin in pins if pin["key_id"] == key_id and pin["public_key"] == public), None)
     versions = json.loads((ROOT / "apps/versions.json").read_text())
     if pin is None or not {app["id"] for app in versions["apps"].values()} <= set(pin["app_ids"]):
-        raise ValueError("publisher must match the shipped pin for the root and all five cells")
+        raise ValueError("publisher must match the shipped pin for the root and every cell")
     prepared = {}
     for name, component in versions["apps"].items():
         try:

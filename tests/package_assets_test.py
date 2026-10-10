@@ -44,7 +44,7 @@ def assets(data):
 root = assets((ROOT / 'build/inbe.zib').read_bytes())
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zib', 'cells/habits.zib', 'cells/practices.zib',
-    'cells/lists.zib', 'cells/diary.zib'}
+    'cells/lists.zib', 'cells/diary.zib', 'cells/leaderboard.zib'}
 practices = assets(root['cells/practices.zib'])
 combined = root | practices
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))

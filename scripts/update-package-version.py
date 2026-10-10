@@ -7,9 +7,10 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 names = {"inbe": "inbe", "lists": "lists", "habits": "habits",
-         "practices": "practice", "diary": "diary", "lumi": "lumi"}
+         "practices": "practice", "diary": "diary", "lumi": "lumi",
+         "leaderboard": "leaderboard"}
 if len(sys.argv) != 2 or sys.argv[1] not in names:
-    raise SystemExit("usage: ./update_version.sh --cell inbe|lists|habits|practices|diary")
+    raise SystemExit("usage: ./update_version.sh --cell inbe|lists|habits|practices|diary|lumi|leaderboard")
 name = sys.argv[1]
 changelog = (root / "apps" / names[name] / "CHANGELOG.md").read_text()
 version = re.search(r"^## \[((?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8}))\]", changelog, re.M)

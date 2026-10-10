@@ -10,6 +10,7 @@
 #import, file "value_codec.zi";
 #import, file "diary_types.zi";
 #import, file "lumi_types.zi";
+#import, file "leaderboard_types.zi";
 #import, file "diary_store.zi";
 #import, file "package_manager.zi";
 #import, file "package_files.zi";
@@ -33,7 +34,9 @@ ModuleSlot :: struct {
 }
 
 #scope_file
-slots: [6]ModuleSlot;
+slots: [PackageCount]ModuleSlot;
+leaderboard_message: LeaderboardMessage;
+leaderboard_codec: LeaderboardMessageCodec;
 lumi_message: LumiMessage;
 lumi_codec: LumiMessageCodec;
 lumi_message_input: [1024]u8;
@@ -110,6 +113,23 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             }
             message.input = AppTextFromCString(*lumi_message_input[0], LUMI_INPUT_MAX)
             lumi_message = message
+            slot.received = true
+            return 1
+        }
+        if ui_active && !identifying && ui_call != null {
+            return ui_call(ui_context, module, function, arguments, count, result)
+        }
+        return 0
+    }
+    if slot.kind == MODULE_LEADERBOARD {
+        if name == "ReadLeaderboardHost" && count == 0 {
+            message := ifx identifying then LeaderboardMessage.{.abi = MODULE_ABI} else leaderboard_message
+            result.* = EncodeLeaderboardMessage(message, *leaderboard_codec)
+            return 1
+        }
+        if name == "WriteLeaderboardHost" && count == 1 && !identifying &&
+        ValidLeaderboardMessage(arguments[0]) {
+            leaderboard_message = DecodeLeaderboardMessage(arguments[0])
             slot.received = true
             return 1
         }
@@ -229,6 +249,10 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             }
             else if feature == APP_DIARY {
                 allowed = DiaryRoute(screen)
+            }
+            else if feature == APP_LEADERBOARD {
+                allowed = LeaderboardRun(LeaderboardMessage.{.action = LEADERBOARD_ROUTE,
+                        .screen = screen}).succeeded
             }
             result.* = ModuleScalar("bool", ifx allowed then 1 else 0)
             return 1
@@ -371,6 +395,9 @@ ModuleCapabilityAllowed :: (kind: s32, name: string) -> bool {
         name == "PerformLumiActionHost" || name == "AppendLumiChatHost" || name == "LumiLocaleHost" ||
         name == "StartLumiOnlineHost" || name == "LumiLocaleRevisionHost"
     }
+    if kind == MODULE_LEADERBOARD {
+        return name == "ReadLeaderboardHost" || name == "WriteLeaderboardHost"
+    }
     if kind == MODULE_DIARY {
         return name == "ReadDiaryHost" || name == "WriteDiaryHost" ||
         name == "ReadDiaryFileHost" || name == "SaveDiaryFileHost" || name == "DiaryClockHost"
@@ -399,7 +426,8 @@ CellsReady :: () -> bool {
     ((enabled_apps & APP_HABITS) == 0 || slots[1].instance != null) &&
     ((enabled_apps & APP_PRACTICE) == 0 || slots[2].instance != null) &&
     ((enabled_apps & APP_DIARY) == 0 || slots[4].instance != null) &&
-    ((enabled_apps & APP_LUMI) == 0 || slots[5].instance != null)
+    ((enabled_apps & APP_LUMI) == 0 || slots[5].instance != null) &&
+    ((enabled_apps & APP_LEADERBOARD) == 0 || slots[6].instance != null)
 }
 
 #program_export
@@ -474,11 +502,11 @@ ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
     while index < count {
         module_name := BundleCapabilityModuleName(slot.bundle, index)
         name := BundleCapabilityFunctionName(slot.bundle, index)
-        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else ifx kind == MODULE_LUMI then "lumi" else "inbe"
+        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else ifx kind == MODULE_LUMI then "lumi" else ifx kind == MODULE_LEADERBOARD then "leaderboard" else "inbe"
         allowed := TextFromCString(module_name) == owner && ModuleCapabilityAllowed(kind, TextFromCString(name))
         if TextFromCString(module_name) == owner {
-            read_name := ifx kind == MODULE_LISTS then "ReadListsHost" else ifx kind == MODULE_HABITS then "ReadHabitsHost" else ifx kind == MODULE_PRACTICE then "ReadPracticeHost" else ifx kind == MODULE_DIARY then "ReadDiaryHost" else ifx kind == MODULE_LUMI then "ReadLumiHost" else "ReadInbeHost"
-            write_name := ifx kind == MODULE_LISTS then "WriteListsHost" else ifx kind == MODULE_HABITS then "WriteHabitsHost" else ifx kind == MODULE_PRACTICE then "WritePracticeHost" else ifx kind == MODULE_DIARY then "WriteDiaryHost" else ifx kind == MODULE_LUMI then "WriteLumiHost" else "WriteInbeHost"
+            read_name := ifx kind == MODULE_LISTS then "ReadListsHost" else ifx kind == MODULE_HABITS then "ReadHabitsHost" else ifx kind == MODULE_PRACTICE then "ReadPracticeHost" else ifx kind == MODULE_DIARY then "ReadDiaryHost" else ifx kind == MODULE_LUMI then "ReadLumiHost" else ifx kind == MODULE_LEADERBOARD then "ReadLeaderboardHost" else "ReadInbeHost"
+            write_name := ifx kind == MODULE_LISTS then "WriteListsHost" else ifx kind == MODULE_HABITS then "WriteHabitsHost" else ifx kind == MODULE_PRACTICE then "WritePracticeHost" else ifx kind == MODULE_DIARY then "WriteDiaryHost" else ifx kind == MODULE_LUMI then "WriteLumiHost" else ifx kind == MODULE_LEADERBOARD then "WriteLeaderboardHost" else "WriteInbeHost"
             has_read = has_read || TextFromCString(name) == read_name
             has_write = has_write || TextFromCString(name) == write_name
         }
@@ -506,6 +534,12 @@ ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
                 TextFromCString(name) == "ReadLumiDonationHost" || TextFromCString(name) == "LumiDonationActionHost" ||
                 TextFromCString(name) == "ReadLumiSuggestionTaskHost" ||
                 TextFromCString(name) == "ReadLumiSuggestionHabitHost" || TextFromCString(name) == "LumiViewLocaleHost"))
+        }
+        if kind == MODULE_LEADERBOARD {
+            allowed = allowed || ModuleWidgetCapability(TextFromCString(module_name), TextFromCString(name)) ||
+            (TextFromCString(module_name) == "leaderboard_view" &&
+                (TextFromCString(name) == "ReadLeaderboardUiHost" || TextFromCString(name) == "WriteLeaderboardUiHost" ||
+                TextFromCString(name) == "ReadLeaderboardRowHost" || TextFromCString(name) == "LeaderboardLocaleHost"))
         }
         if kind == MODULE_INBE {
             owner_name := TextFromCString(module_name)
@@ -693,6 +727,8 @@ PackageFeature :: (index: s32) -> string {
         name = "cells/diary.zib"
     } else if index == 4 {
         name = "cells/lumi.zib"
+    } else if index == 5 {
+        name = "cells/leaderboard.zib"
     }
     asset: u64 = 0
     while asset < BundleAssets(slots[3].bundle) {
@@ -769,10 +805,10 @@ CellsOpenPackage :: (bytes: string) -> bool {
         index: s32 = 0
         while ready && index < PackageCount - 1 {
             feature := PackageFeature(index)
-            // Older root packages may omit Lists and Diary. Current builds
-            // include every cell for offline sidebar changes.
+            // Older root packages may omit Lists, Diary and Leaderboard.
+            // Current builds include every cell for offline sidebar changes.
             if feature.count == 0 {
-                ready = index == 0 || index == 3
+                ready = index == 0 || index == 3 || index == 5
             } else {
 
                 slot := ModuleSlotForPackage(index + 1)
@@ -835,6 +871,7 @@ CellsSetEnabled :: (mask: s32) -> bool {
     habits_message = HabitsMessage.{.abi = MODULE_ABI}
     practice_message = PracticeMessage.{.abi = MODULE_ABI}
     diary_message = DiaryMessage.{.abi = MODULE_ABI}
+    leaderboard_message = LeaderboardMessage.{.abi = MODULE_ABI}
     identifying = true
     index: s32 = 0
     while index < PackageCount - 1 {
@@ -903,6 +940,9 @@ CellsInstalledMask :: () -> s32 {
     if slots[5].instance != null {
         mask |= APP_LUMI
     }
+    if slots[6].instance != null {
+        mask |= APP_LEADERBOARD
+    }
     return mask
 }
 
@@ -951,11 +991,12 @@ ModulePackageAssetsValid :: (bundle: *void, validate_features: bool) -> bool {
     if count < cast(u64)2 || count > cast(u64)8192 {
         return false
     }
-    found: [5]bool
-    names: [5]string = .["cells/lists.zib", "cells/habits.zib", "cells/practices.zib", "cells/diary.zib", "cells/lumi.zib"]
+    found: [PackageCount - 1]bool
+    names: [PackageCount - 1]string = .["cells/lists.zib", "cells/habits.zib", "cells/practices.zib",
+    "cells/diary.zib", "cells/lumi.zib", "cells/leaderboard.zib"]
     for asset: cast(u64)0..count - cast(u64)1 {
         matched := false
-        for feature: cast(s32)0..cast(s32)4 {
+        for feature: cast(s32)0..cast(s32)(PackageCount - 2) {
             if CellBundlePath(TextFromCString(BundleAssetPath(bundle, asset))) == names[feature] && !found[feature] {
                 bytes := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset), BundleAssetLength(bundle, asset)))
                 if validate_features && !CellsValidatePackage(feature + 1, bytes) {
@@ -1091,6 +1132,9 @@ ModuleSlotForPackage :: (index: s32) -> s32 {
     if index == 5 {
         return 5
     }
+    if index == 6 {
+        return 6
+    }
     return index - 1
 }
 
@@ -1103,6 +1147,9 @@ ModuleKindForPackage :: (index: s32) -> s32 {
     }
     if index == 5 {
         return MODULE_LUMI
+    }
+    if index == 6 {
+        return MODULE_LEADERBOARD
     }
     return index
 }
@@ -1125,4 +1172,21 @@ LumiRun :: (message: LumiMessage) -> LumiMessage {
         return message
     }
     return lumi_message
+}
+
+#program_export
+LeaderboardRun :: (message: LeaderboardMessage) -> LeaderboardMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    if slots[6].bundle == null {
+        return message
+    }
+    if slots[6].failed && !ModuleRestart(*slots[6]) {
+        return message
+    }
+    leaderboard_message = message
+    if !ModuleRun(*slots[6]) {
+        return message
+    }
+    return leaderboard_message
 }

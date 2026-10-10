@@ -2,6 +2,7 @@
 
 ## [2.1.25] - 2026-10-10
 
+- Open Leaderboard as its own app.
 - Requires Inner Breeze 2.1.28 or later.
 
 ## [2.1.24] - 2026-10-10

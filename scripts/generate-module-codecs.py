@@ -29,6 +29,7 @@ roots = [
     "ListsMutationResult",
     "HabitsMessage",
     "PracticeMessage",
+    "LeaderboardMessage",
 ]
 needed = []
 
@@ -50,7 +51,7 @@ lines = [
     "// No native application pointers cross the portable module boundary.",
     *[
         f'#import, file "{name}_types.zi";'
-        for name in ["module", "lists", "habits", "practice", "inbe", "diary", "lumi"]
+        for name in ["module", "lists", "habits", "practice", "inbe", "diary", "lumi", "leaderboard"]
     ],
     '#import "bundle_host"',
     '#import "byte_text_linux"',

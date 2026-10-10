@@ -395,22 +395,23 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         if leaderboard_key.count > 0  && leaderboard_json.count > 0 {
             current_key: [96] u8
             app_social_leaderboard_key(*current_key[0], 96,
-                app.profile_leaderboard_practice,
-                app.profile_leaderboard_metric)
+                app.leaderboard_practice,
+                app.leaderboard_metric)
             if AppTextFromCString(*current_key[0], 96) == leaderboard_key {
-                AppCopyText(ifx (leaderboard_json.count > 0) then (leaderboard_json) else ("{\"rows\":[]}"), app.profile_leaderboard_json[:])
+                AppCopyText(ifx (leaderboard_json.count > 0) then (leaderboard_json) else ("{\"rows\":[]}"), app.leaderboard_json[:])
             }
         }
         if leaderboard_avg_key.count > 0  && leaderboard_avg_json.count > 0 {
             current_avg_key: [96] u8
             app_social_leaderboard_key(*current_avg_key[0], 96,
-                app.profile_leaderboard_practice, 1)
+                app.leaderboard_practice, 1)
             if AppTextFromCString(*current_avg_key[0], 96) == leaderboard_avg_key {
-                AppCopyText(ifx (leaderboard_avg_json.count > 0) then (leaderboard_avg_json) else ("{\"rows\":[]}"), app.profile_leaderboard_avg_json[:])
+                AppCopyText(ifx (leaderboard_avg_json.count > 0) then (leaderboard_avg_json) else ("{\"rows\":[]}"), app.leaderboard_avg_json[:])
             }
         }
         app.profile_friends_loaded = 1
-        app.profile_leaderboard_loaded = 1
+        app.leaderboard_loaded = 1
+        app.leaderboard_revision += 1
         app_notifications_on_friends_synced(app)
     }
 }
@@ -455,7 +456,9 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
                 *friends_json[0], size_of(type_of(friends_json)),
                 *leaderboard_json[0], size_of(type_of(leaderboard_json)))
             SyncCopyText(*leaderboard_avg_json[0], size_of(type_of(leaderboard_avg_json)), "{\"rows\":[]}")
-            if result == cast(SyncResult)SYNC_OK && AppTextFromCString(*args.practice[0], 32) == "whm" {
+            // Wim Hof ranks average holds and meditation average time as well.
+            if result == cast(SyncResult)SYNC_OK && (AppTextFromCString(*args.practice[0], 32) == "whm" ||
+                AppTextFromCString(*args.practice[0], 32) == "meditation") {
                 avg_metric: string = ifx (AppTextFromCString(*args.practice[0], 32) == "meditation") then ("avg_time") else ("avg_hold")
                 leaderboard_avg_result = cast(SyncResult)FetchFriendStats(
                     AppTextFromCString(*args.url[0], 256),
@@ -780,16 +783,16 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         sync_unlock()
 
         SyncCopyText(*args.url[0], 256, AppTextFromCString(*url[0], 256))
-        SyncCopyText(*args.practice[0], 32, app_social_practice_id(app.profile_leaderboard_practice))
-        SyncCopyText(*args.metric[0], 32, app_social_metric_id(app.profile_leaderboard_practice,
-            app.profile_leaderboard_metric))
+        SyncCopyText(*args.practice[0], 32, app_social_practice_id(app.leaderboard_practice))
+        SyncCopyText(*args.metric[0], 32, app_social_metric_id(app.leaderboard_practice,
+            app.leaderboard_metric))
         app_social_leaderboard_key(*args.leaderboard_key[0],
             size_of(type_of(args.leaderboard_key)),
-            app.profile_leaderboard_practice,
+            app.leaderboard_practice,
             PROFILE_LEADERBOARD_STREAK)
         app_social_leaderboard_key(*args.leaderboard_avg_key[0],
             size_of(type_of(args.leaderboard_avg_key)),
-            app.profile_leaderboard_practice,
+            app.leaderboard_practice,
             PROFILE_LEADERBOARD_AVG_HOLD)
         SyncCopyText(*args.metric[0], 32, "streak")
         SyncCopyText(*args.action[0], 16, AppTextFromCString(*action[0], 16))
@@ -818,12 +821,12 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         }
         SocialQueuePeek(action[:], action_value[:])
         app_social_leaderboard_key(*g_social_streak_key[0], 96,
-            app.profile_leaderboard_practice, PROFILE_LEADERBOARD_STREAK)
+            app.leaderboard_practice, PROFILE_LEADERBOARD_STREAK)
         app_social_leaderboard_key(*g_social_average_key[0], 96,
-            app.profile_leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD)
+            app.leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD)
         if !BeginSocialRefresh(*g_social_async, AppTextFromCString(*url[0], 256),
             NetworkTransport(*g_social_transfer),
-            app_social_practice_id(app.profile_leaderboard_practice),
+            app_social_practice_id(app.leaderboard_practice),
             AppTextFromCString(*action[0], 16), AppTextFromCString(*action_value[0], 96)) {
             app_social_record_result(g_social_async.result)
             return

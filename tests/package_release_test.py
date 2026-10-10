@@ -32,7 +32,8 @@ def main():
         private.chmod(0o600)
         public = key.public_key().public_bytes(serialization.Encoding.Raw,
                                               serialization.PublicFormat.Raw).hex()
-        ids = ["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary", "inbe.lumi"]
+        ids = ["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary", "inbe.lumi",
+               "inbe.leaderboard"]
         publishers = fixtures / "publishers.json"
         publishers.write_text(json.dumps([dict(key_id="test-key", public_key=public, app_ids=ids)]))
         store = fixtures / "store"
@@ -79,6 +80,23 @@ def main():
             assert not staging.exists()
             for value in values.values():
                 assert json.loads((remote / value["app_id"] / "latest-v2.json").read_bytes()) == value
+        # A node updated for Leaderboard still imports archives staged before it.
+        names = release_tool.NAMES
+        release_tool.NAMES = tuple(name for name in names if name != "leaderboard")
+        try:
+            older = fixtures / "older-store"
+            release_tool.stage(older, private, "test-key", publishers)
+            staging = fixtures / "older-upload"
+            staging.mkdir()
+            archive = staging / "packages.tar"
+            with tarfile.open(archive, "w") as tar:
+                for path in sorted(older.rglob("*")):
+                    if path.is_file() and path.name != ".publish.lock":
+                        tar.add(path, arcname=str(path.relative_to(older)))
+            release_tool.import_archive(archive, fixtures / "older-remote", publishers)
+            assert not (fixtures / "older-remote" / "inbe.leaderboard").exists()
+        finally:
+            release_tool.NAMES = names
         staging = fixtures / "invalid-upload"
         staging.mkdir()
         archive = staging / "packages.tar"

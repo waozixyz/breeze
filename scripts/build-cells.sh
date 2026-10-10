@@ -19,7 +19,7 @@ python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
 mkdir -p "$output" build/bundled-cells
 rm -f "$output/practice.zib"
-for feature in lists habits practices diary lumi; do
+for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
     entry=$feature
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
@@ -33,7 +33,7 @@ for feature in lists habits practices diary lumi; do
 done
 # Removing a sidebar shortcut never removes its bundled package.
 rm -f build/bundled-cells/practice.zib
-for feature in lists habits practices diary lumi; do
+for feature in lists habits practices diary lumi leaderboard; do
     cp "$output/$feature.zib" build/bundled-cells/
 done
 "$ziran" bundle --root . --module-path src \

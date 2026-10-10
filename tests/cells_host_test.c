@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-static unsigned char *payloads[10];
-static size_t sizes[10];
+static unsigned char *payloads[11];
+static size_t sizes[11];
 static int32_t module_runs;
 static bool use_cached_bundles;
-static int32_t cached_reads[6];
+static int32_t cached_reads[7];
 static int32_t bundle_opens;
 static int32_t instance_opens;
 static bool corrupt_cached_lists;
@@ -119,14 +119,15 @@ void ModuleTestUseCache(bool enabled)
 
 int32_t ModuleTestCachedReads(int32_t index)
 {
-    assert(index >= 0 && index < 6);
+    assert(index >= 0 && index < 7);
     return cached_reads[index];
 }
 
 extern String __real_package_manager_PackageInstalledBytes(int32_t index);
 String __wrap_package_manager_PackageInstalledBytes(int32_t index)
 {
-    if(!use_cached_bundles) {
+    // Leaderboard has no cached fixture; it opens from the bundled root.
+    if(!use_cached_bundles || index == 6) {
         return __real_package_manager_PackageInstalledBytes(index);
     }
     assert(index >= 0 && index < 6);
@@ -166,16 +167,17 @@ bool ModuleTestPackageBytes(void)
         BundleClose(root);
         return false;
     }
-    const char *names[] = {"cells/lists.zib", "cells/habits.zib", "cells/practices.zib", "cells/diary.zib", "cells/lumi.zib"};
-    bool matched[5] = {false};
+    const char *names[] = {"cells/lists.zib", "cells/habits.zib", "cells/practices.zib", "cells/diary.zib",
+                           "cells/lumi.zib", "cells/leaderboard.zib"};
+    bool matched[6] = {false};
     bool valid = true;
     for(size_t asset = 0; asset < BundleAssetCount(root); asset++) {
         bool found = false;
-        for(size_t feature = 0; feature < 5; feature++) {
+        for(size_t feature = 0; feature < 6; feature++) {
             if(strcmp(BundleAssetName(root, asset), names[feature]) != 0) {
                 continue;
             }
-            int payload = feature == 4 ? 9 : feature == 3 ? 8 : (int)feature;
+            int payload = feature == 5 ? 10 : feature == 4 ? 9 : feature == 3 ? 8 : (int)feature;
             found = !matched[feature] && BundleAssetSize(root, asset) == sizes[payload] &&
                     memcmp(BundleAssetData(root, asset), payloads[payload], sizes[payload]) == 0;
             matched[feature] = found;
@@ -187,7 +189,7 @@ bool ModuleTestPackageBytes(void)
             valid = valid && found;
     }
     BundleClose(root);
-    return valid && matched[0] && matched[1] && matched[2] && matched[3] && matched[4];
+    return valid && matched[0] && matched[1] && matched[2] && matched[3] && matched[4] && matched[5];
 }
 
 void app_web_storage_flush(void) {}
@@ -210,8 +212,8 @@ size_t asset_entry_total(void)
 String ModuleTestText(String name)
 {
     const char *names[] = {"lists", "habits", "practice", "wrong-record", "wrong-scalar",
-                           "inbe", "missing-assets", "invalid-nested", "diary", "lumi"};
-    for(int i = 0; i < 10; i++) {
+                           "inbe", "missing-assets", "invalid-nested", "diary", "lumi", "leaderboard"};
+    for(int i = 0; i < 11; i++) {
         if(StringEqual(name, StringView(names[i], strlen(names[i])))) {
             return StringView((char *)payloads[i], sizes[i]);
         }
@@ -266,8 +268,8 @@ FILE *__wrap_tmpfile(void)
 
 int main(int argc, char **argv)
 {
-    assert(argc == 11);
-    for(int i = 0; i < 10; i++) {
+    assert(argc == 12);
+    for(int i = 0; i < 11; i++) {
         FILE *file = fopen(argv[i + 1], "rb");
         assert(file != NULL);
         assert(fseek(file, 0, SEEK_END) == 0);
@@ -280,13 +282,13 @@ int main(int argc, char **argv)
     }
     check_practice_inventory_capability();
     int result = CheckModules();
-    for(int i = 0; i < 10; i++) {
+    for(int i = 0; i < 11; i++) {
         free(payloads[i]);
     }
     if(result != 0) {
         fprintf(stderr, "Module integration failed: %d\n", result);
     } else {
-        puts("Root and five independent bundles: app selection, routes, edits, shared SQLite/identity, practices, migration/restart and invalid-schema handling passed");
+        puts("Root and six independent bundles: app selection, routes, edits, shared SQLite/identity, practices, migration/restart and invalid-schema handling passed");
     }
     return result != 0;
 }

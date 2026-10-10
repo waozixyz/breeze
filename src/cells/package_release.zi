@@ -23,9 +23,9 @@ PackageRelease :: struct {
     key_id: [64]u8
     size: s64
     valid: bool
-    dependency_hashes: [6][65]u8
-    dependency_sizes: [6]s64
-    dependency_versions: [6][32]u8
+    dependency_hashes: [PackageCount][65]u8
+    dependency_sizes: [PackageCount]s64
+    dependency_versions: [PackageCount][32]u8
 }
 
 PackageField :: (json: string, at: s32, key: string, output: []u8) -> string {
@@ -131,7 +131,8 @@ PackageParseRelease :: (json: string, index: s32, public_hex: string) -> Package
     count := ArrayCount(json, artifacts)
     dependencies := FieldAt(json, 0, "dependencies")
     dependency_count := ArrayCount(json, dependencies)
-    if count < 1 || count > 2 || (index == 0 && dependency_count != 3 && dependency_count != 5) ||
+    if count < 1 || count > 2 || (index == 0 && dependency_count != 3 && dependency_count != 5 &&
+        dependency_count != 6) ||
     (index != 0 && dependency_count != 0) {
         return release
     }
@@ -241,9 +242,11 @@ PackageVerifyBytes :: (bytes: string, release: PackageRelease) -> bool {
     if TextFromCString(*actual[0]) != TextFromBytes(release.hash[0:64]) {
         return false
     }
-    if release.dependency_sizes[1] == 0 && release.dependency_sizes[2] == 0 &&
-    release.dependency_sizes[3] == 0 && release.dependency_sizes[4] == 0 &&
-    release.dependency_sizes[5] == 0 {
+    dependent := false
+    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+        dependent = dependent || release.dependency_sizes[index] != 0
+    }
+    if !dependent {
         return true
     }
     root := OpenBundleBytes(payload.data, cast(u64)bytes.count)
@@ -256,7 +259,7 @@ PackageVerifyBytes :: (bytes: string, release: PackageRelease) -> bool {
     if BundleAssets(root) < cast(u64)2 || BundleAssets(root) > cast(u64)2048 {
         return false
     }
-    matched: [6]bool
+    matched: [PackageCount]bool
     asset: u64 = 0
     while asset < BundleAssets(root) {
         name := CellBundlePath(TextFromCString(BundleAssetPath(root, asset)))
@@ -275,6 +278,9 @@ PackageVerifyBytes :: (bytes: string, release: PackageRelease) -> bool {
         }
         if name == "cells/diary.zib" {
             index = 4
+        }
+        if name == "cells/leaderboard.zib" {
+            index = 6
         }
         if index < 0 {
             if !PackageResourceValid(name, MODULE_INBE) { return false }

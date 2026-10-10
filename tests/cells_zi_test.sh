@@ -75,4 +75,5 @@ env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SES
     APP_DATA_ROOT="$data/module-data" "$work/test" "$root/build/cells/lists.zib" \
     "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" \
     "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$root/build/inbe-full.zib" \
-    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$root/build/cells/diary.zib" "$root/build/cells/lumi.zib"
+    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$root/build/cells/diary.zib" "$root/build/cells/lumi.zib" \
+    "$root/build/cells/leaderboard.zib"

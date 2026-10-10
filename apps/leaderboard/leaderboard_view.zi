@@ -1,0 +1,170 @@
+// Leaderboard owns its screen composition; the host supplies ranked rows,
+// prepared once when results arrive, and ordinary Kryon widget effects.
+#import "session"
+#import "geometry"
+#import "text"
+#import "vec"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "tab_bar_props"
+#import "tab_bar_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "box_props"
+#import "box_widget"
+#import "tree"
+#import, file "../../src/cells/leaderboard_ui_types.zi";
+#import, file "../../src/cells/leaderboard_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadLeaderboardUiHost :: () -> LeaderboardUiFrame #foreign host_api;
+WriteLeaderboardUiHost :: (frame: LeaderboardUiFrame) #foreign host_api;
+ReadLeaderboardRowHost :: (index: s32) -> LeaderboardUiRow #foreign host_api;
+LeaderboardLocaleHost :: (key: string) -> string #foreign host_api;
+frame: LeaderboardUiFrame;
+state: LeaderboardMessage;
+
+// Wim Hof, breathing patterns, meditation and Sun Salutation, as in Practice.
+PRACTICE_COUNT :: 4
+PracticeAt :: (index: s32) -> s32 {
+    ids: [PRACTICE_COUNT]s32 = .[0, 3, 1, 2]
+    return ids[index]
+}
+
+PracticeLabel :: (practice: s32) -> string {
+    if practice == 1 { return LeaderboardLocaleHost("exercise_meditation") }
+    if practice == 2 { return LeaderboardLocaleHost("exercise_sun_salutation") }
+    if practice == 3 { return LeaderboardLocaleHost("exercise_patterns") }
+    return LeaderboardLocaleHost("exercise_wim_hof")
+}
+
+Scale :: (pixels: s32) -> s32 {
+    return cast(s32)(cast(float32)pixels * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Finish :: () -> LeaderboardMessage {
+    WriteLeaderboardUiHost(frame)
+    state.succeeded = true
+    return state
+}
+
+Cell :: (key: u64, x: s32, y: s32, width: s32, height: s32, text: string) {
+    Text(frame.session, TextProps.{.key = key, .bounds = Bounds(x, y, width, height),
+            .text = text, .font = frame.font, .wrap = cast(TextWrap)TextWrapNone,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
+    frame = ReadLeaderboardUiHost()
+    state = message
+    x := Scale(16)
+    width := frame.width - x * 2
+    y := Scale(12)
+
+    tabs: [PRACTICE_COUNT]Tab
+    selected: s32 = 0
+    for index: cast(s32)0..PRACTICE_COUNT - 1 {
+        practice := PracticeAt(index)
+        tabs[index] = Tab.{.key = cast(u64)(7100 + index), .label = PracticeLabel(practice)}
+        if practice == state.practice {
+            selected = index
+        }
+    }
+    chosen := TabBar(frame.session, TabBarProps.{.id = 7100,
+            .bounds = Bounds(x, y, width, Scale(44)), .selected_index = selected,
+            .min_tab_width = Scale(96), .max_tab_width = width,
+            .scroll_offset = frame.practice_scroll}, tabs[:])
+    frame.practice_scroll = chosen.scroll_offset
+    if chosen.selected_index != selected && chosen.selected_index >= 0 &&
+    chosen.selected_index < PRACTICE_COUNT {
+        state.practice = PracticeAt(chosen.selected_index)
+        state.metric = LEADERBOARD_STREAK
+        state.refresh = true
+        frame.scroll = 0
+        return Finish()
+    }
+    y += Scale(56)
+
+    // The name column is wider when only the streak is ranked.
+    columns: s32 = ifx state.has_average then 3 else 2
+    name_width := ifx state.has_average then width / 2 else (width * 2) / 3
+    value_width := ifx state.has_average then (width - name_width) / 2 else width - name_width
+    average_label := ifx state.practice == 1 then "profile_metric_avg_time" else "profile_metric_avg_hold"
+    labels: [3]string = .[LeaderboardLocaleHost("profile_friends_title"),
+    LeaderboardLocaleHost("profile_metric_streak"), LeaderboardLocaleHost(average_label)]
+    header_x := x
+    for column: cast(s32)0..columns - 1 {
+        column_width := ifx column == 0 then name_width else ifx column == columns - 1 then x + width - header_x else value_width
+        metric := column - 1
+        active := column > 0 && state.metric == metric
+        if Button(frame.session, ButtonProps.{.id = 7110 + column,
+                .bounds = Bounds(header_x, y, column_width, Scale(36)),
+                .label = labels[column], .disabled = column == 0, .selected = active,
+                .tone = cast(ButtonTone)(ifx active then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 &&
+        column > 0 && !active {
+            state.metric = metric
+            return Finish()
+        }
+        header_x += column_width
+    }
+    y += Scale(44)
+
+    if state.row_count == 0 {
+        key := ifx state.loading then "profile_updating_status" else "profile_no_leaderboard_data"
+        Text(frame.session, TextProps.{.key = cast(u64)7120,
+                .bounds = Bounds(x, y, width, Scale(32)), .text = LeaderboardLocaleHost(key),
+                .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+        return Finish()
+    }
+
+    row_height := Scale(40)
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)7130,
+            .bounds = Bounds(x, y, width, frame.height - frame.bottom - y - Scale(8)),
+            .content_height = state.row_count * row_height, .scroll_offset = frame.scroll})
+    frame.scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return Finish()
+    }
+    row_y := cast(s32)scroll.content.y
+    left := cast(s32)scroll.content.x
+    for index: cast(s32)0..state.row_count - 1 {
+        // Rows outside the viewport are not read from the host.
+        if row_y + row_height > cast(s32)scroll.viewport.y &&
+        row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
+            row := ReadLeaderboardRowHost(index)
+            key := cast(u64)(7200 + index * 4)
+            if row.own || index % 2 == 1 {
+                Box(frame.session, BoxProps.{.key = key, .bounds = Bounds(left, row_y, width, row_height),
+                        .fill = ifx row.own then Color.{156, 188, 143, 64} else Color.{156, 156, 156, 24},
+                        .radius = cast(float32)Scale(8)})
+            }
+            name: Vec(u8)
+            BuilderPrint(*name, "%. %", row.rank, row.name)
+            pad := Scale(8)
+            Cell(key + 1, left + pad, row_y, name_width - pad * 2, row_height, BuilderFinish(name))
+            Cell(key + 2, left + name_width + pad, row_y, value_width - pad, row_height, row.streak)
+            if state.has_average {
+                Cell(key + 3, left + name_width + value_width + pad, row_y,
+                    width - name_width - value_width - pad, row_height, row.average)
+            }
+        }
+        row_y += row_height
+    }
+    End(frame.session)
+    return Finish()
+}

@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         saved = settings(profile)
         assert saved["apps_setup_done"] == "0"
         assert saved["language_setup_done"] == "1"
-        assert saved["enabled_apps"] == "31"
+        assert saved["enabled_apps"] == "63"
         assert [int(saved[f"launcher_favorite_{i}"]) for i in range(5)] == [12, 1, 2, 3, 11]
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
@@ -248,13 +248,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     # Upgrading keeps the selected page and repairs missing selected shortcuts.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("DELETE FROM settings WHERE key IN ('enabled_apps','apps_setup_done') OR key LIKE 'app_used_%'")
-        db.execute("DELETE FROM settings WHERE key='lumi_introduced'")
+        db.execute("DELETE FROM settings WHERE key IN ('lumi_introduced','leaderboard_introduced')")
         # This represents an established profile whose existing guides are done.
         db.execute("UPDATE settings SET value='1' WHERE key IN ('tutorial_seen','habits_guide_seen')")
         db.execute("UPDATE settings SET value='0' WHERE key='main_tab'")
     with application(profile, "existing-profile") as (window, log):
         capture(window, "existing-profile-all-apps")
-        wait_setting(profile, "enabled_apps", 23)
+        # Upgrading also installs Leaderboard once, without pinning it.
+        wait_setting(profile, "enabled_apps", 55)
         wait_setting(profile, "main_tab", 0)
         routes = [int(settings(profile)[f"bottom_nav_route_{index}"])
                   for index in range(int(settings(profile)["bottom_nav_route_count"]))]

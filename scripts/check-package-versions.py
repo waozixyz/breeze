@@ -8,7 +8,8 @@ import re
 import sys
 
 NAMES = {"inbe": "inbe", "lists": "lists", "habits": "habits",
-         "practices": "practice", "diary": "diary", "lumi": "lumi"}
+         "practices": "practice", "diary": "diary", "lumi": "lumi",
+         "leaderboard": "leaderboard"}
 VERSION = r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})"
 
 
@@ -18,7 +19,7 @@ def validate(root):
         if type(ledger.get(api)) is not int or not 0 < ledger[api] <= 2147483647:
             raise ValueError(f"invalid {api}")
     if set(ledger["apps"]) != set(NAMES):
-        raise ValueError("the ledger must contain the root and all five cells")
+        raise ValueError("the ledger must contain the root and all six cells")
     for name, source in NAMES.items():
         component = ledger["apps"][name]
         expected_id = "inbe" if name == "inbe" else "inbe." + name

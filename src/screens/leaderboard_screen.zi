@@ -1,0 +1,409 @@
+// Leaderboard ranks you with your friends. Saved and fetched results are
+// parsed and ranked once when they change, never on every frame.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "date_time"
+#import "json_scan"
+#import "text_buffer"
+#import, file "../cells/leaderboard_types.zi";
+#import, file "../cells/leaderboard_ui_types.zi";
+#import, file "../cells/widget_host.zi";
+#import, file "../cells/widget_codec.zi";
+#import, file "../cells/value_codec.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/account_types.zi";
+#import, file "profile_social.zi";
+
+using HostValueKind;
+using ExerciseType;
+c :: #system_library "c";
+sync_account_load :: (account: *SyncAccount) -> s32 #foreign c;
+app_social_refresh_loading :: () -> s32 #foreign c;
+app_request_social_refresh :: (app: *InnerBreeze) #foreign c;
+
+LEADERBOARD_ROW_LIMIT :: 64
+
+LeaderboardEntry :: struct {
+    user_id: [80]u8
+    name: [96]u8
+    streak: [48]u8
+    average: [48]u8
+    streak_value: float64
+    average_value: float64
+    own: bool
+}
+
+// An average received for one friend, matched to the streak rows by ID.
+LeaderboardAverage :: struct {
+    user_id: [80]u8
+    label: [48]u8
+    value: float64
+}
+
+leaderboard_entries: [LEADERBOARD_ROW_LIMIT]LeaderboardEntry;
+leaderboard_averages: [LEADERBOARD_ROW_LIMIT]LeaderboardAverage;
+leaderboard_count: s32;
+leaderboard_signed_in: bool;
+leaderboard_built_revision: s32 = -1;
+leaderboard_built_practice: s32 = -1;
+leaderboard_built_metric: s32 = -1;
+leaderboard_ui: LeaderboardUiFrame;
+leaderboard_ui_codec: WidgetLeaderboardUiFrameCodec;
+leaderboard_row_codec: WidgetLeaderboardUiRowCodec;
+
+// Wim Hof ranks average holds and meditation average time as well.
+LeaderboardHasAverage :: (practice: s32) -> bool {
+    return practice == EXERCISE_WIM_HOF || practice == EXERCISE_MEDITATION
+}
+
+LeaderboardPracticeId :: (practice: s32) -> string {
+    if practice == EXERCISE_MEDITATION { return "meditation" }
+    if practice == EXERCISE_SUN_SALUTATION { return "sun_salutation" }
+    if practice == EXERCISE_PATTERNS { return "patterns" }
+    return "whm"
+}
+
+// The social refresh stores each fetched board under the same key.
+LeaderboardCacheKey :: (practice: s32, metric: s32, output: []u8) -> string {
+    metric_id: string = "streak"
+    if metric == LEADERBOARD_AVERAGE {
+        metric_id = ifx practice == EXERCISE_MEDITATION then "avg_time" else "avg_hold"
+    }
+    if !AppCopyText("leaderboard.breathing.", output) ||
+    !AppAppendText(LeaderboardPracticeId(practice), output) ||
+    !AppAppendText(".", output) || !AppAppendText(metric_id, output) {
+        return ""
+    }
+    return TextUntilNul(output)
+}
+
+LeaderboardLoadBoard :: (practice: s32, metric: s32, output: []u8) {
+    key: [96]u8
+    name := LeaderboardCacheKey(practice, metric, key[:])
+    if name.count == 0 || storage_get_social_cache_json(name, *output[0],
+        cast(s64)output.count) == 0 {
+        unused AppCopyText("{\"rows\":[]}", output)
+    }
+}
+
+LeaderboardLoadCache :: (app: *InnerBreeze) {
+    LeaderboardLoadBoard(app.leaderboard_practice, LEADERBOARD_STREAK, app.leaderboard_json[:])
+    LeaderboardLoadBoard(app.leaderboard_practice, LEADERBOARD_AVERAGE, app.leaderboard_avg_json[:])
+    app.leaderboard_loaded = 1
+    app.leaderboard_revision += 1
+}
+
+LeaderboardToday :: () -> s32 {
+    local := LocalNow()
+    if !local.valid { return 0 }
+    return local.year * 10000 + local.month * 100 + local.day
+}
+
+LeaderboardFormatTime :: (seconds: s64, output: []u8) {
+    if seconds < 0 { seconds = 0 }
+    minutes := cast(s32)((seconds % 3600) / 60)
+    digits: [3]u8 = .[cast(u8)(48 + minutes / 10), cast(u8)(48 + minutes % 10), cast(u8)0]
+    if !AppFormatS64(seconds / 3600, output) || !AppAppendText(":", output) ||
+    !AppAppendText(TextUntilNul(digits[:]), output) {
+        output[0] = cast(u8)0
+    }
+}
+
+// Counts and durations round half to even, as the server labels them.
+LeaderboardFormatRounded :: (value: float64, output: []u8) {
+    if value < -1000000000000000000.0 || value > 1000000000000000000.0 {
+        output[0] = cast(u8)0
+        return
+    }
+    rounded := cast(s64)value
+    fraction := value - cast(float64)rounded
+    if fraction > 0.5 || (fraction == 0.5 && rounded % 2 != 0) {
+        rounded += 1
+    } else if fraction < -0.5 || (fraction == -0.5 && rounded % 2 != 0) {
+        rounded -= 1
+    }
+    if !AppFormatS64(rounded, output) {
+        output[0] = cast(u8)0
+    }
+}
+
+LeaderboardFormatAverage :: (practice: s32, value: float64, output: []u8) {
+    if practice == EXERCISE_MEDITATION {
+        LeaderboardFormatTime(cast(s64)(value + 0.5), output)
+    } else {
+        LeaderboardFormatRounded(value, output)
+    }
+}
+
+// Your own row uses this device's sessions, which are newer than the server.
+LeaderboardOwnValues :: (practice: s32, entry: *LeaderboardEntry) {
+    streak: s32 = 0
+    average: s64 = 0
+    unused storage_profile_activity_stats(practice, LeaderboardToday(), *streak, *average)
+    entry.streak_value = cast(float64)streak
+    LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+    entry.average_value = cast(float64)average
+    LeaderboardFormatAverage(practice, entry.average_value, entry.average[:])
+    entry.own = true
+}
+
+LeaderboardSeen :: (user_id: string) -> bool {
+    for index: cast(s32)0..leaderboard_count - 1 {
+        if TextUntilNul(leaderboard_entries[index].user_id[:]) == user_id {
+            return true
+        }
+    }
+    return false
+}
+
+LeaderboardText :: (json: string, object_at: s32, name: string, output: []u8) -> string {
+    output[0] = cast(u8)0
+    if ReadStringText(json, FieldAt(json, object_at, name), output) < 0 {
+        output[0] = cast(u8)0
+    }
+    return TextUntilNul(output)
+}
+
+LeaderboardNumber :: (json: string, object_at: s32, name: string) -> float64 {
+    number := ReadNumber(json, FieldAt(json, object_at, name))
+    return ifx number.valid then number.value else 0.0
+}
+
+LeaderboardBefore :: (left: *LeaderboardEntry, right: *LeaderboardEntry, metric: s32) -> bool {
+    first := ifx metric == LEADERBOARD_AVERAGE then left.average_value else left.streak_value
+    other := ifx metric == LEADERBOARD_AVERAGE then right.average_value else right.streak_value
+    if first != other { return first > other }
+    first = ifx metric == LEADERBOARD_AVERAGE then left.streak_value else left.average_value
+    other = ifx metric == LEADERBOARD_AVERAGE then right.streak_value else right.average_value
+    if first != other { return first > other }
+    return SocialCompareText(TextUntilNul(left.name[:]), TextUntilNul(right.name[:])) < 0
+}
+
+LeaderboardRebuild :: (app: *InnerBreeze) {
+    practice := app.leaderboard_practice
+    metric := app.leaderboard_metric
+    if app.leaderboard_loaded == 0 {
+        LeaderboardLoadCache(app)
+    }
+    if app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+    has_average := LeaderboardHasAverage(practice)
+    account: SyncAccount
+    own_id: string = ""
+    if sync_account_load(*account) != 0 && account.public_id[0] != cast(u8)0 {
+        own_id = TextUntilNul(account.public_id[:])
+    }
+    leaderboard_signed_in = own_id.count > 0
+    leaderboard_count = 0
+    positions: [LEADERBOARD_ROW_LIMIT]s32
+
+    averages: s32 = 0
+    if has_average {
+        json := TextUntilNul(app.leaderboard_avg_json[:])
+        found := ArrayPositions(json, FieldAt(json, 0, "rows"), positions[:])
+        for index: cast(s32)0..found - 1 {
+            if index >= LEADERBOARD_ROW_LIMIT { break }
+            average := *leaderboard_averages[averages]
+            if LeaderboardText(json, positions[index], "user_id_hash", average.user_id[:]).count == 0 {
+                continue
+            }
+            unused LeaderboardText(json, positions[index], "label", average.label[:])
+            average.value = LeaderboardNumber(json, positions[index], "value")
+            averages += 1
+        }
+    }
+
+    json := TextUntilNul(app.leaderboard_json[:])
+    found := ArrayPositions(json, FieldAt(json, 0, "rows"), positions[:])
+    for index: cast(s32)0..found - 1 {
+        if index >= LEADERBOARD_ROW_LIMIT || leaderboard_count >= LEADERBOARD_ROW_LIMIT { break }
+        entry := *leaderboard_entries[leaderboard_count]
+        entry.* = LeaderboardEntry.{}
+        user_id := LeaderboardText(json, positions[index], "user_id_hash", entry.user_id[:])
+        if user_id.count == 0 || LeaderboardSeen(user_id) {
+            continue
+        }
+        alias: [48]u8
+        display_name(*entry.name[0], cast(s64)entry.name.count,
+            LeaderboardText(json, positions[index], "alias", alias[:]), user_id)
+        entry.streak_value = LeaderboardNumber(json, positions[index], "value")
+        LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+        unused AppCopyText("—", entry.average[:])
+        for item: cast(s32)0..averages - 1 {
+            if TextUntilNul(leaderboard_averages[item].user_id[:]) == user_id {
+                entry.average_value = leaderboard_averages[item].value
+                label := TextUntilNul(leaderboard_averages[item].label[:])
+                if practice == EXERCISE_MEDITATION && label.count > 0 {
+                    unused AppCopyText(label, entry.average[:])
+                } else {
+                    LeaderboardFormatAverage(practice, entry.average_value, entry.average[:])
+                }
+            }
+        }
+        if own_id.count > 0 && user_id == own_id {
+            LeaderboardOwnValues(practice, entry)
+        }
+        leaderboard_count += 1
+    }
+
+    // Friends without a result yet still appear, at zero.
+    friends := TextUntilNul(app.profile_friends_json[:])
+    found = ArrayPositions(friends, FieldAt(friends, 0, "friends"), positions[:])
+    for index: cast(s32)0..found - 1 {
+        if index >= LEADERBOARD_ROW_LIMIT || leaderboard_count >= LEADERBOARD_ROW_LIMIT { break }
+        entry := *leaderboard_entries[leaderboard_count]
+        entry.* = LeaderboardEntry.{}
+        // Older servers name the friend's ID "id".
+        field := ifx FieldAt(friends, positions[index], "user_id_hash") >= 0 then "user_id_hash" else "id"
+        user_id := LeaderboardText(friends, positions[index], field, entry.user_id[:])
+        if user_id.count == 0 || LeaderboardSeen(user_id) {
+            continue
+        }
+        alias: [48]u8
+        display_name(*entry.name[0], cast(s64)entry.name.count,
+            LeaderboardText(friends, positions[index], "alias", alias[:]), user_id)
+        LeaderboardFormatRounded(0.0, entry.streak[:])
+        LeaderboardFormatAverage(practice, 0.0, entry.average[:])
+        leaderboard_count += 1
+    }
+
+    if own_id.count > 0 && !LeaderboardSeen(own_id) && leaderboard_count < LEADERBOARD_ROW_LIMIT {
+        entry := *leaderboard_entries[leaderboard_count]
+        entry.* = LeaderboardEntry.{}
+        unused AppCopyText(own_id, entry.user_id[:])
+        display_name(*entry.name[0], cast(s64)entry.name.count,
+            storage_get_setting_text("sync_account_alias"), own_id)
+        LeaderboardOwnValues(practice, entry)
+        leaderboard_count += 1
+    }
+
+    // At most 64 rows: keep equal rows in their received order.
+    for index: cast(s32)1..leaderboard_count - 1 {
+        current := leaderboard_entries[index]
+        at := index
+        while at > 0 && LeaderboardBefore(*current, *leaderboard_entries[at - 1], metric) {
+            leaderboard_entries[at] = leaderboard_entries[at - 1]
+            at -= 1
+        }
+        leaderboard_entries[at] = current
+    }
+    leaderboard_built_revision = app.leaderboard_revision
+    leaderboard_built_practice = practice
+    leaderboard_built_metric = metric
+}
+
+LeaderboardUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "leaderboard_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadLeaderboardUiHost" && count == 0 {
+        result.* = WidgetEncodeLeaderboardUiFrame(leaderboard_ui, *leaderboard_ui_codec)
+        return 1
+    }
+    if name == "WriteLeaderboardUiHost" && count == 1 && WidgetValidLeaderboardUiFrame(arguments[0]) {
+        observed := WidgetDecodeLeaderboardUiFrame(arguments[0], *leaderboard_ui_codec)
+        leaderboard_ui.scroll = observed.scroll
+        leaderboard_ui.practice_scroll = observed.practice_scroll
+        return 1
+    }
+    if name == "ReadLeaderboardRowHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        row: LeaderboardUiRow
+        if index >= 0 && index < leaderboard_count {
+            entry := *leaderboard_entries[index]
+            row.rank = index + 1
+            row.name = TextUntilNul(entry.name[:])
+            row.streak = TextUntilNul(entry.streak[:])
+            row.average = TextUntilNul(entry.average[:])
+            row.own = entry.own
+        }
+        result.* = WidgetEncodeLeaderboardUiRow(row, *leaderboard_row_codec)
+        return 1
+    }
+    if name == "LeaderboardLocaleHost" && count == 1 &&
+    ModuleScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = ModuleTextData("string"),
+            .data = ModuleTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// Opening the app shows saved results at once and fetches fresh ones.
+#program_export
+leaderboard_screen_enter :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    load_friends_cache(app)
+    LeaderboardLoadCache(app)
+    app_request_social_refresh(app)
+}
+
+#program_export
+leaderboard_screen_draw :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if app.leaderboard_practice < 0 || app.leaderboard_practice >= EXERCISE_COUNT {
+        app.leaderboard_practice = EXERCISE_WIM_HOF
+        app.leaderboard_loaded = 0
+    }
+    if app.leaderboard_metric != LEADERBOARD_STREAK &&
+    (app.leaderboard_metric != LEADERBOARD_AVERAGE || !LeaderboardHasAverage(app.leaderboard_practice)) {
+        app.leaderboard_metric = LEADERBOARD_STREAK
+    }
+    if app.leaderboard_loaded == 0 || leaderboard_built_revision != app.leaderboard_revision ||
+    leaderboard_built_practice != app.leaderboard_practice ||
+    leaderboard_built_metric != app.leaderboard_metric {
+        LeaderboardRebuild(app)
+    }
+    leaderboard_ui.session = app.ui.session
+    leaderboard_ui.width = app.ui.view_width
+    leaderboard_ui.height = app.ui.view_height
+    leaderboard_ui.bottom = app_content_bottom_reserved(app)
+    leaderboard_ui.scale = MetricsScale()
+    leaderboard_ui.font = AppFontSize()
+    state := LeaderboardMessage.{.action = LEADERBOARD_FRAME,
+        .practice = app.leaderboard_practice, .metric = app.leaderboard_metric,
+        .row_count = leaderboard_count, .signed_in = leaderboard_signed_in,
+        .loading = app_social_refresh_loading() != 0,
+        .has_average = LeaderboardHasAverage(app.leaderboard_practice)}
+    WidgetHostBegin(app.ui.session)
+    CellsUiBegin(LeaderboardUiCall, cast(*void)app)
+    state = LeaderboardRun(state)
+    CellsUiEnd()
+    WidgetHostEnd()
+    if !state.succeeded {
+        return
+    }
+    if state.practice != app.leaderboard_practice && state.practice >= 0 &&
+    state.practice < EXERCISE_COUNT {
+        app.leaderboard_practice = state.practice
+        app.leaderboard_metric = LEADERBOARD_STREAK
+        leaderboard_ui.scroll = 0
+        LeaderboardLoadCache(app)
+        app_request_social_refresh(app)
+        return
+    }
+    if state.metric == LEADERBOARD_STREAK ||
+    (state.metric == LEADERBOARD_AVERAGE && LeaderboardHasAverage(app.leaderboard_practice)) {
+        app.leaderboard_metric = state.metric
+    }
+    if state.refresh {
+        app_request_social_refresh(app)
+    }
+}

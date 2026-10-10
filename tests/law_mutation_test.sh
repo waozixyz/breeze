@@ -113,7 +113,7 @@ mutate $recovery app/sync_recovery_policy_laws.zi \
     's/if stage == SocialStageStreak {/if stage != SocialStageStreak {/' \
     StreakFailureDropsOnlyStreak
 mutate $recovery app/sync_recovery_policy_laws.zi \
-    's/(next == SocialStageAverage \&\& practice_is_whm == 0)/(next == SocialStageAverage \&\& practice_is_whm != 0)/' \
+    's/(next == SocialStageAverage \&\& has_average == 0)/(next == SocialStageAverage \&\& has_average != 0)/' \
     FinishesAfterStreakUnlessWhm
 merge=storage/habit_merge_model.zi
 mutate $merge storage/habit_merge_laws.zi \
