@@ -950,7 +950,7 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-cards-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
+VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-cards-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
@@ -3074,6 +3074,11 @@ data-back-ui-test: $(TARGET)
 .PHONY: leaderboard-ui-test
 leaderboard-ui-test: $(TARGET)
 	@sh tests/leaderboard_ui_test.sh $(abspath $(TARGET))
+
+# Missing practice pictures fail the visual gate in CI and releases.
+.PHONY: practice-images-ui-test
+practice-images-ui-test: $(TARGET)
+	@sh tests/practice_images_ui_test.sh $(abspath $(TARGET))
 
 test: app-click-block-zi-test
 
