@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.3] - 2026-10-10
+### Fixed
+- Open the chat without a pause by preparing command suggestions only while you type.
+
 ## [1.3.2] - 2026-10-07
 ### Changed
 - Load earlier chat messages automatically as you scroll up, preserving your reading position.

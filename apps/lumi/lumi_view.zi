@@ -65,6 +65,10 @@ draft_intent: LumiAction;
 draft_intent_title_count: s32;
 candidate_revision: s64 = -1;
 candidate_actions: [20]LumiAction;
+// Suggestion commands read for the current command set, in order.
+candidate_ready: s32;
+// Reading a command takes many text matches, so typing reads one per frame.
+LUMI_CANDIDATES_PER_FRAME :: 1
 
 // Interpretation depends on the draft and translated command set. Cursor
 // blinking, scrolling and unchanged frames reuse the result, while sending
@@ -371,14 +375,23 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             suggestion_count += 1
         }
     }
+    // Suggestions are offered only for typed text, so their commands are read
+    // once typing starts and opening Lumi never waits for them.
     if revision != candidate_revision {
-        for index: cast(s32)0..cast(s32)19 {
-            candidate_actions[index] = LumiIntent(candidates[index], commands)
-        }
         candidate_revision = revision
+        candidate_ready = 0
+    }
+    if typed.count > 0 {
+        prepared: s32 = 0
+        while candidate_ready < 20 && prepared < LUMI_CANDIDATES_PER_FRAME {
+            candidate_actions[candidate_ready] = LumiIntent(candidates[candidate_ready], commands)
+            candidate_ready += 1
+            prepared += 1
+        }
     }
     for index: cast(s32)0..cast(s32)19 {
-        if typed.count == 0 || frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit {
+        if typed.count == 0 || frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit ||
+        index >= candidate_ready {
             break
         }
         candidate_action := candidate_actions[index]

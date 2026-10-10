@@ -40,6 +40,9 @@
 #import, file "../storage/delegate_store.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../habits/habit_actions.zi";
+#import "progress_props"
+#import "progress_widget"
+#import "text_align"
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_model.zi";
 #import, file "../habits/habit_calendar.zi";
@@ -53,6 +56,7 @@
 using HostValueKind;
 using AppNavRoute;
 using TextWrap;
+using TextAlign;
 using ExerciseType;
 lumi_ui: LumiUiFrame;
 lumi_ui_codec: WidgetLumiUiFrameCodec;
@@ -65,6 +69,8 @@ lumi_input: [1024]u8;
 lumi_tasks: EListState;
 lumi_tasks_revision: s64 = -1;
 lumi_row_heights: Vec(s32);
+// Each row's content key, so a row keeps its measured height when it moves.
+lumi_row_keys: Vec(u64);
 lumi_row_offsets: Vec(s32);
 lumi_draft: [LUMI_INPUT_MAX]u8;
 lumi_draft_width: s32;
@@ -83,10 +89,22 @@ lumi_rows_font: s32;
 lumi_rows_scale: float32;
 lumi_rows_assets: u64;
 lumi_rows_language: [32]u8;
+// Rows measured since the chat or its layout last changed.
+lumi_rows_measured: s32;
+// The chat changed while its rows were still being measured.
+lumi_rows_history_pending: bool;
 lumi_pending_route: s32 = -1;
 lumi_pending_practice: s32 = -1;
 lumi_choosing_habit: bool;
 lumi_choosing_diary: bool;
+
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
+
+// Seconds of row measuring per frame. A long chat is measured across frames
+// behind a loading bar, so nothing else on screen, such as a minimized
+// practice's window, waits for it.
+LUMI_MEASURE_BUDGET :: 0.004
 
 #program_export
 app_lumi_input_focused :: (app: *InnerBreeze) -> bool {
@@ -101,7 +119,10 @@ app_lumi_reset :: () {
     lumi_tasks = EListState.{}
     lumi_tasks_revision = -1
     VecFree(lumi_row_heights)
+    VecFree(lumi_row_keys)
     VecFree(lumi_row_offsets)
+    lumi_rows_measured = 0
+    lumi_rows_history_pending = false
     lumi_draft_width = 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
@@ -153,14 +174,25 @@ LumiHostAllowed :: (app: *InnerBreeze, name: string) -> bool {
     return LumiToolsAvailable() || (LumiContextAvailable(app) && LumiDelegateHostAllowed(name))
 }
 
+// What the account may see of the chat. Each check reads settings, so a pass
+// over many rows reads it once.
+LumiRowAccess :: struct {
+    history: bool
+    tools: bool
+}
+
+LumiRowAccessNow :: () -> LumiRowAccess {
+    return LumiRowAccess.{.history = LumiHistoryAvailable(), .tools = LumiToolsAvailable()}
+}
+
 // Retain archived message text without invoking tools embedded in older
 // progress, donation or feedback cards from the full owner installation.
-LumiVisibleRow :: (row: LumiChatRow) -> LumiChatRow {
-    if !LumiHistoryAvailable() {
+LumiVisibleRow :: (row: LumiChatRow, access: LumiRowAccess) -> LumiChatRow {
+    if !access.history {
         return LumiChatRow.{}
     }
     visible := row
-    if !LumiToolsAvailable() {
+    if !access.tools {
         visible.kind = LUMI_CHAT_TEXT
         visible.payload = ""
     }
@@ -356,6 +388,11 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     ModuleScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         requested := cast(s32)arguments[0].integer
         index: s32 = 0
+        // Offsets are ready once every row is measured.
+        if lumi_row_offsets.count != lumi_row_heights.count + 1 {
+            result.* = ModuleScalar("s32", 0)
+            return 1
+        }
         if name == "LumiRowOffsetHost" {
             index = requested
             if index < 0 { index = 0 }
@@ -496,7 +533,7 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         if index < 0 || index >= lumi_ui.chat_count {
             return 0
         }
-        row := LumiMeasuredRow(index)
+        row := LumiMeasuredRow(index, LumiRowAccessNow())
         result.* = WidgetEncodeLumiChatRow(row, *lumi_row_codec)
         return 1
     }
@@ -515,8 +552,23 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     return 0
 }
 
-LumiMeasuredRow :: (index: s32) -> LumiChatRow {
-    row := LumiVisibleRow(ifx index == 0 then LumiChatRow.{.text = LocaleText("lumi_greeting")} else LumiStoreRow(index - 1))
+// The chat's row at index: Lumi's greeting first, then the stored messages.
+LumiChatRowAt :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
+    if index == 0 {
+        return LumiVisibleRow(LumiChatRow.{.text = LocaleText("lumi_greeting")}, access)
+    }
+    return LumiVisibleRow(LumiStoreRow(index - 1), access)
+}
+
+// Identifies what a row's height depends on: its text, author and kind.
+LumiRowKey :: (index: s32, access: LumiRowAccess) -> u64 {
+    row := LumiChatRowAt(index, access)
+    marker := cast(u64)(row.kind * 2 + (ifx row.user then 1 else 0) + 1)
+    return (KeyHash(row.text) ^ marker) * cast(u64)1099511628211
+}
+
+LumiMeasuredRow :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
+    row := LumiChatRowAt(index, access)
     if index < 0 || index >= lumi_row_heights.count {
         return row
     }
@@ -540,6 +592,88 @@ LumiMeasuredRow :: (index: s32) -> LumiChatRow {
     }
     row.height = lumi_row_heights[index]
     return row
+}
+
+// Starts measuring the chat's rows again. While the layout is unchanged, a
+// row keeps the height measured for the same content, wherever a sync, a new
+// message or older history moved it.
+LumiRowsReset :: (layout_changed: bool) {
+    previous_keys: Vec(u64)
+    previous_heights: Vec(s32)
+    VecSwap(previous_keys, lumi_row_keys)
+    VecSwap(previous_heights, lumi_row_heights)
+    previous_count := cast(s32)previous_keys.count
+    access := LumiRowAccessNow()
+    // Rows mostly keep their order, so each search starts after the last
+    // match.
+    next: s32 = 0
+    for index: cast(s32)0..lumi_ui.chat_count - 1 {
+        key := LumiRowKey(index, access)
+        height: s32 = 0
+        if !layout_changed && previous_count > 0 {
+            for step: cast(s32)0..previous_count - 1 {
+                candidate := (next + step) % previous_count
+                if previous_keys[candidate] == key {
+                    height = previous_heights[candidate]
+                    next = (candidate + 1) % previous_count
+                    break
+                }
+            }
+        }
+        unused VecPush(lumi_row_keys, key)
+        unused VecPush(lumi_row_heights, height)
+    }
+    VecFree(previous_keys)
+    VecFree(previous_heights)
+    VecFree(lumi_row_offsets)
+    lumi_rows_measured = 0
+}
+
+// Measures rows for up to the frame's budget. Returns true once every row is
+// measured and the rows' offsets are ready.
+LumiRowsMeasure :: () -> bool {
+    if lumi_row_offsets.count == lumi_ui.chat_count + 1 {
+        return true
+    }
+    started := GetTime()
+    access := LumiRowAccessNow()
+    while lumi_rows_measured < lumi_ui.chat_count {
+        unused LumiMeasuredRow(lumi_rows_measured, access)
+        lumi_rows_measured += 1
+        if GetTime() - started >= LUMI_MEASURE_BUDGET {
+            break
+        }
+    }
+    if lumi_rows_measured < lumi_ui.chat_count {
+        return false
+    }
+    VecFree(lumi_row_offsets)
+    unused VecPush(lumi_row_offsets, cast(s32)0)
+    total: s32 = 0
+    for index: cast(s32)0..lumi_ui.chat_count - 1 {
+        total += lumi_row_heights[index]
+        unused VecPush(lumi_row_offsets, total)
+    }
+    return true
+}
+
+// Shown while a long chat is still being measured: how far it has come.
+LumiDrawLoading :: (app: *InnerBreeze) {
+    column := CenteredColumnFor(app.ui.view_width, AppScale(320), AppScale(24))
+    middle := (app.ui.view_height - app_content_bottom_reserved(app)) / 2
+    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/lumi/loading"),
+            .text = LocaleText("lumi_loading"), .font = AppFontSize(),
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)(middle - AppScale(32)),
+                cast(float32)column.width, cast(float32)AppScale(24)},
+            .align = cast(TextAlign)TextAlignCenter})
+    progress: ProgressProps
+    progress.key = KeyHash("inbe/lumi/loading-progress")
+    progress.bounds = Rectangle.{cast(float32)column.x, cast(float32)middle,
+        cast(float32)column.width, cast(float32)AppScale(8)}
+    progress.min = 0
+    progress.max = lumi_ui.chat_count
+    progress.value = lumi_rows_measured
+    Progress(app.ui.session, progress)
 }
 
 LumiPrepareTools :: (app: *InnerBreeze) {
@@ -641,36 +775,35 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     history_changed := revision != lumi_rows_revision
     assets := AssetGeneration()
     language := LocaleActiveCode()
-    if revision != lumi_rows_revision || lumi_ui.width != lumi_rows_width ||
+    layout_changed := lumi_ui.width != lumi_rows_width ||
     lumi_ui.font != lumi_rows_font || lumi_ui.scale != lumi_rows_scale ||
     assets != lumi_rows_assets ||
-    language != AppTextFromCString(*lumi_rows_language[0], 32) {
-        VecFree(lumi_row_heights)
-        for index: cast(s32)0..lumi_ui.chat_count - 1 {
-            unused VecPush(lumi_row_heights, cast(s32)0)
-        }
+    language != AppTextFromCString(*lumi_rows_language[0], 32)
+    if history_changed || layout_changed {
+        LumiRowsReset(layout_changed)
+        lumi_rows_history_pending = lumi_rows_history_pending || history_changed
         lumi_rows_revision = revision
         lumi_rows_width = lumi_ui.width
         lumi_rows_font = lumi_ui.font
         lumi_rows_scale = lumi_ui.scale
         lumi_rows_assets = assets
         unused AppCopyText(language, lumi_rows_language[:])
-        VecFree(lumi_row_offsets)
-        unused VecPush(lumi_row_offsets, cast(s32)0)
-        total: s32 = 0
-        for index: cast(s32)0..lumi_ui.chat_count - 1 {
-            total += LumiMeasuredRow(index).height
-            unused VecPush(lumi_row_offsets, total)
-        }
     }
+    if !LumiRowsMeasure() {
+        LumiDrawLoading(app)
+        return
+    }
+    history_measured := lumi_rows_history_pending
+    lumi_rows_history_pending = false
     lumi_ui.history_height = ifx lumi_row_offsets.count > 0 then lumi_row_offsets[lumi_row_offsets.count - 1] else 0
     lumi_ui.has_older = lumi_has_older
     if lumi_history_loading {
+        access := LumiRowAccessNow()
         for index: cast(s32)1..lumi_history_added_rows {
-            lumi_ui.scroll += LumiMeasuredRow(index).height
+            lumi_ui.scroll += LumiMeasuredRow(index, access).height
         }
         lumi_history_loading = false
-    } else if lumi_ui.follow_end && history_changed {
+    } else if lumi_ui.follow_end && history_measured {
         lumi_ui.scroll = 1000000
     }
     column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
