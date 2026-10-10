@@ -3182,3 +3182,13 @@ lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 	@sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lumi-feedback-delivery-test
+
+# Lumi reports name the device, system and version (no identifiers).
+.PHONY: device-info-test
+device-info-test: $(ZIRAN_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN_BIN) build --target=c --define PLATFORM_DESKTOP --root tests \
+		--module-path src --module-path build/packages/ziran/std --entry device_info_behavior:Main --exe \
+		-o build/device-info-test tests/device_info_behavior.zi
+	@build/device-info-test/device_info_behavior
+
+test: device-info-test

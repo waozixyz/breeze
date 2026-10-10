@@ -1,0 +1,196 @@
+// The phone or computer a Lumi report comes from and this build's version, so
+// the developer can tell whether a newer release already fixes the problem.
+// Only model, system and package names: never identifiers or user data.
+#import "c_string"
+#import "byte_text_linux"
+
+DEVICE_ANDROID :: #defined(ANDROID_BUILD) || #defined(PLATFORM_ANDROID) || #defined(__ANDROID__)
+DEVICE_WEB :: #defined(PLATFORM_WEB) || #defined(__EMSCRIPTEN__)
+DEVICE_WINDOWS :: #defined(_WIN32)
+DEVICE_APPLE :: #defined(__APPLE__)
+
+DeviceDetails :: struct {
+    system: [128]u8
+    device: [160]u8
+    package: [96]u8
+    sizes: [3]s32
+}
+
+device_c :: #system_library "c";
+
+#if !DEVICE_WEB && !DEVICE_WINDOWS {
+    DeviceOpen :: (path: *u8, mode: *u8) -> *void #foreign device_c "fopen";
+    DeviceRead :: (buffer: *u8, size: u64, count: u64, file: *void) -> u64 #foreign device_c "fread";
+    DeviceClose :: (file: *void) -> s32 #foreign device_c "fclose";
+
+    // A small system file's first bytes, or 0 when it cannot be read.
+    DeviceFile :: (path: string, output: []u8) -> s32 {
+        name: [96]u8
+        mode: [4]u8
+        if !CopyCString(path, name[:]) || !CopyCString("rb", mode[:]) {
+            return 0
+        }
+        file := DeviceOpen(*name[0], *mode[0])
+        if file == null {
+            return 0
+        }
+        count := DeviceRead(*output[0], 1, cast(u64)output.count, file)
+        unused DeviceClose(file)
+        return cast(s32)count
+    }
+}
+
+#if DEVICE_ANDROID {
+    DeviceProperty :: (name: *u8, value: *u8) -> s32 #foreign device_c "__system_property_get";
+
+    DeviceAndroidProperty :: (name: string, output: []u8) -> string {
+        key: [48]u8
+        // PROP_VALUE_MAX is 92 bytes including its terminator.
+        if output.count < 92 || !CopyCString(name, key[:]) {
+            return ""
+        }
+        size := DeviceProperty(*key[0], *output[0])
+        if size <= 0 || cast(s64)size >= output.count {
+            return ""
+        }
+        return TextFromBytes(output[:size])
+    }
+}
+
+// Printable text only, so a report stays one readable line per field.
+DeviceAppend :: (target: []u8, size: *s32, value: string) {
+    for byte: value {
+        if size.* >= cast(s32)target.count - 1 {
+            return
+        }
+        if byte >= cast(u8)32 && byte != cast(u8)127 {
+            target[size.*] = byte
+            size.* += 1
+        }
+    }
+}
+
+DeviceStartsWithFold :: (value: string, prefix: string) -> bool {
+    if prefix.count == 0 || prefix.count > value.count {
+        return false
+    }
+    for index: cast(s64)0..prefix.count - 1 {
+        a := value[index]
+        b := prefix[index]
+        if a >= cast(u8)65 && a <= cast(u8)90 { a += cast(u8)32 }
+        if b >= cast(u8)65 && b <= cast(u8)90 { b += cast(u8)32 }
+        if a != b {
+            return false
+        }
+    }
+    return true
+}
+
+DevicePlatform :: () -> string {
+    platform := "linux"
+    #if DEVICE_ANDROID {
+        platform = "android"
+    }
+    #if DEVICE_WEB {
+        platform = "web"
+    }
+    #if DEVICE_WINDOWS {
+        platform = "windows"
+    }
+    #if DEVICE_APPLE {
+        platform = "macos"
+    }
+    return platform
+}
+
+// Views into the caller's details, which outlive the returned text.
+DeviceSystem :: (details: *DeviceDetails) -> string {
+    return TextFromBytes(BytesFromPointer(*details.system[0], cast(u64)details.sizes[0]))
+}
+DeviceModel :: (details: *DeviceDetails) -> string {
+    return TextFromBytes(BytesFromPointer(*details.device[0], cast(u64)details.sizes[1]))
+}
+DevicePackage :: (details: *DeviceDetails) -> string {
+    return TextFromBytes(BytesFromPointer(*details.package[0], cast(u64)details.sizes[2]))
+}
+
+// Linux: os-release's PRETTY_NAME, unquoted.
+DeviceReleaseName :: (text: string) -> string {
+    at: s64 = 0
+    while at < text.count {
+        end := at
+        while end < text.count && text[end] != cast(u8)10 { end += 1 }
+        line := text[at:end]
+        if line.count > 12 && DeviceStartsWithFold(line, "PRETTY_NAME=") {
+            value := line[12:]
+            if value.count >= 2 && (value[0] == cast(u8)34 || value[0] == cast(u8)39) && value[value.count - 1] == value[0] {
+                value = value[1:value.count - 1]
+            }
+            return value
+        }
+        at = end + 1
+    }
+    return ""
+}
+
+DeviceDescribe :: (details: *DeviceDetails) {
+    details.* = .{}
+    #if DEVICE_ANDROID {
+        manufacturer: [96]u8
+        model: [96]u8
+        release: [96]u8
+        sdk: [96]u8
+        maker := DeviceAndroidProperty("ro.product.manufacturer", manufacturer[:])
+        name := DeviceAndroidProperty("ro.product.model", model[:])
+        if maker.count > 0 && !DeviceStartsWithFold(name, maker) {
+            DeviceAppend(details.device[:], *details.sizes[1], maker)
+            DeviceAppend(details.device[:], *details.sizes[1], " ")
+        }
+        DeviceAppend(details.device[:], *details.sizes[1], name)
+        DeviceAppend(details.system[:], *details.sizes[0], "Android ")
+        DeviceAppend(details.system[:], *details.sizes[0], DeviceAndroidProperty("ro.build.version.release", release[:]))
+        level := DeviceAndroidProperty("ro.build.version.sdk", sdk[:])
+        if level.count > 0 {
+            DeviceAppend(details.system[:], *details.sizes[0], " (SDK ")
+            DeviceAppend(details.system[:], *details.sizes[0], level)
+            DeviceAppend(details.system[:], *details.sizes[0], ")")
+        }
+        // The process name is the installed package, which tells a debug
+        // build (xyz.waozi.inbe.debug) from a release.
+        command: [96]u8
+        read := DeviceFile("/proc/self/cmdline", command[:])
+        end: s32 = 0
+        while end < read && command[end] != 0 { end += 1 }
+        DeviceAppend(details.package[:], *details.sizes[2], TextFromBytes(command[:end]))
+        return
+    }
+    #if DEVICE_WEB {
+        DeviceAppend(details.system[:], *details.sizes[0], "Web browser")
+        return
+    }
+    #if DEVICE_WINDOWS {
+        DeviceAppend(details.system[:], *details.sizes[0], "Windows")
+        return
+    }
+    #if DEVICE_APPLE {
+        DeviceAppend(details.system[:], *details.sizes[0], "macOS")
+        return
+    }
+    #if !DEVICE_ANDROID && !DEVICE_WEB && !DEVICE_WINDOWS && !DEVICE_APPLE {
+        release: [1024]u8
+        read := DeviceFile("/etc/os-release", release[:])
+        name := DeviceReleaseName(TextFromBytes(release[:read]))
+        DeviceAppend(details.system[:], *details.sizes[0], ifx name.count > 0 then name else "Linux")
+        vendor: [96]u8
+        product: [96]u8
+        vendor_size := DeviceFile("/sys/devices/virtual/dmi/id/sys_vendor", vendor[:])
+        product_size := DeviceFile("/sys/devices/virtual/dmi/id/product_name", product[:])
+        while vendor_size > 0 && vendor[vendor_size - 1] <= cast(u8)32 { vendor_size -= 1 }
+        while product_size > 0 && product[product_size - 1] <= cast(u8)32 { product_size -= 1 }
+        DeviceAppend(details.device[:], *details.sizes[1], TextFromBytes(vendor[:vendor_size]))
+        if vendor_size > 0 && product_size > 0 {
+            DeviceAppend(details.device[:], *details.sizes[1], " ")
+        }
+        DeviceAppend(details.device[:], *details.sizes[1], TextFromBytes(product[:product_size]))
+    }
+}

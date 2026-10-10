@@ -2,6 +2,7 @@
 ## [2.1.27] - 2026-10-10
 ### Added
 - End a held breath from the minimized practice window with Breath, or a double tap.
+- Feedback sent through Lumi includes the app version, device and system version, so the developer can tell you when an update already fixes it.
 ### Fixed
 - Picture-in-picture opens when you leave for another app or launcher during a practice.
 - Opening the picture-in-picture window returns to the running practice.
