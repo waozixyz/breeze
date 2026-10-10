@@ -53,6 +53,7 @@ network_state: s32 = -1;
 network_length: s32 = 3;
 network_cancelled: s32;
 network_header_failed: bool;
+network_timeout: s32;
 locale_preferences: [64]u8;
 startup_commands: [16]s8;
 startup_command_count: s32;
@@ -263,7 +264,8 @@ FakeInteger :: (env: *JniEnv, object: *void, method: *void,
     unused object
     unused method
     if CStringEquals(*method_name[0], "httpCreate") {
-        Require(arguments[2].integer == 64 && arguments[3].integer == 20000, 91)
+        Require(arguments[2].integer == 64, 91)
+        network_timeout = arguments[3].integer
         return 71
     }
     if CStringEquals(*method_name[0], "httpPoll") {
@@ -656,7 +658,7 @@ main :: () -> s32 {
     request.content_type = "application/json"
     request.body = "{}"
     request.token = "token"
-    Require(transport.start(transport.context, request, output[:]), 93)
+    Require(transport.start(transport.context, request, output[:]) && network_timeout == 20000, 93)
     Require(!transport.start(transport.context, request, output[:]), 94)
     Require(transport.poll(transport.context, *http_status) == -1, 95)
     network_state = 404
@@ -676,6 +678,10 @@ main :: () -> s32 {
     transport.cancel(transport.context)
     Require(transfer.handle == 0 && transfer.output.count == 0 &&
         network_cancelled == 4 && frame_count == 0, 101)
+    request.url = "https://example.invalid/api/v1/chat/completions"
+    Require(transport.start(transport.context, request, output[:]) && network_timeout == 45000, 115)
+    transport.cancel(transport.context)
+    Require(transfer.handle == 0 && network_cancelled == 5, 116)
     before_startup_calls := void_calls
     AndroidStartupComplete()
     Require(void_calls == before_startup_calls + 1 &&

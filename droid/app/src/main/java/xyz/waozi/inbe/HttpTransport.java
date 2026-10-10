@@ -32,6 +32,7 @@ final class HttpTransport {
         final URL url;
         final int capacity;
         final int timeout;
+        final long deadline;
         final Map<String, String> headers = new LinkedHashMap<>();
         volatile HttpURLConnection connection;
         volatile Future<?> worker;
@@ -46,6 +47,7 @@ final class HttpTransport {
             this.url = url;
             this.capacity = capacity;
             this.timeout = timeout;
+            this.deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
         }
     }
 
@@ -59,9 +61,14 @@ final class HttpTransport {
     synchronized int create(byte[] methodBytes, byte[] urlBytes, int capacity, int timeout) {
         if (closed || methodBytes == null || urlBytes == null || methodBytes.length < 1 ||
             methodBytes.length > 31 || urlBytes.length < 1 || urlBytes.length >= 2048 ||
-            capacity < 1 || capacity > LIMIT || timeout < 1 || timeout > 900000 ||
-            transfers.size() >= 8) {
+            capacity < 1 || capacity > LIMIT || timeout < 1 || timeout > 900000) {
             return 0;
+        }
+        if (transfers.size() >= 8) {
+            reclaimUncollected();
+            if (transfers.size() >= 8) {
+                return 0;
+            }
         }
         try {
             String method = text(methodBytes);
@@ -127,17 +134,35 @@ final class HttpTransport {
     }
 
     private void expire(int id, Transfer transfer) {
-        // Also reclaim completed responses whose native caller lost its JNI
-        // attachment or stopped polling. A handle never outlives its deadline.
-        if (!transfers.remove(id, transfer)) {
-            return;
-        }
+        // The deadline bounds the exchange, not its collection. A completed
+        // response waits for the caller, which does not poll while paused,
+        // in picture-in-picture or during a practice.
         synchronized (transfer) {
+            if (transfer.state >= 0 || !transfers.remove(id, transfer)) {
+                return;
+            }
             transfer.cancelled = true;
             transfer.state = 0;
             transfer.response = null;
         }
         stop(transfer);
+    }
+
+    // Free the slots of completed responses left uncollected past their
+    // deadline, so a caller that lost its JNI handle cannot exhaust them.
+    private void reclaimUncollected() {
+        long now = System.nanoTime();
+        for (Map.Entry<Integer, Transfer> entry : transfers.entrySet()) {
+            Transfer transfer = entry.getValue();
+            synchronized (transfer) {
+                if (transfer.state < 0 || now - transfer.deadline < 0 ||
+                    !transfers.remove(entry.getKey(), transfer)) {
+                    continue;
+                }
+                transfer.cancelled = true;
+                transfer.response = null;
+            }
+        }
     }
 
     private static void stop(Transfer transfer) {
@@ -164,7 +189,7 @@ final class HttpTransport {
             connection.setInstanceFollowRedirects(false);
             connection.setUseCaches(false);
             connection.setConnectTimeout(Math.min(15000, transfer.timeout));
-            connection.setReadTimeout(Math.min(30000, transfer.timeout));
+            connection.setReadTimeout(transfer.timeout);
             connection.setRequestMethod(transfer.method);
             // System HTTPS trust and hostname verification are left intact.
             for (Map.Entry<String, String> header : transfer.headers.entrySet()) {

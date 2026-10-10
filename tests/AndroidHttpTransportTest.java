@@ -144,10 +144,11 @@ public final class AndroidHttpTransportTest {
             require(transport.poll(id) == 0 && transport.response(id) == null,
                 "cancel prevents late publication");
             id = request(transport, "GET", base + "/missing", 64, 100, new byte[0]);
-            require(waitFor(transport, id) == 404, "orphan initially completes");
+            require(waitFor(transport, id) == 404, "uncollected response initially completes");
             Thread.sleep(150);
-            require(transport.poll(id) == 0 && transport.response(id) == null,
-                "deadline reclaims completed response if caller lost its JNI handle");
+            require(transport.poll(id) == 404 && Arrays.equals(transport.response(id), bytes("missing")),
+                "completed response waits past its deadline for a paused caller");
+            int uncollected = id;
             id = request(transport, "GET", secureBase, 64, 1000, new byte[0]);
             require(waitFor(transport, id) == 0, "reject untrusted certificate");
             transport.cancel(id);
@@ -167,10 +168,15 @@ public final class AndroidHttpTransportTest {
                 "create abandoned configuration");
             Thread.sleep(50);
             int[] handles = new int[8];
-            for (int index = 0; index < handles.length; index++) {
+            for (int index = 0; index < handles.length - 1; index++) {
                 handles[index] = transport.create(bytes("GET"), bytes(base), 64, 1000);
                 require(handles[index] > 0, "bounded request slot");
             }
+            require(transport.poll(uncollected) == 404, "uncollected response keeps a free slot's place");
+            handles[handles.length - 1] = transport.create(bytes("GET"), bytes(base), 64, 1000);
+            require(handles[handles.length - 1] > 0 && transport.poll(uncollected) == 0 &&
+                transport.response(uncollected) == null,
+                "a needed slot reclaims a response left uncollected past its deadline");
             require(transport.create(bytes("GET"), bytes(base), 64, 1000) == 0, "slot cap");
             for (int handle : handles) {
                 transport.cancel(handle);
