@@ -5,6 +5,10 @@
 - Keep the practice visible over other Android apps with picture-in-picture, which you can turn off in Settings.
 ### Changed
 - The minimized practice window opens taller and shows the breath count, time left or phase inside its circle.
+### Fixed
+- Show the keyboard in Diary on Android.
+- Keep the practice window over Apps.
+- Open Lumi without freezing the practice window.
 
 ## [2.1.25] - 2026-10-09
 ### Changed
