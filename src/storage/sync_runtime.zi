@@ -21,6 +21,8 @@
 #import, file "device_key_store.zi";
 #import, file "sync_account.zi";
 #import, file "storage_core.zi";
+#import, file "sync_node_storage.zi";
+#import, file "sync_result.zi";
 #import, file "../app/text_buffers.zi";
 
 c :: #system_library "c";
@@ -118,16 +120,20 @@ SyncStoredAccount :: (base_url: string) -> s32 {
     SaveSession(*session)
     storage_free_sync_payload_json(payload)
     WipeDeviceKey(*material)
+    reply := TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))
+    outcome := cast(s32)result
     if result == cast(AuthResult)AuthResult.AUTH_OK {
-        if storage_apply_sync_response_json(TextUntilNul(
-            BytesFromPointer(response, SyncResponseCapacity))) == 0 {
-            result = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+        if storage_apply_sync_response_json(reply) == 0 {
+            outcome = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
         } else {
             storage_purge_synced_deleted_data()
+            SyncNodeStorageRecordResponse(base_url, reply)
         }
+    } else if status == 413 && SyncNodeStorageRecordFull(base_url, reply) {
+        outcome = cast(s32)SyncResult.SYNC_STORAGE_FULL
     }
     free(cast(*void)response)
-    return cast(s32)result
+    return outcome
 }
 
 // Expired context can perform only this key-bound challenge/session exchange.
