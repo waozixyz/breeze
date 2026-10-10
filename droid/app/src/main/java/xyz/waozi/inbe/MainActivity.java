@@ -107,8 +107,10 @@ public class MainActivity extends NativeActivity {
         return params.build();
     }
 
-    public void updatePictureWindow(boolean enabled, boolean requested) {
-        if (enabled == pictureWindowEnabled && !requested) {
+    // Leaving the app opens the floating window on its own; nothing in the
+    // app asks for it.
+    public void updatePictureWindow(boolean enabled) {
+        if (enabled == pictureWindowEnabled) {
             return;
         }
         pictureWindowEnabled = enabled;
@@ -117,25 +119,12 @@ public class MainActivity extends NativeActivity {
                 return;
             }
             setPictureInPictureParams(pictureWindowParams());
-            if (requested && enabled) {
-                enterPictureWindow(true);
-            }
         });
     }
 
-    private void enterPictureWindow(boolean explicit) {
+    private void enterPictureWindow() {
         if (!supportsPictureWindow() || !pictureWindowEnabled ||
-                isInPictureInPictureMode() || isFinishing()) {
-            return;
-        }
-        if (!allowsPictureWindow()) {
-            if (explicit) {
-                Intent settings = new Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS",
-                        Uri.parse("package:" + getPackageName()));
-                if (settings.resolveActivity(getPackageManager()) != null) {
-                    startActivity(settings);
-                }
-            }
+                isInPictureInPictureMode() || isFinishing() || !allowsPictureWindow()) {
             return;
         }
         pictureWindowEntering = true;
@@ -156,7 +145,7 @@ public class MainActivity extends NativeActivity {
         // while this one pauses, as the stock launcher does. Leaving for a
         // third-party launcher or another app comes here instead.
         if (Build.VERSION.SDK_INT >= 26) {
-            enterPictureWindow(false);
+            enterPictureWindow();
         }
     }
 
