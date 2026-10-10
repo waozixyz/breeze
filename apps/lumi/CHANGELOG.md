@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.5] - 2026-10-10
+
+- Requires Inner Breeze 2.1.28 or later.
+
 ## [1.3.4] - 2026-10-10
 ### Added
 - Tap the / button or type / to see Lumi's commands, as in Telegram. The list narrows as you type; tap a command or press Enter to use it, and commands that need text wait for it in the message box.

@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.25] - 2026-10-10
+
+- Requires Inner Breeze 2.1.28 or later.
+
 ## [2.1.24] - 2026-10-10
 
 - Remove the text of practice window buttons that are no longer shown.

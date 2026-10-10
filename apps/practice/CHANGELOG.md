@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.4] - 2026-10-10
+
+- Requires Inner Breeze 2.1.28 or later.
+
 ## [1.1.3] - 2026-10-07
 
 - Keep app labels and content visible after updating Inner Breeze.

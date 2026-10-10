@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.6] - 2026-10-10
+
+### Changed
+- Show **bold** text as bold. The ** marks appear only on the line you are editing, so you can still change them.
+
 ## [1.1.5] - 2026-10-10
 ### Changed
 - Save your writing quietly, without a "Waiting to save…" note below the entry.

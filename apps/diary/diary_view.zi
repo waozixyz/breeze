@@ -38,6 +38,53 @@ DiarySaveDue :: () -> bool {
     return frame.now >= frame.save_at
 }
 
+// Markdown bold reads as bold text. Its ** markers stay in the entry but are
+// hidden, except on the lines holding the caret or a selection, where they
+// can be edited directly.
+DIARY_EMPHASIS_MAX :: 256
+emphasis_hidden: [DIARY_EMPHASIS_MAX * 2]TextRange;
+emphasis_strong: [DIARY_EMPHASIS_MAX]TextRange;
+emphasis_hidden_count: s32;
+emphasis_strong_count: s32;
+
+DiaryEmphasis :: (value: string, cursor: s32, anchor: s32, editing: bool) {
+    emphasis_hidden_count = 0
+    emphasis_strong_count = 0
+    first := ifx cursor < anchor then cursor else anchor
+    last := ifx cursor < anchor then anchor else cursor
+    line: s32 = 0
+    while line <= cast(s32)value.count && emphasis_strong_count < DIARY_EMPHASIS_MAX {
+        end := line
+        while end < cast(s32)value.count && value[end] != cast(u8)10 { end += 1 }
+        active := editing && last >= line && first <= end
+        at := line
+        while at + 1 < end && emphasis_strong_count < DIARY_EMPHASIS_MAX {
+            if value[at] != cast(u8)42 || value[at + 1] != cast(u8)42 {
+                at += 1
+                continue
+            }
+            close := at + 2
+            while close + 1 < end && (value[close] != cast(u8)42 || value[close + 1] != cast(u8)42) {
+                close += 1
+            }
+            if close + 1 >= end {
+                break
+            }
+            if close > at + 2 {
+                emphasis_strong[emphasis_strong_count] = TextRange.{.start = at + 2, .end = close}
+                emphasis_strong_count += 1
+                if !active {
+                    emphasis_hidden[emphasis_hidden_count] = TextRange.{.start = at, .end = at + 2}
+                    emphasis_hidden[emphasis_hidden_count + 1] = TextRange.{.start = close, .end = close + 2}
+                    emphasis_hidden_count += 2
+                }
+            }
+            at = close + 2
+        }
+        line = end + 1
+    }
+}
+
 DateTitle :: (year: s32, month: s32, day: s32) -> string {
     if month < 1 || month > 12 { return "" }
     keys: [12]string = .["habit_month_1", "habit_month_2", "habit_month_3",
@@ -187,6 +234,9 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     area.max_bytes = 2147483646
     area.max_codepoints = 2147483646
     area.input = frame.input
+    DiaryEmphasis(state.text, state.cursor, state.anchor, frame.focused && !area.read_only)
+    area.hidden = emphasis_hidden[:emphasis_hidden_count]
+    area.strong = emphasis_strong[:emphasis_strong_count]
     edited := TextArea(frame.session, area)
     state.cursor = edited.cursor
     state.anchor = edited.anchor
