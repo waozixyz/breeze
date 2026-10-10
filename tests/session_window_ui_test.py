@@ -264,6 +264,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                 if changed(first, later) > 40:
                     break
                 assert time.monotonic() < deadline, practice + " stopped moving in its window"
+            # A breathing circle must not bake a font at a new size each frame.
+            log = OUTPUT / (practice + ".log")
+            baked = log.read_text().count("FONT: Data loaded")
+            time.sleep(4)
+            assert log.read_text().count("FONT: Data loaded") == baked, \
+                (practice, "bakes new font sizes while its window animates")
             assert state(window)["screen"] == SCREEN_START
             wait_running(window, practice + " stopped in its window")
             click(window, *parts["maximize"])
