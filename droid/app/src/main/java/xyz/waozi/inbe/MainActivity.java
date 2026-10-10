@@ -64,6 +64,10 @@ public class MainActivity extends NativeActivity {
     private boolean pictureWindowEntering;
     private boolean activityStopped;
     private int pictureWindowGeneration;
+    // Flips each time the floating window opens back into the app, so native
+    // shows the practice instead of the page behind its in-app window. It is
+    // static because native state also outlives a recreated activity.
+    private static int pictureWindowReturns;
 
     // Called by the native frame thread. A volatile snapshot avoids changing
     // practice state from Android's UI callbacks.
@@ -87,8 +91,9 @@ public class MainActivity extends NativeActivity {
     }
 
     private void refreshPictureWindowState() {
-        pictureWindowGeneration = (pictureWindowGeneration + 1) & 0x1fffffff;
-        pictureWindowState = (pictureWindowGeneration << 2) | (supportsPictureWindow() ? 1 : 0)
+        pictureWindowGeneration = (pictureWindowGeneration + 1) & 0x0fffffff;
+        pictureWindowState = (pictureWindowGeneration << 3) | ((pictureWindowReturns & 1) << 2)
+                | (supportsPictureWindow() ? 1 : 0)
                 | (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()
                     && !activityStopped ? 2 : 0);
     }
@@ -147,7 +152,10 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        if (Build.VERSION.SDK_INT >= 26 && Build.VERSION.SDK_INT < 31) {
+        // Android 12 enters on its own only when the next activity resumes
+        // while this one pauses, as the stock launcher does. Leaving for a
+        // third-party launcher or another app comes here instead.
+        if (Build.VERSION.SDK_INT >= 26) {
             enterPictureWindow(false);
         }
     }
@@ -156,6 +164,11 @@ public class MainActivity extends NativeActivity {
     public void onPictureInPictureModeChanged(boolean visible, Configuration configuration) {
         super.onPictureInPictureModeChanged(visible, configuration);
         pictureWindowEntering = false;
+        // Closing the floating window stops the activity first; opening it
+        // back into the app leaves the activity started.
+        if (!visible && !activityStopped) {
+            pictureWindowReturns++;
+        }
         refreshPictureWindowState();
         requestInsetRefresh();
         syncLifecycleState("onPictureInPictureModeChanged");

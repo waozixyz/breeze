@@ -37,6 +37,7 @@ c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 
 using ButtonEmphasis;
+using ButtonTone;
 using ModalType;
 using ExerciseType;
 using TextAlign;
@@ -48,6 +49,7 @@ SESSION_WINDOW_CLOSE_ID :: 7481
 SESSION_WINDOW_MAXIMIZE_ID :: 7482
 SESSION_WINDOW_RESIZE_ID :: 7483
 SESSION_WINDOW_DETACH_ID :: 7484
+SESSION_WINDOW_BREATHE_ID :: 7488
 // Units: the window's starting and smallest sizes, its inner margin, the
 // row holding its buttons, the lines below the picture and the corner that
 // resizes it.
@@ -59,6 +61,12 @@ SESSION_WINDOW_PADDING :: 8
 SESSION_WINDOW_BUTTON_ROW :: 40
 SESSION_WINDOW_TEXT_HEIGHT :: 46
 SESSION_WINDOW_GRIP :: 32
+// Units: the height of the window's Breath button and the space beside
+// its label.
+SESSION_WINDOW_BREATHE_HEIGHT :: 36
+SESSION_WINDOW_BREATHE_SPACE :: 32
+// Seconds between the two taps of a double tap, as on the practice's screen.
+SESSION_WINDOW_DOUBLE_TAP_SECONDS :: 0.35
 
 session_window_practice :: (screen: s32) -> s32 {
     if screen == ScreenMeditation {
@@ -273,8 +281,52 @@ session_window_resize :: (app: *InnerBreeze, bounds: Rectangle) {
     TreeSetDragCapture(session, node, true)
 }
 
+// The running practice waits for the person to breathe, as a held breath
+// does.
+session_window_can_breathe :: (app: *InnerBreeze, practice: *PracticeDefinition) -> bool {
+    return practice != null && practice.can_breathe != null && practice.breathe != null &&
+    practice.can_breathe(app) != 0
+}
+
+// The window's Breath button, centered along the bottom of its picture,
+// below the held breath's small circle. Returns true when it was pressed.
+session_window_breathe_button :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    label := LocaleText("breath_button")
+    padding := cast(float32)AppScale(SESSION_WINDOW_PADDING)
+    height := cast(float32)AppScale(SESSION_WINDOW_BREATHE_HEIGHT)
+    width := cast(float32)(AppTextWidth(label, AppFontSize()) +
+        AppScale(SESSION_WINDOW_BREATHE_SPACE))
+    if width > bounds.width - padding * 2.0 {
+        width = bounds.width - padding * 2.0
+    }
+    bottom := bounds.y + bounds.height - cast(float32)AppScale(SESSION_WINDOW_TEXT_HEIGHT) - padding
+    button: ButtonProps
+    button.id = SESSION_WINDOW_BREATHE_ID
+    button.bounds = Rectangle.{bounds.x + (bounds.width - width) * 0.5, bottom - height,
+        width, height}
+    button.label = label
+    button.tone = cast(ButtonTone)ButtonToneAccent
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    return Button(app.ui.session, button) != 0
+}
+
+// A tap on the window while the practice is set to double tap to breathe:
+// the second tap in quick succession breathes.
+session_window_breathe_tap :: (app: *InnerBreeze, practice: *PracticeDefinition) {
+    now := GetTime()
+    last := app.breath_tap_last_time
+    if last > 0.0 && now - last <= SESSION_WINDOW_DOUBLE_TAP_SECONDS {
+        app.breath_tap_last_time = 0.0
+        practice.breathe(app)
+        return
+    }
+    app.breath_tap_last_time = now
+}
+
 // The running practice's small window: tap or maximize to return, drag to
-// move, and the X asks to end the practice over the open page.
+// move, and the X asks to end the practice over the open page. While the
+// practice waits for a breath, its Breath button or a double tap, as it is
+// set, breathes right from the window.
 app_session_window_draw :: (app: *InnerBreeze) {
     if app == null || app.session_window.screen == ScreenStart ||
     app_is_session_screen(app.breathing.screen) ||
@@ -393,12 +445,29 @@ app_session_window_draw :: (app: *InnerBreeze) {
         app_session_window_close(app)
         return
     }
+    practice := practice_get(session_window_practice(window.screen))
+    can_breathe := session_window_can_breathe(app, practice)
+    double_tap := can_breathe && app.double_tap_to_breathe != 0
+    if !double_tap {
+        app.breath_tap_last_time = 0.0
+    }
+    if can_breathe && !double_tap && session_window_breathe_button(app, bounds) {
+        practice.breathe(app)
+        return
+    }
     if session_window_exit_prompt(app) {
         return
     }
-    if activated && !window.drag_moved {
-        unused app_session_window_restore(app)
+    if !activated || window.drag_moved {
+        return
     }
+    // Set to double tap, taps on the window are for breathing; maximize
+    // still returns to the practice.
+    if double_tap {
+        session_window_breathe_tap(app, practice)
+        return
+    }
+    unused app_session_window_restore(app)
 }
 
 // Shared content for the in-app card, detached desktop window and Android PiP.

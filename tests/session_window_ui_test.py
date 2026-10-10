@@ -30,6 +30,15 @@ PRACTICES = {"whm": 1, "meditation": 2, "sun_salutation": 3, "patterns": 4}
 # corner 16 units in from the bottom right.
 WINDOW = (162, 72, 220, 320)
 MINIMIZE = (308, 38)
+# With advanced session controls, Next is the last of three 44-unit buttons
+# 12 units apart, centered along the bottom of the 720-unit page.
+NEXT = (251, 692)
+# The held breath's Breath button on the practice's screen, and in the
+# window, where it is centered along the bottom of the picture, 36 units
+# tall and ending 54 units above the window's bottom. Each box stays inside
+# the light button so its label keeps its contrast.
+SCREEN_BREATH = (95, 475, 200, 60)
+WINDOW_BREATH = (WINDOW[0] + 60, WINDOW[1] + WINDOW[3] - 92, WINDOW[2] - 120, 40)
 
 
 def window_parts(left, top, width, height):
@@ -111,6 +120,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         (OUTPUT / (label + ".txt")).write_text("\n".join(f"{w} {l:.0f},{t:.0f}" for w, l, t, *_ in found))
         return found
 
+    def label_in(window, label, box):
+        """The words in a small box, read on their own so a light button keeps its contrast."""
+        left, top, width, height = box
+        path = capture(window, label)
+        large = OUTPUT / (label + "-box.png")
+        command("convert", str(path), "-crop", f"{width}x{height}+{left}+{top}", "+repage",
+                "-colorspace", "gray", "-resize", "400%", "-normalize", str(large))
+        text = command("tesseract", str(large), "stdout", "--psm", "7")
+        (OUTPUT / (label + ".txt")).write_text(text)
+        return text.upper().split()
+
     def line_middle(window, label, text):
         """The center of the text line holding the word, from its first word to its last."""
         found = words(window, label)
@@ -122,9 +142,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         right = max(item[1] + item[3] for item in row)
         return (left + right) / 2, anchor[2] + anchor[4] / 2
 
-    def find(window, label, text, region=lambda x, y: True):
+    def find(window, label, text, region=lambda x, y: True, whole=False):
         for word, left, top, width, height in words(window, label):
-            if text.lower() in word.lower() and region(left, top):
+            found = text.lower() == word.lower() if whole else text.lower() in word.lower()
+            if found and region(left, top):
                 return left + width / 2, top + height / 2, left, top
         return None
 
@@ -163,6 +184,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         command("xdotool", "mouseup", "1")
         time.sleep(.6)
 
+    def double_tap(window, x, y):
+        # Each press lasts a few frames; both land well within the double
+        # tap's 0.35 seconds.
+        command("xdotool", "mousemove", "--window", window, str(int(x)), str(int(y)),
+                "mousedown", "1", "sleep", "0.05", "mouseup", "1", "sleep", "0.08",
+                "mousedown", "1", "sleep", "0.05", "mouseup", "1")
+        time.sleep(.6)
+
     def swipe(window, start, end):
         # Hold the press for a frame first, so the app sees it where it starts.
         args = ["xdotool", "mousemove", "--window", window, str(int(start[0])), str(int(start[1])),
@@ -192,20 +221,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     def wait_running(window, why):
         assert state(window)["practice_running"], (why, state(window))
 
+    def save_settings(values):
+        with sqlite3.connect(profile / "inbe.db") as db:
+            user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+            for key, value in values.items():
+                db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                           "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
+
     with application("initialize", 390, 720):
         pass
-    with sqlite3.connect(profile / "inbe.db") as db:
-        user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
-        # Lumi is pinned first: a practice must still minimize to the page it
-        # was started from, not to the first pinned app.
-        values = dict(enabled_apps="31", main_tab="1", language="en", language_setup_done="1",
-                      apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
-                      cells_auto_update="0", habits_guide_seen="1", launcher_favorite_count="3",
-                      launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2")
-        values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
-        for key, value in values.items():
-            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
+    # Lumi is pinned first: a practice must still minimize to the page it
+    # was started from, not to the first pinned app.
+    values = dict(enabled_apps="31", main_tab="1", language="en", language_setup_done="1",
+                  apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
+                  cells_auto_update="0", habits_guide_seen="1", launcher_favorite_count="3",
+                  launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2")
+    values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
+    save_settings(values)
 
     # Every practice minimizes to Practice, where it was started, and keeps
     # its live picture moving in the window until maximize returns to it.
@@ -371,6 +403,55 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                 time.sleep(.2)
             assert state(window)["screen"] == SCREEN_HABITS, ("Ending left the open app", state(window))
             assert not find(window, "after-exit", "ROUND"), "The window stayed after the practice ended"
+
+    # A held breath ends right from the window, the way the practice is set
+    # to end it: with its Breath button, or with a double tap. A single tap
+    # set to double tap stays on the open page.
+    for double_tap_mode in (() if DESKTOP_ONLY else (False, True)):
+        mode = "double-tap" if double_tap_mode else "button"
+        save_settings(dict(advanced_session_controls="1",
+                           double_tap_to_breathe="1" if double_tap_mode else "0"))
+
+        def holding(window, label):
+            """The practice's screen shows the held breath's Breath button or double tap hint."""
+            if double_tap_mode:
+                return find(window, label, "Double", lambda x, y: y > 360, True) is not None
+            return "BREATH" in label_in(window, label, SCREEN_BREATH)
+
+        with application("breathe-" + mode, 390, 720) as window:
+            action(window, "mcp.open_view", "open-habits-" + mode, {"view": "habits"})
+            wait_screen(window, SCREEN_HABITS, "Habits did not open to breathe from the window")
+            action(window, "practice.whm.start", "start-whm-" + mode)
+            wait_screen(window, SCREEN_SESSION, "Breathing did not start to breathe from the window")
+            # Next skips the countdown and the breaths to the held breath.
+            for step in range(4):
+                if holding(window, f"breathe-{mode}-hold-{step}"):
+                    break
+                click(window, *NEXT)
+            else:
+                assert False, "Next did not reach the held breath"
+            click(window, *MINIMIZE)
+            wait_screen(window, SCREEN_HABITS, "Minimize did not return to Habits during the held breath")
+            wait_running(window, "Minimizing ended the held breath")
+            offered = "BREATH" in label_in(window, f"breathe-{mode}-window", WINDOW_BREATH)
+            middle = (parts["picture"][0] + parts["picture"][2] / 2, parts["picture"][1] + 60)
+            if double_tap_mode:
+                assert not offered, "The window shows Breath while set to double tap"
+                click(window, *middle)
+                assert state(window)["screen"] == SCREEN_HABITS, "A single tap left the open page"
+                double_tap(window, *middle)
+            else:
+                assert offered, "The window does not offer Breath during the held breath"
+                click(window, WINDOW_BREATH[0] + WINDOW_BREATH[2] / 2, WINDOW_BREATH[1] + WINDOW_BREATH[3] / 2)
+                assert "BREATH" not in label_in(window, f"breathe-{mode}-done", WINDOW_BREATH), \
+                    "Breath stayed in the window after breathing"
+            assert state(window)["screen"] == SCREEN_HABITS, "Breathing from the window left the open page"
+            wait_running(window, "Breathing from the window ended the practice")
+            click(window, *parts["maximize"])
+            wait_screen(window, SCREEN_SESSION, "Maximize did not return after breathing from the window")
+            assert not holding(window, f"breathe-{mode}-recovery"), \
+                "The practice is still holding the breath after breathing from the window"
+    save_settings(dict(advanced_session_controls="0", double_tap_to_breathe="0"))
 
     rail = lambda x, y: x < 100
     with application("desktop", 900, 720) as window:
