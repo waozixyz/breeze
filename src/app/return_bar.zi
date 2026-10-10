@@ -1,0 +1,101 @@
+// An app opened from Apps without a pin has no navigation item to return
+// through, so a bar above it names the app and leads back to Apps. The bar
+// sits above the page's coordinates, like top navigation, so every app keeps
+// its own layout.
+#import "dropdown_props"
+#import "geometry"
+#import "layout"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "route_types.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "app_nav_state.zi";
+#import, file "app_launcher_state.zi";
+#import, file "app_modal_state.zi";
+#import, file "launcher_policy.zi";
+#import, file "route_list.zi";
+#import, file "metrics.zi";
+#import, file "locale.zi";
+#import, file "mini_mode.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../platform/environment.zi";
+
+using AppNavRoute;
+
+// The app on screen when Apps opened it and it has no visible pin.
+#program_export
+app_return_bar_route :: (app: *InnerBreeze) -> s32 {
+    if app == null || AppMiniMode() || app.host_feature != 0 || PreviewMode() != 0 ||
+    app.launcher_open {
+        return APP_NAV_ROUTE_NONE
+    }
+    route := app_current_nav_route(app)
+    apps := LauncherRoutes()
+    if !RouteListContains(apps[:], cast(s32)apps.count, route) {
+        return APP_NAV_ROUTE_NONE
+    }
+    visible := app.enabled_apps & CellsInstalledMask()
+    for index: cast(s32)0..app.launcher_favorite_count - 1 {
+        if app.launcher_favorites[index] == route && (app_nav_route_bit(route) & visible) != 0 {
+            return APP_NAV_ROUTE_NONE
+        }
+    }
+    return route
+}
+
+#program_export
+app_return_bar_height :: (app: *InnerBreeze) -> s32 {
+    if app_return_bar_route(app) == APP_NAV_ROUTE_NONE {
+        return 0
+    }
+    return AppTitleBarHeight()
+}
+
+app_return_to_apps :: (app: *InnerBreeze) {
+    app_block_current_click(app)
+    if !app.launcher_open {
+        app_launcher_toggle(app)
+    }
+}
+
+// Back at an unpinned app's first page returns to Apps; inner pages keep
+// their own Back.
+app_return_bar_takes_back :: (app: *InnerBreeze) -> bool {
+    route := app_return_bar_route(app)
+    if route == APP_NAV_ROUTE_NONE {
+        return false
+    }
+    if route == APP_NAV_ROUTE_HABITS {
+        return app.habits.screen_mode != HABITS_SCREEN_HISTORY &&
+            app.habits.screen_mode != HABITS_SCREEN_STATISTICS &&
+            !(app.habits.tab == HABIT_TAB_EDIT && app.habit_edit.active != 0)
+    }
+    if route == APP_NAV_ROUTE_PRACTICE {
+        return app.practice_tab == PRACTICE_TAB_PLAY
+    }
+    return true
+}
+
+#program_export
+app_draw_return_bar :: (app: *InnerBreeze) {
+    route := app_return_bar_route(app)
+    if route == APP_NAV_ROUTE_NONE || app.file_dialog_active != 0 {
+        return
+    }
+    height := app_return_bar_height(app)
+    bar: TitleBarProps
+    bar.key = KeyHash("inbe/return-bar")
+    bar.title = app_nav_route_label(route)
+    bar.height = height
+    bar.bounds = Rectangle.{0.0, -cast(float32)height,
+        cast(float32)app.ui.view_width, cast(float32)height}
+    bar.has_leading_action = app.modal.active == 0
+    bar.leading_label = LocaleText("return_to_apps")
+    options: [1]DropdownOption
+    result := TitleBar(app.ui.session, bar, options[0:0])
+    if result.clicked_leading {
+        app_return_to_apps(app)
+    }
+}
