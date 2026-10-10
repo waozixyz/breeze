@@ -1,4 +1,13 @@
 # Changelog
+## [2.1.27] - 2026-10-10
+### Added
+- End a held breath from the minimized practice window with Breath, or a double tap.
+### Fixed
+- Picture-in-picture opens when you leave for another app or launcher during a practice.
+- Opening the picture-in-picture window returns to the running practice.
+- Lumi distinguishes feedback saved on your device from feedback received by the developer inbox.
+- Keep feedback saved for retry when delivery cannot be confirmed.
+
 ## [2.1.26] - 2026-10-09
 ### Added
 - Detach a running practice into its own resizable desktop window.
