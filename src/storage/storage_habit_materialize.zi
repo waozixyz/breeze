@@ -23,7 +23,7 @@ using HabitSyncMode;
 storage_build_session_habit_counts :: () -> s32 {
     stmt: *void = null
     rc: s32
-    if exec_sql("DROP TABLE IF EXISTS temp.session_habit_counts;CREATE TEMP TABLE session_habit_counts( habit_id TEXT NOT NULL, local_date INTEGER NOT NULL, session_count INTEGER NOT NULL, PRIMARY KEY(habit_id,local_date));") == 0 {
+    if exec_sql("CREATE TEMP TABLE IF NOT EXISTS session_habit_counts( habit_id TEXT NOT NULL, local_date INTEGER NOT NULL, session_count INTEGER NOT NULL, PRIMARY KEY(habit_id,local_date));DELETE FROM temp.session_habit_counts;") == 0 {
         return 0
     }
     sql_mz1: [395] u8
@@ -220,19 +220,22 @@ storage_apply_session_habit_counts :: (changed_at: s64) -> s32 {
 }
 
 storage_snapshot_habit_day_visible_state :: () -> s32 {
-    if exec_sql("DROP TABLE IF EXISTS temp.habit_day_visible_before;CREATE TEMP TABLE habit_day_visible_before( habit_id TEXT NOT NULL, local_date INTEGER NOT NULL, completed INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(habit_id,local_date));INSERT INTO habit_day_visible_before(habit_id,local_date,completed,count) SELECT hd.habit_id,hd.local_date,hd.completed,hd.count FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=(SELECT id FROM users LIMIT 1)") != 0 {
+    if exec_sql("CREATE TEMP TABLE IF NOT EXISTS habit_day_visible_before( habit_id TEXT NOT NULL, local_date INTEGER NOT NULL, completed INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(habit_id,local_date));DELETE FROM temp.habit_day_visible_before;INSERT INTO habit_day_visible_before(habit_id,local_date,completed,count) SELECT hd.habit_id,hd.local_date,hd.completed,hd.count FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=(SELECT id FROM users LIMIT 1)") != 0 {
         return 1
     }
     return 0
 }
 
 storage_enqueue_materialized_habit_day_changes :: () -> s32 {
-    if exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',hd.habit_id,hd.local_date,strftime('%s','now') FROM habit_days hd JOIN habits h ON h.id=hd.habit_id LEFT JOIN habit_day_visible_before b ON b.habit_id=hd.habit_id AND b.local_date=hd.local_date WHERE h.user_id=(SELECT id FROM users LIMIT 1) AND (b.habit_id IS NULL OR b.completed<>hd.completed OR b.count<>hd.count) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at;DROP TABLE IF EXISTS temp.habit_day_visible_before") != 0 {
+    if exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',hd.habit_id,hd.local_date,strftime('%s','now') FROM habit_days hd JOIN habits h ON h.id=hd.habit_id LEFT JOIN habit_day_visible_before b ON b.habit_id=hd.habit_id AND b.local_date=hd.local_date WHERE h.user_id=(SELECT id FROM users LIMIT 1) AND (b.habit_id IS NULL OR b.completed<>hd.completed OR b.count<>hd.count) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at;DELETE FROM temp.habit_day_visible_before") != 0 {
         return 1
     }
     return 0
 }
 
+// The working tables live for the connection and are emptied, never
+// dropped: DROP TABLE fails with "database table is locked" while any other
+// statement on the connection is still reading, which stopped sync.
 #program_export
 storage_materialize_session_habit_days :: () -> s32 {
     changed_at: s64
@@ -249,7 +252,7 @@ storage_materialize_session_habit_days :: () -> s32 {
         return 0
     }
     ok = 0
-    if storage_snapshot_habit_day_visible_state() != 0 && storage_build_session_habit_counts() != 0 && storage_apply_session_habit_counts(changed_at) != 0 && storage_enqueue_materialized_habit_day_changes() != 0 && exec_sql("DROP TABLE IF EXISTS temp.session_habit_counts;") != 0 {
+    if storage_snapshot_habit_day_visible_state() != 0 && storage_build_session_habit_counts() != 0 && storage_apply_session_habit_counts(changed_at) != 0 && storage_enqueue_materialized_habit_day_changes() != 0 && exec_sql("DELETE FROM temp.session_habit_counts;") != 0 {
         ok = 1
     }
     if ok != 0 {
