@@ -61,31 +61,39 @@ for t in needed:
         elif s.startswith('float'): lines += [f'    {v} = HostValue.{{.kind = cast(s32)HostReal, .type_name = ModuleTextData("{s}"), .real = cast(float64)data.{n}}}']
         else: lines += [f'    {v} = ModuleScalar("{s}", ' + (f'ifx data.{n} then 1 else 0)' if s=='bool' else f'cast(s64)data.{n})')]
     lines += ['    return value', '}', '', f'WidgetDecode{t} :: (value: HostValue, codec: *Widget{t}Codec) -> {t} {{', f'    data: {t}']
+    # Fields match by name (value_codec's ModuleFieldAt): a field the other
+    # side lacks keeps its zero value and an unknown one is ignored.
     for i,(n,s) in enumerate(schema[t]):
-        v=f'value.fields[{i}].value'
-        if s in needed: lines += [f'    data.{n} = WidgetDecode{s}({v}, *codec.{n})']
+        v='value.fields[field_at].value'
+        body=[]
+        if s in needed: body += [f'    data.{n} = WidgetDecode{s}({v}, *codec.{n})']
         elif s.startswith('[]'):
             b=s[2:]
-            lines += ['    {', '        index: usize = 0', f'        while index < {v}.length {{',
-                      f'            codec.{n}_decoded[index] = WidgetDecode{b}({v}.elements[index], *codec.{n}_codecs[index])',
-                      '            index += cast(usize)1', '        }', '    }',
-                      f'    // Slice storage is attached by the rendering effect after decoding.']
-        elif s=='string': lines += [f'    data.{n} = TextFromBytes(BytesFromPointer({v}.data, cast(u64){v}.length))']
-        elif s=='bool': lines += [f'    data.{n} = {v}.integer != 0']
-        else: lines += [f'    data.{n} = cast({s}){v}.' + ('real' if s.startswith('float') else 'bits' if s.startswith('u') else 'integer')]
+            body += ['    {', '        index: usize = 0', f'        while index < {v}.length {{',
+                     f'            codec.{n}_decoded[index] = WidgetDecode{b}({v}.elements[index], *codec.{n}_codecs[index])',
+                     '            index += cast(usize)1', '        }', '    }',
+                     f'    // Slice storage is attached by the rendering effect after decoding.']
+        elif s=='string': body += [f'    data.{n} = TextFromBytes(BytesFromPointer({v}.data, cast(u64){v}.length))']
+        elif s=='bool': body += [f'    data.{n} = {v}.integer != 0']
+        else: body += [f'    data.{n} = cast({s}){v}.' + ('real' if s.startswith('float') else 'bits' if s.startswith('u') else 'integer')]
+        lines += ['    {', f'        field_at := ModuleFieldAt(value, {i}, "{n}")', '        if field_at >= 0 {',
+                  *('        ' + line for line in body), '        }', '    }']
     lines += ['    return data', '}', '', f'WidgetValid{t} :: (value: HostValue) -> bool {{',
               f'    if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "{t}" ||',
-              f'    value.field_count != {len(schema[t])} || value.fields == null {{ return false }}']
+              '    value.field_count > cast(usize)MODULE_FIELD_LIMIT ||',
+              '    (value.field_count > cast(usize)0 && value.fields == null) { return false }']
     for i,(n,s) in enumerate(schema[t]):
-        v=f'value.fields[{i}].value'
-        lines += [f'    if TextFromCString(value.fields[{i}].name) != "{n}" {{ return false }}']
-        if s in needed: lines += [f'    if !WidgetValid{s}({v}) {{ return false }}']
+        v='value.fields[field_at].value'
+        body=[]
+        if s in needed: body += [f'    if !WidgetValid{s}({v}) {{ return false }}']
         elif s.startswith('[]'):
-            b=s[2:]; lines += [f'    if {v}.kind != cast(s32)HostSlice || TextFromCString({v}.type_name) != "{s}" ||',
+            b=s[2:]; body += [f'    if {v}.kind != cast(s32)HostSlice || TextFromCString({v}.type_name) != "{s}" ||',
                 f'        {v}.length > cast(usize)1024 || ({v}.length > cast(usize)0 && {v}.elements == null) {{ return false }}',
                 '    {', '        index: usize = 0', f'        while index < {v}.length {{',
                 f'            if !WidgetValid{b}({v}.elements[index]) {{ return false }}',
                 '            index += cast(usize)1', '        }', '    }']
-        else: lines += [f'    if !ModuleScalarValid({v}, "{s}", cast(s32){scalar(s)}) {{ return false }}']
+        else: body += [f'    if !ModuleScalarValid({v}, "{s}", cast(s32){scalar(s)}) {{ return false }}']
+        lines += ['    {', f'        field_at := ModuleFieldAt(value, {i}, "{n}")', '        if field_at >= 0 {',
+                  *('        ' + line for line in body), '        }', '    }']
     lines += ['    return true', '}', '']
 (root / 'src/cells/widget_codec.zi').write_text('\n'.join(lines))

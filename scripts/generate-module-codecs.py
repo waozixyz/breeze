@@ -178,7 +178,10 @@ for t in needed:
         f"    data: {t}",
     ]
     for i, (n, sub) in enumerate(schema[t]):
-        v = f"value.fields[{i}].value"
+        v = "value.fields[field_at].value"
+        # A field the other side lacks keeps its zero value.
+        lines += ["    {", f'        field_at := ModuleFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
+        start = len(lines)
         if sub in needed:
             lines += [f"    data.{n} = Decode{sub}({v})"]
         elif sub.startswith("["):
@@ -214,23 +217,23 @@ for t in needed:
                     else "bits" if sub.startswith("u") else "integer"
                 )
             ]
+        lines[start:] = ["        " + line for line in lines[start:]]
+        lines += ["        }", "    }"]
     lines += ["    return data", "}", ""]
 # Check every borrowed native value before any decoder can dereference it.
 for t in needed:
     lines += [
         f"Valid{t} :: (value: HostValue) -> bool {{",
         f'    if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "{t}" ||',
-        f"    value.field_count != {len(schema[t])} || value.fields == null {{",
+        "    value.field_count > cast(usize)MODULE_FIELD_LIMIT ||",
+        "    (value.field_count > cast(usize)0 && value.fields == null) {",
         "        return false",
         "    }",
     ]
     for i, (n, sub) in enumerate(schema[t]):
-        v = f"value.fields[{i}].value"
-        lines += [
-            f'    if TextFromCString(value.fields[{i}].name) != "{n}" {{',
-            "        return false",
-            "    }",
-        ]
+        v = "value.fields[field_at].value"
+        lines += ["    {", f'        field_at := ModuleFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
+        start = len(lines)
         if sub in needed:
             lines += [f"    if !Valid{sub}({v}) {{", "        return false", "    }"]
         elif sub.startswith("["):
@@ -271,8 +274,31 @@ for t in needed:
                 "        return false",
                 "    }",
             ]
+        lines[start:] = ["        " + line for line in lines[start:]]
+        lines += ["        }", "    }"]
     lines += ["    return true", "}", ""]
 lines += [
+    "// Records match fields by name, so a module and its host may be built",
+    "// against different layouts: a missing field keeps its zero value and an",
+    "// unknown one is ignored. The usual field order is checked first.",
+    "MODULE_FIELD_LIMIT :: 512",
+    "",
+    "ModuleFieldAt :: (value: HostValue, position: s32, name: string) -> s32 {",
+    "    count := cast(s32)value.field_count",
+    "    if position < count && value.fields[position].name != null &&",
+    "    TextFromCString(value.fields[position].name) == name {",
+    "        return position",
+    "    }",
+    "    index: s32 = 0",
+    "    while index < count {",
+    "        if value.fields[index].name != null && TextFromCString(value.fields[index].name) == name {",
+    "            return index",
+    "        }",
+    "        index += 1",
+    "    }",
+    "    return -1",
+    "}",
+    "",
     "ModuleScalarValid :: (value: HostValue, type_name: string, kind: s32) -> bool {",
     "    if value.kind != kind || TextFromCString(value.type_name) != type_name {",
     "        return false",
