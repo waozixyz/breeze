@@ -1,6 +1,8 @@
-"""Scroll archived chat and open Telegram settings on an owned private display."""
+"""Scroll archived chat and open Profile's Telegram page on an owned private display."""
 import ast
 import contextlib
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -80,6 +82,28 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         (OUTPUT / (label + ".txt")).write_text(text)
         return text
 
+    def click_word(window, label, word, region):
+        """Clicks a rendered word whose center lies in region (left, top, right, bottom)."""
+        path = OUTPUT / (label + ".png")
+        command("import", "-window", window, str(path))
+        ocr = OUTPUT / "ocr.png"
+        command("convert", str(path), "-resize", "200%", str(ocr))
+        found = []
+        for row in csv.DictReader(io.StringIO(command("tesseract", str(ocr), "stdout", "-l", "eng", "--psm", "11",
+                                                      "-c", "tessedit_create_tsv=1")), delimiter="\t"):
+            if (row.get("text") or "").strip().lower() != word:
+                continue
+            x = (int(row["left"]) + int(row["width"]) // 2) // 2
+            y = (int(row["top"]) + int(row["height"]) // 2) // 2
+            if region[0] <= x < region[2] and region[1] <= y < region[3]:
+                found.append((x, y))
+        assert len(found) == 1, (label, word, found)
+        command("xdotool", "mousemove", "--window", window, str(found[0][0]), str(found[0][1]))
+        command("xdotool", "mousedown", "1")
+        time.sleep(.15)
+        command("xdotool", "mouseup", "1")
+        time.sleep(.6)
+
     def state(window):
         prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
         return json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
@@ -132,13 +156,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         assert earliest == 1, ("Could not scroll through both older batches", earliest)
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.message.%'").fetchone()[0] == 140
-        action(window, "settings")
-        capture(window, "settings")
-        command("xdotool", "mousemove", "--window", window, "200", "381")
-        command("xdotool", "mousedown", "1")
-        time.sleep(.15)
-        command("xdotool", "mouseup", "1")
-        time.sleep(.5)
+        # Telegram lives in Profile: Apps, Profile, then its Telegram card.
+        click_word(window, "rail", "apps", (0, 0, 88, 720))
+        click_word(window, "apps", "profile", (88, 600, 900, 720))
+        command("xdotool", "mousemove", "--window", window, "450", "400")
+        for _ in range(10):
+            command("xdotool", "click", "5")
+        time.sleep(.6)
+        click_word(window, "profile", "telegram", (88, 60, 900, 720))
         text = capture(window, "telegram")
         normalized = " ".join(text.split())
         assert "Telegram input" in normalized and "Connect your sync account first" in normalized, text
@@ -147,4 +172,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         text = capture(window, "telegram-narrow")
         assert "Connect your sync account first" in " ".join(text.split()), text
     (OUTPUT / "result.json").write_text(json.dumps(dict(passed=True, archived=140, earliest_visible=earliest)) + "\n")
-print("Scrolling to the oldest archived message and Telegram settings passed")
+print("Scrolling to the oldest archived message and Profile's Telegram page passed")
