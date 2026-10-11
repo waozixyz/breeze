@@ -56,7 +56,10 @@ class PackageVersionsTest(unittest.TestCase):
                         versions.validate(self.root)
 
     def test_packages_declare_a_supported_host_interface(self):
-        for candidate in (4, 7, "5", True, None):
+        # Just outside the ledger's range, so the check follows interface bumps.
+        below = self.ledger["oldest_host_api"] - 1
+        above = self.ledger["host_api"] + 1
+        for candidate in (below, above, "5", True, None):
             with self.subTest(host_api=candidate):
                 value = copy.deepcopy(self.ledger)
                 value["apps"]["diary"]["host_api"] = candidate
@@ -69,7 +72,8 @@ class PackageVersionsTest(unittest.TestCase):
         self.assertEqual(versions.validate(self.root), value)
 
     def test_host_interface_range(self):
-        for field, candidate in (("oldest_host_api", 7), ("oldest_host_api", 0),
+        newer = self.ledger["host_api"] + 1
+        for field, candidate in (("oldest_host_api", newer), ("oldest_host_api", 0),
                                  ("oldest_host_api", None), ("host_api", 65536)):
             with self.subTest(field=field, value=candidate):
                 value = copy.deepcopy(self.ledger)
