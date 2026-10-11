@@ -11,7 +11,7 @@ export YUE_DESKTOP_RECOVERY=0
 mkdir -p "$work/generated"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
+    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "qrcode=$root/build/packages/qrcode/src" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \

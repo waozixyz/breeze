@@ -12,7 +12,7 @@ export YUE_DESKTOP_RECOVERY=0
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "kryon=$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
+    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "qrcode=$root/build/packages/qrcode/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" --entry telegram_account_flow_behavior:Check \
     -o "$work/generated" "$root/tests/telegram_account_flow_behavior.zi" \
