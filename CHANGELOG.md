@@ -1,4 +1,8 @@
 # Changelog
+## [2.1.31] - 2026-10-11
+### Fixed
+- Android: after the floating practice window, the app fits the screen again instead of running under the status bar and navigation and losing its sides.
+
 ## [2.1.30] - 2026-10-11
 ### Fixed
 - Long menus, such as the colour theme, scroll by touch and open at your choice.
