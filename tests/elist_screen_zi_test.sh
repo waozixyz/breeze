@@ -7,13 +7,13 @@ work=$root/build/elist-screen-zi-test
 mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     "$root/src/screens/elist_screen.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
@@ -34,6 +34,7 @@ mkdir -p "$work/c"
     "$work/c/asset_paths.c" "$work/c/assets.c" \
     "$work/c/sun_salutation_inventory.c" \
     "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
+    "$work/c/hosted_values.c" "$work/c/widget_host.c" \
     "$root/build/ziran-toolchain/libziran.a" -lm \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"

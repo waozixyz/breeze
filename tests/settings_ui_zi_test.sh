@@ -8,13 +8,13 @@ work=$(mktemp -d "$root/build/settings-ui-zi-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/c"
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_ui.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
@@ -29,13 +29,13 @@ done
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 mkdir -p "$work/device"
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_device.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
@@ -46,13 +46,13 @@ mkdir -p "$work/device"
     -o "$work/device/settings_device.o"
 mkdir -p "$work/breaks"
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_breaks.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
@@ -63,13 +63,13 @@ mkdir -p "$work/breaks"
     -o "$work/breaks/settings_breaks.o"
 mkdir -p "$work/notifications"
 "$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_notifications.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \

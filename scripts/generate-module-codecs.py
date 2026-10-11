@@ -55,6 +55,7 @@ lines = [
     ],
     '#import "bundle_host"',
     '#import "byte_text_linux"',
+    '#import "hosted_values"',
     '#import "drawing_props"',
     '#import, file "../core/types.zi";',
     '#import, file "../practices/patterns/patterns_types.zi";',
@@ -139,13 +140,13 @@ for t in needed:
                     f"            {row}.elements = *codec.{n}_elements[i][0]",
                     "            j: s32 = 0",
                     f"            while j < {ds[1]} {{",
-                    f'                codec.{n}_elements[i][j] = ModuleScalar("{base}", cast(s64)data.{n}[i][j])',
+                    f'                codec.{n}_elements[i][j] = HostScalar("{base}", cast(s64)data.{n}[i][j])',
                     "                j += 1",
                     "            }",
                 ]
             else:
                 lines += [
-                    f'            codec.{n}_elements[i] = ModuleScalar("{base}", cast(s64)data.{n}[i])'
+                    f'            codec.{n}_elements[i] = HostScalar("{base}", cast(s64)data.{n}[i])'
                 ]
             lines += ["            i += 1", "        }", "    }"]
         elif sub == "string":
@@ -163,7 +164,7 @@ for t in needed:
             ]
         else:
             lines += [
-                f'    {target} = ModuleScalar("{sub}", '
+                f'    {target} = HostScalar("{sub}", '
                 + (
                     f"ifx data.{n} then 1 else 0)"
                     if sub == "bool"
@@ -180,7 +181,7 @@ for t in needed:
     for i, (n, sub) in enumerate(schema[t]):
         v = "value.fields[field_at].value"
         # A field the other side lacks keeps its zero value.
-        lines += ["    {", f'        field_at := ModuleFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
+        lines += ["    {", f'        field_at := HostFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
         start = len(lines)
         if sub in needed:
             lines += [f"    data.{n} = Decode{sub}({v})"]
@@ -225,14 +226,14 @@ for t in needed:
     lines += [
         f"Valid{t} :: (value: HostValue) -> bool {{",
         f'    if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "{t}" ||',
-        "    value.field_count > cast(usize)MODULE_FIELD_LIMIT ||",
+        "    value.field_count > cast(usize)HOST_FIELD_LIMIT ||",
         "    (value.field_count > cast(usize)0 && value.fields == null) {",
         "        return false",
         "    }",
     ]
     for i, (n, sub) in enumerate(schema[t]):
         v = "value.fields[field_at].value"
-        lines += ["    {", f'        field_at := ModuleFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
+        lines += ["    {", f'        field_at := HostFieldAt(value, {i}, "{n}")', "        if field_at >= 0 {"]
         start = len(lines)
         if sub in needed:
             lines += [f"    if !Valid{sub}({v}) {{", "        return false", "    }"]
@@ -241,7 +242,7 @@ for t in needed:
             base = re.sub(r"\[[^]]+\]", "", sub)
             canonical = "".join(f"[{d}]" for d in ds) + base
             lines += [
-                f'    if !ModuleArrayValid({v}, "{canonical}", {ds[0]}) {{',
+                f'    if !HostArrayValid({v}, "{canonical}", {ds[0]}) {{',
                 "        return false",
                 "    }",
                 "    {",
@@ -250,12 +251,12 @@ for t in needed:
             ]
             if len(ds) > 1:
                 lines += [
-                    f'            if !ModuleArrayValid({v}.elements[i], "[{ds[1]}]{base}", {ds[1]}) {{',
+                    f'            if !HostArrayValid({v}.elements[i], "[{ds[1]}]{base}", {ds[1]}) {{',
                     "                return false",
                     "            }",
                     "            j: s32 = 0",
                     f"            while j < {ds[1]} {{",
-                    f'                if !ModuleScalarValid({v}.elements[i].elements[j], "{base}", cast(s32){scalar(base)}) {{',
+                    f'                if !HostScalarValid({v}.elements[i].elements[j], "{base}", cast(s32){scalar(base)}) {{',
                     "                    return false",
                     "                }",
                     "                j += 1",
@@ -263,76 +264,20 @@ for t in needed:
                 ]
             else:
                 lines += [
-                    f'            if !ModuleScalarValid({v}.elements[i], "{base}", cast(s32){scalar(base)}) {{',
+                    f'            if !HostScalarValid({v}.elements[i], "{base}", cast(s32){scalar(base)}) {{',
                     "                return false",
                     "            }",
                 ]
             lines += ["            i += 1", "        }", "    }"]
         else:
             lines += [
-                f'    if !ModuleScalarValid({v}, "{sub}", cast(s32){scalar(sub)}) {{',
+                f'    if !HostScalarValid({v}, "{sub}", cast(s32){scalar(sub)}) {{',
                 "        return false",
                 "    }",
             ]
         lines[start:] = ["        " + line for line in lines[start:]]
         lines += ["        }", "    }"]
     lines += ["    return true", "}", ""]
-lines += [
-    "// Records match fields by name, so a module and its host may be built",
-    "// against different layouts: a missing field keeps its zero value and an",
-    "// unknown one is ignored. The usual field order is checked first.",
-    "MODULE_FIELD_LIMIT :: 512",
-    "",
-    "ModuleFieldAt :: (value: HostValue, position: s32, name: string) -> s32 {",
-    "    count := cast(s32)value.field_count",
-    "    if position < count && value.fields[position].name != null &&",
-    "    TextFromCString(value.fields[position].name) == name {",
-    "        return position",
-    "    }",
-    "    index: s32 = 0",
-    "    while index < count {",
-    "        if value.fields[index].name != null && TextFromCString(value.fields[index].name) == name {",
-    "            return index",
-    "        }",
-    "        index += 1",
-    "    }",
-    "    return -1",
-    "}",
-    "",
-    "ModuleScalarValid :: (value: HostValue, type_name: string, kind: s32) -> bool {",
-    "    if value.kind != kind || TextFromCString(value.type_name) != type_name {",
-    "        return false",
-    "    }",
-    "    if kind == cast(s32)HostString {",
-    "        return value.length == 0 || value.data != null",
-    "    }",
-    "    return true",
-    "}",
-    "",
-    "ModuleArrayValid :: (value: HostValue, type_name: string, count: usize) -> bool {",
-    "    return value.kind == cast(s32)HostArray && TextFromCString(value.type_name) == type_name &&",
-    "        value.length == count && value.elements != null",
-    "}",
-    "",
-]
-lines += [
-    "ModuleScalar :: (type_name: string, number: s64) -> HostValue {",
-    "    value: HostValue",
-    "    value.type_name = type_name.data",
-    "    value.integer = number",
-    "    value.bits = cast(u64)number",
-    "    value.kind = ifx type_name[0] == cast(u8)117 then cast(s32)HostUnsigned else cast(s32)HostInteger",
-    "    return value",
-    "}",
-    "",
-]
-lines += [
-    "ModuleTextData :: (text: string) -> *u8 {",
-    "    descriptor := cast(*TextDescriptor)(*text)",
-    "    return descriptor.data",
-    "}",
-    "",
-]
 source = "\n".join(lines)
-source = re.sub(r'("[^"\n]+"|data\.\w+|type_name)\.data', r"ModuleTextData(\1)", source)
+source = re.sub(r'("[^"\n]+"|data\.\w+|type_name)\.data', r"HostTextData(\1)", source)
 (root / "src/cells/value_codec.zi").write_text(source)

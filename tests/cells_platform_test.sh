@@ -14,7 +14,7 @@ if [ "$target" = android ]; then
     set -- --define ANDROID_BUILD --define __arm__
 fi
 "$ziran" build --target=c --no-main "$@" --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
+    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$source/std" -o "$generated" \
     "$root/tests/cells_platform_probe.zi"
 if [ "$target" = android ]; then

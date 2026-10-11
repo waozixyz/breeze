@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-ABI_NAMES = '''    value.type_name = ModuleTextData("BreathSession")
+ABI_NAMES = '''    value.type_name = HostTextData("BreathSession")
     if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "BreathSession" ||
 '''
 
