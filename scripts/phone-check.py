@@ -30,8 +30,8 @@ WIM_HOF = 0
 SOURCE_PATHS = ("src", "droid", "apps", "assets", "locales", "themes", "fonts",
                 "Makefile", "ziran.toml", "ziran.lock", "CHANGELOG.md", "scripts", "packaging")
 # The breathing circle animates for the whole measured window, so the app
-# must keep the display's rate with only occasional late frames.
-MINIMUM_FPS = 55.0
+# must keep the display's refresh rate with only occasional late frames.
+MINIMUM_REFRESH_SHARE = 0.94
 MAXIMUM_LATE_PERCENT = 3.0
 MAXIMUM_FRAME_MS = 250.0
 PENDING = 9223372036854775807
@@ -64,9 +64,10 @@ class Phone:
         return self.adb("shell", *argv, **kwargs).decode(errors="replace")
 
     def focused(self, package):
+        # Launcher aliases name the window too, so any activity of the app counts.
         windows = self.shell("dumpsys", "window", "windows")
         line = next((line for line in windows.splitlines() if "mCurrentFocus=" in line), "")
-        if f"{package}/{ACTIVITY}" not in line:
+        if f" {package}/" not in line:
             raise ValueError("Inner Breeze does not own the foreground window: " + line.strip())
 
     def screenshot(self, package, path):
@@ -108,10 +109,24 @@ def source_state():
     return commit, dirty, version
 
 
+def layout_shift(before, after):
+    """Mean pixel difference of the practice header, which does not animate."""
+    from PIL import Image, ImageChops, ImageStat
+
+    with Image.open(before) as first, Image.open(after) as second:
+        if first.size != second.size:
+            return 255.0
+        width, height = first.size
+        box = (0, height * 4 // 100, width, height * 12 // 100)
+        difference = ImageChops.difference(first.convert("RGB").crop(box), second.convert("RGB").crop(box))
+        return round(sum(ImageStat.Stat(difference).mean) / 3, 1)
+
+
 def frame_timing(phone, package, seconds):
     """Collect every presented frame of the app's window for the session."""
+    # Android 9 names layers "<id> package/activity#N"; tokens are not layers.
     layers = [line.strip() for line in phone.shell("dumpsys", "SurfaceFlinger", "--list").splitlines()
-              if line.strip().startswith(f"{package}/{ACTIVITY}")]
+              if f" {package}/" in " " + line.strip() and "Token{" not in line]
     if not layers:
         raise ValueError("Inner Breeze has no window layer")
     presented = {}
@@ -149,7 +164,8 @@ def frame_timing(phone, package, seconds):
 
 
 def smooth(timing):
-    return (timing["fps"] >= MINIMUM_FPS and timing["late_percent"] <= MAXIMUM_LATE_PERCENT and
+    return (timing["refresh_hz"] >= 30 and timing["fps"] >= timing["refresh_hz"] * MINIMUM_REFRESH_SHARE and
+            timing["late_percent"] <= MAXIMUM_LATE_PERCENT and
             timing["worst_frame_ms"] <= MAXIMUM_FRAME_MS)
 
 
@@ -197,6 +213,9 @@ def check(phone, apk, seconds, evidence):
     if phone.pid(package) != pid:
         raise ValueError("Inner Breeze restarted when it returned from the background")
     phone.screenshot(package, evidence / "resume.png")
+    # Leaving during a practice may pass through the floating window; the
+    # practice must come back with the layout it had.
+    timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
     model = phone.shell("getprop", "ro.product.model").strip()
     android = phone.shell("getprop", "ro.build.version.release").strip()
     return identity, timing, dict(model=model, android=android)
@@ -205,8 +224,8 @@ def check(phone, apk, seconds, evidence):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=Path)
-    parser.add_argument("--host", default=os.environ.get("INBE_PHONE_HOST", "wao@thinkpad.local"),
-                        help="SSH host that runs adb, or 'local'")
+    parser.add_argument("--host", default=os.environ.get("INBE_PHONE_HOST", "auto"),
+                        help="SSH host that runs adb, 'local', or 'auto' (this machine, then the ThinkPad)")
     parser.add_argument("--serial", default=os.environ.get("INBE_PHONE_SERIAL", "ZE2223BQZT"))
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--record", action="store_true",
@@ -221,14 +240,18 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence = ROOT / "backup/phone-checks" / f"{version}-{stamp}"
     evidence.mkdir(parents=True, exist_ok=True)
-    identity, timing, device = check(Phone(args.host, args.serial), apk, args.seconds, evidence)
+    host = args.host
+    if host == "auto":
+        attached = subprocess.run(["adb", "devices"], capture_output=True, text=True).stdout
+        host = "local" if re.search(rf"^{re.escape(args.serial)}\s+device$", attached, re.M) else "wao@thinkpad.local"
+    identity, timing, device = check(Phone(host, args.serial), apk, args.seconds, evidence)
     if identity["version_name"] != version:
         raise SystemExit(f"the APK is {identity['version_name']}, but the source is {version}")
     passed = smooth(timing)
     receipt = dict(schema=1, version=version, source_commit=commit,
                    apk=dict(sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), **identity),
                    device=device, practice=dict(name="Wim Hof", **timing),
-                   limits=dict(minimum_fps=MINIMUM_FPS, maximum_late_percent=MAXIMUM_LATE_PERCENT,
+                   limits=dict(minimum_refresh_share=MINIMUM_REFRESH_SHARE, maximum_late_percent=MAXIMUM_LATE_PERCENT,
                                maximum_frame_ms=MAXIMUM_FRAME_MS),
                    checks=["installed over the existing app", "launch", "Wim Hof frame timing",
                            "background and resume"],
@@ -239,6 +262,9 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(receipt, indent=2) + "\n")
         print(f"Recorded {target.relative_to(ROOT)}; commit it with the release.")
+    if timing["resume_layout_shift"] > 2:
+        print(f"WARNING: the practice layout changed after resuming (difference {timing['resume_layout_shift']}); "
+              f"compare practice-end.png and resume.png in {evidence.relative_to(ROOT)}")
     print(f"{device['model']} (Android {device['android']}): {timing['fps']} fps over {timing['seconds']} s, "
           f"{timing['late_percent']}% late frames, worst {timing['worst_frame_ms']} ms -> "
           f"{'smooth' if passed else 'NOT smooth'}; evidence in {evidence.relative_to(ROOT)}")
