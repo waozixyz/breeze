@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.26] - 2026-10-10
+
+- Bring Diary's title bar, undo and redo, and spelling correction, and Lumi's typing dots.
+- Requires Inner Breeze 2.1.29 or later.
+
 ## [2.1.25] - 2026-10-10
 
 - Open Leaderboard as its own app.
