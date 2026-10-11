@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.8] - 2026-10-10
+
+### Added
+- Correct the spelling of an entry with one button. Inner Breeze sends the entry to the Waozi node, which returns it with only misspelled words corrected. It uses the same daily online allowance as Lumi.
+- Undo and redo buttons, so a correction or any other change can be taken back.
+
+### Changed
+- A title bar shows the date in the middle, between the previous and next day. Today, the calendar, the time and photos are now compact buttons above the entry, leaving more room for writing.
+
 ## [1.1.7] - 2026-10-10
 
 ### Changed

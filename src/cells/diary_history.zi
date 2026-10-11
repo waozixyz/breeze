@@ -1,0 +1,169 @@
+// Undo and redo for the Diary entry on screen. The host keeps copies of the
+// entry's text because the Diary package's values last only one run. Typing
+// within a moment is one step; a spelling correction, an undo and a redo are
+// steps of their own.
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+DIARY_HISTORY_DEPTH :: 64
+// Typing joins the open step until it pauses this long or the step is this
+// old, in seconds.
+DIARY_HISTORY_PAUSE :: 1.0
+DIARY_HISTORY_SPAN :: 5.0
+
+DiaryHistory :: struct {
+    year: s32
+    month: s32
+    day: s32
+    // Owned copies, freed by DiaryHistoryFree.
+    current: string
+    undo: [DIARY_HISTORY_DEPTH]string
+    undo_count: s32
+    redo: [DIARY_HISTORY_DEPTH]string
+    redo_count: s32
+    typing: bool
+    typed_at: float64
+    step_started: float64
+}
+
+// A replacement of text[start:end], as the Diary package applies edits.
+DiaryEdit :: struct {
+    start: s32
+    end: s32
+    replacement: string
+}
+
+c :: #system_library "c";
+DiaryHistoryFreeBytes :: (bytes: *u8) #foreign c "free";
+
+DiaryHistoryCopy :: (text: string) -> string {
+    copy: Vec(u8)
+    BuilderPrint(*copy, "%", text)
+    return BuilderFinish(copy)
+}
+
+DiaryHistoryFree :: (value: string) {
+    if value.count == 0 {
+        return
+    }
+    bytes := cast(*TextDescriptor)(*value)
+    DiaryHistoryFreeBytes(bytes.data)
+}
+
+DiaryHistoryPush :: (steps: []string, count: *s32, snapshot: string) {
+    if count.* == cast(s32)steps.count {
+        // The oldest step makes room for the newest.
+        DiaryHistoryFree(steps[0])
+        for index: cast(s32)1..count.* - 1 {
+            steps[index - 1] = steps[index]
+        }
+        count.* -= 1
+    }
+    steps[count.*] = snapshot
+    count.* += 1
+}
+
+DiaryHistoryDropRedo :: (history: *DiaryHistory) {
+    for index: cast(s32)0..history.redo_count - 1 {
+        DiaryHistoryFree(history.redo[index])
+        history.redo[index] = ""
+    }
+    history.redo_count = 0
+}
+
+DiaryHistoryClear :: (history: *DiaryHistory) {
+    DiaryHistoryFree(history.current)
+    for index: cast(s32)0..history.undo_count - 1 {
+        DiaryHistoryFree(history.undo[index])
+    }
+    DiaryHistoryDropRedo(history)
+    history.* = DiaryHistory.{}
+}
+
+// Records the entry as it is after a frame. Another day starts a new
+// history. typing is false for a change that must be its own step.
+DiaryHistoryObserve :: (history: *DiaryHistory, year: s32, month: s32, day: s32,
+    text: string, now: float64, typing: bool) {
+    if history.year != year || history.month != month || history.day != day {
+        DiaryHistoryClear(history)
+        history.year = year
+        history.month = month
+        history.day = day
+        history.current = DiaryHistoryCopy(text)
+        return
+    }
+    if history.current == text {
+        return
+    }
+    joins := typing && history.typing &&
+    now - history.typed_at < DIARY_HISTORY_PAUSE &&
+    now - history.step_started < DIARY_HISTORY_SPAN
+    if joins {
+        DiaryHistoryFree(history.current)
+    } else {
+        DiaryHistoryPush(history.undo[:], *history.undo_count, history.current)
+        history.step_started = now
+    }
+    DiaryHistoryDropRedo(history)
+    history.current = DiaryHistoryCopy(text)
+    history.typing = typing
+    history.typed_at = now
+}
+
+// Moves back one step. The history's current text becomes the text the host
+// then shows; false means there is nothing to undo.
+DiaryHistoryUndo :: (history: *DiaryHistory) -> bool {
+    if history.undo_count == 0 {
+        return false
+    }
+    history.undo_count -= 1
+    DiaryHistoryPush(history.redo[:], *history.redo_count, history.current)
+    history.current = history.undo[history.undo_count]
+    history.undo[history.undo_count] = ""
+    history.typing = false
+    return true
+}
+
+DiaryHistoryRedo :: (history: *DiaryHistory) -> bool {
+    if history.redo_count == 0 {
+        return false
+    }
+    history.redo_count -= 1
+    DiaryHistoryPush(history.undo[:], *history.undo_count, history.current)
+    history.current = history.redo[history.redo_count]
+    history.redo[history.redo_count] = ""
+    history.typing = false
+    return true
+}
+
+DiaryContinuationByte :: (byte: u8) -> bool {
+    return (byte & cast(u8)192) == cast(u8)128
+}
+
+// The smallest replacement that turns from into to, on whole UTF-8
+// characters, so the caret lands just after the changed text.
+DiaryHistoryEdit :: (from: string, to: string) -> DiaryEdit {
+    shorter := ifx from.count < to.count then from.count else to.count
+    prefix: s64 = 0
+    while prefix < shorter && from[prefix] == to[prefix] {
+        prefix += 1
+    }
+    while prefix > 0 &&
+    ((prefix < from.count && DiaryContinuationByte(from[prefix])) ||
+        (prefix < to.count && DiaryContinuationByte(to[prefix]))) {
+        prefix -= 1
+    }
+    suffix: s64 = 0
+    while suffix < from.count - prefix && suffix < to.count - prefix &&
+    from[from.count - 1 - suffix] == to[to.count - 1 - suffix] {
+        suffix += 1
+    }
+    // The shared ending is the same bytes in both texts, so one check keeps
+    // it on a character boundary in each.
+    while suffix > 0 && DiaryContinuationByte(from[from.count - suffix]) {
+        suffix -= 1
+    }
+    return DiaryEdit.{.start = cast(s32)prefix, .end = cast(s32)(from.count - suffix),
+        .replacement = to[prefix:to.count - suffix]}
+}

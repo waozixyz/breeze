@@ -1,0 +1,92 @@
+#import, file "../src/cells/diary_history.zi";
+
+Applied :: (from: string, edit: DiaryEdit) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", from[:edit.start])
+    BuilderPrint(*out, "%", edit.replacement)
+    BuilderPrint(*out, "%", from[edit.end:])
+    return BuilderFinish(out)
+}
+
+EditRoundTrips :: (from: string, to: string) -> bool {
+    edit := DiaryHistoryEdit(from, to)
+    if edit.start < 0 || edit.end < edit.start || edit.end > cast(s32)from.count {
+        return false
+    }
+    applied := Applied(from, edit)
+    defer { DiaryHistoryFree(applied) }
+    return applied == to
+}
+
+#program_export
+Answer :: () -> s32 {
+    history: DiaryHistory
+    DiaryHistoryObserve(*history, 2026, 10, 10, "", 0.0, true)
+    if DiaryHistoryUndo(*history) { return 1 }
+
+    // Typing within a moment is one step, a pause starts the next.
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I", 1.0, true)
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I w", 1.4, true)
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I wnet", 1.8, true)
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I wnet home", 3.5, true)
+    if history.undo_count != 2 { return 2 }
+    // A spelling correction is its own step even during typing.
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I went home", 3.6, false)
+    if history.undo_count != 3 { return 3 }
+
+    if !DiaryHistoryUndo(*history) || history.current != "I wnet home" { return 4 }
+    if !DiaryHistoryUndo(*history) || history.current != "I wnet" { return 5 }
+    if !DiaryHistoryRedo(*history) || history.current != "I wnet home" { return 6 }
+    if !DiaryHistoryRedo(*history) || history.current != "I went home" { return 7 }
+    if DiaryHistoryRedo(*history) { return 8 }
+    // Showing the undone text is not a new step.
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I went home", 4.0, true)
+    if history.undo_count != 3 { return 9 }
+
+    // A new edit after an undo forgets the redo steps.
+    if !DiaryHistoryUndo(*history) { return 10 }
+    DiaryHistoryObserve(*history, 2026, 10, 10, "I wnet home!", 6.0, true)
+    if history.redo_count != 0 || history.undo_count != 3 { return 11 }
+
+    // Long uninterrupted typing still splits into steps.
+    for index: cast(s32)1..12 {
+        builder: Vec(u8)
+        BuilderPrint(*builder, "typing %", index)
+        text := BuilderFinish(builder)
+        DiaryHistoryObserve(*history, 2026, 10, 10, text, 10.0 + cast(float64)index * 0.5, true)
+        DiaryHistoryFree(text)
+    }
+    if history.undo_count != 5 { return 12 }
+
+    // The oldest steps give way at the depth limit.
+    for index: cast(s32)1..DIARY_HISTORY_DEPTH + 10 {
+        builder: Vec(u8)
+        BuilderPrint(*builder, "step %", index)
+        text := BuilderFinish(builder)
+        DiaryHistoryObserve(*history, 2026, 10, 10, text, 100.0 + cast(float64)index, false)
+        DiaryHistoryFree(text)
+    }
+    if history.undo_count != DIARY_HISTORY_DEPTH { return 13 }
+    if !DiaryHistoryUndo(*history) || history.current != "step 73" { return 14 }
+
+    // Another day starts empty.
+    DiaryHistoryObserve(*history, 2026, 10, 9, "Yesterday", 200.0, true)
+    if history.undo_count != 0 || history.redo_count != 0 ||
+    history.current != "Yesterday" { return 15 }
+
+    if !EditRoundTrips("I wnet home", "I went home") { return 16 }
+    edit := DiaryHistoryEdit("I wnet home", "I went home")
+    if edit.start != 3 || edit.end != 5 || edit.replacement != "en" { return 17 }
+    if !EditRoundTrips("", "Hello") || !EditRoundTrips("Hello", "") { return 18 }
+    if !EditRoundTrips("aaa", "aaaa") || !EditRoundTrips("abcabc", "abc") { return 19 }
+    // Characters that share leading bytes are replaced whole.
+    if !EditRoundTrips("Café ok", "Cafè ok") { return 20 }
+    accent := DiaryHistoryEdit("Café ok", "Cafè ok")
+    if accent.start != 3 || accent.end != 5 { return 21 }
+    if !EditRoundTrips("über 日本", "uber 日本語") || !EditRoundTrips("日本", "日木") { return 22 }
+    kanji := DiaryHistoryEdit("日本", "日木")
+    if kanji.start != 3 || kanji.end != 6 { return 23 }
+
+    DiaryHistoryClear(*history)
+    return 42
+}

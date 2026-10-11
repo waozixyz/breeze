@@ -1,0 +1,114 @@
+// Diary spelling uses the Waozi node's GLM service: the same signed account
+// requests and daily allowance as Lumi's online chat. The entry goes only to
+// that node, which returns it with misspelled words corrected.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "auth"
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../platform/network_transport.zi";
+
+// The node corrects at most this many bytes at once.
+DIARY_SPELLING_LIMIT :: 8192
+
+diary_spelling_operation: StoredOperation;
+diary_spelling_session: Session;
+diary_spelling_transfer: NetworkTransfer;
+diary_spelling_response: [65536]u8;
+// A correction may grow a little; the node refuses anything larger.
+diary_spelling_text: [2 * DIARY_SPELLING_LIMIT + 512]u8;
+
+DiarySpellingResult :: struct {
+    finished: bool
+    // Valid until the next check starts.
+    text: string
+    // A locale key when the check did not return a correction.
+    notice: string
+}
+
+DiarySpellingWaiting :: () -> bool {
+    return diary_spelling_operation.active
+}
+
+DiarySpellingJson :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte == cast(u8)10 {
+            BuilderPrint(out, "\\n")
+        } else if byte == cast(u8)13 {
+            BuilderPrint(out, "\\r")
+        } else if byte == cast(u8)9 {
+            BuilderPrint(out, "\\t")
+        } else if byte >= cast(u8)32 {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+// Returns "" once the check is on its way, or the locale key saying why it
+// cannot start.
+DiarySpellingStart :: (text: string) -> string {
+    if diary_spelling_operation.active {
+        return ""
+    }
+    if storage_has_sync_account() == 0 || StoredAccountMode() == AccountModeDelegate {
+        return "diary_spelling_account"
+    }
+    if text.count > DIARY_SPELLING_LIMIT {
+        return "diary_spelling_too_long"
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"text\":")
+    DiarySpellingJson(*out, text)
+    BuilderPrint(*out, "}")
+    body := BuilderFinish(out)
+    defer { PackageFree(body) }
+    diary_spelling_response = .{}
+    if !BeginStoredRequest(*diary_spelling_operation, "https://api.waozi.xyz",
+        NetworkTransport(*diary_spelling_transfer), "POST", "/api/v1/chat/spelling",
+        body, diary_spelling_response[:], false, *diary_spelling_session) {
+        return "diary_spelling_error"
+    }
+    return ""
+}
+
+DiarySpellingPoll :: () -> DiarySpellingResult {
+    result: DiarySpellingResult
+    if !diary_spelling_operation.active {
+        return result
+    }
+    if !PollStoredOperation(*diary_spelling_operation) {
+        return result
+    }
+    result.finished = true
+    diary_spelling_session = diary_spelling_operation.session
+    if diary_spelling_operation.result != cast(s32)AuthResult.AUTH_OK {
+        result.notice = "diary_spelling_error"
+        if diary_spelling_operation.request.status == 429 {
+            result.notice = "diary_spelling_limit"
+        }
+        return result
+    }
+    document := TextUntilNul(diary_spelling_response[:])
+    count := ReadStringText(document, FieldAt(document, 0, "text"), diary_spelling_text[:])
+    if count <= 0 || count >= cast(s32)diary_spelling_text.count {
+        result.notice = "diary_spelling_error"
+        return result
+    }
+    result.text = TextFromBytes(diary_spelling_text[:count])
+    return result
+}
+
+DiarySpellingCancel :: () {
+    CancelStoredOperation(*diary_spelling_operation)
+}

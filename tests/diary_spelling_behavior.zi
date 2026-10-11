@@ -1,0 +1,154 @@
+// Real account storage and signed requests; only the HTTP transport is synthetic.
+#import, file "../src/cells/diary_spelling.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/sync_crypto_random.zi";
+#import, file "../src/storage/sync_crypto.zi";
+#import, file "../src/storage/sync_account_crypto.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "storage_test_support.zi";
+#import "async_client"
+#import "net_http"
+#import "text_buffer"
+#import "wire"
+#import "transaction"
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+TestNow :: (out: *s64) -> s64 #foreign c "time";
+
+owner: SyncAccount;
+spelling_status: s32 = 200;
+spelling_response: string = "{\"text\":\"I went home.\",\"remaining\":4}";
+spelling_requests: s32;
+spelling_body: [32768]u8;
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    challenge_url := "https://api.waozi.xyz/api/v1/sync/challenge?user_id="
+    if request.url.count == challenge_url.count + 64 && request.url[:challenge_url.count] == challenge_url {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/sync/login" {
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-spelling-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, TestNow(null))
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/account/devices" {
+        return AppCopyText("true", output)
+    }
+    check_true("only the spelling request reaches the node", request.method == "POST" &&
+        request.url == "https://api.waozi.xyz/api/v1/chat/spelling")
+    spelling_requests += 1
+    unused AppCopyText(request.body, spelling_body[:])
+    return AppCopyText(spelling_response, output)
+}
+
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = ifx diary_spelling_operation.request.stage == 3 then spelling_status else 200
+    return 1
+}
+
+FakeCancel :: (context: *void) {
+    unused context
+}
+
+#program_export
+SpellingTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{null, FakeStart, FakePoll, FakeCancel}
+}
+
+Finish :: () -> DiarySpellingResult {
+    for step: cast(s32)0..39 {
+        result := DiarySpellingPoll()
+        if result.finished {
+            return result
+        }
+    }
+    check_true("spelling check finishes", false)
+    return DiarySpellingResult.{}
+}
+
+#program_export
+Check :: () -> s32 {
+    transport := SpellingTestTransport()
+    check_true("fixture transport available", transport.start != null)
+    guard := support_begin("/tmp/inbe-diary-spelling-test/")
+    if guard != 0 {
+        return guard
+    }
+    root := "/tmp/inbe-diary-spelling-test/data"
+    check_true("fixture database initialized", storage_init(root) != 0)
+    check_true("no account explains itself", DiarySpellingStart("I wnet home.") == "diary_spelling_account")
+    check_int("no account sends nothing", spelling_requests, 0)
+
+    check_true("owner created", CreateSyncAccount(*owner) != 0)
+    check_true("owner saved", sync_account_save(*owner,
+        cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
+        cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+
+    long_entry: Vec(u8)
+    for index: cast(s32)0..DIARY_SPELLING_LIMIT {
+        BuilderPrint(*long_entry, "a")
+    }
+    too_long := BuilderFinish(long_entry)
+    defer { PackageFree(too_long) }
+    check_true("an entry over the node's limit is not sent",
+        DiarySpellingStart(too_long) == "diary_spelling_too_long")
+    check_int("a long entry sends nothing", spelling_requests, 0)
+
+    check_true("a signed-in check starts", DiarySpellingStart("I wnet \"home\".\n\tBye\\") == "")
+    check_true("the check waits for the node", DiarySpellingWaiting())
+    result := Finish()
+    check_true("the corrected entry returns", result.notice == "" && result.text == "I went home.")
+    check_int("one request per check", spelling_requests, 1)
+    check_true("the entry is sent as escaped JSON",
+        TextUntilNul(spelling_body[:]) == "{\"text\":\"I wnet \\\"home\\\".\\n\\tBye\\\\\"}")
+    check_true("the finished check no longer waits", !DiarySpellingWaiting())
+
+    spelling_response = "{\"text\":\"Caf\\u00e9 \\u00fcber \\u65e5\\u672c\\n**12:30**\",\"remaining\":3}"
+    check_true("a second check starts", DiarySpellingStart("Cafe uber 日本\n**12:30**") == "")
+    result = Finish()
+    check_true("escaped characters decode", result.notice == "" && result.text == "Café über 日本\n**12:30**")
+
+    spelling_status = 429
+    spelling_response = "{\"error\":\"daily chat allowance reached\"}"
+    check_true("a limited check starts", DiarySpellingStart("I wnet home.") == "")
+    result = Finish()
+    check_true("the daily limit is explained", result.notice == "diary_spelling_limit" && result.text == "")
+
+    spelling_status = 503
+    spelling_response = "{\"error\":\"online chat unavailable\"}"
+    check_true("an unavailable check starts", DiarySpellingStart("I wnet home.") == "")
+    result = Finish()
+    check_true("an unavailable node is reported", result.notice == "diary_spelling_error" && result.text == "")
+
+    spelling_status = 200
+    spelling_response = "{\"remaining\":2}"
+    check_true("a malformed check starts", DiarySpellingStart("I wnet home.") == "")
+    result = Finish()
+    check_true("an answer without text is an error", result.notice == "diary_spelling_error" && result.text == "")
+
+    spelling_response = "{\"text\":\"\",\"remaining\":1}"
+    check_true("an empty-answer check starts", DiarySpellingStart("I wnet home.") == "")
+    result = Finish()
+    check_true("an empty correction is an error", result.notice == "diary_spelling_error")
+
+    check_true("a cancelled check starts", DiarySpellingStart("I wnet home.") == "")
+    DiarySpellingCancel()
+    check_true("cancel stops waiting", !DiarySpellingWaiting())
+    SyncCryptoWipe(*owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    storage_close()
+    remove_tree("/tmp/inbe-diary-spelling-test/")
+    return failures
+}

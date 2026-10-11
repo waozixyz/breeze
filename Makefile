@@ -3222,6 +3222,15 @@ lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 
 test: lumi-feedback-delivery-test
 
+.PHONY: diary-spelling-test diary-history-test
+diary-spelling-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/diary_spelling_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+diary-history-test: $(ZI2C_BIN)
+	@sh tests/diary_history_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: diary-spelling-test diary-history-test
+
 # Lumi reports name the device, system and version (no identifiers).
 .PHONY: device-info-test
 device-info-test: $(ZIRAN_BIN)

@@ -40,6 +40,13 @@ def capture(window, name):
     raw.unlink()
 
 
+def wait_for_text(entry, matches, message):
+    deadline = time.monotonic() + 10
+    while not matches(json.loads(entry.read_text())["text"]):
+        assert time.monotonic() < deadline, message
+        time.sleep(0.1)
+
+
 @contextlib.contextmanager
 def application(profile, label, import_source=None):
     with (OUTPUT / f"{label}.log").open("w") as log:
@@ -91,18 +98,26 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             assert time.monotonic() < deadline, "Diary text was not saved"
             time.sleep(0.1)
         capture(window, "saved")
-        tap(window, 430, 200)  # Insert current time.
-        deadline = time.monotonic() + 10
-        while "**" not in json.loads(entry.read_text())["text"]:
-            assert time.monotonic() < deadline, "Time insertion was not saved"
-            time.sleep(0.1)
+        # Typing within a moment of another change joins its undo step.
+        time.sleep(1.2)
+        tap(window, 700, 86)  # Insert current time.
+        wait_for_text(entry, lambda text: "**" in text, "Time insertion was not saved")
+        with_time = json.loads(entry.read_text())["text"]
+        tap(window, 288, 86)  # Undo.
+        wait_for_text(entry, lambda text: text == "A saved Diary entry", "Undo did not restore the entry")
+        tap(window, 336, 86)  # Redo.
+        wait_for_text(entry, lambda text: text == with_time, "Redo did not restore the time")
+        tap(window, 604, 86)  # Spelling needs a signed-in account.
+        time.sleep(0.5)
+        capture(window, "spelling-without-account")
+        assert json.loads(entry.read_text())["text"] == with_time, "Spelling changed the entry without an account"
         saved = json.loads(entry.read_text())
-        tap(window, 430, 148)  # Calendar.
+        tap(window, 652, 86)  # Calendar.
         capture(window, "calendar")
     with application(profile, "restart") as window:
         capture(window, "restored")
         assert json.loads(entry.read_text()) == saved
-        tap(window, 745, 96)  # Next day saves before changing selection.
+        tap(window, 748, 34)  # Next day saves before changing selection.
         capture(window, "today-limit")
         assert list((profile / "diary").glob("*/????-??-??.json")) == [entry]
         assert json.loads(entry.read_text()) == saved
@@ -135,5 +150,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     (source / entry.name).write_text(json.dumps(dict(original, text="Changed source")))
     with application(migrated, "migration-restart", source):
         assert json.loads(target.read_text()) == original, "import overwrote an existing Inbe entry"
-    print("Standalone Diary: native editing, delayed save, time insertion, calendar, restart and day navigation passed")
+    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")

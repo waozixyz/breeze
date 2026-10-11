@@ -8,6 +8,8 @@
 #import "image_props"
 #import "image_widget"
 #import, file "../cells/diary_store.zi";
+#import, file "../cells/diary_history.zi";
+#import, file "../cells/diary_spelling.zi";
 #import, file "../platform/file_picker.zi";
 #import, file "../platform/environment.zi";
 #import, file "../platform/android/android_import.zi";
@@ -62,6 +64,18 @@ diary_photo_error: bool;
 diary_photo_no_room: [320]u8;
 diary_pending_replacement: string;
 diary_frame_text: string;
+diary_history: DiaryHistory;
+diary_undo_requested: bool;
+diary_redo_requested: bool;
+diary_spelling_requested: bool;
+// The day and text a spelling check was sent for; a correction applies only
+// while both are unchanged.
+diary_spelling_year: s32;
+diary_spelling_month: s32;
+diary_spelling_day: s32;
+diary_spelling_sent: string;
+diary_spelling_notice: string;
+diary_spelling_notice_until: float64;
 c :: #system_library "c";
 DiaryNow :: () -> float64 #foreign c "GetTime";
 
@@ -123,6 +137,14 @@ app_diary_append :: (text: string) -> bool {
 app_diary_reset :: () {
     diary_loaded = false
     diary_pending = false
+    DiarySpellingCancel()
+    PackageFree(diary_spelling_sent)
+    diary_spelling_sent = ""
+    diary_spelling_notice = ""
+    DiaryHistoryClear(*diary_history)
+    diary_undo_requested = false
+    diary_redo_requested = false
+    diary_spelling_requested = false
     PackageFree(diary_pending_replacement)
     diary_pending_replacement = ""
     PackageFree(diary_frame_text)
@@ -230,6 +252,9 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
         diary_ui.page_scroll = observed.page_scroll
         diary_ui.save_at = observed.save_at
         diary_photo_requested = observed.photo_requested
+        diary_undo_requested = observed.undo_requested
+        diary_redo_requested = observed.redo_requested
+        diary_spelling_requested = observed.spelling_requested
         diary_focused = observed.focused
         if observed.clipboard_write { unused TextInputWriteClipboard(observed.clipboard_text) }
         return 1
@@ -248,6 +273,94 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
     return 0
 }
 
+// Shows another version of the entry as one edit, so the caret lands just
+// after the changed text and the entry saves on the next frame.
+DiaryShowText :: (text: string) {
+    edit := DiaryHistoryEdit(diary_state.text, text)
+    diary_state.action = DIARY_EDIT
+    diary_state.edit_start = edit.start
+    diary_state.edit_end = edit.end
+    diary_state.replacement = edit.replacement
+    diary_state = DiaryRun(diary_state)
+    diary_state.replacement = ""
+}
+
+DiaryNotice :: (key: string) {
+    diary_spelling_notice = key
+    diary_spelling_notice_until = DiaryNow() + 6.0
+}
+
+DiaryHistoryCurrent :: () -> bool {
+    return diary_loaded && !diary_state.load_error &&
+    diary_history.year == diary_state.year && diary_history.month == diary_state.month &&
+    diary_history.day == diary_state.day
+}
+
+DiaryUndoRedo :: () {
+    undo := diary_undo_requested
+    redo := diary_redo_requested
+    diary_undo_requested = false
+    diary_redo_requested = false
+    if DiarySpellingWaiting() || !DiaryHistoryCurrent() {
+        return
+    }
+    if undo && DiaryHistoryUndo(*diary_history) {
+        DiaryShowText(diary_history.current)
+    }
+    if redo && DiaryHistoryRedo(*diary_history) {
+        DiaryShowText(diary_history.current)
+    }
+}
+
+DiarySpelling :: () {
+    if diary_spelling_requested && !DiarySpellingWaiting() && DiaryHistoryCurrent() {
+        notice := DiarySpellingStart(diary_state.text)
+        if notice == "" {
+            PackageFree(diary_spelling_sent)
+            diary_spelling_sent = PackageText(diary_state.text, "")
+            diary_spelling_year = diary_state.year
+            diary_spelling_month = diary_state.month
+            diary_spelling_day = diary_state.day
+            diary_spelling_notice = ""
+        } else {
+            DiaryNotice(notice)
+        }
+    }
+    diary_spelling_requested = false
+    if !DiarySpellingWaiting() {
+        return
+    }
+    result := DiarySpellingPoll()
+    if !result.finished {
+        return
+    }
+    same_day := diary_state.year == diary_spelling_year &&
+    diary_state.month == diary_spelling_month && diary_state.day == diary_spelling_day
+    unchanged := same_day && DiaryHistoryCurrent() && diary_state.text == diary_spelling_sent
+    PackageFree(diary_spelling_sent)
+    diary_spelling_sent = ""
+    if !same_day {
+        // The person moved to another day; the answer is for a page they left.
+        return
+    }
+    if result.notice != "" {
+        DiaryNotice(result.notice)
+        return
+    }
+    if !unchanged {
+        DiaryNotice("diary_spelling_error")
+        return
+    }
+    if result.text == diary_state.text {
+        DiaryNotice("diary_spelling_none")
+        return
+    }
+    DiaryShowText(result.text)
+    // The correction is one step, which undo reverts as a whole.
+    DiaryHistoryObserve(*diary_history, diary_state.year, diary_state.month, diary_state.day,
+        diary_state.text, DiaryNow(), false)
+}
+
 #program_export
 diary_screen_draw :: (app: *InnerBreeze) {
     DiaryPump()
@@ -256,6 +369,8 @@ diary_screen_draw :: (app: *InnerBreeze) {
         diary_loaded = diary_state.succeeded
     }
     DiaryPhotoPicker(app)
+    DiaryUndoRedo()
+    DiarySpelling()
     diary_ui.session = app.ui.session
     diary_ui.width = app.ui.view_width
     diary_ui.height = app.ui.view_height
@@ -266,6 +381,16 @@ diary_screen_draw :: (app: *InnerBreeze) {
     diary_ui.photo_error = diary_photo_error
     diary_ui.photo_format = DiaryImageFormat(DiaryStorePreview(diary_state.photo_file))
     diary_ui.photo_requested = false
+    diary_ui.undo_requested = false
+    diary_ui.redo_requested = false
+    diary_ui.spelling_requested = false
+    diary_ui.can_undo = DiaryHistoryCurrent() && diary_history.undo_count > 0
+    diary_ui.can_redo = DiaryHistoryCurrent() && diary_history.redo_count > 0
+    diary_ui.spelling_busy = DiarySpellingWaiting()
+    diary_ui.spelling_notice = ""
+    if diary_ui.now < diary_spelling_notice_until {
+        diary_ui.spelling_notice = diary_spelling_notice
+    }
     diary_ui.clipboard_write = false
     diary_ui.clipboard_text = ""
     typed: [512]u8
@@ -276,4 +401,8 @@ diary_screen_draw :: (app: *InnerBreeze) {
     diary_state = DiaryRun(diary_state)
     CellsUiEnd()
     WidgetHostEnd()
+    if diary_loaded && !diary_state.load_error {
+        DiaryHistoryObserve(*diary_history, diary_state.year, diary_state.month, diary_state.day,
+            diary_state.text, DiaryNow(), true)
+    }
 }
