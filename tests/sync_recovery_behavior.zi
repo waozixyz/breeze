@@ -42,7 +42,7 @@ Answer :: () -> s32 {
             app_sync_record_result(result)
             if result == 0 {
                 if Attempt() != 0 || g_sync.retry_at != 0.0 { return 3 }
-            } else if result == 4 || result == 6 || result == 7 {
+            } else if result == 3 || result == 4 || result == 6 || result == 7 {
                 if Attempt() != expected_attempts[index] { return 4 }
                 if g_sync.retry_at != now + cast(float64)expected_delays[index] { return 5 }
             } else {
@@ -110,9 +110,8 @@ Answer :: () -> s32 {
     recovery_set_queue(0, 1, 1)
     if app_sync_status_key() != "sync_status_ready" { return 27 }
 
-    // A saved payload error must not prevent a fresh startup/Sync now request.
-    // Ordinary edits keep the actionable error stopped, and requesting a
-    // retry does not misreport the old failure as a successful sync.
+    // A payload that could not be built retries on its schedule, Sync now
+    // tries at once, and the old failure is not reported as a success.
     app: InnerBreeze
     app_sync_record_result(3)
     if app_sync_retry_ready(3, now) { return 30 }
@@ -122,10 +121,11 @@ Answer :: () -> s32 {
     if !app_sync_retry_ready(3, now) { return 34 }
     if SettingsReadInt("sync_last_result", 0) != 3 { return 35 }
     if app_sync_status_key() != "sync_failed" { return 36 }
-    // Dispatch consumes that single request; another payload failure stops.
+    // Dispatch consumes that single request; another payload failure waits
+    // for its next automatic try.
     g_sync.retry_requested = false
     app_sync_record_result(3)
-    if app_sync_retry_ready(3, now + 1000.0) { return 37 }
+    if app_sync_retry_ready(3, now) || !app_sync_retry_ready(3, now + 1000.0) { return 37 }
     app_sync_record_result(6)
     if app_sync_retry_ready(6, now) { return 38 }
     if app_request_sync(*app) == 0 || !app_sync_retry_ready(6, now) { return 39 }
