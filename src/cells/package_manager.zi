@@ -157,6 +157,34 @@ PackageInstalledBytes :: (index: s32) -> string {
     return bytes
 }
 
+// Whether the current release pointer names this hash and its payload is
+// present at its signed size. The payload was verified when it was written
+// and is verified again whenever it loads, so it is not read and hashed
+// here: hashing every installed package on the frame thread at each update
+// check froze phones for seconds after launch.
+PackageInstalledMatches :: (index: s32, hash: string) -> bool {
+    if index < 0 || index >= PackageCount || DataTemporary() {
+        return false
+    }
+    pointer := PackagePath(index, ".current.json")
+    defer {
+        PackageFree(pointer)
+    }
+    metadata := PackageRead(pointer, 65536)
+    defer {
+        PackageFree(metadata)
+    }
+    release := PackageTrustedRelease(metadata, index)
+    if !release.valid || TextFromCString(*release.hash[0]) != hash {
+        return false
+    }
+    path := PackagePayloadPath(index, hash)
+    defer {
+        PackageFree(path)
+    }
+    return PackageFileSize(path) == release.size
+}
+
 PackageVersionCompare :: (left: string, right: string) -> s32 {
     left_at: s64 = 0
     right_at: s64 = 0
@@ -566,13 +594,7 @@ PackagePump :: (desired: s32, now: s32) {
                 PackageFinish(false);
                 return
             }
-            // The payload was verified when it was written and is verified
-            // again whenever it loads, so its presence at the signed size is
-            // enough here. Hashing every installed package on the frame
-            // thread at each check froze phones for seconds after launch.
-            payload := PackagePayloadPath(package_index, TextFromCString(*package_release.hash[0]))
-            usable := PackageFileSize(payload) == package_release.size
-            PackageFree(payload)
+            usable := PackageInstalledMatches(package_index, TextFromCString(*package_release.hash[0]))
             if usable {
                 PackageFinish(true);
                 return
