@@ -23,6 +23,15 @@
   Raise `host_api` when the host interface changes and `oldest_host_api` only
   when it can no longer run older packages. `make package-compat-test` runs
   the node's packages in this build and new packages in the last release.
+- Goal (owner, 2026-10-11): every app updates through its own package
+  without a new APK. Work toward it in small steps alongside requested work;
+  discuss larger moves with the owner first. Put app screens, rules and text
+  in `apps/<app>/`, not in the host under `src/`. Habits and Practices still
+  draw compiled host screens (see [docs/cells.md](docs/cells.md)); when work
+  touches one, prefer moving it into its package. Keep the host interface
+  small and generic (storage, network, locale, platform effects), because
+  each new host call needs an APK before a package can use it. Apps share
+  data only through the host interface, never another app's internals.
 - Translate changed strings in every affected locale; no English placeholders.
 - `make locale-translated-test` fails on any locale string that still equals
   its English text. Translate it; add it to `tests/locale_same_as_english.txt`
