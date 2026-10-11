@@ -1,4 +1,18 @@
 # Changelog
+## [2.1.28] - 2026-10-10
+### Added
+- Connect a phone and a computer by QR code in Profile.
+- Leaderboard is its own app.
+- Profile > Data shows each sync node's storage.
+### Changed
+- Profile holds your account, data and Telegram; Settings holds device preferences.
+- Diary shows bold text as bold.
+- On desktop, a minimized practice opens in its own window.
+### Fixed
+- Linux: text uses Inner Breeze's fonts again.
+- Smoother minimized breathing count.
+- The desktop close prompt shows above Apps.
+
 ## [2.1.27] - 2026-10-10
 ### Added
 - End a held breath from the minimized practice window with Breath or a double tap.
