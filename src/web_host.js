@@ -9,38 +9,6 @@ addToLibrary({
   browser_storage_busy: () => Module.__inbeStorageSyncing ||
     Module.__inbeStorageSyncPending ? 1 : 0,
 
-  browser_viewport_size: (fallbackWidth, fallbackHeight, output) => {
-    const doc = typeof document !== 'undefined' ? document : null;
-    const viewport = typeof visualViewport !== 'undefined' ? visualViewport : null;
-    let width = fallbackWidth;
-    let height = fallbackHeight;
-    if (viewport && viewport.width > 0 && viewport.height > 0) {
-      width = viewport.width;
-      height = viewport.height;
-    } else if (typeof window !== 'undefined') {
-      width = window.innerWidth ||
-        (doc && doc.documentElement && doc.documentElement.clientWidth) || fallbackWidth;
-      height = window.innerHeight ||
-        (doc && doc.documentElement && doc.documentElement.clientHeight) || fallbackHeight;
-    }
-    const canvas = Module.canvas || (doc && doc.getElementById('canvas'));
-    const candidates = [doc && doc.getElementById('canvas-frame'),
-      canvas && canvas.parentElement, canvas];
-    for (const element of candidates) {
-      if (!element || !element.getBoundingClientRect) {
-        continue;
-      }
-      const bounds = element.getBoundingClientRect();
-      if (bounds.width > 0 && bounds.height > 0) {
-        width = Math.min(width, bounds.width);
-        height = Math.min(height, bounds.height);
-        break;
-      }
-    }
-    HEAP32[output >> 2] = Math.max(1, Math.round(width > 0 ? width : fallbackWidth));
-    HEAP32[(output + 4) >> 2] = Math.max(1, Math.round(height > 0 ? height : fallbackHeight));
-  },
-
   browser_storage_wait__deps: ['$Asyncify'],
   browser_storage_wait__async: true,
   browser_storage_wait: (timeout_ms, log_success) => Asyncify.handleAsync(async () => {
@@ -113,29 +81,6 @@ addToLibrary({
     if (typeof window !== 'undefined' &&
         typeof window.__inbeExtensionBreakNow === 'function') {
       window.__inbeExtensionBreakNow(break_type);
-    }
-  },
-
-  web_download_file__deps: ['$FS', '$UTF8ToString'],
-  web_download_file: (path, filename, mime) => {
-    try {
-      const bytes = FS.readFile(UTF8ToString(path));
-      const blob = new Blob([bytes], {
-        type: UTF8ToString(mime) || 'application/octet-stream'
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = UTF8ToString(filename) || 'download';
-      anchor.style.display = 'none';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      return 1;
-    } catch (error) {
-      console.error('Inbe web download failed:', error);
-      return 0;
     }
   },
 

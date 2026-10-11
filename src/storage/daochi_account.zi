@@ -11,11 +11,11 @@
 #import "net_http"
 #import "byte_text_linux"
 #import, file "account_types.zi";
-#import, file "sync_account_sign.zi";
-#import, file "sync_crypto.zi";
-#import, file "sync_crypto_random.zi";
+#import "keys"
+#import "crypto"
 
-AccountField :: (data: *u8, capacity: s64) -> string {
+// A fixed-size account field as text, up to its NUL.
+AccountFieldText :: (data: *u8, capacity: s64) -> string {
     if data == null || capacity <= 0 {
         return ""
     }
@@ -35,7 +35,7 @@ DigestBody :: (body: string, output: []u8) -> bool {
         return false
     }
     descriptor: *TextDescriptor = cast(*TextDescriptor)(*body)
-    SyncCryptoSha256Hex(descriptor.data, body.count, *output[0])
+    Sha256Hex(descriptor.data, body.count, *output[0])
     return output[0] != cast(u8)0
 }
 
@@ -44,14 +44,14 @@ NativeNonce :: (context: *void, output: []u8) -> bool {
     unused context
     if output.count < 65 { return false }
     random_bytes: [32]u8
-    if SyncCryptoRandom(*random_bytes[0], 32) == 0 { return false }
-    result := SyncCryptoBytesToHex(*random_bytes[0], 32,
+    if SecureRandom(*random_bytes[0], 32) == 0 { return false }
+    result := BytesToHex(*random_bytes[0], 32,
         *output[0], output.count) != 0
-    SyncCryptoWipe(*random_bytes[0], 32)
+    SecureWipe(*random_bytes[0], 32)
     return result
 }
 
-OpenAccountClient :: (base_url: string, account: *SyncAccount,
+OpenAccountClient :: (base_url: string, account: *AccountKeys,
     client_id: string, output: *Client) -> bool {
     if output == null {
         return false
@@ -60,10 +60,10 @@ OpenAccountClient :: (base_url: string, account: *SyncAccount,
     if StoredAccountMode() == AccountModeDelegate || account == null {
         return false
     }
-    account_id := AccountField(*account.public_id[0],
-        SYNC_PUBLIC_ID_HEX_SIZE)
-    public_key := AccountField(*account.public_key_hex[0],
-        SYNC_PUBLIC_KEY_HEX_SIZE)
+    account_id := AccountFieldText(*account.public_id[0],
+        ACCOUNT_PUBLIC_ID_HEX_SIZE)
+    public_key := AccountFieldText(*account.public_key_hex[0],
+        ACCOUNT_PUBLIC_KEY_HEX_SIZE)
     if account_id.count != 64 || public_key.count == 0 ||
         account.private_key_hex[0] == cast(u8)0 ||
         client_id.count == 0 {
@@ -78,7 +78,7 @@ OpenAccountClient :: (base_url: string, account: *SyncAccount,
     output.app_id = "inbe"
     output.identity = identity
     output.digest = DigestBody
-    output.signer = SignStoredAccountMessage
+    output.signer = SignAccountMessage
     return true
 }
 
@@ -120,7 +120,7 @@ OpenDelegateRenewalClient :: (base_url: string, material: *DelegateMaterial,
 // Explicit owner creation/recovery inside the hosted flow. The actual owner
 // material and this client remain in caller-owned memory; global mode stays
 // delegated and no owner credential is saved in SQLite.
-OpenTemporaryOwnerClient :: (base_url: string, account: *SyncAccount,
+OpenTemporaryOwnerClient :: (base_url: string, account: *AccountKeys,
     client_id: string, expected_bot: s64, expected_user: s64, output: *Client) -> bool {
     if output == null {
         return false
@@ -131,9 +131,9 @@ OpenTemporaryOwnerClient :: (base_url: string, account: *SyncAccount,
         !LowerHex(client_id, 64) {
         return false
     }
-    account_id := AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
-    public_key := AccountField(*account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE)
-    private_key := AccountField(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    account_id := AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
+    public_key := AccountFieldText(*account.public_key_hex[0], ACCOUNT_PUBLIC_KEY_HEX_SIZE)
+    private_key := AccountFieldText(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     if !LowerHex(account_id, 64) || !LowerHex(public_key, 2624) || !LowerHex(private_key, 5120) ||
         !LocalOwnerAccepts(account_id) {
         return false
@@ -141,11 +141,11 @@ OpenTemporaryOwnerClient :: (base_url: string, account: *SyncAccount,
     public_bytes: [1312]u8
     public_id: [65]u8
     normalized: [513]u8
-    if SyncCryptoHexToBytes(public_key, *public_bytes[0], 1312) == 0 ||
+    if HexToBytes(public_key, *public_bytes[0], 1312) == 0 ||
         !NormalizeUrl(base_url, normalized[:]) {
         return false
     }
-    SyncCryptoSha256Hex(*public_bytes[0], 1312, *public_id[0])
+    Sha256Hex(*public_bytes[0], 1312, *public_id[0])
     if TextUntilNul(public_id[:]) != account_id {
         return false
     }
@@ -156,6 +156,6 @@ OpenTemporaryOwnerClient :: (base_url: string, account: *SyncAccount,
     output.identity.client_id = client_id
     output.identity.signing_context = cast(*void)account
     output.digest = DigestBody
-    output.signer = SignStoredAccountMessage
+    output.signer = SignAccountMessage
     return true
 }

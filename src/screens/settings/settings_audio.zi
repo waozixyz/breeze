@@ -5,6 +5,7 @@
 #import, file "../../app/music_library.zi";
 #import, file "../../app/audio_selection.zi";
 #import, file "../../platform/android/android_import.zi";
+#import "android_picker"
 #import, file "../../platform/environment.zi";
 #import, file "../../platform/media_types.zi";
 #import, file "../../platform/audio_runtime.zi";
@@ -21,7 +22,7 @@
 #import "control_props"
 #import "text_props"
 #import "text_align"
-#import, file "../../platform/asset_download_types.zi";
+#import "file_download"
 #import, file "../../app/metrics.zi";
 #import, file "../../app/current_app.zi";
 #import "button_widget"
@@ -33,14 +34,13 @@
 #import "button_props"
 #import "dropdown_props"
 
-using AssetDownloadStatus;
+using FileDownloadStatus;
 using ExerciseType;
 using TextWrap;
 using TextAlign;
 using ButtonTone;
 using ButtonEmphasis;
 using AndroidImportKind;
-using AndroidImportResult;
 
 SETTINGS_AUDIO_LOG_INFO :: 3
 #import, file "../../platform/trace_log.zi";
@@ -413,15 +413,8 @@ settings_audio_start_import :: (app: *InnerBreeze, action: s32, practice: s32) {
     settings_audio_stop_preview(app)
     audio_status_practice = practice
     if AndroidPlatform() != 0 {
-        mime_types: [192]u8
-        if !AppCopyText(android_audio_mime_types, mime_types[:]) {
-            settings_audio_set_status_error(action,
-                LocaleText("audio_import_failed"))
-            return
-        }
         settings_audio_dialog_begin(app, action, practice)
-        if android_import_open_picker_for(audio_android_kind(action),
-            *mime_types[0]) != 0 {
+        if AndroidPickerOpen(audio_android_kind(action), android_audio_mime_types) {
             settings_audio_set_status_success(action, LocaleText("audio_import_title"))
         } else {
             unused settings_audio_dialog_finish(app)
@@ -456,13 +449,12 @@ settings_audio_handle_import :: (app: *InnerBreeze) {
     if action == SETTINGS_AUDIO_ACTION_NONE {
         return
     }
-    result := android_import_poll_result_for(audio_android_kind(action),
-        *path[0], cast(s32)path.count)
-    if result == cast(s32)ANDROID_IMPORT_RESULT_NONE {
+    result := AndroidPickerPoll(audio_android_kind(action), path[:])
+    if result == .AndroidPickerNone {
         return
     }
     action = settings_audio_dialog_finish(app)
-    if result == cast(s32)ANDROID_IMPORT_RESULT_CANCELLED {
+    if result == .AndroidPickerCancelled {
         settings_audio_set_status_error(action, LocaleText("audio_import_cancelled"))
         return
     }
@@ -547,10 +539,10 @@ settings_audio_download_height :: (app: *InnerBreeze) -> s32 {
         return height
     }
     status := app.meditation.music_download.status
-    if meditation_music_available(app) == 0 || status != AssetDownloadStatus.Idle {
-        if status == AssetDownloadStatus.Downloading {
+    if meditation_music_available(app) == 0 || status != FileDownloadStatus.Idle {
+        if status == FileDownloadStatus.Downloading {
             height += AppScale(28) + AppScale(22)
-        } else if status == AssetDownloadStatus.Error {
+        } else if status == FileDownloadStatus.Error {
             height += AppScale(34)
         }
     }
@@ -898,8 +890,8 @@ draw_music_download :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     }
     y.* += settings_audio_button_row_height()
 
-    if installed == 0 || app.meditation.music_download.status != AssetDownloadStatus.Idle {
-        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+    if installed == 0 || app.meditation.music_download.status != FileDownloadStatus.Idle {
+        if app.meditation.music_download.status == FileDownloadStatus.Downloading {
             download_status: [96] u8
             meditation_music_format_download_status(*download_status[0],
                 size_of(type_of(download_status)),
@@ -913,7 +905,7 @@ draw_music_download :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
             y.* += AppScale(28)
             meditation_music_draw_download_progress(app, x, y.*, w)
             y.* += AppScale(22)
-        } else if app.meditation.music_download.status == AssetDownloadStatus.Error {
+        } else if app.meditation.music_download.status == FileDownloadStatus.Error {
             Text(CurrentApp().ui.session, TextProps.{
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
                         cast(float32)w, cast(float32)AppScale(28)},

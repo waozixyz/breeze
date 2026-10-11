@@ -9,7 +9,7 @@ generated=$work/generated
 mkdir -p "$generated/app"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     -o "$generated" "$root/src/app/audio_settings.zi"
 cp "$generated/settings_key.h" "$generated/app/settings_key.h"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \

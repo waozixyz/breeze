@@ -6,7 +6,7 @@
 static int account_present;
 static const char *account_alias;
 
-int32_t sync_account_load(SyncAccount *account)
+int32_t sync_account_load(AccountKeys *account)
 {
     if (!account_present)
         return 0;

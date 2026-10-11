@@ -9,11 +9,11 @@ source=$root/tests/direct_draw_plan_behavior.zi
 mkdir -p "$work/ir"
 "$bin/ziran" ir --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/ir" "$source"
 "$bin/ziran" bundle --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     --entry direct_draw_plan_behavior:Answer \
     -o "$work/source.zib" "$source"
 "$bin/ziran" bundle --root "$work/ir" --module-path "$work/ir" \

@@ -625,7 +625,7 @@ WEB_TARGET := $(WEB_DIST_DIR)/index.html
 WEB_APP_SCRIPT := <script>window.__inbeRenderer="canvas";window.__inbeLoadApp("index.js?v=$(WEB_CACHE_BUSTER)")</script>
 WEB_JS_TARGET := $(WEB_DIST_DIR)/index.js
 WEB_BOOT_JS := src/web_boot.js
-WEB_HOST_JS := src/web_host.js scripts/browser_network.js scripts/telegram_host.js
+WEB_HOST_JS := src/web_host.js scripts/telegram_host.js
 # Kryon's canvas hosts are Ziran modules on Ziran's web bridge; its runtime is the only JS they need.
 WEB_CANVAS_HOST_JS := $(ZIRAN_DIR)/web/ziran_web.js
 WEB_HOST_JS += $(WEB_CANVAS_HOST_JS)
@@ -799,20 +799,6 @@ sync-retry-zi-test: build-laws $(ZI2C_BIN)
 	@sh tests/sync_retry_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: sync-retry-zi-test
-
-.PHONY: sync-crypto-zi-test
-sync-crypto-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/sync_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-test: sync-crypto-zi-test
-
-.PHONY: sync-account-crypto-zi-test
-sync-account-crypto-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/sync_account_crypto_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
-
-test: sync-account-crypto-zi-test
 
 # Exercise the packaged Ziran crypto API against the exact archive used by
 # Inbe, including ML-KEM round trips, tampering and short-buffer rejection.
@@ -1739,13 +1725,6 @@ android-import-zi-test: $(ZI2C_BIN)
 		sh tests/android_import_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: android-import-zi-test
-
-.PHONY: android-runtime-assets-zi-test
-android-runtime-assets-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/android_runtime_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-test: android-runtime-assets-zi-test
 
 .PHONY: android-lifecycle-zi-test
 android-lifecycle-zi-test: $(ZI2C_BIN)
@@ -3110,7 +3089,7 @@ device-key-wasm-test: $(ZI2C_BIN)
 test: device-key-test
 web-smoke-test web-canvas-smoke-test: device-key-wasm-test
 
-.PHONY: telegram-authorization-test telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+.PHONY: telegram-authorization-test telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test storage-delegate-test lumi-delegate-scope-test
 
 telegram-bridge-test:
 	@sh tests/telegram_bridge_test.sh
@@ -3142,16 +3121,13 @@ lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A)
 delegate-account-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/delegate_account_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-delegate-secret-cleanup-test: $(ZIRAN_BIN) $(LIBOQS_A)
-	@sh tests/delegate_secret_cleanup_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
-
 storage-delegate-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/storage_delegate_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/lumi_delegate_scope_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test delegate-secret-cleanup-test storage-delegate-test lumi-delegate-scope-test
+telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test storage-delegate-test lumi-delegate-scope-test
 
 test: telegram-authorization-test
 

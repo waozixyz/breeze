@@ -11,8 +11,8 @@
 
 
 #import, file "../../storage/data.zi";
-#import, file "../../platform/asset_download_types.zi";
-#import, file "../../platform/asset_download.zi";
+#import "file_download"
+#import, file "../../platform/web_storage.zi";
 #import, file "../../platform/media_types.zi";
 #import, file "../../platform/audio_runtime.zi";
 
@@ -20,7 +20,7 @@
 
 
 
-using AssetDownloadStatus;
+using FileDownloadStatus;
 using ModalType;
 #import "text_props"
 using TextWrap;
@@ -180,7 +180,7 @@ missing_audio_message :: () -> string {
     return LocaleText("meditation_music_missing_audio")
 }
 
-is_network_download_error :: (download: *AssetDownload) -> s32 {
+is_network_download_error :: (download: *FileDownload) -> s32 {
 
     if download == null {
         return 0
@@ -206,14 +206,14 @@ is_network_download_error :: (download: *AssetDownload) -> s32 {
 
 #program_export
 meditation_music_format_download_status :: (out: *u8, out_size: s64,
-    download: *AssetDownload) {
+    download: *FileDownload) {
     percent: s32
 
     if out == null || out_size == 0 || download == null {
         return
     }
 
-    if download.status == AssetDownloadStatus.Downloading  && download.total_bytes > 0 {
+    if download.status == FileDownloadStatus.Downloading  && download.total_bytes > 0 {
         percent = cast(s32)((download.bytes * 100u) / download.total_bytes)
         if percent < 0 {
             percent = 0
@@ -230,7 +230,7 @@ meditation_music_format_download_status :: (out: *u8, out_size: s64,
 
 #program_export
 meditation_music_draw_download_progress :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
-    download: *AssetDownload
+    download: *FileDownload
     bar_h := AppScale(10)
     fill_w: s32 = 0
     bg := StyleTokenColor("canvas")
@@ -241,7 +241,7 @@ meditation_music_draw_download_progress :: (app: *InnerBreeze, x: s32, y: s32, w
     }
 
     download = *app.meditation.music_download
-    if download.status != AssetDownloadStatus.Downloading {
+    if download.status != FileDownloadStatus.Downloading {
         return
     }
 
@@ -588,16 +588,22 @@ meditation_music_update :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    PollRuntimeAssetDownload(*app.meditation.music_download)
+    downloading := app.meditation.music_download.status == FileDownloadStatus.Downloading
+    FileDownloadPoll(*app.meditation.music_download)
+    #if #defined(PLATFORM_WEB) {
+        if downloading && app.meditation.music_download.status != FileDownloadStatus.Downloading {
+            schedule_web_storage_sync(120, 0)
+        }
+    }
 
-    if app.meditation.music_download.status == AssetDownloadStatus.Ready  && app.meditation.music_archive_extracted == 0 {
+    if app.meditation.music_download.status == FileDownloadStatus.Ready  && app.meditation.music_archive_extracted == 0 {
         archive_path(app, *archive_file_path[0], size_of(type_of(archive_file_path)))
         app.meditation.music_archive_extracted = 1
         if extract_audio_archive(app, AppTextFromCString(*archive_file_path[0], size_of(type_of(archive_file_path)))) == 0 {
             AppCopyText(AppTextFromCString(*app.meditation.music_download.error[0], 256), app.meditation.music_status[:])
-            app.meditation.music_download.status = AssetDownloadStatus.Error
+            app.meditation.music_download.status = FileDownloadStatus.Error
         }
-    } else if app.meditation.music_download.status == AssetDownloadStatus.Error {
+    } else if app.meditation.music_download.status == FileDownloadStatus.Error {
         if is_network_download_error(*app.meditation.music_download) != 0 {
             set_status(app, LocaleText("meditation_music_network_error_title"))
             if app.meditation.music_network_error_notified == 0 && app.modal.active == 0 {
@@ -643,7 +649,7 @@ meditation_music_start_download :: (app: *InnerBreeze) {
     app.meditation.music_archive_extracted = 0
     app.meditation.music_network_error_notified = 0
     set_status(app, LocaleText("meditation_music_downloading"))
-    DownloadRuntimeAsset(*app.meditation.music_download,
+    unused FileDownloadStart(*app.meditation.music_download,
         audio_url,
         AppTextFromCString(*archive_file_path[0], size_of(type_of(archive_file_path))))
 }
@@ -780,8 +786,8 @@ meditation_music_draw_practice_settings :: (app: *InnerBreeze,
         y.* += button_h + AppScale(12)
     }
 
-    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != AssetDownloadStatus.Idle) {
-        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != FileDownloadStatus.Idle) {
+        if app.meditation.music_download.status == FileDownloadStatus.Downloading {
             meditation_music_format_download_status(*download_status[0],
                 size_of(type_of(download_status)),
                 *app.meditation.music_download)
@@ -835,8 +841,8 @@ meditation_music_measure_practice_settings :: (app: *InnerBreeze,
         h += AppScale(60)
     }
 
-    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != AssetDownloadStatus.Idle) {
-        if app.meditation.music_download.status == AssetDownloadStatus.Downloading {
+    if show_status != 0  && (installed == 0  || app.meditation.music_download.status != FileDownloadStatus.Idle) {
+        if app.meditation.music_download.status == FileDownloadStatus.Downloading {
             h += AppScale(50)
         } else {
             h += AppScale(34)

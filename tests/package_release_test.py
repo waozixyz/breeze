@@ -217,6 +217,7 @@ def main():
         subprocess.run([str(ziran), "build", "--target=c", "--no-main", "--root", str(ROOT / "tests"),
                         "--module-path", str(ROOT / "src"), "--module-path", str(ROOT / "build/packages/ziran/std"),
                         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
+                        "--module-path", str(ROOT / "build/packages/daochi-client"),
                         "-o", str(work / "generated"), str(ROOT / "tests/package_release_behavior.zi")], check=True)
         sources = list((work / "generated").rglob("*.c"))
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
@@ -250,8 +251,9 @@ def main():
                         str(ROOT / "build/packages/monocypher/src/monocypher.c"),
                         str(ROOT / "build/packages/monocypher/src/optional/monocypher-ed25519.c"),
                         str(ROOT / "build/ziran-toolchain/libziran.a"),
-                        "-Wl,--wrap=DownloadRuntimeAsset", "-Wl,--wrap=PollRuntimeAssetDownload",
-                        "-Wl,--wrap=ReleaseRuntimeAssetDownload", "-Wl,--wrap=storage_db_path",
+                        "-Wl,--wrap=file_download_FileDownloadStart", "-Wl,--wrap=file_download_FileDownloadPoll",
+                        "-Wl,--wrap=file_download_FileDownloadRelease", "-Wl,--wrap=storage_db_path",
+                        "-Wl,--wrap=SecureRandom",
                         "-Wl,--gc-sections", "-lm", "-o", str(work / "manager-test")], check=True)
         subprocess.run([str(work / "manager-test"), str(fixtures)], check=True)
     print("Signed package identity, API, canonical metadata, payload and nested-dependency and update lifecycle tests passed")

@@ -9,31 +9,31 @@ mkdir -p "$work/c"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     "$root/src/app/app_chrome.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/c" "$root/src/app/app_chrome.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/c" "$root/src/app/practice_title_bar.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/c" "$root/src/app/assets.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/c" "$root/src/app/image_dimensions.zi"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \

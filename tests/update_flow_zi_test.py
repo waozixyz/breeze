@@ -79,6 +79,7 @@ def build_probe(work, compiler, env):
         "--module-path", "build/packages/kryon/src/ui",
         "--module-path", "build/packages/kss/src",
         "--module-path", "kryon=build/packages/kryon/src/ui",
+        "--module-path", "build/packages/kryon/src/backend",
         "--module-path", "build/packages/ziran/std",
         "--module-path", "oqs=build/packages/oqs/src",
         "--module-path", "build/packages/daochi-client",
@@ -94,7 +95,7 @@ def build_probe(work, compiler, env):
         output / "update_flow_probe.c", output / "update_check.c",
         output / "update_policy.c",
         output / "json_scan.c", output / "update.c",
-        output / "text_buffer.c", output / "sync_crypto.c",
+        output / "text_buffer.c", output / "crypto.c",
         output / "current_app.c", output / "update_transport.c",
         output / "c_string.c", output / "byte_text_linux.c",
     ]

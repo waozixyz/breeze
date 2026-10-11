@@ -1,5 +1,5 @@
-// Android's density callback and the render thread share this value.
-// SDL spin locks provide the required ordering where those threads coexist.
+// SDL spin locks order the density between threads where those coexist;
+// Android's comes from Kryon's android_device.
 // A desktop without SDL (Windows) sets and reads it on one thread.
 SDL_DENSITY_THREADS :: #defined(PLATFORM_DESKTOP) && #defined(NATIVE_WINDOW_HAVE_SDL)
 ANDROID_DENSITY_THREADS :: #defined(ANDROID_BUILD)
@@ -11,14 +11,9 @@ ANDROID_DENSITY_THREADS :: #defined(ANDROID_BUILD)
 }
 
 #if ANDROID_DENSITY_THREADS {
-    c :: #system_library "c";
-    atomic :: #system_library "atomic";
-    DensityCopyBits :: (destination: *void, source: *void,
-        count: usize) -> *void #foreign c "memcpy";
-    DensityAtomicStore :: (destination: *u32, value: u32,
-        order: s32) #foreign atomic "__atomic_store_4";
-    DensityAtomicLoad :: (source: *u32,
-        order: s32) -> u32 #foreign atomic "__atomic_load_4";
+    density_c :: #system_library "c";
+    // Kryon's android_device keeps the density the activity reports.
+    DensityAndroid :: () -> float32 #foreign density_c "AndroidDensity";
 }
 
 density_lock: s32;
@@ -27,13 +22,6 @@ density_bits: u32;
 
 #program_export
 SetDeviceDensity :: (density: float32) {
-    #if ANDROID_DENSITY_THREADS {
-        bits: u32
-        DensityCopyBits(cast(*void)(*bits), cast(*void)(*density),
-            cast(usize)4)
-        DensityAtomicStore(*density_bits, bits, 3)
-        return
-    }
     #if SDL_DENSITY_THREADS {
         DensityLock(*density_lock)
     }
@@ -46,11 +34,7 @@ SetDeviceDensity :: (density: float32) {
 #program_export
 app_device_density :: () -> float32 {
     #if ANDROID_DENSITY_THREADS {
-        bits := DensityAtomicLoad(*density_bits, 2)
-        atomic_value: float32
-        DensityCopyBits(cast(*void)(*atomic_value), cast(*void)(*bits),
-            cast(usize)4)
-        return atomic_value
+        return DensityAndroid()
     }
     #if SDL_DENSITY_THREADS {
         DensityLock(*density_lock)

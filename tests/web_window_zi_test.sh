@@ -5,6 +5,8 @@ bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$(mktemp -d "$root/build/web-window-zi.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 "$bin/zi2c" --root "$root/tests" --entry web_window_behavior:main \
+    --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/tests/web_window_behavior.zi"
 "${CC:-cc}" -std=c11 -O2 -DZIRAN_BOUNDS_CHECK \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \

@@ -10,7 +10,7 @@ source=$root/tests/statistics_date_behavior.zi
 "$bin/ziran" bundle --root "$root" \
     --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     --entry statistics_date_behavior:Answer \
     -o "$work/date.zib" "$source"
 test "$("$bin/ziran" run "$work/date.zib")" = 42
@@ -18,7 +18,7 @@ test "$("$bin/ziran" run "$work/date.zib")" = 42
 "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "statistics_date_behavior.h"

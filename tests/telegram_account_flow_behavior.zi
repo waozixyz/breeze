@@ -19,13 +19,10 @@
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/daochi_account.zi";
 #import, file "../src/storage/sync_account.zi";
-#import, file "../src/storage/sync_account_crypto.zi";
-#import, file "../src/storage/sync_account_encrypted.zi";
-#import, file "../src/storage/sync_crypto.zi";
-#import, file "../src/storage/sync_crypto_random.zi";
+#import "keys"
+#import "crypto"
 #import, file "../src/platform/network_transport.zi";
 #import, file "../src/screens/telegram_account.zi";
-#import, file "../src/storage/sync_crypto_hmac.zi";
 #import, file "../src/storage/sync_async.zi";
 #import, file "../src/storage/delegate_store.zi";
 #import, file "../src/storage/storage_core.zi";
@@ -47,8 +44,8 @@ FlowBot :: 42
 FlowUser :: 7
 failures: s32;
 fixture_mode: string = "create";
-fixture_account: SyncAccount;
-fixture_owner: SyncAccount;
+fixture_account: AccountKeys;
+fixture_owner: AccountKeys;
 fixture_grant: GrantStorage;
 fixture_claimed: bool;
 fixture_approved: bool;
@@ -614,7 +611,7 @@ CheckRestorePreserves :: () {
         telegram_account_flow.owner.private_key_hex[0] == cast(u8)0)
     Expect("wrong passphrase preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
     other_backup: [17664]u8
-    Expect("other owner encrypted backup", ExportSyncAccountTextEncrypted(*fixture_owner, flow_host_passphrase,
+    Expect("other owner encrypted backup", AccountKeysEncryptedText(*fixture_owner, flow_host_passphrase,
         *other_backup[0], other_backup.count) != 0)
     unused AppCopyText(TextUntilNul(other_backup[:]), flow_host_recovery[:])
     unused AppCopyText(flow_host_passphrase, telegram_account_flow.recovery_input.value[:])
@@ -631,7 +628,7 @@ CheckRestorePreserves :: () {
         telegram_account_flow.recovery_input.value[0] == cast(u8)0 && telegram_account_flow.recovery[0] == cast(u8)0)
     Expect("cancel preserves history/outbox", HistoryCount() == 2 && OutboxCount() == outbox)
     Expect("no restore secret request leaks", !flow_host_secret_leak)
-    SyncCryptoWipe(*other_backup[0], 17664)
+    SecureWipe(*other_backup[0], 17664)
 }
 
 CheckConnect :: () {
@@ -715,7 +712,7 @@ CheckProtectedRestart :: () {
     fixture_grant = saved_grant
     flow_host_capsule = saved_capsule
     Expect("online reopening after outage restores same account", PumpUntil(14) && StoredDelegateAvailable() == 1)
-    SyncCryptoWipe(*saved_capsule[0], 65537)
+    SecureWipe(*saved_capsule[0], 65537)
 }
 
 CheckDifferentTelegramUser :: () {
@@ -756,7 +753,7 @@ CheckDifferentTelegramUser :: () {
     Expect("different user preserves data/outbox without owner fallback", HistoryCount() == 2 &&
         OutboxCount() == outbox && storage_get_setting_text("sync_private_key") == "" &&
         !flow_host_secret_leak)
-    SyncCryptoWipe(*saved_capsule[0], 65537)
+    SecureWipe(*saved_capsule[0], 65537)
 }
 
 CheckContextCancel :: () {
@@ -874,8 +871,8 @@ CheckCallbackContext :: () {
 Check :: () -> s32 {
     FlowHostReset()
     FlowSetClock(1700000000)
-    if CreateSyncAccount(*fixture_account) == 0 || CreateSyncAccount(*fixture_owner) == 0 ||
-    ExportSyncAccountTextEncrypted(*fixture_account, flow_host_passphrase, *fixture_backup[0], fixture_backup.count) == 0 {
+    if CreateAccountKeys(*fixture_account) == 0 || CreateAccountKeys(*fixture_owner) == 0 ||
+    AccountKeysEncryptedText(*fixture_account, flow_host_passphrase, *fixture_backup[0], fixture_backup.count) == 0 {
         return 1
     }
     CheckHostedSettings()
@@ -895,8 +892,8 @@ Check :: () -> s32 {
         storage_close()
     }
     ClearDelegate()
-    SyncCryptoWipe(*fixture_account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
-    SyncCryptoWipe(*fixture_owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
-    SyncCryptoWipe(*fixture_backup[0], 17664)
+    SecureWipe(*fixture_account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*fixture_owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*fixture_backup[0], 17664)
     return failures
 }

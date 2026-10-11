@@ -8,11 +8,11 @@ mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     "$root/src/app/app_frame_pacing.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/c" "$root/src/app/app_frame_pacing.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \

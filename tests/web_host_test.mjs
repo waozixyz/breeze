@@ -52,18 +52,6 @@ assert.equal(host({}, {
   window: { location: { protocol: 'chrome-extension:' } },
   chrome: { runtime: {} }
 }).web_extension_host_js(), 1);
-const measured = new Int32Array(4);
-host({}, { HEAP32: measured }).browser_viewport_size(640, 480, 0);
-assert.deepEqual([...measured.slice(0, 2)], [640, 480]);
-const frame = { getBoundingClientRect: () => ({ width: 280, height: 500 }) };
-host({}, {
-  HEAP32: measured,
-  visualViewport: { width: 330, height: 600 },
-  document: { getElementById: id => id === 'canvas-frame' ? frame : null }
-}).browser_viewport_size(640, 480, 0);
-assert.deepEqual([...measured.slice(0, 2)], [280, 500]);
-host({}, { HEAP32: measured }).browser_viewport_size(0, 0, 0);
-assert.deepEqual([...measured.slice(0, 2)], [1, 1]);
 assert.equal(host({ __inbeStorageSyncing: true }).browser_storage_busy(), 1);
 assert.equal(host({ __inbeStorageSyncPending: true }).browser_storage_busy(), 1);
 assert.equal(host().browser_storage_busy(), 0);

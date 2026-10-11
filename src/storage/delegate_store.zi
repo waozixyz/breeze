@@ -1,5 +1,5 @@
 // Delegate credentials belong to the host's protected memory/SecureStorage.
-// They are never represented as an owner SyncAccount or written to SQLite.
+// They are never represented as an owner AccountKeys or written to SQLite.
 #import "authorization"
 #import "wire"
 #import "delegated"
@@ -10,8 +10,8 @@
 #import "byte_text_linux"
 #import "json_scan"
 #import, file "device_key.zi";
-#import, file "sync_crypto.zi";
-#import, file "sync_crypto_random.zi";
+#import "crypto"
+#import "keys"
 #import, file "storage_core.zi";
 #import, file "storage_layout.zi";
 #import, file "sql_query.zi";
@@ -95,11 +95,11 @@ DelegateNonce :: (context: *void, output: []u8) -> bool {
         return false
     }
     nonce: [16]u8
-    if SyncCryptoRandom(*nonce[0], 16) == 0 {
+    if SecureRandom(*nonce[0], 16) == 0 {
         return false
     }
-    result := SyncCryptoBytesToHex(*nonce[0], 16, *output[0], output.count) != 0
-    SyncCryptoWipe(*nonce[0], 16)
+    result := BytesToHex(*nonce[0], 16, *output[0], output.count) != 0
+    SecureWipe(*nonce[0], 16)
     return result
 }
 
@@ -110,7 +110,7 @@ WipeDelegateMaterial :: (material: *DelegateMaterial) {
     }
     WipeDeviceKey(*material.signing)
     ClearEncryptionKeys(*material.encryption)
-    SyncCryptoWipe(*material.lumi_key[0], 32)
+    SecureWipe(*material.lumi_key[0], 32)
     material.* = DelegateMaterial.{}
 }
 
@@ -209,13 +209,13 @@ GenerateDelegateMaterial :: (material: *DelegateMaterial) -> bool {
     if !GenerateDeviceKey(*material.signing) ||
         !CreateEncryptionKeys(*material.encryption) ||
         !EncryptionPublicHex(*material.encryption, material.encryption_hex[:]) ||
-        SyncCryptoRandom(*random[0], 32) == 0 {
-        SyncCryptoWipe(*random[0], 32)
+        SecureRandom(*random[0], 32) == 0 {
+        SecureWipe(*random[0], 32)
         WipeDelegateMaterial(material)
         return false
     }
-    SyncCryptoSha256Hex(*random[0], 32, *material.client_id[0])
-    SyncCryptoWipe(*random[0], 32)
+    Sha256Hex(*random[0], 32, *material.client_id[0])
+    SecureWipe(*random[0], 32)
     material.scopes[0] = RequestedScope.{LumiPrivateCollection, true, true}
     return LowerHex(TextUntilNul(material.client_id[:]), 64)
 }
@@ -328,7 +328,7 @@ InstallAuthorizedDelegate :: (answer: string, expected: DelegateInstallExpectati
         !VerifiedDelegateIdentityCurrent(grant.bot_id, grant.telegram_id) ||
         !LocalOwnerAccepts(grant.account_id) ||
         !AppCopyText(TextUntilNul(owner_public[:]), material.owner_public_key[:]) {
-        SyncCryptoWipe(*material.lumi_key[0], 32)
+        SecureWipe(*material.lumi_key[0], 32)
         ClearDelegateSession(*material.session)
         return false
     }
@@ -412,7 +412,7 @@ LoadDelegateForRenewal :: (material: *DelegateMaterial) -> bool {
         return false
     }
     material.* = stored_delegate
-    SyncCryptoWipe(*material.lumi_key[0], 32)
+    SecureWipe(*material.lumi_key[0], 32)
     return true
 }
 
@@ -498,7 +498,7 @@ StoredDelegateKey :: (collection: string, key_id: string, out: *u8) -> s32 {
     if out == null {
         return 0
     }
-    SyncCryptoWipe(out, 32)
+    SecureWipe(out, 32)
     if StoredDelegateAvailable() == 0 || collection != LumiPrivateCollection || key_id != LumiPrivateKeyID {
         return 0
     }
@@ -527,13 +527,13 @@ ExportStoredDelegateCapsule :: (output: []u8) -> bool {
     encryption_private: [4801]u8
     grant_body: [32768]u8
     defer {
-        SyncCryptoWipe(*private_hex[0], 129)
-        SyncCryptoWipe(*encryption_private[0], 4801)
+        SecureWipe(*private_hex[0], 129)
+        SecureWipe(*encryption_private[0], 4801)
     }
     views: [16]GrantScope
     grant: Grant
     if !DevicePrivateHex(*stored_delegate.signing, private_hex[:]) ||
-        SyncCryptoBytesToHex(*stored_delegate.encryption.secret_key[0], 2400,
+        BytesToHex(*stored_delegate.encryption.secret_key[0], 2400,
             *encryption_private[0], 4801) == 0 ||
         !ViewGrant(*stored_delegate.grant, views[:], *grant) ||
         !BuildGrantBody(grant, grant_body[:]) {
@@ -554,7 +554,7 @@ ExportStoredDelegateCapsule :: (output: []u8) -> bool {
     writer = WriteText(writer, TextUntilNul(grant_body[:]))
     writer = WriteByte(writer, cast(u8)125)
     if !writer.valid || StoredDelegateAvailable() == 0 {
-        SyncCryptoWipe(*output[0], cast(s64)output.count)
+        SecureWipe(*output[0], cast(s64)output.count)
         return false
     }
     return true
@@ -588,8 +588,8 @@ ReadDelegateCapsule :: (capsule: string, expected: DelegateInstallExpectation,
     public_bytes: [32]u8
     signing_id: [65]u8
     defer {
-        SyncCryptoWipe(*private_hex[0], 129)
-        SyncCryptoWipe(*encryption_private[0], 4801)
+        SecureWipe(*private_hex[0], 129)
+        SecureWipe(*encryption_private[0], 4801)
     }
     if !ObjectFields(capsule, 0, names[:], positions[:]) ||
         ReadStringText(capsule, positions[0], format[:]) < 0 ||
@@ -605,16 +605,16 @@ ReadDelegateCapsule :: (capsule: string, expected: DelegateInstallExpectation,
         !LocalOwnerAccepts(TextUntilNul(material.grant.account_id[:])) {
         return false
     }
-    if SyncCryptoHexToBytes(TextUntilNul(material.grant.signing_key[:]), *public_bytes[0], 32) == 0 {
+    if HexToBytes(TextUntilNul(material.grant.signing_key[:]), *public_bytes[0], 32) == 0 {
         return false
     }
-    SyncCryptoSha256Hex(*public_bytes[0], 32, *signing_id[0])
+    Sha256Hex(*public_bytes[0], 32, *signing_id[0])
     if !LoadDeviceKey(TextUntilNul(private_hex[:]), TextUntilNul(material.grant.signing_key[:]),
             TextUntilNul(signing_id[:]), *material.signing) ||
         !LowerHex(TextUntilNul(material.encryption_hex[:]), 2368) ||
         !LowerHex(TextUntilNul(encryption_private[:]), 4800) ||
-        SyncCryptoHexToBytes(TextUntilNul(material.encryption_hex[:]), *material.encryption.public_key[0], 1184) == 0 ||
-        SyncCryptoHexToBytes(TextUntilNul(encryption_private[:]), *material.encryption.secret_key[0], 2400) == 0 ||
+        HexToBytes(TextUntilNul(material.encryption_hex[:]), *material.encryption.public_key[0], 1184) == 0 ||
+        HexToBytes(TextUntilNul(encryption_private[:]), *material.encryption.secret_key[0], 2400) == 0 ||
         !AppCopyText(expected.server_url, material.server[:]) {
         return false
     }

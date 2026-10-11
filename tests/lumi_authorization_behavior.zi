@@ -13,16 +13,14 @@
 #import, file "../src/storage/data.zi";
 #import, file "../src/storage/db.zi";
 #import, file "../src/cells/lumi_authorization.zi";
-#import, file "../src/storage/sync_account_crypto.zi";
+#import "keys"
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/daochi_account.zi";
 #import, file "../src/storage/storage_layout.zi";
 #import, file "../src/storage/sync_account.zi";
-#import, file "../src/storage/sync_crypto_random.zi";
 #import, file "../src/storage/device_key.zi";
 #import, file "../src/storage/delegate_store.zi";
-#import, file "../src/storage/sync_crypto_hmac.zi";
-#import, file "../src/storage/sync_crypto.zi";
+#import "crypto"
 
 c :: #system_library "c";
 TestNow :: (out: *s64) -> s64 #foreign c "time";
@@ -30,7 +28,7 @@ TestSleep :: (microseconds: u32) -> s32 #foreign c "usleep";
 using SyncAccountLocalDataChoice;
 using SyncAccountSaveResult;
 
-owner_account: SyncAccount;
+owner_account: AccountKeys;
 recipient: EncryptionKeys;
 delegate_signer: DeviceKeyMaterial;
 claim: OwnerRendezvous;
@@ -51,7 +49,7 @@ make_claim :: () {
     claim.scope_count = 1
     claim.scopes[0].read = true
     claim.scopes[0].write = true
-    unused AppCopyText(AccountField(*owner_account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), claim.account_id[:])
+    unused AppCopyText(AccountFieldText(*owner_account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), claim.account_id[:])
     unused AppCopyText("inbe", claim.app_id[:])
     unused AppCopyText(AuthorizationAudience, claim.audience[:])
     unused AppCopyText(LumiPrivateCollection, claim.scopes[0].collection[:])
@@ -132,7 +130,7 @@ check_envelope :: () {
     rejected[0] = cast(u8)120
     check_true("legacy global key never sealed", !LumiAuthorizationSealAndSign(*owner_account, *claim,
         TestNow(null), legacy_key[:], rejected[:], *approval) && rejected[0] == cast(u8)0)
-    SyncCryptoWipe(*legacy_key[0], 32)
+    SecureWipe(*legacy_key[0], 32)
     body: [32768]u8
     now := TestNow(null)
     check_true("owner signs sealed Lumi grant", LumiAuthorizationSealAndSign(*owner_account, *claim,
@@ -163,8 +161,8 @@ check_envelope :: () {
     altered.collection = "private.inbe.v2.diary"
     check_true("Diary excluded cryptographically", !OpenCollectionKey(grant, altered, *recipient, opened[:]))
     ClearEncryptionKeys(*other)
-    SyncCryptoWipe(*key[0], 32)
-    SyncCryptoWipe(*opened[0], 32)
+    SecureWipe(*key[0], 32)
+    SecureWipe(*opened[0], 32)
 }
 
 FakeTransport :: struct {
@@ -476,7 +474,7 @@ check_temporary_operation :: () {
     check_true("wrong temporary owner hash rejected", !BeginTemporaryOwnerAuthorizationOperation(
         *operation, *bad_owner, claim.bot_id, claim.telegram_id, AuthorizationAudience,
         transport, "/api/v1/telegram/account/bind", "{}", output[:], true))
-    SyncCryptoWipe(*bad_owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*bad_owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     check_true("temporary broad owner route refused", !BeginTemporaryOwnerAuthorizationOperation(
         *operation, *owner_account, claim.bot_id, claim.telegram_id, AuthorizationAudience,
         transport, "/api/v1/account/delete", "{}", output[:], true))
@@ -509,11 +507,11 @@ check_temporary_envelope :: () {
         TextUntilNul(owner_account.public_key_hex[:]), now))
     key: [32]u8
     secret: [2560]u8
-    check_true("actual owner secret decoded", SyncCryptoHexToBytes(TextUntilNul(owner_account.private_key_hex[:]),
+    check_true("actual owner secret decoded", HexToBytes(TextUntilNul(owner_account.private_key_hex[:]),
         *secret[0], 2560) != 0)
-    check_true("direct V2 owner key derivation", SyncCryptoHmacSha256Text(*secret[0], 2560,
+    check_true("direct V2 owner key derivation", HmacSha256Text(*secret[0], 2560,
         LumiPrivateKeyContext, *key[0]) != 0)
-    SyncCryptoWipe(*secret[0], 2560)
+    SecureWipe(*secret[0], 2560)
     opened: [32]u8
     check_true("temporary recipient opens exact V2 key", OpenCollectionKey(grant, scopes[0], *recipient,
         opened[:]) && EqualBytes(*opened[0], *key[0], 32))
@@ -540,8 +538,8 @@ check_temporary_envelope :: () {
         claim.telegram_id + 1, TestNow(null) + 300))
     check_true("identity switch blocks previous envelope", !SealAndSignTemporaryLumiGrant(
         *owner_account, *claim, now, body[:], *approval))
-    SyncCryptoWipe(*key[0], 32)
-    SyncCryptoWipe(*opened[0], 32)
+    SecureWipe(*key[0], 32)
+    SecureWipe(*opened[0], 32)
 }
 
 #program_export
@@ -553,7 +551,7 @@ Check :: () -> s32 {
     install_english_catalog()
     root := "/tmp/inbe-lumi-authorization-test/data"
     check_true("test database", storage_init(root) != 0)
-    check_true("real owner created", CreateSyncAccount(*owner_account) != 0)
+    check_true("real owner created", CreateAccountKeys(*owner_account) != 0)
     check_true("owner saved", sync_account_save(*owner_account,
         cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_MERGE) == cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK)
     check_true("separate signing key generated", GenerateDeviceKey(*delegate_signer))
@@ -567,7 +565,7 @@ Check :: () -> s32 {
     check_temporary_envelope()
     ClearEncryptionKeys(*recipient)
     WipeDeviceKey(*delegate_signer)
-    SyncCryptoWipe(*owner_account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*owner_account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()
     remove_tree("/tmp/inbe-lumi-authorization-test/")
     return failures

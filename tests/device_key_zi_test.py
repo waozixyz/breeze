@@ -27,8 +27,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),
         str(ROOT / "src/app/update_transport.zi"),
     ], check=True)
-    names = {"device_key_store.c", "device_key.c", "sync_crypto.c",
-             "sync_crypto_random.c", "byte_text_linux.c", "Oqs.c", "update_transport.c"}
+    names = {"device_key_store.c", "device_key.c", "crypto.c",
+             "keys.c", "byte_text_linux.c", "Oqs.c", "update_transport.c"}
     sources = sorted(str(path) for path in generated.rglob("*.c")
                      if path.name in names)
     monocypher = ROOT / "build/packages/monocypher/src"

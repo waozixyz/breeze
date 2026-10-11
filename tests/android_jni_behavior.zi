@@ -1,12 +1,14 @@
 #import "android_jni"
 #import, file "../src/platform/android/android_health_host.zi";
 #import, file "../src/platform/android/android_wakelock_host.zi";
-#import, file "../src/platform/android/android_share.zi";
-#import, file "../src/platform/android/android_import_host.zi";
+#import "file_export"
+#import "byte_text_linux"
+#import "android_picker"
 #import, file "../src/platform/android/android_push_host.zi";
 #import, file "../src/platform/android/android_push_types.zi";
-#import, file "../src/platform/android/android_device.zi";
-#import, file "../src/platform/android/android_runtime_assets_host.zi";
+#import "android_device"
+#import, file "../src/platform/android/android_activity.zi";
+#import "file_download"
 #import, file "../src/platform/android/android_insets.zi";
 #import, file "../src/platform/network_transport.zi";
 #import, file "../src/platform/android/android_startup.zi";
@@ -212,8 +214,8 @@ FakeVoid :: (env: *JniEnv, object: *void, method: *void,
         java_asset_cancelled = arguments[0].long_integer
     }
     if CStringEquals(*method_name[0], "shareFile") {
-        Require(CStringEquals(cast(*u8)arguments[2].reference, "export.csv"), 18)
-        Require(CStringEquals(cast(*u8)arguments[3].reference, "application/octet-stream"), 19)
+        Require(CStringEquals(cast(*u8)arguments[1].reference, "export.csv"), 18)
+        Require(CStringEquals(cast(*u8)arguments[2].reference, "application/octet-stream"), 19)
     }
 }
 FakeObject :: (env: *JniEnv, object: *void, method: *void,
@@ -478,20 +480,6 @@ android_can_open_donation_reminder :: () -> s32 {
     return 1
 }
 #program_export
-SetAndroidWindowInsets :: (left: s32, top: s32, right: s32,
-    bottom: s32, ime: s32, cutout_left: s32, cutout_top: s32,
-    cutout_right: s32, cutout_bottom: s32) {
-    unused left
-    unused top
-    unused right
-    unused bottom
-    unused ime
-    unused cutout_left
-    unused cutout_top
-    unused cutout_right
-    unused cutout_bottom
-}
-#program_export
 SetDeviceDensity :: (density: float32) {
     unused density
 }
@@ -540,9 +528,9 @@ main :: () -> s32 {
 
     Require(JNI_OnLoad(*vm, null) == JniVersion && registered_methods == 20, 30)
     native_dark(*environment, cast(*void)*activity, 1)
-    Require(android_device_system_dark() == 1, 31)
+    Require(AndroidSystemDark() == 1, 31)
     native_dark(*environment, cast(*void)*activity, 0)
-    Require(android_device_system_dark() == 0, 32)
+    Require(AndroidSystemDark() == 0, 32)
     Require(native_practice(*environment, null, 3) == 1, 33)
     Require(android_take_pending_practice_start() == 3, 34)
     Require(android_take_pending_practice_start() == -1, 35)
@@ -570,15 +558,15 @@ main :: () -> s32 {
     Require(wakelock_keep_screen_on_host() && wakelock_allow_screen_off_host(), 47)
     Require(!wakelock_update_notification_host(null), 48)
 
-    Require(import_open_picker_host(3, *path[0]) && last_integer == 3, 50)
-    android_import_native_selected(*environment, null, 3, cast(*void)*path[0])
+    Require(AndroidPickerOpen(3, "*/*") && last_integer == 3, 50)
+    AndroidNativePickerSelected(*environment, null, 3, cast(*void)*path[0])
     output: [64]u8
-    Require(import_poll_result_host(2, *output[0], 64) == 0, 51)
-    Require(import_poll_result_host(3, *output[0], 64) == 1, 52)
+    Require(AndroidPickerPoll(2, output[:]) == .AndroidPickerNone, 51)
+    Require(AndroidPickerPoll(3, output[:]) == .AndroidPickerSelected, 52)
     Require(CStringEquals(*output[0], "/tmp/export.csv"), 53)
-    Require(import_poll_result_host(3, *output[0], 64) == 0, 54)
-    android_import_native_cancelled(*environment, null, 3)
-    Require(import_poll_result_host(3, *output[0], 64) == 2, 55)
+    Require(AndroidPickerPoll(3, output[:]) == .AndroidPickerNone, 54)
+    AndroidNativePickerCancelled(*environment, null, 3)
+    Require(AndroidPickerPoll(3, output[:]) == .AndroidPickerCancelled, 55)
     Require(push_host_configure() && push_host_configure_with(*path[0]), 56)
     Require(push_host_registered() == 1, 57)
     catalog: PushCatalog
@@ -586,57 +574,49 @@ main :: () -> s32 {
 
     android_device_set_orientation_mode(2)
     Require(last_integer == 2, 60)
-    android_device_set_soft_keyboard_visible(8)
-    Require(last_integer == 1, 61)
     Require(android_device_copy_text_and_toast(*path[0], null) == 1, 62)
     Require(android_device_app_icon() == 2 && android_device_set_app_icon(1) == 1, 63)
     input_session := SessionOpen()
-    android_text_input_open(input_session)
-    android_text_input_frame(input_session, true)
+    AndroidTextInputOpen(input_session)
+    AndroidTextInputFrame(input_session, true)
     Require(last_integer == 1, 64)
-    android_device_native_text_input_commit(*environment, null, 0x1f642)
-    android_device_native_text_input_backspace(*environment, null)
-    android_device_native_text_input_enter(*environment, null)
-    android_text_input_begin_frame(input_session)
-    Require(android_text_input_character() == 0x1f642 &&
-        android_text_input_character() == 0, 65)
-    android_text_input_begin_frame(input_session)
-    Require(android_text_input_key_pressed(259), 66)
-    android_text_input_begin_frame(input_session)
-    Require(android_text_input_key_pressed(257), 67)
-    android_text_input_close(input_session)
+    AndroidNativeTextCommit(*environment, null, 0x1f642)
+    AndroidNativeTextBackspace(*environment, null)
+    AndroidNativeTextEnter(*environment, null)
+    AndroidTextInputBeginFrame(input_session)
+    Require(AndroidTextInputCharacter() == 0x1f642 &&
+        AndroidTextInputCharacter() == 0, 65)
+    AndroidTextInputBeginFrame(input_session)
+    Require(AndroidTextInputKeyPressed(259), 66)
+    AndroidTextInputBeginFrame(input_session)
+    Require(AndroidTextInputKeyPressed(257), 67)
+    AndroidTextInputClose(input_session)
     Require(last_integer == 0, 68)
     SessionClose(input_session)
 
-    error: [64]u8
-    handle := android_asset_start_host(*path[0], *path[0], cast(u64)65536, *error[0], 64)
-    Require(handle > 0 && java_handle == cast(s64)handle, 70)
+    download: FileDownload
+    download.maximum_bytes = 65536
+    Require(FileDownloadStart(*download, "https://example.invalid/music.zip", "/data/music.zip") &&
+        download.handle > 0 && java_handle == cast(s64)download.handle, 70)
     Require(java_asset_maximum == 65536, 99)
-    status: s32
+    handle := download.handle
     http_status: s32
-    bytes: u64
-    total_bytes: u64
-    android_runtime_asset_native_progress(*environment, null, cast(s64)handle, 8, 10)
-    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
-        *total_bytes, *error[0], 64) && status == 1 && bytes == 8 && total_bytes == 10, 71)
-    android_runtime_asset_native_succeeded(*environment, null, cast(s64)handle, 10, 200)
-    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
-        *total_bytes, *error[0], 64) && status == 2 && bytes == 10 && http_status == 200, 72)
-    android_runtime_asset_native_failed(*environment, null, cast(s64)handle, 500, null)
-    Require(android_asset_poll_host(handle, *status, *http_status, *bytes,
-        *total_bytes, *error[0], 64) && status == 2, 73)
-    android_asset_release_host(handle)
-    Require(java_asset_cancelled == cast(s64)handle, 100)
-    Require(!android_asset_poll_host(handle, *status, *http_status, *bytes,
-        *total_bytes, *error[0], 64), 74)
+    FileDownloadNativeProgress(*environment, null, cast(s64)handle, 8, 10)
+    Require(FileDownloadPoll(*download) == FileDownloadStatus.Downloading &&
+        download.bytes == 8 && download.total_bytes == 10, 71)
+    FileDownloadNativeSucceeded(*environment, null, cast(s64)handle, 10, 200)
+    // A failure reported after success is ignored.
+    FileDownloadNativeFailed(*environment, null, cast(s64)handle, 500, null)
+    Require(FileDownloadPoll(*download) == FileDownloadStatus.Ready && download.bytes == 10 &&
+        download.http_status == 200, 72)
+    // A finished download is forgotten and the activity told so.
+    Require(java_asset_cancelled == cast(s64)handle && download.handle == 0, 100)
 
     payload: [3]u8
     payload[0] = 65
-    filename: [32]u8
-    CopyCString("export.csv", filename[:])
-    Require(android_share_bytes(*payload[0], 3, *filename[0], null, null) == 1, 80)
-    Require(android_share_bytes(*payload[0], cast(usize)2147483648,
-        *filename[0], null, null) == 0, 81)
+    Require(ExportBytes(TextFromBytes(payload[:]), "export.csv", "application/octet-stream", "Share"), 80)
+    Require(!ExportBytes(TextFromBytes(BytesFromPointer(*payload[0], cast(u64)2147483648)),
+        "export.csv", "application/octet-stream", "Share"), 81)
     wallet := "monero:84abc?tx_amount=0.1"
     Require(CanOpenUri(wallet) && OpenUri(wallet), 84)
     resolve_available = false

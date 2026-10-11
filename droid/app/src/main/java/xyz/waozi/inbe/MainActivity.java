@@ -979,6 +979,11 @@ public class MainActivity extends NativeActivity {
         });
     }
 
+    /** Called from Kryon's file_export: share bytes as a file. */
+    public void shareFile(byte[] data, String filename, String mimeType, String title) {
+        ShareHelper.shareFile(this, data, filename, mimeType, title);
+    }
+
     public void copyTextAndShowToast(final String text, final String toastText) {
         runOnUiThread(new Runnable() {
             @Override

@@ -1,4 +1,5 @@
 // Account storage and its Kryon controls. The private key is never drawn.
+#import "keys"
 #import, file "../../app/app.zi";
 #import, file "../../app/app_types.zi";
 #import, file "../../app/modal_rules.zi";
@@ -31,6 +32,7 @@
 #import, file "../qr_code_view.zi";
 #import, file "../../app/device_link_session.zi";
 #import, file "../../platform/android/android_import.zi";
+#import "android_picker"
 #import, file "../../platform/environment.zi";
 #import, file "settings_status_view.zi";
 #import "url"
@@ -61,7 +63,6 @@ using ButtonEmphasis;
 using TextWrap;
 using DeviceLinkStage;
 using AndroidImportKind;
-using AndroidImportResult;
 
 SettingsSyncKeySaveDialog :: #type (app: *InnerBreeze, value: string) -> s32;
 SettingsSyncKeyImportDialog :: #type (app: *InnerBreeze) -> s32;
@@ -191,11 +192,11 @@ settings_sync_account_set_import_dialog :: (callback: SettingsSyncKeyImportDialo
     import_dialog_callback = callback
 }
 
-SettingsSyncAccountId :: (account: *SyncAccount) -> string {
+SettingsSyncAccountId :: (account: *AccountKeys) -> string {
     if account == null {
         return ""
     }
-    return AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+    return AppTextFromCString(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
 }
 
 SettingsSyncNormalizeAlias :: (app: *InnerBreeze) {
@@ -281,7 +282,7 @@ SettingsSyncOpenAlias :: (app: *InnerBreeze, then_backup: s32) {
 }
 
 SettingsSyncRunConnect :: (app: *InnerBreeze) {
-    account: SyncAccount
+    account: AccountKeys
     normalized: [256]u8
     if sync_account_load(*account) == 0 {
         storage_set_sync_enabled(0)
@@ -302,7 +303,7 @@ SettingsSyncRunConnect :: (app: *InnerBreeze) {
 
 #program_export
 settings_sync_account_save_prepared :: (app: *InnerBreeze,
-    account: *SyncAccount, action: PendingSyncAccountAction,
+    account: *AccountKeys, action: PendingSyncAccountAction,
     choice: SyncAccountLocalDataChoice) -> s32 {
     if app == null || account == null {
         return 0
@@ -317,7 +318,7 @@ settings_sync_account_save_prepared :: (app: *InnerBreeze,
     if result != cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK {
         return 0
     }
-    app.pending_sync_account = SyncAccount.{}
+    app.pending_sync_account = AccountKeys.{}
     app.pending_sync_account_action = cast(s32)PendingSyncAccountNone
     if action == cast(PendingSyncAccountAction)PendingSyncAccountCreate {
         settings_screen_set_status_success(LocaleText("sync_account_created"), "")
@@ -335,7 +336,7 @@ settings_sync_account_save_prepared :: (app: *InnerBreeze,
 }
 
 SettingsSyncCreate :: (app: *InnerBreeze) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     if sync_account_generate(*account) == 0 {
         settings_screen_set_status_error(LocaleText("sync_account_create_failed"))
         return 0
@@ -350,7 +351,7 @@ SettingsSyncCreate :: (app: *InnerBreeze) -> s32 {
 }
 
 SettingsSyncConnected :: (app: *InnerBreeze) -> bool {
-    account: SyncAccount
+    account: AccountKeys
     saved: [256]u8
     if sync_account_load(*account) == 0 || storage_sync_enabled() == 0 {
         return false
@@ -483,8 +484,7 @@ SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_a
     DeviceLinkTestScan()
     // A code scanned by the camera arrives like an imported file.
     scanned: [512]u8
-    if android_import_poll_result_for(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, *scanned[0], 512) ==
-        cast(s32)ANDROID_IMPORT_RESULT_SELECTED {
+    if AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, scanned[:]) == .AndroidPickerSelected {
         unused DeviceLinkScan(AppTextFromCString(*scanned[0], 512))
     }
     received := DeviceLinkAccountReceived()
@@ -572,9 +572,8 @@ SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_a
         scan := SettingsSyncButtonProps(LocaleText("device_link_scan"), x + half + AppScale(10), y.*, half,
             button_h, 5287, true)
         if Button(app.ui.session, scan) != 0 {
-            prompt: [256]u8
-            unused AppCopyText(LocaleText("device_link_scan_prompt"), prompt[:])
-            if android_qr_scan_open(*prompt[0]) == 0 {
+            if !AndroidScannerOpen(cast(s32)ANDROID_IMPORT_KIND_QR_CODE,
+                LocaleText("device_link_scan_prompt")) {
                 settings_screen_set_status_error(LocaleText("device_link_failed"))
             }
         }
@@ -584,7 +583,7 @@ SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_a
 
 #program_export
 settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     link := SettingsDeviceLinkHeight(content_w)
     if sync_account_load(*account) == 0 {
         return AppScale(176) + link
@@ -599,7 +598,7 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
     if app == null || y == null {
         return
     }
-    account: SyncAccount
+    account: AccountKeys
     has_account := sync_account_load(*account) != 0
     button_h := AppScale(38)
     gap := AppScale(10)
@@ -782,7 +781,7 @@ SettingsSyncModal :: (app: *InnerBreeze,
 
 #program_export
 settings_sync_account_draw_backup_modal :: (app: *InnerBreeze) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     if app == null || sync_account_load(*account) == 0 {
         return 1
     }
@@ -921,7 +920,7 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
 
 #program_export
 settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     if app == null || sync_account_load(*account) == 0 {
         return 1
     }

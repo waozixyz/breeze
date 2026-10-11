@@ -73,7 +73,8 @@ bool CellsValidatePackage(int32_t index, String bytes) {
     return true; /* The capability decoder is covered by cells-test. */
 }
 
-int32_t SyncCryptoRandom(uint8_t *output, int64_t length) {
+/* Wraps daochi-client's SecureRandom so the device bucket is fixed. */
+int32_t __wrap_SecureRandom(uint8_t *output, int64_t length) {
     for (int64_t index = 0; index < length; index++) {
         output[index] = (uint8_t)(index * 37 + 11);
     }
@@ -82,7 +83,7 @@ int32_t SyncCryptoRandom(uint8_t *output, int64_t length) {
 
 static char latest_query[128];
 
-int32_t __wrap_DownloadRuntimeAsset(AssetDownload *download, String url, String destination) {
+bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, String destination) {
     assert(url.length > 0 && destination.length < sizeof(download->destination));
     assert(download->maximum_bytes > 0);
     /* Release checks name this host's interfaces and keep one device bucket. */
@@ -97,13 +98,13 @@ int32_t __wrap_DownloadRuntimeAsset(AssetDownload *download, String url, String 
         snprintf(latest_query, sizeof(latest_query), "%s", query);
     }
     snprintf((char *)download->destination, sizeof(download->destination), "%.*s", (int)destination.length, destination.data);
-    download->status = AssetDownloadStatus_Downloading;
+    download->status = FileDownloadStatus_Downloading;
     download->handle = (uint64_t)++starts;
-    return 1;
+    return true;
 }
-AssetDownloadStatus __wrap_PollRuntimeAssetDownload(AssetDownload *download) {
+FileDownloadStatus __wrap_file_download_FileDownloadPoll(FileDownload *download) {
     if (held) {
-        return AssetDownloadStatus_Downloading;
+        return FileDownloadStatus_Downloading;
     }
     const char *destination = (char *)download->destination;
     const char *name = strstr(destination, ".download.json") ? manifest :
@@ -114,10 +115,10 @@ AssetDownloadStatus __wrap_PollRuntimeAssetDownload(AssetDownload *download) {
     assert(output && fwrite(data.data, 1, data.length, output) == data.length);
     fclose(output);
     free((void *)data.data);
-    download->status = AssetDownloadStatus_Ready;
+    download->status = FileDownloadStatus_Ready;
     return download->status;
 }
-void __wrap_ReleaseRuntimeAssetDownload(AssetDownload *download) {
+void __wrap_file_download_FileDownloadRelease(FileDownload *download) {
     if (download->handle) {
         releases++;
     }

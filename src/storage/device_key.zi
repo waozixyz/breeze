@@ -3,8 +3,8 @@
 #import "byte_text_linux"
 #import "auth"
 #import "sync"
-#import, file "sync_crypto.zi";
-#import, file "sync_crypto_random.zi";
+#import "crypto"
+#import "keys"
 
 c :: #system_library "c";
 Ed25519KeyPair :: (private_key: *u8, public_key: *u8,
@@ -35,15 +35,15 @@ GenerateDeviceKey :: (material: *DeviceKeyMaterial) -> bool {
     if material == null { return false }
     material.* = DeviceKeyMaterial.{}
     seed: [32]u8
-    if SyncCryptoRandom(*seed[0], 32) == 0 { return false }
+    if SecureRandom(*seed[0], 32) == 0 { return false }
     Ed25519KeyPair(*material.private_key[0],
         *material.public_key[0], *seed[0])
-    SyncCryptoWipe(*seed[0], 32)
-    if SyncCryptoBytesToHex(*material.public_key[0], 32,
+    SecureWipe(*seed[0], 32)
+    if BytesToHex(*material.public_key[0], 32,
         *material.public_hex[0], 65) == 0 {
         return false
     }
-    SyncCryptoSha256Hex(*material.public_key[0], 32,
+    Sha256Hex(*material.public_key[0], 32,
         *material.key_id[0])
     return material.key_id[0] != cast(u8)0
 }
@@ -54,9 +54,9 @@ LoadDeviceKey :: (private_hex: string, public_hex: string,
     key_id: string, material: *DeviceKeyMaterial) -> bool {
     if material == null { return false }
     material.* = DeviceKeyMaterial.{}
-    if SyncCryptoHexToBytes(private_hex,
+    if HexToBytes(private_hex,
         *material.private_key[0], 64) == 0 ||
-    SyncCryptoHexToBytes(public_hex,
+    HexToBytes(public_hex,
         *material.public_key[0], 32) == 0 {
         return false
     }
@@ -73,12 +73,12 @@ LoadDeviceKey :: (private_hex: string, public_hex: string,
     valid := EqualBytes(*derived_private[0],
         *material.private_key[0], 64) &&
     EqualBytes(*derived_public[0], *material.public_key[0], 32)
-    SyncCryptoWipe(*seed[0], 32)
-    SyncCryptoWipe(*derived_private[0], 64)
+    SecureWipe(*seed[0], 32)
+    SecureWipe(*derived_private[0], 64)
     if !valid { return false }
-    if SyncCryptoBytesToHex(*material.public_key[0], 32,
+    if BytesToHex(*material.public_key[0], 32,
         *material.public_hex[0], 65) == 0 { return false }
-    SyncCryptoSha256Hex(*material.public_key[0], 32,
+    Sha256Hex(*material.public_key[0], 32,
         *material.key_id[0])
     expected := TextFromCString(*material.key_id[0])
     if key_id.count != 64 { return false }
@@ -95,7 +95,7 @@ LoadDeviceKey :: (private_hex: string, public_hex: string,
 DevicePrivateHex :: (material: *DeviceKeyMaterial,
     output: []u8) -> bool {
     if material == null || output.count < 129 { return false }
-    return SyncCryptoBytesToHex(*material.private_key[0], 64,
+    return BytesToHex(*material.private_key[0], 64,
         *output[0], output.count) != 0
 }
 
@@ -111,9 +111,9 @@ SignDeviceMessage :: (context: *void, message: string,
     signature: [64]u8
     Ed25519Sign(*signature[0], *material.private_key[0],
         descriptor.data, cast(usize)message.count)
-    result := SyncCryptoBytesToHex(*signature[0], 64,
+    result := BytesToHex(*signature[0], 64,
         *output[0], output.count) != 0
-    SyncCryptoWipe(*signature[0], 64)
+    SecureWipe(*signature[0], 64)
     return result
 }
 
@@ -133,7 +133,7 @@ DeviceFromKey :: (material: *DeviceKeyMaterial) -> Device {
 #program_export
 WipeDeviceKey :: (material: *DeviceKeyMaterial) {
     if material != null {
-        SyncCryptoWipe(*material.private_key[0], 64)
+        SecureWipe(*material.private_key[0], 64)
         material.* = DeviceKeyMaterial.{}
     }
 }

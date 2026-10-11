@@ -89,7 +89,7 @@ int main(void)
         StringLiteral(message),
         (Slice){.data = signature_hex, .length = sizeof signature_hex}));
     uint8_t signature[64];
-    assert(SyncCryptoHexToBytes(StringView(signature_hex, 128),
+    assert(HexToBytes(StringView(signature_hex, 128),
         signature, 64));
     assert(crypto_ed25519_check(signature, generated.public_key,
         (const uint8_t *)message, strlen(message)) == 0);

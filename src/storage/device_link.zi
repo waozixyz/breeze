@@ -9,8 +9,8 @@
 #import "vec"
 #import "text_buffer"
 #import, file "account_types.zi";
-#import, file "sync_crypto.zi";
-#import, file "sync_crypto_random.zi";
+#import "crypto"
+#import "keys"
 #import, file "../cells/package_files.zi";
 
 c :: #system_library "c";
@@ -56,7 +56,7 @@ DeviceLinkCode :: struct {
 
 DeviceLinkAccount :: struct {
     valid: bool
-    account: SyncAccount
+    account: AccountKeys
     server: [DEVICE_LINK_SERVER_MAX + 1]u8
 }
 
@@ -70,7 +70,7 @@ DeviceLinkBytes :: (value: string) -> *u8 {
 }
 
 DeviceLinkNewKeys :: (keys: *DeviceLinkKeys) -> bool {
-    if SyncCryptoRandom(*keys.secret[0], DEVICE_LINK_KEY) == 0 {
+    if SecureRandom(*keys.secret[0], DEVICE_LINK_KEY) == 0 {
         return false
     }
     LinkPublicKey(*keys.public[0], *keys.secret[0])
@@ -84,16 +84,16 @@ DeviceLinkForget :: (keys: *DeviceLinkKeys) {
 // A random 128-bit link ID as 32 lowercase hex characters.
 DeviceLinkNewID :: (output: []u8) -> bool {
     random: [16]u8
-    if output.count < DEVICE_LINK_ID_HEX + 1 || SyncCryptoRandom(*random[0], 16) == 0 {
+    if output.count < DEVICE_LINK_ID_HEX + 1 || SecureRandom(*random[0], 16) == 0 {
         return false
     }
-    return SyncCryptoBytesToHex(*random[0], 16, *output[0], cast(s64)output.count) != 0
+    return BytesToHex(*random[0], 16, *output[0], cast(s64)output.count) != 0
 }
 
 // inbe-link:1:<link ID>:<public key>:<s or r>:<server>
 DeviceLinkCodeText :: (id: string, keys: *DeviceLinkKeys, sends: bool, server: string) -> string {
     public: [DEVICE_LINK_KEY * 2 + 1]u8
-    if SyncCryptoBytesToHex(*keys.public[0], DEVICE_LINK_KEY, *public[0], public.count) == 0 {
+    if BytesToHex(*keys.public[0], DEVICE_LINK_KEY, *public[0], public.count) == 0 {
         return ""
     }
     out: Vec(u8)
@@ -152,7 +152,7 @@ DeviceLinkParse :: (text: string) -> DeviceLinkCode {
     server := text[at + 3:]
     if !DeviceLinkHexValid(id, DEVICE_LINK_ID_HEX) || !DeviceLinkHexValid(public, DEVICE_LINK_KEY * 2) ||
         !DeviceLinkServerValid(server) ||
-        SyncCryptoHexToBytes(public, *code.public[0], DEVICE_LINK_KEY) == 0 {
+        HexToBytes(public, *code.public[0], DEVICE_LINK_KEY) == 0 {
         return code
     }
     for byte, index: id { code.id[index] = byte }
@@ -197,17 +197,17 @@ DeviceLinkKey :: (secret: *u8, other: *u8, shower: *u8, scanner: *u8, key: *u8) 
 
 // Seals the account for the other device. sender holds this device's link
 // keys; the message starts with its public key, then nonce, MAC and text.
-DeviceLinkSeal :: (account: *SyncAccount, server: string, id: string, sender: *DeviceLinkKeys,
+DeviceLinkSeal :: (account: *AccountKeys, server: string, id: string, sender: *DeviceLinkKeys,
     other: *u8, sender_shows: bool) -> string {
     if server.count > DEVICE_LINK_SERVER_MAX {
         return ""
     }
     plain := *device_link_plain[0]
     plain[0] = cast(u8)1
-    if SyncCryptoHexToBytes(TextUntilNul(account.public_id[:]), *plain[1], DEVICE_LINK_PUBLIC_ID) == 0 ||
-        SyncCryptoHexToBytes(TextUntilNul(account.public_key_hex[:]), *plain[1 + DEVICE_LINK_PUBLIC_ID],
+    if HexToBytes(TextUntilNul(account.public_id[:]), *plain[1], DEVICE_LINK_PUBLIC_ID) == 0 ||
+        HexToBytes(TextUntilNul(account.public_key_hex[:]), *plain[1 + DEVICE_LINK_PUBLIC_ID],
             DEVICE_LINK_PUBLIC_KEY) == 0 ||
-        SyncCryptoHexToBytes(TextUntilNul(account.private_key_hex[:]),
+        HexToBytes(TextUntilNul(account.private_key_hex[:]),
             *plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY) == 0 {
         LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
         return ""
@@ -222,7 +222,7 @@ DeviceLinkSeal :: (account: *SyncAccount, server: string, id: string, sender: *D
     key: [DEVICE_LINK_KEY]u8
     shower := ifx sender_shows then *sender.public[0] else other
     scanner := ifx sender_shows then other else *sender.public[0]
-    if SyncCryptoRandom(nonce, DEVICE_LINK_NONCE) == 0 {
+    if SecureRandom(nonce, DEVICE_LINK_NONCE) == 0 {
         LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
         return ""
     }
@@ -231,7 +231,7 @@ DeviceLinkSeal :: (account: *SyncAccount, server: string, id: string, sender: *D
     LinkWipe(cast(*void)*key[0], cast(usize)DEVICE_LINK_KEY)
     LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
     total := DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC + size
-    if SyncCryptoBytesToHex(sealed, total, *device_link_message[0], DEVICE_LINK_MESSAGE_MAX) == 0 {
+    if BytesToHex(sealed, total, *device_link_message[0], DEVICE_LINK_MESSAGE_MAX) == 0 {
         return ""
     }
     return PackageText(TextUntilNul(device_link_message[:]), "")
@@ -249,7 +249,7 @@ DeviceLinkOpen :: (message: string, id: string, receiver: *DeviceLinkKeys, recei
     }
     total := cast(s32)message.count / 2
     sealed := *device_link_sealed[0]
-    if SyncCryptoHexToBytes(message, sealed, total) == 0 {
+    if HexToBytes(message, sealed, total) == 0 {
         return result
     }
     sender := sealed
@@ -273,19 +273,19 @@ DeviceLinkOpen :: (message: string, id: string, receiver: *DeviceLinkKeys, recei
         LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
         return result
     }
-    ok := SyncCryptoBytesToHex(*plain[1], DEVICE_LINK_PUBLIC_ID, *result.account.public_id[0],
-            SYNC_PUBLIC_ID_HEX_SIZE) != 0 &&
-        SyncCryptoBytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID], DEVICE_LINK_PUBLIC_KEY,
-            *result.account.public_key_hex[0], SYNC_PUBLIC_KEY_HEX_SIZE) != 0 &&
-        SyncCryptoBytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY,
-            *result.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) != 0
+    ok := BytesToHex(*plain[1], DEVICE_LINK_PUBLIC_ID, *result.account.public_id[0],
+            ACCOUNT_PUBLIC_ID_HEX_SIZE) != 0 &&
+        BytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID], DEVICE_LINK_PUBLIC_KEY,
+            *result.account.public_key_hex[0], ACCOUNT_PUBLIC_KEY_HEX_SIZE) != 0 &&
+        BytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY,
+            *result.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) != 0
     server_size := size - DEVICE_LINK_ACCOUNT
     for index: cast(s32)0..server_size - 1 { result.server[index] = plain[DEVICE_LINK_ACCOUNT + index] }
     result.server[server_size] = cast(u8)0
     LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
     result.valid = ok && (server_size == 0 || DeviceLinkServerValid(TextUntilNul(result.server[:])))
     if !result.valid {
-        LinkWipe(cast(*void)*result.account.private_key_hex[0], cast(usize)SYNC_PRIVATE_KEY_HEX_SIZE)
+        LinkWipe(cast(*void)*result.account.private_key_hex[0], cast(usize)ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     }
     return result
 }

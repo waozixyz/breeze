@@ -1,5 +1,6 @@
 // Data transfer choices and account safety prompts remain in Ziran.
 c :: #system_library "c";
+#import "keys"
 #import, file "../../app/app.zi";
 #import, file "../../app/app_types.zi";
 #import, file "../../app/modal_rules.zi";
@@ -22,12 +23,14 @@ c :: #system_library "c";
 #import, file "../../storage/import.zi";
 #import, file "../../storage/path_join.zi";
 #import, file "../../platform/android/android_import.zi";
+#import "android_picker"
 #import, file "../../platform/environment.zi";
 #import, file "settings_sync_account_impl.zi";
 #import, file "settings_status.zi";
 #import, file "settings_status_view.zi";
 #import "geometry"
 #import "file_picker"
+#import "file_export"
 #import "session"
 #import "layout"
 #import "tree"
@@ -58,17 +61,10 @@ using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
 using AndroidImportKind;
-using AndroidImportResult;
 
 app_reload_after_import :: (app: *InnerBreeze,
     reload_settings: s32) #foreign c;
 malloc :: (size: usize) -> *void #foreign c;
-android_share_bytes :: (data: *u8, size: u64, filename: *u8,
-    mime: *u8, title: *u8) -> s32 #foreign c;
-#if #defined(PLATFORM_WEB) {
-    web_download_file :: (path: *u8, filename: *u8,
-        mime: *u8) -> s32 #foreign c;
-}
 free :: (value: *void) #foreign c;
 
 pending_import_path: [4096]u8;
@@ -134,58 +130,16 @@ SettingsDataReleaseWebImport :: (path: string) {
 
 SettingsDataDeliverExport :: (path: string, filename: string,
     mime: string) -> bool {
-    path_bytes: [4096]u8
-    name_bytes: [256]u8
-    mime_bytes: [128]u8
-    title_bytes: [256]u8
-    if !AppCopyText(path, path_bytes[:]) ||
-    !AppCopyText(filename, name_bytes[:]) ||
-    !AppCopyText(mime, mime_bytes[:]) ||
-    !AppCopyText(LocaleText("share_sheet_title"), title_bytes[:]) {
-        return false
-    }
-    #if #defined(PLATFORM_WEB) {
-        downloaded := web_download_file(*path_bytes[0], *name_bytes[0],
-            *mime_bytes[0]) != 0
-        SettingsDataReleaseExportPath(path)
-        return downloaded
-    }
-    if AndroidPlatform() == 0 {
+    if WebPlatform() == 0 && AndroidPlatform() == 0 {
         return true
     }
-    file := OpenRead(path)
-    if !file.valid {
-        return false
-    }
-    size := FileSize(file)
-    if size <= 0 || size > 2147483647 {
-        unused CloseFile(file)
-        return false
-    }
-    bytes := cast(*u8)malloc(cast(usize)size)
-    if bytes == null {
-        unused CloseFile(file)
-        return false
-    }
-    read_count := ReadAt(file, BytesFromPointer(bytes, cast(u64)size), 0)
-    closed := CloseFile(file)
-    if read_count != size || !closed {
-        free(cast(*void)bytes)
-        return false
-    }
-    shared := android_share_bytes(bytes, cast(u64)size,
-        *name_bytes[0], *mime_bytes[0], *title_bytes[0]) != 0
-    free(cast(*void)bytes)
+    delivered := ExportFile(path, filename, mime, LocaleText("share_sheet_title"))
     SettingsDataReleaseExportPath(path)
-    return shared
+    return delivered
 }
 
 SettingsDataBeginAndroidImport :: (kind: s32) -> bool {
-    mime: [16]u8
-    if !AppCopyText("*/*", mime[:]) {
-        return false
-    }
-    if android_import_open_picker_for(kind, *mime[0]) == 0 {
+    if !AndroidPickerOpen(kind, "*/*") {
         return false
     }
     pending_android_import_kind = kind
@@ -239,7 +193,7 @@ SettingsDataInspectImport :: (app: *InnerBreeze, path: string) {
 }
 
 SettingsDataImportKeyPath :: (app: *InnerBreeze, path: string) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     path_bytes: [4096]u8
     if path.count == 0 || !AppCopyText(path, path_bytes[:]) ||
     sync_account_import_private_key_preview(*account, *path_bytes[0]) == 0 {
@@ -259,7 +213,7 @@ SettingsDataImportKeyPath :: (app: *InnerBreeze, path: string) -> s32 {
 }
 
 SettingsDataSaveKey :: (app: *InnerBreeze, filename: string) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
     path: [4096]u8
     if sync_account_load(*account) == 0 {
         return 3
@@ -454,7 +408,7 @@ settings_data_draw_actions :: (app: *InnerBreeze,
         SettingsDataExportCsv(app)
     }
     y.* += AppScale(50)
-    account: SyncAccount
+    account: AccountKeys
     if sync_account_load(*account) == 0 {
         clear_button := SettingsDataButtonProps(
             LocaleText("clear_local_data_button"),
@@ -506,12 +460,12 @@ settings_data_handle_import :: (app: *InnerBreeze) {
     }
     path: [4096]u8
     kind := pending_android_import_kind
-    result := android_import_poll_result_for(kind, *path[0], 4096)
-    if result == cast(s32)ANDROID_IMPORT_RESULT_NONE {
+    result := AndroidPickerPoll(kind, path[:])
+    if result == .AndroidPickerNone {
         return
     }
     pending_android_import_kind = -1
-    if result == cast(s32)ANDROID_IMPORT_RESULT_CANCELLED {
+    if result == .AndroidPickerCancelled {
         key := "import_cancelled"
         if kind == cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY {
             key = "sync_private_key_import_cancelled"
@@ -858,11 +812,11 @@ settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
             LocaleText("sync_account_switch_title"),
             LocaleText("sync_account_switch_message"), labels[:])
         if choice > 0 {
-            account: SyncAccount = app.pending_sync_account
+            account: AccountKeys = app.pending_sync_account
             action := cast(PendingSyncAccountAction)app.pending_sync_account_action
             app_close_modal(app)
             if choice == 1 {
-                app.pending_sync_account = SyncAccount.{}
+                app.pending_sync_account = AccountKeys.{}
                 app.pending_sync_account_action = cast(s32)PendingSyncAccountNone
                 settings_screen_set_status_error(
                     LocaleText("sync_account_switch_cancelled"))

@@ -1,0 +1,114 @@
+// Calls into Inner Breeze's own activity: orientation lock, copying with a
+// toast, and the launcher icon. Device state, text input and the input
+// method come from Kryon's android_device.
+#import "android_jni"
+#import "c_string"
+#import "session"
+
+#if #defined(ANDROID_BUILD) {
+    ActivityCallInteger :: (name: string, signature: string, value: s32) {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 {
+            return
+        }
+        unused AndroidJniCallVoidInteger(*session, name, signature, value)
+        AndroidJniDetachCurrent(*session)
+    }
+
+    ActivityCopyText :: (session: *AndroidJniSession, text: *u8, toast: *u8) -> s32 {
+        method := AndroidJniMethod(session, "copyTextAndShowToast",
+            "(Ljava/lang/String;Ljava/lang/String;)V")
+        if method == null {
+            return 0
+        }
+        env := session.env
+        arguments: [2]JniValue
+        arguments[0].reference = AndroidJniString(env, text)
+        arguments[1].reference = AndroidJniString(env, toast)
+        if arguments[0].reference == null || arguments[1].reference == null {
+            return 0
+        }
+        env.functions.CallVoidMethodA(env, session.activity, method, *arguments[0])
+        if env.functions.ExceptionCheck(env) != 0 {
+            return 0
+        }
+        return 1
+    }
+
+    ActivityAppIcon :: (icon: s32, change: bool) -> s32 {
+        result: s32 = ifx change then 0 else -1
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 {
+            return result
+        }
+        name := ifx change then "setAppIcon" else "getAppIcon"
+        signature := ifx change then "(I)Z" else "()I"
+        method := AndroidJniMethod(*session, name, signature)
+        if method != null {
+            env := session.env
+            if change {
+                arguments: [1]JniValue
+                arguments[0].integer = icon
+                result = cast(s32)env.functions.CallBooleanMethodA(env, session.activity, method, *arguments[0])
+            } else {
+                result = env.functions.CallIntMethodA(env, session.activity, method, null)
+            }
+            if env.functions.ExceptionCheck(env) != 0 {
+                result = ifx change then 0 else -1
+            }
+        }
+        AndroidJniDetachCurrent(*session)
+        return result
+    }
+}
+
+// Kryon's android_device shows the keyboard on Android (KRYON_ANDROID_HOST);
+// other platforms have none to show.
+#if !#defined(ANDROID_BUILD) {
+    #program_export
+    SetPlatformTextKeyboardVisible :: (session: Session, visible: bool) {
+        unused session
+        unused visible
+    }
+}
+
+#program_export
+android_device_set_orientation_mode :: (mode: s32) {
+    #if #defined(ANDROID_BUILD) {
+        ActivityCallInteger("applyOrientationMode", "(I)V", mode)
+    }
+    unused mode
+}
+
+#program_export
+android_device_copy_text_and_toast :: (text: *u8, toast: *u8) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 {
+            return 0
+        }
+        copied := ActivityCopyText(*session, text, toast)
+        AndroidJniDetachCurrent(*session)
+        return copied
+    }
+    unused text
+    unused toast
+    return 0
+}
+
+#program_export
+android_device_app_icon :: () -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return ActivityAppIcon(0, false)
+    }
+    return 0
+}
+
+#program_export
+android_device_set_app_icon :: (icon: s32) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        return ActivityAppIcon(icon, true)
+    }
+    unused icon
+    return 0
+}

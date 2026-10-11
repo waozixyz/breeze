@@ -15,9 +15,7 @@
 #import, file "../storage/account_types.zi";
 #import, file "../storage/daochi_account.zi";
 #import, file "../storage/device_key.zi";
-#import, file "../storage/sync_crypto_random.zi";
-#import, file "../storage/sync_account_crypto.zi";
-#import, file "../storage/sync_account_encrypted.zi";
+#import "keys"
 #import, file "../storage/sync_async.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/storage_layout.zi";
@@ -72,7 +70,7 @@ TelegramAccountFlow :: struct {
     pending: PublicRendezvous
     owner_pending: OwnerRendezvous
     material: DelegateMaterial
-    owner: SyncAccount
+    owner: AccountKeys
     approved: GrantStorage
     transfer: NetworkTransfer
     owner_operation: OwnerAuthorizationOperation
@@ -96,22 +94,22 @@ TelegramFlowStopOperations :: (flow: *TelegramAccountFlow) {
         cancel_transport.cancel(cancel_transport.context)
         flow.entry_cancel_waiting = false
     }
-    SyncCryptoWipe(*flow.owner_cancel_response[0], 8193)
-    SyncCryptoWipe(*flow.owner_cancel_body[0], 1025)
-    SyncCryptoWipe(*flow.entry_cancel_response[0], 8193)
-    SyncCryptoWipe(*flow.entry_cancel_body[0], 32768)
+    SecureWipe(*flow.owner_cancel_response[0], 8193)
+    SecureWipe(*flow.owner_cancel_body[0], 1025)
+    SecureWipe(*flow.entry_cancel_response[0], 8193)
+    SecureWipe(*flow.entry_cancel_body[0], 32768)
     flow.cancellation_deadline = 0
     flow.waiting = false
 }
 
 TelegramFlowWipeSecrets :: (flow: *TelegramAccountFlow) {
     TelegramAccountClearPassword(*flow.recovery_input)
-    SyncCryptoWipe(*flow.owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
-    SyncCryptoWipe(*flow.init_data[0], 16385)
-    SyncCryptoWipe(*flow.capsule[0], 65537)
-    SyncCryptoWipe(*flow.recovery[0], 17664)
-    SyncCryptoWipe(*flow.body[0], 32768)
-    SyncCryptoWipe(*flow.response[0], 65537)
+    SecureWipe(*flow.owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*flow.init_data[0], 16385)
+    SecureWipe(*flow.capsule[0], 65537)
+    SecureWipe(*flow.recovery[0], 17664)
+    SecureWipe(*flow.body[0], 32768)
+    SecureWipe(*flow.response[0], 65537)
     WipeDelegateMaterial(*flow.material)
 }
 
@@ -190,10 +188,10 @@ TelegramFlowPumpRemoteCancellation :: (flow: *TelegramAccountFlow) {
         }
     }
     if !flow.owner_cancel_operation.active && !flow.entry_cancel_waiting {
-        SyncCryptoWipe(*flow.owner_cancel_response[0], 8193)
-        SyncCryptoWipe(*flow.owner_cancel_body[0], 1025)
-        SyncCryptoWipe(*flow.entry_cancel_response[0], 8193)
-        SyncCryptoWipe(*flow.entry_cancel_body[0], 32768)
+        SecureWipe(*flow.owner_cancel_response[0], 8193)
+        SecureWipe(*flow.owner_cancel_body[0], 1025)
+        SecureWipe(*flow.entry_cancel_response[0], 8193)
+        SecureWipe(*flow.entry_cancel_body[0], 32768)
         flow.cancellation_deadline = 0
     }
 }
@@ -409,7 +407,7 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
         TelegramFlowFail(flow)
         return
     }
-    defer { SyncCryptoWipe(*snapshot[0], 65537) }
+    defer { SecureWipe(*snapshot[0], 65537) }
     json := TextUntilNul(snapshot[:])
     now := CurrentStoredDelegateTime(null)
     phase := flow.phase
@@ -460,7 +458,7 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
         if flow.status != 200 || !ReadTelegramEntryIdentity(json, *flow.challenge,
             TextUntilNul(flow.material.client_id[:]), TextUntilNul(flow.material.signing.public_hex[:]),
             TextUntilNul(flow.material.encryption_hex[:]), now, *bound) ||
-        TextUntilNul(bound.account_id[:]) != AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) ||
+        TextUntilNul(bound.account_id[:]) != AccountFieldText(*flow.owner.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE) ||
         TextUntilNul(bound.status[:]) != "bound" {
             TelegramFlowFail(flow)
             return
@@ -473,7 +471,7 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
     } else if phase == 6 {
         if flow.status != 200 || !ReadOwnerRendezvous(json, *flow.owner_pending) ||
         !LumiAuthorizationPendingValid(*flow.owner_pending,
-            AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, false) {
+            AccountFieldText(*flow.owner.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, false) {
             TelegramFlowFail(flow)
             return
         }
@@ -563,8 +561,8 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
             TelegramFlowFail(flow)
             return
         }
-        SyncCryptoWipe(*flow.owner.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
-        SyncCryptoWipe(*flow.init_data[0], 16385)
+        SecureWipe(*flow.owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+        SecureWipe(*flow.init_data[0], 16385)
         flow.phase = 14
         flow.view.visible = false
         flow.view.busy = false
@@ -572,7 +570,7 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
         if !ExportStoredDelegateCapsule(flow.capsule[:]) ||
         !BeginTelegramProtectedOperation(*flow.protected_operation, 1,
             TextUntilNul(flow.capsule[:]), flow.response[:]) {
-            SyncCryptoWipe(*flow.capsule[0], 65537)
+            SecureWipe(*flow.capsule[0], 65537)
             flow.protected_phase = 0
         }
         WipeDelegateMaterial(*flow.material)
@@ -580,7 +578,7 @@ TelegramFlowHandleResponse :: (flow: *TelegramAccountFlow) {
     } else if phase == 15 {
         if flow.status != 200 || !ReadOwnerRendezvous(json, *flow.owner_pending) ||
         !LumiAuthorizationPendingValid(*flow.owner_pending,
-            AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, true) ||
+            AccountFieldText(*flow.owner.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), TelegramFlowServer, now, true) ||
         TextUntilNul(flow.owner_pending.request_id[:]) != TextUntilNul(flow.pending.request_id[:]) ||
         TextUntilNul(flow.owner_pending.challenge[:]) != TextUntilNul(flow.pending.challenge[:]) ||
         flow.owner_pending.expires_at != flow.pending.expires_at ||
@@ -650,7 +648,7 @@ HandleTelegramAccountAction :: (app: *InnerBreeze, action: s32) {
     now := CurrentStoredDelegateTime(null)
     if action == 1 {
         if flow.initial_owner[0] != cast(u8)0 || flow.identity.account_id[0] != cast(u8)0 ||
-        storage_sync_data_owner_public_id() != "" || CreateSyncAccount(*flow.owner) == 0 {
+        storage_sync_data_owner_public_id() != "" || CreateAccountKeys(*flow.owner) == 0 {
             TelegramFlowFail(flow)
             return
         }
@@ -663,18 +661,18 @@ HandleTelegramAccountAction :: (app: *InnerBreeze, action: s32) {
         {
             passphrase := TextUntilNul(flow.recovery_input.value[:])
             saved = flow.temporary_owner && passphrase.count >= 12 &&
-            ExportSyncAccountTextEncrypted(*flow.owner, passphrase, *flow.recovery[0], 17664) != 0 &&
+            AccountKeysEncryptedText(*flow.owner, passphrase, *flow.recovery[0], 17664) != 0 &&
             HashText(TextUntilNul(flow.recovery[:]), flow.backup_digest[:]) &&
             DownloadTelegramRecoveryFile(TextUntilNul(flow.recovery[:]))
         }
         if !saved {
             TelegramAccountClearPassword(*flow.recovery_input)
-            SyncCryptoWipe(*flow.recovery[0], 17664)
+            SecureWipe(*flow.recovery[0], 17664)
             flow.view.restore_failed = true
             return
         }
         TelegramAccountClearPassword(*flow.recovery_input)
-        SyncCryptoWipe(*flow.recovery[0], 17664)
+        SecureWipe(*flow.recovery[0], 17664)
         // A browser download click is not evidence of a saved backup. Require
         // the saved ciphertext to be selected and matched before binding.
         flow.backup_saved = false
@@ -724,7 +722,7 @@ HandleTelegramAccountAction :: (app: *InnerBreeze, action: s32) {
         !TelegramFlowStartChallenge(flow) {
             TelegramFlowFail(flow)
         }
-        SyncCryptoWipe(*flow.capsule[0], 65537)
+        SecureWipe(*flow.capsule[0], 65537)
     }
 }
 
@@ -758,7 +756,7 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
         }
         if result == 0 { return }
         if flow.protected_phase == 1 {
-            if result < 0 { SyncCryptoWipe(*flow.capsule[0], 65537) }
+            if result < 0 { SecureWipe(*flow.capsule[0], 65537) }
             if !SetVerifiedDelegateIdentity(flow.environment.bot_id, flow.identity.telegram_id, now + 300) {
                 TelegramFlowFail(flow)
             } else {
@@ -772,14 +770,14 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
                 }
             }
         } else if flow.protected_phase == 2 {
-            SyncCryptoWipe(*flow.capsule[0], 65537)
+            SecureWipe(*flow.capsule[0], 65537)
         } else if flow.protected_phase == 5 {
             flow.view.busy = false
             digest: [65]u8
             valid := result > 0 && flow.temporary_owner &&
             HashText(TextUntilNul(flow.recovery[:]), digest[:]) &&
             TextUntilNul(digest[:]) == TextUntilNul(flow.backup_digest[:])
-            SyncCryptoWipe(*flow.recovery[0], 17664)
+            SecureWipe(*flow.recovery[0], 17664)
             if !valid {
                 flow.view.restore_failed = true
                 flow.protected_phase = 0
@@ -790,29 +788,29 @@ TelegramAccountFlowPump :: (app: *InnerBreeze) {
             flow.view.status = ""
             flow.view.action_labels[7] = ""
             if !BuildTelegramEntryActionBody(*flow.identity, *flow.material, "bind",
-                AccountField(*flow.owner.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, flow.body[:]) ||
+                AccountFieldText(*flow.owner.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), now, flow.body[:]) ||
             !TelegramFlowOwnerRequest(flow, "/api/v1/telegram/account/bind", true, 5) {
                 TelegramFlowFail(flow)
             }
         } else if flow.protected_phase == 4 {
             flow.view.busy = false
             if result < 0 { TelegramAccountClearPassword(*flow.recovery_input); return }
-            candidate: SyncAccount
-            valid := ParseSyncAccountTextEncrypted(TextUntilNul(flow.recovery[:]),
+            candidate: AccountKeys
+            valid := ParseEncryptedAccountKeys(TextUntilNul(flow.recovery[:]),
                 TextUntilNul(flow.recovery_input.value[:]), *candidate) != 0
             TelegramAccountClearPassword(*flow.recovery_input)
-            SyncCryptoWipe(*flow.recovery[0], 17664)
-            owner := AccountField(*candidate.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+            SecureWipe(*flow.recovery[0], 17664)
+            owner := AccountFieldText(*candidate.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
             valid = valid && (flow.identity.account_id[0] == cast(u8)0 ||
                 TextUntilNul(flow.identity.account_id[:]) == owner) &&
             (storage_sync_data_owner_public_id() == "" || storage_sync_data_owner_public_id() == owner)
             if !valid {
-                SyncCryptoWipe(*candidate.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+                SecureWipe(*candidate.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
                 flow.view.restore_failed = true
                 return
             }
             flow.owner = candidate
-            SyncCryptoWipe(*candidate.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+            SecureWipe(*candidate.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
             flow.temporary_owner = true
             flow.backup_saved = true
             flow.view.restore_failed = false

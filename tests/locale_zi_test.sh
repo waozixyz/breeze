@@ -9,14 +9,14 @@ work=$root/build/locale-zi-test
 mkdir -p "$work/c" "$work/dropdown-c"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" "$root/src/app/locale.zi"
+    --module-path "$toolchain/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$kryon/src/backend" "$root/src/app/locale.zi"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" \
+    --module-path "$toolchain/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$kryon/src/backend" \
     "$root/src/app/locale_dropdown.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" \
+    --module-path "$toolchain/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$kryon/src/backend" \
     -o "$work/dropdown-c" "$root/src/app/locale_dropdown.zi"
 "${CC:-cc}" -std=c11 -I"$toolchain/include" \
     -I"$work/dropdown-c" -c "$work/dropdown-c/app/locale_dropdown.c" \
@@ -24,7 +24,7 @@ mkdir -p "$work/c" "$work/dropdown-c"
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src" \
     --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" \
+    --module-path "$toolchain/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$kryon/src/backend" \
     -o "$work/c" "$root/tests/locale_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"

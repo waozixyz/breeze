@@ -89,7 +89,7 @@ static bool sign_device(void *context, String message, Slice output)
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    SyncAccount account = {0};
+    AccountKeys account = {0};
     memset(account.public_id, 'a', 64);
     strcpy((char *)account.public_key_hex, "pub");
     memset(account.private_key_hex, 'a', 5120);

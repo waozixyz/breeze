@@ -14,9 +14,9 @@ GEN = WORK / "generated"
 BACKEND = Path(os.environ.get("KRYON_BACKEND", str(ROOT / "build/packages/kryon/src/backend")))
 MODULES = [
     "android_mutex", "android_health_host",
-    "android_wakelock_host", "android_share", "android_import_host",
-    "android_push_host", "android_push_types", "android_device", "android_text_editor",
-    "android_runtime_assets_host", "android_insets", "android_startup",
+    "android_wakelock_host",
+    "android_push_host", "android_push_types", "android_activity",
+    "android_insets", "android_startup",
 ]
 SOURCES = [ROOT / f"src/platform/android/{name}.zi" for name in MODULES]
 
@@ -28,7 +28,7 @@ def generate(output, architecture=None):
         "sh", str(ROOT / "scripts/run-ziran.sh"), str(BIN / "zi2c"), "--no-main", "--root", str(ROOT),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
-        "--module-path", str(UI), "--module-path", str(BACKEND), "--define", "ANDROID_BUILD",
+        "--module-path", str(UI), "--module-path", str(BACKEND), "--define", "ANDROID_BUILD", "--define", "KRYON_ANDROID_HOST",
         "-o", str(output), str(ROOT / "tests/android_jni_behavior.zi"),
         *map(str, SOURCES), str(ROOT / "build/packages/ziran/std/c_string.zi"),
     ]

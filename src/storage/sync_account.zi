@@ -1,9 +1,7 @@
+#import "file_export"
 #import, file "account_types.zi";
-#import, file "sync_crypto.zi";
-#import, file "sync_account_crypto.zi";
-#import, file "sync_account_text.zi";
-#import, file "sync_account_parse.zi";
-#import, file "sync_account_sign.zi";
+#import "crypto"
+#import "keys"
 #import, file "data.zi";
 #import, file "storage_core.zi";
 #import, file "delegate_store.zi";
@@ -27,10 +25,6 @@ SyncSaveFileData :: (path: *u8, body: *u8, length: s32) -> bool #foreign c "Save
 
 
 AccountExportPlatform :: () -> s32 #foreign c "inbe_account_export_platform";
-AccountShareBytes :: (data: *u8, data_size: u64, filename: *u8,
-    mime: *u8, title: *u8) -> s32 #foreign c "inbe_account_share_bytes";
-AccountDownloadFile :: (path: *u8, filename: *u8,
-    mime: *u8) -> s32 #foreign c "inbe_account_download_file";
 
 sync_public_id_key: string = "sync_public_id";
 sync_public_key_key: string = "sync_public_key";
@@ -40,7 +34,7 @@ sync_auth_token_key: string = "sync_auth_token";
 sync_auth_token_expires_key: string = "sync_auth_token_expires_at";
 AccountPathCapacity :: 512
 
-account_has_values :: (account: *SyncAccount) -> s32 {
+account_has_values :: (account: *AccountKeys) -> s32 {
     if account == null {
         return 0
     }
@@ -51,17 +45,17 @@ account_has_values :: (account: *SyncAccount) -> s32 {
     return 1
 }
 
-sync_account_write_and_reset :: (account: *SyncAccount) {
+sync_account_write_and_reset :: (account: *AccountKeys) {
     public_id: string = ""
     public_key: string = ""
     private_key: string = ""
     if account != null {
         public_id = AppTextFromCString(*account.public_id[0],
-            SYNC_PUBLIC_ID_HEX_SIZE)
+            ACCOUNT_PUBLIC_ID_HEX_SIZE)
         public_key = AppTextFromCString(*account.public_key_hex[0],
-            SYNC_PUBLIC_KEY_HEX_SIZE)
+            ACCOUNT_PUBLIC_KEY_HEX_SIZE)
         private_key = AppTextFromCString(*account.private_key_hex[0],
-            SYNC_PRIVATE_KEY_HEX_SIZE)
+            ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     }
     storage_settings_begin_write()
     storage_set_setting_text(sync_public_id_key, public_id)
@@ -75,9 +69,9 @@ sync_account_write_and_reset :: (account: *SyncAccount) {
     storage_settings_end_write()
 }
 
-sync_account_same_owner :: (owner: string, account: *SyncAccount) -> s32 {
+sync_account_same_owner :: (owner: string, account: *AccountKeys) -> s32 {
     if owner.count == 0 || account == null { return 0 }
-    id := AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE)
+    id := AppTextFromCString(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
     if owner.count != id.count { return 0 }
     index: s64 = 0
     while index < owner.count {
@@ -88,7 +82,7 @@ sync_account_same_owner :: (owner: string, account: *SyncAccount) -> s32 {
 }
 
 sync_sha256_hex :: (data: *u8, len: s64, out_hex: *u8) {
-    SyncCryptoSha256Hex(data, len, out_hex)
+    Sha256Hex(data, len, out_hex)
 }
 
 sync_account_available :: () -> s32 {
@@ -96,7 +90,7 @@ sync_account_available :: () -> s32 {
 }
 
 #program_export
-sync_account_load :: (account: *SyncAccount) -> s32 {
+sync_account_load :: (account: *AccountKeys) -> s32 {
     public_id: string
     public_key: string
     private_key: string
@@ -105,7 +99,7 @@ sync_account_load :: (account: *SyncAccount) -> s32 {
     if account == null {
         return 0
     }
-    account.* = SyncAccount.{}
+    account.* = AccountKeys.{}
     if StoredAccountMode() == AccountModeDelegate {
         return 0
     }
@@ -131,31 +125,31 @@ sync_account_load :: (account: *SyncAccount) -> s32 {
     return account_has_values(account)
 }
 
-sync_account_generate :: (account: *SyncAccount) -> s32 {
+sync_account_generate :: (account: *AccountKeys) -> s32 {
     data_init()
     if account == null {
         return 0
     }
-    account.* = SyncAccount.{}
-    return CreateSyncAccount(account)
+    account.* = AccountKeys.{}
+    return CreateAccountKeys(account)
 }
 
-sync_account_import_private_key_preview :: (account: *SyncAccount,
+sync_account_import_private_key_preview :: (account: *AccountKeys,
                                                filename: *u8) -> s32 {
     data_init()
     if account == null || filename == null || filename[0] == 0 {
         return 0
     }
-    account.* = SyncAccount.{}
+    account.* = AccountKeys.{}
     body := LoadFileText(filename)
     if body == null { return 0 }
-    text := AppTextFromCString(body, SYNC_ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE)
-    result := ParseSyncAccountText(text, account)
+    text := AppTextFromCString(body, ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE)
+    result := ParseAccountKeys(text, account)
     UnloadFileText(body)
     return result
 }
 
-sync_account_save :: (account: *SyncAccount,
+sync_account_save :: (account: *AccountKeys,
                          local_data_choice: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
     owner: string
 
@@ -164,7 +158,7 @@ sync_account_save :: (account: *SyncAccount,
         return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_FAILED
     }
 
-    current: SyncAccount
+    current: AccountKeys
     if sync_account_load(*current) != 0 && AccountValuesEqual(*current, account) {
         return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK
     }
@@ -183,7 +177,7 @@ sync_account_save :: (account: *SyncAccount,
 
     LeaveDelegateMode()
     storage_set_sync_data_owner_public_id(
-        AppTextFromCString(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE))
+        AppTextFromCString(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
     sync_account_write_and_reset(account)
     return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK
 }
@@ -199,38 +193,23 @@ sync_account_clear :: () -> s32 {
     return 1
 }
 
-sync_account_export_private_key :: (account: *SyncAccount,
+sync_account_export_private_key :: (account: *AccountKeys,
                                        filename: *u8) -> s32 {
-    body: [SYNC_ACCOUNT_EXPORT_TEXT_SIZE] u8
+    body: [ACCOUNT_EXPORT_TEXT_SIZE] u8
 
     if account_has_values(account) == 0 || filename == null || filename[0] == 0 {
         return 0
     }
-    if ExportSyncAccountText(account, *body[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE) == 0 {
+    if AccountKeysText(account, *body[0], ACCOUNT_EXPORT_TEXT_SIZE) == 0 {
         return 0
     }
-    len := cast(s32)AppTextFromCString(*body[0], SYNC_ACCOUNT_EXPORT_TEXT_SIZE).count
+    len := cast(s32)AppTextFromCString(*body[0], ACCOUNT_EXPORT_TEXT_SIZE).count
 
     platform := AccountExportPlatform()
-    if platform == 1 {
-        title: [128]u8
-        mime: [32]u8
-        if !AppCopyText(LocaleText("share_sheet_title"), title[:]) ||
-            !AppCopyText("application/octet-stream", mime[:]) { return 0 }
-        return AccountShareBytes(*body[0], cast(u64)len, filename,
-            *mime[0], *title[0])
-    } else if platform == 2 {
-        path: [AccountPathCapacity]u8
-        root: [AccountPathCapacity]u8
-        mime: [32]u8
-        if !AppCopyText(data_root(), root[:]) ||
-            !AppCopyText("application/octet-stream", mime[:]) ||
-            storage_join_path(*path[0], AccountPathCapacity,
-                *root[0], filename) == 0 {
-            return 0
-        }
-        if !SyncSaveFileData(*path[0], *body[0], len) { return 0 }
-        return AccountDownloadFile(*path[0], filename, *mime[0])
+    if platform == 1 || platform == 2 {
+        return ifx ExportBytes(AppTextFromCString(*body[0], ACCOUNT_EXPORT_TEXT_SIZE),
+            AppTextFromCString(filename, AccountPathCapacity), "application/octet-stream",
+            LocaleText("share_sheet_title")) then 1 else 0
     } else {
         index: s32 = 0
         full_path: bool = false
@@ -257,11 +236,11 @@ sync_account_export_private_key :: (account: *SyncAccount,
 
 sync_account_sign_hex :: (message: *u8, message_len: s64,
                              out_signature_hex: *u8, out_size: s64) -> s32 {
-    account: SyncAccount
+    account: AccountKeys
 
     if sync_account_load(*account) == 0 {
         return 0
     }
-    return SignSyncAccountHex(*account, message, message_len, out_signature_hex,
+    return SignAccountKeysHex(*account, message, message_len, out_signature_hex,
                               out_size)
 }

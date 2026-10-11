@@ -6,7 +6,7 @@ work="$root/build/app-click-block-test"
 mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/generated" "$root/tests/app_click_block_behavior.zi"

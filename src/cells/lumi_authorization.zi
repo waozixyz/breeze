@@ -18,9 +18,8 @@
 #import, file "../storage/device_key_store.zi";
 #import, file "../storage/device_key.zi";
 #import, file "../storage/sync_session.zi";
-#import, file "../storage/sync_crypto_random.zi";
-#import, file "../storage/sync_crypto_hmac.zi";
-#import, file "../storage/sync_crypto.zi";
+#import "keys"
+#import "crypto"
 #import, file "../storage/delegate_store.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/storage_layout.zi";
@@ -37,7 +36,7 @@ AuthorizationAudience :: "https://api.waozi.xyz"
 AuthorizationGrantLifetime :: 86400
 
 OwnerAuthorizationOperation :: struct {
-    account: SyncAccount
+    account: AccountKeys
     client: Client
     session: Session
     material: DeviceKeyMaterial
@@ -75,9 +74,9 @@ OwnerAuthorizationCurrent :: (operation: *OwnerAuthorizationOperation) -> bool {
     }
     return operation != null && operation.account.private_key_hex[0] != cast(u8)0 &&
     storage_get_setting_text("sync_public_id") ==
-    AccountField(*operation.account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) &&
+    AccountFieldText(*operation.account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE) &&
     storage_get_setting_text("sync_private_key") ==
-    AccountField(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    AccountFieldText(*operation.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
 }
 
 FinishOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
@@ -87,14 +86,14 @@ FinishOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
         SaveSession(*operation.session)
     }
     WipeDeviceKey(*operation.material)
-    SyncCryptoWipe(*operation.account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*operation.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     if operation.temporary {
         // Only the server clock remains useful to the controller. No temporary
         // owner bearer or login receipt survives completion or cancellation.
-        SyncCryptoWipe(*operation.session.token[0], 4096)
+        SecureWipe(*operation.session.token[0], 4096)
         operation.session.expires_at_local = 0
         operation.session.expires_in_seconds = 0
-        SyncCryptoWipe(*operation.request.login_response[0], 8192)
+        SecureWipe(*operation.request.login_response[0], 8192)
         operation.request = PendingRequest.{}
         operation.client = Client.{}
     }
@@ -151,7 +150,7 @@ BeginOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
 // Create/recovery owners live only in this bounded operation. Hosted mode
 // remains delegated; no owner account, bearer or device key is saved locally.
 BeginTemporaryOwnerAuthorizationOperation :: (operation: *OwnerAuthorizationOperation,
-    account: *SyncAccount, expected_bot: s64, expected_user: s64,
+    account: *AccountKeys, expected_bot: s64, expected_user: s64,
     server: string, transport: AsyncTransport, path: string, body: string,
     output: []u8, signed: bool) -> bool {
     if operation == null || operation.active || account == null || output.count == 0 ||
@@ -361,7 +360,7 @@ LumiAuthorizationBuildGrant :: (pending: *OwnerRendezvous, owner: string,
     AppCopyText("private", scope.visibility[:]) && AppCopyText(LumiPrivateKeyID, scope.key_id[:])
 }
 
-LumiAuthorizationSealAndSign :: (account: *SyncAccount, pending: *OwnerRendezvous,
+LumiAuthorizationSealAndSign :: (account: *AccountKeys, pending: *OwnerRendezvous,
     now: s64, collection_key: []u8, output: []u8, storage: *GrantStorage) -> bool {
     if output.count > 0 {
         output[0] = cast(u8)0
@@ -369,19 +368,19 @@ LumiAuthorizationSealAndSign :: (account: *SyncAccount, pending: *OwnerRendezvou
     if account == null || storage == null || collection_key.count != 32 ||
     account.private_key_hex[0] == cast(u8)0 ||
     !LumiAuthorizationBuildGrant(pending,
-        AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, storage) {
+        AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), now, storage) {
         return false
     }
     // Match the installed owner's isolated collection key before sealing. A
     // caller cannot accidentally pass the legacy key shared by other data.
     expected_key: [32]u8
     defer {
-        SyncCryptoWipe(*expected_key[0], 32)
+        SecureWipe(*expected_key[0], 32)
     }
     if storage_get_setting_text("sync_public_id") !=
-    AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE) ||
+    AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE) ||
     storage_get_setting_text("sync_private_key") !=
-    AccountField(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE) ||
+    AccountFieldText(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) ||
     storage_migrate_lumi_collection() == 0 ||
     storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *expected_key[0]) == 0 ||
     !EqualBytes(*expected_key[0], *collection_key[0], 32) {
@@ -408,7 +407,7 @@ LumiAuthorizationSealAndSign :: (account: *SyncAccount, pending: *OwnerRendezvou
 
 // Seal only the independently derived Lumi v2 key from the actual local
 // owner. The hosted profile never saves this owner or reads its legacy key.
-SealAndSignTemporaryLumiGrant :: (account: *SyncAccount, pending: *OwnerRendezvous,
+SealAndSignTemporaryLumiGrant :: (account: *AccountKeys, pending: *OwnerRendezvous,
     now: s64, output: []u8, storage: *GrantStorage) -> bool {
     if output.count > 0 {
         output[0] = cast(u8)0
@@ -424,20 +423,20 @@ SealAndSignTemporaryLumiGrant :: (account: *SyncAccount, pending: *OwnerRendezvo
     if !OpenTemporaryOwnerClient(AuthorizationAudience, account,
         TextUntilNul(pending.client_id[:]), pending.bot_id, pending.telegram_id, *client) ||
     !LumiAuthorizationBuildGrant(pending,
-        AccountField(*account.public_id[0], SYNC_PUBLIC_ID_HEX_SIZE), now, storage) {
+        AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), now, storage) {
         return false
     }
-    owner_secret: [(SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2]u8
+    owner_secret: [(ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2]u8
     collection_key: [32]u8
     defer {
-        SyncCryptoWipe(*owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2)
-        SyncCryptoWipe(*collection_key[0], 32)
+        SecureWipe(*owner_secret[0], (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2)
+        SecureWipe(*collection_key[0], 32)
     }
     scopes: [1]GrantScope
     grant: Grant
-    if SyncCryptoHexToBytes(AccountField(*account.private_key_hex[0],
-        SYNC_PRIVATE_KEY_HEX_SIZE), *owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2) == 0 ||
-    SyncCryptoHmacSha256Text(*owner_secret[0], (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2,
+    if HexToBytes(AccountFieldText(*account.private_key_hex[0],
+        ACCOUNT_PRIVATE_KEY_HEX_SIZE), *owner_secret[0], (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2) == 0 ||
+    HmacSha256Text(*owner_secret[0], (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2,
         LumiPrivateKeyContext, *collection_key[0]) == 0 ||
     !ViewGrant(storage, scopes[:], *grant) ||
     !SealCollectionKey(grant, scopes[0], collection_key[:], storage.scopes[0].key_envelope[:]) ||
@@ -701,7 +700,7 @@ LumiAuthorizationPump :: () {
     }
     if lumi_authorization_intent == 3 {
         lumi_authorization_intent = 0
-        account: SyncAccount
+        account: AccountKeys
         key: [32]u8
         body: [32768]u8
         approved_now := ServerNow(*lumi_authorization_operation.session, AuthorizationNow(null))
@@ -710,8 +709,8 @@ LumiAuthorizationPump :: () {
         storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *key[0]) != 0 &&
         LumiAuthorizationSealAndSign(*account, *lumi_authorization_pending, approved_now,
             key[:], body[:], *lumi_authorization_grant)
-        SyncCryptoWipe(*key[0], 32)
-        SyncCryptoWipe(*account.private_key_hex[0], SYNC_PRIVATE_KEY_HEX_SIZE)
+        SecureWipe(*key[0], 32)
+        SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
         if !ok || !LumiAuthorizationBegin("/api/v1/authorization/approve", TextUntilNul(body[:]), false, 3) {
             lumi_authorization_state = 5
             lumi_authorization_ready = false

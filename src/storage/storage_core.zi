@@ -20,10 +20,8 @@ Scan :: #import "json_scan"
 #import, file "sync_node_storage.zi";
 #import, file "storage_layout.zi";
 #import, file "export_sql.zi";
-#import, file "sync_crypto.zi";
-#import, file "sync_crypto_hmac.zi";
-#import, file "sync_crypto_random.zi";
-#import, file "sync_crypto_chacha.zi";
+#import "crypto"
+#import "keys"
 c :: #system_library "c";
 StorageCacheFlush :: (database: *void) -> s32 #foreign c "sqlite3_db_cacheflush";
 StorageDelegateMode :: #type () -> s32;
@@ -229,13 +227,13 @@ fill_random_bytes :: (data: *u8, len: s64) -> s32 {
     if data == null || len <= 0 {
         return 0
     }
-    return SyncCryptoRandom(data, len)
+    return SecureRandom(data, len)
 }
 
 storage_sha256_hex :: (data: *u8, len: s64, out_hex: *u8) {
     digest: [32] u8
-    SyncCryptoSha256(data, len, *digest[0])
-    if SyncCryptoBytesToHex(*digest[0], size_of(type_of(digest)), out_hex, 65) == 0 {
+    Sha256(data, len, *digest[0])
+    if BytesToHex(*digest[0], size_of(type_of(digest)), out_hex, 65) == 0 {
         out_hex[0] = cast(u8)0
     }
 }
@@ -1306,23 +1304,23 @@ storage_private_record_key_for_context :: (context: string, out: *u8) -> s32 {
     if out == null {
         return 0
     }
-    SyncCryptoWipe(out, 32)
+    SecureWipe(out, 32)
     if storage_delegate_mode != null && storage_delegate_mode() == 2 {
         return 0
     }
     private_key_hex: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)
     // The whole account private key (an ML-DSA-44 secret key) feeds the HMAC.
-    private_key: [(SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2] u8
-    key_size: s64 = (SYNC_PRIVATE_KEY_HEX_SIZE - 1) / 2
+    private_key: [(ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2] u8
+    key_size: s64 = (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2
     ok: s32
     if private_key_hex.count == 0 {
         return 0
     }
-    ok = SyncCryptoHexToBytes(private_key_hex, *private_key[0], key_size)
+    ok = HexToBytes(private_key_hex, *private_key[0], key_size)
     if ok != 0 {
-        SyncCryptoHmacSha256Text(*private_key[0], key_size, context, out)
+        HmacSha256Text(*private_key[0], key_size, context, out)
     }
-    SyncCryptoWipe(*private_key[0], key_size)
+    SecureWipe(*private_key[0], key_size)
     return ok
 }
 
@@ -1338,7 +1336,7 @@ storage_private_collection_key :: (collection: string, key_id: string, out: *u8)
     if out == null {
         return 0
     }
-    SyncCryptoWipe(out, 32)
+    SecureWipe(out, 32)
     if storage_delegate_mode != null && storage_delegate_mode() == 2 {
         if collection != LumiPrivateCollection || key_id != LumiPrivateKeyID ||
         storage_delegate_key == null {
@@ -1346,7 +1344,7 @@ storage_private_collection_key :: (collection: string, key_id: string, out: *u8)
         }
         result := storage_delegate_key(collection, key_id, out)
         if result == 0 {
-            SyncCryptoWipe(out, 32)
+            SecureWipe(out, 32)
         }
         return result
     }
@@ -1386,7 +1384,7 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     sealed: *u8 = null
     sealed_hex: *u8 = null
     nonce_hex: [25] u8
-    content_hash: [SYNC_PUBLIC_ID_HEX_SIZE] u8
+    content_hash: [ACCOUNT_PUBLIC_ID_HEX_SIZE] u8
     sealed_len: s64
     ok: s32 = 0
     if collection.count == 0 || key_id.count == 0 || record_id.count == 0 {
@@ -1413,15 +1411,15 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     if aad.ok == 0 || aad.data == null {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
-    if SyncCryptoRandom(*nonce[0], 12) == 0 {
+    if SecureRandom(*nonce[0], 12) == 0 {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
-    if SyncCryptoChaCha20Poly1305Seal(key, *nonce[0], plain.data,
+    if ChaCha20Poly1305Seal(key, *nonce[0], plain.data,
         plain.len, aad.data,
         aad.len, sealed, sealed_len) == 0 {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
-    if SyncCryptoBytesToHex(*nonce[0], 12, *nonce_hex[0], 25) == 0  || SyncCryptoBytesToHex(sealed, sealed_len, sealed_hex, sealed_len * 2 + 1) == 0 {
+    if BytesToHex(*nonce[0], 12, *nonce_hex[0], 25) == 0  || BytesToHex(sealed, sealed_len, sealed_hex, sealed_len * 2 + 1) == 0 {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
     storage_json_builder_append_text(json, "{")
@@ -1441,7 +1439,7 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
             ifx (queued_at > 0) then (queued_at) else (now_seconds()))
     }
     storage_json_builder_append_text(json, ",")
-    storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], SYNC_PUBLIC_ID_HEX_SIZE))
+    storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
     storage_json_builder_append_text(json, ",\"schema_version\":1")
     storage_json_builder_append_text(json, "}")
     ok = json.ok
@@ -1490,11 +1488,11 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                 if storage_append_encrypted_record_json(json, *key[0], collection, key_id, AppTextFromCString(*record_id[0], 180),
                     entity_type, entity_id, local_date,
                     queued_at, is_delete) == 0 {
-                    SyncCryptoWipe(*key[0], 32)
+                    SecureWipe(*key[0], 32)
                     json.ok = 0
                     break
                 }
-                SyncCryptoWipe(*key[0], 32)
+                SecureWipe(*key[0], 32)
             }
             if step_result != SQLITE_DONE {
                 json.ok = 0
@@ -1505,7 +1503,7 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
         if stmt != null {
             SqliteFinalize(stmt)
         }
-        SyncCryptoWipe(*key[0], 32)
+        SecureWipe(*key[0], 32)
         storage_json_builder_append_text(json, "]")
     }
 }
@@ -1536,7 +1534,7 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
         return null
     }
     can_shadow_encrypt = storage_private_record_key(*shadow_key[0])
-    SyncCryptoWipe(*shadow_key[0], 32)
+    SecureWipe(*shadow_key[0], 32)
     if can_shadow_encrypt == 0 {
         return null
     }
@@ -2118,7 +2116,7 @@ storage_decrypted_record_cleanup :: (aad: *StorageJsonBuilder, sealed: *u8,
     storage_json_builder_free(aad)
     free(cast(*void)sealed)
     free(cast(*void)plaintext)
-    SyncCryptoWipe(key, 32)
+    SecureWipe(key, 32)
 }
 
 storage_decrypt_record :: (collection: string, record_id: string, key_id: string, nonce_hex: string, ciphertext_hex: string, content_hash: string, plaintext_out: **u8) -> s32 {
@@ -2127,10 +2125,10 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
     nonce: [12] u8
     sealed: *u8 = null
     plaintext: *u8 = null
-    actual_hash: [SYNC_PUBLIC_ID_HEX_SIZE] u8
+    actual_hash: [ACCOUNT_PUBLIC_ID_HEX_SIZE] u8
     sealed_len: s64
     plaintext_out.* = null
-    if ciphertext_hex.count < 32 || ciphertext_hex.count % 2 != 0  || SyncCryptoHexToBytes(nonce_hex, *nonce[0], size_of(type_of(nonce))) == 0  || storage_private_collection_key(collection, key_id, *key[0]) == 0 {
+    if ciphertext_hex.count < 32 || ciphertext_hex.count % 2 != 0  || HexToBytes(nonce_hex, *nonce[0], size_of(type_of(nonce))) == 0  || storage_private_collection_key(collection, key_id, *key[0]) == 0 {
         return 0
     }
     sealed_len = cast(s64)ciphertext_hex.count / 2
@@ -2140,7 +2138,7 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
         storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
         return 0
     }
-    if SyncCryptoHexToBytes(ciphertext_hex, sealed, sealed_len) == 0 {
+    if HexToBytes(ciphertext_hex, sealed, sealed_len) == 0 {
         storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
         return 0
     }
@@ -2154,7 +2152,7 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
         storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
         return 0
     }
-    if SyncCryptoChaCha20Poly1305Open(*key[0], *nonce[0], sealed, sealed_len,
+    if ChaCha20Poly1305Open(*key[0], *nonce[0], sealed, sealed_len,
         cast(*u8)aad.data, aad.len,
         plaintext, sealed_len - 16) == 0 {
         storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
@@ -2163,7 +2161,7 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
     plaintext[sealed_len - 16] = cast(u8)0
     if content_hash.count > 0 && content_hash[0] != #char "\0" {
         storage_sha256_hex(plaintext, sealed_len - 16, *actual_hash[0])
-        if storage_compare_text(AppTextFromCString(*actual_hash[0], SYNC_PUBLIC_ID_HEX_SIZE), content_hash) != 0 {
+        if storage_compare_text(AppTextFromCString(*actual_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), content_hash) != 0 {
             storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
             return 0
         }

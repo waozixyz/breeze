@@ -1,6 +1,7 @@
 // One QR code connection at a time, advanced by the frame loop. The device
 // showing the code polls Daochi's link mailbox for the other device; the
 // scanning device answers. See src/storage/device_link.zi for the protocol.
+#import "keys"
 #import "json_scan"
 #import "text"
 #import "vec"
@@ -11,7 +12,7 @@
 #import, file "../platform/network_transport.zi";
 #import, file "../storage/account_types.zi";
 #import, file "../storage/device_link.zi";
-#import, file "../storage/sync_crypto.zi";
+#import "crypto"
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/sync_account.zi";
 #import, file "../storage/sync_nodes.zi";
@@ -126,7 +127,7 @@ DeviceLinkServer :: (output: []u8) -> bool {
 // without one, the scanning device sends its account to this device.
 DeviceLinkShow :: () -> bool {
     DeviceLinkReset()
-    account: SyncAccount
+    account: AccountKeys
     device_link.sends = sync_account_load(*account) != 0
     device_link.shows = true
     if !DeviceLinkServer(device_link.server[:]) || !DeviceLinkNewKeys(*device_link.keys) ||
@@ -173,7 +174,7 @@ DeviceLinkScan :: (text: string) -> bool {
         DeviceLinkSend(DEVICE_LINK_PUT_REQUEST)
         return true
     }
-    account: SyncAccount
+    account: AccountKeys
     if sync_account_load(*account) == 0 {
         DeviceLinkFail("device_link_no_account")
         return false
@@ -216,11 +217,11 @@ DeviceLinkSend :: (request: s32) {
     path := "/api/v1/link/get"
     if request == DEVICE_LINK_PUT_REQUEST {
         public: [DEVICE_LINK_KEY * 2 + 1]u8
-        unused SyncCryptoBytesToHex(*device_link.keys.public[0], DEVICE_LINK_KEY, *public[0], public.count)
+        unused BytesToHex(*device_link.keys.public[0], DEVICE_LINK_KEY, *public[0], public.count)
         BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"request\",\"data\":\"%\"}", id, TextUntilNul(public[:]))
         path = "/api/v1/link/put"
     } else if request == DEVICE_LINK_PUT_RESPONSE {
-        account: SyncAccount
+        account: AccountKeys
         if sync_account_load(*account) == 0 {
             DeviceLinkFail("device_link_no_account")
             return
@@ -307,7 +308,7 @@ DeviceLinkFinished :: (status: s32) {
     message := TextFromBytes(device_link_message_in[:length])
     if request == DEVICE_LINK_GET_REQUEST {
         // The scanner's key: compare digits before sending the account.
-        if length != DEVICE_LINK_KEY * 2 || SyncCryptoHexToBytes(message, *device_link.other[0], DEVICE_LINK_KEY) == 0 {
+        if length != DEVICE_LINK_KEY * 2 || HexToBytes(message, *device_link.other[0], DEVICE_LINK_KEY) == 0 {
             DeviceLinkFailAt("device_link_failed", "reading the key", status)
             return
         }
@@ -340,7 +341,7 @@ DeviceLinkUseServer :: () -> bool {
 }
 
 // The received account for the screen to import.
-DeviceLinkAccountReceived :: () -> *SyncAccount {
+DeviceLinkAccountReceived :: () -> *AccountKeys {
     if device_link.stage != cast(DeviceLinkStage)DeviceLinkReceived || !device_link_pending.valid {
         return null
     }

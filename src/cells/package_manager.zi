@@ -1,5 +1,6 @@
 // Serial downloads keep the platform transfer service and disk publication
 // bounded. Account app choices never contain local versions or cache paths.
+#import "keys"
 #import "json_scan"
 #import "byte_text_linux"
 #import "file_linux"
@@ -12,14 +13,14 @@
 #import, file "../app/assets.zi";
 #import, file "../app/settings_store.zi";
 #import, file "../app/text_buffers.zi";
-#import, file "../platform/asset_download.zi";
-#import, file "../platform/asset_download_types.zi";
+#import "file_download"
+#import, file "../platform/web_storage.zi";
 #import, file "../storage/temporary_data.zi";
 #import, file "../storage/paths.zi";
 
-using AssetDownloadStatus;
+using FileDownloadStatus;
 
-package_download: AssetDownload;
+package_download: FileDownload;
 package_index: s32 = -1;
 package_phase: s32;
 package_requested: [PackageCount]bool;
@@ -285,7 +286,7 @@ PackageRequestAll :: (desired: s32) {
 }
 
 PackageCancel :: () {
-    ReleaseRuntimeAssetDownload(*package_download)
+    FileDownloadRelease(*package_download)
     PackageFree(package_metadata)
     package_metadata = ""
     package_index = -1
@@ -304,7 +305,7 @@ PackageSetAutomatic :: (enabled: bool) {
     unused SettingsStoreInt("cells_auto_update", ifx enabled then 1 else 0)
     if !enabled {
         if package_automatic && package_index >= 0 {
-            ReleaseRuntimeAssetDownload(*package_download)
+            FileDownloadRelease(*package_download)
             package_status[package_index] = 0
             PackageFree(package_metadata)
             package_metadata = ""
@@ -346,7 +347,7 @@ PackageBucket :: () -> s32 {
         return stored
     }
     random: [4]u8
-    if SyncCryptoRandom(*random[0], 4) == 0 {
+    if SecureRandom(*random[0], 4) == 0 {
         return 99
     }
     value := cast(u32)random[0] | (cast(u32)random[1] << 8) |
@@ -376,14 +377,14 @@ PackageStartTransfer :: (suffix: string, destination: string) -> bool {
         PackageFree(route);
         PackageFree(url)
     }
-    ReleaseRuntimeAssetDownload(*package_download)
-    package_download = AssetDownload.{}
+    FileDownloadRelease(*package_download)
+    package_download = FileDownload.{}
     package_download.maximum_bytes = cast(u64)(ifx latest then 65536 else package_release.size)
-    return DownloadRuntimeAsset(*package_download, url, destination) != 0
+    return FileDownloadStart(*package_download, url, destination)
 }
 
 PackageFinish :: (ok: bool) {
-    ReleaseRuntimeAssetDownload(*package_download)
+    FileDownloadRelease(*package_download)
     package_status[package_index] = ifx ok then 2 else 3
     PackageFree(package_metadata)
     package_metadata = ""
@@ -393,7 +394,6 @@ PackageFinish :: (ok: bool) {
 
 // Validating includes the module capability allowlist and identity handshake.
 CellsValidatePackage :: (index: s32, bytes: string) -> bool #foreign c;
-SyncCryptoRandom :: (output: *u8, length: s64) -> s32 #foreign c;
 
 PackageTrialKey :: (prefix: string, index: s32) -> string {
     return PackageText(prefix, PackageName(index))
@@ -534,12 +534,18 @@ PackagePump :: (desired: s32, now: s32) {
         package_automatic = false
         return
     }
-    status := PollRuntimeAssetDownload(*package_download)
-    if status == cast(AssetDownloadStatus)Error {
+    downloading := package_download.status == FileDownloadStatus.Downloading
+    status := FileDownloadPoll(*package_download)
+    #if #defined(PLATFORM_WEB) {
+        if downloading && status != FileDownloadStatus.Downloading {
+            schedule_web_storage_sync(120, 0)
+        }
+    }
+    if status == cast(FileDownloadStatus)Error {
         PackageFinish(false);
         return
     }
-    if status != cast(AssetDownloadStatus)Ready {
+    if status != cast(FileDownloadStatus)Ready {
         return
     }
     if package_phase == 1 {
