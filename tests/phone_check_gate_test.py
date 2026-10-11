@@ -17,7 +17,8 @@ RECEIPT = {
     "apk": {"sha256": "0" * 64, "package": "xyz.waozi.inbe.debug", "version_code": 300, "version_name": "3.0.0"},
     "device": {"model": "moto e6 play", "android": "9"},
     "practice": {"name": "Wim Hof", "seconds": 60.0, "frames": 3580, "refresh_hz": 60.0, "fps": 59.6,
-                 "late_percent": 0.4, "p95_frame_ms": 16.9, "worst_frame_ms": 41.2},
+                 "late_percent": 0.4, "p95_frame_ms": 16.9, "worst_frame_ms": 41.2,
+                 "resume_layout_shift": 0.4},
     "passed": True,
 }
 
@@ -75,6 +76,8 @@ class PhoneCheckGateTest(unittest.TestCase):
             "late frames": lambda value: value["practice"].update(late_percent=9.0),
             "long stall": lambda value: value["practice"].update(worst_frame_ms=600.0),
             "short run": lambda value: value["practice"].update(seconds=20.0),
+            "shifted after resume": lambda value: value["practice"].update(resume_layout_shift=11.4),
+            "resume not checked": lambda value: value["practice"].pop("resume_layout_shift"),
             "marked failed": lambda value: value.update(passed=False),
             "other version": lambda value: value.update(version="2.9.9"),
             "other APK": lambda value: value["apk"].update(version_name="2.9.9"),
