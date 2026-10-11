@@ -17,6 +17,8 @@
 #import, file "../app/text_buffers.zi";
 
 lumi_rows: Vec(LumiChatRow);
+// Each loaded message's record key, in the same order, for deleting it.
+lumi_keys: Vec(string);
 lumi_count: s32;
 lumi_owner: [64]u8;
 lumi_store_loaded: bool;
@@ -31,6 +33,11 @@ LumiStoreReset :: () {
         lumi_rows[index] = LumiChatRow.{}
     }
     VecFree(lumi_rows)
+    for index: cast(s32)0..cast(s32)lumi_keys.count - 1 {
+        PackageFree(lumi_keys[index])
+        lumi_keys[index] = ""
+    }
+    VecFree(lumi_keys)
     lumi_count = 0
     lumi_owner[0] = cast(u8)0
     lumi_store_loaded = false
@@ -93,7 +100,7 @@ LumiStoreLoad :: () {
         if !lumi_store_error { storage_set_setting_int("lumi_archive_migrated", 1) }
     }
     statement: *void
-    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
         lumi_store_error = true
         return
     }
@@ -144,11 +151,17 @@ LumiStoreLoad :: () {
             lumi_store_error = true
             return
         }
+        row_key := PackageText(AppTextFromCString(SqliteColumnText(statement, 1), 256), "")
+        if !VecPush(lumi_keys, row_key) {
+            PackageFree(row_key)
+            lumi_store_error = true
+            return
+        }
         lumi_count += 1
     }
     total: *void
     lumi_has_older = false
-    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%'", -1, *total, null) == SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL", -1, *total, null) == SQLITE_OK {
         bind_text(total, 1, owner)
         lumi_has_older = SqliteStep(total) == SQLITE_ROW && SqliteColumnInt64(total, 0) > lumi_count
         SqliteFinalize(total)
@@ -250,8 +263,41 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
         lumi_storage_revision = -1
         return false
     }
+    row_key := PackageText(key, "")
+    if !VecPush(lumi_keys, row_key) {
+        PackageFree(row_key)
+        lumi_storage_revision = -1
+        return false
+    }
     lumi_count += 1
     lumi_store_revision += 1
+    return true
+}
+
+// Deleting keeps a small record under the same key, so other devices learn of
+// it through sync and keep the message's place. Inner Breeze 2.1.28 and older
+// do not know deleted messages and show it as a dash instead of failing.
+LumiStoreDelete :: (index: s32) -> bool {
+    LumiStoreLoad()
+    if lumi_store_error || index < 0 || index >= lumi_count || index >= cast(s32)lumi_keys.count {
+        return false
+    }
+    key := lumi_keys[index]
+    existing := CellRecordRead(key)
+    defer { PackageFree(existing) }
+    time := ReadNumber(existing, FieldAt(existing, 0, "time"))
+    if !time.valid {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"time\":%,\"user\":0,\"kind\":0,\"text\":\"\\u2014\",\"payload\":\"\",\"deleted\":true}",
+        cast(s64)time.value)
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    if !CellRecordWrite(key, value) {
+        return false
+    }
+    lumi_storage_revision = -1
     return true
 }
 

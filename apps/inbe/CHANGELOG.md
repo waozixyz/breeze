@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.28] - 2026-10-11
+
+- Bring Lumi's message selection with copy and delete.
+- Requires Inner Breeze 2.1.29 or later.
+
 ## [2.1.27] - 2026-10-11
 
 - Bring Lumi's chat that loads older messages as you scroll up.

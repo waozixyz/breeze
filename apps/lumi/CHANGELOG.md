@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.8] - 2026-10-11
+### Added
+- Select messages like in Telegram: hold a message to select it, then tap or drag across others. Checkmarks show what is selected, and a bar at the top shows how many, with copy and delete.
+
 ## [1.3.7] - 2026-10-11
 ### Changed
 - Like Telegram, the chat shows your newest messages and loads older ones as you scroll up, right away while the newest do not fill the screen.

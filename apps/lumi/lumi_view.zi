@@ -13,6 +13,10 @@
 #import "control_props"
 #import "box_props"
 #import "box_widget"
+#import "checkbox_props"
+#import "checkbox_widget"
+#import "press_props"
+#import "press_widget"
 #import "scroll_props"
 #import "scroll_widget"
 #import "tree"
@@ -41,6 +45,7 @@ ReadLumiSuggestionHabitHost :: (index: s32) -> LumiTask #foreign host_api;
 LumiViewLocaleHost :: (key: string) -> string #foreign host_api;
 LumiFeedbackChoiceHost :: (id: string, action: s32) -> bool #foreign host_api;
 LumiLoadOlderHost :: () -> bool #foreign host_api;
+LumiDeleteRowHost :: (index: s32) -> bool #foreign host_api;
 LumiFirstVisibleRowHost :: (scroll: s32) -> s32 #foreign host_api;
 LumiRowOffsetHost :: (index: s32) -> s32 #foreign host_api;
 ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
@@ -89,6 +94,168 @@ menu_revision: s64 = -1;
 menu_commands: [LUMI_MENU_COMMANDS]LumiMenuCommand;
 menu_scroll: s32;
 focus_request: s32;
+// Telegram-style selection: hold a message to select it, then tap messages
+// or drag across them. Indices are rows of the loaded chat, which keeps its
+// older messages unloaded while selecting so the rows stay in place.
+LUMI_SELECT_MAX :: 4096
+selecting: bool;
+selected: [LUMI_SELECT_MAX]bool;
+selected_count: s32;
+sweeping: bool;
+sweep_anchor: s32;
+sweep_value: bool;
+// Where the sweep began, in chat content and on screen. The rows it reaches
+// follow the pointer's movement since then, so the chat making room for the
+// selection bar does not shift which row the pointer means.
+sweep_content_y: s32;
+sweep_screen_y: float32;
+confirm_delete: bool;
+// Copied text waits until the composer has written its own clipboard state.
+pending_copy: string;
+copy_pending: bool;
+LUMI_CLOSE_ICON :: "S1.8rr:M6 6L18 18M18 6L6 18"
+LUMI_COPY_ICON :: "S1.6rr:M9 9H20V20H9ZM15 5V4H4V15H5"
+LUMI_DELETE_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+
+SelectionClear :: () {
+    for index: cast(s32)0..LUMI_SELECT_MAX - 1 {
+        selected[index] = false
+    }
+    selected_count = 0
+    selecting = false
+    sweeping = false
+    confirm_delete = false
+}
+
+SelectionSet :: (index: s32, value: bool) {
+    if index < 0 || index >= LUMI_SELECT_MAX || index >= frame.chat_count || selected[index] == value {
+        return
+    }
+    selected[index] = value
+    selected_count += ifx value then 1 else -1
+}
+
+// A press began on a row: it selects or clears that row, and dragging then
+// gives every row it sweeps over the same state.
+SweepStart :: (index: s32, value: bool, content_y: s32, screen_y: float32) {
+    sweeping = true
+    sweep_anchor = index
+    sweep_value = value
+    sweep_content_y = content_y
+    sweep_screen_y = screen_y
+    SelectionSet(index, value)
+}
+
+SweepTo :: (index: s32) {
+    if index < 0 {
+        index = 0
+    }
+    if index >= frame.chat_count {
+        index = frame.chat_count - 1
+    }
+    first := ifx index < sweep_anchor then index else sweep_anchor
+    last := ifx index < sweep_anchor then sweep_anchor else index
+    for row: first..last {
+        SelectionSet(row, sweep_value)
+    }
+}
+
+// The template with its %d replaced by the count.
+CountText :: (template: string, count: s32) -> string {
+    out: Vec(u8)
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 && template[at + 1] == cast(u8)100 {
+            BuilderPrint(*out, "%", count)
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+SelectedText :: () -> string {
+    out: Vec(u8)
+    written: s32 = 0
+    for index: cast(s32)0..frame.chat_count - 1 {
+        if index >= LUMI_SELECT_MAX {
+            break
+        }
+        if !selected[index] {
+            continue
+        }
+        if written > 0 {
+            BuilderPrint(*out, "\n\n")
+        }
+        BuilderPrint(*out, "%", ReadLumiChatRowHost(index).text)
+        written += 1
+    }
+    return BuilderFinish(out)
+}
+
+// The bar replacing the top of the chat while messages are selected: close,
+// the count, then copy and delete, with delete asking first.
+SelectionBar :: (x: s32, top: s32, width: s32) {
+    control := Scale(44)
+    if confirm_delete {
+        Text(frame.session, TextProps.{.key = cast(u64)300370,
+                .bounds = Bounds(x, top, width - Scale(216), control),
+                .text = LumiViewLocaleHost("lumi_delete_confirm"), .font = frame.font,
+                .wrap = cast(TextWrap)TextWrapAuto, .vertical_align = cast(TextAlign)TextAlignCenter})
+        if Button(frame.session, ButtonProps.{.id = 30020,
+                .bounds = Bounds(x + width - Scale(208), top, Scale(100), control),
+                .label = LumiViewLocaleHost("cancel_button"), .fit_content = true,
+                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            confirm_delete = false
+        }
+        if Button(frame.session, ButtonProps.{.id = 30021,
+                .bounds = Bounds(x + width - Scale(100), top, Scale(100), control),
+                .label = LumiViewLocaleHost("delete_button"), .fit_content = true,
+                .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            // From the last row back, so earlier rows keep their indices.
+            index := frame.chat_count - 1
+            while index >= 0 {
+                if index < LUMI_SELECT_MAX && selected[index] {
+                    unused LumiDeleteRowHost(index)
+                }
+                index -= 1
+            }
+            SelectionClear()
+        }
+        return
+    }
+    if Button(frame.session, ButtonProps.{.id = 30022, .bounds = Bounds(x, top, control, control),
+            .label = LumiViewLocaleHost("lumi_cancel_selection"), .icon_shape = LUMI_CLOSE_ICON, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        SelectionClear()
+        return
+    }
+    Box(frame.session, BoxProps.{.key = cast(u64)300371,
+            .bounds = Bounds(x + control + Scale(8), top + Scale(6), Scale(150), control - Scale(12)),
+            .fill = Color.{156, 188, 143, 48}, .radius = cast(float32)(control - Scale(12)) / 2.0})
+    Text(frame.session, TextProps.{.key = cast(u64)300372,
+            .bounds = Bounds(x + control + Scale(8), top, Scale(150), control),
+            .text = CountText(LumiViewLocaleHost("lumi_selected_count"), selected_count), .font = frame.font,
+            .wrap = cast(TextWrap)TextWrapNone, .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    if Button(frame.session, ButtonProps.{.id = 30023,
+            .bounds = Bounds(x + width - 2 * control - Scale(4), top, control, control),
+            .label = LumiViewLocaleHost("lumi_copy"), .icon_shape = LUMI_COPY_ICON, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        pending_copy = SelectedText()
+        copy_pending = true
+        SelectionClear()
+        return
+    }
+    if Button(frame.session, ButtonProps.{.id = 30024,
+            .bounds = Bounds(x + width - control, top, control, control),
+            .label = LumiViewLocaleHost("delete_button"), .icon_shape = LUMI_DELETE_ICON, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        confirm_delete = true
+    }
+}
 // A rounded square with a slash, and a paper plane, in Kryon's 24 x 24 icon
 // shape format.
 LUMI_COMMANDS_ICON :: "S1.8rr:M7 3H17C19.2091 3 21 4.79086 21 7V17C21 19.2091 19.2091 21 17 21H7C4.79086 21 3 19.2091 3 17V7C3 4.79086 4.79086 3 7 3Z|S1.8rr:M14.5 7.5L9.5 16.5"
@@ -375,6 +542,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     footer := frame.height - frame.bottom - Scale(16) - input_height
     suggestions_top := footer - Scale(ifx LumiTrim(frame.value).count > 0 then 46 else 0)
     history_top := Scale(12)
+    if selecting {
+        history_top = Scale(64)
+    }
     menu := MenuCommands(revision)
     menu_matches: [LUMI_MENU_COMMANDS]s32
     menu_count: s32 = 0
@@ -429,7 +599,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     frame.follow_end = history.scroll_offset == history.max_scroll
     // Older messages load when the chat reaches its top, and at once while
     // the loaded ones do not fill the chat, which then cannot scroll.
-    load_older := frame.has_older &&
+    load_older := frame.has_older && !selecting &&
     (history.max_scroll <= 0 || (!frame.follow_end && frame.scroll <= Scale(96)))
     if history.opened {
         first := LumiFirstVisibleRowHost(history.scroll_offset)
@@ -442,7 +612,36 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             row_height := row.height
             bubble_width := width - Scale(ifx row.user then 60 else 80)
             left := x + Scale(48)
-            if !row.user {
+            // The whole row takes holds and sweeps; its buttons sit above it.
+            press := Press(frame.session, PressProps.{.key = cast(u64)(410000 + index),
+                    .bounds = Bounds(x, top, width, row_height - Scale(10)),
+                    .label = LumiViewLocaleHost("lumi_message"), .now = frame.now, .capture = selecting})
+            if !selecting && press.held {
+                selecting = true
+                confirm_delete = false
+                // The bar takes the top of the chat; scrolling by its height
+                // keeps the messages where they were when the chat can scroll.
+                frame.scroll += Scale(52)
+                SweepStart(index, true, cast(s32)(press.y - history.content.y), press.y)
+            } else if selecting && press.down && !sweeping {
+                SweepStart(index, index >= LUMI_SELECT_MAX || !selected[index],
+                    cast(s32)(press.y - history.content.y), press.y)
+            }
+            if sweeping && press.down {
+                SweepTo(LumiFirstVisibleRowHost(sweep_content_y + cast(s32)(press.y - sweep_screen_y)))
+            }
+            if press.released {
+                sweeping = false
+            }
+            if selecting {
+                checked := index < LUMI_SELECT_MAX && selected[index]
+                toggled := Checkbox(frame.session, CheckboxProps.{.key = cast(u64)(420000 + index),
+                        .bounds = Bounds(x + Scale(8), top + (row_height - Scale(10)) / 2 - Scale(12), Scale(24), Scale(24)),
+                        .label = LumiViewLocaleHost("lumi_message"), .checked = checked})
+                if toggled.changed {
+                    SelectionSet(index, toggled.checked)
+                }
+            } else if !row.user {
                 Image(frame.session, ImageProps.{.key = cast(u64)(300400 + index * 4),
                         .asset_path = "assets/lumi/mascot.png", .alt_text = "Lumi",
                         .bounds = Bounds(x, top + row_height - Scale(54), Scale(40), Scale(40)),
@@ -465,7 +664,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             props := TextProps.{.key = cast(u64)(300403 + index * 4),
                 .bounds = Bounds(left + Scale(14), top + text_top,
                     bubble_width - Scale(28), text_height),
-                .text = row.text, .font = frame.font, .selectable = true,
+                .text = row.text, .font = frame.font,
                 .wrap = cast(TextWrap)TextWrapAuto}
             if !row.user {
                 formatted := ReplyText(index, row.text)
@@ -497,6 +696,12 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             TypingDots(x, cast(s32)history.content.y + frame.history_height)
         }
         End(frame.session)
+    }
+    if selecting && selected_count <= 0 && !sweeping {
+        SelectionClear()
+    }
+    if selecting {
+        SelectionBar(x, Scale(12), width)
     }
     typed := LumiTrim(frame.value)
     candidates: [20]string = .[commands.start_whm, commands.complete_habit,
@@ -676,6 +881,11 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     }
     frame.clipboard_write = field.clipboard_write
     frame.clipboard_text = field.clipboard_text
+    if copy_pending {
+        frame.clipboard_write = true
+        frame.clipboard_text = pending_copy
+        copy_pending = false
+    }
     send := !show_commands && Button(frame.session, ButtonProps.{.id = 30011,
             .bounds = Bounds(x + width - Scale(48), footer, Scale(48), Scale(48)),
             .label = LumiViewLocaleHost("lumi_send"), .icon_shape = LUMI_SEND_ICON, .icon_only = true,
