@@ -196,6 +196,59 @@ int32_t RunPackageManagerFixture(void) {
     package_manager_PackageSetAutomatic(false);
     assert(package_index == 4); /* In-flight manual work also survives. */
     package_manager_PackageCancel();
+    held = false;
+
+    /* A downloaded package proves itself by running; an unproven one that
+       three starts in a row never proved is set aside for the bundled one. */
+    package_trial_counted[4] = false;
+    String trial = package_manager_PackageInstalledBytes(4);
+    assert(trial.length > 8 && package_manager_PackageTrialAllows(4));
+    free((void *)trial.data);
+    package_manager_PackageTrialsProve(package_started_at + 9);
+    assert(package_trials_open); /* Not proven before ten seconds. */
+    package_manager_PackageTrialsProve(package_started_at + 10);
+    assert(!package_trials_open);
+    for (int start = 0; start < 5; start++) {
+        package_trial_counted[4] = false;
+        trial = package_manager_PackageInstalledBytes(4);
+        assert(trial.length > 8 && package_manager_PackageTrialAllows(4)); /* Proven stays good. */
+        free((void *)trial.data);
+    }
+    storage_set_setting_text(StringLiteral("package_good_diary"), StringLiteral(""));
+    for (int start = 0; start < 3; start++) {
+        package_trial_counted[4] = false;
+        trial = package_manager_PackageInstalledBytes(4);
+        assert(trial.length > 8 && package_manager_PackageTrialAllows(4));
+        free((void *)trial.data);
+    }
+    package_trial_counted[4] = false;
+    trial = package_manager_PackageInstalledBytes(4);
+    assert(trial.length > 8 && !package_manager_PackageTrialAllows(4));
+    free((void *)trial.data);
+    assert(!package_manager_PackageTrialAllows(4)); /* Set aside for this process too. */
+    int before_set_aside = starts;
+    manifest = "diary-new";
+    request(); /* The set-aside release is not downloaded again. */
+    assert(package_manager_PackageStatus(4) == 2 && starts == before_set_aside + 1);
+
+    /* Checks run daily, once after a start an hour after the last one, and
+       ten minutes after a sync reports a newer root package. */
+    storage_set_setting_int(StringLiteral("package_sequence_hint"), 0);
+    package_last_check = 200000;
+    package_hint_read_at = 0;
+    package_launch_checked = false;
+    assert(!package_manager_PackageCheckDue(201000));
+    package_launch_checked = false;
+    assert(package_manager_PackageCheckDue(203600));
+    assert(!package_manager_PackageCheckDue(203700)); /* Once per start. */
+    assert(package_manager_PackageCheckDue(286400));
+    storage_set_setting_int(StringLiteral("package_sequence_hint"), 1000000);
+    package_hint_read_at = 0;
+    assert(!package_manager_PackageCheckDue(200300));
+    assert(package_manager_PackageCheckDue(200700));
+    storage_set_setting_int(StringLiteral("package_sequence_hint"), 1);
+    package_hint_read_at = 0;
+    assert(!package_manager_PackageCheckDue(200800)); /* Not newer than the installed root. */
     return 0;
 }
 extern int32_t CheckPackageManager(void);

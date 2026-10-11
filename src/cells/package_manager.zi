@@ -34,6 +34,19 @@ package_fallback_versions: [PackageCount][32]u8;
 package_cached_releases: [PackageCount]PackageRelease;
 package_status: [PackageCount]s32;
 package_revision: s32;
+// Update checks run daily, once after each start, and soon after a sync
+// reports a newer root package. The schedule stays in memory: the pump runs
+// every frame and settings reads are database queries.
+package_last_check: s32 = -1;
+package_launch_checked: bool;
+package_sequence_hint: s32;
+package_hint_read_at: s32;
+// Downloaded packages prove themselves by running for a while after a start.
+package_started_at: s32;
+package_trial_counted: [PackageCount]bool;
+package_trials_open: bool;
+PACKAGE_TRIAL_STARTS :: 3
+PACKAGE_TRIAL_SECONDS :: 10
 c :: #system_library "c";
 PackageSettingText :: (key: string) -> string #foreign c "storage_get_setting_text";
 
@@ -354,6 +367,100 @@ PackageFinish :: (ok: bool) {
 CellsValidatePackage :: (index: s32, bytes: string) -> bool #foreign c;
 SyncCryptoRandom :: (output: *u8, length: s64) -> s32 #foreign c;
 
+PackageTrialKey :: (prefix: string, index: s32) -> string {
+    return PackageText(prefix, PackageName(index))
+}
+
+PackageStoreTrialText :: (key: string, value: string) {
+    bytes: [65]u8
+    unused AppCopyText(value, bytes[:])
+    unused SettingsStoreText(key, bytes[:])
+}
+
+// A downloaded package that three starts in a row never proved is set aside
+// for the bundled one until a different release arrives, so a release that
+// crashes at startup cannot keep the app from opening. Call this after
+// PackageInstalledBytes returned the package for use.
+PackageTrialAllows :: (index: s32) -> bool {
+    if index < 0 || index >= PackageCount {
+        return false
+    }
+    hash := TextFromCString(*package_cached_releases[index].hash[0])
+    good_key := PackageTrialKey("package_good_", index)
+    bad_key := PackageTrialKey("package_bad_", index)
+    trial_key := PackageTrialKey("package_trial_", index)
+    starts_key := PackageTrialKey("package_trial_starts_", index)
+    defer {
+        PackageFree(good_key);
+        PackageFree(bad_key);
+        PackageFree(trial_key);
+        PackageFree(starts_key)
+    }
+    // Without a release identity there is nothing to track.
+    if hash.count == 0 {
+        return true
+    }
+    if PackageSettingText(bad_key) == hash {
+        package_versions[index][0] = cast(u8)0
+        return false
+    }
+    if PackageSettingText(good_key) == hash || package_trial_counted[index] {
+        return true
+    }
+    package_trial_counted[index] = true
+    starts: s32 = 1
+    if PackageSettingText(trial_key) == hash {
+        starts = SettingsReadInt(starts_key, 0) + 1
+    }
+    if starts > PACKAGE_TRIAL_STARTS {
+        PackageStoreTrialText(bad_key, hash)
+        PackageStoreTrialText(trial_key, "")
+        unused SettingsStoreInt(starts_key, 0)
+        package_versions[index][0] = cast(u8)0
+        return false
+    }
+    PackageStoreTrialText(trial_key, hash)
+    unused SettingsStoreInt(starts_key, starts)
+    package_trials_open = true
+    return true
+}
+
+// Packages on trial become good once the app has run with them for a while.
+PackageTrialsProve :: (now: s32) {
+    if !package_trials_open || now - package_started_at < PACKAGE_TRIAL_SECONDS {
+        return
+    }
+    package_trials_open = false
+    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+        trial_key := PackageTrialKey("package_trial_", index)
+        good_key := PackageTrialKey("package_good_", index)
+        defer {
+            PackageFree(trial_key);
+            PackageFree(good_key)
+        }
+        trial := PackageSettingText(trial_key)
+        if trial.count > 0 {
+            PackageStoreTrialText(good_key, trial)
+            PackageStoreTrialText(trial_key, "")
+        }
+    }
+}
+
+PackageCheckDue :: (now: s32) -> bool {
+    if package_last_check < 0 {
+        package_last_check = SettingsReadInt("apps_last_update_check", 0)
+    }
+    if now - package_hint_read_at >= 60 {
+        package_hint_read_at = now
+        package_sequence_hint = SettingsReadInt("package_sequence_hint", 0)
+    }
+    launch := !package_launch_checked
+    package_launch_checked = true
+    elapsed := now - package_last_check
+    return elapsed >= 86400 || (launch && elapsed >= 3600) ||
+    (package_sequence_hint > 0 && elapsed >= 600 && package_sequence_hint > PackageSequence(0))
+}
+
 PackagePump :: (desired: s32, now: s32) {
     if DataTemporary() {
         return
@@ -361,9 +468,13 @@ PackagePump :: (desired: s32, now: s32) {
     if !package_initialized {
         PackageInitialize()
     }
+    if package_started_at == 0 && now > 0 {
+        package_started_at = now
+    }
+    PackageTrialsProve(now)
     if package_index < 0 {
         if PackageAutomaticEnabled() && PackagePublisherConfigured() && now > 0 &&
-        now - SettingsReadInt("apps_last_update_check", 0) >= 86400 {
+        PackageCheckDue(now) {
             for index: cast(s32)0..cast(s32)(PackageCount - 1) {
                 if (index == 0 || (desired & PackageBit(index)) != 0) && !package_requested[index] {
                     package_requested[index] = true
@@ -371,6 +482,7 @@ PackagePump :: (desired: s32, now: s32) {
                 }
             }
             unused SettingsStoreInt("apps_last_update_check", now)
+            package_last_check = now
         }
         for index: cast(s32)0..cast(s32)(PackageCount - 1) {
             if package_requested[index] {
@@ -420,6 +532,13 @@ PackagePump :: (desired: s32, now: s32) {
             TextFromCString(*public_key[0]))
         if !package_release.valid {
             PackageFinish(false);
+            return
+        }
+        bad_key := PackageTrialKey("package_bad_", package_index)
+        set_aside := PackageSettingText(bad_key) == TextFromCString(*package_release.hash[0])
+        PackageFree(bad_key)
+        if set_aside {
+            PackageFinish(true)
             return
         }
         if PackageBundledSequence(package_index) > 0 &&

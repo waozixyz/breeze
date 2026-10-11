@@ -157,7 +157,12 @@ Downloads use the Daochi release v2 endpoints on `https://api.waozi.xyz`:
 `/api/v2/packages/{app_id}/{sha256}.zib`. IDs are `inbe`, `inbe.habits`,
 `inbe.practices`, `inbe.lists`, `inbe.diary` and `inbe.lumi`.
 
-Automatic updates default on and check daily for the root and selected apps.
+Automatic updates default on and check daily for the root and selected apps,
+once after a start when the last check is an hour old, and ten minutes after
+a sync reports a newer root package (`package_sequence` in sync replies).
+A downloaded package proves itself by running ten seconds after a start; one
+that three starts in a row never proved is set aside for the bundled package
+and is not downloaded again until a different release arrives.
 The cell picker includes an automatic-update switch and a manual check button.
 Turning the switch off cancels active and queued automatic work; manual
 installation and checking remain available. No automatic network checks run
