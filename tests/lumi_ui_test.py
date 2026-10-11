@@ -73,7 +73,7 @@ def application(profile, label, standalone=False, recommended=False):
     with (OUTPUT / f"{label}.log").open("w") as log:
         app = subprocess.Popen([sys.argv[1], "--bundle", str(bundle)], cwd=ROOT,
                                env=ENV | {"APP_DATA_ROOT": str(profile),
-                                          "INBE_TEST_OPEN_URI_CAPTURE": str(OUTPUT / (label + "-uri.txt"))},
+                                          "KRYON_TEST_OPEN_URI_CAPTURE": str(OUTPUT / (label + "-uri.txt"))},
                                stdout=log, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 20

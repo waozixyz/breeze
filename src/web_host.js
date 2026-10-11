@@ -41,30 +41,6 @@ addToLibrary({
     HEAP32[(output + 4) >> 2] = Math.max(1, Math.round(height > 0 ? height : fallbackHeight));
   },
 
-  browser_open_uri__deps: ['$UTF8ToString'],
-  browser_open_uri: pointer => {
-    const uri = UTF8ToString(pointer);
-    if (!/^https?:\/\//i.test(uri)) {
-      return 0;
-    }
-    let anchor;
-    try {
-      anchor = document.createElement('a');
-      anchor.href = uri;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      return 1;
-    } catch (error) {
-      return 0;
-    } finally {
-      if (anchor) {
-        anchor.remove();
-      }
-    }
-  },
-
   app_pick_file_web__deps: ['$Asyncify', '$FS', '$UTF8ToString',
     '$lengthBytesUTF8', '$stringToUTF8'],
   app_pick_file_web__async: true,

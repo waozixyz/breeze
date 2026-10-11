@@ -105,20 +105,6 @@ assert.equal(saved.result, 1);
 assert.match(saved.selectedPath, /^\/tmp\/inbe-file-/);
 assert.equal(saved.writes.length, 0);
 assert.equal((await pickFile('selected', 0, 2)).result, -1);
-let opened = 0;
-let removedLink = 0;
-const link = { click() { opened += 1; }, remove() { removedLink += 1; } };
-const uriHost = host({}, {
-  UTF8ToString: pointer => pointer,
-  document: { createElement: () => link, body: { appendChild() {} } }
-});
-assert.equal(uriHost.browser_open_uri('javascript:alert(1)'), 0);
-assert.equal(uriHost.browser_open_uri('file:///tmp/data'), 0);
-assert.equal(uriHost.browser_open_uri('https://example.test/a'), 1);
-assert.equal(opened, 1);
-assert.equal(removedLink, 1);
-assert.equal(link.target, '_blank');
-assert.equal(link.rel, 'noopener');
 const measured = new Int32Array(4);
 host({}, { HEAP32: measured }).browser_viewport_size(640, 480, 0);
 assert.deepEqual([...measured.slice(0, 2)], [640, 480]);

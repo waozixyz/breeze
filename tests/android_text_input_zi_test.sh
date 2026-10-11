@@ -9,9 +9,11 @@ mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --define ANDROID_BUILD --root "$root/tests" \
     --module-path "$root/src" --module-path "$ui" \
+    --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/ziran/std" "$source"
 "$bin/zi2c" --define ANDROID_BUILD --root "$root/tests" \
     --module-path "$root/src" --module-path "$ui" \
+    --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/ziran/std" -o "$work/c" "$source"
 "${CC:-cc}" -std=c11 -D_DEFAULT_SOURCE -O2 -pthread \
     -ffunction-sections -fdata-sections -I"$root/build/packages/ziran/include" \

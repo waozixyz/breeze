@@ -1,5 +1,5 @@
 // Android owns TLS/socket effects; request policy and Daochi state remain Zi.
-#import "activity_jni"
+#import "android_jni"
 #import "net_http"
 #import "byte_text_linux"
 #import "async_client"
@@ -13,7 +13,7 @@ AndroidTransfer :: struct {
     output: []u8
 }
 
-NetworkBytes :: (session: *ActivityJniSession, value: string) -> *void {
+NetworkBytes :: (session: *AndroidJniSession, value: string) -> *void {
     env := session.env
     bytes := env.functions.NewByteArray(env, cast(s32)value.count)
     if bytes == null {
@@ -30,8 +30,8 @@ NetworkBytes :: (session: *ActivityJniSession, value: string) -> *void {
     return bytes
 }
 
-CancelAndroidHandle :: (session: *ActivityJniSession, handle: s32) {
-    method := JniMethod(session, "httpCancel", "(I)V")
+CancelAndroidHandle :: (session: *AndroidJniSession, handle: s32) {
+    method := AndroidJniMethod(session, "httpCancel", "(I)V")
     if method != null {
         arguments: [1]JniValue
         arguments[0].integer = handle
@@ -40,12 +40,12 @@ CancelAndroidHandle :: (session: *ActivityJniSession, handle: s32) {
     }
 }
 
-AndroidAddHeader :: (session: *ActivityJniSession, handle: s32,
+AndroidAddHeader :: (session: *AndroidJniSession, handle: s32,
     name: string, value: string) -> bool {
     if name.count == 0 || name.count > 128 || value.count > 8192 {
         return false
     }
-    method := JniMethod(session, "httpHeader", "(I[B[B)Z")
+    method := AndroidJniMethod(session, "httpHeader", "(I[B[B)Z")
     if method == null {
         return false
     }
@@ -64,7 +64,7 @@ AndroidAddHeader :: (session: *ActivityJniSession, handle: s32,
     return ok
 }
 
-ConfigureAndroidTransfer :: (session: *ActivityJniSession, handle: s32,
+ConfigureAndroidTransfer :: (session: *AndroidJniSession, handle: s32,
     request: HttpRequest) -> bool {
     if request.accept.count > 0 &&
         !AndroidAddHeader(session, handle, "Accept", request.accept) {
@@ -99,7 +99,7 @@ ConfigureAndroidTransfer :: (session: *ActivityJniSession, handle: s32,
         }
         index += 1
     }
-    method := JniMethod(session, "httpSend", "(I[B)Z")
+    method := AndroidJniMethod(session, "httpSend", "(I[B)Z")
     if method == null {
         return false
     }
@@ -125,12 +125,12 @@ StartAndroidTransfer :: (context: *void, request: HttpRequest,
         return false
     }
     output[0] = cast(u8)0
-    session: ActivityJniSession
-    if activity_jni_attach(*session) == 0 {
+    session: AndroidJniSession
+    if AndroidJniAttachCurrent(*session) == 0 {
         return false
     }
-    defer activity_jni_detach(*session)
-    method := JniMethod(*session, "httpCreate", "([B[BII)I")
+    defer AndroidJniDetachCurrent(*session)
+    method := AndroidJniMethod(*session, "httpCreate", "([B[BII)I")
     if method == null {
         return false
     }
@@ -167,15 +167,15 @@ PollAndroidTransfer :: (context: *void, status: *s32) -> s32 {
         return 0
     }
     status.* = 0
-    session: ActivityJniSession
-    if activity_jni_attach(*session) == 0 {
+    session: AndroidJniSession
+    if AndroidJniAttachCurrent(*session) == 0 {
         transfer.output[0] = cast(u8)0
         transfer.* = AndroidTransfer.{}
         return 0
     }
-    defer activity_jni_detach(*session)
+    defer AndroidJniDetachCurrent(*session)
     env := session.env
-    method := JniMethod(*session, "httpPoll", "(I)I")
+    method := AndroidJniMethod(*session, "httpPoll", "(I)I")
     state: s32 = 0
     arguments: [1]JniValue
     arguments[0].integer = transfer.handle
@@ -192,7 +192,7 @@ PollAndroidTransfer :: (context: *void, status: *s32) -> s32 {
     }
     result: s32 = 0
     if state > 0 {
-        method = JniMethod(*session, "httpResponse", "(I)[B")
+        method = AndroidJniMethod(*session, "httpResponse", "(I)[B")
         if method != null {
             bytes := env.functions.CallObjectMethodA(env, session.activity,
                 method, *arguments[0])
@@ -226,10 +226,10 @@ CancelAndroidTransfer :: (context: *void) {
     if transfer == null || transfer.handle == 0 {
         return
     }
-    session: ActivityJniSession
-    if activity_jni_attach(*session) != 0 {
+    session: AndroidJniSession
+    if AndroidJniAttachCurrent(*session) != 0 {
         CancelAndroidHandle(*session, transfer.handle)
-        activity_jni_detach(*session)
+        AndroidJniDetachCurrent(*session)
     }
     // Java owns copied arrays and never retains this native output address.
     transfer.* = AndroidTransfer.{}

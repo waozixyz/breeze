@@ -708,11 +708,6 @@ $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/module
 		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) \
 		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
 
-.PHONY: uri-link-test
-uri-link-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		python3 tests/uri_host_zi_test.py $(ZIRAN_BUILD_DIR)/bin
-
 .PHONY: frame-activity-test
 frame-activity-test: $(ZI2C_BIN)
 	@sh tests/frame_activity_zi_test.sh $(ZIRAN_BUILD_DIR)/bin

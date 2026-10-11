@@ -6,6 +6,7 @@ work=$root/build/android-package-assets-test
 mkdir -p "$work/generated"
 sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --define ANDROID_BUILD \
     --root "$root" --module-path "$root/src" \
+    --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/generated" "$root/tests/android_package_assets_behavior.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-function \

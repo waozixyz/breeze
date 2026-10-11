@@ -1,5 +1,5 @@
 #include "android_package_assets_behavior.h"
-#include "activity_jni.h"
+#include "android_jni.h"
 #include "assets_host.h"
 #include <assert.h>
 #include <string.h>

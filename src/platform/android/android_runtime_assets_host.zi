@@ -1,4 +1,4 @@
-#import, file "activity_jni.zi";
+#import "android_jni"
 #import, file "android_mutex.zi";
 #import "c_string"
 
@@ -57,17 +57,17 @@ AssetCopyErrorCString :: (output: *u8, capacity: s32, text: *u8) {
         return null
     }
 
-    AssetStart :: (session: *ActivityJniSession, handle: u64,
+    AssetStart :: (session: *AndroidJniSession, handle: u64,
         url: *u8, path: *u8, maximum: u64) -> bool {
-        method := JniMethod(session, "startRuntimeAssetDownload",
+        method := AndroidJniMethod(session, "startRuntimeAssetDownload",
             "(Ljava/lang/String;Ljava/lang/String;JJ)V")
         if method == null {
             return false
         }
         env := session.env
         arguments: [4]JniValue
-        arguments[0].reference = JniString(env, url)
-        arguments[1].reference = JniString(env, path)
+        arguments[0].reference = AndroidJniString(env, url)
+        arguments[1].reference = AndroidJniString(env, path)
         arguments[2].long_integer = cast(s64)handle
         arguments[3].long_integer = cast(s64)maximum
         if arguments[0].reference == null || arguments[1].reference == null {
@@ -101,15 +101,15 @@ android_asset_release_host :: (handle: u64) {
         }
         AndroidMutexUnlock(*download_mutex)
         if removed != null {
-            session: ActivityJniSession
-            if activity_jni_attach(*session) != 0 {
-                method := JniMethod(*session, "cancelRuntimeAssetDownload", "(J)V")
+            session: AndroidJniSession
+            if AndroidJniAttachCurrent(*session) != 0 {
+                method := AndroidJniMethod(*session, "cancelRuntimeAssetDownload", "(J)V")
                 if method != null {
                     argument: JniValue
                     argument.long_integer = cast(s64)handle
                     session.env.functions.CallVoidMethodA(session.env, session.activity, method, *argument)
                 }
-                activity_jni_detach(*session)
+                AndroidJniDetachCurrent(*session)
             }
             AssetFree(cast(*void)removed)
         }
@@ -145,13 +145,13 @@ android_asset_start_host :: (url: *u8, path: *u8, maximum: u64,
         job.next = download_jobs
         download_jobs = job
         AndroidMutexUnlock(*download_mutex)
-        session: ActivityJniSession
+        session: AndroidJniSession
         started := false
         failure := "Android activity is not ready"
-        if activity_jni_attach(*session) != 0 {
+        if AndroidJniAttachCurrent(*session) != 0 {
             started = AssetStart(*session, handle, url, path, maximum)
             failure = "Android download failed to start"
-            activity_jni_detach(*session)
+            AndroidJniDetachCurrent(*session)
         }
         if started {
             return handle
