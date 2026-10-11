@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.27] - 2026-10-11
+
+- Bring Lumi's chat that loads older messages as you scroll up.
+- Requires Inner Breeze 2.1.29 or later.
+
 ## [2.1.26] - 2026-10-10
 
 - Bring Diary's title bar, undo and redo, and spelling correction, and Lumi's typing dots.

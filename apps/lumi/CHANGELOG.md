@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.7] - 2026-10-11
+### Changed
+- Like Telegram, the chat shows your newest messages and loads older ones as you scroll up, right away while the newest do not fill the screen.
+
 ## [1.3.6] - 2026-10-10
 ### Added
 - While Lumi is answering, three dots show in its bubble where the answer will appear.
