@@ -57,7 +57,13 @@ for attempt in $(seq 1 100); do
   sleep 0.1
 done
 expect "$baseline" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'initial order'
-import -window "$window" "$test_dir/overview.png"
+# On a slow machine the first frame can follow the seed; capture again until
+# the overview shows Yoga's controls.
+for attempt in $(seq 1 20); do
+  import -window "$window" "$test_dir/overview.png"
+  python3 "$root/tests/habits_rendered_controls.py" "$test_dir/overview.png" day >/dev/null 2>&1 && break
+  sleep 0.5
+done
 read -r today_x today_y < <(python3 "$root/tests/habits_rendered_controls.py" "$test_dir/overview.png" day)
 read -r chevron_x chevron_y < <(python3 "$root/tests/habits_rendered_controls.py" "$test_dir/overview.png" chevron)
 before="$(day_count)"
