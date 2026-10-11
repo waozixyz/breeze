@@ -227,6 +227,7 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
     if !LumiToolRoundAllowed(lumi_online_round, calls, lumi_tool_count) {
         return false
     }
+    feedback_card := false
     out: Vec(u8)
     BuilderPrint(*out, "%,%", lumi_online_messages[:lumi_online_messages.count - 1],
         document[at:ValueEnd(document, at, 0)])
@@ -264,6 +265,16 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         BuilderPrint(*out, ",\"content\":")
         LumiJsonString(*out, result)
         BuilderPrint(*out, "}")
+        if name == "report_feedback" && ContainsFoldASCII(result, "\"ok\":true") {
+            feedback_card = true
+        }
+    }
+    if feedback_card {
+        // The feedback card with Yes and No is Lumi's whole answer; the
+        // model's follow-up would only repeat it.
+        PackageFree(BuilderFinish(out))
+        LumiOnlineClearTurn()
+        return true
     }
     BuilderPrint(*out, "]")
     PackageFree(lumi_online_messages)
@@ -426,9 +437,9 @@ app_lumi_pump :: (app: *InnerBreeze) {
             confirmed := success && LumiFeedbackReceiptMatches(
                 TextUntilNul(lumi_online_response[:]), id)
             if confirmed {
-                // Persist the receipt notice before removing the outbox item.
-                // A local write failure leaves delivery safe to retry.
-                if LumiFeedbackNotice(id, true) && FeedbackDelivered(id) {
+                // Delivery adds no message: the confirmation card is the whole
+                // exchange. Only a failure is told, once.
+                if FeedbackDelivered(id) {
                     lumi_feedback_retry = 0
                 }
             } else {

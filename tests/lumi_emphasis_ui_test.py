@@ -55,9 +55,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-emphasis-') as directory:
         reports = [json.loads(row[0]) for row in query(profile, pending_sql)]
         assert len(reports) == 1 and reports[0]['message'] == suggestion
         assert reports[0]['title'] == suggestion
-        saved = 'Saved on this device, waiting to send to the developer inbox. Delivery needs an Inner Breeze account and internet access.'
-        wait_for(lambda: chat(profile)[-1]['text'].strip() == saved,
-                 'Lumi did not explain that delivery is still pending')
+        # The confirmation card stays the whole exchange: Yes adds no message.
+        time.sleep(1.0)
+        assert chat(profile)[-1].get('kind', 0) == 3, 'A message followed the feedback card: %r' % chat(profile)[-2:]
         capture(window, 'suggestion-feedback')
     with application(profile, 'emphasis-restart'):
         reports = [json.loads(row[0]) for row in query(profile, pending_sql)]
