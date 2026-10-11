@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
 
 definition = harness.config()
-assert len(definition["scenes"]) == 16 and len(definition["buckets"]) == 4
+assert len(definition["scenes"]) == 17 and len(definition["buckets"]) == 4
 assert next(b for b in definition["buckets"] if b["name"] == "phone")["scale"] == 25
 environment = os.environ.copy()
 for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"):
