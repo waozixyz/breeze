@@ -8,6 +8,7 @@
 #import, file "package_release.zi";
 #import, file "package_files.zi";
 #import, file "versions.zi";
+#import, file "host_api.zi";
 #import, file "../app/assets.zi";
 #import, file "../app/settings_store.zi";
 #import, file "../app/text_buffers.zi";
@@ -296,18 +297,47 @@ PackageInitialize :: () {
     }
 }
 
+// Devices keep one random bucket from 0 to 99, so a staged package release
+// reaches the same share of devices on every check.
+PackageBucket :: () -> s32 {
+    stored := SettingsReadInt("package_bucket", -1)
+    if stored >= 0 && stored < 100 {
+        return stored
+    }
+    random: [4]u8
+    if SyncCryptoRandom(*random[0], 4) == 0 {
+        return 99
+    }
+    value := cast(u32)random[0] | (cast(u32)random[1] << 8) |
+    (cast(u32)random[2] << 16) | (cast(u32)random[3] << 24)
+    bucket := cast(s32)(value % cast(u32)100)
+    unused SettingsStoreInt("package_bucket", bucket)
+    return bucket
+}
+
+// The node answers with the newest release this host can run.
+PackageLatestQuery :: () -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "/latest?host_api=%&module_api=%&bucket=%", cast(s32)PackageHostAPI,
+        cast(s32)PackageModuleAPI, PackageBucket())
+    return BuilderFinish(out)
+}
+
 PackageStartTransfer :: (suffix: string, destination: string) -> bool {
+    latest := suffix == "/latest"
     path := PackageText("/api/v2/packages/", PackageID(package_index))
-    route := PackageText(path, suffix)
+    query := ifx latest then PackageLatestQuery() else PackageText(suffix, "")
+    route := PackageText(path, query)
     url := PackageText(TextFromCString(*package_origin[0]), route)
     defer {
         PackageFree(path);
+        PackageFree(query);
         PackageFree(route);
         PackageFree(url)
     }
     ReleaseRuntimeAssetDownload(*package_download)
     package_download = AssetDownload.{}
-    package_download.maximum_bytes = cast(u64)(ifx suffix == "/latest" then 65536 else package_release.size)
+    package_download.maximum_bytes = cast(u64)(ifx latest then 65536 else package_release.size)
     return DownloadRuntimeAsset(*package_download, url, destination) != 0
 }
 
@@ -322,6 +352,7 @@ PackageFinish :: (ok: bool) {
 
 // Validating includes the module capability allowlist and identity handshake.
 CellsValidatePackage :: (index: s32, bytes: string) -> bool #foreign c;
+SyncCryptoRandom :: (output: *u8, length: s64) -> s32 #foreign c;
 
 PackagePump :: (desired: s32, now: s32) {
     if DataTemporary() {

@@ -14,6 +14,20 @@ for name in names:
         raise SystemExit(f"invalid {name} version")
     if type(value["sequence"]) is not int or not 0 < value["sequence"] <= 2147483647:
         raise SystemExit(f"invalid {name} sequence")
+for api in ("host_api", "oldest_host_api", "module_api"):
+    if type(ledger.get(api)) is not int or not 0 < ledger[api] <= 65535:
+        raise SystemExit(f"invalid {api}")
+# The interfaces are compiled host behavior, so they live apart from the
+# package versions and changing them triggers an app release.
+interfaces = "\n".join([
+    "// Generated from apps/versions.json. This host runs packages built for host",
+    "// interfaces from the oldest to the current one; module interfaces must match.",
+    f"PackageHostAPI :: {ledger['host_api']}",
+    f"PackageHostAPIOldest :: {ledger['oldest_host_api']}",
+    f"PackageModuleAPI :: {ledger['module_api']}", ""])
+interface_path = root / "src/cells/host_api.zi"
+if not interface_path.exists() or interface_path.read_text() != interfaces:
+    interface_path.write_text(interfaces)
 lines = ["// Generated from apps/versions.json; module releases are independent.",
          "PackageBundledVersion :: (index: s32) -> string {",
          f"    if index < 0 || index >= {len(names)} {{", "        return \"\"", "    }",

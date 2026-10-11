@@ -73,9 +73,29 @@ bool CellsValidatePackage(int32_t index, String bytes) {
     return true; /* The capability decoder is covered by cells-test. */
 }
 
+int32_t SyncCryptoRandom(uint8_t *output, int64_t length) {
+    for (int64_t index = 0; index < length; index++) {
+        output[index] = (uint8_t)(index * 37 + 11);
+    }
+    return 1;
+}
+
+static char latest_query[128];
+
 int32_t __wrap_DownloadRuntimeAsset(AssetDownload *download, String url, String destination) {
     assert(url.length > 0 && destination.length < sizeof(download->destination));
     assert(download->maximum_bytes > 0);
+    /* Release checks name this host's interfaces and keep one device bucket. */
+    char target[512];
+    snprintf(target, sizeof(target), "%.*s", (int)destination.length, destination.data);
+    if (strstr(target, ".download.json")) {
+        char text[512];
+        snprintf(text, sizeof(text), "%.*s", (int)url.length, url.data);
+        const char *query = strstr(text, "/latest?host_api=");
+        assert(query && strstr(query, "&module_api=") && strstr(query, "&bucket="));
+        assert(!latest_query[0] || strcmp(latest_query, query) == 0);
+        snprintf(latest_query, sizeof(latest_query), "%s", query);
+    }
     snprintf((char *)download->destination, sizeof(download->destination), "%.*s", (int)destination.length, destination.data);
     download->status = AssetDownloadStatus_Downloading;
     download->handle = (uint64_t)++starts;

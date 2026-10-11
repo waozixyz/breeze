@@ -55,6 +55,29 @@ class PackageVersionsTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         versions.validate(self.root)
 
+    def test_packages_declare_a_supported_host_interface(self):
+        for candidate in (4, 7, "5", True, None):
+            with self.subTest(host_api=candidate):
+                value = copy.deepcopy(self.ledger)
+                value["apps"]["diary"]["host_api"] = candidate
+                self.write(value)
+                with self.assertRaisesRegex(ValueError, "host_api must be between"):
+                    versions.validate(self.root)
+        value = copy.deepcopy(self.ledger)
+        del value["apps"]["diary"]["host_api"]
+        self.write(value)
+        self.assertEqual(versions.validate(self.root), value)
+
+    def test_host_interface_range(self):
+        for field, candidate in (("oldest_host_api", 7), ("oldest_host_api", 0),
+                                 ("oldest_host_api", None), ("host_api", 65536)):
+            with self.subTest(field=field, value=candidate):
+                value = copy.deepcopy(self.ledger)
+                value[field] = candidate
+                self.write(value)
+                with self.assertRaises(ValueError):
+                    versions.validate(self.root)
+
     def test_every_cell_is_available_offline(self):
         value = copy.deepcopy(self.ledger)
         value["apps"]["habits"]["bundled"] = False

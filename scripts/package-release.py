@@ -3,6 +3,7 @@
 import argparse
 from contextlib import ExitStack
 import fcntl
+import io
 from hashlib import sha256
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import sys
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -91,7 +93,7 @@ def stage(store, key_path, key_id, publishers_path=None):
                 dependencies.append(dict(app_id=release["app_id"], version=release["version"],
                                          sha256=release["artifacts"][0]["sha256"], size=len(nested)))
         value = dict(app_id=component["id"], sequence=sequence, version=component["version"],
-                     runtime="kryon-app-v1", host_api=versions["host_api"],
+                     runtime="kryon-app-v1", host_api=component.get("host_api", versions["host_api"]),
                      module_api=versions["module_api"], data_schema=0, key_id=key_id,
                      artifacts=[artifact], dependencies=sorted(dependencies, key=lambda d: d["app_id"]))
         value["signature"] = key.sign(signing_message(value)).hex()
@@ -141,7 +143,14 @@ def stage(store, key_path, key_id, publishers_path=None):
     return releases
 
 
-def publish(store, target, remote_store):
+def rollout_value(percent, hours):
+    """A staged release reaches buckets below percent, then everyone after hours."""
+    if type(percent) is not int or not 1 <= percent <= 100 or type(hours) is not int or not 0 < hours <= 720:
+        raise ValueError("rollout needs a share from 1 to 100 percent and 1 to 720 hours")
+    return dict(percent=percent, hours=hours)
+
+
+def publish(store, target, remote_store, rollout=None):
     if not re.fullmatch(r"[a-zA-Z0-9_.@-]+", target) or target.startswith("-"):
         raise ValueError("invalid SSH target")
     if not remote_store.startswith("/") or "\n" in remote_store:
@@ -162,6 +171,11 @@ def publish(store, target, remote_store):
                                  f"release-{value['sequence']}.json"):
                     path = directory / filename
                     tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
+            if rollout is not None:
+                encoded = json.dumps(rollout_value(rollout["percent"], rollout["hours"])).encode()
+                member = tarfile.TarInfo("rollout.json")
+                member.size = len(encoded)
+                tar.addfile(member, io.BytesIO(encoded))
         options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
         if os.environ.get("INBE_SSH_IDENTITY"):
             options += ["-i", os.environ["INBE_SSH_IDENTITY"]]
@@ -189,7 +203,8 @@ def verify_origin(store, origin, open_url=open_public_url):
         app_id = "inbe" if name == "inbe" else "inbe." + name
         expected = json.loads((store / app_id / "latest-v2.json").read_bytes())
         route = origin + "/api/v2/packages/" + app_id
-        with open_url(route + "/latest", timeout=30) as response:
+        # Bucket 0 receives a staged release first.
+        with open_url(route + "/latest?bucket=0", timeout=30) as response:
             encoded = response.read(65537)
         if len(encoded) > 65536 or json.loads(encoded) != expected:
             raise ValueError(f"{app_id}: public release metadata differs from the signed publication")
@@ -269,8 +284,15 @@ def import_archive(archive, store, publishers_path=None):
            "inbe.leaderboard"}
     entries = {}
     total = 0
+    rollout = None
     with tarfile.open(archive) as tar:
         for member in tar.getmembers():
+            if member.name == "rollout.json" and member.isfile() and member.size <= 1024 and rollout is None:
+                rollout = json.loads(tar.extractfile(member).read())
+                if not isinstance(rollout, dict) or set(rollout) != {"percent", "hours"}:
+                    raise ValueError("invalid rollout")
+                rollout = rollout_value(rollout["percent"], rollout["hours"])
+                continue
             parts = Path(member.name).parts
             if len(parts) != 2 or parts[0] not in ids or not member.isfile() or member.size > 64 * 1024 * 1024:
                 raise ValueError("invalid archive member")
@@ -304,6 +326,7 @@ def import_archive(archive, store, publishers_path=None):
             if not data.startswith(b"ZIB\0"):
                 raise ValueError("payload is not a ZIB bundle")
             current = directory / "latest-v2.json"
+            old = None
             if current.exists():
                 old = json.loads(current.read_bytes())
                 if old != value and (old["sequence"] >= value["sequence"] or
@@ -313,17 +336,17 @@ def import_archive(archive, store, publishers_path=None):
             archived = directory / f"release-{value['sequence']}.json"
             if archived.exists() and archived.read_bytes() != encoded:
                 raise ValueError("release sequence is already occupied")
-            releases[app_id] = (value, encoded, data)
+            releases[app_id] = (value, encoded, data, old != value)
         root = releases["inbe"]
         for dependency in root[0]["dependencies"]:
-            child, _, payload = releases[dependency["app_id"]]
+            child, _, payload, _ = releases[dependency["app_id"]]
             artifact = child["artifacts"][0]
             if dependency != dict(app_id=child["app_id"], version=child["version"],
                                   sha256=artifact["sha256"], size=artifact["size"]) or root[2].count(payload) != 1:
                 raise ValueError("root does not contain its exact signed cell dependency")
         # Dependencies go first. Publishing the root is the final step.
         for app_id in sorted(present, key=lambda value: value == "inbe"):
-            value, encoded, data = releases[app_id]
+            value, encoded, data, changed = releases[app_id]
             directory = store / app_id
             payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
             archived = directory / f"release-{value['sequence']}.json"
@@ -333,6 +356,15 @@ def import_archive(archive, store, publishers_path=None):
             atomic_write(payload.with_name(payload.name + ".release-v2.json"), encoded)
             atomic_write(archived, encoded)
             atomic_write(directory / "latest-v2.json", encoded)
+            # Daochi holds a staged release back from the other buckets until
+            # it expires. A new full release or a full rollout ends staging.
+            staged = directory / "rollout.json"
+            if rollout is not None and rollout["percent"] < 100 and changed:
+                until = int(time.time()) + rollout["hours"] * 3600
+                atomic_write(staged, json.dumps(dict(sequence=value["sequence"], percent=rollout["percent"],
+                                                     until=until)).encode())
+            elif changed or (rollout is not None and rollout["percent"] == 100):
+                staged.unlink(missing_ok=True)
     archive.unlink()
     archive.parent.rmdir()
 
@@ -367,6 +399,8 @@ def main():
     parser.add_argument("--import-archive", type=Path)
     parser.add_argument("--receive-archive", action="store_true")
     parser.add_argument("--publishers", type=Path, help="node-owned public publisher pins")
+    parser.add_argument("--rollout", type=int, help="publish changed releases to this share of devices first")
+    parser.add_argument("--rollout-hours", type=int, default=24, help="then to every device after these hours")
     args = parser.parse_args()
     try:
         if args.receive_archive:
@@ -382,7 +416,8 @@ def main():
             if args.ssh_target:
                 if not args.remote_store:
                     parser.error("--remote-store is required with --ssh-target")
-                publish(args.store, args.ssh_target, args.remote_store)
+                rollout = None if args.rollout is None else rollout_value(args.rollout, args.rollout_hours)
+                publish(args.store, args.ssh_target, args.remote_store, rollout)
             if args.verify_origin:
                 verify_origin(args.store, args.verify_origin)
         print("Inbe package releases published" if args.ssh_target or args.import_archive or args.receive_archive else "Inbe package releases staged")

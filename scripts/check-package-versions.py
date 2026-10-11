@@ -15,9 +15,12 @@ VERSION = r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})"
 
 def validate(root):
     ledger = json.loads((root / "apps/versions.json").read_text())
-    for api in ("host_api", "module_api"):
-        if type(ledger.get(api)) is not int or not 0 < ledger[api] <= 2147483647:
+    for api in ("host_api", "oldest_host_api", "module_api"):
+        if type(ledger.get(api)) is not int or not 0 < ledger[api] <= 65535:
             raise ValueError(f"invalid {api}")
+    # The host runs packages from its oldest supported interface to its own.
+    if ledger["oldest_host_api"] > ledger["host_api"]:
+        raise ValueError("oldest_host_api is newer than host_api")
     if set(ledger["apps"]) != set(NAMES):
         raise ValueError("the ledger must contain the root and all six cells")
     for name, source in NAMES.items():
@@ -31,6 +34,11 @@ def validate(root):
             raise ValueError(f"{name}: invalid release sequence")
         if component.get("bundled") is not True:
             raise ValueError(f"{name}: every cell must be bundled for offline use")
+        # A package declares the oldest host interface it runs on, so apps
+        # that keep an older host still receive it.
+        host = component.get("host_api", ledger["host_api"])
+        if type(host) is not int or not ledger["oldest_host_api"] <= host <= ledger["host_api"]:
+            raise ValueError(f"{name}: host_api must be between oldest_host_api and host_api")
         changelog = root / "apps" / source / "CHANGELOG.md"
         headings = re.findall(r"^## \[([^\]]+)\] - ([^\n]+)$", changelog.read_text(), re.M)
         if not headings or not re.fullmatch(VERSION, headings[0][0]):

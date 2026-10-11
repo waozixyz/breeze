@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import tarfile
 from io import BytesIO
 
@@ -45,13 +46,17 @@ def main():
             prefix = "https://node.example/api/v2/packages/"
             assert url.startswith(prefix)
             app_id, filename = url.removeprefix(prefix).split("/")
-            return BytesIO((store / app_id / ("latest-v2.json" if filename == "latest" else filename)).read_bytes())
+            # The publisher asks as bucket 0, which receives staged releases first.
+            if filename.startswith("latest"):
+                assert filename == "latest?bucket=0", filename
+                filename = "latest-v2.json"
+            return BytesIO((store / app_id / filename).read_bytes())
 
         release_tool.verify_origin(store, "https://node.example", served)
         for failure in ("metadata", "hash", "truncated", "oversized"):
             def damaged(url, timeout):
                 content = served(url, timeout).read()
-                if failure == "metadata" and url.endswith("/latest"):
+                if failure == "metadata" and "/latest" in url:
                     return BytesIO(b"{}")
                 if url.endswith(".zib"):
                     if failure == "hash":
@@ -80,6 +85,41 @@ def main():
             assert not staging.exists()
             for value in values.values():
                 assert json.loads((remote / value["app_id"] / "latest-v2.json").read_bytes()) == value
+        # A staged upload holds changed releases back until it is promoted or
+        # expires; unchanged re-uploads keep the staging.
+        def upload(name, rollout_text):
+            staging = fixtures / name
+            staging.mkdir()
+            archive = staging / "packages.tar"
+            with tarfile.open(archive, "w") as tar:
+                for path in sorted(store.rglob("*")):
+                    if path.is_file() and path.name != ".publish.lock":
+                        tar.add(path, arcname=str(path.relative_to(store)))
+                if rollout_text is not None:
+                    data = rollout_text.encode()
+                    member = tarfile.TarInfo("rollout.json")
+                    member.size = len(data)
+                    tar.addfile(member, BytesIO(data))
+            return archive
+
+        staged_remote = fixtures / "staged-remote"
+        release_tool.import_archive(upload("staged-0", '{"percent": 20, "hours": 24}'), staged_remote, publishers)
+        for value in values.values():
+            staged = json.loads((staged_remote / value["app_id"] / "rollout.json").read_text())
+            assert staged["sequence"] == value["sequence"] and staged["percent"] == 20, staged
+            assert 0 < staged["until"] - time.time() <= 24 * 3600, staged
+        release_tool.import_archive(upload("staged-1", None), staged_remote, publishers)
+        assert (staged_remote / "inbe.diary" / "rollout.json").exists()
+        release_tool.import_archive(upload("staged-2", '{"percent": 100, "hours": 1}'), staged_remote, publishers)
+        assert not list(staged_remote.rglob("rollout.json"))
+        for index, bad in enumerate(('{"percent": 0, "hours": 24}', '{"percent": 20, "hours": 0}',
+                                     '{"percent": 20, "hours": 24, "extra": 1}', '[]', '{')):
+            try:
+                release_tool.import_archive(upload(f"staged-bad-{index}", bad), staged_remote, publishers)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"invalid rollout {bad} was accepted")
         # A node updated for Leaderboard still imports archives staged before it.
         names = release_tool.NAMES
         release_tool.NAMES = tuple(name for name in names if name != "leaderboard")
@@ -129,8 +169,13 @@ def main():
             (fixtures / name).write_text(json.dumps(value))
 
         altered("wrong-app", lambda value: value.update(app_id="inbe.diary"))
-        altered("wrong-api", lambda value: value.update(host_api=value["host_api"] + 1))
-        altered("old-api", lambda value: value.update(host_api=value["host_api"] - 1))
+        # The host runs releases built for any interface it still supports.
+        ledger = json.loads((ROOT / "apps/versions.json").read_text())
+        altered("wrong-api", lambda value: value.update(host_api=ledger["host_api"] + 1))
+        altered("old-api", lambda value: value.update(host_api=ledger["oldest_host_api"] - 1))
+        altered("oldest-api", lambda value: value.update(host_api=ledger["oldest_host_api"]))
+        altered("current-api", lambda value: value.update(host_api=ledger["host_api"]))
+        altered("wrong-module", lambda value: value.update(module_api=ledger["module_api"] + 1))
         altered("bad-signature", lambda value: value.update(version="9.0.0"), False)
         altered("fraction", lambda value: value.update(sequence=1.5))
         altered("negative", lambda value: value.update(sequence=-1))
