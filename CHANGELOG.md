@@ -1,4 +1,13 @@
 # Changelog
+## [2.1.30] - 2026-10-11
+### Fixed
+- Long menus, such as the colour theme, scroll by touch and open at your choice.
+- With a menu open, tapping the navigation closes it and switches screens in one tap.
+- Menus stay above the navigation instead of hiding their last options behind it.
+- Web: the app is sharp on high-density screens instead of magnified and blurry.
+### Changed
+- Icons are sharper on the web.
+
 ## [2.1.29] - 2026-10-11
 ### Fixed
 - Scrolling Lumi's commands keeps the keyboard open.
