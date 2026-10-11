@@ -24,6 +24,8 @@
 #import "layout"
 #import "kss_parser"
 #import "layout_widget"
+#import "grid"
+#import "grid_props"
 #import "overlay_props"
 #import "overlay_widget"
 #import "paint_queue"
@@ -275,8 +277,13 @@ app_draw_launcher :: (app: *InnerBreeze) {
     }
     tile_height := AppScale(88)
     gap := AppScale(12)
-    pinned_rows := (pinned_count + 1) / 2
-    more_rows := (more_count + 1) / 2
+    // The tiles reflow into as many columns as the panel's width allows.
+    columns := MeasureGrid(GridProps.{.bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0},
+            .min_item_width = AppScale(140), .max_columns = 6, .gap = gap}).columns
+    cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
+            .bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0}})
+    pinned_rows := GridRowCount(cells, pinned_count)
+    more_rows := GridRowCount(cells, more_count)
     pinned_height := AppScale(36) + pinned_rows * (tile_height + gap)
     more_height := AppScale(36) + more_rows * (tile_height + gap)
     if more_count == 0 { more_height += AppScale(64) }
@@ -294,6 +301,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
     scrolled := Scroll(app.ui.session, scroll)
     app.launcher_scroll = scrolled.scroll_offset
     pinned_bounds: Rectangle
+    pinned_cells: GridMetrics
     more_bounds: Rectangle
     pinned_slots: [LAUNCHER_APP_COUNT]Rectangle
     if scrolled.opened {
@@ -301,7 +309,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
         y := cast(s32)scrolled.content.y
         pinned_bounds = Rectangle.{cast(float32)x, cast(float32)y,
             cast(float32)width, cast(float32)pinned_height}
-        item_width := (width - gap) / 2
         for section: cast(s32)0..cast(s32)1 {
             count := ifx section == 0 then pinned_count else more_count
             Text(app.ui.session, TextProps.{
@@ -314,15 +321,18 @@ app_draw_launcher :: (app: *InnerBreeze) {
                     cast(float32)width, cast(float32)more_height}
             }
             y += AppScale(36)
+            // The scroll's content may be narrower than the panel; the column
+            // count chosen for the panel keeps the content height exact.
+            section_cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, 0.0}})
+            if section == 0 { pinned_cells = section_cells }
             for index: cast(s32)0..count - 1 {
                 route := ifx section == 0 then pinned[index] else more[index]
-                bounds := Rectangle.{cast(float32)(x + (index % 2) * (item_width + gap)),
-                    cast(float32)(y + (index / 2) * (tile_height + gap)),
-                    cast(float32)item_width, cast(float32)tile_height}
+                bounds := GridCellBounds(section_cells, index, tile_height)
                 if section == 0 { pinned_slots[index] = bounds }
                 app_launcher_draw_card(app, route, bounds, true)
             }
-            y += ((count + 1) / 2) * (tile_height + gap)
+            y += GridRowCount(section_cells, count) * (tile_height + gap)
         }
         if match_count == 0 {
             Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
@@ -356,12 +366,8 @@ app_draw_launcher :: (app: *InnerBreeze) {
         if query.count == 0 && scrolled.opened &&
         PointInBounds(point.x, point.y, scrolled.viewport) &&
         PointInBounds(point.x, point.y, pinned_bounds) {
-            row := cast(s32)(point.y - pinned_bounds.y - cast(float32)AppScale(36))
-            if row < 0 { row = 0 }
-            row /= tile_height + gap
-            column: s32 = ifx point.x >= pinned_bounds.x + pinned_bounds.width * 0.5 then 1 else 0
-            target = row * 2 + column
-            if target > app.launcher_favorite_count { target = app.launcher_favorite_count }
+            target = GridIndexAt(pinned_cells, point.x, point.y, tile_height,
+                app.launcher_favorite_count)
             highlight := pinned_bounds
             if target < pinned_count { highlight = pinned_slots[target] }
             highlight = RectangleIntersection(highlight, scrolled.viewport)

@@ -240,6 +240,25 @@ with contextlib.ExitStack() as stack:
         raise SystemExit(0)
 
     layouts = ((900, 720), (390, 844))
+
+    def grid_cell(width, mobile, index, row_top):
+        """A card's left, top and width in Apps' grid, which reflows its
+        columns: at least 140 wide, 12 apart, at most six."""
+        left = 20 if mobile else 108
+        content = width - (40 if mobile else 128)
+        columns = max(1, min(6, (content + 12) // 152))
+        cell = (content - 12 * (columns - 1)) // columns
+        return (left + (index % columns) * (cell + 12),
+                row_top + (index // columns) * 100, cell)
+
+    def card(width, mobile, index, row_top=184):
+        x, y, cell = grid_cell(width, mobile, index, row_top)
+        return (x + cell // 2, y + 44)
+
+    def card_corner(width, mobile, index, row_top=184):
+        # The install or remove symbol sits in the card's top-right corner.
+        x, y, cell = grid_cell(width, mobile, index, row_top)
+        return (x + cell - 22, y + 22)
     if arguments.layout == "desktop":
         layouts = layouts[:1]
     elif arguments.layout == "mobile":
@@ -270,7 +289,7 @@ with contextlib.ExitStack() as stack:
                     key(window, "Right")
                 assert settings(profile)["launcher_guide_seen"] == "1", "Apps guide did not finish"
                 # Practices is the third pinned card in the same grid as the rest.
-                click(window, 170 if not mobile else 100, 328)
+                click(window, *card(width, mobile, 2))
                 assert settings(profile)["apps_setup_done"] == "1", log.read_text()
                 assert settings(profile)["main_tab"] == "1", log.read_text()
             seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
@@ -283,8 +302,8 @@ with contextlib.ExitStack() as stack:
                            "launcher_favorite_1": 2})
             # Desktop keeps Apps in the sidebar's bottom corner.
             apps_point = (330, height - 42) if mobile else (44, height - 60)
-            pinned_first = (100, 228) if mobile else (170, 228)
-            more_first = (100, 364) if mobile else (170, 364)
+            pinned_first = card(width, mobile, 0)
+            more_first = card(width, mobile, 0, 320)
             with application(profile, name, width, height) as (window, log):
                 page = capture(window, name + "-practice")
                 if not mobile:
@@ -311,8 +330,8 @@ with contextlib.ExitStack() as stack:
                 click(window, *apps_point)
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
                 if not mobile:
-                    # The second column occupies the page, beyond the old drawer.
-                    click(window, width - 170, 228)
+                    # The grid fills the page, beyond the old drawer.
+                    click(window, *card(width, mobile, 1))
                     assert settings(profile)["main_tab"] == "1", "Apps did not fill the desktop content area"
                     click(window, *apps_point)
                     key(window, "Escape")
@@ -355,7 +374,7 @@ with contextlib.ExitStack() as stack:
                 # Habits is the second pinned card. The trash symbol in its
                 # top-right corner removes only the installation and shortcut,
                 # retaining local data.
-                click(window, width - 42, 206)
+                click(window, *card_corner(width, mobile, 1))
                 assert settings(profile)["app_used_habits"] == "0", "Trash did not uninstall Habits"
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with sqlite3.connect(profile / "inbe.db") as db:
@@ -363,7 +382,7 @@ with contextlib.ExitStack() as stack:
                 capture(window, name + "-uninstalled")
                 # The same app is now first in More, with an install symbol in
                 # the same corner of its card.
-                click(window, 168 if mobile else 466, 342)
+                click(window, *card_corner(width, mobile, 0, 320))
                 assert settings(profile)["app_used_habits"] == "1", "Install did not restore Habits"
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
                 assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
