@@ -159,8 +159,24 @@ public class MainActivity extends NativeActivity {
             pictureWindowReturns++;
         }
         refreshPictureWindowState();
+        reportWindowSize();
         requestInsetRefresh();
         syncLifecycleState("onPictureInPictureModeChanged");
+    }
+
+    // The floating window's shadow makes the drawing surface larger than the
+    // window frame on every side, and Android keeps that margin after the
+    // window opens back into the app. In full screen the margin lies past the
+    // screen edges, so native draws the app in the frame's part of the
+    // surface. The floating window shows the whole surface, so there the app
+    // fills it (size 0) rather than leaving a border.
+    private void reportWindowSize() {
+        View decor = getWindow().getDecorView();
+        if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()) {
+            nativeSetWindowSize(0, 0);
+        } else {
+            nativeSetWindowSize(decor.getWidth(), decor.getHeight());
+        }
     }
 
     private void showStartup() {
@@ -271,6 +287,7 @@ public class MainActivity extends NativeActivity {
 
     private native void nativeSetInsets(int left, int top, int right, int bottom, int imeBottom,
         int cutoutLeft, int cutoutTop, int cutoutRight, int cutoutBottom);
+    private native void nativeSetWindowSize(int width, int height);
     private native void nativeSetDeviceDensity(float density);
     private native void nativeSetSystemDark(int dark);
     private native void nativeSetOrientation(int orientation);
@@ -1140,6 +1157,9 @@ public class MainActivity extends NativeActivity {
                     return insets;
                 }
             });
+
+            decorView.addOnLayoutChangeListener((view, left, top, right, bottom,
+                    oldLeft, oldTop, oldRight, oldBottom) -> reportWindowSize());
 
             // 2. Startup safety net: Catches frame sizing on the initial layout pass
             decorView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
