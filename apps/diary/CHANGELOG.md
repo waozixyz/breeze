@@ -7,7 +7,8 @@
 - Undo and redo buttons, so a correction or any other change can be taken back.
 
 ### Changed
-- A title bar shows the date in the middle, between the previous and next day. Today, the calendar, the time and photos are now compact buttons above the entry, leaving more room for writing.
+- A title bar shows the date in the middle, between the previous and next day. Today and the calendar sit together on the left, and the entry's tools are compact buttons on the right, leaving more room for writing.
+- The entry reaches the bottom of the screen; a notice takes room below it only while it is shown.
 
 ## [1.1.7] - 2026-10-10
 

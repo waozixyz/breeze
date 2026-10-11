@@ -103,16 +103,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         tap(window, 700, 86)  # Insert current time.
         wait_for_text(entry, lambda text: "**" in text, "Time insertion was not saved")
         with_time = json.loads(entry.read_text())["text"]
-        tap(window, 288, 86)  # Undo.
+        tap(window, 556, 86)  # Undo.
         wait_for_text(entry, lambda text: text == "A saved Diary entry", "Undo did not restore the entry")
-        tap(window, 336, 86)  # Redo.
+        tap(window, 604, 86)  # Redo.
         wait_for_text(entry, lambda text: text == with_time, "Redo did not restore the time")
-        tap(window, 604, 86)  # Spelling needs a signed-in account.
+        tap(window, 652, 86)  # Spelling needs a signed-in account.
         time.sleep(0.5)
         capture(window, "spelling-without-account")
         assert json.loads(entry.read_text())["text"] == with_time, "Spelling changed the entry without an account"
         saved = json.loads(entry.read_text())
-        tap(window, 652, 86)  # Calendar.
+        tap(window, 288, 86)  # Calendar.
         capture(window, "calendar")
     with application(profile, "restart") as window:
         capture(window, "restored")

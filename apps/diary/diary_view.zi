@@ -205,8 +205,9 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
             .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap = cast(TextWrap)TextWrapNone})
 
-    // Tools: Today with undo and redo, then spelling, the calendar and the
-    // entry's tools. Today narrows on phones so every icon keeps its target.
+    // Tools: Today and the calendar move between days; undo, redo, spelling,
+    // the time and photos change the entry. Today narrows on phones so every
+    // icon keeps its target.
     tools := top + control + gap
     tool_gap := cast(float32)Scale(4)
     tool := control
@@ -221,19 +222,19 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     }
     DiaryAction(29004, DiaryLocaleHost("diary_today"), Rectangle.{left, tools, today_width, control})
     DiaryAction(29003, DiaryLocaleHost("tab_diary_calendar"),
-        Rectangle.{left + width - 3.0 * tool - 2.0 * tool_gap, tools, tool, control},
+        Rectangle.{left + today_width + gap, tools, tool, control},
         true, DIARY_CALENDAR_ICON, state.calendar)
     editable := !state.load_error && state.year > 0
     if !state.calendar {
         idle := editable && !frame.spelling_busy
         DiaryAction(29014, DiaryLocaleHost("diary_undo"),
-            Rectangle.{left + today_width + gap, tools, tool, control},
+            Rectangle.{left + width - 5.0 * tool - 4.0 * tool_gap, tools, tool, control},
             idle && frame.can_undo, DIARY_UNDO_ICON)
         DiaryAction(29015, DiaryLocaleHost("diary_redo"),
-            Rectangle.{left + today_width + gap + tool + tool_gap, tools, tool, control},
+            Rectangle.{left + width - 4.0 * tool - 3.0 * tool_gap, tools, tool, control},
             idle && frame.can_redo, DIARY_REDO_ICON)
         DiaryAction(29016, DiaryLocaleHost("diary_check_spelling"),
-            Rectangle.{left + width - 4.0 * tool - 3.0 * tool_gap, tools, tool, control},
+            Rectangle.{left + width - 3.0 * tool - 2.0 * tool_gap, tools, tool, control},
             idle && HasWords(state.text), DIARY_SPELLING_ICON, false, frame.spelling_busy)
         DiaryAction(29013, DiaryLocaleHost("diary_insert_time"),
             Rectangle.{left + width - 2.0 * tool - tool_gap, tools, tool, control},
@@ -285,14 +286,18 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         End(frame.session)
         return FinishView()
     }
-    editor_height := cast(s32)content_height - Scale(60)
+    // The editor reaches the bottom; a notice takes room below it only while
+    // it is shown.
+    notice := frame.photo_error || state.load_error || frame.spelling_notice != ""
+    notice_room := ifx notice then Scale(60) else 0
+    editor_height := cast(s32)content_height - notice_room
     if editor_height < Scale(120) {
         editor_height = Scale(120)
     }
     page := Scroll(frame.session, ScrollProps.{.key = cast(u64)290301,
             .bounds = Rectangle.{left, content, width, content_height},
-            .content_height = editor_height + Scale(48) +
-            (ifx state.photo_count > 0 then Scale(380) else 0), .scroll_offset = frame.page_scroll})
+            .content_height = editor_height + notice_room +
+            (ifx state.photo_count > 0 then Scale(392) else 0), .scroll_offset = frame.page_scroll})
     frame.page_scroll = page.scroll_offset
     if !page.opened {
         return FinishView()
@@ -337,7 +342,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         frame.clipboard_text = edited.clipboard_text
     }
 
-    if frame.photo_error || state.load_error || frame.spelling_notice != "" {
+    if notice {
         status := frame.spelling_notice
         if state.load_error {
             status = "diary_read_error"
@@ -350,7 +355,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
                 .text = DiaryLocaleHost(status), .font = frame.font})
     }
     if state.photo_count > 0 {
-        photo_top := area.bounds.y + area.bounds.height + cast(float32)Scale(60)
+        photo_top := area.bounds.y + area.bounds.height + cast(float32)(notice_room + Scale(12))
         photo_bounds := Rectangle.{left, photo_top, width, cast(float32)Scale(240)}
         if frame.photo_format.count > 0 {
             path: Vec(u8)
