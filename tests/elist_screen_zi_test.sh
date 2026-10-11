@@ -34,7 +34,7 @@ mkdir -p "$work/c"
     "$work/c/asset_paths.c" "$work/c/assets.c" \
     "$work/c/sun_salutation_inventory.c" \
     "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
-    "$work/c/hosted_values.c" "$work/c/widget_host.c" \
+    "$work/c/hosted_values.c" "$work/c/widget_host.c" "$work/c/hosted_app.c" \
     "$root/build/ziran-toolchain/libziran.a" -lm \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"

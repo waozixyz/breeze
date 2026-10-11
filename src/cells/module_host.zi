@@ -10,6 +10,7 @@
 #import, file "value_codec.zi";
 #import "hosted_values"
 #import "widget_host"
+#import "hosted_app"
 #import, file "diary_types.zi";
 #import, file "lumi_types.zi";
 #import, file "leaderboard_types.zi";
@@ -27,12 +28,13 @@
 using HostValueKind;
 
 ModuleSlot :: struct {
-    bundle: *void
-    instance: *void
+    app: HostedApp
     bundle_bytes: s64
-    failed: bool
     kind: s32
     received: bool
+    // The message calls the bundle asked for while starting.
+    has_read: bool
+    has_write: bool
 }
 
 #scope_file
@@ -410,13 +412,13 @@ ModuleCapabilityAllowed :: (kind: s32, name: string) -> bool {
 
 #program_export
 CellsReady :: () -> bool {
-    return (!package_required || slots[3].instance != null) &&
-    ((enabled_apps & APP_LISTS) == 0 || slots[0].instance != null) &&
-    ((enabled_apps & APP_HABITS) == 0 || slots[1].instance != null) &&
-    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].instance != null) &&
-    ((enabled_apps & APP_DIARY) == 0 || slots[4].instance != null) &&
-    ((enabled_apps & APP_LUMI) == 0 || slots[5].instance != null) &&
-    ((enabled_apps & APP_LEADERBOARD) == 0 || slots[6].instance != null)
+    return (!package_required || slots[3].app.instance != null) &&
+    ((enabled_apps & APP_LISTS) == 0 || slots[0].app.instance != null) &&
+    ((enabled_apps & APP_HABITS) == 0 || slots[1].app.instance != null) &&
+    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].app.instance != null) &&
+    ((enabled_apps & APP_DIARY) == 0 || slots[4].app.instance != null) &&
+    ((enabled_apps & APP_LUMI) == 0 || slots[5].app.instance != null) &&
+    ((enabled_apps & APP_LEADERBOARD) == 0 || slots[6].app.instance != null)
 }
 
 #program_export
@@ -424,8 +426,7 @@ CellsClose :: () {
     AssetUnbindProvider()
     index: s32 = 0
     while index < PackageCount {
-        CloseBundleInstance(slots[index].instance)
-        CloseBundle(slots[index].bundle)
+        HostedAppClose(*slots[index].app)
         slots[index] = ModuleSlot.{}
         index += 1
     }
@@ -443,15 +444,9 @@ CellsClose :: () {
 }
 
 ModuleRun :: (slot: *ModuleSlot) -> bool {
-    if slot.instance == null {
-        return false
-    }
     answer: s64
-    has_answer: s32
     slot.received = false
-    if RunBundleInstance(slot.instance, *answer, *has_answer) == 0 ||
-    has_answer == 0 {
-        slot.failed = true
+    if !HostedAppRun(*slot.app, *answer) {
         return false
     }
     if identifying {
@@ -463,125 +458,109 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
 ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
     slot.kind = kind
     slot.bundle_bytes = 0
-    slot.bundle = OpenBundleBytes(HostTextData(bytes), cast(u64)bytes.count)
-    if slot.bundle == null {
-        return false
-    }
-    if !ModuleInstantiate(slot) {
+    if !HostedAppOpen(*slot.app, bytes) || !ModuleInstantiate(slot) {
         return false
     }
     slot.bundle_bytes = bytes.count
     return true
 }
 
-ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
-    slot.failed = false
+// Packages may add another already supported widget without a wrapper
+// release. Require their message protocol and check every effect against
+// the allowlist; an exact capability count would reject those UI updates.
+ModuleAllows :: (context: *void, module_name: string, name: string) -> bool {
+    slot := cast(*ModuleSlot)context
     kind := slot.kind
-    count := BundleCapabilities(slot.bundle)
-    if count < 2 || count > 64 {
+    owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else ifx kind == MODULE_LUMI then "lumi" else ifx kind == MODULE_LEADERBOARD then "leaderboard" else "inbe"
+    allowed := module_name == owner && ModuleCapabilityAllowed(kind, name)
+    if module_name == owner {
+        read_name := ifx kind == MODULE_LISTS then "ReadListsHost" else ifx kind == MODULE_HABITS then "ReadHabitsHost" else ifx kind == MODULE_PRACTICE then "ReadPracticeHost" else ifx kind == MODULE_DIARY then "ReadDiaryHost" else ifx kind == MODULE_LUMI then "ReadLumiHost" else ifx kind == MODULE_LEADERBOARD then "ReadLeaderboardHost" else "ReadInbeHost"
+        write_name := ifx kind == MODULE_LISTS then "WriteListsHost" else ifx kind == MODULE_HABITS then "WriteHabitsHost" else ifx kind == MODULE_PRACTICE then "WritePracticeHost" else ifx kind == MODULE_DIARY then "WriteDiaryHost" else ifx kind == MODULE_LUMI then "WriteLumiHost" else ifx kind == MODULE_LEADERBOARD then "WriteLeaderboardHost" else "WriteInbeHost"
+        slot.has_read = slot.has_read || name == read_name
+        slot.has_write = slot.has_write || name == write_name
+    }
+    if kind == MODULE_LISTS {
+        allowed = allowed || WidgetHostSupports(module_name, name) ||
+        (module_name == "lists_view" &&
+            (name == "ReadListsUiHost" || name == "WriteListsUiHost" ||
+            name == "ReadListsRowHost" || name == "ListsLocaleHost"))
+    }
+    if kind == MODULE_DIARY {
+        allowed = allowed || WidgetHostSupports(module_name, name) ||
+        (module_name == "diary_view" &&
+            (name == "ReadDiaryUiHost" || name == "WriteDiaryUiHost" ||
+            name == "DiaryLocaleHost"))
+    }
+    if kind == MODULE_LUMI {
+        allowed = allowed || WidgetHostSupports(module_name, name) ||
+        (module_name == "lumi_view" &&
+            (name == "ReadLumiUiHost" || name == "WriteLumiUiHost" ||
+            name == "ReadLumiChatRowHost" ||
+            name == "LumiFeedbackChoiceHost" ||
+            name == "LumiLoadOlderHost" ||
+            name == "LumiDeleteRowHost" ||
+            name == "LumiFirstVisibleRowHost" ||
+            name == "LumiRowOffsetHost" ||
+            name == "ReadLumiDonationHost" || name == "LumiDonationActionHost" ||
+            name == "ReadLumiSuggestionTaskHost" ||
+            name == "ReadLumiSuggestionHabitHost" || name == "LumiViewLocaleHost"))
+    }
+    if kind == MODULE_LEADERBOARD {
+        allowed = allowed || WidgetHostSupports(module_name, name) ||
+        (module_name == "leaderboard_view" &&
+            (name == "ReadLeaderboardUiHost" || name == "WriteLeaderboardUiHost" ||
+            name == "ReadLeaderboardRowHost" || name == "LeaderboardLocaleHost"))
+    }
+    if kind == MODULE_INBE {
+        allowed = allowed ||
+        (module_name == "text_widget" && name == "TextHostedHost") ||
+        (module_name == "button_widget" && name == "ButtonHostedHost") ||
+        (module_name == "scroll_widget" && name == "ScrollHostedHost") ||
+        (module_name == "tree" && name == "EndHostedHost") ||
+        (module_name == "checkbox_widget" && name == "CheckboxHostedHost") ||
+        (module_name == "toggle_widget" && name == "ToggleHostedHost") ||
+        (module_name == "inbe_view" && (name == "ReadPickerUiHost" ||
+            name == "WritePickerUiHost" || name == "PickerLocaleHost"))
+    }
+    return allowed
+}
+
+ModuleProtocolComplete :: (slot: *ModuleSlot) -> bool {
+    if slot.has_read && slot.has_write {
+        return true
+    }
+    CloseBundleInstance(slot.app.instance)
+    slot.app.instance = null
+    return false
+}
+
+ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
+    slot.has_read = false
+    slot.has_write = false
+    return HostedAppStart(*slot.app, ModuleAllows, ModuleHostCall, cast(*void)slot) &&
+    ModuleProtocolComplete(slot) && ModuleRun(slot)
+}
+
+// The restarted instance must speak the message protocol and identify
+// itself before it replaces the working one.
+ModuleHandshake :: (context: *void) -> bool {
+    slot := cast(*ModuleSlot)context
+    if !slot.has_read || !slot.has_write {
         return false
     }
-    // Packages may add another already supported widget without a wrapper
-    // release. Require their message protocol and check every effect against
-    // the allowlist; an exact capability count would reject those UI updates.
-    bindings: [64]HostBinding
-    has_read: bool
-    has_write: bool
-    index: u64 = 0
-    while index < count {
-        module_name := BundleCapabilityModuleName(slot.bundle, index)
-        name := BundleCapabilityFunctionName(slot.bundle, index)
-        owner := ifx kind == MODULE_LISTS then "lists" else ifx kind == MODULE_HABITS then "habits" else ifx kind == MODULE_PRACTICE then "practice" else ifx kind == MODULE_DIARY then "diary" else ifx kind == MODULE_LUMI then "lumi" else ifx kind == MODULE_LEADERBOARD then "leaderboard" else "inbe"
-        allowed := TextFromCString(module_name) == owner && ModuleCapabilityAllowed(kind, TextFromCString(name))
-        if TextFromCString(module_name) == owner {
-            read_name := ifx kind == MODULE_LISTS then "ReadListsHost" else ifx kind == MODULE_HABITS then "ReadHabitsHost" else ifx kind == MODULE_PRACTICE then "ReadPracticeHost" else ifx kind == MODULE_DIARY then "ReadDiaryHost" else ifx kind == MODULE_LUMI then "ReadLumiHost" else ifx kind == MODULE_LEADERBOARD then "ReadLeaderboardHost" else "ReadInbeHost"
-            write_name := ifx kind == MODULE_LISTS then "WriteListsHost" else ifx kind == MODULE_HABITS then "WriteHabitsHost" else ifx kind == MODULE_PRACTICE then "WritePracticeHost" else ifx kind == MODULE_DIARY then "WriteDiaryHost" else ifx kind == MODULE_LUMI then "WriteLumiHost" else ifx kind == MODULE_LEADERBOARD then "WriteLeaderboardHost" else "WriteInbeHost"
-            has_read = has_read || TextFromCString(name) == read_name
-            has_write = has_write || TextFromCString(name) == write_name
-        }
-        if kind == MODULE_LISTS {
-            allowed = allowed || WidgetHostSupports(TextFromCString(module_name), TextFromCString(name)) ||
-            (TextFromCString(module_name) == "lists_view" &&
-                (TextFromCString(name) == "ReadListsUiHost" || TextFromCString(name) == "WriteListsUiHost" ||
-                TextFromCString(name) == "ReadListsRowHost" || TextFromCString(name) == "ListsLocaleHost"))
-        }
-        if kind == MODULE_DIARY {
-            allowed = allowed || WidgetHostSupports(TextFromCString(module_name), TextFromCString(name)) ||
-            (TextFromCString(module_name) == "diary_view" &&
-                (TextFromCString(name) == "ReadDiaryUiHost" || TextFromCString(name) == "WriteDiaryUiHost" ||
-                TextFromCString(name) == "DiaryLocaleHost"))
-        }
-        if kind == MODULE_LUMI {
-            allowed = allowed || WidgetHostSupports(TextFromCString(module_name), TextFromCString(name)) ||
-            (TextFromCString(module_name) == "lumi_view" &&
-                (TextFromCString(name) == "ReadLumiUiHost" || TextFromCString(name) == "WriteLumiUiHost" ||
-                TextFromCString(name) == "ReadLumiChatRowHost" ||
-                TextFromCString(name) == "LumiFeedbackChoiceHost" ||
-                TextFromCString(name) == "LumiLoadOlderHost" ||
-                TextFromCString(name) == "LumiDeleteRowHost" ||
-                TextFromCString(name) == "LumiFirstVisibleRowHost" ||
-                TextFromCString(name) == "LumiRowOffsetHost" ||
-                TextFromCString(name) == "ReadLumiDonationHost" || TextFromCString(name) == "LumiDonationActionHost" ||
-                TextFromCString(name) == "ReadLumiSuggestionTaskHost" ||
-                TextFromCString(name) == "ReadLumiSuggestionHabitHost" || TextFromCString(name) == "LumiViewLocaleHost"))
-        }
-        if kind == MODULE_LEADERBOARD {
-            allowed = allowed || WidgetHostSupports(TextFromCString(module_name), TextFromCString(name)) ||
-            (TextFromCString(module_name) == "leaderboard_view" &&
-                (TextFromCString(name) == "ReadLeaderboardUiHost" || TextFromCString(name) == "WriteLeaderboardUiHost" ||
-                TextFromCString(name) == "ReadLeaderboardRowHost" || TextFromCString(name) == "LeaderboardLocaleHost"))
-        }
-        if kind == MODULE_INBE {
-            owner_name := TextFromCString(module_name)
-            function_name := TextFromCString(name)
-            allowed = allowed ||
-            (owner_name == "text_widget" && function_name == "TextHostedHost") ||
-            (owner_name == "button_widget" && function_name == "ButtonHostedHost") ||
-            (owner_name == "scroll_widget" && function_name == "ScrollHostedHost") ||
-            (owner_name == "tree" && function_name == "EndHostedHost") ||
-            (owner_name == "checkbox_widget" && function_name == "CheckboxHostedHost") ||
-            (owner_name == "toggle_widget" && function_name == "ToggleHostedHost") ||
-            (owner_name == "inbe_view" && (function_name == "ReadPickerUiHost" ||
-                function_name == "WritePickerUiHost" || function_name == "PickerLocaleHost"))
-        }
-        if !allowed {
-            return false
-        }
-        bindings[index].module = module_name
-        bindings[index].function = name
-        bindings[index].call = ModuleHostCall
-        bindings[index].context = cast(*void)slot
-        index += 1
-    }
-    if !has_read || !has_write {
-        return false
-    }
-    slot.instance = InstantiateBundle(slot.bundle, *bindings[0], count)
-    // Packages and this host may be built against different record layouts
-    // within the supported host interfaces; the codecs match by name too.
-    MatchBundleFieldsByName(slot.instance, true)
-    LimitBundleSteps(slot.instance, 10000000)
-    return ModuleRun(slot)
+    previous_identifying := identifying
+    identifying = true
+    ready := ModuleRun(slot)
+    identifying = previous_identifying
+    return ready
 }
 
 // Keep the working instance until its replacement passes the handshake.
 // A failed UI reset must not make CellsReady false and stop every screen.
 ModuleRestart :: (slot: *ModuleSlot) -> bool {
-    previous_instance := slot.instance
-    previous_failed := slot.failed
-    slot.instance = null
-    previous_identifying := identifying
-    identifying = true
-    ready := ModuleInstantiate(slot)
-    identifying = previous_identifying
-    if ready {
-        CloseBundleInstance(previous_instance)
-    } else {
-        CloseBundleInstance(slot.instance)
-        slot.instance = previous_instance
-        slot.failed = previous_failed
-    }
-    return ready
+    slot.has_read = false
+    slot.has_write = false
+    return HostedAppRestart(*slot.app, ModuleAllows, ModuleHostCall, cast(*void)slot, ModuleHandshake)
 }
 
 #program_export
@@ -662,8 +641,7 @@ CellsOpen :: () -> bool {
         }
         slot := ModuleSlotForPackage(local_bundle_index)
         kind := ModuleKindForPackage(local_bundle_index)
-        CloseBundleInstance(slots[slot].instance)
-        CloseBundle(slots[slot].bundle)
+        HostedAppClose(*slots[slot].app)
         slots[slot] = ModuleSlot.{}
         identifying = true
         ready = ModuleOpen(*slots[slot], bytes, kind)
@@ -691,26 +669,23 @@ CellsOpenInstalledFeatures :: () {
             replacement: ModuleSlot
             kind := ModuleKindForPackage(index)
             if ModuleOpen(*replacement, bytes, kind) &&
-            ModuleFeatureAssetsValid(replacement.bundle, kind) {
+            ModuleFeatureAssetsValid(replacement.app.bundle, kind) {
                 slot := ModuleSlotForPackage(index)
                 // Host callbacks retain the slot address. Rebind after moving
                 // the checked candidate into its permanent slot, keeping the
                 // working package intact until that instance is ready.
                 installed := slots[slot]
-                CloseBundleInstance(replacement.instance)
-                replacement.instance = null
+                CloseBundleInstance(replacement.app.instance)
+                replacement.app.instance = null
                 slots[slot] = replacement
                 if ModuleInstantiate(*slots[slot]) {
-                    CloseBundleInstance(installed.instance)
-                    CloseBundle(installed.bundle)
+                    HostedAppClose(*installed.app)
                 } else {
-                    CloseBundleInstance(slots[slot].instance)
-                    CloseBundle(slots[slot].bundle)
+                    HostedAppClose(*slots[slot].app)
                     slots[slot] = installed
                 }
             } else {
-                CloseBundleInstance(replacement.instance)
-                CloseBundle(replacement.bundle)
+                HostedAppClose(*replacement.app)
             }
         }
         PackageFree(bytes)
@@ -732,10 +707,10 @@ PackageFeature :: (index: s32) -> string {
         name = "cells/leaderboard.zib"
     }
     asset: u64 = 0
-    while asset < BundleAssets(slots[3].bundle) {
-        if CellBundlePath(TextFromCString(BundleAssetPath(slots[3].bundle, asset))) == name {
-            return TextFromBytes(BytesFromPointer(BundleAssetBytes(slots[3].bundle, asset),
-                BundleAssetLength(slots[3].bundle, asset)))
+    while asset < BundleAssets(slots[3].app.bundle) {
+        if CellBundlePath(TextFromCString(BundleAssetPath(slots[3].app.bundle, asset))) == name {
+            return TextFromBytes(BytesFromPointer(BundleAssetBytes(slots[3].app.bundle, asset),
+                BundleAssetLength(slots[3].app.bundle, asset)))
         }
         asset += 1
     }
@@ -804,35 +779,15 @@ CellsAssetOwner :: (path: string) -> s32 {
 }
 
 // Compare bytes in place; most names differ early, so no length scan is needed.
-CellsAssetNamed :: (name: *u8, path: string) -> bool {
-    if name == null {
-        return false
-    }
-    for index: cast(s64)0..path.count - 1 {
-        if name[index] != path[index] {
-            return false
-        }
-    }
-    return name[path.count] == cast(u8)0
-}
-
 CellsAssetIn :: (slot: s32, path: string) -> AssetView {
-    if slot < 0 || slot >= PackageCount || slots[slot].bundle == null {
+    if slot < 0 || slot >= PackageCount {
         return AssetView.{}
     }
-    count := BundleAssets(slots[slot].bundle)
-    index: u64 = 0
-    while index < count {
-        if CellsAssetNamed(BundleAssetPath(slots[slot].bundle, index), path) {
-            return AssetView.{.found = true,
-                .mime = CellsAssetMime(path),
-                .data = TextFromBytes(BytesFromPointer(
-                    BundleAssetBytes(slots[slot].bundle, index),
-                    BundleAssetLength(slots[slot].bundle, index)))}
-        }
-        index += 1
+    asset := HostedAppAsset(*slots[slot].app, path)
+    if !asset.found {
+        return AssetView.{}
     }
-    return AssetView.{}
+    return AssetView.{.found = true, .mime = CellsAssetMime(path), .data = asset.data}
 }
 
 #program_export
@@ -846,7 +801,7 @@ CellsOpenPackage :: (bytes: string) -> bool {
     identifying = true
     ready := ModuleOpen(*slots[3], bytes, MODULE_INBE)
     if ready {
-        ready = ModulePackageAssetsValid(slots[3].bundle, false)
+        ready = ModulePackageAssetsValid(slots[3].app.bundle, false)
     }
     if ready {
         index: s32 = 0
@@ -861,7 +816,7 @@ CellsOpenPackage :: (bytes: string) -> bool {
                 slot := ModuleSlotForPackage(index + 1)
                 kind := ModuleKindForPackage(index + 1)
                 ready = ModuleOpen(*slots[slot], feature, kind) &&
-                ModuleFeatureAssetsValid(slots[slot].bundle, kind)
+                ModuleFeatureAssetsValid(slots[slot].app.bundle, kind)
             }
             index += 1
         }
@@ -889,10 +844,10 @@ InbeRun :: (message: InbeMessage) -> InbeMessage {
 
 #program_export
 InbeUiRun :: (message: InbeMessage) -> InbeMessage {
-    if slots[3].bundle == null {
+    if slots[3].app.bundle == null {
         return message
     }
-    if slots[3].failed && !ModuleRestart(*slots[3]) {
+    if slots[3].app.failed && !ModuleRestart(*slots[3]) {
         return message
     }
     return InbeRun(message)
@@ -925,7 +880,7 @@ CellsSetEnabled :: (mask: s32) -> bool {
         slot := ModuleSlotForPackage(index + 1)
         // The mask chooses shortcuts. Keep bundled apps loaded when hidden,
         // so adding them back needs neither a download nor another VM load.
-        if slots[slot].instance == null {
+        if slots[slot].app.instance == null {
 
             downloaded: string
             if local_bundle_index == index + 1 {
@@ -938,8 +893,7 @@ CellsSetEnabled :: (mask: s32) -> bool {
             ready := downloaded.count > 0 && ModuleOpen(*slots[slot], downloaded, kind)
             PackageFree(downloaded)
             if !ready {
-                CloseBundleInstance(slots[slot].instance)
-                CloseBundle(slots[slot].bundle)
+                HostedAppClose(*slots[slot].app)
                 slots[slot] = ModuleSlot.{}
                 feature := PackageFeature(index)
                 if feature.count > 0 && !ModuleOpen(*slots[slot], feature, kind) {
@@ -963,7 +917,7 @@ CellsPackageSize :: (index: s32) -> s64 {
         return 0
     }
     slot := ModuleSlotForPackage(index)
-    if slots[slot].instance == null {
+    if slots[slot].app.instance == null {
         return 0
     }
     return slots[slot].bundle_bytes
@@ -972,22 +926,22 @@ CellsPackageSize :: (index: s32) -> s64 {
 #program_export
 CellsInstalledMask :: () -> s32 {
     mask: s32 = 0
-    if slots[0].instance != null {
+    if slots[0].app.instance != null {
         mask |= APP_LISTS
     }
-    if slots[1].instance != null {
+    if slots[1].app.instance != null {
         mask |= APP_HABITS
     }
-    if slots[2].instance != null {
+    if slots[2].app.instance != null {
         mask |= APP_PRACTICE
     }
-    if slots[4].instance != null {
+    if slots[4].app.instance != null {
         mask |= APP_DIARY
     }
-    if slots[5].instance != null {
+    if slots[5].app.instance != null {
         mask |= APP_LUMI
     }
-    if slots[6].instance != null {
+    if slots[6].app.instance != null {
         mask |= APP_LEADERBOARD
     }
     return mask
@@ -1006,14 +960,13 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
     ok := ModuleOpen(*test, bytes, kind)
     if ok {
         if index == 0 {
-            ok = ModulePackageAssetsValid(test.bundle, true)
+            ok = ModulePackageAssetsValid(test.app.bundle, true)
         } else {
-            ok = ModuleFeatureAssetsValid(test.bundle, kind)
+            ok = ModuleFeatureAssetsValid(test.app.bundle, kind)
         }
     }
     identifying = previous
-    CloseBundleInstance(test.instance)
-    CloseBundle(test.bundle)
+    HostedAppClose(*test.app)
     return ok
 }
 
@@ -1086,12 +1039,12 @@ CellsUiEnd :: () {
 DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
-    if slots[4].bundle == null {
+    if slots[4].app.bundle == null {
         return message
     }
     // The VM reclaims temporary values. Keep its verified instance and
     // caches across frames; rebuild only after an execution failure.
-    if slots[4].failed && !ModuleRestart(*slots[4]) {
+    if slots[4].app.failed && !ModuleRestart(*slots[4]) {
         return message
     }
     diary_message = message
@@ -1115,10 +1068,10 @@ ListsRun :: (message: ListsMessage) -> ListsMessage {
 
 #program_export
 ListsUiRun :: (message: ListsMessage) -> ListsMessage {
-    if slots[0].bundle == null {
+    if slots[0].app.bundle == null {
         return ListsMessage.{}
     }
-    if slots[0].failed && !ModuleRestart(*slots[0]) {
+    if slots[0].app.failed && !ModuleRestart(*slots[0]) {
         return ListsMessage.{}
     }
     return ListsRun(message)
@@ -1162,8 +1115,7 @@ CellsReloadFeatures :: (mask: s32) -> bool {
         if index == 3 {
             continue
         }
-        CloseBundleInstance(slots[index].instance)
-        CloseBundle(slots[index].bundle)
+        HostedAppClose(*slots[index].app)
         slots[index] = ModuleSlot.{}
     }
     return CellsSetEnabled(mask)
@@ -1205,10 +1157,10 @@ ModuleKindForPackage :: (index: s32) -> s32 {
 LumiRun :: (message: LumiMessage) -> LumiMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
-    if slots[5].bundle == null {
+    if slots[5].app.bundle == null {
         return message
     }
-    if slots[5].failed && !ModuleRestart(*slots[5]) {
+    if slots[5].app.failed && !ModuleRestart(*slots[5]) {
         return message
     }
     // Lumi overwrites its frame from host state on every call. The runtime
@@ -1225,10 +1177,10 @@ LumiRun :: (message: LumiMessage) -> LumiMessage {
 LeaderboardRun :: (message: LeaderboardMessage) -> LeaderboardMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
-    if slots[6].bundle == null {
+    if slots[6].app.bundle == null {
         return message
     }
-    if slots[6].failed && !ModuleRestart(*slots[6]) {
+    if slots[6].app.failed && !ModuleRestart(*slots[6]) {
         return message
     }
     leaderboard_message = message
