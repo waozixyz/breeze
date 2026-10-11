@@ -34,6 +34,9 @@ SOURCE_PATHS = ("src", "droid", "apps", "assets", "locales", "themes", "fonts",
 MINIMUM_REFRESH_SHARE = 0.94
 MAXIMUM_LATE_PERCENT = 3.0
 MAXIMUM_FRAME_MS = 250.0
+# Leaving during a practice may pass through the floating window; the
+# practice must come back with the layout it had, not shifted or cropped.
+MAXIMUM_RESUME_LAYOUT_SHIFT = 2.0
 PENDING = 9223372036854775807
 
 
@@ -169,6 +172,10 @@ def smooth(timing):
             timing["worst_frame_ms"] <= MAXIMUM_FRAME_MS)
 
 
+def resumed_in_place(timing):
+    return timing.get("resume_layout_shift", 255.0) <= MAXIMUM_RESUME_LAYOUT_SHIFT
+
+
 def check(phone, apk, seconds, evidence):
     identity = apk_identity(apk)
     package = identity["package"]
@@ -213,8 +220,6 @@ def check(phone, apk, seconds, evidence):
     if phone.pid(package) != pid:
         raise ValueError("Inner Breeze restarted when it returned from the background")
     phone.screenshot(package, evidence / "resume.png")
-    # Leaving during a practice may pass through the floating window; the
-    # practice must come back with the layout it had.
     timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
     model = phone.shell("getprop", "ro.product.model").strip()
     android = phone.shell("getprop", "ro.build.version.release").strip()
@@ -247,12 +252,13 @@ def main():
     identity, timing, device = check(Phone(host, args.serial), apk, args.seconds, evidence)
     if identity["version_name"] != version:
         raise SystemExit(f"the APK is {identity['version_name']}, but the source is {version}")
-    passed = smooth(timing)
+    passed = smooth(timing) and resumed_in_place(timing)
     receipt = dict(schema=1, version=version, source_commit=commit,
                    apk=dict(sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), **identity),
                    device=device, practice=dict(name="Wim Hof", **timing),
                    limits=dict(minimum_refresh_share=MINIMUM_REFRESH_SHARE, maximum_late_percent=MAXIMUM_LATE_PERCENT,
-                               maximum_frame_ms=MAXIMUM_FRAME_MS),
+                               maximum_frame_ms=MAXIMUM_FRAME_MS,
+                               maximum_resume_layout_shift=MAXIMUM_RESUME_LAYOUT_SHIFT),
                    checks=["installed over the existing app", "launch", "Wim Hof frame timing",
                            "background and resume"],
                    passed=passed, checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
@@ -262,12 +268,12 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(receipt, indent=2) + "\n")
         print(f"Recorded {target.relative_to(ROOT)}; commit it with the release.")
-    if timing["resume_layout_shift"] > 2:
-        print(f"WARNING: the practice layout changed after resuming (difference {timing['resume_layout_shift']}); "
+    if not resumed_in_place(timing):
+        print(f"FAILED: the practice layout changed after resuming (difference {timing['resume_layout_shift']}); "
               f"compare practice-end.png and resume.png in {evidence.relative_to(ROOT)}")
     print(f"{device['model']} (Android {device['android']}): {timing['fps']} fps over {timing['seconds']} s, "
           f"{timing['late_percent']}% late frames, worst {timing['worst_frame_ms']} ms -> "
-          f"{'smooth' if passed else 'NOT smooth'}; evidence in {evidence.relative_to(ROOT)}")
+          f"{'smooth' if smooth(timing) else 'NOT smooth'}; evidence in {evidence.relative_to(ROOT)}")
     return 0 if passed else 1
 
 

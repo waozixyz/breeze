@@ -44,6 +44,9 @@ def validate(root, version):
     timing = receipt.get("practice", {})
     if receipt.get("passed") is not True or not phone_check.smooth(timing) or timing.get("seconds", 0) < 55:
         raise ValueError(f"the phone check did not pass: {timing}")
+    if not phone_check.resumed_in_place(timing):
+        raise ValueError("the app came back from the background with a shifted layout: "
+                         f"{timing.get('resume_layout_shift')}")
     if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", commit, "HEAD"],
                       capture_output=True).returncode != 0:
         raise ValueError(f"the checked commit {commit} is not part of this release")
