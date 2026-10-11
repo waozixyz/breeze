@@ -1035,6 +1035,7 @@ public class MainActivity extends NativeActivity {
 
         // Widget/tile/shortcut launch: the intent that started this activity.
         handleStartPracticeIntent(getIntent());
+        AppUpdate.onStart(this, getIntent() != null && ACTION_START_PRACTICE.equals(getIntent().getAction()));
         handleAudioE2EIntent(getIntent());
         handleDebugDonationReminderIntent(getIntent());
     }
