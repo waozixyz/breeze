@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.6] - 2026-10-10
+### Added
+- While Lumi is answering, three dots show in its bubble where the answer will appear.
+
 ## [1.3.5] - 2026-10-10
 
 - Requires Inner Breeze 2.1.28 or later.

@@ -328,6 +328,37 @@ DonationCard :: (index: s32, x: s32, y: s32, width: s32) {
     }
 }
 
+// Lumi's bubble with three dots that brighten and rise in turn, where its
+// answer will appear.
+TypingDots :: (x: s32, top: s32) {
+    left := x + Scale(48)
+    Image(frame.session, ImageProps.{.key = cast(u64)300380,
+            .asset_path = "assets/lumi/mascot.png", .alt_text = "Lumi",
+            .bounds = Bounds(x, top + Scale(16), Scale(40), Scale(40)),
+            .source = Rectangle.{0.0, 0.0, -1254.0, 1254.0},
+            .fit = cast(ImageFit)ImageFitContain})
+    Box(frame.session, BoxProps.{.key = cast(u64)300381,
+            .bounds = Bounds(left, top, Scale(96), Scale(60)),
+            .fill = Color.{156, 156, 156, 24}, .radius = cast(float32)Scale(16)})
+    Text(frame.session, TextProps.{.key = cast(u64)300382,
+            .bounds = Bounds(left + Scale(14), top + Scale(8), Scale(68), Scale(20)),
+            .text = "Lumi", .font = Scale(12)})
+    for dot: cast(s32)0..2 {
+        phase := frame.now * 1.4 - cast(float64)dot * 0.2
+        phase = phase - cast(float64)cast(s64)phase
+        if phase < 0.0 {
+            phase += 1.0
+        }
+        level := ifx phase < 0.5 then phase * 2.0 else (1.0 - phase) * 2.0
+        size := Scale(8)
+        Box(frame.session, BoxProps.{.key = cast(u64)(300383 + dot),
+                .bounds = Bounds(left + Scale(16) + dot * Scale(14),
+                    top + Scale(38) - cast(s32)(level * cast(float64)Scale(4)), size, size),
+                .fill = Color.{170, 170, 170, cast(u8)(90.0 + 165.0 * level)},
+                .radius = cast(float32)size / 2.0})
+    }
+}
+
 LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> LumiMessage {
     frame = ReadLumiUiHost()
     column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
@@ -389,9 +420,11 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     if frame.follow_end {
         frame.scroll = 1000000
     }
+    // While Lumi answers, its typing dots follow the last message.
+    typing_height := ifx frame.waiting then Scale(70) else 0
     history := Scroll(frame.session, ScrollProps.{.key = cast(u64)300100,
             .bounds = Bounds(x, history_top, width, chat_height),
-            .content_height = frame.history_height, .scroll_offset = frame.scroll, .scale = frame.scale})
+            .content_height = frame.history_height + typing_height, .scroll_offset = frame.scroll, .scale = frame.scale})
     frame.scroll = history.scroll_offset
     frame.follow_end = history.scroll_offset == history.max_scroll
     if history.opened {
@@ -455,6 +488,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
                 }
             }
             top += row_height
+        }
+        if frame.waiting {
+            TypingDots(x, cast(s32)history.content.y + frame.history_height)
         }
         End(frame.session)
     }

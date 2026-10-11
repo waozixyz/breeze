@@ -39,6 +39,9 @@ lumi_online_response: [65536]u8;
 lumi_online_owner: [64]u8;
 lumi_online_messages: string;
 lumi_online_queued: bool;
+// A message sent this frame is drawn, with Lumi's typing dots, before its
+// request is prepared, so Enter shows it at once.
+lumi_online_fresh: bool;
 lumi_online_stage: s32;
 lumi_online_round: s32;
 lumi_feedback_retry: s64;
@@ -86,6 +89,7 @@ LumiOnlineCancel :: () {
     CancelStoredOperation(*lumi_online_operation)
     LumiOnlineClearTurn()
     lumi_online_queued = false
+    lumi_online_fresh = false
     lumi_online_stage = 0
     lumi_online_round = 0
     lumi_online_session = Session.{}
@@ -126,6 +130,7 @@ LumiOnlineStart :: (input: string) -> bool {
     BuilderPrint(*out, "]")
     lumi_online_messages = BuilderFinish(out)
     lumi_online_queued = true
+    lumi_online_fresh = true
     lumi_online_round = 0
     unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), lumi_online_owner[:])
     return true
@@ -446,6 +451,10 @@ app_lumi_pump :: (app: *InnerBreeze) {
         return
     }
     if lumi_online_queued {
+        if lumi_online_fresh {
+            lumi_online_fresh = false
+            return
+        }
         if !LumiOnlineRequest(app) {
             lumi_online_queued = false
             LumiOnlineAppend(LocaleText("lumi_online_unavailable"))

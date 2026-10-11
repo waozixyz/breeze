@@ -214,6 +214,73 @@ LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
         .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE), .done = count >= target}
 }
 
+// The habit's last two weeks, so Lumi can coach from real progress: the
+// days it was planned and done, and the current run of done days.
+LumiHabitProgress :: struct {
+    scheduled_days: s32
+    done_days: s32
+    streak: s32
+}
+
+LUMI_PROGRESS_DAYS :: 14
+LUMI_STREAK_DAYS :: 365
+
+LumiPreviousDay :: (day_index: s32) -> s32 {
+    year := day_index / 10000
+    month := (day_index / 100) % 100
+    day := day_index % 100
+    if day > 1 {
+        return day_index - 1
+    }
+    month -= 1
+    if month < 1 {
+        month = 12
+        year -= 1
+    }
+    return year * 10000 + month * 100 + habit_days_in_month(year, month)
+}
+
+LumiHabitProgressAt :: (app: *InnerBreeze, index: s32) -> LumiHabitProgress {
+    progress: LumiHabitProgress
+    if !LumiToolsAvailable() || !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) ||
+    index < 0 || index >= app.habits.count {
+        return progress
+    }
+    habit := *app.habits.items[index]
+    target := ifx habit_counting_enabled(habit) != 0 then habit_counter_target(habit) else 1
+    // Day 0 lists the habit's linked practice sessions on every day.
+    linked := habit_cached_linked_entries(app, index, 0)
+    today := habits_today_index()
+    day := today
+    streak_open := true
+    for offset: cast(s32)0..LUMI_STREAK_DAYS - 1 {
+        done := HabitEffectiveDayCount(habit, day, linked) >= target
+        scheduled := habit_scheduled_day(habit, day) != 0
+        if offset < LUMI_PROGRESS_DAYS {
+            if scheduled {
+                progress.scheduled_days += 1
+            }
+            if done {
+                progress.done_days += 1
+            }
+        }
+        // Today still counts toward the streak until it ends, and days off
+        // the habit's schedule neither extend nor break it.
+        if streak_open {
+            if done {
+                progress.streak += 1
+            } else if scheduled && day != today {
+                streak_open = false
+            }
+        }
+        if !streak_open && offset >= LUMI_PROGRESS_DAYS - 1 {
+            break
+        }
+        day = LumiPreviousDay(day)
+    }
+    return progress
+}
+
 LumiTaskAt :: (index: s32) -> LumiTask {
     if !LumiToolsAvailable() {
         return LumiTask.{}
@@ -770,6 +837,7 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.height = app.ui.view_height
     lumi_ui.bottom = app_content_bottom_reserved(app)
     lumi_ui.scale = MetricsScale()
+    lumi_ui.now = GetTime()
     lumi_ui.font = AppFontSize()
     revision := LumiStoreRevision()
     history_changed := revision != lumi_rows_revision
