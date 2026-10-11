@@ -1,23 +1,17 @@
+// Inner Breeze's requests reach Daochi through async_client; Kryon's
+// http_transfer carries them on each platform. Model answers get longer
+// deadlines (network_deadline.zi).
 #import "async_client"
-#if #defined(PLATFORM_WEB) {
-    #import, file "browser_network.zi";
-    NetworkTransfer :: struct {
-        browser: BrowserTransfer
-    }
-}
-#if #defined(ANDROID_BUILD) {
-    #import, file "android/android_network.zi";
-    NetworkTransfer :: struct {
-        android: AndroidTransfer
-    }
-}
-#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
-    #import "net_http"
-    #import, file "native_network.zi";
-    NetworkTransfer :: struct {
-        native: NativeTransfer
-    }
+#import "net_http"
+#import "http_transfer"
+#import "c_string"
+#import, file "network_deadline.zi";
 
+NetworkTransfer :: struct {
+    transfer: HttpTransfer
+}
+
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
     // Native requests use SendCurl with caller-owned buffers
     // (daochi_native.zi), so this host declines net_http's blocking Send.
     // A Windows link resolves every host call, even unused ones.
@@ -30,14 +24,46 @@
     }
 }
 
+StartNetworkTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    transfer := cast(*NetworkTransfer)context
+    return transfer != null &&
+        HttpTransferStart(*transfer.transfer, request, output, NetworkDeadline(request.url))
+}
+
+PollNetworkTransfer :: (context: *void, status: *s32) -> s32 {
+    transfer := cast(*NetworkTransfer)context
+    if transfer == null {
+        return 0
+    }
+    return HttpTransferPoll(*transfer.transfer, status)
+}
+
+CancelNetworkTransfer :: (context: *void) {
+    transfer := cast(*NetworkTransfer)context
+    if transfer != null {
+        HttpTransferCancel(*transfer.transfer)
+    }
+}
+
 NetworkTransport :: (transfer: *NetworkTransfer) -> AsyncTransport {
-    #if #defined(PLATFORM_WEB) {
-        return BrowserTransport(*transfer.browser)
-    }
-    #if #defined(ANDROID_BUILD) {
-        return AndroidTransport(*transfer.android)
-    }
+    return AsyncTransport.{.context = cast(*void)transfer, .start = StartNetworkTransfer,
+        .poll = PollNetworkTransfer, .cancel = CancelNetworkTransfer}
+}
+
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+    network_trace_c :: #system_library "c";
+    NetworkEnvironment :: (name: *u8) -> *u8 #foreign network_trace_c "getenv";
+}
+
+// INBE_NETWORK_TRACE=1 prints request sizes on desktops.
+NetworkTracing :: () -> bool {
     #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
-        return NativeTransport(*transfer.native)
+        name: [24]u8
+        if !CopyCString("INBE_NETWORK_TRACE", name[:]) {
+            return false
+        }
+        value := NetworkEnvironment(*name[0])
+        return value != null && value[0] == cast(u8)49
     }
+    return false
 }

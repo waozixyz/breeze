@@ -8,6 +8,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 "$compiler" build --target=c --define PLATFORM_WEB --root "$root/tests" \
+    --module-path "$root/tests/flow_fake" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" \

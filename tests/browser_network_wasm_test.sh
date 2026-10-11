@@ -10,14 +10,6 @@ sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --define PLATFORM_WEB --ro
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/tests/browser_network_wasm.zi"
 cat > "$work/fixture.js" <<'JS'
-globalThis.fetch = async (url, options) => {
-  if (options.headers.get('Authorization') !== 'Bearer secret' ||
-      options.headers.get('X-Test') !== 'zi' ||
-      new TextDecoder().decode(options.body) !== '{"test":true}' ||
-      options.redirect !== 'error') throw new Error('request ABI mismatch');
-  if (url.endsWith('/cancel')) await new Promise(resolve => setTimeout(resolve, 2));
-  return new Response(url.endsWith('/overflow') ? 'oversized' : 'accepted', { status: 201 });
-};
 globalThis.WebSocket = class {
   constructor(url, protocols) {
     if (protocols.join(',') !== 'daochi-sync-v1,bearer.secret') throw new Error('protocol ABI');
@@ -38,4 +30,4 @@ find "$work/c" -type f -name '*.c' -exec \
     -sASYNCIFY -sEXIT_RUNTIME=1 -sENVIRONMENT=node -sWASM_ASYNC_COMPILATION=0 \
     -o "$work/test.js" {} +
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY node "$work/test.js"
-echo "Browser network typed Ziran WebAssembly ABI test passed"
+echo "Browser event socket typed Ziran WebAssembly ABI test passed"

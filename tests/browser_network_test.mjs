@@ -38,19 +38,6 @@ function text(value) {
   heap[at + data.length] = 0;
   return [at, data.length];
 }
-function create(url = 'https://example.org/data', capacity = 1024, timeout = 1000) {
-  return library.browser_http_create(...text('POST'), ...text(url), 65536, capacity, timeout);
-}
-async function complete(id) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const result = library.browser_http_poll(id, 32768);
-    if (result >= 0) {
-      return result;
-    }
-    await new Promise(resolve => setTimeout(resolve, 1));
-  }
-  throw new Error('transfer did not complete');
-}
 function output() {
   let end = 65536;
   while (heap[end] !== 0) {
@@ -59,75 +46,7 @@ function output() {
   return Buffer.from(heap.subarray(65536, end)).toString();
 }
 
-fetchRequest = async (url, options) => {
-  assert.equal(url, 'https://example.org/data');
-  assert.equal(options.redirect, 'error');
-  assert.equal(options.credentials, 'omit');
-  assert.equal(options.headers.get('authorization'), 'Bearer secret');
-  assert.equal(Buffer.from(options.body).toString(), 'request');
-  return new Response('response', { status: 200 });
-};
-let handle = create();
-assert.ok(handle > 0);
-assert.equal(library.browser_http_header(handle, ...text('Authorization'), ...text('Bearer secret')), 1);
-assert.equal(library.browser_http_send(handle, ...text('request')), 1);
-assert.equal(library.browser_http_poll(handle, 32768), -1);
-assert.equal(await complete(handle), 1);
-assert.equal(words[32768 >> 2], 200);
-assert.equal(output(), 'response');
-assert.equal(library.$BrowserNetwork.http.size, 0);
-
-for (const declared of [true, false]) {
-  fetchRequest = async () => new Response('x'.repeat(64), {
-    headers: declared ? { 'content-length': '64' } : {}
-  });
-  handle = create('https://example.org/large', 64);
-  assert.equal(library.browser_http_send(handle, 0, 0), 1);
-  assert.equal(await complete(handle), 0);
-  assert.equal(output(), '');
-}
-
-for (const failure of ['redirect', 'network']) {
-  fetchRequest = async (_url, options) => {
-    assert.equal(options.redirect, 'error');
-    throw new TypeError(failure);
-  };
-  handle = create();
-  assert.equal(library.browser_http_send(handle, 0, 0), 1);
-  assert.equal(await complete(handle), 0);
-}
-
-fetchRequest = async () => new Response('missing', { status: 404 });
-handle = create();
-assert.equal(library.browser_http_send(handle, 0, 0), 1);
-assert.equal(await complete(handle), 1);
-assert.equal(words[32768 >> 2], 404);
-assert.equal(output(), 'missing');
-
-let finishLate;
-let abortSignal;
-fetchRequest = (_url, options) => {
-  abortSignal = options.signal;
-  return new Promise(resolve => { finishLate = resolve; });
-};
-handle = create();
-assert.equal(library.browser_http_send(handle, 0, 0), 1);
-library.browser_http_cancel(handle);
-assert.equal(abortSignal.aborted, true);
-heap[65536] = 77;
-finishLate(new Response('late'));
-await new Promise(resolve => setTimeout(resolve, 5));
-assert.equal(heap[65536], 77, 'canceled request must not write freed output');
-assert.equal(library.browser_http_poll(handle, 32768), 0);
-
-fetchRequest = () => new Promise(() => {});
-handle = create('https://example.org/stall', 64, 2);
-assert.equal(library.browser_http_send(handle, 0, 0), 1);
-assert.equal(await complete(handle), 0);
-assert.equal(library.$BrowserNetwork.http.size, 0);
-assert.equal(create('file:///etc/passwd'), 0);
-assert.equal(create('https://user:pass@example.org'), 0);
-
+// HTTP requests run in Kryon's http_transfer; this host keeps sockets.
 function open() {
   const id = library.browser_ws_open(...text('wss://example.org/events'),
     ...text('daochi-sync-v1'), ...text('bearer.secret'), 128);
@@ -163,8 +82,11 @@ socket.onmessage({ data: 'late' });
 assert.equal(library.$BrowserNetwork.sockets.size, 0);
 assert.equal(library.browser_ws_poll(socketHandle, 65536, 128), 0);
 
-console.log('Browser HTTP bounds, status, redirect policy, cancellation, timeout, and WebSocket lifecycle passed');
+console.log('Browser WebSocket lifecycle passed');
 
+let handle;
+let finishLate;
+let abortSignal;
 // Streaming transfers apply backpressure: only one bounded chunk is retained,
 // and asynchronous callbacks never write into the caller's memory.
 function stream(maximum = 100000, timeout = 1000) {

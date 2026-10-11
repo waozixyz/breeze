@@ -16,7 +16,7 @@ MODULES = [
     "android_mutex", "android_health_host",
     "android_wakelock_host", "android_share", "android_import_host",
     "android_push_host", "android_push_types", "android_device", "android_text_editor",
-    "android_runtime_assets_host", "android_insets", "android_network", "android_startup",
+    "android_runtime_assets_host", "android_insets", "android_startup",
 ]
 SOURCES = [ROOT / f"src/platform/android/{name}.zi" for name in MODULES]
 

@@ -1661,11 +1661,6 @@ update-transport-zi-test: $(ZI2C_BIN)
 
 test: plan9-host-zi-test android-jni-zi-test update-transport-zi-test
 
-.PHONY: secondary-window-host-test
-secondary-window-host-test: $(ZI2C_BIN) $(RAYLIB_A)
-	@sh tests/secondary_window_host_zi_test.sh \
-		$(abspath $(dir $(ZI2C_BIN))) $(abspath $(RAYLIB_A))
-
 .PHONY: raylib-log-host-test
 raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@mkdir -p $(BUILD_DIR)/raylib-log-host-test/c

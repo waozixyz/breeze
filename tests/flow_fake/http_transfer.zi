@@ -1,0 +1,135 @@
+// Stands in for Kryon's http_transfer in the Telegram account flow test:
+// requests are answered by telegram_account_flow_host.zi.
+#import "net_http"
+#import "text_buffer"
+#import, file "../telegram_account_flow_host.zi";
+#import, file "../../src/app/text_buffers.zi";
+
+flow_fake_c :: #system_library "c";
+// main.c of tests/telegram_account_flow_zi_test.sh moves the fixture clock.
+FlowClockAdvance :: (seconds: s64) #foreign flow_fake_c;
+
+HttpTransfer :: struct {
+    handle: s32
+    job: *void
+    output: []u8
+}
+
+FlowHeader :: (operation: *FlowHttpOperation, key: string, text: string) -> bool {
+    FlowObserve(key)
+    FlowObserve(text)
+    if key == "Authorization" && !AppCopyText(text, operation.authorization[:]) {
+        return false
+    }
+    if key == "X-Daochi-Tx" && !AppCopyText(text, operation.transaction[:]) {
+        return false
+    }
+    return true
+}
+
+HttpTransferStart :: (transfer: *HttpTransfer, request: HttpRequest, output: []u8,
+    timeout_ms: s32) -> bool {
+    unused timeout_ms
+    if transfer == null || transfer.handle != 0 || output.count == 0 {
+        return false
+    }
+    operation: *FlowHttpOperation
+    for index: 0..7 {
+        if !flow_host_operations[index].active {
+            operation = *flow_host_operations[index]
+            break
+        }
+    }
+    if operation == null {
+        return false
+    }
+    operation.* = FlowHttpOperation.{}
+    if !AppCopyText(request.method, operation.method[:]) || !AppCopyText(request.url, operation.url[:]) {
+        return false
+    }
+    FlowObserve(request.method)
+    FlowObserve(request.url)
+    authorization: [8193]u8
+    configured := (request.accept.count == 0 || FlowHeader(operation, "Accept", request.accept)) &&
+        (request.content_type.count == 0 || FlowHeader(operation, "Content-Type", request.content_type)) &&
+        (request.token.count == 0 || (HttpTransferBearer(request.token, authorization[:]) &&
+            FlowHeader(operation, "Authorization", TextUntilNul(authorization[:]))))
+    for index: cast(s64)0..request.headers.count - 1 {
+        configured = configured && FlowHeader(operation, request.headers[index].name, request.headers[index].value)
+    }
+    if !configured || flow_host_reply == null || !AppCopyText(request.body, operation.body[:]) {
+        return false
+    }
+    FlowObserve(request.body)
+    flow_host_calls += 1
+    // Last-request snapshots are synthetic diagnostics only. Each asynchronous
+    // response remains bound to its separate retained host operation.
+    flow_host_url = operation.url
+    flow_host_method = operation.method
+    flow_host_body = operation.body
+    flow_host_authorization = operation.authorization
+    flow_host_transaction = operation.transaction
+    operation.output = output
+    reply: HttpRequest
+    reply.url = TextUntilNul(operation.url[:])
+    reply.method = TextUntilNul(operation.method[:])
+    reply.body = TextUntilNul(operation.body[:])
+    if !flow_host_reply(reply, operation.output, *operation.status) {
+        return false
+    }
+    flow_host_handle += 1
+    operation.handle = flow_host_handle
+    operation.active = true
+    FlowUpdateActive()
+    transfer.handle = operation.handle
+    transfer.output = output
+    return true
+}
+
+HttpTransferPoll :: (transfer: *HttpTransfer, status: *s32) -> s32 {
+    operation := FlowFindOperation(transfer.handle)
+    if operation == null {
+        transfer.* = HttpTransfer.{}
+        return 0
+    }
+    if flow_host_delay > 0 {
+        flow_host_delay -= 1
+        FlowClockAdvance(1)
+        return -1
+    }
+    if flow_host_change_context_on_http_poll {
+        flow_host_current = false
+        flow_host_change_context_on_http_poll = false
+    }
+    status.* = operation.status
+    operation.active = false
+    FlowUpdateActive()
+    transfer.* = HttpTransfer.{}
+    return 1
+}
+
+HttpTransferCancel :: (transfer: *HttpTransfer) {
+    operation := FlowFindOperation(transfer.handle)
+    if operation != null {
+        operation.active = false
+        flow_host_cancelled += 1
+        FlowUpdateActive()
+    }
+    transfer.* = HttpTransfer.{}
+}
+
+
+HttpTransferBearer :: (token: string, output: []u8) -> bool {
+    prefix := "Bearer "
+    if prefix.count + token.count >= output.count {
+        return false
+    }
+    for index: cast(s64)0..prefix.count - 1 {
+        output[index] = prefix[index]
+    }
+    for index: cast(s64)0..token.count - 1 {
+        output[prefix.count + index] = token[index]
+    }
+    output[prefix.count + token.count] = 0
+    return true
+}
