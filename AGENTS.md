@@ -13,6 +13,16 @@
   The canonical macros are `APP_VERSION_STRING`, `APP_VERSION_MAJOR`,
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.
   Only the GitHub Actions release workflow creates or pushes release tags.
+- A new version publishes only with a passing phone check of its exact
+  sources: build the APK from the committed release, run
+  `make phone-check APK=...` with the development Moto connected through the
+  ThinkPad, and commit `releases/phone-checks/VERSION.json`. Changes to app
+  sources after the check require a new one.
+- Packages declare the oldest host interface they run on (`host_api` per app
+  in `apps/versions.json`); the host runs `oldest_host_api` to `host_api`.
+  Raise `host_api` when the host interface changes and `oldest_host_api` only
+  when it can no longer run older packages. `make package-compat-test` runs
+  the node's packages in this build and new packages in the last release.
 - Translate changed strings in every affected locale; no English placeholders.
 - `make locale-translated-test` fails on any locale string that still equals
   its English text. Translate it; add it to `tests/locale_same_as_english.txt`

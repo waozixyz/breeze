@@ -187,6 +187,19 @@ Packaged resource and translation changes also trigger only the package workflow
 `make package-version-test` checks every module's numeric changelog, ledger,
 sequence and bundled status before publishing.
 
+Hosts and packages agree on interfaces, not exact versions. Every package
+declares the oldest host interface it needs (`host_api` in its ledger entry),
+and the host runs packages from `oldest_host_api` to its own `host_api`.
+Records between them match fields by name, so a field one side lacks keeps its
+zero value and an unknown field is ignored. Update checks send the host's
+interfaces and a stable device bucket; the node answers with the newest
+release that fits, so apps that keep an older host still receive the packages
+built for it. `package-release.py --rollout PERCENT --rollout-hours HOURS`
+stages changed releases to that share of devices first; the node releases them
+to everyone when the time runs out. `make package-compat-test` runs the
+packages the node serves in the current build, and runs each new package that
+declares an older interface in the last released app.
+
 ## Publishing configuration
 
 The `Cell packages` GitHub Actions workflow builds and verifies package releases
@@ -295,6 +308,13 @@ to finish the entirely portable architecture. Changes to their compiled UI or
 to native host capabilities still require a wrapper release.
 
 ## Verification
+
+A new app version is published only with a passing phone check of its
+exact sources. `make phone-check APK=...` installs that APK on the development
+Moto, runs the Wim Hof session for a minute while it reads SurfaceFlinger's
+frame times, checks resuming from the background and records
+`releases/phone-checks/VERSION.json`; the Release workflow refuses a new tag
+without it or when app sources changed after it.
 
 Harmony Projects shows this wrapper release, every cell version and its Moto
 screenshots. Harmony's `make inbe-release-verify` checks the latest published

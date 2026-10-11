@@ -3093,6 +3093,25 @@ test: app-click-block-zi-test
 package-release-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
 	python3 tests/package_release_test.py
 
+# This build runs the packages the node serves, and the last released app runs
+# each new package that declares a host interface it has.
+.PHONY: package-compat-test
+package-compat-test: $(TARGET) $(CELL_BUNDLES) $(INBE_BUNDLE)
+	python3 tests/package_compat_test.py $(abspath $(TARGET))
+
+.PHONY: phone-check-gate-test
+phone-check-gate-test:
+	python3 tests/phone_check_gate_test.py
+
+test: phone-check-gate-test
+
+# Check an exact APK on the development Moto and record the release receipt:
+# make phone-check APK=path/to/inbe.apk
+.PHONY: phone-check
+phone-check:
+	@test -n "$(APK)" || { echo "Set APK=path/to/inbe.apk"; exit 1; }
+	python3 scripts/phone-check.py "$(APK)" --record
+
 test: package-release-test
 
 .PHONY: app-preferences-sync-test
