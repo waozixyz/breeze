@@ -135,7 +135,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             # its card in the Apps library installs and opens it.
             click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
             time.sleep(.4)
-            click(window, 297, 427)  # Diary, the fifth pinned card.
+            # Diary, the fifth pinned card: Apps fits five 144 wide cards
+            # in a row at this width.
+            click(window, 804, 228)
             deadline = time.monotonic() + 2
             while "screen=0->22" not in log.read_text():
                 assert time.monotonic() < deadline, "Diary click was ignored\n" + log.read_text()

@@ -70,6 +70,17 @@ def word_at(window, label, word):
     raise AssertionError(f"{word!r} is not on screen")
 
 
+def lowest_word(window, label, word):
+    """The lowest place a rendered word appears, found with OCR."""
+    result = command("tesseract", str(capture(window, label)), "stdout", "--psm", "11",
+                     "-c", "tessedit_create_tsv=1")
+    places = [(int(item["left"]) + int(item["width"]) // 2, int(item["top"]) + int(item["height"]) // 2)
+              for item in csv.DictReader(io.StringIO(result), delimiter="\t")
+              if (item.get("text") or "").strip().lower() == word]
+    assert places, f"{word!r} is not on screen"
+    return max(places, key=lambda place: place[1])
+
+
 def send(window, text):
     command("xdotool", "mousemove", "--window", window, "400", "680")
     command("xdotool", "mousedown", "1")
@@ -155,4 +166,38 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:
         except AssertionError as error:
             if "came back" in str(error):
                 raise
-print("Lumi selection: hold, sweep, copy, delete with confirmation, synced deletion and restart passed")
+# Dragging to the top edge scrolls through older pages while selecting.
+with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-scroll-") as temporary:
+    profile = Path(temporary)
+    with application(profile, "scroll-initialize"):
+        pass
+    with sqlite3.connect(profile / "inbe.db") as db:
+        user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                   "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+                   (user, "lumi_archive_migrated", "1"))
+        for index in range(1, 46):
+            value = json.dumps(dict(time=index, user=1, kind=0, payload="",
+                                    text=f"History message {index:03}"))
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1)",
+                       (user, f"cell.lumi.message.test-{index:03}", value))
+    with application(profile, "scroll") as window:
+        # The newest message is the lowest one in the chat.
+        newest = lowest_word(window, "scroll-start", "history")
+        command("xdotool", "mousemove", "--window", window, str(newest[0]), str(newest[1]))
+        time.sleep(0.15)
+        command("xdotool", "mousedown", "1")
+        time.sleep(0.9)
+        for y in range(newest[1], 20, -40):
+            command("xdotool", "mousemove", "--window", window, str(newest[0]), str(y))
+            time.sleep(0.05)
+        command("xdotool", "mousemove", "--window", window, str(newest[0]), "20")
+        time.sleep(6.0)
+        command("xdotool", "mouseup", "1")
+        time.sleep(0.4)
+        capture(window, "scroll-selected")
+        tap(window, LEFT + WIDTH - 2 * 44 - 4 + 22, BAR_Y)  # Copy.
+        copied = command("xclip", "-selection", "clipboard", "-o")
+        assert "History message 045" in copied and "History message 001" in copied, copied[:200]
+        assert copied.count("History message") == 45, copied.count("History message")
+print("Lumi selection: hold, sweep, edge scrolling through older pages, copy, delete with confirmation, synced deletion and restart passed")

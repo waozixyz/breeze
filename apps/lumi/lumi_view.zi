@@ -95,20 +95,23 @@ menu_commands: [LUMI_MENU_COMMANDS]LumiMenuCommand;
 menu_scroll: s32;
 focus_request: s32;
 // Telegram-style selection: hold a message to select it, then tap messages
-// or drag across them. Indices are rows of the loaded chat, which keeps its
-// older messages unloaded while selecting so the rows stay in place.
+// or drag across them; dragging near the chat's top or bottom scrolls it.
+// Rows are counted from the newest message, which older messages loading
+// above do not change, so a sweep can keep going up through the history.
+// The greeting above every message is kept apart.
 LUMI_SELECT_MAX :: 4096
 selecting: bool;
 selected: [LUMI_SELECT_MAX]bool;
+greeting_selected: bool;
 selected_count: s32;
 sweeping: bool;
+// The row the sweep began on, counted from the newest message; -1 is the
+// greeting.
 sweep_anchor: s32;
 sweep_value: bool;
-// Where the sweep began, in chat content and on screen. The rows it reaches
-// follow the pointer's movement since then, so the chat making room for the
-// selection bar does not shift which row the pointer means.
-sweep_content_y: s32;
-sweep_screen_y: float32;
+// Where the pointer is during a sweep, for scrolling at the chat's edges.
+sweep_pointer_y: float32;
+sweep_seen: bool;
 confirm_delete: bool;
 // Copied text waits until the composer has written its own clipboard state.
 pending_copy: string;
@@ -117,10 +120,34 @@ LUMI_CLOSE_ICON :: "S1.8rr:M6 6L18 18M18 6L6 18"
 LUMI_COPY_ICON :: "S1.6rr:M9 9H20V20H9ZM15 5V4H4V15H5"
 LUMI_DELETE_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
 
+// A row's place counted from the newest message; the greeting is -1.
+RowSlot :: (index: s32) -> s32 {
+    if index <= 0 {
+        return -1
+    }
+    return frame.chat_count - 1 - index
+}
+
+SlotRow :: (slot: s32) -> s32 {
+    if slot < 0 {
+        return 0
+    }
+    return frame.chat_count - 1 - slot
+}
+
+IsSelected :: (index: s32) -> bool {
+    slot := RowSlot(index)
+    if slot < 0 {
+        return greeting_selected
+    }
+    return slot < LUMI_SELECT_MAX && selected[slot]
+}
+
 SelectionClear :: () {
     for index: cast(s32)0..LUMI_SELECT_MAX - 1 {
         selected[index] = false
     }
+    greeting_selected = false
     selected_count = 0
     selecting = false
     sweeping = false
@@ -128,21 +155,26 @@ SelectionClear :: () {
 }
 
 SelectionSet :: (index: s32, value: bool) {
-    if index < 0 || index >= LUMI_SELECT_MAX || index >= frame.chat_count || selected[index] == value {
+    if index < 0 || index >= frame.chat_count || IsSelected(index) == value {
         return
     }
-    selected[index] = value
+    slot := RowSlot(index)
+    if slot < 0 {
+        greeting_selected = value
+    } else if slot < LUMI_SELECT_MAX {
+        selected[slot] = value
+    } else {
+        return
+    }
     selected_count += ifx value then 1 else -1
 }
 
 // A press began on a row: it selects or clears that row, and dragging then
 // gives every row it sweeps over the same state.
-SweepStart :: (index: s32, value: bool, content_y: s32, screen_y: float32) {
+SweepStart :: (index: s32, value: bool) {
     sweeping = true
-    sweep_anchor = index
+    sweep_anchor = RowSlot(index)
     sweep_value = value
-    sweep_content_y = content_y
-    sweep_screen_y = screen_y
     SelectionSet(index, value)
 }
 
@@ -153,8 +185,9 @@ SweepTo :: (index: s32) {
     if index >= frame.chat_count {
         index = frame.chat_count - 1
     }
-    first := ifx index < sweep_anchor then index else sweep_anchor
-    last := ifx index < sweep_anchor then sweep_anchor else index
+    anchor := SlotRow(sweep_anchor)
+    first := ifx index < anchor then index else anchor
+    last := ifx index < anchor then anchor else index
     for row: first..last {
         SelectionSet(row, sweep_value)
     }
@@ -180,10 +213,7 @@ SelectedText :: () -> string {
     out: Vec(u8)
     written: s32 = 0
     for index: cast(s32)0..frame.chat_count - 1 {
-        if index >= LUMI_SELECT_MAX {
-            break
-        }
-        if !selected[index] {
+        if !IsSelected(index) {
             continue
         }
         if written > 0 {
@@ -199,6 +229,9 @@ SelectedText :: () -> string {
 // the count, then copy and delete, with delete asking first.
 SelectionBar :: (x: s32, top: s32, width: s32) {
     control := Scale(44)
+    Box(frame.session, BoxProps.{.key = cast(u64)300369,
+            .bounds = Bounds(x - Scale(16), 0, width + Scale(32), top + control + Scale(8)),
+            .fill = frame.background})
     if confirm_delete {
         Text(frame.session, TextProps.{.key = cast(u64)300370,
                 .bounds = Bounds(x, top, width - Scale(216), control),
@@ -217,7 +250,7 @@ SelectionBar :: (x: s32, top: s32, width: s32) {
             // From the last row back, so earlier rows keep their indices.
             index := frame.chat_count - 1
             while index >= 0 {
-                if index < LUMI_SELECT_MAX && selected[index] {
+                if IsSelected(index) {
                     unused LumiDeleteRowHost(index)
                 }
                 index -= 1
@@ -526,6 +559,29 @@ TypingDots :: (x: s32, top: s32) {
     }
 }
 
+// A row's press: a hold starts selecting, and while selecting a press starts
+// a sweep that follows the pointer, even off the row and past the chat.
+RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
+    key := ifx index == 0 then 0 else RowSlot(index) + 1
+    press := Press(frame.session, PressProps.{.key = cast(u64)(410000 + key), .bounds = bounds,
+            .label = LumiViewLocaleHost("lumi_message"), .now = frame.now, .capture = selecting})
+    if !selecting && press.held {
+        selecting = true
+        confirm_delete = false
+        SweepStart(index, true)
+    } else if selecting && press.down && !sweeping {
+        SweepStart(index, !IsSelected(index))
+    }
+    if sweeping && press.down {
+        sweep_seen = true
+        sweep_pointer_y = press.y
+        SweepTo(LumiFirstVisibleRowHost(cast(s32)(press.y - content_y)))
+    }
+    if press.released {
+        sweeping = false
+    }
+}
+
 LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> LumiMessage {
     frame = ReadLumiUiHost()
     column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
@@ -542,9 +598,6 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     footer := frame.height - frame.bottom - Scale(16) - input_height
     suggestions_top := footer - Scale(ifx LumiTrim(frame.value).count > 0 then 46 else 0)
     history_top := Scale(12)
-    if selecting {
-        history_top = Scale(64)
-    }
     menu := MenuCommands(revision)
     menu_matches: [LUMI_MENU_COMMANDS]s32
     menu_count: s32 = 0
@@ -599,8 +652,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     frame.follow_end = history.scroll_offset == history.max_scroll
     // Older messages load when the chat reaches its top, and at once while
     // the loaded ones do not fill the chat, which then cannot scroll.
-    load_older := frame.has_older && !selecting &&
+    load_older := frame.has_older &&
     (history.max_scroll <= 0 || (!frame.follow_end && frame.scroll <= Scale(96)))
+    anchor_drawn := false
     if history.opened {
         first := LumiFirstVisibleRowHost(history.scroll_offset)
         top := cast(s32)history.content.y + LumiRowOffsetHost(first)
@@ -613,29 +667,13 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             bubble_width := width - Scale(ifx row.user then 60 else 80)
             left := x + Scale(48)
             // The whole row takes holds and sweeps; its buttons sit above it.
-            press := Press(frame.session, PressProps.{.key = cast(u64)(410000 + index),
-                    .bounds = Bounds(x, top, width, row_height - Scale(10)),
-                    .label = LumiViewLocaleHost("lumi_message"), .now = frame.now, .capture = selecting})
-            if !selecting && press.held {
-                selecting = true
-                confirm_delete = false
-                // The bar takes the top of the chat; scrolling by its height
-                // keeps the messages where they were when the chat can scroll.
-                frame.scroll += Scale(52)
-                SweepStart(index, true, cast(s32)(press.y - history.content.y), press.y)
-            } else if selecting && press.down && !sweeping {
-                SweepStart(index, index >= LUMI_SELECT_MAX || !selected[index],
-                    cast(s32)(press.y - history.content.y), press.y)
-            }
-            if sweeping && press.down {
-                SweepTo(LumiFirstVisibleRowHost(sweep_content_y + cast(s32)(press.y - sweep_screen_y)))
-            }
-            if press.released {
-                sweeping = false
+            RowPress(index, Bounds(x, top, width, row_height - Scale(10)), history.content.y)
+            if RowSlot(index) == sweep_anchor {
+                anchor_drawn = true
             }
             if selecting {
-                checked := index < LUMI_SELECT_MAX && selected[index]
-                toggled := Checkbox(frame.session, CheckboxProps.{.key = cast(u64)(420000 + index),
+                checked := IsSelected(index)
+                toggled := Checkbox(frame.session, CheckboxProps.{.key = cast(u64)(420000 + RowSlot(index) + 1),
                         .bounds = Bounds(x + Scale(8), top + (row_height - Scale(10)) / 2 - Scale(12), Scale(24), Scale(24)),
                         .label = LumiViewLocaleHost("lumi_message"), .checked = checked})
                 if toggled.changed {
@@ -695,8 +733,43 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
         if frame.waiting {
             TypingDots(x, cast(s32)history.content.y + frame.history_height)
         }
+        // Scrolling can carry the row the sweep began on out of view; its
+        // press stays registered so the sweep goes on.
+        if sweeping && !anchor_drawn {
+            anchor := SlotRow(sweep_anchor)
+            if anchor >= 0 && anchor < frame.chat_count {
+                anchor_top := cast(s32)history.content.y + LumiRowOffsetHost(anchor)
+                RowPress(anchor, Bounds(x, anchor_top, width,
+                        ReadLumiChatRowHost(anchor).height - Scale(10)), history.content.y)
+            }
+        }
         End(frame.session)
     }
+    // Dragging near the chat's top or bottom scrolls it, faster nearer the
+    // edge, so a sweep can reach every message.
+    if sweeping && sweep_seen {
+        edge := cast(float32)Scale(56)
+        top_edge := cast(float32)Scale(60) + edge
+        bottom_edge := cast(float32)(history_top + chat_height) - edge
+        if sweep_pointer_y < top_edge {
+            step := cast(s32)((top_edge - sweep_pointer_y) / 3.0) + Scale(4)
+            if step > Scale(40) {
+                step = Scale(40)
+            }
+            frame.scroll -= step
+            if frame.scroll < 0 {
+                frame.scroll = 0
+            }
+            frame.follow_end = false
+        } else if sweep_pointer_y > bottom_edge {
+            step := cast(s32)((sweep_pointer_y - bottom_edge) / 3.0) + Scale(4)
+            if step > Scale(40) {
+                step = Scale(40)
+            }
+            frame.scroll += step
+        }
+    }
+    sweep_seen = false
     if selecting && selected_count <= 0 && !sweeping {
         SelectionClear()
     }

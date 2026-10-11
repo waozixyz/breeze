@@ -2,7 +2,7 @@
 
 ## [1.3.8] - 2026-10-11
 ### Added
-- Select messages like in Telegram: hold a message to select it, then tap or drag across others. Checkmarks show what is selected, and a bar at the top shows how many, with copy and delete.
+- Select messages like in Telegram: hold a message to select it, then tap or drag across others; dragging to the top or bottom of the chat scrolls it, through older messages too. Checkmarks show what is selected, and a bar over the top of the chat shows how many, with copy and delete.
 
 ## [1.3.7] - 2026-10-11
 ### Changed

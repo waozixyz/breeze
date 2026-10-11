@@ -255,7 +255,9 @@ def run_cases(arguments, evidence):
                         command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
                         time.sleep(.15)
                         command("xdotool", "mouseup", "1")
-                        card = (500, 184, 880, 272) if layout == "desktop" else (201, 184, 370, 272)
+                        # Practice is the second pinned card. Apps reflows to five
+                        # 144 wide cards on the desktop and keeps two on a phone.
+                        card = (264, 184, 408, 272) if layout == "desktop" else (201, 184, 370, 272)
                         command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
                         for state in ("idle", "hover", "pressed"):
                             if state != "idle":
