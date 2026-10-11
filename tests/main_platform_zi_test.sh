@@ -6,7 +6,8 @@ raylib=${2:-"$root/vendor-builds/linux/x86_64/raylib/libraylib.a"}
 work=$(mktemp -d "$root/build/main-platform-zi.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 "$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src/platform" --module-path "$root/build/packages/ziran/std" \
+    --module-path "$root/src/platform" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/tests/main_platform_behavior.zi"
 "${CC:-cc}" -std=c11 -O2 -DZIRAN_BOUNDS_CHECK \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

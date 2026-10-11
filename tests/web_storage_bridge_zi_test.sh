@@ -14,6 +14,7 @@ for platform in desktop android; do
     fi
     "$bin/zi2c" --no-main \
         --root "$root" --module-path "$root/src" \
+        --module-path "$root/build/packages/kryon/src/backend" \
         --module-path "$root/build/packages/ziran/std" "$@" \
         -o "$work/$platform" "$root/tests/web_storage_bridge_link.zi" \
         "$root/src/app/host_services.zi" "$root/src/platform/web_bridge.zi"

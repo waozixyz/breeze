@@ -42,11 +42,24 @@ using ButtonEmphasis;
 using AndroidImportKind;
 using AndroidImportResult;
 
-settings_audio_log :: #system_library "c";
 SETTINGS_AUDIO_LOG_INFO :: 3
 #import, file "../../platform/trace_log.zi";
-settings_audio_pick_file :: (title: *u8, music: bool,
-    output: *u8, capacity: s32) -> s32 #foreign settings_audio_log "app_audio_pick_file";
+#import "file_picker"
+
+// Linux and BSD desktops choose audio with Kryon's file picker; Android uses
+// its own import, and other platforms report that no picker ran.
+SettingsAudioPick :: (title: string, music: bool, output: []u8) -> s32 {
+    #if #defined(_WIN32) || #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        unused title
+        unused music
+        return -1
+    }
+    filter := "Sound files | *.ogg *.wav *.qoa"
+    if music {
+        filter = "Audio files | *.ogg *.wav *.qoa *.xm *.mod *.mp3 *.flac *.m4a *.opus"
+    }
+    return PickFile(FilePickerProps.{.title = title, .filter = filter}, output)
+}
 
 SettingsAudioDialogOrigin :: struct {
     active: s32
@@ -416,17 +429,10 @@ settings_audio_start_import :: (app: *InnerBreeze, action: s32, practice: s32) {
         }
         return
     }
-    title: [128]u8
     path: [FS_PATH_MAX]u8
-    if !AppCopyText(LocaleText("audio_import_title"), title[:]) {
-        settings_audio_set_status_error(action,
-            LocaleText("audio_import_failed"))
-        return
-    }
     settings_audio_dialog_begin(app, action, practice)
-    selected := settings_audio_pick_file(*title[0],
-        action == SETTINGS_AUDIO_ACTION_MUSIC,
-        *path[0], FS_PATH_MAX)
+    selected := SettingsAudioPick(LocaleText("audio_import_title"),
+        action == SETTINGS_AUDIO_ACTION_MUSIC, path[:])
     unused settings_audio_dialog_finish(app)
     if selected == 1 {
         if audio_import_path(app, action,

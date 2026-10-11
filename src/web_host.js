@@ -41,54 +41,6 @@ addToLibrary({
     HEAP32[(output + 4) >> 2] = Math.max(1, Math.round(height > 0 ? height : fallbackHeight));
   },
 
-  app_pick_file_web__deps: ['$Asyncify', '$FS', '$UTF8ToString',
-    '$lengthBytesUTF8', '$stringToUTF8'],
-  app_pick_file_web__async: true,
-  app_pick_file_web: (title, filter, suggested_name, save, output, capacity) =>
-    Asyncify.handleAsync(async () => {
-      const titleText = UTF8ToString(title);
-      const filterText = UTF8ToString(filter);
-      const path = '/tmp/inbe-file-' + Date.now() + '-' +
-        Math.random().toString(36).slice(2);
-      if (capacity < 2 || lengthBytesUTF8(path) + 1 > capacity) {
-        return -1;
-      }
-      let input;
-      try {
-        if (save) {
-          stringToUTF8(path, output, capacity);
-          return 1;
-        }
-        input = document.createElement('input');
-        input.type = 'file';
-        input.setAttribute('aria-label', titleText);
-        input.accept = (filterText.match(/[*][.][a-z0-9]+/gi) || [])
-          .map(value => value.slice(1)).join(',');
-        input.style.display = 'none';
-        document.body.appendChild(input);
-        const selected = await new Promise(resolve => {
-          input.addEventListener('change', () =>
-            resolve(input.files && input.files[0] || null), {once: true});
-          input.addEventListener('cancel', () => resolve(null), {once: true});
-          input.click();
-        });
-        if (!selected) {
-          return 0;
-        }
-        const bytes = new Uint8Array(await selected.arrayBuffer());
-        FS.writeFile(path, bytes);
-        stringToUTF8(path, output, capacity);
-        return 1;
-      } catch (error) {
-        console.error('Inbe file picker failed:', error);
-        return -1;
-      } finally {
-        if (input) {
-          input.remove();
-        }
-      }
-    }),
-
   browser_storage_wait__deps: ['$Asyncify'],
   browser_storage_wait__async: true,
   browser_storage_wait: (timeout_ms, log_success) => Asyncify.handleAsync(async () => {

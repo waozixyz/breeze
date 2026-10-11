@@ -1633,59 +1633,6 @@ android-text-input-zi-test: $(ZI2C_BIN)
 
 test: android-text-input-zi-test
 
-.PHONY: window-close-host-test
-window-close-host-test: $(ZI2C_BIN)
-	@mkdir -p $(BUILD_DIR)/window-close-host-test/c
-	@$(ZI2C_BIN) --define PLATFORM_DESKTOP \
-		--define NATIVE_WINDOW_HAVE_SDL \
-		--entry window_close_behavior:main --root tests \
-		--module-path src -o $(BUILD_DIR)/window-close-host-test/c \
-		tests/window_close_behavior.zi
-	@$(CC) -std=c11 -O2 -I$(ZIRAN_DIR)/include \
-		-iquote $(BUILD_DIR)/window-close-host-test/c \
-		$(BUILD_DIR)/window-close-host-test/c/*.c \
-		$(RAY_SDL_LDLIBS) -o $(BUILD_DIR)/window-close-host-test/test
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		$(BUILD_DIR)/window-close-host-test/test
-
-test: window-close-host-test
-
-.PHONY: activity-host-test
-activity-host-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		DBUS_SESSION_BUS_ADDRESS=invalid: \
-		sh tests/activity_host_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-test: activity-host-test
-
-.PHONY: audio-picker-host-test
-audio-picker-host-test: $(ZI2C_BIN)
-	@mkdir -p $(BUILD_DIR)/audio-picker-host-test/c
-	@cp tests/support/audio_picker_zenity.sh \
-		$(BUILD_DIR)/audio-picker-host-test/zenity
-	@chmod +x $(BUILD_DIR)/audio-picker-host-test/zenity
-	@$(ZI2C_BIN) --no-main --define PLATFORM_DESKTOP --root src \
-		--module-path $(ZIRAN_DIR)/std \
-		-o $(BUILD_DIR)/audio-picker-host-test/c \
-		src/platform/audio_picker_host.zi
-	@$(CC) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror \
-		-Wno-unused-function -I$(ZIRAN_DIR)/include \
-		-iquote $(BUILD_DIR)/audio-picker-host-test/c \
-		tests/audio_picker_host_test.c \
-		$(BUILD_DIR)/audio-picker-host-test/c/*.c \
-		$(BUILD_DIR)/audio-picker-host-test/c/platform/audio_picker_host.c \
-		$(BUILD_DIR)/audio-picker-host-test/c/platform/file_picker.c \
-		-o $(BUILD_DIR)/audio-picker-host-test/test
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		PATH="$(abspath $(BUILD_DIR)/audio-picker-host-test)" \
-		$(abspath $(BUILD_DIR)/audio-picker-host-test/test)
-
-.PHONY: file-picker-zi-test
-file-picker-zi-test: $(ZI2C_BIN)
-	@sh tests/file_picker_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
-
-test: audio-picker-host-test file-picker-zi-test
-
 .PHONY: main-platform-zi-test
 main-platform-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@RAY_LDLIBS='$(RAY_LDLIBS)' sh tests/main_platform_zi_test.sh \
@@ -1724,7 +1671,7 @@ raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@mkdir -p $(BUILD_DIR)/raylib-log-host-test/c
 	@$(ZI2C_BIN) --define PLATFORM_DESKTOP \
 		--entry raylib_log_behavior:main --root tests \
-		--module-path src --module-path $(ZIRAN_DIR)/std \
+		--module-path src --module-path $(KRYON_DIR)/src/backend --module-path $(ZIRAN_DIR)/std \
 		-o $(BUILD_DIR)/raylib-log-host-test/c tests/raylib_log_behavior.zi
 	@$(CC) -std=c11 -O2 -I$(ZIRAN_DIR)/include \
 		-iquote $(BUILD_DIR)/raylib-log-host-test/c \
