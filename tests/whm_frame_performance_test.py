@@ -92,7 +92,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-whm-frames-") as temporary, contex
                     for cpu, peak, sync, sync_peak, fps in reports]
     assert min(row["fps"] for row in measurements) >= 55, measurements
     assert max(row["cpuAverageMs"] for row in measurements) < 8, measurements
+    # Leaving returns to the start screen without reloading the app, which
+    # froze phones for seconds.
+    command("xprop", "-id", window, "-f", "_HARMONY_APP_ACTION", "8s", "-set",
+            "_HARMONY_APP_ACTION", json.dumps({"control": "practice.pause", "request_id": "whm-pause"}))
+    wait(state, lambda value: value.get("last_request_id") == "whm-pause" and value.get("paused"),
+         "WHM pause")
+    # Held across frames: raylib misses a press and release in one frame.
+    command("xdotool", "keydown", "BackSpace")
+    time.sleep(0.15)
+    command("xdotool", "keyup", "BackSpace")
+    wait(state, lambda value: not value.get("practice_running") and not value.get("paused"), "WHM exit")
+    initialized = log_path.read_text().count("APP PROBE: data initialized")
+    assert initialized == 1, f"Leaving WHM initialized the app again ({initialized} times)"
     result = {"passed": True, "privateDisplay": True, "syntheticProfile": True,
-              "screenshots": False, "practiceContinued": True, "measurements": measurements}
+              "screenshots": False, "practiceContinued": True, "leftWithoutReload": True,
+              "measurements": measurements}
     (OUTPUT / "frames.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result))
