@@ -3,7 +3,7 @@
 
 #define APP_VERSION_MAJOR 2
 #define APP_VERSION_MINOR 1
-#define APP_VERSION_PATCH 30
-#define APP_VERSION_STRING "2.1.30"
+#define APP_VERSION_PATCH 31
+#define APP_VERSION_STRING "2.1.31"
 
 #endif
