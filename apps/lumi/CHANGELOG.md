@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.9] - 2026-10-11
+### Fixed
+- Scrolling the command list keeps the keyboard open.
+### Changed
+- Scrollbars use your theme's colours and show how much of the chat is in view.
+
 ## [1.3.8] - 2026-10-11
 ### Added
 - Select messages like in Telegram: hold a message to select it, then tap or drag across others; dragging to the top or bottom of the chat scrolls it, through older messages too. Checkmarks show what is selected, and a bar over the top of the chat shows how many, with copy and delete.

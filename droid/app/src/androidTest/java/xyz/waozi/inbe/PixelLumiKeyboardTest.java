@@ -58,7 +58,7 @@ public class PixelLumiKeyboardTest extends InstrumentationTestCase {
         assertEquals("Shell keyboard gesture failed", "", output.toString("UTF-8").trim());
     }
 
-    private void focus(MainActivity activity) {
+    private int[] focusPoint(MainActivity activity) {
         int[] location = new int[2];
         getInstrumentation().runOnMainSync(() -> {
             WindowInsets insets = activity.getWindow().getDecorView().getRootWindowInsets();
@@ -67,10 +67,34 @@ public class PixelLumiKeyboardTest extends InstrumentationTestCase {
             location[0] = activity.getWindow().getDecorView().getWidth() / 5;
             location[1] = activity.getWindow().getDecorView().getHeight() - bottom - Math.round(92 * density);
         });
+        return location;
+    }
+
+    private void focus(MainActivity activity) {
+        int[] location = focusPoint(activity);
         long start = SystemClock.uptimeMillis();
         pointer(MotionEvent.ACTION_DOWN, start, location[0], location[1]);
         SystemClock.sleep(250);
         pointer(MotionEvent.ACTION_UP, start, location[0], location[1]);
+        SystemClock.sleep(1500);
+    }
+
+    private void swipeCommands(MainActivity activity, int[] field) throws Exception {
+        float density = activity.getResources().getDisplayMetrics().density;
+        int start_y = field[1] - Math.round(80 * density);
+        int end_y = field[1] - Math.round(300 * density);
+        String command = "input touchscreen swipe " + field[0] + " " + start_y + " " +
+            field[0] + " " + end_y + " 400";
+        ParcelFileDescriptor pipe = getInstrumentation().getUiAutomation().executeShellCommand(command);
+        try (InputStream stream = new ParcelFileDescriptor.AutoCloseInputStream(pipe)) {
+            byte[] buffer = new byte[1024];
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            int count;
+            while ((count = stream.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            assertEquals("Command scroll failed", "", output.toString("UTF-8").trim());
+        }
         SystemClock.sleep(1500);
     }
 
@@ -134,6 +158,55 @@ public class PixelLumiKeyboardTest extends InstrumentationTestCase {
             SystemClock.sleep(100);
         }
         assertEquals("Native Lumi did not apply the keyboard edit", sent.getLong(input), accepted.getLong(input));
+    }
+
+    public void testCommandScrollKeepsKeyboardOnPixel() throws Exception {
+        assertEquals("This check is only for the authorized Pixel", "Pixel 3a", Build.MODEL);
+        AccessibilityServiceInfo service = getInstrumentation().getUiAutomation().getServiceInfo();
+        service.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        getInstrumentation().getUiAutomation().setServiceInfo(service);
+        Intent launch = new Intent(getInstrumentation().getTargetContext(), MainActivity.class);
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        MainActivity activity = (MainActivity)getInstrumentation().startActivitySync(launch);
+        Field ready = MainActivity.class.getDeclaredField("firstFrameReady");
+        ready.setAccessible(true);
+        long deadline = SystemClock.uptimeMillis() + 15000;
+        while (!ready.getBoolean(activity) && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(100);
+        }
+        assertTrue("Native first frame did not finish", ready.getBoolean(activity));
+        openLumi(activity);
+        int[] field = focusPoint(activity);
+        focus(activity);
+        Field fieldAccessor = MainActivity.class.getDeclaredField("textInputView");
+        fieldAccessor.setAccessible(true);
+        TextInputView input = (TextInputView)fieldAccessor.get(activity);
+        String[] original = new String[1];
+        InputConnection[] connection = new InputConnection[1];
+        getInstrumentation().runOnMainSync(() -> {
+            assertTrue("Lumi did not focus its editor", input.hasFocus());
+            original[0] = input.getText().toString();
+            connection[0] = input.onCreateInputConnection(new EditorInfo());
+            connection[0].setSelection(0, input.length());
+            connection[0].commitText("/", 1);
+        });
+        acknowledged(input);
+        assertNotNull("Command list did not keep Gboard open", key("w"));
+        try {
+            swipeCommands(activity, field);
+            assertNotNull("Scrolling commands closed Gboard", key("w"));
+            getInstrumentation().runOnMainSync(() -> {
+                assertTrue("Scrolling commands dropped Lumi's editor", input.hasFocus());
+                assertEquals("Scrolling commands changed the draft", "/", input.getText().toString());
+            });
+        } finally {
+            getInstrumentation().runOnMainSync(() -> {
+                InputConnection current = input.onCreateInputConnection(new EditorInfo());
+                current.setSelection(0, input.length());
+                current.commitText(original[0], 1);
+            });
+            acknowledged(input);
+        }
     }
 
     public void testGboardSwipeAndReopeningOnPixel() throws Exception {

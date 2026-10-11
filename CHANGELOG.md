@@ -1,4 +1,14 @@
 # Changelog
+## [2.1.29] - 2026-10-11
+### Fixed
+- Scrolling Lumi's commands keeps the keyboard open.
+- New habits show each colour choice in its own colour.
+- Leaving Wim Hof no longer freezes the app for a few seconds.
+- The app no longer freezes just after launch while it checks for app updates.
+### Changed
+- Scrollbars use your theme's colours and show how much is in view.
+- Apps rearranges to fill the window's width.
+
 ## [2.1.28] - 2026-10-10
 ### Added
 - Connect a phone and a computer by QR code in Profile.

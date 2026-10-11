@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.9] - 2026-10-11
+
+### Changed
+- Scrollbars use your theme's colours and show how much of the page is in view.
+
 ## [1.1.8] - 2026-10-10
 
 ### Added

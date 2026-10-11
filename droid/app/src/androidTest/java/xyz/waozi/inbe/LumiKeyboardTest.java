@@ -38,6 +38,40 @@ public class LumiKeyboardTest extends InstrumentationTestCase {
         SystemClock.sleep(500);
     }
 
+    private void drag(int startX, int startY, int endX, int endY) {
+        long now = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, startX, startY, 0);
+        getInstrumentation().sendPointerSync(down);
+        down.recycle();
+        for (int step = 1; step <= 8; step++) {
+            float x = startX + (endX - startX) * step / 8.0f;
+            float y = startY + (endY - startY) * step / 8.0f;
+            MotionEvent move = MotionEvent.obtain(now, SystemClock.uptimeMillis(),
+                MotionEvent.ACTION_MOVE, x, y, 0);
+            getInstrumentation().sendPointerSync(move);
+            move.recycle();
+            SystemClock.sleep(40);
+        }
+        MotionEvent up = MotionEvent.obtain(now, SystemClock.uptimeMillis(),
+            MotionEvent.ACTION_UP, endX, endY, 0);
+        getInstrumentation().sendPointerSync(up);
+        up.recycle();
+        SystemClock.sleep(700);
+    }
+
+    private void acknowledge(TextInputView input) throws Exception {
+        Field revision = TextInputView.class.getDeclaredField("revision");
+        revision.setAccessible(true);
+        Field acknowledged = TextInputView.class.getDeclaredField("acknowledgedRevision");
+        acknowledged.setAccessible(true);
+        long sent = revision.getLong(input);
+        long deadline = SystemClock.uptimeMillis() + 7000;
+        while (acknowledged.getLong(input) < sent && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(100);
+        }
+        assertEquals("Native widget did not acknowledge the IME edit", sent, acknowledged.getLong(input));
+    }
+
     public void testFirstFocusSwipeTextReachesNativeLumi() throws Exception {
         Intent launch = new Intent(getInstrumentation().getTargetContext(), MainActivity.class);
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -82,6 +116,21 @@ public class LumiKeyboardTest extends InstrumentationTestCase {
             assertTrue("Lumi did not regain the editor", input.hasFocus());
             assertEquals("Dismissal changed the draft", "hello 水😀", input.getText().toString());
         });
+        getInstrumentation().runOnMainSync(() -> {
+            InputConnection connection = input.onCreateInputConnection(new EditorInfo());
+            connection.setSelection(0, input.length());
+            connection.commitText("/", 1);
+        });
+        acknowledge(input);
+        awaitKeyboard(activity, true);
+        drag(195, 620, 195, 520);
+        awaitKeyboard(activity, true);
+        getInstrumentation().runOnMainSync(() -> {
+            assertTrue("Scrolling commands dropped Lumi's editor", input.hasFocus());
+            assertEquals("Scrolling commands changed the draft", "/", input.getText().toString());
+        });
+        getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
+        awaitKeyboard(activity, false);
         assertFalse(activity.isFinishing());
     }
 }

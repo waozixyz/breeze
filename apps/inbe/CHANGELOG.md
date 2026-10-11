@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.29] - 2026-10-11
+
+- Bring Lumi 1.3.9, Diary 1.1.9, Lists 1.0.5 and Leaderboard 1.0.1.
+- Requires Inner Breeze 2.1.29 or later.
+
 ## [2.1.28] - 2026-10-11
 
 - Bring Lumi's message selection with copy and delete.

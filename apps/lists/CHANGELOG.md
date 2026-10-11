@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.5] - 2026-10-11
+
+- Scrollbars use your theme's colours and show how much of the list is in view.
+- Scrolling while you type a new item keeps the keyboard open.
+
 ## [1.0.4] - 2026-10-10
 
 - Requires Inner Breeze 2.1.28 or later.
