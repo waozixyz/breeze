@@ -7,12 +7,14 @@ import android.app.NotificationManager;
 import android.app.NativeActivity;
 import android.app.AppOpsManager;
 import android.app.PictureInPictureParams;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.graphics.Insets;
 import android.graphics.Rect;
@@ -122,8 +124,8 @@ public class MainActivity extends NativeActivity {
         });
     }
 
-    private void enterPictureWindow() {
-        if (!supportsPictureWindow() || !pictureWindowEnabled ||
+    private void enterPictureWindow(String reason) {
+        if (!supportsPictureWindow() || !pictureWindowEnabled || pictureWindowEntering ||
                 isInPictureInPictureMode() || isFinishing() || !allowsPictureWindow()) {
             return;
         }
@@ -131,10 +133,11 @@ public class MainActivity extends NativeActivity {
         try {
             if (!enterPictureInPictureMode(pictureWindowParams())) {
                 pictureWindowEntering = false;
+                Log.w(TAG, "Picture-in-picture refused after " + reason);
             }
         } catch (IllegalStateException | IllegalArgumentException error) {
             pictureWindowEntering = false;
-            Log.w(TAG, "Picture-in-picture is unavailable", error);
+            Log.w(TAG, "Picture-in-picture is unavailable after " + reason, error);
         }
     }
 
@@ -145,8 +148,42 @@ public class MainActivity extends NativeActivity {
         // while this one pauses, as the stock launcher does. Leaving for a
         // third-party launcher or another app comes here instead.
         if (Build.VERSION.SDK_INT >= 26) {
-            enterPictureWindow();
+            enterPictureWindow("onUserLeaveHint");
         }
+    }
+
+    // Android 12 keeps the app resumed behind Recents, including the quick
+    // switch along the gesture bar. Opening another app from there first
+    // moves Home forward, so when the app then pauses, Android refuses the
+    // floating window, even from onUserLeaveHint. Recents announces itself
+    // by closing system dialogs with the reason "recentapps" while the app
+    // may still enter. The notification shade, dialogs and the keyboard send
+    // no such reason.
+    private final BroadcastReceiver recentsReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if ("recentapps".equals(intent.getStringExtra("reason"))) {
+                enterPictureWindow("Recents");
+            }
+        }
+    };
+    private boolean recentsReceiverRegistered;
+
+    private void watchRecents(boolean watch) {
+        if (watch == recentsReceiverRegistered || !supportsPictureWindow()) {
+            return;
+        }
+        if (watch) {
+            IntentFilter filter = new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(recentsReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(recentsReceiver, filter);
+            }
+        } else {
+            unregisterReceiver(recentsReceiver);
+        }
+        recentsReceiverRegistered = watch;
     }
 
     @Override
@@ -1293,6 +1330,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onPause() {
         NotificationPresence.setActivityVisible(false);
+        watchRecents(false);
         super.onPause();
         activityPaused = true;
         syncLifecycleState("onPause");
@@ -1325,6 +1363,7 @@ public class MainActivity extends NativeActivity {
         if (supportsPictureWindow()) {
             setPictureInPictureParams(pictureWindowParams());
         }
+        watchRecents(true);
         configureSystemBars();
         nativeInvalidateGraphicsResources();
         requestInsetRefresh();
