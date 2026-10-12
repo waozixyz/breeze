@@ -26,6 +26,9 @@
 #import "drawing_props"
 #import "session"
 #import "button_props"
+#import "box_props"
+#import "box_widget"
+#import "kss_parser"
 
 
 
@@ -648,5 +651,103 @@ practice_draw_results :: (app: *InnerBreeze, center_x: s32, center_y: s32,
         }) != 0 {
             session_result_done(app)
         }
+    }
+}
+
+// The lines a finished practice's floating window shows: the results its
+// results screen leads with, as many as fit a small window.
+session_result_window_lines :: (result: *SessionResult, first: []u8,
+    second: []u8) -> s32 {
+    if result.activity == EXERCISE_WIM_HOF {
+        unused session_result_format_number("results_rounds",
+            result.round_count, first)
+        if result.round_count <= 0 {
+            return 1
+        }
+        best: s32 = 0
+        average: s32 = 0
+        session_result_round_stats(result, *best, *average)
+        unused session_result_format_number("results_best", best, second)
+        return 2
+    }
+    if result.activity == EXERCISE_SUN_SALUTATION {
+        unused session_result_format_number("results_repetitions",
+            result.primary_value, first)
+        return 1
+    }
+    duration: [32]u8
+    unused session_result_format_duration(result.primary_value, duration[:])
+    unused session_result_format_text("results_duration",
+        AppTextFromCString(*duration[0], 32), first)
+    if result.activity == EXERCISE_PATTERNS && result.secondary_value > 0 {
+        unused session_result_format_number("results_cycles",
+            result.secondary_value, second)
+        return 2
+    }
+    return 1
+}
+
+// A practice that finished in its floating window says so there, above
+// its name and its main results, until the window opens back into the
+// app's screen.
+practice_draw_results_window :: (app: *InnerBreeze, bounds: Rectangle,
+    result: *SessionResult) {
+    session := app.ui.session
+    lines: [2][80]u8
+    count := session_result_window_lines(result, lines[0][:], lines[1][:])
+    padding := cast(float32)AppScale(12)
+    width := bounds.width - padding * 2.0
+    heading_height := cast(float32)AppScale(32)
+    rule_height := cast(float32)AppScale(3)
+    name_height := cast(float32)AppScale(22)
+    line_height := cast(float32)AppScale(24)
+    gap := cast(float32)AppScale(10)
+    total := heading_height + gap + rule_height + gap + name_height + gap +
+    cast(float32)count * line_height
+    y := bounds.y + (bounds.height - total) * 0.5
+    x := bounds.x + padding
+
+    heading := LocaleText("session_window_finished")
+    Text(session, TextProps.{.key = KeyHash("inbe/picture-window/results/heading"),
+            .bounds = Rectangle.{x, y, width, heading_height},
+            .text = heading,
+            .font = AppFitFontSize(heading, cast(s32)width, AppScale(24), AppScale(14)),
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    y += heading_height + gap
+    rule_width := cast(float32)AppScale(40)
+    Box(session, BoxProps.{.key = KeyHash("inbe/picture-window/results/rule"),
+            .bounds = Rectangle.{bounds.x + (bounds.width - rule_width) * 0.5, y,
+                rule_width, rule_height},
+            .fill = StyleTokenColor("accent"), .radius = rule_height * 0.5})
+    y += rule_height + gap
+
+    name := practice_label(result.activity)
+    Text(session, TextProps.{.key = KeyHash("inbe/picture-window/results/name"),
+            .bounds = Rectangle.{x, y, width, name_height},
+            .text = name,
+            .font = AppFitFontSize(name, cast(s32)width, AppScale(15), AppScale(11)),
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
+            .class_name = KssClassId(KssMakeName("launcher-muted"))})
+    y += name_height + gap
+
+    keys: [2]u64 = .[KeyHash("inbe/picture-window/results/line-1"),
+    KeyHash("inbe/picture-window/results/line-2")]
+    index: s32 = 0
+    while index < count {
+        line := FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*lines[index][0], 80))
+        Text(session, TextProps.{.key = keys[index],
+                .bounds = Rectangle.{x, y, width, line_height},
+                .text = line,
+                .font = AppFitFontSize(line, cast(s32)width, AppScale(17), AppScale(11)),
+                .wrap = cast(TextWrap)TextWrapNone,
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+        y += line_height
+        index += 1
     }
 }
