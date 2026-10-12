@@ -1,4 +1,16 @@
 # Changelog
+## [2.1.32] - 2026-10-12
+### Added
+- Drag habits to reorder them or into Inactive habits.
+- Habits have icons; with a sync account, missing ones are picked for you.
+### Changed
+- Habits is a table of the last seven days.
+### Fixed
+- Android: Recents during a practice opens the floating window.
+- Android: a practice ending in the floating window shows its results.
+- The donation reminder no longer reopens on other devices.
+- Held Backspace and arrow keys repeat in text fields.
+
 ## [2.1.31] - 2026-10-11
 ### Fixed
 - Android: after the floating practice window, the app fits the screen again instead of running under the status bar and navigation and losing its sides.
