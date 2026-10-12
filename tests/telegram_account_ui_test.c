@@ -51,6 +51,7 @@ void RasterImage(String asset_path, uint32_t texture_id, Rectangle source,
 }
 int32_t GetCharPressed(void) { return 0; }
 bool IsKeyPressed(int32_t key) { (void)key; return false; }
+bool IsKeyPressedRepeat(int32_t key) { (void)key; return false; }
 bool IsKeyDown(int32_t key) { (void)key; return false; }
 char *GetClipboardText(void) { return ""; }
 void SetClipboardText(char *text) { (void)text; assert(0); }
