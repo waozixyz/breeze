@@ -71,6 +71,7 @@ using IconType;
 using TextWrap;
 using TextAlign;
 using WidgetKind;
+using ContentAlignment;
 
 HABITS_GUIDE_STEPS :: 6;
 HABITS_MOUSE_RIGHT :: 1;
@@ -886,29 +887,22 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
         Text(app.ui.session, description_props)
     }
 
-    // History, statistics, editing and deactivating: deactivating hides
-    // the habit with its days until it is dragged back into the list.
     action_size := AppScale(52)
-    action_gap := (cast(s32)card.width - AppScale(28) - action_size * 4) / 3
+    action_gap := (cast(s32)card.width - AppScale(28) - action_size * 3) / 2
     action_y := cast(s32)card.y + AppScale(78)
-    action_icons: [4]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat,
-        cast(s32)IconEdit, cast(s32)IconPause]
-    deactivated := false
+    actions: [3]ButtonProps
+    action_ids: [3]s32 = .[5600000 + index * 3,
+    5600001 + index * 3, 5600002 + index * 3]
+    action_icons: [3]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat, cast(s32)IconEdit]
     column: s32 = 0
-    while column < 4 {
+    while column < 3 {
         action: ButtonProps
-        action.id = 5600000 + index * 3 + column
-        if column == 3 {
-            action.id = 5610000 + index
-        }
+        action.id = action_ids[column]
         action.bounds = HabitScreenRect(cast(s32)card.x + AppScale(14) +
             column * (action_size + action_gap), action_y, action_size,
             action_size)
         action.icon_type = action_icons[column]
         action.icon_only = true
-        if column == 3 {
-            action.label = LocaleText("habit_deactivate_button")
-        }
         action.tone = cast(ButtonTone)ButtonToneNeutral
         action.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
         action.disabled = app.modal.active != 0
@@ -918,16 +912,11 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
                 habits_open_history(app)
             } else if column == 1 {
                 habits_open_statistics(app)
-            } else if column == 2 {
-                habit_edit_begin(app, index)
             } else {
-                habits_deactivate(*app.habits, index)
-                unused app_auto_sync(app)
-                HabitScreenSave(app)
-                deactivated = true
+                habit_edit_begin(app, index)
             }
         }
-        if column < 3 && index == habits_active_at(*app.habits, 0) {
+        if index == habits_active_at(*app.habits, 0) {
             app.habits_guide_anchors[2 + column] = action.bounds
         }
         column += 1
@@ -944,8 +933,7 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
     body_y := cast(s32)card.y + AppScale(174)
     HabitScreenSelectedWeek(app, index, cast(s32)card.x + AppScale(14),
         body_y, cast(s32)card.width - AppScale(28))
-    collapsed := HabitScreenChevron(app, index, card, true)
-    return collapsed || deactivated
+    return HabitScreenChevron(app, index, card, true)
 }
 
 // The habit list shows active habits in their order; deactivated habits
@@ -1156,25 +1144,34 @@ HabitScreenCardDrag :: (app: *InnerBreeze, index: s32,
     return false
 }
 
-// The bottom of the habit page: a button that shows or hides the
-// deactivated habits, and their list while it is shown.
+// The bottom of the habit page: the inactive habits, a dropdown that a
+// card is dragged into to make it inactive and out of to make it active.
 HabitScreenDeactivated :: (app: *InnerBreeze,
     geometry: HabitScreenGeometry, top: s32, toggle_h: s32, panel_h: s32,
     count: s32) {
-    label := LocaleText("habits_hide_deactivated")
-    if app.habits.show_deactivated == 0 {
-        text: [96]u8
-        args: [1]FormatArg
-        args[0].number = count
-        unused FormatTemplate(LocaleText("habits_show_deactivated"), args[:],
-            text[:])
-        label = FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*text[0], cast(s32)text.count))
-    }
+    text: [96]u8
+    args: [1]FormatArg
+    args[0].number = count
+    unused FormatTemplate(LocaleText("habits_inactive_section"), args[:],
+        text[:])
+    label := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*text[0], cast(s32)text.count))
     toggle := HabitScreenButtonProps(app, label, 4110, geometry.x, top,
         geometry.width, toggle_h, false, false)
-    if Button(app.ui.session, toggle) != 0 {
-        if app.habits.show_deactivated != 0 {
+    toggle.content_alignment = cast(ContentAlignment)ContentAlignmentStart
+    open := app.habits.show_deactivated != 0
+    clicked := Button(app.ui.session, toggle) != 0
+    // The chevron at the header's end points down while the list is closed.
+    chevron_x := geometry.x + geometry.width - AppScale(24)
+    chevron_y := top + toggle_h / 2
+    span := AppScale(5)
+    tip := ifx open then (chevron_y - span / 2) else (chevron_y + span / 2)
+    ends := ifx open then (chevron_y + span / 2) else (chevron_y - span / 2)
+    chevron_color := Fade(StyleTokenColor("text"), 0.7)
+    HabitScreenLine(app, chevron_x - span, ends, chevron_x, tip, chevron_color)
+    HabitScreenLine(app, chevron_x, tip, chevron_x + span, ends, chevron_color)
+    if clicked {
+        if open {
             app.habits.show_deactivated = 0
         } else {
             app.habits.show_deactivated = 1
@@ -1182,7 +1179,7 @@ HabitScreenDeactivated :: (app: *InnerBreeze,
         app.habits.deactivated_scroll = 0
         return
     }
-    if app.habits.show_deactivated == 0 || panel_h <= 0 {
+    if !open || panel_h <= 0 {
         return
     }
     panel_y := top + toggle_h + AppScale(8)
@@ -1193,6 +1190,9 @@ HabitScreenDeactivated :: (app: *InnerBreeze,
     hint.font = AppSmallFontSize()
     hint.wrap = cast(TextWrap)TextWrapAuto
     Text(app.ui.session, hint)
+    if count == 0 {
+        return
+    }
     row_h := AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
     row_gap := AppScale(8)
     rows_y := panel_y + AppScale(HABITS_DEACTIVATED_HINT_HEIGHT)
@@ -1223,10 +1223,11 @@ HabitScreenDeactivated :: (app: *InnerBreeze,
 
 // Scrolls the habit list while a dragged habit is near its top or bottom
 // edge or past it, faster the further it goes. A card keeps scrolling the
-// list when dragged beyond it; a deactivated habit, which starts below the
-// list, scrolls it only once over it.
+// list when dragged beyond it, except over the inactive habits where it is
+// dropped; a deactivated habit, which starts below the list, scrolls it
+// only once over it.
 HabitScreenEdgeScroll :: (app: *InnerBreeze, list: ScrollResult,
-    point: Vector2, reactivating: bool) {
+    point: Vector2, only_over_list: bool) {
     now := GetTime()
     elapsed := cast(float32)(now - app.habits.drag_scroll_at)
     app.habits.drag_scroll_at = now
@@ -1242,7 +1243,7 @@ HabitScreenEdgeScroll :: (app: *InnerBreeze, list: ScrollResult,
     } else if point.y > bottom {
         depth = (point.y - bottom) / margin
     }
-    if reactivating && !PointInBounds(point.x, point.y, list.viewport) {
+    if only_over_list && !PointInBounds(point.x, point.y, list.viewport) {
         depth = 0.0
     }
     if depth > 2.0 {
@@ -1279,8 +1280,9 @@ HabitScreenEdgeScroll :: (app: *InnerBreeze, list: ScrollResult,
 // While a habit is dragged over the habit list, the card it would take the
 // place of is outlined, or the whole list when it would go last. Releasing
 // it there moves a card to that place or reactivates a deactivated habit.
+// A card dragged onto the inactive habits below the list becomes inactive.
 HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
-    cards: []Rectangle, count: s32, gap: s32) {
+    cards: []Rectangle, count: s32, gap: s32, section: Rectangle) {
     if app.habits.dragging == 0 {
         return
     }
@@ -1314,8 +1316,17 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
         }
         HabitScreenDragOutline(app, highlight)
     }
+    over_section := !reactivating && app.habits.drag_moving != 0 &&
+        section.height > 0.0 && PointInBounds(point.x, point.y, section)
+    if over_section {
+        HabitScreenDragOutline(app, section)
+    }
     if app.habits.drag_released != 0 {
-        if target >= 0 {
+        if over_section {
+            habits_deactivate(*app.habits, dragged)
+            unused app_auto_sync(app)
+            HabitScreenSave(app)
+        } else if target >= 0 {
             if reactivating {
                 unused habits_reactivate(*app.habits, dragged, target)
             } else {
@@ -1331,7 +1342,7 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     if app.habits.drag_moving == 0 {
         return
     }
-    HabitScreenEdgeScroll(app, list, point, reactivating)
+    HabitScreenEdgeScroll(app, list, point, reactivating || over_section)
     lifted := app.habits.drag_bounds
     lifted.x = point.x - app.habits.drag_grab.x
     lifted.y = point.y - app.habits.drag_grab.y
@@ -1437,14 +1448,12 @@ HabitScreenOverview :: (app: *InnerBreeze,
         position += 1
     }
     deactivated_count := app.habits.count - active_count
-    if deactivated_count <= 0 {
-        app.habits.show_deactivated = 0
-    }
+    show_section := app.habits.count > 0
     list_y := summary_y + AppScale(54)
     list_bottom := geometry.y + geometry.height
     toggle_h := AppScale(44)
     panel_h: s32 = 0
-    if deactivated_count > 0 {
+    if show_section {
         if app.habits.show_deactivated != 0 {
             panel_h = HabitScreenDeactivatedPanelHeight(deactivated_count,
                 list_bottom - list_y)
@@ -1584,11 +1593,13 @@ HabitScreenOverview :: (app: *InnerBreeze,
         position += 1
     }
     End(app.ui.session)
-    if deactivated_count > 0 {
+    section := HabitScreenRect(geometry.x, list_bottom + gap, geometry.width, 0)
+    if show_section {
+        section.height = cast(float32)(toggle_h + panel_h)
         HabitScreenDeactivated(app, geometry, list_bottom + gap, toggle_h,
             panel_h, deactivated_count)
     }
-    HabitScreenDrop(app, scrolled, cards[:], active_count, gap)
+    HabitScreenDrop(app, scrolled, cards[:], active_count, gap, section)
 }
 // A habit's pages are separate: its view (week or calendar), its
 // statistics, and its editor. Each has only Back and its own title here;
