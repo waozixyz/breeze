@@ -79,9 +79,13 @@ HABITS_SELECTED_CARD_HEIGHT :: 400;
 HABITS_CARD_MARKER_SIZE :: 34;
 HABITS_DEACTIVATED_ROW_HEIGHT :: 52;
 HABITS_DEACTIVATED_HINT_HEIGHT :: 40;
-// A dragged habit held this many frames at the list's edge scrolls it, so
-// passing the edge on the way in does not.
-HABITS_DRAG_EDGE_FRAMES :: 18;
+// A dragged habit within this distance of the list's top or bottom edge, or
+// past it, scrolls the list after a short wait, so passing the edge on the
+// way in does not. It scrolls this many units a second at the edge, and up
+// to twice as fast further past it.
+HABITS_DRAG_EDGE_MARGIN :: 48;
+HABITS_DRAG_EDGE_WAIT_SECONDS :: 0.15;
+HABITS_DRAG_EDGE_SPEED :: 700;
 // On a touch screen a card is lifted after this long a hold.
 HABITS_CARD_HOLD_SECONDS :: 0.4;
 // The first habit's today marker from the last drawn frame; the web smoke
@@ -882,22 +886,29 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
         Text(app.ui.session, description_props)
     }
 
+    // History, statistics, editing and deactivating: deactivating hides
+    // the habit with its days until it is dragged back into the list.
     action_size := AppScale(52)
-    action_gap := (cast(s32)card.width - AppScale(28) - action_size * 3) / 2
+    action_gap := (cast(s32)card.width - AppScale(28) - action_size * 4) / 3
     action_y := cast(s32)card.y + AppScale(78)
-    actions: [3]ButtonProps
-    action_ids: [3]s32 = .[5600000 + index * 3,
-    5600001 + index * 3, 5600002 + index * 3]
-    action_icons: [3]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat, cast(s32)IconEdit]
+    action_icons: [4]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat,
+        cast(s32)IconEdit, cast(s32)IconPause]
+    deactivated := false
     column: s32 = 0
-    while column < 3 {
+    while column < 4 {
         action: ButtonProps
-        action.id = action_ids[column]
+        action.id = 5600000 + index * 3 + column
+        if column == 3 {
+            action.id = 5610000 + index
+        }
         action.bounds = HabitScreenRect(cast(s32)card.x + AppScale(14) +
             column * (action_size + action_gap), action_y, action_size,
             action_size)
         action.icon_type = action_icons[column]
         action.icon_only = true
+        if column == 3 {
+            action.label = LocaleText("habit_deactivate_button")
+        }
         action.tone = cast(ButtonTone)ButtonToneNeutral
         action.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
         action.disabled = app.modal.active != 0
@@ -907,11 +918,16 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
                 habits_open_history(app)
             } else if column == 1 {
                 habits_open_statistics(app)
-            } else {
+            } else if column == 2 {
                 habit_edit_begin(app, index)
+            } else {
+                habits_deactivate(*app.habits, index)
+                unused app_auto_sync(app)
+                HabitScreenSave(app)
+                deactivated = true
             }
         }
-        if index == habits_active_at(*app.habits, 0) {
+        if column < 3 && index == habits_active_at(*app.habits, 0) {
             app.habits_guide_anchors[2 + column] = action.bounds
         }
         column += 1
@@ -928,7 +944,8 @@ HabitScreenSelectedCard :: (app: *InnerBreeze, index: s32,
     body_y := cast(s32)card.y + AppScale(174)
     HabitScreenSelectedWeek(app, index, cast(s32)card.x + AppScale(14),
         body_y, cast(s32)card.width - AppScale(28))
-    return HabitScreenChevron(app, index, card, true)
+    collapsed := HabitScreenChevron(app, index, card, true)
+    return collapsed || deactivated
 }
 
 // The habit list shows active habits in their order; deactivated habits
@@ -990,7 +1007,8 @@ HabitScreenBeginDrag :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     app.habits.drag_pressed_at = GetTime()
     app.habits.drag_moving = 0
     app.habits.drag_released = 0
-    app.habits.drag_edge_frames = 0
+    app.habits.drag_at_edge = 0
+    app.habits.drag_scroll_carry = 0.0
     app.habits.drag_bounds = bounds
     app.habits.drag_origin = Vector2.{drag.x, drag.y}
     app.habits.drag_grab = Vector2.{drag.grab_x, drag.grab_y}
@@ -1002,7 +1020,8 @@ HabitScreenEndDrag :: (app: *InnerBreeze) {
     app.habits.drag_lifted = 0
     app.habits.drag_moving = 0
     app.habits.drag_released = 0
-    app.habits.drag_edge_frames = 0
+    app.habits.drag_at_edge = 0
+    app.habits.drag_scroll_carry = 0.0
 }
 
 // The drop place and the dragged copy are outlined in the text colour,
@@ -1202,6 +1221,61 @@ HabitScreenDeactivated :: (app: *InnerBreeze,
     End(app.ui.session)
 }
 
+// Scrolls the habit list while a dragged habit is near its top or bottom
+// edge or past it, faster the further it goes. A card keeps scrolling the
+// list when dragged beyond it; a deactivated habit, which starts below the
+// list, scrolls it only once over it.
+HabitScreenEdgeScroll :: (app: *InnerBreeze, list: ScrollResult,
+    point: Vector2, reactivating: bool) {
+    now := GetTime()
+    elapsed := cast(float32)(now - app.habits.drag_scroll_at)
+    app.habits.drag_scroll_at = now
+    if elapsed > 0.1 {
+        elapsed = 0.1
+    }
+    margin := cast(float32)AppScale(HABITS_DRAG_EDGE_MARGIN)
+    top := list.viewport.y + margin
+    bottom := list.viewport.y + list.viewport.height - margin
+    depth: float32 = 0.0
+    if point.y < top {
+        depth = (point.y - top) / margin
+    } else if point.y > bottom {
+        depth = (point.y - bottom) / margin
+    }
+    if reactivating && !PointInBounds(point.x, point.y, list.viewport) {
+        depth = 0.0
+    }
+    if depth > 2.0 {
+        depth = 2.0
+    }
+    if depth < -2.0 {
+        depth = -2.0
+    }
+    if depth == 0.0 {
+        app.habits.drag_at_edge = 0
+        app.habits.drag_scroll_carry = 0.0
+        return
+    }
+    if app.habits.drag_at_edge == 0 {
+        app.habits.drag_at_edge = 1
+        app.habits.drag_edge_since = now
+    }
+    if now - app.habits.drag_edge_since < HABITS_DRAG_EDGE_WAIT_SECONDS {
+        return
+    }
+    speed := cast(float32)AppScale(HABITS_DRAG_EDGE_SPEED)
+    app.habits.drag_scroll_carry += speed * depth * elapsed
+    step := cast(s32)app.habits.drag_scroll_carry
+    app.habits.drag_scroll_carry -= cast(float32)step
+    app.habits.scroll += step
+    if app.habits.scroll < 0 {
+        app.habits.scroll = 0
+    }
+    if app.habits.scroll > list.max_scroll {
+        app.habits.scroll = list.max_scroll
+    }
+}
+
 // While a habit is dragged over the habit list, the card it would take the
 // place of is outlined, or the whole list when it would go last. Releasing
 // it there moves a card to that place or reactivates a deactivated habit.
@@ -1257,29 +1331,7 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     if app.habits.drag_moving == 0 {
         return
     }
-    margin := cast(float32)AppScale(32)
-    edge: s32 = 0
-    if PointInBounds(point.x, point.y, list.viewport) {
-        if point.y < list.viewport.y + margin {
-            edge = -1
-        } else if point.y > list.viewport.y + list.viewport.height - margin {
-            edge = 1
-        }
-    }
-    if edge == 0 {
-        app.habits.drag_edge_frames = 0
-    } else {
-        app.habits.drag_edge_frames += 1
-    }
-    if app.habits.drag_edge_frames > HABITS_DRAG_EDGE_FRAMES {
-        app.habits.scroll += edge * AppScale(8)
-        if app.habits.scroll < 0 {
-            app.habits.scroll = 0
-        }
-        if app.habits.scroll > list.max_scroll {
-            app.habits.scroll = list.max_scroll
-        }
-    }
+    HabitScreenEdgeScroll(app, list, point, reactivating)
     lifted := app.habits.drag_bounds
     lifted.x = point.x - app.habits.drag_grab.x
     lifted.y = point.y - app.habits.drag_grab.y
