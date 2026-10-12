@@ -1653,6 +1653,11 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
         app.session_window.system_last_tick = now
         // The in-app card must not replay the whole PiP interval on return.
         app.session_window.last_tick = now
+        // A finished practice leaves the in-app card for its results, as the
+        // card's tick decides; that tick does not run behind this window.
+        if app.breathing.screen == ScreenResults {
+            app.session_window.screen = ScreenStart
+        }
         practice := practice_active(app)
         if practice != null {
             screen := app.session_window.screen
@@ -1664,7 +1669,13 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
                 total := elapsed * 1000.0 + app.session_window.system_elapsed_carry
                 milliseconds := cast(s32)total
                 app.session_window.system_elapsed_carry = total - cast(float64)milliseconds
+                before := app_current_route(app)
                 practice.advance_elapsed(app, milliseconds)
+                // A practice that finishes here opens its results outside the
+                // app's frame. Reporting the change keeps the frame after the
+                // window opens back into the app from returning to the
+                // practice's page.
+                app_observe_direct_route_change(app, before)
             }
         }
         scale := viewport.width / 200.0
@@ -1675,9 +1686,24 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
         AppMetricsConfigure(1.0)
         DirectDrawFrameBegin(viewport)
         DrawRectangleRec(viewport, StyleTokenColor("surface"))
+        // A practice that finishes here shows that it has finished and its
+        // results instead of its last picture, also while its screen waits
+        // to be extended.
+        result := *app.session_result
+        waiting: SessionResult
+        finished := app.breathing.screen == ScreenResults && result.active != 0
+        if !finished && practice != null && practice.window_result != null &&
+        practice.window_result(app, *waiting) != 0 {
+            result = *waiting
+            finished = true
+        }
         if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/picture-window"), bounds) == 0 {
             BeginMode2D(camera)
-            app_session_window_picture(app, app.session_window.system_screen, bounds, 0.0)
+            if finished {
+                practice_draw_results_window(app, bounds, result)
+            } else {
+                app_session_window_picture(app, app.session_window.system_screen, bounds, 0.0)
+            }
             app_finish_frame(app)
             EndMode2D()
         }
