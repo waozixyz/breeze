@@ -8,6 +8,7 @@ static int32_t queued[8];
 static int queued_at;
 static bool control_down;
 static bool paste_pressed;
+static int32_t repeating_key;
 static uint8_t clipboard[32] = "pasted";
 
 
@@ -24,6 +25,13 @@ bool
 IsKeyPressed(int32_t key)
 {
     return paste_pressed && key == TextInputKeyV;
+}
+
+/* The OS repeats a held key; only that key's repeat is reported. */
+bool
+IsKeyPressedRepeat(int32_t key)
+{
+    return repeating_key != 0 && key == repeating_key;
 }
 
 bool
@@ -89,6 +97,21 @@ main(void)
     assert(input.text.length == 0);
     assert(input.paste);
     assert(StringEqual(input.paste_text, StringView("pasted", 6)));
+    /* A held Backspace keeps deleting; a held paste shortcut acts once. */
+    control_down = false;
+    paste_pressed = false;
+    queued[0] = 0;
+    queued_at = 0;
+    repeating_key = TextInputKeyBackspace;
+    input = SampleTextFieldInput(true, typed_buffer);
+    assert(input.backspace);
+    assert(!input.delete_forward);
+    control_down = true;
+    repeating_key = TextInputKeyV;
+    input = SampleTextFieldInput(true, typed_buffer);
+    assert(!input.paste);
+    repeating_key = 0;
+    control_down = false;
     assert(TextInputWriteClipboard(StringView("copied", 6)));
     assert(strcmp((const char *)clipboard, "copied") == 0);
     return 0;
