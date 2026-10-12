@@ -29,6 +29,7 @@ final class TextInputView extends EditText {
     private int batchDepth;
     private boolean dirty;
     private boolean secure;
+    private boolean numeric;
     private boolean multiline;
 
     TextInputView(Context context, Listener listener) {
@@ -99,13 +100,14 @@ final class TextInputView extends EditText {
     }
 
     void update(long target, long acknowledged, byte[] bytes, int cursor, int anchor,
-                boolean secure, boolean multiline) {
+                boolean secure, boolean numeric, boolean multiline) {
         boolean changedTarget = this.target != target;
         if (!changedTarget && acknowledged < revision) {
             return;
         }
         String value = new String(bytes, StandardCharsets.UTF_8);
-        boolean changedType = this.secure != secure || this.multiline != multiline;
+        boolean changedType = this.secure != secure || this.numeric != numeric
+            || this.multiline != multiline;
         restoring = true;
         try {
             this.target = target;
@@ -116,12 +118,15 @@ final class TextInputView extends EditText {
             }
             if (changedType || changedTarget) {
                 int type = InputType.TYPE_CLASS_TEXT;
-                if (secure) {
+                if (numeric) {
+                    type = InputType.TYPE_CLASS_NUMBER
+                        | (secure ? InputType.TYPE_NUMBER_VARIATION_PASSWORD : 0);
+                } else if (secure) {
                     type |= InputType.TYPE_TEXT_VARIATION_PASSWORD;
                 } else {
                     type |= InputType.TYPE_TEXT_FLAG_AUTO_CORRECT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
                 }
-                if (multiline) {
+                if (multiline && !numeric) {
                     type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE;
                 }
                 setInputType(type);
@@ -129,6 +134,7 @@ final class TextInputView extends EditText {
                     | (secure ? EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING : 0)
                     | (multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE));
                 this.secure = secure;
+                this.numeric = numeric;
                 this.multiline = multiline;
             }
             // Preserve composing spans when acknowledging the same text.

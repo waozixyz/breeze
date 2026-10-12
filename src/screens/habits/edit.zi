@@ -298,7 +298,10 @@ habit_edit_name_field :: (app: *InnerBreeze,
     app.habit_edit.name_anchor = result.anchor
     app.habit_edit.name_scroll_x = result.scroll_x
     app.habit_edit.focused = ifx (result.focused) then (1) else (0)
-    if result.focused { app.habit_edit.description_focused = 0 }
+    if result.focused {
+        app.habit_edit.description_focused = 0
+        app.habit_edit.counter_focused = 0
+    }
     if result.clipboard_write {
         unused TextInputWriteClipboard(result.clipboard_text)
     }
@@ -332,7 +335,68 @@ habit_edit_description_field :: (app: *InnerBreeze,
     app.habit_edit.description_anchor = result.anchor
     app.habit_edit.description_scroll_y = result.scroll_y
     app.habit_edit.description_focused = ifx (result.focused) then (1) else (0)
-    if result.focused { app.habit_edit.focused = 0 }
+    if result.focused {
+        app.habit_edit.focused = 0
+        app.habit_edit.counter_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result.focused
+}
+
+// Shows the daily target as its number; an empty or zero entry keeps the
+// last target until the field is left.
+habit_edit_counter_text :: (app: *InnerBreeze) {
+    unused AppFormatS32(app.habit_edit.counter_target,
+        app.habit_edit.counter_text[:])
+    length := cast(s32)AppTextFromCString(*app.habit_edit.counter_text[0],
+        cast(s32)app.habit_edit.counter_text.count).count
+    app.habit_edit.counter_cursor = length
+    app.habit_edit.counter_anchor = length
+}
+
+habit_edit_counter_field :: (app: *InnerBreeze,
+    bounds: Rectangle) -> bool {
+    if app.habit_edit.counter_focused == 0 { habit_edit_counter_text(app) }
+    typed: [16]u8
+    current := AppTextFromCString(*app.habit_edit.counter_text[0],
+        cast(s32)app.habit_edit.counter_text.count)
+    field: TextFieldProps
+    field.key = KeyHash("habit/edit/counter")
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text, current)
+    field.cursor = app.habit_edit.counter_cursor
+    field.anchor = app.habit_edit.counter_anchor
+    field.scroll_x = app.habit_edit.counter_scroll_x
+    field.focused = app.habit_edit.counter_focused != 0
+    field.focus_id = 7622
+    field.numeric = true
+    field.max_bytes = 4
+    field.max_codepoints = 4
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed && AppReplaceText(app.habit_edit.counter_text[:],
+        result.edit.start, result.edit.end, result.edit.replacement) {
+        typed_text := AppTextFromCString(*app.habit_edit.counter_text[0],
+            cast(s32)app.habit_edit.counter_text.count)
+        value: s32 = 0
+        index: s32 = 0
+        while index < cast(s32)typed_text.count {
+            value = value * 10 + cast(s32)typed_text[index] - 48
+            index += 1
+        }
+        if value > HABIT_COUNTER_TARGET_MAX { value = HABIT_COUNTER_TARGET_MAX }
+        if value > 0 { app.habit_edit.counter_target = value }
+    }
+    app.habit_edit.counter_cursor = result.cursor
+    app.habit_edit.counter_anchor = result.anchor
+    app.habit_edit.counter_scroll_x = result.scroll_x
+    app.habit_edit.counter_focused = ifx (result.focused) then (1) else (0)
+    if result.focused {
+        app.habit_edit.focused = 0
+        app.habit_edit.description_focused = 0
+    }
     if result.clipboard_write {
         unused TextInputWriteClipboard(result.clipboard_text)
     }
@@ -616,7 +680,7 @@ habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32,
 }
 
 habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
-    width: s32) {
+    width: s32, viewport_y: s32, viewport_h: s32, content_h: s32) {
     habit_edit_text(app, LocaleText("habit_counter_mode"),
         x, y + AppScale(10), width - AppScale(64), AppScale(36))
     counter := Toggle(app.ui.session, ToggleProps.{
@@ -634,8 +698,8 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
     y += AppScale(52)
     if app.habit_edit.counter_enabled != 0 {
         habit_edit_text(app, LocaleText("habit_counter_target"),
-            x, y + AppScale(10), width - AppScale(140), AppScale(36))
-        control_x := x + width - AppScale(136)
+            x, y + AppScale(10), width - AppScale(164), AppScale(36))
+        control_x := x + width - AppScale(160)
         if Button(app.ui.session, ButtonProps.{
                 .id = 7620,
                 .bounds = Rectangle.{cast(float32)control_x, cast(float32)y,
@@ -644,22 +708,27 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             app.habit_edit.counter_target -= 1
+            habit_edit_counter_text(app)
         }
-        number: [16]u8
-        unused AppFormatS32(app.habit_edit.counter_target, number[:])
-        habit_edit_text(app, FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*number[0], 16)),
-            control_x + AppScale(52), y + AppScale(12),
-            AppScale(40), AppScale(28))
+        counter_bounds := Rectangle.{
+            cast(float32)(control_x + AppScale(50)), cast(float32)y,
+            cast(float32)AppScale(60), cast(float32)AppScale(44)}
+        was_focused := app.habit_edit.counter_focused != 0
+        if habit_edit_counter_field(app, counter_bounds) && !was_focused {
+            habit_edit_ensure_visible(app, viewport_y, viewport_h,
+                content_h, counter_bounds)
+        }
         if Button(app.ui.session, ButtonProps.{
                 .id = 7621,
                 .bounds = Rectangle.{
-                    cast(float32)(control_x + AppScale(92)), cast(float32)y,
+                    cast(float32)(control_x + AppScale(116)), cast(float32)y,
                     cast(float32)AppScale(44), cast(float32)AppScale(44)},
-                .label = "+", .disabled = app.habit_edit.counter_target >= 99,
+                .label = "+",
+                .disabled = app.habit_edit.counter_target >= HABIT_COUNTER_TARGET_MAX,
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             app.habit_edit.counter_target += 1
+            habit_edit_counter_text(app)
         }
         y += AppScale(52)
     }
@@ -790,6 +859,7 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
                 ifx (open) then (0) else (1)
                 app.habit_edit.focused = 0
                 app.habit_edit.description_focused = 0
+                app.habit_edit.counter_focused = 0
             }
             if open {
                 body_x := x + AppScale(12)
@@ -801,7 +871,8 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
                 } else if section == 1 {
                     habit_edit_routine(app, body_x, body_y, body_width)
                 } else {
-                    habit_edit_tracking(app, body_x, body_y, body_width)
+                    habit_edit_tracking(app, body_x, body_y, body_width,
+                        top, viewport_h, content_h)
                 }
             }
             y += height + AppScale(12)

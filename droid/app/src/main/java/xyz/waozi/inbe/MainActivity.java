@@ -436,10 +436,12 @@ public class MainActivity extends NativeActivity {
 
     public void setTextInputState(final long target, final long revision, final byte[] value,
                                  final int cursor, final int anchor,
-                                 final boolean secure, final boolean multiline) {
+                                 final boolean secure, final boolean numeric,
+                                 final boolean multiline) {
         runOnUiThread(() -> {
             if (textInputView != null && !isFinishing() && !isDestroyed()) {
-                textInputView.update(target, revision, value, cursor, anchor, secure, multiline);
+                textInputView.update(target, revision, value, cursor, anchor, secure, numeric,
+                    multiline);
             }
         });
     }
