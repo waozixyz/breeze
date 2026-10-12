@@ -1,0 +1,210 @@
+// Habits without an icon get one from the Waozi node's GLM service, which
+// picks from the icons a habit can show; the same signed account requests
+// and daily allowance as Lumi's online chat and Diary spelling. A habit the
+// service finds no fitting icon for keeps the first letter of its name, and
+// an icon the person chose is never replaced. Only the names and
+// descriptions of the habits without an icon go to the node, each at most
+// once per run, and nothing more is asked in a run after a request fails.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "auth"
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_icons.zi";
+#import, file "../app/text_buffers.zi";
+
+habit_icon_operation: StoredOperation;
+habit_icon_session: Session;
+habit_icon_transfer: NetworkTransfer;
+habit_icon_response: [16384]u8;
+habit_icon_asked: [HABIT_MAX][HABIT_ID_SIZE]u8;
+habit_icon_asked_count: s32;
+// The habits asked about in this run.
+habit_icon_seen: [HABIT_MAX][HABIT_ID_SIZE]u8;
+habit_icon_seen_count: s32;
+habit_icon_failed: bool;
+
+HabitIconSeen :: (habit: *Habit) -> bool {
+    id := AppTextFromCString(*habit.id[0], HABIT_ID_SIZE)
+    seen: s32 = 0
+    while seen < habit_icon_seen_count {
+        if AppTextFromCString(*habit_icon_seen[seen][0], HABIT_ID_SIZE) == id {
+            return true
+        }
+        seen += 1
+    }
+    return false
+}
+
+// A habit that still has no icon of its own and no practice to suggest one.
+HabitIconWanted :: (habit: *Habit) -> bool {
+    return habit.icon == 0 && habit.sync_activity == 0 &&
+        habit.name[0] != cast(u8)0
+}
+
+HabitIconJson :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte >= cast(u8)32 {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+// Asks the node for icons when habits are waiting for one; returns whether
+// a request is on its way.
+HabitIconChoiceStart :: (habits: *Habits) -> bool {
+    if habit_icon_failed || habit_icon_operation.active || habits == null {
+        return false
+    }
+    waiting := false
+    index: s32 = 0
+    while index < habits.count {
+        habit := *habits.items[index]
+        if HabitIconWanted(habit) && !HabitIconSeen(habit) &&
+        habit_icon_seen_count + 1 < HABIT_MAX {
+            waiting = true
+        }
+        index += 1
+    }
+    if !waiting {
+        return false
+    }
+    if storage_has_sync_account() == 0 || StoredAccountMode() == AccountModeDelegate {
+        habit_icon_failed = true
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"icons\":[")
+    icon: s32 = 1
+    while icon <= HABIT_ICON_COUNT {
+        if icon > 1 {
+            BuilderPrint(*out, ",")
+        }
+        HabitIconJson(*out, HabitIconName(icon))
+        icon += 1
+    }
+    BuilderPrint(*out, "],\"habits\":[")
+    habit_icon_asked_count = 0
+    index = 0
+    while index < habits.count {
+        habit := *habits.items[index]
+        if HabitIconWanted(habit) && !HabitIconSeen(habit) &&
+        habit_icon_seen_count < HABIT_MAX {
+            if habit_icon_asked_count > 0 {
+                BuilderPrint(*out, ",")
+            }
+            BuilderPrint(*out, "{\"name\":")
+            HabitIconJson(*out, AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE))
+            BuilderPrint(*out, ",\"description\":")
+            HabitIconJson(*out, AppTextFromCString(*habit.description[0],
+                HABIT_DESCRIPTION_SIZE))
+            BuilderPrint(*out, "}")
+            unused AppCopyText(AppTextFromCString(*habit.id[0], HABIT_ID_SIZE),
+                habit_icon_asked[habit_icon_asked_count][:])
+            unused AppCopyText(AppTextFromCString(*habit.id[0], HABIT_ID_SIZE),
+                habit_icon_seen[habit_icon_seen_count][:])
+            habit_icon_asked_count += 1
+            habit_icon_seen_count += 1
+        }
+        index += 1
+    }
+    BuilderPrint(*out, "]}")
+    body := BuilderFinish(out)
+    defer { PackageFree(body) }
+    if habit_icon_asked_count == 0 {
+        return false
+    }
+    habit_icon_response = .{}
+    if !BeginStoredRequest(*habit_icon_operation, "https://api.waozi.xyz",
+        NetworkTransport(*habit_icon_transfer), "POST", "/api/v1/chat/habit-icons",
+        body, habit_icon_response[:], false, *habit_icon_session) {
+        habit_icon_failed = true
+        return false
+    }
+    return true
+}
+
+// Gives the asked habits the icons the node chose, or their first letter
+// when none fits; a habit that got an icon meanwhile keeps it. Returns
+// whether any habit changed.
+HabitIconChoicePoll :: (habits: *Habits) -> bool {
+    if !habit_icon_operation.active || !PollStoredOperation(*habit_icon_operation) {
+        return false
+    }
+    habit_icon_session = habit_icon_operation.session
+    if habit_icon_operation.result != cast(s32)AuthResult.AUTH_OK || habits == null {
+        habit_icon_failed = true
+        return false
+    }
+    changed := HabitIconChoiceApply(habits, TextUntilNul(habit_icon_response[:]))
+    if changed < 0 {
+        habit_icon_failed = true
+        return false
+    }
+    return changed > 0
+}
+
+// Applies the node's answer, {"icons": [name or "", one per asked habit]},
+// to the asked habits that still have no icon. Returns how many changed, or
+// -1 when the answer does not fit the question.
+HabitIconChoiceApply :: (habits: *Habits, document: string) -> s32 {
+    icons := FieldAt(document, 0, "icons")
+    if icons < 0 || ArrayCount(document, icons) != habit_icon_asked_count {
+        return -1
+    }
+    changed: s32 = 0
+    asked: s32 = 0
+    while asked < habit_icon_asked_count {
+        name: [40]u8
+        count := ReadStringText(document, ElementAt(document, icons, asked), name[:])
+        chosen: s32 = HABIT_ICON_LETTER
+        if count > 0 && count < cast(s32)name.count {
+            found := HabitIconNumber(TextFromBytes(name[:count]))
+            if found > 0 {
+                chosen = found
+            }
+        }
+        id := AppTextFromCString(*habit_icon_asked[asked][0], HABIT_ID_SIZE)
+        index: s32 = 0
+        while index < habits.count {
+            habit := *habits.items[index]
+            if AppTextFromCString(*habit.id[0], HABIT_ID_SIZE) == id &&
+            HabitIconWanted(habit) {
+                habit.icon = chosen
+                changed += 1
+            }
+            index += 1
+        }
+        asked += 1
+    }
+    return changed
+}
+
+// Remembers which habits a question asks about, in order, as a request
+// does; tests use it to apply answers without the node.
+HabitIconChoiceAsk :: (habits: *Habits) {
+    habit_icon_asked_count = 0
+    index: s32 = 0
+    while index < habits.count && habit_icon_asked_count < HABIT_MAX {
+        habit := *habits.items[index]
+        if HabitIconWanted(habit) {
+            unused AppCopyText(AppTextFromCString(*habit.id[0], HABIT_ID_SIZE),
+                habit_icon_asked[habit_icon_asked_count][:])
+            habit_icon_asked_count += 1
+        }
+        index += 1
+    }
+}

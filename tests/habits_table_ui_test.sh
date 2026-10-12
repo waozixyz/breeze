@@ -183,4 +183,26 @@ xdotool mouseup 1
 sleep 0.4
 expect "$(order)" 'Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope|Yoga' 'a row dragged down the scrolled table goes last'
 echo "PASS habit rows: dragged into another place and scrolled at the edge"
+
+# Holding Backspace keeps deleting, as in any text editor: a new habit typed
+# as "Walkx", cleared with one held Backspace and typed again is "Run".
+shot before-new
+read -r new_x new_y < <(find_word before-new new "the New Habit button is missing")
+tap "$new_x" "$new_y"
+shot new-habit
+read -r name_x name_y < <(find_word new-habit name "the editor has no name field")
+tap "$name_x" "$((name_y + 40))"
+xdotool type --delay 60 Walkx
+sleep 0.3
+xdotool keydown BackSpace
+sleep 1.6
+xdotool keyup BackSpace
+sleep 0.3
+xdotool type --delay 60 Run
+sleep 0.3
+shot new-habit-named
+read -r create_x create_y < <(find_word new-habit-named create "the editor has no Create button")
+tap "$create_x" "$create_y"
+expect "$(sql "SELECT COUNT(*) FROM habits WHERE name='Run' AND deleted_at=0")" 1 'a held Backspace deleted the whole name'
+echo "PASS text fields: a held Backspace keeps deleting"
 echo "Screenshots and isolated database: $test_dir ; $db"

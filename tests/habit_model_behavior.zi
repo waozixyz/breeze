@@ -13,6 +13,8 @@
 #import, file "../src/habits/habit_calendar.zi";
 #import, file "../src/habits/habit_days.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/cells/habit_icon_choice.zi";
+#import, file "../src/habits/habit_icons.zi";
 
 using ExerciseType;
 
@@ -261,6 +263,40 @@ test_deactivate_and_reactivate :: () {
     storage_close()
 }
 
+// The node's icon answers go to the habits without an icon of their own: a
+// name it does not offer becomes the first letter, and a habit linked to a
+// practice or with a chosen icon is not asked about.
+test_suggested_icons :: () {
+    root := make_root("habit-model-icons")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_custom(*habits_a, "Read", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Floss", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Run", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Breathe", Walk(), 1,
+        habit_activity_mask_for(EXERCISE_WIM_HOF))
+    habits_a.items[2].icon = HABIT_ICON_LETTER
+    HabitIconChoiceAsk(*habits_a)
+    check_int("only habits without an icon or practice are asked", habit_icon_asked_count, 2)
+    check_int("an answer of the wrong length is refused",
+        HabitIconChoiceApply(*habits_a, "{\"icons\":[\"book\"]}"), -1)
+    check_int("the icons are applied",
+        HabitIconChoiceApply(*habits_a, "{\"icons\":[\"book\",\"toothbrush\"],\"remaining\":3}"), 2)
+    check_int("Read gets the book", habits_a.items[0].icon, HabitIconNumber("book"))
+    check_int("an unknown icon becomes the letter", habits_a.items[1].icon, HABIT_ICON_LETTER)
+    check_int("a chosen letter stays", habits_a.items[2].icon, HABIT_ICON_LETTER)
+    check_int("a practice habit keeps its practice icon", habits_a.items[3].icon, 0)
+    // An icon chosen while the question was on its way is kept.
+    habits_a.items[0].icon = 0
+    HabitIconChoiceAsk(*habits_a)
+    habits_a.items[0].icon = HabitIconNumber("leaf")
+    check_int("nothing left to change",
+        HabitIconChoiceApply(*habits_a, "{\"icons\":[\"book\"]}"), 0)
+    check_int("the chosen icon stays", habits_a.items[0].icon, HabitIconNumber("leaf"))
+    habits_free(*habits_a)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-habit-model-zi-test/")
@@ -271,5 +307,6 @@ Check :: () -> s32 {
     test_move_delete_and_unique_names()
     test_defaults_and_activity_matching()
     test_deactivate_and_reactivate()
+    test_suggested_icons()
     return failures
 }
