@@ -83,8 +83,8 @@ storage_habits_load :: (habits_ptr: *void) -> s32 {
     }
     habits_free(habits)
     habits.* = Habits.{}
-    sql_hb1: [200] u8
-    AppCopyText("SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour FROM habits WHERE deleted_at=0 ORDER BY sort_order,id LIMIT 32", sql_hb1[:])
+    sql_hb1: [224] u8
+    AppCopyText("SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour,deactivated FROM habits WHERE deleted_at=0 ORDER BY sort_order,id LIMIT 32", sql_hb1[:])
     if SqlitePrepare(storage_db_handle(), *sql_hb1[0], -1, *stmt, null) != SQLITE_OK {
         return 0
     }
@@ -112,6 +112,11 @@ storage_habits_load :: (habits_ptr: *void) -> s32 {
         habit.reminder_hour = sqlite3_column_int(stmt, 11)
         if habit.reminder_hour > 23 {
             habit.reminder_hour = -1
+        }
+        if sqlite3_column_int(stmt, 12) != 0 {
+            habit.deactivated = 1
+        } else {
+            habit.deactivated = 0
         }
         index += 1
     }
@@ -194,8 +199,8 @@ storage_habits_save :: (habits_ptr: *void) {
     sql_hbp1: [64] u8
     AppCopyText("INSERT OR IGNORE INTO sync_loaded_habits(id) VALUES(?1)", sql_hbp1[:])
     SqlitePrepare(storage_db_handle(), *sql_hbp1[0], -1, *loaded_stmt, null)
-    sql_hbq1: [1237] u8
-    AppCopyText("INSERT INTO habits(id,user_id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15) ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,name=excluded.name,description=excluded.description,color_r=excluded.color_r,color_g=excluded.color_g,color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=0,updated_at=excluded.updated_at,weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour WHERE habits.user_id<>excluded.user_id OR habits.name<>excluded.name OR habits.color_r<>excluded.color_r OR habits.color_g<>excluded.color_g OR habits.color_b<>excluded.color_b OR habits.sync_mode<>excluded.sync_mode OR habits.sync_activity<>excluded.sync_activity OR habits.counter_enabled<>excluded.counter_enabled OR habits.counter_target<>excluded.counter_target OR habits.sort_order<>excluded.sort_order OR habits.deleted_at<>0 OR habits.weekdays<>excluded.weekdays OR habits.reminder_hour<>excluded.reminder_hour", sql_hbq1[:])
+    sql_hbq1: [1336] u8
+    AppCopyText("INSERT INTO habits(id,user_id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16) ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,name=excluded.name,description=excluded.description,color_r=excluded.color_r,color_g=excluded.color_g,color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=0,updated_at=excluded.updated_at,weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour,deactivated=excluded.deactivated WHERE habits.user_id<>excluded.user_id OR habits.name<>excluded.name OR habits.color_r<>excluded.color_r OR habits.color_g<>excluded.color_g OR habits.color_b<>excluded.color_b OR habits.sync_mode<>excluded.sync_mode OR habits.sync_activity<>excluded.sync_activity OR habits.counter_enabled<>excluded.counter_enabled OR habits.counter_target<>excluded.counter_target OR habits.sort_order<>excluded.sort_order OR habits.deleted_at<>0 OR habits.weekdays<>excluded.weekdays OR habits.reminder_hour<>excluded.reminder_hour OR habits.deactivated<>excluded.deactivated", sql_hbq1[:])
     SqlitePrepare(storage_db_handle(), *sql_hbq1[0], -1, *habit_stmt, null)
     sql_hbq2: [72] u8
     AppCopyText("UPDATE habits SET description=?2 WHERE id=?1 AND description<>?2", sql_hbq2[:])
@@ -246,6 +251,7 @@ storage_habits_save :: (habits_ptr: *void) {
             SqliteBindInt64(habit_stmt, 13, changed_at)
             sqlite3_bind_int(habit_stmt, 14, habit.weekdays & 0xff)
             sqlite3_bind_int(habit_stmt, 15, ifx (habit.reminder_hour >= 0  && habit.reminder_hour <= 23) then (habit.reminder_hour) else (-1))
+            sqlite3_bind_int(habit_stmt, 16, ifx (habit.deactivated != 0) then (1) else (0))
             if SqliteStep(habit_stmt) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
                 storage_enqueue_sync_habit(AppTextFromCString(*habit.id[0], 40))
             }

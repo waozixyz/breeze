@@ -207,11 +207,21 @@ LumiVisibleRow :: (row: LumiChatRow, access: LumiRowAccess) -> LumiChatRow {
     return visible
 }
 
-LumiHabitAt :: (app: *InnerBreeze, index: s32) -> LumiTask {
-    if !LumiToolsAvailable() {
+// Lumi sees the habits in the habit list: position counts active habits
+// only, as LumiHabitCount does.
+LumiHabitCount :: (app: *InnerBreeze) -> s32 {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return 0
+    }
+    return habits_active_count(*app.habits)
+}
+
+LumiHabitAt :: (app: *InnerBreeze, position: s32) -> LumiTask {
+    if !LumiToolsAvailable() || !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
         return LumiTask.{}
     }
-    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) || index < 0 || index >= app.habits.count {
+    index := habits_active_at(*app.habits, position)
+    if index < 0 {
         return LumiTask.{}
     }
     habit := *app.habits.items[index]
@@ -248,10 +258,13 @@ LumiPreviousDay :: (day_index: s32) -> s32 {
     return year * 10000 + month * 100 + habit_days_in_month(year, month)
 }
 
-LumiHabitProgressAt :: (app: *InnerBreeze, index: s32) -> LumiHabitProgress {
+LumiHabitProgressAt :: (app: *InnerBreeze, position: s32) -> LumiHabitProgress {
     progress: LumiHabitProgress
-    if !LumiToolsAvailable() || !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) ||
-    index < 0 || index >= app.habits.count {
+    if !LumiToolsAvailable() || !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return progress
+    }
+    index := habits_active_at(*app.habits, position)
+    if index < 0 {
         return progress
     }
     habit := *app.habits.items[index]
@@ -375,9 +388,10 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
         if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
             return false
         }
-        for index: cast(s32)0..app.habits.count - 1 {
-            if LumiHabitAt(app, index).id == action.id && action.id.count > 0 {
-                return habit_complete_day(app, index, habits_today_index())
+        for position: cast(s32)0..LumiHabitCount(app) - 1 {
+            if LumiHabitAt(app, position).id == action.id && action.id.count > 0 {
+                return habit_complete_day(app, habits_active_at(*app.habits, position),
+                    habits_today_index())
             }
         }
         return false
@@ -811,7 +825,7 @@ LumiPrepareTools :: (app: *InnerBreeze) {
     lumi_ui.choosing_habit = lumi_choosing_habit
     lumi_ui.choosing_diary = lumi_choosing_diary
     lumi_ui.waiting = LumiOnlineWaiting()
-    lumi_ui.habit_count = ifx app_nav_route_available(app, APP_NAV_ROUTE_HABITS) then app.habits.count else 0
+    lumi_ui.habit_count = LumiHabitCount(app)
 }
 
 // Telegram and the native composer run the same interpreter against live app

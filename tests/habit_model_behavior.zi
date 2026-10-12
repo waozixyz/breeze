@@ -169,6 +169,67 @@ test_defaults_and_activity_matching :: () {
     storage_close()
 }
 
+test_deactivate_and_reactivate :: () {
+    root := make_root("habit-model-deactivate")
+    check_true("init db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_custom(*habits_a, "Walk", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Read", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Swim", Walk(), 0, 0)
+    habits_add_custom(*habits_a, "Yoga", Walk(), 0, 0)
+    habits_a.selected = 1
+    habits_deactivate(*habits_a, 1)
+    check_int("deactivate sets the flag", habits_a.items[1].deactivated, 1)
+    check_int("deactivating the selected habit clears the selection",
+        habits_a.selected, -1)
+    check_int("active count", habits_active_count(*habits_a), 3)
+    check_int("deactivated count", habits_deactivated_count(*habits_a), 1)
+    check_int("the list skips the deactivated habit",
+        habits_active_at(*habits_a, 1), 2)
+    check_int("the list ends after the active habits",
+        habits_active_at(*habits_a, 3), -1)
+    check_int("a deactivated habit is never scheduled",
+        habit_scheduled_day(*habits_a.items[1], 20260107), 0)
+    habits_deactivate(*habits_a, 3)
+
+    // A restart reads the deactivated habits back from storage.
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    check_int("reload", storage_habits_load(cast(*void)*habits_a), 1)
+    check_int("reload keeps every habit", habits_a.count, 4)
+    check_int("reload keeps Walk active", habits_a.items[0].deactivated, 0)
+    check_int("reload keeps Read deactivated", habits_a.items[1].deactivated, 1)
+    check_int("reload keeps Yoga deactivated", habits_a.items[3].deactivated, 1)
+
+    // Walk, Read (off), Swim, Yoga (off): Yoga dropped on Walk goes first.
+    check_int("reactivate before the first habit",
+        habits_reactivate(*habits_a, 3, 0), 0)
+    check_true("Yoga first", name_of(*habits_a, 0) == "Yoga")
+    check_int("Yoga active", habits_a.items[0].deactivated, 0)
+    // Yoga, Walk, Read (off), Swim: Read dropped past the end goes last.
+    check_int("reactivate after the last habit",
+        habits_reactivate(*habits_a, 2, 3), 3)
+    check_true("Swim before Read", name_of(*habits_a, 2) == "Swim")
+    check_true("Read last", name_of(*habits_a, 3) == "Read")
+    check_int("an active habit is not reactivated",
+        habits_reactivate(*habits_a, 0, 1), -1)
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    unused storage_habits_load(cast(*void)*habits_a)
+    check_true("restart keeps the order", name_of(*habits_a, 0) == "Yoga" &&
+        name_of(*habits_a, 1) == "Walk" && name_of(*habits_a, 2) == "Swim" &&
+        name_of(*habits_a, 3) == "Read")
+    check_int("restart keeps them active", habits_deactivated_count(*habits_a), 0)
+
+    // Yoga (off), Walk, Swim, Read: Yoga dropped on Swim goes before it.
+    habits_deactivate(*habits_a, 0)
+    check_int("reactivate into the middle", habits_reactivate(*habits_a, 0, 1), 1)
+    check_true("middle order", name_of(*habits_a, 0) == "Walk" &&
+        name_of(*habits_a, 1) == "Yoga" && name_of(*habits_a, 2) == "Swim")
+    habits_free(*habits_a)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-habit-model-zi-test/")
@@ -178,5 +239,6 @@ Check :: () -> s32 {
     test_dirty_flush_on_storage_failure()
     test_move_delete_and_unique_names()
     test_defaults_and_activity_matching()
+    test_deactivate_and_reactivate()
     return failures
 }
