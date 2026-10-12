@@ -118,5 +118,31 @@ class RestrictedUploadTest(unittest.TestCase):
             run.assert_called_once()
 
 
+    def test_only_a_new_version_is_published(self):
+        self.assertEqual(self.receive().returncode, 0)
+        served = {app_id: json.dumps(value).encode() for app_id, value in self.values.items()}
+
+        def open_url(url, timeout):
+            app_id = url.split("/api/v2/packages/")[1].split("/")[0]
+            if app_id not in served:
+                raise release.HTTPError(url, 404, "Not Found", None, None)
+            self.assertTrue(url.endswith("/latest?bucket=0"))
+            return BytesIO(served[app_id])
+
+        changes = lambda: release.published_changes(self.store, "https://node.example/", open_url)
+        self.assertEqual(changes(), ([], []))
+        # A package that changed under the version the node serves waits.
+        staged = self.store / "inbe.diary" / "latest-v2.json"
+        changed = dict(self.values["inbe.diary"],
+                       artifacts=[dict(variant="module", sha256="1" * 64, size=99)])
+        staged.write_text(json.dumps(changed))
+        self.assertEqual(changes(), ([], ["inbe.diary"]))
+        # With a new version and sequence it is published.
+        staged.write_text(json.dumps(dict(changed, version="1.0.1", sequence=2)))
+        self.assertEqual(changes(), (["inbe.diary"], []))
+        # An app the node has never served is new.
+        del served["inbe.leaderboard"]
+        self.assertEqual(changes(), (["inbe.diary", "inbe.leaderboard"], []))
+
 if __name__ == "__main__":
     unittest.main()
