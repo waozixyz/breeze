@@ -96,4 +96,52 @@ python3 "$root/tests/habits_rendered_controls.py" "$test_dir/collapsed.png" day 
 expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'card order remains stable'
 import -window "$window" "$test_dir/collapsed-final.png"
 echo "PASS shared habit buttons: chevron expansion, day taps, undo, drag cancellation, and collapse"
+
+# Deactivate Yoga from its editor: it keeps its data and leaves the list.
+word() { python3 "$root/tests/rendered_word.py" "$@"; }
+deactivated() { sql "SELECT deactivated FROM habits WHERE name='Yoga'"; }
+tap "$chevron_x" "$chevron_y"
+# The edit action is the last of the expanded card's three actions, below
+# the chevron at the card's right edge.
+tap "$((chevron_x - 6))" "$((chevron_y + 73))"
+import -window "$window" "$test_dir/editor.png"
+read -r deactivate_x deactivate_y < <(word "$test_dir/editor.png" deactivate) ||
+  { echo "FAIL the editor shows no Deactivate button ($test_dir/editor.png)"; exit 1; }
+tap "$deactivate_x" "$deactivate_y"
+expect "$(deactivated)" 1 'editor deactivates Yoga'
+expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'deactivating keeps the order'
+import -window "$window" "$test_dir/deactivated-hidden.png"
+if word "$test_dir/deactivated-hidden.png" yoga >/dev/null; then
+  echo "FAIL Yoga is still in the habit list ($test_dir/deactivated-hidden.png)"; exit 1
+fi
+read -r show_x show_y < <(word "$test_dir/deactivated-hidden.png" deactivated) ||
+  { echo "FAIL no button shows the deactivated habits ($test_dir/deactivated-hidden.png)"; exit 1; }
+tap "$show_x" "$show_y"
+import -window "$window" "$test_dir/deactivated-shown.png"
+# Yoga is no longer a card, so its only name on screen is its row below.
+read -r row_x row_y < <(word "$test_dir/deactivated-shown.png" yoga) ||
+  { echo "FAIL Yoga is not listed below the habits ($test_dir/deactivated-shown.png)"; exit 1; }
+read -r first_x first_y < <(word "$test_dir/deactivated-shown.png" meditation) ||
+  { echo "FAIL Meditation's card is missing ($test_dir/deactivated-shown.png)"; exit 1; }
+# A tap on the row alone changes nothing.
+tap "$row_x" "$row_y"
+expect "$(deactivated)" 1 'a tap does not reactivate'
+# Dropped on Meditation's card, Yoga becomes active in Meditation's place.
+# The frame captured on the way shows the lifted row and the outlined card.
+xdotool mousemove --window "$window" "$row_x" "$row_y" mousedown 1 sleep 0.1
+for step in $(seq 1 12); do
+  xdotool mousemove --window "$window" "$first_x"     "$((row_y + (first_y + 30 - row_y) * step / 12))"
+  sleep 0.025
+done
+sleep 0.3
+import -window "$window" "$test_dir/dragging.png"
+xdotool mouseup 1
+sleep 0.4
+expect "$(deactivated)" 0 'drag into the list reactivates Yoga'
+expect "$(order)" 'Yoga|Meditation|Sit ups|Push ups|Cold Shower|Jumping Rope' 'Yoga takes the place it was dropped on'
+import -window "$window" "$test_dir/reactivated.png"
+if word "$test_dir/reactivated.png" deactivated >/dev/null; then
+  echo "FAIL the deactivated button stayed without deactivated habits ($test_dir/reactivated.png)"; exit 1
+fi
+echo "PASS habit deactivation: editor action, hidden from the list, shown below it, dragged back into place"
 echo "Screenshots and isolated database: $test_dir ; $db"

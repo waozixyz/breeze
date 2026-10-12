@@ -52,7 +52,8 @@ db.executescript(
         color_g INTEGER, color_b INTEGER, sync_mode INTEGER,
         sync_activity INTEGER, counter_enabled INTEGER,
         counter_target INTEGER, sort_order INTEGER, deleted_at INTEGER,
-        updated_at INTEGER, weekdays INTEGER, reminder_hour INTEGER);
+        updated_at INTEGER, weekdays INTEGER, reminder_hour INTEGER,
+        deactivated INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE habit_days(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
@@ -173,5 +174,21 @@ assert db.execute(
 assert db.execute(
     "SELECT entity_id FROM sync_outbox WHERE entity_type='habit'"
 ).fetchone() == ("new-habit",)
+
+# The server does not store whether a habit is deactivated yet, so a remote
+# change without the field keeps the device's own choice.
+db.execute(
+    "INSERT INTO habits(id,user_id,name,deleted_at,updated_at,deactivated) "
+    "VALUES('paused','user','Reading',0,1,1)"
+)
+for remote, expected in (
+    ({"id": "paused", "name": "Reading", "updated_at": "2026-09-27T12:00:00Z"}, 1),
+    ({"id": "paused", "name": "Reading", "deactivated": 0,
+      "updated_at": "2026-09-28T12:00:00Z"}, 0),
+):
+    db.execute(sql["SyncHabitsSQL"], (json.dumps({"changes": {"habits": [remote]}}), "user"))
+    assert db.execute(
+        "SELECT deactivated FROM habits WHERE id='paused'"
+    ).fetchone() == (expected,), remote
 
 print("Ziran sync SQL preserved local edits, reconciled habits, and omitted deleted exports")

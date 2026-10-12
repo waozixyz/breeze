@@ -157,7 +157,7 @@ static void upgrade_1_8_9(const char *fixture)
         assert(scalar("SELECT COUNT(*) FROM habits WHERE id='habit' AND "
                       "description='Keep me' AND counter_enabled=1 AND "
                       "counter_target=1 AND weekdays=0 AND reminder_hour=-1 "
-                      "AND updated_at=125") == 1);
+                      "AND deactivated=0 AND updated_at=125") == 1);
         assert(scalar("SELECT count FROM habit_days") == 7);
         assert(scalar("SELECT session_count FROM habit_days") == 2);
         assert(scalar("SELECT COUNT(*) FROM sessions WHERE id='session' AND "
@@ -186,6 +186,7 @@ int main(int argc, char **argv)
     assert(migrate_schema());
     assert(has_table("sync_outbox"));
     assert(has_column("habits", "reminder_hour"));
+    assert(has_column("habits", "deactivated"));
     assert(has_column("sessions", "mood_after"));
     assert(scalar("SELECT value FROM meta WHERE key='schema_version'") == 1);
     assert(db_select_int64((uint8_t *)"SELECT 42", -1) == 42);
