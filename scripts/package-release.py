@@ -15,6 +15,7 @@ import tempfile
 import time
 import sys
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from cryptography.hazmat.primitives import serialization
@@ -228,6 +229,44 @@ def verify_origin(store, origin, open_url=open_public_url):
     print("Verified public signed metadata and package bytes for the root and all six cells")
 
 
+def version_tuple(value):
+    return tuple(map(int, value["version"].split(".")))
+
+
+def published_changes(store, origin, open_url=open_public_url):
+    """Compare the staged releases with the ones the public node serves.
+
+    Returns the apps with a new version and the apps whose package changed
+    without one. Signing is deterministic, so an unchanged package stages
+    exactly the release the node already serves.
+    """
+    origin = origin.rstrip("/")
+    advanced = []
+    unversioned = []
+    for name in NAMES:
+        app_id = "inbe" if name == "inbe" else "inbe." + name
+        staged = json.loads((store / app_id / "latest-v2.json").read_bytes())
+        try:
+            with open_url(origin + "/api/v2/packages/" + app_id + "/latest?bucket=0",
+                          timeout=30) as response:
+                encoded = response.read(65537)
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+            advanced.append(app_id)
+            continue
+        if len(encoded) > 65536:
+            raise ValueError(f"{app_id}: public release metadata is too large")
+        served = json.loads(encoded)
+        if served == staged:
+            continue
+        if staged["sequence"] > served["sequence"] and version_tuple(staged) > version_tuple(served):
+            advanced.append(app_id)
+        else:
+            unversioned.append(app_id)
+    return advanced, unversioned
+
+
 def validate_release(value, app_id, publishers):
     fields = {"app_id", "sequence", "version", "runtime", "host_api", "module_api",
               "data_schema", "key_id", "artifacts", "dependencies", "signature"}
@@ -416,6 +455,22 @@ def main():
             if args.ssh_target:
                 if not args.remote_store:
                     parser.error("--remote-store is required with --ssh-target")
+                if args.verify_origin:
+                    advanced, unversioned = published_changes(args.store, args.verify_origin)
+                    # A package that changed without a new version waits for
+                    # its next version; that is not a failure. Only a new
+                    # version that ships with an unversioned change fails,
+                    # because the node accepts every app together or none.
+                    if unversioned and advanced:
+                        raise ValueError(", ".join(unversioned) + " changed without a new version, "
+                                         "so " + ", ".join(advanced) + " cannot be published with it")
+                    if unversioned:
+                        print("::notice title=App packages::Not published: " + ", ".join(unversioned) +
+                              " changed without a new version and will publish with the next one")
+                        return
+                    if not advanced:
+                        print("Every package is already published")
+                        return
                 rollout = None if args.rollout is None else rollout_value(args.rollout, args.rollout_hours)
                 publish(args.store, args.ssh_target, args.remote_store, rollout)
             if args.verify_origin:
