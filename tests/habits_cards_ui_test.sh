@@ -97,22 +97,31 @@ expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'c
 import -window "$window" "$test_dir/collapsed-final.png"
 echo "PASS shared habit buttons: chevron expansion, day taps, undo, drag cancellation, and collapse"
 
-# Deactivate Yoga from its open card: it keeps its data and leaves the list.
+# Dragged onto the inactive habits below the list, Yoga becomes inactive:
+# it keeps its data and leaves the list.
 word() { python3 "$root/tests/rendered_word.py" "$@"; }
 deactivated() { sql "SELECT deactivated FROM habits WHERE name='Yoga'"; }
-tap "$chevron_x" "$chevron_y"
-import -window "$window" "$test_dir/yoga-open.png"
-# Deactivate is the last of the open card's actions, below the chevron at
-# the card's right edge.
-tap "$((chevron_x - 6))" "$((chevron_y + 73))"
-expect "$(deactivated)" 1 'the open card deactivates Yoga'
+read -r yoga_x yoga_y < <(word "$test_dir/collapsed-final.png" yoga) ||
+  { echo "FAIL Yoga's card is missing ($test_dir/collapsed-final.png)"; exit 1; }
+read -r section_x section_y < <(word "$test_dir/collapsed-final.png" inactive) ||
+  { echo "FAIL the inactive habits are not below the list ($test_dir/collapsed-final.png)"; exit 1; }
+xdotool mousemove --window "$window" "$yoga_x" "$yoga_y" mousedown 1 sleep 0.1
+for step in $(seq 1 12); do
+  xdotool mousemove --window "$window" "$section_x" "$((yoga_y + (section_y - yoga_y) * step / 12))"
+  sleep 0.025
+done
+sleep 0.5
+import -window "$window" "$test_dir/card-over-inactive.png"
+xdotool mouseup 1
+sleep 0.4
+expect "$(deactivated)" 1 'a card dropped on the inactive habits deactivates Yoga'
 expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'deactivating keeps the order'
 import -window "$window" "$test_dir/deactivated-hidden.png"
 if word "$test_dir/deactivated-hidden.png" yoga >/dev/null; then
   echo "FAIL Yoga is still in the habit list ($test_dir/deactivated-hidden.png)"; exit 1
 fi
-read -r show_x show_y < <(word "$test_dir/deactivated-hidden.png" deactivated) ||
-  { echo "FAIL no button shows the deactivated habits ($test_dir/deactivated-hidden.png)"; exit 1; }
+read -r show_x show_y < <(word "$test_dir/deactivated-hidden.png" inactive) ||
+  { echo "FAIL no dropdown shows the inactive habits ($test_dir/deactivated-hidden.png)"; exit 1; }
 tap "$show_x" "$show_y"
 import -window "$window" "$test_dir/deactivated-shown.png"
 # Yoga is no longer a card, so its only name on screen is its row below.
@@ -137,10 +146,10 @@ sleep 0.4
 expect "$(deactivated)" 0 'drag into the list reactivates Yoga'
 expect "$(order)" 'Yoga|Meditation|Sit ups|Push ups|Cold Shower|Jumping Rope' 'Yoga takes the place it was dropped on'
 import -window "$window" "$test_dir/reactivated.png"
-if word "$test_dir/reactivated.png" deactivated >/dev/null; then
-  echo "FAIL the deactivated button stayed without deactivated habits ($test_dir/reactivated.png)"; exit 1
-fi
-echo "PASS habit deactivation: open card action, hidden from the list, shown below it, dragged back into place"
+# The dropdown stays, so a card can be dragged into it again.
+word "$test_dir/reactivated.png" inactive >/dev/null ||
+  { echo "FAIL the inactive habits left with their last habit ($test_dir/reactivated.png)"; exit 1; }
+echo "PASS habit deactivation: dragged into the inactive habits, hidden from the list, shown below it, dragged back into place"
 
 # With a mouse, a card follows a press that moves at once and takes the
 # place of the card it is dropped on.
@@ -183,13 +192,13 @@ sleep 0.4
 expect "$(order)" 'Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope|Yoga' 'a card dragged down the scrolled list goes last'
 import -window "$window" "$test_dir/card-moved.png"
 # A click without moving still opens the card.
-read -r click_x click_y < <(word "$test_dir/card-moved.png" meditation) ||
-  { echo "FAIL Meditation's card is missing ($test_dir/card-moved.png)"; exit 1; }
+read -r click_x click_y < <(word "$test_dir/card-moved.png" jumping) ||
+  { echo "FAIL the Jumping Rope card is missing ($test_dir/card-moved.png)"; exit 1; }
 tap "$click_x" "$click_y"
 import -window "$window" "$test_dir/card-clicked.png"
 expect "$(order)" 'Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope|Yoga' 'a click does not move a card'
-# Only an open card shows its current streak.
-word "$test_dir/card-clicked.png" streak >/dev/null ||
+# Only an open card offers to complete today.
+word "$test_dir/card-clicked.png" complete >/dev/null ||
   { echo "FAIL a click no longer opens the card ($test_dir/card-clicked.png)"; exit 1; }
 echo "PASS habit cards: dragged into another place, scrolled at the edge, a click still opens a card"
 echo "Screenshots and isolated database: $test_dir ; $db"
