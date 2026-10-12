@@ -13,9 +13,10 @@ test_dir="$root/build/habits-table-ui-test"
 mkdir -p "$test_dir"
 exec 9>"$test_dir/lock"
 flock 9
-# A short window, so the six habits need the list to scroll.
+# A tall window shows the whole table; it is made shorter later, so the
+# table needs to scroll.
 APP_SHOT_WINDOW=1 "$binary" --screenshot "$test_dir/start.png" \
-  --screenshot-scene habits_overview --screenshot-width 411 --screenshot-height 600 \
+  --screenshot-scene habits_overview --screenshot-width 411 --screenshot-height 760 \
   --screenshot-theme 4 --screenshot-dark 1 >"$test_dir/app.log" 2>&1 &
 app_pid=$!
 db="/tmp/inbe-screenshot-$app_pid/inbe.db"
@@ -124,9 +125,9 @@ fi
 expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'taps keep the order'
 echo "PASS habit table: day columns, check-ins, undo, drag cancellation, details, icon"
 
-# Dragged onto the inactive habits below the table, Yoga becomes inactive:
-# it keeps its data and leaves the table.
-read -r inactive_x inactive_y < <(find_word yoga-closed inactive "the inactive habits are below the table")
+# Dragged onto the inactive habits' header at the end of the table, Yoga
+# becomes inactive: it keeps its data and leaves the habits.
+read -r inactive_x inactive_y < <(find_word yoga-closed inactive "the inactive habits end the table")
 drag "$yoga_x" "$yoga_y" "$inactive_x" "$inactive_y" 0.5 row-over-inactive
 expect "$(deactivated)" 1 'a habit dropped on the inactive habits becomes inactive'
 expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'deactivating keeps the order'
@@ -137,7 +138,7 @@ fi
 read -r show_x show_y < <(find_word deactivated-hidden inactive "no dropdown shows the inactive habits")
 tap "$show_x" "$show_y"
 shot deactivated-shown
-read -r row_x row_y < <(find_word deactivated-shown yoga "Yoga is not listed below the table")
+read -r row_x row_y < <(find_word deactivated-shown yoga "Yoga is not listed among the inactive habits" "$show_y")
 read -r first_x first_y < <(find_word deactivated-shown meditation "Meditation's row is missing")
 tap "$row_x" "$row_y"
 expect "$(deactivated)" 1 'a tap does not reactivate'
@@ -156,15 +157,17 @@ read -r meditation_x meditation_y < <(find_word reactivated meditation "Meditati
 read -r push_x push_y < <(find_word reactivated push "the Push ups row is missing")
 drag "$meditation_x" "$meditation_y" "$push_x" "$push_y" 0.3 row-dragging
 expect "$(order)" 'Yoga|Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope' 'a dragged row takes the place it was dropped on'
-# Held at the bottom edge of the table, a dragged row scrolls it down to the
-# last habit, which is out of sight at first.
+# In a shorter window, a row held at the bottom edge of the table scrolls it
+# down to the last habit, which is out of sight at first.
+xdotool windowsize --sync "$window" 411 520 || true
+sleep 1
 shot row-moved
 if word "$test_dir/row-moved.png" jumping >/dev/null; then
   echo "FAIL Jumping Rope is already in sight, so nothing needs to scroll ($test_dir/row-moved.png)"; exit 1
 fi
 read -r yoga_x yoga_y < <(find_word row-moved yoga "Yoga's row is missing")
-read -r _ section_y < <(find_word row-moved inactive "the inactive habits are missing")
-edge_y=$((section_y - 46))
+read -r _ nav_y < <(find_word row-moved lumi "the navigation is missing")
+edge_y=$((nav_y - 70))
 xdotool mousemove --window "$window" "$yoga_x" "$yoga_y" mousedown 1 sleep 0.1
 for step in $(seq 1 12); do
   xdotool mousemove --window "$window" "$yoga_x" "$((yoga_y + (edge_y - yoga_y) * step / 12))"
@@ -172,7 +175,7 @@ for step in $(seq 1 12); do
 done
 sleep 1.5
 # Lifted off the edge, the dragged copy no longer covers the last row.
-xdotool mousemove --window "$window" "$yoga_x" "$((edge_y - 120))"
+xdotool mousemove --window "$window" "$yoga_x" "$((edge_y - 200))"
 sleep 0.3
 shot edge-scrolled
 read -r _ jump_y < <(word "$test_dir/edge-scrolled.png" jumping) ||
