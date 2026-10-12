@@ -5,6 +5,7 @@
 // in the habit modules; this screen composes them with Kryon's current widgets.
 raylib_input :: #system_library "raylib";
 IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
+GetTime :: () -> float64 #foreign raylib_input;
 
 #import, file "../app/app.zi";
 #import, file "../core/types.zi";
@@ -81,6 +82,8 @@ HABITS_DEACTIVATED_HINT_HEIGHT :: 40;
 // A dragged habit held this many frames at the list's edge scrolls it, so
 // passing the edge on the way in does not.
 HABITS_DRAG_EDGE_FRAMES :: 18;
+// On a touch screen a card is lifted after this long a hold.
+HABITS_CARD_HOLD_SECONDS :: 0.4;
 // The first habit's today marker from the last drawn frame; the web smoke
 // test clicks it.
 habits_first_day_bounds: Rectangle;
@@ -970,9 +973,33 @@ HabitScreenUpdateDrag :: (app: *InnerBreeze, point: Vector2) {
     }
 }
 
+// A mouse drags a habit card as soon as it moves. On a touch screen a swipe
+// over the cards scrolls them, so a card is lifted only once held.
+HabitScreenCardDragAtOnce :: () -> bool {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        return false
+    }
+    return true
+}
+
+HabitScreenBeginDrag :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
+    drag: PointerDrag, lifted: bool) {
+    app.habits.dragging = 1
+    app.habits.drag_habit = index
+    app.habits.drag_lifted = ifx lifted then 1 else 0
+    app.habits.drag_pressed_at = GetTime()
+    app.habits.drag_moving = 0
+    app.habits.drag_released = 0
+    app.habits.drag_edge_frames = 0
+    app.habits.drag_bounds = bounds
+    app.habits.drag_origin = Vector2.{drag.x, drag.y}
+    app.habits.drag_grab = Vector2.{drag.grab_x, drag.grab_y}
+}
+
 HabitScreenEndDrag :: (app: *InnerBreeze) {
     app.habits.dragging = 0
     app.habits.drag_habit = -1
+    app.habits.drag_lifted = 0
     app.habits.drag_moving = 0
     app.habits.drag_released = 0
     app.habits.drag_edge_frames = 0
@@ -1003,9 +1030,9 @@ HabitScreenGrip :: (app: *InnerBreeze, bounds: Rectangle) {
     }
 }
 
-// A deactivated habit's colour, name and grip, in its row or in the copy
-// that follows the pointer while it is dragged.
-HabitScreenDeactivatedFace :: (app: *InnerBreeze, index: s32,
+// A habit's colour, name and grip, in a deactivated habit's row or in the
+// copy that follows the pointer while a habit is dragged.
+HabitScreenDragFace :: (app: *InnerBreeze, index: s32,
     bounds: Rectangle) {
     habit := *app.habits.items[index]
     dot: BoxProps
@@ -1041,14 +1068,7 @@ HabitScreenDeactivatedRow :: (app: *InnerBreeze, index: s32,
         TreeCurrentParent(app.ui.session), key, WidgetKindButton)
     drag := TreeTakeDragAt(app.ui.session, previous)
     if drag.started && !row.disabled {
-        app.habits.dragging = 1
-        app.habits.drag_habit = index
-        app.habits.drag_moving = 0
-        app.habits.drag_released = 0
-        app.habits.drag_edge_frames = 0
-        app.habits.drag_bounds = bounds
-        app.habits.drag_origin = Vector2.{drag.x, drag.y}
-        app.habits.drag_grab = Vector2.{drag.grab_x, drag.grab_y}
+        HabitScreenBeginDrag(app, index, bounds, drag, true)
     }
     if (drag.active || drag.ended) && app.habits.dragging != 0 &&
     app.habits.drag_habit == index {
@@ -1061,7 +1081,60 @@ HabitScreenDeactivatedRow :: (app: *InnerBreeze, index: s32,
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
         key, WidgetKindButton)
     TreeSetDragCapture(app.ui.session, node, true)
-    HabitScreenDeactivatedFace(app, index, bounds)
+    HabitScreenDragFace(app, index, bounds)
+}
+
+// A press on a habit card that moves drags the card to another place in
+// the list; the list keeps scrolling with a swipe until a touch is held.
+// Returns true when the card was tapped without being dragged.
+HabitScreenCardDrag :: (app: *InnerBreeze, index: s32,
+    card: ButtonProps) -> bool {
+    key := cast(u64)card.id
+    previous := TreePrevious(app.ui.session,
+        TreeCurrentParent(app.ui.session), key, WidgetKindButton)
+    drag := TreeTakeDragAt(app.ui.session, previous)
+    if drag.started && !card.disabled {
+        HabitScreenBeginDrag(app, index, card.bounds, drag,
+            HabitScreenCardDragAtOnce())
+    }
+    if app.habits.dragging == 0 || app.habits.drag_habit != index {
+        return false
+    }
+    point := Vector2.{drag.x, drag.y}
+    if drag.active && app.habits.drag_lifted == 0 {
+        dx := point.x - app.habits.drag_origin.x
+        dy := point.y - app.habits.drag_origin.y
+        threshold := cast(float32)AppScale(6)
+        if dx * dx + dy * dy >= threshold * threshold {
+            // A swipe before the hold scrolls the list instead.
+            HabitScreenEndDrag(app)
+            return false
+        }
+        if GetTime() - app.habits.drag_pressed_at >= HABITS_CARD_HOLD_SECONDS {
+            app.habits.drag_lifted = 1
+            app.habits.drag_moving = 1
+            TreeCapturePressAt(app.ui.session, previous)
+        }
+        return false
+    }
+    if drag.active {
+        HabitScreenUpdateDrag(app, point)
+        return false
+    }
+    if !drag.ended {
+        return false
+    }
+    if app.habits.drag_lifted == 0 {
+        HabitScreenEndDrag(app)
+        return true
+    }
+    HabitScreenUpdateDrag(app, point)
+    if app.habits.drag_moving == 0 {
+        HabitScreenEndDrag(app)
+        return TreeHoveredAt(app.ui.session, previous)
+    }
+    app.habits.drag_released = 1
+    return false
 }
 
 // The bottom of the habit page: a button that shows or hides the
@@ -1129,20 +1202,20 @@ HabitScreenDeactivated :: (app: *InnerBreeze,
     End(app.ui.session)
 }
 
-// While a deactivated habit is dragged over the habit list, the card it
-// would take the place of is outlined, or the whole list when it would go
-// last. Releasing it there reactivates it in that place.
+// While a habit is dragged over the habit list, the card it would take the
+// place of is outlined, or the whole list when it would go last. Releasing
+// it there moves a card to that place or reactivates a deactivated habit.
 HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     cards: []Rectangle, count: s32, gap: s32) {
     if app.habits.dragging == 0 {
         return
     }
     dragged := app.habits.drag_habit
-    if dragged < 0 || dragged >= app.habits.count ||
-    app.habits.items[dragged].deactivated == 0 {
+    if dragged < 0 || dragged >= app.habits.count {
         HabitScreenEndDrag(app)
         return
     }
+    reactivating := app.habits.items[dragged].deactivated != 0
     point := app.habits.drag_pointer
     target: s32 = -1
     if app.habits.drag_moving != 0 &&
@@ -1169,7 +1242,11 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     }
     if app.habits.drag_released != 0 {
         if target >= 0 {
-            unused habits_reactivate(*app.habits, dragged, target)
+            if reactivating {
+                unused habits_reactivate(*app.habits, dragged, target)
+            } else {
+                unused habits_move_active(*app.habits, dragged, target)
+            }
             unused app_auto_sync(app)
             HabitScreenSave(app)
         }
@@ -1210,7 +1287,7 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     PaintRoundedFill(app.ui.session, -1, lifted, radius, 12,
         StyleTokenColor("surface"))
     HabitScreenDragOutline(app, lifted)
-    HabitScreenDeactivatedFace(app, dragged, lifted)
+    HabitScreenDragFace(app, dragged, lifted)
 }
 
 HabitScreenOverview :: (app: *InnerBreeze,
@@ -1290,7 +1367,7 @@ HabitScreenOverview :: (app: *InnerBreeze,
         pointer := PointerSample(app.ui.session)
         if !pointer.down && !pointer.released {
             HabitScreenEndDrag(app)
-        } else {
+        } else if app.habits.drag_lifted != 0 {
             HabitScreenUpdateDrag(app, Vector2.{pointer.x, pointer.y})
             if pointer.released {
                 app.habits.drag_released = 1
@@ -1394,7 +1471,12 @@ HabitScreenOverview :: (app: *InnerBreeze,
         card_button.style_kind = StyleKindCard()
         card_button.icon_only = false
         card_button.disabled = app.modal.active != 0
-        card_clicked := Button(app.ui.session, card_button) != 0
+        card_tapped := HabitScreenCardDrag(app, index, card_button)
+        card_clicked := Button(app.ui.session, card_button) != 0 || card_tapped
+        card_node := TreeSubmitted(app.ui.session,
+            TreeCurrentParent(app.ui.session), cast(u64)card_button.id,
+            WidgetKindButton)
+        TreeSetDragCapture(app.ui.session, card_node, HabitScreenCardDragAtOnce())
 
         dot: BoxProps
         dot.bounds = HabitScreenRect(cast(s32)card.x + AppScale(16),

@@ -144,4 +144,33 @@ if word "$test_dir/reactivated.png" deactivated >/dev/null; then
   echo "FAIL the deactivated button stayed without deactivated habits ($test_dir/reactivated.png)"; exit 1
 fi
 echo "PASS habit deactivation: editor action, hidden from the list, shown below it, dragged back into place"
+
+# With a mouse, a card follows a press that moves at once and takes the
+# place of the card it is dropped on.
+read -r meditation_x meditation_y < <(word "$test_dir/reactivated.png" meditation) ||
+  { echo "FAIL Meditation's card is missing ($test_dir/reactivated.png)"; exit 1; }
+read -r push_x push_y < <(word "$test_dir/reactivated.png" push) ||
+  { echo "FAIL the Push ups card is missing ($test_dir/reactivated.png)"; exit 1; }
+xdotool mousemove --window "$window" "$meditation_x" "$meditation_y" mousedown 1 sleep 0.1
+for step in $(seq 1 12); do
+  xdotool mousemove --window "$window" "$push_x" \
+    "$((meditation_y + (push_y - meditation_y) * step / 12))"
+  sleep 0.025
+done
+sleep 0.3
+import -window "$window" "$test_dir/card-dragging.png"
+xdotool mouseup 1
+sleep 0.4
+expect "$(order)" 'Yoga|Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope' 'a dragged card takes the place it was dropped on'
+import -window "$window" "$test_dir/card-moved.png"
+# A click without moving still opens the card.
+read -r click_x click_y < <(word "$test_dir/card-moved.png" push) ||
+  { echo "FAIL the Push ups card is missing ($test_dir/card-moved.png)"; exit 1; }
+tap "$click_x" "$click_y"
+import -window "$window" "$test_dir/card-clicked.png"
+expect "$(order)" 'Yoga|Sit ups|Push ups|Meditation|Cold Shower|Jumping Rope' 'a click does not move a card'
+# Only an open card shows its current streak.
+word "$test_dir/card-clicked.png" streak >/dev/null ||
+  { echo "FAIL a click no longer opens the card ($test_dir/card-clicked.png)"; exit 1; }
+echo "PASS habit cards: dragged into another place, a click still opens a card"
 echo "Screenshots and isolated database: $test_dir ; $db"
