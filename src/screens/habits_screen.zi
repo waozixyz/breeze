@@ -33,6 +33,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import, file "habits/edit.zi";
 #import, file "habits/table_layout.zi";
 #import, file "../habits/habit_icons.zi";
+#import, file "../cells/habit_icon_choice.zi";
 #import, file "../app/exercise_types.zi";
 #import, file "statistics_screen.zi";
 #import "date_parse"
@@ -84,7 +85,11 @@ HABITS_MOUSE_RIGHT :: 1;
 HABITS_TABLE_HEADER_HEIGHT :: 40;
 HABITS_ROW_HEIGHT :: 60;
 HABITS_ROW_ICON_SIZE :: 34;
-HABITS_NAME_MIN_WIDTH :: 150;
+// Without room for names, rows show a smaller icon alone.
+HABITS_ROW_SMALL_ICON_SIZE :: 28;
+HABITS_ICON_COLUMN_WIDTH :: 36;
+HABITS_NAME_PREFERRED_WIDTH :: 150;
+HABITS_NAME_MIN_WIDTH :: 120;
 HABITS_DAY_MIN_WIDTH :: 30;
 HABITS_DAY_MAX_WIDTH :: 72;
 HABITS_DEACTIVATED_ROW_HEIGHT :: 52;
@@ -705,6 +710,9 @@ HabitScreenIconFor :: (app: *InnerBreeze, index: s32) -> s32 {
     if habit.icon >= 1 && habit.icon <= HABIT_ICON_COUNT {
         return habit.icon
     }
+    if habit.icon == HABIT_ICON_LETTER {
+        return 0
+    }
     if (habit.sync_activity & habit_activity_mask_for(EXERCISE_MEDITATION)) != 0 {
         return HABIT_ICON_LOTUS
     }
@@ -808,10 +816,11 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
 }
 
 // The day names over the table's day columns, today first.
-HabitScreenTableHeader :: (app: *InnerBreeze, x: s32, y: s32, day_w: s32,
-    height: s32) {
+HabitScreenTableHeader :: (app: *InnerBreeze, x: s32, y: s32,
+    layout: HabitTableLayout, height: s32) {
+    day_w := layout.day_width
     column: s32 = 0
-    while column < 7 {
+    while column < layout.days {
         label := HabitScreenWeekdayLabel(habits_day_index(column), column)
         props: TextProps
         props.bounds = HabitScreenRect(x + column * day_w, y, day_w, height)
@@ -830,7 +839,7 @@ HabitScreenTableHeader :: (app: *InnerBreeze, x: s32, y: s32, day_w: s32,
 // another place, and then a circle for each of the last seven days.
 // Returns true when the row was tapped.
 HabitScreenRow :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    name_w: s32, day_w: s32, pad: s32, open: bool) -> bool {
+    layout: HabitTableLayout, pad: s32, open: bool) -> bool {
     habit := *app.habits.items[index]
     row: ButtonProps
     row.id = 4200 + index
@@ -844,31 +853,34 @@ HabitScreenRow :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
         cast(u64)row.id, WidgetKindButton)
     TreeSetDragCapture(app.ui.session, node, HabitScreenRowDragAtOnce())
-    HabitScreenRowFace(app, index, bounds, name_w, pad)
-    x := cast(s32)bounds.x + pad + name_w
+    HabitScreenRowFace(app, index, bounds, layout, pad)
+    x := cast(s32)bounds.x + pad + layout.name_width
     column: s32 = 0
-    while column < 7 {
+    while column < layout.days {
         HabitScreenDayCell(app, index, habits_day_index(column), column,
-            HabitScreenRect(x + column * day_w, cast(s32)bounds.y, day_w,
-            cast(s32)bounds.height))
+            HabitScreenRect(x + column * layout.day_width, cast(s32)bounds.y,
+            layout.day_width, cast(s32)bounds.height))
         column += 1
     }
     return clicked
 }
 
-// A habit's icon and name at the start of its row, or in the copy that
-// follows the pointer while it is dragged.
+// A habit's icon and name at the start of its row; without room for the
+// name, a smaller icon alone.
 HabitScreenRowFace :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    name_w: s32, pad: s32) {
+    layout: HabitTableLayout, pad: s32) {
     habit := *app.habits.items[index]
-    icon_size := AppScale(HABITS_ROW_ICON_SIZE)
+    icon_size := AppScale(ifx layout.names then HABITS_ROW_ICON_SIZE else HABITS_ROW_SMALL_ICON_SIZE)
     HabitScreenHabitIcon(app, index, HabitScreenRect(cast(s32)bounds.x + pad,
         cast(s32)(bounds.y + (bounds.height - cast(float32)icon_size) * 0.5),
         icon_size, icon_size))
+    if !layout.names {
+        return
+    }
     name: TextProps
     name.bounds = HabitScreenRect(cast(s32)bounds.x + pad + icon_size +
         AppScale(10), cast(s32)bounds.y,
-        name_w - icon_size - AppScale(14), cast(s32)bounds.height)
+        layout.name_width - icon_size - AppScale(14), cast(s32)bounds.height)
     name.text = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
     name.font = AppFontSize()
     name.vertical_align = cast(TextAlign)TextAlignCenter
@@ -1449,6 +1461,13 @@ HabitScreenOverview :: (app: *InnerBreeze,
             cast(float32)AppScale(3), 8,
             StyleTokenColor("accent"))
     }
+    // Habits without an icon get one the node's GLM service chooses.
+    if HabitIconChoicePoll(*app.habits) {
+        habits_save(*app.habits)
+        unused app_auto_sync(app)
+        HabitScreenSave(app)
+    }
+    unused HabitIconChoiceStart(*app.habits)
     if app.habits.dragging != 0 {
         pointer := PointerSample(app.ui.session)
         if !pointer.down && !pointer.released {
@@ -1521,10 +1540,10 @@ HabitScreenOverview :: (app: *InnerBreeze,
     pad := AppScale(12)
     table_x := cast(s32)scrolled.content.x
     table_w := cast(s32)scrolled.content.width
-    day_w := HabitTableDayWidth(table_w - pad * 2,
-        AppScale(HABITS_NAME_MIN_WIDTH), AppScale(HABITS_DAY_MIN_WIDTH),
+    layout := HabitTableLayoutFor(table_w - pad * 2,
+        AppScale(HABITS_NAME_PREFERRED_WIDTH), AppScale(HABITS_NAME_MIN_WIDTH),
+        AppScale(HABITS_ICON_COLUMN_WIDTH), AppScale(HABITS_DAY_MIN_WIDTH),
         AppScale(HABITS_DAY_MAX_WIDTH))
-    name_w := table_w - pad * 2 - day_w * 7
     if active_count == 0 {
         empty: TextProps
         empty.bounds = HabitScreenRect(table_x + pad,
@@ -1552,7 +1571,7 @@ HabitScreenOverview :: (app: *InnerBreeze,
         if position == 0 {
             app.habits_guide_anchors[1] = row
         }
-        if HabitScreenRow(app, index, row, name_w, day_w, pad, open) {
+        if HabitScreenRow(app, index, row, layout, pad, open) {
             End(app.ui.session)
             if open {
                 habits_collapse_card(app)
@@ -1568,8 +1587,8 @@ HabitScreenOverview :: (app: *InnerBreeze,
         position += 1
     }
     End(app.ui.session)
-    HabitScreenTableHeader(app, table_x + pad + name_w, list_y, day_w,
-        header_h)
+    HabitScreenTableHeader(app, table_x + pad + layout.name_width, list_y,
+        layout, header_h)
     PaintRoundedFill(app.ui.session, -1, HabitScreenRect(geometry.x, rows_y,
         geometry.width, HabitScreenHairline()), 0.0, 1,
         Fade(StyleTokenColor("text"), 0.12))

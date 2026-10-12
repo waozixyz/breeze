@@ -53,7 +53,8 @@ db.executescript(
         sync_activity INTEGER, counter_enabled INTEGER,
         counter_target INTEGER, sort_order INTEGER, deleted_at INTEGER,
         updated_at INTEGER, weekdays INTEGER, reminder_hour INTEGER,
-        deactivated INTEGER NOT NULL DEFAULT 0);
+        deactivated INTEGER NOT NULL DEFAULT 0,
+        icon INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE habit_days(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
@@ -189,6 +190,19 @@ for remote, expected in (
     db.execute(sql["SyncHabitsSQL"], (json.dumps({"changes": {"habits": [remote]}}), "user"))
     assert db.execute(
         "SELECT deactivated FROM habits WHERE id='paused'"
+    ).fetchone() == (expected,), remote
+
+# A remote change without an icon keeps the device's icon; one with an icon
+# takes it.
+db.execute("UPDATE habits SET icon=5 WHERE id='paused'")
+for remote, expected in (
+    ({"id": "paused", "name": "Reading", "updated_at": "2026-09-29T12:00:00Z"}, 5),
+    ({"id": "paused", "name": "Reading", "icon": 25,
+      "updated_at": "2026-09-30T12:00:00Z"}, 25),
+):
+    db.execute(sql["SyncHabitsSQL"], (json.dumps({"changes": {"habits": [remote]}}), "user"))
+    assert db.execute(
+        "SELECT icon FROM habits WHERE id='paused'"
     ).fetchone() == (expected,), remote
 
 print("Ziran sync SQL preserved local edits, reconciled habits, and omitted deleted exports")
