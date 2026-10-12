@@ -20,6 +20,7 @@ c :: #system_library "c";
 #import, file "../../habits/habit_model.zi";
 #import, file "../../habits/habit_sessions.zi";
 #import, file "../../app/exercise_types.zi";
+#import, file "../../habits/habit_icons.zi";
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/locale.zi";
 #import, file "../../app/app_modal_state.zi";
@@ -111,6 +112,7 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.counter_target = ifx (app.habits.items[index].counter_target > 0) then (app.habits.items[index].counter_target) else (1)
     app.habit_edit.weekdays = app.habits.items[index].weekdays
     app.habit_edit.reminder_hour = app.habits.items[index].reminder_hour
+    app.habit_edit.icon = app.habits.items[index].icon
     app.habit_edit.sections[0] = 1
     app.habit_edit.sections[2] = 1
     AppCopyText(AppTextFromCString(*app.habits.items[index].name[0],
@@ -345,8 +347,10 @@ habit_edit_section_height :: (app: *InnerBreeze, section: s32,
         columns := width / AppScale(48)
         if columns < 1 { columns = 1 }
         colors: s32 = ifx (app.habit_edit.more_colors != 0) then (12) else (7)
+        icons: s32 = HABIT_ICON_COUNT + 1
         return header + AppScale(230) +
-        (colors + columns - 1) / columns * AppScale(44)
+        (colors + columns - 1) / columns * AppScale(44) + AppScale(38) +
+        (icons + columns - 1) / columns * AppScale(44)
     }
     if section == 1 {
         scheduled := (app.habit_edit.weekdays & HABIT_SCHEDULE_OFF) == 0
@@ -467,6 +471,51 @@ habit_edit_details :: (app: *InnerBreeze, x: s32, y: s32,
         x, y, width, label_h)
     y += label_h + AppScale(4)
     habit_edit_colors(app, x, y, width)
+    columns := width / AppScale(48)
+    if columns < 1 { columns = 1 }
+    colors: s32 = ifx (app.habit_edit.more_colors != 0) then (12) else (7)
+    y += (colors + columns - 1) / columns * AppScale(44) + AppScale(10)
+    habit_edit_text(app, LocaleText("habit_icon_label"),
+        x, y, width, label_h)
+    y += label_h + AppScale(4)
+    habit_edit_icons(app, x, y, width)
+}
+
+// The icons a habit can show in the habit list. The first lets its linked
+// practice choose, or shows the first letter of its name.
+habit_edit_icons :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    columns := width / AppScale(48)
+    if columns < 1 { columns = 1 }
+    name := AppTextFromCString(*app.habit_edit.text[0], HABIT_NAME_SIZE)
+    first: s64 = 1
+    while first < name.count && (name[first] & cast(u8)192) == cast(u8)128 {
+        first += 1
+    }
+    icon: s32 = 0
+    while icon <= HABIT_ICON_COUNT {
+        button: ButtonProps
+        button.id = 7560 + icon
+        button.bounds = Rectangle.{
+            cast(float32)(x + (icon % columns) * AppScale(48) + AppScale(4)),
+            cast(float32)(y + (icon / columns) * AppScale(44) + AppScale(2)),
+            cast(float32)AppScale(40), cast(float32)AppScale(40)}
+        button.circle = true
+        button.selected = app.habit_edit.icon == icon
+        if icon == 0 {
+            button.label = ifx (name.count > 0) then (name[0:first]) else ("-")
+        } else {
+            button.icon_shape = HabitIconShape(icon)
+            button.icon_only = true
+        }
+        button.tone = cast(ButtonTone)(ifx (button.selected) then
+            (ButtonToneAccent) else (ButtonToneNeutral))
+        button.emphasis = cast(ButtonEmphasis)(ifx (button.selected) then
+            (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+        if Button(app.ui.session, button) != 0 {
+            app.habit_edit.icon = icon
+        }
+        icon += 1
+    }
 }
 
 habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32,

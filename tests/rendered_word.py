@@ -45,10 +45,15 @@ def find(region):
     return None
 
 
-# Buttons with their own backgrounds read better one band at a time.
+# Buttons with their own backgrounds read better one band at a time, and
+# a word beside an icon or a grip reads better in part of its band.
 regions = [(0, 0, gray.width, gray.height)]
 regions += [(0, top, gray.width, min(top + 80, gray.height))
             for top in range(0, gray.height, 40)]
+window = min(240, gray.width)
+regions += [(left, top, min(left + window, gray.width), min(top + 80, gray.height))
+            for top in range(0, gray.height, 40)
+            for left in range(0, max(gray.width - window, 0) + 1, 60)]
 for region in regions:
     if region[3] <= min_y:
         continue

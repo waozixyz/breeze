@@ -731,6 +731,12 @@ break-rules-test: $(ZI2C_BIN)
 sun-salutation-test: $(ZI2C_BIN)
 	@sh tests/sun_salutation_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
+.PHONY: habits-table-layout-test
+habits-table-layout-test: $(ZI2C_BIN)
+	@sh tests/habits_table_layout_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: habits-table-layout-test
+
 .PHONY: sun-salutation-assets-test
 sun-salutation-assets-test:
 	python3 tests/sun_salutation_assets_test.py
@@ -941,7 +947,7 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-cards-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
+VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
@@ -1288,9 +1294,9 @@ embedded-image-assets-check: $(EMBEDDED_ASSETS_C)
 icon-sheets-check: $(PACKAGES_MK)
 	python3 tests/icon_sheets_test.py $(KRYON_DIR)/src/ui/icon.zi
 
-.PHONY: habits-cards-ui-test
-habits-cards-ui-test: $(TARGET)
-	bash tests/habits_cards_ui_test.sh "$(abspath $(TARGET))"
+.PHONY: habits-table-ui-test
+habits-table-ui-test: $(TARGET)
+	bash tests/habits_table_ui_test.sh "$(abspath $(TARGET))"
 
 .PHONY: lists-ui-test
 lists-ui-test: $(TARGET)
