@@ -231,6 +231,12 @@ data_save_session_path :: (round_times: *s32, round_count: s32,
     return storage_save_session(round_times, round_count, out_path, out_path_size)
 }
 
+// The session counts around the practices finished on this device since the
+// donation reminder last looked. Sessions that arrive by sync are not
+// practices finished here, so they never open the reminder.
+local_practice_count_before: s32 = -1;
+local_practice_count_after: s32;
+
 #program_export
 data_save_session_path_for_activity :: (round_times: *s32, round_count: s32,
     topic: s32, activity: s32,
@@ -241,8 +247,26 @@ data_save_session_path_for_activity :: (round_times: *s32, round_count: s32,
         return 1
     }
     data_init()
-    return storage_save_session_for_activity(round_times, round_count, topic, activity,
+    before := storage_session_count()
+    saved := storage_save_session_for_activity(round_times, round_count, topic, activity,
         out_path, out_path_size)
+    after := storage_session_count()
+    if saved != 0 && after > before {
+        if local_practice_count_before < 0 { local_practice_count_before = before }
+        local_practice_count_after = after
+    }
+    return saved
+}
+
+// Hands the counts around the practices finished here to the donation
+// reminder once; returns 0 when none finished since the last call.
+#program_export
+data_take_local_practices :: (before: *s32, after: *s32) -> s32 {
+    if local_practice_count_before < 0 { return 0 }
+    before.* = local_practice_count_before
+    after.* = local_practice_count_after
+    local_practice_count_before = -1
+    return 1
 }
 
 data_replace_session :: (path: string, round_times: *s32,

@@ -16,6 +16,7 @@ using AppMainTab;
 // the reminder decision module.
 save_settings :: (app: *InnerBreeze) #foreign c;
 storage_session_count :: () -> s32 #foreign c;
+data_take_local_practices :: (before: *s32, after: *s32) -> s32 #foreign c;
 
 save_reminder :: (app: *InnerBreeze) {
     if app != null { save_settings(app) }
@@ -36,15 +37,6 @@ app_record_donation_reminder_seen :: (app: *InnerBreeze) {
 
 practice_home :: (app: *InnerBreeze) -> bool {
     return app != null && app.breathing.screen == ScreenStart  && app.main_tab == APP_MAIN_TAB_PRACTICE  && app.practice_tab == PRACTICE_TAB_PLAY
-}
-
-#program_export
-app_init_donation_reminder_observed_practice_count :: (app: *InnerBreeze) {
-    if app == null || app.donation_reminder_observed_practice_count_initialized != 0 {
-        return
-    }
-    app.donation_reminder_observed_practice_count = storage_session_count()
-    app.donation_reminder_observed_practice_count_initialized = 1
 }
 
 #program_export
@@ -84,29 +76,21 @@ reminder_safe :: (app: *InnerBreeze, first_run_guide_active: s32,
 app_maybe_open_donation_reminder :: (app: *InnerBreeze,
                                      first_run_guide_active: s32,
                                      habits_guide_active: s32) {
-    if !reminder_safe(app, first_run_guide_active, habits_guide_active) { return }
-    practice_count := storage_session_count()
-    if app.donation_reminder_observed_practice_count_initialized == 0 {
-        app.donation_reminder_observed_practice_count = practice_count
-        app.donation_reminder_observed_practice_count_initialized = 1
+    if !reminder_safe(app, first_run_guide_active, habits_guide_active) ||
+       !practice_home(app) {
         return
     }
-    observed := app.donation_reminder_observed_practice_count
-    if practice_count < observed {
-        app.donation_reminder_observed_practice_count = practice_count
-        return
-    }
-    if practice_count <= observed || !practice_home(app) { return }
+    // Only a practice finished on this device that reaches the next count
+    // opens the reminder; the device where it was finished shows it once.
+    before: s32
+    after: s32
+    if data_take_local_practices(*before, *after) == 0 { return }
     next := donation_next_threshold(app.donation_reminder_last_prompt_practice_count,
-                                     observed)
+                                     before)
     if app.donation_reminder_next_prompt_practice_count != next {
         app.donation_reminder_next_prompt_practice_count = next
         save_reminder(app)
     }
-    if practice_count < next {
-        app.donation_reminder_observed_practice_count = practice_count
-        return
-    }
-    app.donation_reminder_observed_practice_count = practice_count
+    if after < next { return }
     app_open_modal(app, cast(ModalType)ModalDonationReminder)
 }
