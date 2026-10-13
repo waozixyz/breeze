@@ -3,15 +3,15 @@
 ### Added
 - Drag habits to reorder or deactivate them.
 - Habits get icons, schedules, times and daily questions.
+- Questions can compare with your average.
 - Apps asks before downloading app updates.
 ### Changed
 - Habits is a table of the last seven days.
 ### Fixed
-- Android: Recents opens a practice's floating window.
-- Android: the floating window shows a practice's results.
+- Android: the floating practice window opens from Recents and shows results.
 - The donation reminder shows on one device only.
-- Held Backspace and arrows repeat in text fields.
-- The breathing count is readable.
+- Held keys repeat in text fields.
+- The breathing count is readable; older habit entries edit again.
 
 ## [2.1.31] - 2026-10-11
 ### Fixed
