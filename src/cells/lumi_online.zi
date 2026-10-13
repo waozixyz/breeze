@@ -1,11 +1,16 @@
 // The same harness runs in standalone Inbe and its Harmony-hosted window.
 // Only completed authenticated requests reach app tools, on the main thread.
+// Nothing here reaches the network unless lumi_connection.zi allows it:
+// offline, or without the agreement, Lumi sends no request of any kind.
 #import "json_scan"
 #import "text"
 #import "vec"
 #import "text_buffer"
 #import "byte_text_linux"
 #import "auth"
+#import "keys"
+#import "net_http"
+#import, file "lumi_connection.zi";
 #import, file "lumi_types.zi";
 #import, file "lumi_ui_types.zi";
 #import, file "lumi_response.zi";
@@ -48,6 +53,12 @@ lumi_feedback_id: [65]u8;
 lumi_tool_ids: [12][129]u8;
 lumi_tool_results: [12]string;
 lumi_tool_count: s32;
+// A turn answered by the person's own OpenAI-compatible provider, directly
+// from this device (stage 4), rather than by Inner Breeze's server.
+lumi_online_provider_turn: bool;
+lumi_provider_transfer: NetworkTransfer;
+lumi_provider_status: s32;
+LUMI_STAGE_PROVIDER :: 4
 c :: #system_library "c";
 #if #defined(_WIN32) {
     OnlineNow :: (out: *s64) -> s64 #foreign c "_time64";
@@ -68,7 +79,7 @@ LumiOnlineWaiting :: () -> bool {
     if StoredAccountMode() == AccountModeDelegate {
         return false
     }
-    return lumi_online_queued || lumi_online_stage == 1
+    return lumi_online_queued || lumi_online_stage == 1 || lumi_online_stage == LUMI_STAGE_PROVIDER
 }
 
 LumiOnlineClearTurn :: () {
@@ -82,8 +93,17 @@ LumiOnlineClearTurn :: () {
     lumi_tool_ids = .{}
 }
 
+LumiProviderCancel :: () {
+    if lumi_online_stage == LUMI_STAGE_PROVIDER {
+        CancelNetworkTransfer(cast(*void)*lumi_provider_transfer)
+        lumi_online_stage = 0
+    }
+    lumi_online_provider_turn = false
+}
+
 LumiOnlineCancel :: () {
     CancelStoredOperation(*lumi_online_operation)
+    LumiProviderCancel()
     LumiOnlineClearTurn()
     lumi_online_queued = false
     lumi_online_fresh = false
@@ -102,10 +122,17 @@ LumiOnlineStart :: (input: string) -> bool {
         return false
     }
     unused input
-    if LumiOnlineWaiting() || storage_get_setting_int("lumi_online", 1) == 0 ||
-    storage_has_sync_account() == 0 {
+    if LumiOnlineWaiting() {
         return false
     }
+    route := LumiAiRoute()
+    if route != LUMI_AI_NODE && route != LUMI_AI_OWN {
+        // Offline nothing is sent: say how Lumi could answer instead.
+        LumiOnlineAppend(LocaleText(ifx route == LUMI_AI_OFFLINE then
+            "lumi_offline_unknown" else "lumi_online_setup"))
+        return true
+    }
+    lumi_online_provider_turn = route == LUMI_AI_OWN
     if lumi_online_stage == 2 || lumi_online_stage == 3 {
         // A conversation takes priority over retriable inbox background work.
         CancelStoredOperation(*lumi_online_operation)
@@ -148,8 +175,83 @@ OnlineToolSchemas :: (out: *Vec(u8)) {
     BuilderPrint(out, "]")
 }
 
+// The node's instructions for Lumi (assets/mcp/lumi_instructions.json, the
+// same words as Daochi's chat.zi), sent as the system message when the
+// person's own provider answers, followed by the app context.
+LumiProviderMessages :: (out: *Vec(u8), context: string) {
+    asset := AssetRead("assets/mcp/lumi_instructions.json")
+    instructions: [4096]u8
+    count: s32 = 0
+    if asset.found {
+        count = ReadStringText(asset.data, FieldAt(asset.data, 0, "instructions"), instructions[:])
+    }
+    system: Vec(u8)
+    BuilderPrint(*system, "%\nCurrent app context:\n%",
+        ifx count > 0 && count < 4096 then TextFromBytes(instructions[:count]) else "", context)
+    system_text := BuilderFinish(system)
+    defer { PackageFree(system_text) }
+    BuilderPrint(out, "[{\"role\":\"system\",\"content\":")
+    LumiJsonString(out, system_text)
+    BuilderPrint(out, "}")
+    inner := lumi_online_messages
+    if inner.count > 2 && inner[0] == cast(u8)91 {
+        BuilderPrint(out, ",%", inner[1:])
+    } else {
+        BuilderPrint(out, "]")
+    }
+}
+
+// Sends the turn to the person's own provider. Its key goes only into this
+// request's Authorization header; it is never printed or kept elsewhere.
+LumiProviderRequest :: (context: string) -> bool {
+    url: [LUMI_PROVIDER_URL_MAX]u8
+    model: [LUMI_PROVIDER_MODEL_MAX]u8
+    key: [LUMI_PROVIDER_KEY_MAX]u8
+    endpoint: [LUMI_PROVIDER_URL_MAX + 32]u8
+    defer { SecureWipe(*key[0], LUMI_PROVIDER_KEY_MAX) }
+    if !AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:]) ||
+    !AppCopyText(storage_get_setting_text(LumiProviderModelSetting), model[:]) ||
+    !AppCopyText(storage_get_setting_text(LumiProviderKeySetting), key[:]) ||
+    !LumiProviderUrlValid(TextUntilNul(url[:])) ||
+    !LumiProviderModelValid(TextUntilNul(model[:])) ||
+    !LumiProviderKeyValid(TextUntilNul(key[:])) {
+        return false
+    }
+    target := LumiProviderEndpoint(TextUntilNul(url[:]), endpoint[:])
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"model\":")
+    LumiJsonString(*out, TextUntilNul(model[:]))
+    BuilderPrint(*out, ",\"messages\":")
+    LumiProviderMessages(*out, context)
+    BuilderPrint(*out, ",\"tools\":")
+    OnlineToolSchemas(*out)
+    BuilderPrint(*out, "}")
+    body := BuilderFinish(out)
+    defer { PackageFree(body) }
+    #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+        if NetworkTracing() {
+            print("LUMI: provider_request body_bytes=%\n", body.count)
+        }
+    }
+    lumi_online_response[0] = cast(u8)0
+    transport := NetworkTransport(*lumi_provider_transfer)
+    request := HttpRequest.{.method = "POST", .url = target, .token = TextUntilNul(key[:]),
+        .accept = "application/json", .content_type = "application/json", .body = body}
+    if target.count == 0 || !transport.start(transport.context, request, lumi_online_response[:]) {
+        return false
+    }
+    lumi_online_stage = LUMI_STAGE_PROVIDER
+    lumi_online_queued = false
+    return true
+}
+
 LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
     if StoredAccountMode() == AccountModeDelegate {
+        return false
+    }
+    route := LumiAiRoute()
+    if (route != LUMI_AI_NODE && route != LUMI_AI_OWN) ||
+    (route == LUMI_AI_OWN) != lumi_online_provider_turn {
         return false
     }
     context := AppToolContext(app)
@@ -161,6 +263,9 @@ LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
     }
     if context.count > 8192 {
         return false
+    }
+    if lumi_online_provider_turn {
+        return LumiProviderRequest(context)
     }
     out: Vec(u8)
     BuilderPrint(*out, "{\"messages\":%,\"context\":%,\"tools\":", lumi_online_messages, context)
@@ -206,7 +311,7 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         return false
     }
     document := TextUntilNul(lumi_online_response[:])
-    at := LumiResponseMessageAt(document)
+    at := ifx lumi_online_provider_turn then LumiProviderMessageAt(document) else LumiResponseMessageAt(document)
     if at < 0 {
         return false
     }
@@ -226,8 +331,17 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
     }
     feedback_card := false
     out: Vec(u8)
-    BuilderPrint(*out, "%,%", lumi_online_messages[:lumi_online_messages.count - 1],
-        document[at:ValueEnd(document, at, 0)])
+    if lumi_online_provider_turn {
+        // Only the fields every OpenAI-compatible provider accepts back.
+        content_at := FieldAt(document, at, "content")
+        BuilderPrint(*out, "%,{\"role\":\"assistant\",\"content\":%,\"tool_calls\":%}",
+            lumi_online_messages[:lumi_online_messages.count - 1],
+            ifx content_at >= 0 then document[content_at:ValueEnd(document, content_at, 0)] else "null",
+            document[calls_at:ValueEnd(document, calls_at, 0)])
+    } else {
+        BuilderPrint(*out, "%,%", lumi_online_messages[:lumi_online_messages.count - 1],
+            document[at:ValueEnd(document, at, 0)])
+    }
     for index: cast(s32)0..calls - 1 {
         call_at := ElementAt(document, calls_at, index)
         function_at := FieldAt(document, call_at, "function")
@@ -262,13 +376,15 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         BuilderPrint(*out, ",\"content\":")
         LumiJsonString(*out, result)
         BuilderPrint(*out, "}")
-        if name == "report_feedback" && ContainsFoldASCII(result, "\"ok\":true") {
+        if (name == "report_feedback" || name == "delete_habit") &&
+        ContainsFoldASCII(result, "\"ok\":true") {
             feedback_card = true
         }
     }
     if feedback_card {
-        // The feedback card with Yes and No is Lumi's whole answer; the
-        // model's follow-up would only repeat it.
+        // The feedback card with Yes and No, or the question whether to
+        // delete a habit, is Lumi's whole answer; the model's follow-up
+        // would only repeat it.
         PackageFree(BuilderFinish(out))
         LumiOnlineClearTurn()
         return true
@@ -326,7 +442,7 @@ LumiFeedbackNotice :: (id: string, delivered: bool) -> bool {
 }
 
 LumiFeedbackStart :: () -> bool {
-    if StoredAccountMode() == AccountModeDelegate {
+    if StoredAccountMode() == AccountModeDelegate || !LumiNodeTrafficAllowed() {
         return false
     }
     body := FeedbackFirst()
@@ -382,6 +498,59 @@ LumiFeedbackReplies :: () {
     }
 }
 
+// Ends a conversation turn: the answer or a notice, then the actions the
+// tools asked for. Another round may already be queued.
+LumiOnlineFinishTurn :: (app: *InnerBreeze, success: bool, status: s32) {
+    lumi_pending_route = -1
+    lumi_pending_practice = -1
+    if !success || !LumiOnlineAnswer(app) {
+        notice := "lumi_online_unavailable"
+        if status == 429 && !lumi_online_provider_turn {
+            notice = "lumi_online_limit"
+        } else if (status == 401 || status == 403) && lumi_online_provider_turn {
+            notice = "lumi_provider_rejected"
+        }
+        LumiOnlineAppend(LocaleText(notice))
+    }
+    if lumi_pending_practice >= 0 {
+        unused app_start_practice(app, lumi_pending_practice)
+    }
+    if lumi_pending_route >= 0 {
+        app_apply_nav_route(app, lumi_pending_route)
+    }
+    if !LumiOnlineWaiting() {
+        LumiOnlineClearTurn()
+        lumi_online_provider_turn = false
+    }
+    unused LumiStoreSave()
+}
+
+// Going offline, withdrawing or changing where requests go stops what is
+// in flight at once; nothing more is sent.
+LumiOnlineEnforce :: () {
+    route := LumiAiRoute()
+    turn_allowed := (lumi_online_provider_turn && route == LUMI_AI_OWN) ||
+    (!lumi_online_provider_turn && route == LUMI_AI_NODE)
+    if lumi_online_operation.active {
+        stage := lumi_online_stage
+        if (stage == 1 && !turn_allowed) ||
+        ((stage == 2 || stage == 3) && !LumiNodeTrafficAllowed()) {
+            CancelStoredOperation(*lumi_online_operation)
+            lumi_online_stage = 0
+        }
+    }
+    if lumi_online_stage == LUMI_STAGE_PROVIDER && !turn_allowed {
+        LumiProviderCancel()
+    }
+    if (lumi_online_queued || lumi_online_stage == 0) && !turn_allowed &&
+    lumi_online_messages.count > 0 && !lumi_online_operation.active {
+        lumi_online_queued = false
+        lumi_online_fresh = false
+        lumi_online_provider_turn = false
+        LumiOnlineClearTurn()
+    }
+}
+
 app_lumi_pump :: (app: *InnerBreeze) {
     if StoredAccountMode() == AccountModeDelegate {
         LumiOnlineCancel()
@@ -395,6 +564,19 @@ app_lumi_pump :: (app: *InnerBreeze) {
     if lumi_online_owner[0] != cast(u8)0 && owner != TextUntilNul(lumi_online_owner[:]) {
         LumiOnlineCancel()
         app_lumi_reset()
+        return
+    }
+    LumiOnlineEnforce()
+    if lumi_online_stage == LUMI_STAGE_PROVIDER {
+        transport := NetworkTransport(*lumi_provider_transfer)
+        status: s32
+        polled := transport.poll(transport.context, *status)
+        if polled < 0 {
+            return
+        }
+        lumi_online_stage = 0
+        lumi_provider_status = status
+        LumiOnlineFinishTurn(app, polled == 1 && status >= 200 && status < 300, status)
         return
     }
     if lumi_online_operation.active {
@@ -413,22 +595,7 @@ app_lumi_pump :: (app: *InnerBreeze) {
         success := lumi_online_operation.result == cast(s32)AuthResult.AUTH_OK
         lumi_online_session = lumi_online_operation.session
         if stage == 1 {
-            lumi_pending_route = -1
-            lumi_pending_practice = -1
-            if !success || !LumiOnlineAnswer(app) {
-                LumiOnlineAppend(LocaleText(ifx lumi_online_operation.request.status == 429 then
-                    "lumi_online_limit" else "lumi_online_unavailable"))
-            }
-            if lumi_pending_practice >= 0 {
-                unused app_start_practice(app, lumi_pending_practice)
-            }
-            if lumi_pending_route >= 0 {
-                app_apply_nav_route(app, lumi_pending_route)
-            }
-            if !LumiOnlineWaiting() {
-                LumiOnlineClearTurn()
-            }
-            unused LumiStoreSave()
+            LumiOnlineFinishTurn(app, success, lumi_online_operation.request.status)
         } else if stage == 2 {
             id := TextUntilNul(lumi_feedback_id[:])
             confirmed := success && LumiFeedbackReceiptMatches(
@@ -471,7 +638,7 @@ app_lumi_pump :: (app: *InnerBreeze) {
         }
         return
     }
-    if storage_has_sync_account() == 0 {
+    if storage_has_sync_account() == 0 || !LumiNodeTrafficAllowed() {
         return
     }
     unused AppCopyText(owner, lumi_online_owner[:])

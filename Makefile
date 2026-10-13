@@ -416,6 +416,7 @@ cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 .PHONY: lumi-test
 lumi-test: cells
 	sh tests/lumi_engine_test.sh
+	python3 tests/lumi_habit_intent_test.py
 
 .PHONY: lumi-ui-test
 lumi-ui-test: $(TARGET)
@@ -3170,6 +3171,14 @@ lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 	@sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lumi-feedback-delivery-test
+
+# Offline and before the agreement Lumi sends nothing; an own provider gets
+# its key only in its Authorization header.
+.PHONY: lumi-connection-test
+lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/lumi_connection_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: lumi-connection-test
 
 .PHONY: diary-spelling-test diary-history-test
 diary-spelling-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws

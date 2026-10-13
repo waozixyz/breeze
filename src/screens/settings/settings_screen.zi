@@ -14,6 +14,9 @@
 #import, file "settings_breaks.zi";
 #import, file "settings_notifications.zi";
 #import, file "settings_about.zi";
+#import, file "settings_lumi.zi";
+#import, file "../../cells/module_host.zi";
+#import, file "../../cells/inbe_types.zi";
 #import "geometry"
 #import "drawing_props"
 #import "session"
@@ -61,6 +64,7 @@ settings_screen_tab_label :: (tab: s32) -> string {
         return LocaleText("settings_section_appearance")
     }
     if tab == SETTINGS_TAB_ABOUT { return LocaleText("settings_tab_about") }
+    if tab == SETTINGS_TAB_LUMI { return "Lumi" }
     return LocaleText("settings_title")
 }
 
@@ -83,12 +87,16 @@ settings_tab_content_height :: (app: *InnerBreeze,
     if tab == SETTINGS_TAB_THEME {
         return settings_theme_content_height(app, width)
     }
+    if tab == SETTINGS_TAB_LUMI {
+        return settings_lumi_content_height(app, width)
+    }
     return settings_about_content_height(width)
 }
 
 settings_screen_normalize :: (app: *InnerBreeze) {
     if app == null { return }
-    if app.settings_tab < 0 || app.settings_tab >= SETTINGS_TAB_COUNT {
+    lumi := app.settings_tab == SETTINGS_TAB_LUMI && SettingsLumiInstalled()
+    if (app.settings_tab < 0 || app.settings_tab >= SETTINGS_TAB_COUNT) && !lumi {
         app.settings_tab = SETTINGS_TAB_DEVICE
     }
     #if !SETTINGS_DESKTOP {
@@ -104,16 +112,25 @@ settings_screen_prepare :: (app: *InnerBreeze) {
     settings_audio_handle_import(app)
 }
 
+SettingsLumiInstalled :: () -> bool {
+    return (CellsInstalledMask() & APP_LUMI) != 0
+}
+
+// Lumi's tab comes before About while Lumi is installed.
 SettingsScreenTabAt :: (position: s32) -> s32 {
     #if SETTINGS_DESKTOP {
-        tabs: [6]s32 = .{SETTINGS_TAB_DEVICE,
+        tabs: [7]s32 = .{SETTINGS_TAB_DEVICE,
             SETTINGS_TAB_AUDIO, SETTINGS_TAB_BREAKS,
             SETTINGS_TAB_NOTIFICATIONS, SETTINGS_TAB_THEME,
-            SETTINGS_TAB_ABOUT}
+            SETTINGS_TAB_LUMI, SETTINGS_TAB_ABOUT}
     } else {
-        tabs: [5]s32 = .{SETTINGS_TAB_DEVICE,
+        tabs: [6]s32 = .{SETTINGS_TAB_DEVICE,
             SETTINGS_TAB_AUDIO, SETTINGS_TAB_NOTIFICATIONS,
-            SETTINGS_TAB_THEME, SETTINGS_TAB_ABOUT}
+            SETTINGS_TAB_THEME, SETTINGS_TAB_LUMI, SETTINGS_TAB_ABOUT}
+    }
+    lumi_at := cast(s32)tabs.count - 2
+    if !SettingsLumiInstalled() && position >= lumi_at {
+        position += 1
     }
     if position < 0 || position >= cast(s32)tabs.count {
         return SETTINGS_TAB_DEVICE
@@ -122,11 +139,14 @@ SettingsScreenTabAt :: (position: s32) -> s32 {
 }
 
 SettingsScreenTabCount :: () -> s32 {
+    count: s32 = 5
     #if SETTINGS_DESKTOP {
-        return 6
-    } else {
-        return 5
+        count = 6
     }
+    if SettingsLumiInstalled() {
+        count += 1
+    }
+    return count
 }
 
 SettingsScreenTabProps :: (app: *InnerBreeze,
@@ -177,6 +197,8 @@ SettingsScreenPanel :: (app: *InnerBreeze,
         settings_notifications_draw(app, x, width, *y)
         case SETTINGS_TAB_THEME;
         settings_theme_draw(app, x, width, *y, *app.theme_state)
+        case SETTINGS_TAB_LUMI;
+        settings_lumi_draw(app, x, width, *y)
         case;
         settings_about_draw(app, x, width, *y)
     }

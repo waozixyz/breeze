@@ -1,0 +1,237 @@
+// Lumi's connection with real account storage and the real Lumi and
+// Telegram pumps; only the HTTP transport is synthetic and records every
+// request. Offline, or without the agreement, nothing reaches it at all.
+#import, file "../src/cells/lumi_online.zi";
+#import, file "../src/cells/lumi_connection.zi";
+#import, file "../src/cells/lumi_telegram.zi";
+#import, file "../src/cells/feedback_store.zi";
+#import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/sync_async.zi";
+#import "keys"
+#import "crypto"
+#import, file "../src/storage/sync_account.zi";
+#import, file "storage_test_support.zi";
+#import "async_client"
+#import "net_http"
+#import "text_buffer"
+#import "wire"
+#import "transaction"
+#import, file "../src/cells/catalog.zi";
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+c :: #system_library "c";
+TestNow :: (out: *s64) -> s64 #foreign c "time";
+
+owner: AccountKeys;
+requests: s32;
+chat_requests: s32;
+provider_requests: s32;
+feedback_requests: s32;
+telegram_requests: s32;
+provider_url: [256]u8;
+provider_token: [128]u8;
+provider_body: [65536]u8;
+TEST_KEY :: "sk-test-lumi-provider-0123456789"
+
+// Records the request and answers it as the server or provider would.
+ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    requests += 1
+    challenge_url := "https://api.waozi.xyz/api/v1/sync/challenge?user_id="
+    if request.url.count == challenge_url.count + 64 && request.url[:challenge_url.count] == challenge_url {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/sync/login" {
+        writer: Writer = .{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-lumi-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, TestNow(null))
+        writer = WriteByte(writer, cast(u8)125)
+        return writer.valid
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/account/devices" {
+        return AppCopyText("true", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/chat/completions" {
+        chat_requests += 1
+        return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the server\"},\"remaining\":19}", output)
+    }
+    if ContainsFoldASCII(request.url, "/api/v1/feedback") {
+        feedback_requests += 1
+        return AppCopyText("{\"feedback\":[]}", output)
+    }
+    if ContainsFoldASCII(request.url, "/api/v1/lumi/telegram") {
+        telegram_requests += 1
+        return AppCopyText("{\"linked\":false}", output)
+    }
+    if request.url.count > 17 && request.url[:17] == "http://127.0.0.1:" {
+        provider_requests += 1
+        unused AppCopyText(request.url, provider_url[:])
+        unused AppCopyText(request.token, provider_token[:])
+        unused AppCopyText(request.body, provider_body[:])
+        return AppCopyText("{\"id\":\"x\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the provider\"},\"finish_reason\":\"stop\"}]}", output)
+    }
+    check_true("no other address is contacted", false)
+    return false
+}
+
+ConnectionPoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = 200
+    return 1
+}
+
+ConnectionCancel :: (context: *void) {
+    unused context
+}
+
+#program_export
+ConnectionTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{null, ConnectionStart, ConnectionPoll, ConnectionCancel}
+}
+
+// Lets every timed retry run now, then pumps a while.
+Pump :: (app: *InnerBreeze) {
+    for step: cast(s32)0..29 {
+        lumi_feedback_retry = 0
+        lumi_reply_retry = 0
+        lumi_telegram_retry = 0
+        app_lumi_pump(app)
+    }
+}
+
+// The composer stores the person's message, then asks the host to go
+// online with it.
+Ask :: (text: string) -> bool {
+    LumiStoreAppend(text, true)
+    return LumiOnlineStart(text)
+}
+
+LastRow :: () -> string {
+    count := LumiStoreCount()
+    if count == 0 {
+        return ""
+    }
+    return LumiStoreRow(count - 1).text
+}
+
+#program_export
+Check :: () -> s32 {
+    transport := ConnectionTestTransport()
+    check_true("fixture transport available", transport.start != null)
+    guard := support_begin("/tmp/inbe-lumi-connection-test/")
+    if guard != 0 {
+        return guard
+    }
+    english_catalog = "[lumi_offline_unknown]\nOFFLINE\n---\n[lumi_online_setup]\nSETUP\n---\n[lumi_online_unavailable]\nUNAVAILABLE\n---\n[lumi_provider_rejected]\nREJECTED\n---\n"
+    install_english_catalog()
+    root := "/tmp/inbe-lumi-connection-test/data"
+    check_true("fixture database initialized", storage_init(root) != 0)
+    check_true("owner created", CreateAccountKeys(*owner) != 0)
+    check_true("owner saved", sync_account_save(*owner,
+        cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
+        cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    app: InnerBreeze
+
+    // Before agreeing, Lumi is offline whatever its switch says: a request
+    // it does not understand gets the offline answer, and a confirmed
+    // feedback report waits. Nothing at all is sent.
+    check_true("switch starts on", LumiOnlineWanted())
+    check_true("not agreed", !LumiNodeAgreed() && !LumiToggleOn())
+    check_true("an unknown request is answered offline", Ask("what should I do today?"))
+    check_true("offline answer", LastRow() == "OFFLINE")
+    draft := FeedbackDraft("Lumi freezes", "Please fix Lumi freezing", "view=lumi")
+    defer { PackageFree(draft) }
+    check_true("feedback confirmed", FeedbackChoice(draft, 1))
+    Pump(*app)
+    check_int("no request before agreeing", requests, 0)
+
+    // Agreeing sends the waiting feedback, polls replies and Telegram, and
+    // lets a conversation reach the server.
+    check_true("agreed", LumiAgree())
+    check_true("agreement syncs as a Lumi record",
+        contains(storage_get_setting_text(LumiAgreementRecord), "\"agreed\":true"))
+    Pump(*app)
+    check_true("feedback delivered after agreeing", feedback_requests > 0)
+    check_true("Telegram relay polled after agreeing", telegram_requests > 0)
+    check_true("a conversation starts", Ask("what should I do today?"))
+    Pump(*app)
+    check_int("one request to the server's AI", chat_requests, 1)
+    check_true("the server's answer arrives", LastRow() == "Hello from the server")
+
+    // Offline sends nothing, and switching off stops a turn in flight.
+    check_true("a turn starts", Ask("and tomorrow?"))
+    lumi_online_fresh = false
+    app_lumi_pump(*app)
+    check_true("the turn is in flight", LumiOnlineWaiting())
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    before := requests
+    Pump(*app)
+    check_true("switching off ends the turn", !LumiOnlineWaiting() && !lumi_online_operation.active)
+    check_true("offline answer again", Ask("and next week?") && LastRow() == "OFFLINE")
+    Pump(*app)
+    check_int("nothing is sent while offline", requests, before)
+
+    // An own provider needs its own agreement, then gets the request
+    // straight from this device with the key in its Authorization header.
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    storage_set_setting_text(LumiProviderSetting, "own")
+    storage_set_setting_text(LumiProviderUrlSetting, "http://127.0.0.1:9/v1")
+    storage_set_setting_text(LumiProviderModelSetting, "test-model")
+    storage_set_setting_text(LumiProviderKeySetting, TEST_KEY)
+    check_true("a new provider is not agreed yet", !LumiToggleOn())
+    server_chats := chat_requests
+    check_true("offline until agreed", Ask("hello") && LastRow() == "OFFLINE")
+    Pump(*app)
+    check_int("nothing reaches the provider", provider_requests, 0)
+    check_int("nothing reaches the server's AI", chat_requests, server_chats)
+    check_true("agreed to the provider", LumiAgree())
+    check_true("the provider answers", Ask("hello"))
+    Pump(*app)
+    check_int("one request to the provider", provider_requests, 1)
+    check_int("no AI request to the server", chat_requests, server_chats)
+    check_true("provider endpoint", TextUntilNul(provider_url[:]) == "http://127.0.0.1:9/v1/chat/completions")
+    check_true("key only as the bearer token", TextUntilNul(provider_token[:]) == TEST_KEY)
+    body := TextUntilNul(provider_body[:])
+    check_true("model named", contains(body, "\"model\":\"test-model\""))
+    check_true("system message with Lumi's instructions and context",
+        contains(body, "\"role\":\"system\"") && contains(body, "Current app context"))
+    check_true("app tools offered", contains(body, "\"tools\":["))
+    check_true("the user's message is sent", contains(body, "hello"))
+    check_true("the key is never in the body", !contains(body, TEST_KEY))
+    check_true("the provider's answer arrives", LastRow() == "Hello from the provider")
+    check_true("the key is never synced", !CellRecordValid(LumiProviderKeySetting) &&
+        !AppPreferenceValid(LumiProviderKeySetting))
+
+    // Another address needs agreeing again.
+    storage_set_setting_text(LumiProviderUrlSetting, "https://example.com/v1")
+    check_true("a changed address is not agreed", !LumiToggleOn())
+    check_true("plain http to another machine is refused", !LumiProviderUrlValid("http://example.com/v1"))
+    check_true("credentials in the address are refused", !LumiProviderUrlValid("https://user:pass@example.com/v1"))
+
+    // Withdrawing turns Lumi offline here and, through sync, elsewhere.
+    storage_set_setting_text(LumiProviderSetting, "")
+    check_true("withdrawn", LumiWithdraw())
+    check_true("withdrawal syncs as a Lumi record",
+        contains(storage_get_setting_text(LumiAgreementRecord), "\"agreed\":false"))
+    before = requests
+    check_true("offline after withdrawing", Ask("hello") && LastRow() == "OFFLINE")
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    Pump(*app)
+    check_int("nothing is sent after withdrawing", requests, before)
+
+    LumiOnlineCancel()
+    SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    storage_close()
+    remove_tree("/tmp/inbe-lumi-connection-test/")
+    return failures
+}

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0] - 2026-10-13
+### Added
+- Lumi understands habit requests on your device, in every app language: add, rename, pause, resume or delete a habit, set its days and reminder, count it or measure it from start to end, and give it questions with what a good answer is. For example “add a habit push ups every day at 8”, “jumping rope should ask how many I did, higher is better” or “my eating window is good at most 8 hours”. Lumi asks before it deletes a habit.
+- A title bar with a switch between offline and online. Lumi starts offline and goes online only after you agree to its online terms, which say what is sent, where it goes and what is kept.
+- Settings > Lumi: read or withdraw the online terms, and use your own OpenAI-compatible AI provider with its address, key and model instead of Inner Breeze's server.
+### Changed
+- Offline, Lumi sends nothing: no AI requests, no feedback delivery and no Telegram messages until you switch it online.
+- Requires Inner Breeze 2.1.33 or later.
+
 ## [1.3.9] - 2026-10-11
 ### Fixed
 - Scrolling the command list keeps the keyboard open.

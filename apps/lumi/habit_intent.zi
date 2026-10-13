@@ -1,0 +1,847 @@
+// Lumi's offline understanding of habit requests: a message is read as one
+// core template (create, rename, pause, remind, ask, ...) and the clauses
+// around it (every day, at 8, 3 times a day, at most 8 hours, higher is
+// better, ...), then turned into the same app tool calls the online model
+// makes (assets/mcp/tools.json). Anything it cannot read whole is left to
+// the model, or, offline, answered with what Lumi can do.
+#import "vec"
+#import "text"
+#import "utf8"
+#import "json_scan"
+#import "byte_text_linux"
+#import, file "habit_patterns.zi";
+
+LUMI_HABIT_CREATE :: 1
+LUMI_HABIT_UPDATE :: 2
+LUMI_HABIT_RENAME :: 3
+LUMI_HABIT_PAUSE :: 4
+LUMI_HABIT_RESUME :: 5
+LUMI_HABIT_DELETE :: 6
+LUMI_HABIT_ASK :: 7
+LUMI_HABIT_UNASK :: 8
+// A new habit's name is already a habit's, and nothing else was asked.
+LUMI_HABIT_EXISTS :: 9
+
+LUMI_REPEAT_DAILY :: 1
+LUMI_REPEAT_EVERY :: 2
+LUMI_REPEAT_DAYS :: 3
+
+LUMI_MODE_CHECK :: 1
+LUMI_MODE_COUNT :: 2
+LUMI_MODE_SPAN :: 3
+
+LUMI_ANSWER_TEXT :: 1
+LUMI_ANSWER_NUMBER :: 2
+LUMI_ANSWER_TIME :: 3
+LUMI_ANSWER_YES_NO :: 4
+
+LUMI_GOAL_ABOVE :: 1
+LUMI_GOAL_BELOW :: 2
+LUMI_GOAL_AT_LEAST :: 3
+LUMI_GOAL_AT_MOST :: 4
+LUMI_GOAL_BETWEEN :: 5
+LUMI_GOAL_YES :: 6
+LUMI_GOAL_NO :: 7
+
+// What a goal's bounds measure.
+LUMI_UNIT_ANY :: 0
+LUMI_UNIT_NUMBER :: 1
+LUMI_UNIT_TIME :: 2
+LUMI_UNIT_LENGTH :: 3
+
+LUMI_HABIT_INPUT_MAX :: 240
+
+LumiLanguage :: struct {
+    patterns: string
+    clauses: string
+    words: string
+}
+
+LumiHabitPlan :: struct {
+    kind: s32
+    // The habit in the list the parser was given; -1 none, -2 ambiguous.
+    habit: s32
+    name: string
+    question: string
+    answer: s32
+    repeat: s32
+    every: s32
+    weekdays: s32
+    // 1 at hour, 2 off.
+    reminder: s32
+    // The reminder's hour plus one, so that 0 means none was read.
+    hour: s32
+    mode: s32
+    target: s32
+    goal: s32
+    unit: s32
+    low: s32
+    high: s32
+    clauses: s32
+}
+
+LumiToolCall :: struct {
+    name: string
+    arguments: string
+}
+
+LUMI_CALLS_MAX :: 6
+
+LumiCoreKind :: (tag: string) -> s32 {
+    if tag == "create" || tag == "remind_new" { return LUMI_HABIT_CREATE }
+    if tag == "rename" { return LUMI_HABIT_RENAME }
+    if tag == "pause" { return LUMI_HABIT_PAUSE }
+    if tag == "resume" { return LUMI_HABIT_RESUME }
+    if tag == "delete" { return LUMI_HABIT_DELETE }
+    if tag == "ask" { return LUMI_HABIT_ASK }
+    if tag == "unask" { return LUMI_HABIT_UNASK }
+    return LUMI_HABIT_UPDATE
+}
+
+LumiHabitFilter :: (tag: string) -> s32 {
+    if tag == "resume" { return LUMI_HABITS_PAUSED }
+    if tag == "rename" || tag == "delete" { return LUMI_HABITS_ANY }
+    return LUMI_HABITS_ACTIVE
+}
+
+LumiSetOnce :: (field: *s32, value: s32) -> bool {
+    if field.* != 0 && field.* != value {
+        return false
+    }
+    field.* = value
+    return true
+}
+
+LumiSetGoal :: (plan: *LumiHabitPlan, goal: s32, unit: s32, low: s32, high: s32) -> bool {
+    if plan.goal != 0 {
+        return false
+    }
+    plan.goal = goal
+    plan.unit = unit
+    plan.low = low
+    plan.high = high
+    return true
+}
+
+LumiOrdered :: (values: [2]s32, count: s32, low: *s32, high: *s32) -> bool {
+    if count != 2 {
+        return false
+    }
+    low.* = ifx values[0] <= values[1] then values[0] else values[1]
+    high.* = ifx values[0] <= values[1] then values[1] else values[0]
+    return true
+}
+
+// Applies one clause; false when it contradicts one already read.
+LumiApplyClause :: (plan: *LumiHabitPlan, tag: string, capture: LumiCapture) -> bool {
+    plan.clauses += 1
+    low: s32 = 0
+    high: s32 = 0
+    if tag == "daily" {
+        return LumiSetOnce(*plan.repeat, LUMI_REPEAT_DAILY)
+    }
+    if tag == "every_other" {
+        return LumiSetOnce(*plan.repeat, LUMI_REPEAT_EVERY) && LumiSetOnce(*plan.every, 2)
+    }
+    if tag == "every" {
+        if capture.number_count != 1 || capture.numbers[0] < 1 || capture.numbers[0] > 999 {
+            return false
+        }
+        if capture.numbers[0] == 1 {
+            return LumiSetOnce(*plan.repeat, LUMI_REPEAT_DAILY)
+        }
+        return LumiSetOnce(*plan.repeat, LUMI_REPEAT_EVERY) && LumiSetOnce(*plan.every, capture.numbers[0])
+    }
+    if tag == "days" || tag == "workdays" || tag == "weekend" {
+        mask := capture.days
+        if tag == "workdays" { mask = 31 }
+        if tag == "weekend" { mask = 96 }
+        if mask == 0 || !LumiSetOnce(*plan.repeat, LUMI_REPEAT_DAYS) {
+            return false
+        }
+        plan.weekdays |= mask
+        return true
+    }
+    if tag == "remind" {
+        if capture.time_count != 1 || capture.times[0] % 60 != 0 {
+            return false
+        }
+        return LumiSetOnce(*plan.reminder, 1) && LumiSetOnce(*plan.hour, capture.times[0] / 60 + 1)
+    }
+    if tag == "no_remind" {
+        return LumiSetOnce(*plan.reminder, 2)
+    }
+    if tag == "count" {
+        if capture.number_count != 1 || capture.numbers[0] < 1 || capture.numbers[0] > 9999 {
+            return false
+        }
+        return LumiSetOnce(*plan.mode, LUMI_MODE_COUNT) && LumiSetOnce(*plan.target, capture.numbers[0])
+    }
+    if tag == "check" {
+        return LumiSetOnce(*plan.mode, LUMI_MODE_CHECK)
+    }
+    if tag == "span" {
+        return LumiSetOnce(*plan.mode, LUMI_MODE_SPAN)
+    }
+    if tag == "length_at_most" && capture.length_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_MOST, LUMI_UNIT_LENGTH, 0, capture.lengths[0])
+    }
+    if tag == "length_at_least" && capture.length_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_LEAST, LUMI_UNIT_LENGTH, capture.lengths[0], 0)
+    }
+    if tag == "length_between" && capture.length_count == 1 && capture.number_count == 1 {
+        // "between 6 and 8 hours": the first number takes the second's unit.
+        lengths: [2]s32 = .[capture.numbers[0] * capture.length_unit, capture.lengths[0]]
+        if LumiOrdered(lengths, 2, *low, *high) && low > 0 {
+            return LumiSetGoal(plan, LUMI_GOAL_BETWEEN, LUMI_UNIT_LENGTH, low, high)
+        }
+        return false
+    }
+    if tag == "length_between" && LumiOrdered(capture.lengths, capture.length_count, *low, *high) {
+        return LumiSetGoal(plan, LUMI_GOAL_BETWEEN, LUMI_UNIT_LENGTH, low, high)
+    }
+    if tag == "shorter" {
+        return LumiSetGoal(plan, LUMI_GOAL_BELOW, LUMI_UNIT_LENGTH, 0, 0)
+    }
+    if tag == "longer" {
+        return LumiSetGoal(plan, LUMI_GOAL_ABOVE, LUMI_UNIT_LENGTH, 0, 0)
+    }
+    if tag == "higher" {
+        return LumiSetGoal(plan, LUMI_GOAL_ABOVE, LUMI_UNIT_ANY, 0, 0)
+    }
+    if tag == "lower" {
+        return LumiSetGoal(plan, LUMI_GOAL_BELOW, LUMI_UNIT_ANY, 0, 0)
+    }
+    if tag == "at_least" && capture.number_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_LEAST, LUMI_UNIT_NUMBER, capture.numbers[0], 0)
+    }
+    if tag == "at_most" && capture.number_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_MOST, LUMI_UNIT_NUMBER, 0, capture.numbers[0])
+    }
+    if tag == "between" && LumiOrdered(capture.numbers, capture.number_count, *low, *high) {
+        return LumiSetGoal(plan, LUMI_GOAL_BETWEEN, LUMI_UNIT_NUMBER, low, high)
+    }
+    if tag == "before" && capture.time_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_MOST, LUMI_UNIT_TIME, 0, capture.times[0])
+    }
+    if tag == "after" && capture.time_count == 1 {
+        return LumiSetGoal(plan, LUMI_GOAL_AT_LEAST, LUMI_UNIT_TIME, capture.times[0], 0)
+    }
+    if tag == "between_times" && capture.time_count == 2 {
+        // Between a later and an earlier time spans midnight; keep the order.
+        return LumiSetGoal(plan, LUMI_GOAL_BETWEEN, LUMI_UNIT_TIME, capture.times[0], capture.times[1])
+    }
+    if tag == "earlier" {
+        return LumiSetGoal(plan, LUMI_GOAL_BELOW, LUMI_UNIT_TIME, 0, 0)
+    }
+    if tag == "later" {
+        return LumiSetGoal(plan, LUMI_GOAL_ABOVE, LUMI_UNIT_TIME, 0, 0)
+    }
+    if tag == "yes_good" {
+        return LumiSetGoal(plan, LUMI_GOAL_YES, LUMI_UNIT_ANY, 0, 0)
+    }
+    if tag == "no_good" {
+        return LumiSetGoal(plan, LUMI_GOAL_NO, LUMI_UNIT_ANY, 0, 0)
+    }
+    if tag == "answer_number" { return LumiSetOnce(*plan.answer, LUMI_ANSWER_NUMBER) }
+    if tag == "answer_time" { return LumiSetOnce(*plan.answer, LUMI_ANSWER_TIME) }
+    if tag == "answer_yes_no" { return LumiSetOnce(*plan.answer, LUMI_ANSWER_YES_NO) }
+    if tag == "answer_text" { return LumiSetOnce(*plan.answer, LUMI_ANSWER_TEXT) }
+    return false
+}
+
+// A language read once: its templates and words.
+LumiCompiled :: struct {
+    patterns: LumiTemplates
+    clauses: LumiTemplates
+    words: LumiWords
+}
+
+LumiCompileLanguage :: (language: LumiLanguage, compiled: *LumiCompiled) {
+    LumiCompileTemplates(language.patterns, *compiled.patterns)
+    LumiCompileTemplates(language.clauses, *compiled.clauses)
+    LumiCompileWords(language.words, *compiled.words)
+}
+
+LumiParser :: struct {
+    matcher: LumiMatcher
+    active: *LumiCompiled
+    english: *LumiCompiled
+    // English is not tried twice when it is the active language.
+    english_extra: bool
+}
+
+// The clause of either language that matches all of text, applied to plan.
+// Returns 1 applied, 0 none matched, -1 a contradiction.
+LumiClauseMatch :: (parser: *LumiParser, text: string, plan: *LumiHabitPlan) -> s32 {
+    last := ifx parser.english_extra then 1 else 0
+    for source: cast(s32)0..last {
+        clauses := ifx source == 0 then *parser.active.clauses else *parser.english.clauses
+        for index: cast(s32)0..clauses.count - 1 {
+            template := *clauses.items[index]
+            parser.matcher.input = text
+            parser.matcher.habit_filter = LUMI_HABITS_ANY
+            capture: LumiCapture
+            if LumiTemplateMatches(*parser.matcher, template, *capture) {
+                return ifx LumiApplyClause(plan, template.tag, capture) then 1 else -1
+            }
+            if parser.matcher.budget <= 0 {
+                return -1
+            }
+        }
+    }
+    return 0
+}
+
+// Whether a word of the tag ends text, as "and" before a stripped clause.
+LumiEndsWithTagged :: (parser: *LumiParser, text: string, tag: s32) -> s32 {
+    at: s32 = 0
+    while at < cast(s32)text.count {
+        if LumiBoundary(text, at) && !LumiSpaceCode(LumiCodeAt(text, at)) {
+            parser.matcher.input = text
+            end := LumiTaggedAt(*parser.matcher, tag, at)
+            if end >= 0 && LumiSkipTail(text, end) == cast(s32)text.count {
+                return at
+            }
+        }
+        at = Decode(text, at).after
+    }
+    return -1
+}
+
+LumiTrimJoins :: (parser: *LumiParser, text: string) -> string {
+    rest := LumiTrimText(text)
+    for guard: cast(s32)0..cast(s32)3 {
+        unused guard
+        at := LumiEndsWithTagged(parser, rest, LUMI_WORD_JOIN)
+        if at <= 0 {
+            break
+        }
+        rest = LumiTrimText(rest[:at])
+    }
+    return rest
+}
+
+// Peels clauses off the end of text, then, when allowed, off its start.
+// Returns what is left for a core template, or "" on a contradiction.
+LumiStripClauses :: (parser: *LumiParser, text: string, from_start: bool, plan: *LumiHabitPlan) -> string {
+    rest := LumiTrimJoins(parser, text)
+    for guard: cast(s32)0..cast(s32)7 {
+        unused guard
+        found := false
+        at: s32 = 0
+        while at < cast(s32)rest.count {
+            at = Decode(rest, at).after
+            if at >= cast(s32)rest.count || !LumiBoundary(rest, at) ||
+            LumiSpaceCode(LumiCodeAt(rest, at)) || LumiPunctuationCode(LumiCodeAt(rest, at)) {
+                continue
+            }
+            matched := LumiClauseMatch(parser, rest[at:], plan)
+            if matched < 0 {
+                return ""
+            }
+            if matched > 0 {
+                rest = LumiTrimJoins(parser, rest[:at])
+                found = true
+                break
+            }
+        }
+        if !found {
+            break
+        }
+    }
+    if !from_start {
+        return rest
+    }
+    for guard: cast(s32)0..cast(s32)7 {
+        unused guard
+        found := false
+        end := cast(s32)rest.count
+        while end > 0 {
+            previous := end - 1
+            while previous > 0 && Continuation(rest[previous]) {
+                previous -= 1
+            }
+            end = previous
+            if end <= 0 || !LumiBoundary(rest, end) {
+                continue
+            }
+            matched := LumiClauseMatch(parser, rest[:end], plan)
+            if matched < 0 {
+                return ""
+            }
+            if matched > 0 {
+                rest = LumiTrimText(rest[end:])
+                found = true
+                break
+            }
+        }
+        if !found {
+            break
+        }
+    }
+    return rest
+}
+
+// A copy that outlives the message it was read from.
+LumiOwned :: (text: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", text)
+    return BuilderFinish(out)
+}
+
+// A new habit's or question's words as the person typed them, with a
+// capital first letter.
+LumiCapitalized :: (text: string) -> string {
+    if text.count == 0 || text[0] < cast(u8)97 || text[0] > cast(u8)122 {
+        return text
+    }
+    out: Vec(u8)
+    unused VecPush(out, text[0] - cast(u8)32)
+    BuilderPrint(*out, "%", text[1:])
+    return BuilderFinish(out)
+}
+
+LumiQuestionText :: (text: string) -> string {
+    words := LumiTrimText(text)
+    if words.count >= 2 && (words[0] == cast(u8)34 || words[0] == cast(u8)39) &&
+    words[words.count - 1] == words[0] {
+        return LumiTrimText(words[1:words.count - 1])
+    }
+    capitalized := LumiCapitalized(words)
+    last := LumiCodeBefore(capitalized, cast(s32)capitalized.count)
+    if last == 63 || last == 65311 {
+        return capitalized
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%?", capitalized)
+    return BuilderFinish(out)
+}
+
+// The answer a question's own words suggest: "how many" a number, "what
+// time" a time, "did I" yes or no.
+LumiAnswerFromWords :: (parser: *LumiParser, text: string) -> s32 {
+    parser.matcher.input = text
+    if LumiTaggedAt(*parser.matcher, LUMI_WORD_ASK_NUMBER, 0) > 0 { return LUMI_ANSWER_NUMBER }
+    if LumiTaggedAt(*parser.matcher, LUMI_WORD_ASK_TIME, 0) > 0 { return LUMI_ANSWER_TIME }
+    if LumiTaggedAt(*parser.matcher, LUMI_WORD_ASK_YES_NO, 0) > 0 { return LUMI_ANSWER_YES_NO }
+    return LUMI_ANSWER_TEXT
+}
+
+// The habit named exactly like name, active or paused, or -1.
+LumiHabitNamed :: (habits: []LumiHabitRef, name: string) -> s32 {
+    for index: cast(s32)0..cast(s32)habits.count - 1 {
+        if LumiSamePhrase(LumiLineTrim(habits[index].title), name) &&
+        LumiSamePhrase(name, LumiLineTrim(habits[index].title)) {
+            return index
+        }
+    }
+    return -1
+}
+
+// Checks that a plan's parts fit together; false sends it to the model.
+LumiPlanComplete :: (parser: *LumiParser, plan: *LumiHabitPlan, habits: []LumiHabitRef) -> bool {
+    kind := plan.kind
+    if plan.habit == -2 {
+        return true
+    }
+    if kind == LUMI_HABIT_PAUSE || kind == LUMI_HABIT_RESUME || kind == LUMI_HABIT_DELETE ||
+    kind == LUMI_HABIT_RENAME || kind == LUMI_HABIT_UNASK {
+        return plan.clauses == 0
+    }
+    if kind == LUMI_HABIT_CREATE {
+        existing := LumiHabitNamed(habits, plan.name)
+        if existing >= 0 {
+            plan.habit = existing
+            plan.kind = ifx plan.clauses == 0 then LUMI_HABIT_EXISTS else LUMI_HABIT_UPDATE
+            if habits[existing].paused && plan.clauses > 0 {
+                return false
+            }
+            kind = plan.kind
+        }
+    }
+    if kind == LUMI_HABIT_UPDATE && plan.clauses == 0 {
+        return false
+    }
+    if kind == LUMI_HABIT_ASK {
+        // The question's own words decide first, so a goal that does not
+        // fit them sends the request to the model instead.
+        if plan.answer == 0 {
+            plan.answer = LumiAnswerFromWords(parser, plan.question)
+        }
+        if plan.answer == LUMI_ANSWER_TEXT && plan.goal != 0 {
+            if plan.unit == LUMI_UNIT_TIME {
+                plan.answer = LUMI_ANSWER_TIME
+            } else if plan.goal == LUMI_GOAL_YES || plan.goal == LUMI_GOAL_NO {
+                plan.answer = LUMI_ANSWER_YES_NO
+            } else {
+                plan.answer = LUMI_ANSWER_NUMBER
+            }
+        }
+        if plan.unit == LUMI_UNIT_LENGTH || plan.repeat != 0 || plan.reminder != 0 || plan.mode != 0 {
+            return false
+        }
+        if plan.goal != 0 {
+            answer := plan.answer
+            yes_no := plan.goal == LUMI_GOAL_YES || plan.goal == LUMI_GOAL_NO
+            if answer == LUMI_ANSWER_TEXT || (answer == LUMI_ANSWER_YES_NO) != yes_no ||
+            (plan.unit == LUMI_UNIT_NUMBER && answer != LUMI_ANSWER_NUMBER) ||
+            (plan.unit == LUMI_UNIT_TIME && answer != LUMI_ANSWER_TIME) {
+                return false
+            }
+        }
+        plan.question = LumiQuestionText(plan.question)
+        return plan.question.count > 0 && plan.question.count < 96
+    }
+    // A habit's own goal judges its spans.
+    if plan.goal != 0 {
+        if plan.unit != LUMI_UNIT_LENGTH {
+            return false
+        }
+        if plan.mode == 0 {
+            plan.mode = LUMI_MODE_SPAN
+        }
+        if plan.mode != LUMI_MODE_SPAN {
+            return false
+        }
+    }
+    if plan.answer != 0 {
+        return false
+    }
+    return kind != LUMI_HABIT_CREATE || (plan.name.count > 0 && plan.name.count < 40)
+}
+
+// The plan the first template of tag that matches makes, or kind 0.
+LumiCoreMatch :: (parser: *LumiParser, text: string, tag: string, base: LumiHabitPlan,
+    habits: []LumiHabitRef) -> LumiHabitPlan {
+    last := ifx parser.english_extra then 1 else 0
+    for source: cast(s32)0..last {
+        patterns := ifx source == 0 then *parser.active.patterns else *parser.english.patterns
+        for index: cast(s32)0..patterns.count - 1 {
+            template := *patterns.items[index]
+            if template.tag != tag {
+                continue
+            }
+            parser.matcher.input = text
+            parser.matcher.habit_filter = LumiHabitFilter(tag)
+            capture: LumiCapture
+            if !LumiTemplateMatches(*parser.matcher, template, *capture) {
+                continue
+            }
+            candidate := base
+            candidate.kind = LumiCoreKind(tag)
+            candidate.habit = capture.habit
+            candidate.name = LumiOwned(LumiCapitalized(LumiTrimText(text[capture.name_at:capture.name_end])))
+            candidate.question = LumiOwned(LumiTrimText(text[capture.text_at:capture.text_end]))
+            // Templates may hold the time themselves, as "{time}に".
+            if capture.time_count == 1 && !LumiApplyClause(*candidate, "remind", capture) {
+                continue
+            }
+            if tag == "no_remind" && !LumiApplyClause(*candidate, "no_remind", capture) {
+                continue
+            }
+            if (tag == "remind" || tag == "remind_new") && candidate.reminder != 1 {
+                continue
+            }
+            if tag == "remind_new" && candidate.repeat == 0 {
+                candidate.repeat = LUMI_REPEAT_DAILY
+            }
+            if LumiPlanComplete(parser, *candidate, habits) {
+                return candidate
+            }
+        }
+    }
+    return LumiHabitPlan.{.habit = -1}
+}
+
+LumiParseWith :: (parser: *LumiParser, text: string, from_start: bool,
+    habits: []LumiHabitRef) -> LumiHabitPlan {
+    plan := LumiHabitPlan.{.habit = -1}
+    rest := LumiStripClauses(parser, text, from_start, *plan)
+    if rest.count == 0 {
+        return LumiHabitPlan.{.habit = -1}
+    }
+    // Templates naming an existing habit come before those creating one.
+    tags: [11]string = .["rename", "pause", "resume", "delete", "unask", "ask", "no_remind",
+    "remind", "update", "create", "remind_new"]
+    for tag: tags {
+        matched := LumiCoreMatch(parser, rest, tag, plan, habits)
+        if matched.kind != 0 {
+            return matched
+        }
+        if parser.matcher.budget <= 0 {
+            break
+        }
+    }
+    return LumiHabitPlan.{.habit = -1}
+}
+
+// Reads a habit request with languages already read. A plan of kind 0 is
+// not one Lumi understands. english may be active itself.
+LumiHabitParseCompiled :: (input: string, active: *LumiCompiled, english: *LumiCompiled,
+    habits: []LumiHabitRef) -> LumiHabitPlan {
+    text := LumiTrimText(input)
+    if text.count == 0 || text.count > LUMI_HABIT_INPUT_MAX {
+        return LumiHabitPlan.{.habit = -1}
+    }
+    parser: LumiParser
+    parser.active = active
+    parser.english = english
+    parser.english_extra = english != active
+    parser.matcher.words = *active.words
+    parser.matcher.english_words = *english.words
+    parser.matcher.habits = habits
+    parser.matcher.budget = LUMI_PARSE_BUDGET
+    // Clauses may also lead, as in Japanese "毎日8時に読書の習慣を追加".
+    // The reading that understands more of the message wins.
+    plan := LumiParseWith(*parser, text, false, habits)
+    if parser.matcher.budget > 0 {
+        leading := LumiParseWith(*parser, text, true, habits)
+        if leading.kind != 0 && (plan.kind == 0 || leading.clauses > plan.clauses) {
+            plan = leading
+        }
+    }
+    lumi_parse_steps = LUMI_PARSE_BUDGET - parser.matcher.budget
+    return plan
+}
+
+// The matcher steps a message may take, and those the last one took.
+LUMI_PARSE_BUDGET :: 40000
+lumi_parse_steps: s32;
+
+lumi_parse_active: LumiCompiled;
+lumi_parse_english: LumiCompiled;
+
+// Reads a habit request in a language given as its locale text.
+LumiHabitParse :: (input: string, active: LumiLanguage, english: LumiLanguage,
+    habits: []LumiHabitRef) -> LumiHabitPlan {
+    LumiCompileLanguage(active, *lumi_parse_active)
+    if english.patterns == active.patterns {
+        return LumiHabitParseCompiled(input, *lumi_parse_active, *lumi_parse_active, habits)
+    }
+    LumiCompileLanguage(english, *lumi_parse_english)
+    return LumiHabitParseCompiled(input, *lumi_parse_active, *lumi_parse_english, habits)
+}
+
+LumiJsonText :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 || byte == cast(u8)92 {
+            unused VecPush(out.*, cast(u8)92)
+            unused VecPush(out.*, byte)
+        } else if byte == cast(u8)10 {
+            BuilderPrint(out, "\\n")
+        } else if byte >= cast(u8)32 {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+// A clock time as the tools write it: 7:00, 19:30.
+LumiClockText :: (minutes: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%:", minutes / 60)
+    BuilderPrint(*out, "%", ifx minutes % 60 < 10 then "0" else "")
+    BuilderPrint(*out, "%", minutes % 60)
+    return BuilderFinish(out)
+}
+
+LumiGoalName :: (goal: s32) -> string {
+    names: [8]string = .["none", "above_average", "below_average", "at_least", "at_most",
+    "between", "yes", "no"]
+    return names[goal]
+}
+
+LumiGoalBound :: (out: *Vec(u8), name: string, value: s32, unit: s32) {
+    BuilderPrint(out, ",\"%\":", name)
+    if unit == LUMI_UNIT_NUMBER {
+        BuilderPrint(out, "%", value)
+    } else {
+        LumiJsonText(out, LumiClockText(value))
+    }
+}
+
+LumiGoalFields :: (out: *Vec(u8), plan: LumiHabitPlan) {
+    if plan.goal == 0 {
+        return
+    }
+    BuilderPrint(out, ",\"good\":\"%\"", LumiGoalName(plan.goal))
+    if plan.goal == LUMI_GOAL_AT_LEAST || plan.goal == LUMI_GOAL_BETWEEN {
+        LumiGoalBound(out, "low", plan.low, plan.unit)
+    }
+    if plan.goal == LUMI_GOAL_AT_MOST || plan.goal == LUMI_GOAL_BETWEEN {
+        LumiGoalBound(out, "high", plan.high, plan.unit)
+    }
+}
+
+LumiCallStart :: (out: *Vec(u8), id: string) {
+    BuilderPrint(out, "{\"id\":")
+    LumiJsonText(out, id)
+}
+
+LumiAnswerName :: (answer: s32) -> string {
+    names: [5]string = .["text", "text", "number", "time", "yes_no"]
+    return names[answer]
+}
+
+// The same question, ignoring case and a final question mark.
+LumiSameQuestion :: (left: string, right: string) -> bool {
+    a := LumiTrimText(left)
+    b := LumiTrimText(right)
+    return a.count > 0 && LumiSamePhrase(a, b) && LumiSamePhrase(b, a)
+}
+
+// The questions a habit keeps, changed by the plan: the existing JSON items
+// verbatim, with the asked one replaced or added, or the named one removed.
+// Returns "" when there is nothing to change or no room.
+LumiQuestionList :: (plan: LumiHabitPlan, existing: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    count: s32 = 0
+    replaced := false
+    removed := false
+    list := ArrayCount(existing, 0)
+    for index: cast(s32)0..list - 1 {
+        at := ElementAt(existing, 0, index)
+        end := ValueEnd(existing, at, 0)
+        if at < 0 || end < 0 {
+            return ""
+        }
+        words: [96]u8
+        length := ReadStringText(existing, FieldAt(existing, at, "text"), words[:])
+        same := length > 0 && length < 96 &&
+        LumiSameQuestion(TextFromBytes(words[:length]), plan.question)
+        if same && plan.kind == LUMI_HABIT_UNASK {
+            removed = true
+            continue
+        }
+        if same && plan.kind == LUMI_HABIT_ASK {
+            replaced = true
+            BuilderPrint(*out, "%", ifx count == 0 then "" else ",")
+            LumiQuestionItem(*out, plan, TextFromBytes(words[:length]))
+            count += 1
+            continue
+        }
+        BuilderPrint(*out, "%", ifx count == 0 then "" else ",")
+        BuilderPrint(*out, "%", existing[at:end])
+        count += 1
+    }
+    if plan.kind == LUMI_HABIT_UNASK && !removed {
+        return ""
+    }
+    if plan.kind == LUMI_HABIT_ASK && !replaced {
+        if count >= 8 {
+            return ""
+        }
+        BuilderPrint(*out, "%", ifx count == 0 then "" else ",")
+        LumiQuestionItem(*out, plan, plan.question)
+    }
+    BuilderPrint(*out, "]")
+    return BuilderFinish(out)
+}
+
+LumiQuestionItem :: (out: *Vec(u8), plan: LumiHabitPlan, text: string) {
+    BuilderPrint(out, "{\"text\":")
+    LumiJsonText(out, text)
+    BuilderPrint(out, ",\"answer\":\"%\"", LumiAnswerName(plan.answer))
+    goal := plan
+    if goal.unit == LUMI_UNIT_ANY && goal.answer == LUMI_ANSWER_TIME {
+        goal.unit = LUMI_UNIT_TIME
+    }
+    LumiGoalFields(out, goal)
+    BuilderPrint(out, "}")
+}
+
+// The tool calls a plan makes, in order. "$new" stands for the id the
+// first call, create_habit, returns. questions holds the habit's current
+// questions (read_habit) for ask and unask. Returns how many, 0 for none.
+LumiHabitCalls :: (plan: LumiHabitPlan, habits: []LumiHabitRef, questions: string,
+    calls: []LumiToolCall) -> s32 {
+    count: s32 = 0
+    id := "$new"
+    if plan.habit >= 0 && plan.habit < cast(s32)habits.count {
+        id = habits[plan.habit].id
+    }
+    kind := plan.kind
+    if kind == LUMI_HABIT_CREATE {
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"name\":")
+        LumiJsonText(*out, plan.name)
+        BuilderPrint(*out, "}")
+        calls[count] = LumiToolCall.{.name = "create_habit", .arguments = BuilderFinish(out)}
+        count += 1
+    } else if plan.habit < 0 {
+        return 0
+    }
+    if kind == LUMI_HABIT_RENAME || kind == LUMI_HABIT_PAUSE || kind == LUMI_HABIT_RESUME ||
+    kind == LUMI_HABIT_DELETE {
+        out: Vec(u8)
+        LumiCallStart(*out, id)
+        name := "delete_habit"
+        if kind == LUMI_HABIT_RENAME {
+            name = "rename_habit"
+            BuilderPrint(*out, ",\"name\":")
+            LumiJsonText(*out, plan.name)
+        } else if kind != LUMI_HABIT_DELETE {
+            name = "set_habit_active"
+            BuilderPrint(*out, ",\"active\":%", kind == LUMI_HABIT_RESUME)
+        }
+        BuilderPrint(*out, "}")
+        calls[count] = LumiToolCall.{.name = name, .arguments = BuilderFinish(out)}
+        return count + 1
+    }
+    if kind == LUMI_HABIT_ASK || kind == LUMI_HABIT_UNASK {
+        list := LumiQuestionList(plan, questions)
+        if list.count == 0 {
+            return 0
+        }
+        out: Vec(u8)
+        LumiCallStart(*out, id)
+        BuilderPrint(*out, ",\"questions\":%}", list)
+        calls[count] = LumiToolCall.{.name = "set_habit_questions", .arguments = BuilderFinish(out)}
+        return count + 1
+    }
+    if plan.repeat != 0 || plan.reminder != 0 {
+        out: Vec(u8)
+        LumiCallStart(*out, id)
+        if plan.repeat == LUMI_REPEAT_DAILY {
+            BuilderPrint(*out, ",\"repeat\":\"daily\"")
+        } else if plan.repeat == LUMI_REPEAT_EVERY {
+            BuilderPrint(*out, ",\"repeat\":\"daily\",\"every\":%", plan.every)
+        } else if plan.repeat == LUMI_REPEAT_DAYS {
+            BuilderPrint(*out, ",\"repeat\":\"weekly\",\"weekdays\":[")
+            names: [7]string = .["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            first := true
+            for day: cast(s32)0..cast(s32)6 {
+                if (plan.weekdays & (1 << day)) != 0 {
+                    BuilderPrint(*out, "%\"%\"", ifx first then "" else ",", names[day])
+                    first = false
+                }
+            }
+            BuilderPrint(*out, "]")
+        }
+        if plan.reminder == 1 {
+            BuilderPrint(*out, ",\"notification\":true,\"notification_hour\":%", plan.hour - 1)
+        } else if plan.reminder == 2 {
+            BuilderPrint(*out, ",\"notification\":false")
+        }
+        BuilderPrint(*out, "}")
+        calls[count] = LumiToolCall.{.name = "set_habit_schedule", .arguments = BuilderFinish(out)}
+        count += 1
+    }
+    if plan.mode != 0 {
+        modes: [4]string = .["", "check", "count", "span"]
+        out: Vec(u8)
+        LumiCallStart(*out, id)
+        BuilderPrint(*out, ",\"mode\":\"%\"", modes[plan.mode])
+        if plan.mode == LUMI_MODE_COUNT {
+            BuilderPrint(*out, ",\"target\":%", plan.target)
+        }
+        LumiGoalFields(*out, plan)
+        BuilderPrint(*out, "}")
+        calls[count] = LumiToolCall.{.name = "set_habit_tracking", .arguments = BuilderFinish(out)}
+        count += 1
+    }
+    return count
+}

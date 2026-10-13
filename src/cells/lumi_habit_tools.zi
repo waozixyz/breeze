@@ -1,0 +1,251 @@
+// Habit tools that Lumi's offline harness, the online model and Harmony's
+// MCP clients share (assets/mcp/tools.json): create, rename, pause or
+// resume, read and delete a habit. Deleting only asks; the person confirms
+// with their next message, so neither a pattern nor a model deletes alone.
+#import "text"
+#import "vec"
+#import "json_scan"
+#import "byte_text_linux"
+#import "drawing_props"
+#import "text_buffer"
+#import, file "app_tools.zi";
+#import, file "lumi_store.zi";
+#import, file "lumi_types.zi";
+#import, file "lumi_ui_types.zi";
+#import, file "package_files.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../habits/habit_actions.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_schedule.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../screens/lumi_screen.zi";
+
+using AppNavRoute;
+using HabitSyncMode;
+
+c :: #system_library "c";
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
+
+// The habit Lumi asked to delete, until the next message confirms it.
+lumi_delete_pending: [HABIT_ID_SIZE]u8;
+lumi_delete_title: [HABIT_NAME_SIZE]u8;
+
+LumiDeletePending :: () -> bool {
+    return lumi_delete_pending[0] != cast(u8)0
+}
+
+LumiDeleteClear :: () {
+    lumi_delete_pending = .{}
+    lumi_delete_title = .{}
+}
+
+// Any habit with this exact id, active or paused, or -1.
+LumiHabitIndexById :: (app: *InnerBreeze, id: string) -> s32 {
+    if id.count == 0 {
+        return -1
+    }
+    for index: cast(s32)0..app.habits.count - 1 {
+        if AppTextFromCString(*app.habits.items[index].id[0], HABIT_ID_SIZE) == id {
+            return index
+        }
+    }
+    return -1
+}
+
+LumiHabitToolIndex :: (app: *InnerBreeze, arguments: string) -> s32 {
+    id_bytes: [HABIT_ID_SIZE + 1]u8
+    return LumiHabitIndexById(app, ToolString(arguments, "id", id_bytes[:]))
+}
+
+// A habit name as typed: trimmed, on one line, short enough to keep.
+LumiHabitNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count >= HABIT_NAME_SIZE ||
+    name[0] == cast(u8)32 || name[name.count - 1] == cast(u8)32 {
+        return false
+    }
+    for byte: name {
+        if byte < cast(u8)32 || byte == cast(u8)127 {
+            return false
+        }
+    }
+    return true
+}
+
+LumiHabitResult :: (app: *InnerBreeze, index: s32) -> string {
+    habit := *app.habits.items[index]
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true,\"id\":")
+    LumiJsonString(*out, AppTextFromCString(*habit.id[0], HABIT_ID_SIZE))
+    BuilderPrint(*out, ",\"title\":")
+    LumiJsonString(*out, AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE))
+    BuilderPrint(*out, ",\"paused\":%}", habit.deactivated != 0)
+    return BuilderFinish(out)
+}
+
+LumiCreateHabitTool :: (app: *InnerBreeze, arguments: string) -> string {
+    name_bytes: [HABIT_NAME_SIZE + 1]u8
+    name := ToolString(arguments, "name", name_bytes[:])
+    if !LumiHabitNameValid(name) {
+        return ToolFailure("name must be 1 to 39 bytes on one line")
+    }
+    if habits_name_exists(*app.habits, name, -1) != 0 {
+        return ToolFailure("a habit has this name")
+    }
+    // The same colour and every-day schedule a new habit has in the editor.
+    color := Color.{.r = 99, .g = 196, .b = 165, .a = 255}
+    index := habits_add_custom(*app.habits, name, color, HABIT_SYNC_NONE, 0)
+    if index < 0 {
+        return ToolFailure("there is no room for another habit")
+    }
+    habit := *app.habits.items[index]
+    unused HabitScheduleSet(habit, HabitScheduleFromWeekdays(0), habits_today_index(), true)
+    habits_save(*app.habits)
+    unused app_auto_sync(app)
+    return LumiHabitResult(app, index)
+}
+
+LumiRenameHabitTool :: (app: *InnerBreeze, arguments: string) -> string {
+    index := LumiHabitToolIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no habit has this id")
+    }
+    name_bytes: [HABIT_NAME_SIZE + 1]u8
+    name := ToolString(arguments, "name", name_bytes[:])
+    if !LumiHabitNameValid(name) {
+        return ToolFailure("name must be 1 to 39 bytes on one line")
+    }
+    if habits_name_exists(*app.habits, name, index) != 0 {
+        return ToolFailure("another habit has this name")
+    }
+    habit := *app.habits.items[index]
+    if !AppCopyText(name, habit.name[:]) {
+        return ToolFailure("the name could not be saved")
+    }
+    habits_save(*app.habits)
+    unused app_auto_sync(app)
+    return LumiHabitResult(app, index)
+}
+
+// Pausing takes a habit out of the habit list with its days kept, as
+// dragging it to Inactive does; resuming brings it back last.
+LumiHabitActiveTool :: (app: *InnerBreeze, arguments: string) -> string {
+    index := LumiHabitToolIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no habit has this id")
+    }
+    active_at := FieldAt(arguments, 0, "active")
+    if active_at < 0 || (!MatchLiteral(arguments, active_at, "true") &&
+        !MatchLiteral(arguments, active_at, "false")) {
+        return ToolFailure("active must be true or false")
+    }
+    id := AppTextFromCString(*app.habits.items[index].id[0], HABIT_ID_SIZE)
+    id_copy: [HABIT_ID_SIZE]u8
+    unused AppCopyText(id, id_copy[:])
+    if MatchLiteral(arguments, active_at, "true") {
+        if app.habits.items[index].deactivated != 0 {
+            unused habits_reactivate(*app.habits, index, -1)
+        }
+    } else if app.habits.items[index].deactivated == 0 {
+        habits_deactivate(*app.habits, index)
+    }
+    unused app_auto_sync(app)
+    return LumiHabitResult(app, LumiHabitIndexById(app, TextUntilNul(id_copy[:])))
+}
+
+LumiReadHabitTool :: (app: *InnerBreeze, arguments: string) -> string {
+    index := LumiHabitToolIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no habit has this id")
+    }
+    habit := *app.habits.items[index]
+    schedule := HabitScheduleCurrent(habit)
+    described: [256]u8
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true,\"id\":")
+    LumiJsonString(*out, AppTextFromCString(*habit.id[0], HABIT_ID_SIZE))
+    BuilderPrint(*out, ",\"title\":")
+    LumiJsonString(*out, AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE))
+    BuilderPrint(*out, ",\"paused\":%,\"schedule\":", habit.deactivated != 0)
+    LumiJsonString(*out, HabitScheduleDescribe(*schedule, described[:]))
+    BuilderPrint(*out, ",\"notification_hour\":%", habit.reminder_hour)
+    AppToolTrackingContext(*out, habit)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+// Asks in the chat; ConfirmLumiDelete deletes after a yes.
+LumiDeleteHabitTool :: (app: *InnerBreeze, arguments: string) -> string {
+    index := LumiHabitToolIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no habit has this id")
+    }
+    habit := *app.habits.items[index]
+    title := AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+    args: [1]FormatArg
+    args[0].text = title
+    args[0].is_text = true
+    question: [512]u8
+    if !FormatTemplate(LocaleText("lumi_habit_delete_confirm"), args[:], question[:]) ||
+    !AppCopyText(AppTextFromCString(*habit.id[0], HABIT_ID_SIZE), lumi_delete_pending[:]) ||
+    !AppCopyText(title, lumi_delete_title[:]) {
+        LumiDeleteClear()
+        return ToolFailure("the habit could not be deleted")
+    }
+    LumiStoreAppend(TextUntilNul(question[:]), false)
+    if lumi_ui.follow_end {
+        lumi_ui.scroll = 1000000
+    }
+    return PackageText("{\"ok\":true,\"deleted\":false,\"confirmation\":\"asked in the chat; the person answers yes or no\"}", "")
+}
+
+// The person's answer to a pending deletion. Anything but yes keeps it.
+ConfirmLumiDelete :: (app: *InnerBreeze, confirmed: bool) -> bool {
+    if !LumiDeletePending() {
+        return false
+    }
+    id: [HABIT_ID_SIZE]u8
+    title: [HABIT_NAME_SIZE]u8
+    id = lumi_delete_pending
+    title = lumi_delete_title
+    LumiDeleteClear()
+    if !confirmed || app == null || !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return false
+    }
+    index := LumiHabitIndexById(app, TextUntilNul(id[:]))
+    // A habit open in the editor stays; deleting it there is the editor's.
+    if index < 0 || (app.habit_edit.active != 0 && app.habit_edit.index == index) {
+        LumiStoreAppend(LocaleText("lumi_unavailable"), false)
+        return false
+    }
+    habits_delete(*app.habits, index)
+    unused app_auto_sync(app)
+    out: Vec(u8)
+    BuilderPrint(*out, "**%**\n%", TextUntilNul(title[:]), LocaleText("habit_change_deleted"))
+    reply := BuilderFinish(out)
+    LumiStoreAppend(reply, false)
+    PackageFree(reply)
+    return true
+}
+
+LumiHabitTool :: (app: *InnerBreeze, name: string, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    if name == "create_habit" {
+        return LumiCreateHabitTool(app, arguments)
+    }
+    if name == "rename_habit" {
+        return LumiRenameHabitTool(app, arguments)
+    }
+    if name == "set_habit_active" {
+        return LumiHabitActiveTool(app, arguments)
+    }
+    if name == "read_habit" {
+        return LumiReadHabitTool(app, arguments)
+    }
+    return LumiDeleteHabitTool(app, arguments)
+}
