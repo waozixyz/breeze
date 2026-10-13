@@ -1,6 +1,6 @@
 // Serves the studio, and receives frames from the render page.
 //
-//   node tools/serve.mjs [--port 8765]
+//   node tools/serve.mjs [--port 8771]
 
 import { createReadStream, statSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -73,7 +73,7 @@ export function startServer({ port = 0, host = '127.0.0.1', jobs = new Map() } =
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const portIndex = process.argv.indexOf('--port')
-    const port = portIndex > 0 ? Number(process.argv[portIndex + 1]) : 8765
+    const port = portIndex > 0 ? Number(process.argv[portIndex + 1]) : 8771
     const { url } = await startServer({ port })
     console.log(`Tai Chi studio: ${url}`)
 }
