@@ -132,12 +132,22 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
         assert yoga['tracking']['mode'] in ('check', 'count') and yoga['questions'] == [], yoga
         identifier = yoga['id']
 
+        # A habit that starts measuring spans judges them against their
+        # average, shorter being good, unless told a length.
         result = tracking(window, id=identifier, mode='span')
-        assert result['ok'] and result['tracking'] == dict(mode='span', target=1), result
+        assert result['ok'] and result['tracking'] == dict(
+            mode='span', target=1, good='below_average'), result
+        result = tracking(window, id=identifier, mode='span', good='at_most', high='8:00')
+        assert result['tracking'] == dict(mode='span', target=1, good='at_most',
+                                          high='8:00'), result
+        result = tracking(window, id=identifier, mode='span', good='between',
+                          low='14:00', high='36:30')
+        assert result['tracking'] == dict(mode='span', target=1, good='between',
+                                          low='14:00', high='36:30'), result
         result = tracking(window, id=identifier, mode='count', target=3)
         assert result['tracking'] == dict(mode='count', target=3), result
         result = tracking(window, id=identifier, mode='span')
-        assert result['tracking'] == dict(mode='span', target=3), result
+        assert result['tracking'] == dict(mode='span', target=3, good='below_average'), result
 
         result = questions(window, identifier, MEAL)
         assert result['ok'], result
@@ -154,7 +164,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
             dict(text='Plates', answer='number', good='at_most', high=3),
             dict(text='When did I start eating?', answer='time', good='at_least',
                  low='12:00'),
-            dict(text='Bedtime', answer='time', good='between', low='22:00', high='00:30')])
+            dict(text='Bedtime', answer='time', good='between', low='22:00', high='00:30'),
+            dict(text='How many?', answer='number')])
         assert result['ok'], result
         after = stored_ids(profile, identifier)
         assert after['Plates'] == before['Plates'], (before, after)
@@ -162,6 +173,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
         assert after['Bedtime'] not in before.values(), (before, after)
         assert habit(window, 'Yoga')['questions'][2] == dict(
             text='Bedtime', answer='time', good='between', low='22:00', high='00:30')
+        # Without good, a number is good above its average.
+        assert habit(window, 'Yoga')['questions'][3] == dict(
+            text='How many?', answer='number', good='above_average')
 
         for items, error in [
                 ([dict(text='Plates', answer='number', good='yes')], 'yes and no'),
@@ -176,7 +190,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
             assert result['ok'] is False and error in result['error'], (items, result)
         for wrong, error in [
                 (dict(mode='timer'), 'mode'),
-                (dict(mode='count', target=0), 'target')]:
+                (dict(mode='count', target=0), 'target'),
+                (dict(mode='count', good='at_most', high='8:00'), 'spans only'),
+                (dict(mode='span', good='at_most'), 'H:MM'),
+                (dict(mode='span', good='at_most', high='8'), 'H:MM'),
+                (dict(mode='span', good='yes'), 'yes and no'),
+                (dict(mode='span', good='between', low='9:00', high='8:00'), 'low')]:
             result = tracking(window, id=identifier, **wrong)
             assert result['ok'] is False and error in result['error'], (wrong, result)
         assert tracking(window, id='no-such-habit', mode='check')['ok'] is False
@@ -184,9 +203,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
 
     with application(profile, 'restart') as window:
         yoga = habit(window, 'Yoga')
-        assert yoga['tracking'] == dict(mode='span', target=3), yoga
+        assert yoga['tracking'] == dict(mode='span', target=3, good='below_average'), yoga
         assert [item['text'] for item in yoga['questions']] == [
-            'Plates', 'When did I start eating?', 'Bedtime'], yoga
+            'Plates', 'When did I start eating?', 'Bedtime', 'How many?'], yoga
         result = questions(window, yoga['id'], [])
         assert result['ok'] and result['questions'] == [], result
 print('habit tracking tool tests passed')

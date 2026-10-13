@@ -99,12 +99,20 @@ drag "$today_x" "$yoga_y" "$((today_x + 150))" "$yoga_y"
 expect "$(day_count)" "$before" 'a drag over the days marks none'
 # A tap on the name opens the habit's details below its row; another closes them.
 tap "$yoga_x" "$yoga_y"
+# Opening scrolls the list so the whole card shows; wait until it rests.
 shot yoga-open
+for attempt in $(seq 1 20); do
+  sleep 0.3
+  shot yoga-open-rest
+  cmp -s "$test_dir/yoga-open.png" "$test_dir/yoga-open-rest.png" && break
+  mv "$test_dir/yoga-open-rest.png" "$test_dir/yoga-open.png"
+done
 find_word yoga-open streak "the open habit shows its streak" >/dev/null
 # Its editor opens from the last of the details' actions, at the table's
-# right edge below the row and the description, and gives Yoga an icon.
+# right edge above the figures, and gives Yoga an icon.
+read -r _ week_y < <(find_word yoga-open week "the open habit shows this week")
 day_w=$((day1_x - today_x))
-tap "$((today_x + day_w * 6 - 8))" "$((yoga_y + 90))"
+tap "$((today_x + day_w * 6 - 8))" "$((week_y - 55))"
 for attempt in $(seq 1 12); do
   shot editor
   word "$test_dir/editor.png" icon >/dev/null 2>&1 && break
@@ -128,6 +136,8 @@ echo "PASS habit table: day columns, check-ins, undo, drag cancellation, details
 # Dragged onto the inactive habits' header at the end of the table, Yoga
 # becomes inactive: it keeps its data and leaves the habits.
 read -r inactive_x inactive_y < <(find_word yoga-closed inactive "the inactive habits end the table")
+# The list may have scrolled while the details were open.
+read -r yoga_x yoga_y < <(find_word yoga-closed yoga "Yoga's row is missing" "$header_y")
 drag "$yoga_x" "$yoga_y" "$inactive_x" "$inactive_y" 0.5 row-over-inactive
 expect "$(deactivated)" 1 'a habit dropped on the inactive habits becomes inactive'
 expect "$(order)" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'deactivating keeps the order'

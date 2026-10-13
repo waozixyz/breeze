@@ -15,6 +15,8 @@
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/habits/habit_questions.zi";
 #import, file "../src/habits/habit_answer_stats.zi";
+#import, file "../src/habits/habit_changes.zi";
+#import, file "../src/storage/sql_query.zi";
 
 c :: #system_library "c";
 #import, file "../src/storage/import_types.zi";
@@ -702,7 +704,7 @@ test_entry_statistics :: () {
     unused storage_habit_span_stats(habit, days[:], *lengths, *starts, *ends)
     check_true("span lengths in minutes", lengths.point_count == 3 &&
         lengths.highest == 510 && lengths.lowest == 10)
-    check_int("spans are measured, not judged", lengths.judged, 0)
+    check_int("spans without a goal are measured, not judged", lengths.judged, 0)
     check_int("the starts are counted too", starts.point_count, 3)
     check_true("Unix time and local day agree",
         storage_local_date_of(storage_unix_at(20260701, 450)) == 20260701 &&
@@ -732,6 +734,84 @@ test_entry_statistics :: () {
         HabitSpanText(965, text[:]) == "16h 05m" && HabitSpanText(45, text[:]) == "45m")
 }
 
+// Average goals judge each value against the average of the values before
+// it, from before the days counted too; a changed goal judges values by
+// the goal they had; saving a habit records what changed.
+test_average_goals_and_changes :: () {
+    root := make_root("habit-average-goals")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions,span,span_goal) VALUES('jump',(SELECT id FROM users LIMIT 1),'Jumping',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"number\",\"text\":\"How many?\",\"goal\":\"above_average\"},{\"id\":2,\"type\":\"number\",\"text\":\"Minutes\",\"goal\":\"at_most\",\"low\":0,\"high\":20}]',1,7);")
+    raw_exec(root, "INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('e1',(SELECT id FROM users LIMIT 1),'jump',20260620,1782000000,1782000000+3600,'[{\"id\":1,\"value\":\"10\"}]',0,1782200000),('e2',(SELECT id FROM users LIMIT 1),'jump',20260621,1782086400,1782086400+3600,'[{\"id\":1,\"value\":\"20\"}]',0,1782200000),('a',(SELECT id FROM users LIMIT 1),'jump',20260701,1782950000,1782950000+1800,'[{\"id\":1,\"value\":\"15\"},{\"id\":2,\"value\":\"30\"}]',0,1782200000),('b',(SELECT id FROM users LIMIT 1),'jump',20260702,1783036000,1783036000+5400,'[{\"id\":1,\"value\":\"12\"},{\"id\":2,\"value\":\"10\"}]',0,1782200000),('c',(SELECT id FROM users LIMIT 1),'jump',20260703,1783122400,1783122400+600,'[{\"id\":1,\"value\":\"30\"},{\"id\":2,\"value\":\"25\"}]',0,1782200000);")
+    raw_exec(root, "INSERT INTO habit_changes(id,user_id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at) VALUES('g1',(SELECT id FROM users LIMIT 1),'jump',1783000000,16,2,'Minutes','1:25:0:2','2:0:20:2',0,1783000000);")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_b = Habits.{}
+    check_true("load habit", storage_habits_load(cast(*void)*habits_b) != 0)
+    habit := *habits_b.items[0]
+    check_true("average goals and the span goal read",
+        habit.questions[0].goal.kind == HABIT_GOAL_ABOVE_AVERAGE &&
+        habit.span_goal.kind == HABIT_GOAL_BELOW_AVERAGE)
+    days: [HABIT_ANSWER_STATS_DAYS]s32
+    slot: s32 = 0
+    while slot < HABIT_ANSWER_STATS_DAYS {
+        days[slot] = 20260701 + slot
+        slot += 1
+    }
+    stats: HabitAnswerStats
+    unused storage_habit_answer_stats("jump", *habit.questions[0], days[:], *stats)
+    check_int("values before the days start the average", stats.earlier_count, 2)
+    check_true("15 against 10 and 20 is as good as the average",
+        stats.points[0].benchmark == 1500 && stats.points[0].good == 1)
+    check_true("12 against 15 is below the average",
+        stats.points[1].benchmark == 1500 && stats.points[1].good == 0)
+    check_true("30 against 14.25 is above it",
+        stats.points[2].benchmark == 1425 && stats.points[2].good == 1)
+    check_true("two of three on target", stats.judged == 3 && stats.good == 2)
+    check_int("the next value is judged against all five", cast(s32)stats.benchmark, 1740)
+    unused storage_habit_answer_stats("jump", *habit.questions[1], days[:], *stats)
+    check_true("a value before the goal changed keeps the old goal",
+        stats.points[0].goal.kind == HABIT_GOAL_AT_LEAST && stats.points[0].good == 1)
+    check_true("later values have the new goal",
+        stats.points[1].goal.kind == HABIT_GOAL_AT_MOST && stats.points[1].good == 1 &&
+        stats.points[2].good == 0)
+    lengths: HabitAnswerStats
+    starts: HabitAnswerStats
+    ends: HabitAnswerStats
+    unused storage_habit_span_stats(habit, days[:], *lengths, *starts, *ends)
+    check_true("spans shorter than their average are good",
+        lengths.points[0].benchmark == 6000 && lengths.points[0].good == 1 &&
+        lengths.points[1].good == 0 && lengths.points[2].good == 1)
+    habit.span_goal = HabitGoal.{.kind = HABIT_GOAL_AT_MOST, .high = 60}
+    unused storage_habit_span_stats(habit, days[:], *lengths, *starts, *ends)
+    check_true("spans of at most an hour are good, whenever they start",
+        lengths.points[0].good == 1 && lengths.points[1].good == 0 &&
+        lengths.points[2].good == 1)
+    // Saving records what changed, once.
+    unused AppCopyText("Jumping jacks", habit.name[:])
+    habit.questions[1].goal = HabitGoal.{.kind = HABIT_GOAL_BELOW_AVERAGE}
+    habits_save(*habits_b)
+    habits_save(*habits_b)
+    records: [8]HabitChangeRecord
+    count := storage_habit_changes_load("jump", records[:])
+    check_int("a save records its changes, an equal save none", count, 4)
+    check_true("the goal change is newest first with its question and answer type",
+        records[0].change.kind == HABIT_CHANGE_QUESTION_GOAL &&
+        records[0].change.question == 2 &&
+        AppTextFromCString(*records[0].change.after[0], HABIT_CHANGE_VALUE_SIZE) == "7:0:0:2" &&
+        HabitChangeAnswerType(*records[0].change) == HABIT_ANSWER_NUMBER)
+    check_true("the span goal change keeps its length in minutes",
+        records[1].change.kind == HABIT_CHANGE_SPAN_GOAL &&
+        AppTextFromCString(*records[1].change.after[0], HABIT_CHANGE_VALUE_SIZE) == "2:0:60")
+    check_true("the rename keeps both names",
+        records[2].change.kind == HABIT_CHANGE_NAME &&
+        AppTextFromCString(*records[2].change.before[0], HABIT_CHANGE_VALUE_SIZE) == "Jumping" &&
+        AppTextFromCString(*records[2].change.after[0], HABIT_CHANGE_VALUE_SIZE) == "Jumping jacks")
+    check_true("each change waits to sync",
+        db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_change'", 0) == 3)
+    habits_free(*habits_b)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -751,5 +831,6 @@ Check :: () -> s32 {
     test_uuid_habit_ids_load_days()
     test_habit_questions_and_entries()
     test_entry_statistics()
+    test_average_goals_and_changes()
     return failures
 }

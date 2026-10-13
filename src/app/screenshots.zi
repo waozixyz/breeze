@@ -38,6 +38,7 @@
 #import, file "../screens/habits/edit.zi";
 #import, file "../screens/habits_screen.zi";
 #import, file "../habits/habit_questions.zi";
+#import, file "../habits/habit_changes.zi";
 #import, file "../habits/habit_actions.zi";
 #import, file "../habits/habit_sessions.zi";
 #import, file "../screens/habits/habit_entries.zi";
@@ -168,8 +169,10 @@ screenshot_seed_habit_counts :: (app: *InnerBreeze) {
 }
 
 // The habit entry scenes: "First meal" asks four questions with goals and
-// most of the last two weeks have an entry; "Fasting window" measures
-// spans from evening to noon, at least 16 hours being good, and one runs.
+// most of the last two weeks have an entry, its first meal's goal moved
+// from 08:30 to 08:00 a week ago and its plates judged against their
+// average; "Fasting window" measures spans from evening to noon, at least
+// 16 hours being good, and one runs.
 screenshot_question_times: [14]s32 = .[-1, 430, 465, 485, -1, 415, 450, 440,
 495, -1, 425, 460, 445, 470];
 screenshot_question_meals: [3]string = .["Oatmeal", "Eggs", "Fruit"];
@@ -189,8 +192,8 @@ screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32,
     types: [4]s32 = .[HABIT_ANSWER_TIME, HABIT_ANSWER_NUMBER,
     HABIT_ANSWER_YES_NO, HABIT_ANSWER_TEXT]
     goals: [4]HabitGoal = .[
-    HabitGoal.{.kind = HABIT_GOAL_AT_MOST, .high = 480},
-    HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 1, .high = 2},
+    HabitGoal.{.kind = HABIT_GOAL_AT_MOST, .high = 510},
+    HabitGoal.{.kind = HABIT_GOAL_ABOVE_AVERAGE},
     HabitGoal.{.kind = HABIT_GOAL_YES},
     HabitGoal.{}]
     habit.question_count = 0
@@ -206,6 +209,15 @@ screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32,
     if !with_entries {
         return
     }
+    // The questions were set up a month ago, and a week ago the first meal
+    // moved from 08:30 to 08:00.
+    habit_id := AppTextFromCString(*habit.id[0], HABIT_ID_SIZE)
+    month_ago := storage_unix_at(screenshot_day_index_offset(29), 600)
+    storage_habit_changes_backdate(habit_id, month_ago, month_ago)
+    habit.questions[0].goal.high = 480
+    habits_save(*app.habits)
+    storage_habit_changes_backdate(habit_id, month_ago,
+        storage_unix_at(screenshot_day_index_offset(7), 720))
     none: [1]HabitAnswer
     offset: s32 = 1
     while offset < 14 {
@@ -237,8 +249,11 @@ screenshot_seed_entry_habits :: (app: *InnerBreeze) {
     fast := *app.habits.items[4]
     unused AppCopyText("Fasting window", fast.name[:])
     fast.span = 1
+    fast.span_goal = HabitGoal.{.kind = HABIT_GOAL_AT_LEAST, .low = 16 * 60}
     fast.counter_enabled = 0
     habits_save(*app.habits)
+    storage_habit_changes_backdate(AppTextFromCString(*fast.id[0], HABIT_ID_SIZE),
+        0, storage_unix_at(screenshot_day_index_offset(29), 600))
     screenshot_seed_habit_questions(app, 3, true)
     none: [1]HabitAnswer
     offset: s32 = 1

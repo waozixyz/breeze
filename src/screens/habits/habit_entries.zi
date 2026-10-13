@@ -153,6 +153,16 @@ HabitScreenOpenEntry :: (app: *InnerBreeze, index: s32, day_index: s32,
         }
         answer += 1
     }
+    // A span's start and end questions answer its start and end, as
+    // entries recorded before the habit measured spans do.
+    start_answer := HabitScreenSpanTimeAnswer(app, 0)
+    if start_answer >= 0 && dialog.times[start_answer] >= 0 {
+        dialog.start = dialog.times[start_answer]
+    }
+    end_answer := HabitScreenSpanTimeAnswer(app, 1)
+    if end_answer >= 0 && dialog.times[end_answer] >= 0 && dialog.end >= 0 {
+        dialog.end = dialog.times[end_answer]
+    }
     app_open_modal(app, cast(ModalType)ModalHabitEntry)
 }
 
@@ -164,6 +174,14 @@ HabitScreenSaveEntry :: (app: *InnerBreeze) -> bool {
         return false
     }
     habit := *app.habits.items[dialog.habit]
+    start_answer := HabitScreenSpanTimeAnswer(app, 0)
+    if start_answer >= 0 {
+        dialog.times[start_answer] = dialog.start
+    }
+    end_answer := HabitScreenSpanTimeAnswer(app, 1)
+    if end_answer >= 0 {
+        dialog.times[end_answer] = dialog.end
+    }
     answer: s32 = 0
     while answer < dialog.count {
         if dialog.answers[answer].answer_type == HABIT_ANSWER_TIME {
@@ -189,8 +207,22 @@ HabitScreenSaveEntry :: (app: *InnerBreeze) -> bool {
         }
     }
     return habit_save_entry(app, dialog.habit, dialog.day,
-        AppTextFromCString(*dialog.entry[0], HABIT_ID_SIZE), started, ended,
+        AppTextFromCString(*dialog.entry[0], HABIT_ENTRY_ID_SIZE), started, ended,
         dialog.answers[:], dialog.count)
+}
+
+// Records the entry without answers: the day is done, and its questions
+// were skipped.
+HabitScreenSkipEntry :: (app: *InnerBreeze) -> bool {
+    dialog := *app.habits.answer_dialog
+    answer: s32 = 0
+    while answer < dialog.count {
+        dialog.answers[answer].value[0] = cast(u8)0
+        dialog.times[answer] = -1
+        answer += 1
+    }
+    dialog.focus = -1
+    return HabitScreenSaveEntry(app)
 }
 
 // One typed field of the dialog. Fields share one cursor: only the
@@ -236,8 +268,10 @@ HabitScreenAnswerTextField :: (app: *InnerBreeze, field: s32,
 
 // A labelled time, picked in the time picker: minutes after midnight, or -1
 // while none is chosen.
+// A time in the dialog. Clear takes it away: a time answer is then
+// unanswered, and a span's end empty, so the span keeps running.
 HabitScreenTimePicker :: (app: *InnerBreeze, key: s32, label: string, x: s32,
-    y: s32, width: s32, value: *s32) {
+    y: s32, width: s32, value: *s32, clearable: bool, placeholder: string) {
     if label.count > 0 {
         caption: TextProps
         caption.bounds = HabitScreenRect(x, y, width, AppScale(24))
@@ -260,6 +294,8 @@ HabitScreenTimePicker :: (app: *InnerBreeze, key: s32, label: string, x: s32,
             .now = storage_local_minutes_of(UnixNow()),
             .now_label = LocaleText("statistics_now_label"),
             .done_label = LocaleText("done_button"),
+            .clear_label = ifx clearable then LocaleText("clear_button") else "",
+            .placeholder = placeholder,
             .scale = MetricsScale()})
     if picked.changed {
         value.* = picked.value
@@ -294,18 +330,47 @@ HabitScreenYesNo :: (app: *InnerBreeze, answer: *HabitAnswer, id: s32,
     }
 }
 
-// The time rows: a span's start and end, any other entry's time.
+// The time rows: a span's start and end. Other entries ask no time; they
+// keep the time they were recorded.
 HabitScreenEntryTimeRows :: (app: *InnerBreeze) -> s32 {
     dialog := *app.habits.answer_dialog
     if dialog.habit < 0 || dialog.habit >= app.habits.count {
-        return 1
+        return 0
     }
-    return ifx app.habits.items[dialog.habit].span != 0 then 2 else 1
+    return ifx app.habits.items[dialog.habit].span != 0 then 2 else 0
+}
+
+// A span habit's first and second time questions ask for its start and
+// end: their words name those rows and their answers are the span's start
+// and end, so they are not asked again below. The answer's index, or -1.
+HabitScreenSpanTimeAnswer :: (app: *InnerBreeze, which: s32) -> s32 {
+    dialog := *app.habits.answer_dialog
+    if HabitScreenEntryTimeRows(app) != 2 {
+        return -1
+    }
+    seen: s32 = 0
+    index: s32 = 0
+    while index < dialog.count {
+        if dialog.answers[index].answer_type == HABIT_ANSWER_TIME {
+            if seen == which {
+                return index
+            }
+            seen += 1
+        }
+        index += 1
+    }
+    return -1
 }
 
 HabitScreenAnswersHeight :: (app: *InnerBreeze) -> s32 {
-    return (HabitScreenEntryTimeRows(app) + app.habits.answer_dialog.count) *
-    AppScale(HABIT_ANSWER_ROW_HEIGHT)
+    rows := HabitScreenEntryTimeRows(app) + app.habits.answer_dialog.count
+    if HabitScreenSpanTimeAnswer(app, 0) >= 0 {
+        rows -= 1
+    }
+    if HabitScreenSpanTimeAnswer(app, 1) >= 0 {
+        rows -= 1
+    }
+    return rows * AppScale(HABIT_ANSWER_ROW_HEIGHT)
 }
 
 // The entry's time or start and end, then each question above its answer
@@ -313,19 +378,48 @@ HabitScreenAnswersHeight :: (app: *InnerBreeze) -> s32 {
 HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
     width: s32) {
     dialog := *app.habits.answer_dialog
+    start_answer := HabitScreenSpanTimeAnswer(app, 0)
+    end_answer := HabitScreenSpanTimeAnswer(app, 1)
     if HabitScreenEntryTimeRows(app) == 2 {
-        HabitScreenTimePicker(app, 0, LocaleText("habit_span_start"), x, y,
-            width, *dialog.start)
+        start_label := LocaleText("habit_span_start")
+        if start_answer >= 0 {
+            start_label = FrameTextHold(*app.ui.frame_text,
+                HabitAnswerQuestion(*dialog.answers[start_answer]))
+        }
+        HabitScreenTimePicker(app, 0, start_label, x, y, width, *dialog.start,
+            false, "")
         y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-        HabitScreenTimePicker(app, 1, LocaleText("habit_span_end"), x, y,
-            width, *dialog.end)
-    } else {
-        HabitScreenTimePicker(app, 0, LocaleText("habit_entry_time"), x, y,
-            width, *dialog.start)
+        // Without an end the span keeps running; the end is only ever set
+        // here, by picking it or by Now.
+        end_label := LocaleText("habit_span_end")
+        if end_answer >= 0 {
+            end_label = FrameTextHold(*app.ui.frame_text,
+                HabitAnswerQuestion(*dialog.answers[end_answer]))
+        }
+        HabitScreenTimePicker(app, 1, end_label, x, y, width, *dialog.end,
+            true, LocaleText("habit_span_running"))
+        picker_w := AppScale(160)
+        now_w := AppScale(96)
+        if picker_w + AppScale(8) + now_w <= width {
+            now: ButtonProps
+            now.id = 5730005
+            now.bounds = HabitScreenRect(x + picker_w + AppScale(8),
+                y + AppScale(HABIT_ANSWER_INPUT_Y), now_w, AppScale(44))
+            now.label = LocaleText("statistics_now_label")
+            now.tone = cast(ButtonTone)ButtonToneAccent
+            now.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+            if Button(app.ui.session, now) != 0 {
+                dialog.end = storage_local_minutes_of(UnixNow())
+            }
+        }
+        y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
     }
-    y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
     index: s32 = 0
     while index < dialog.count {
+        if index == start_answer || index == end_answer {
+            index += 1
+            continue
+        }
         answer := *dialog.answers[index]
         field := index
         label: TextProps
@@ -338,7 +432,7 @@ HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
         input_y := y + AppScale(HABIT_ANSWER_INPUT_Y)
         if answer.answer_type == HABIT_ANSWER_TIME {
             HabitScreenTimePicker(app, 2 + index, "", x, y, width,
-                *dialog.times[index])
+                *dialog.times[index], true, "")
         } else if answer.answer_type == HABIT_ANSWER_YES_NO {
             HabitScreenYesNo(app, answer, 7900 + index * 2, x, input_y, width)
         } else if answer.answer_type == HABIT_ANSWER_NUMBER {
@@ -449,7 +543,7 @@ HabitScreenEntryDialog :: (app: *InnerBreeze) {
         remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
         if Button(app.ui.session, remove) != 0 &&
         habit_delete_entry(app, index, day_index,
-            AppTextFromCString(*dialog.entry[0], HABIT_ID_SIZE)) {
+            AppTextFromCString(*dialog.entry[0], HABIT_ENTRY_ID_SIZE)) {
             app_close_modal(app)
         }
         save: ButtonProps
@@ -463,9 +557,26 @@ HabitScreenEntryDialog :: (app: *InnerBreeze) {
             app_close_modal(app)
         }
     } else {
+        // Questions can be skipped: the day is done without answers.
+        done_x := x
+        if dialog.count > 0 {
+            half := (width - gap) / 2
+            skip: ButtonProps
+            skip.id = 5730004
+            skip.bounds = HabitScreenRect(x, y, half, button_h)
+            skip.label = LocaleText("skip_button")
+            skip.tone = cast(ButtonTone)ButtonToneNeutral
+            skip.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+            if Button(app.ui.session, skip) != 0 && HabitScreenSkipEntry(app) {
+                app_close_modal(app)
+                unused End(app.ui.session)
+                return
+            }
+            done_x = x + half + gap
+        }
         complete: ButtonProps
         complete.id = 5730003
-        complete.bounds = HabitScreenRect(x, y, width, button_h)
+        complete.bounds = HabitScreenRect(done_x, y, x + width - done_x, button_h)
         complete.label = LocaleText("done_button")
         complete.tone = cast(ButtonTone)ButtonToneAccent
         complete.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
@@ -536,7 +647,7 @@ HabitEntryDescribe :: (habit: *Habit, entry: *HabitEntrySummary) {
     ended: s64 = 0
     entry.summary[0] = cast(u8)0
     unused storage_habit_entry_load(AppTextFromCString(*entry.id[0],
-        HABIT_ID_SIZE), *started, *ended, answers[:], *count)
+        HABIT_ENTRY_ID_SIZE), *started, *ended, answers[:], *count)
     index: s32 = 0
     while index < count {
         value := HabitAnswerValue(*answers[index])
@@ -629,7 +740,7 @@ HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
             edit.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
             if Button(app.ui.session, edit) != 0 {
                 HabitScreenOpenEntry(app, index, day_index,
-                    AppTextFromCString(*item.id[0], HABIT_ID_SIZE))
+                    AppTextFromCString(*item.id[0], HABIT_ENTRY_ID_SIZE))
             }
             remove: ButtonProps
             remove.id = 5740001 + entry * 2
@@ -642,7 +753,7 @@ HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
             remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
             if Button(app.ui.session, remove) != 0 {
                 unused habit_delete_entry(app, index, day_index,
-                    AppTextFromCString(*item.id[0], HABIT_ID_SIZE))
+                    AppTextFromCString(*item.id[0], HABIT_ENTRY_ID_SIZE))
                 return y
             }
             line_y := y + pad + icon_w + AppScale(8)
@@ -669,12 +780,12 @@ HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
                 stop.tone = cast(ButtonTone)ButtonToneAccent
                 stop.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
                 if Button(app.ui.session, stop) != 0 {
-                    ended: [HABIT_ID_SIZE]u8
+                    ended: [HABIT_ENTRY_ID_SIZE]u8
                     unused AppCopyText(AppTextFromCString(*item.id[0],
-                        HABIT_ID_SIZE), ended[:])
+                        HABIT_ENTRY_ID_SIZE), ended[:])
                     if habit_end_span(app, index) && habit.question_count > 0 {
                         HabitScreenOpenEntry(app, index, day_index,
-                            AppTextFromCString(*ended[0], HABIT_ID_SIZE))
+                            AppTextFromCString(*ended[0], HABIT_ENTRY_ID_SIZE))
                     }
                     return y
                 }

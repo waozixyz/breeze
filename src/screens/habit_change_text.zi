@@ -1,0 +1,251 @@
+// How a habit's goals and the changes of its settings read in its
+// statistics: a goal as the editor's option names it, with its bounds, and
+// each change as one line.
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_questions.zi";
+#import, file "../habits/habit_answer_stats.zi";
+#import, file "../habits/habit_changes.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+
+// A number, time of day or length as statistics show it.
+HabitStatsValueText :: (answer_type: s32, value: s32, output: []u8) -> string {
+    if answer_type == HABIT_ANSWER_TIME {
+        return HabitAnswerTimeText(value, output)
+    }
+    if answer_type == HABIT_ANSWER_SPAN {
+        return HabitSpanText(value, output)
+    }
+    unused AppFormatS32(value, output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// An average in hundredths as its values show: a number with one decimal,
+// a time of day, or a length.
+HabitStatsAverageText :: (answer_type: s32, average_x100: s64,
+    output: []u8) -> string {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        return HabitAnswerDecimalText(average_x100, output)
+    }
+    return HabitStatsValueText(answer_type, cast(s32)((average_x100 + 50) / 100),
+        output)
+}
+
+HabitAnswerTypeLabel :: (answer_type: s32) -> string {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        return LocaleText("habit_answer_number")
+    }
+    if answer_type == HABIT_ANSWER_TIME {
+        return LocaleText("habit_answer_time")
+    }
+    if answer_type == HABIT_ANSWER_YES_NO {
+        return LocaleText("habit_answer_yes_no")
+    }
+    return LocaleText("habit_answer_text")
+}
+
+// The name of a goal's kind for an answer type, as the editor offers it.
+// HABIT_ANSWER_SPAN names a span habit's goals.
+HabitGoalKindLabel :: (kind: s32, answer_type: s32) -> string {
+    time := answer_type == HABIT_ANSWER_TIME
+    if answer_type == HABIT_ANSWER_SPAN {
+        if kind == HABIT_GOAL_ABOVE_AVERAGE {
+            return LocaleText("habit_span_goal_longer")
+        }
+        if kind == HABIT_GOAL_BELOW_AVERAGE {
+            return LocaleText("habit_span_goal_shorter")
+        }
+        if kind == HABIT_GOAL_NONE {
+            return LocaleText("habit_span_goal_any")
+        }
+    }
+    if kind == HABIT_GOAL_ABOVE_AVERAGE {
+        return LocaleText(ifx time then "habit_goal_later_than_average"
+            else "habit_goal_above_average")
+    }
+    if kind == HABIT_GOAL_BELOW_AVERAGE {
+        return LocaleText(ifx time then "habit_goal_earlier_than_average"
+            else "habit_goal_below_average")
+    }
+    if kind == HABIT_GOAL_AT_LEAST {
+        return LocaleText(ifx time then "habit_goal_after" else "habit_goal_at_least")
+    }
+    if kind == HABIT_GOAL_AT_MOST {
+        return LocaleText(ifx time then "habit_goal_before" else "habit_goal_at_most")
+    }
+    if kind == HABIT_GOAL_BETWEEN {
+        return LocaleText("habit_goal_between")
+    }
+    if kind == HABIT_GOAL_YES {
+        return LocaleText("habit_answer_yes")
+    }
+    if kind == HABIT_GOAL_NO {
+        return LocaleText("habit_answer_no")
+    }
+    return LocaleText("habit_goal_any")
+}
+
+// A goal with its bounds: "At least 5", "Before 08:00", "Between 22:00 and
+// 00:30" or "Above my average". With an average in hundredths, an average
+// goal shows it: "Above my average (21.5)".
+HabitGoalDescribe :: (goal: HabitGoal, answer_type: s32, average_x100: s64,
+    output: []u8) -> string {
+    low: [24]u8
+    high: [24]u8
+    args: [4]FormatArg
+    args[0].text = HabitGoalKindLabel(goal.kind, answer_type)
+    args[0].is_text = true
+    template := "%s"
+    used: s32 = 1
+    if goal.kind == HABIT_GOAL_AT_LEAST || goal.kind == HABIT_GOAL_AT_MOST {
+        args[1].text = HabitStatsValueText(answer_type,
+            ifx goal.kind == HABIT_GOAL_AT_LEAST then goal.low else goal.high, low[:])
+        args[1].is_text = true
+        template = "%s %s"
+        used = 2
+    } else if goal.kind == HABIT_GOAL_BETWEEN {
+        args[1].text = HabitStatsValueText(answer_type, goal.low, low[:])
+        args[1].is_text = true
+        args[2].text = LocaleText("habit_goal_and")
+        args[2].is_text = true
+        args[3].text = HabitStatsValueText(answer_type, goal.high, high[:])
+        args[3].is_text = true
+        template = "%s %s %s %s"
+        used = 4
+    } else if HabitGoalIsAverage(goal.kind) && average_x100 >= 0 {
+        args[1].text = HabitStatsAverageText(answer_type, average_x100, low[:])
+        args[1].is_text = true
+        template = "%s (%s)"
+        used = 2
+    }
+    unused FormatTemplate(template, args[:used], output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// How a habit tracks its days, from a change's stored text: "check",
+// "count:N" or "span".
+HabitTrackingDescribe :: (text: string, output: []u8) -> string {
+    if text == "span" {
+        return LocaleText("habit_tracking_span")
+    }
+    if text.count > 6 && text[0] == cast(u8)99 && text[5] == cast(u8)58 {
+        target: s32 = 0
+        index: s64 = 6
+        while index < text.count && HabitTimeDigit(text[index]) {
+            target = target * 10 + cast(s32)text[index] - 48
+            index += 1
+        }
+        args: [1]FormatArg
+        args[0].number = target
+        unused FormatTemplate(LocaleText("habit_tracking_count"), args[:], output)
+        return AppTextFromCString(*output[0], cast(s32)output.count)
+    }
+    return LocaleText("habit_tracking_check")
+}
+
+// A reminder hour from a change's stored text, or off.
+HabitReminderDescribe :: (text: string, output: []u8) -> string {
+    hour := HabitAnswerNumber(text)
+    if hour < 0 || hour > 23 {
+        return LocaleText("toggle_off")
+    }
+    return HabitAnswerTimeText(hour * 60, output)
+}
+
+// One change as a line: "Renamed: Run → Morning run", or "When did I start
+// eating?: good when Before 08:00 → Earlier than my average".
+HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
+    first: [HABIT_CHANGE_VALUE_SIZE]u8
+    second: [HABIT_CHANGE_VALUE_SIZE]u8
+    before := AppTextFromCString(*change.before[0], HABIT_CHANGE_VALUE_SIZE)
+    after := AppTextFromCString(*change.after[0], HABIT_CHANGE_VALUE_SIZE)
+    question := AppTextFromCString(*change.question_text[0],
+        HABIT_QUESTION_TEXT_SIZE)
+    args: [3]FormatArg
+    for index: cast(s32)0..cast(s32)2 {
+        args[index].is_text = true
+    }
+    key := ""
+    // The values the line's template takes, in order.
+    used: s32 = 0
+    if change.kind == HABIT_CHANGE_CREATED {
+        key = "habit_change_created"
+    } else if change.kind == HABIT_CHANGE_NAME {
+        key = "habit_change_name"
+        args[0].text = before
+        args[1].text = after
+        used = 2
+    } else if change.kind == HABIT_CHANGE_COLOR {
+        key = "habit_change_color"
+    } else if change.kind == HABIT_CHANGE_ICON {
+        key = "habit_change_icon"
+    } else if change.kind == HABIT_CHANGE_DESCRIPTION {
+        key = "habit_change_description"
+    } else if change.kind == HABIT_CHANGE_SCHEDULE {
+        key = "habit_change_schedule"
+    } else if change.kind == HABIT_CHANGE_REMINDER {
+        key = "habit_change_reminder"
+        args[0].text = HabitReminderDescribe(before, first[:])
+        args[1].text = HabitReminderDescribe(after, second[:])
+        used = 2
+    } else if change.kind == HABIT_CHANGE_TRACKING {
+        key = "habit_change_tracking"
+        args[0].text = HabitTrackingDescribe(before, first[:])
+        args[1].text = HabitTrackingDescribe(after, second[:])
+        used = 2
+    } else if change.kind == HABIT_CHANGE_PRACTICES {
+        key = "habit_change_practices"
+    } else if change.kind == HABIT_CHANGE_PAUSED {
+        key = "habit_change_paused"
+    } else if change.kind == HABIT_CHANGE_RESUMED {
+        key = "habit_change_resumed"
+    } else if change.kind == HABIT_CHANGE_QUESTION_ADDED {
+        key = "habit_change_question_added"
+        args[0].text = question
+        used = 1
+    } else if change.kind == HABIT_CHANGE_QUESTION_REMOVED {
+        key = "habit_change_question_removed"
+        args[0].text = question
+        used = 1
+    } else if change.kind == HABIT_CHANGE_QUESTION_WORDS {
+        key = "habit_change_question_words"
+        args[0].text = before
+        args[1].text = after
+        used = 2
+    } else if change.kind == HABIT_CHANGE_QUESTION_ANSWER {
+        key = "habit_change_question_answer"
+        args[0].text = question
+        args[1].text = HabitAnswerTypeLabel(HabitAnswerTypeFromName(before))
+        args[2].text = HabitAnswerTypeLabel(HabitAnswerTypeFromName(after))
+        used = 3
+    } else if change.kind == HABIT_CHANGE_QUESTION_GOAL ||
+    change.kind == HABIT_CHANGE_SPAN_GOAL {
+        // A goal change keeps the question's answer type in the question's
+        // goal kinds only, so bounds read as numbers unless they are times
+        // of a time question; the words are the question's then.
+        answer_type: s32 = HABIT_ANSWER_SPAN
+        key = "habit_change_span_goal"
+        if change.kind == HABIT_CHANGE_QUESTION_GOAL {
+            answer_type = HabitChangeAnswerType(change)
+            key = "habit_change_question_goal"
+        }
+        old_goal := HabitGoalFromText(before)
+        new_goal := HabitGoalFromText(after)
+        index: s32 = 0
+        if change.kind == HABIT_CHANGE_QUESTION_GOAL {
+            args[0].text = question
+            index = 1
+        }
+        args[index].text = HabitGoalDescribe(old_goal, answer_type, -1, first[:])
+        args[index + 1].text = HabitGoalDescribe(new_goal, answer_type, -1,
+            second[:])
+        used = index + 2
+    } else if change.kind == HABIT_CHANGE_DELETED {
+        key = "habit_change_deleted"
+    }
+    if key.count == 0 {
+        return ""
+    }
+    unused FormatTemplate(LocaleText(key), args[:used], output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}

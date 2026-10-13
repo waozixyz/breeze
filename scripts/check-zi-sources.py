@@ -58,6 +58,8 @@ result = subprocess.run(
         "--module-path",
         f"qrcode={root / 'build/packages/qrcode/src'}",
         "--module-path",
+        f"plot={root / 'build/packages/plot/src'}",
+        "--module-path",
         str(standard),
         "--module-path",
         str(client),
