@@ -5,6 +5,7 @@
 #import "geometry"
 #import "guide"
 #import "image_props"
+#import "image_widget"
 #import "modal"
 #import "modal_frame_widget"
 #import "modal_props"
@@ -24,6 +25,7 @@
 #import, file "app_types.zi";
 #import, file "current_app.zi";
 #import, file "locale.zi";
+#import, file "lumi_guide.zi";
 #import, file "metrics.zi";
 #import, file "text_buffers.zi";
 
@@ -189,6 +191,70 @@ GuideProgressDots :: (session: Session, node: s32,
     }
 }
 
+// A guide step whose text and Lumi's voice clip share one locale key.
+#program_export
+GuideOverlayStepFor :: (anchor: Rectangle, key: string) -> GuideOverlayStep {
+    return GuideOverlayStep.{anchor, LocaleText(key), key}
+}
+
+GuideStepGeometry :: struct {
+    place: GuideLumiPlacement
+    font: s32
+    text_width: s32
+    text_height: s32
+}
+
+// A step's bubble, sized to its text, and Lumi's place beside it. The bubble
+// leaves room at its side for Lumi.
+GuideStepGeometryFor :: (guide: GuideOverlayProps, step: s32, width: s32,
+    height: s32, metrics: GuideMetrics) -> GuideStepGeometry {
+    geometry: GuideStepGeometry
+    lumi_width := AppScale(LUMI_GUIDE_WIDTH)
+    lumi_height := lumi_width * LUMI_SHEET_FRAME_HEIGHT / LUMI_SHEET_FRAME_WIDTH
+    lumi_room := lumi_width - lumi_width / 4
+    tip_width := GuideTipWidth(width - lumi_room, guide.max_width, metrics)
+    maximum_height := GuideMaxTipHeight(height,
+        guide.reserved_top, guide.reserved_bottom, metrics)
+    font := GuideParagraphFontFor(guide.paragraph_font, 0,
+        AppFontSize())
+    text_width := tip_width - metrics.pad * 2
+    text := guide.steps[step].text
+    text_height := AppParagraphHeight(text, text_width, font,
+        metrics.default_line_gap)
+    while GuideShouldShrinkParagraphFont(text_height,
+        GuideParagraphHeightLimit(maximum_height, metrics),
+        font, AppSmallFontSize()) {
+        font -= 1
+        text_height = AppParagraphHeight(text, text_width, font,
+            metrics.default_line_gap)
+    }
+    tip := GuideTipBounds(guide.steps[step].anchor, tip_width,
+        GuideTipHeight(text_height, maximum_height, metrics),
+        width, height, guide.reserved_top, guide.reserved_bottom,
+        metrics)
+    geometry.place = GuideLumiPlacementFor(tip, width, height, lumi_width,
+        lumi_height, metrics.margin, metrics.pad + metrics.close_size / 2)
+    geometry.font = font
+    geometry.text_width = text_width
+    geometry.text_height = text_height
+    return geometry
+}
+
+// Where Lumi sets off when a guide appears: from her place at the step
+// before, as if she had just been there, or for the first step from above
+// the screen.
+GuideLumiOrigin :: (guide: GuideOverlayProps, step: s32, width: s32,
+    height: s32, metrics: GuideMetrics, current: GuideStepGeometry) -> Vector2 {
+    if step > 0 && guide.steps[step - 1].anchor.width > 0.0 &&
+    guide.steps[step - 1].anchor.height > 0.0 {
+        previous := GuideStepGeometryFor(guide, step - 1, width, height,
+            metrics)
+        return Vector2.{previous.place.lumi.x, previous.place.lumi.y}
+    }
+    return Vector2.{current.place.lumi.x,
+        0.0 - current.place.lumi.height * 1.5}
+}
+
 #program_export
 GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     result: GuideOverlayResult
@@ -226,40 +292,31 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     if metrics.anchor_padding < AppScale(12) {
         metrics.anchor_padding = AppScale(12)
     }
-    tip_width := GuideTipWidth(width, guide.max_width, metrics)
-    maximum_height := GuideMaxTipHeight(height,
-        guide.reserved_top, guide.reserved_bottom, metrics)
-    font := GuideParagraphFontFor(guide.paragraph_font, 0,
-        AppFontSize())
-    text_width := tip_width - metrics.pad * 2
+    geometry := GuideStepGeometryFor(guide, step, width, height, metrics)
+    tip := geometry.place.tip
     text := guide.steps[step].text
-    text_height := AppParagraphHeight(text, text_width, font,
-        metrics.default_line_gap)
-    while GuideShouldShrinkParagraphFont(text_height,
-        GuideParagraphHeightLimit(maximum_height, metrics),
-        font, AppSmallFontSize()) {
-        font -= 1
-        text_height = AppParagraphHeight(text, text_width, font,
-            metrics.default_line_gap)
-    }
-    tip := GuideTipBounds(anchor, tip_width,
-        GuideTipHeight(text_height, maximum_height, metrics),
-        width, height, guide.reserved_top, guide.reserved_bottom,
-        metrics)
-    layout := GuideLayoutFor(tip, text_width, text_height,
+    layout := GuideLayoutFor(tip, geometry.text_width, geometry.text_height,
         step, guide.count, metrics)
     guide_layout = layout
+    lumi_request: LumiGuideRequest
+    lumi_request.voice = guide.steps[step].voice
+    lumi_request.text = text
+    lumi_request.place = geometry.place
+    lumi_request.anchor = anchor
+    if !LumiGuideShown() {
+        lumi_request.origin = GuideLumiOrigin(guide, step, width, height,
+            metrics, geometry)
+    }
+    lumi := LumiGuideFrame(app, lumi_request)
     overlay_props: DismissibleOverlayProps
     overlay_props.key = cast(u64)83100
     overlay_props.bounds = tip
     overlay_props.view_width = width
     overlay_props.view_height = height
+    // A tap goes on with the guide instead of closing it; Close, Escape and
+    // Back still close it.
+    overlay_props.dismiss_disabled = true
     overlay := DismissibleOverlay(session, overlay_props)
-    if overlay.closed {
-        result.closed = 1
-        result.step = step
-        return result
-    }
     if overlay.node < 0 || overlay.panel_node < 0 {
         return result
     }
@@ -322,12 +379,15 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
     title_props.style_kind = StyleKindGuide()
     Text(session, title_props)
 
+    // Lumi types the text while she says it; screen readers get all of it.
     paragraph: TextProps
     paragraph.text = text
     paragraph.bounds = layout.text
-    paragraph.font = font
+    paragraph.font = geometry.font
     paragraph.wrap = cast(TextWrap)TextWrapAuto
     paragraph.style_kind = StyleKindGuide()
+    paragraph.typing = lumi.typed < lumi.characters
+    paragraph.typed = lumi.typed
     Text(session, paragraph)
 
     GuideProgressDots(session, overlay.panel_node, tip,
@@ -382,8 +442,29 @@ GuideOverlay :: (guide: GuideOverlayProps) -> GuideOverlayResult {
         next = true
     }
     unused End(session)
+    // Lumi hovers above the scrim and in front of her bubble's edge.
+    if lumi.visible && TreePushScope(session, overlay.node) {
+        sprite: ImageProps
+        sprite.asset_path = LUMI_GUIDE_SHEET
+        sprite.alt_text = "Lumi"
+        sprite.bounds = lumi.bounds
+        sprite.source = lumi.source
+        sprite.smooth = true
+        Image(session, sprite)
+        unused End(session)
+    }
+    tap := GuideTapFor(lumi.typed, lumi.characters, overlay.tapped)
+    if tap.reveal {
+        LumiGuideReveal()
+    }
+    if tap.next {
+        next = true
+    }
     policy := GuidePolicyFor(step, guide.count, previous,
         next, close)
+    if policy.closed || policy.finished {
+        LumiGuideStop()
+    }
     guide.step.* = policy.step
     result.step = policy.step
     result.changed = ifx policy.changed then 1 else 0

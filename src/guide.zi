@@ -67,6 +67,35 @@ GuideInput :: struct {
     close_requested: bool
 }
 
+// Lumi guides each step: she flies beside its bubble, then types its text
+// while she says it. Times are milliseconds and counts are characters.
+
+// Characters a second Lumi types when a step has no voice clip.
+GUIDE_TYPING_RATE :: 18
+GUIDE_TYPING_MIN_MS :: 600
+GUIDE_TYPING_MAX_MS :: 9000
+GUIDE_FLIGHT_MIN_MS :: 550
+GUIDE_FLIGHT_MAX_MS :: 950
+// Lumi's flight cycle has eight frames; her wings beat faster in flight.
+GUIDE_LUMI_FRAMES :: 8
+GUIDE_HOVER_FPS :: 10
+GUIDE_FLIGHT_FPS :: 18
+
+// A tap on the guide shows the whole text while it is being typed, and
+// goes to the next step once it is all there.
+GuideTap :: struct {
+    reveal: bool
+    next: bool
+}
+
+// Where a step's bubble and Lumi go: Lumi hovers at one side of the bubble,
+// facing it.
+GuideLumiPlacement :: struct {
+    tip: Rectangle
+    lumi: Rectangle
+    faces_left: bool
+}
+
 guide_clampi :: (value: s32, minimum: s32, maximum: s32) -> s32 {
     if value < minimum { return minimum }
     if value > maximum { return maximum }
@@ -403,4 +432,101 @@ GuideLayoutFor :: (tip: Rectangle, paragraph_width: s32,
         cast(float32)metrics.button_size
     }
     return layout
+}
+
+// Typing lasts as long as the step's voice clip, so the text and the voice
+// end together. A step without a clip is typed at an even pace.
+#program_export
+GuideTypingMs :: (characters: s32, clip_ms: s32) -> s32 {
+    if clip_ms > 0 { return clip_ms }
+    if characters <= 0 { return 0 }
+    return guide_clampi(characters * 1000 / GUIDE_TYPING_RATE,
+        GUIDE_TYPING_MIN_MS, GUIDE_TYPING_MAX_MS)
+}
+
+// How many characters are typed after elapsed_ms of typing_ms.
+#program_export
+GuideTypedFor :: (characters: s32, elapsed_ms: s32, typing_ms: s32) -> s32 {
+    if characters <= 0 || elapsed_ms <= 0 { return 0 }
+    if typing_ms <= 0 || elapsed_ms >= typing_ms { return characters }
+    return cast(s32)(cast(s64)characters * cast(s64)elapsed_ms /
+        cast(s64)typing_ms)
+}
+
+#program_export
+GuideTapFor :: (typed: s32, characters: s32, tapped: bool) -> GuideTap {
+    tap: GuideTap
+    if !tapped { return tap }
+    if typed < characters {
+        tap.reveal = true
+    } else {
+        tap.next = true
+    }
+    return tap
+}
+
+// A longer flight takes a little longer. hundred_units is how many pixels
+// make 100 layout units at the current scale.
+#program_export
+GuideFlightMs :: (distance: s32, hundred_units: s32) -> s32 {
+    if hundred_units <= 0 { hundred_units = 100 }
+    if distance < 0 { distance = 0 - distance }
+    units: s32 = cast(s32)(cast(s64)distance * 100 / cast(s64)hundred_units)
+    return guide_clampi(450 + units * 5 / 7, GUIDE_FLIGHT_MIN_MS,
+        GUIDE_FLIGHT_MAX_MS)
+}
+
+// How far along her flight Lumi is, in thousandths: she sets off and
+// arrives gently.
+#program_export
+GuideFlightEase :: (elapsed_ms: s32, flight_ms: s32) -> s32 {
+    if flight_ms <= 0 || elapsed_ms >= flight_ms { return 1000 }
+    if elapsed_ms <= 0 { return 0 }
+    t: s64 = cast(s64)elapsed_ms * 1000 / cast(s64)flight_ms
+    return cast(s32)(t * t * (3000 - 2 * t) / 1000000)
+}
+
+// The frame of Lumi's flight cycle shown after elapsed_ms.
+#program_export
+GuideLumiFrame :: (elapsed_ms: s32, flying: bool) -> s32 {
+    if elapsed_ms < 0 { elapsed_ms = 0 }
+    rate: s64 = GUIDE_HOVER_FPS
+    if flying { rate = GUIDE_FLIGHT_FPS }
+    return cast(s32)((cast(s64)elapsed_ms * rate / 1000) % GUIDE_LUMI_FRAMES)
+}
+
+// Lumi hovers at the side of the bubble with more room, level with its
+// title, overlapping its edge by a quarter of her width. A bubble too near
+// that side moves over to make room for her.
+#program_export
+GuideLumiPlacementFor :: (tip: Rectangle, view_width: s32,
+    view_height: s32, lumi_width: s32, lumi_height: s32, margin: s32,
+    title_middle: s32) -> GuideLumiPlacement {
+    place: GuideLumiPlacement
+    place.tip = tip
+    overlap: s32 = lumi_width / 4
+    need: s32 = lumi_width - overlap
+    left: s32 = cast(s32)tip.x - margin
+    right: s32 = view_width - margin - cast(s32)(tip.x + tip.width)
+    shift: s32 = 0
+    if left >= right {
+        if left < need && right > 0 {
+            shift = guide_clampi(need - left, 0, right)
+        }
+        place.tip.x = tip.x + cast(float32)shift
+        place.lumi.x = place.tip.x - cast(float32)need
+    } else {
+        if right < need && left > 0 {
+            shift = guide_clampi(need - right, 0, left)
+        }
+        place.tip.x = tip.x - cast(float32)shift
+        place.lumi.x = place.tip.x + place.tip.width - cast(float32)overlap
+        place.faces_left = true
+    }
+    y: s32 = cast(s32)place.tip.y + title_middle - lumi_height / 2
+    y = guide_clampi(y, 0, view_height - lumi_height)
+    place.lumi.y = cast(float32)y
+    place.lumi.width = cast(float32)lumi_width
+    place.lumi.height = cast(float32)lumi_height
+    return place
 }
