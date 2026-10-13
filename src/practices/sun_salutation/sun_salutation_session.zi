@@ -20,6 +20,7 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "../../app/locale.zi";
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/widgets.zi";
+#import, file "../../app/cards.zi";
 #import, file "../../app/app_nav_state.zi";
 #import, file "../../app/practice_title_bar.zi";
 #import, file "sun_salutation_labels.zi";
@@ -34,6 +35,8 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "sun_salutation_entry.zi";
 #import "control_props"
 #import "image_props"
+#import "progress_props"
+#import "progress_widget"
 #import "text_props"
 #import, file "../../app/exercise_types.zi";
 #import, file "../../app/metrics.zi";
@@ -166,9 +169,9 @@ sun_salutation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
     advance_seconds(app, cast(float64)elapsed_ms / 1000.0)
 }
 
-// How many ticks the current step lasts.
-step_ticks_total :: (app: *InnerBreeze) -> s32 {
-    ticks := SalutationStepSeconds(app.sun_salutation) * 60
+// How many ticks one breath of the current round lasts.
+breath_ticks :: (app: *InnerBreeze) -> s32 {
+    ticks := SalutationBreathSeconds(app.sun_salutation) * 60
     if ticks <= 0 {
         ticks = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
     }
@@ -182,7 +185,7 @@ draw_pose :: (app: *InnerBreeze, area: Rectangle) {
         return
     }
     step := app.sun_salutation.step
-    frame := SalutationFrameAt(app.sun_salutation.step_ticks, step_ticks_total(app),
+    frame := SalutationFrameAt(app.sun_salutation.step_ticks, breath_ticks(app),
         SunSalutationFrameCount(step), SUN_SALUTATION_TRANSITION_FRAMES,
         SUN_SALUTATION_FRAME_FPS)
     picture := SunSalutationFrameImage(app.sun_salutation.character, step,
@@ -191,49 +194,85 @@ draw_pose :: (app: *InnerBreeze, area: Rectangle) {
     Image(CurrentApp().ui.session, picture)
 }
 
-// The moving figure in the practice's small window, with the pose's name
-// below it.
+// The moving figure in the practice's small window, with the breath and
+// the pose's name below it.
 sun_salutation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
     app.sun_salutation = SalutationNormalizeDraw(app.sun_salutation)
     draw_pose(app, picture)
     status[0] = 0
-    unused AppAppendText(SunSalutationStepTitle(app.sun_salutation.step), status)
+    parts: [2]FormatArg = .[
+    FormatArg.{.text = breath_label(app), .is_text = true},
+    FormatArg.{.text = SunSalutationPoseName(app.sun_salutation.step), .is_text = true}
+    ]
+    FormatTemplate("%s · %s", parts[:], status)
     return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
-draw_pose_timer :: (app: *InnerBreeze, seconds: s32, top_y: s32, bottom_y: s32) {
-    timer_text: [32] u8
-    seconds_text: [16] u8
-    elapsed_seconds: s32
-    text_w: s32
-    x: s32
-    y: s32
-    font := AppSmallFontSize()
-
-    if app == null || seconds <= 0 || bottom_y <= top_y {
-        return
+// The words for the breath being taken now.
+breath_label :: (app: *InnerBreeze) -> string {
+    breath := SalutationBreathAt(app.sun_salutation)
+    if breath.direction == SUN_SALUTATION_BREATH_IN {
+        return LocaleText("sun_salutation_breathe_in")
     }
+    return LocaleText("sun_salutation_breathe_out")
+}
 
-    elapsed_seconds = app.sun_salutation.step_ticks / 60
-    if elapsed_seconds > seconds {
-        elapsed_seconds = seconds
+// "Step 1" and so on, for the title bar.
+step_number :: (app: *InnerBreeze) -> string {
+    buffer: [48]u8
+    if !FormatNumberTemplate(LocaleText("sun_salutation_step_number"),
+        app.sun_salutation.step + 1, buffer[:]) {
+        return ""
     }
-    AppFormatS32(elapsed_seconds, timer_text[:])
-    AppAppendText("s / ", timer_text[:])
-    AppFormatS32(seconds, seconds_text[:])
-    AppAppendText(AppTextFromCString(*seconds_text[0], 16), timer_text[:])
-    AppAppendText("s", timer_text[:])
-    timer_label := AppTextFromCString(*timer_text[0], 32)
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 48))
+}
 
-    text_w = AppTextWidth(timer_label, font)
-    x = (app.ui.view_width - text_w) / 2
-    y = top_y + AppScale(4)
+// One line of text centred across the screen, smaller if it would not fit.
+draw_centered_line :: (app: *InnerBreeze, text: string, y: s32, font: s32,
+    smaller: s32, strong: bool) -> s32 {
+    if AppTextWidth(text, font) > app.ui.view_width - AppScale(80) {
+        font = smaller
+    }
+    width := AppTextWidth(text, font)
+    emphasis := StrongWhole(text)
     Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
-            .text = FrameTextHold(*app.ui.frame_text, timer_label),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
+        .bounds = Rectangle.{cast(float32)((app.ui.view_width - width) / 2),
+            cast(float32)y, 0, 0},
+        .text = text,
+        .font = font,
+        .strong = ifx strong then emphasis[:1] else emphasis[:0],
+        .wrap = cast(TextWrap)TextWrapNone})
+    return y + AppTextLineHeight(font)
+}
 
+// The pose to move into, then the breath to take now in large letters,
+// over a bar that fills while you breathe in and empties while you breathe
+// out. Returns the y below it.
+draw_breath_cue :: (app: *InnerBreeze, top_y: s32) -> s32 {
+    breath := SalutationBreathAt(app.sun_salutation)
+    y := draw_centered_line(app, SunSalutationPoseName(app.sun_salutation.step), top_y,
+        AppScale(Text24), AppScale(Text20), false)
+    y = draw_centered_line(app, breath_label(app), y + AppScale(2),
+        AppScale(Text32), AppScale(Text24), true)
+
+    bar_w := app.ui.view_width - AppScale(96)
+    if bar_w > AppScale(280) {
+        bar_w = AppScale(280)
+    }
+    bar_h := AppScale(10)
+    bar_y := y + AppScale(8)
+    fullness := breath.progress
+    if breath.direction == SUN_SALUTATION_BREATH_OUT {
+        fullness = 1000 - breath.progress
+    }
+    bar: ProgressProps
+    bar.bounds = Rectangle.{cast(float32)((app.ui.view_width - bar_w) / 2),
+        cast(float32)bar_y, cast(float32)bar_w, cast(float32)bar_h}
+    bar.min = 0
+    bar.max = 1000
+    bar.value = fullness
+    Progress(CurrentApp().ui.session, bar)
+    return bar_y + bar_h
 }
 
 sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
@@ -243,7 +282,6 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
     step: s32
     repetition: s32
     repetitions: s32
-    current_step_seconds: s32
     pause_icon: ActionIcon
     title_h := PracticeTitleBarHeight()
     content_top := title_h + AppScale(8)
@@ -262,9 +300,7 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
     repetition = app.sun_salutation.repetition
     repetitions = app.sun_salutation.repetitions
 
-    current_step_seconds = SalutationStepSeconds(app.sun_salutation)
-
-    step_label = SunSalutationStepTitle(step)
+    step_label = step_number(app)
     if PracticeTitleBar(app, step_label, title_h) {
         sun_salutation_request_exit(app)
         return
@@ -294,8 +330,7 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
         })
 
     image_bottom = row.y - AppScale(18)
-    draw_pose_timer(app, current_step_seconds, content_top, image_bottom)
-    pose_top := content_top + AppScale(28)
+    pose_top := draw_breath_cue(app, content_top + AppScale(10)) + AppScale(12)
     draw_pose(app, Rectangle.{cast(float32)AppScale(24), cast(float32)pose_top,
             cast(float32)(app.ui.view_width - AppScale(48)),
             cast(float32)(image_bottom - pose_top)})

@@ -89,9 +89,20 @@ Customize saves the character choice; the live session, previews and guide all
 use it. Run `make sun-salutation-test sun-salutation-assets-test` to validate
 session behavior and decode all 3,964 shipped frames.
 
-The app opens each step with the move, over at most 3 s and at most half the
-step, showing one solid frame at a time, then holds the pose. Hands and feet
-also switch contact drawings without a fade. Frames are
+The app moves with the breath. Each pose is reached on one breath. The
+title bar shows only the step number; below it the session shows the pose's
+name and "Breathe in" or "Breathe out" above a bar that fills while
+breathing in and empties while breathing out: out in Mountain pose, in to the
+upward salute, out to the fold, in to the half lift, out to step back into
+plank and in while holding it, out to lower down, in to upward dog, out to
+downward dog, then in, out, in and out back up to Mountain pose. Only the
+first round starts with a breath in Mountain pose; later rounds rise straight
+from the Mountain pose that ended the previous one. The tempo is the length of
+one breath, 6 s in the first round easing to 4 s in the last by default.
+
+The move into a pose fills three quarters of its breath, at most 4 s, showing
+one solid frame at a time, then the pose settles for the rest of the breath.
+Hands and feet also switch contact drawings without a fade. Frames are
 separate images so that only the few most recent ones stay loaded.
 
 ## Transitions
