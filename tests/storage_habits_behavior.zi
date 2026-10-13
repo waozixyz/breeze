@@ -13,6 +13,8 @@
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_questions.zi";
+#import, file "../src/habits/habit_answer_stats.zi";
 
 c :: #system_library "c";
 #import, file "../src/storage/import_types.zi";
@@ -536,6 +538,140 @@ test_uuid_habit_ids_load_days :: () {
     storage_close()
 }
 
+// Questions travel with the habit; a day keeps its answers with the
+// question's words, so they read the same after the question goes.
+test_habit_questions_and_answers :: () {
+    root := make_root("habit-questions")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('meal',(SELECT id FROM users LIMIT 1),'First meal',1,2,3,0,0,0,0,0,1782200000);")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_b = Habits.{}
+    check_true("load habit", storage_habits_load(cast(*void)*habits_b) != 0)
+    habit := *habits_b.items[0]
+    check_int("no questions at first", habit.question_count, 0)
+    check_true("add a time question",
+        HabitQuestionAdd(habit.questions[:], *habit.question_count, 1782200000))
+    unused AppCopyText("When did I start \"eating\"?", habit.questions[0].text[:])
+    habit.questions[0].answer_type = HABIT_ANSWER_TIME
+    check_true("add a number question",
+        HabitQuestionAdd(habit.questions[:], *habit.question_count, 1782200000))
+    unused AppCopyText("Plates", habit.questions[1].text[:])
+    habit.questions[1].answer_type = HABIT_ANSWER_NUMBER
+    check_true("add a question without words",
+        HabitQuestionAdd(habit.questions[:], *habit.question_count, 1782200000))
+    HabitQuestionsKeepWorded(habit.questions[:], *habit.question_count)
+    check_int("a question without words is dropped", habit.question_count, 2)
+    check_true("each question has its own id",
+        habit.questions[0].id != habit.questions[1].id)
+    time_id := habit.questions[0].id
+    storage_habits_save(cast(*void)*habits_b)
+    check_int("the habit is queued to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit' AND entity_id='meal'"), 1)
+    habits_free(*habits_b)
+    habits_b = Habits.{}
+    check_true("reload habit", storage_habits_load(cast(*void)*habits_b) != 0)
+    habit = *habits_b.items[0]
+    check_int("questions kept", habit.question_count, 2)
+    check_true("words kept, quotes too",
+        HabitQuestionText(*habit.questions[0]) == "When did I start \"eating\"?")
+    check_int("answer type kept", habit.questions[0].answer_type, HABIT_ANSWER_TIME)
+    check_true("id kept", habit.questions[0].id == time_id)
+
+    none: [1]HabitAnswer
+    answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
+    count := HabitAnswersForDay(habit, none[:], 0, answers[:])
+    check_int("a day asks every question", count, 2)
+    unused AppCopyText("07:30", answers[0].value[:])
+    unused AppCopyText("2", answers[1].value[:])
+    check_true("save answers",
+        storage_habit_day_answers_save("meal", 20260701, answers[:], count) != 0)
+    check_int("the day is queued to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_day' AND entity_id='meal' AND local_date=20260701"), 1)
+    loaded: [HABIT_DAY_ANSWER_MAX]HabitAnswer
+    loaded_count := storage_habit_day_answers_load("meal", 20260701, loaded[:])
+    check_int("answers loaded", loaded_count, 2)
+    check_true("time answer loaded", HabitAnswerValue(*loaded[0]) == "07:30" &&
+        loaded[0].id == time_id && loaded[0].answer_type == HABIT_ANSWER_TIME)
+    check_true("question words kept with the answer",
+        HabitAnswerQuestion(*loaded[0]) == "When did I start \"eating\"?")
+
+    HabitQuestionRemove(habit.questions[:], *habit.question_count, 0)
+    shown := HabitAnswersForDay(habit, loaded[:], loaded_count, answers[:])
+    check_int("a removed question's answer still shows", shown, 2)
+    check_true("current questions come first",
+        HabitAnswerQuestion(*answers[0]) == "Plates" &&
+        HabitAnswerValue(*answers[0]) == "2")
+    check_true("the removed question keeps its words",
+        HabitAnswerValue(*answers[1]) == "07:30" && answers[1].id == time_id)
+
+    cleared := storage_habit_day_answers_save("meal", 20260701, none[:], 0)
+    check_true("clear answers", cleared != 0 &&
+        storage_habit_day_answers_load("meal", 20260701, loaded[:]) == 0)
+    habits_free(*habits_b)
+    storage_close()
+}
+
+test_answer_statistics :: () {
+    root := make_root("habit-answer-stats")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions) VALUES('sleep',(SELECT id FROM users LIMIT 1),'Sleep',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"text\":\"Bedtime\"},{\"id\":2,\"type\":\"number\",\"text\":\"Pages\"},{\"id\":3,\"type\":\"yes_no\",\"text\":\"Tea\"},{\"id\":4,\"type\":\"text\",\"text\":\"Dream\"}]');INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at,answers) VALUES('sleep',20260701,1,1,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"23:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"2\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"yes\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Flying\"}]'),('sleep',20260702,1,1,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"00:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"3\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"no\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Sea\"}]');")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_b = Habits.{}
+    check_true("load habit", storage_habits_load(cast(*void)*habits_b) != 0)
+    habit := *habits_b.items[0]
+    check_int("questions read from JSON", habit.question_count, 4)
+    check_int("yes or no read", habit.questions[2].answer_type, HABIT_ANSWER_YES_NO)
+    days: [HABIT_ANSWER_STATS_DAYS]s32
+    slot: s32 = 0
+    while slot < HABIT_ANSWER_STATS_DAYS {
+        days[slot] = 20260701 + slot
+        slot += 1
+    }
+    stats: HabitAnswerStats
+    text: [16]u8
+    unused storage_habit_answer_stats("sleep", *habit.questions[0], days[:], *stats)
+    check_int("bedtimes answered", stats.answered, 2)
+    check_true("bedtimes around midnight average to midnight",
+        HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(*stats) + 50) / 100),
+        text[:]) == "00:00")
+    check_true("earliest bedtime is 23:30",
+        HabitAnswerTimeText(stats.lowest, text[:]) == "23:30")
+    check_true("latest bedtime is 00:30",
+        HabitAnswerTimeText(stats.highest, text[:]) == "00:30")
+    unused storage_habit_answer_stats("sleep", *habit.questions[1], days[:], *stats)
+    check_true("pages sum", stats.sum == 5)
+    check_true("pages average 2.5",
+        HabitAnswerDecimalText(HabitAnswerStatsAverage100(*stats), text[:]) == "2.5")
+    check_int("first day's pages in its slot", stats.values[0], 2)
+    check_int("an unanswered day has no value", stats.values[2], -1)
+    unused storage_habit_answer_stats("sleep", *habit.questions[2], days[:], *stats)
+    check_true("one yes and one no", stats.yes == 1 && stats.no == 1)
+    unused storage_habit_answer_stats("sleep", *habit.questions[3], days[:], *stats)
+    check_true("newest text answer first", stats.recent_count == 2 &&
+        AppTextFromCString(*stats.recent[0][0], HABIT_ANSWER_SIZE) == "Sea" &&
+        stats.recent_days[0] == 20260702)
+    habits_free(*habits_b)
+    storage_close()
+
+    day_times: [3]s32 = .[420, 480, 540]
+    check_int("times through the day keep midnight", HabitAnswerTimeCut(day_times[:]), -1)
+    typed: [8]u8
+    check_true("typed 7 and 5 read 07:05",
+        HabitTimeFromTyped("7", "5", typed[:]) &&
+        AppTextFromCString(*typed[0], 8) == "07:05")
+    check_true("no hours, no time",
+        HabitTimeFromTyped("", "30", typed[:]) &&
+        AppTextFromCString(*typed[0], 8) == "")
+    check_true("24 hours is not a time", !HabitTimeFromTyped("24", "00", typed[:]))
+    hours: s32 = 0
+    minutes: s32 = 0
+    check_true("9:05 reads", HabitTimeParts("9:05", *hours, *minutes) &&
+        hours == 9 && minutes == 5)
+    check_true("9:5 does not", !HabitTimeParts("9:5", *hours, *minutes))
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -553,5 +689,7 @@ Check :: () -> s32 {
     test_existing_sessions_materialize()
     test_meditation_logs_feed_profile_stats()
     test_uuid_habit_ids_load_days()
+    test_habit_questions_and_answers()
+    test_answer_statistics()
     return failures
 }

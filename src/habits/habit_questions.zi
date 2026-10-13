@@ -1,0 +1,227 @@
+// The questions a habit asks when a day is done, and the day's answers.
+#import, file "habit_types.zi";
+#import, file "../app/text_buffers.zi";
+
+// The name an answer type is stored and synced under.
+HabitAnswerTypeName :: (answer_type: s32) -> string {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        return "number"
+    }
+    if answer_type == HABIT_ANSWER_TIME {
+        return "time"
+    }
+    if answer_type == HABIT_ANSWER_YES_NO {
+        return "yes_no"
+    }
+    return "text"
+}
+
+// A type this version does not know, as from a newer app, reads as text.
+HabitAnswerTypeFromName :: (name: string) -> s32 {
+    if name == "number" {
+        return HABIT_ANSWER_NUMBER
+    }
+    if name == "time" {
+        return HABIT_ANSWER_TIME
+    }
+    if name == "yes_no" {
+        return HABIT_ANSWER_YES_NO
+    }
+    return HABIT_ANSWER_TEXT
+}
+
+HabitQuestionText :: (question: *HabitQuestion) -> string {
+    return AppTextFromCString(*question.text[0], HABIT_QUESTION_TEXT_SIZE)
+}
+
+HabitAnswerValue :: (answer: *HabitAnswer) -> string {
+    return AppTextFromCString(*answer.value[0], HABIT_ANSWER_SIZE)
+}
+
+HabitAnswerQuestion :: (answer: *HabitAnswer) -> string {
+    return AppTextFromCString(*answer.question[0], HABIT_QUESTION_TEXT_SIZE)
+}
+
+// An id above every id the questions have, and above every id given before
+// now, so a removed question's answers never belong to a new one.
+HabitQuestionNewId :: (questions: []HabitQuestion, count: s32,
+    now: s64) -> s64 {
+    id := now * 100
+    index: s32 = 0
+    while index < count && index < cast(s32)questions.count {
+        if questions[index].id >= id {
+            id = questions[index].id + 1
+        }
+        index += 1
+    }
+    return id
+}
+
+// Adds a question without words, answered as text, or returns false when
+// the habit asks all it can.
+HabitQuestionAdd :: (questions: []HabitQuestion, count: *s32,
+    now: s64) -> bool {
+    if count.* < 0 || count.* >= HABIT_QUESTION_MAX ||
+    count.* >= cast(s32)questions.count {
+        return false
+    }
+    question := *questions[count.*]
+    question.* = HabitQuestion.{}
+    question.id = HabitQuestionNewId(questions, count.*, now)
+    question.answer_type = HABIT_ANSWER_TEXT
+    count.* += 1
+    return true
+}
+
+HabitQuestionRemove :: (questions: []HabitQuestion, count: *s32,
+    index: s32) {
+    if index < 0 || index >= count.* {
+        return
+    }
+    while index + 1 < count.* {
+        questions[index] = questions[index + 1]
+        index += 1
+    }
+    count.* -= 1
+    questions[count.*] = HabitQuestion.{}
+}
+
+// Keeps the questions that have words, trimmed, in their order.
+HabitQuestionsKeepWorded :: (questions: []HabitQuestion, count: *s32) {
+    index: s32 = 0
+    while index < count.* {
+        text := HabitQuestionText(*questions[index])
+        start: s64 = 0
+        end := text.count
+        while start < end && (text[start] == cast(u8)32 || text[start] == cast(u8)9) {
+            start += 1
+        }
+        while end > start && (text[end - 1] == cast(u8)32 || text[end - 1] == cast(u8)9) {
+            end -= 1
+        }
+        if start == end {
+            HabitQuestionRemove(questions, count, index)
+        } else {
+            trimmed: [HABIT_QUESTION_TEXT_SIZE]u8
+            unused AppCopyText(text[start:end], trimmed[:])
+            unused AppCopyText(AppTextFromCString(*trimmed[0],
+                HABIT_QUESTION_TEXT_SIZE), questions[index].text[:])
+            index += 1
+        }
+    }
+}
+
+HabitTimeDigit :: (byte: u8) -> bool {
+    return byte >= cast(u8)48 && byte <= cast(u8)57
+}
+
+// Reads "H:MM" or "HH:MM" from 0:00 to 23:59.
+HabitTimeParts :: (value: string, hours: *s32, minutes: *s32) -> bool {
+    colon: s64 = -1
+    index: s64 = 0
+    while index < value.count {
+        if value[index] == cast(u8)58 {
+            colon = index
+        } else if !HabitTimeDigit(value[index]) {
+            return false
+        }
+        index += 1
+    }
+    if colon < 1 || colon > 2 || value.count - colon != 3 {
+        return false
+    }
+    hour: s32 = 0
+    index = 0
+    while index < colon {
+        hour = hour * 10 + cast(s32)value[index] - 48
+        index += 1
+    }
+    minute := (cast(s32)value[colon + 1] - 48) * 10 +
+    cast(s32)value[colon + 2] - 48
+    if hour > 23 || minute > 59 {
+        return false
+    }
+    hours.* = hour
+    minutes.* = minute
+    return true
+}
+
+HabitTimeTypedNumber :: (typed: string) -> s32 {
+    if typed.count == 0 {
+        return -1
+    }
+    value: s32 = 0
+    index: s64 = 0
+    while index < typed.count {
+        if !HabitTimeDigit(typed[index]) {
+            return -1
+        }
+        value = value * 10 + cast(s32)typed[index] - 48
+        index += 1
+    }
+    return value
+}
+
+// The time typed as hours and minutes, as "HH:MM"; empty while the hours
+// are, and minutes left empty are 00.
+HabitTimeFromTyped :: (hours_typed: string, minutes_typed: string,
+    output: []u8) -> bool {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    hours := HabitTimeTypedNumber(hours_typed)
+    if hours < 0 {
+        return hours_typed.count == 0
+    }
+    minutes: s32 = 0
+    if minutes_typed.count > 0 {
+        minutes = HabitTimeTypedNumber(minutes_typed)
+    }
+    if hours > 23 || minutes < 0 || minutes > 59 {
+        return false
+    }
+    cursor: s32 = 0
+    return TextBufferAppendPaddedNumber(output, *cursor, hours, 2) &&
+    TextBufferAppendByte(output, *cursor, cast(u8)58) &&
+    TextBufferAppendPaddedNumber(output, *cursor, minutes, 2)
+}
+
+// The answers a day's dialog shows: one for each question the habit asks
+// now, in its order, with what the day recorded for it, then what the day
+// recorded for questions since removed.
+HabitAnswersForDay :: (habit: *Habit, stored: []HabitAnswer,
+    stored_count: s32, output: []HabitAnswer) -> s32 {
+    count: s32 = 0
+    used: [HABIT_DAY_ANSWER_MAX]bool
+    index: s32 = 0
+    while index < habit.question_count && count < cast(s32)output.count {
+        question := *habit.questions[index]
+        answer := *output[count]
+        answer.* = HabitAnswer.{}
+        answer.id = question.id
+        answer.answer_type = question.answer_type
+        unused AppCopyText(HabitQuestionText(question), answer.question[:])
+        match: s32 = 0
+        while match < stored_count && match < cast(s32)stored.count {
+            if !used[match] && stored[match].id == question.id {
+                used[match] = true
+                unused AppCopyText(HabitAnswerValue(*stored[match]),
+                    answer.value[:])
+                break
+            }
+            match += 1
+        }
+        count += 1
+        index += 1
+    }
+    index = 0
+    while index < stored_count && index < cast(s32)stored.count &&
+    count < cast(s32)output.count {
+        if !used[index] && HabitAnswerValue(*stored[index]).count > 0 {
+            output[count] = stored[index]
+            count += 1
+        }
+        index += 1
+    }
+    return count
+}

@@ -4,6 +4,7 @@
 #import, file "habit_types.zi";
 #import, file "habit_calendar.zi";
 #import, file "habit_schedule.zi";
+#import, file "habit_questions.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../storage/storage_habits.zi";
@@ -28,6 +29,42 @@ habit_complete_day :: (app: *InnerBreeze, index: s32, day: s32) -> bool {
     habit_set_day_count(*app.habits, index, day, count)
     unused app_auto_sync(app)
     return habit_completed_day(habit, day) != 0
+}
+
+// Records a day's answers to its habit's questions. Unless the habit counts,
+// the day is done with them; a counting habit keeps the day's count.
+habit_answer_day :: (app: *InnerBreeze, index: s32, day: s32,
+    answers: []HabitAnswer, count: s32) -> bool {
+    if app == null || index < 0 || index >= app.habits.count || day <= 0 {
+        return false
+    }
+    habit := *app.habits.items[index]
+    if habit_counting_enabled(habit) == 0 && habit_completed_day(habit, day) == 0 &&
+    !habit_complete_day(app, index, day) {
+        return false
+    }
+    if storage_habit_day_answers_save(AppTextFromCString(*habit.id[0],
+        HABIT_ID_SIZE), day, answers, count) == 0 {
+        return false
+    }
+    unused app_auto_sync(app)
+    return true
+}
+
+// A done day back to open, without its answers.
+habit_reopen_day :: (app: *InnerBreeze, index: s32, day: s32) -> bool {
+    if app == null || index < 0 || index >= app.habits.count || day <= 0 {
+        return false
+    }
+    habit := *app.habits.items[index]
+    none: [1]HabitAnswer
+    if storage_habit_day_answers_save(AppTextFromCString(*habit.id[0],
+        HABIT_ID_SIZE), day, none[:], 0) == 0 {
+        return false
+    }
+    habit_set_day(*app.habits, index, day, 0)
+    unused app_auto_sync(app)
+    return true
 }
 
 // Gives a habit a schedule from today on and its notification hour, or -1

@@ -97,6 +97,23 @@ earlier days keep the schedule they had, and nothing recorded is removed. Days
 off the schedule have no circle but still open, and what was recorded on them
 shows faded. The context lists each habit's schedule and notification hour.
 
+A habit can ask questions when a day is done, set under "Ask when done" in its
+editor: each has its words and an answer type, text, a whole number, a time
+or yes or no. Without questions a tap marks the day as before. With them the
+Habits package answers a day tap with `HABITS_DAY_QUESTIONS`: an open day shows
+the questions and Done records the answers with the day; a done day shows its
+answers to change, or Not done to open it again without them. Counting habits
+show the questions under the count steps. Questions are stored as a JSON
+array on the habit (`habits.questions`) and answers on the day
+(`habit_days.answers`), each with a stable question id and the question's
+words, so a day reads the same after a question changes or goes. Both sync in
+the encrypted habit and day records; a record from an app before them keeps
+what the device has. The habit's statistics add up each question's last 30
+days: average and total of numbers, average and earliest to latest of times
+(cut at the day's longest unanswered stretch, so bedtimes around midnight
+average correctly), how often the answer was yes, and the latest written
+answers.
+
 `/donate` and `show_donation_links` show the existing Bitcoin and Monero addresses
 with copy, wallet and Trocador actions. Only a user click opens a destination.
 The host chooses every address and URL from Inbe's donation configuration. Old
