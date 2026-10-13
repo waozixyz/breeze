@@ -10,6 +10,8 @@
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_calendar.zi";
+#import, file "../src/habits/habit_schedule.zi";
 #import, file "../src/core/types.zi";
 #import, file "../src/screens/habits/edit.zi";
 #import, file "cells_test_fixture.zi";
@@ -53,10 +55,9 @@ Check :: () -> s32 {
     check_int("new habit opens the form", app.breathing.screen, ScreenHabitEdit)
     check_true("the name starts empty", app.habit_edit.text[0] == cast(u8)0)
     check_int("no reminder by default", app.habit_edit.reminder_hour, -1)
-    check_int("no schedule by default", app.habit_edit.weekdays, HABIT_SCHEDULE_OFF)
-    check_true("first section open", app.habit_edit.sections[0] != 0)
-    check_true("only the routine sections are open by default",
-        app.habit_edit.sections[1] == 0 && app.habit_edit.sections[2] != 0)
+    check_true("a new habit is planned on every weekday",
+        app.habit_edit.schedule.repeat == HABIT_REPEAT_WEEKLY &&
+        app.habit_edit.schedule.weekdays == 127)
 
     habit_edit_commit(app)
     check_true("an empty name keeps the form open", app.habit_edit.active != 0 && app.habit_edit.name_error == 1)
@@ -72,7 +73,7 @@ Check :: () -> s32 {
     app.habit_edit.counter_enabled = 1
     app.habit_edit.counter_target = 250
     app.habit_edit.sync_activity = 3
-    app.habit_edit.weekdays = 31
+    app.habit_edit.schedule.weekdays = 31
     app.habit_edit.reminder_hour = 9
     habit_edit_commit(app)
     check_true("a valid habit is added and the form closes", app.habits.count == 1 && app.habit_edit.active == 0)
@@ -83,6 +84,9 @@ Check :: () -> s32 {
     check_int("linked activities", app.habits.items[0].sync_activity, 3)
     check_int("linking is independent of the counter", app.habits.items[0].sync_mode, 1)
     check_int("weekdays", app.habits.items[0].weekdays, 31)
+    check_int("the habit has its schedule", app.habits.items[0].schedule_count, 1)
+    check_int("planned on a Friday", habit_scheduled_day(*app.habits.items[0], 20261016), 1)
+    check_int("not planned on a Saturday", habit_scheduled_day(*app.habits.items[0], 20261017), 0)
     check_int("reminder", app.habits.items[0].reminder_hour, 9)
     check_true("description", TextFromCString(*app.habits.items[0].description[0]) == "Only for testing")
 
@@ -97,20 +101,36 @@ Check :: () -> s32 {
     habit_edit_begin(app, 0)
     check_true("editing opens the form for the habit", app.breathing.screen == ScreenHabitEdit && app.habit_edit.is_new == 0)
     check_true("the form shows the habit's settings", app.habit_edit.counter_enabled != 0 &&
-        app.habit_edit.counter_target == 250 && app.habit_edit.sync_activity == 3)
+        app.habit_edit.counter_target == 250 && app.habit_edit.sync_activity == 3 &&
+        app.habit_edit.schedule.repeat == HABIT_REPEAT_WEEKLY &&
+        app.habit_edit.schedule.weekdays == 31)
     set_text(app.habit_edit.text[:], "Unsaved edit")
     habit_edit_cancel(app)
     check_true("cancelling an edit keeps the habit", TextFromCString(*app.habits.items[0].name[0]) == "Test counter")
 
     habit_edit_begin(app, 0)
     app.habit_edit.counter_enabled = 0
-    app.habit_edit.weekdays = 0
+    habit_edit_set_repeat(app, HABIT_REPEAT_DAILY)
     app.habit_edit.reminder_hour = -1
     habit_edit_commit(app)
     check_true("turning the counter off leaves the linking alone",
         app.habits.items[0].counter_enabled == 0 && app.habits.items[0].sync_activity == 3)
     check_true("the schedule and reminder are cleared",
         app.habits.items[0].weekdays == 0 && app.habits.items[0].reminder_hour == -1)
+    check_true("the linked habit keeps its earlier schedule",
+        app.habits.items[0].schedule_count == 2 &&
+        app.habits.items[0].schedules[1].repeat == HABIT_REPEAT_DAILY)
+
+    // A formula that does not read keeps the form open and the habit as it was.
+    habit_edit_begin(app, 0)
+    habit_edit_set_repeat(app, HABIT_REPEAT_FORMULA)
+    check_true("a formula starts from an example", HabitFormulaValid(
+        HabitScheduleFormulaText(*app.habit_edit.schedule)))
+    unused HabitScheduleSetFormula(*app.habit_edit.schedule, "days %")
+    habit_edit_commit(app)
+    check_true("an unreadable formula keeps the form open",
+        app.habit_edit.active != 0 && app.habits.items[0].schedule_count == 2)
+    habit_edit_cancel(app)
     check_int("sync ran for the edit", syncs, 2)
     habits_free(*app.habits)
     CloseTestCells()

@@ -485,27 +485,54 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     }
 }
 
+// A day off the habit's schedule shows what was recorded on it in the
+// habit's color faded toward the surface.
+HabitScreenOffDayColor :: (accent: Color) -> Color {
+    surface := StyleTokenColor("surface")
+    return Color.{
+        cast(u8)((cast(s32)accent.r * 45 + cast(s32)surface.r * 55) / 100),
+        cast(u8)((cast(s32)accent.g * 45 + cast(s32)surface.g * 55) / 100),
+        cast(u8)((cast(s32)accent.b * 45 + cast(s32)surface.b * 55) / 100),
+        255}
+}
+
 // A day button. With a dot, as for a counting habit's calendar day, the
 // label sits at the top and the day's dot with its count below it, and the
-// dot rather than the button shows that the day is complete.
+// dot rather than the button shows that the day is complete. A day off the
+// habit's schedule has no background and a faded label, yet still opens.
 HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
     day_index: s32, label: string, id: s32, bounds: Rectangle, dot: bool) {
     habit := *app.habits.items[index]
     scheduled := habit_scheduled_day(habit, day_index) != 0
     complete := HabitScreenCompletion(app, index, day_index)
-    disabled := !scheduled && !complete
+    disabled := app.modal.active != 0
     filled := complete && !dot
+    faded_label := !scheduled && !filled
     props: ButtonProps
     props.bounds = bounds
     props.id = id
-    props.label = ifx (dot) then ("") else (label)
+    props.label = ifx (dot || faded_label) then ("") else (label)
     props.tone = cast(ButtonTone)(ifx (filled) then
         (ButtonToneAccent) else (ButtonToneNeutral))
-    props.emphasis = cast(ButtonEmphasis)(ifx (filled) then
-        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
+    props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    if filled && scheduled {
+        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    } else if !scheduled && !filled {
+        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    }
     props.selected = filled
-    props.disabled = disabled || app.modal.active != 0
+    props.disabled = disabled
     clicked := Button(app.ui.session, props) != 0
+    if faded_label && !dot {
+        off_label: TextProps
+        off_label.bounds = bounds
+        off_label.text = label
+        off_label.align = cast(TextAlign)TextAlignCenter
+        off_label.vertical_align = cast(TextAlign)TextAlignCenter
+        off_label.wrap = cast(TextWrap)TextWrapNone
+        off_label.disabled = true
+        Text(app.ui.session, off_label)
+    }
     if dot {
         top := cast(s32)bounds.y + AppScale(3)
         number: TextProps
@@ -516,15 +543,19 @@ HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
         number.align = cast(TextAlign)TextAlignCenter
         number.vertical_align = cast(TextAlign)TextAlignCenter
         number.wrap = cast(TextWrap)TextWrapNone
-        number.disabled = props.disabled
+        number.disabled = props.disabled || !scheduled
         Text(app.ui.session, number)
         count := HabitScreenDayCount(app, index, day_index)
         if count > 0 || complete {
             radius := AppScale(12)
+            accent := habit.color
+            if !scheduled {
+                accent = HabitScreenOffDayColor(habit.color)
+            }
             HabitScreenDayDot(app,
                 cast(s32)(bounds.x + bounds.width / 2),
                 cast(s32)(bounds.y + bounds.height) - AppScale(4) - radius,
-                radius, habit.color, complete, true, count)
+                radius, accent, complete, true, count)
         }
     }
     if clicked {
@@ -821,7 +852,9 @@ HabitScreenHabitIcon :: (app: *InnerBreeze, index: s32, bounds: Rectangle) {
         center_y - AppTextLineHeight(font) / 2, font, color)
 }
 
-// One of the last seven days in a habit's row: its circle marks the day.
+// One of the last seven days in a habit's row: a planned day has a circle
+// that marks it. A day off the schedule has none, unless something was
+// recorded on it, which shows faded; it still opens like any other day.
 HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
     column: s32, bounds: Rectangle) {
     habit := *app.habits.items[habit_index]
@@ -833,7 +866,7 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
     marker.id = cast(s32)5200000 + habit_index * 16 + column
     marker.bounds = bounds
     marker.invisible = true
-    marker.disabled = (!scheduled && !complete) || app.modal.active != 0
+    marker.disabled = app.modal.active != 0
     clicked := Button(app.ui.session, marker) != 0
     if habit_index == habits_active_at(*app.habits, 0) && column == 0 {
         habits_first_day_bounds = bounds
@@ -856,8 +889,14 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
         HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
             Fade(habit.color, 0.24))
     }
-    HabitScreenDayDot(app, center_x, center_y, radius, habit.color, complete,
-        habit_counting_enabled(habit) != 0, count)
+    if scheduled {
+        HabitScreenDayDot(app, center_x, center_y, radius, habit.color,
+            complete, habit_counting_enabled(habit) != 0, count)
+    } else if complete || count > 0 {
+        HabitScreenDayDot(app, center_x, center_y, radius,
+            HabitScreenOffDayColor(habit.color), complete,
+            habit_counting_enabled(habit) != 0, count)
+    }
     if clicked {
         HabitScreenDayAction(app, habit_index, day_index, false)
     }

@@ -54,7 +54,8 @@ db.executescript(
         counter_target INTEGER, sort_order INTEGER, deleted_at INTEGER,
         updated_at INTEGER, weekdays INTEGER, reminder_hour INTEGER,
         deactivated INTEGER NOT NULL DEFAULT 0,
-        icon INTEGER NOT NULL DEFAULT 0);
+        icon INTEGER NOT NULL DEFAULT 0,
+        schedule TEXT NOT NULL DEFAULT '');
     CREATE TABLE habit_days(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
@@ -203,6 +204,20 @@ for remote, expected in (
     db.execute(sql["SyncHabitsSQL"], (json.dumps({"changes": {"habits": [remote]}}), "user"))
     assert db.execute(
         "SELECT icon FROM habits WHERE id='paused'"
+    ).fetchone() == (expected,), remote
+
+# A change from a version without schedules keeps the device's schedules;
+# one with schedules takes them.
+weekly = "from=0;repeat=weekly;every=1;start=0;weekdays=9;month_days=0;last_day=0;week_of_month=0;formula="
+db.execute("UPDATE habits SET schedule=? WHERE id='paused'", (weekly,))
+for remote, expected in (
+    ({"id": "paused", "name": "Reading", "updated_at": "2026-10-01T12:00:00Z"}, weekly),
+    ({"id": "paused", "name": "Reading", "schedule": weekly + "\nfrom=20261013;repeat=none",
+      "updated_at": "2026-10-02T12:00:00Z"}, weekly + "\nfrom=20261013;repeat=none"),
+):
+    db.execute(sql["SyncHabitsSQL"], (json.dumps({"changes": {"habits": [remote]}}), "user"))
+    assert db.execute(
+        "SELECT schedule FROM habits WHERE id='paused'"
     ).fetchone() == (expected,), remote
 
 print("Ziran sync SQL preserved local edits, reconciled habits, and omitted deleted exports")

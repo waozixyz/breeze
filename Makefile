@@ -947,7 +947,7 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test lists-ui-test sync-review-ui-test data-back-ui-test
+VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test habit-schedule-tool-test lists-ui-test sync-review-ui-test data-back-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
@@ -1844,6 +1844,10 @@ test: style-apply-zi-test
 .PHONY: appearance-ui-test
 appearance-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	sh tests/appearance_ui_test.sh $(abspath $(TARGET))
+
+.PHONY: habit-schedule-tool-test
+habit-schedule-tool-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	sh tests/habit_schedule_tool_test.sh $(abspath $(TARGET))
 
 .PHONY: audio-settings-test
 audio-settings-test: $(ZI2C_BIN)
