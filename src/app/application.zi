@@ -53,6 +53,7 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../storage/data.zi";
 #import, file "audio.zi";
 #import, file "lumi_guide.zi";
+#import, file "screen_guides.zi";
 #import, file "app_nav.zi";
 #import, file "app_launcher.zi";
 #import, file "app_launcher_state.zi";
@@ -1043,6 +1044,7 @@ updateapp :: (app: *InnerBreeze) {
     frame_route: AppRoute
     first_run_guide_active: s32 = 0
     habits_guide_active: s32 = 0
+    screen_guide_active: s32 = SCREEN_GUIDE_NONE
     practice_fullscreen_modal: bool = false
     global_modal_drawn: bool = false
     if TelegramAccountFlowOwnsContext() {
@@ -1125,10 +1127,12 @@ updateapp :: (app: *InnerBreeze) {
     habits_screen_prepare_first_run_guide(app)
     first_run_guide_active = practice_screen_first_run_guide_active(app)
     habits_guide_active = habits_screen_first_run_guide_active(app)
+    screen_guide_active = ScreenGuideActive(app)
     app_clear_invalid_screen_local_modal(app)
     if !AppMiniMode() {
+        // Lumi's guide on another screen keeps the reminder away too.
         app_maybe_open_donation_reminder(app, first_run_guide_active,
-            habits_guide_active)
+            ifx screen_guide_active != SCREEN_GUIDE_NONE then 1 else habits_guide_active)
     }
     // These modals cover the practice page, which must then not draw the
     // same manual or configuration a second time with the same widget keys.
@@ -1161,12 +1165,16 @@ updateapp :: (app: *InnerBreeze) {
             }
         } else if app.close_prompt_open != 0 {
             app.close_prompt_open = 0
-        } else if first_run_guide_active != 0 || habits_guide_active != 0 {
+        } else if first_run_guide_active != 0 || habits_guide_active != 0 ||
+        screen_guide_active != SCREEN_GUIDE_NONE {
             if first_run_guide_active != 0 {
                 practice_screen_dismiss_first_run_guide(app)
             }
             if habits_guide_active != 0 {
                 habits_screen_dismiss_first_run_guide(app)
+            }
+            if screen_guide_active != SCREEN_GUIDE_NONE {
+                ScreenGuideDismiss(app)
             }
         } else if app.modal.active != 0 {
             app_close_modal(app)
@@ -1313,6 +1321,7 @@ updateapp :: (app: *InnerBreeze) {
     app_draw_mini_expand_button(app)
     practice_screen_draw_first_run_guide(app)
     habits_screen_draw_first_run_guide(app)
+    ScreenGuideDraw(app)
     if !global_modal_drawn {
         draw_global_modal(app)
     }

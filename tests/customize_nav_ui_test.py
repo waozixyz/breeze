@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                   "apps_setup_done": 1, "enabled_apps": 22, "lumi_introduced": 1,
-                  "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
+                  "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "ui_scale": 10,
                   "navigation_placement": 0 if NARROW else 1, "navigation_collapsed": 0,
                   "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                   "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,

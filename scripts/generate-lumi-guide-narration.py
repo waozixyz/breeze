@@ -47,7 +47,10 @@ LANGUAGES = {
 BRANDS = {
     "inner breeze": "innerbreeze", "ルミ": "lumi", "루미": "lumi",
     "露米": "lumi", "卢米": "lumi", "鲁米": "lumi", "люми": "lumi",
-    "луми": "lumi", "ё": "е",
+    "луми": "lumi", "ё": "е", "イナブリーズ": "innerbreeze",
+    "インナーブリーズ": "innerbreeze", "이너 브리즈": "innerbreeze",
+    "이너브리즈": "innerbreeze", "이너 브릿지": "innerbreeze",
+    "텔레그램": "telegram", "テレグラム": "telegram", "телеграм": "telegram",
 }
 
 

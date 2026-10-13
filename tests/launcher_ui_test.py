@@ -163,7 +163,7 @@ with contextlib.ExitStack() as stack:
             routes = [12, 1, 2, 3, 11]
             seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
                            "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
-                           "main_tab": 3, "tutorial_seen": 1, "habits_guide_seen": 1,
+                           "main_tab": 3, "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127,
                            "theme": 9, "theme_source": 0, "theme_mode": 2,
                            "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
             cases = [(390, 844, 0, 10, count) for count in (3, 4, 5)]
@@ -306,7 +306,7 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["main_tab"] == "1", log.read_text()
             seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
                            "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
-                           "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
+                           "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127,
                            "ui_scale": 10, "navigation_placement": 0, "theme": 9,
                            "theme_source": 0, "theme_mode": 2, "package_updates_allowed": 0,
                            "apps_last_update_check": 1900000000,

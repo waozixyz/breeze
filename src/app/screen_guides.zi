@@ -1,0 +1,446 @@
+// Lumi's guides for the screens past the first run: Lists, Diary, Lumi,
+// Leaderboard, Settings, Profile and a habit's Statistics. Each shows once,
+// the first time its screen is open with all its parts and nothing over it.
+// The app packages draw some of these screens, so a guide finds the controls
+// it introduces in the last finished frame, by their keys or labels.
+#import "geometry"
+#import "guide"
+#import "session"
+#import "tree"
+#import "widget_kind"
+#import, file "../core/types.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "app_types.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "mini_mode.zi";
+#import, file "widgets.zi";
+#import, file "../platform/web_storage.zi";
+
+c :: #system_library "c";
+save_settings :: (app: *InnerBreeze) #foreign c;
+storage_has_sync_account :: () -> s32 #foreign c;
+app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 #foreign c;
+
+using WidgetKind;
+
+SCREEN_GUIDE_NONE :: -1
+SCREEN_GUIDE_LISTS :: 0
+SCREEN_GUIDE_DIARY :: 1
+SCREEN_GUIDE_LUMI :: 2
+SCREEN_GUIDE_LEADERBOARD :: 3
+SCREEN_GUIDE_SETTINGS :: 4
+SCREEN_GUIDE_PROFILE :: 5
+SCREEN_GUIDE_STATISTICS :: 6
+// Every screen guide seen, as the lumi_guides_seen setting stores them.
+SCREEN_GUIDES_ALL :: 127
+SCREEN_GUIDE_MAX_STEPS :: 4
+SCREEN_GUIDE_MATCHES :: 16
+
+// A control a guide looks for: by key, or by its accessible label. kind
+// narrows the match; enclosing asks for the smallest widget of that kind
+// around it, such as the card around a label.
+GuideMatch :: struct {
+    key: u64
+    label: string
+    kind: s32
+    enclosing: s32
+}
+
+screen_guide_step: s32;
+screen_guide_shown: s32 = SCREEN_GUIDE_NONE;
+// The frame the guide last showed in; it waits unseen until its screen's
+// controls are there.
+screen_guide_drawn_frame: s32 = -10;
+
+// The guide for the screen in front, whether or not it was seen.
+ScreenGuideFor :: (app: *InnerBreeze) -> s32 {
+    screen := app.breathing.screen
+    if screen == ScreenEList { return SCREEN_GUIDE_LISTS }
+    if screen == ScreenDiary { return SCREEN_GUIDE_DIARY }
+    if screen == ScreenLumi { return SCREEN_GUIDE_LUMI }
+    if screen == ScreenLeaderboard { return SCREEN_GUIDE_LEADERBOARD }
+    if screen == ScreenSettings { return SCREEN_GUIDE_SETTINGS }
+    if screen == ScreenProfile && app.profile_view == PROFILE_VIEW_MAIN &&
+    app.profile_tab == PROFILE_TAB_OVERVIEW {
+        return SCREEN_GUIDE_PROFILE
+    }
+    if screen == ScreenHabits &&
+    app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
+        return SCREEN_GUIDE_STATISTICS
+    }
+    return SCREEN_GUIDE_NONE
+}
+
+ScreenGuideSeen :: (app: *InnerBreeze, guide: s32) -> bool {
+    return (app.lumi_guides_seen & (1 << guide)) != 0
+}
+
+// The guide that may show now: its screen is in front, it was not seen, and
+// no dialog, other guide or the Apps screen covers it. Like the first-run
+// guides, it waits for people new to Inner Breeze, without an account.
+ScreenGuideWanted :: (app: *InnerBreeze) -> s32 {
+    if app == null || AppMiniMode() || app.modal.active != 0 ||
+    app.launcher_open {
+        return SCREEN_GUIDE_NONE
+    }
+    guide := ScreenGuideFor(app)
+    if guide == SCREEN_GUIDE_NONE || ScreenGuideSeen(app, guide) ||
+    storage_has_sync_account() != 0 {
+        return SCREEN_GUIDE_NONE
+    }
+    return guide
+}
+
+// The guide on screen now, which Back closes, or none.
+#program_export
+ScreenGuideActive :: (app: *InnerBreeze) -> s32 {
+    guide := ScreenGuideWanted(app)
+    if guide == SCREEN_GUIDE_NONE ||
+    app.breathing.frame - screen_guide_drawn_frame > 1 {
+        return SCREEN_GUIDE_NONE
+    }
+    return guide
+}
+
+// Closing or finishing a guide shows it no more.
+#program_export
+ScreenGuideDismiss :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    guide := ScreenGuideFor(app)
+    if guide == SCREEN_GUIDE_NONE {
+        return
+    }
+    app.lumi_guides_seen = app.lumi_guides_seen | (1 << guide)
+    screen_guide_step = 0
+    screen_guide_shown = SCREEN_GUIDE_NONE
+    save_settings(app)
+    unused sync_web_storage_critical()
+}
+
+GuideRectangleValid :: (bounds: Rectangle) -> bool {
+    return bounds.width > 0.0 && bounds.height > 0.0
+}
+
+GuideRectangleUnion :: (first: Rectangle, second: Rectangle) -> Rectangle {
+    if !GuideRectangleValid(first) { return second }
+    if !GuideRectangleValid(second) { return first }
+    left := ifx first.x < second.x then first.x else second.x
+    top := ifx first.y < second.y then first.y else second.y
+    right := first.x + first.width
+    if second.x + second.width > right { right = second.x + second.width }
+    bottom := first.y + first.height
+    if second.y + second.height > bottom { bottom = second.y + second.height }
+    return Rectangle.{left, top, right - left, bottom - top}
+}
+
+GuideRectangleContains :: (outer: Rectangle, inner: Rectangle) -> bool {
+    return outer.x <= inner.x && outer.y <= inner.y &&
+        outer.x + outer.width >= inner.x + inner.width &&
+        outer.y + outer.height >= inner.y + inner.height
+}
+
+// Finds each match in the last finished frame's page, leaving the overlays,
+// such as the guide itself, out. found[index] stays empty when nothing
+// matches.
+GuideFind :: (session: Session, matches: []GuideMatch, found: []Rectangle) {
+    count := TreeCount(session)
+    index: s32 = 0
+    while index < count {
+        if TreeOverlayLayerAt(session, index, true) == 0 {
+            node := TreeNodeAt(session, index)
+            position: s64 = 0
+            while position < matches.count {
+                match := matches[position]
+                by_key := match.key != cast(u64)0 && node.key == match.key
+                by_label := match.label.count > 0 &&
+                    node.semantic_label == match.label
+                if !GuideRectangleValid(found[position]) &&
+                (match.kind < 0 || node.kind == match.kind) &&
+                (by_key || by_label) && GuideRectangleValid(node.bounds) {
+                    found[position] = node.bounds
+                }
+                position += 1
+            }
+        }
+        index += 1
+    }
+    // A label's card is the smallest widget of the asked kind around it.
+    position: s64 = 0
+    while position < matches.count {
+        match := matches[position]
+        position += 1
+        if match.enclosing < 0 || !GuideRectangleValid(found[position - 1]) {
+            continue
+        }
+        label := found[position - 1]
+        best: Rectangle
+        index = 0
+        while index < count {
+            if TreeOverlayLayerAt(session, index, true) == 0 {
+                node := TreeNodeAt(session, index)
+                larger := node.bounds.width * node.bounds.height >
+                    label.width * label.height
+                smaller := !GuideRectangleValid(best) ||
+                    node.bounds.width * node.bounds.height <
+                    best.width * best.height
+                if node.kind == match.enclosing && larger && smaller &&
+                GuideRectangleContains(node.bounds, label) {
+                    best = node.bounds
+                }
+            }
+            index += 1
+        }
+        found[position - 1] = best
+    }
+}
+
+GuideByKey :: (key: u64) -> GuideMatch {
+    return GuideMatch.{.key = key, .kind = -1, .enclosing = -1}
+}
+
+GuideByLabel :: (label: string, kind: s32) -> GuideMatch {
+    return GuideMatch.{.label = label, .kind = kind, .enclosing = -1}
+}
+
+GuideCardOf :: (label: string, card: s32) -> GuideMatch {
+    return GuideMatch.{.label = label, .kind = WidgetKindText,
+        .enclosing = card}
+}
+
+// The union of found[first] to found[last]; empty when any is missing.
+GuideAll :: (found: []Rectangle, first: s32, last: s32) -> Rectangle {
+    bounds: Rectangle
+    index := first
+    while index <= last {
+        if !GuideRectangleValid(found[index]) {
+            return Rectangle.{}
+        }
+        bounds = GuideRectangleUnion(bounds, found[index])
+        index += 1
+    }
+    return bounds
+}
+
+// The union of whichever of found[first] to found[last] are on screen.
+GuideAny :: (found: []Rectangle, first: s32, last: s32) -> Rectangle {
+    bounds: Rectangle
+    index := first
+    while index <= last {
+        bounds = GuideRectangleUnion(bounds, found[index])
+        index += 1
+    }
+    return bounds
+}
+
+// Lists: its tabs and list actions, the field that adds an item, and the
+// items. The guide waits until a list is open.
+ScreenGuideListsSteps :: (app: *InnerBreeze, steps: []GuideOverlayStep) -> s32 {
+    matches: [7]GuideMatch = .[GuideByKey(cast(u64)6500), GuideByKey(cast(u64)6505),
+    GuideByKey(cast(u64)6503), GuideByKey(cast(u64)6504),
+    GuideByKey(cast(u64)6501), GuideByKey(cast(u64)6507),
+    GuideByKey(cast(u64)6600)]
+    found: [7]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    show_completed: [1]GuideMatch = .[GuideByKey(cast(u64)6502)]
+    completed: [1]Rectangle
+    GuideFind(app.ui.session, show_completed[:], completed[:])
+    lists := GuideAll(found[:], 0, 3)
+    field := GuideAll(found[:], 4, 5)
+    items := GuideRectangleUnion(found[6], completed[0])
+    if !GuideRectangleValid(lists) || !GuideRectangleValid(field) ||
+    !GuideRectangleValid(found[6]) {
+        return 0
+    }
+    steps[0] = GuideOverlayStepFor(lists, "lists_guide_tabs")
+    steps[1] = GuideOverlayStepFor(field, "lists_guide_add")
+    steps[2] = GuideOverlayStepFor(items, "lists_guide_items")
+    return 3
+}
+
+// Diary: the day's title, Today and the calendar, then the page and its
+// tools. The guide waits while the calendar is open.
+ScreenGuideDiarySteps :: (app: *InnerBreeze, steps: []GuideOverlayStep) -> s32 {
+    matches: [7]GuideMatch = .[GuideByKey(cast(u64)29001), GuideByKey(cast(u64)29002),
+    GuideByKey(cast(u64)29004), GuideByKey(cast(u64)29003),
+    GuideByKey(cast(u64)29014), GuideByKey(cast(u64)29005),
+    GuideByKey(cast(u64)290200)]
+    found: [7]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    days := GuideAll(found[:], 0, 1)
+    moves := GuideAll(found[:], 2, 3)
+    page := GuideAll(found[:], 4, 6)
+    if !GuideRectangleValid(days) || !GuideRectangleValid(moves) ||
+    !GuideRectangleValid(page) {
+        return 0
+    }
+    steps[0] = GuideOverlayStepFor(days, "diary_guide_days")
+    steps[1] = GuideOverlayStepFor(moves, "diary_guide_today")
+    steps[2] = GuideOverlayStepFor(page, "diary_guide_write")
+    return 3
+}
+
+// Leaderboard: the practices, then the ranking and its rows.
+ScreenGuideLeaderboardSteps :: (app: *InnerBreeze,
+    steps: []GuideOverlayStep) -> s32 {
+    matches: [8]GuideMatch = .[GuideByKey(cast(u64)7100), GuideByKey(cast(u64)7101),
+    GuideByKey(cast(u64)7102), GuideByKey(cast(u64)7103),
+    GuideByKey(cast(u64)7111), GuideByKey(cast(u64)7112),
+    GuideByKey(cast(u64)7130), GuideByKey(cast(u64)7120)]
+    found: [8]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    practices := GuideAll(found[:], 0, 3)
+    ranking := GuideAny(found[:], 4, 7)
+    if !GuideRectangleValid(practices) || !GuideRectangleValid(found[4]) {
+        return 0
+    }
+    steps[0] = GuideOverlayStepFor(practices, "leaderboard_guide_practices")
+    steps[1] = GuideOverlayStepFor(ranking, "leaderboard_guide_ranking")
+    return 2
+}
+
+// Settings: its sections, then Audio and Appearance among them. On a phone
+// the guide waits for the list of sections.
+ScreenGuideSettingsSteps :: (app: *InnerBreeze, steps: []GuideOverlayStep) -> s32 {
+    matches: [5]GuideMatch = .[
+    GuideByLabel(LocaleText("settings_tab_device"), WidgetKindButton),
+    GuideByLabel(LocaleText("settings_tab_audio"), WidgetKindButton),
+    GuideByLabel(LocaleText("settings_tab_notifications"), WidgetKindButton),
+    GuideByLabel(LocaleText("settings_section_appearance"), WidgetKindButton),
+    GuideByLabel(LocaleText("settings_tab_about"), WidgetKindButton)]
+    found: [5]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    sections := GuideAll(found[:], 0, 4)
+    if !GuideRectangleValid(sections) {
+        return 0
+    }
+    steps[0] = GuideOverlayStepFor(sections, "settings_guide_sections")
+    steps[1] = GuideOverlayStepFor(found[1], "settings_guide_audio")
+    steps[2] = GuideOverlayStepFor(found[3], "settings_guide_appearance")
+    return 3
+}
+
+// Profile: the picture and account, this week, and the pages below.
+ScreenGuideProfileSteps :: (app: *InnerBreeze, steps: []GuideOverlayStep) -> s32 {
+    matches: [10]GuideMatch = .[
+    GuideByLabel(LocaleText("tab_profile"), WidgetKindButton),
+    GuideByLabel(LocaleText("sync_connect_account_button"), WidgetKindButton),
+    GuideByLabel(LocaleText("sync_account_title"), WidgetKindButton),
+    GuideCardOf(LocaleText("profile_today_short"), WidgetKindBox),
+    GuideCardOf(LocaleText("profile_active_days_short"), WidgetKindBox),
+    GuideCardOf(LocaleText("profile_sessions_short"), WidgetKindBox),
+    GuideCardOf(LocaleText("profile_friends_title"), WidgetKindButton),
+    GuideCardOf(LocaleText("profile_data_management_title"), WidgetKindButton),
+    GuideCardOf(LocaleText("profile_account_sync_title"), WidgetKindButton),
+    GuideCardOf(LocaleText("lumi_telegram"), WidgetKindButton)]
+    found: [10]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    account := GuideRectangleUnion(found[1], found[2])
+    you := GuideRectangleUnion(found[0], account)
+    week := GuideAll(found[:], 3, 5)
+    pages := GuideAll(found[:], 6, 9)
+    if !GuideRectangleValid(found[0]) || !GuideRectangleValid(account) ||
+    !GuideRectangleValid(week) || !GuideRectangleValid(pages) {
+        return 0
+    }
+    steps[0] = GuideOverlayStepFor(you, "profile_guide_you")
+    steps[1] = GuideOverlayStepFor(week, "profile_guide_week")
+    steps[2] = GuideOverlayStepFor(pages, "profile_guide_more")
+    return 3
+}
+
+// Statistics: the habit's two figures, then the charts further down, which
+// the page shows below them.
+ScreenGuideStatisticsSteps :: (app: *InnerBreeze,
+    steps: []GuideOverlayStep) -> s32 {
+    matches: [2]GuideMatch = .[
+    GuideCardOf(LocaleText("habit_stats_current_streak"), WidgetKindBox),
+    GuideCardOf(LocaleText("habit_stats_last_30_days"), WidgetKindBox)]
+    found: [2]Rectangle
+    GuideFind(app.ui.session, matches[:], found[:])
+    figures := GuideAll(found[:], 0, 1)
+    if !GuideRectangleValid(figures) {
+        return 0
+    }
+    top := figures.y + figures.height + cast(float32)AppScale(12)
+    bottom := cast(float32)(app.ui.view_height - app_content_bottom_reserved(app) -
+        AppScale(12))
+    if bottom - top < cast(float32)AppScale(48) {
+        return 0
+    }
+    below := Rectangle.{figures.x, top, figures.width, bottom - top}
+    steps[0] = GuideOverlayStepFor(figures, "statistics_guide_numbers")
+    steps[1] = GuideOverlayStepFor(below, "statistics_guide_more")
+    return 2
+}
+
+ScreenGuideSteps :: (app: *InnerBreeze, guide: s32,
+    steps: []GuideOverlayStep) -> s32 {
+    if guide == SCREEN_GUIDE_LISTS { return ScreenGuideListsSteps(app, steps) }
+    if guide == SCREEN_GUIDE_DIARY { return ScreenGuideDiarySteps(app, steps) }
+    if guide == SCREEN_GUIDE_LEADERBOARD {
+        return ScreenGuideLeaderboardSteps(app, steps)
+    }
+    if guide == SCREEN_GUIDE_SETTINGS { return ScreenGuideSettingsSteps(app, steps) }
+    if guide == SCREEN_GUIDE_PROFILE { return ScreenGuideProfileSteps(app, steps) }
+    if guide == SCREEN_GUIDE_STATISTICS {
+        return ScreenGuideStatisticsSteps(app, steps)
+    }
+    return 0
+}
+
+// Draws the guide for the screen in front, once its controls are on screen.
+#program_export
+ScreenGuideDraw :: (app: *InnerBreeze) {
+    guide := ScreenGuideWanted(app)
+    if guide == SCREEN_GUIDE_NONE {
+        return
+    }
+    if guide != screen_guide_shown {
+        screen_guide_shown = guide
+        screen_guide_step = 0
+    }
+    steps: [SCREEN_GUIDE_MAX_STEPS]GuideOverlayStep
+    count := ScreenGuideSteps(app, guide, steps[:])
+    if count <= 0 {
+        return
+    }
+    screen_guide_drawn_frame = app.breathing.frame
+    props: GuideOverlayProps
+    props.steps = *steps[0]
+    props.count = count
+    props.step = *screen_guide_step
+    props.view_width = app.ui.view_width
+    props.view_height = app.ui.view_height
+    props.reserved_bottom = app_content_bottom_reserved(app)
+    props.max_width = AppScale(300)
+    props.paragraph_font = AppFontSize()
+    props.previous_requested = app.ui.manual_previous
+    props.next_requested = app.ui.manual_next
+    props.close_requested = app.ui.manual_close
+    result := GuideOverlay(props)
+    if result.finished != 0 || result.closed != 0 {
+        ScreenGuideDismiss(app)
+    }
+}
+
+// Screenshots and browser tests show these guides only when they ask to.
+#program_export
+ScreenGuidesSeenAll :: (app: *InnerBreeze) {
+    if app != null {
+        app.lumi_guides_seen = SCREEN_GUIDES_ALL
+    }
+}
+
+// A screenshot of one guide at a step: it is the only one not yet seen.
+#program_export
+ScreenGuideShowForScreenshot :: (app: *InnerBreeze, guide: s32, step: s32) {
+    if app == null {
+        return
+    }
+    app.lumi_guides_seen = SCREEN_GUIDES_ALL - (1 << guide)
+    screen_guide_shown = guide
+    screen_guide_step = step
+}

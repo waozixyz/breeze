@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                       "apps_setup_done": 0, "enabled_apps": 22, "lumi_introduced": 1,
                       "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
-                      "tutorial_seen": 1, "habits_guide_seen": 1, "launcher_guide_seen": 1,
+                      "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1,
                       "ui_scale": 10,
                       "navigation_placement": 1, "navigation_collapsed": 0,
                       "bottom_nav_route_count": 2, "bottom_nav_route_0": 0,

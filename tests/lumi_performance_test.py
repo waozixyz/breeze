@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                   "apps_setup_done": 1, "launcher_guide_seen": 1,
                   "enabled_apps": 31, "lumi_introduced": 1,
                   "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
-                  "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
+                  "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "ui_scale": 10,
                   "navigation_placement": 0 if MOBILE else 1, "navigation_collapsed": 0,
                   "launcher_favorite_count": 5,
                   **{f"launcher_favorite_{index}": route

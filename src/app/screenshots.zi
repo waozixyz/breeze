@@ -1,6 +1,7 @@
 #import "keys"
 #import "date_time"
 #import, file "lumi_guide.zi";
+#import, file "screen_guides.zi";
 #import, file "modal_rules.zi";
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_model.zi";
@@ -387,6 +388,31 @@ screenshot_lumi_moment :: (scene: string) -> s32 {
     return LUMI_MOMENT_SETTLED
 }
 
+// Where "+guide" starts in a scene, or -1.
+screenshot_screen_guide_marker :: (scene: string) -> s32 {
+    index: s32 = 0
+    while index + 6 <= cast(s32)scene.count {
+        if scene[index:index + 6] == "+guide" {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+// The guide step a scene asks for after "+guide", or -1 for no guide.
+screenshot_screen_guide_step :: (scene: string) -> s32 {
+    marker := screenshot_screen_guide_marker(scene)
+    if marker < 0 {
+        return -1
+    }
+    step := ScreenshotParseInt(scene[marker + 6:], 0)
+    if step < 0 || step >= SCREEN_GUIDE_MAX_STEPS {
+        return 0
+    }
+    return step
+}
+
 #program_export
 setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
     if app == null || request == null {
@@ -394,6 +420,13 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
     }
     scene_text: string = AppTextFromCString(*request.scene[0], 64)
     LumiGuidePin(screenshot_lumi_moment(scene_text))
+    // A scene such as lists+guide1_flight is the lists scene with Lumi's
+    // guide for that screen open at its second step.
+    guide_step := screenshot_screen_guide_step(scene_text)
+    if guide_step >= 0 {
+        request.scene[screenshot_screen_guide_marker(scene_text)] = cast(u8)0
+        scene_text = AppTextFromCString(*request.scene[0], 64)
+    }
     app.language_selected = 1
     app_close_modal(app)
     app.settings_scroll = 0
@@ -403,6 +436,7 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
     app.habits_guide_seen = 1
     app.tutorial_seen = 1
     app.launcher_guide_seen = 1
+    ScreenGuidesSeenAll(app)
     // Screenshots never download packages or show the Apps question.
     PackageSetAutomatic(false)
     // Sync screenshots must show only data already present in their isolated
@@ -961,5 +995,10 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.exercise_type = EXERCISE_WIM_HOF
         app.practice_tab = PRACTICE_TAB_PLAY
         app.breathing.screen = ScreenStart
+    }
+    if guide_step >= 0 {
+        // Settings on a phone opens on its list of sections.
+        app.settings_overview = 1
+        ScreenGuideShowForScreenshot(app, ScreenGuideFor(app), guide_step)
     }
 }
