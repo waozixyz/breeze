@@ -454,7 +454,7 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     if app.habit_edit.counter_enabled != 0 {
         height += AppScale(52)
     }
-    if app.habit_edit.span != 0 {
+    if app.habit_edit.span != 0 && !habit_edit_has_span_start(app) {
         height += habit_edit_span_goal_height(app.habit_edit.span_goal)
     }
     return height
@@ -466,10 +466,39 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
 HABIT_EDIT_QUESTION_PADDING :: 12
 HABIT_EDIT_QUESTION_GAP :: 10
 
-// A question's card: its words, its answer type and its goal's rows.
-habit_edit_question_card_height :: (question: *HabitQuestion) -> s32 {
+// A question of a span habit that asks its start (1) or end (2), else 0.
+habit_edit_span_role :: (app: *InnerBreeze, index: s32) -> s32 {
+    edit := *app.habit_edit
+    return HabitSpanQuestionRole(edit.questions[:], edit.question_count,
+        edit.span != 0, index)
+}
+
+// Whether a question asks the span's start, so its card holds the span's
+// goal and the tracking options don't.
+habit_edit_has_span_start :: (app: *InnerBreeze) -> bool {
+    index: s32 = 0
+    while index < app.habit_edit.question_count {
+        if habit_edit_span_role(app, index) == 1 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// A question's card: its words, its answer type and its goal's rows. A
+// span's start question holds the span's one goal, its length; its end
+// question has none.
+habit_edit_question_card_height :: (app: *InnerBreeze, index: s32) -> s32 {
+    question := *app.habit_edit.questions[index]
     height := AppScale(HABIT_EDIT_QUESTION_PADDING) * 2 + AppScale(96)
     goal := habit_edit_goal_height(question.answer_type, question.goal)
+    role := habit_edit_span_role(app, index)
+    if role == 1 {
+        goal = habit_edit_span_goal_height(app.habit_edit.span_goal)
+    } else if role == 2 {
+        goal = 0
+    }
     if goal > 0 {
         // The goal's rows leave 4 units below their last control.
         height += AppScale(8) + goal - AppScale(4)
@@ -481,8 +510,7 @@ habit_edit_questions_height :: (app: *InnerBreeze) -> s32 {
     height := AppScale(48) + AppScale(44)
     index: s32 = 0
     while index < app.habit_edit.question_count {
-        height += habit_edit_question_card_height(
-            *app.habit_edit.questions[index]) +
+        height += habit_edit_question_card_height(app, index) +
         AppScale(HABIT_EDIT_QUESTION_GAP)
         index += 1
     }
@@ -793,7 +821,7 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
     inner_w := width - question_pad * 2
     index: s32 = 0
     while index < edit.question_count {
-        card_h := habit_edit_question_card_height(*edit.questions[index])
+        card_h := habit_edit_question_card_height(app, index)
         Box(app.ui.session, CardProps(Rectangle.{cast(float32)x,
                     cast(float32)y, cast(float32)width, cast(float32)card_h}))
         card_bottom := y + card_h
@@ -839,9 +867,14 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
             return
         }
         y += AppScale(104)
-        unused habit_edit_goal(app, index, edit.questions[index].answer_type,
-            *edit.questions[index].goal, LocaleText("habit_goal_label"), inner_x, y,
-            inner_w)
+        role := habit_edit_span_role(app, index)
+        if role == 1 {
+            habit_edit_span_goal(app, inner_x, y, inner_w)
+        } else if role == 0 {
+            unused habit_edit_goal(app, index, edit.questions[index].answer_type,
+                *edit.questions[index].goal, LocaleText("habit_goal_label"),
+                inner_x, y, inner_w)
+        }
         y = card_bottom + AppScale(HABIT_EDIT_QUESTION_GAP)
         index += 1
     }
@@ -1818,7 +1851,8 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
         }
     }
     y += AppScale(52)
-    if app.habit_edit.span != 0 {
+    // Without a start question the span's goal sits under its switch.
+    if app.habit_edit.span != 0 && !habit_edit_has_span_start(app) {
         habit_edit_span_goal(app, x, y, width)
         y += habit_edit_span_goal_height(app.habit_edit.span_goal)
     }
