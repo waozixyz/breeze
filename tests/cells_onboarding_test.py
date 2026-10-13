@@ -124,8 +124,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
         capture(window, "resumed-apps")
-        tap(window, 180, 104)
-        # With the guide closed, Apps asks once about app updates. The first
+        # A tap on Lumi's guide goes on with it rather than closing it; Right
+        # steps through its three steps to the end.
+        for _ in range(3):
+            command("xdotool", "windowfocus", window)
+            command("xdotool", "keydown", "--clearmodifiers", "Right")
+            time.sleep(0.12)
+            command("xdotool", "keyup", "Right")
+            time.sleep(0.4)
+        wait_setting(profile, "launcher_guide_seen", 1)
+        # With the guide finished, Apps asks once about app updates. The first
         # "allow" read belongs to Don't allow, left of or above Allow.
         capture(window, "resumed-apps-updates-question")
         decline = subprocess.run(

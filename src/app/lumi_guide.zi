@@ -1,0 +1,376 @@
+// Lumi guides a screen's first-run steps. She flies beside each step's
+// bubble, sweeping past the highlighted control, then says the step's text
+// while it types into the bubble, and hovers with gently beating wings until
+// the step changes. One guide shows at a time, so her state lives here
+// between frames; GuideOverlay draws her and the bubble.
+#import "drawing_props"
+#import "geometry"
+#import "guide"
+#import "byte_text_linux"
+#import "image_raster"
+#import "math"
+#import, file "app_types.zi";
+#import, file "assets.zi";
+#import, file "audio.zi";
+#import, file "audio_policy.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "ogg_length.zi";
+#import, file "../platform/audio_runtime.zi";
+#import, file "../platform/media_types.zi";
+Grapheme :: #import "std/grapheme";
+
+raylib :: #system_library "raylib";
+GetTime :: () -> float64 #foreign raylib;
+
+// Lumi's flight cycle: eight frames facing right, then the same eight facing
+// left, each 192 by 157 pixels on a 200 by 165 grid four frames wide.
+LUMI_GUIDE_SHEET :: "assets/lumi/guide-flight.png"
+LUMI_GUIDE_WIDTH :: 72
+LUMI_SHEET_FRAME_WIDTH :: 192
+LUMI_SHEET_FRAME_HEIGHT :: 157
+LUMI_SHEET_PITCH_X :: 200
+LUMI_SHEET_PITCH_Y :: 165
+LUMI_SHEET_INSET :: 4
+LUMI_SHEET_COLUMNS :: 4
+// The largest voice clip she plays; her lines are a few dozen kilobytes.
+LUMI_VOICE_CAPACITY :: 131072
+// A voice that reports it stopped this soon after starting may still be
+// loading, as in a browser decoding it.
+LUMI_VOICE_SETTLE_MS :: 400
+
+// Screenshots hold Lumi's clock at one moment of a step and keep her quiet.
+LUMI_MOMENT_LIVE :: 0
+LUMI_MOMENT_FLIGHT :: 1
+LUMI_MOMENT_TYPING :: 2
+LUMI_MOMENT_SETTLED :: 3
+
+LumiGuideRequest :: struct {
+    // The step's locale key, which also names its voice clip.
+    voice: string
+    text: string
+    place: GuideLumiPlacement
+    // Where she sets off when she was not on screen yet.
+    origin: Vector2
+    // The highlighted control she sweeps past.
+    anchor: Rectangle
+}
+
+LumiGuideView :: struct {
+    visible: bool
+    bounds: Rectangle
+    source: Rectangle
+    typed: s32
+    characters: s32
+}
+
+LumiGuideState :: struct {
+    shown: bool
+    drawn_frame: s32
+    voice_key: [96]u8
+    voice_key_count: s32
+    step_started: float64
+    revealed: bool
+    characters: s32
+    typing_ms: s32
+    flight_ms: s32
+    from: Vector2
+    position: Vector2
+    has_position: bool
+    flight_faces_left: bool
+    voice: MusicHandle
+    voice_started: bool
+    voice_playing: bool
+    voice_began: float64
+}
+
+lumi_guide: LumiGuideState;
+lumi_guide_moment: s32;
+// The clip being played. Its stream reads these bytes while it plays.
+lumi_voice_bytes: [LUMI_VOICE_CAPACITY]u8;
+
+#program_export
+LumiGuidePin :: (moment: s32) {
+    lumi_guide_moment = moment
+}
+
+// The voice clip for key in the app's language.
+LumiGuideClip :: (key: string) -> AssetView {
+    path: [192]u8
+    parts: [5]string = .["assets/lumi/voice/", LocaleActiveCode(), "/", key,
+        ".ogg"]
+    length: s32 = 0
+    for part: parts[:] {
+        if length + cast(s32)part.count >= cast(s32)path.count {
+            return AssetView.{}
+        }
+        index: s32 = 0
+        while index < cast(s32)part.count {
+            path[length] = part[index]
+            length += 1
+            index += 1
+        }
+    }
+    return AssetReadBytes(path[0:length])
+}
+
+LumiGuideSameVoice :: (key: string) -> bool {
+    if cast(s32)key.count != lumi_guide.voice_key_count {
+        return false
+    }
+    return TextFromBytes(lumi_guide.voice_key[0:lumi_guide.voice_key_count]) == key
+}
+
+LumiGuideNow :: () -> float64 {
+    return GetTime()
+}
+
+// Milliseconds since the step began, or the pinned moment of a screenshot.
+LumiGuideElapsed :: (now: float64) -> s32 {
+    if lumi_guide_moment == LUMI_MOMENT_FLIGHT {
+        return lumi_guide.flight_ms / 2
+    }
+    if lumi_guide_moment == LUMI_MOMENT_TYPING {
+        return lumi_guide.flight_ms + lumi_guide.typing_ms / 2
+    }
+    if lumi_guide_moment == LUMI_MOMENT_SETTLED {
+        return lumi_guide.flight_ms + lumi_guide.typing_ms + 4000
+    }
+    elapsed: float64 = (now - lumi_guide.step_started) * 1000.0
+    if elapsed < 0.0 {
+        return 0
+    }
+    if elapsed > 86400000.0 {
+        return 86400000
+    }
+    return cast(s32)elapsed
+}
+
+// Stops her voice. The clip's bytes are free again afterwards.
+LumiGuideSilence :: () {
+    if lumi_guide.voice.id != cast(u64)0 {
+        audio_stop_music(lumi_guide.voice)
+        audio_unload_music(lumi_guide.voice)
+    }
+    lumi_guide.voice = MusicHandle.{}
+    lumi_guide.voice_playing = false
+}
+
+// Lumi says the step's line in the app's language, at the cue volume.
+// Nothing plays when cues are silent, the clip is missing or audio is
+// unavailable; the text still types at the clip's pace.
+LumiGuideSpeak :: (app: *InnerBreeze, key: string) {
+    volume := SoundVolumeFor(app.sound_volume, 1.0)
+    if volume <= 0.0 {
+        return
+    }
+    clip := LumiGuideClip(key)
+    if !clip.found || clip.data.count == 0 ||
+    clip.data.count > LUMI_VOICE_CAPACITY {
+        return
+    }
+    app_audio_ensure_ready(app)
+    if app.audio_ready == 0 {
+        return
+    }
+    index: s64 = 0
+    while index < clip.data.count {
+        lumi_voice_bytes[index] = clip.data[index]
+        index += 1
+    }
+    voice := audio_load_music_memory(".ogg", *lumi_voice_bytes[0],
+        cast(s32)clip.data.count, false)
+    if !audio_music_valid(voice) {
+        return
+    }
+    audio_set_music_volume(voice, volume)
+    audio_play_music(voice)
+    lumi_guide.voice = voice
+    lumi_guide.voice_playing = true
+    lumi_guide.voice_began = LumiGuideNow()
+}
+
+// Keeps her voice streaming and lets it go once the line is said.
+LumiGuideVoiceUpdate :: () {
+    if !lumi_guide.voice_playing {
+        return
+    }
+    if !audio_music_valid(lumi_guide.voice) {
+        lumi_guide.voice = MusicHandle.{}
+        lumi_guide.voice_playing = false
+        return
+    }
+    audio_update_music(lumi_guide.voice)
+    settled := (LumiGuideNow() - lumi_guide.voice_began) * 1000.0 >=
+        cast(float64)LUMI_VOICE_SETTLE_MS
+    if settled && !audio_music_playing(lumi_guide.voice) {
+        LumiGuideSilence()
+    }
+}
+
+// The point she sweeps past: the highlighted control's middle.
+LumiGuideSweep :: (request: LumiGuideRequest) -> Vector2 {
+    return Vector2.{
+        request.anchor.x + request.anchor.width / 2.0 -
+            request.place.lumi.width / 2.0,
+        request.anchor.y + request.anchor.height / 2.0 -
+            request.place.lumi.height / 2.0
+    }
+}
+
+LumiGuideStartStep :: (request: LumiGuideRequest, now: float64) {
+    LumiGuideSilence()
+    count: s32 = cast(s32)request.voice.count
+    if count > cast(s32)lumi_guide.voice_key.count {
+        count = cast(s32)lumi_guide.voice_key.count
+    }
+    index: s32 = 0
+    while index < count {
+        lumi_guide.voice_key[index] = request.voice[index]
+        index += 1
+    }
+    lumi_guide.voice_key_count = count
+    lumi_guide.step_started = now
+    lumi_guide.revealed = false
+    lumi_guide.voice_started = false
+    lumi_guide.characters = Grapheme.Count(request.text)
+    clip := LumiGuideClip(request.voice)
+    clip_ms: s32 = 0
+    if clip.found {
+        clip_ms = OggVorbisMilliseconds(clip.data)
+    }
+    lumi_guide.typing_ms = GuideTypingMs(lumi_guide.characters, clip_ms)
+    lumi_guide.from = request.origin
+    if lumi_guide.has_position {
+        lumi_guide.from = lumi_guide.position
+    }
+    target := Vector2.{request.place.lumi.x, request.place.lumi.y}
+    dx: s32 = cast(s32)(target.x - lumi_guide.from.x)
+    dy: s32 = cast(s32)(target.y - lumi_guide.from.y)
+    if dx < 0 {
+        dx = 0 - dx
+    }
+    if dy < 0 {
+        dy = 0 - dy
+    }
+    // Close enough to the straight distance for timing a flight.
+    distance: s32 = dx + dy * 3 / 8
+    if dy > dx {
+        distance = dy + dx * 3 / 8
+    }
+    lumi_guide.flight_ms = GuideFlightMs(distance, AppScale(100))
+    lumi_guide.flight_faces_left = target.x < lumi_guide.from.x
+    lumi_guide.shown = true
+}
+
+// Lumi for this frame of a step: where she is, her frame of the flight
+// cycle, and how much of the text is typed. A new step starts her flight,
+// and her voice begins when she arrives.
+#program_export
+LumiGuideFrame :: (app: *InnerBreeze, request: LumiGuideRequest) -> LumiGuideView {
+    view: LumiGuideView
+    now := LumiGuideNow()
+    if !lumi_guide.shown || !LumiGuideSameVoice(request.voice) {
+        LumiGuideStartStep(request, now)
+    }
+    lumi_guide.drawn_frame = app.breathing.frame
+    elapsed := LumiGuideElapsed(now)
+    flying := elapsed < lumi_guide.flight_ms
+    target := Vector2.{request.place.lumi.x, request.place.lumi.y}
+    position := target
+    faces_left := request.place.faces_left
+    if flying {
+        // A curve from where she was, bending toward the control she
+        // introduces, to her place beside the bubble.
+        t := cast(float32)GuideFlightEase(elapsed, lumi_guide.flight_ms) / 1000.0
+        sweep := LumiGuideSweep(request)
+        rest := 1.0 - t
+        position.x = rest * rest * lumi_guide.from.x + 2.0 * rest * t * sweep.x +
+            t * t * target.x
+        position.y = rest * rest * lumi_guide.from.y + 2.0 * rest * t * sweep.y +
+            t * t * target.y
+        faces_left = lumi_guide.flight_faces_left
+    } else {
+        // She floats a little while she hovers.
+        drift := cast(float32)(elapsed - lumi_guide.flight_ms) * 0.15
+        position.y += SineDegrees(drift) * cast(float32)AppScale(2)
+    }
+    lumi_guide.position = position
+    lumi_guide.has_position = true
+    if !flying && !lumi_guide.voice_started {
+        lumi_guide.voice_started = true
+        if lumi_guide_moment == LUMI_MOMENT_LIVE {
+            LumiGuideSpeak(app, request.voice)
+        }
+    }
+    LumiGuideVoiceUpdate()
+    view.characters = lumi_guide.characters
+    view.typed = view.characters
+    if !lumi_guide.revealed {
+        view.typed = GuideTypedFor(view.characters,
+            elapsed - lumi_guide.flight_ms, lumi_guide.typing_ms)
+    }
+    frame := GuideLumiFrame(elapsed, flying)
+    if faces_left {
+        frame += GUIDE_LUMI_FRAMES
+    }
+    column := frame % LUMI_SHEET_COLUMNS
+    row := frame / LUMI_SHEET_COLUMNS
+    view.source = Rectangle.{
+        cast(float32)(LUMI_SHEET_INSET + column * LUMI_SHEET_PITCH_X),
+        cast(float32)(LUMI_SHEET_INSET + row * LUMI_SHEET_PITCH_Y),
+        cast(float32)LUMI_SHEET_FRAME_WIDTH,
+        cast(float32)LUMI_SHEET_FRAME_HEIGHT
+    }
+    view.bounds = Rectangle.{position.x, position.y,
+        request.place.lumi.width, request.place.lumi.height}
+    // Without the Lumi app's art she is not drawn; the guide still works.
+    view.visible = AssetWidth(LUMI_GUIDE_SHEET) > 0
+    return view
+}
+
+// Whether Lumi is on screen with a guide.
+#program_export
+LumiGuideShown :: () -> bool {
+    return lumi_guide.shown
+}
+
+// A tap while the text types shows all of it; her voice goes on.
+#program_export
+LumiGuideReveal :: () {
+    lumi_guide.revealed = true
+}
+
+// The guide closed or finished: she stops speaking and leaves.
+#program_export
+LumiGuideStop :: () {
+    LumiGuideSilence()
+    lumi_guide = LumiGuideState.{}
+}
+
+// Called after every frame is drawn: a guide not drawn for two frames has
+// gone with its screen, so Lumi stops speaking and starts afresh next time.
+#program_export
+LumiGuideFrameEnd :: (app: *InnerBreeze) {
+    if !lumi_guide.shown || app == null {
+        return
+    }
+    if app.breathing.frame - lumi_guide.drawn_frame >= 2 {
+        LumiGuideStop()
+    }
+}
+
+// Whether Lumi is flying, typing or speaking, which needs smooth frames.
+// Hovering after her line needs only the idle frame rate.
+#program_export
+LumiGuideAnimating :: () -> bool {
+    if !lumi_guide.shown {
+        return false
+    }
+    elapsed := LumiGuideElapsed(LumiGuideNow())
+    if elapsed < lumi_guide.flight_ms || lumi_guide.voice_playing {
+        return true
+    }
+    return !lumi_guide.revealed &&
+        elapsed < lumi_guide.flight_ms + lumi_guide.typing_ms
+}

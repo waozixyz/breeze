@@ -27,6 +27,35 @@ fresh() {
         "$work/src/app/"
     cp "$root"/src/storage/sync_result.zi "$root"/src/storage/storage_layout.zi \
         "$root"/src/storage/storage_layout_laws.zi "$work/src/storage/"
+    cp "$root"/src/guide.zi "$root"/src/guide_pager.zi \
+        "$root"/src/guide_laws.zi "$work/src/"
+}
+
+# Guide laws read Kryon's geometry and styles.
+check_guide() {
+    "$ziran" check --root "$work/src" \
+        --module-path "$root/build/packages/kryon/src/ui" \
+        --module-path "$root/build/packages/ziran/std" \
+        "$work/src/guide_laws.zi" > "$work/out.json" 2> "$work/out.err"
+}
+
+mutate_guide() {
+    expression=$1 law=$2
+    fresh
+    sed -i "$expression" "$work/src/guide.zi"
+    if cmp -s "$root/src/guide.zi" "$work/src/guide.zi"; then
+        echo "mutation did not change guide.zi: $expression" >&2
+        exit 1
+    fi
+    if check_guide; then
+        echo "guide laws accepted mutation: $expression" >&2
+        exit 1
+    fi
+    if ! grep -q "law $law is disproved" "$work/out.err"; then
+        echo "mutation $expression did not disprove $law" >&2
+        cat "$work/out.err" >&2
+        exit 1
+    fi
 }
 
 check() {
@@ -42,6 +71,7 @@ check app/modal_rules_laws.zi
 check storage/habit_merge_laws.zi
 check storage/sync_restore_laws.zi
 check storage/storage_layout_laws.zi
+check_guide
 
 # file, module to check, sed expression, expected disproved law
 mutate() {
@@ -184,5 +214,18 @@ mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
 mutate storage/storage_layout.zi storage/storage_layout_laws.zi \
     's/^LumiPrivateKeyID :: .*/LumiPrivateKeyID :: "breathing-main-1"/' \
     LumiKeyIsSeparate
+
+# A tap on finished text that shows it again instead of going on.
+mutate_guide 's/    if typed < characters {/    if typed <= characters {/' \
+    TapStepsWhenTyped
+# Typing that outlasts the voice clip.
+mutate_guide 's/if clip_ms > 0 { return clip_ms }/if clip_ms > 0 { return clip_ms + 100 }/' \
+    TypingFollowsClip
+# Text that is all there before the voice ends.
+mutate_guide 's/if typing_ms <= 0 || elapsed_ms >= typing_ms { return characters }/if typing_ms <= 0 || elapsed_ms + 1 >= typing_ms { return characters }/' \
+    TextEndsWithClip
+# Lumi hovering away from her bubble.
+mutate_guide 's/place.lumi.x = place.tip.x - cast(float32)need/place.lumi.x = place.tip.x - cast(float32)lumi_width/' \
+    LumiBesideBubble
 
 echo "law mutation test passed"

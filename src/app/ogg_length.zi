@@ -1,0 +1,52 @@
+// The length of an Ogg Vorbis clip, read from its headers without decoding
+// it, so a guide can pace its text to a clip that is not playing.
+
+OggByte :: (data: string, at: s64) -> s64 {
+    return cast(s64)data[at]
+}
+
+OggUnsigned32 :: (data: string, at: s64) -> s64 {
+    return OggByte(data, at) | (OggByte(data, at + 1) << 8) |
+        (OggByte(data, at + 2) << 16) | (OggByte(data, at + 3) << 24)
+}
+
+// Milliseconds an Ogg Vorbis clip lasts: the granule position of its last
+// page over the sample rate in its identification header. 0 when data is
+// not such a clip.
+#program_export
+OggVorbisMilliseconds :: (data: string) -> s32 {
+    count: s64 = data.count
+    if count < 58 || data[0:4] != "OggS" {
+        return 0
+    }
+    header: s64 = 27 + OggByte(data, 26)
+    if header + 16 > count || data[header] != cast(u8)1 ||
+    data[header + 1:header + 7] != "vorbis" {
+        return 0
+    }
+    rate: s64 = OggUnsigned32(data, header + 12)
+    if rate <= 0 {
+        return 0
+    }
+    // The last page starts within its largest possible size of the end.
+    at: s64 = count - 27
+    lowest: s64 = count - 65307
+    if lowest < 0 {
+        lowest = 0
+    }
+    while at >= lowest && data[at:at + 4] != "OggS" {
+        at -= 1
+    }
+    if at < lowest {
+        return 0
+    }
+    high: s64 = OggUnsigned32(data, at + 10)
+    if high != 0 {
+        return 0
+    }
+    milliseconds: s64 = OggUnsigned32(data, at + 6) * 1000 / rate
+    if milliseconds <= 0 || milliseconds > 600000 {
+        return 0
+    }
+    return cast(s32)milliseconds
+}

@@ -1,5 +1,6 @@
 #import, file "guide.zi";
 #import, file "guide_pager.zi";
+#import "geometry"
 
 // Laws for guides and guide pagers. Each states the expected behavior
 // independently of the implementation; `ziran check` proves it over every
@@ -34,3 +35,45 @@ B :: (value: s32) -> bool { return value != 0 }
 #law FinishRequestFinishes forall page: 0..3 => GuidePagerPolicyFor(page, 4, false, false, false, true, false).finished;
 #law LastPageNext forall finish_on_next: 0..1 => GuidePagerPolicyFor(3, 4, false, true, false, false, B(finish_on_next)).finished == B(finish_on_next) && GuidePagerPolicyFor(3, 4, false, true, false, false, B(finish_on_next)).page == 3;
 #law PagerStepsBothWays forall page: 1..2 => GuidePagerPolicyFor(page, 4, true, false, false, false, false).page == page - 1 && GuidePagerPolicyFor(page, 4, false, true, false, false, false).page == page + 1;
+
+// Lumi's guide. A tap while she types shows the whole text and stays on the
+// step; once the text is all there, a tap goes to the next step. Without a
+// tap nothing changes.
+#law TapRevealsWhileTyping forall typed: 0..11 => GuideTapFor(typed, 12, true).reveal && !GuideTapFor(typed, 12, true).next;
+#law TapStepsWhenTyped forall extra: 0..2 => GuideTapFor(12 + extra, 12, true).next && !GuideTapFor(12 + extra, 12, true).reveal;
+#law NoTapNoChange forall typed: 0..14 => !GuideTapFor(typed, 12, false).reveal && !GuideTapFor(typed, 12, false).next;
+
+// Typing lasts exactly as long as the step's voice clip, so the text and the
+// voice end together: the last character appears when the clip ends and not
+// before. Without a clip, longer text takes no less time, within bounds.
+#law TypingFollowsClip forall clip: 1..80, characters: 0..30 => GuideTypingMs(characters, clip * 250) == clip * 250;
+#law TextEndsWithClip forall clip: 1..40, characters: 1..30 => GuideTypedFor(characters, GuideTypingMs(characters, clip * 250), GuideTypingMs(characters, clip * 250)) == characters && GuideTypedFor(characters, clip * 250 - 1, clip * 250) < characters;
+#law PaceWithoutClip forall characters: 1..300 => GuideTypingMs(characters, 0) >= 600 && GuideTypingMs(characters, 0) <= 9000 && GuideTypingMs(characters + 1, 0) >= GuideTypingMs(characters, 0);
+
+// Typed text starts empty and only grows, never past the whole text.
+#law TypingStartsEmpty forall characters: 0..40 => GuideTypedFor(characters, 0, 5000) == 0;
+#law TypingNeverShrinks forall characters: 1..30, step: 0..40 => GuideTypedFor(characters, step * 125, 5000) <= GuideTypedFor(characters, step * 125 + 125, 5000) && GuideTypedFor(characters, step * 125 + 125, 5000) <= characters;
+
+// Lumi's flight starts where she was and arrives where she hovers, moving
+// only forward, and takes a bounded time that grows with the distance.
+#law FlightStartsAndArrives forall flight: 1..20 => GuideFlightEase(0, flight * 50) == 0 && GuideFlightEase(flight * 50, flight * 50) == 1000;
+#law FlightMovesForward forall step: -2..21 => GuideFlightEase(step * 50, 1000) <= GuideFlightEase(step * 50 + 50, 1000) && GuideFlightEase(step * 50, 1000) >= 0 && GuideFlightEase(step * 50, 1000) <= 1000;
+#law FlightTimeBounded forall distance: 0..80 => GuideFlightMs(distance * 40, 250) >= 550 && GuideFlightMs(distance * 40, 250) <= 950 && GuideFlightMs(distance * 40 + 40, 250) >= GuideFlightMs(distance * 40, 250);
+
+// Every frame Lumi shows is one of the eight in her flight cycle.
+#law FrameInCycle forall elapsed: 0..300, flying: 0..1 => GuideLumiFrame(elapsed * 37, B(flying)) >= 0 && GuideLumiFrame(elapsed * 37, B(flying)) < 8;
+
+// On a phone-wide view, Lumi stays inside the view beside her bubble,
+// overlapping a quarter of her width and facing it; the bubble keeps its
+// size and height wherever it starts.
+P :: (x: s32) -> GuideLumiPlacement {
+    tip: Rectangle
+    tip.x = cast(float32)x
+    tip.y = 100.0
+    tip.width = 300.0
+    tip.height = 120.0
+    return GuideLumiPlacementFor(tip, 432, 768, 64, 52, 12, 30)
+}
+#law LumiStaysInView forall x: 12..120 => P(x).lumi.x >= 0.0 && P(x).lumi.x + 64.0 <= 432.0 && P(x).lumi.y == 104.0;
+#law LumiBesideBubble forall x: 12..120 => (!P(x).faces_left && P(x).lumi.x + 48.0 == P(x).tip.x) || (P(x).faces_left && P(x).lumi.x + 16.0 == P(x).tip.x + 300.0);
+#law BubbleKeepsSize forall x: 12..120 => P(x).tip.width == 300.0 && P(x).tip.y == 100.0 && P(x).tip.x >= 12.0 && P(x).tip.x + 300.0 <= 420.0;

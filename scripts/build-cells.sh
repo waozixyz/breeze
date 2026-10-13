@@ -14,6 +14,7 @@ python3 scripts/check-package-versions.py
 python3 tests/font_glyph_coverage_test.py
 python3 tests/locale_translated_test.py
 python3 tests/locale_used_keys_test.py
+python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
