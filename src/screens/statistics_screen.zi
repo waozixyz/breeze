@@ -696,23 +696,41 @@ statistics_span_height :: (width: s32) -> s32 {
     AppScale(STATISTICS_SECTION_GAP)
 }
 
+// A span habit's start and end questions are its span's times: its
+// statistics are about the span's length, so they get no charts of their own.
+statistics_answer_shown :: (active: *Habit, index: s32) -> bool {
+    return HabitSpanQuestionRole(active.questions[:], active.question_count,
+        active.span != 0, index) == 0
+}
+
+statistics_shown_answers :: (active: *Habit, count: s32) -> s32 {
+    shown: s32 = 0
+    index: s32 = 0
+    while index < count {
+        if statistics_answer_shown(active, index) {
+            shown += 1
+        }
+        index += 1
+    }
+    return shown
+}
+
 statistics_answers_height :: (active: *Habit, width: s32) -> s32 {
     if active == null || (active.question_count <= 0 && active.span == 0) {
         return 0
     }
     count := statistics_answer_stats(active)
     height: s32 = 0
-    if active.span != 0 {
-        height += statistics_span_height(width)
-    }
-    if count > 0 {
+    if statistics_shown_answers(active, count) > 0 {
         height += SectionTitleHeight(LocaleText("habit_stats_answers_title"),
             width) + AppScale(10)
     }
     index: s32 = 0
     while index < count {
-        height += statistics_answer_height(*statistics_answers[index],
-            HabitQuestionText(*active.questions[index]), width)
+        if statistics_answer_shown(active, index) {
+            height += statistics_answer_height(*statistics_answers[index],
+                HabitQuestionText(*active.questions[index]), width)
+        }
         index += 1
     }
     return height
@@ -1034,23 +1052,24 @@ statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
         start_text, LocaleText("habit_stats_ended"), end_text, accent)
 }
 
-// The habit's spans and every question with what its entries add up to.
+// Every question with what its entries add up to; a span habit's spans
+// come first in the view.
 statistics_draw_answers :: (active: *Habit, x: s32, y: s32, width: s32) {
     if active == null || (active.question_count <= 0 && active.span == 0) {
         return
     }
     count := statistics_answer_stats(active)
-    if active.span != 0 {
-        statistics_draw_spans(x, y, width, active.color)
-        y += statistics_span_height(width)
-    }
-    if count <= 0 {
+    if statistics_shown_answers(active, count) <= 0 {
         return
     }
     y += SectionTitle(CurrentApp().ui.session,
         LocaleText("habit_stats_answers_title"), x, y, width) + AppScale(10)
     index: s32 = 0
     while index < count {
+        if !statistics_answer_shown(active, index) {
+            index += 1
+            continue
+        }
         title := HabitQuestionText(*active.questions[index])
         statistics_draw_answer(*statistics_answers[index], index + 1,
             FrameTextHold(*CurrentApp().ui.frame_text, title), x, y, width,
@@ -1246,6 +1265,13 @@ statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLi
         AppTextFromCString(*value[0], 64), active.color)
     y += metric_h + section_gap
 
+    // A habit that measures spans is about their length: it comes first.
+    if active.span != 0 {
+        unused statistics_answer_stats(active)
+        statistics_draw_spans(content_x, y, content_w, active.color)
+        y += statistics_span_height(content_w)
+    }
+
     if mood_count > 0 {
         y += statistics_draw_mood_panel(content_x, y, content_w, *mood_stats,
             active.color) + section_gap
@@ -1339,6 +1365,10 @@ statistics_view_height :: (active: *Habit, linked_ctx: *HabitLinkedContext,
     mood_count: s32, content_w: s32) -> s32 {
     section_gap := AppScale(STATISTICS_SECTION_GAP)
     height := AppScale(8) + AppScale(FIGURE_CARD_HEIGHT) + section_gap
+    if active != null && active.span != 0 {
+        unused statistics_answer_stats(active)
+        height += statistics_span_height(content_w)
+    }
     if mood_count > 0 {
         height += statistics_mood_panel_height(content_w) + section_gap
     }
