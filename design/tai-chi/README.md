@@ -23,7 +23,7 @@ later (see "App playback" below).
 ```sh
 cd design/tai-chi
 npm install                     # Three.js, pinned in package.json
-node tools/serve.mjs            # studio at http://127.0.0.1:8765/
+node tools/serve.mjs            # studio at http://127.0.0.1:8771/
 node tools/check.mjs            # motion checks for every item and figure
 node tools/render.mjs --item lesson-2/brush-knee/demo --stills 3,6,9 --label
 node tools/render.mjs --lessons --full --label   # an MP4 per lesson and the full form
