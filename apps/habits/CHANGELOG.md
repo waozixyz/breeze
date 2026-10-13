@@ -1,9 +1,5 @@
 # Changelog
 
-## [1.0.5] - 2026-10-13
-
-- Days outside a habit's schedule can still be opened, marked and counted.
-
 ## [1.0.4] - 2026-10-10
 
 - Requires Inner Breeze 2.1.28 or later.
