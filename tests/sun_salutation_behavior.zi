@@ -7,8 +7,8 @@ Answer :: () -> s32 {
     state.start_seconds = 1
     state.end_seconds = 99
     state = SalutationInit(state)
-    if state.repetitions != 3 || state.start_seconds != 8 ||
-    state.end_seconds != 5 {
+    if state.repetitions != 3 || state.start_seconds != 6 ||
+    state.end_seconds != 4 {
         return 1
     }
 
@@ -42,10 +42,12 @@ Answer :: () -> s32 {
         return 5
     }
 
+    // A round ends in Mountain pose, so the next one starts with the
+    // upward salute rather than standing there again.
     state.step = SUN_SALUTATION_STEP_COUNT - 1
     state.repetition = 0
     next: SalutationStepResult = SalutationForward(state)
-    if next.completed != 0 || next.state.step != 0 ||
+    if next.completed != 0 || next.state.step != SUN_SALUTATION_REPEAT_STEP ||
     next.state.repetition != 1 || next.state.step_ticks != 0 {
         return 6
     }
@@ -106,32 +108,34 @@ Answer :: () -> s32 {
         return 18
     }
 
-    // A step of 8 s with 24 move frames and 4 hold frames at 8 fps: the
-    // move takes 3 s, from the previous pose (-1) to the last move frame,
-    // then the hold frames follow and the last one stays.
+    // A breath of 8 s with 24 move frames and 4 hold frames at 8 fps: the
+    // move takes at most 4 s, from the previous pose (-1) to the last move
+    // frame, then the hold frames follow and the last one stays.
     if SalutationFrameAt(0, 480, 28, 24, 8) != -1 ||
-    SalutationFrameAt(45, 480, 28, 24, 8) != 5 ||
-    SalutationFrameAt(90, 480, 28, 24, 8) != 11 ||
-    SalutationFrameAt(179, 480, 28, 24, 8) != 22 ||
-    SalutationFrameAt(180, 480, 28, 24, 8) != 23 ||
-    SalutationFrameAt(195, 480, 28, 24, 8) != 25 ||
+    SalutationFrameAt(60, 480, 28, 24, 8) != 5 ||
+    SalutationFrameAt(120, 480, 28, 24, 8) != 11 ||
+    SalutationFrameAt(239, 480, 28, 24, 8) != 22 ||
+    SalutationFrameAt(240, 480, 28, 24, 8) != 23 ||
+    SalutationFrameAt(255, 480, 28, 24, 8) != 25 ||
     SalutationFrameAt(1000, 480, 28, 24, 8) != 27 {
         return 11
     }
-    // A 3 s step moves in its first half; the first pose is one frame.
-    if SalutationFrameAt(45, 180, 28, 24, 8) != 11 ||
+    // A 4 s breath moves through its first three quarters; the first pose
+    // is one frame.
+    if SalutationFrameAt(90, 240, 28, 24, 8) != 11 ||
+    SalutationFrameAt(180, 240, 28, 24, 8) != 23 ||
     SalutationFrameAt(30, 480, 1, 24, 8) != 0 {
         return 13
     }
     // At 30 fps the full move has 90 distinct frames, followed by 15
-    // settling frames. Short steps still spend at most half their time moving.
+    // settling frames. Short breaths still keep a quarter for settling.
     if SalutationFrameAt(0, 480, 105, 90, 30) != -1 ||
-    SalutationFrameAt(2, 480, 105, 90, 30) != 0 ||
-    SalutationFrameAt(90, 480, 105, 90, 30) != 44 ||
-    SalutationFrameAt(180, 480, 105, 90, 30) != 89 ||
-    SalutationFrameAt(182, 480, 105, 90, 30) != 90 ||
+    SalutationFrameAt(3, 480, 105, 90, 30) != 0 ||
+    SalutationFrameAt(120, 480, 105, 90, 30) != 44 ||
+    SalutationFrameAt(240, 480, 105, 90, 30) != 89 ||
+    SalutationFrameAt(242, 480, 105, 90, 30) != 90 ||
     SalutationFrameAt(1000, 480, 105, 90, 30) != 104 ||
-    SalutationFrameAt(45, 180, 105, 90, 30) != 44 {
+    SalutationFrameAt(45, 180, 105, 90, 30) != 29 {
         return 14
     }
 
@@ -171,9 +175,78 @@ Answer :: () -> s32 {
         return 22
     }
     // Bound hairstyles settle at the end of the 90-frame move.
-    if SalutationFrameAt(180, 480, 90, 90, 30) != 89 ||
+    if SalutationFrameAt(240, 480, 90, 90, 30) != 89 ||
     SalutationFrameAt(1000, 480, 90, 90, 30) != 89 {
         return 23
+    }
+
+    // Plank takes two breaths: out to step back into it, in to hold it.
+    breathing: SunSalutationPracticeState
+    breathing.repetitions = 3
+    breathing.start_seconds = 6
+    breathing.end_seconds = 4
+    breathing = SalutationStart(breathing)
+    breathing.step = SUN_SALUTATION_PLANK_STEP
+    if SalutationStepSeconds(breathing) != 12 || SalutationBreathSeconds(breathing) != 6 {
+        return 24
+    }
+    breathing.step_ticks = 90
+    breath := SalutationBreathAt(breathing)
+    if breath.direction != SUN_SALUTATION_BREATH_OUT || breath.progress != 250 {
+        return 25
+    }
+    breathing.step_ticks = 540
+    breath = SalutationBreathAt(breathing)
+    if breath.direction != SUN_SALUTATION_BREATH_IN || breath.progress != 500 {
+        return 26
+    }
+    // The move into plank happens on its first breath.
+    if SalutationFrameAt(240, 360, 105, 90, 30) != 89 {
+        return 27
+    }
+
+    // Through a whole session the breath turns from out to in and back on
+    // every breath, starting with a breath out in Mountain pose, and only
+    // the first round stands in Mountain pose before it rises.
+    breathing = SalutationStart(breathing)
+    expected: s32 = SUN_SALUTATION_BREATH_OUT
+    breaths: s32 = 0
+    mountains: s32 = 0
+    finished := false
+    while !finished && breaths < 100 {
+        seconds := SalutationBreathSeconds(breathing)
+        for breath_index: 0..SalutationStepBreaths(breathing.step) - 1 {
+            breathing.step_ticks = cast(s32)breath_index * seconds * 60 + seconds * 30
+            if SalutationBreathAt(breathing).direction != expected {
+                return 28
+            }
+            expected = 1 - expected
+            breaths += 1
+        }
+        if breathing.step == 0 {
+            mountains += 1
+        }
+        next = SalutationForward(breathing)
+        breathing = next.state
+        finished = next.completed != 0
+    }
+    // 13 breaths in the first round, 12 in each of the other two.
+    if !finished || breaths != 37 || mountains != 1 {
+        return 29
+    }
+    // Going back from the first step of a later round returns to the
+    // previous round's Mountain pose; drawing never shows a skipped step.
+    breathing = SalutationStart(breathing)
+    breathing.repetition = 1
+    breathing.step = SUN_SALUTATION_REPEAT_STEP
+    breathing = SalutationBack(breathing)
+    if breathing.repetition != 0 || breathing.step != SUN_SALUTATION_STEP_COUNT - 1 {
+        return 30
+    }
+    breathing.repetition = 1
+    breathing.step = 0
+    if SalutationNormalizeDraw(breathing).step != SUN_SALUTATION_REPEAT_STEP {
+        return 31
     }
     return 42
 }

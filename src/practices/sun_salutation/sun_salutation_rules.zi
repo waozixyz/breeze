@@ -2,14 +2,34 @@
 SUN_SALUTATION_STEP_COUNT :: 12
 SUN_SALUTATION_POSE_COUNT :: SUN_SALUTATION_STEP_COUNT
 SUN_SALUTATION_CHARACTER_COUNT :: 4
-// A step opens with the move into its pose, at most this long and at most
-// half the step.
-SUN_SALUTATION_TRANSITION_SECONDS :: 3
+// The move into a pose fills most of the breath that carries it: three
+// quarters of the breath, and at most this long.
+SUN_SALUTATION_TRANSITION_SECONDS :: 4
+// The tempo is the length of one breath, in or out.
 SUN_SALUTATION_SECONDS_MIN :: 3
 SUN_SALUTATION_SECONDS_MAX :: 12
 SUN_SALUTATION_DEFAULT_REPETITIONS :: 3
-SUN_SALUTATION_DEFAULT_START_SECONDS :: 8
-SUN_SALUTATION_DEFAULT_END_SECONDS :: 5
+SUN_SALUTATION_DEFAULT_START_SECONDS :: 6
+SUN_SALUTATION_DEFAULT_END_SECONDS :: 4
+
+// Breathing. Each pose is reached on one breath, in and out in turn:
+// out in Mountain pose, in to the upward salute, out to the fold, in to the
+// half lift, out to step back into plank and in while holding it, out to
+// lower down, in to upward dog, out to downward dog, in to the half lift,
+// out to the fold, in to the upward salute and out back to Mountain pose.
+// Only the first round starts in Mountain pose; the next rounds begin with
+// the upward salute, so the breath never repeats in a row.
+SUN_SALUTATION_BREATH_OUT :: 0
+SUN_SALUTATION_BREATH_IN :: 1
+SUN_SALUTATION_PLANK_STEP :: 4
+SUN_SALUTATION_REPEAT_STEP :: 1
+
+SalutationBreath :: struct {
+    // SUN_SALUTATION_BREATH_IN or SUN_SALUTATION_BREATH_OUT.
+    direction: s32
+    // How far the breath has gone, 0 to 1000.
+    progress: s32
+}
 
 SunSalutationPracticeState :: struct {
     character: s32
@@ -119,11 +139,45 @@ SalutationNormalizeDraw :: (state: SunSalutationPracticeState) -> SunSalutationP
         SUN_SALUTATION_STEP_COUNT - 1)
     state.repetition = SalutationClamp(state.repetition, 0,
         state.repetitions - 1)
+    if state.repetition > 0 && state.step < SUN_SALUTATION_REPEAT_STEP {
+        state.step = SUN_SALUTATION_REPEAT_STEP
+    }
     return state
 }
 
+// How many breaths a step takes: plank has one to step back and one to
+// hold it, every other pose one.
 #program_export
-SalutationStepSeconds :: (state: SunSalutationPracticeState) -> s32 {
+SalutationStepBreaths :: (step: s32) -> s32 {
+    if step == SUN_SALUTATION_PLANK_STEP {
+        return 2
+    }
+    return 1
+}
+
+// Whether the `breath`th breath of `step` (from 0) breathes in or out.
+#assert SUN_SALUTATION_STEP_COUNT == 12
+#program_export
+SalutationBreathDirection :: (step: s32, breath: s32) -> s32 {
+    directions: [12]s32 = .[
+        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
+        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
+        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_OUT,
+        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
+        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
+        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT
+    ]
+    step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    if step == SUN_SALUTATION_PLANK_STEP && breath >= 1 {
+        return SUN_SALUTATION_BREATH_IN
+    }
+    return directions[step]
+}
+
+// The length of one breath in the current round: the start tempo in the
+// first round, moving evenly to the end tempo in the last.
+#program_export
+SalutationBreathSeconds :: (state: SunSalutationPracticeState) -> s32 {
     start_seconds: s32 = state.start_seconds
     end_seconds: s32 = state.end_seconds
     repetitions: s32 = state.repetitions
@@ -145,6 +199,37 @@ SalutationStepSeconds :: (state: SunSalutationPracticeState) -> s32 {
     (repetitions - 1)
 }
 
+// How long the current step lasts: one breath, two for plank.
+#program_export
+SalutationStepSeconds :: (state: SunSalutationPracticeState) -> s32 {
+    return SalutationBreathSeconds(state) * SalutationStepBreaths(state.step)
+}
+
+// The breath being taken `state.step_ticks` into the current step.
+#program_export
+SalutationBreathAt :: (state: SunSalutationPracticeState) -> SalutationBreath {
+    result: SalutationBreath
+    breath_ticks := SalutationBreathSeconds(state) * 60
+    if breath_ticks < 1 {
+        breath_ticks = 1
+    }
+    ticks := state.step_ticks
+    if ticks < 0 {
+        ticks = 0
+    }
+    breath := ticks / breath_ticks
+    last := SalutationStepBreaths(state.step) - 1
+    if breath > last {
+        breath = last
+    }
+    result.direction = SalutationBreathDirection(state.step, breath)
+    result.progress = ((ticks - breath * breath_ticks) * 1000) / breath_ticks
+    if result.progress > 1000 {
+        result.progress = 1000
+    }
+    return result
+}
+
 #program_export
 SalutationForward :: (state: SunSalutationPracticeState) -> SalutationStepResult {
     result: SalutationStepResult
@@ -155,8 +240,9 @@ SalutationForward :: (state: SunSalutationPracticeState) -> SalutationStepResult
         if state.repetition >= state.repetitions - 1 {
             result.completed = 1
         } else {
+            // The round ended in Mountain pose; the next one rises from it.
             result.state.repetition += 1
-            result.state.step = 0
+            result.state.step = SUN_SALUTATION_REPEAT_STEP
         }
     } else {
         result.state.step += 1
@@ -168,7 +254,11 @@ SalutationForward :: (state: SunSalutationPracticeState) -> SalutationStepResult
 SalutationBack :: (state: SunSalutationPracticeState) -> SunSalutationPracticeState {
     state.step_ticks = 0
     state.tick_fraction = 0.0
-    if state.step > 0 {
+    first_step: s32 = 0
+    if state.repetition > 0 {
+        first_step = SUN_SALUTATION_REPEAT_STEP
+    }
+    if state.step > first_step {
         state.step -= 1
     } else if state.repetition > 0 {
         state.repetition -= 1
@@ -213,13 +303,14 @@ SalutationAdvance :: (state: SunSalutationPracticeState,
     return result
 }
 
-// The frame to show `step_ticks` into a step of `ticks_per_step` whose
-// animation has `frame_count` frames: the move into the pose
-// (`transition_frames`), then the first moments of the hold at
-// `frames_per_second`, whose last frame stays. Frames count from the
-// step's first one; -1 is the previous step's held pose.
+// The frame to show `step_ticks` into a step whose first breath lasts
+// `breath_ticks` and whose animation has `frame_count` frames: the move
+// into the pose (`transition_frames`) over three quarters of that breath,
+// then the first moments of the hold at `frames_per_second`, whose last
+// frame stays. Frames count from the step's first one; -1 is the previous
+// step's held pose.
 #program_export
-SalutationFrameAt :: (step_ticks: s32, ticks_per_step: s32,
+SalutationFrameAt :: (step_ticks: s32, breath_ticks: s32,
     frame_count: s32, transition_frames: s32,
     frames_per_second: s32) -> s32 {
     if frame_count <= 1 || transition_frames <= 0 {
@@ -229,8 +320,8 @@ SalutationFrameAt :: (step_ticks: s32, ticks_per_step: s32,
         transition_frames = frame_count
     }
     transition_ticks: s32 = SUN_SALUTATION_TRANSITION_SECONDS * 60
-    if transition_ticks > ticks_per_step / 2 {
-        transition_ticks = ticks_per_step / 2
+    if transition_ticks > breath_ticks * 3 / 4 {
+        transition_ticks = breath_ticks * 3 / 4
     }
     if transition_ticks < 1 {
         transition_ticks = 1
