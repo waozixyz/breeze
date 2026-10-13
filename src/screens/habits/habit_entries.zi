@@ -38,6 +38,8 @@
 #import "box_widget"
 #import "control_props"
 #import "text_field_widget"
+#import "time_picker_props"
+#import "time_picker_widget"
 #import "text_input_props"
 #import "style_sheet"
 #import "layout"
@@ -100,35 +102,6 @@ HABIT_ANSWER_ROW_HEIGHT :: 84
 // Where an answer's input starts below its question.
 HABIT_ANSWER_INPUT_Y :: 30
 
-// Minutes after midnight as typed hours and minutes; empty for -1.
-HabitScreenTypeTime :: (minutes: s32, hours_out: []u8, minutes_out: []u8) {
-    hours_out[0] = cast(u8)0
-    minutes_out[0] = cast(u8)0
-    if minutes < 0 {
-        return
-    }
-    cursor: s32 = 0
-    unused TextBufferAppendPaddedNumber(hours_out, *cursor, (minutes / 60) % 24, 2)
-    cursor = 0
-    unused TextBufferAppendPaddedNumber(minutes_out, *cursor, minutes % 60, 2)
-}
-
-// The minutes after midnight typed as hours and minutes, minutes left
-// empty being 00, or -1 while the hours are empty.
-HabitScreenTypedMinutes :: (hours: []u8, minutes: []u8) -> s32 {
-    typed_hours := HabitTimeTypedNumber(AppTextFromCString(*hours[0],
-        cast(s32)hours.count))
-    if typed_hours < 0 {
-        return -1
-    }
-    typed_minutes := HabitTimeTypedNumber(AppTextFromCString(*minutes[0],
-        cast(s32)minutes.count))
-    if typed_minutes < 0 {
-        typed_minutes = 0
-    }
-    return typed_hours * 60 + typed_minutes
-}
-
 // Opens the entry dialog for entry, or for a new entry of the day: now, or
 // on another day at this time of day.
 HabitScreenOpenEntry :: (app: *InnerBreeze, index: s32, day_index: s32,
@@ -162,11 +135,10 @@ HabitScreenOpenEntry :: (app: *InnerBreeze, index: s32, day_index: s32,
             ended = started
         }
     }
-    HabitScreenTypeTime(storage_local_minutes_of(started),
-        dialog.start_hours[:], dialog.start_minutes[:])
+    dialog.start = storage_local_minutes_of(started)
+    dialog.end = -1
     if habit.span != 0 && ended > 0 {
-        HabitScreenTypeTime(storage_local_minutes_of(ended),
-            dialog.end_hours[:], dialog.end_minutes[:])
+        dialog.end = storage_local_minutes_of(ended)
     }
     dialog.count = HabitAnswersFor(habit, stored[:], stored_count,
         dialog.answers[:])
@@ -174,10 +146,10 @@ HabitScreenOpenEntry :: (app: *InnerBreeze, index: s32, day_index: s32,
     while answer < dialog.count {
         hours: s32 = 0
         minutes: s32 = 0
+        dialog.times[answer] = -1
         if dialog.answers[answer].answer_type == HABIT_ANSWER_TIME &&
         HabitTimeParts(HabitAnswerValue(*dialog.answers[answer]), *hours, *minutes) {
-            HabitScreenTypeTime(hours * 60 + minutes, dialog.hours[answer][:],
-                dialog.minutes[answer][:])
+            dialog.times[answer] = hours * 60 + minutes
         }
         answer += 1
     }
@@ -195,15 +167,12 @@ HabitScreenSaveEntry :: (app: *InnerBreeze) -> bool {
     answer: s32 = 0
     while answer < dialog.count {
         if dialog.answers[answer].answer_type == HABIT_ANSWER_TIME {
-            unused HabitTimeFromTyped(
-                AppTextFromCString(*dialog.hours[answer][0], 4),
-                AppTextFromCString(*dialog.minutes[answer][0], 4),
+            unused HabitAnswerTimeText(dialog.times[answer],
                 dialog.answers[answer].value[:])
         }
         answer += 1
     }
-    start := HabitScreenTypedMinutes(dialog.start_hours[:],
-        dialog.start_minutes[:])
+    start := dialog.start
     if start < 0 {
         return false
     }
@@ -211,8 +180,7 @@ HabitScreenSaveEntry :: (app: *InnerBreeze) -> bool {
     ended := started
     if habit.span != 0 {
         ended = 0
-        end := HabitScreenTypedMinutes(dialog.end_hours[:],
-            dialog.end_minutes[:])
+        end := dialog.end
         if end >= 0 {
             if end < start {
                 end += HABIT_MINUTES_PER_DAY
@@ -266,37 +234,36 @@ HabitScreenAnswerTextField :: (app: *InnerBreeze, field: s32,
     }
 }
 
-// Hours and minutes stop at their largest: 23 and 59.
-HabitScreenClampTyped :: (buffer: []u8, largest: s32) {
-    typed := HabitTimeTypedNumber(AppTextFromCString(*buffer[0],
-        cast(s32)buffer.count))
-    if typed > largest {
-        cursor: s32 = 0
-        unused TextBufferAppendPaddedNumber(buffer, *cursor, largest, 2)
+// A labelled time, picked in the time picker: minutes after midnight, or -1
+// while none is chosen.
+HabitScreenTimePicker :: (app: *InnerBreeze, key: s32, label: string, x: s32,
+    y: s32, width: s32, value: *s32) {
+    if label.count > 0 {
+        caption: TextProps
+        caption.bounds = HabitScreenRect(x, y, width, AppScale(24))
+        caption.text = label
+        caption.font = AppFontSize()
+        caption.wrap = cast(TextWrap)TextWrapEllipsis
+        Text(app.ui.session, caption)
     }
-}
-
-// A labelled time: hours, a colon and minutes, from field and field + 1.
-HabitScreenTimeRow :: (app: *InnerBreeze, label: string, x: s32, y: s32,
-    width: s32, field: s32, hours: []u8, minutes: []u8) {
-    caption: TextProps
-    caption.bounds = HabitScreenRect(x, y, width, AppScale(24))
-    caption.text = label
-    caption.font = AppFontSize()
-    caption.wrap = cast(TextWrap)TextWrapEllipsis
-    Text(app.ui.session, caption)
-    input_y := y + AppScale(HABIT_ANSWER_INPUT_Y)
-    part_w := AppScale(64)
-    colon_w := AppScale(20)
-    HabitScreenAnswerTextField(app, field,
-        HabitScreenRect(x, input_y, part_w, AppScale(44)), hours, true, 2)
-    HabitScreenClampTyped(hours, 23)
-    HabitScreenCountText(app, HabitScreenRect(x + part_w, input_y,
-        colon_w, AppScale(44)), ":", AppFontSize())
-    HabitScreenAnswerTextField(app, field + 1,
-        HabitScreenRect(x + part_w + colon_w, input_y, part_w, AppScale(44)),
-        minutes, true, 2)
-    HabitScreenClampTyped(minutes, 59)
+    picker_w := AppScale(160)
+    if picker_w > width {
+        picker_w = width
+    }
+    picked := TimePicker(app.ui.session, TimePickerProps.{
+            .key = KeyHash("habits/answers/time") + cast(u64)key,
+            .id = 7960 + key,
+            .bounds = HabitScreenRect(x, y + AppScale(HABIT_ANSWER_INPUT_Y),
+                picker_w, AppScale(44)),
+            .label = label,
+            .value = value.*,
+            .now = storage_local_minutes_of(UnixNow()),
+            .now_label = LocaleText("statistics_now_label"),
+            .done_label = LocaleText("done_button"),
+            .scale = MetricsScale()})
+    if picked.changed {
+        value.* = picked.value
+    }
 }
 
 // A yes or no answer: tapping the chosen one again leaves it unanswered.
@@ -347,20 +314,20 @@ HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
     width: s32) {
     dialog := *app.habits.answer_dialog
     if HabitScreenEntryTimeRows(app) == 2 {
-        HabitScreenTimeRow(app, LocaleText("habit_span_start"), x, y, width, 0,
-            dialog.start_hours[:], dialog.start_minutes[:])
+        HabitScreenTimePicker(app, 0, LocaleText("habit_span_start"), x, y,
+            width, *dialog.start)
         y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-        HabitScreenTimeRow(app, LocaleText("habit_span_end"), x, y, width, 2,
-            dialog.end_hours[:], dialog.end_minutes[:])
+        HabitScreenTimePicker(app, 1, LocaleText("habit_span_end"), x, y,
+            width, *dialog.end)
     } else {
-        HabitScreenTimeRow(app, LocaleText("habit_entry_time"), x, y, width, 0,
-            dialog.start_hours[:], dialog.start_minutes[:])
+        HabitScreenTimePicker(app, 0, LocaleText("habit_entry_time"), x, y,
+            width, *dialog.start)
     }
     y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
     index: s32 = 0
     while index < dialog.count {
         answer := *dialog.answers[index]
-        field := HABIT_ENTRY_TIME_FIELDS + index * 2
+        field := index
         label: TextProps
         label.bounds = HabitScreenRect(x, y, width, AppScale(24))
         label.text = FrameTextHold(*app.ui.frame_text,
@@ -370,8 +337,8 @@ HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
         Text(app.ui.session, label)
         input_y := y + AppScale(HABIT_ANSWER_INPUT_Y)
         if answer.answer_type == HABIT_ANSWER_TIME {
-            HabitScreenTimeRow(app, "", x, y, width, field,
-                dialog.hours[index][:], dialog.minutes[index][:])
+            HabitScreenTimePicker(app, 2 + index, "", x, y, width,
+                *dialog.times[index])
         } else if answer.answer_type == HABIT_ANSWER_YES_NO {
             HabitScreenYesNo(app, answer, 7900 + index * 2, x, input_y, width)
         } else if answer.answer_type == HABIT_ANSWER_NUMBER {

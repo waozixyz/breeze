@@ -51,6 +51,8 @@ c :: #system_library "c";
 #import "spinbox_widget"
 #import "text_area_widget"
 #import "text_field_widget"
+#import "time_picker_props"
+#import "time_picker_widget"
 #import "text_widget"
 #import "title_bar_widget"
 #import "toggle_widget"
@@ -528,37 +530,22 @@ habit_edit_goal_height :: (answer_type: s32, goal: HabitGoal) -> s32 {
     return height
 }
 
-// A goal's bound as typed: a number, or hours and minutes; a time's hours
-// stay within a day.
-habit_edit_goal_type_value :: (value: s32, answer_type: s32,
-    whole_out: []u8, minutes_out: []u8) {
-    whole_out[0] = cast(u8)0
-    minutes_out[0] = cast(u8)0
-    if value < 0 {
-        return
-    }
-    if answer_type == HABIT_ANSWER_NUMBER {
-        unused AppFormatS32(value, whole_out)
-        return
-    }
-    hours := value / 60
-    if answer_type == HABIT_ANSWER_TIME {
-        hours = hours % 24
-    }
-    cursor: s32 = 0
-    unused TextBufferAppendPaddedNumber(whole_out, *cursor, hours, 2)
-    cursor = 0
-    unused TextBufferAppendPaddedNumber(minutes_out, *cursor, value % 60, 2)
-}
-
-// Writes a goal's bounds into the slot's typed fields.
+// A number goal's bounds as typed, in the slot's fields; a time goal's
+// bounds are picked as minutes and need none.
 habit_edit_goal_fill :: (app: *InnerBreeze, slot: s32, answer_type: s32,
     goal: HabitGoal) {
     edit := *app.habit_edit
-    habit_edit_goal_type_value(goal.low, answer_type, edit.goal_low[slot][:],
-        edit.goal_low_minutes[slot][:])
-    habit_edit_goal_type_value(goal.high, answer_type, edit.goal_high[slot][:],
-        edit.goal_high_minutes[slot][:])
+    edit.goal_low[slot][0] = cast(u8)0
+    edit.goal_high[slot][0] = cast(u8)0
+    if answer_type != HABIT_ANSWER_NUMBER {
+        return
+    }
+    if goal.low >= 0 {
+        unused AppFormatS32(goal.low, edit.goal_low[slot][:])
+    }
+    if goal.high >= 0 {
+        unused AppFormatS32(goal.high, edit.goal_high[slot][:])
+    }
 }
 
 // Every question's typed fields from their goals, as after questions move.
@@ -569,30 +556,6 @@ habit_edit_goal_fill_all :: (app: *InnerBreeze) {
         habit_edit_goal_fill(app, index, edit.questions[index].answer_type,
             edit.questions[index].goal)
         index += 1
-    }
-}
-
-// A typed bound, or -1 while it is empty.
-habit_edit_goal_typed :: (answer_type: s32, whole: []u8, minutes: []u8) -> s32 {
-    typed := HabitTimeTypedNumber(AppTextFromCString(*whole[0],
-        cast(s32)whole.count))
-    if typed < 0 || answer_type == HABIT_ANSWER_NUMBER {
-        return typed
-    }
-    typed_minutes := HabitTimeTypedNumber(AppTextFromCString(*minutes[0],
-        cast(s32)minutes.count))
-    if typed_minutes < 0 {
-        typed_minutes = 0
-    }
-    return typed * 60 + typed_minutes
-}
-
-habit_edit_clamp_typed :: (buffer: []u8, largest: s32) {
-    typed := HabitTimeTypedNumber(AppTextFromCString(*buffer[0],
-        cast(s32)buffer.count))
-    if typed > largest {
-        cursor: s32 = 0
-        unused TextBufferAppendPaddedNumber(buffer, *cursor, largest, 2)
     }
 }
 
@@ -639,41 +602,51 @@ habit_edit_goal_field :: (app: *InnerBreeze, code: s32, bounds: Rectangle,
     return result.focused
 }
 
-// One bound's fields at x: a number, or hours, a colon and minutes. Returns
-// their width.
+// One bound at x: a number typed in its field, or a time picked in the
+// time picker. Returns its width.
 habit_edit_goal_bound :: (app: *InnerBreeze, slot: s32, high: bool,
-    answer_type: s32, x: s32, y: s32) -> s32 {
+    answer_type: s32, goal: *HabitGoal, x: s32, y: s32) -> s32 {
     edit := *app.habit_edit
-    code := slot * 4 + ifx high then 2 else 0
-    whole := edit.goal_low[slot][:]
-    minutes := edit.goal_low_minutes[slot][:]
-    if high {
-        whole = edit.goal_high[slot][:]
-        minutes = edit.goal_high_minutes[slot][:]
-    }
     if answer_type == HABIT_ANSWER_NUMBER {
+        code := slot * 2 + ifx high then 1 else 0
+        typed := edit.goal_low[slot][:]
+        if high {
+            typed = edit.goal_high[slot][:]
+        }
         unused habit_edit_goal_field(app, code, Rectangle.{cast(float32)x,
             cast(float32)y, cast(float32)AppScale(120), cast(float32)AppScale(44)},
-            whole, 9)
+            typed, 9)
+        number := HabitTimeTypedNumber(AppTextFromCString(*typed[0],
+            cast(s32)typed.count))
+        if number >= 0 && high {
+            goal.high = number
+        } else if number >= 0 {
+            goal.low = number
+        }
         return AppScale(120)
     }
-    part_w := AppScale(56)
-    unused habit_edit_goal_field(app, code, Rectangle.{cast(float32)x,
-        cast(float32)y, cast(float32)part_w, cast(float32)AppScale(44)},
-        whole, 2)
-    if answer_type == HABIT_ANSWER_TIME {
-        habit_edit_clamp_typed(whole, 23)
+    picker_w := AppScale(132)
+    local := LocalNow()
+    now := ifx local.valid then local.hour * 60 + local.minute else 0
+    picked := TimePicker(app.ui.session, TimePickerProps.{
+            .key = KeyHash("habit/edit/goal-time") + cast(u64)(slot * 2 +
+            ifx high then 1 else 0),
+            .id = 7940 + slot * 2 + ifx high then 1 else 0,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)picker_w, cast(float32)AppScale(44)},
+            .label = LocaleText(ifx high then "habit_goal_before"
+            else "habit_goal_after"),
+            .value = ifx high then goal.high else goal.low,
+            .now = now,
+            .now_label = LocaleText("statistics_now_label"),
+            .done_label = LocaleText("done_button"),
+            .scale = MetricsScale()})
+    if picked.changed && picked.value >= 0 && high {
+        goal.high = picked.value
+    } else if picked.changed && picked.value >= 0 {
+        goal.low = picked.value
     }
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + part_w), cast(float32)y,
-                cast(float32)AppScale(16), cast(float32)AppScale(44)},
-            .text = ":", .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter})
-    unused habit_edit_goal_field(app, code + 1, Rectangle.{
-            cast(float32)(x + part_w + AppScale(16)), cast(float32)y,
-            cast(float32)part_w, cast(float32)AppScale(44)}, minutes, 2)
-    habit_edit_clamp_typed(minutes, 59)
-    return part_w * 2 + AppScale(16)
+    return picker_w
 }
 
 // "Good when" and the goal's options, then its values: from, up to, or
@@ -711,7 +684,7 @@ habit_edit_goal :: (app: *InnerBreeze, slot: s32, answer_type: s32,
     }
     bound_x := x
     if goal.kind != HABIT_GOAL_AT_MOST {
-        bound_x += habit_edit_goal_bound(app, slot, false, answer_type,
+        bound_x += habit_edit_goal_bound(app, slot, false, answer_type, goal,
             bound_x, y + AppScale(4))
     }
     if goal.kind == HABIT_GOAL_BETWEEN {
@@ -725,19 +698,8 @@ habit_edit_goal :: (app: *InnerBreeze, slot: s32, answer_type: s32,
         bound_x += AppScale(40)
     }
     if goal.kind != HABIT_GOAL_AT_LEAST {
-        unused habit_edit_goal_bound(app, slot, true, answer_type, bound_x,
-            y + AppScale(4))
-    }
-    edit := *app.habit_edit
-    low := habit_edit_goal_typed(answer_type, edit.goal_low[slot][:],
-        edit.goal_low_minutes[slot][:])
-    high := habit_edit_goal_typed(answer_type, edit.goal_high[slot][:],
-        edit.goal_high_minutes[slot][:])
-    if low >= 0 {
-        goal.low = low
-    }
-    if high >= 0 {
-        goal.high = high
+        unused habit_edit_goal_bound(app, slot, true, answer_type, goal,
+            bound_x, y + AppScale(4))
     }
     return y + AppScale(52)
 }
