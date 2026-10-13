@@ -59,7 +59,10 @@ db.executescript(
         icon INTEGER NOT NULL DEFAULT 0,
         schedule TEXT NOT NULL DEFAULT '',
         questions TEXT NOT NULL DEFAULT '',
-        span INTEGER NOT NULL DEFAULT 0);
+        span INTEGER NOT NULL DEFAULT 0,
+        span_goal INTEGER NOT NULL DEFAULT 0,
+        span_low INTEGER NOT NULL DEFAULT 0,
+        span_high INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE habit_entries(
         id TEXT PRIMARY KEY, user_id TEXT, habit_id TEXT, local_date INTEGER,
         started_at INTEGER, ended_at INTEGER, answers TEXT,
@@ -68,6 +71,13 @@ db.executescript(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
         PRIMARY KEY(habit_id, local_date));
+    CREATE TABLE habit_changes(
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, habit_id TEXT NOT NULL,
+        changed_at INTEGER NOT NULL, kind INTEGER NOT NULL,
+        question INTEGER NOT NULL DEFAULT 0,
+        question_text TEXT NOT NULL DEFAULT '',
+        old_value TEXT NOT NULL DEFAULT '', new_value TEXT NOT NULL DEFAULT '',
+        deleted_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
     CREATE TABLE sync_remote_habit_map(
         old_id TEXT PRIMARY KEY, new_id TEXT);
     """

@@ -112,11 +112,19 @@ find_word yoga-open streak "the open habit shows its streak" >/dev/null
 # right edge above the figures, and gives Yoga an icon.
 read -r _ week_y < <(find_word yoga-open week "the open habit shows this week")
 day_w=$((day1_x - today_x))
-tap "$((today_x + day_w * 6 - 8))" "$((week_y - 55))"
+edit_x=$((today_x + day_w * 6 - 8))
+tap "$edit_x" "$((week_y - 55))"
 for attempt in $(seq 1 12); do
   shot editor
   word "$test_dir/editor.png" icon >/dev/null 2>&1 && break
-  xdotool mousemove --window "$window" 200 300 click 5 click 5
+  # While the details still show, the tap did not reach their edit action
+  # (a slow runner can drop it); tap it again where it is now. Once the
+  # editor is open, scroll down to its icons.
+  if week_at="$(word "$test_dir/editor.png" week 2>/dev/null)"; then
+    tap "$edit_x" "$((${week_at#* } - 55))"
+  else
+    xdotool mousemove --window "$window" 200 300 click 5 click 5
+  fi
   sleep 0.3
 done
 read -r icon_x icon_y < <(find_word editor icon "the editor has no icons")
