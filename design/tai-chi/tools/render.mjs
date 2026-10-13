@@ -6,8 +6,9 @@
 //   node tools/render.mjs --item full/normal --video
 //   node tools/render.mjs --lessons            (every lesson, demo video each)
 //
-// Options: --view behind|front|side|threeQuarter|top, --figure sageBun|
-// sageMale|mannequin, --theme light|dark, --width, --height, --fps,
+// Options: --view behind|front|side|threeQuarter|top, --figure monk|
+// tibetanWoman|sageBun|sageMale|mannequin, --theme light|dark, --width,
+// --height, --fps,
 // --label (draw title, cue and time), --out DIR, --name NAME.
 
 import { spawn } from 'node:child_process'

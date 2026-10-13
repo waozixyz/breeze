@@ -11,7 +11,8 @@ import { makeRig } from './rig.js'
 import { solvePose } from './solve.js'
 import { createFigure, styleNames } from './view/figure.js'
 import './view/characters.js'
-import { VIEWS, createCameraRig, createStage } from './view/stage.js'
+import { THEMES, VIEWS, createCameraRig, createStage } from './view/stage.js'
+import { createPaintedFigure, loadCharacter } from './painted/figure.js'
 
 const params = new URLSearchParams(location.search)
 const renderMode = params.has('render')
@@ -19,7 +20,13 @@ if (renderMode) {
     document.body.classList.add('render')
 }
 
-const FIGURE_LABELS = { mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male' }
+const FIGURE_LABELS = { mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', monk: 'Monk', tibetanWoman: 'Tibetan Woman' }
+// Painted 2D characters: cut-out paintings over the same solved body.
+const PAINTED = {
+    monk: 'characters/monk/character.json',
+    tibetanWoman: 'characters/tibetan-woman/character.json',
+}
+const DEG = Math.PI / 180
 const course = buildCourse()
 
 const state = {
@@ -31,7 +38,7 @@ const state = {
     loop: true,
     view: 'behind',
     mirror: false,
-    figure: params.get('figure') ?? 'sageBun',
+    figure: params.get('figure') ?? 'monk',
     theme: params.get('theme') ?? 'light',
     footprints: true,
     weight: true,
@@ -52,9 +59,15 @@ orbit.target.set(0, 0.9, 0)
 let rig = makeRig(state.figure)
 let figure = null
 let ghost = null
+let painted = null
+const characters = new Map()
 
-function setFigure(name) {
-    if (!styleNames().includes(name)) {
+function figureNames() {
+    return [...Object.keys(PAINTED), ...styleNames()]
+}
+
+async function setFigure(name) {
+    if (!figureNames().includes(name)) {
         name = 'mannequin'
     }
     state.figure = name
@@ -65,12 +78,28 @@ function setFigure(name) {
             old.dispose()
         }
     }
-    figure = createFigure(rig, name, { theme: state.theme })
-    stage.scene.add(figure.root)
-    ghost = createFigure(rig, name, { theme: state.theme })
-    ghost.setGhost(0.22)
-    ghost.root.visible = state.ghost
-    stage.scene.add(ghost.root)
+    figure = null
+    ghost = null
+    painted?.dispose()
+    painted = null
+    if (PAINTED[name]) {
+        if (!characters.has(name)) {
+            characters.set(name, loadCharacter(PAINTED[name]))
+        }
+        const character = await characters.get(name)
+        if (state.figure !== name) {
+            return
+        }
+        painted = createPaintedFigure(character, rig)
+        painted.setBackground(THEMES[state.theme]?.background ?? THEMES.light.background)
+    } else {
+        figure = createFigure(rig, name, { theme: state.theme })
+        stage.scene.add(figure.root)
+        ghost = createFigure(rig, name, { theme: state.theme })
+        ghost.setGhost(0.22)
+        ghost.root.visible = state.ghost
+        stage.scene.add(ghost.root)
+    }
     footprintGeometry = null
     rebuildFootprints()
     renderToolbar()
@@ -259,7 +288,7 @@ function renderToolbar() {
     }
     const figures = document.getElementById('figures')
     figures.innerHTML = ''
-    for (const name of styleNames()) {
+    for (const name of figureNames()) {
         const button = document.createElement('button')
         button.textContent = FIGURE_LABELS[name] ?? name
         button.className = state.figure === name ? 'on' : ''
@@ -281,9 +310,14 @@ function renderToolbar() {
         toggles.append(button)
     }
     toggle('Mirror', 'mirror', () => canvas.classList.toggle('mirrored', state.mirror), 'Flip the picture left to right, like a mirror')
-    toggle('Footprints', 'footprints')
+    // Footprints and the next-pose ghost are drawn in the 3D scene only.
+    if (!PAINTED[state.figure]) {
+        toggle('Footprints', 'footprints')
+    }
     toggle('Weight', 'weight', () => { document.getElementById('weight').style.display = state.weight ? '' : 'none' })
-    toggle('Next pose', 'ghost', () => { ghost.root.visible = state.ghost }, 'Show the next key pose as a ghost')
+    if (!PAINTED[state.figure]) {
+        toggle('Next pose', 'ghost', () => { ghost.root.visible = state.ghost }, 'Show the next key pose as a ghost')
+    }
     toggle('Checks', 'checks', () => { if (state.checks) { runChecks() } else { document.getElementById('checks').classList.add('hidden') } }, 'Run the motion checks for this item')
     const theme = document.createElement('button')
     theme.textContent = state.theme === 'light' ? 'Dark' : 'Light'
@@ -296,7 +330,7 @@ function setTheme(name) {
     state.theme = name
     document.documentElement.dataset.theme = name
     stage.setTheme(name)
-    setFigure(state.figure)
+    return setFigure(state.figure)
 }
 
 function setView(name) {
@@ -519,23 +553,51 @@ function drawFrame(dt, snap = false) {
     const timeline = state.data.timeline
     const sample = timeline.sample(timeline.start + state.time)
     const solved = solvePose(sample.pose, rig)
-    figure.update(solved)
-    if (state.ghost) {
-        ghost.update(solvePose({ ...sample.to.pose, look: sample.to.pose.look }, rig))
-    }
-    updateFootprints(sample, solved)
     if (state.view === 'free') {
         orbit.update()
     } else {
         cameraRig.update(solved.joints.pelvis, sample.pose.facing, dt, snap)
     }
-    stage.follow(solved.joints.pelvis)
-    stage.render()
+    if (painted) {
+        drawPainted(solved)
+    } else if (figure) {
+        figure.update(solved)
+        if (state.ghost) {
+            ghost.update(solvePose({ ...sample.to.pose, look: sample.to.pose.look }, rig))
+        }
+        updateFootprints(sample, solved)
+        stage.follow(solved.joints.pelvis)
+        stage.render()
+    }
     updateHud(sample)
     if (state.weight) {
         updateWeight(solved)
     }
     return { sample, solved }
+}
+
+// The painted figure is seen flat along the 3D camera's direction, framed
+// like the 3D view but a little closer.
+function drawPainted(solved) {
+    const camera = stage.camera
+    const target = state.view === 'free'
+        ? orbit.target.clone()
+        : cameraRig.center.clone().setY(VIEWS[state.view]?.target ?? 0.9)
+    const offset = camera.position.clone().sub(target)
+    const flat = Math.hypot(offset.x, offset.z)
+    const yaw = Math.atan2(offset.x, offset.z)
+    const tilt = Math.min(14 * DEG, Math.max(0, Math.atan2(offset.y, flat)))
+    const distance = Math.max(2.5, state.view === 'top' ? 4.4 : offset.length())
+    const viewHeight = 2 * distance * Math.tan((34 * DEG) / 2) * 0.8
+    painted.update(solved, {
+        yaw,
+        tilt,
+        center: state.view === 'free' ? target : cameraRig.center,
+        viewHeight,
+        viewCenter: Math.max(0.85, target.y),
+        aspect: camera.aspect,
+    })
+    painted.render(stage.renderer)
 }
 
 let last = performance.now()
@@ -638,12 +700,12 @@ function drawLabel(context, sample, width, height) {
     }
 }
 
-function start() {
+async function start() {
     renderOutline()
     document.documentElement.dataset.theme = state.theme
     stage.setTheme(state.theme)
-    setFigure(state.figure)
-    const firstItem = params.get('item') ?? 'lesson-1/commencing/demo'
+    await setFigure(state.figure)
+    const firstItem = params.get('item') ?? 'full/normal'
     selectItem(firstItem, { time: Number(params.get('t') ?? 0) })
     if (params.get('view')) {
         setView(params.get('view'))
