@@ -567,7 +567,6 @@ test_habit_questions_and_entries :: () {
     check_true("each question has its own id",
         habit.questions[0].id != habit.questions[1].id)
     habit.span = 1
-    habit.span_goal = HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 900, .high = 1080}
     time_id := habit.questions[0].id
     storage_habits_save(cast(*void)*habits_b)
     check_int("the habit is queued to sync",
@@ -585,9 +584,7 @@ test_habit_questions_and_entries :: () {
         habit.questions[0].goal.high == 480)
     check_true("a question without a goal has none",
         habit.questions[1].goal.kind == HABIT_GOAL_NONE)
-    check_true("span and its goal kept", habit.span == 1 &&
-        habit.span_goal.kind == HABIT_GOAL_BETWEEN &&
-        habit.span_goal.low == 900 && habit.span_goal.high == 1080)
+    check_int("span kept", habit.span, 1)
     check_true("id kept", habit.questions[0].id == time_id)
 
     none: [1]HabitAnswer
@@ -658,7 +655,7 @@ test_entry_statistics :: () {
     root := make_root("habit-entry-stats")
     check_true("init db", storage_init(root) != 0)
     storage_close()
-    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions,span,span_goal,span_low) VALUES('sleep',(SELECT id FROM users LIMIT 1),'Sleep',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"text\":\"Bedtime\",\"goal\":\"at_most\",\"low\":0,\"high\":30},{\"id\":2,\"type\":\"number\",\"text\":\"Pages\",\"goal\":\"between\",\"low\":2,\"high\":5},{\"id\":3,\"type\":\"yes_no\",\"text\":\"Tea\",\"goal\":\"yes\"},{\"id\":4,\"type\":\"text\",\"text\":\"Dream\"}]',1,1,480);INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('a',(SELECT id FROM users LIMIT 1),'sleep',20260701,1782950000,1782950000+30600,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"23:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"2\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"yes\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Flying\"}]',0,1782200000),('b',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783036000,1783036000+25200,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"00:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"3\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"no\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Sea\"}]',0,1782200000),('c',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783050000,1783050000+600,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"9\"}]',0,1782200000),('gone',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783060000,1783061000,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"100\"}]',1,1782200000);")
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions,span) VALUES('sleep',(SELECT id FROM users LIMIT 1),'Sleep',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"text\":\"Bedtime\",\"goal\":\"at_most\",\"low\":0,\"high\":30},{\"id\":2,\"type\":\"number\",\"text\":\"Pages\",\"goal\":\"between\",\"low\":2,\"high\":5},{\"id\":3,\"type\":\"yes_no\",\"text\":\"Tea\",\"goal\":\"yes\"},{\"id\":4,\"type\":\"text\",\"text\":\"Dream\"}]',1);INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('a',(SELECT id FROM users LIMIT 1),'sleep',20260701,1782950000,1782950000+30600,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"23:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"2\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"yes\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Flying\"}]',0,1782200000),('b',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783036000,1783036000+25200,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"00:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"3\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"no\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Sea\"}]',0,1782200000),('c',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783050000,1783050000+600,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"9\"}]',0,1782200000),('gone',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783060000,1783061000,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"100\"}]',1,1782200000);")
     check_true("reopen db", storage_init(root) != 0)
     habits_b = Habits.{}
     check_true("load habit", storage_habits_load(cast(*void)*habits_b) != 0)
@@ -705,8 +702,7 @@ test_entry_statistics :: () {
     unused storage_habit_span_stats(habit, days[:], *lengths, *starts, *ends)
     check_true("span lengths in minutes", lengths.point_count == 3 &&
         lengths.highest == 510 && lengths.lowest == 10)
-    check_true("spans of at least 8 hours are good",
-        lengths.judged == 3 && lengths.good == 1)
+    check_int("spans are measured, not judged", lengths.judged, 0)
     check_int("the starts are counted too", starts.point_count, 3)
     check_true("Unix time and local day agree",
         storage_local_date_of(storage_unix_at(20260701, 450)) == 20260701 &&
