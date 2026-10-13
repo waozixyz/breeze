@@ -106,6 +106,12 @@ lumi_rows_measured: s32;
 // The chat changed while its rows were still being measured.
 lumi_rows_history_pending: bool;
 lumi_pending_route: s32 = -1;
+// The title bar's wrench opens Settings > Lumi after the frame.
+lumi_pending_settings: bool;
+// Opening Lumi shows its online terms until they are answered, once a run:
+// after "Not now" they wait for the next run or the connection button.
+lumi_agreement_due: bool;
+lumi_agreement_prompted: bool;
 lumi_pending_practice: s32 = -1;
 lumi_choosing_habit: bool;
 lumi_choosing_diary: bool;
@@ -147,6 +153,7 @@ app_lumi_reset :: () {
     lumi_draft_width = 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
+    lumi_pending_settings = false
     lumi_history_loading = false
     lumi_choosing_habit = false
     lumi_choosing_diary = false
@@ -209,8 +216,18 @@ LumiAgreementPrepare :: (width: s32) {
     lumi_ui.agreement_height = lumi_agreement_height
 }
 
-// The title bar's switch. Going online without the agreement for where
-// requests go opens the terms instead: 1 online, 2 terms shown, 0 offline.
+// Whether opening Lumi now shows its online terms: not yet agreed for where
+// requests would go, never withdrawn or switched offline, with an own
+// provider ready to name, and not shown before in this run.
+LumiAgreementPromptWanted :: () -> bool {
+    return LUMI_AGREEMENT_REQUIRED != 0 && !lumi_agreement_prompted && lumi_ui.agreement == 0 &&
+    StoredAccountMode() != AccountModeDelegate && LumiOnlineWanted() && !LumiAiAgreed() &&
+    !LumiNodeDeclined() && (!LumiOwnProviderSelected() || LumiOwnProviderReady())
+}
+
+// The title bar's connection button. Going online without the agreement
+// for where requests go opens the terms instead: 1 online, 2 terms shown,
+// 0 offline.
 LumiSetOnline :: (on: bool) -> s32 {
     if StoredAccountMode() == AccountModeDelegate {
         return 0
@@ -696,6 +713,11 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostScalar("bool", ifx chosen then 1 else 0)
         return 1
     }
+    if name == "OpenLumiSettingsHost" && count == 0 {
+        lumi_pending_settings = true
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
     // The offline harness runs the same validated tools as the online model.
     if name == "LumiToolHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
@@ -1038,6 +1060,7 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_history_loading = false
         lumi_ui.follow_end = true
         lumi_ui.scroll = 1000000
+        lumi_agreement_due = true
     }
     lumi_last_drawn = opened_at
     LumiPrepareTools(app)
@@ -1110,6 +1133,13 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_draft_height = cast(s32)draft.bounds.height
     }
     lumi_ui.draft_height = lumi_draft_height
+    if lumi_agreement_due {
+        lumi_agreement_due = false
+        if LumiAgreementPromptWanted() {
+            lumi_agreement_prompted = true
+            lumi_ui.agreement = 1
+        }
+    }
     // The terms wrap clear of their scroll bar, as Lumi's view draws them.
     LumiAgreementPrepare(column_width - AppScale(24))
     typed: [512]u8
@@ -1119,6 +1149,7 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.input.commit = enter && !lumi_ui.input.shift
     lumi_pending_route = -1
     lumi_pending_practice = -1
+    lumi_pending_settings = false
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     CellsUiBegin(LumiUiCall, cast(*void)app)
     response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
@@ -1132,6 +1163,12 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     if lumi_pending_route >= 0 {
         app_apply_nav_route(app, lumi_pending_route)
+    }
+    if lumi_pending_settings {
+        lumi_pending_settings = false
+        app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
+        app.settings_tab = SETTINGS_TAB_LUMI
+        app.settings_overview = 0
     }
 }
 

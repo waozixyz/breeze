@@ -2,11 +2,13 @@
 private display, at phone size (1080x1920, UI scale 2.5) and desktop size
 (900x720), against a local stand-in for an OpenAI-compatible provider.
 
-Lumi starts offline: an unknown request gets the offline answer and a habit
-request still works on the device, while the provider receives nothing.
-The title bar's switch opens the terms; after agreeing, the provider gets
-the request with the key only in its Authorization header. Switched off,
-nothing is sent again. Settings > Lumi shows the provider and reopens the
+Opening Lumi shows its online terms until they are answered, once a run.
+After "Not now" Lumi stays offline: an unknown request gets the offline
+answer and a habit request still works on the device, while the provider
+receives nothing. The title bar's connection button opens the terms; after
+agreeing, the provider gets the request with the key only in its
+Authorization header. Switched off, nothing is sent again. The title bar's
+wrench opens Settings > Lumi, which shows the provider and reopens the
 terms. Screenshots of each step are kept in build/lumi-harness-ui-test.
 """
 import ast
@@ -151,12 +153,17 @@ def setting(profile, key):
     return row[0] if row else None
 
 
-def tap_switch(window, size, online):
-    """Lumi's title bar keeps its switch, 184 units wide, 12 from the right."""
+def tap_title_button(window, size, button):
+    """Lumi's title bar ends 12 units from the right with two 40-unit
+    buttons 4 apart: the connection button, then the wrench."""
     width, _, scale = size
     scale /= 10
-    left = width - round((12 + 184) * scale)
-    tap(window, left + round((138 if online else 46) * scale), round(26 * scale))
+    centre = 12 + 20 if button == 'wrench' else 12 + 40 + 4 + 20
+    tap(window, width - round(centre * scale), round(26 * scale))
+
+
+def terms_open(window, label):
+    return any(row['text'] == 'Agree' for row in words(window, label))
 
 
 def tap_composer(window, size, label):
@@ -243,7 +250,20 @@ def run(name, size, port):
                            lumi_provider='own', lumi_provider_url=f'http://127.0.0.1:{port}/v1',
                            lumi_provider_model='test-model', lumi_provider_key=KEY))
         with application(profile, size, name) as window:
+            # Opening Lumi asks right away; "Not now" keeps it offline.
+            wait_for(lambda: terms_open(window, name + '-prompt-wait'), 'Opening Lumi did not show the terms')
+            capture(window, name + '-prompt-on-open')
+            assert not Provider.requests, 'Showing the terms sent something'
+            tap_word(window, 'Not', name + '-not-now', lowest=True)
+            time.sleep(0.8)
+            assert not terms_open(window, name + '-after-not-now'), 'The terms stayed open'
             capture(window, name + '-title-offline')
+            # Once a run: leaving Lumi and coming back doesn't ask again.
+            action(window, 'mcp.open_view', dict(view='settings'))
+            time.sleep(1.5)
+            action(window, 'mcp.open_view', dict(view='lumi'))
+            time.sleep(0.8)
+            assert not terms_open(window, name + '-reopened'), 'The terms showed twice in one run'
             answer = send(window, profile, 'tell me a joke', name + '-1')
             assert 'offline' in answer.lower() or 'title bar' in answer, answer
             answer = send(window, profile, 'add a habit stretching every day at 8', name + '-2')
@@ -264,9 +284,8 @@ def run(name, size, port):
             capture(window, name + '-habits-offline')
             assert not Provider.requests, 'Lumi reached the provider while offline'
 
-            tap_switch(window, size, True)
-            wait_for(lambda: any(row['text'] == 'Agree' for row in words(window, name + '-terms-wait')),
-                     'The terms did not open')
+            tap_title_button(window, size, 'connection')
+            wait_for(lambda: terms_open(window, name + '-terms-wait'), 'The terms did not open')
             capture(window, name + '-agreement')
             assert not Provider.requests, 'Opening the terms sent something'
             tap_word(window, 'Agree', name + '-agree', lowest=True)
@@ -290,23 +309,18 @@ def run(name, size, port):
             assert KEY not in json.dumps(body)
             capture(window, name + '-online-answer')
 
-            tap_switch(window, size, False)
+            tap_title_button(window, size, 'connection')
+            time.sleep(0.4)
+            capture(window, name + '-title-offline-again')
             answer = send(window, profile, 'another joke please', name + '-4')
             assert len(Provider.requests) == 1, 'Lumi reached the provider while switched off'
 
-            action(window, 'mcp.open_view', dict(view='settings'))
+            # The wrench opens Settings > Lumi.
+            tap_title_button(window, size, 'wrench')
             time.sleep(0.8)
-            # Settings lists Lumi's tab right after Appearance.
-            found = words(window, name + '-settings-tabs')
-            appearance = [row for row in found if row['text'] == 'Appearance']
-            assert appearance, 'Settings did not open'
-            below = sorted((row for row in found if row['text'] == 'Lumi'
-                            and int(row['top']) > int(appearance[0]['top'])),
-                           key=lambda row: int(row['top']))
-            assert below, 'Settings has no Lumi tab'
-            tap(window, int(below[0]['left']) + int(below[0]['width']) // 2,
-                int(below[0]['top']) + int(below[0]['height']) // 2)
-            time.sleep(0.8)
+            found = words(window, name + '-settings-lumi-words')
+            assert any(row['text'] == 'Read' for row in found), 'The wrench did not open Settings > Lumi'
+            assert any(row['text'] == 'Model' for row in found), 'Settings > Lumi shows no provider'
             capture(window, name + '-settings-lumi')
             assert setting(profile, 'lumi_provider_key') == KEY
             tap_word(window, 'Read', name + '-read-terms')
@@ -323,5 +337,5 @@ try:
         run(name, size, server.server_address[1])
 finally:
     server.shutdown()
-print('Lumi harness UI: offline until agreed, terms, own provider request and Settings > Lumi passed; '
-      f'screenshots in {OUTPUT.relative_to(ROOT)}')
+print('Lumi harness UI: terms on opening once a run, offline until agreed, connection button, '
+      f'own provider request and the wrench to Settings > Lumi passed; screenshots in {OUTPUT.relative_to(ROOT)}')
