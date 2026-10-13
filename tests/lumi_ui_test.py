@@ -328,7 +328,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert "habit is complete for today" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT completed,count FROM habit_days WHERE habit_id='lumi-counting-habit'") == [(1, 3)]
         send(window, profile, "Something you do not understand")
-        assert chat(profile)[-1]["text"] == "What would you like me to do?"
+        # Offline, what Lumi can't read stays here, with how to ask the AI.
+        assert chat(profile)[-1]["text"].startswith("I didn’t understand that on this device."), \
+            chat(profile)[-1]["text"]
         send(window, profile, "write this to my diary:")
         assert chat(profile)[-1]["text"] == "What would you like to write?"
         send(window, profile, "A calm morning\nThen a walk")
