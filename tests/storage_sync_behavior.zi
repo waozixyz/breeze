@@ -882,7 +882,7 @@ remote_records :: (name: string, sql: string) {
     set_account()
     storage_close()
     raw_exec(root, sql)
-    raw_exec(root, "DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1782300000 FROM habits;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1782300000 FROM habit_days;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'session',id,0,1782300000 FROM sessions;")
+    raw_exec(root, "DELETE FROM sync_outbox;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,1782300000 FROM habits;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',habit_id,local_date,1782300000 FROM habit_days;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'session',id,0,1782300000 FROM sessions;INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,1782300000 FROM habit_entries;")
     check_true("reopen remote device", storage_init(root) != 0)
     check_true("remote payload builds", build_payload())
     remote_records_text = TextBuffer.{}
@@ -1290,27 +1290,74 @@ test_waiting_review_merges :: () {
     storage_close()
 }
 
-// A habit's questions and a day's answers reach another device. A record
-// from an app before them, without these fields, keeps what is there.
-test_questions_and_answers_sync :: () {
-    remote_records("questions-remote", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions) VALUES('meal',(SELECT id FROM users LIMIT 1),'First meal',1,2,3,0,0,0,1,0,1782290000,'[{\"id\":7,\"type\":\"time\",\"text\":\"Started eating\"}]');INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at,answers) VALUES('meal',20260624,1,1,0,1782290000,'[{\"id\":7,\"type\":\"time\",\"question\":\"Started eating\",\"value\":\"07:30\"}]');")
+// A habit's questions and its entries reach another device. A habit
+// record from an app before questions keeps them; an older entry does not
+// replace a newer one, and a deletion reaches the other device.
+test_questions_and_entries_sync :: () {
+    remote_records("questions-remote", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions,span,span_goal,span_low) VALUES('meal',(SELECT id FROM users LIMIT 1),'First meal',1,2,3,0,0,0,1,0,1782290000,'[{\"id\":7,\"type\":\"time\",\"text\":\"Started eating\",\"goal\":\"at_most\",\"low\":0,\"high\":480}]',1,1,960);INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('entry-1',(SELECT id FROM users LIMIT 1),'meal',20260624,1782290000,1782300000,'[{\"id\":7,\"type\":\"time\",\"question\":\"Started eating\",\"value\":\"07:30\"}]',0,1782290000);")
     root := make_root("questions-local")
     check_true("init local device", storage_init(root) != 0)
     set_account()
     check_true("apply the remote records",
         storage_apply_sync_response_json(snapshot_response(20, "questions-hash")) != 0)
-    check_int("questions arrive with the habit", count_of(root,
-        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND json_extract(questions,'$[0].type')='time'"), 1)
-    check_int("answers arrive with the day", count_of(root,
-        "SELECT COUNT(*) FROM habit_days WHERE habit_id='meal' AND local_date=20260624 AND json_extract(answers,'$[0].value')='07:30' AND completed=1"), 1)
-    older: string = "{\"protocol_version\":6,\"server_version\":21,\"server_state_hash\":\"older-hash\",\"changes\":{\"habits\":[{\"id\":\"meal\",\"name\":\"First meal\",\"color_r\":1,\"color_g\":2,\"color_b\":3,\"sync_mode\":0,\"sync_activity\":0,\"counter_enabled\":false,\"counter_target\":1,\"sort_order\":1,\"deleted_at\":0,\"updated_at\":\"2026-06-30T00:00:00Z\"}],\"habit_days\":[{\"habit_id\":\"meal\",\"local_date\":20260624,\"completed\":true,\"count\":1,\"updated_at\":\"2026-06-30T00:00:00Z\"}]}}"
-    // Decrypted records go through the same habit and day apply.
+    check_int("questions and goals arrive with the habit", count_of(root,
+        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND json_extract(questions,'$[0].goal')='at_most' AND span=1 AND span_goal=1 AND span_low=960"), 1)
+    check_int("the entry arrives with its answers", count_of(root,
+        "SELECT COUNT(*) FROM habit_entries WHERE id='entry-1' AND habit_id='meal' AND local_date=20260624 AND started_at=1782290000 AND ended_at=1782300000 AND json_extract(answers,'$[0].value')='07:30' AND deleted_at=0"), 1)
+    older: string = "{\"protocol_version\":6,\"changes\":{\"habits\":[{\"id\":\"meal\",\"name\":\"First meal\",\"color_r\":1,\"color_g\":2,\"color_b\":3,\"sync_mode\":0,\"sync_activity\":0,\"counter_enabled\":false,\"counter_target\":1,\"sort_order\":1,\"deleted_at\":0,\"updated_at\":\"2026-06-30T00:00:00Z\"}]}}"
+    // Decrypted records go through the same apply.
     check_true("apply an older app's habit", storage_apply_sync_habits_json(older) != 0)
-    check_true("apply an older app's day", storage_apply_sync_habit_days_json(older) != 0)
-    check_int("an older app's habit keeps the questions", count_of(root,
-        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND updated_at>1782290000"), 1)
-    check_int("an older app's day keeps the answers", count_of(root,
-        "SELECT COUNT(*) FROM habit_days WHERE habit_id='meal' AND json_extract(answers,'$[0].value')='07:30' AND updated_at>1782290000"), 1)
+    check_int("an older app's habit keeps the questions and span", count_of(root,
+        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND span=1 AND updated_at>1782290000"), 1)
+    stale: string = "{\"changes\":{\"habit_entries\":[{\"id\":\"entry-1\",\"habit_id\":\"meal\",\"local_date\":20260624,\"started_at\":1,\"ended_at\":2,\"answers\":\"\",\"deleted_at\":0,\"updated_at\":\"2026-06-01T00:00:00Z\"}]}}"
+    check_true("apply an older entry", storage_apply_sync_habit_entries_json(stale) != 0)
+    check_int("an older entry does not replace a newer one", count_of(root,
+        "SELECT COUNT(*) FROM habit_entries WHERE id='entry-1' AND started_at=1782290000"), 1)
+    removed: string = "{\"changes\":{\"habit_entries\":[{\"id\":\"entry-1\",\"habit_id\":\"meal\",\"local_date\":20260624,\"started_at\":1782290000,\"ended_at\":1782300000,\"answers\":\"\",\"deleted_at\":1783000000,\"updated_at\":\"2026-07-04T00:00:00Z\"}]}}"
+    check_true("apply a deletion", storage_apply_sync_habit_entries_json(removed) != 0)
+    check_int("the deletion reaches this device", count_of(root,
+        "SELECT COUNT(*) FROM habit_entries WHERE id='entry-1' AND deleted_at>0"), 1)
+    storage_close()
+}
+
+// Whether the last payload uploads the record with id as a deletion: 1 it
+// does, 0 it keeps it, -1 it has no such record.
+record_deleted :: (record_id: string) -> s32 {
+    count := record_count()
+    index: s32 = 0
+    while index < count {
+        path: TextBuffer
+        append(*path, "$.encrypted_records[")
+        number: [16]u8
+        append(*path, FormatInteger(cast(s64)index, number[:]))
+        append(*path, "].")
+        id_path: TextBuffer
+        append(*id_path, TextFromCString(*path.bytes[0]))
+        append(*id_path, "id")
+        found: [96]u8
+        if storage_json_extract_text(payload(), TextFromCString(*id_path.bytes[0]),
+            *found[0], 96) != 0 && TextFromCString(*found[0]) == record_id {
+            deleted_path: TextBuffer
+            append(*deleted_path, TextFromCString(*path.bytes[0]))
+            append(*deleted_path, "deleted_at")
+            return ifx storage_json_extract_int64(payload(),
+                TextFromCString(*deleted_path.bytes[0]), 0) > 0 then 1 else 0
+        }
+        index += 1
+    }
+    return -1
+}
+
+// A list, an item and an entry that are kept upload as kept; only a
+// deleted entry uploads as a deletion.
+test_kept_records_upload_kept :: () {
+    unused local_device("kept-upload", "INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES('list-kept',(SELECT id FROM users LIMIT 1),'Kept',0,0,1782300000);INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) VALUES('item-kept',(SELECT id FROM users LIMIT 1),'list-kept','Milk','',0,0,0,1782300000);INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('meal',(SELECT id FROM users LIMIT 1),'First meal',1,2,3,0,0,0,1,0,1782300000);INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('entry-kept',(SELECT id FROM users LIMIT 1),'meal',20260624,1782300000,1782300000,'',0,1782300000),('entry-gone',(SELECT id FROM users LIMIT 1),'meal',20260624,1782300100,1782300100,'',1782300500,1782300500);",
+        "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('elist_list','list-kept',0,1782300000),('elist_item','item-kept',0,1782300000),('habit_entry','entry-kept',0,1782300000),('habit_entry','entry-gone',0,1782300500);")
+    check_true("payload builds", build_payload())
+    check_int("a kept list uploads as kept", record_deleted("list-kept"), 0)
+    check_int("a kept item uploads as kept", record_deleted("item-kept"), 0)
+    check_int("a kept entry uploads as kept", record_deleted("entry-kept"), 0)
+    check_int("a deleted entry uploads as deleted", record_deleted("entry-gone"), 1)
     storage_close()
 }
 
@@ -1666,6 +1713,7 @@ Check :: () -> s32 {
     test_review_completion_changes()
     test_review_no_changes_resolves_automatically()
     test_waiting_review_merges()
-    test_questions_and_answers_sync()
+    test_questions_and_entries_sync()
+    test_kept_records_upload_kept()
     return failures
 }

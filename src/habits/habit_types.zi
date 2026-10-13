@@ -91,18 +91,35 @@ HABIT_ANSWER_NUMBER :: 2
 HABIT_ANSWER_TIME :: 3
 HABIT_ANSWER_YES_NO :: 4
 HABIT_ANSWER_TYPE_COUNT :: 4
-// A day's answers also keep those to questions since removed.
+// An entry's answers also keep those to questions since removed.
 HABIT_DAY_ANSWER_MAX :: 16
+
+// What counts as good: a number, time or span from low, up to high, or
+// between them, or a yes or a no. Times are minutes after midnight, where
+// "at least" reads "after" and "at most" "before"; spans are minutes.
+HABIT_GOAL_NONE :: 0
+HABIT_GOAL_AT_LEAST :: 1
+HABIT_GOAL_AT_MOST :: 2
+HABIT_GOAL_BETWEEN :: 3
+HABIT_GOAL_YES :: 4
+HABIT_GOAL_NO :: 5
+
+HabitGoal :: struct {
+    kind: s32
+    low: s32
+    high: s32
+}
 
 HabitQuestion :: struct {
     // Stays with the question while its words or answer change, so each
-    // day's answer still finds it; never given to another question.
+    // entry's answer still finds it; never given to another question.
     id: s64
     answer_type: s32
     text: [HABIT_QUESTION_TEXT_SIZE]u8
+    goal: HabitGoal
 }
 
-// One answer of a day. It keeps the question's words and answer type as
+// One answer of an entry. It keeps the question's words and answer type as
 // they were, so it reads the same after the question changes or goes.
 HabitAnswer :: struct {
     id: s64
@@ -144,6 +161,14 @@ Habit :: struct {
     // Asked when a day is done; without them a tap marks the day.
     questions: [HABIT_QUESTION_MAX]HabitQuestion
     question_count: s32
+    // A habit that measures a span: a tap starts it and the next ends it.
+    // It does not count. span_goal is good spans in minutes.
+    span: s32
+    span_goal: HabitGoal
+    // The span that has started and not ended, if any: its entry and day.
+    running_entry: [HABIT_ID_SIZE]u8
+    running_day: s32
+    running_since: s64
     days: *HabitDay
     day_count: s32
     day_capacity: s32
@@ -156,23 +181,58 @@ HabitDaySave :: struct {
     count: s32
 }
 
-// The day dialog that asks a habit's questions, or shows the answers of a
-// day that is done.
+// One entry of a habit's day as its day screen lists it: when it started
+// and ended (0 while a span runs) and its answers in one line.
+HABIT_DAY_ENTRY_MAX :: 32
+HABIT_ENTRY_SUMMARY_SIZE :: 256
+
+HabitEntrySummary :: struct {
+    id: [HABIT_ID_SIZE]u8
+    started_at: s64
+    ended_at: s64
+    // Its time, or its span's start, end and length, as shown.
+    when: [64]u8
+    summary: [HABIT_ENTRY_SUMMARY_SIZE]u8
+}
+
+// The entry dialog: a new entry of a day, or one being changed. A span has
+// a start and an end, any other entry its time; then the questions.
+HABIT_ENTRY_TIME_FIELDS :: 4
+
 HabitAnswerDialog :: struct {
     habit: s32
     day: s32
+    // The entry changed, or empty for a new one.
+    entry: [HABIT_ID_SIZE]u8
+    // The start, or the time, and the end as typed hours and minutes; an
+    // end left empty keeps a span running.
+    start_hours: [4]u8
+    start_minutes: [4]u8
+    end_hours: [4]u8
+    end_minutes: [4]u8
     answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
     count: s32
     // A time answer's hours and minutes as typed.
     hours: [HABIT_DAY_ANSWER_MAX][4]u8
     minutes: [HABIT_DAY_ANSWER_MAX][4]u8
-    // The field typed in: twice the answer's index, plus one for a time's
+    // The field typed in: 0 to 3 for the start's and end's hours and
+    // minutes, then 4 + twice the answer's index, plus one for a time's
     // minutes; -1 while none is.
     focus: s32
     cursor: s32
     anchor: s32
     scroll_x: s32
     scroll: s32
+}
+
+// A habit day's entries as its day screen shows them, read again when the
+// stored data changes.
+HabitDayEntries :: struct {
+    habit: s32
+    day: s32
+    revision: s64
+    entries: [HABIT_DAY_ENTRY_MAX]HabitEntrySummary
+    count: s32
 }
 
 HabitLinkedEntry :: struct {
@@ -229,8 +289,10 @@ Habits :: struct {
     // The habit and day the count dialog edits while it is open.
     count_dialog_habit: s32
     count_dialog_day: s32
-    // The answers the questions or count dialog edits while it is open.
+    // The entry the entry dialog edits while it is open.
     answer_dialog: HabitAnswerDialog
+    // The entries of the day the day screen shows.
+    day_entries: HabitDayEntries
     // Set when a habit's card opens: the list scrolls it into view once.
     reveal_selected: s32
     // Whether the inactive habits' rows are shown in the table, and the habit

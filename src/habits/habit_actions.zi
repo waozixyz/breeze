@@ -5,6 +5,7 @@
 #import, file "habit_calendar.zi";
 #import, file "habit_schedule.zi";
 #import, file "habit_questions.zi";
+#import "date_time"
 #import, file "../app/app_types.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../storage/storage_habits.zi";
@@ -31,38 +32,130 @@ habit_complete_day :: (app: *InnerBreeze, index: s32, day: s32) -> bool {
     return habit_completed_day(habit, day) != 0
 }
 
-// Records a day's answers to its habit's questions. Unless the habit counts,
-// the day is done with them; a counting habit keeps the day's count.
-habit_answer_day :: (app: *InnerBreeze, index: s32, day: s32,
+// Whether a habit keeps its days' data as entries: it asks questions or
+// measures spans.
+habit_keeps_entries :: (habit: *Habit) -> bool {
+    return habit.question_count > 0 || habit.span != 0
+}
+
+// After a day's entries change: unless the habit counts, the day is done
+// while it has an entry, for a span an ended one. The habit's running span
+// is read again.
+habit_entries_changed :: (app: *InnerBreeze, index: s32, day: s32) {
+    habit := *app.habits.items[index]
+    if habit_counting_enabled(habit) == 0 {
+        has := storage_habit_day_has_entries(AppTextFromCString(*habit.id[0],
+            HABIT_ID_SIZE), day, habit.span != 0)
+        done := habit_completed_day(habit, day) != 0
+        if has && !done {
+            unused habit_complete_day(app, index, day)
+        } else if !has && done {
+            habit_set_day(*app.habits, index, day, 0)
+        }
+    }
+    storage_habit_running_span(habit)
+    unused app_auto_sync(app)
+}
+
+// Records an entry of a habit's day: a new one when entry_id is empty. A
+// span that has not ended has ended_at 0.
+habit_save_entry :: (app: *InnerBreeze, index: s32, day: s32,
+    entry_id: string, started_at: s64, ended_at: s64,
     answers: []HabitAnswer, count: s32) -> bool {
     if app == null || index < 0 || index >= app.habits.count || day <= 0 {
         return false
     }
     habit := *app.habits.items[index]
-    if habit_counting_enabled(habit) == 0 && habit_completed_day(habit, day) == 0 &&
-    !habit_complete_day(app, index, day) {
+    saved: [HABIT_ID_SIZE]u8
+    if storage_habit_entry_save(entry_id, AppTextFromCString(*habit.id[0],
+        HABIT_ID_SIZE), day, started_at, ended_at, answers, count,
+        saved[:]) == 0 {
         return false
     }
-    if storage_habit_day_answers_save(AppTextFromCString(*habit.id[0],
-        HABIT_ID_SIZE), day, answers, count) == 0 {
+    habit_entries_changed(app, index, day)
+    return true
+}
+
+habit_delete_entry :: (app: *InnerBreeze, index: s32, day: s32,
+    entry_id: string) -> bool {
+    if app == null || index < 0 || index >= app.habits.count {
         return false
     }
+    if storage_habit_entry_delete(entry_id) == 0 {
+        return false
+    }
+    habit_entries_changed(app, index, day)
+    return true
+}
+
+// Starts a span of a habit now, as an entry of today.
+habit_start_span :: (app: *InnerBreeze, index: s32) -> bool {
+    none: [1]HabitAnswer
+    return habit_save_entry(app, index, habits_today_index(), "", UnixNow(), 0,
+        none[:], 0)
+}
+
+// Ends the habit's running span now, keeping its answers.
+habit_end_span :: (app: *InnerBreeze, index: s32) -> bool {
+    if app == null || index < 0 || index >= app.habits.count {
+        return false
+    }
+    habit := *app.habits.items[index]
+    entry := AppTextFromCString(*habit.running_entry[0], HABIT_ID_SIZE)
+    if entry.count == 0 {
+        return false
+    }
+    started: s64 = 0
+    ended: s64 = 0
+    answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
+    count: s32 = 0
+    if !storage_habit_entry_load(entry, *started, *ended, answers[:], *count) {
+        return false
+    }
+    entry_id: [HABIT_ID_SIZE]u8
+    unused AppCopyText(entry, entry_id[:])
+    now := UnixNow()
+    if now < started {
+        now = started
+    }
+    return habit_save_entry(app, index, habit.running_day,
+        AppTextFromCString(*entry_id[0], HABIT_ID_SIZE), started, now,
+        answers[:], count)
+}
+
+// Gives a habit its questions, then saves and syncs it.
+habit_set_questions :: (app: *InnerBreeze, index: s32,
+    questions: []HabitQuestion, count: s32) -> bool {
+    if app == null || index < 0 || index >= app.habits.count ||
+    count < 0 || count > HABIT_QUESTION_MAX {
+        return false
+    }
+    habit := *app.habits.items[index]
+    habit.question_count = 0
+    while habit.question_count < count {
+        habit.questions[habit.question_count] = questions[habit.question_count]
+        habit.question_count += 1
+    }
+    habits_save(*app.habits)
     unused app_auto_sync(app)
     return true
 }
 
-// A done day back to open, without its answers.
-habit_reopen_day :: (app: *InnerBreeze, index: s32, day: s32) -> bool {
-    if app == null || index < 0 || index >= app.habits.count || day <= 0 {
+// Makes a habit mark its days, count them up to target, or measure spans
+// with good lengths; it counts or measures spans, not both.
+habit_set_tracking :: (app: *InnerBreeze, index: s32, counting: bool,
+    target: s32, span: bool, span_goal: HabitGoal) -> bool {
+    if app == null || index < 0 || index >= app.habits.count ||
+    target < 1 || target > HABIT_COUNTER_TARGET_MAX || (counting && span) {
         return false
     }
     habit := *app.habits.items[index]
-    none: [1]HabitAnswer
-    if storage_habit_day_answers_save(AppTextFromCString(*habit.id[0],
-        HABIT_ID_SIZE), day, none[:], 0) == 0 {
-        return false
-    }
-    habit_set_day(*app.habits, index, day, 0)
+    habit.counter_enabled = ifx counting then 1 else 0
+    habit.counter_target = target
+    habit.span = ifx span then 1 else 0
+    habit.span_goal = span_goal
+    habits_save(*app.habits)
+    storage_habit_running_span(habit)
     unused app_auto_sync(app)
     return true
 }

@@ -38,6 +38,10 @@
 #import, file "../screens/habits_screen.zi";
 #import, file "../habits/habit_questions.zi";
 #import, file "../habits/habit_actions.zi";
+#import, file "../habits/habit_sessions.zi";
+#import, file "../screens/habits/habit_entries.zi";
+#import, file "../habits/habit_answer_stats.zi";
+#import, file "../storage/storage_habits.zi";
 #import, file "../screens/lumi_screen.zi";
 #import, file "text_buffers.zi";
 #import, file "../app/exercise_types.zi";
@@ -162,36 +166,54 @@ screenshot_seed_habit_counts :: (app: *InnerBreeze) {
     habit_set_day_count(*app.habits, 2, screenshot_day_index_offset(4), 2)
 }
 
-// The habit_question scenes: the first habit asks four questions, and most
-// of the last two weeks have answers.
-screenshot_question_times: [14]string = .["", "07:10", "07:45", "08:05", "",
-"06:55", "07:30", "07:20", "08:15", "", "07:05", "07:40", "07:25", "07:50"];
+// The habit entry scenes: "First meal" asks four questions with goals and
+// most of the last two weeks have an entry; "Fasting window" measures
+// spans from evening to noon, at least 16 hours being good, and one runs.
+screenshot_question_times: [14]s32 = .[-1, 430, 465, 485, -1, 415, 450, 440,
+495, -1, 425, 460, 445, 470];
 screenshot_question_meals: [3]string = .["Oatmeal", "Eggs", "Fruit"];
+screenshot_fast_starts: [14]s32 = .[-1, 1200, 1230, 1190, 1260, -1, 1215, 1205,
+1250, 1195, -1, 1220, 1240, 1210];
+screenshot_fast_ends: [14]s32 = .[-1, 2160, 2100, 2190, 2040, -1, 2175, 2160,
+2130, 2205, -1, 2145, 2080, 2170];
 
-screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32) {
+// Gives a habit the meal questions; with entries, most past days answer
+// them.
+screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32,
+    with_entries: bool) {
     if app == null || index < 0 || index >= app.habits.count { return }
     habit := *app.habits.items[index]
     texts: [4]string = .["When did I start eating?", "Plates", "Ate fruit?",
     "What did I eat first?"]
     types: [4]s32 = .[HABIT_ANSWER_TIME, HABIT_ANSWER_NUMBER,
     HABIT_ANSWER_YES_NO, HABIT_ANSWER_TEXT]
+    goals: [4]HabitGoal = .[
+    HabitGoal.{.kind = HABIT_GOAL_AT_MOST, .high = 480},
+    HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 1, .high = 2},
+    HabitGoal.{.kind = HABIT_GOAL_YES},
+    HabitGoal.{}]
     habit.question_count = 0
     question: s32 = 0
     while question < 4 && HabitQuestionAdd(habit.questions[:],
         *habit.question_count, 1782200000) {
         unused AppCopyText(texts[question], habit.questions[question].text[:])
         habit.questions[question].answer_type = types[question]
+        habit.questions[question].goal = goals[question]
         question += 1
     }
     habits_save(*app.habits)
+    if !with_entries {
+        return
+    }
     none: [1]HabitAnswer
     offset: s32 = 1
     while offset < 14 {
-        time := screenshot_question_times[offset]
-        if time.count > 0 {
+        minutes := screenshot_question_times[offset]
+        if minutes >= 0 {
+            day := screenshot_day_index_offset(offset)
             answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
-            count := HabitAnswersForDay(habit, none[:], 0, answers[:])
-            unused AppCopyText(time, answers[0].value[:])
+            count := HabitAnswersFor(habit, none[:], 0, answers[:])
+            unused HabitAnswerTimeText(minutes, answers[0].value[:])
             plates: [4]u8
             unused AppFormatS32(1 + offset % 3, plates[:])
             unused AppCopyText(AppTextFromCString(*plates[0], 4), answers[1].value[:])
@@ -199,11 +221,37 @@ screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32) {
                 answers[2].value[:])
             unused AppCopyText(screenshot_question_meals[offset % 3],
                 answers[3].value[:])
-            unused habit_answer_day(app, index, screenshot_day_index_offset(offset),
-                answers[:], count)
+            at := storage_unix_at(day, minutes)
+            unused habit_save_entry(app, index, day, "", at, at, answers[:], count)
         }
         offset += 1
     }
+}
+
+// Names habit 3 "First meal" with the meal questions and habit 4
+// "Fasting window", which measures spans, with a span running since now.
+screenshot_seed_entry_habits :: (app: *InnerBreeze) {
+    if app == null || app.habits.count < 5 { return }
+    unused AppCopyText("First meal", app.habits.items[3].name[:])
+    fast := *app.habits.items[4]
+    unused AppCopyText("Fasting window", fast.name[:])
+    fast.span = 1
+    fast.counter_enabled = 0
+    fast.span_goal = HabitGoal.{.kind = HABIT_GOAL_AT_LEAST, .low = 960}
+    habits_save(*app.habits)
+    screenshot_seed_habit_questions(app, 3, true)
+    none: [1]HabitAnswer
+    offset: s32 = 1
+    while offset < 14 {
+        if screenshot_fast_starts[offset] >= 0 {
+            day := screenshot_day_index_offset(offset)
+            unused habit_save_entry(app, 4, day, "",
+                storage_unix_at(day, screenshot_fast_starts[offset]),
+                storage_unix_at(day, screenshot_fast_ends[offset]), none[:], 0)
+        }
+        offset += 1
+    }
+    unused habit_start_span(app, 4)
 }
 
 // The sun_salutation_pose scene: Upward salute, the second step, with the
@@ -598,34 +646,44 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.habits.view_mode = HABIT_VIEW_WEEKLY
         app.breathing.screen = ScreenHabits
         screenshot_seed_habit_counts(app)
-        screenshot_seed_habit_questions(app, 2)
+        screenshot_seed_habit_questions(app, 2, false)
         HabitScreenOpenCount(app, 2, screenshot_day_index_offset(0))
-    } else if scene_text == "habit_questions_dialog" {
+    } else if scene_text == "habits_card" || scene_text == "habit_questions_dialog" {
         app.main_tab = APP_MAIN_TAB_HABITS
         app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
-        app.habits.selected = -1
+        app.habits.selected = ifx scene_text == "habits_card" then 4 else -1
+        app.habits.reveal_selected = 1
         app.habits.tab = HABIT_TAB_WEEKLY
         app.habits.view_mode = HABIT_VIEW_WEEKLY
         app.breathing.screen = ScreenHabits
-        screenshot_seed_habit_questions(app, 0)
-        HabitScreenLoadAnswers(app, 0, screenshot_day_index_offset(0))
-        dialog := *app.habits.answer_dialog
-        unused AppCopyText("07", dialog.hours[0][:])
-        unused AppCopyText("40", dialog.minutes[0][:])
-        unused AppCopyText("2", dialog.answers[1].value[:])
-        unused AppCopyText("yes", dialog.answers[2].value[:])
-        unused AppCopyText("Oatmeal with berries", dialog.answers[3].value[:])
-        app_open_modal(app, cast(ModalType)ModalHabitQuestions)
-    } else if scene_text == "habit_edit_questions" {
+        screenshot_seed_entry_habits(app)
+        if scene_text == "habit_questions_dialog" {
+            HabitScreenOpenEntry(app, 3, screenshot_day_index_offset(0), "")
+            dialog := *app.habits.answer_dialog
+            unused AppCopyText("07", dialog.hours[0][:])
+            unused AppCopyText("40", dialog.minutes[0][:])
+            unused AppCopyText("2", dialog.answers[1].value[:])
+            unused AppCopyText("yes", dialog.answers[2].value[:])
+            unused AppCopyText("Oatmeal with berries", dialog.answers[3].value[:])
+        }
+    } else if scene_text == "habit_edit_questions" || scene_text == "habit_edit_span" {
         app.main_tab = APP_MAIN_TAB_HABITS
-        screenshot_seed_habit_questions(app, 0)
-        habit_edit_begin(app, 0)
+        screenshot_seed_entry_habits(app)
+        habit_edit_begin(app, ifx scene_text == "habit_edit_span" then 4 else 3)
         app.habits.scroll = 100000
-    } else if scene_text == "habit_question_stats" {
+    } else if scene_text == "habit_day_entries" || scene_text == "habit_span_day" {
         app.main_tab = APP_MAIN_TAB_HABITS
-        screenshot_seed_habit_questions(app, 0)
+        screenshot_seed_entry_habits(app)
+        if scene_text == "habit_span_day" {
+            habit_open_linked_edit_page(app, 4, screenshot_day_index_offset(0))
+        } else {
+            habit_open_linked_edit_page(app, 3, screenshot_day_index_offset(1))
+        }
+    } else if scene_text == "habit_question_stats" || scene_text == "habit_span_stats" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        screenshot_seed_entry_habits(app)
         app.habits.screen_mode = HABITS_SCREEN_STATISTICS
-        app.habits.selected = 0
+        app.habits.selected = ifx scene_text == "habit_span_stats" then 4 else 3
         app.habits.tab = HABIT_TAB_STATISTICS
         app.breathing.screen = ScreenHabits
         app.habits.scroll = 100000

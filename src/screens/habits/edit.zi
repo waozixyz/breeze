@@ -23,6 +23,7 @@ c :: #system_library "c";
 #import, file "../../habits/habit_icons.zi";
 #import, file "../../habits/habit_schedule.zi";
 #import, file "../../habits/habit_questions.zi";
+#import, file "../../habits/habit_answer_stats.zi";
 #import "date_time"
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/locale.zi";
@@ -125,6 +126,9 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.icon = app.habits.items[index].icon
     app.habit_edit.questions = app.habits.items[index].questions
     app.habit_edit.question_count = app.habits.items[index].question_count
+    app.habit_edit.span = app.habits.items[index].span
+    app.habit_edit.span_goal = app.habits.items[index].span_goal
+    habit_edit_goal_fill_all(app)
     AppCopyText(AppTextFromCString(*app.habits.items[index].name[0],
         HABIT_NAME_SIZE), app.habit_edit.text[:])
     AppCopyText(AppTextFromCString(*app.habits.items[index].description[0],
@@ -438,15 +442,295 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     if section == 1 {
         return habit_edit_schedule_height(app, width)
     }
-    return AppScale(ifx (app.habit_edit.counter_enabled != 0)
-        then (148) else (96)) + habit_edit_questions_height(app)
+    // Counter mode, the span toggle and practice links, with the target
+    // or the span's goal under their toggle, then the questions.
+    height := AppScale(52 + 52 + 44) + habit_edit_questions_height(app)
+    if app.habit_edit.counter_enabled != 0 {
+        height += AppScale(52)
+    }
+    if app.habit_edit.span != 0 {
+        height += habit_edit_goal_height(HABIT_ANSWER_SPAN,
+            app.habit_edit.span_goal)
+    }
+    return height
 }
 
 // The questions below the tracking options: a heading, each question with
-// its answer type under it, and the button that adds one.
+// its answer type and goal under it, and the button that adds one.
 habit_edit_questions_height :: (app: *InnerBreeze) -> s32 {
-    return AppScale(48) + app.habit_edit.question_count * AppScale(104) +
-    AppScale(44)
+    height := AppScale(48) + AppScale(44)
+    index: s32 = 0
+    while index < app.habit_edit.question_count {
+        question := *app.habit_edit.questions[index]
+        height += AppScale(104) + habit_edit_goal_height(question.answer_type,
+            question.goal)
+        index += 1
+    }
+    return height
+}
+
+// The goals an answer type offers, as options with their kinds: none for
+// text, yes or no, and otherwise at least, at most or between, which a
+// time reads as after and before.
+habit_edit_goal_options :: (answer_type: s32, options: []DropdownOption,
+    kinds: []s32) -> s32 {
+    if answer_type == HABIT_ANSWER_TEXT {
+        return 0
+    }
+    options[0].label = LocaleText("habit_goal_any")
+    kinds[0] = HABIT_GOAL_NONE
+    if answer_type == HABIT_ANSWER_YES_NO {
+        options[1].label = LocaleText("habit_answer_yes")
+        kinds[1] = HABIT_GOAL_YES
+        options[2].label = LocaleText("habit_answer_no")
+        kinds[2] = HABIT_GOAL_NO
+        return 3
+    }
+    time := answer_type == HABIT_ANSWER_TIME
+    options[1].label = LocaleText(ifx time then "habit_goal_after"
+        else "habit_goal_at_least")
+    kinds[1] = HABIT_GOAL_AT_LEAST
+    options[2].label = LocaleText(ifx time then "habit_goal_before"
+        else "habit_goal_at_most")
+    kinds[2] = HABIT_GOAL_AT_MOST
+    options[3].label = LocaleText("habit_goal_between")
+    kinds[3] = HABIT_GOAL_BETWEEN
+    return 4
+}
+
+habit_edit_goal_has_values :: (kind: s32) -> bool {
+    return kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_AT_MOST ||
+    kind == HABIT_GOAL_BETWEEN
+}
+
+// A goal's rows: "Good when" with its options, then its values.
+habit_edit_goal_height :: (answer_type: s32, goal: HabitGoal) -> s32 {
+    if answer_type == HABIT_ANSWER_TEXT {
+        return 0
+    }
+    height := AppScale(52)
+    if habit_edit_goal_has_values(goal.kind) {
+        height += AppScale(52)
+    }
+    return height
+}
+
+// A goal's bound as typed: a number, or hours and minutes; a time's hours
+// stay within a day.
+habit_edit_goal_type_value :: (value: s32, answer_type: s32,
+    whole_out: []u8, minutes_out: []u8) {
+    whole_out[0] = cast(u8)0
+    minutes_out[0] = cast(u8)0
+    if value < 0 {
+        return
+    }
+    if answer_type == HABIT_ANSWER_NUMBER {
+        unused AppFormatS32(value, whole_out)
+        return
+    }
+    hours := value / 60
+    if answer_type == HABIT_ANSWER_TIME {
+        hours = hours % 24
+    }
+    cursor: s32 = 0
+    unused TextBufferAppendPaddedNumber(whole_out, *cursor, hours, 2)
+    cursor = 0
+    unused TextBufferAppendPaddedNumber(minutes_out, *cursor, value % 60, 2)
+}
+
+// Writes a goal's bounds into the slot's typed fields.
+habit_edit_goal_fill :: (app: *InnerBreeze, slot: s32, answer_type: s32,
+    goal: HabitGoal) {
+    edit := *app.habit_edit
+    habit_edit_goal_type_value(goal.low, answer_type, edit.goal_low[slot][:],
+        edit.goal_low_minutes[slot][:])
+    habit_edit_goal_type_value(goal.high, answer_type, edit.goal_high[slot][:],
+        edit.goal_high_minutes[slot][:])
+}
+
+// Every question's and the span's typed fields from their goals, as after
+// questions move.
+habit_edit_goal_fill_all :: (app: *InnerBreeze) {
+    edit := *app.habit_edit
+    index: s32 = 0
+    while index < edit.question_count {
+        habit_edit_goal_fill(app, index, edit.questions[index].answer_type,
+            edit.questions[index].goal)
+        index += 1
+    }
+    // The span's goal is typed in the slot after the questions'.
+    habit_edit_goal_fill(app, HABIT_QUESTION_MAX, HABIT_ANSWER_SPAN,
+        edit.span_goal)
+}
+
+// A typed bound, or -1 while it is empty.
+habit_edit_goal_typed :: (answer_type: s32, whole: []u8, minutes: []u8) -> s32 {
+    typed := HabitTimeTypedNumber(AppTextFromCString(*whole[0],
+        cast(s32)whole.count))
+    if typed < 0 || answer_type == HABIT_ANSWER_NUMBER {
+        return typed
+    }
+    typed_minutes := HabitTimeTypedNumber(AppTextFromCString(*minutes[0],
+        cast(s32)minutes.count))
+    if typed_minutes < 0 {
+        typed_minutes = 0
+    }
+    return typed * 60 + typed_minutes
+}
+
+habit_edit_clamp_typed :: (buffer: []u8, largest: s32) {
+    typed := HabitTimeTypedNumber(AppTextFromCString(*buffer[0],
+        cast(s32)buffer.count))
+    if typed > largest {
+        cursor: s32 = 0
+        unused TextBufferAppendPaddedNumber(buffer, *cursor, largest, 2)
+    }
+}
+
+// One typed goal value. Goal fields share one cursor: only the focused
+// one has it.
+habit_edit_goal_field :: (app: *InnerBreeze, code: s32, bounds: Rectangle,
+    buffer: []u8, max_bytes: s32) -> bool {
+    edit := *app.habit_edit
+    focused := edit.goal_focused == code + 1
+    typed: [16]u8
+    field: TextFieldProps
+    field.key = KeyHash("habit/edit/goal") + cast(u64)code
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+    if focused {
+        field.cursor = edit.goal_cursor
+        field.anchor = edit.goal_anchor
+        field.scroll_x = edit.goal_scroll_x
+    }
+    field.focused = focused
+    field.focus_id = 7800 + code
+    field.numeric = true
+    field.max_bytes = max_bytes
+    field.max_codepoints = max_bytes
+    field.input = SampleTextFieldInput(focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed {
+        unused AppReplaceText(buffer, result.edit.start, result.edit.end,
+            result.edit.replacement)
+    }
+    if result.focused {
+        edit.goal_focused = code + 1
+        edit.goal_cursor = result.cursor
+        edit.goal_anchor = result.anchor
+        edit.goal_scroll_x = result.scroll_x
+        habit_edit_focus_only(app, 6)
+    } else if focused {
+        edit.goal_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result.focused
+}
+
+// One bound's fields at x: a number, or hours, a colon and minutes. Returns
+// their width.
+habit_edit_goal_bound :: (app: *InnerBreeze, slot: s32, high: bool,
+    answer_type: s32, x: s32, y: s32) -> s32 {
+    edit := *app.habit_edit
+    code := slot * 4 + ifx high then 2 else 0
+    whole := edit.goal_low[slot][:]
+    minutes := edit.goal_low_minutes[slot][:]
+    if high {
+        whole = edit.goal_high[slot][:]
+        minutes = edit.goal_high_minutes[slot][:]
+    }
+    if answer_type == HABIT_ANSWER_NUMBER {
+        unused habit_edit_goal_field(app, code, Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)AppScale(120), cast(float32)AppScale(44)},
+            whole, 9)
+        return AppScale(120)
+    }
+    part_w := AppScale(56)
+    unused habit_edit_goal_field(app, code, Rectangle.{cast(float32)x,
+        cast(float32)y, cast(float32)part_w, cast(float32)AppScale(44)},
+        whole, 2)
+    if answer_type == HABIT_ANSWER_TIME {
+        habit_edit_clamp_typed(whole, 23)
+    }
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)(x + part_w), cast(float32)y,
+                cast(float32)AppScale(16), cast(float32)AppScale(44)},
+            .text = ":", .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    unused habit_edit_goal_field(app, code + 1, Rectangle.{
+            cast(float32)(x + part_w + AppScale(16)), cast(float32)y,
+            cast(float32)part_w, cast(float32)AppScale(44)}, minutes, 2)
+    habit_edit_clamp_typed(minutes, 59)
+    return part_w * 2 + AppScale(16)
+}
+
+// "Good when" and the goal's options, then its values: from, up to, or
+// from and to. Returns the y below them.
+habit_edit_goal :: (app: *InnerBreeze, slot: s32, answer_type: s32,
+    goal: *HabitGoal, label: string, x: s32, y: s32, width: s32) -> s32 {
+    options: [4]DropdownOption
+    kinds: [4]s32
+    count := habit_edit_goal_options(answer_type, options[:], kinds[:])
+    if count == 0 {
+        return y
+    }
+    menu_w := AppScale(160)
+    habit_edit_row_label(app, label, x, y, width - menu_w - AppScale(8))
+    menu: DropdownProps
+    menu.id = 7770 + slot
+    menu.bounds = Rectangle.{cast(float32)(x + width - menu_w),
+        cast(float32)(y + AppScale(4)), cast(float32)menu_w,
+        cast(float32)AppScale(44)}
+    option: s32 = 0
+    while option < count {
+        if kinds[option] == goal.kind {
+            menu.selected_index = option
+        }
+        option += 1
+    }
+    chosen := Dropdown(app.ui.session, menu, options[:count])
+    if chosen.changed {
+        goal.kind = kinds[chosen.selected_index]
+        habit_edit_goal_fill(app, slot, answer_type, goal.*)
+    }
+    y += AppScale(52)
+    if !habit_edit_goal_has_values(goal.kind) {
+        return y
+    }
+    bound_x := x
+    if goal.kind != HABIT_GOAL_AT_MOST {
+        bound_x += habit_edit_goal_bound(app, slot, false, answer_type,
+            bound_x, y + AppScale(4))
+    }
+    if goal.kind == HABIT_GOAL_BETWEEN {
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)bound_x,
+                    cast(float32)(y + AppScale(4)), cast(float32)AppScale(40),
+                    cast(float32)AppScale(44)},
+                .text = LocaleText("habit_goal_and"),
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+        bound_x += AppScale(40)
+    }
+    if goal.kind != HABIT_GOAL_AT_LEAST {
+        unused habit_edit_goal_bound(app, slot, true, answer_type, bound_x,
+            y + AppScale(4))
+    }
+    edit := *app.habit_edit
+    low := habit_edit_goal_typed(answer_type, edit.goal_low[slot][:],
+        edit.goal_low_minutes[slot][:])
+    high := habit_edit_goal_typed(answer_type, edit.goal_high[slot][:],
+        edit.goal_high_minutes[slot][:])
+    if low >= 0 {
+        goal.low = low
+    }
+    if high >= 0 {
+        goal.high = high
+    }
+    return y + AppScale(52)
 }
 
 habit_edit_answer_label :: (answer_type: s32) -> string {
@@ -546,14 +830,23 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
         menu.selected_index = edit.questions[index].answer_type - 1
         chosen := Dropdown(app.ui.session, menu, types[:])
         if chosen.changed {
+            // Another answer type starts without a goal.
             edit.questions[index].answer_type = chosen.selected_index + 1
+            edit.questions[index].goal = HabitGoal.{}
+            habit_edit_goal_fill(app, index, edit.questions[index].answer_type,
+                edit.questions[index].goal)
         }
         if removed {
             HabitQuestionRemove(edit.questions[:], *edit.question_count, index)
             edit.question_focused = 0
+            edit.goal_focused = 0
+            habit_edit_goal_fill_all(app)
             return
         }
         y += AppScale(104)
+        y = habit_edit_goal(app, index, edit.questions[index].answer_type,
+            *edit.questions[index].goal, LocaleText("habit_goal_label"), x, y,
+            width)
         index += 1
     }
     add_label: [96]u8
@@ -571,6 +864,8 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
             .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 &&
     HabitQuestionAdd(edit.questions[:], *edit.question_count, UnixNow()) {
+        habit_edit_goal_fill(app, edit.question_count - 1, HABIT_ANSWER_TEXT,
+            HabitGoal.{})
         edit.question_focused = edit.question_count
         edit.question_cursor = 0
         edit.question_anchor = 0
@@ -890,6 +1185,9 @@ habit_edit_focus_only :: (app: *InnerBreeze, field: s32) {
     app.habit_edit.formula_focused = ifx field == 4 then 1 else 0
     if field != 5 {
         app.habit_edit.question_focused = 0
+    }
+    if field != 6 {
+        app.habit_edit.goal_focused = 0
     }
 }
 
@@ -1295,6 +1593,10 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
     if counter.changed {
         app.habit_edit.counter_enabled =
         ifx (counter.value) then (1) else (0)
+        // A habit counts or measures spans, not both.
+        if counter.value {
+            app.habit_edit.span = 0
+        }
     }
     y += AppScale(52)
     if app.habit_edit.counter_enabled != 0 {
@@ -1332,6 +1634,35 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
             habit_edit_counter_text(app)
         }
         y += AppScale(52)
+    }
+    span_props := ToggleProps.{
+        .id = 7612,
+        .value = app.habit_edit.span != 0,
+        .off_label = LocaleText("toggle_off"),
+        .on_label = LocaleText("toggle_on")}
+    span_size := ToggleMinimumSize(span_props)
+    span_w := cast(s32)span_size.x
+    span_h := cast(s32)span_size.y
+    if span_h < AppScale(30) {
+        span_h = AppScale(30)
+    }
+    span_props.bounds = Rectangle.{cast(float32)(x + width - span_w),
+        cast(float32)(y + (AppScale(44) - span_h) / 2),
+        cast(float32)span_w, cast(float32)span_h}
+    habit_edit_text(app, LocaleText("habit_span_mode"),
+        x, y + AppScale(10), width - span_w - AppScale(8), AppScale(36))
+    span := Toggle(app.ui.session, span_props)
+    if span.changed {
+        app.habit_edit.span = ifx span.value then 1 else 0
+        if span.value {
+            app.habit_edit.counter_enabled = 0
+        }
+    }
+    y += AppScale(52)
+    if app.habit_edit.span != 0 {
+        y = habit_edit_goal(app, HABIT_QUESTION_MAX, HABIT_ANSWER_SPAN,
+            *app.habit_edit.span_goal, LocaleText("habit_span_goal_label"), x, y,
+            width)
     }
     linked: s32 = 0
     index: s32 = 0

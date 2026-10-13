@@ -36,13 +36,7 @@ SET completed = MAX(completed, COALESCE((
         JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
         WHERE m.new_id = habit_days.habit_id
           AND d.local_date = habit_days.local_date
-    ), 0)),
-    answers = CASE WHEN answers <> '' THEN answers ELSE COALESCE((
-        SELECT d.answers FROM habit_days d
-        JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
-        WHERE m.new_id = habit_days.habit_id
-          AND d.local_date = habit_days.local_date
-    ), '') END
+    ), 0))
 WHERE EXISTS (
     SELECT 1 FROM sync_remote_habit_map m
     WHERE m.new_id = habit_days.habit_id
@@ -51,10 +45,10 @@ SQL
 
 InsertRemoteHabitDaysSQL :: #string SQL
 INSERT INTO habit_days(
-    habit_id, local_date, completed, count, session_count, updated_at, answers
+    habit_id, local_date, completed, count, session_count, updated_at
 )
 SELECT m.new_id, d.local_date, d.completed, d.count,
-       d.session_count, d.updated_at, d.answers
+       d.session_count, d.updated_at
 FROM habit_days d
 JOIN sync_remote_habit_map m ON m.old_id = d.habit_id
 WHERE NOT EXISTS (
@@ -80,6 +74,21 @@ WHERE entity_type IN ('habit', 'habit_day')
       SELECT 1 FROM sync_remote_habit_map m
       WHERE m.old_id = sync_outbox.entity_id
   );
+INSERT INTO sync_outbox(entity_type, entity_id, local_date, queued_at)
+SELECT 'habit_entry', e.id, 0, CAST(strftime('%s','now') AS INTEGER)
+FROM habit_entries e
+JOIN sync_remote_habit_map m ON m.old_id = e.habit_id
+ON CONFLICT(entity_type, entity_id, local_date) DO UPDATE SET queued_at = excluded.queued_at;
+UPDATE habit_entries
+SET habit_id = (
+    SELECT m.new_id FROM sync_remote_habit_map m
+    WHERE m.old_id = habit_entries.habit_id
+),
+    updated_at = MAX(updated_at + 1, CAST(strftime('%s','now') AS INTEGER))
+WHERE EXISTS (
+    SELECT 1 FROM sync_remote_habit_map m
+    WHERE m.old_id = habit_entries.habit_id
+);
 DELETE FROM habit_days
 WHERE EXISTS (
     SELECT 1 FROM sync_remote_habit_map m
@@ -94,7 +103,7 @@ SQL
 
 SyncHabitsSQL :: #string SQL
 INSERT INTO
-habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions)
+habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high)
 SELECT COALESCE(json_extract(value,'$.id'),''),?2,
 COALESCE(json_extract(value,'$.name'),''),
 CAST(COALESCE(json_extract(value,'$.color_r'),0) AS INTEGER),
@@ -120,7 +129,15 @@ FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
 CAST(COALESCE(json_extract(value,'$.schedule'),                     (SELECT schedule
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),'') AS TEXT),
 CAST(COALESCE(json_extract(value,'$.questions'),                     (SELECT questions
-FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),'') AS TEXT) FROM (SELECT value
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),'') AS TEXT),
+CAST(COALESCE(json_extract(value,'$.span'),                     (SELECT span
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.span_goal'),                     (SELECT span_goal
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.span_low'),                     (SELECT span_low
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.span_high'),                     (SELECT span_high
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER) FROM (SELECT value
 FROM json_each(?1,'$.changes.habits')       UNION ALL SELECT value FROM
 json_each(?1,'$.data.habits')) WHERE COALESCE(json_extract(value,'$.id'),'')<>'' ON CONFLICT(id)
 DO UPDATE SET
@@ -129,30 +146,49 @@ color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.syn
 counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=excluded.deleted_at,
 updated_at=excluded.updated_at, weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour,
 deactivated=excluded.deactivated,icon=excluded.icon,schedule=excluded.schedule,
-questions=excluded.questions
+questions=excluded.questions,span=excluded.span,span_goal=excluded.span_goal,
+span_low=excluded.span_low,span_high=excluded.span_high
 WHERE excluded.updated_at > habits.updated_at OR (excluded.updated_at = habits.updated_at AND
 NOT EXISTS ( SELECT 1 FROM sync_outbox  WHERE entity_type='habit' AND entity_id=habits.id AND
 local_date=0))
 SQL
 
 SyncHabitDaysSQL :: #string SQL
-INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at,answers) SELECT
+INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) SELECT
 COALESCE(json_extract(value,'$.habit_id'),''),
 CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER),       CASE WHEN
 json_extract(value,'$.completed') THEN 1 ELSE 0 END,
 CAST(COALESCE(json_extract(value,'$.count'),CASE WHEN json_extract(value,'$.completed') THEN 1
 ELSE 0 END) AS INTEGER),
-CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.answers'),(SELECT answers FROM habit_days WHERE
-habit_id=COALESCE(json_extract(value,'$.habit_id'),'') AND
-local_date=CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER)),'') AS TEXT) FROM (SELECT
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER) FROM (SELECT
 value FROM json_each(?1,'$.changes.habit_days')       UNION ALL SELECT value FROM
 json_each(?1,'$.data.habit_days')) WHERE COALESCE(json_extract(value,'$.habit_id'),'')<>''   AND
 CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER)>0 ON
 CONFLICT(habit_id,local_date) DO UPDATE SET
-completed=excluded.completed,count=excluded.count,updated_at=excluded.updated_at,
-answers=excluded.answers WHERE
+completed=excluded.completed,count=excluded.count,updated_at=excluded.updated_at WHERE
 excluded.updated_at > habit_days.updated_at OR (excluded.updated_at = habit_days.updated_at AND
 NOT EXISTS (     SELECT 1 FROM sync_outbox      WHERE entity_type='habit_day' AND
 entity_id=habit_days.habit_id        AND local_date=habit_days.local_date    ))
+SQL
+
+// A habit's entries from another device. A newer entry wins; at an equal
+// time the device's own queued change does.
+SyncHabitEntriesSQL :: #string SQL
+INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+COALESCE(json_extract(value,'$.habit_id'),''),
+CAST(COALESCE(json_extract(value,'$.local_date'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.started_at'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.ended_at'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.answers'),'') AS TEXT),
+CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.habit_entries') UNION ALL SELECT value FROM
+json_each(?1,'$.data.habit_entries')) WHERE COALESCE(json_extract(value,'$.id'),'')<>'' AND
+COALESCE(json_extract(value,'$.habit_id'),'')<>'' ON CONFLICT(id) DO UPDATE SET
+habit_id=excluded.habit_id,local_date=excluded.local_date,started_at=excluded.started_at,
+ended_at=excluded.ended_at,answers=excluded.answers,deleted_at=excluded.deleted_at,
+updated_at=excluded.updated_at WHERE excluded.updated_at > habit_entries.updated_at OR
+(excluded.updated_at = habit_entries.updated_at AND NOT EXISTS ( SELECT 1 FROM sync_outbox
+WHERE entity_type='habit_entry' AND entity_id=habit_entries.id))
 SQL

@@ -83,7 +83,12 @@ storage_same_habit_id :: (a: string, b: string) -> bool {
     return true
 }
 
-storage_merge_habit_into_sqls: [4] string = .["UPDATE habit_days SET completed=MAX(completed,COALESCE((SELECT d.completed FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), count=MAX(count,COALESCE((SELECT d.count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), session_count=MAX(session_count,COALESCE((SELECT d.session_count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), updated_at=MAX(updated_at,COALESCE((SELECT d.updated_at FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), answers=CASE WHEN answers<>'' THEN answers ELSE COALESCE((SELECT d.answers FROM habit_days d WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),'') END WHERE habit_id=?1 AND EXISTS (SELECT 1 FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date)", "INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at,answers) SELECT ?1,d.local_date,d.completed,d.count,d.session_count,d.updated_at,d.answers FROM habit_days d WHERE d.habit_id=?2 AND NOT EXISTS (SELECT 1 FROM habit_days k     WHERE k.habit_id=?1 AND k.local_date=d.local_date)", "DELETE FROM habit_days WHERE habit_id=?2", "DELETE FROM habits WHERE id=?2"];
+storage_merge_habit_into_sqls: [4] string = .["UPDATE habit_days SET completed=MAX(completed,COALESCE((SELECT d.completed FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), count=MAX(count,COALESCE((SELECT d.count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), session_count=MAX(session_count,COALESCE((SELECT d.session_count FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)), updated_at=MAX(updated_at,COALESCE((SELECT d.updated_at FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date),0)) WHERE habit_id=?1 AND EXISTS (SELECT 1 FROM habit_days d     WHERE d.habit_id=?2 AND d.local_date=habit_days.local_date)", "INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) SELECT ?1,d.local_date,d.completed,d.count,d.session_count,d.updated_at FROM habit_days d WHERE d.habit_id=?2 AND NOT EXISTS (SELECT 1 FROM habit_days k     WHERE k.habit_id=?1 AND k.local_date=d.local_date)", "DELETE FROM habit_days WHERE habit_id=?2", "DELETE FROM habits WHERE id=?2"];
+
+// The duplicate's entries go with its days to the habit that keeps them.
+storage_merge_habit_entries_sqls: [2]string = .[
+"INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,CAST(strftime('%s','now') AS INTEGER) FROM habit_entries WHERE habit_id=?2 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at",
+"UPDATE habit_entries SET habit_id=?1,updated_at=MAX(updated_at+1,CAST(strftime('%s','now') AS INTEGER)) WHERE habit_id=?2"];
 
 storage_merge_habit_into :: (keeper_id: string, duplicate_id: string) -> s32 {
     stmt: *void = null
@@ -91,6 +96,11 @@ storage_merge_habit_into :: (keeper_id: string, duplicate_id: string) -> s32 {
     if keeper_id.count == 0 || duplicate_id.count == 0 ||
     storage_same_habit_id(keeper_id, duplicate_id) {
         return 1
+    }
+    for statement: storage_merge_habit_entries_sqls {
+        if storage_exec_with_two_ids(statement, keeper_id, duplicate_id) == 0 {
+            return 0
+        }
     }
     {
         i: s64 = 0
@@ -120,6 +130,20 @@ storage_merge_habit_into :: (keeper_id: string, duplicate_id: string) -> s32 {
     return ok
 }
 
+
+// Runs one statement with ?1 and ?2 bound to ids.
+storage_exec_with_two_ids :: (statement: string, first: string,
+    second: string) -> s32 {
+    stmt: *void = null
+    if SqlitePrepareText(storage_db_handle(), statement, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, first)
+    bind_text(stmt, 2, second)
+    done := SqliteStep(stmt) == SQLITE_DONE
+    SqliteFinalize(stmt)
+    return ifx done then 1 else 0
+}
 
 #program_export
 storage_reconcile_remote_habit_ids :: (response_json: string) -> s32 {
@@ -428,4 +452,8 @@ storage_apply_sync_habits_json :: (response_json: string) -> s32 {
 #program_export
 storage_apply_sync_habit_days_json :: (response_json: string) -> s32 {
     return storage_exec_json_user_sql(SyncHabitDaysSQL, response_json)
+}
+
+storage_apply_sync_habit_entries_json :: (response_json: string) -> s32 {
+    return storage_exec_json_user_sql(SyncHabitEntriesSQL, response_json)
 }
