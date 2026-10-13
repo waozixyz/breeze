@@ -221,6 +221,7 @@ habits_expand_card :: (app: *InnerBreeze, index: s32) {
     message = HabitsRun(message)
     HabitsAcceptView(app, message)
     if message.succeeded {
+        app.habits.reveal_selected = 1
         HabitScreenSave(app)
     }
 }
@@ -632,15 +633,6 @@ HabitScreenLine :: (app: *InnerBreeze, x1: s32, y1: s32,
 }
 
 
-// A point of a day's check, offset from the dot's center and placed on a
-// whole pixel, so every day's check is drawn alike.
-HabitScreenCheckPoint :: (center_x: s32, center_y: s32,
-    offset_x: float32, offset_y: float32) -> Vector2 {
-    x := cast(float32)center_x + offset_x + 0.5
-    y := cast(float32)center_y + offset_y + 0.5
-    return Vector2.{cast(float32)cast(s32)x, cast(float32)cast(s32)y}
-}
-
 // A day's dot: filled once the day is complete, showing the day's count
 // when the habit counts and a check when it does not. Both kinds are lit
 // from the top left, with a rim, a shaded lower edge and a highlight.
@@ -666,29 +658,17 @@ HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
             center_y - radius / 2, highlight_radius,
             Fade(Color.{255, 255, 255, 255}, 0.3))
         if !show_count {
-            // A bold check, stroked the way Kryon's Checkbox draws its
-            // own: two segments of stacked one-pixel lines meeting at the
-            // bottom corner. An odd number of lines keeps each of them on
-            // whole pixels, where every day's check rasterizes alike.
-            unit := cast(float32)radius * 1.4 / 24.0
-            stroke := cast(s32)(cast(float32)radius * 0.1 + 0.5) * 2 + 1
-            if stroke < 3 {
-                stroke = 3
-            }
-            if stroke > 7 {
-                stroke = 7
-            }
-            check := HabitScreenTextColor(accent)
-            corner := HabitScreenCheckPoint(center_x, center_y,
-                unit * -2.8, unit * 5.0)
-            PaintCheckboxSegment(app.ui.session, -1,
-                HabitScreenCheckPoint(center_x, center_y,
-                    unit * -8.0, unit * -0.2),
-                corner, cast(float32)stroke, check)
-            PaintCheckboxSegment(app.ui.session, -1, corner,
-                HabitScreenCheckPoint(center_x, center_y,
-                    unit * 8.0, unit * -5.8),
-                cast(float32)stroke, check)
+            // A check centred on the dot's face and sized to it, drawn as
+            // one smooth stroke, so it stays inside the dot at any scale.
+            face_x := cast(float32)center_x
+            face_y := cast(float32)(center_y - AppScale(1))
+            reach := cast(float32)(radius - AppScale(2))
+            check: [3]Vector2 = .[
+            Vector2.{face_x - reach * 0.42, face_y + reach * 0.02},
+            Vector2.{face_x - reach * 0.12, face_y + reach * 0.32},
+            Vector2.{face_x + reach * 0.44, face_y - reach * 0.30}]
+            PaintStroke(app.ui.session, -1, check[:], reach * 0.2,
+                HabitScreenTextColor(accent))
         }
     } else {
         HabitScreenCircle(app, center_x, center_y,
@@ -1557,6 +1537,29 @@ HabitScreenOverview :: (app: *InnerBreeze,
     panel.border = Fade(StyleTokenColor("text"), 0.12)
     panel.radius = cast(float32)AppScale(14)
     Box(app.ui.session, panel)
+    // A card that just opened scrolls into view: all of it when it fits,
+    // otherwise from its top.
+    if app.habits.reveal_selected != 0 {
+        app.habits.reveal_selected = 0
+        if selected_position >= 0 {
+            card_top := HabitRowOffset(selected_position, selected_position,
+                row_h, detail_h)
+            card_bottom := card_top + row_h + detail_h
+            view_h := cast(s32)viewport.height
+            if card_bottom - app.habits.scroll > view_h {
+                app.habits.scroll = card_bottom - view_h
+            }
+            if card_top < app.habits.scroll {
+                app.habits.scroll = card_top
+            }
+            if app.habits.scroll > content_h - view_h {
+                app.habits.scroll = content_h - view_h
+            }
+            if app.habits.scroll < 0 {
+                app.habits.scroll = 0
+            }
+        }
+    }
     scrolled := HabitScreenScroll(app, "inbe/habits/overview", viewport,
         content_h)
     if !scrolled.opened { return }
