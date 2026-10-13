@@ -162,7 +162,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
                         if WIDTH < 500:
                             apps = image.crop((WIDTH - 74, HEIGHT - 48, WIDTH - 14, HEIGHT - 4))
                         else:
-                            apps = image.crop((14, 465, 74, 495))
+                            # The rail keeps Apps at its bottom, whatever
+                            # apps sit above it.
+                            apps = image.crop((14, HEIGHT - 78, 74, HEIGHT - 48))
                         assert any(high - low > 24 for low, high in apps.convert("RGB").getextrema()), \
                             "Practice content covered the Apps shortcut"
                 if not RAPID:
