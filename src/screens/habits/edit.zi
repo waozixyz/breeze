@@ -35,6 +35,9 @@ c :: #system_library "c";
 #import, file "../../app/metrics.zi";
 #import, file "../../app/draw.zi";
 #import, file "../../app/current_app.zi";
+#import, file "../../app/cards.zi";
+#import "box_props"
+#import "box_widget"
 #import "button_widget"
 #import "checkbox_widget"
 #import "checkbox"
@@ -450,15 +453,30 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     return height
 }
 
-// The questions below the tracking options: a heading, each question with
-// its answer type and goal under it, and the button that adds one.
+// The questions below the tracking options: a heading, each question on
+// its own card with its answer type and goal under it, and the button that
+// adds one.
+HABIT_EDIT_QUESTION_PADDING :: 12
+HABIT_EDIT_QUESTION_GAP :: 10
+
+// A question's card: its words, its answer type and its goal's rows.
+habit_edit_question_card_height :: (question: *HabitQuestion) -> s32 {
+    height := AppScale(HABIT_EDIT_QUESTION_PADDING) * 2 + AppScale(96)
+    goal := habit_edit_goal_height(question.answer_type, question.goal)
+    if goal > 0 {
+        // The goal's rows leave 4 units below their last control.
+        height += AppScale(8) + goal - AppScale(4)
+    }
+    return height
+}
+
 habit_edit_questions_height :: (app: *InnerBreeze) -> s32 {
     height := AppScale(48) + AppScale(44)
     index: s32 = 0
     while index < app.habit_edit.question_count {
-        question := *app.habit_edit.questions[index]
-        height += AppScale(104) + habit_edit_goal_height(question.answer_type,
-            question.goal)
+        height += habit_edit_question_card_height(
+            *app.habit_edit.questions[index]) +
+        AppScale(HABIT_EDIT_QUESTION_GAP)
         index += 1
     }
     return height
@@ -793,10 +811,19 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
         types[answer_type].label = habit_edit_answer_label(answer_type + 1)
         answer_type += 1
     }
+    // Each question's card spans the options' width; its rows sit inside.
+    question_pad := AppScale(HABIT_EDIT_QUESTION_PADDING)
+    inner_x := x + question_pad
+    inner_w := width - question_pad * 2
     index: s32 = 0
     while index < edit.question_count {
-        text_bounds := Rectangle.{cast(float32)x, cast(float32)y,
-            cast(float32)(width - remove_w - AppScale(8)),
+        card_h := habit_edit_question_card_height(*edit.questions[index])
+        Box(app.ui.session, CardProps(Rectangle.{cast(float32)x,
+                    cast(float32)y, cast(float32)width, cast(float32)card_h}))
+        card_bottom := y + card_h
+        y += question_pad
+        text_bounds := Rectangle.{cast(float32)inner_x, cast(float32)y,
+            cast(float32)(inner_w - remove_w - AppScale(8)),
             cast(float32)AppScale(44)}
         was_focused := edit.question_focused == index + 1
         if habit_edit_question_field(app, index, text_bounds) && !was_focused {
@@ -805,17 +832,17 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
         }
         removed := Button(app.ui.session, ButtonProps.{
                 .id = 7740 + index,
-                .bounds = Rectangle.{cast(float32)(x + width - remove_w),
+                .bounds = Rectangle.{cast(float32)(inner_x + inner_w - remove_w),
                     cast(float32)y, cast(float32)remove_w,
                     cast(float32)AppScale(44)},
                 .label = "-",
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
-        habit_edit_row_label(app, LocaleText("habit_answer_as"), x,
-            y + AppScale(48), width - type_w - AppScale(8))
+        habit_edit_row_label(app, LocaleText("habit_answer_as"), inner_x,
+            y + AppScale(48), inner_w - type_w - AppScale(8))
         menu: DropdownProps
         menu.id = 7750 + index
-        menu.bounds = Rectangle.{cast(float32)(x + width - type_w),
+        menu.bounds = Rectangle.{cast(float32)(inner_x + inner_w - type_w),
             cast(float32)(y + AppScale(52)), cast(float32)type_w,
             cast(float32)AppScale(44)}
         menu.selected_index = edit.questions[index].answer_type - 1
@@ -835,9 +862,10 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
             return
         }
         y += AppScale(104)
-        y = habit_edit_goal(app, index, edit.questions[index].answer_type,
-            *edit.questions[index].goal, LocaleText("habit_goal_label"), x, y,
-            width)
+        unused habit_edit_goal(app, index, edit.questions[index].answer_type,
+            *edit.questions[index].goal, LocaleText("habit_goal_label"), inner_x, y,
+            inner_w)
+        y = card_bottom + AppScale(HABIT_EDIT_QUESTION_GAP)
         index += 1
     }
     add_label: [96]u8
@@ -1084,6 +1112,20 @@ habit_edit_grid_bounds :: (x: s32, y: s32, width: s32,
         cast(float32)AppScale(40), cast(float32)AppScale(40)}
 }
 
+// A row of round buttons spread evenly across the width when they fit on
+// one line, as the week's days are; otherwise the grid.
+habit_edit_spread_bounds :: (x: s32, y: s32, width: s32, count: s32,
+    index: s32) -> Rectangle {
+    if count < 2 || habit_edit_columns(width) < count {
+        return habit_edit_grid_bounds(x, y, width, index)
+    }
+    step := (width - AppScale(48)) / (count - 1)
+    return Rectangle.{
+        cast(float32)(x + index * step + AppScale(4)),
+        cast(float32)(y + AppScale(4)),
+        cast(float32)AppScale(40), cast(float32)AppScale(40)}
+}
+
 // The formula hint's height, wrapped as Text wraps it, with its 4-pixel
 // line gap.
 habit_edit_hint_height :: (width: s32) -> s32 {
@@ -1251,7 +1293,7 @@ habit_edit_weekday_buttons :: (app: *InnerBreeze, x: s32, y: s32,
     day: s32 = 0
     while day < 7 {
         selected := (rule.weekdays & (1 << day)) != 0
-        bounds := habit_edit_grid_bounds(x, y, width, day)
+        bounds := habit_edit_spread_bounds(x, y, width, 7, day)
         clicked := Button(app.ui.session, ButtonProps.{
                 .id = 7710 + day, .bounds = bounds,
                 .label = days[day], .circle = true, .fit_content = true,
@@ -1728,6 +1770,7 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
     title.title = LocaleText(ifx (app.habit_edit.is_new != 0)
         then ("habit_new_title") else ("habit_edit_title"))
     title.height = top
+    title.strong_title = true
     title.bounds = Rectangle.{0.0, 0.0,
         cast(float32)app.ui.view_width, cast(float32)top}
     title.has_leading_action = true
@@ -1768,13 +1811,13 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
             body_h := habit_edit_section_body(app, section, body_width)
             heading: TextProps
             heading.text = titles[section]
-            heading.font = AppSmallFontSize()
+            heading.font = AppFontSize()
             heading.wrap = cast(TextWrap)TextWrapNone
             heading.semantic_kind = cast(SemanticKind)SemanticHeading
             heading.heading_level = 2
             heading.bounds = Rectangle.{cast(float32)(x + AppScale(4)),
                 cast(float32)y, cast(float32)(width - AppScale(4)),
-                cast(float32)AppScale(22)}
+                cast(float32)AppScale(26)}
             Text(app.ui.session, heading)
             card: FieldsetProps
             card.bounds = Rectangle.{cast(float32)x,
@@ -1800,8 +1843,17 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
         unused End(app.ui.session)
     }
 
-    DrawRectangle(0, app.ui.view_height - footer,
-        app.ui.view_width, footer, StyleTokenColor("canvas"))
+    // The footer keeps Save and Delete apart from the scrolling form.
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{0.0,
+                cast(float32)(app.ui.view_height - footer),
+                cast(float32)app.ui.view_width, cast(float32)footer},
+            .fill = StyleTokenColor("canvas")})
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{0.0,
+                cast(float32)(app.ui.view_height - footer),
+                cast(float32)app.ui.view_width, cast(float32)AppScale(1)},
+            .fill = Fade(StyleTokenColor("text"), 0.12)})
     if app.habit_edit.name_error != 0 {
         message := LocaleText(ifx (app.habit_edit.name_error == 1)
             then ("habit_name_required") else ("habit_name_duplicate"))
@@ -1820,7 +1872,7 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
                     cast(float32)delete_width, cast(float32)AppScale(44)},
                 .label = LocaleText("habit_delete_button"),
                 .tone = cast(ButtonTone)ButtonToneDanger,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             app_open_modal(app, cast(ModalType)ModalConfirmDeleteHabit)
         }
         action_x += delete_width + AppScale(8)

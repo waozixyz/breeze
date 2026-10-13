@@ -40,6 +40,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import, file "../cells/habit_icon_choice.zi";
 #import, file "../app/exercise_types.zi";
 #import, file "statistics_screen.zi";
+#import, file "../app/cards.zi";
 #import "date_parse"
 #import "date_time"
 #import "geometry"
@@ -738,37 +739,6 @@ HabitScreenWeekProgress :: (app: *InnerBreeze, index: s32,
     return completed
 }
 
-HabitScreenMetric :: (app: *InnerBreeze, x: s32, y: s32,
-    width: s32, height: s32, label: string, value: string,
-    accent: Color) {
-    surface := StyleTokenColor("surface")
-    panel: BoxProps
-    panel.bounds = HabitScreenRect(x, y, width, height)
-    panel.fill = DarkenColor(surface, 3)
-    panel.radius = cast(float32)AppScale(8)
-    Box(app.ui.session, panel)
-    bar: BoxProps
-    bar.bounds = HabitScreenRect(x, y, AppScale(4), height)
-    bar.fill = accent
-    Box(app.ui.session, bar)
-    label_props: TextProps
-    label_props.bounds = HabitScreenRect(x + AppScale(14), y + AppScale(8),
-        width - AppScale(18), AppScale(18))
-    label_props.text = label
-    label_props.font = AppSmallFontSize()
-    label_props.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, label_props)
-    value_props: TextProps
-    value_props.bounds = HabitScreenRect(x + AppScale(14), y + AppScale(32),
-        width - AppScale(18), AppScale(24))
-    value_props.text = value
-    value_props.font = AppFontSize()
-    value_props.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, value_props)
-}
-
-
-
 // A habit's own icon, or the one its linked practice suggests; 0 when it
 // has neither and shows the first letter of its name.
 HabitScreenIconFor :: (app: *InnerBreeze, index: s32) -> s32 {
@@ -973,13 +943,18 @@ HabitScreenRowFace :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     Text(app.ui.session, name)
 }
 
-// An open habit's details below its row: its description, its history,
-// statistics and editor, and its current streak and this week's days.
+// An open habit's details below its row, together on a tinted panel: its
+// description, its history, statistics and editor, and its current streak
+// and this week's days.
+HABITS_DETAIL_ACTION_SIZE :: 52
+HABITS_DETAIL_PADDING :: 12
+
 HabitScreenRowDetailHeight :: (app: *InnerBreeze, index: s32) -> s32 {
-    height := AppScale(8) + AppScale(52) + AppScale(12) + AppScale(64) +
-        AppScale(14)
+    height := AppScale(4) + AppScale(HABITS_DETAIL_PADDING) * 2 +
+        AppScale(HABITS_DETAIL_ACTION_SIZE) + AppScale(12) +
+        AppScale(FIGURE_CARD_HEIGHT) + AppScale(12)
     if app.habits.items[index].description[0] != cast(u8)0 {
-        height += AppScale(26)
+        height += AppScale(30)
     }
     return height
 }
@@ -987,9 +962,19 @@ HabitScreenRowDetailHeight :: (app: *InnerBreeze, index: s32) -> s32 {
 HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     pad: s32) {
     habit := *app.habits.items[index]
-    x := cast(s32)bounds.x + pad
-    width := cast(s32)bounds.width - pad * 2
-    y := cast(s32)bounds.y + AppScale(8)
+    panel_x := cast(s32)bounds.x + pad
+    panel_w := cast(s32)bounds.width - pad * 2
+    panel_y := cast(s32)bounds.y + AppScale(4)
+    panel_h := cast(s32)bounds.height - AppScale(4) - AppScale(12)
+    panel: BoxProps
+    panel.bounds = HabitScreenRect(panel_x, panel_y, panel_w, panel_h)
+    panel.fill = Fade(StyleTokenColor("text"), 0.04)
+    panel.radius = cast(float32)AppScale(CARD_RADIUS)
+    Box(app.ui.session, panel)
+    inner := AppScale(HABITS_DETAIL_PADDING)
+    x := panel_x + inner
+    width := panel_w - inner * 2
+    y := panel_y + inner
     description := AppTextFromCString(*habit.description[0],
         HABIT_DESCRIPTION_SIZE)
     if description.count > 0 {
@@ -999,9 +984,9 @@ HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
         text.font = AppSmallFontSize()
         text.wrap = cast(TextWrap)TextWrapEllipsis
         Text(app.ui.session, text)
-        y += AppScale(26)
+        y += AppScale(30)
     }
-    action_size := AppScale(52)
+    action_size := AppScale(HABITS_DETAIL_ACTION_SIZE)
     action_gap := (width - action_size * 3) / 2
     action_icons: [3]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat, cast(s32)IconEdit]
     column: s32 = 0
@@ -1013,7 +998,7 @@ HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
         action.icon_type = action_icons[column]
         action.icon_only = true
         action.tone = cast(ButtonTone)ButtonToneNeutral
-        action.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        action.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
         action.disabled = app.modal.active != 0
         if Button(app.ui.session, action) != 0 {
             if column == 0 {
@@ -1049,13 +1034,13 @@ HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     metric_y := y + action_size + AppScale(12)
     metric_gap := AppScale(10)
     metric_width := (width - metric_gap) / 2
-    HabitScreenMetric(app, x, metric_y, metric_width, AppScale(64),
-        LocaleText("habit_stats_current_streak"), streak_text,
-        habit.color)
-    HabitScreenMetric(app, x + metric_width + metric_gap, metric_y,
-        width - metric_width - metric_gap, AppScale(64),
-        LocaleText("profile_progress_title"), week_text,
-        LightenColor(habit.color, 18))
+    FigureCard(app.ui.session, HabitScreenRect(x, metric_y, metric_width,
+        AppScale(FIGURE_CARD_HEIGHT)),
+        LocaleText("habit_stats_current_streak"), streak_text, habit.color)
+    FigureCard(app.ui.session, HabitScreenRect(x + metric_width + metric_gap,
+        metric_y, width - metric_width - metric_gap,
+        AppScale(FIGURE_CARD_HEIGHT)),
+        LocaleText("profile_progress_title"), week_text, habit.color)
 }
 
 // The habit list shows active habits in their order; deactivated habits
@@ -1418,6 +1403,8 @@ HabitScreenOverview :: (app: *InnerBreeze,
     heading.text = LocaleText("tab_habits")
     heading.font = AppTitleFontSize(heading.text,
         cast(s32)heading.bounds.width)
+    heading_strong := StrongWhole(heading.text)
+    heading.strong = heading_strong[:]
     heading.wrap = cast(TextWrap)TextWrapNone
     Text(app.ui.session, heading)
     add_button := HabitScreenButtonProps(app, add_label, 4100,
@@ -1662,40 +1649,57 @@ HabitScreenOverview :: (app: *InnerBreeze,
         RectangleIntersection(section, scrolled.viewport))
 }
 // A habit's pages are separate: its view (week or calendar), its
-// statistics, and its editor. Each has only Back and its own title here;
-// none of them links sideways into the others.
+// statistics, and its editor. Each has only Back and its own title here,
+// strong, with its subtitle muted below it; none of them links sideways
+// into the others.
+HABIT_BACK_SHAPE :: "S1.8rr:M15 5L8 12L15 19"
+
 HabitScreenPageHeader :: (app: *InnerBreeze,
     geometry: HabitScreenGeometry, index: s32, subtitle: string) -> s32 {
     y := geometry.y
     habit := *app.habits.items[index]
-    if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("back_button"), 4300,
-        geometry.x, y, AppScale(72), AppScale(40), false, false)) != 0 {
+    back_label := LocaleText("back_button")
+    back_w := AppTextWidth(back_label, AppFontSize()) + AppScale(48)
+    if back_w < AppScale(88) {
+        back_w = AppScale(88)
+    }
+    if back_w > geometry.width / 3 {
+        back_w = geometry.width / 3
+    }
+    back := HabitScreenButtonProps(app, back_label, 4300, geometry.x,
+        y + AppScale(2), back_w, AppScale(42), false, false)
+    back.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
+    back.icon_shape = HABIT_BACK_SHAPE
+    back.fit_content = true
+    if Button(app.ui.session, back) != 0 {
         habits_return_to_overview(app)
         return -1
     }
+    title_x := geometry.x + back_w + AppScale(16)
+    title_w := geometry.width - back_w - AppScale(16)
     name := AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+    strong := StrongWhole(name)
     title: TextProps
-    title.bounds = HabitScreenRect(geometry.x + AppScale(82), y,
-        geometry.width - AppScale(82), AppScale(40))
+    title.bounds = HabitScreenRect(title_x, y, title_w,
+        ifx subtitle.count > 0 then AppScale(34) else AppScale(46))
     title.text = name
-    title.font = AppTitleFontSize(name, geometry.width - AppScale(82))
+    title.font = AppTitleFontSize(name, title_w)
+    title.strong = strong[:]
     title.vertical_align = cast(TextAlign)TextAlignCenter
-    title.wrap = cast(TextWrap)TextWrapNone
+    title.wrap = cast(TextWrap)TextWrapEllipsis
     Text(app.ui.session, title)
-    y += AppScale(44)
-    if subtitle.count > 0 {
-        label: TextProps
-        label.bounds = HabitScreenRect(geometry.x + AppScale(82), y,
-            geometry.width - AppScale(82), AppScale(24))
-        label.text = subtitle
-        label.font = AppSmallFontSize()
-        label.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, label)
-        y += AppScale(32)
-    } else {
-        y += AppScale(8)
+    if subtitle.count == 0 {
+        return y + AppScale(58)
     }
-    return y
+    label: TextProps
+    label.bounds = HabitScreenRect(title_x, y + AppScale(34), title_w,
+        AppScale(22))
+    label.text = subtitle
+    label.font = AppSmallFontSize()
+    label.class_name = MutedTextClass()
+    label.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, label)
+    return y + AppScale(68)
 }
 
 // The habit view switches only between its week list and its calendar.
@@ -1911,6 +1915,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     frame := ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash("habits/count-dialog"),
             .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+            .strong_title = true,
             .width = AppScale(340), .height = content_h + AppScale(74),
             .scale = MetricsScale(),
             .has_right_action = true,
@@ -1934,8 +1939,15 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
         day_text, AppSmallFontSize())
     y += AppScale(24)
-    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(64)),
-        HabitScreenNumber(app, count), AppScale(Text48))
+    count_text := HabitScreenNumber(app, count)
+    count_strong := StrongWhole(count_text)
+    Text(app.ui.session, TextProps.{
+            .bounds = HabitScreenRect(x, y, width, AppScale(64)),
+            .text = count_text, .font = AppScale(Text48),
+            .strong = count_strong[:],
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapNone})
     y += AppScale(64)
     target_text: [96]u8
     target_args: [2]FormatArg
@@ -1965,7 +1977,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
         entries.bounds = HabitScreenRect(x, y, width, button_h)
         entries.label = LocaleText("habit_day_entries")
         entries.tone = cast(ButtonTone)ButtonToneNeutral
-        entries.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        entries.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
         if Button(app.ui.session, entries) != 0 {
             unused End(app.ui.session)
             habit_open_linked_edit_page(app, index, day_index)
@@ -1988,7 +2000,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
             AppTextFromCString(*sessions_text[0],
             cast(s32)sessions_text.count))
         sessions.tone = cast(ButtonTone)ButtonToneNeutral
-        sessions.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        sessions.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
         if Button(app.ui.session, sessions) != 0 {
             unused End(app.ui.session)
             habit_open_linked_edit_page(app, index, day_index)
@@ -2000,8 +2012,8 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     done.id = 5720003
     done.bounds = HabitScreenRect(x, y, width, button_h)
     done.label = LocaleText("done_button")
-    done.tone = cast(ButtonTone)ButtonToneNeutral
-    done.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    done.tone = cast(ButtonTone)ButtonToneAccent
+    done.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
     if Button(app.ui.session, done) != 0 {
         app_close_modal(app)
     }
@@ -2028,7 +2040,11 @@ HabitScreenDrawPage :: (app: *InnerBreeze) {
     }
     selected := app.habits.selected
     if app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
-        top := HabitScreenPageHeader(app, geometry, selected,
+        // The header lines up with the statistics' column below it.
+        column := geometry
+        GetCenteredColumn(AppScale(CONTENT_MAX_W), GetPageSidePadding(),
+            *column.x, *column.width)
+        top := HabitScreenPageHeader(app, column, selected,
             LocaleText("habit_statistics_title"))
         if top < 0 { return }
         draw_statistics_content(app, top)

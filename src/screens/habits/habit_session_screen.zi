@@ -41,6 +41,10 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
 #import "session"
 #import "button_props"
 #import "image_props"
+#import "box_props"
+#import "box_widget"
+#import "paint_queue"
+#import, file "../../app/cards.zi";
 
 
 
@@ -283,12 +287,253 @@ habit_session_draw_edit_screen :: (app: *InnerBreeze) {
     }
 }
 
+habit_session_has_activity :: (ctx: *HabitLinkedContext, activity: s32) -> bool {
+    i: s32 = 0
+    while i < ctx.count {
+        if ctx.entries[i].activity == activity {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+// A line between the rows of a practice's card.
+habit_session_divider :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    PaintRoundedFill(app.ui.session, -1, Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)width, cast(float32)AppScale(1)},
+        0.0, 1, Fade(StyleTokenColor("text"), 0.1))
+}
+
+// One practice's sessions of the day on its card: the practice's name, each
+// session's time and summary with a button that deletes it, and a breathing
+// session's rounds below it, each with buttons that change or delete it.
+// Returns the y below the card, or -1 after a button changed the day.
+habit_session_draw_practice :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
+    activity: s32, content_x: s32, content_w: s32, y: s32,
+    draw: s32) -> s32 {
+    pad := AppScale(CARD_PADDING)
+    x := content_x + pad
+    width := content_w - pad * 2
+    row_h := AppScale(48)
+    summary_h := AppScale(44)
+    icon_w := AppScale(HABIT_ENTRY_BUTTON)
+    row_font := AppFontSize()
+    title := practice_label(activity)
+    y += pad
+    if draw != 0 {
+        title_strong := StrongWhole(title)
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                    cast(float32)(width - icon_w - AppScale(8)),
+                    cast(float32)AppScale(34)},
+                .text = title,
+                .font = AppTitleFontSize(title, width - icon_w - AppScale(8)),
+                .strong = title_strong[:],
+                .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapEllipsis
+            })
+    }
+    y += AppScale(34)
+    first := true
+    i: s32 = 0
+    while i < ctx.count {
+        time_text: [16] u8
+        summary_text: [32] u8
+        trash_x := x + width - icon_w
+        summary_x := x + AppScale(100)
+
+        if ctx.entries[i].activity != activity {
+            i += 1
+            continue
+        }
+        if !first {
+            if draw != 0 {
+                habit_session_divider(app, x, y + AppScale(6), width)
+            }
+            y += AppScale(12)
+        }
+        first = false
+
+        time_args: [2]FormatArg = .[
+        FormatArg.{.number = ctx.entries[i].hour},
+        FormatArg.{.number = ctx.entries[i].minute}
+        ]
+        unused FormatTemplate("%02d:%02d", time_args[:], time_text[:])
+        if activity == EXERCISE_SUN_SALUTATION {
+            FormatLocaleCount(*summary_text[0], size_of(type_of(summary_text)),
+                "practice_home_repetitions",
+                ifx (ctx.entries[i].round_count > 0) then (ctx.entries[i].rounds[0]) else (1))
+        } else if activity == EXERCISE_MEDITATION {
+            habit_format_duration(ctx.entries[i].total_seconds,
+                *summary_text[0], size_of(type_of(summary_text)))
+        } else {
+            FormatLocaleCount(*summary_text[0], size_of(type_of(summary_text)),
+                "results_rounds",
+                ctx.entries[i].round_count)
+        }
+        summary_too_wide := summary_x + AppTextWidth(
+            AppTextFromCString(*summary_text[0],
+            size_of(type_of(summary_text))), row_font) >
+        trash_x - AppScale(8)
+        if summary_too_wide {
+            summary_x = x + AppScale(68)
+        }
+
+        if draw != 0 {
+            Text(app.ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                        cast(float32)(summary_x - x - AppScale(8)),
+                        cast(float32)summary_h},
+                    .text = AppTextFromCString(*time_text[0],
+                    size_of(type_of(time_text))),
+                    .font = row_font,
+                    .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
+                })
+            Text(app.ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)summary_x, cast(float32)y,
+                        cast(float32)(trash_x - summary_x - AppScale(8)),
+                        cast(float32)summary_h},
+                    .text = AppTextFromCString(*summary_text[0],
+                    size_of(type_of(summary_text))),
+                    .font = row_font,
+                    .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
+                })
+            if app.habit_session_edit.active == 0 && Button(app.ui.session, ButtonProps.{
+                    .id = 0,
+                    .bounds = Rectangle.{cast(float32)(trash_x), cast(float32)(y + (summary_h - icon_w) / 2),
+                        cast(float32)(icon_w), cast(float32)(icon_w)},
+                    .label = LocaleText("delete_button"),
+                    .image = habit_session_delete_image(), .icon_only = true,
+                    .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                }) != 0 {
+                if data_delete_session(AppTextFromCString(
+                    *ctx.entries[i].path[0], HABIT_LINKED_PATH_SIZE)) != 0 {
+                    habit_session_changed(app, ctx.count)
+                }
+                habit_session_cancel_edit(app)
+                return -1
+            }
+        }
+        y += summary_h
+
+        if activity == EXERCISE_MEDITATION  || activity == EXERCISE_SUN_SALUTATION {
+            i += 1
+            continue
+        }
+        if ctx.entries[i].round_count > 0 {
+            y += AppScale(8)
+        }
+
+        r: s32 = 0
+        while r < ctx.entries[i].round_count {
+            round_label: [64] u8
+            round_value: [24] u8
+            round_trash_x := x + width - icon_w
+            round_edit_x := round_trash_x - icon_w - AppScale(10)
+            value_x := x + width / 3
+            value_w := round_edit_x - value_x - AppScale(8)
+            editing_round := app.habit_session_edit.active != 0 &&
+            app.habit_session_edit.kind == HABIT_SESSION_EDIT_ROUND &&
+            app.habit_session_edit.round == r &&
+            habit_session_same_path(*app.habit_session_edit.path[0],
+                *ctx.entries[i].path[0])
+            value_text_x := ifx (editing_round) then (value_x - AppScale(8)) else (value_x)
+            value_text_w := ifx (editing_round) then (AppScale(78)) else (value_w)
+
+            FormatLocaleCount(*round_label[0], size_of(type_of(round_label)),
+                "round_number_label", r + 1)
+            if editing_round {
+                AppCopyText(AppTextFromCString(
+                    *app.habit_session_edit.text[0],
+                    size_of(type_of(app.habit_session_edit.text))),
+                    round_value[:])
+            } else {
+                FormatLocaleCount(*round_value[0], size_of(type_of(round_value)),
+                    "results_metric_seconds",
+                    ctx.entries[i].rounds[r])
+            }
+            if draw != 0 {
+                habit_session_divider(app, x, y, width)
+                if editing_round {
+                    Box(app.ui.session, BoxProps.{
+                            .bounds = Rectangle.{cast(float32)x,
+                                cast(float32)(y + AppScale(2)),
+                                cast(float32)width,
+                                cast(float32)(row_h - AppScale(4))},
+                            .fill = Fade(StyleTokenColor("surface"), 0.75),
+                            .border = Fade(StyleTokenColor("text"), 0.55),
+                            .radius = cast(float32)AppScale(8)})
+                    Box(app.ui.session, BoxProps.{
+                            .bounds = Rectangle.{
+                                cast(float32)(value_x - AppScale(8)),
+                                cast(float32)(y + AppScale(6)),
+                                cast(float32)AppScale(78),
+                                cast(float32)(row_h - AppScale(12))},
+                            .border = StyleTokenColor("text"),
+                            .radius = cast(float32)AppScale(6)})
+                }
+                Text(app.ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)x,
+                            cast(float32)y,
+                            cast(float32)(value_x - x - AppScale(8)),
+                            cast(float32)row_h},
+                        .text = AppTextFromCString(*round_label[0],
+                        size_of(type_of(round_label))), .font = row_font,
+                        .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
+                    })
+                Text(app.ui.session, TextProps.{
+                        .bounds = Rectangle.{cast(float32)value_text_x,
+                            cast(float32)y, cast(float32)value_text_w,
+                            cast(float32)row_h},
+                        .text = AppTextFromCString(*round_value[0],
+                        size_of(type_of(round_value))), .font = AppScale(19),
+                        .wrap = cast(TextWrap)TextWrapNone,
+                        .align = ifx editing_round then
+                        (cast(TextAlign)TextAlignCenter) else
+                        (cast(TextAlign)TextAlignStart),
+                        .vertical_align = cast(TextAlign)TextAlignCenter
+                    })
+                if app.habit_session_edit.active == 0 && Button(app.ui.session, ButtonProps.{
+                        .id = 0,
+                        .bounds = Rectangle.{cast(float32)(round_edit_x), cast(float32)(y + (row_h - icon_w) / 2),
+                            cast(float32)(icon_w), cast(float32)(icon_w)},
+                        .label = LocaleText("habit_edit_title"),
+                        .image = habit_session_edit_image(),
+                        .icon_only = true,
+                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                    }) != 0 {
+                    begin_round_edit(app, *ctx.entries[i], r)
+                    return -1
+                }
+                if app.habit_session_edit.active == 0 && Button(app.ui.session, ButtonProps.{
+                        .id = 0,
+                        .bounds = Rectangle.{cast(float32)(round_trash_x), cast(float32)(y + (row_h - icon_w) / 2),
+                            cast(float32)(icon_w), cast(float32)(icon_w)},
+                        .label = LocaleText("delete_button"),
+                        .image = habit_session_delete_image(),
+                        .icon_only = true,
+                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+                    }) != 0 {
+                    if delete_round(*ctx.entries[i], r) != 0 {
+                        habit_session_changed(app, ctx.count)
+                    }
+                    habit_session_cancel_edit(app)
+                    return -1
+                }
+            }
+            y += row_h
+            r += 1
+        }
+        i += 1
+    }
+    return y + pad
+}
+
 habit_session_draw_edit_content :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
     content_x: s32, content_w: s32, y: s32,
     draw: s32) -> s32 {
-    row_h := AppScale(48)
-    section_gap := AppScale(22)
-    title_h := AppScale(38)
+    section_gap := AppScale(16)
     summary_h := AppScale(40)
 
     if app == null || ctx == null {
@@ -318,227 +563,22 @@ habit_session_draw_edit_content :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
     {
         activity: s32 = 0
         while activity < EXERCISE_COUNT {
-            has_activity: s32 = 0
-
-            {
-                i: s32 = 0
-                while i < ctx.count {
-                    if ctx.entries[i].activity == activity {
-                        has_activity = 1
-                        break
-                    }
-                    i += 1
-                }
+            if !habit_session_has_activity(ctx, activity) {
+                activity += 1
+                continue
             }
-            if has_activity == 0 {
-                activity += 1; continue
-            }
-
-            title := practice_label(activity)
+            card_h := habit_session_draw_practice(app, ctx, activity,
+                content_x, content_w, y, 0) - y
             if draw != 0 {
-                Text(CurrentApp().ui.session, TextProps.{
-                        .bounds = Rectangle.{cast(float32)content_x, cast(float32)y,
-                            cast(float32)content_w, cast(float32)title_h},
-                        .text = (title),
-                        .font = AppTitleFontSize(title, content_w),
-                        .wrap = cast(TextWrap)TextWrapNone
-                    })
-            }
-            y += AppScale(16)
-
-            {
-                i: s32 = 0
-                while i < ctx.count {
-                    time_text: [16] u8
-                    summary_text: [32] u8
-                    icon_w := AppScale(40)
-                    trash_x := content_x + content_w - icon_w
-                    row_font := AppFontSize()
-                    summary_x := content_x + AppScale(100)
-
-                    if ctx.entries[i].activity != activity {
-                        i += 1; continue
-                    }
-
-                    time_args: [2]FormatArg = .[
-                    FormatArg.{.number = ctx.entries[i].hour},
-                    FormatArg.{.number = ctx.entries[i].minute}
-                    ]
-                    unused FormatTemplate("%02d:%02d", time_args[:],
-                        time_text[:])
-                    if activity == EXERCISE_SUN_SALUTATION {
-                        FormatLocaleCount(*summary_text[0], size_of(type_of(summary_text)),
-                            "practice_home_repetitions",
-                            ifx (ctx.entries[i].round_count > 0) then (ctx.entries[i].rounds[0]) else (1))
-                    } else if activity == EXERCISE_MEDITATION {
-                        habit_format_duration(ctx.entries[i].total_seconds,
-                            *summary_text[0], size_of(type_of(summary_text)))
-                    } else {
-                        FormatLocaleCount(*summary_text[0], size_of(type_of(summary_text)),
-                            "results_rounds",
-                            ctx.entries[i].round_count)
-                    }
-                    summary_too_wide := summary_x + AppTextWidth(
-                        AppTextFromCString(*summary_text[0],
-                        size_of(type_of(summary_text))), row_font) >
-                    trash_x - AppScale(8)
-                    if summary_too_wide {
-                        summary_x = content_x + AppScale(68)
-                    }
-
-                    if draw != 0 {
-                        Text(CurrentApp().ui.session, TextProps.{
-                                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y,
-                                    cast(float32)(summary_x - content_x - AppScale(8)),
-                                    cast(float32)summary_h},
-                                .text = AppTextFromCString(*time_text[0],
-                                size_of(type_of(time_text))),
-                                .font = row_font,
-                                .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
-                            })
-                        Text(CurrentApp().ui.session, TextProps.{
-                                .bounds = Rectangle.{cast(float32)summary_x, cast(float32)y,
-                                    cast(float32)(trash_x - summary_x - AppScale(8)),
-                                    cast(float32)summary_h},
-                                .text = AppTextFromCString(*summary_text[0],
-                                size_of(type_of(summary_text))),
-                                .font = row_font,
-                                .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
-                            })
-                        if app.habit_session_edit.active == 0 && Button(CurrentApp().ui.session, ButtonProps.{
-                                .id = 0,
-                                .bounds = Rectangle.{cast(float32)(trash_x), cast(float32)(y + (summary_h - icon_w) / 2),
-                                    cast(float32)(icon_w), cast(float32)(icon_w)},
-                                .label = LocaleText("delete_button"),
-                                .image = habit_session_delete_image(), .icon_only = true,
-                                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-                            }) != 0 {
-                            if data_delete_session(AppTextFromCString(
-                                *ctx.entries[i].path[0], HABIT_LINKED_PATH_SIZE)) != 0 {
-                                habit_session_changed(app, ctx.count)
-                            }
-                            habit_session_cancel_edit(app)
-                            return y
-                        }
-                        DrawLine(content_x, y + summary_h + AppScale(8),
-                            content_x + content_w, y + summary_h + AppScale(8),
-                            Fade(StyleTokenColor("text"), 0.22f))
-                    }
-                    y += summary_h + AppScale(18)
-
-                    if activity == EXERCISE_MEDITATION  || activity == EXERCISE_SUN_SALUTATION {
-                        y += AppScale(4)
-                        i += 1; continue
-                    }
-
-                    {
-                        r: s32 = 0
-                        while r < ctx.entries[i].round_count {
-
-                            round_label: [64] u8
-                            round_value: [24] u8
-                            round_trash_x := content_x + content_w - icon_w
-                            round_edit_x := round_trash_x - icon_w - AppScale(8)
-                            value_x := content_x + content_w / 3
-                            value_w := round_edit_x - value_x - AppScale(8)
-                            editing_round := app.habit_session_edit.active != 0 &&
-                            app.habit_session_edit.kind == HABIT_SESSION_EDIT_ROUND &&
-                            app.habit_session_edit.round == r &&
-                            habit_session_same_path(*app.habit_session_edit.path[0],
-                                *ctx.entries[i].path[0])
-                            value_text_x := ifx (editing_round) then (value_x - AppScale(8)) else (value_x)
-                            value_text_w := ifx (editing_round) then (AppScale(78)) else (value_w)
-
-                            FormatLocaleCount(*round_label[0], size_of(type_of(round_label)),
-                                "round_number_label", r + 1)
-                            if editing_round {
-                                AppCopyText(AppTextFromCString(
-                                    *app.habit_session_edit.text[0],
-                                    size_of(type_of(app.habit_session_edit.text))),
-                                    round_value[:])
-                            } else {
-                                FormatLocaleCount(*round_value[0], size_of(type_of(round_value)),
-                                    "results_metric_seconds",
-                                    ctx.entries[i].rounds[r])
-                            }
-                            if draw != 0 {
-                                if editing_round {
-                                    selection: Rectangle = Rectangle.{cast(float32)content_x,
-                                        cast(float32)y, cast(float32)content_w,
-                                        cast(float32)row_h}
-                                    DrawRectangleRounded(selection, 0.12f, 8,
-                                        Fade(StyleTokenColor("surface"), 0.75f))
-                                    DrawRectangleRoundedLinesEx(selection, 0.12f, 8, 1.0f,
-                                        Fade(StyleTokenColor("text"), 0.55f))
-                                    value_field: Rectangle = Rectangle.{
-                                        cast(float32)(value_x - AppScale(8)),
-                                        cast(float32)(y + AppScale(5)),
-                                        cast(float32)AppScale(78),
-                                        cast(float32)(row_h - AppScale(10))}
-                                    DrawRectangleRoundedLinesEx(value_field, 0.12f, 8, 1.0f,
-                                        StyleTokenColor("text"))
-                                }
-                                Text(CurrentApp().ui.session, TextProps.{
-                                        .bounds = Rectangle.{cast(float32)content_x,
-                                            cast(float32)y,
-                                            cast(float32)(value_x - content_x - AppScale(8)),
-                                            cast(float32)row_h},
-                                        .text = AppTextFromCString(*round_label[0],
-                                        size_of(type_of(round_label))), .font = row_font,
-                                        .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter
-                                    })
-                                Text(CurrentApp().ui.session, TextProps.{
-                                        .bounds = Rectangle.{cast(float32)value_text_x,
-                                            cast(float32)y, cast(float32)value_text_w,
-                                            cast(float32)row_h},
-                                        .text = AppTextFromCString(*round_value[0],
-                                        size_of(type_of(round_value))), .font = AppScale(19),
-                                        .wrap = cast(TextWrap)TextWrapNone,
-                                        .align = ifx editing_round then
-                                        (cast(TextAlign)TextAlignCenter) else
-                                        (cast(TextAlign)TextAlignStart),
-                                        .vertical_align = cast(TextAlign)TextAlignCenter
-                                    })
-                                if app.habit_session_edit.active == 0 && Button(CurrentApp().ui.session, ButtonProps.{
-                                        .id = 0,
-                                        .bounds = Rectangle.{cast(float32)(round_edit_x), cast(float32)(y + (row_h - icon_w) / 2),
-                                            cast(float32)(icon_w), cast(float32)(icon_w)},
-                                        .label = LocaleText("habit_edit_title"),
-                                        .image = habit_session_edit_image(),
-                                        .icon_only = true,
-                                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-                                    }) != 0 {
-                                    begin_round_edit(app, *ctx.entries[i], r)
-                                    return y
-                                }
-                                if app.habit_session_edit.active == 0 && Button(CurrentApp().ui.session, ButtonProps.{
-                                        .id = 0,
-                                        .bounds = Rectangle.{cast(float32)(round_trash_x), cast(float32)(y + (row_h - icon_w) / 2),
-                                            cast(float32)(icon_w), cast(float32)(icon_w)},
-                                        .label = LocaleText("delete_button"),
-                                        .image = habit_session_delete_image(),
-                                        .icon_only = true,
-                                        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-                                    }) != 0 {
-                                    if delete_round(*ctx.entries[i], r) != 0 {
-                                        habit_session_changed(app, ctx.count)
-                                    }
-                                    habit_session_cancel_edit(app)
-                                    return y
-                                }
-                                DrawLine(content_x, y + row_h, content_x + content_w,
-                                    y + row_h, Fade(StyleTokenColor("text"), 0.22f))
-                            }
-                            y += row_h
-                            r += 1
-                        }
-                        y += AppScale(12)
-                        i += 1
-                    }
+                Box(app.ui.session, CardProps(Rectangle.{
+                            cast(float32)content_x, cast(float32)y,
+                            cast(float32)content_w, cast(float32)card_h}))
+                if habit_session_draw_practice(app, ctx, activity,
+                    content_x, content_w, y, 1) < 0 {
+                    return y
                 }
-                y += section_gap
             }
-
+            y += card_h + section_gap
             activity += 1
         }
     }
@@ -576,8 +616,12 @@ habit_session_draw_edit_content :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
                     app_auto_sync(app)
                     return y
                 }
-                DrawRectangle(label_x, y, label_w, button_h,
-                    DarkenColor(StyleTokenColor("canvas"), 5))
+                Box(app.ui.session, BoxProps.{
+                        .bounds = Rectangle.{cast(float32)label_x,
+                            cast(float32)y, cast(float32)label_w,
+                            cast(float32)button_h},
+                        .fill = DarkenColor(StyleTokenColor("canvas"), 5),
+                        .radius = cast(float32)AppScale(8)})
                 Text(CurrentApp().ui.session, TextProps.{
                         .bounds = Rectangle.{cast(float32)(label_x + AppScale(8)),
                             cast(float32)AppControlTextY(AppTextFromCString(
