@@ -129,8 +129,22 @@ def application(profile, label):
                 app.wait(timeout=5)
 
 
+def keep_offline(profile):
+    """Switched offline and with its guide seen, Lumi opens on its chat
+    rather than its online terms or guide."""
+    with sqlite3.connect(profile / "inbe.db") as db:
+        user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        for key, value in (("lumi_online", "0"), ("lumi_guides_seen", "127")):
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+                       (user, key, value))
+
+
 with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:
     profile = Path(temporary)
+    with application(profile, "select-initialize"):
+        pass
+    keep_offline(profile)
     with application(profile, "select") as window:
         send(window, "alpha note")
         send(window, "omega note")
@@ -171,6 +185,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-scroll-") as tempor
     profile = Path(temporary)
     with application(profile, "scroll-initialize"):
         pass
+    keep_offline(profile)
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
         db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "

@@ -26,6 +26,7 @@ for feature in lists habits practices diary lumi leaderboard; do
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
     "$ziran" bundle --root . --module-path src \
         --module-path build/packages/kryon/src/ui \
+        --module-path mingcute=build/packages/mingcute/src \
         --define KRYON_HOSTED_UI \
         --module-path build/packages/ziran/std \
         --asset-dir "assets=build/package-assets/$feature/assets" \

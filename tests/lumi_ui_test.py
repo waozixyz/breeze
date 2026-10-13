@@ -186,6 +186,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             "main_tab": "4", "language": "en", "language_setup_done": "1",
             "apps_setup_done": "1", "lumi_introduced": "1", "package_updates_allowed": "0",
             "tutorial_seen": "1", "habits_guide_seen": "1", "lumi_guides_seen": "127",
+            # Switched offline, Lumi opens on its chat rather than its terms.
+            "lumi_online": "0",
         }.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))

@@ -91,7 +91,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                   "launcher_favorite_count": 5,
                   **{f"launcher_favorite_{index}": route
                      for index, route in enumerate((12, 1, 2, 3, 11))},
-                  "main_tab": 4, "lumi_chat": json.dumps(history)}
+                  "main_tab": 4, "lumi_chat": json.dumps(history),
+                  # Switched offline, Lumi opens on its chat rather than its terms.
+                  "lumi_online": 0}
         for key, value in values.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))

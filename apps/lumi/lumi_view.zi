@@ -22,8 +22,6 @@
 #import "title_bar_props"
 #import "title_bar_widget"
 #import "dropdown_props"
-#import "toggle_props"
-#import "toggle_widget"
 #import "tree"
 #import "text"
 #import "byte_text_linux"
@@ -35,6 +33,9 @@
 #import, file "command_text.zi";
 #import, file "engine.zi";
 #import, file "message_text.zi";
+ConnectedIcon :: #import "mingcute/mingcute_regular_wifi";
+DisconnectedIcon :: #import "mingcute/mingcute_regular_wifi_off";
+ConfigureIcon :: #import "mingcute/mingcute_regular_tool";
 
 using ImageFit;
 using TextWrap;
@@ -57,6 +58,7 @@ ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
 LumiDonationActionHost :: (coin: s32, action: s32) -> bool #foreign host_api;
 SetLumiOnlineHost :: (online: bool) -> s32 #foreign host_api;
 LumiAgreementHost :: (choice: s32) -> bool #foreign host_api;
+OpenLumiSettingsHost :: () -> bool #foreign host_api;
 frame: LumiUiFrame;
 // The terms panel's scroll and its formatted text.
 agreement_scroll: s32;
@@ -593,29 +595,41 @@ RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
     }
 }
 
-// Lumi's title bar: its name, and a switch between offline and online.
-// Returns the bar's height.
+// Lumi's title bar: its name, a connection button that switches between
+// offline and online, and a wrench that opens Settings > Lumi. Returns the
+// bar's height.
 LumiTitleBar :: () -> s32 {
     height := Scale(52)
-    switch_width := ifx frame.connection then Scale(184) else 0
+    button := Scale(40)
+    gap := Scale(4)
+    trailing := ifx frame.connection then 2 * button + gap else 0
     options: [1]DropdownOption
     bar := TitleBar(frame.session, TitleBarProps.{.key = cast(u64)300400, .title = "Lumi",
             .bounds = Bounds(0, 0, frame.width, height), .height = height, .scale = frame.scale,
-            .trailing_width = switch_width}, options[0:0])
+            .trailing_width = trailing}, options[0:0])
     if !frame.connection || bar.trailing_bounds.width <= 0.0 {
         return height
     }
-    switch_height := Scale(34)
     area := bar.trailing_bounds
-    switch := Toggle(frame.session, ToggleProps.{.key = cast(u64)300401, .id = 30040,
-            .bounds = Rectangle.{area.x, area.y + (area.height - cast(float32)switch_height) / 2.0,
-                area.width, cast(float32)switch_height},
-            .value = frame.online, .label = LumiViewLocaleHost("lumi_toggle_online"),
-            .off_label = LumiViewLocaleHost("lumi_toggle_offline"),
-            .on_label = LumiViewLocaleHost("lumi_toggle_online")})
-    if switch.changed {
+    top := area.y + (area.height - cast(float32)button) / 2.0
+    size := cast(float32)button
+    // Its label says whether Lumi is online now.
+    state := ifx frame.online then "lumi_toggle_online" else "lumi_toggle_offline"
+    if Button(frame.session, ButtonProps.{.key = cast(u64)300401, .id = 30040,
+            .bounds = Rectangle.{area.x + area.width - 2.0 * size - cast(float32)gap, top, size, size},
+            .label = LumiViewLocaleHost(state), .selected = frame.online,
+            .icon_shape = ifx frame.online then ConnectedIcon.Shape else DisconnectedIcon.Shape,
+            .icon_only = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
         // Going online without the agreement opens the terms instead.
-        unused SetLumiOnlineHost(switch.value)
+        unused SetLumiOnlineHost(!frame.online)
+    }
+    if Button(frame.session, ButtonProps.{.key = cast(u64)300390, .id = 30043,
+            .bounds = Rectangle.{area.x + area.width - size, top, size, size},
+            .label = LumiViewLocaleHost("settings_title"), .icon_shape = ConfigureIcon.Shape,
+            .icon_only = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        unused OpenLumiSettingsHost()
     }
     return height
 }
