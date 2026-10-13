@@ -648,36 +648,119 @@ HabitEntryDescribe :: (habit: *Habit, entry: *HabitEntrySummary) {
     entry.summary[0] = cast(u8)0
     unused storage_habit_entry_load(AppTextFromCString(*entry.id[0],
         HABIT_ENTRY_ID_SIZE), *started, *ended, answers[:], *count)
+    // A span's start and end questions are its times, shown above.
+    span_times: [2]s64 = .[-1, -1]
+    if habit.span != 0 {
+        found: s32 = 0
+        question: s32 = 0
+        while question < habit.question_count && found < 2 {
+            if habit.questions[question].answer_type == HABIT_ANSWER_TIME {
+                span_times[found] = habit.questions[question].id
+                found += 1
+            }
+            question += 1
+        }
+    }
+    // Each answer is two lines: its question, then its value.
     index: s32 = 0
     while index < count {
+        if answers[index].id == span_times[0] || answers[index].id == span_times[1] {
+            index += 1
+            continue
+        }
         value := HabitAnswerValue(*answers[index])
         if answers[index].answer_type == HABIT_ANSWER_YES_NO {
             value = LocaleText(ifx value == "yes" then "habit_answer_yes"
                 else "habit_answer_no")
         }
-        if index > 0 {
+        if entry.summary[0] != cast(u8)0 {
             unused AppAppendText("\n", entry.summary[:])
         }
         unused AppAppendText(HabitAnswerQuestion(*answers[index]), entry.summary[:])
-        unused AppAppendText(": ", entry.summary[:])
+        unused AppAppendText("\n", entry.summary[:])
         unused AppAppendText(value, entry.summary[:])
         index += 1
     }
 }
 
+// An entry's answers: each question muted, its value under it in bold.
+// Returns their height; draws them when draw is set.
+HabitEntryAnswers :: (app: *InnerBreeze, summary: string, x: s32, y: s32,
+    width: s32, draw: bool) -> s32 {
+    height: s32 = 0
+    start: s64 = 0
+    line: s32 = 0
+    while start < summary.count {
+        end := start
+        while end < summary.count && summary[end] != cast(u8)10 {
+            end += 1
+        }
+        line_bytes: [HABIT_ENTRY_SUMMARY_SIZE]u8
+        copied: s64 = 0
+        while start + copied < end && copied < HABIT_ENTRY_SUMMARY_SIZE - 1 {
+            line_bytes[copied] = summary[start + copied]
+            copied += 1
+        }
+        line_bytes[copied] = cast(u8)0
+        text := AppTextFromCString(*line_bytes[0], HABIT_ENTRY_SUMMARY_SIZE)
+        value := line % 2 == 1
+        font := AppSmallFontSize()
+        if value {
+            font = AppFontSize() + AppScale(2)
+        }
+        text_h := AppParagraphHeight(text, width, font, AppScale(4))
+        if draw {
+            props: TextProps
+            props.bounds = HabitScreenRect(x, y + height, width, text_h)
+            props.text = FrameTextHold(*app.ui.frame_text, text)
+            props.font = font
+            props.wrap = cast(TextWrap)TextWrapAuto
+            strong := StrongWhole(props.text)
+            if value {
+                props.strong = strong[:]
+            } else {
+                props.class_name = MutedTextClass()
+            }
+            Text(app.ui.session, props)
+        }
+        height += text_h
+        if value {
+            height += AppScale(10)
+        } else {
+            height += AppScale(2)
+        }
+        start = end + 1
+        line += 1
+    }
+    if height > AppScale(10) {
+        height -= AppScale(10)
+    }
+    return height
+}
+
 HABIT_ENTRY_BUTTON :: 44
 
-// An entry's card: its time or span with the buttons that change or
-// delete it, its answers below, each on its own line, and End now for a
-// running span.
-HabitEntryCardHeight :: (item: *HabitEntrySummary, running: bool,
-    width: s32) -> s32 {
+// An entry's card: a span's times with the buttons that change or delete
+// it and its answers below, and End now while it runs. Other entries ask
+// no time, so their answers sit beside the buttons, and a skipped one shows
+// when it was recorded.
+HabitEntryCardHeight :: (app: *InnerBreeze, item: *HabitEntrySummary,
+    span: bool, running: bool, width: s32) -> s32 {
     pad := AppScale(CARD_PADDING)
-    height := pad + AppScale(HABIT_ENTRY_BUTTON) + pad
+    buttons := AppScale(HABIT_ENTRY_BUTTON)
     summary := AppTextFromCString(*item.summary[0], HABIT_ENTRY_SUMMARY_SIZE)
+    if !span && summary.count > 0 {
+        answers := HabitEntryAnswers(app, summary, 0, 0,
+            width - pad * 2 - buttons * 2 - AppScale(18), false)
+        if answers < buttons {
+            answers = buttons
+        }
+        return pad + answers + pad
+    }
+    height := pad + buttons + pad
     if summary.count > 0 {
-        height += AppParagraphHeight(summary, width - pad * 2, AppFontSize(),
-            AppScale(6)) + AppScale(8)
+        height += HabitEntryAnswers(app, summary, 0, 0, width - pad * 2,
+            false) + AppScale(8)
     }
     if running {
         height += AppScale(44) + AppScale(12)
@@ -712,23 +795,35 @@ HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
     while entry < cache.count {
         item := *cache.entries[entry]
         running := habit.span != 0 && item.ended_at <= 0
-        card_h := HabitEntryCardHeight(item, running, width)
+        span := habit.span != 0
+        summary := AppTextFromCString(*item.summary[0], HABIT_ENTRY_SUMMARY_SIZE)
+        card_h := HabitEntryCardHeight(app, item, span, running, width)
         if draw {
             Box(app.ui.session, CardProps(HabitScreenRect(x, y, width, card_h)))
             inner_x := x + pad
             inner_w := width - pad * 2
             buttons_w := icon_w * 2 + AppScale(10)
-            when_text := AppTextFromCString(*item.when[0], 64)
-            when_strong := StrongWhole(when_text)
-            when: TextProps
-            when.bounds = HabitScreenRect(inner_x, y + pad,
-                inner_w - buttons_w - AppScale(8), icon_w)
-            when.text = FrameTextHold(*app.ui.frame_text, when_text)
-            when.font = AppFontSize() + AppScale(4)
-            when.strong = when_strong[:]
-            when.vertical_align = cast(TextAlign)TextAlignCenter
-            when.wrap = cast(TextWrap)TextWrapEllipsis
-            Text(app.ui.session, when)
+            if span || summary.count == 0 {
+                when_text := AppTextFromCString(*item.when[0], 64)
+                when_strong := StrongWhole(when_text)
+                when: TextProps
+                when.bounds = HabitScreenRect(inner_x, y + pad,
+                    inner_w - buttons_w - AppScale(8), icon_w)
+                when.text = FrameTextHold(*app.ui.frame_text, when_text)
+                when.font = AppFontSize()
+                if span {
+                    when.font = AppFontSize() + AppScale(4)
+                    when.strong = when_strong[:]
+                } else {
+                    when.class_name = MutedTextClass()
+                }
+                when.vertical_align = cast(TextAlign)TextAlignCenter
+                when.wrap = cast(TextWrap)TextWrapEllipsis
+                Text(app.ui.session, when)
+            } else {
+                unused HabitEntryAnswers(app, summary, inner_x, y + pad,
+                    inner_w - buttons_w - AppScale(8), true)
+            }
             edit: ButtonProps
             edit.id = 5740000 + entry * 2
             edit.bounds = HabitScreenRect(inner_x + inner_w - buttons_w,
@@ -757,19 +852,9 @@ HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
                 return y
             }
             line_y := y + pad + icon_w + AppScale(8)
-            summary := AppTextFromCString(*item.summary[0],
-                HABIT_ENTRY_SUMMARY_SIZE)
-            if summary.count > 0 {
-                summary_h := AppParagraphHeight(summary, inner_w,
-                    AppFontSize(), AppScale(6))
-                answers: TextProps
-                answers.bounds = HabitScreenRect(inner_x, line_y, inner_w,
-                    summary_h)
-                answers.text = FrameTextHold(*app.ui.frame_text, summary)
-                answers.font = AppFontSize()
-                answers.wrap = cast(TextWrap)TextWrapAuto
-                Text(app.ui.session, answers)
-                line_y += summary_h + AppScale(8)
+            if span && summary.count > 0 {
+                line_y += HabitEntryAnswers(app, summary, inner_x, line_y,
+                    inner_w, true) + AppScale(8)
             }
             if running {
                 stop: ButtonProps
