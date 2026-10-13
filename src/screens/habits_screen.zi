@@ -59,6 +59,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import "text_widget"
 #import "control_props"
 #import "paint_queue"
+#import "checkbox_widget"
 #import "text_align"
 #import "segmented_control_props"
 #import "segmented_control_widget"
@@ -590,26 +591,63 @@ HabitScreenLine :: (app: *InnerBreeze, x1: s32, y1: s32,
 }
 
 
+// A point of a day's check, offset from the dot's center and placed on a
+// whole pixel, so every day's check is drawn alike.
+HabitScreenCheckPoint :: (center_x: s32, center_y: s32,
+    offset_x: float32, offset_y: float32) -> Vector2 {
+    x := cast(float32)center_x + offset_x + 0.5
+    y := cast(float32)center_y + offset_y + 0.5
+    return Vector2.{cast(float32)cast(s32)x, cast(float32)cast(s32)y}
+}
+
 // A day's dot: filled once the day is complete, showing the day's count
-// when the habit counts and a check when it does not.
+// when the habit counts and a check when it does not. Both kinds are lit
+// from the top left, with a rim, a shaded lower edge and a highlight.
 HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
     radius: s32, accent: Color, complete: bool, counting: bool, count: s32) {
     surface := StyleTokenColor("surface")
     foreground := StyleTokenColor("text")
+    highlight_radius := radius / 3
+    if highlight_radius < AppScale(2) {
+        highlight_radius = AppScale(2)
+    }
     HabitScreenCircle(app, center_x, center_y + AppScale(1),
         radius + AppScale(2), Fade(Color.{0, 0, 0, 255}, 0.16))
     show_count := counting && count > 0
     if complete {
         HabitScreenCircle(app, center_x, center_y,
-            radius + AppScale(1), LightenColor(accent, 16))
-        HabitScreenCircle(app, center_x, center_y, radius, accent)
+            radius + AppScale(1), DarkenColor(accent, 18))
+        HabitScreenCircle(app, center_x, center_y, radius,
+            DarkenColor(accent, 8))
+        HabitScreenCircle(app, center_x, center_y - AppScale(1),
+            radius - AppScale(2), accent)
+        HabitScreenCircle(app, center_x - radius / 3,
+            center_y - radius / 2, highlight_radius,
+            Fade(Color.{255, 255, 255, 255}, 0.3))
         if !show_count {
+            // A bold check, stroked the way Kryon's Checkbox draws its
+            // own: two segments of stacked one-pixel lines meeting at the
+            // bottom corner. An odd number of lines keeps each of them on
+            // whole pixels, where every day's check rasterizes alike.
+            unit := cast(float32)radius * 1.4 / 24.0
+            stroke := cast(s32)(cast(float32)radius * 0.1 + 0.5) * 2 + 1
+            if stroke < 3 {
+                stroke = 3
+            }
+            if stroke > 7 {
+                stroke = 7
+            }
             check := HabitScreenTextColor(accent)
-            HabitScreenLine(app, center_x - radius / 2, center_y,
-                center_x - radius / 8, center_y + radius / 3, check)
-            HabitScreenLine(app, center_x - radius / 8,
-                center_y + radius / 3, center_x + radius / 2,
-                center_y - radius / 3, check)
+            corner := HabitScreenCheckPoint(center_x, center_y,
+                unit * -2.8, unit * 5.0)
+            PaintCheckboxSegment(app.ui.session, -1,
+                HabitScreenCheckPoint(center_x, center_y,
+                    unit * -8.0, unit * -0.2),
+                corner, cast(float32)stroke, check)
+            PaintCheckboxSegment(app.ui.session, -1, corner,
+                HabitScreenCheckPoint(center_x, center_y,
+                    unit * 8.0, unit * -5.8),
+                cast(float32)stroke, check)
         }
     } else {
         HabitScreenCircle(app, center_x, center_y,
@@ -618,8 +656,7 @@ HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
             radius - AppScale(2), surface)
         if !show_count {
             HabitScreenCircle(app, center_x - AppScale(2),
-                center_y - AppScale(3), ifx radius / 3 > AppScale(2) then
-                (radius / 3) else (AppScale(2)),
+                center_y - AppScale(3), highlight_radius,
                 Fade(Color.{255, 255, 255, 255}, 0.16))
         }
     }
