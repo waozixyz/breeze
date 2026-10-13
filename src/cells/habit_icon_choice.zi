@@ -5,6 +5,8 @@
 // an icon the person chose is never replaced. Only the names and
 // descriptions of the habits without an icon go to the node, each at most
 // once per run, and nothing more is asked in a run after a request fails.
+// Like Lumi it asks only while Lumi is online under its agreement; until
+// then habits show their practice's icon or their first letter.
 #import "json_scan"
 #import "text"
 #import "vec"
@@ -19,6 +21,7 @@
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_icons.zi";
 #import, file "../app/text_buffers.zi";
+#import, file "lumi_connection.zi";
 
 habit_icon_operation: StoredOperation;
 habit_icon_session: Session;
@@ -79,7 +82,7 @@ HabitIconChoiceStart :: (habits: *Habits) -> bool {
         }
         index += 1
     }
-    if !waiting {
+    if !waiting || !LumiNodeTrafficAllowed() {
         return false
     }
     if storage_has_sync_account() == 0 || StoredAccountMode() == AccountModeDelegate {
@@ -141,6 +144,16 @@ HabitIconChoiceStart :: (habits: *Habits) -> bool {
 // when none fits; a habit that got an icon meanwhile keeps it. Returns
 // whether any habit changed.
 HabitIconChoicePoll :: (habits: *Habits) -> bool {
+    if habit_icon_operation.active && !LumiNodeTrafficAllowed() {
+        // Switched offline meanwhile: these habits are asked about again
+        // once Lumi is online.
+        CancelStoredOperation(*habit_icon_operation)
+        if habit_icon_seen_count >= habit_icon_asked_count {
+            habit_icon_seen_count -= habit_icon_asked_count
+        }
+        habit_icon_asked_count = 0
+        return false
+    }
     if !habit_icon_operation.active || !PollStoredOperation(*habit_icon_operation) {
         return false
     }

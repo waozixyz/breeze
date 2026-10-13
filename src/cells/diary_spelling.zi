@@ -1,6 +1,8 @@
 // Diary spelling uses the Waozi node's GLM service: the same signed account
 // requests and daily allowance as Lumi's online chat. The entry goes only to
-// that node, which returns it with misspelled words corrected.
+// that node, which returns it with misspelled words corrected. Like Lumi it
+// runs only while Lumi is online under its agreement; otherwise the check
+// quietly does nothing (lumi_connection.zi).
 #import "json_scan"
 #import "text"
 #import "vec"
@@ -12,6 +14,7 @@
 #import, file "../storage/delegate_store.zi";
 #import, file "../storage/sync_async.zi";
 #import, file "../platform/network_transport.zi";
+#import, file "lumi_connection.zi";
 
 // The node corrects at most this many bytes at once.
 DIARY_SPELLING_LIMIT :: 8192
@@ -56,13 +59,17 @@ DiarySpellingJson :: (out: *Vec(u8), value: string) {
 }
 
 // Returns "" once the check is on its way, or the locale key saying why it
-// cannot start.
+// cannot start. While Lumi is offline or not agreed it returns "" without
+// starting anything: no suggestions, and no notice either.
 DiarySpellingStart :: (text: string) -> string {
     if diary_spelling_operation.active {
         return ""
     }
     if storage_has_sync_account() == 0 || StoredAccountMode() == AccountModeDelegate {
         return "diary_spelling_account"
+    }
+    if !LumiNodeTrafficAllowed() {
+        return ""
     }
     if text.count > DIARY_SPELLING_LIMIT {
         return "diary_spelling_too_long"
@@ -85,6 +92,11 @@ DiarySpellingStart :: (text: string) -> string {
 DiarySpellingPoll :: () -> DiarySpellingResult {
     result: DiarySpellingResult
     if !diary_spelling_operation.active {
+        return result
+    }
+    if !LumiNodeTrafficAllowed() {
+        // Switched offline meanwhile: the check ends without an answer.
+        CancelStoredOperation(*diary_spelling_operation)
         return result
     }
     if !PollStoredOperation(*diary_spelling_operation) {

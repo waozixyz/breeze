@@ -7,6 +7,7 @@
 - Settings > Lumi: read or withdraw the online terms, and use your own OpenAI-compatible AI provider with its address, key and model instead of Inner Breeze's server.
 ### Changed
 - Offline, Lumi sends nothing: no AI requests, no feedback delivery and no Telegram messages until you switch it online.
+- Diary spelling checks and automatic habit icons follow the same switch and terms. Until then the diary offers no spelling corrections, and habits show their practice's icon or their first letter.
 - Requires Inner Breeze 2.1.33 or later.
 
 ## [1.3.9] - 2026-10-11
