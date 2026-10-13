@@ -20,7 +20,7 @@ ROOT = pathlib.Path(os.environ.get("SYNC_RESTORE_ROOT") or
 CORE = (ROOT / "src/storage/storage_core.zi").read_text()
 SCHEMA = (ROOT / "src/storage/schema_sql.zi").read_text()
 
-TABLES = ["users", "habits", "habit_days", "habit_entries", "sessions", "elist_lists",
+TABLES = ["users", "habits", "habit_days", "habit_entries", "habit_changes", "sessions", "elist_lists",
           "elist_items", "settings", "sync_outbox"]
 
 
@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 8, inserts
+    assert len(inserts) == 9, inserts
     return clear + inserts
 
 
@@ -61,7 +61,7 @@ ENTITIES = [
     ("habit", "h1", 0), ("habit", "h2", 0), ("habit_day", "h1", 20260101),
     ("app_preference", "app_used_lists", 0), ("app_preference", "app_used_diary", 0),
     ("session", "s1", 0), ("elist_list", "l1", 0), ("elist_item", "i1", 0),
-    ("habit_entry", "e1", 0),
+    ("habit_entry", "e1", 0), ("habit_change", "c1", 0),
     ("cell_record", "cell.lumi.message.history", 0),
     ("cell_record", "cell.diary.entry.today", 0),
     ("cell_record", "cell.feedback.report", 0),
@@ -82,6 +82,8 @@ def open_database():
     insert_row(database, "elist_items", {"id": "i1", "user_id": "u1"})
     insert_row(database, "habit_entries",
                {"id": "e1", "user_id": "u1", "habit_id": "h1", "local_date": 20260101})
+    insert_row(database, "habit_changes",
+               {"id": "c1", "user_id": "u1", "habit_id": "h1", "changed_at": 1, "kind": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})
