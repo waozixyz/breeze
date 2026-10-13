@@ -111,8 +111,12 @@ find_word yoga-open streak "the open habit shows its streak" >/dev/null
 # Its editor opens from the last of the details' actions, at the table's
 # right edge above the figures, and gives Yoga an icon.
 read -r _ week_y < <(find_word yoga-open week "the open habit shows this week")
-day_w=$((day1_x - today_x))
-edit_x=$((today_x + day_w * 6 - 8))
+# The open details make the table scroll, and its scroll bar moves the day
+# columns left; aim at the middle of the edit action from where they are now.
+read -r open_day1_x _ < <(find_word yoga-open "$yesterday" "the open table names yesterday")
+read -r open_day2_x _ < <(find_word yoga-open "$before_yesterday" "the open table names the day before")
+day_w=$((open_day2_x - open_day1_x))
+edit_x=$((open_day1_x + day_w * 5 - 24))
 tap "$edit_x" "$((week_y - 55))"
 for attempt in $(seq 1 12); do
   shot editor
