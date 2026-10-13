@@ -30,6 +30,8 @@ tray_memcmp :: (left: *void, right: *void, count: usize) -> s32 #foreign c "memc
 #import "tray_props"
 #import, file "../app/locale.zi";
 #import "c_string"
+#import, file "../app/assets.zi";
+#import, file "../storage/data.zi";
 
 tray_getenv :: (name: *u8) -> *u8 #foreign c "getenv";
 habits_today_index :: () -> s32 #foreign c;
@@ -272,7 +274,7 @@ desktop_tray_init :: () -> s32 {
     if tray_getenv(*no_tray_name[0]) != null {
         return 0
     }
-    TrayIconPaths[0] = "inbe.png"
+    TrayIconPaths[0] = TrayIconFromAssets()
     TrayIconPaths[1] = "packaging/linux/appimage/inbe.png"
     TrayIconPaths[2] = "packaging/snap/snap/gui/inbe.png"
     TrayIconPaths[3] = "web-assets/icons/inbe.png"
@@ -289,6 +291,33 @@ desktop_tray_init :: () -> s32 {
     TrayReady = ifx (TrayOpen(spec)) then (1) else (0)
     return TrayReady
 }
+// The tray shows Inbe's own logo: the app icon in its assets, saved as
+// tray-icon.png in the data folder. Without it the tray looks for an icon
+// named "inbe" in the desktop's theme, which an older install may have
+// left with an old logo.
+TrayIconFile: [1024]u8;
+SaveTrayIcon :: (path: *u8, data: *u8, size: s32) -> bool #foreign raylib "SaveFileData";
+
+TrayIconFromAssets :: () -> string {
+    asset_path: [32]u8
+    if !CopyCString("assets/app/icon.png", asset_path[:]) {
+        return ""
+    }
+    asset := asset_lookup(*asset_path[0])
+    if !asset.found || asset.data == null || asset.size == 0 ||
+    asset.size > cast(usize)16777216 {
+        return ""
+    }
+    if !AppCopyText(data_root(), TrayIconFile[:]) ||
+    !AppAppendText("/tray-icon.png", TrayIconFile[:]) {
+        return ""
+    }
+    if !SaveTrayIcon(*TrayIconFile[0], asset.data, cast(s32)asset.size) {
+        return ""
+    }
+    return AppTextFromCString(*TrayIconFile[0], cast(s32)TrayIconFile.count)
+}
+
 #program_export
 desktop_tray_shutdown :: () {
     TrayClose()
