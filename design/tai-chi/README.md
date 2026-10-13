@@ -23,7 +23,7 @@ later (see "App playback" below).
 ```sh
 cd design/tai-chi
 npm install                     # Three.js, pinned in package.json
-node tools/serve.mjs            # studio at http://127.0.0.1:8771/
+node tools/serve.mjs            # studio at http://127.0.0.1:8771/ (opens on the full form)
 node tools/check.mjs            # motion checks for every item and figure
 node tools/render.mjs --item lesson-2/brush-knee/demo --stills 3,6,9 --label
 node tools/render.mjs --lessons --full --label   # an MP4 per lesson and the full form
@@ -37,6 +37,37 @@ Output goes to `build/tai-chi/` (ignored).
 Studio keys: Space plays, ←/→ step a frame (Shift: a second), `[`/`]`
 jump between cued steps, 1–6 switch views. Dragging the view switches to
 the free orbit camera.
+
+## Painted characters
+
+The studio opens on the full form with the painted Tibetan monk: a 2D
+cut-out puppet in the hand-painted style of Sun Salutation, drawn over the
+same solved body as the 3D figures, so every lesson, version and the full
+form play with it. The second painted character is a Tibetan woman (braids
+wound round her head, teal wrap vest, pangden-striped sash). Pick them in the
+figure buttons (`?figure=monk`, `?figure=tibetanWoman`); the 3D figures are
+still there.
+
+- `characters/<id>/source/` keeps the generated turnaround and part sheets
+  with their prompts (Codex built-in image generation, the turnaround and
+  the approved Sun Salutation characters as references).
+- `tools/cut-parts.py characters/<id>` cuts the sheets listed in
+  `sheets.json` into transparent `parts/`, recovering edges from the white
+  background and fading the cut edges that another part covers (hand into
+  forearm, ankle into trouser cuff).
+- `characters/<id>/character.json` names each part's points as fractions of
+  its image: the neck and hips of the five torso views, the armholes, the
+  neck of the five head views, wrist and fingertips of the hands, heel and
+  toe of the shoes.
+- `src/painted/figure.js` projects the solved joints flat along the view
+  and places the paintings as textured meshes in an orthographic scene:
+  arms and legs bend along their projected bones, the torso follows the
+  projected spine, and the head, torso, hands and shoes switch between
+  front, three-quarter, side, three-quarter back and back drawings as they
+  turn (mirrored for the other side, with a little hysteresis so a part on
+  a boundary does not flicker). Hands pick palm, back, edge, fist or hook
+  drawings from the hand's shape and which way the palm faces. Back arms,
+  legs, head, torso and front arms are drawn in that order.
 
 ## How it works
 
@@ -61,8 +92,9 @@ the free orbit camera.
   of each movement, and the full form's duration.
 - `form/`: the choreography. `lessonN.js` exports the lesson's movements;
   `boundaries.js` holds the poses where lessons hand over.
-- `src/view/`: the stage, camera views, the mannequin and the two
-  characters (Sage Bun and Sage Male).
+- `src/view/`: the stage, camera views, the mannequin and the two 3D
+  characters (Sage Bun and Sage Male); `src/painted/` the painted 2D
+  figures (see above).
 
 ## App playback
 
