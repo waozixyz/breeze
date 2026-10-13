@@ -88,6 +88,15 @@ habits count scheduled habits whose manual or linked activity count reaches the
 target. Select a bar to see its date and value. Online requests use the same
 `show_progress_chart` tool; model-provided data never becomes a chart.
 
+Online Lumi sets a habit's schedule and notification with `set_habit_schedule`,
+the same choices as the habit editor: daily, weekly on any weekdays, monthly on
+days of the month, the last day or a weekday of a week of the month, yearly, a
+formula over the day's numbers, or no set days, every N days, weeks, months or
+years from a start date. A changed schedule plans the days from today on;
+earlier days keep the schedule they had, and nothing recorded is removed. Days
+off the schedule have no circle but still open, and what was recorded on them
+shows faded. The context lists each habit's schedule and notification hour.
+
 `/donate` and `show_donation_links` show the existing Bitcoin and Monero addresses
 with copy, wallet and Trocador actions. Only a user click opens a destination.
 The host chooses every address and URL from Inbe's donation configuration. Old

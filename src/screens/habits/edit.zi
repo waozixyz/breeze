@@ -21,6 +21,7 @@ c :: #system_library "c";
 #import, file "../../habits/habit_sessions.zi";
 #import, file "../../app/exercise_types.zi";
 #import, file "../../habits/habit_icons.zi";
+#import, file "../../habits/habit_schedule.zi";
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/locale.zi";
 #import, file "../../app/app_modal_state.zi";
@@ -35,6 +36,13 @@ c :: #system_library "c";
 #import "checkbox_widget"
 #import "checkbox"
 #import "dropdown_widget"
+#import "fieldset_props"
+#import "fieldset_widget"
+#import "semantic"
+#import "segmented_control_props"
+#import "segmented_control_widget"
+#import "spinbox_props"
+#import "spinbox_widget"
 #import "text_area_widget"
 #import "text_field_widget"
 #import "text_widget"
@@ -43,6 +51,7 @@ c :: #system_library "c";
 #import "toggle"
 #import "modal"
 #import "drawing_props"
+#import "paint_queue"
 #import "session"
 #import "button_props"
 #import "checkbox_props"
@@ -61,6 +70,7 @@ using TextAlign;
 using TextWrap;
 using ButtonTone;
 using ButtonEmphasis;
+using SemanticKind;
 
 save_settings :: (app: *InnerBreeze) #foreign c "save_settings";
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c "app_auto_sync";
@@ -87,9 +97,7 @@ habit_edit_begin_new :: (app: *InnerBreeze) {
     app.habit_edit.sync_mode = HABIT_SYNC_NONE
     app.habit_edit.counter_target = 1
     app.habit_edit.reminder_hour = -1
-    app.habit_edit.weekdays = HABIT_SCHEDULE_OFF
-    app.habit_edit.sections[0] = 1
-    app.habit_edit.sections[2] = 1
+    app.habit_edit.schedule = HabitScheduleFromWeekdays(0)
     app.habit_edit.cursor = 0
     app.habit_edit.focused = 0
     app.habits.scroll = 0
@@ -110,11 +118,9 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.sync_activity = app.habits.items[index].sync_activity
     app.habit_edit.counter_enabled = app.habits.items[index].counter_enabled
     app.habit_edit.counter_target = ifx (app.habits.items[index].counter_target > 0) then (app.habits.items[index].counter_target) else (1)
-    app.habit_edit.weekdays = app.habits.items[index].weekdays
+    app.habit_edit.schedule = HabitScheduleCurrent(*app.habits.items[index])
     app.habit_edit.reminder_hour = app.habits.items[index].reminder_hour
     app.habit_edit.icon = app.habits.items[index].icon
-    app.habit_edit.sections[0] = 1
-    app.habit_edit.sections[2] = 1
     AppCopyText(AppTextFromCString(*app.habits.items[index].name[0],
         HABIT_NAME_SIZE), app.habit_edit.text[:])
     AppCopyText(AppTextFromCString(*app.habits.items[index].description[0],
@@ -221,6 +227,11 @@ habit_edit_commit :: (app: *InnerBreeze) {
     if app == null || app.habit_edit.active == 0 {
         return
     }
+    // A formula that does not read keeps the editor open on it.
+    if app.habit_edit.schedule.repeat == HABIT_REPEAT_FORMULA &&
+    !habit_edit_formula_valid(app) {
+        return
+    }
     message := HabitsMessageFor(app, HABITS_COMMIT)
     message.active = app.habit_edit.active != 0
     message.is_new = app.habit_edit.is_new != 0
@@ -230,7 +241,7 @@ habit_edit_commit :: (app: *InnerBreeze) {
     message.color = app.habit_edit.color
     message.sync_activity = app.habit_edit.sync_activity
     message.sync_mode = app.habit_edit.sync_mode
-    message.weekdays = app.habit_edit.weekdays
+    message.weekdays = HabitScheduleWeekdays(app.habit_edit.schedule)
     message.reminder_hour = app.habit_edit.reminder_hour
     message.counter_enabled = app.habit_edit.counter_enabled
     message.counter_target = app.habit_edit.counter_target
@@ -238,7 +249,6 @@ habit_edit_commit :: (app: *InnerBreeze) {
     message = HabitsRun(message)
     app.habit_edit.name_error = message.name_error
     if message.name_error != 0 {
-        app.habit_edit.sections[0] = 1
         app.habits.scroll = 0
         return
     }
@@ -299,8 +309,7 @@ habit_edit_name_field :: (app: *InnerBreeze,
     app.habit_edit.name_scroll_x = result.scroll_x
     app.habit_edit.focused = ifx (result.focused) then (1) else (0)
     if result.focused {
-        app.habit_edit.description_focused = 0
-        app.habit_edit.counter_focused = 0
+        habit_edit_focus_only(app, 1)
     }
     if result.clipboard_write {
         unused TextInputWriteClipboard(result.clipboard_text)
@@ -336,8 +345,7 @@ habit_edit_description_field :: (app: *InnerBreeze,
     app.habit_edit.description_scroll_y = result.scroll_y
     app.habit_edit.description_focused = ifx (result.focused) then (1) else (0)
     if result.focused {
-        app.habit_edit.focused = 0
-        app.habit_edit.counter_focused = 0
+        habit_edit_focus_only(app, 2)
     }
     if result.clipboard_write {
         unused TextInputWriteClipboard(result.clipboard_text)
@@ -394,8 +402,7 @@ habit_edit_counter_field :: (app: *InnerBreeze,
     app.habit_edit.counter_scroll_x = result.scroll_x
     app.habit_edit.counter_focused = ifx (result.focused) then (1) else (0)
     if result.focused {
-        app.habit_edit.focused = 0
-        app.habit_edit.description_focused = 0
+        habit_edit_focus_only(app, 3)
     }
     if result.clipboard_write {
         unused TextInputWriteClipboard(result.clipboard_text)
@@ -403,25 +410,37 @@ habit_edit_counter_field :: (app: *InnerBreeze,
     return result.focused
 }
 
-habit_edit_section_height :: (app: *InnerBreeze, section: s32,
+// The icons shown: all of them, or one row ending in a button for the rest.
+habit_edit_icon_slots :: (app: *InnerBreeze, width: s32) -> s32 {
+    if app.habit_edit.more_icons != 0 {
+        return HABIT_ICON_COUNT + 1
+    }
+    return habit_edit_columns(width)
+}
+
+// A section's body height below its heading.
+habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     width: s32) -> s32 {
-    header := AppScale(50)
-    if app.habit_edit.sections[section] == 0 { return header }
     if section == 0 {
-        columns := width / AppScale(48)
-        if columns < 1 { columns = 1 }
+        columns := habit_edit_columns(width)
         colors: s32 = ifx (app.habit_edit.more_colors != 0) then (12) else (7)
-        icons: s32 = HABIT_ICON_COUNT + 1
-        return header + AppScale(230) +
-        (colors + columns - 1) / columns * AppScale(44) + AppScale(38) +
+        icons := habit_edit_icon_slots(app, width)
+        return AppScale(266) +
+        (colors + columns - 1) / columns * AppScale(44) +
         (icons + columns - 1) / columns * AppScale(44)
     }
     if section == 1 {
-        scheduled := (app.habit_edit.weekdays & HABIT_SCHEDULE_OFF) == 0
-        return header + AppScale(ifx (scheduled) then (232) else (116))
+        return habit_edit_schedule_height(app, width)
     }
-    return header + AppScale(ifx (app.habit_edit.counter_enabled != 0)
-        then (168) else (116))
+    return AppScale(ifx (app.habit_edit.counter_enabled != 0)
+        then (148) else (96))
+}
+
+// A section is a heading above a framed card holding its body.
+habit_edit_section_height :: (app: *InnerBreeze, section: s32,
+    width: s32) -> s32 {
+    return AppScale(30) + AppScale(24) +
+    habit_edit_section_body(app, section, width)
 }
 
 habit_edit_content_height :: (app: *InnerBreeze, width: s32) -> s32 {
@@ -546,27 +565,34 @@ habit_edit_details :: (app: *InnerBreeze, x: s32, y: s32,
 }
 
 // The icons a habit can show in the habit list. The first is the first
-// letter of its name.
+// letter of its name. Until all are shown, one row holds the first icons,
+// the chosen one, and a button that shows the rest.
 habit_edit_icons :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
-    columns := width / AppScale(48)
-    if columns < 1 { columns = 1 }
     name := AppTextFromCString(*app.habit_edit.text[0], HABIT_NAME_SIZE)
     first: s64 = 1
     while first < name.count && (name[first] & cast(u8)192) == cast(u8)128 {
         first += 1
     }
-    icon: s32 = 0
-    while icon <= HABIT_ICON_COUNT {
+    chosen_icon := app.habit_edit.icon
+    if chosen_icon == HABIT_ICON_LETTER {
+        chosen_icon = 0
+    }
+    slots := habit_edit_icon_slots(app, width)
+    collapsed := app.habit_edit.more_icons == 0
+    shown := ifx collapsed then slots - 1 else slots
+    slot: s32 = 0
+    while slot < shown {
+        icon := slot
+        if collapsed && slot == shown - 1 && chosen_icon >= shown {
+            icon = chosen_icon
+        }
         chosen: s32 = icon
         if icon == 0 {
             chosen = HABIT_ICON_LETTER
         }
         button: ButtonProps
         button.id = 7560 + icon
-        button.bounds = Rectangle.{
-            cast(float32)(x + (icon % columns) * AppScale(48) + AppScale(4)),
-            cast(float32)(y + (icon / columns) * AppScale(44) + AppScale(2)),
-            cast(float32)AppScale(40), cast(float32)AppScale(40)}
+        button.bounds = habit_edit_grid_bounds(x, y - AppScale(2), width, slot)
         button.circle = true
         button.selected = app.habit_edit.icon == chosen
         if icon == 0 {
@@ -582,79 +608,502 @@ habit_edit_icons :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
         if Button(app.ui.session, button) != 0 {
             app.habit_edit.icon = chosen
         }
-        icon += 1
+        slot += 1
+    }
+    if collapsed {
+        more: ButtonProps
+        more.id = 7559
+        more.bounds = habit_edit_grid_bounds(x, y - AppScale(2), width, shown)
+        more.circle = true
+        more.label = "..."
+        more.tone = cast(ButtonTone)ButtonToneNeutral
+        more.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        if Button(app.ui.session, more) != 0 {
+            app.habit_edit.more_icons = 1
+        }
     }
 }
 
-habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32,
+// A label beside a row's 44-unit control, centered on it.
+habit_edit_row_label :: (app: *InnerBreeze, label: string, x: s32, y: s32,
     width: s32) {
-    scheduled := (app.habit_edit.weekdays & HABIT_SCHEDULE_OFF) == 0
-    habit_edit_text(app, LocaleText("habit_schedule_enabled"),
-        x, y + AppScale(10), width - AppScale(64), AppScale(36))
-    switch := Toggle(app.ui.session, ToggleProps.{
-            .id = 7600,
-            .bounds = Rectangle.{cast(float32)(x + width - AppScale(56)),
-                cast(float32)(y + AppScale(7)),
-                cast(float32)AppScale(56), cast(float32)AppScale(30)},
-            .value = scheduled,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)),
+                cast(float32)width, cast(float32)AppScale(44)},
+            .text = label,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+habit_edit_columns :: (width: s32) -> s32 {
+    columns := width / AppScale(48)
+    if columns < 1 { columns = 1 }
+    return columns
+}
+
+// The height of a grid of round 40-unit buttons.
+habit_edit_grid_height :: (count: s32, width: s32) -> s32 {
+    columns := habit_edit_columns(width)
+    return (count + columns - 1) / columns * AppScale(44) + AppScale(8)
+}
+
+habit_edit_grid_bounds :: (x: s32, y: s32, width: s32,
+    index: s32) -> Rectangle {
+    columns := habit_edit_columns(width)
+    return Rectangle.{
+        cast(float32)(x + (index % columns) * AppScale(48) + AppScale(4)),
+        cast(float32)(y + (index / columns) * AppScale(44) + AppScale(4)),
+        cast(float32)AppScale(40), cast(float32)AppScale(40)}
+}
+
+// The formula hint's height, wrapped as Text wraps it, with its 4-pixel
+// line gap.
+habit_edit_hint_height :: (width: s32) -> s32 {
+    return AppParagraphHeight(LocaleText("habit_formula_hint"), width,
+        AppSmallFontSize(), 4)
+}
+
+habit_edit_formula_valid :: (app: *InnerBreeze) -> bool {
+    return HabitFormulaValid(
+        HabitScheduleFormulaText(*app.habit_edit.schedule))
+}
+
+// The schedule section's height.
+habit_edit_schedule_height :: (app: *InnerBreeze, width: s32) -> s32 {
+    rule := *app.habit_edit.schedule
+    row := AppScale(52)
+    height := row
+    if rule.repeat == HABIT_REPEAT_WEEKLY {
+        height += habit_edit_grid_height(7, width)
+    } else if rule.repeat == HABIT_REPEAT_MONTHLY {
+        height += row
+        if rule.week_of_month != 0 {
+            height += row + habit_edit_grid_height(7, width)
+        } else {
+            height += habit_edit_grid_height(31, width) + AppScale(48)
+        }
+    } else if rule.repeat == HABIT_REPEAT_YEARLY {
+        height += row
+    } else if rule.repeat == HABIT_REPEAT_FORMULA {
+        height += row + habit_edit_hint_height(width) + AppScale(8)
+        if !habit_edit_formula_valid(app) {
+            height += AppScale(28)
+        }
+    }
+    if rule.repeat != HABIT_REPEAT_NONE {
+        height += row
+    }
+    return height
+}
+
+// Chooses how the schedule repeats. Weekdays start with every day chosen,
+// the days of the month and the yearly date with today's.
+habit_edit_set_repeat :: (app: *InnerBreeze, repeat: s32) {
+    rule := *app.habit_edit.schedule
+    if repeat == HABIT_REPEAT_WEEKLY && rule.repeat != HABIT_REPEAT_WEEKLY {
+        rule.weekdays = 127
+    }
+    if repeat == HABIT_REPEAT_MONTHLY && rule.repeat != HABIT_REPEAT_MONTHLY {
+        rule.week_of_month = 0
+        rule.weekdays = 0
+    }
+    rule.repeat = repeat
+    if repeat == HABIT_REPEAT_FORMULA &&
+    HabitScheduleFormulaText(rule).count == 0 {
+        unused HabitScheduleSetFormula(rule, "days % 2 = 0")
+    }
+    HabitScheduleNormalize(rule, habits_today_index())
+}
+
+// How a schedule repeats in words, such as "Every 2 weeks".
+habit_edit_repeat_phrase :: (app: *InnerBreeze, repeat: s32,
+    every: s32) -> string {
+    if repeat == HABIT_REPEAT_FORMULA {
+        return LocaleText("habit_repeat_formula")
+    }
+    if repeat == HABIT_REPEAT_NONE {
+        return LocaleText("habit_repeat_none")
+    }
+    one: [4]string = .["habit_every_day", "habit_every_week",
+    "habit_every_month", "habit_every_year"]
+    other: [4]string = .["habit_every_n_days", "habit_every_n_weeks",
+    "habit_every_n_months", "habit_every_n_years"]
+    index := repeat - HABIT_REPEAT_DAILY
+    if every <= 1 {
+        return LocaleText(one[index])
+    }
+    phrase: [96]u8
+    args: [1]FormatArg
+    args[0].number = every
+    if !FormatTemplate(LocaleText(other[index]), args[:], phrase[:]) {
+        return LocaleText(one[index])
+    }
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*phrase[0], 96))
+}
+
+habit_edit_focus_only :: (app: *InnerBreeze, field: s32) {
+    app.habit_edit.focused = ifx field == 1 then 1 else 0
+    app.habit_edit.description_focused = ifx field == 2 then 1 else 0
+    app.habit_edit.counter_focused = ifx field == 3 then 1 else 0
+    app.habit_edit.formula_focused = ifx field == 4 then 1 else 0
+}
+
+habit_edit_formula_field :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    typed: [64]u8
+    rule := *app.habit_edit.schedule
+    field: TextFieldProps
+    field.key = KeyHash("habit/edit/formula")
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text,
+        HabitScheduleFormulaText(rule))
+    field.cursor = app.habit_edit.formula_cursor
+    field.anchor = app.habit_edit.formula_anchor
+    field.scroll_x = app.habit_edit.formula_scroll_x
+    field.focused = app.habit_edit.formula_focused != 0
+    field.focus_id = 7770
+    field.max_bytes = HABIT_FORMULA_SIZE - 1
+    field.max_codepoints = HABIT_FORMULA_SIZE - 1
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed {
+        unused AppReplaceText(rule.formula[:], result.edit.start,
+            result.edit.end, result.edit.replacement)
+    }
+    app.habit_edit.formula_cursor = result.cursor
+    app.habit_edit.formula_anchor = result.anchor
+    app.habit_edit.formula_scroll_x = result.scroll_x
+    if result.focused {
+        habit_edit_focus_only(app, 4)
+    } else {
+        app.habit_edit.formula_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result.focused
+}
+
+// A planned day's button lights up in the habit's color, as its circles
+// do in the habit table.
+habit_edit_lit_day :: (app: *InnerBreeze, bounds: Rectangle, label: string) {
+    color := app.habit_edit.color
+    color.a = 255
+    PaintRoundedFill(app.ui.session, -1, bounds, bounds.width * 0.5, 12,
+        color)
+    luma := cast(s32)color.r * 299 + cast(s32)color.g * 587 +
+    cast(s32)color.b * 114
+    text_color := Color.{255, 255, 255, 255}
+    if luma >= 128000 {
+        text_color = Color.{0, 0, 0, 255}
+    }
+    font := AppFitFontSize(label, cast(s32)bounds.width - AppScale(6),
+        AppSmallFontSize(), AppScale(9))
+    PaintLabel(app.ui.session, -1, label,
+        cast(s32)(bounds.x + bounds.width * 0.5) - AppTextWidth(label, font) / 2,
+        cast(s32)(bounds.y + bounds.height * 0.5) - AppTextLineHeight(font) / 2,
+        font, text_color)
+}
+
+// Round day buttons from Monday to Sunday: a lit day is planned, and a tap
+// turns it on or off. The last lit day stays.
+habit_edit_weekday_buttons :: (app: *InnerBreeze, x: s32, y: s32,
+    width: s32) -> s32 {
+    rule := *app.habit_edit.schedule
+    days: [7]string = .[
+    LocaleText("habit_day_mon"), LocaleText("habit_day_tue"),
+    LocaleText("habit_day_wed"), LocaleText("habit_day_thu"),
+    LocaleText("habit_day_fri"), LocaleText("habit_day_sat"),
+    LocaleText("habit_day_sun")]
+    day: s32 = 0
+    while day < 7 {
+        selected := (rule.weekdays & (1 << day)) != 0
+        bounds := habit_edit_grid_bounds(x, y, width, day)
+        clicked := Button(app.ui.session, ButtonProps.{
+                .id = 7710 + day, .bounds = bounds,
+                .label = days[day], .circle = true, .fit_content = true,
+                .selected = selected,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+        if selected {
+            habit_edit_lit_day(app, bounds, days[day])
+        }
+        if clicked {
+            mask := rule.weekdays ^ (1 << day)
+            if mask != 0 {
+                rule.weekdays = mask
+            }
+        }
+        day += 1
+    }
+    return y + habit_edit_grid_height(7, width)
+}
+
+// The days of the month from the 1st to the 31st, and the last day.
+habit_edit_month_day_buttons :: (app: *InnerBreeze, x: s32, y: s32,
+    width: s32) -> s32 {
+    rule := *app.habit_edit.schedule
+    day: s32 = 1
+    while day <= 31 {
+        bit := 1 << (day - 1)
+        selected := (rule.month_days & bit) != 0
+        number: [8]u8
+        unused AppFormatS32(day, number[:])
+        label := FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*number[0], 8))
+        bounds := habit_edit_grid_bounds(x, y, width, day - 1)
+        clicked := Button(app.ui.session, ButtonProps.{
+                .id = 7730 + day, .bounds = bounds, .label = label,
+                .circle = true, .selected = selected,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+        if selected {
+            habit_edit_lit_day(app, bounds, label)
+        }
+        if clicked {
+            mask := rule.month_days ^ bit
+            if mask != 0 || rule.last_day != 0 {
+                rule.month_days = mask
+            }
+        }
+        day += 1
+    }
+    y += habit_edit_grid_height(31, width)
+    last := rule.last_day != 0
+    if Button(app.ui.session, ButtonProps.{
+            .id = 7729,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(40)},
+            .label = LocaleText("habit_month_last_day"),
+            .selected = last,
+            .tone = cast(ButtonTone)(ifx (last)
+            then (ButtonToneAccent) else (ButtonToneNeutral)),
+            .emphasis = cast(ButtonEmphasis)(ifx (last)
+            then (ButtonEmphasisFilled) else (ButtonEmphasisSoft))}) != 0 {
+        if !last || rule.month_days != 0 {
+            rule.last_day = ifx last then 0 else 1
+        }
+    }
+    return y + AppScale(48)
+}
+
+// A monthly schedule plans days of the month, or a weekday in a week of
+// the month such as the last Friday.
+habit_edit_monthly :: (app: *InnerBreeze, x: s32, y: s32,
+    width: s32) -> s32 {
+    rule := *app.habit_edit.schedule
+    options: [2]SegmentOption = .[
+    SegmentOption.{.label = LocaleText("habit_month_by_day")},
+    SegmentOption.{.label = LocaleText("habit_month_by_weekday")}]
+    props: SegmentedControlProps
+    props.id = 7720
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)),
+        cast(float32)width, cast(float32)AppScale(42)}
+    props.height = AppScale(42)
+    props.selected_index = ifx rule.week_of_month != 0 then 1 else 0
+    props.has_selection = true
+    switch := SegmentedControl(app.ui.session, props, options[:])
     if switch.changed {
-        app.habit_edit.weekdays =
-        ifx (switch.value) then (0) else (HABIT_SCHEDULE_OFF)
+        anchor_day := rule.start
+        if anchor_day == 0 {
+            anchor_day = habits_today_index()
+        }
+        anchor := HabitScheduleDateOf(anchor_day)
+        if switch.selected_index == 1 {
+            rule.week_of_month = (anchor.day - 1) / 7 + 1
+            if anchor.day + 7 > anchor.month_length {
+                rule.week_of_month = -1
+            }
+            rule.weekdays = 1 << anchor.weekday
+        } else {
+            rule.week_of_month = 0
+        }
+        HabitScheduleNormalize(rule, habits_today_index())
     }
     y += AppScale(52)
-    if scheduled {
-        every_day := app.habit_edit.weekdays == 0
-        if Button(app.ui.session, ButtonProps.{
-                .id = 7550,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                    cast(float32)width, cast(float32)AppScale(40)},
-                .label = LocaleText("habit_every_day"),
-                .selected = every_day,
-                .tone = cast(ButtonTone)(ifx (every_day)
-                then (ButtonToneAccent) else (ButtonToneNeutral)),
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            app.habit_edit.weekdays = 0
-        }
-        y += AppScale(44)
-        days: [7]string = .[
-        LocaleText("habit_day_mon"), LocaleText("habit_day_tue"),
-        LocaleText("habit_day_wed"), LocaleText("habit_day_thu"),
-        LocaleText("habit_day_fri"), LocaleText("habit_day_sat"),
-        LocaleText("habit_day_sun")]
-        columns := width / AppScale(48)
-        if columns < 1 { columns = 1 }
-        day: s32 = 0
-        while day < 7 {
-            mask: s32 = ifx (app.habit_edit.weekdays == 0) then (127) else (app.habit_edit.weekdays)
-            selected := (mask & (1 << day)) != 0
-            if Button(app.ui.session, ButtonProps.{
-                    .id = 7560 + day,
-                    .bounds = Rectangle.{
-                        cast(float32)(x + (day % columns) * AppScale(48) +
-                        AppScale(4)),
-                        cast(float32)(y + (day / columns) * AppScale(44) +
-                        AppScale(4)),
-                        cast(float32)AppScale(40),
-                        cast(float32)AppScale(40)},
-                    .label = days[day], .circle = true,
-                    .selected = selected,
-                    .tone = cast(ButtonTone)(ifx (selected)
-                    then (ButtonToneAccent) else (ButtonToneNeutral)),
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-                mask ^= 1 << day
-                if mask != 0 {
-                    app.habit_edit.weekdays =
-                    ifx (mask == 127) then (0) else (mask)
-                }
-            }
-            day += 1
-        }
-        y += ((7 + columns - 1) / columns) * AppScale(44)
+    if rule.week_of_month == 0 {
+        return habit_edit_month_day_buttons(app, x, y, width)
     }
-    habit_edit_text(app, LocaleText("habit_reminder_label"),
-        x, y + AppScale(10), width - AppScale(140), AppScale(40))
+    control_w := AppScale(168)
+    habit_edit_row_label(app, LocaleText("habit_week_of_month_label"), x, y,
+        width - control_w - AppScale(8))
+    weeks: [6]DropdownOption
+    week_keys: [6]string = .["habit_week_first", "habit_week_second",
+    "habit_week_third", "habit_week_fourth", "habit_week_fifth",
+    "habit_week_last"]
+    index: s32 = 0
+    while index < 6 {
+        weeks[index].label = LocaleText(week_keys[index])
+        index += 1
+    }
+    menu: DropdownProps
+    menu.id = 7721
+    menu.bounds = Rectangle.{cast(float32)(x + width - control_w),
+        cast(float32)(y + AppScale(4)), cast(float32)control_w,
+        cast(float32)AppScale(44)}
+    menu.selected_index = 5
+    if rule.week_of_month > 0 {
+        menu.selected_index = rule.week_of_month - 1
+    }
+    week_menu := Dropdown(app.ui.session, menu, weeks[:])
+    if week_menu.changed {
+        rule.week_of_month = week_menu.selected_index + 1
+        if week_menu.selected_index == 5 {
+            rule.week_of_month = -1
+        }
+    }
+    y += AppScale(52)
+    return habit_edit_weekday_buttons(app, x, y, width)
+}
+
+// A yearly schedule's month and day.
+habit_edit_yearly :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    rule := *app.habit_edit.schedule
+    date := HabitScheduleDateOf(rule.start)
+    if !date.valid {
+        date = HabitScheduleDateOf(habits_today_index())
+    }
+    gap := AppScale(8)
+    month_w := (width - gap) / 2
+    months: [12]DropdownOption
+    month: s32 = 0
+    while month < 12 {
+        keys: [12]string = .["habit_month_name_1", "habit_month_name_2",
+        "habit_month_name_3", "habit_month_name_4", "habit_month_name_5",
+        "habit_month_name_6", "habit_month_name_7", "habit_month_name_8",
+        "habit_month_name_9", "habit_month_name_10", "habit_month_name_11",
+        "habit_month_name_12"]
+        months[month].label = LocaleText(keys[month])
+        month += 1
+    }
+    menu: DropdownProps
+    menu.id = 7724
+    menu.bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)),
+        cast(float32)month_w, cast(float32)AppScale(44)}
+    menu.selected_index = date.month - 1
+    month_menu := Dropdown(app.ui.session, menu, months[:])
+    chosen_month := date.month
+    if month_menu.changed {
+        chosen_month = month_menu.selected_index + 1
+    }
+    number: [8]u8
+    unused AppFormatS32(date.day, number[:])
+    day: SpinboxProps
+    day.id = 7725
+    day.bounds = Rectangle.{cast(float32)(x + month_w + gap),
+        cast(float32)(y + AppScale(4)), cast(float32)(width - month_w - gap),
+        cast(float32)AppScale(44)}
+    day.label = LocaleText("habit_every_year")
+    day.min = 1
+    day.max = 31
+    day.step = 1
+    day.value = date.day
+    day.wrap = true
+    day.value_text = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*number[0], 8))
+    stepped := Spinbox(app.ui.session, day)
+    chosen_day := date.day
+    if stepped.changed {
+        chosen_day = stepped.value
+    }
+    if chosen_month != date.month || chosen_day != date.day {
+        length := HabitScheduleMonthLength(date.year, chosen_month)
+        if chosen_day > length {
+            chosen_day = length
+        }
+        rule.start = date.year * 10000 + chosen_month * 100 + chosen_day
+    }
+}
+
+// The schedule reads as a sentence: how it repeats, with buttons for how
+// often, then its days and when it reminds.
+habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
+    viewport_y: s32, viewport_h: s32, content_h: s32) {
+    rule := *app.habit_edit.schedule
+    row := AppScale(52)
+    step_w := AppScale(44)
+    counted := rule.repeat >= HABIT_REPEAT_DAILY &&
+    rule.repeat <= HABIT_REPEAT_YEARLY
+    menu_w := width
+    if counted {
+        menu_w = width - step_w * 2 - AppScale(8)
+    }
+    repeats: [6]DropdownOption
+    index: s32 = 0
+    while index < 6 {
+        repeats[index].label = habit_edit_repeat_phrase(app, index + 1,
+            rule.every)
+        index += 1
+    }
+    menu: DropdownProps
+    menu.id = 7700
+    menu.bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)),
+        cast(float32)menu_w, cast(float32)AppScale(44)}
+    menu.selected_index = rule.repeat - 1
+    repeat_menu := Dropdown(app.ui.session, menu, repeats[:])
+    if repeat_menu.changed {
+        habit_edit_set_repeat(app, repeat_menu.selected_index + 1)
+    }
+    if counted {
+        if Button(app.ui.session, ButtonProps.{
+                .id = 7702,
+                .bounds = Rectangle.{cast(float32)(x + menu_w + AppScale(4)),
+                    cast(float32)(y + AppScale(4)), cast(float32)step_w,
+                    cast(float32)AppScale(44)},
+                .label = "-", .disabled = rule.every <= 1,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            rule.every -= 1
+            HabitScheduleNormalize(rule, habits_today_index())
+        }
+        if Button(app.ui.session, ButtonProps.{
+                .id = 7703,
+                .bounds = Rectangle.{cast(float32)(x + width - step_w),
+                    cast(float32)(y + AppScale(4)), cast(float32)step_w,
+                    cast(float32)AppScale(44)},
+                .label = "+",
+                .disabled = rule.every >= HABIT_SCHEDULE_EVERY_MAX,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            rule.every += 1
+            HabitScheduleNormalize(rule, habits_today_index())
+        }
+    }
+    y += row
+    if rule.repeat == HABIT_REPEAT_WEEKLY {
+        y = habit_edit_weekday_buttons(app, x, y, width)
+    } else if rule.repeat == HABIT_REPEAT_MONTHLY {
+        y = habit_edit_monthly(app, x, y, width)
+    } else if rule.repeat == HABIT_REPEAT_YEARLY {
+        habit_edit_yearly(app, x, y, width)
+        y += row
+    } else if rule.repeat == HABIT_REPEAT_FORMULA {
+        formula_bounds := Rectangle.{cast(float32)x,
+            cast(float32)(y + AppScale(4)), cast(float32)width,
+            cast(float32)AppScale(44)}
+        was_focused := app.habit_edit.formula_focused != 0
+        if habit_edit_formula_field(app, formula_bounds) && !was_focused {
+            habit_edit_ensure_visible(app, viewport_y, viewport_h,
+                content_h, formula_bounds)
+        }
+        y += row
+        hint_h := habit_edit_hint_height(width)
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                    cast(float32)width, cast(float32)hint_h},
+                .text = LocaleText("habit_formula_hint"),
+                .font = AppSmallFontSize(),
+                .wrap = cast(TextWrap)TextWrapAuto})
+        y += hint_h + AppScale(8)
+        if !habit_edit_formula_valid(app) {
+            habit_edit_text(app, LocaleText("habit_formula_invalid"),
+                x, y, width, AppScale(24))
+            y += AppScale(28)
+        }
+    }
+    if rule.repeat == HABIT_REPEAT_NONE {
+        return
+    }
+    habit_edit_row_label(app, LocaleText("habit_reminder_label"), x, y,
+        width - AppScale(144))
     options: [25]DropdownOption
     options[0].label = LocaleText("habit_reminder_off")
     hour: s32 = 0
@@ -664,18 +1113,16 @@ habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32,
             habit_edit_hour_label(hour, hour_buffer[:]))
         hour += 1
     }
-    menu: DropdownProps
-    menu.id = 7400
-    menu.bounds = Rectangle.{
+    hours: DropdownProps
+    hours.id = 7400
+    hours.bounds = Rectangle.{
         cast(float32)(x + width - AppScale(136)),
         cast(float32)(y + AppScale(4)),
         cast(float32)AppScale(136), cast(float32)AppScale(44)}
-    menu.selected_index = app.habit_edit.reminder_hour + 1
-    reminder_menu :=
-    Dropdown(app.ui.session, menu, options[:])
-    if reminder_menu.changed {
-        app.habit_edit.reminder_hour =
-        reminder_menu.selected_index - 1
+    hours.selected_index = app.habit_edit.reminder_hour + 1
+    hour_menu := Dropdown(app.ui.session, hours, options[:])
+    if hour_menu.changed {
+        app.habit_edit.reminder_hour = hour_menu.selected_index - 1
     }
 }
 
@@ -844,38 +1291,37 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
         LocaleText("habit_tracking_title")]
         section: s32 = 0
         while section < 3 {
-            height := habit_edit_section_height(app, section,
-                width - AppScale(24))
-            open := app.habit_edit.sections[section] != 0
-            if Button(app.ui.session, ButtonProps.{
-                    .id = 7510 + section,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)width, cast(float32)AppScale(50)},
-                    .label = titles[section],
-                    .selected = open,
-                    .tone = cast(ButtonTone)ButtonToneNeutral,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-                app.habit_edit.sections[section] =
-                ifx (open) then (0) else (1)
-                app.habit_edit.focused = 0
-                app.habit_edit.description_focused = 0
-                app.habit_edit.counter_focused = 0
+            body_width := width - AppScale(24)
+            body_h := habit_edit_section_body(app, section, body_width)
+            heading: TextProps
+            heading.text = titles[section]
+            heading.font = AppSmallFontSize()
+            heading.wrap = cast(TextWrap)TextWrapNone
+            heading.semantic_kind = cast(SemanticKind)SemanticHeading
+            heading.heading_level = 2
+            heading.bounds = Rectangle.{cast(float32)(x + AppScale(4)),
+                cast(float32)y, cast(float32)(width - AppScale(4)),
+                cast(float32)AppScale(22)}
+            Text(app.ui.session, heading)
+            card: FieldsetProps
+            card.bounds = Rectangle.{cast(float32)x,
+                cast(float32)(y + AppScale(30)), cast(float32)width,
+                cast(float32)(body_h + AppScale(24))}
+            Fieldset(app.ui.session, card)
+            body_x := x + AppScale(12)
+            body_y := y + AppScale(42)
+            if section == 0 {
+                habit_edit_details(app, body_x, body_y, body_width,
+                    top, viewport_h, content_h)
+            } else if section == 1 {
+                habit_edit_routine(app, body_x, body_y, body_width,
+                    top, viewport_h, content_h)
+            } else {
+                habit_edit_tracking(app, body_x, body_y, body_width,
+                    top, viewport_h, content_h)
             }
-            if open {
-                body_x := x + AppScale(12)
-                body_y := y + AppScale(58)
-                body_width := width - AppScale(24)
-                if section == 0 {
-                    habit_edit_details(app, body_x, body_y, body_width,
-                        top, viewport_h, content_h)
-                } else if section == 1 {
-                    habit_edit_routine(app, body_x, body_y, body_width)
-                } else {
-                    habit_edit_tracking(app, body_x, body_y, body_width,
-                        top, viewport_h, content_h)
-                }
-            }
-            y += height + AppScale(12)
+            y += habit_edit_section_height(app, section, body_width) +
+            AppScale(12)
             section += 1
         }
         unused End(app.ui.session)

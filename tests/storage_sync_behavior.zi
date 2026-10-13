@@ -19,6 +19,8 @@
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/storage/sync_review.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_calendar.zi";
+#import, file "../src/habits/habit_schedule.zi";
 #import, file "../src/cells/lumi_store.zi";
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/package_files.zi";
@@ -542,6 +544,15 @@ test_records_round_trip_between_devices :: () {
     check_true("add habit", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0) == 0)
     habit_set_day_count(*habits_a, 0, 20260618, 3)
     habits_a.items[0].icon = 17
+    // A schedule changed after the recorded day, then a formula.
+    weekly: HabitSchedule
+    weekly.repeat = HABIT_REPEAT_WEEKLY
+    weekly.weekdays = 1 + 4 + 8
+    check_true("weekly schedule", HabitScheduleSet(*habits_a.items[0], weekly, 20260620, false))
+    formula: HabitSchedule
+    formula.repeat = HABIT_REPEAT_FORMULA
+    check_true("formula fits", HabitScheduleSetFormula(*formula, "days % 3 = 0 and weekday < 6"))
+    check_true("formula schedule", HabitScheduleSet(*habits_a.items[0], formula, 20260625, false))
     habits_save(*habits_a)
     habits_free(*habits_a)
     check_true("device a payload", build_payload())
@@ -559,6 +570,13 @@ test_records_round_trip_between_devices :: () {
     check_true("device b has the habit", habit != null)
     check_int("device b day count", day_count_of(habit, 20260618), 3)
     check_int("device b has the habit's icon", habit.icon, 17)
+    check_int("device b has every schedule", habit.schedule_count, 3)
+    check_int("the weekly schedule starts on its day", habit.schedules[1].from, 20260620)
+    check_int("the weekly schedule's days", habit.schedules[1].weekdays, 13)
+    check_true("the formula arrives whole",
+        HabitScheduleFormulaText(*habit.schedules[2]) == "days % 3 = 0 and weekday < 6")
+    check_int("the recorded day keeps its schedule", habit_scheduled_day(habit, 20260618), 1)
+    check_int("an off day under the weekly schedule", habit_scheduled_day(habit, 20260623), 0)
     habits_free(*habits_b)
     storage_close()
 }

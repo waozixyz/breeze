@@ -1,0 +1,944 @@
+// A habit's schedule: the days it is planned. A habit keeps every schedule
+// it has had, each from the day it took effect, so a new schedule never
+// changes how earlier days were planned or the days recorded on them.
+#import "date_parse"
+#import "byte_text_linux"
+#import, file "habit_types.zi";
+
+HabitScheduleDate :: struct {
+    year: s32
+    month: s32
+    day: s32
+    // Days since 1970-01-01.
+    ordinal: s64
+    // Monday 0 to Sunday 6.
+    weekday: s32
+    month_length: s32
+    valid: bool
+}
+
+HabitScheduleFloorDiv :: (value: s64, divisor: s64) -> s64 {
+    quotient := value / divisor
+    if value % divisor != 0 && (value < 0) != (divisor < 0) {
+        quotient -= 1
+    }
+    return quotient
+}
+
+HabitScheduleFloorMod :: (value: s64, divisor: s64) -> s64 {
+    return value - HabitScheduleFloorDiv(value, divisor) * divisor
+}
+
+HabitScheduleMonthLength :: (year: s32, month: s32) -> s32 {
+    length: s32 = 31
+    while length > 28 && !DateValid(year, month, length) {
+        length -= 1
+    }
+    return length
+}
+
+HabitScheduleDateOf :: (day_index: s32) -> HabitScheduleDate {
+    date: HabitScheduleDate
+    date.year = day_index / 10000
+    date.month = (day_index / 100) % 100
+    date.day = day_index % 100
+    if day_index <= 0 || !DateValid(date.year, date.month, date.day) {
+        return date
+    }
+    date.ordinal = DaysFromCivil(date.year, date.month, date.day)
+    date.weekday = cast(s32)HabitScheduleFloorMod(date.ordinal + 3, 7)
+    date.month_length = HabitScheduleMonthLength(date.year, date.month)
+    date.valid = true
+    return date
+}
+
+// A date written YYYY-MM-DD as YYYYMMDD, or 0 when it is not a date.
+HabitScheduleDateFromText :: (text: string) -> s32 {
+    if text.count != 10 || text[4] != #char "-" || text[7] != #char "-" {
+        return 0
+    }
+    value: s32 = 0
+    index: s32 = 0
+    while index < 10 {
+        if index != 4 && index != 7 {
+            if !(text[index] >= #char "0" && text[index] <= #char "9") {
+                return 0
+            }
+            value = value * 10 + cast(s32)(text[index] - cast(u8)48)
+        }
+        index += 1
+    }
+    if !HabitScheduleDateOf(value).valid {
+        return 0
+    }
+    return value
+}
+
+// The day a number of days after another, or 0 outside the calendar.
+HabitScheduleAddDays :: (day_index: s32, days: s32) -> s32 {
+    date := HabitScheduleDateOf(day_index)
+    if !date.valid {
+        return 0
+    }
+    moved := CivilFromUnix((date.ordinal + cast(s64)days) * 86400)
+    if moved.year < 1 {
+        return 0
+    }
+    return moved.year * 10000 + moved.month * 100 + moved.day
+}
+
+HabitScheduleFormulaText :: (rule: *HabitSchedule) -> string {
+    if rule == null {
+        return ""
+    }
+    length: s64 = 0
+    while length < HABIT_FORMULA_SIZE && rule.formula[length] != cast(u8)0 {
+        length += 1
+    }
+    return TextFromBytes(BytesFromPointer(*rule.formula[0], cast(u64)length))
+}
+
+// Copies a formula into a schedule; false when it does not fit on one line.
+HabitScheduleSetFormula :: (rule: *HabitSchedule, text: string) -> bool {
+    if rule == null || text.count >= HABIT_FORMULA_SIZE {
+        return false
+    }
+    index: s64 = 0
+    while index < text.count {
+        if text[index] < cast(u8)32 {
+            return false
+        }
+        index += 1
+    }
+    index = 0
+    while index < HABIT_FORMULA_SIZE {
+        rule.formula[index] = ifx index < text.count then text[index] else cast(u8)0
+        index += 1
+    }
+    return true
+}
+
+// Formulas are integer arithmetic over the day's numbers. A day is planned
+// when its formula is not 0.
+HABIT_FORMULA_VARIABLES :: 11
+HABIT_FORMULA_LIMIT :: 1000000000
+
+HabitFormulaNames: [11]string = .["days", "weeks",
+"months", "years", "weekday", "day", "month", "year", "yearday", "daysleft",
+"nth"];
+
+HabitFormula :: struct {
+    text: string
+    at: s64
+    ok: bool
+    values: [HABIT_FORMULA_VARIABLES]s64
+}
+
+HabitFormulaLetter :: (byte: u8) -> bool {
+    return (byte >= #char "a" && byte <= #char "z") ||
+    (byte >= #char "A" && byte <= #char "Z") || byte == #char "_"
+}
+
+HabitFormulaDigit :: (byte: u8) -> bool {
+    return byte >= #char "0" && byte <= #char "9"
+}
+
+// Keeps results small enough that no operation overflows.
+HabitFormulaClamp :: (value: s64) -> s64 {
+    if value > HABIT_FORMULA_LIMIT {
+        return HABIT_FORMULA_LIMIT
+    }
+    if value < -HABIT_FORMULA_LIMIT {
+        return -HABIT_FORMULA_LIMIT
+    }
+    return value
+}
+
+HabitFormulaSkip :: (formula: *HabitFormula) {
+    while formula.at < formula.text.count &&
+    (formula.text[formula.at] == #char " " ||
+    formula.text[formula.at] == #char "\t") {
+        formula.at += 1
+    }
+}
+
+// Takes a symbol or a whole word at the cursor.
+HabitFormulaTake :: (formula: *HabitFormula, symbol: string) -> bool {
+    HabitFormulaSkip(formula)
+    end := formula.at + symbol.count
+    if end > formula.text.count || formula.text[formula.at:end] != symbol {
+        return false
+    }
+    if HabitFormulaLetter(symbol[0]) && end < formula.text.count &&
+    (HabitFormulaLetter(formula.text[end]) ||
+    HabitFormulaDigit(formula.text[end])) {
+        return false
+    }
+    formula.at = end
+    return true
+}
+
+HabitFormulaPrimary :: (formula: *HabitFormula) -> s64 {
+    HabitFormulaSkip(formula)
+    if formula.at >= formula.text.count {
+        formula.ok = false
+        return 0
+    }
+    byte := formula.text[formula.at]
+    if byte == #char "(" {
+        formula.at += 1
+        value := HabitFormulaOr(formula)
+        if !HabitFormulaTake(formula, ")") {
+            formula.ok = false
+        }
+        return value
+    }
+    if HabitFormulaDigit(byte) {
+        value: s64 = 0
+        digits: s32 = 0
+        while formula.at < formula.text.count &&
+        HabitFormulaDigit(formula.text[formula.at]) {
+            if digits < 10 {
+                value = value * 10 + cast(s64)(formula.text[formula.at] -
+                    cast(u8)48)
+            }
+            digits += 1
+            formula.at += 1
+        }
+        if digits > 9 {
+            formula.ok = false
+        }
+        return value
+    }
+    if HabitFormulaLetter(byte) {
+        start := formula.at
+        while formula.at < formula.text.count &&
+        (HabitFormulaLetter(formula.text[formula.at]) ||
+        HabitFormulaDigit(formula.text[formula.at])) {
+            formula.at += 1
+        }
+        name := formula.text[start:formula.at]
+        index: s32 = 0
+        while index < HABIT_FORMULA_VARIABLES {
+            if name == HabitFormulaNames[index] {
+                return formula.values[index]
+            }
+            index += 1
+        }
+    }
+    formula.ok = false
+    return 0
+}
+
+HabitFormulaUnary :: (formula: *HabitFormula) -> s64 {
+    if HabitFormulaTake(formula, "-") {
+        return -HabitFormulaUnary(formula)
+    }
+    return HabitFormulaPrimary(formula)
+}
+
+// Division and remainder round toward minus infinity, so a remainder is
+// never negative; dividing by 0 gives 0.
+HabitFormulaProduct :: (formula: *HabitFormula) -> s64 {
+    value := HabitFormulaUnary(formula)
+    while formula.ok {
+        if HabitFormulaTake(formula, "*") {
+            value = HabitFormulaClamp(value * HabitFormulaUnary(formula))
+        } else if HabitFormulaTake(formula, "/") {
+            divisor := HabitFormulaUnary(formula)
+            if divisor == 0 {
+                value = 0
+            } else {
+                value = HabitScheduleFloorDiv(value, divisor)
+            }
+        } else if HabitFormulaTake(formula, "%") {
+            divisor := HabitFormulaUnary(formula)
+            if divisor == 0 {
+                value = 0
+            } else {
+                value = HabitScheduleFloorMod(value, divisor)
+            }
+        } else {
+            break
+        }
+    }
+    return value
+}
+
+HabitFormulaSum :: (formula: *HabitFormula) -> s64 {
+    value := HabitFormulaProduct(formula)
+    while formula.ok {
+        if HabitFormulaTake(formula, "+") {
+            value = HabitFormulaClamp(value + HabitFormulaProduct(formula))
+        } else if HabitFormulaTake(formula, "-") {
+            value = HabitFormulaClamp(value - HabitFormulaProduct(formula))
+        } else {
+            break
+        }
+    }
+    return value
+}
+
+HabitFormulaCompare :: (formula: *HabitFormula) -> s64 {
+    left := HabitFormulaSum(formula)
+    result: bool
+    if HabitFormulaTake(formula, "==") {
+        result = left == HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, "!=") {
+        result = left != HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, "<=") {
+        result = left <= HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, ">=") {
+        result = left >= HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, "<") {
+        result = left < HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, ">") {
+        result = left > HabitFormulaSum(formula)
+    } else if HabitFormulaTake(formula, "=") {
+        result = left == HabitFormulaSum(formula)
+    } else {
+        return left
+    }
+    return ifx result then 1 else 0
+}
+
+HabitFormulaNot :: (formula: *HabitFormula) -> s64 {
+    if HabitFormulaTake(formula, "!") || HabitFormulaTake(formula, "not") {
+        return ifx HabitFormulaNot(formula) == 0 then 1 else 0
+    }
+    return HabitFormulaCompare(formula)
+}
+
+HabitFormulaAnd :: (formula: *HabitFormula) -> s64 {
+    value := HabitFormulaNot(formula)
+    while formula.ok &&
+    (HabitFormulaTake(formula, "&&") || HabitFormulaTake(formula, "and")) {
+        right := HabitFormulaNot(formula)
+        value = ifx value != 0 && right != 0 then 1 else 0
+    }
+    return value
+}
+
+HabitFormulaOr :: (formula: *HabitFormula) -> s64 {
+    value := HabitFormulaAnd(formula)
+    while formula.ok &&
+    (HabitFormulaTake(formula, "||") || HabitFormulaTake(formula, "or")) {
+        right := HabitFormulaAnd(formula)
+        value = ifx value != 0 || right != 0 then 1 else 0
+    }
+    return value
+}
+
+HabitFormulaRun :: (formula: *HabitFormula) -> s64 {
+    formula.at = 0
+    formula.ok = formula.text.count > 0 && formula.text.count < HABIT_FORMULA_SIZE
+    if !formula.ok {
+        return 0
+    }
+    value := HabitFormulaOr(formula)
+    HabitFormulaSkip(formula)
+    if formula.at != formula.text.count {
+        formula.ok = false
+    }
+    return value
+}
+
+// Whether a formula reads as a whole: numbers, the day's names, + - * / %,
+// comparisons, and/or/not (also && || !) and parentheses.
+HabitFormulaValid :: (text: string) -> bool {
+    formula: HabitFormula
+    formula.text = text
+    unused HabitFormulaRun(*formula)
+    return formula.ok
+}
+
+// A day's numbers, counted from the schedule's start: days, weeks (from
+// the start's Monday), months and years since it, then the weekday from
+// Monday 1 to Sunday 7, the day, month, year and day of the year, the days
+// left in the month, and which such weekday of the month the day is.
+HabitFormulaSetDay :: (formula: *HabitFormula, date: HabitScheduleDate,
+    start: HabitScheduleDate) {
+    formula.values[0] = date.ordinal - start.ordinal
+    formula.values[1] = HabitScheduleFloorDiv(
+        (date.ordinal - date.weekday) - (start.ordinal - start.weekday), 7)
+    formula.values[2] = cast(s64)((date.year * 12 + date.month) -
+        (start.year * 12 + start.month))
+    formula.values[3] = cast(s64)(date.year - start.year)
+    formula.values[4] = cast(s64)(date.weekday + 1)
+    formula.values[5] = cast(s64)date.day
+    formula.values[6] = cast(s64)date.month
+    formula.values[7] = cast(s64)date.year
+    formula.values[8] = date.ordinal - DaysFromCivil(date.year, 1, 1) + 1
+    formula.values[9] = cast(s64)(date.month_length - date.day)
+    formula.values[10] = cast(s64)((date.day - 1) / 7 + 1)
+}
+
+// A schedule without a start counts from this Monday.
+HABIT_SCHEDULE_EPOCH :: 19700105
+
+HabitScheduleMatches :: (rule: *HabitSchedule, day_index: s32) -> bool {
+    if rule == null {
+        return true
+    }
+    if rule.repeat == HABIT_REPEAT_NONE {
+        return false
+    }
+    date := HabitScheduleDateOf(day_index)
+    if !date.valid {
+        return false
+    }
+    start := HabitScheduleDateOf(rule.start)
+    if start.valid && date.ordinal < start.ordinal {
+        return false
+    }
+    if !start.valid {
+        start = HabitScheduleDateOf(HABIT_SCHEDULE_EPOCH)
+    }
+    every: s64 = ifx rule.every > 1 then cast(s64)rule.every else 1
+    if rule.repeat == HABIT_REPEAT_WEEKLY {
+        weeks := HabitScheduleFloorDiv((date.ordinal - date.weekday) -
+            (start.ordinal - start.weekday), 7)
+        return HabitScheduleFloorMod(weeks, every) == 0 &&
+        (rule.weekdays & (1 << date.weekday)) != 0
+    }
+    if rule.repeat == HABIT_REPEAT_MONTHLY {
+        months := cast(s64)((date.year * 12 + date.month) -
+            (start.year * 12 + start.month))
+        if HabitScheduleFloorMod(months, every) != 0 {
+            return false
+        }
+        if rule.week_of_month != 0 {
+            if (rule.weekdays & (1 << date.weekday)) == 0 {
+                return false
+            }
+            if rule.week_of_month < 0 {
+                return date.day + 7 > date.month_length
+            }
+            return (date.day - 1) / 7 + 1 == rule.week_of_month
+        }
+        if (rule.month_days & (1 << (date.day - 1))) != 0 {
+            return true
+        }
+        if date.day != date.month_length {
+            return false
+        }
+        if rule.last_day != 0 {
+            return true
+        }
+        later := date.day + 1
+        while later <= 31 {
+            if (rule.month_days & (1 << (later - 1))) != 0 {
+                return true
+            }
+            later += 1
+        }
+        return false
+    }
+    if rule.repeat == HABIT_REPEAT_YEARLY {
+        years := cast(s64)(date.year - start.year)
+        if HabitScheduleFloorMod(years, every) != 0 ||
+        date.month != start.month {
+            return false
+        }
+        return date.day == start.day ||
+        (start.day > date.month_length && date.day == date.month_length)
+    }
+    if rule.repeat == HABIT_REPEAT_FORMULA {
+        formula: HabitFormula
+        formula.text = HabitScheduleFormulaText(rule)
+        HabitFormulaSetDay(*formula, date, start)
+        value := HabitFormulaRun(*formula)
+        return formula.ok && value != 0
+    }
+    return HabitScheduleFloorMod(date.ordinal - start.ordinal, every) == 0
+}
+
+// The schedule that plans a day, or null when the habit has none.
+HabitScheduleFor :: (habit: *Habit, day_index: s32) -> *HabitSchedule {
+    if habit == null || habit.schedule_count <= 0 {
+        return null
+    }
+    count := habit.schedule_count
+    if count > HABIT_SCHEDULE_MAX {
+        count = HABIT_SCHEDULE_MAX
+    }
+    chosen := *habit.schedules[0]
+    index: s32 = 1
+    while index < count {
+        if habit.schedules[index].from <= day_index {
+            chosen = *habit.schedules[index]
+        }
+        index += 1
+    }
+    return chosen
+}
+
+// The schedule of a habit from before schedules, from its weekday mask.
+// Every day is every weekday, so its days show to be chosen.
+HabitScheduleFromWeekdays :: (weekdays: s32) -> HabitSchedule {
+    rule: HabitSchedule
+    rule.every = 1
+    mask := weekdays & 127
+    if (weekdays & HABIT_SCHEDULE_OFF) != 0 {
+        rule.repeat = HABIT_REPEAT_NONE
+    } else {
+        rule.repeat = HABIT_REPEAT_WEEKLY
+        rule.weekdays = ifx mask == 0 then 127 else mask
+    }
+    return rule
+}
+
+// The weekday mask closest to a schedule, which versions of the app from
+// before schedules read. Other schedules read there as every day.
+HabitScheduleWeekdays :: (rule: HabitSchedule) -> s32 {
+    if rule.repeat == HABIT_REPEAT_NONE {
+        return HABIT_SCHEDULE_OFF
+    }
+    mask := rule.weekdays & 127
+    if rule.repeat == HABIT_REPEAT_WEEKLY && rule.every <= 1 && mask != 127 {
+        return mask
+    }
+    return 0
+}
+
+// The habit's schedule from its last change on.
+HabitScheduleCurrent :: (habit: *Habit) -> HabitSchedule {
+    if habit == null {
+        return HabitScheduleFromWeekdays(0)
+    }
+    if habit.schedule_count <= 0 {
+        return HabitScheduleFromWeekdays(habit.weekdays)
+    }
+    count := habit.schedule_count
+    if count > HABIT_SCHEDULE_MAX {
+        count = HABIT_SCHEDULE_MAX
+    }
+    return habit.schedules[count - 1]
+}
+
+// Fills a schedule's missing choices from its start, or from today when it
+// has none, and keeps its numbers in range.
+HabitScheduleNormalize :: (rule: *HabitSchedule, today: s32) {
+    if rule.repeat < HABIT_REPEAT_DAILY || rule.repeat > HABIT_REPEAT_NONE {
+        rule.repeat = HABIT_REPEAT_DAILY
+    }
+    if rule.every < 1 {
+        rule.every = 1
+    }
+    if rule.every > HABIT_SCHEDULE_EVERY_MAX {
+        rule.every = HABIT_SCHEDULE_EVERY_MAX
+    }
+    if rule.start != 0 && !HabitScheduleDateOf(rule.start).valid {
+        rule.start = 0
+    }
+    if rule.start == 0 && HabitScheduleDateOf(today).valid &&
+    (rule.every > 1 || rule.repeat == HABIT_REPEAT_YEARLY ||
+    rule.repeat == HABIT_REPEAT_FORMULA) {
+        rule.start = today
+    }
+    rule.weekdays = rule.weekdays & 127
+    rule.month_days = rule.month_days & 2147483647
+    rule.last_day = ifx rule.last_day != 0 then 1 else 0
+    if rule.week_of_month < -1 || rule.week_of_month > 5 {
+        rule.week_of_month = 0
+    }
+    anchor := HabitScheduleDateOf(ifx rule.start != 0 then rule.start else today)
+    if !anchor.valid {
+        anchor = HabitScheduleDateOf(HABIT_SCHEDULE_EPOCH)
+    }
+    if rule.repeat == HABIT_REPEAT_WEEKLY && rule.weekdays == 0 {
+        rule.weekdays = 1 << anchor.weekday
+    }
+    if rule.repeat == HABIT_REPEAT_MONTHLY {
+        if rule.week_of_month != 0 && rule.weekdays == 0 {
+            rule.weekdays = 1 << anchor.weekday
+        }
+        if rule.week_of_month == 0 && rule.month_days == 0 &&
+        rule.last_day == 0 {
+            rule.month_days = 1 << (anchor.day - 1)
+        }
+    }
+}
+
+HabitScheduleSame :: (first: *HabitSchedule, second: *HabitSchedule) -> bool {
+    return first.repeat == second.repeat && first.every == second.every &&
+    first.start == second.start && first.weekdays == second.weekdays &&
+    first.month_days == second.month_days &&
+    first.last_day == second.last_day &&
+    first.week_of_month == second.week_of_month &&
+    HabitScheduleFormulaText(first) == HabitScheduleFormulaText(second)
+}
+
+// Whether a habit has anything recorded before today: a counted day, or
+// any day at all when practices mark it.
+HabitScheduleHasHistory :: (habit: *Habit, today: s32) -> bool {
+    if habit.sync_activity != 0 {
+        return true
+    }
+    index: s32 = 0
+    while index < habit.day_count && habit.days != null {
+        day := habit.days[index]
+        if day.day_index < today &&
+        (day.completed != 0 || day.count > 0 || day.session_count > 0) {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// Makes a schedule the habit's schedule from today on, keeping the
+// schedules of earlier days. A new habit, or one with nothing recorded
+// before today, takes it for every day. Returns whether the habit's
+// schedule changed.
+HabitScheduleSet :: (habit: *Habit, chosen: HabitSchedule, today: s32,
+    new_habit: bool) -> bool {
+    if habit == null {
+        return false
+    }
+    rule := chosen
+    HabitScheduleNormalize(*rule, today)
+    if rule.repeat == HABIT_REPEAT_FORMULA &&
+    !HabitFormulaValid(HabitScheduleFormulaText(*rule)) {
+        return false
+    }
+    rule.from = 0
+    if new_habit || !HabitScheduleHasHistory(habit, today) {
+        current := HabitScheduleCurrent(habit)
+        current.from = 0
+        if !new_habit && habit.schedule_count <= 1 &&
+        HabitScheduleSame(*current, *rule) {
+            return false
+        }
+        habit.schedules[0] = rule
+        habit.schedule_count = 1
+        habit.weekdays = HabitScheduleWeekdays(rule)
+        return true
+    }
+    current := HabitScheduleCurrent(habit)
+    current.from = 0
+    if HabitScheduleSame(*current, *rule) {
+        return false
+    }
+    habit.weekdays = HabitScheduleWeekdays(rule)
+    if habit.schedule_count <= 0 {
+        habit.schedules[0] = current
+        habit.schedules[0].from = 0
+        habit.schedule_count = 1
+    }
+    if habit.schedule_count > HABIT_SCHEDULE_MAX {
+        habit.schedule_count = HABIT_SCHEDULE_MAX
+    }
+    last := habit.schedule_count - 1
+    rule.from = today
+    if habit.schedules[last].from >= today && last > 0 {
+        habit.schedules[last] = rule
+        if HabitScheduleSame(*habit.schedules[last - 1], *rule) {
+            habit.schedule_count -= 1
+        }
+        return true
+    }
+    if habit.schedule_count == HABIT_SCHEDULE_MAX {
+        index: s32 = 0
+        while index < HABIT_SCHEDULE_MAX - 1 {
+            habit.schedules[index] = habit.schedules[index + 1]
+            index += 1
+        }
+        habit.schedule_count -= 1
+    }
+    habit.schedules[habit.schedule_count] = rule
+    habit.schedule_count += 1
+    return true
+}
+
+HabitScheduleRepeatNames: [6]string = .["daily", "weekly", "monthly",
+"yearly", "formula", "none"];
+
+HabitScheduleRepeatName :: (repeat: s32) -> string {
+    if repeat < HABIT_REPEAT_DAILY || repeat > HABIT_REPEAT_NONE {
+        return HabitScheduleRepeatNames[0]
+    }
+    return HabitScheduleRepeatNames[repeat - 1]
+}
+
+// The repeat a name such as "weekly" stands for, or 0.
+HabitScheduleRepeatNamed :: (name: string) -> s32 {
+    index: s32 = 0
+    while index < 6 {
+        if name == HabitScheduleRepeatNames[index] {
+            return index + 1
+        }
+        index += 1
+    }
+    return 0
+}
+
+// Appends text to a buffer at a position and moves the position past it,
+// leaving the position past the end when the text does not fit.
+HabitScheduleAppend :: (output: []u8, at: *s64, text: string) {
+    if at.* + text.count > output.count {
+        at.* = output.count + 1
+        return
+    }
+    index: s64 = 0
+    while index < text.count {
+        output[at.* + index] = text[index]
+        index += 1
+    }
+    at.* += text.count
+}
+
+HabitScheduleAppendNumber :: (output: []u8, at: *s64, value: s32) {
+    digits: [12]u8
+    count: s32 = 0
+    number := cast(s64)value
+    if number < 0 {
+        HabitScheduleAppend(output, at, "-")
+        number = -number
+    }
+    while count == 0 || number > 0 {
+        digits[11 - count] = cast(u8)(48 + number % 10)
+        number /= 10
+        count += 1
+    }
+    HabitScheduleAppend(output, at, TextView(digits[12 - count:12]))
+}
+
+HabitScheduleAppendDate :: (output: []u8, at: *s64, day_index: s32) {
+    HabitScheduleAppendNumber(output, at, day_index / 10000)
+    month := (day_index / 100) % 100
+    day := day_index % 100
+    HabitScheduleAppend(output, at, ifx month < 10 then "-0" else "-")
+    HabitScheduleAppendNumber(output, at, month)
+    HabitScheduleAppend(output, at, ifx day < 10 then "-0" else "-")
+    HabitScheduleAppendNumber(output, at, day)
+}
+
+// A habit's schedules as text, one line each, for storage and sync; empty
+// when the habit has none.
+HabitScheduleWrite :: (habit: *Habit, output: []u8) -> string {
+    at: s64 = 0
+    if habit == null {
+        return ""
+    }
+    count := habit.schedule_count
+    if count > HABIT_SCHEDULE_MAX {
+        count = HABIT_SCHEDULE_MAX
+    }
+    index: s32 = 0
+    while index < count {
+        rule := *habit.schedules[index]
+        if index > 0 {
+            HabitScheduleAppend(output, *at, "\n")
+        }
+        HabitScheduleAppend(output, *at, "from=")
+        HabitScheduleAppendNumber(output, *at, rule.from)
+        HabitScheduleAppend(output, *at, ";repeat=")
+        HabitScheduleAppend(output, *at, HabitScheduleRepeatName(rule.repeat))
+        HabitScheduleAppend(output, *at, ";every=")
+        HabitScheduleAppendNumber(output, *at, rule.every)
+        HabitScheduleAppend(output, *at, ";start=")
+        HabitScheduleAppendNumber(output, *at, rule.start)
+        HabitScheduleAppend(output, *at, ";weekdays=")
+        HabitScheduleAppendNumber(output, *at, rule.weekdays)
+        HabitScheduleAppend(output, *at, ";month_days=")
+        HabitScheduleAppendNumber(output, *at, rule.month_days)
+        HabitScheduleAppend(output, *at, ";last_day=")
+        HabitScheduleAppendNumber(output, *at, rule.last_day)
+        HabitScheduleAppend(output, *at, ";week_of_month=")
+        HabitScheduleAppendNumber(output, *at, rule.week_of_month)
+        HabitScheduleAppend(output, *at, ";formula=")
+        HabitScheduleAppend(output, *at, HabitScheduleFormulaText(rule))
+        index += 1
+    }
+    if at > output.count {
+        return ""
+    }
+    return TextView(output[0:at])
+}
+
+HabitScheduleNumber :: (text: string) -> s32 {
+    value: s64 = 0
+    index: s64 = 0
+    negative := text.count > 0 && text[0] == #char "-"
+    if negative {
+        index = 1
+    }
+    while index < text.count && index < 11 && HabitFormulaDigit(text[index]) {
+        value = value * 10 + cast(s64)(text[index] - cast(u8)48)
+        index += 1
+    }
+    if value > 2147483647 {
+        value = 2147483647
+    }
+    return cast(s32)(ifx negative then -value else value)
+}
+
+// Reads one schedule line; the formula takes the rest of its line.
+HabitScheduleReadLine :: (line: string) -> HabitSchedule {
+    rule: HabitSchedule
+    at: s64 = 0
+    while at < line.count {
+        equals := at
+        while equals < line.count && line[equals] != #char "=" {
+            equals += 1
+        }
+        if equals >= line.count {
+            break
+        }
+        key := line[at:equals]
+        end := equals + 1
+        if key != "formula" {
+            while end < line.count && line[end] != #char ";" {
+                end += 1
+            }
+        } else {
+            end = line.count
+        }
+        value := line[equals + 1:end]
+        if key == "from" {
+            rule.from = HabitScheduleNumber(value)
+        } else if key == "repeat" {
+            rule.repeat = HabitScheduleRepeatNamed(value)
+        } else if key == "every" {
+            rule.every = HabitScheduleNumber(value)
+        } else if key == "start" {
+            rule.start = HabitScheduleNumber(value)
+        } else if key == "weekdays" {
+            rule.weekdays = HabitScheduleNumber(value)
+        } else if key == "month_days" {
+            rule.month_days = HabitScheduleNumber(value)
+        } else if key == "last_day" {
+            rule.last_day = HabitScheduleNumber(value)
+        } else if key == "week_of_month" {
+            rule.week_of_month = HabitScheduleNumber(value)
+        } else if key == "formula" {
+            unused HabitScheduleSetFormula(*rule, value)
+        }
+        at = end + 1
+    }
+    return rule
+}
+
+// Replaces a habit's schedules with those written by HabitScheduleWrite.
+// Lines that do not read, or are out of order, are left out.
+HabitScheduleRead :: (habit: *Habit, text: string) {
+    if habit == null {
+        return
+    }
+    habit.schedule_count = 0
+    at: s64 = 0
+    while at < text.count && habit.schedule_count < HABIT_SCHEDULE_MAX {
+        end := at
+        while end < text.count && text[end] != #char "\n" {
+            end += 1
+        }
+        rule := HabitScheduleReadLine(text[at:end])
+        at = end + 1
+        if rule.repeat == 0 {
+            continue
+        }
+        HabitScheduleNormalize(*rule, 0)
+        if rule.repeat == HABIT_REPEAT_FORMULA &&
+        !HabitFormulaValid(HabitScheduleFormulaText(*rule)) {
+            continue
+        }
+        if habit.schedule_count > 0 &&
+        rule.from <= habit.schedules[habit.schedule_count - 1].from {
+            continue
+        }
+        habit.schedules[habit.schedule_count] = rule
+        habit.schedule_count += 1
+    }
+}
+
+HabitScheduleDayNames: [7]string = .["mon", "tue", "wed", "thu", "fri",
+"sat", "sun"];
+
+HabitScheduleAppendWeekdays :: (output: []u8, at: *s64, weekdays: s32) {
+    first := true
+    day: s32 = 0
+    while day < 7 {
+        if (weekdays & (1 << day)) != 0 {
+            if !first {
+                HabitScheduleAppend(output, at, ",")
+            }
+            HabitScheduleAppend(output, at, HabitScheduleDayNames[day])
+            first = false
+        }
+        day += 1
+    }
+}
+
+HabitScheduleAppendEvery :: (output: []u8, at: *s64, every: s32,
+    unit: string) {
+    HabitScheduleAppend(output, at, "every ")
+    if every > 1 {
+        HabitScheduleAppendNumber(output, at, every)
+        HabitScheduleAppend(output, at, " ")
+        HabitScheduleAppend(output, at, unit)
+        HabitScheduleAppend(output, at, "s")
+    } else {
+        HabitScheduleAppend(output, at, unit)
+    }
+}
+
+// A schedule in plain English, as Lumi reads it.
+HabitScheduleDescribe :: (rule: *HabitSchedule, output: []u8) -> string {
+    at: s64 = 0
+    if rule.repeat == HABIT_REPEAT_NONE {
+        HabitScheduleAppend(output, *at, "no set days")
+    } else if rule.repeat == HABIT_REPEAT_WEEKLY && rule.every <= 1 &&
+    (rule.weekdays & 127) == 127 {
+        HabitScheduleAppend(output, *at, "every day")
+    } else if rule.repeat == HABIT_REPEAT_WEEKLY {
+        HabitScheduleAppendEvery(output, *at, rule.every, "week")
+        HabitScheduleAppend(output, *at, " on ")
+        HabitScheduleAppendWeekdays(output, *at, rule.weekdays)
+    } else if rule.repeat == HABIT_REPEAT_MONTHLY {
+        HabitScheduleAppendEvery(output, *at, rule.every, "month")
+        if rule.week_of_month != 0 {
+            names: [5]string = .["first", "second", "third", "fourth", "fifth"]
+            HabitScheduleAppend(output, *at, " on the ")
+            if rule.week_of_month < 0 {
+                HabitScheduleAppend(output, *at, "last")
+            } else {
+                HabitScheduleAppend(output, *at, names[rule.week_of_month - 1])
+            }
+            HabitScheduleAppend(output, *at, " ")
+            HabitScheduleAppendWeekdays(output, *at, rule.weekdays)
+        } else {
+            HabitScheduleAppend(output, *at, " on day ")
+            first := true
+            day: s32 = 1
+            while day <= 31 {
+                if (rule.month_days & (1 << (day - 1))) != 0 {
+                    if !first {
+                        HabitScheduleAppend(output, *at, ",")
+                    }
+                    HabitScheduleAppendNumber(output, *at, day)
+                    first = false
+                }
+                day += 1
+            }
+            if rule.last_day != 0 {
+                HabitScheduleAppend(output, *at, ifx first then "last" else ",last")
+            }
+        }
+    } else if rule.repeat == HABIT_REPEAT_YEARLY {
+        HabitScheduleAppendEvery(output, *at, rule.every, "year")
+    } else if rule.repeat == HABIT_REPEAT_FORMULA {
+        HabitScheduleAppend(output, *at, "days where ")
+        HabitScheduleAppend(output, *at, HabitScheduleFormulaText(rule))
+    } else {
+        HabitScheduleAppendEvery(output, *at, rule.every, "day")
+    }
+    if rule.repeat != HABIT_REPEAT_NONE && rule.start != 0 {
+        HabitScheduleAppend(output, *at, " from ")
+        HabitScheduleAppendDate(output, *at, rule.start)
+    }
+    if at > output.count {
+        return ""
+    }
+    return TextView(output[0:at])
+}
