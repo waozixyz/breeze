@@ -1,0 +1,286 @@
+// What Lumi says after a habit request it understood on the device, and
+// the small readers lumi.zi uses to run it through the host's app tools,
+// the same validated tools the online model calls. Nothing here calls the
+// host, so the phrase tests run it as it is.
+#import "vec"
+#import "text"
+#import "json_scan"
+#import "byte_text_linux"
+#import, file "habit_intent.zi";
+#import, file "habit_patterns.zi";
+#import, file "../../src/cells/lumi_types.zi";
+
+LUMI_HABITS_MAX :: 48
+
+// The translated words of Lumi's habit answers. Most are the habit
+// editor's own, so Lumi and Habits describe a change alike.
+LumiReplyWords :: struct {
+    created: string
+    renamed: string
+    paused: string
+    resumed: string
+    question_added: string
+    question_removed: string
+    every_day: string
+    every_n_days: string
+    days: [7]string
+    reminder: string
+    no_reminder: string
+    check: string
+    count: string
+    span: string
+    yes: string
+    no: string
+    longer: string
+    shorter: string
+    later_than_average: string
+    above_average: string
+    earlier_than_average: string
+    below_average: string
+    after: string
+    at_least: string
+    before: string
+    at_most: string
+    between: string
+    and_word: string
+}
+
+LumiToolOk :: (result: string) -> bool {
+    at := FieldAt(result, 0, "ok")
+    return at >= 0 && MatchLiteral(result, at, "true")
+}
+
+LumiToolText :: (result: string, name: string) -> string {
+    bytes: [256]u8
+    count := ReadStringText(result, FieldAt(result, 0, name), bytes[:])
+    if count <= 0 || count >= 256 {
+        return ""
+    }
+    return LumiOwned(TextFromBytes(bytes[:count]))
+}
+
+// Fills %s and %d in a translated template, in order.
+LumiFill :: (template: string, values: []string) -> string {
+    out: Vec(u8)
+    used: s32 = 0
+    at: s64 = 0
+    while at < template.count {
+        if template[at] == cast(u8)37 && at + 1 < template.count &&
+        (template[at + 1] == cast(u8)115 || template[at + 1] == cast(u8)100) &&
+        used < cast(s32)values.count {
+            BuilderPrint(*out, "%", values[used])
+            used += 1
+            at += 2
+            continue
+        }
+        unused VecPush(out, template[at])
+        at += 1
+    }
+    return BuilderFinish(out)
+}
+
+LumiNumberText :: (value: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// A time of day as habits show it: 07:00.
+LumiDayTimeText :: (minutes: s32) -> string {
+    out: Vec(u8)
+    hour := minutes / 60
+    minute := minutes % 60
+    BuilderPrint(*out, "%", ifx hour < 10 then "0" else "")
+    BuilderPrint(*out, "%:", hour)
+    BuilderPrint(*out, "%", ifx minute < 10 then "0" else "")
+    BuilderPrint(*out, "%", minute)
+    return BuilderFinish(out)
+}
+
+LumiGoalValue :: (plan: LumiHabitPlan, value: s32) -> string {
+    if plan.unit == LUMI_UNIT_NUMBER {
+        return LumiNumberText(value)
+    }
+    if plan.unit == LUMI_UNIT_LENGTH {
+        return LumiClockText(value)
+    }
+    return LumiDayTimeText(value)
+}
+
+// A goal in the words the habit editor uses: "At most 8:00", "Before
+// 07:00", "Above my average".
+LumiGoalText :: (words: LumiReplyWords, plan: LumiHabitPlan) -> string {
+    time := plan.unit == LUMI_UNIT_TIME || (plan.unit == LUMI_UNIT_ANY && plan.answer == LUMI_ANSWER_TIME)
+    if plan.goal == LUMI_GOAL_YES { return words.yes }
+    if plan.goal == LUMI_GOAL_NO { return words.no }
+    if plan.unit == LUMI_UNIT_LENGTH && plan.goal == LUMI_GOAL_ABOVE {
+        return words.longer
+    }
+    if plan.unit == LUMI_UNIT_LENGTH && plan.goal == LUMI_GOAL_BELOW {
+        return words.shorter
+    }
+    if plan.goal == LUMI_GOAL_ABOVE {
+        return ifx time then words.later_than_average else words.above_average
+    }
+    if plan.goal == LUMI_GOAL_BELOW {
+        return ifx time then words.earlier_than_average else words.below_average
+    }
+    out: Vec(u8)
+    if plan.goal == LUMI_GOAL_AT_LEAST {
+        BuilderPrint(*out, "% ", ifx time then words.after else words.at_least)
+        BuilderPrint(*out, "%", LumiGoalValue(plan, plan.low))
+    } else if plan.goal == LUMI_GOAL_AT_MOST {
+        BuilderPrint(*out, "% ", ifx time then words.before else words.at_most)
+        BuilderPrint(*out, "%", LumiGoalValue(plan, plan.high))
+    } else {
+        BuilderPrint(*out, "% ", words.between)
+        BuilderPrint(*out, "% ", LumiGoalValue(plan, plan.low))
+        BuilderPrint(*out, "% ", words.and_word)
+        BuilderPrint(*out, "%", LumiGoalValue(plan, plan.high))
+    }
+    return BuilderFinish(out)
+}
+
+LumiScheduleText :: (words: LumiReplyWords, plan: LumiHabitPlan) -> string {
+    if plan.repeat == LUMI_REPEAT_DAILY || (plan.repeat == LUMI_REPEAT_DAYS && plan.weekdays == 127) {
+        return words.every_day
+    }
+    if plan.repeat == LUMI_REPEAT_EVERY {
+        values: [1]string = .[LumiNumberText(plan.every)]
+        return LumiFill(words.every_n_days, values[:])
+    }
+    out: Vec(u8)
+    first := true
+    for day: cast(s32)0..cast(s32)6 {
+        if (plan.weekdays & (1 << day)) != 0 {
+            BuilderPrint(*out, "%", ifx first then "" else ", ")
+            BuilderPrint(*out, "%", words.days[day])
+            first = false
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// What Lumi says it did: the habit's name in bold, then one line per change.
+LumiHabitReply :: (words: LumiReplyWords, plan: LumiHabitPlan, title: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "**%**", title)
+    if plan.kind == LUMI_HABIT_CREATE {
+        BuilderPrint(*out, "\n%", words.created)
+    }
+    if plan.kind == LUMI_HABIT_RENAME {
+        values: [2]string = .[title, plan.name]
+        BuilderPrint(*out, "\n%", LumiFill(words.renamed, values[:]))
+    }
+    if plan.kind == LUMI_HABIT_PAUSE {
+        BuilderPrint(*out, "\n%", words.paused)
+    }
+    if plan.kind == LUMI_HABIT_RESUME {
+        BuilderPrint(*out, "\n%", words.resumed)
+    }
+    if plan.kind == LUMI_HABIT_ASK || plan.kind == LUMI_HABIT_UNASK {
+        values: [1]string = .[plan.question]
+        template := ifx plan.kind == LUMI_HABIT_ASK then words.question_added else words.question_removed
+        BuilderPrint(*out, "\n%", LumiFill(template, values[:]))
+        if plan.kind == LUMI_HABIT_ASK && plan.goal != 0 {
+            BuilderPrint(*out, "\n%", LumiGoalText(words, plan))
+        }
+        return BuilderFinish(out)
+    }
+    if plan.repeat != 0 {
+        BuilderPrint(*out, "\n%", LumiScheduleText(words, plan))
+    }
+    if plan.reminder == 1 {
+        values: [1]string = .[LumiDayTimeText((plan.hour - 1) * 60)]
+        BuilderPrint(*out, "\n%", LumiFill(words.reminder, values[:]))
+    } else if plan.reminder == 2 {
+        BuilderPrint(*out, "\n%", words.no_reminder)
+    }
+    if plan.mode == LUMI_MODE_CHECK {
+        BuilderPrint(*out, "\n%", words.check)
+    } else if plan.mode == LUMI_MODE_COUNT {
+        values: [1]string = .[LumiNumberText(plan.target)]
+        BuilderPrint(*out, "\n%", LumiFill(words.count, values[:]))
+    } else if plan.mode == LUMI_MODE_SPAN {
+        BuilderPrint(*out, "\n%", words.span)
+        if plan.goal != 0 {
+            BuilderPrint(*out, ": %", LumiGoalText(words, plan))
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// Adds the paused habits a read_context result lists.
+LumiPausedHabits :: (context: string, habits: []LumiHabitRef, count: s32) -> s32 {
+    list := FieldAt(context, 0, "paused_habits")
+    total := ArrayCount(context, list)
+    for index: cast(s32)0..total - 1 {
+        if count >= cast(s32)habits.count {
+            break
+        }
+        at := ElementAt(context, list, index)
+        id_bytes: [64]u8
+        title_bytes: [64]u8
+        id_count := ReadStringText(context, FieldAt(context, at, "id"), id_bytes[:])
+        title_count := ReadStringText(context, FieldAt(context, at, "title"), title_bytes[:])
+        if id_count <= 0 || id_count >= 64 || title_count <= 0 || title_count >= 64 {
+            continue
+        }
+        habits[count] = LumiHabitRef.{.id = LumiOwned(TextFromBytes(id_bytes[:id_count])),
+            .title = LumiOwned(TextFromBytes(title_bytes[:title_count])), .paused = true}
+        count += 1
+    }
+    return count
+}
+
+LumiIdArguments :: (id: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"id\":")
+    LumiJsonText(*out, id)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+// The questions a read_habit result lists, as JSON, or "".
+LumiQuestionsOf :: (result: string) -> string {
+    at := FieldAt(result, 0, "questions")
+    end := ValueEnd(result, at, 0)
+    if !LumiToolOk(result) || at < 0 || end < 0 {
+        return ""
+    }
+    return LumiOwned(result[at:end])
+}
+
+LumiReplaceNew :: (arguments: string, id: string) -> string {
+    marker := "\"$new\""
+    out: Vec(u8)
+    at: s64 = 0
+    while at < arguments.count {
+        if at + marker.count <= arguments.count && arguments[at:at + marker.count] == marker {
+            LumiJsonText(*out, id)
+            at += marker.count
+            continue
+        }
+        unused VecPush(out, arguments[at])
+        at += 1
+    }
+    return BuilderFinish(out)
+}
+
+// The person's answer to "Delete ...? Reply yes or no.": 1 yes, 2 no,
+// 0 neither, in their language or English.
+LumiYesNo :: (input: string, active: *LumiCompiled, english: *LumiCompiled) -> s32 {
+    matcher: LumiMatcher
+    matcher.input = LumiTrimText(input)
+    matcher.words = *active.words
+    matcher.english_words = *english.words
+    yes := LumiTaggedAt(*matcher, LUMI_WORD_YES, 0)
+    no := LumiTaggedAt(*matcher, LUMI_WORD_NO, 0)
+    if yes > 0 && LumiSkipTail(matcher.input, yes) == cast(s32)matcher.input.count && yes >= no {
+        return 1
+    }
+    if no > 0 && LumiSkipTail(matcher.input, no) == cast(s32)matcher.input.count {
+        return 2
+    }
+    return 0
+}

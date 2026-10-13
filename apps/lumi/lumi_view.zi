@@ -19,6 +19,11 @@
 #import "press_widget"
 #import "scroll_props"
 #import "scroll_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "dropdown_props"
+#import "toggle_props"
+#import "toggle_widget"
 #import "tree"
 #import "text"
 #import "byte_text_linux"
@@ -50,7 +55,13 @@ LumiFirstVisibleRowHost :: (scroll: s32) -> s32 #foreign host_api;
 LumiRowOffsetHost :: (index: s32) -> s32 #foreign host_api;
 ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
 LumiDonationActionHost :: (coin: s32, action: s32) -> bool #foreign host_api;
+SetLumiOnlineHost :: (online: bool) -> s32 #foreign host_api;
+LumiAgreementHost :: (choice: s32) -> bool #foreign host_api;
 frame: LumiUiFrame;
+// The terms panel's scroll and its formatted text.
+agreement_scroll: s32;
+agreement_bytes: [8192]u8;
+agreement_strong: [32]TextRange;
 chart_selected_key: u64;
 chart_selected_point: s32;
 donation_notice: string;
@@ -230,7 +241,7 @@ SelectedText :: () -> string {
 SelectionBar :: (x: s32, top: s32, width: s32) {
     control := Scale(44)
     Box(frame.session, BoxProps.{.key = cast(u64)300369,
-            .bounds = Bounds(x - Scale(16), 0, width + Scale(32), top + control + Scale(8)),
+            .bounds = Bounds(0, 0, frame.width, top + control + Scale(8)),
             .fill = frame.background})
     if confirm_delete {
         Text(frame.session, TextProps.{.key = cast(u64)300370,
@@ -582,8 +593,86 @@ RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
     }
 }
 
+// Lumi's title bar: its name, and a switch between offline and online.
+// Returns the bar's height.
+LumiTitleBar :: () -> s32 {
+    height := Scale(52)
+    switch_width := ifx frame.connection then Scale(184) else 0
+    options: [1]DropdownOption
+    bar := TitleBar(frame.session, TitleBarProps.{.key = cast(u64)300400, .title = "Lumi",
+            .bounds = Bounds(0, 0, frame.width, height), .height = height, .scale = frame.scale,
+            .trailing_width = switch_width}, options[0:0])
+    if !frame.connection || bar.trailing_bounds.width <= 0.0 {
+        return height
+    }
+    switch_height := Scale(34)
+    area := bar.trailing_bounds
+    switch := Toggle(frame.session, ToggleProps.{.key = cast(u64)300401, .id = 30040,
+            .bounds = Rectangle.{area.x, area.y + (area.height - cast(float32)switch_height) / 2.0,
+                area.width, cast(float32)switch_height},
+            .value = frame.online, .label = LumiViewLocaleHost("lumi_toggle_online"),
+            .off_label = LumiViewLocaleHost("lumi_toggle_offline"),
+            .on_label = LumiViewLocaleHost("lumi_toggle_online")})
+    if switch.changed {
+        // Going online without the agreement opens the terms instead.
+        unused SetLumiOnlineHost(switch.value)
+    }
+    return height
+}
+
+// The terms Lumi asks to agree to before going online, or shows again from
+// Settings with a way to withdraw.
+LumiAgreementView :: (top: s32) {
+    column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
+    buttons_top := frame.height - frame.bottom - Scale(16) - Scale(48)
+    area_height := buttons_top - Scale(12) - top
+    if area_height < Scale(60) {
+        area_height = Scale(60)
+    }
+    counts := LumiFormatInto(frame.agreement_text, true, agreement_bytes[:], agreement_strong[:])
+    panel := Scroll(frame.session, ScrollProps.{.key = cast(u64)300410,
+            .bounds = Bounds(column.x, top, column.width, area_height),
+            .content_height = frame.agreement_height, .scroll_offset = agreement_scroll,
+            .scale = frame.scale})
+    agreement_scroll = panel.scroll_offset
+    if panel.opened {
+        // The host measured the terms at this width, clear of the scroll bar.
+        Text(frame.session, TextProps.{.key = cast(u64)300411,
+                .bounds = Rectangle.{panel.content.x, panel.content.y,
+                    cast(float32)(column.width - Scale(24)), cast(float32)frame.agreement_height},
+                .text = TextFromBytes(agreement_bytes[:counts.count]), .font = frame.font,
+                .strong = agreement_strong[:counts.strong_count], .wrap = cast(TextWrap)TextWrapAuto})
+        unused End(frame.session)
+    }
+    reading := frame.agreement == 2
+    half := (column.width - Scale(12)) / 2
+    first := ifx reading then "lumi_agreement_withdraw" else "lumi_agreement_agree"
+    second := ifx reading then "close_button" else "lumi_agreement_later"
+    if Button(frame.session, ButtonProps.{.id = 30041,
+            .bounds = Bounds(column.x, buttons_top, half, Scale(48)),
+            .label = LumiViewLocaleHost(first),
+            .tone = cast(ButtonTone)(ifx reading then ButtonToneDanger else ButtonToneAccent),
+            .emphasis = cast(ButtonEmphasis)(ifx reading then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
+        agreement_scroll = 0
+        unused LumiAgreementHost(ifx reading then 3 else 1)
+    }
+    if Button(frame.session, ButtonProps.{.id = 30042,
+            .bounds = Bounds(column.x + half + Scale(12), buttons_top, half, Scale(48)),
+            .label = LumiViewLocaleHost(second), .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        agreement_scroll = 0
+        unused LumiAgreementHost(ifx reading then 4 else 2)
+    }
+}
+
 LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> LumiMessage {
     frame = ReadLumiUiHost()
+    title_height := LumiTitleBar()
+    if frame.agreement != 0 {
+        LumiAgreementView(title_height + Scale(8))
+        WriteLumiUiHost(frame)
+        return message
+    }
     column := CenteredColumnFor(frame.width, Scale(720), Scale(16))
     x := column.x
     width := column.width
@@ -597,7 +686,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     }
     footer := frame.height - frame.bottom - Scale(16) - input_height
     suggestions_top := footer - Scale(ifx LumiTrim(frame.value).count > 0 then 46 else 0)
-    history_top := Scale(12)
+    history_top := title_height + Scale(8)
     menu := MenuCommands(revision)
     menu_matches: [LUMI_MENU_COMMANDS]s32
     menu_count: s32 = 0
@@ -777,6 +866,8 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     }
     if selecting {
         SelectionBar(x, Scale(12), width)
+        // Like Telegram, the selection bar covers the title bar while
+        // messages are selected.
     }
     typed := LumiTrim(frame.value)
     candidates: [20]string = .[commands.start_whm, commands.complete_habit,

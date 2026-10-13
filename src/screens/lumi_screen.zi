@@ -15,6 +15,8 @@
 #import, file "../cells/lumi_progress.zi";
 #import, file "../cells/lumi_chart.zi";
 #import, file "../cells/lumi_online.zi";
+#import, file "../cells/lumi_connection.zi";
+#import, file "../cells/lumi_habit_tools.zi";
 #import, file "../cells/lumi_telegram.zi";
 #import, file "../app/exercise_types.zi";
 #import, file "../cells/feedback_store.zi";
@@ -39,6 +41,8 @@
 #import, file "../app/text_buffers.zi";
 #import, file "../storage/storage_elist.zi";
 #import, file "../storage/state.zi";
+#import, file "../storage/storage_core.zi";
+#import "text_buffer"
 #import, file "../storage/db.zi";
 #import, file "../storage/delegate_store.zi";
 #import, file "../platform/raylib_text_input.zi";
@@ -105,6 +109,15 @@ lumi_pending_route: s32 = -1;
 lumi_pending_practice: s32 = -1;
 lumi_choosing_habit: bool;
 lumi_choosing_diary: bool;
+// Text handed to Lumi's package for the current call only.
+lumi_provider_host_text: [LUMI_PROVIDER_URL_MAX]u8;
+lumi_tool_text: string;
+// Lumi's online terms as last composed, and what they were composed for.
+lumi_agreement_text: string;
+lumi_agreement_key: u64;
+lumi_agreement_height: s32;
+lumi_agreement_bytes: [8192]u8;
+lumi_agreement_strong: [32]TextRange;
 
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
@@ -137,6 +150,113 @@ app_lumi_reset :: () {
     lumi_history_loading = false
     lumi_choosing_habit = false
     lumi_choosing_diary = false
+    LumiDeleteClear()
+}
+
+// Lumi's online terms in the app's language, for where requests go now:
+// what is sent, where it goes, what Inner Breeze's server keeps, safety and
+// the person's choice. Each sentence states what the code does: the request
+// built in lumi_online.zi and app_tools.zi, and in Daochi chat.zi (prompt,
+// provider request, daily counts), feedback_http.zi, lumi_telegram.zi and
+// the deploy workflow's 30-day database backups. Change them together.
+LumiAgreementCompose :: (host: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "**%**\n\n", LocaleText("lumi_agreement_title"))
+    BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_intro"))
+    BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_sent"))
+    if host.count > 0 {
+        args: [1]FormatArg
+        args[0].text = host
+        args[0].is_text = true
+        where: [1024]u8
+        unused FormatTemplate(LocaleText("lumi_agreement_where_own"), args[:], where[:])
+        BuilderPrint(*out, "%\n\n", TextUntilNul(where[:]))
+    } else {
+        BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_where_node"))
+        BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_kept"))
+    }
+    BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_server"))
+    BuilderPrint(*out, "%\n\n", LocaleText("lumi_agreement_safety"))
+    BuilderPrint(*out, "%", LocaleText("lumi_agreement_choice"))
+    return BuilderFinish(out)
+}
+
+// Composes and measures the terms while their panel is open.
+LumiAgreementPrepare :: (width: s32) {
+    if lumi_ui.agreement == 0 {
+        lumi_ui.agreement_text = ""
+        lumi_ui.agreement_height = 0
+        return
+    }
+    key := (KeyHash(lumi_ui.provider_host) ^ KeyHash(LocaleActiveCode()) ^ AssetGeneration()) *
+    cast(u64)1099511628211 + cast(u64)width * cast(u64)31 + cast(u64)lumi_ui.font
+    if key != lumi_agreement_key || lumi_agreement_text.count == 0 {
+        lumi_agreement_key = key
+        lumi_ui.agreement_text = ""
+        PackageFree(lumi_agreement_text)
+        lumi_agreement_text = LumiAgreementCompose(lumi_ui.provider_host)
+        counts := LumiFormatInto(lumi_agreement_text, true, lumi_agreement_bytes[:],
+            lumi_agreement_strong[:])
+        prepared := PrepareText(TextProps.{.text = TextFromBytes(lumi_agreement_bytes[:counts.count]),
+                .font = lumi_ui.font, .wrap = cast(TextWrap)TextWrapAuto,
+                .strong = lumi_agreement_strong[:counts.strong_count],
+                .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0}}, DefaultTextFace())
+        lumi_agreement_height = cast(s32)prepared.bounds.height + AppScale(16)
+    }
+    lumi_ui.agreement_text = lumi_agreement_text
+    lumi_ui.agreement_height = lumi_agreement_height
+}
+
+// The title bar's switch. Going online without the agreement for where
+// requests go opens the terms instead: 1 online, 2 terms shown, 0 offline.
+LumiSetOnline :: (on: bool) -> s32 {
+    if StoredAccountMode() == AccountModeDelegate {
+        return 0
+    }
+    lumi_ui.agreement = 0
+    if !on {
+        // The next pump cancels anything in flight; nothing new starts.
+        storage_set_setting_int(LumiOnlineSetting, 0)
+        return 0
+    }
+    if LumiOwnProviderSelected() && !LumiOwnProviderReady() {
+        // Terms naming no address would say nothing; set the provider first.
+        LumiStoreAppend(LocaleText("lumi_online_setup"), false)
+        return 0
+    }
+    if !LumiAiAgreed() {
+        lumi_ui.agreement = 1
+        return 2
+    }
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    return 1
+}
+
+// The terms panel's buttons: 1 agree and go online, 2 not now, 3 withdraw,
+// 4 close.
+LumiAgreementChoice :: (choice: s32) -> bool {
+    if StoredAccountMode() == AccountModeDelegate || choice < 1 || choice > 4 {
+        return false
+    }
+    asked := lumi_ui.agreement
+    lumi_ui.agreement = 0
+    if choice == 1 && asked != 0 {
+        return LumiAgree()
+    }
+    if choice == 3 {
+        return LumiWithdraw()
+    }
+    return true
+}
+
+// Settings shows the terms where they live, in Lumi.
+#program_export
+app_lumi_show_agreement :: (app: *InnerBreeze) {
+    if app == null || StoredAccountMode() == AccountModeDelegate {
+        return
+    }
+    lumi_ui.agreement = ifx LumiAiAgreed() then 2 else 1
+    app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
 }
 
 // Opening a conversation never submits it: the user supplies the desired look.
@@ -170,6 +290,7 @@ LumiContextAvailable :: (app: *InnerBreeze) -> bool {
 
 LumiDelegateHostAllowed :: (name: string) -> bool {
     return name == "LumiFirstVisibleRowHost" || name == "LumiRowOffsetHost" ||
+    name == "LumiEnglishLocaleHost" ||
     name == "LumiLoadOlderHost" || name == "ReadLumiToolsHost" ||
     name == "ReadLumiUiHost" || name == "WriteLumiUiHost" ||
     name == "LumiLocaleHost" || name == "LumiViewLocaleHost" ||
@@ -562,10 +683,48 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostScalar("bool", ifx LumiOnlineStart(input) then 1 else 0)
         return 1
     }
+    if name == "SetLumiOnlineHost" && count == 1 &&
+    HostScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
+        result.* = HostScalar("s32", LumiSetOnline(arguments[0].integer != 0))
+        return 1
+    }
+    if name == "LumiAgreementHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        chosen := LumiAgreementChoice(cast(s32)arguments[0].integer)
+        result.* = HostScalar("bool", ifx chosen then 1 else 0)
+        return 1
+    }
+    // The offline harness runs the same validated tools as the online model.
+    if name == "LumiToolHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        tool := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        tool_arguments := TextFromBytes(BytesFromPointer(arguments[1].data, cast(u64)arguments[1].length))
+        PackageFree(lumi_tool_text)
+        lumi_tool_text = AppToolExecute(cast(*InnerBreeze)context, tool, tool_arguments)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(lumi_tool_text), .length = cast(usize)lumi_tool_text.count}
+        return 1
+    }
+    if name == "ConfirmLumiDeleteHost" && count == 1 &&
+    HostScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
+        deleted := ConfirmLumiDelete(cast(*InnerBreeze)context, arguments[0].integer != 0)
+        result.* = HostScalar("bool", ifx deleted then 1 else 0)
+        return 1
+    }
+    if name == "LumiEnglishLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleEnglishText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
     if name == "ReadLumiToolsHost" && count == 0 {
         result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = lumi_ui.available_apps,
                 .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
-                .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary}, *lumi_tools_codec)
+                .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary,
+                .confirming_delete = LumiDeletePending()}, *lumi_tools_codec)
         return 1
     }
     if name == "SetLumiHabitChoiceHost" && count == 1 && HostScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
@@ -791,6 +950,10 @@ LumiPrepareTools :: (app: *InnerBreeze) {
         lumi_ui.choosing_diary = false
         lumi_ui.waiting = false
         lumi_ui.chat_count = ifx current then LumiStoreCount() + 1 else 0
+        lumi_ui.online = false
+        lumi_ui.connection = false
+        lumi_ui.agreement = 0
+        lumi_ui.provider_host = ""
         return
     }
 
@@ -826,6 +989,15 @@ LumiPrepareTools :: (app: *InnerBreeze) {
     lumi_ui.choosing_diary = lumi_choosing_diary
     lumi_ui.waiting = LumiOnlineWaiting()
     lumi_ui.habit_count = LumiHabitCount(app)
+    lumi_ui.online = LumiToggleOn()
+    lumi_ui.connection = true
+    lumi_provider_host_text = .{}
+    if LumiOwnProviderSelected() {
+        url: [LUMI_PROVIDER_URL_MAX]u8
+        unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:])
+        unused AppCopyText(LumiProviderHost(TextUntilNul(url[:])), lumi_provider_host_text[:])
+    }
+    lumi_ui.provider_host = AppTextFromCString(*lumi_provider_host_text[0], LUMI_PROVIDER_URL_MAX)
 }
 
 // Telegram and the native composer run the same interpreter against live app
@@ -936,6 +1108,8 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_draft_height = cast(s32)draft.bounds.height
     }
     lumi_ui.draft_height = lumi_draft_height
+    // The terms wrap clear of their scroll bar, as Lumi's view draws them.
+    LumiAgreementPrepare(column_width - AppScale(24))
     typed: [512]u8
     lumi_ui.input = SampleTextAreaInput(lumi_ui.focused, typed[:])
     enter := lumi_ui.input.enter || lumi_ui.input.commit

@@ -1,0 +1,965 @@
+// Matches the translated templates Lumi understands habits with, on the
+// device and without a model. A template is a line of words and slots:
+//
+//     create: add a/the habit {name}
+//     remind: [and] remind me at {time}
+//
+// Words fold case and, when they are ASCII words of four or more letters,
+// accept one typo. "a/the" accepts either word, [ ] makes words optional.
+// Slots: {habit} an existing habit, {name} and {text} free words, {n} a
+// whole number, {time} a clock time, {length} a duration with its unit,
+// {days} weekday names. Words need boundaries only between letters of
+// alphabets written with spaces, so Japanese, Chinese and Korean templates
+// need no spaces. Matching is bounded; it never runs code from a template.
+#import "utf8"
+#import "vec"
+#import "text"
+#import, file "command_text.zi";
+
+LUMI_TOKEN_WORDS :: 0
+LUMI_TOKEN_SLOT :: 1
+LUMI_TOKEN_OPEN :: 2
+LUMI_TOKEN_CLOSE :: 3
+LUMI_TOKEN_MAX :: 24
+
+LUMI_SLOT_HABIT :: 1
+LUMI_SLOT_NAME :: 2
+LUMI_SLOT_TEXT :: 3
+LUMI_SLOT_NUMBER :: 4
+LUMI_SLOT_TIME :: 5
+LUMI_SLOT_LENGTH :: 6
+LUMI_SLOT_DAYS :: 7
+
+// Which habits {habit} may name.
+LUMI_HABITS_ACTIVE :: 0
+LUMI_HABITS_PAUSED :: 1
+LUMI_HABITS_ANY :: 2
+
+// Habit candidates one {habit} slot considers at a position.
+LUMI_HABIT_CANDIDATES :: 8
+
+LumiToken :: struct {
+    kind: s32
+    slot: s32
+    text: string
+}
+
+LumiHabitRef :: struct {
+    id: string
+    title: string
+    paused: bool
+}
+
+// What a template's slots read. A habit of -2 means several habits match.
+// Free words are kept as byte ranges of the matched input.
+LumiCapture :: struct {
+    habit: s32
+    name_at: s32
+    name_end: s32
+    text_at: s32
+    text_end: s32
+    numbers: [2]s32
+    number_count: s32
+    // Minutes since midnight.
+    times: [2]s32
+    time_count: s32
+    // Minutes, and the unit the last one was written in: 60 for hours, 1
+    // for minutes, so "between 6 and 8 hours" reads 6 as hours too.
+    lengths: [2]s32
+    length_count: s32
+    length_unit: s32
+    days: s32
+}
+
+// The words a language uses beside its templates, read from its
+// "tag: a | b" lines once per language: weekdays, numbers, units and the
+// words of answers.
+LUMI_WORD_MON :: 0
+LUMI_WORD_AND :: 7
+LUMI_WORD_JOIN :: 8
+// One to ten follow in order.
+LUMI_WORD_ONE :: 9
+LUMI_WORD_AM :: 19
+LUMI_WORD_PM :: 20
+LUMI_WORD_OCLOCK :: 21
+LUMI_WORD_HOURS :: 22
+LUMI_WORD_MINUTES :: 23
+LUMI_WORD_ASK_NUMBER :: 24
+LUMI_WORD_ASK_TIME :: 25
+LUMI_WORD_ASK_YES_NO :: 26
+LUMI_WORD_YES :: 27
+LUMI_WORD_NO :: 28
+LUMI_WORD_TAGS :: 29
+LUMI_WORD_ALTERNATIVES :: 12
+
+LumiWords :: struct {
+    phrases: [LUMI_WORD_TAGS * LUMI_WORD_ALTERNATIVES]string
+    counts: [LUMI_WORD_TAGS]s32
+}
+
+LumiWordTag :: (tag: string) -> s32 {
+    names: [LUMI_WORD_TAGS]string = .["mon", "tue", "wed", "thu", "fri", "sat", "sun", "and", "join",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "am", "pm", "oclock", "hours", "minutes",
+    "ask_number", "ask_time", "ask_yes_no", "yes", "no"]
+    for index: cast(s32)0..LUMI_WORD_TAGS - 1 {
+        if names[index] == tag {
+            return index
+        }
+    }
+    return -1
+}
+
+// A template, read once into words and slots.
+LumiTemplate :: struct {
+    tag: string
+    tokens: [LUMI_TOKEN_MAX]LumiToken
+    count: s32
+}
+
+LUMI_TEMPLATES_MAX :: 128
+
+LumiTemplates :: struct {
+    items: [LUMI_TEMPLATES_MAX]LumiTemplate
+    count: s32
+}
+
+LumiMatcher :: struct {
+    input: string
+    words: *LumiWords
+    english_words: *LumiWords
+    habits: []LumiHabitRef
+    habit_filter: s32
+    budget: s32
+}
+
+LumiNewCapture :: () -> LumiCapture {
+    return LumiCapture.{.habit = -1}
+}
+
+LumiFoldCode :: (codepoint: u32) -> u32 {
+    // A typed apostrophe matches the typographic one translations use.
+    if codepoint == cast(u32)8217 || codepoint == cast(u32)700 {
+        return cast(u32)39
+    }
+    return CommandFold(codepoint)
+}
+
+// Letters and digits of alphabets written with spaces between words.
+LumiWordCode :: (codepoint: u32) -> bool {
+    return (codepoint >= 48 && codepoint <= 57) || (codepoint >= 65 && codepoint <= 90) ||
+    (codepoint >= 97 && codepoint <= 122) || codepoint == 39 || codepoint == 8217 ||
+    (codepoint >= 192 && codepoint <= 591 && codepoint != 215 && codepoint != 247) ||
+    (codepoint >= 880 && codepoint <= 1327)
+}
+
+LumiSpaceCode :: (codepoint: u32) -> bool {
+    return codepoint == 32 || codepoint == 9 || codepoint == 10 || codepoint == 13 ||
+    codepoint == 160 || codepoint == 12288
+}
+
+// Punctuation that may end a request or separate its parts.
+LumiPunctuationCode :: (codepoint: u32) -> bool {
+    return codepoint == 44 || codepoint == 46 || codepoint == 33 || codepoint == 63 ||
+    codepoint == 59 || codepoint == 12290 || codepoint == 12289 || codepoint == 65281 ||
+    codepoint == 65311 || codepoint == 65292 || codepoint == 65307
+}
+
+LumiCodeAt :: (text: string, at: s32) -> u32 {
+    if at < 0 || at >= cast(s32)text.count {
+        return cast(u32)0
+    }
+    return Decode(text, at).value
+}
+
+// The codepoint before at, or 0 at the start.
+LumiCodeBefore :: (text: string, at: s32) -> u32 {
+    if at <= 0 || at > cast(s32)text.count {
+        return cast(u32)0
+    }
+    start := at - 1
+    while start > 0 && Continuation(text[start]) {
+        start -= 1
+    }
+    return Decode(text, start).value
+}
+
+// No word continues across this position.
+LumiBoundary :: (text: string, at: s32) -> bool {
+    return !LumiWordCode(LumiCodeBefore(text, at)) || !LumiWordCode(LumiCodeAt(text, at))
+}
+
+// Spaces and commas between a template's words: "the shorter, the better".
+LumiSkipGap :: (text: string, at: s32) -> s32 {
+    while at < cast(s32)text.count {
+        decoded := Decode(text, at)
+        if !LumiSpaceCode(decoded.value) && decoded.value != 44 && decoded.value != 12289 &&
+        decoded.value != 65292 {
+            return at
+        }
+        at = decoded.after
+    }
+    return at
+}
+
+LumiSkipSpace :: (text: string, at: s32) -> s32 {
+    while at < cast(s32)text.count {
+        decoded := Decode(text, at)
+        if !LumiSpaceCode(decoded.value) {
+            return at
+        }
+        at = decoded.after
+    }
+    return at
+}
+
+// Spaces and punctuation that may end a request.
+LumiSkipTail :: (text: string, at: s32) -> s32 {
+    while at < cast(s32)text.count {
+        decoded := Decode(text, at)
+        if !LumiSpaceCode(decoded.value) && !LumiPunctuationCode(decoded.value) {
+            return at
+        }
+        at = decoded.after
+    }
+    return at
+}
+
+LumiTrimText :: (text: string) -> string {
+    start: s32 = 0
+    while start < cast(s32)text.count {
+        decoded := Decode(text, start)
+        if !LumiSpaceCode(decoded.value) && !LumiPunctuationCode(decoded.value) {
+            break
+        }
+        start = decoded.after
+    }
+    end := cast(s32)text.count
+    while end > start {
+        previous := end - 1
+        while previous > start && Continuation(text[previous]) {
+            previous -= 1
+        }
+        code := Decode(text, previous).value
+        if !LumiSpaceCode(code) && !LumiPunctuationCode(code) {
+            break
+        }
+        end = previous
+    }
+    return text[start:end]
+}
+
+// The end of one word or phrase at at, case folded, or -1. Spaces in the
+// phrase match one or more spaces.
+LumiPhraseAt :: (text: string, at: s32, phrase: string) -> s32 {
+    return LumiPhraseFrom(text, at, phrase, true)
+}
+
+// A unit may follow its number without a space, as in 16h.
+LumiPhraseFrom :: (text: string, at: s32, phrase: string, word_start: bool) -> s32 {
+    if phrase.count == 0 || at < 0 {
+        return -1
+    }
+    a := at
+    b: s32 = 0
+    while b < cast(s32)phrase.count {
+        y := Decode(phrase, b)
+        if LumiSpaceCode(y.value) {
+            if a >= cast(s32)text.count || !LumiSpaceCode(LumiCodeAt(text, a)) {
+                return -1
+            }
+            a = LumiSkipSpace(text, a)
+            b = LumiSkipSpace(phrase, b)
+            continue
+        }
+        if a >= cast(s32)text.count {
+            return -1
+        }
+        x := Decode(text, a)
+        if LumiFoldCode(x.value) != LumiFoldCode(y.value) {
+            return -1
+        }
+        a = x.after
+        b = y.after
+    }
+    if !LumiBoundary(text, a) || (word_start && !LumiBoundary(text, at)) {
+        return -1
+    }
+    return a
+}
+
+LumiAsciiWord :: (word: string) -> bool {
+    if word.count < 4 {
+        return false
+    }
+    for byte: word {
+        if !((byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90)) {
+            return false
+        }
+    }
+    return true
+}
+
+// The end of the word at at.
+LumiWordEnd :: (text: string, at: s32) -> s32 {
+    end := at
+    while end < cast(s32)text.count {
+        decoded := Decode(text, end)
+        if !LumiWordCode(decoded.value) {
+            break
+        }
+        end = decoded.after
+    }
+    return end
+}
+
+// One alternative of a template word, allowing a typo in longer words.
+LumiWordAt :: (text: string, at: s32, word: string) -> s32 {
+    end := LumiPhraseAt(text, at, word)
+    if end >= 0 {
+        return end
+    }
+    if !LumiAsciiWord(word) || !LumiBoundary(text, at) {
+        return -1
+    }
+    word_end := LumiWordEnd(text, at)
+    if word_end > at && CommandTypo(text[at:word_end], word) {
+        return word_end
+    }
+    return -1
+}
+
+// A template word with "/" alternatives: the longest that matches.
+LumiWordsAt :: (text: string, at: s32, words: string) -> s32 {
+    best: s32 = -1
+    start: s32 = 0
+    while start <= cast(s32)words.count {
+        end := start
+        while end < cast(s32)words.count && words[end] != cast(u8)47 {
+            end += 1
+        }
+        if end > start {
+            matched := LumiWordAt(text, at, words[start:end])
+            if matched > best {
+                best = matched
+            }
+        }
+        start = end + 1
+    }
+    return best
+}
+
+// The tag of a "tag: body" line, and its body.
+LumiLine :: struct {
+    tag: string
+    body: string
+}
+
+LumiLineAt :: (text: string, start: s32) -> LumiLine {
+    end := start
+    while end < cast(s32)text.count && text[end] != cast(u8)10 {
+        end += 1
+    }
+    line := text[start:end]
+    colon: s32 = 0
+    while colon < cast(s32)line.count && line[colon] != cast(u8)58 {
+        colon += 1
+    }
+    if colon >= cast(s32)line.count {
+        return LumiLine.{.body = LumiLineTrim(line)}
+    }
+    return LumiLine.{.tag = LumiLineTrim(line[:colon]), .body = LumiLineTrim(line[colon + 1:])}
+}
+
+LumiNextLine :: (text: string, start: s32) -> s32 {
+    end := start
+    while end < cast(s32)text.count && text[end] != cast(u8)10 {
+        end += 1
+    }
+    return end + 1
+}
+
+LumiLineTrim :: (value: string) -> string {
+    start: s64 = 0
+    end := value.count
+    while start < end && CommandSpace(value[start]) {
+        start += 1
+    }
+    while end > start && CommandSpace(value[end - 1]) {
+        end -= 1
+    }
+    return value[start:end]
+}
+
+// Reads a language's "tag: a | b" word lines.
+LumiCompileWords :: (text: string, words: *LumiWords) {
+    words.* = LumiWords.{}
+    start: s32 = 0
+    while start < cast(s32)text.count {
+        line := LumiLineAt(text, start)
+        start = LumiNextLine(text, start)
+        tag := LumiWordTag(line.tag)
+        if tag < 0 {
+            continue
+        }
+        from: s32 = 0
+        while from <= cast(s32)line.body.count {
+            to := from
+            while to < cast(s32)line.body.count && line.body[to] != cast(u8)124 {
+                to += 1
+            }
+            alternative := LumiLineTrim(line.body[from:to])
+            if alternative.count > 0 && words.counts[tag] < LUMI_WORD_ALTERNATIVES {
+                words.phrases[tag * LUMI_WORD_ALTERNATIVES + words.counts[tag]] = alternative
+                words.counts[tag] += 1
+            }
+            from = to + 1
+        }
+    }
+}
+
+// Reads a language's "tag: template" lines.
+LumiCompileTemplates :: (text: string, templates: *LumiTemplates) {
+    templates.count = 0
+    start: s32 = 0
+    while start < cast(s32)text.count && templates.count < LUMI_TEMPLATES_MAX {
+        line := LumiLineAt(text, start)
+        start = LumiNextLine(text, start)
+        if line.tag.count == 0 || line.body.count == 0 {
+            continue
+        }
+        template := *templates.items[templates.count]
+        template.tag = line.tag
+        template.count = LumiTokens(line.body, template.tokens[:])
+        if template.count > 0 {
+            templates.count += 1
+        }
+    }
+}
+
+// The longest alternative of a tag in one words list at at.
+LumiTaggedFrom :: (words: *LumiWords, tag: s32, text: string, at: s32, word_start: bool) -> s32 {
+    best: s32 = -1
+    if words == null || tag < 0 || tag >= LUMI_WORD_TAGS {
+        return best
+    }
+    for index: cast(s32)0..words.counts[tag] - 1 {
+        matched := LumiPhraseFrom(text, at, words.phrases[tag * LUMI_WORD_ALTERNATIVES + index], word_start)
+        if matched > best {
+            best = matched
+        }
+    }
+    return best
+}
+
+LumiTaggedEither :: (matcher: *LumiMatcher, tag: s32, at: s32, word_start: bool) -> s32 {
+    active := LumiTaggedFrom(matcher.words, tag, matcher.input, at, word_start)
+    if matcher.english_words == matcher.words {
+        return active
+    }
+    english := LumiTaggedFrom(matcher.english_words, tag, matcher.input, at, word_start)
+    return ifx english > active then english else active
+}
+
+// A unit of the language or of English, which may follow its number
+// without a space, as in 9pm or 16h.
+LumiUnitAt :: (matcher: *LumiMatcher, tag: s32, at: s32) -> s32 {
+    return LumiTaggedEither(matcher, tag, at, false)
+}
+
+// A tagged word of the language or of English.
+LumiTaggedAt :: (matcher: *LumiMatcher, tag: s32, at: s32) -> s32 {
+    return LumiTaggedEither(matcher, tag, at, true)
+}
+
+LumiDigitsAt :: (text: string, at: s32, most: s32) -> s32 {
+    end := at
+    while end < cast(s32)text.count && end - at < most && text[end] >= cast(u8)48 &&
+    text[end] <= cast(u8)57 {
+        end += 1
+    }
+    return end
+}
+
+LumiDigitsValue :: (text: string) -> s32 {
+    value: s32 = 0
+    for byte: text {
+        value = value * 10 + cast(s32)(byte - cast(u8)48)
+    }
+    return value
+}
+
+LumiNumberAt :: (matcher: *LumiMatcher, at: s32, value: *s32) -> s32 {
+    end := LumiDigitsAt(matcher.input, at, 4)
+    if end > at {
+        if !LumiBoundary(matcher.input, end) && LumiCodeAt(matcher.input, end) >= 65 {
+            // Letters straight after digits belong to a unit, not a count.
+            return -1
+        }
+        value.* = LumiDigitsValue(matcher.input[at:end])
+        return end
+    }
+    best: s32 = -1
+    for index: cast(s32)0..cast(s32)9 {
+        matched := LumiTaggedAt(matcher, LUMI_WORD_ONE + index, at)
+        if matched > best {
+            best = matched
+            value.* = index + 1
+        }
+    }
+    return best
+}
+
+// A clock time: 7, 7:30, 19.30, 7 am or 7pm. Returns its end and the
+// minutes since midnight, or -1.
+LumiTimeAt :: (matcher: *LumiMatcher, at: s32, minutes: *s32) -> s32 {
+    text := matcher.input
+    end := LumiDigitsAt(text, at, 2)
+    if end == at {
+        return -1
+    }
+    hour := LumiDigitsValue(text[at:end])
+    minute: s32 = 0
+    if end + 2 < cast(s32)text.count && (text[end] == cast(u8)58 || text[end] == cast(u8)46) {
+        minute_end := LumiDigitsAt(text, end + 1, 2)
+        if minute_end == end + 3 {
+            minute = LumiDigitsValue(text[end + 1:minute_end])
+            end = minute_end
+        }
+    }
+    if minute > 59 {
+        return -1
+    }
+    after := LumiSkipSpace(text, end)
+    // "8 o'clock", "8 Uhr abends", "8時": a clock word, then morning or
+    // evening.
+    oclock := LumiUnitAt(matcher, LUMI_WORD_OCLOCK, after)
+    if oclock > 0 {
+        end = oclock
+        after = LumiSkipSpace(text, end)
+    }
+    am := LumiUnitAt(matcher, LUMI_WORD_AM, after)
+    pm := LumiUnitAt(matcher, LUMI_WORD_PM, after)
+    if am > 0 || pm > 0 {
+        if hour < 1 || hour > 12 {
+            return -1
+        }
+        if hour == 12 {
+            hour = 0
+        }
+        if pm > am {
+            hour += 12
+            end = pm
+        } else {
+            end = am
+        }
+    }
+    if hour > 23 || (!LumiBoundary(text, end) && LumiCodeAt(text, end) >= 65) {
+        return -1
+    }
+    minutes.* = hour * 60 + minute
+    return end
+}
+
+// A duration with its unit: 8 hours, 16h, 1.5 hours, 90 minutes, or 8:00.
+LumiLengthAt :: (matcher: *LumiMatcher, at: s32, minutes: *s32, unit: *s32) -> s32 {
+    text := matcher.input
+    end := LumiDigitsAt(text, at, 3)
+    if end == at {
+        return -1
+    }
+    whole := LumiDigitsValue(text[at:end])
+    if end + 2 < cast(s32)text.count && text[end] == cast(u8)58 {
+        minute_end := LumiDigitsAt(text, end + 1, 2)
+        if minute_end != end + 3 {
+            return -1
+        }
+        part := LumiDigitsValue(text[end + 1:minute_end])
+        if part > 59 {
+            return -1
+        }
+        hours_word := LumiUnitAt(matcher, LUMI_WORD_HOURS, LumiSkipSpace(text, minute_end))
+        minutes.* = whole * 60 + part
+        unit.* = 60
+        return ifx hours_word > 0 then hours_word else minute_end
+    }
+    tenths: s32 = 0
+    if end + 1 < cast(s32)text.count && (text[end] == cast(u8)46 || text[end] == cast(u8)44) &&
+    text[end + 1] >= cast(u8)48 && text[end + 1] <= cast(u8)57 {
+        tenths = cast(s32)(text[end + 1] - cast(u8)48)
+        end = LumiDigitsAt(text, end + 1, 3)
+    }
+    after := LumiSkipSpace(text, end)
+    hours := LumiUnitAt(matcher, LUMI_WORD_HOURS, after)
+    minute_unit := LumiUnitAt(matcher, LUMI_WORD_MINUTES, after)
+    if hours > minute_unit {
+        minutes.* = whole * 60 + tenths * 6
+        unit.* = 60
+        return hours
+    }
+    if minute_unit > 0 && tenths == 0 {
+        minutes.* = whole
+        unit.* = 1
+        return minute_unit
+    }
+    return -1
+}
+
+LumiDayAt :: (matcher: *LumiMatcher, at: s32, day: *s32) -> s32 {
+    best: s32 = -1
+    for index: cast(s32)0..cast(s32)6 {
+        matched := LumiTaggedAt(matcher, LUMI_WORD_MON + index, at)
+        if matched > best {
+            best = matched
+            day.* = index
+        }
+    }
+    return best
+}
+
+// The ends of weekday lists at at, shortest first: "mon", "mon and wed".
+LumiDays :: struct {
+    ends: [7]s32
+    masks: [7]s32
+    count: s32
+}
+
+LumiDaysAt :: (matcher: *LumiMatcher, at: s32) -> LumiDays {
+    found: LumiDays
+    mask: s32 = 0
+    position := at
+    while found.count < 7 {
+        day: s32 = 0
+        end := LumiDayAt(matcher, position, *day)
+        if end < 0 {
+            break
+        }
+        mask |= 1 << day
+        found.ends[found.count] = end
+        found.masks[found.count] = mask
+        found.count += 1
+        next := LumiSkipSpace(matcher.input, end)
+        if next < cast(s32)matcher.input.count && matcher.input[next] == cast(u8)44 {
+            next = LumiSkipSpace(matcher.input, next + 1)
+        }
+        joined := LumiTaggedAt(matcher, LUMI_WORD_AND, next)
+        if joined > 0 {
+            next = LumiSkipSpace(matcher.input, joined)
+        }
+        position = next
+    }
+    return found
+}
+
+// Folded equality of two phrases, ignoring how many spaces separate words.
+LumiSamePhrase :: (left: string, right: string) -> bool {
+    return left.count > 0 && LumiPhraseAt(left, 0, right) == cast(s32)left.count
+}
+
+// A word close to a habit's word: the same, one typo, or the same stem, as
+// "meditate" and "Meditation" or "медитации" and "Медитация".
+LumiNearWord :: (left: string, right: string) -> bool {
+    if CommandEqual(left, right) || CommandTypo(left, right) {
+        return true
+    }
+    a: s32 = 0
+    b: s32 = 0
+    shared: s32 = 0
+    while a < cast(s32)left.count && b < cast(s32)right.count {
+        x := Decode(left, a)
+        y := Decode(right, b)
+        if LumiFoldCode(x.value) != LumiFoldCode(y.value) {
+            break
+        }
+        shared += 1
+        a = x.after
+        b = y.after
+    }
+    left_count := Count(left)
+    right_count := Count(right)
+    longer := ifx left_count > right_count then left_count else right_count
+    return shared >= 5 && shared >= longer - 3
+}
+
+// The end of a near match of the title's words at at, or -1.
+LumiNearTitleAt :: (text: string, at: s32, title: string) -> s32 {
+    position := at
+    from: s32 = 0
+    words: s32 = 0
+    while from < cast(s32)title.count {
+        from = LumiSkipSpace(title, from)
+        if from >= cast(s32)title.count {
+            break
+        }
+        to := LumiWordEnd(title, from)
+        if to == from {
+            return -1
+        }
+        position = LumiSkipSpace(text, position)
+        end := LumiWordEnd(text, position)
+        if end == position || !LumiNearWord(text[position:end], title[from:to]) {
+            return -1
+        }
+        position = end
+        from = to
+        words += 1
+    }
+    return ifx words > 0 then position else -1
+}
+
+LumiHabitAllowed :: (matcher: *LumiMatcher, habit: LumiHabitRef) -> bool {
+    if matcher.habit_filter == LUMI_HABITS_ACTIVE {
+        return !habit.paused
+    }
+    if matcher.habit_filter == LUMI_HABITS_PAUSED {
+        return habit.paused
+    }
+    return true
+}
+
+LumiTokens :: (template: string, tokens: []LumiToken) -> s32 {
+    count: s32 = 0
+    at: s32 = 0
+    while at < cast(s32)template.count {
+        byte := template[at]
+        if byte == cast(u8)32 || byte == cast(u8)9 {
+            at += 1
+            continue
+        }
+        if count >= cast(s32)tokens.count {
+            return -1
+        }
+        if byte == cast(u8)91 || byte == cast(u8)93 {
+            tokens[count] = LumiToken.{.kind = ifx byte == cast(u8)91 then LUMI_TOKEN_OPEN else LUMI_TOKEN_CLOSE}
+            count += 1
+            at += 1
+            continue
+        }
+        if byte == cast(u8)123 {
+            end := at + 1
+            while end < cast(s32)template.count && template[end] != cast(u8)125 {
+                end += 1
+            }
+            if end >= cast(s32)template.count {
+                return -1
+            }
+            name := template[at + 1:end]
+            slot: s32 = 0
+            if name == "habit" { slot = LUMI_SLOT_HABIT }
+            if name == "name" { slot = LUMI_SLOT_NAME }
+            if name == "text" { slot = LUMI_SLOT_TEXT }
+            if name == "n" { slot = LUMI_SLOT_NUMBER }
+            if name == "time" { slot = LUMI_SLOT_TIME }
+            if name == "length" { slot = LUMI_SLOT_LENGTH }
+            if name == "days" { slot = LUMI_SLOT_DAYS }
+            if slot == 0 {
+                return -1
+            }
+            tokens[count] = LumiToken.{.kind = LUMI_TOKEN_SLOT, .slot = slot}
+            count += 1
+            at = end + 1
+            continue
+        }
+        end := at
+        while end < cast(s32)template.count && template[end] != cast(u8)32 &&
+        template[end] != cast(u8)91 && template[end] != cast(u8)93 && template[end] != cast(u8)123 {
+            end += 1
+        }
+        tokens[count] = LumiToken.{.kind = LUMI_TOKEN_WORDS, .text = template[at:end]}
+        count += 1
+        at = end
+    }
+    return count
+}
+
+LumiCloseOf :: (tokens: []LumiToken, open: s32) -> s32 {
+    index := open + 1
+    while index < cast(s32)tokens.count {
+        if tokens[index].kind == LUMI_TOKEN_CLOSE {
+            return index
+        }
+        index += 1
+    }
+    return cast(s32)tokens.count
+}
+
+// Free words from at to end: something other than spaces and punctuation.
+LumiWordsBetween :: (text: string, at: s32, end: s32) -> string {
+    return LumiTrimText(text[at:end])
+}
+
+LumiMatchFrom :: (matcher: *LumiMatcher, tokens: []LumiToken, index: s32, at: s32,
+    capture: LumiCapture, out: *LumiCapture) -> bool {
+    matcher.budget -= 1
+    if matcher.budget <= 0 {
+        return false
+    }
+    text := matcher.input
+    at = LumiSkipGap(text, at)
+    if index >= cast(s32)tokens.count {
+        if LumiSkipTail(text, at) != cast(s32)text.count {
+            return false
+        }
+        out.* = capture
+        return true
+    }
+    token := tokens[index]
+    if token.kind == LUMI_TOKEN_OPEN {
+        if LumiMatchFrom(matcher, tokens, index + 1, at, capture, out) {
+            return true
+        }
+        return LumiMatchFrom(matcher, tokens, LumiCloseOf(tokens, index) + 1, at, capture, out)
+    }
+    if token.kind == LUMI_TOKEN_CLOSE {
+        return LumiMatchFrom(matcher, tokens, index + 1, at, capture, out)
+    }
+    if token.kind == LUMI_TOKEN_WORDS {
+        end := LumiWordsAt(text, at, token.text)
+        return end >= 0 && LumiMatchFrom(matcher, tokens, index + 1, end, capture, out)
+    }
+    if token.slot == LUMI_SLOT_NAME || token.slot == LUMI_SLOT_TEXT {
+        // The fewest words that let the rest of the template match.
+        end := at
+        while end < cast(s32)text.count {
+            end = Decode(text, end).after
+            if !LumiBoundary(text, end) {
+                continue
+            }
+            words := LumiWordsBetween(text, at, end)
+            if words.count == 0 {
+                continue
+            }
+            next := capture
+            if token.slot == LUMI_SLOT_NAME {
+                next.name_at = at
+                next.name_end = end
+            } else {
+                next.text_at = at
+                next.text_end = end
+            }
+            if LumiMatchFrom(matcher, tokens, index + 1, end, next, out) {
+                return true
+            }
+            if matcher.budget <= 0 {
+                return false
+            }
+        }
+        return false
+    }
+    if token.slot == LUMI_SLOT_NUMBER {
+        value: s32 = 0
+        end := LumiNumberAt(matcher, at, *value)
+        if end < 0 || capture.number_count >= 2 {
+            return false
+        }
+        next := capture
+        next.numbers[next.number_count] = value
+        next.number_count += 1
+        return LumiMatchFrom(matcher, tokens, index + 1, end, next, out)
+    }
+    if token.slot == LUMI_SLOT_TIME {
+        minutes: s32 = 0
+        end := LumiTimeAt(matcher, at, *minutes)
+        if end < 0 || capture.time_count >= 2 {
+            return false
+        }
+        next := capture
+        next.times[next.time_count] = minutes
+        next.time_count += 1
+        return LumiMatchFrom(matcher, tokens, index + 1, end, next, out)
+    }
+    if token.slot == LUMI_SLOT_LENGTH {
+        minutes: s32 = 0
+        unit: s32 = 0
+        end := LumiLengthAt(matcher, at, *minutes, *unit)
+        if end < 0 || minutes <= 0 || capture.length_count >= 2 {
+            return false
+        }
+        next := capture
+        next.lengths[next.length_count] = minutes
+        next.length_count += 1
+        next.length_unit = unit
+        return LumiMatchFrom(matcher, tokens, index + 1, end, next, out)
+    }
+    if token.slot == LUMI_SLOT_DAYS {
+        days := LumiDaysAt(matcher, at)
+        choice := days.count - 1
+        while choice >= 0 {
+            next := capture
+            next.days |= days.masks[choice]
+            if LumiMatchFrom(matcher, tokens, index + 1, days.ends[choice], next, out) {
+                return true
+            }
+            choice -= 1
+        }
+        return false
+    }
+    return LumiMatchHabit(matcher, tokens, index, at, capture, out)
+}
+
+// {habit}: the habits whose names match here, exact ones first and longer
+// names before shorter. Several near matches of the same words are
+// ambiguous; the template still matches, and the caller asks.
+LumiMatchHabit :: (matcher: *LumiMatcher, tokens: []LumiToken, index: s32, at: s32,
+    capture: LumiCapture, out: *LumiCapture) -> bool {
+    text := matcher.input
+    ends: [LUMI_HABIT_CANDIDATES]s32
+    habits: [LUMI_HABIT_CANDIDATES]s32
+    exact: [LUMI_HABIT_CANDIDATES]bool
+    count: s32 = 0
+    for candidate: cast(s32)0..cast(s32)matcher.habits.count - 1 {
+        habit := matcher.habits[candidate]
+        if !LumiHabitAllowed(matcher, habit) || habit.title.count == 0 || count >= LUMI_HABIT_CANDIDATES {
+            continue
+        }
+        end := LumiPhraseAt(text, at, LumiLineTrim(habit.title))
+        is_exact := end >= 0
+        if !is_exact {
+            end = LumiNearTitleAt(text, at, habit.title)
+        }
+        if end >= 0 {
+            ends[count] = end
+            habits[count] = candidate
+            exact[count] = is_exact
+            count += 1
+        }
+    }
+    for pass: cast(s32)0..cast(s32)1 {
+        tried: s32 = 0
+        while tried < count {
+            // The longest remaining candidate of this pass.
+            best: s32 = -1
+            for candidate: cast(s32)0..count - 1 {
+                if ends[candidate] >= 0 && exact[candidate] == (pass == 0) &&
+                (best < 0 || ends[candidate] > ends[best]) {
+                    best = candidate
+                }
+            }
+            if best < 0 {
+                break
+            }
+            next := capture
+            next.habit = habits[best]
+            for other: cast(s32)0..count - 1 {
+                if other != best && ends[other] == ends[best] && exact[other] == exact[best] {
+                    next.habit = -2
+                    ends[other] = -1
+                }
+            }
+            end := ends[best]
+            ends[best] = -1
+            if LumiMatchFrom(matcher, tokens, index + 1, end, next, out) {
+                return true
+            }
+            tried += 1
+        }
+    }
+    return false
+}
+
+// Whether a template matches the whole input, filling out.
+LumiTemplateMatches :: (matcher: *LumiMatcher, template: *LumiTemplate, out: *LumiCapture) -> bool {
+    if template.count <= 0 {
+        return false
+    }
+    return LumiMatchFrom(matcher, template.tokens[:template.count], 0, 0, LumiNewCapture(), out)
+}

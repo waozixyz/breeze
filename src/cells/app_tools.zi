@@ -40,6 +40,7 @@
 #import, file "../habits/habit_questions.zi";
 #import, file "../habits/habit_answer_stats.zi";
 #import, file "../habits/habit_calendar.zi";
+#import, file "lumi_habit_tools.zi";
 #import "date_time"
 using AppNavRoute;
 
@@ -69,6 +70,23 @@ AppToolContext :: (app: *InnerBreeze) -> string {
         BuilderPrint(*out, ",\"notification_hour\":%", stored.reminder_hour)
         AppToolTrackingContext(*out, stored)
         BuilderPrint(*out, "}")
+    }
+    // Paused habits keep their days out of the list; Lumi can resume them.
+    BuilderPrint(*out, "],\"paused_habits\":[")
+    paused: s32 = 0
+    if app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        for index: cast(s32)0..app.habits.count - 1 {
+            stored := *app.habits.items[index]
+            if stored.deactivated == 0 || paused >= 8 {
+                continue
+            }
+            BuilderPrint(*out, "%{\"id\":", ifx paused == 0 then "" else ",")
+            LumiJsonString(*out, AppTextFromCString(*stored.id[0], HABIT_ID_SIZE))
+            BuilderPrint(*out, ",\"title\":")
+            LumiJsonString(*out, AppTextFromCString(*stored.name[0], HABIT_NAME_SIZE))
+            BuilderPrint(*out, "}")
+            paused += 1
+        }
     }
     BuilderPrint(*out, "],\"tasks\":[")
     if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
@@ -263,13 +281,26 @@ AppHabitScheduleTool :: (app: *InnerBreeze, arguments: string) -> string {
     }
     repeat_bytes: [16]u8
     rule: HabitSchedule
+    // Without repeat the habit keeps its days; only the notification changes.
+    keep_days := FieldAt(arguments, 0, "repeat") < 0
     rule.repeat = HabitScheduleRepeatNamed(ToolString(arguments, "repeat",
         repeat_bytes[:]))
-    if rule.repeat == 0 {
+    if keep_days {
+        rule = HabitScheduleCurrent(*app.habits.items[index])
+        rule.from = 0
+    } else if rule.repeat == 0 {
         return ToolFailure("repeat must be daily, weekly, monthly, yearly, formula or none")
     }
-    rule.every = 1
+    if !keep_days {
+        rule.every = 1
+    }
     every_at := FieldAt(arguments, 0, "every")
+    if keep_days && (every_at >= 0 || FieldAt(arguments, 0, "weekdays") >= 0 ||
+        FieldAt(arguments, 0, "month_days") >= 0 || FieldAt(arguments, 0, "formula") >= 0 ||
+        FieldAt(arguments, 0, "week_of_month") >= 0 || FieldAt(arguments, 0, "start") >= 0 ||
+        FieldAt(arguments, 0, "last_day_of_month") >= 0) {
+        return ToolFailure("planned days need repeat")
+    }
     if every_at >= 0 {
         every := ReadNumber(arguments, every_at)
         if !every.valid || every.value < 1 || every.value > cast(float64)HABIT_SCHEDULE_EVERY_MAX ||
@@ -345,7 +376,7 @@ AppHabitScheduleTool :: (app: *InnerBreeze, arguments: string) -> string {
     }
     formula_bytes: [HABIT_FORMULA_SIZE]u8
     formula := ToolString(arguments, "formula", formula_bytes[:])
-    if rule.repeat == HABIT_REPEAT_FORMULA {
+    if !keep_days && rule.repeat == HABIT_REPEAT_FORMULA {
         if !HabitScheduleSetFormula(*rule, formula) || !HabitFormulaValid(formula) {
             return ToolFailure("the formula does not read; see the tool description")
         }
@@ -630,6 +661,10 @@ AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string
     }
     if name == "set_habit_tracking" {
         return AppHabitTrackingTool(app, arguments)
+    }
+    if name == "create_habit" || name == "rename_habit" || name == "set_habit_active" ||
+    name == "read_habit" || name == "delete_habit" {
+        return LumiHabitTool(app, name, arguments)
     }
     if name == "read_style" || name == "inspect_style" || name == "preview_style" ||
     name == "save_style" || name == "reset_style" || name == "undo_style" ||

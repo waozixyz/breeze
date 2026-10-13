@@ -7,6 +7,7 @@
 #import "byte_text_linux"
 #import "auth"
 #import, file "lumi_online.zi";
+#import, file "lumi_connection.zi";
 #import, file "lumi_store.zi";
 #import, file "feedback_store.zi";
 #import, file "lumi_types.zi";
@@ -99,6 +100,9 @@ LumiTelegramBusy :: () -> bool {
 LumiTelegramStatusKey :: () -> string {
     if storage_has_sync_account() == 0 {
         return "lumi_telegram_account"
+    }
+    if !LumiNodeTrafficAllowed() {
+        return "lumi_telegram_offline"
     }
     if lumi_telegram_error {
         return "lumi_telegram_error"
@@ -329,6 +333,18 @@ LumiTelegramPump :: (app: *InnerBreeze) {
             }
         }
     }
+    // Offline the relay stops at once. Disconnecting still reaches the
+    // server, so access can always be withdrawn.
+    relay := LumiNodeTrafficAllowed()
+    if !relay && lumi_telegram_operation.active && lumi_telegram_stage != 5 {
+        CancelStoredOperation(*lumi_telegram_operation)
+        lumi_telegram_stage = 0
+        lumi_telegram_ack = 0
+        lumi_telegram_waiting = false
+    }
+    if !relay {
+        lumi_telegram_link_requested = false
+    }
     if lumi_telegram_operation.active { return }
     now := TelegramNow(null)
     requested := lumi_telegram_disconnect_requested || lumi_telegram_link_requested
@@ -358,6 +374,9 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         if !LumiTelegramRequest("POST", "/api/v1/lumi/telegram/link", "{}", 1) {
             lumi_telegram_error = true
         }
+        return
+    }
+    if !relay {
         return
     }
     lumi_telegram_retry = now + LUMI_TELEGRAM_POLL_SECONDS

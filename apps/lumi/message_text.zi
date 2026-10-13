@@ -51,27 +51,35 @@ LumiTextClosing :: (value: string, at: s32) -> s32 {
     return -1
 }
 
-LumiFormatMessage :: (value: string, formatted: bool) -> LumiMessageText {
-    result: LumiMessageText
+LumiFormatCounts :: struct {
+    count: s32
+    strong_count: s32
+}
+
+// Formats into caller buffers, for text longer than a chat message such
+// as Lumi's online terms. Bytes that do not fit are left out.
+LumiFormatInto :: (value: string, formatted: bool, bytes: []u8, strong: []TextRange) -> LumiFormatCounts {
+    result: LumiFormatCounts
+    limit := cast(s32)bytes.count - 1
     at: s32 = 0
     code: bool
-    while at < value.count && result.count < LUMI_INPUT_MAX - 1 {
+    while at < value.count && result.count < limit {
         byte := value[at]
         if formatted && byte == cast(u8)96 && !LumiTextEscaped(value, at) {
             code = !code
         }
-        if formatted && !code && LumiTextMarker(value, at) && result.strong_count < 256 {
+        if formatted && !code && LumiTextMarker(value, at) && result.strong_count < cast(s32)strong.count {
             end := LumiTextClosing(value, at)
             if end >= 0 {
                 range := TextRange.{.start = result.count}
                 at += 2
-                while at < end && result.count < LUMI_INPUT_MAX - 1 {
-                    result.bytes[result.count] = value[at]
+                while at < end && result.count < limit {
+                    bytes[result.count] = value[at]
                     result.count += 1
                     at += 1
                 }
                 range.end = result.count
-                result.strong[result.strong_count] = range
+                strong[result.strong_count] = range
                 result.strong_count += 1
                 at = end + 2
                 continue
@@ -82,9 +90,17 @@ LumiFormatMessage :: (value: string, formatted: bool) -> LumiMessageText {
             at += 1
             byte = value[at]
         }
-        result.bytes[result.count] = byte
+        bytes[result.count] = byte
         result.count += 1
         at += 1
     }
+    return result
+}
+
+LumiFormatMessage :: (value: string, formatted: bool) -> LumiMessageText {
+    result: LumiMessageText
+    counts := LumiFormatInto(value, formatted, result.bytes[:], result.strong[:])
+    result.count = counts.count
+    result.strong_count = counts.strong_count
     return result
 }

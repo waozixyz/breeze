@@ -7,6 +7,9 @@
 #import, file "../../src/core/types.zi";
 #import, file "engine.zi";
 #import, file "lumi_view.zi";
+#import, file "habit_patterns.zi";
+#import, file "habit_intent.zi";
+#import, file "habit_harness.zi";
 
 host_api :: #system_library "host_api";
 ReadLumiHost :: () -> LumiMessage #foreign host_api;
@@ -24,6 +27,14 @@ ReadLumiToolsHost :: () -> LumiTools #foreign host_api;
 SetLumiHabitChoiceHost :: (choosing: bool) #foreign host_api;
 SetLumiDiaryChoiceHost :: (choosing: bool) #foreign host_api;
 StartLumiOnlineHost :: (input: string) -> bool #foreign host_api;
+LumiToolHost :: (name: string, arguments: string) -> string #foreign host_api;
+ConfirmLumiDeleteHost :: (confirmed: bool) -> bool #foreign host_api;
+LumiEnglishLocaleHost :: (key: string) -> string #foreign host_api;
+habit_revision: s64 = -1;
+habit_active: LumiCompiled;
+habit_english: LumiCompiled;
+habit_english_extra: bool;
+habit_words: LumiReplyWords;
 
 LumiAskHabit :: (tools: LumiTools) {
     if tools.habit_count == 0 {
@@ -65,6 +76,130 @@ LumiCommandSet :: () -> LumiCommands {
     return command_cache
 }
 
+// The habit templates of the app's language and of English, and the words
+// of Lumi's habit answers, read again when the language changes.
+LumiHabitLanguage :: () {
+    revision := LumiLocaleRevisionHost()
+    if revision == habit_revision {
+        return
+    }
+    habit_revision = revision
+    active := LumiLanguage.{.patterns = LumiLocaleHost("lumi_habit_patterns"),
+        .clauses = LumiLocaleHost("lumi_habit_clauses"), .words = LumiLocaleHost("lumi_habit_words")}
+    english := LumiLanguage.{.patterns = LumiEnglishLocaleHost("lumi_habit_patterns"),
+        .clauses = LumiEnglishLocaleHost("lumi_habit_clauses"),
+        .words = LumiEnglishLocaleHost("lumi_habit_words")}
+    LumiCompileLanguage(active, *habit_active)
+    habit_english_extra = english.patterns != active.patterns
+    if habit_english_extra {
+        LumiCompileLanguage(english, *habit_english)
+    }
+    days: [7]string = .[LumiLocaleHost("habit_day_mon"), LumiLocaleHost("habit_day_tue"),
+    LumiLocaleHost("habit_day_wed"), LumiLocaleHost("habit_day_thu"), LumiLocaleHost("habit_day_fri"),
+    LumiLocaleHost("habit_day_sat"), LumiLocaleHost("habit_day_sun")]
+    habit_words = LumiReplyWords.{.created = LumiLocaleHost("habit_change_created"),
+        .renamed = LumiLocaleHost("habit_change_name"), .paused = LumiLocaleHost("habit_change_paused"),
+        .resumed = LumiLocaleHost("habit_change_resumed"),
+        .question_added = LumiLocaleHost("habit_change_question_added"),
+        .question_removed = LumiLocaleHost("habit_change_question_removed"),
+        .every_day = LumiLocaleHost("habit_every_day"), .every_n_days = LumiLocaleHost("habit_every_n_days"),
+        .days = days, .reminder = LumiLocaleHost("lumi_habit_reminder"),
+        .no_reminder = LumiLocaleHost("lumi_habit_no_reminder"),
+        .check = LumiLocaleHost("habit_tracking_check"), .count = LumiLocaleHost("habit_tracking_count"),
+        .span = LumiLocaleHost("habit_tracking_span"), .yes = LumiLocaleHost("habit_answer_yes"),
+        .no = LumiLocaleHost("habit_answer_no"), .longer = LumiLocaleHost("habit_span_goal_longer"),
+        .shorter = LumiLocaleHost("habit_span_goal_shorter"),
+        .later_than_average = LumiLocaleHost("habit_goal_later_than_average"),
+        .above_average = LumiLocaleHost("habit_goal_above_average"),
+        .earlier_than_average = LumiLocaleHost("habit_goal_earlier_than_average"),
+        .below_average = LumiLocaleHost("habit_goal_below_average"),
+        .after = LumiLocaleHost("habit_goal_after"), .at_least = LumiLocaleHost("habit_goal_at_least"),
+        .before = LumiLocaleHost("habit_goal_before"), .at_most = LumiLocaleHost("habit_goal_at_most"),
+        .between = LumiLocaleHost("habit_goal_between"), .and_word = LumiLocaleHost("habit_goal_and")}
+}
+
+// English, or the active language itself when it is English.
+LumiEnglishCompiled :: () -> *LumiCompiled {
+    return ifx habit_english_extra then *habit_english else *habit_active
+}
+
+// Answers a habit request on the device with the same app tools the online
+// model uses. False leaves the message to the rest of Lumi: other
+// commands, the model online, or the offline answer.
+LumiHabitRespond :: (input: string, tools: LumiTools) -> bool {
+    if (tools.available_apps & LUMI_HABITS) == 0 {
+        return false
+    }
+    LumiHabitLanguage()
+    habits: [LUMI_HABITS_MAX]LumiHabitRef
+    count: s32 = 0
+    for index: cast(s32)0..tools.habit_count - 1 {
+        if count >= LUMI_HABITS_MAX {
+            break
+        }
+        habit := ReadLumiHabitHost(index)
+        if habit.id.count > 0 && habit.title.count > 0 {
+            habits[count] = LumiHabitRef.{.id = habit.id, .title = habit.title}
+            count += 1
+        }
+    }
+    count = LumiPausedHabits(LumiToolHost("read_context", "{}"), habits[:], count)
+    known := habits[:count]
+    plan := LumiHabitParseCompiled(input, *habit_active, LumiEnglishCompiled(), known)
+    if plan.kind == 0 {
+        return false
+    }
+    if plan.habit == -2 {
+        AppendLumiChatHost(LumiLocaleHost("lumi_ambiguous"), false)
+        return true
+    }
+    title := plan.name
+    if plan.habit >= 0 {
+        title = known[plan.habit].title
+    }
+    if plan.kind == LUMI_HABIT_EXISTS {
+        values: [1]string = .[title]
+        AppendLumiChatHost(LumiFill(LumiLocaleHost("lumi_habit_exists"), values[:]), false)
+        return true
+    }
+    questions := "[]"
+    if (plan.kind == LUMI_HABIT_ASK || plan.kind == LUMI_HABIT_UNASK) && plan.habit >= 0 {
+        questions = LumiQuestionsOf(LumiToolHost("read_habit", LumiIdArguments(known[plan.habit].id)))
+        if questions.count == 0 {
+            return false
+        }
+    }
+    calls: [LUMI_CALLS_MAX]LumiToolCall
+    total := LumiHabitCalls(plan, known, questions, calls[:])
+    if total <= 0 {
+        return false
+    }
+    created := ""
+    for index: cast(s32)0..total - 1 {
+        arguments := calls[index].arguments
+        if created.count > 0 {
+            arguments = LumiReplaceNew(arguments, created)
+        }
+        result := LumiToolHost(calls[index].name, arguments)
+        if !LumiToolOk(result) {
+            values: [1]string = .[title]
+            AppendLumiChatHost(LumiFill(LumiLocaleHost("lumi_habit_failed"), values[:]), false)
+            return true
+        }
+        if calls[index].name == "create_habit" {
+            created = LumiToolText(result, "id")
+            title = LumiToolText(result, "title")
+        }
+        if calls[index].name == "delete_habit" {
+            // The host asked in the chat whether to delete; the next
+            // message answers.
+            return true
+        }
+    }
+    AppendLumiChatHost(LumiHabitReply(habit_words, plan, title), false)
+    return true
+}
+
 LumiRespond :: (input: string) {
     input = LumiTrim(input)
     if input.count == 0 || input.count >= LUMI_INPUT_MAX {
@@ -72,6 +207,20 @@ LumiRespond :: (input: string) {
     }
     AppendLumiChatHost(input, true)
     tools := ReadLumiToolsHost()
+    if tools.confirming_delete {
+        // Lumi asked whether to delete a habit: yes deletes, no keeps it,
+        // and anything else keeps it and is read as a new request.
+        LumiHabitLanguage()
+        answer := LumiYesNo(input, *habit_active, LumiEnglishCompiled())
+        unused ConfirmLumiDeleteHost(answer == 1)
+        if answer == 1 {
+            return
+        }
+        if answer == 2 {
+            AppendLumiChatHost(LumiLocaleHost("lumi_cancelled"), false)
+            return
+        }
+    }
     help_requested := LumiEqual(input, "help") || LumiEqual(input, "/help") || LumiEqual(input, "how can you help?")
     if (tools.choosing_diary || tools.choosing_habit) &&
     (LumiEqual(input, "/cancel") || LumiEqual(input, "cancel") || LumiEqual(input, LumiLocaleHost("cancel_button"))) {
@@ -80,11 +229,17 @@ LumiRespond :: (input: string) {
         AppendLumiChatHost(LumiLocaleHost("lumi_cancelled"), false)
         return
     }
-    action := LumiIntent(input, LumiCommandSet())
+    action := LumiIntentWith(input, LumiCommandSet(), false)
     if tools.choosing_diary && !help_requested {
         action = LumiAction.{.kind = LUMI_WRITE_DIARY, .title = input}
     } else if action.kind == 0 && tools.choosing_habit && !help_requested {
         action = LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = input}
+    }
+    if action.kind == 0 && !help_requested && !tools.choosing_diary && !tools.choosing_habit {
+        if LumiHabitRespond(input, tools) {
+            return
+        }
+        action = LumiIntent(input, LumiCommandSet())
     }
     reply := ifx help_requested then "lumi_help" else "lumi_unknown"
     if action.kind != 0 && !LumiActionAvailable(action, tools.available_apps) {
