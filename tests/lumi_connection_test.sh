@@ -96,4 +96,4 @@ if grep -q 'sk-test-lumi-provider' "$work/output.txt"; then
     echo 'the provider key reached the output' >&2
     exit 1
 fi
-printf '%s\n' 'Lumi connection: nothing sent before agreeing or offline; server and own provider after agreeing; key only in its header; withdrawal passed'
+printf '%s\n' 'Lumi connection: nothing sent before agreeing or offline, diary spelling and habit icons included; server and own provider after agreeing; key only in its header; withdrawal passed'

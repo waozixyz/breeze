@@ -6,6 +6,12 @@
 #import, file "../src/cells/lumi_telegram.zi";
 #import, file "../src/cells/feedback_store.zi";
 #import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/diary_spelling.zi";
+#import, file "../src/cells/habit_icon_choice.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_icons.zi";
+#import "drawing_props"
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/app/text_buffers.zi";
@@ -38,6 +44,9 @@ chat_requests: s32;
 provider_requests: s32;
 feedback_requests: s32;
 telegram_requests: s32;
+spelling_requests: s32;
+icon_requests: s32;
+icon_habits: Habits;
 provider_url: [256]u8;
 provider_token: [128]u8;
 provider_body: [65536]u8;
@@ -64,6 +73,14 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
     if request.url == "https://api.waozi.xyz/api/v1/chat/completions" {
         chat_requests += 1
         return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the server\"},\"remaining\":19}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/chat/spelling" {
+        spelling_requests += 1
+        return AppCopyText("{\"text\":\"Hello\"}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/chat/habit-icons" {
+        icon_requests += 1
+        return AppCopyText("{\"icons\":[\"book\"]}", output)
     }
     if ContainsFoldASCII(request.url, "/api/v1/feedback") {
         feedback_requests += 1
@@ -153,6 +170,12 @@ Check :: () -> s32 {
     defer { PackageFree(draft) }
     check_true("feedback confirmed", FeedbackChoice(draft, 1))
     Pump(*app)
+    // Diary spelling and habit icons follow the same agreement, quietly.
+    check_true("spelling waits quietly", DiarySpellingStart("Helo") == "" && !DiarySpellingWaiting())
+    check_true("a habit without an icon", habits_add_custom(*icon_habits, "Read",
+        Color.{.r = 99, .g = 196, .b = 165, .a = 255}, 0, 0) >= 0)
+    check_true("icons wait quietly", !HabitIconChoiceStart(*icon_habits))
+    check_int("the habit keeps its letter for now", icon_habits.items[0].icon, 0)
     check_int("no request before agreeing", requests, 0)
 
     // Agreeing sends the waiting feedback, polls replies and Telegram, and
@@ -167,6 +190,24 @@ Check :: () -> s32 {
     Pump(*app)
     check_int("one request to the server's AI", chat_requests, 1)
     check_true("the server's answer arrives", LastRow() == "Hello from the server")
+    check_true("spelling starts after agreeing", DiarySpellingStart("Helo") == "" && DiarySpellingWaiting())
+    spelled := DiarySpellingPoll()
+    for step: cast(s32)0..19 {
+        if spelled.finished {
+            break
+        }
+        spelled = DiarySpellingPoll()
+    }
+    check_true("spelling answered", spelled.finished && spelled.text == "Hello")
+    check_int("one spelling request", spelling_requests, 1)
+    check_true("icons asked after agreeing", HabitIconChoiceStart(*icon_habits))
+    for step: cast(s32)0..19 {
+        if HabitIconChoicePoll(*icon_habits) {
+            break
+        }
+    }
+    check_int("one icon request", icon_requests, 1)
+    check_true("the habit got its icon", icon_habits.items[0].icon == HabitIconNumber("book"))
 
     // Offline sends nothing, and switching off stops a turn in flight.
     check_true("a turn starts", Ask("and tomorrow?"))
@@ -178,8 +219,28 @@ Check :: () -> s32 {
     Pump(*app)
     check_true("switching off ends the turn", !LumiOnlineWaiting() && !lumi_online_operation.active)
     check_true("offline answer again", Ask("and next week?") && LastRow() == "OFFLINE")
+    check_true("no spelling while offline", DiarySpellingStart("Helo") == "" && !DiarySpellingWaiting())
+    check_true("a second habit without an icon", habits_add_custom(*icon_habits, "Walk",
+        Color.{.r = 99, .g = 196, .b = 165, .a = 255}, 0, 0) >= 0)
+    check_true("no icons while offline", !HabitIconChoiceStart(*icon_habits))
     Pump(*app)
     check_int("nothing is sent while offline", requests, before)
+
+    // Switching off ends a spelling check and an icon question in flight;
+    // the habit is asked about again once Lumi is online.
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    check_true("spelling in flight", DiarySpellingStart("Helo") == "" && DiarySpellingWaiting())
+    check_true("icons in flight", HabitIconChoiceStart(*icon_habits))
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    check_true("switching off ends the check without an answer",
+        !DiarySpellingPoll().finished && !DiarySpellingWaiting())
+    check_true("switching off ends the question", !HabitIconChoicePoll(*icon_habits) &&
+        !habit_icon_operation.active && icon_habits.items[1].icon == 0)
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    check_true("asked again once online", HabitIconChoiceStart(*icon_habits))
+    CancelStoredOperation(*habit_icon_operation)
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    before = requests
 
     // An own provider needs its own agreement, then gets the request
     // straight from this device with the key in its Authorization header.
