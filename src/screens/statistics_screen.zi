@@ -522,10 +522,12 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
     }
 }
 
-// ---- What a habit's answers add up to ------------------------------------
+// ---- What a habit's entries add up to ------------------------------------
 
 statistics_answers: [HABIT_QUESTION_MAX]HabitAnswerStats;
 statistics_answers_count: s32;
+// A span habit's lengths, starts and ends.
+statistics_spans: [3]HabitAnswerStats;
 statistics_answers_revision: s64 = -1;
 statistics_answers_today: s32;
 statistics_answers_habit: [HABIT_ID_SIZE]u8;
@@ -557,7 +559,7 @@ statistics_today_index :: () -> s32 {
     return local.year * 10000 + local.month * 100 + local.day
 }
 
-// The habit's answer statistics, read again when its data or the day changes.
+// The habit's entry statistics, read again when its data or the day changes.
 statistics_answer_stats :: (active: *Habit) -> s32 {
     today := statistics_today_index()
     habit_id := AppTextFromCString(*active.id[0], HABIT_ID_SIZE)
@@ -580,6 +582,8 @@ statistics_answer_stats :: (active: *Habit) -> s32 {
             *statistics_answers[statistics_answers_count])
         statistics_answers_count += 1
     }
+    unused storage_habit_span_stats(active, days[:], *statistics_spans[0],
+        *statistics_spans[1], *statistics_spans[2])
     return statistics_answers_count
 }
 
@@ -587,29 +591,46 @@ statistics_answer_title_height :: (title: string, width: s32) -> s32 {
     return AppParagraphHeight(title, width, Text16, AppScale(3))
 }
 
-// One question's statistics below its title: two figures, then the days'
+STATISTICS_METRIC_ROW :: 66 + 22
+STATISTICS_CHART_ROW :: 128 + 24
+
+// One question's statistics below its title: two figures, then its
 // numbers or times as a chart, or the latest written answers.
 statistics_answer_height :: (stats: *HabitAnswerStats, title: string,
     width: s32) -> s32 {
     height := statistics_answer_title_height(title, width) + AppScale(10) +
-    AppScale(66) + AppScale(22)
+    AppScale(STATISTICS_METRIC_ROW)
     if stats.answer_type == HABIT_ANSWER_TIME ||
     stats.answer_type == HABIT_ANSWER_NUMBER {
-        height += AppScale(128) + AppScale(24)
+        height += AppScale(STATISTICS_CHART_ROW)
     } else if stats.answer_type == HABIT_ANSWER_TEXT {
         height += stats.recent_count * AppScale(26) + AppScale(14)
     }
     return height
 }
 
+// A span habit's statistics: their length and how many were good, a chart
+// of the lengths, and when they started and ended on average.
+statistics_span_height :: (width: s32) -> s32 {
+    return statistics_answer_title_height(LocaleText("habit_stats_spans_title"),
+        width) + AppScale(10) + AppScale(STATISTICS_METRIC_ROW) +
+    AppScale(STATISTICS_CHART_ROW) + AppScale(STATISTICS_METRIC_ROW)
+}
+
 statistics_answers_height :: (active: *Habit, width: s32) -> s32 {
-    if active == null || active.question_count <= 0 {
+    if active == null || (active.question_count <= 0 && active.span == 0) {
         return 0
     }
     count := statistics_answer_stats(active)
-    // The answers start a little below the page's fixed height.
-    height := AppScale(48) + statistics_answer_title_height(
-        LocaleText("habit_stats_answers_title"), width) + AppScale(10)
+    // The entries start a little below the page's fixed height.
+    height := AppScale(48)
+    if active.span != 0 {
+        height += statistics_span_height(width)
+    }
+    if count > 0 {
+        height += statistics_answer_title_height(
+            LocaleText("habit_stats_answers_title"), width) + AppScale(10)
+    }
     index: s32 = 0
     while index < count {
         height += statistics_answer_height(*statistics_answers[index],
@@ -624,22 +645,36 @@ statistics_answer_value_text :: (stats: *HabitAnswerStats, value: s32,
     if stats.answer_type == HABIT_ANSWER_TIME {
         return HabitAnswerTimeText(value, output)
     }
+    if stats.answer_type == HABIT_ANSWER_SPAN {
+        return HabitSpanText(value, output)
+    }
     unused AppFormatS32(value, output)
     return AppTextFromCString(*output[0], cast(s32)output.count)
 }
 
-// The days oldest to newest: bars from zero for numbers, dots between the
-// earliest and latest time for times.
+// Entries the goal found good of those it judged, as "12/15".
+statistics_on_target_text :: (stats: *HabitAnswerStats, output: []u8) -> string {
+    args: [2]FormatArg
+    args[0].number = stats.good
+    args[1].number = stats.judged
+    unused FormatTemplate("%d/%d", args[:], output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// The days oldest to newest: bars from zero for numbers and lengths, dots
+// between the earliest and latest time for times. Values the goal finds
+// good are in the habit's color and the rest are muted; the goal's bounds
+// are lines across the chart.
 statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
     width: s32, accent: Color) {
     chart_h := AppScale(128)
-    axis_w := AppScale(52)
+    axis_w := AppScale(56)
     plot_x := x + axis_w
     plot_y := y + AppScale(12)
     plot_w := width - axis_w - AppScale(10)
     plot_h := chart_h - AppScale(24)
     DrawRectangle(x, y, width, chart_h, DarkenColor(StyleTokenColor("canvas"), 7))
-    if stats.answered <= 0 || plot_w <= 0 {
+    if stats.point_count <= 0 || plot_w <= 0 {
         return
     }
     is_time := stats.answer_type == HABIT_ANSWER_TIME
@@ -668,93 +703,122 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
             .text = FrameTextHold(*CurrentApp().ui.frame_text,
             statistics_answer_value_text(stats, low, label[:])),
             .font = Text12, .wrap = cast(TextWrap)TextWrapNone})
+    muted := Fade(StyleTokenColor("text"), 0.35)
+    // The goal's bounds, where they fall inside the chart.
+    bounds: [2]s32 = .[-1, -1]
+    if stats.goal.kind == HABIT_GOAL_AT_LEAST || stats.goal.kind == HABIT_GOAL_BETWEEN {
+        bounds[0] = stats.goal.low
+    }
+    if stats.goal.kind == HABIT_GOAL_AT_MOST || stats.goal.kind == HABIT_GOAL_BETWEEN {
+        bounds[1] = stats.goal.high
+    }
+    for bound: bounds {
+        if bound >= low && bound <= high {
+            line_y := plot_y + plot_h - (bound - low) * plot_h / (high - low)
+            DrawRectangle(plot_x, line_y, plot_w, AppScale(1), Fade(accent, 0.6))
+        }
+    }
     slot_w := plot_w / HABIT_ANSWER_STATS_DAYS
     if slot_w < 1 { slot_w = 1 }
-    day: s32 = 0
-    while day < HABIT_ANSWER_STATS_DAYS {
-        value := stats.values[day]
-        if value >= 0 {
-            slot_x := plot_x + day * slot_w
-            if is_time {
-                dot := AppScale(8)
-                dot_y := plot_y + (high - value) * (plot_h - dot) / (high - low)
-                DrawRectangle(slot_x + (slot_w - dot) / 2, dot_y, dot, dot, accent)
-            } else {
-                bar_h := value * plot_h / high
-                if bar_h < AppScale(3) { bar_h = AppScale(3) }
-                bar_w := slot_w - AppScale(2)
-                if bar_w < 1 { bar_w = 1 }
-                DrawRectangle(slot_x + 1, plot_y + plot_h - bar_h, bar_w,
-                    bar_h, LightenColor(accent, 12))
-            }
-        }
-        day += 1
+    // Bars of one day share its slot side by side.
+    per_day: [HABIT_ANSWER_STATS_DAYS]s32
+    for point: stats.points[:stats.point_count] {
+        per_day[point.slot] += 1
     }
+    placed: [HABIT_ANSWER_STATS_DAYS]s32
+    for point: stats.points[:stats.point_count] {
+        color := ifx point.good == 0 then muted else accent
+        slot_x := plot_x + point.slot * slot_w
+        if is_time {
+            dot := AppScale(8)
+            dot_y := plot_y + (high - point.value) * (plot_h - dot) / (high - low)
+            DrawRectangle(slot_x + (slot_w - dot) / 2, dot_y, dot, dot, color)
+        } else {
+            share := slot_w / per_day[point.slot]
+            if share < 1 { share = 1 }
+            bar_h := (point.value - low) * plot_h / (high - low)
+            if bar_h < AppScale(3) { bar_h = AppScale(3) }
+            bar_w := share - AppScale(2)
+            if bar_w < 1 { bar_w = 1 }
+            DrawRectangle(slot_x + placed[point.slot] * share + 1,
+                plot_y + plot_h - bar_h, bar_w, bar_h,
+                ifx point.good == 0 then color else LightenColor(color, 12))
+            placed[point.slot] += 1
+        }
+    }
+}
+
+statistics_draw_metric_pair :: (x: s32, y: s32, width: s32,
+    first_label: string, first: string, second_label: string, second: string,
+    accent: Color) {
+    gap := AppScale(8)
+    half := (width - gap) / 2
+    statistics_draw_metric(x, y, half, AppScale(66), first_label,
+        FrameTextHold(*CurrentApp().ui.frame_text, first), accent)
+    statistics_draw_metric(x + half + gap, y, width - half - gap, AppScale(66),
+        second_label, FrameTextHold(*CurrentApp().ui.frame_text, second),
+        LightenColor(accent, 20))
 }
 
 statistics_draw_answer :: (stats: *HabitAnswerStats, title: string, x: s32,
     y: s32, width: s32, accent: Color) {
     y += statistics_draw_section_title(title, x, y, width) + AppScale(10)
-    metric_h := AppScale(66)
-    gap := AppScale(8)
-    half := (width - gap) / 2
     first: [48]u8
     second: [48]u8
     first_label := LocaleText("habit_stats_average")
     second_label := LocaleText("habit_stats_total")
     first_text := "-"
     second_text := "-"
-    if stats.answer_type == HABIT_ANSWER_YES_NO {
-        first_label = LocaleText("habit_answer_yes")
-        second_label = LocaleText("habit_stats_answered")
-        if stats.answered > 0 {
-            args: [1]FormatArg
-            args[0].number = (stats.yes * 100 + stats.answered / 2) / stats.answered
-            unused FormatTemplate("%d%%", args[:], first[:])
-            first_text = AppTextFromCString(*first[0], 48)
-        }
-    } else if stats.answer_type == HABIT_ANSWER_TEXT {
-        first_label = LocaleText("habit_stats_answered")
-    } else if stats.answered > 0 {
-        average := HabitAnswerStatsAverage100(stats)
-        if stats.answer_type == HABIT_ANSWER_TIME {
-            first_text = HabitAnswerTimeText(cast(s32)((average + 50) / 100), first[:])
-            low: [16]u8
-            high: [16]u8
-            args: [2]FormatArg
-            args[0].text = HabitAnswerTimeText(stats.lowest, low[:])
-            args[0].is_text = true
-            args[1].text = HabitAnswerTimeText(stats.highest, high[:])
-            args[1].is_text = true
-            unused FormatTemplate("%s - %s", args[:], second[:])
-            second_text = AppTextFromCString(*second[0], 48)
-            second_label = LocaleText("habit_stats_time_range")
-        } else {
-            first_text = HabitAnswerDecimalText(average, first[:])
-            unused AppFormatS64(stats.sum, second[:])
-            second_text = AppTextFromCString(*second[0], 48)
-        }
-    }
     answered: [24]u8
     answered_args: [2]FormatArg
-    answered_args[0].number = stats.answered
+    answered_args[0].number = stats.days
     answered_args[1].number = HABIT_ANSWER_STATS_DAYS
     unused FormatTemplate("%d/%d", answered_args[:], answered[:])
     if stats.answer_type == HABIT_ANSWER_TEXT {
-        statistics_draw_metric(x, y, width, metric_h, first_label,
+        statistics_draw_metric(x, y, width, AppScale(66),
+            LocaleText("habit_stats_answered"),
             FrameTextHold(*CurrentApp().ui.frame_text,
             AppTextFromCString(*answered[0], 24)), accent)
     } else {
         if stats.answer_type == HABIT_ANSWER_YES_NO {
+            first_label = LocaleText("habit_answer_yes")
+            second_label = LocaleText("habit_stats_answered")
             second_text = AppTextFromCString(*answered[0], 24)
+            if stats.answered > 0 {
+                args: [1]FormatArg
+                args[0].number = (stats.yes * 100 + stats.answered / 2) / stats.answered
+                unused FormatTemplate("%d%%", args[:], first[:])
+                first_text = AppTextFromCString(*first[0], 48)
+            }
+        } else if stats.point_count > 0 {
+            average := HabitAnswerStatsAverage100(stats)
+            if stats.answer_type == HABIT_ANSWER_TIME {
+                first_text = HabitAnswerTimeText(cast(s32)((average + 50) / 100), first[:])
+                low: [16]u8
+                high: [16]u8
+                args: [2]FormatArg
+                args[0].text = HabitAnswerTimeText(stats.lowest, low[:])
+                args[0].is_text = true
+                args[1].text = HabitAnswerTimeText(stats.highest, high[:])
+                args[1].is_text = true
+                unused FormatTemplate("%s - %s", args[:], second[:])
+                second_text = AppTextFromCString(*second[0], 48)
+                second_label = LocaleText("habit_stats_time_range")
+            } else {
+                first_text = HabitAnswerDecimalText(average, first[:])
+                unused AppFormatS64(stats.sum, second[:])
+                second_text = AppTextFromCString(*second[0], 48)
+            }
         }
-        statistics_draw_metric(x, y, half, metric_h, first_label,
-            FrameTextHold(*CurrentApp().ui.frame_text, first_text), accent)
-        statistics_draw_metric(x + half + gap, y, width - half - gap, metric_h,
-            second_label, FrameTextHold(*CurrentApp().ui.frame_text,
-            second_text), LightenColor(accent, 20))
+        // With a goal, the second figure is how many were on target.
+        if stats.judged > 0 {
+            second_label = LocaleText("habit_stats_on_target")
+            second_text = statistics_on_target_text(stats, second[:])
+        }
+        statistics_draw_metric_pair(x, y, width, first_label, first_text,
+            second_label, second_text, accent)
     }
-    y += metric_h + AppScale(22)
+    y += AppScale(STATISTICS_METRIC_ROW)
     if stats.answer_type == HABIT_ANSWER_TIME ||
     stats.answer_type == HABIT_ANSWER_NUMBER {
         statistics_draw_answer_chart(stats, x, y, width, accent)
@@ -783,12 +847,58 @@ statistics_draw_answer :: (stats: *HabitAnswerStats, title: string, x: s32,
     }
 }
 
-// Every question of the habit with what its answers add up to.
+// A span habit's lengths, how many were good, and when they started and
+// ended on average.
+statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
+    lengths := *statistics_spans[0]
+    y += statistics_draw_section_title(LocaleText("habit_stats_spans_title"),
+        x, y, width) + AppScale(10)
+    first: [48]u8
+    second: [48]u8
+    first_text := "-"
+    second_text := "-"
+    second_label := LocaleText("habit_stats_longest")
+    if lengths.point_count > 0 {
+        first_text = HabitSpanText(cast(s32)((HabitAnswerStatsAverage100(lengths) +
+            50) / 100), first[:])
+        second_text = HabitSpanText(lengths.highest, second[:])
+    }
+    if lengths.judged > 0 {
+        second_label = LocaleText("habit_stats_on_target")
+        second_text = statistics_on_target_text(lengths, second[:])
+    }
+    statistics_draw_metric_pair(x, y, width, LocaleText("habit_stats_average"),
+        first_text, second_label, second_text, accent)
+    y += AppScale(STATISTICS_METRIC_ROW)
+    statistics_draw_answer_chart(lengths, x, y, width, accent)
+    y += AppScale(STATISTICS_CHART_ROW)
+    starts := *statistics_spans[1]
+    ends := *statistics_spans[2]
+    start_text := "-"
+    end_text := "-"
+    if starts.point_count > 0 {
+        start_text = HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(starts) +
+            50) / 100), first[:])
+        end_text = HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(ends) +
+            50) / 100), second[:])
+    }
+    statistics_draw_metric_pair(x, y, width, LocaleText("habit_stats_started"),
+        start_text, LocaleText("habit_stats_ended"), end_text, accent)
+}
+
+// The habit's spans and every question with what its entries add up to.
 statistics_draw_answers :: (active: *Habit, x: s32, y: s32, width: s32) {
-    if active == null || active.question_count <= 0 {
+    if active == null || (active.question_count <= 0 && active.span == 0) {
         return
     }
     count := statistics_answer_stats(active)
+    if active.span != 0 {
+        statistics_draw_spans(x, y, width, active.color)
+        y += statistics_span_height(width)
+    }
+    if count <= 0 {
+        return
+    }
     y += statistics_draw_section_title(LocaleText("habit_stats_answers_title"),
         x, y, width) + AppScale(10)
     index: s32 = 0

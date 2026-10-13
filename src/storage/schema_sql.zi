@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS habit_days( habit_id TEXT NOT NULL,
  count INTEGER NOT NULL DEFAULT 0,
  session_count INTEGER NOT NULL DEFAULT 0,
  updated_at INTEGER NOT NULL,
- answers TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(habit_id,
 local_date));
 CREATE TABLE IF NOT EXISTS sync_remote_habit_map( old_id TEXT PRIMARY KEY,
@@ -232,9 +231,41 @@ SchemaHabitQuestions :: #string SQL
 ALTER TABLE habits ADD COLUMN questions TEXT NOT NULL DEFAULT ''
 SQL
 
-// A day's answers to its habit's questions, as a JSON array.
-SchemaDayAnswers :: #string SQL
-ALTER TABLE habit_days ADD COLUMN answers TEXT NOT NULL DEFAULT ''
+// A habit that measures a span from start to end, and its good spans.
+SchemaHabitSpan :: #string SQL
+ALTER TABLE habits ADD COLUMN span INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE habits ADD COLUMN span_goal INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE habits ADD COLUMN span_low INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE habits ADD COLUMN span_high INTEGER NOT NULL DEFAULT 0;
+SQL
+
+// A habit's entries: each a moment of a day, or a span from its start to
+// its end (0 while it runs), with its answers to the habit's questions as
+// a JSON array. An entry belongs to the day it started.
+SchemaHabitEntries :: #string SQL
+CREATE TABLE IF NOT EXISTS habit_entries( id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL,
+ habit_id TEXT NOT NULL,
+ local_date INTEGER NOT NULL,
+ started_at INTEGER NOT NULL,
+ ended_at INTEGER NOT NULL DEFAULT 0,
+ answers TEXT NOT NULL DEFAULT '',
+ deleted_at INTEGER NOT NULL DEFAULT 0,
+ updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS habit_entries_day ON habit_entries(habit_id,local_date);
+SQL
+
+// A build before entries kept a day's answers on the day; each becomes an
+// entry of that day.
+SchemaDayAnswersToEntries :: #string SQL
+INSERT OR IGNORE INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at)
+SELECT hd.habit_id||':'||hd.local_date,h.user_id,hd.habit_id,hd.local_date,hd.updated_at,hd.updated_at,hd.answers,0,hd.updated_at
+FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE hd.answers<>'';
+INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at)
+SELECT 'habit_entry',hd.habit_id||':'||hd.local_date,0,CAST(strftime('%s','now') AS INTEGER)
+FROM habit_days hd WHERE hd.answers<>''
+ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at;
+UPDATE habit_days SET answers='' WHERE answers<>'';
 SQL
 
 SchemaSessionMoodBefore :: #string SQL

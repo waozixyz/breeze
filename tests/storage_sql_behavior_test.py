@@ -46,7 +46,9 @@ db.executescript(
         user_id TEXT, kind TEXT, json TEXT, updated_at INTEGER,
         PRIMARY KEY(user_id, kind));
     CREATE TABLE sync_outbox(
-        entity_type TEXT, entity_id TEXT, local_date INTEGER);
+        entity_type TEXT, entity_id TEXT, local_date INTEGER,
+        queued_at INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(entity_type, entity_id, local_date));
     CREATE TABLE habits(
         id TEXT PRIMARY KEY, user_id TEXT, name TEXT, color_r INTEGER,
         color_g INTEGER, color_b INTEGER, sync_mode INTEGER,
@@ -56,11 +58,18 @@ db.executescript(
         deactivated INTEGER NOT NULL DEFAULT 0,
         icon INTEGER NOT NULL DEFAULT 0,
         schedule TEXT NOT NULL DEFAULT '',
-        questions TEXT NOT NULL DEFAULT '');
+        questions TEXT NOT NULL DEFAULT '',
+        span INTEGER NOT NULL DEFAULT 0,
+        span_goal INTEGER NOT NULL DEFAULT 0,
+        span_low INTEGER NOT NULL DEFAULT 0,
+        span_high INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE habit_entries(
+        id TEXT PRIMARY KEY, user_id TEXT, habit_id TEXT, local_date INTEGER,
+        started_at INTEGER, ended_at INTEGER, answers TEXT,
+        deleted_at INTEGER, updated_at INTEGER);
     CREATE TABLE habit_days(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
-        answers TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(habit_id, local_date));
     CREATE TABLE sync_remote_habit_map(
         old_id TEXT PRIMARY KEY, new_id TEXT);
@@ -71,7 +80,7 @@ db.execute(
     "VALUES('local','user',3,2000000000,0)"
 )
 db.execute("INSERT INTO session_rounds VALUES('local',0,999)")
-db.execute("INSERT INTO sync_outbox VALUES('session','local',0)")
+db.execute("INSERT INTO sync_outbox(entity_type,entity_id,local_date) VALUES('session','local',0)")
 db.execute(
     "INSERT INTO sessions(id,user_id,activity,updated_at,deleted_at) "
     "VALUES('deleted','user',2,1,1)"
@@ -143,7 +152,7 @@ db.execute(
     "VALUES('old-habit','user','Walking',0,2000000000)"
 )
 db.execute("INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('old-habit',20260925,1,3,0,2000000000)")
-db.execute("INSERT INTO sync_outbox VALUES('habit','old-habit',0)")
+db.execute("INSERT INTO sync_outbox(entity_type,entity_id,local_date) VALUES('habit','old-habit',0)")
 habit_response = json.dumps(
     {
         "changes": {

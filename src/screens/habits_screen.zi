@@ -34,6 +34,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import, file "../storage/storage_core.zi";
 #import, file "../platform/web_storage.zi";
 #import, file "habits/edit.zi";
+#import, file "habits/habit_entries.zi";
 #import, file "habits/table_layout.zi";
 #import, file "../habits/habit_icons.zi";
 #import, file "../cells/habit_icon_choice.zi";
@@ -122,12 +123,6 @@ HabitScreenGeometry :: struct {
     height: s32
 }
 
-HabitScreenRect :: (x: s32, y: s32, width: s32,
-    height: s32) -> Rectangle {
-    return Rectangle.{cast(float32)x, cast(float32)y,
-        cast(float32)width, cast(float32)height}
-}
-
 HabitScreenButtonProps :: (app: *InnerBreeze, label: string, id: s32,
     x: s32, y: s32, width: s32, height: s32,
     selected: bool, disabled: bool) -> ButtonProps {
@@ -147,17 +142,6 @@ HabitScreenButtonProps :: (app: *InnerBreeze, label: string, id: s32,
 HabitScreenNumber :: (app: *InnerBreeze, value: s32) -> string {
     buffer: [24]u8
     if !FormatNumberTemplate("%d", value, buffer[:]) { return "" }
-    return FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
-}
-
-HabitScreenDate :: (app: *InnerBreeze, day_index: s32) -> string {
-    buffer: [24]u8
-    args: [3]FormatArg
-    args[0].number = day_index / 10000
-    args[1].number = (day_index / 100) % 100
-    args[2].number = day_index % 100
-    if !FormatTemplate("%04d-%02d-%02d", args[:], buffer[:]) { return "" }
     return FrameTextHold(*app.ui.frame_text,
         AppTextFromCString(*buffer[0], cast(s32)buffer.count))
 }
@@ -456,7 +440,6 @@ HabitScreenAdjustCount :: (app: *InnerBreeze, index: s32,
 HabitScreenOpenCount :: (app: *InnerBreeze, index: s32, day_index: s32) {
     app.habits.count_dialog_habit = index
     app.habits.count_dialog_day = day_index
-    HabitScreenLoadAnswers(app, index, day_index)
     app_open_modal(app, cast(ModalType)ModalHabitCount)
 }
 
@@ -474,6 +457,7 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     message.counter_enabled = habit_counting_enabled(habit)
     message.linked_count = HabitScreenLinkedCount(app, index, day_index)
     message.question_count = habit.question_count
+    message.span = habit.span != 0
     message.decrement = decrement
     message = HabitsRun(message)
     if !message.succeeded {
@@ -486,7 +470,9 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     } else if message.day_action == HABITS_DAY_LINKED {
         habit_open_linked_edit_page(app, index, day_index)
     } else if message.day_action == HABITS_DAY_QUESTIONS {
-        HabitScreenOpenQuestions(app, index, day_index)
+        HabitScreenQuestionsTap(app, index, day_index)
+    } else if message.day_action == HABITS_DAY_SPAN {
+        HabitScreenSpanTap(app, index, day_index)
     } else if message.day_action == HABITS_DAY_TOGGLE {
         habit_toggle_day(*app.habits, index, day_index)
         unused app_auto_sync(app)
@@ -531,6 +517,11 @@ HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
     } else if !scheduled && !filled {
         props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
     }
+    // A running span's day is lit softly until the span ends.
+    if !filled && HabitScreenSpanRunning(habit, day_index) {
+        props.tone = cast(ButtonTone)ButtonToneAccent
+        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    }
     props.selected = filled
     props.disabled = disabled
     clicked := Button(app.ui.session, props) != 0
@@ -566,7 +557,7 @@ HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
             HabitScreenDayDot(app,
                 cast(s32)(bounds.x + bounds.width / 2),
                 cast(s32)(bounds.y + bounds.height) - AppScale(4) - radius,
-                radius, accent, complete, true, count)
+                radius, accent, complete, false, true, count)
         }
     }
     if clicked {
@@ -636,8 +627,18 @@ HabitScreenLine :: (app: *InnerBreeze, x1: s32, y1: s32,
 // A day's dot: filled once the day is complete, showing the day's count
 // when the habit counts and a check when it does not. Both kinds are lit
 // from the top left, with a rim, a shaded lower edge and a highlight.
+// The left half of a dot, for a day whose span has started and not ended.
+HABIT_HALF_DOT_SHAPE :: "F:M12 1C5.93 1 1 5.93 1 12C1 18.07 5.93 23 12 23Z"
+
+// Whether a day of a habit holds its running span.
+HabitScreenSpanRunning :: (habit: *Habit, day_index: s32) -> bool {
+    return habit.span != 0 && habit.running_entry[0] != cast(u8)0 &&
+    habit.running_day == day_index
+}
+
 HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
-    radius: s32, accent: Color, complete: bool, counting: bool, count: s32) {
+    radius: s32, accent: Color, complete: bool, half: bool, counting: bool,
+    count: s32) {
     surface := StyleTokenColor("surface")
     foreground := StyleTokenColor("text")
     highlight_radius := radius / 3
@@ -675,7 +676,13 @@ HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
             radius + AppScale(1), Fade(foreground, 0.54))
         HabitScreenCircle(app, center_x, center_y,
             radius - AppScale(2), surface)
-        if !show_count {
+        if half {
+            face := radius - AppScale(2)
+            PaintSvgIcon(app.ui.session, -1, HABIT_HALF_DOT_SHAPE,
+                HabitScreenRect(center_x - face, center_y - face, face * 2,
+                face * 2), accent)
+        }
+        if !show_count && !half {
             HabitScreenCircle(app, center_x - AppScale(2),
                 center_y - AppScale(3), highlight_radius,
                 Fade(Color.{255, 255, 255, 255}, 0.16))
@@ -879,12 +886,13 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
         HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
             Fade(habit.color, 0.24))
     }
+    half := HabitScreenSpanRunning(habit, day_index)
     if scheduled {
         HabitScreenDayDot(app, center_x, center_y, radius, habit.color,
-            complete, habit_counting_enabled(habit) != 0, count)
-    } else if complete || count > 0 {
+            complete, half, habit_counting_enabled(habit) != 0, count)
+    } else if complete || count > 0 || half {
         HabitScreenDayDot(app, center_x, center_y, radius,
-            HabitScreenOffDayColor(habit.color), complete,
+            HabitScreenOffDayColor(habit.color), complete, half,
             habit_counting_enabled(habit) != 0, count)
     }
     if clicked {
@@ -1835,310 +1843,44 @@ HabitScreenCalendar :: (app: *InnerBreeze,
     }
 }
 
-HabitScreenCountText :: (app: *InnerBreeze, bounds: Rectangle,
-    text: string, font: s32) {
-    props: TextProps
-    props.bounds = bounds
-    props.text = text
-    props.font = font
-    props.align = cast(TextAlign)TextAlignCenter
-    props.vertical_align = cast(TextAlign)TextAlignCenter
-    props.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, props)
+// A tap on a day of a habit that asks questions: an open day takes a new
+// entry, a done day opens its data.
+HabitScreenQuestionsTap :: (app: *InnerBreeze, index: s32, day_index: s32) {
+    if HabitScreenCompletion(app, index, day_index) {
+        habit_open_linked_edit_page(app, index, day_index)
+        return
+    }
+    HabitScreenOpenEntry(app, index, day_index, "")
 }
 
-// ---- A day's questions and answers ---------------------------------------
-
-HABIT_ANSWER_ROW_HEIGHT :: 82
-
-// Fills the day dialog with the habit's questions and what the day answered.
-HabitScreenLoadAnswers :: (app: *InnerBreeze, index: s32, day_index: s32) {
-    dialog := *app.habits.answer_dialog
-    dialog.* = HabitAnswerDialog.{}
-    dialog.habit = index
-    dialog.day = day_index
-    dialog.focus = -1
+// A tap on a day of a habit that measures spans. The running span ends on
+// its day or today, asking the questions if the habit has any; otherwise a
+// day with spans opens their data, today starts one, and another day takes
+// a span typed in.
+HabitScreenSpanTap :: (app: *InnerBreeze, index: s32, day_index: s32) {
     habit := *app.habits.items[index]
-    stored: [HABIT_DAY_ANSWER_MAX]HabitAnswer
-    stored_count := storage_habit_day_answers_load(
-        AppTextFromCString(*habit.id[0], HABIT_ID_SIZE), day_index, stored[:])
-    dialog.count = HabitAnswersForDay(habit, stored[:], stored_count,
-        dialog.answers[:])
-    answer: s32 = 0
-    while answer < dialog.count {
-        hours: s32 = 0
-        minutes: s32 = 0
-        if dialog.answers[answer].answer_type == HABIT_ANSWER_TIME &&
-        HabitTimeParts(HabitAnswerValue(*dialog.answers[answer]), *hours, *minutes) {
-            cursor: s32 = 0
-            unused TextBufferAppendPaddedNumber(dialog.hours[answer][:],
-                *cursor, hours, 2)
-            cursor = 0
-            unused TextBufferAppendPaddedNumber(dialog.minutes[answer][:],
-                *cursor, minutes, 2)
+    running: [HABIT_ID_SIZE]u8
+    unused AppCopyText(AppTextFromCString(*habit.running_entry[0],
+        HABIT_ID_SIZE), running[:])
+    running_day := habit.running_day
+    if running[0] != cast(u8)0 &&
+    (day_index == running_day || day_index == habits_today_index()) {
+        if habit_end_span(app, index) && habit.question_count > 0 {
+            HabitScreenOpenEntry(app, index, running_day,
+                AppTextFromCString(*running[0], HABIT_ID_SIZE))
         }
-        answer += 1
-    }
-}
-
-// Saves the dialog's answers: a day with questions is done with them.
-HabitScreenSaveAnswers :: (app: *InnerBreeze) -> bool {
-    dialog := *app.habits.answer_dialog
-    answer: s32 = 0
-    while answer < dialog.count {
-        if dialog.answers[answer].answer_type == HABIT_ANSWER_TIME {
-            unused HabitTimeFromTyped(
-                AppTextFromCString(*dialog.hours[answer][0], 4),
-                AppTextFromCString(*dialog.minutes[answer][0], 4),
-                dialog.answers[answer].value[:])
-        }
-        answer += 1
-    }
-    return habit_answer_day(app, dialog.habit, dialog.day,
-        dialog.answers[:], dialog.count)
-}
-
-// One typed answer. Fields share one cursor: only the focused one has it.
-HabitScreenAnswerTextField :: (app: *InnerBreeze, field: s32,
-    bounds: Rectangle, buffer: []u8, numeric: bool, max_bytes: s32) {
-    dialog := *app.habits.answer_dialog
-    focused := dialog.focus == field
-    typed: [64]u8
-    props: TextFieldProps
-    props.key = KeyHash("habits/answers/field") + cast(u64)field
-    props.bounds = bounds
-    props.value = FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
-    if focused {
-        props.cursor = dialog.cursor
-        props.anchor = dialog.anchor
-        props.scroll_x = dialog.scroll_x
-    }
-    props.focused = focused
-    props.focus_id = 7800 + field
-    props.numeric = numeric
-    props.max_bytes = max_bytes
-    props.max_codepoints = max_bytes
-    props.input = SampleTextFieldInput(focused, typed[:])
-    result := TextField(app.ui.session, props)
-    if result.edit.changed {
-        unused AppReplaceText(buffer, result.edit.start, result.edit.end,
-            result.edit.replacement)
-    }
-    if result.focused {
-        dialog.focus = field
-        dialog.cursor = result.cursor
-        dialog.anchor = result.anchor
-        dialog.scroll_x = result.scroll_x
-    } else if dialog.focus == field {
-        dialog.focus = -1
-    }
-    if result.clipboard_write {
-        unused TextInputWriteClipboard(result.clipboard_text)
-    }
-}
-
-// Hours and minutes stop at their largest: 23 and 59.
-HabitScreenClampTyped :: (buffer: []u8, largest: s32) {
-    typed := HabitTimeTypedNumber(AppTextFromCString(*buffer[0],
-        cast(s32)buffer.count))
-    if typed > largest {
-        cursor: s32 = 0
-        unused TextBufferAppendPaddedNumber(buffer, *cursor, largest, 2)
-    }
-}
-
-// A yes or no answer: tapping the chosen one again leaves it unanswered.
-HabitScreenYesNo :: (app: *InnerBreeze, answer: *HabitAnswer, id: s32,
-    x: s32, y: s32, width: s32) {
-    gap := AppScale(8)
-    half := (width - gap) / 2
-    values: [2]string = .["yes", "no"]
-    labels: [2]string = .[LocaleText("habit_answer_yes"),
-    LocaleText("habit_answer_no")]
-    option: s32 = 0
-    while option < 2 {
-        chosen := HabitAnswerValue(answer) == values[option]
-        props: ButtonProps
-        props.id = id + option
-        props.bounds = HabitScreenRect(x + option * (half + gap), y, half,
-            AppScale(44))
-        props.label = labels[option]
-        props.tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent
-            else ButtonToneNeutral)
-        props.emphasis = cast(ButtonEmphasis)(ifx chosen then
-            ButtonEmphasisFilled else ButtonEmphasisSoft)
-        if Button(app.ui.session, props) != 0 {
-            unused AppCopyText(ifx chosen then "" else values[option],
-                answer.value[:])
-        }
-        option += 1
-    }
-}
-
-HabitScreenAnswersHeight :: (app: *InnerBreeze) -> s32 {
-    return app.habits.answer_dialog.count * AppScale(HABIT_ANSWER_ROW_HEIGHT)
-}
-
-// Each question above its answer, in the input its answer type takes.
-HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
-    width: s32) {
-    dialog := *app.habits.answer_dialog
-    index: s32 = 0
-    while index < dialog.count {
-        answer := *dialog.answers[index]
-        label: TextProps
-        label.bounds = HabitScreenRect(x, y, width, AppScale(22))
-        label.text = FrameTextHold(*app.ui.frame_text,
-            HabitAnswerQuestion(answer))
-        label.font = AppSmallFontSize()
-        label.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, label)
-        input_y := y + AppScale(26)
-        if answer.answer_type == HABIT_ANSWER_TIME {
-            part_w := AppScale(64)
-            colon_w := AppScale(20)
-            HabitScreenAnswerTextField(app, index * 2,
-                HabitScreenRect(x, input_y, part_w, AppScale(44)),
-                dialog.hours[index][:], true, 2)
-            HabitScreenClampTyped(dialog.hours[index][:], 23)
-            HabitScreenCountText(app, HabitScreenRect(x + part_w, input_y,
-                colon_w, AppScale(44)), ":", AppFontSize())
-            HabitScreenAnswerTextField(app, index * 2 + 1,
-                HabitScreenRect(x + part_w + colon_w, input_y, part_w,
-                AppScale(44)), dialog.minutes[index][:], true, 2)
-            HabitScreenClampTyped(dialog.minutes[index][:], 59)
-        } else if answer.answer_type == HABIT_ANSWER_YES_NO {
-            HabitScreenYesNo(app, answer, 7900 + index * 2, x, input_y, width)
-        } else if answer.answer_type == HABIT_ANSWER_NUMBER {
-            HabitScreenAnswerTextField(app, index * 2,
-                HabitScreenRect(x, input_y, AppScale(160), AppScale(44)),
-                answer.value[:], true, 9)
-        } else {
-            HabitScreenAnswerTextField(app, index * 2,
-                HabitScreenRect(x, input_y, width, AppScale(44)),
-                answer.value[:], false, HABIT_ANSWER_SIZE - 1)
-        }
-        y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-        index += 1
-    }
-}
-
-// The answers in a scrolling area, for questions that do not all fit.
-HabitScreenAnswerArea :: (app: *InnerBreeze, bounds: Rectangle) {
-    dialog := *app.habits.answer_dialog
-    scroll := Scroll(app.ui.session, ScrollProps.{
-            .key = KeyHash("habits/answers/scroll"),
-            .bounds = bounds,
-            .content_height = HabitScreenAnswersHeight(app),
-            .scroll_offset = dialog.scroll,
-            .scale = MetricsScale()})
-    dialog.scroll = scroll.scroll_offset
-    if scroll.opened {
-        HabitScreenAnswerFields(app, cast(s32)scroll.content.x,
-            cast(s32)scroll.content.y, cast(s32)scroll.content.width)
-        unused End(app.ui.session)
-    }
-}
-
-// The answer area's height in a dialog: all answers, or what fits.
-HabitScreenAnswerAreaHeight :: (app: *InnerBreeze, other: s32) -> s32 {
-    room := app.ui.view_height - AppScale(32) - AppScale(74) - other
-    height := HabitScreenAnswersHeight(app)
-    if height > room {
-        height = room
-    }
-    if height < AppScale(HABIT_ANSWER_ROW_HEIGHT) {
-        height = AppScale(HABIT_ANSWER_ROW_HEIGHT)
-    }
-    return height
-}
-
-HabitScreenOpenQuestions :: (app: *InnerBreeze, index: s32, day_index: s32) {
-    HabitScreenLoadAnswers(app, index, day_index)
-    app_open_modal(app, cast(ModalType)ModalHabitQuestions)
-}
-
-// A habit's questions for a day. Done records the answers and the day; a
-// day that is done shows its answers to change, or opens again.
-HabitScreenQuestionsDialog :: (app: *InnerBreeze) {
-    if app.modal.active == 0 ||
-    app.modal.type != cast(ModalType)ModalHabitQuestions { return }
-    dialog := *app.habits.answer_dialog
-    index := dialog.habit
-    day_index := dialog.day
-    if index < 0 || index >= app.habits.count || day_index <= 0 {
-        app_close_modal(app)
         return
     }
-    habit := *app.habits.items[index]
-    done := HabitScreenCompletion(app, index, day_index)
-    gap := AppScale(12)
-    date_h := AppScale(24)
-    button_h := AppScale(44)
-    area_h := HabitScreenAnswerAreaHeight(app, date_h + gap * 2 + button_h)
-    content_h := date_h + gap + area_h + gap + button_h
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-            .key = KeyHash("habits/questions-dialog"),
-            .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
-            .width = AppScale(380), .height = content_h + AppScale(74),
-            .scale = MetricsScale(),
-            .has_right_action = true,
-            .right_label = LocaleText("cancel_button")})
-    if frame.dismissed || frame.right_clicked {
-        app_close_modal(app)
+    if storage_habit_day_has_entries(AppTextFromCString(*habit.id[0],
+        HABIT_ID_SIZE), day_index, false) {
+        habit_open_linked_edit_page(app, index, day_index)
         return
     }
-    if !frame.opened {
+    if day_index == habits_today_index() && running[0] == cast(u8)0 {
+        unused habit_start_span(app, index)
         return
     }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-    day_text := HabitScreenDate(app, day_index)
-    if day_index == habits_today_index() {
-        day_text = LocaleText("habits_today")
-    }
-    HabitScreenCountText(app, HabitScreenRect(x, y, width, date_h),
-        day_text, AppSmallFontSize())
-    y += date_h + gap
-    HabitScreenAnswerArea(app, HabitScreenRect(x, y, width, area_h))
-    y += area_h + gap
-    if done {
-        half := (width - gap) / 2
-        reopen: ButtonProps
-        reopen.id = 5730001
-        reopen.bounds = HabitScreenRect(x, y, half, button_h)
-        reopen.label = LocaleText("habit_day_not_done")
-        reopen.tone = cast(ButtonTone)ButtonToneNeutral
-        reopen.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        if Button(app.ui.session, reopen) != 0 &&
-        habit_reopen_day(app, index, day_index) {
-            app_close_modal(app)
-        }
-        save: ButtonProps
-        save.id = 5730002
-        save.bounds = HabitScreenRect(x + half + gap, y, width - half - gap,
-            button_h)
-        save.label = LocaleText("save_button")
-        save.tone = cast(ButtonTone)ButtonToneAccent
-        save.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-        if Button(app.ui.session, save) != 0 && HabitScreenSaveAnswers(app) {
-            app_close_modal(app)
-        }
-    } else {
-        complete: ButtonProps
-        complete.id = 5730003
-        complete.bounds = HabitScreenRect(x, y, width, button_h)
-        complete.label = LocaleText("done_button")
-        complete.tone = cast(ButtonTone)ButtonToneAccent
-        complete.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-        if Button(app.ui.session, complete) != 0 && HabitScreenSaveAnswers(app) {
-            app_close_modal(app)
-        }
-    }
-    unused End(app.ui.session)
+    HabitScreenOpenEntry(app, index, day_index, "")
 }
 
 // The count dialog: the day's count with large steps down and up. Linked
@@ -2162,27 +1904,18 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     content_h := AppScale(24) + AppScale(64) + AppScale(24) + gap +
     step_h + gap + button_h
     if linked_count > 0 { content_h += button_h + gap }
-    // A counting habit's questions sit under the steps; their answers are
-    // kept however the dialog closes.
-    asks := habit.question_count > 0 &&
-    app.habits.answer_dialog.habit == index &&
-    app.habits.answer_dialog.day == day_index
-    area_h: s32 = 0
-    if asks {
-        area_h = HabitScreenAnswerAreaHeight(app, content_h + gap)
-        content_h += area_h + gap
-    }
+    // A counting habit that asks questions keeps their answers as the
+    // day's entries, opened from here.
+    asks := habit.question_count > 0
+    if asks { content_h += button_h + gap }
     frame := ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash("habits/count-dialog"),
             .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
-            .width = AppScale(ifx asks then 380 else 340), .height = content_h + AppScale(74),
+            .width = AppScale(340), .height = content_h + AppScale(74),
             .scale = MetricsScale(),
             .has_right_action = true,
             .right_label = LocaleText("close_button")})
     if frame.dismissed || frame.right_clicked {
-        if asks {
-            unused HabitScreenSaveAnswers(app)
-        }
         app_close_modal(app)
         return
     }
@@ -2227,8 +1960,18 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     }
     y += step_h + gap
     if asks {
-        HabitScreenAnswerArea(app, HabitScreenRect(x, y, width, area_h))
-        y += area_h + gap
+        entries: ButtonProps
+        entries.id = 5720004
+        entries.bounds = HabitScreenRect(x, y, width, button_h)
+        entries.label = LocaleText("habit_day_entries")
+        entries.tone = cast(ButtonTone)ButtonToneNeutral
+        entries.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        if Button(app.ui.session, entries) != 0 {
+            unused End(app.ui.session)
+            habit_open_linked_edit_page(app, index, day_index)
+            return
+        }
+        y += button_h + gap
     }
 
     if linked_count > 0 {
@@ -2248,9 +1991,6 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
         sessions.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
         if Button(app.ui.session, sessions) != 0 {
             unused End(app.ui.session)
-            if asks {
-                unused HabitScreenSaveAnswers(app)
-            }
             habit_open_linked_edit_page(app, index, day_index)
             return
         }
@@ -2263,9 +2003,6 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     done.tone = cast(ButtonTone)ButtonToneNeutral
     done.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
     if Button(app.ui.session, done) != 0 {
-        if asks {
-            unused HabitScreenSaveAnswers(app)
-        }
         app_close_modal(app)
     }
     unused End(app.ui.session)
@@ -2276,7 +2013,7 @@ draw_habits_screen :: (app: *InnerBreeze) {
     if app == null { return }
     HabitScreenDrawPage(app)
     HabitScreenCountDialog(app)
-    HabitScreenQuestionsDialog(app)
+    HabitScreenEntryDialog(app)
 }
 
 HabitScreenDrawPage :: (app: *InnerBreeze) {

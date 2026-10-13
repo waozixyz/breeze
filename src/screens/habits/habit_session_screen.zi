@@ -26,6 +26,8 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
 #import, file "../../app/text_buffers.zi";
 #import, file "../../platform/raylib_text_input.zi";
 #import, file "habit_session_rules.zi";
+#import, file "habit_entries.zi";
+#import, file "../../habits/habit_actions.zi";
 #import "control_props"
 #import "text_align"
 #import "text_props"
@@ -61,22 +63,6 @@ ScrollPageContext :: struct {
 habit_session_same_path :: (left: *u8, right: *u8) -> bool {
     return AppTextFromCString(left, HABIT_LINKED_PATH_SIZE) ==
     AppTextFromCString(right, HABIT_LINKED_PATH_SIZE)
-}
-
-habit_session_delete_image :: () -> ImageProps {
-    return ImageProps.{
-        .asset_path = "icons/ui.png",
-        .alt_text = LocaleText("delete_button"),
-        .source = Rectangle.{0.0, 384.0, 64.0, 64.0}
-    }
-}
-
-habit_session_edit_image :: () -> ImageProps {
-    return ImageProps.{
-        .asset_path = "icons/ui.png",
-        .alt_text = LocaleText("habit_edit_title"),
-        .source = Rectangle.{384.0, 0.0, 64.0, 64.0}
-    }
 }
 
 begin_round_edit :: (app: *InnerBreeze, entry: *HabitLinkedEntry,
@@ -224,7 +210,9 @@ habit_session_draw_edit_screen :: (app: *InnerBreeze) {
 
     habit = *app.habits.items[app.habit_detail_index]
     habit_collect_linked_entries(habit, app.habit_detail_day, *ctx)
-    if ctx.count <= 0 {
+    // A day with neither sessions nor a habit that keeps entries has
+    // nothing to show.
+    if ctx.count <= 0 && !habit_keeps_entries(habit) {
         habit_session_cancel_edit(app)
         app_switch_screen(app, ScreenHabits)
         return
@@ -267,6 +255,7 @@ habit_session_draw_edit_screen :: (app: *InnerBreeze) {
             content_w, cast(s32)page.y, 1)
         unused End(app.ui.session)
     }
+    HabitScreenEntryDialog(app)
 
     if app.habit_session_edit.active != 0 {
         active_entry: *HabitLinkedEntry = null
@@ -304,6 +293,15 @@ habit_session_draw_edit_content :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
 
     if app == null || ctx == null {
         return y
+    }
+    habit := *app.habits.items[app.habit_detail_index]
+    if habit_keeps_entries(habit) {
+        y = HabitDayEntriesDraw(app, app.habit_detail_index,
+            app.habit_detail_day, content_x, content_w, y, draw != 0)
+        if ctx.count <= 0 {
+            return y
+        }
+        y += section_gap
     }
 
     if ctx.count <= 0 {

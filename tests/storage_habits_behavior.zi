@@ -538,9 +538,10 @@ test_uuid_habit_ids_load_days :: () {
     storage_close()
 }
 
-// Questions travel with the habit; a day keeps its answers with the
-// question's words, so they read the same after the question goes.
-test_habit_questions_and_answers :: () {
+// Questions and their goals travel with the habit; an entry keeps its
+// answers with the question's words, so they read the same after the
+// question goes.
+test_habit_questions_and_entries :: () {
     root := make_root("habit-questions")
     check_true("init db", storage_init(root) != 0)
     storage_close()
@@ -554,6 +555,7 @@ test_habit_questions_and_answers :: () {
         HabitQuestionAdd(habit.questions[:], *habit.question_count, 1782200000))
     unused AppCopyText("When did I start \"eating\"?", habit.questions[0].text[:])
     habit.questions[0].answer_type = HABIT_ANSWER_TIME
+    habit.questions[0].goal = HabitGoal.{.kind = HABIT_GOAL_AT_MOST, .high = 480}
     check_true("add a number question",
         HabitQuestionAdd(habit.questions[:], *habit.question_count, 1782200000))
     unused AppCopyText("Plates", habit.questions[1].text[:])
@@ -564,6 +566,8 @@ test_habit_questions_and_answers :: () {
     check_int("a question without words is dropped", habit.question_count, 2)
     check_true("each question has its own id",
         habit.questions[0].id != habit.questions[1].id)
+    habit.span = 1
+    habit.span_goal = HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 900, .high = 1080}
     time_id := habit.questions[0].id
     storage_habits_save(cast(*void)*habits_b)
     check_int("the habit is queued to sync",
@@ -575,21 +579,56 @@ test_habit_questions_and_answers :: () {
     check_int("questions kept", habit.question_count, 2)
     check_true("words kept, quotes too",
         HabitQuestionText(*habit.questions[0]) == "When did I start \"eating\"?")
-    check_int("answer type kept", habit.questions[0].answer_type, HABIT_ANSWER_TIME)
+    check_true("answer type and goal kept",
+        habit.questions[0].answer_type == HABIT_ANSWER_TIME &&
+        habit.questions[0].goal.kind == HABIT_GOAL_AT_MOST &&
+        habit.questions[0].goal.high == 480)
+    check_true("a question without a goal has none",
+        habit.questions[1].goal.kind == HABIT_GOAL_NONE)
+    check_true("span and its goal kept", habit.span == 1 &&
+        habit.span_goal.kind == HABIT_GOAL_BETWEEN &&
+        habit.span_goal.low == 900 && habit.span_goal.high == 1080)
     check_true("id kept", habit.questions[0].id == time_id)
 
     none: [1]HabitAnswer
     answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
-    count := HabitAnswersForDay(habit, none[:], 0, answers[:])
-    check_int("a day asks every question", count, 2)
+    count := HabitAnswersFor(habit, none[:], 0, answers[:])
+    check_int("an entry asks every question", count, 2)
     unused AppCopyText("07:30", answers[0].value[:])
     unused AppCopyText("2", answers[1].value[:])
-    check_true("save answers",
-        storage_habit_day_answers_save("meal", 20260701, answers[:], count) != 0)
-    check_int("the day is queued to sync",
-        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_day' AND entity_id='meal' AND local_date=20260701"), 1)
+    first: [HABIT_ID_SIZE]u8
+    check_true("save an entry", storage_habit_entry_save("", "meal", 20260701,
+        1782900000, 1782900000, answers[:], count, first[:]) != 0)
+    first_id := AppTextFromCString(*first[0], HABIT_ID_SIZE)
+    check_true("a new entry gets an id", first_id.count > 0)
+    check_int("the entry is queued to sync", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_entry'"), 1)
+    second: [HABIT_ID_SIZE]u8
+    check_true("a day takes a second entry", storage_habit_entry_save("", "meal",
+        20260701, 1782910000, 0, none[:], 0, second[:]) != 0)
+    summaries: [HABIT_DAY_ENTRY_MAX]HabitEntrySummary
+    check_int("both entries listed", storage_habit_day_entries("meal", 20260701,
+        summaries[:]), 2)
+    check_true("listed in the order they started",
+        AppTextFromCString(*summaries[0].id[0], HABIT_ID_SIZE) == first_id &&
+        summaries[1].ended_at == 0)
+    check_true("a running span is found", true)
+    storage_habit_running_span(habit)
+    check_true("the habit's running span is the second entry",
+        AppTextFromCString(*habit.running_entry[0], HABIT_ID_SIZE) ==
+        AppTextFromCString(*second[0], HABIT_ID_SIZE) &&
+        habit.running_day == 20260701 && habit.running_since == 1782910000)
+    check_true("a span's day counts only ended spans",
+        storage_habit_day_has_entries("meal", 20260701, true) &&
+        !storage_habit_day_has_entries("meal", 20260702, false))
+
     loaded: [HABIT_DAY_ANSWER_MAX]HabitAnswer
-    loaded_count := storage_habit_day_answers_load("meal", 20260701, loaded[:])
+    loaded_count: s32 = 0
+    started: s64 = 0
+    ended: s64 = 0
+    check_true("load the entry", storage_habit_entry_load(first_id, *started,
+        *ended, loaded[:], *loaded_count) && started == 1782900000 &&
+        ended == 1782900000)
     check_int("answers loaded", loaded_count, 2)
     check_true("time answer loaded", HabitAnswerValue(*loaded[0]) == "07:30" &&
         loaded[0].id == time_id && loaded[0].answer_type == HABIT_ANSWER_TIME)
@@ -597,7 +636,7 @@ test_habit_questions_and_answers :: () {
         HabitAnswerQuestion(*loaded[0]) == "When did I start \"eating\"?")
 
     HabitQuestionRemove(habit.questions[:], *habit.question_count, 0)
-    shown := HabitAnswersForDay(habit, loaded[:], loaded_count, answers[:])
+    shown := HabitAnswersFor(habit, loaded[:], loaded_count, answers[:])
     check_int("a removed question's answer still shows", shown, 2)
     check_true("current questions come first",
         HabitAnswerQuestion(*answers[0]) == "Plates" &&
@@ -605,24 +644,30 @@ test_habit_questions_and_answers :: () {
     check_true("the removed question keeps its words",
         HabitAnswerValue(*answers[1]) == "07:30" && answers[1].id == time_id)
 
-    cleared := storage_habit_day_answers_save("meal", 20260701, none[:], 0)
-    check_true("clear answers", cleared != 0 &&
-        storage_habit_day_answers_load("meal", 20260701, loaded[:]) == 0)
+    check_true("delete the entry", storage_habit_entry_delete(first_id) != 0)
+    check_true("a deleted entry is gone", !storage_habit_entry_load(first_id,
+        *started, *ended, loaded[:], *loaded_count) &&
+        storage_habit_day_entries("meal", 20260701, summaries[:]) == 1)
+    check_int("the deletion is kept to sync", read_db_count(
+        "SELECT COUNT(*) FROM habit_entries WHERE deleted_at>0"), 1)
     habits_free(*habits_b)
     storage_close()
 }
 
-test_answer_statistics :: () {
-    root := make_root("habit-answer-stats")
+test_entry_statistics :: () {
+    root := make_root("habit-entry-stats")
     check_true("init db", storage_init(root) != 0)
     storage_close()
-    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions) VALUES('sleep',(SELECT id FROM users LIMIT 1),'Sleep',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"text\":\"Bedtime\"},{\"id\":2,\"type\":\"number\",\"text\":\"Pages\"},{\"id\":3,\"type\":\"yes_no\",\"text\":\"Tea\"},{\"id\":4,\"type\":\"text\",\"text\":\"Dream\"}]');INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at,answers) VALUES('sleep',20260701,1,1,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"23:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"2\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"yes\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Flying\"}]'),('sleep',20260702,1,1,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"00:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"3\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"no\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Sea\"}]');")
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions,span,span_goal,span_low) VALUES('sleep',(SELECT id FROM users LIMIT 1),'Sleep',1,2,3,0,0,0,0,0,1782200000,'[{\"id\":1,\"type\":\"time\",\"text\":\"Bedtime\",\"goal\":\"at_most\",\"low\":0,\"high\":30},{\"id\":2,\"type\":\"number\",\"text\":\"Pages\",\"goal\":\"between\",\"low\":2,\"high\":5},{\"id\":3,\"type\":\"yes_no\",\"text\":\"Tea\",\"goal\":\"yes\"},{\"id\":4,\"type\":\"text\",\"text\":\"Dream\"}]',1,1,480);INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES('a',(SELECT id FROM users LIMIT 1),'sleep',20260701,1782950000,1782950000+30600,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"23:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"2\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"yes\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Flying\"}]',0,1782200000),('b',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783036000,1783036000+25200,'[{\"id\":1,\"type\":\"time\",\"question\":\"Bedtime\",\"value\":\"00:30\"},{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"3\"},{\"id\":3,\"type\":\"yes_no\",\"question\":\"Tea\",\"value\":\"no\"},{\"id\":4,\"type\":\"text\",\"question\":\"Dream\",\"value\":\"Sea\"}]',0,1782200000),('c',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783050000,1783050000+600,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"9\"}]',0,1782200000),('gone',(SELECT id FROM users LIMIT 1),'sleep',20260702,1783060000,1783061000,'[{\"id\":2,\"type\":\"number\",\"question\":\"Pages\",\"value\":\"100\"}]',1,1782200000);")
     check_true("reopen db", storage_init(root) != 0)
     habits_b = Habits.{}
     check_true("load habit", storage_habits_load(cast(*void)*habits_b) != 0)
     habit := *habits_b.items[0]
     check_int("questions read from JSON", habit.question_count, 4)
-    check_int("yes or no read", habit.questions[2].answer_type, HABIT_ANSWER_YES_NO)
+    check_true("goals read from JSON",
+        habit.questions[0].goal.kind == HABIT_GOAL_AT_MOST &&
+        habit.questions[1].goal.kind == HABIT_GOAL_BETWEEN &&
+        habit.questions[2].goal.kind == HABIT_GOAL_YES)
     days: [HABIT_ANSWER_STATS_DAYS]s32
     slot: s32 = 0
     while slot < HABIT_ANSWER_STATS_DAYS {
@@ -636,27 +681,44 @@ test_answer_statistics :: () {
     check_true("bedtimes around midnight average to midnight",
         HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(*stats) + 50) / 100),
         text[:]) == "00:00")
-    check_true("earliest bedtime is 23:30",
-        HabitAnswerTimeText(stats.lowest, text[:]) == "23:30")
-    check_true("latest bedtime is 00:30",
+    check_true("earliest and latest bedtime",
+        HabitAnswerTimeText(stats.lowest, text[:]) == "23:30" &&
         HabitAnswerTimeText(stats.highest, text[:]) == "00:30")
+    check_true("a bedtime by 00:30 is good, 23:30 is not",
+        stats.judged == 2 && stats.good == 1)
     unused storage_habit_answer_stats("sleep", *habit.questions[1], days[:], *stats)
-    check_true("pages sum", stats.sum == 5)
-    check_true("pages average 2.5",
-        HabitAnswerDecimalText(HabitAnswerStatsAverage100(*stats), text[:]) == "2.5")
-    check_int("first day's pages in its slot", stats.values[0], 2)
-    check_int("an unanswered day has no value", stats.values[2], -1)
+    check_true("pages of every entry count, not a deleted one",
+        stats.answered == 3 && stats.sum == 14 && stats.days == 2)
+    check_true("pages within 2 to 5 are good", stats.judged == 3 && stats.good == 2)
+    check_true("pages average 4.7",
+        HabitAnswerDecimalText(HabitAnswerStatsAverage100(*stats), text[:]) == "4.7")
     unused storage_habit_answer_stats("sleep", *habit.questions[2], days[:], *stats)
-    check_true("one yes and one no", stats.yes == 1 && stats.no == 1)
+    check_true("one yes, one no, the yes is good", stats.yes == 1 &&
+        stats.no == 1 && stats.good == 1 && stats.judged == 2)
     unused storage_habit_answer_stats("sleep", *habit.questions[3], days[:], *stats)
     check_true("newest text answer first", stats.recent_count == 2 &&
         AppTextFromCString(*stats.recent[0][0], HABIT_ANSWER_SIZE) == "Sea" &&
         stats.recent_days[0] == 20260702)
+    lengths: HabitAnswerStats
+    starts: HabitAnswerStats
+    ends: HabitAnswerStats
+    unused storage_habit_span_stats(habit, days[:], *lengths, *starts, *ends)
+    check_true("span lengths in minutes", lengths.point_count == 3 &&
+        lengths.highest == 510 && lengths.lowest == 10)
+    check_true("spans of at least 8 hours are good",
+        lengths.judged == 3 && lengths.good == 1)
+    check_int("the starts are counted too", starts.point_count, 3)
+    check_true("Unix time and local day agree",
+        storage_local_date_of(storage_unix_at(20260701, 450)) == 20260701 &&
+        storage_local_minutes_of(storage_unix_at(20260701, 450)) == 450)
+    check_true("minutes past the day fall on the next",
+        storage_local_date_of(storage_unix_at(20260701, 1440 + 60)) == 20260702)
     habits_free(*habits_b)
     storage_close()
 
-    day_times: [3]s32 = .[420, 480, 540]
-    check_int("times through the day keep midnight", HabitAnswerTimeCut(day_times[:]), -1)
+    check_true("a goal between later and earlier times spans midnight",
+        HabitGoalMet(HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 1320, .high = 60}, 30) == 1 &&
+        HabitGoalMet(HabitGoal.{.kind = HABIT_GOAL_BETWEEN, .low = 1320, .high = 60}, 600) == 0)
     typed: [8]u8
     check_true("typed 7 and 5 read 07:05",
         HabitTimeFromTyped("7", "5", typed[:]) &&
@@ -670,6 +732,8 @@ test_answer_statistics :: () {
     check_true("9:05 reads", HabitTimeParts("9:05", *hours, *minutes) &&
         hours == 9 && minutes == 5)
     check_true("9:5 does not", !HabitTimeParts("9:5", *hours, *minutes))
+    check_true("a length reads in hours and minutes",
+        HabitSpanText(965, text[:]) == "16h 05m" && HabitSpanText(45, text[:]) == "45m")
 }
 
 #program_export
@@ -689,7 +753,7 @@ Check :: () -> s32 {
     test_existing_sessions_materialize()
     test_meditation_logs_feed_profile_stats()
     test_uuid_habit_ids_load_days()
-    test_habit_questions_and_answers()
-    test_answer_statistics()
+    test_habit_questions_and_entries()
+    test_entry_statistics()
     return failures
 }

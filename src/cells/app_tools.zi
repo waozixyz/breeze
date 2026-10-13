@@ -37,6 +37,10 @@
 #import, file "../habits/habit_model.zi";
 #import, file "../habits/habit_schedule.zi";
 #import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_questions.zi";
+#import, file "../habits/habit_answer_stats.zi";
+#import, file "../habits/habit_calendar.zi";
+#import "date_time"
 using AppNavRoute;
 
 AppToolContext :: (app: *InnerBreeze) -> string {
@@ -62,7 +66,9 @@ AppToolContext :: (app: *InnerBreeze) -> string {
         schedule := HabitScheduleCurrent(stored)
         described: [256]u8
         LumiJsonString(*out, HabitScheduleDescribe(*schedule, described[:]))
-        BuilderPrint(*out, ",\"notification_hour\":%}", stored.reminder_hour)
+        BuilderPrint(*out, ",\"notification_hour\":%", stored.reminder_hour)
+        AppToolTrackingContext(*out, stored)
+        BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "],\"tasks\":[")
     if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
@@ -105,6 +111,87 @@ AppFeedbackContext :: (app: *InnerBreeze) -> string {
     LumiJsonString(*out, DevicePackage(*details))
     BuilderPrint(*out, "}")
     return BuilderFinish(out)
+}
+
+AppToolGoalName :: (kind: s32) -> string {
+    if kind == HABIT_GOAL_AT_LEAST { return "at_least" }
+    if kind == HABIT_GOAL_AT_MOST { return "at_most" }
+    if kind == HABIT_GOAL_BETWEEN { return "between" }
+    if kind == HABIT_GOAL_YES { return "yes" }
+    if kind == HABIT_GOAL_NO { return "no" }
+    return "none"
+}
+
+AppToolGoalKind :: (name: string) -> s32 {
+    if name == "at_least" { return HABIT_GOAL_AT_LEAST }
+    if name == "at_most" { return HABIT_GOAL_AT_MOST }
+    if name == "between" { return HABIT_GOAL_BETWEEN }
+    if name == "yes" { return HABIT_GOAL_YES }
+    if name == "no" { return HABIT_GOAL_NO }
+    if name == "none" || name == "" { return HABIT_GOAL_NONE }
+    return -1
+}
+
+// A goal's bound as Lumi reads and writes it: a time or length as H:MM,
+// a number as itself.
+AppToolGoalBound :: (out: *Vec(u8), name: string, value: s32, answer_type: s32) {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        BuilderPrint(out, ",\"%\":%", name, value)
+        return
+    }
+    text: [16]u8
+    shown := ifx answer_type == HABIT_ANSWER_TIME then HabitAnswerTimeText(value,
+        text[:]) else AppToolDurationText(value, text[:])
+    BuilderPrint(out, ",\"%\":", name)
+    LumiJsonString(out, shown)
+}
+
+AppToolDurationText :: (minutes: s32, output: []u8) -> string {
+    cursor: s32 = 0
+    output[0] = cast(u8)0
+    unused TextBufferAppendNumber(output, *cursor, minutes / 60)
+    unused TextBufferAppendByte(output, *cursor, cast(u8)58)
+    unused TextBufferAppendPaddedNumber(output, *cursor, minutes % 60, 2)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+AppToolGoalContext :: (out: *Vec(u8), goal: HabitGoal, answer_type: s32) {
+    BuilderPrint(out, ",\"good\":\"%\"", AppToolGoalName(goal.kind))
+    if goal.kind == HABIT_GOAL_AT_LEAST || goal.kind == HABIT_GOAL_BETWEEN {
+        AppToolGoalBound(out, "low", goal.low, answer_type)
+    }
+    if goal.kind == HABIT_GOAL_AT_MOST || goal.kind == HABIT_GOAL_BETWEEN {
+        AppToolGoalBound(out, "high", goal.high, answer_type)
+    }
+}
+
+// How a habit tracks its days, and the questions it asks, for Lumi.
+AppToolTrackingContext :: (out: *Vec(u8), habit: *Habit) {
+    mode := "check"
+    if habit.span != 0 {
+        mode = "span"
+    } else if habit_counting_enabled(habit) != 0 {
+        mode = "count"
+    }
+    BuilderPrint(out, ",\"tracking\":{\"mode\":\"%\",\"target\":%", mode,
+        habit_counter_target(habit))
+    if habit.span != 0 {
+        AppToolGoalContext(out, habit.span_goal, HABIT_ANSWER_SPAN)
+    }
+    BuilderPrint(out, "},\"questions\":[")
+    index: s32 = 0
+    while index < habit.question_count {
+        question := *habit.questions[index]
+        BuilderPrint(out, "%{\"text\":", ifx index == 0 then "" else ",")
+        LumiJsonString(out, HabitQuestionText(question))
+        BuilderPrint(out, ",\"answer\":\"%\"", HabitAnswerTypeName(question.answer_type))
+        if question.answer_type != HABIT_ANSWER_TEXT {
+            AppToolGoalContext(out, question.goal, question.answer_type)
+        }
+        BuilderPrint(out, "}")
+        index += 1
+    }
+    BuilderPrint(out, "]")
 }
 
 ToolFailure :: (error: string) -> string {
@@ -250,6 +337,213 @@ AppHabitScheduleTool :: (app: *InnerBreeze, arguments: string) -> string {
     return BuilderFinish(out)
 }
 
+// The active habit with the exact id in arguments, or -1.
+AppToolHabitIndex :: (app: *InnerBreeze, arguments: string) -> s32 {
+    id_bytes: [65]u8
+    id := ToolString(arguments, "id", id_bytes[:])
+    index: s32 = -1
+    for position: cast(s32)0..LumiHabitCount(app) - 1 {
+        if id.count > 0 && LumiHabitAt(app, position).id == id {
+            index = habits_active_at(*app.habits, position)
+        }
+    }
+    return index
+}
+
+// Reads a goal's kind and bounds from the object at object_at: a number,
+// a time or a length as answer_type says. Returns an error or "".
+AppToolReadGoal :: (document: string, object_at: s32, answer_type: s32,
+    goal: *HabitGoal) -> string {
+    goal.* = HabitGoal.{}
+    good_bytes: [16]u8
+    good_at := FieldAt(document, object_at, "good")
+    good := ""
+    if good_at >= 0 {
+        count := ReadStringText(document, good_at, good_bytes[:])
+        if count > 0 && count < 16 {
+            good = TextFromBytes(good_bytes[:count])
+        }
+    }
+    kind := AppToolGoalKind(good)
+    if kind < 0 {
+        return "good must be none, at_least, at_most, between, yes or no"
+    }
+    yes_no := kind == HABIT_GOAL_YES || kind == HABIT_GOAL_NO
+    if answer_type == HABIT_ANSWER_TEXT && kind != HABIT_GOAL_NONE {
+        return "text answers have no good answers"
+    }
+    if yes_no != (answer_type == HABIT_ANSWER_YES_NO) && kind != HABIT_GOAL_NONE {
+        return "yes and no are the good answers of yes_no questions only"
+    }
+    goal.kind = kind
+    names: [2]string = .["low", "high"]
+    for which: cast(s32)0..cast(s32)1 {
+        needed := (which == 0 && (kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_BETWEEN)) ||
+        (which == 1 && (kind == HABIT_GOAL_AT_MOST || kind == HABIT_GOAL_BETWEEN))
+        if needed {
+            at := FieldAt(document, object_at, names[which])
+            value: s32 = -1
+            if at >= 0 && answer_type == HABIT_ANSWER_NUMBER {
+                number := ReadNumber(document, at)
+                if number.valid && number.value >= 0 && number.value <= 999999999 &&
+                number.value == cast(float64)cast(s32)number.value {
+                    value = cast(s32)number.value
+                }
+            } else if at >= 0 {
+                text_bytes: [16]u8
+                count := ReadStringText(document, at, text_bytes[:])
+                if count > 0 && count < 16 {
+                    text := TextFromBytes(text_bytes[:count])
+                    if answer_type == HABIT_ANSWER_TIME {
+                        hours: s32 = 0
+                        minutes: s32 = 0
+                        if HabitTimeParts(text, *hours, *minutes) {
+                            value = hours * 60 + minutes
+                        }
+                    } else {
+                        value = HabitDurationMinutes(text)
+                    }
+                }
+            }
+            if value < 0 && answer_type == HABIT_ANSWER_NUMBER {
+                return "low and high must be whole numbers"
+            }
+            if value < 0 {
+                return "low and high must be written H:MM"
+            }
+            if which == 0 {
+                goal.low = value
+            } else {
+                goal.high = value
+            }
+        }
+    }
+    if kind == HABIT_GOAL_BETWEEN && answer_type != HABIT_ANSWER_TIME &&
+    goal.low > goal.high {
+        return "low must not be above high"
+    }
+    return ""
+}
+
+// Sets the questions a habit asks (set_habit_questions). A question with
+// the words of one the habit has keeps its id, so its answers stay its.
+AppHabitQuestionsTool :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    index := AppToolHabitIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no active habit has this id")
+    }
+    list_at := FieldAt(arguments, 0, "questions")
+    count := ArrayCount(arguments, list_at)
+    if list_at < 0 || count < 0 {
+        return ToolFailure("questions must be a list")
+    }
+    if count > HABIT_QUESTION_MAX {
+        return ToolFailure("a habit asks at most 8 questions")
+    }
+    habit := *app.habits.items[index]
+    questions: [HABIT_QUESTION_MAX]HabitQuestion
+    question_count: s32 = 0
+    now := UnixNow()
+    for element: cast(s32)0..count - 1 {
+        item_at := ElementAt(arguments, list_at, element)
+        text_bytes: [HABIT_QUESTION_TEXT_SIZE]u8
+        text_count := ReadStringText(arguments, FieldAt(arguments, item_at, "text"),
+            text_bytes[:])
+        if text_count <= 0 || text_count >= HABIT_QUESTION_TEXT_SIZE {
+            return ToolFailure("each question needs words, up to 95 bytes")
+        }
+        text := TextFromBytes(text_bytes[:text_count])
+        answer_bytes: [16]u8
+        answer_count := ReadStringText(arguments, FieldAt(arguments, item_at, "answer"),
+            answer_bytes[:])
+        answer := ""
+        if answer_count > 0 && answer_count < 16 {
+            answer = TextFromBytes(answer_bytes[:answer_count])
+        }
+        if answer != "text" && answer != "number" && answer != "time" && answer != "yes_no" {
+            return ToolFailure("answer must be text, number, time or yes_no")
+        }
+        question := *questions[question_count]
+        question.answer_type = HabitAnswerTypeFromName(answer)
+        unused AppCopyText(text, question.text[:])
+        failure := AppToolReadGoal(arguments, item_at, question.answer_type,
+            *question.goal)
+        if failure.count > 0 {
+            return ToolFailure(failure)
+        }
+        for kept: cast(s32)0..habit.question_count - 1 {
+            if HabitQuestionText(*habit.questions[kept]) == text {
+                question.id = habit.questions[kept].id
+            }
+        }
+        if question.id == 0 {
+            question.id = HabitQuestionNewId(questions[:], question_count, now)
+            for kept: cast(s32)0..habit.question_count - 1 {
+                if habit.questions[kept].id >= question.id {
+                    question.id = habit.questions[kept].id + 1
+                }
+            }
+        }
+        question_count += 1
+    }
+    if !habit_set_questions(app, index, questions[:], question_count) {
+        return ToolFailure("the questions could not be saved")
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true")
+    AppToolTrackingContext(*out, habit)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+// Sets how a habit tracks its days (set_habit_tracking): marked, counted
+// to a target, or measured as spans with good lengths.
+AppHabitTrackingTool :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    index := AppToolHabitIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no active habit has this id")
+    }
+    habit := *app.habits.items[index]
+    mode_bytes: [8]u8
+    mode := ToolString(arguments, "mode", mode_bytes[:])
+    if mode != "check" && mode != "count" && mode != "span" {
+        return ToolFailure("mode must be check, count or span")
+    }
+    target := habit_counter_target(habit)
+    target_at := FieldAt(arguments, 0, "target")
+    if target_at >= 0 {
+        number := ReadNumber(arguments, target_at)
+        if !number.valid || number.value < 1 ||
+        number.value > cast(float64)HABIT_COUNTER_TARGET_MAX ||
+        number.value != cast(float64)cast(s32)number.value {
+            return ToolFailure("target must be an integer from 1 to 9999")
+        }
+        target = cast(s32)number.value
+    }
+    goal := habit.span_goal
+    if mode == "span" {
+        failure := AppToolReadGoal(arguments, 0, HABIT_ANSWER_SPAN, *goal)
+        if failure.count > 0 {
+            return ToolFailure(failure)
+        }
+    }
+    if !habit_set_tracking(app, index, mode == "count", target, mode == "span",
+        goal) {
+        return ToolFailure("the tracking could not be saved")
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true")
+    AppToolTrackingContext(*out, habit)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
 ToolString :: (document: string, name: string, output: []u8) -> string {
     count := ReadStringText(document, FieldAt(document, 0, name), output)
     if count <= 0 || count >= output.count {
@@ -270,6 +564,12 @@ AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string
     }
     if name == "set_habit_schedule" {
         return AppHabitScheduleTool(app, arguments)
+    }
+    if name == "set_habit_questions" {
+        return AppHabitQuestionsTool(app, arguments)
+    }
+    if name == "set_habit_tracking" {
+        return AppHabitTrackingTool(app, arguments)
     }
     if name == "read_style" || name == "inspect_style" || name == "preview_style" ||
     name == "save_style" || name == "reset_style" || name == "undo_style" ||
