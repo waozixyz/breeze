@@ -33,9 +33,11 @@ habit_cached_linked_entries :: (app: *InnerBreeze,
 using ExerciseType;
 using HabitSyncMode;
 #import "text_props"
+#import "text_align"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/text_buffers.zi";
 using TextWrap;
+using TextAlign;
 #import "control_props"
 #import, file "../app/metrics.zi";
 #import, file "../app/draw.zi";
@@ -45,6 +47,10 @@ using TextWrap;
 #import "drawing_props"
 #import "session"
 #import "button_props"
+#import "box_props"
+#import "box_widget"
+#import "paint_queue"
+#import, file "../app/cards.zi";
 using ButtonTone;
 using ButtonEmphasis;
 
@@ -137,41 +143,34 @@ statistics_has_wim_hof_rounds :: (linked_ctx: *HabitLinkedContext) -> s32 {
     return 0
 }
 
-statistics_draw_metric :: (x: s32, y: s32, w: s32, h: s32, label: string, value: string, accent: Color) {
-    value_font: s32 = Text24
-    value_w: s32 = 0
-
-    DrawRectangle(x, y, w, h, DarkenColor(StyleTokenColor("canvas"), 8))
-    DrawRectangle(x, y, AppScale(4), h, accent)
-    DrawLine(x, y + h - 1, x + w, y + h - 1, DarkenColor(StyleTokenColor("canvas"), 30))
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y + AppScale(8)), 0, 0},
-            .text = (label),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    value_w = AppTextWidth(value, value_font)
-    if value_w > w - AppScale(24) {
-        value_font = 20
-    }
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y + AppScale(30)), 0, 0},
-            .text = (value),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
+// A line of a chart, from its start by its width and height.
+statistics_line :: (x1: s32, y1: s32, x2: s32, y2: s32, color: Color) {
+    PaintLine(CurrentApp().ui.session, -1, Rectangle.{cast(float32)x1,
+            cast(float32)y1, cast(float32)(x2 - x1), cast(float32)(y2 - y1)},
+        color)
 }
 
-statistics_draw_section_title :: (title: string, x: s32, y: s32, w: s32) -> s32 {
-    paragraph := ParagraphSpec.{.text = title, .width = w, .font = Text16, .line_gap = AppScale(3) }
-    height := AppParagraphHeight(paragraph.text, paragraph.width, paragraph.font, paragraph.line_gap)
+// A bar of a chart, its top a little rounded.
+statistics_bar :: (x: s32, y: s32, width: s32, height: s32, color: Color) {
+    radius := AppScale(3)
+    if radius * 2 > width { radius = width / 2 }
+    PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)width, cast(float32)height},
+        cast(float32)radius, 6, color)
+}
 
-    Text(CurrentApp().ui.session, TextProps.{
-        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-            cast(float32)w, cast(float32)height},
-        .text = title,
-        .font = Text16,
-        .wrap = cast(TextWrap)TextWrapAuto
-    })
-    return height
+// A chart's card: the card face the figures use.
+statistics_chart_card :: (x: s32, y: s32, width: s32, height: s32) {
+    Box(CurrentApp().ui.session, CardProps(Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)width, cast(float32)height}))
+}
+
+statistics_figure :: (x: s32, y: s32, width: s32, label: string,
+    value: string, accent: Color) {
+    FigureCard(CurrentApp().ui.session, Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)width,
+            cast(float32)AppScale(FIGURE_CARD_HEIGHT)}, label,
+        FrameTextHold(*CurrentApp().ui.frame_text, value), accent)
 }
 
 statistics_mood_color :: (mood: s32) -> Color {
@@ -205,15 +204,22 @@ statistics_format_average :: (out: []u8, value_x100: s32,
     return FormatTemplate("%s%d.%02d%s", args[:], out)
 }
 
+STATISTICS_MOOD_BARS_HEIGHT :: 64
+
+// The mood check-ins: their average and count, and a bar for each mood.
+// Returns its height.
+statistics_mood_panel_height :: (content_w: s32) -> s32 {
+    return SectionTitleHeight(LocaleText("habit_stats_mood_title"),
+        content_w) + AppScale(10) + AppScale(FIGURE_CARD_HEIGHT) +
+    AppScale(STATISTICS_CARD_GAP) + AppScale(STATISTICS_MOOD_BARS_HEIGHT)
+}
+
 statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
     stats: *StorageMoodStats,
     accent: Color) -> s32 {
-    panel_h := AppScale(156)
-    metrics_gap := AppScale(8)
-    metric_h := AppScale(58)
+    metrics_gap := AppScale(STATISTICS_CARD_GAP)
     metric_w := (content_w - metrics_gap) / 2
-    bars_y := y + AppScale(78)
-    bars_h := AppScale(54)
+    bars_h := AppScale(STATISTICS_MOOD_BARS_HEIGHT)
     slot_w := content_w / 5
     value: [32] u8
 
@@ -221,34 +227,33 @@ statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
         return 0
     }
 
-    y += statistics_draw_section_title(LocaleText("habit_stats_mood_title"),
-        content_x, y, content_w) + AppScale(10)
+    y += SectionTitle(CurrentApp().ui.session,
+        LocaleText("habit_stats_mood_title"), content_x, y, content_w) +
+    AppScale(10)
     statistics_format_average(value[:], cast(s32)(stats.average * 100.0f),
         "/5")
-    statistics_draw_metric(content_x, y, metric_w, metric_h,
+    statistics_figure(content_x, y, metric_w,
         LocaleText("habit_stats_mood_average"),
-        AppTextFromCString(*value[0], 32),
-        accent)
+        AppTextFromCString(*value[0], 32), accent)
     AppFormatS32(stats.total, value[:])
-    statistics_draw_metric(content_x + metric_w + metrics_gap, y,
-        content_w - metric_w - metrics_gap, metric_h,
+    statistics_figure(content_x + metric_w + metrics_gap, y,
+        content_w - metric_w - metrics_gap,
         LocaleText("habit_stats_mood_checkins"),
-        AppTextFromCString(*value[0], 32),
-        LightenColor(accent, 20))
+        AppTextFromCString(*value[0], 32), accent)
+    bars_y := y + AppScale(FIGURE_CARD_HEIGHT) + metrics_gap
 
-    DrawRectangle(content_x, bars_y, content_w, bars_h,
-        DarkenColor(StyleTokenColor("canvas"), 7))
+    statistics_chart_card(content_x, bars_y, content_w, bars_h)
     {
         i: s32 = 0
         while i < 5 {
             count := stats.counts[i]
             bar_h := AppScale(3)
             if count > 0 {
-                bar_h = (count * (bars_h - AppScale(24))) / stats.total
+                bar_h = (count * (bars_h - AppScale(30))) / stats.total
             }
-            x := content_x + i * slot_w + AppScale(7)
-            w := slot_w - AppScale(14)
-            bar_y := bars_y + bars_h - bar_h - AppScale(18)
+            x := content_x + i * slot_w + AppScale(10)
+            w := slot_w - AppScale(20)
+            bar_y := bars_y + bars_h - bar_h - AppScale(22)
             label: [4]u8
 
             if w < AppScale(4) {
@@ -256,17 +261,19 @@ statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
             }
             bar_color := statistics_mood_color(i + 1)
             if count <= 0 {
-                bar_color = DarkenColor(StyleTokenColor("canvas"), 24)
+                bar_color = Fade(StyleTokenColor("text"), 0.16)
             }
-            DrawRectangle(x, bar_y, w, bar_h, bar_color)
+            statistics_bar(x, bar_y, w, bar_h, bar_color)
             AppFormatS32(i + 1, label[:])
             label_text := AppTextFromCString(*label[0], 4)
             Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{
-                    cast(float32)(x + (w - AppTextWidth(label_text, Text12)) / 2),
-                    cast(float32)(bars_y + bars_h - AppScale(16)), 0, 0},
+                .bounds = Rectangle.{cast(float32)x,
+                    cast(float32)(bars_y + bars_h - AppScale(20)),
+                    cast(float32)w, cast(float32)AppScale(16)},
                 .text = label_text,
                 .font = Text12,
+                .class_name = MutedTextClass(),
+                .align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(TextWrap)TextWrapNone
             })
             i += 1
@@ -274,7 +281,7 @@ statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
 
     }
 
-    return panel_h
+    return statistics_mood_panel_height(content_w)
 }
 
 statistics_draw_hold_range_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s32) -> s32 {
@@ -308,10 +315,6 @@ statistics_draw_hold_range_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s3
     return clicked
 }
 
-statistics_content_height :: (linked_count: s32, mood_count: s32) -> s32 {
-    return AppScale(ifx (linked_count > 0) then (710) else (420)) +            (ifx (mood_count > 0) then (AppScale(188)) else (0))
-}
-
 statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContext,
     content_x: s32, y: s32, content_w: s32, today_index: s32,
     filter: s32, accent: Color) {
@@ -321,7 +324,7 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
     day_points: [STATISTICS_MAX_GRAPH_DAYS]s32
     day_totals: [STATISTICS_MAX_GRAPH_DAYS]s32
     max_hold: s32 = 1
-    graph_h := AppScale(170)
+    graph_h := AppScale(STATISTICS_HOLD_GRAPH_HEIGHT)
     axis_w := AppScale(48)
     plot_x := content_x + axis_w
     plot_y := y + AppScale(8)
@@ -329,7 +332,7 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
     plot_h := graph_h - AppScale(36)
     axis_label: [32] u8
 
-    DrawRectangle(content_x, y, content_w, graph_h, DarkenColor(StyleTokenColor("canvas"), 7))
+    statistics_chart_card(content_x, y, content_w, graph_h)
     {
         i: s32 = 0
         while linked_ctx != null && i < linked_ctx.count {
@@ -385,7 +388,8 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
         while i < graph_days {
             if graph_days == 7 || i % 5 == 0 {
                 x := plot_x + (plot_w * i) / graph_days
-                DrawLine(x, plot_y, x, plot_y + plot_h, DarkenColor(StyleTokenColor("canvas"), 22))
+                statistics_line(x, plot_y, x, plot_y + plot_h,
+                    Fade(StyleTokenColor("text"), 0.1))
             }
             i += 1
         }
@@ -398,7 +402,8 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
             seconds := max_hold - (max_hold * i) / 2
             axis_args: [1]FormatArg = .[FormatArg.{.number = seconds}]
             FormatTemplate("%ds", axis_args[:], axis_label[:])
-            DrawLine(plot_x, line_y, plot_x + plot_w, line_y, DarkenColor(StyleTokenColor("canvas"), 20))
+            statistics_line(plot_x, line_y, plot_x + plot_w, line_y,
+                Fade(StyleTokenColor("text"), 0.1))
             Text(CurrentApp().ui.session, TextProps.{
                     .bounds = Rectangle.{cast(float32)(content_x + AppScale(4)), cast(float32)(line_y - AppScale(8)), 0, 0},
                     .text = AppTextFromCString(*axis_label[0], 32),
@@ -408,7 +413,8 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
         }
 
     }
-    DrawLine(plot_x, plot_y + plot_h, plot_x + plot_w, plot_y + plot_h, DarkenColor(StyleTokenColor("text"), 42))
+    statistics_line(plot_x, plot_y + plot_h, plot_x + plot_w, plot_y + plot_h,
+        Fade(StyleTokenColor("text"), 0.4))
     {
         day_seen: [STATISTICS_MAX_GRAPH_DAYS] s32
         day_first_x: [STATISTICS_MAX_GRAPH_DAYS] s32
@@ -462,9 +468,11 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
                     avg_seconds = day_totals[i] / day_points[i]
                     avg_y = plot_y + plot_h - (avg_seconds * (plot_h - AppScale(10))) / max_hold
                     if has_prev {
-                        DrawLine(prev_x, prev_y, day_first_x[i], avg_y, accent)
+                        statistics_line(prev_x, prev_y, day_first_x[i], avg_y,
+                            accent)
                     }
-                    DrawLine(day_first_x[i], avg_y, day_last_x[i], avg_y, accent)
+                    statistics_line(day_first_x[i], avg_y, day_last_x[i],
+                        avg_y, accent)
                     prev_x = day_last_x[i]
                     prev_y = avg_y
                     has_prev = true
@@ -478,8 +486,11 @@ statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContex
     {
         i: s32 = 0
         while i < point_count {
-            DrawCircle(points[i].x, points[i].y,
-                cast(float32)AppScale(3), accent)
+            dot := AppScale(3)
+            PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{
+                    cast(float32)(points[i].x - dot),
+                    cast(float32)(points[i].y - dot), cast(float32)(dot * 2),
+                    cast(float32)(dot * 2)}, cast(float32)dot, 8, accent)
             i += 1
         }
 
@@ -587,34 +598,35 @@ statistics_answer_stats :: (active: *Habit) -> s32 {
     return statistics_answers_count
 }
 
-statistics_answer_title_height :: (title: string, width: s32) -> s32 {
-    return AppParagraphHeight(title, width, Text16, AppScale(3))
-}
-
-STATISTICS_METRIC_ROW :: 66 + 22
-STATISTICS_CHART_ROW :: 128 + 24
+STATISTICS_CARD_GAP :: 10
+STATISTICS_SECTION_GAP :: 28
+STATISTICS_CHART_HEIGHT :: 128
+STATISTICS_ANSWER_ROW :: 40
 
 // One question's statistics below its title: two figures, then its
-// numbers or times as a chart, or the latest written answers.
+// numbers or times as a chart, or how often it was answered with the
+// latest written answers on the same card.
 statistics_answer_height :: (stats: *HabitAnswerStats, title: string,
     width: s32) -> s32 {
-    height := statistics_answer_title_height(title, width) + AppScale(10) +
-    AppScale(STATISTICS_METRIC_ROW)
+    height := SectionTitleHeight(title, width) + AppScale(10) +
+    AppScale(FIGURE_CARD_HEIGHT)
     if stats.answer_type == HABIT_ANSWER_TIME ||
     stats.answer_type == HABIT_ANSWER_NUMBER {
-        height += AppScale(STATISTICS_CHART_ROW)
+        height += AppScale(STATISTICS_CARD_GAP) +
+        AppScale(STATISTICS_CHART_HEIGHT)
     } else if stats.answer_type == HABIT_ANSWER_TEXT {
-        height += stats.recent_count * AppScale(26) + AppScale(14)
+        height += stats.recent_count * AppScale(STATISTICS_ANSWER_ROW)
     }
-    return height
+    return height + AppScale(STATISTICS_SECTION_GAP)
 }
 
 // A span habit's statistics: their average and longest length, a chart of
 // the lengths, and when they started and ended on average.
 statistics_span_height :: (width: s32) -> s32 {
-    return statistics_answer_title_height(LocaleText("habit_stats_spans_title"),
-        width) + AppScale(10) + AppScale(STATISTICS_METRIC_ROW) +
-    AppScale(STATISTICS_CHART_ROW) + AppScale(STATISTICS_METRIC_ROW)
+    return SectionTitleHeight(LocaleText("habit_stats_spans_title"), width) +
+    AppScale(10) + AppScale(FIGURE_CARD_HEIGHT) * 2 +
+    AppScale(STATISTICS_CHART_HEIGHT) + AppScale(STATISTICS_CARD_GAP) * 2 +
+    AppScale(STATISTICS_SECTION_GAP)
 }
 
 statistics_answers_height :: (active: *Habit, width: s32) -> s32 {
@@ -622,14 +634,13 @@ statistics_answers_height :: (active: *Habit, width: s32) -> s32 {
         return 0
     }
     count := statistics_answer_stats(active)
-    // The entries start a little below the page's fixed height.
-    height := AppScale(48)
+    height: s32 = 0
     if active.span != 0 {
         height += statistics_span_height(width)
     }
     if count > 0 {
-        height += statistics_answer_title_height(
-            LocaleText("habit_stats_answers_title"), width) + AppScale(10)
+        height += SectionTitleHeight(LocaleText("habit_stats_answers_title"),
+            width) + AppScale(10)
     }
     index: s32 = 0
     while index < count {
@@ -667,13 +678,13 @@ statistics_on_target_text :: (stats: *HabitAnswerStats, output: []u8) -> string 
 // are lines across the chart.
 statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
     width: s32, accent: Color) {
-    chart_h := AppScale(128)
+    chart_h := AppScale(STATISTICS_CHART_HEIGHT)
     axis_w := AppScale(56)
     plot_x := x + axis_w
-    plot_y := y + AppScale(12)
-    plot_w := width - axis_w - AppScale(10)
-    plot_h := chart_h - AppScale(24)
-    DrawRectangle(x, y, width, chart_h, DarkenColor(StyleTokenColor("canvas"), 7))
+    plot_y := y + AppScale(16)
+    plot_w := width - axis_w - AppScale(16)
+    plot_h := chart_h - AppScale(32)
+    statistics_chart_card(x, y, width, chart_h)
     if stats.point_count <= 0 || plot_w <= 0 {
         return
     }
@@ -692,17 +703,19 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
     }
     label: [16]u8
     Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + AppScale(6)),
+            .bounds = Rectangle.{cast(float32)(x + AppScale(10)),
                 cast(float32)(plot_y - AppScale(6)), 0, 0},
             .text = FrameTextHold(*CurrentApp().ui.frame_text,
             statistics_answer_value_text(stats, high, label[:])),
-            .font = Text12, .wrap = cast(TextWrap)TextWrapNone})
+            .font = Text12, .class_name = MutedTextClass(),
+            .wrap = cast(TextWrap)TextWrapNone})
     Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + AppScale(6)),
+            .bounds = Rectangle.{cast(float32)(x + AppScale(10)),
                 cast(float32)(plot_y + plot_h - AppScale(10)), 0, 0},
             .text = FrameTextHold(*CurrentApp().ui.frame_text,
             statistics_answer_value_text(stats, low, label[:])),
-            .font = Text12, .wrap = cast(TextWrap)TextWrapNone})
+            .font = Text12, .class_name = MutedTextClass(),
+            .wrap = cast(TextWrap)TextWrapNone})
     muted := Fade(StyleTokenColor("text"), 0.35)
     // The goal's bounds, where they fall inside the chart.
     bounds: [2]s32 = .[-1, -1]
@@ -715,7 +728,10 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
     for bound: bounds {
         if bound >= low && bound <= high {
             line_y := plot_y + plot_h - (bound - low) * plot_h / (high - low)
-            DrawRectangle(plot_x, line_y, plot_w, AppScale(1), Fade(accent, 0.6))
+            PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{
+                    cast(float32)plot_x, cast(float32)line_y,
+                    cast(float32)plot_w, cast(float32)AppScale(1)}, 0.0, 1,
+                Fade(accent, 0.6))
         }
     }
     slot_w := plot_w / HABIT_ANSWER_STATS_DAYS
@@ -732,7 +748,10 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
         if is_time {
             dot := AppScale(8)
             dot_y := plot_y + (high - point.value) * (plot_h - dot) / (high - low)
-            DrawRectangle(slot_x + (slot_w - dot) / 2, dot_y, dot, dot, color)
+            PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{
+                    cast(float32)(slot_x + (slot_w - dot) / 2),
+                    cast(float32)dot_y, cast(float32)dot, cast(float32)dot},
+                cast(float32)(dot / 2), 8, color)
         } else {
             share := slot_w / per_day[point.slot]
             if share < 1 { share = 1 }
@@ -740,7 +759,7 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
             if bar_h < AppScale(3) { bar_h = AppScale(3) }
             bar_w := share - AppScale(2)
             if bar_w < 1 { bar_w = 1 }
-            DrawRectangle(slot_x + placed[point.slot] * share + 1,
+            statistics_bar(slot_x + placed[point.slot] * share + 1,
                 plot_y + plot_h - bar_h, bar_w, bar_h,
                 ifx point.good == 0 then color else LightenColor(color, 12))
             placed[point.slot] += 1
@@ -748,21 +767,71 @@ statistics_draw_answer_chart :: (stats: *HabitAnswerStats, x: s32, y: s32,
     }
 }
 
-statistics_draw_metric_pair :: (x: s32, y: s32, width: s32,
+statistics_draw_figure_pair :: (x: s32, y: s32, width: s32,
     first_label: string, first: string, second_label: string, second: string,
     accent: Color) {
-    gap := AppScale(8)
+    gap := AppScale(STATISTICS_CARD_GAP)
     half := (width - gap) / 2
-    statistics_draw_metric(x, y, half, AppScale(66), first_label,
-        FrameTextHold(*CurrentApp().ui.frame_text, first), accent)
-    statistics_draw_metric(x + half + gap, y, width - half - gap, AppScale(66),
-        second_label, FrameTextHold(*CurrentApp().ui.frame_text, second),
-        LightenColor(accent, 20))
+    statistics_figure(x, y, half, first_label, first, accent)
+    statistics_figure(x + half + gap, y, width - half - gap, second_label,
+        second, accent)
+}
+
+// How often a written question was answered, with its latest answers
+// below on the same card: each answer's day muted beside it.
+statistics_draw_text_answers :: (stats: *HabitAnswerStats, answered: string,
+    x: s32, y: s32, width: s32, accent: Color) {
+    session := CurrentApp().ui.session
+    row_h := AppScale(STATISTICS_ANSWER_ROW)
+    height := AppScale(FIGURE_CARD_HEIGHT) + stats.recent_count * row_h
+    FigureCard(session, Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)width, cast(float32)height},
+        LocaleText("habit_stats_answered"),
+        FrameTextHold(*CurrentApp().ui.frame_text, answered), accent)
+    inset := AppScale(5) + AppScale(CARD_PADDING)
+    row_x := x + inset
+    row_w := width - inset - AppScale(CARD_PADDING)
+    date_w := AppTextWidth("0000-00-00", AppSmallFontSize()) + AppScale(20)
+    row_y := y + AppScale(FIGURE_CARD_HEIGHT)
+    index: s32 = 0
+    while index < stats.recent_count {
+        PaintRoundedFill(session, -1, Rectangle.{cast(float32)row_x,
+                cast(float32)row_y, cast(float32)row_w,
+                cast(float32)AppScale(1)}, 0.0, 1,
+            Fade(StyleTokenColor("text"), 0.1))
+        day := stats.recent_days[index]
+        date: [16]u8
+        args: [3]FormatArg
+        args[0].number = day / 10000
+        args[1].number = (day / 100) % 100
+        args[2].number = day % 100
+        unused FormatTemplate("%04d-%02d-%02d", args[:], date[:])
+        Text(session, TextProps.{
+                .bounds = Rectangle.{cast(float32)row_x, cast(float32)row_y,
+                    cast(float32)date_w, cast(float32)row_h},
+                .text = FrameTextHold(*CurrentApp().ui.frame_text,
+                AppTextFromCString(*date[0], 16)),
+                .font = AppSmallFontSize(), .class_name = MutedTextClass(),
+                .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapNone})
+        Text(session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(row_x + date_w),
+                    cast(float32)row_y, cast(float32)(row_w - date_w),
+                    cast(float32)row_h},
+                .text = FrameTextHold(*CurrentApp().ui.frame_text,
+                AppTextFromCString(*stats.recent[index][0],
+                HABIT_ANSWER_SIZE)),
+                .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapEllipsis})
+        row_y += row_h
+        index += 1
+    }
 }
 
 statistics_draw_answer :: (stats: *HabitAnswerStats, title: string, x: s32,
     y: s32, width: s32, accent: Color) {
-    y += statistics_draw_section_title(title, x, y, width) + AppScale(10)
+    y += SectionTitle(CurrentApp().ui.session, title, x, y, width) +
+    AppScale(10)
     first: [48]u8
     second: [48]u8
     first_label := LocaleText("habit_stats_average")
@@ -775,75 +844,51 @@ statistics_draw_answer :: (stats: *HabitAnswerStats, title: string, x: s32,
     answered_args[1].number = HABIT_ANSWER_STATS_DAYS
     unused FormatTemplate("%d/%d", answered_args[:], answered[:])
     if stats.answer_type == HABIT_ANSWER_TEXT {
-        statistics_draw_metric(x, y, width, AppScale(66),
-            LocaleText("habit_stats_answered"),
-            FrameTextHold(*CurrentApp().ui.frame_text,
-            AppTextFromCString(*answered[0], 24)), accent)
-    } else {
-        if stats.answer_type == HABIT_ANSWER_YES_NO {
-            first_label = LocaleText("habit_answer_yes")
-            second_label = LocaleText("habit_stats_answered")
-            second_text = AppTextFromCString(*answered[0], 24)
-            if stats.answered > 0 {
-                args: [1]FormatArg
-                args[0].number = (stats.yes * 100 + stats.answered / 2) / stats.answered
-                unused FormatTemplate("%d%%", args[:], first[:])
-                first_text = AppTextFromCString(*first[0], 48)
-            }
-        } else if stats.point_count > 0 {
-            average := HabitAnswerStatsAverage100(stats)
-            if stats.answer_type == HABIT_ANSWER_TIME {
-                first_text = HabitAnswerTimeText(cast(s32)((average + 50) / 100), first[:])
-                low: [16]u8
-                high: [16]u8
-                args: [2]FormatArg
-                args[0].text = HabitAnswerTimeText(stats.lowest, low[:])
-                args[0].is_text = true
-                args[1].text = HabitAnswerTimeText(stats.highest, high[:])
-                args[1].is_text = true
-                unused FormatTemplate("%s - %s", args[:], second[:])
-                second_text = AppTextFromCString(*second[0], 48)
-                second_label = LocaleText("habit_stats_time_range")
-            } else {
-                first_text = HabitAnswerDecimalText(average, first[:])
-                unused AppFormatS64(stats.sum, second[:])
-                second_text = AppTextFromCString(*second[0], 48)
-            }
-        }
-        // With a goal, the second figure is how many were on target.
-        if stats.judged > 0 {
-            second_label = LocaleText("habit_stats_on_target")
-            second_text = statistics_on_target_text(stats, second[:])
-        }
-        statistics_draw_metric_pair(x, y, width, first_label, first_text,
-            second_label, second_text, accent)
+        statistics_draw_text_answers(stats,
+            AppTextFromCString(*answered[0], 24), x, y, width, accent)
+        return
     }
-    y += AppScale(STATISTICS_METRIC_ROW)
+    if stats.answer_type == HABIT_ANSWER_YES_NO {
+        first_label = LocaleText("habit_answer_yes")
+        second_label = LocaleText("habit_stats_answered")
+        second_text = AppTextFromCString(*answered[0], 24)
+        if stats.answered > 0 {
+            args: [1]FormatArg
+            args[0].number = (stats.yes * 100 + stats.answered / 2) / stats.answered
+            unused FormatTemplate("%d%%", args[:], first[:])
+            first_text = AppTextFromCString(*first[0], 48)
+        }
+    } else if stats.point_count > 0 {
+        average := HabitAnswerStatsAverage100(stats)
+        if stats.answer_type == HABIT_ANSWER_TIME {
+            first_text = HabitAnswerTimeText(cast(s32)((average + 50) / 100), first[:])
+            low: [16]u8
+            high: [16]u8
+            args: [2]FormatArg
+            args[0].text = HabitAnswerTimeText(stats.lowest, low[:])
+            args[0].is_text = true
+            args[1].text = HabitAnswerTimeText(stats.highest, high[:])
+            args[1].is_text = true
+            unused FormatTemplate("%s - %s", args[:], second[:])
+            second_text = AppTextFromCString(*second[0], 48)
+            second_label = LocaleText("habit_stats_time_range")
+        } else {
+            first_text = HabitAnswerDecimalText(average, first[:])
+            unused AppFormatS64(stats.sum, second[:])
+            second_text = AppTextFromCString(*second[0], 48)
+        }
+    }
+    // With a goal, the second figure is how many were on target.
+    if stats.judged > 0 {
+        second_label = LocaleText("habit_stats_on_target")
+        second_text = statistics_on_target_text(stats, second[:])
+    }
+    statistics_draw_figure_pair(x, y, width, first_label, first_text,
+        second_label, second_text, accent)
+    y += AppScale(FIGURE_CARD_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
     if stats.answer_type == HABIT_ANSWER_TIME ||
     stats.answer_type == HABIT_ANSWER_NUMBER {
         statistics_draw_answer_chart(stats, x, y, width, accent)
-    } else if stats.answer_type == HABIT_ANSWER_TEXT {
-        index: s32 = 0
-        while index < stats.recent_count {
-            day := stats.recent_days[index]
-            line: [HABIT_ANSWER_SIZE + 32]u8
-            args: [4]FormatArg
-            args[0].number = day / 10000
-            args[1].number = (day / 100) % 100
-            args[2].number = day % 100
-            args[3].text = AppTextFromCString(*stats.recent[index][0],
-                HABIT_ANSWER_SIZE)
-            args[3].is_text = true
-            unused FormatTemplate("%04d-%02d-%02d   %s", args[:], line[:])
-            Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)width, cast(float32)AppScale(24)},
-                    .text = FrameTextHold(*CurrentApp().ui.frame_text,
-                    AppTextFromCString(*line[0], cast(s32)line.count)),
-                    .wrap = cast(TextWrap)TextWrapNone})
-            y += AppScale(26)
-            index += 1
-        }
     }
 }
 
@@ -851,8 +896,8 @@ statistics_draw_answer :: (stats: *HabitAnswerStats, title: string, x: s32,
 // ended on average. Spans are measured, not judged.
 statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
     lengths := *statistics_spans[0]
-    y += statistics_draw_section_title(LocaleText("habit_stats_spans_title"),
-        x, y, width) + AppScale(10)
+    y += SectionTitle(CurrentApp().ui.session,
+        LocaleText("habit_stats_spans_title"), x, y, width) + AppScale(10)
     first: [48]u8
     second: [48]u8
     first_text := "-"
@@ -862,11 +907,11 @@ statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
             50) / 100), first[:])
         second_text = HabitSpanText(lengths.highest, second[:])
     }
-    statistics_draw_metric_pair(x, y, width, LocaleText("habit_stats_average"),
+    statistics_draw_figure_pair(x, y, width, LocaleText("habit_stats_average"),
         first_text, LocaleText("habit_stats_longest"), second_text, accent)
-    y += AppScale(STATISTICS_METRIC_ROW)
+    y += AppScale(FIGURE_CARD_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
     statistics_draw_answer_chart(lengths, x, y, width, accent)
-    y += AppScale(STATISTICS_CHART_ROW)
+    y += AppScale(STATISTICS_CHART_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
     starts := *statistics_spans[1]
     ends := *statistics_spans[2]
     start_text := "-"
@@ -877,7 +922,7 @@ statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
         end_text = HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(ends) +
             50) / 100), second[:])
     }
-    statistics_draw_metric_pair(x, y, width, LocaleText("habit_stats_started"),
+    statistics_draw_figure_pair(x, y, width, LocaleText("habit_stats_started"),
         start_text, LocaleText("habit_stats_ended"), end_text, accent)
 }
 
@@ -894,8 +939,8 @@ statistics_draw_answers :: (active: *Habit, x: s32, y: s32, width: s32) {
     if count <= 0 {
         return
     }
-    y += statistics_draw_section_title(LocaleText("habit_stats_answers_title"),
-        x, y, width) + AppScale(10)
+    y += SectionTitle(CurrentApp().ui.session,
+        LocaleText("habit_stats_answers_title"), x, y, width) + AppScale(10)
     index: s32 = 0
     while index < count {
         title := HabitQuestionText(*active.questions[index])
@@ -916,9 +961,10 @@ statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLi
     last_30_total: s32 = 30
     weekday_counts: [7] s32
     max_weekday: s32 = 1
-    chart_h := AppScale(128)
-    metrics_gap := AppScale(8)
-    metric_h := AppScale(66)
+    chart_h := AppScale(STATISTICS_CHART_HEIGHT)
+    metrics_gap := AppScale(STATISTICS_CARD_GAP)
+    metric_h := AppScale(FIGURE_CARD_HEIGHT)
+    section_gap := AppScale(STATISTICS_SECTION_GAP)
     metric_w: s32 = 0
     value: [64] u8
     has_wim_hof_rounds := statistics_has_wim_hof_rounds(linked_ctx)
@@ -988,7 +1034,7 @@ statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLi
 
     metric_w = (content_w - metrics_gap) / 2
     statistics_format_day_count(*value[0], size_of(type_of(value)), current_streak)
-    statistics_draw_metric(content_x, y, metric_w, metric_h,
+    statistics_figure(content_x, y, metric_w,
         LocaleText("habit_stats_current_streak"),
         AppTextFromCString(*value[0], 64), active.color)
     days_args: [2]FormatArg = .[
@@ -996,55 +1042,62 @@ statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLi
         FormatArg.{.number = last_30_total}
     ]
     FormatTemplate("%d/%d", days_args[:], value[:])
-    statistics_draw_metric(content_x + metric_w + metrics_gap, y,
-        content_w - metric_w - metrics_gap, metric_h,
+    statistics_figure(content_x + metric_w + metrics_gap, y,
+        content_w - metric_w - metrics_gap,
         LocaleText("habit_stats_last_30_days"),
-        AppTextFromCString(*value[0], 64), LightenColor(active.color, 24))
-    y += metric_h + AppScale(22)
+        AppTextFromCString(*value[0], 64), active.color)
+    y += metric_h + section_gap
 
     if mood_count > 0 {
         y += statistics_draw_mood_panel(content_x, y, content_w, *mood_stats,
-            active.color) + AppScale(22)
+            active.color) + section_gap
     }
 
     if has_wim_hof_rounds != 0 {
-        y += statistics_draw_section_title(LocaleText("habit_stats_wim_hof_hold_rounds"), content_x, y, content_w) + AppScale(10)
+        y += SectionTitle(app.ui.session,
+            LocaleText("habit_stats_wim_hof_hold_rounds"), content_x, y,
+            content_w) + AppScale(10)
         statistics_draw_hold_range_selector(app, content_x, y, AppScale(118))
         y += AppScale(42)
         statistics_draw_hold_graph(app, linked_ctx, content_x, y,
             content_w, today_index, EXERCISE_WIM_HOF, active.color)
-        y += AppScale(194)
+        y += AppScale(STATISTICS_HOLD_GRAPH_HEIGHT) + section_gap
     }
 
-    y += statistics_draw_section_title(LocaleText("habit_stats_weekday_pattern"), content_x, y, content_w) + AppScale(10)
-    DrawRectangle(content_x, y, content_w, chart_h, DarkenColor(StyleTokenColor("canvas"), 7))
+    y += SectionTitle(app.ui.session,
+        LocaleText("habit_stats_weekday_pattern"), content_x, y, content_w) +
+    AppScale(10)
+    statistics_chart_card(content_x, y, content_w, chart_h)
     {
         labels: [7] string = .["S", "M", "T", "W", "T", "F", "S"]
-        slot_w := content_w / 7
+        inner_x := content_x + AppScale(8)
+        slot_w := (content_w - AppScale(16)) / 7
         {
             i: s32 = 0
             while i < 7 {
 
                 h := AppScale(3)
                 if weekday_counts[i] > 0 {
-                    h = (weekday_counts[i] * (chart_h - AppScale(34))) /
+                    h = (weekday_counts[i] * (chart_h - AppScale(44))) /
                         max_weekday
                 }
-                x := content_x + i * slot_w + AppScale(5)
+                x := inner_x + i * slot_w + AppScale(5)
                 w := slot_w - AppScale(10)
-                bar_y := y + chart_h - h - AppScale(22)
+                bar_y := y + chart_h - h - AppScale(28)
 
                 if w < AppScale(4) { w = AppScale(4) }
-                DrawRectangle(x, bar_y, w, h,
+                statistics_bar(x, bar_y, w, h,
                     ifx (weekday_counts[i] > 0) then
                     (LightenColor(active.color, 12)) else
-                    (DarkenColor(StyleTokenColor("canvas"), 24)))
-                Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{
-                        cast(float32)(x + (w - AppTextWidth(labels[i], Text12)) / 2),
-                        cast(float32)(y + chart_h - AppScale(18)), 0, 0},
+                    (Fade(StyleTokenColor("text"), 0.16)))
+                Text(app.ui.session, TextProps.{
+                    .bounds = Rectangle.{cast(float32)x,
+                        cast(float32)(y + chart_h - AppScale(24)),
+                        cast(float32)w, cast(float32)AppScale(18)},
                     .text = labels[i],
                     .font = Text12,
+                    .class_name = MutedTextClass(),
+                    .align = cast(TextAlign)TextAlignCenter,
                     .wrap = cast(TextWrap)TextWrapNone
                 })
 
@@ -1052,29 +1105,58 @@ statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLi
             }
         }
     }
-    y += chart_h + AppScale(24)
+    y += chart_h + section_gap
 
     if linked_ctx != null && linked_ctx.count > 0 {
         best: [32] u8
         total: [32] u8
-        y += statistics_draw_section_title(LocaleText("habit_stats_practice_time"), content_x, y, content_w) + AppScale(10)
+        y += SectionTitle(app.ui.session,
+            LocaleText("habit_stats_practice_time"), content_x, y,
+            content_w) + AppScale(10)
         habit_format_duration(linked_ctx.best_seconds, *best[0], size_of(type_of(best)))
         habit_format_duration(linked_ctx.total_seconds, *total[0], size_of(type_of(total)))
-        statistics_draw_metric(content_x, y, metric_w, metric_h,
+        statistics_figure(content_x, y, metric_w,
             LocaleText("habit_stats_best_hold"),
             AppTextFromCString(*best[0], 32), active.color)
-        statistics_draw_metric(content_x + metric_w + metrics_gap, y,
-            content_w - metric_w - metrics_gap, metric_h,
+        statistics_figure(content_x + metric_w + metrics_gap, y,
+            content_w - metric_w - metrics_gap,
             LocaleText("habit_stats_total_hold"),
-            AppTextFromCString(*total[0], 32), LightenColor(active.color, 20))
+            AppTextFromCString(*total[0], 32), active.color)
     } else {
         statistics_format_day_count(*value[0], size_of(type_of(value)), best_streak)
-        statistics_draw_metric(content_x, y, content_w, metric_h,
+        statistics_figure(content_x, y, content_w,
             LocaleText("habit_stats_best_streak"),
             AppTextFromCString(*value[0], 64), active.color)
     }
-    y += metric_h + AppScale(32)
+    y += metric_h + section_gap
     statistics_draw_answers(active, content_x, y, content_w)
+}
+
+STATISTICS_HOLD_GRAPH_HEIGHT :: 170
+
+// The page's height as statistics_draw_view lays it out.
+statistics_view_height :: (active: *Habit, linked_ctx: *HabitLinkedContext,
+    mood_count: s32, content_w: s32) -> s32 {
+    section_gap := AppScale(STATISTICS_SECTION_GAP)
+    height := AppScale(8) + AppScale(FIGURE_CARD_HEIGHT) + section_gap
+    if mood_count > 0 {
+        height += statistics_mood_panel_height(content_w) + section_gap
+    }
+    if statistics_has_wim_hof_rounds(linked_ctx) != 0 {
+        height += SectionTitleHeight(
+            LocaleText("habit_stats_wim_hof_hold_rounds"), content_w) +
+        AppScale(10) + AppScale(42) + AppScale(STATISTICS_HOLD_GRAPH_HEIGHT) +
+        section_gap
+    }
+    height += SectionTitleHeight(LocaleText("habit_stats_weekday_pattern"),
+        content_w) + AppScale(10) + AppScale(STATISTICS_CHART_HEIGHT) +
+    section_gap
+    if linked_ctx != null && linked_ctx.count > 0 {
+        height += SectionTitleHeight(LocaleText("habit_stats_practice_time"),
+            content_w) + AppScale(10)
+    }
+    height += AppScale(FIGURE_CARD_HEIGHT) + section_gap
+    return height + statistics_answers_height(active, content_w)
 }
 
 draw_statistics_content :: (app: *InnerBreeze, content_top: s32) {
@@ -1117,8 +1199,8 @@ draw_statistics_content :: (app: *InnerBreeze, content_top: s32) {
     page_ctx.linked_count = ifx (linked_ctx != null) then (linked_ctx.count) else (0)
     page_ctx.mood_count = page_mood_count
     GetCenteredColumn(max_w, GetPageSidePadding(), *content_x, *content_w)
-    content_h = statistics_content_height(page_ctx.linked_count,
-        page_ctx.mood_count) + statistics_answers_height(active, content_w)
+    content_h = statistics_view_height(active, linked_ctx,
+        page_ctx.mood_count, content_w)
     {
         scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0,
             cast(float32)scroll_y, cast(float32)app.ui.view_width,
