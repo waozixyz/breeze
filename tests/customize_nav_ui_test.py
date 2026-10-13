@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                   "apps_setup_done": 1, "enabled_apps": 22, "lumi_introduced": 1,
                   "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "ui_scale": 10,
                   "navigation_placement": 0 if NARROW else 1, "navigation_collapsed": 0,
-                  "cells_auto_update": 0, "apps_last_update_check": 1900000000,
+                  "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                   "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,
                   "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
                   "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}

@@ -135,6 +135,9 @@ static void request(void) {
 }
 
 int32_t RunPackageManagerFixture(void) {
+    pump();
+    assert(starts == 0); /* Unasked means no implicit request. */
+    assert(!package_manager_PackageAutomaticEnabled());
     package_manager_PackageSetAutomatic(false);
     pump();
     assert(starts == 0); /* Off means no implicit request. */

@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                   "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
-                  "cells_auto_update": 0, "apps_last_update_check": 1900000000,
+                  "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                   "tutorial_seen": 1, "habits_guide_seen": 1, "launcher_guide_seen": 1,
                   "ui_scale": 10, "navigation_placement": 0 if WIDTH < 500 else 1,
                   "navigation_collapsed": 0, "launcher_favorite_count": 5, "main_tab": 3,

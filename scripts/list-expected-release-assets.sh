@@ -28,6 +28,7 @@ inbe-$version-armeabi-v7a.apk
 inbe-$version-x86.apk
 inbe-$version-x86_64.apk
 inbe-$version-gplay.apk
+inbe-$version-fdroid.apk
 inbe-$version-gplay.aab
 inbe-web.zip
 inbe-chrome-web-store.zip

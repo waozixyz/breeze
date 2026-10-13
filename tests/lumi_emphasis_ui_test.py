@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-emphasis-') as directory:
         settings = dict(enabled_apps='31', app_used_lists='1', app_used_lumi='1',
                         app_used_habits='1', app_used_practices='1', app_used_diary='1',
                         main_tab='4', language='en', language_setup_done='1', apps_setup_done='1',
-                        lumi_introduced='1', cells_auto_update='0', tutorial_seen='1',
+                        lumi_introduced='1', package_updates_allowed='0', tutorial_seen='1',
                         habits_guide_seen='1', lumi_archive_migrated='0', lumi_chat=json.dumps(history))
         for key, value in settings.items():
             db.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) '
