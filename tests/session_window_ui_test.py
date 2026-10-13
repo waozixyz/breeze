@@ -235,7 +235,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     # was started from, not to the first pinned app.
     values = dict(enabled_apps="31", main_tab="1", language="en", language_setup_done="1",
                   apps_setup_done="1", launcher_guide_seen="1", lumi_introduced="1", tutorial_seen="1",
-                  package_updates_allowed="0", habits_guide_seen="1", launcher_favorite_count="3",
+                  package_updates_allowed="0", habits_guide_seen="1", lumi_guides_seen="127", launcher_favorite_count="3",
                   launcher_favorite_0="12", launcher_favorite_1="1", launcher_favorite_2="2",
                   picture_in_picture="0")
     values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})

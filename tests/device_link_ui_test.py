@@ -116,7 +116,7 @@ def prepare(profile, server):
         for key, value in dict(sync_enabled=0, sync_server_url=server, language="en",
                                language_setup_done=1, apps_setup_done=1, enabled_apps=31,
                                tutorial_seen=1, launcher_guide_seen=1, practice_guide_seen=1,
-                               habits_guide_seen=1, lumi_introduced=1, package_updates_allowed=0).items():
+                               habits_guide_seen=1, lumi_guides_seen=127, lumi_introduced=1, package_updates_allowed=0).items():
             database.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                              "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
                              (user, key, str(value)))

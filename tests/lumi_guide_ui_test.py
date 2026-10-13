@@ -134,7 +134,7 @@ with contextlib.ExitStack() as stack:
             user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         seed(profile, user, {"language": "en", "language_system": 0, "language_setup_done": 1,
                              "apps_setup_done": 1, "launcher_guide_seen": 1, "main_tab": 1,
-                             "tutorial_seen": 0, "tutorial_step": 0, "habits_guide_seen": 1,
+                             "tutorial_seen": 0, "tutorial_step": 0, "habits_guide_seen": 1, "lumi_guides_seen": 127,
                              "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
         with application(profile, "guide") as (window, log):
             # Lumi flies in and starts typing her first line; it is not all

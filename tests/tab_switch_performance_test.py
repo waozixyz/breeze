@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
         values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                   "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                   "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
-                  "tutorial_seen": 1, "habits_guide_seen": 1, "launcher_guide_seen": 1,
+                  "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1,
                   "ui_scale": 10, "navigation_placement": 0 if WIDTH < 500 else 1,
                   "navigation_collapsed": 0, "launcher_favorite_count": 5, "main_tab": 3,
                   **{f"launcher_favorite_{i}": route for i, route in enumerate((3, 1, 2, 11, 12))},

@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
     database.execute("UPDATE meta SET value=? WHERE key='sync_data_owner_public_id'", (owner,))
     for key, value in dict(sync_enabled=1, sync_server_url='', language='en', language_setup_done=1,
                            enabled_apps=31, tutorial_seen=1, launcher_guide_seen=1,
-                           practice_guide_seen=1, habits_guide_seen=1).items():
+                           practice_guide_seen=1, habits_guide_seen=1, lumi_guides_seen=127).items():
         setting(key, value)
     remote = dict(version=1, session_id='a' * 32, device_id='b' * 64, control_id='',
                   time=int(time.time()), revision=1, active=1, paused=0, screen=2,

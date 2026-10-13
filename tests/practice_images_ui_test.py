@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory:
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         settings = {"language": "en", "language_system": 0, "language_setup_done": 1,
                     "apps_setup_done": 1, "main_tab": 1, "tutorial_seen": 1,
-                    "habits_guide_seen": 1, "launcher_guide_seen": 1, "package_updates_allowed": 0,
+                    "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1, "package_updates_allowed": 0,
                     "apps_last_update_check": 1900000000}
         for key, value in settings.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
