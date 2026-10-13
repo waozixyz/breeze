@@ -22,6 +22,8 @@ c :: #system_library "c";
 #import, file "../../app/exercise_types.zi";
 #import, file "../../habits/habit_icons.zi";
 #import, file "../../habits/habit_schedule.zi";
+#import, file "../../habits/habit_questions.zi";
+#import "date_time"
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/locale.zi";
 #import, file "../../app/app_modal_state.zi";
@@ -121,6 +123,8 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.schedule = HabitScheduleCurrent(*app.habits.items[index])
     app.habit_edit.reminder_hour = app.habits.items[index].reminder_hour
     app.habit_edit.icon = app.habits.items[index].icon
+    app.habit_edit.questions = app.habits.items[index].questions
+    app.habit_edit.question_count = app.habits.items[index].question_count
     AppCopyText(AppTextFromCString(*app.habits.items[index].name[0],
         HABIT_NAME_SIZE), app.habit_edit.text[:])
     AppCopyText(AppTextFromCString(*app.habits.items[index].description[0],
@@ -232,6 +236,8 @@ habit_edit_commit :: (app: *InnerBreeze) {
     !habit_edit_formula_valid(app) {
         return
     }
+    HabitQuestionsKeepWorded(app.habit_edit.questions[:],
+        *app.habit_edit.question_count)
     message := HabitsMessageFor(app, HABITS_COMMIT)
     message.active = app.habit_edit.active != 0
     message.is_new = app.habit_edit.is_new != 0
@@ -433,7 +439,144 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
         return habit_edit_schedule_height(app, width)
     }
     return AppScale(ifx (app.habit_edit.counter_enabled != 0)
-        then (148) else (96))
+        then (148) else (96)) + habit_edit_questions_height(app)
+}
+
+// The questions below the tracking options: a heading, each question with
+// its answer type under it, and the button that adds one.
+habit_edit_questions_height :: (app: *InnerBreeze) -> s32 {
+    return AppScale(48) + app.habit_edit.question_count * AppScale(104) +
+    AppScale(44)
+}
+
+habit_edit_answer_label :: (answer_type: s32) -> string {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        return LocaleText("habit_answer_number")
+    }
+    if answer_type == HABIT_ANSWER_TIME {
+        return LocaleText("habit_answer_time")
+    }
+    if answer_type == HABIT_ANSWER_YES_NO {
+        return LocaleText("habit_answer_yes_no")
+    }
+    return LocaleText("habit_answer_text")
+}
+
+habit_edit_question_field :: (app: *InnerBreeze, index: s32,
+    bounds: Rectangle) -> bool {
+    question := *app.habit_edit.questions[index]
+    focused := app.habit_edit.question_focused == index + 1
+    typed: [64]u8
+    field: TextFieldProps
+    field.key = KeyHash("habit/edit/question") + cast(u64)index
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text, HabitQuestionText(question))
+    field.placeholder = LocaleText("habit_question_placeholder")
+    if focused {
+        field.cursor = app.habit_edit.question_cursor
+        field.anchor = app.habit_edit.question_anchor
+        field.scroll_x = app.habit_edit.question_scroll_x
+    }
+    field.focused = focused
+    field.focus_id = 7720 + index
+    field.max_bytes = HABIT_QUESTION_TEXT_SIZE - 1
+    field.max_codepoints = HABIT_QUESTION_TEXT_SIZE - 1
+    field.input = SampleTextFieldInput(focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed {
+        unused AppReplaceText(question.text[:], result.edit.start,
+            result.edit.end, result.edit.replacement)
+    }
+    if result.focused {
+        app.habit_edit.question_focused = index + 1
+        app.habit_edit.question_cursor = result.cursor
+        app.habit_edit.question_anchor = result.anchor
+        app.habit_edit.question_scroll_x = result.scroll_x
+        habit_edit_focus_only(app, 5)
+    } else if focused {
+        app.habit_edit.question_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result.focused
+}
+
+// "Ask when done": each question's words with a button that removes it,
+// "Answer as" its type under them, and a button that adds a question.
+habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
+    viewport_y: s32, viewport_h: s32, content_h: s32) {
+    edit := *app.habit_edit
+    habit_edit_text(app, LocaleText("habit_questions_label"),
+        x, y + AppScale(12), width, AppScale(28))
+    y += AppScale(48)
+    remove_w := AppScale(44)
+    type_w := AppScale(160)
+    types: [HABIT_ANSWER_TYPE_COUNT]DropdownOption
+    answer_type: s32 = 0
+    while answer_type < HABIT_ANSWER_TYPE_COUNT {
+        types[answer_type].label = habit_edit_answer_label(answer_type + 1)
+        answer_type += 1
+    }
+    index: s32 = 0
+    while index < edit.question_count {
+        text_bounds := Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)(width - remove_w - AppScale(8)),
+            cast(float32)AppScale(44)}
+        was_focused := edit.question_focused == index + 1
+        if habit_edit_question_field(app, index, text_bounds) && !was_focused {
+            habit_edit_ensure_visible(app, viewport_y, viewport_h,
+                content_h, text_bounds)
+        }
+        removed := Button(app.ui.session, ButtonProps.{
+                .id = 7740 + index,
+                .bounds = Rectangle.{cast(float32)(x + width - remove_w),
+                    cast(float32)y, cast(float32)remove_w,
+                    cast(float32)AppScale(44)},
+                .label = "-",
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+        habit_edit_row_label(app, LocaleText("habit_answer_as"), x,
+            y + AppScale(48), width - type_w - AppScale(8))
+        menu: DropdownProps
+        menu.id = 7750 + index
+        menu.bounds = Rectangle.{cast(float32)(x + width - type_w),
+            cast(float32)(y + AppScale(52)), cast(float32)type_w,
+            cast(float32)AppScale(44)}
+        menu.selected_index = edit.questions[index].answer_type - 1
+        chosen := Dropdown(app.ui.session, menu, types[:])
+        if chosen.changed {
+            edit.questions[index].answer_type = chosen.selected_index + 1
+        }
+        if removed {
+            HabitQuestionRemove(edit.questions[:], *edit.question_count, index)
+            edit.question_focused = 0
+            return
+        }
+        y += AppScale(104)
+        index += 1
+    }
+    add_label: [96]u8
+    args: [1]FormatArg
+    args[0].text = LocaleText("habit_question_add")
+    args[0].is_text = true
+    unused FormatTemplate("+  %s", args[:], add_label[:])
+    if Button(app.ui.session, ButtonProps.{
+            .id = 7760,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(44)},
+            .label = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*add_label[0], 96)),
+            .disabled = edit.question_count >= HABIT_QUESTION_MAX,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 &&
+    HabitQuestionAdd(edit.questions[:], *edit.question_count, UnixNow()) {
+        edit.question_focused = edit.question_count
+        edit.question_cursor = 0
+        edit.question_anchor = 0
+        edit.question_scroll_x = 0
+        habit_edit_focus_only(app, 5)
+    }
 }
 
 // A section is a heading above a framed card holding its body.
@@ -745,6 +888,9 @@ habit_edit_focus_only :: (app: *InnerBreeze, field: s32) {
     app.habit_edit.description_focused = ifx field == 2 then 1 else 0
     app.habit_edit.counter_focused = ifx field == 3 then 1 else 0
     app.habit_edit.formula_focused = ifx field == 4 then 1 else 0
+    if field != 5 {
+        app.habit_edit.question_focused = 0
+    }
 }
 
 habit_edit_formula_field :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
@@ -1206,6 +1352,8 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
         app_open_modal(app, cast(ModalType)ModalHabitPracticePicker)
     }
+    habit_edit_questions(app, x, y + AppScale(44), width, viewport_y,
+        viewport_h, content_h)
 }
 
 habit_edit_modal :: (app: *InnerBreeze) -> bool {

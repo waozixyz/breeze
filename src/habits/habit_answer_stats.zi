@@ -1,0 +1,229 @@
+// What a habit's answers to one question add up to over its last days.
+#import, file "habit_types.zi";
+#import, file "habit_questions.zi";
+#import, file "../app/text_buffers.zi";
+
+HABIT_ANSWER_STATS_DAYS :: 30
+HABIT_ANSWER_RECENT :: 3
+HABIT_MINUTES_PER_DAY :: 1440
+
+HabitAnswerStats :: struct {
+    id: s64
+    answer_type: s32
+    // Days with an answer, and for numbers and times their sum, lowest and
+    // highest. Times are minutes after midnight; see HabitAnswerStatsFinish.
+    answered: s32
+    sum: s64
+    lowest: s32
+    highest: s32
+    yes: s32
+    no: s32
+    // Each day, oldest first: the day's number or time, or -1 without one.
+    values: [HABIT_ANSWER_STATS_DAYS]s32
+    // The latest text answers, newest first, and their days.
+    recent: [HABIT_ANSWER_RECENT][HABIT_ANSWER_SIZE]u8
+    recent_days: [HABIT_ANSWER_RECENT]s32
+    recent_count: s32
+}
+
+HabitAnswerStatsBegin :: (stats: *HabitAnswerStats, question: *HabitQuestion) {
+    stats.* = HabitAnswerStats.{}
+    stats.id = question.id
+    stats.answer_type = question.answer_type
+    day: s32 = 0
+    while day < HABIT_ANSWER_STATS_DAYS {
+        stats.values[day] = -1
+        day += 1
+    }
+}
+
+// A whole number of up to nine digits, or -1.
+HabitAnswerNumber :: (value: string) -> s32 {
+    if value.count == 0 || value.count > 9 {
+        return -1
+    }
+    number: s32 = 0
+    index: s64 = 0
+    while index < value.count {
+        if !HabitTimeDigit(value[index]) {
+            return -1
+        }
+        number = number * 10 + cast(s32)value[index] - 48
+        index += 1
+    }
+    return number
+}
+
+// Counts the answer of the day at slot, 0 the oldest; a later answer of the
+// same day is the one shown.
+HabitAnswerStatsAdd :: (stats: *HabitAnswerStats, slot: s32, local_date: s32,
+    value: string) {
+    if slot < 0 || slot >= HABIT_ANSWER_STATS_DAYS || value.count == 0 {
+        return
+    }
+    if stats.answer_type == HABIT_ANSWER_YES_NO {
+        if value == "yes" {
+            stats.yes += 1
+            stats.answered += 1
+        } else if value == "no" {
+            stats.no += 1
+            stats.answered += 1
+        }
+        return
+    }
+    if stats.answer_type == HABIT_ANSWER_TEXT {
+        stats.answered += 1
+        // Days come oldest first: each newer answer goes in front.
+        last := stats.recent_count
+        if last >= HABIT_ANSWER_RECENT {
+            last = HABIT_ANSWER_RECENT - 1
+        }
+        while last > 0 {
+            stats.recent[last] = stats.recent[last - 1]
+            stats.recent_days[last] = stats.recent_days[last - 1]
+            last -= 1
+        }
+        unused AppCopyText(value, stats.recent[0][:])
+        stats.recent_days[0] = local_date
+        if stats.recent_count < HABIT_ANSWER_RECENT {
+            stats.recent_count += 1
+        }
+        return
+    }
+    number: s32 = -1
+    if stats.answer_type == HABIT_ANSWER_TIME {
+        hours: s32 = 0
+        minutes: s32 = 0
+        if HabitTimeParts(value, *hours, *minutes) {
+            number = hours * 60 + minutes
+        }
+    } else {
+        number = HabitAnswerNumber(value)
+    }
+    if number < 0 || stats.values[slot] >= 0 {
+        return
+    }
+    stats.values[slot] = number
+    stats.answered += 1
+}
+
+// Where the day's clock is cut for times: at the end of the longest
+// stretch of the day without an answer. Times before the cut count as the
+// next day's, so bedtimes such as 23:30 and 00:30 average to midnight,
+// while times through the day, such as 07:00 to 09:00, keep midnight as
+// the cut (-1).
+HabitAnswerTimeCut :: (values: []s32) -> s32 {
+    sorted: [HABIT_ANSWER_STATS_DAYS]s32
+    count: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)values.count && count < HABIT_ANSWER_STATS_DAYS {
+        value := values[index]
+        if value >= 0 {
+            place := count
+            while place > 0 && sorted[place - 1] > value {
+                sorted[place] = sorted[place - 1]
+                place -= 1
+            }
+            sorted[place] = value
+            count += 1
+        }
+        index += 1
+    }
+    if count < 2 {
+        return -1
+    }
+    // The stretch over midnight, from the latest time to the earliest.
+    longest := sorted[0] + HABIT_MINUTES_PER_DAY - sorted[count - 1]
+    cut: s32 = -1
+    index = 1
+    while index < count {
+        gap := sorted[index] - sorted[index - 1]
+        if gap > longest {
+            longest = gap
+            cut = sorted[index]
+        }
+        index += 1
+    }
+    return cut
+}
+
+// Sums the days' numbers and times, with their lowest and highest. Times
+// before the cut (HabitAnswerTimeCut) count a day later; they are shown
+// modulo a day.
+HabitAnswerStatsFinish :: (stats: *HabitAnswerStats) {
+    if stats.answer_type != HABIT_ANSWER_TIME &&
+    stats.answer_type != HABIT_ANSWER_NUMBER {
+        return
+    }
+    if stats.answer_type == HABIT_ANSWER_TIME {
+        cut := HabitAnswerTimeCut(stats.values[:])
+        if cut >= 0 {
+            day: s32 = 0
+            while day < HABIT_ANSWER_STATS_DAYS {
+                if stats.values[day] >= 0 && stats.values[day] < cut {
+                    stats.values[day] += HABIT_MINUTES_PER_DAY
+                }
+                day += 1
+            }
+        }
+    }
+    stats.sum = 0
+    stats.lowest = -1
+    stats.highest = -1
+    day: s32 = 0
+    while day < HABIT_ANSWER_STATS_DAYS {
+        value := stats.values[day]
+        if value >= 0 {
+            stats.sum += cast(s64)value
+            if stats.lowest < 0 || value < stats.lowest {
+                stats.lowest = value
+            }
+            if value > stats.highest {
+                stats.highest = value
+            }
+        }
+        day += 1
+    }
+}
+
+// The average in hundredths, or -1 without answers.
+HabitAnswerStatsAverage100 :: (stats: *HabitAnswerStats) -> s64 {
+    if stats.answered <= 0 {
+        return -1
+    }
+    return (stats.sum * 100 + cast(s64)stats.answered / 2) /
+    cast(s64)stats.answered
+}
+
+// Minutes after midnight, of this or the next day, as "HH:MM".
+HabitAnswerTimeText :: (minutes: s32, output: []u8) -> string {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    if minutes < 0 {
+        return ""
+    }
+    minutes = minutes % HABIT_MINUTES_PER_DAY
+    cursor: s32 = 0
+    unused TextBufferAppendPaddedNumber(output, *cursor, minutes / 60, 2)
+    unused TextBufferAppendByte(output, *cursor, cast(u8)58)
+    unused TextBufferAppendPaddedNumber(output, *cursor, minutes % 60, 2)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// A number in hundredths with up to one decimal: 1250 is "12.5".
+HabitAnswerDecimalText :: (value_x100: s64, output: []u8) -> string {
+    if output.count > 0 {
+        output[0] = cast(u8)0
+    }
+    tenths := (value_x100 + 5) / 10
+    unused AppFormatS64(tenths / 10, output)
+    if tenths % 10 != 0 {
+        cursor := cast(s32)AppTextFromCString(*output[0],
+            cast(s32)output.count).count
+        unused TextBufferAppendByte(output, *cursor, cast(u8)46)
+        unused TextBufferAppendByte(output, *cursor,
+            cast(u8)(48 + tenths % 10))
+    }
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}

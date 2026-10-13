@@ -901,6 +901,8 @@ storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_append_int_field(json, "icon", cast(s64)sqlite3_column_int(stmt, 15))
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "schedule", AppTextFromCString(SqliteColumnText(stmt, 16), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "questions", AppTextFromCString(SqliteColumnText(stmt, 17), 65536))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -914,6 +916,8 @@ storage_append_habit_day_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_append_int_field(json, "count", cast(s64)sqlite3_column_int(stmt, 3))
     storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "answers", AppTextFromCString(SqliteColumnText(stmt, 5), 65536))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -1073,14 +1077,14 @@ storage_append_dated_payload_json :: (json: *StorageJsonBuilder, sql: string, id
 storage_append_habit_payload_json :: (json: *StorageJsonBuilder, habit_id: string) -> s32 {
     return storage_append_id_payload_json(
         json,
-        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule FROM habits WHERE user_id=?1 AND id=?2",
+        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions FROM habits WHERE user_id=?1 AND id=?2",
         habit_id, storage_append_habit_row_json)
 }
 
 storage_append_habit_day_payload_json :: (json: *StorageJsonBuilder, habit_id: string, local_date: s32) -> s32 {
     return storage_append_dated_payload_json(
         json,
-        "SELECT hd.habit_id,hd.local_date,hd.completed,hd.count,hd.updated_at FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=?1 AND hd.habit_id=?2 AND hd.local_date=?3",
+        "SELECT hd.habit_id,hd.local_date,hd.completed,hd.count,hd.updated_at,hd.answers FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=?1 AND hd.habit_id=?2 AND hd.local_date=?3",
         habit_id, local_date, storage_append_habit_day_row_json)
 }
 
@@ -2555,7 +2559,7 @@ storage_sync_status :: (status: *StorageSyncStatus) -> s32 {
 storage_purge_synced_deleted_data_sqls: [4] string = .[
 "DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at>0 AND id NOT IN  (SELECT entity_id FROM sync_outbox WHERE entity_type='session'))",
 "DELETE FROM sessions WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='session')",
-"DELETE FROM habit_days WHERE completed=0 AND count=0 AND session_count=0 AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.entity_type='habit_day' AND o.entity_id=habit_days.habit_id AND o.local_date=habit_days.local_date)",
+"DELETE FROM habit_days WHERE completed=0 AND count=0 AND session_count=0 AND answers='' AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.entity_type='habit_day' AND o.entity_id=habit_days.habit_id AND o.local_date=habit_days.local_date)",
 "DELETE FROM habits WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit')"
 ];
 

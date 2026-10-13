@@ -61,7 +61,8 @@ def load(database, habit, sequence):
     for day, value in enumerate(sequence):
         if value:
             database.execute(
-                "INSERT INTO habit_days VALUES (?,?,?,?,?,?)",
+                "INSERT INTO habit_days(habit_id,local_date,completed,count,"
+                "session_count,updated_at) VALUES (?,?,?,?,?,?)",
                 (habit, day, value, value, value, value))
 
 

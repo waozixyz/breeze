@@ -35,6 +35,9 @@
 #import, file "../storage/sync_result.zi";
 #import, file "../screens/elist_types.zi";
 #import, file "../screens/habits/edit.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../habits/habit_questions.zi";
+#import, file "../habits/habit_actions.zi";
 #import, file "../screens/lumi_screen.zi";
 #import, file "text_buffers.zi";
 #import, file "../app/exercise_types.zi";
@@ -157,6 +160,50 @@ screenshot_seed_habit_counts :: (app: *InnerBreeze) {
     habit_set_day_count(*app.habits, 2, screenshot_day_index_offset(1), 1)
     habit_set_day_count(*app.habits, 2, screenshot_day_index_offset(2), 12)
     habit_set_day_count(*app.habits, 2, screenshot_day_index_offset(4), 2)
+}
+
+// The habit_question scenes: the first habit asks four questions, and most
+// of the last two weeks have answers.
+screenshot_question_times: [14]string = .["", "07:10", "07:45", "08:05", "",
+"06:55", "07:30", "07:20", "08:15", "", "07:05", "07:40", "07:25", "07:50"];
+screenshot_question_meals: [3]string = .["Oatmeal", "Eggs", "Fruit"];
+
+screenshot_seed_habit_questions :: (app: *InnerBreeze, index: s32) {
+    if app == null || index < 0 || index >= app.habits.count { return }
+    habit := *app.habits.items[index]
+    texts: [4]string = .["When did I start eating?", "Plates", "Ate fruit?",
+    "What did I eat first?"]
+    types: [4]s32 = .[HABIT_ANSWER_TIME, HABIT_ANSWER_NUMBER,
+    HABIT_ANSWER_YES_NO, HABIT_ANSWER_TEXT]
+    habit.question_count = 0
+    question: s32 = 0
+    while question < 4 && HabitQuestionAdd(habit.questions[:],
+        *habit.question_count, 1782200000) {
+        unused AppCopyText(texts[question], habit.questions[question].text[:])
+        habit.questions[question].answer_type = types[question]
+        question += 1
+    }
+    habits_save(*app.habits)
+    none: [1]HabitAnswer
+    offset: s32 = 1
+    while offset < 14 {
+        time := screenshot_question_times[offset]
+        if time.count > 0 {
+            answers: [HABIT_DAY_ANSWER_MAX]HabitAnswer
+            count := HabitAnswersForDay(habit, none[:], 0, answers[:])
+            unused AppCopyText(time, answers[0].value[:])
+            plates: [4]u8
+            unused AppFormatS32(1 + offset % 3, plates[:])
+            unused AppCopyText(AppTextFromCString(*plates[0], 4), answers[1].value[:])
+            unused AppCopyText(ifx offset % 2 == 0 then "yes" else "no",
+                answers[2].value[:])
+            unused AppCopyText(screenshot_question_meals[offset % 3],
+                answers[3].value[:])
+            unused habit_answer_day(app, index, screenshot_day_index_offset(offset),
+                answers[:], count)
+        }
+        offset += 1
+    }
 }
 
 // The sun_salutation_pose scene: Upward salute, the second step, with the
@@ -543,6 +590,45 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
             app.habits.count_dialog_day = screenshot_day_index_offset(0)
             app_open_modal(app, cast(ModalType)ModalHabitCount)
         }
+    } else if scene_text == "habit_count_questions" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+        app.habits.selected = 2
+        app.habits.tab = HABIT_TAB_WEEKLY
+        app.habits.view_mode = HABIT_VIEW_WEEKLY
+        app.breathing.screen = ScreenHabits
+        screenshot_seed_habit_counts(app)
+        screenshot_seed_habit_questions(app, 2)
+        HabitScreenOpenCount(app, 2, screenshot_day_index_offset(0))
+    } else if scene_text == "habit_questions_dialog" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+        app.habits.selected = -1
+        app.habits.tab = HABIT_TAB_WEEKLY
+        app.habits.view_mode = HABIT_VIEW_WEEKLY
+        app.breathing.screen = ScreenHabits
+        screenshot_seed_habit_questions(app, 0)
+        HabitScreenLoadAnswers(app, 0, screenshot_day_index_offset(0))
+        dialog := *app.habits.answer_dialog
+        unused AppCopyText("07", dialog.hours[0][:])
+        unused AppCopyText("40", dialog.minutes[0][:])
+        unused AppCopyText("2", dialog.answers[1].value[:])
+        unused AppCopyText("yes", dialog.answers[2].value[:])
+        unused AppCopyText("Oatmeal with berries", dialog.answers[3].value[:])
+        app_open_modal(app, cast(ModalType)ModalHabitQuestions)
+    } else if scene_text == "habit_edit_questions" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        screenshot_seed_habit_questions(app, 0)
+        habit_edit_begin(app, 0)
+        app.habits.scroll = 100000
+    } else if scene_text == "habit_question_stats" {
+        app.main_tab = APP_MAIN_TAB_HABITS
+        screenshot_seed_habit_questions(app, 0)
+        app.habits.screen_mode = HABITS_SCREEN_STATISTICS
+        app.habits.selected = 0
+        app.habits.tab = HABIT_TAB_STATISTICS
+        app.breathing.screen = ScreenHabits
+        app.habits.scroll = 100000
     } else if scene_text == "habit_count_calendar" {
         app.main_tab = APP_MAIN_TAB_HABITS
         app.habits.screen_mode = HABITS_SCREEN_HISTORY

@@ -55,10 +55,12 @@ db.executescript(
         updated_at INTEGER, weekdays INTEGER, reminder_hour INTEGER,
         deactivated INTEGER NOT NULL DEFAULT 0,
         icon INTEGER NOT NULL DEFAULT 0,
-        schedule TEXT NOT NULL DEFAULT '');
+        schedule TEXT NOT NULL DEFAULT '',
+        questions TEXT NOT NULL DEFAULT '');
     CREATE TABLE habit_days(
         habit_id TEXT, local_date INTEGER, completed INTEGER,
         count INTEGER, session_count INTEGER, updated_at INTEGER,
+        answers TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(habit_id, local_date));
     CREATE TABLE sync_remote_habit_map(
         old_id TEXT PRIMARY KEY, new_id TEXT);
@@ -140,7 +142,7 @@ db.execute(
     "INSERT INTO habits(id,user_id,name,deleted_at,updated_at) "
     "VALUES('old-habit','user','Walking',0,2000000000)"
 )
-db.execute("INSERT INTO habit_days VALUES('old-habit',20260925,1,3,0,2000000000)")
+db.execute("INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('old-habit',20260925,1,3,0,2000000000)")
 db.execute("INSERT INTO sync_outbox VALUES('habit','old-habit',0)")
 habit_response = json.dumps(
     {

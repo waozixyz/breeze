@@ -18,6 +18,7 @@
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/storage/sync_review.zi";
+#import, file "../src/storage/storage_habit_sync.zi";
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/habits/habit_calendar.zi";
 #import, file "../src/habits/habit_schedule.zi";
@@ -1091,7 +1092,7 @@ test_social_cache_is_server_authored :: () {
 test_review_preview_and_choices :: () {
     remote_seed: TextBuffer
     append(*remote_seed, REMOTE_SQL)
-    append(*remote_seed, "INSERT INTO habit_days VALUES('remote-habit',20260905,0,0,0,1782290000);INSERT INTO habit_days VALUES('remote-habit',20260906,0,3,0,1782290000);")
+    append(*remote_seed, "INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('remote-habit',20260905,0,0,0,1782290000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('remote-habit',20260906,0,3,0,1782290000);")
     append(*remote_seed, "INSERT INTO elist_lists VALUES('remote-review-list',(SELECT id FROM users LIMIT 1),'Remote list',0,0,1782290000);INSERT INTO elist_items VALUES('remote-review-item',(SELECT id FROM users LIMIT 1),'remote-review-list','Remote item','',0,0,0,1782290000);")
     remote_records("review-preview-source", TextFromCString(*remote_seed.bytes[0]))
     seed: TextBuffer
@@ -1204,7 +1205,7 @@ test_review_social_differences :: () {
 test_review_no_changes_resolves_automatically :: () {
     remote_seed: TextBuffer
     append(*remote_seed, LOCAL_SQL)
-    append(*remote_seed, "UPDATE sessions SET activity=3;INSERT INTO habit_days VALUES('local-habit',20260905,0,0,0,1782290000);")
+    append(*remote_seed, "UPDATE sessions SET activity=3;INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('local-habit',20260905,0,0,0,1782290000);")
     remote_records("review-no-changes-source", TextFromCString(*remote_seed.bytes[0]))
     seed: TextBuffer
     append(*seed, LOCAL_SQL)
@@ -1289,14 +1290,38 @@ test_waiting_review_merges :: () {
     storage_close()
 }
 
+// A habit's questions and a day's answers reach another device. A record
+// from an app before them, without these fields, keeps what is there.
+test_questions_and_answers_sync :: () {
+    remote_records("questions-remote", "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at,questions) VALUES('meal',(SELECT id FROM users LIMIT 1),'First meal',1,2,3,0,0,0,1,0,1782290000,'[{\"id\":7,\"type\":\"time\",\"text\":\"Started eating\"}]');INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at,answers) VALUES('meal',20260624,1,1,0,1782290000,'[{\"id\":7,\"type\":\"time\",\"question\":\"Started eating\",\"value\":\"07:30\"}]');")
+    root := make_root("questions-local")
+    check_true("init local device", storage_init(root) != 0)
+    set_account()
+    check_true("apply the remote records",
+        storage_apply_sync_response_json(snapshot_response(20, "questions-hash")) != 0)
+    check_int("questions arrive with the habit", count_of(root,
+        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND json_extract(questions,'$[0].type')='time'"), 1)
+    check_int("answers arrive with the day", count_of(root,
+        "SELECT COUNT(*) FROM habit_days WHERE habit_id='meal' AND local_date=20260624 AND json_extract(answers,'$[0].value')='07:30' AND completed=1"), 1)
+    older: string = "{\"protocol_version\":6,\"server_version\":21,\"server_state_hash\":\"older-hash\",\"changes\":{\"habits\":[{\"id\":\"meal\",\"name\":\"First meal\",\"color_r\":1,\"color_g\":2,\"color_b\":3,\"sync_mode\":0,\"sync_activity\":0,\"counter_enabled\":false,\"counter_target\":1,\"sort_order\":1,\"deleted_at\":0,\"updated_at\":\"2026-06-30T00:00:00Z\"}],\"habit_days\":[{\"habit_id\":\"meal\",\"local_date\":20260624,\"completed\":true,\"count\":1,\"updated_at\":\"2026-06-30T00:00:00Z\"}]}}"
+    // Decrypted records go through the same habit and day apply.
+    check_true("apply an older app's habit", storage_apply_sync_habits_json(older) != 0)
+    check_true("apply an older app's day", storage_apply_sync_habit_days_json(older) != 0)
+    check_int("an older app's habit keeps the questions", count_of(root,
+        "SELECT COUNT(*) FROM habits WHERE id='meal' AND json_extract(questions,'$[0].text')='Started eating' AND updated_at>1782290000"), 1)
+    check_int("an older app's day keeps the answers", count_of(root,
+        "SELECT COUNT(*) FROM habit_days WHERE habit_id='meal' AND json_extract(answers,'$[0].value')='07:30' AND updated_at>1782290000"), 1)
+    storage_close()
+}
+
 test_review_completion_changes :: () {
     remote_seed: TextBuffer
     append(*remote_seed, REMOTE_SQL)
-    append(*remote_seed, "DELETE FROM sessions;UPDATE habit_days SET completed=0,count=0,session_count=0;INSERT INTO habit_days VALUES('remote-habit',20260905,0,0,0,1782290000);")
+    append(*remote_seed, "DELETE FROM sessions;UPDATE habit_days SET completed=0,count=0,session_count=0;INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('remote-habit',20260905,0,0,0,1782290000);")
     remote_records("review-completion-source", TextFromCString(*remote_seed.bytes[0]))
     seed: TextBuffer
     append(*seed, REMOTE_SQL)
-    append(*seed, "DELETE FROM sessions;INSERT INTO habit_days VALUES('remote-habit',20260904,0,0,0,1782290000);")
+    append(*seed, "DELETE FROM sessions;INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('remote-habit',20260904,0,0,0,1782290000);")
     unused local_device("review-completion-local", TextFromCString(*seed.bytes[0]), "")
     snapshot := snapshot_response(24, "review-completion-hash")
     plan: *u8 = null
@@ -1641,5 +1666,6 @@ Check :: () -> s32 {
     test_review_completion_changes()
     test_review_no_changes_resolves_automatically()
     test_waiting_review_merges()
+    test_questions_and_answers_sync()
     return failures
 }
