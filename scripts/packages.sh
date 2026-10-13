@@ -87,6 +87,7 @@ link oqs oqs
 link raylib raylib
 link game2d game2d
 link qrcode qrcode
+link plot plot
 link daochi-client daochi_client
 link sqlite sqlite
 link curl curl

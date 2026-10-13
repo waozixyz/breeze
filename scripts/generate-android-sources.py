@@ -34,6 +34,7 @@ for directory in (
 command.extend(["--module-path", f"kryon={kryon / 'src/ui'}"])
 command.extend(["--module-path", f"kryon={kryon / 'src/backend'}"])
 command.extend(["--module-path", f"qrcode={root / 'build/packages/qrcode/src'}"])
+command.extend(["--module-path", f"plot={root / 'build/packages/plot/src'}"])
 command.extend(["--module-path", f"oqs={root / 'build/packages/oqs/src'}"])
 command.extend(["-o", str(args.output)])
 command.extend(str(path.relative_to(root)) for path in sources)

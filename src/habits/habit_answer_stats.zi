@@ -2,6 +2,7 @@
 // answers, or a span habit's lengths, starts and ends.
 #import, file "habit_types.zi";
 #import, file "habit_questions.zi";
+#import, file "habit_changes.zi";
 #import, file "../app/text_buffers.zi";
 
 HABIT_ANSWER_STATS_DAYS :: 30
@@ -10,20 +11,40 @@ HABIT_ANSWER_POINT_MAX :: 128
 HABIT_MINUTES_PER_DAY :: 1440
 // Statistics of a span's length in minutes, beside the answer types.
 HABIT_ANSWER_SPAN :: 5
+// An average goal's benchmark: the average of the values recorded last
+// before the one it judges, up to this many.
+HABIT_BENCHMARK_COUNT :: 30
+HABIT_GOAL_VERSION_MAX :: 16
 
-// One entry's number, time or length on its day, 0 the oldest day, and
-// whether it meets the goal: 1 good, 0 not, -1 without a goal, as a
-// span's length always is.
+// One entry's number, time or length on its day, 0 the oldest day, when
+// the entry started, and whether it met the goal it had then: 1 good, 0
+// not, -1 when that goal said nothing about it or an average goal had no
+// earlier values yet.
 HabitAnswerPoint :: struct {
     slot: s32
     value: s32
     good: s32
+    at: s64
+    goal: HabitGoal
+    // The average an average goal judged it against, in hundredths, or -1.
+    benchmark: s64
 }
 
 HabitAnswerStats :: struct {
     id: s64
     answer_type: s32
+    // The goal now, and its changes, oldest first: each value is judged by
+    // the goal it had when it was recorded.
     goal: HabitGoal
+    versions: [HABIT_GOAL_VERSION_MAX]HabitGoalVersion
+    version_count: s32
+    // The values recorded before the days counted, oldest first, up to
+    // HABIT_BENCHMARK_COUNT: the first averages start from them.
+    earlier: [HABIT_BENCHMARK_COUNT]s32
+    earlier_count: s32
+    // The average the next value would be judged against, in hundredths,
+    // or -1 without values.
+    benchmark: s64
     // Entries with an answer, and days with at least one.
     answered: s32
     days: s32
@@ -54,6 +75,66 @@ HabitAnswerStatsBegin :: (stats: *HabitAnswerStats, answer_type: s32,
     stats.lowest = -1
     stats.highest = -1
     stats.last_slot = -1
+    stats.benchmark = -1
+}
+
+// A goal change of the question, in the order they happened.
+HabitAnswerStatsAddVersion :: (stats: *HabitAnswerStats, at: s64,
+    before: HabitGoal, after: HabitGoal) {
+    if stats.version_count >= HABIT_GOAL_VERSION_MAX {
+        // The oldest changes give way to the newest.
+        index: s32 = 1
+        while index < HABIT_GOAL_VERSION_MAX {
+            stats.versions[index - 1] = stats.versions[index]
+            index += 1
+        }
+        stats.version_count = HABIT_GOAL_VERSION_MAX - 1
+    }
+    version := *stats.versions[stats.version_count]
+    version.at = at
+    version.before = before
+    version.after = after
+    stats.version_count += 1
+}
+
+// The goal the question had at a time.
+HabitAnswerStatsGoalAt :: (stats: *HabitAnswerStats, at: s64) -> HabitGoal {
+    return HabitGoalAt(stats.versions[:], stats.version_count, stats.goal, at)
+}
+
+HabitGoalIsAverage :: (kind: s32) -> bool {
+    return kind == HABIT_GOAL_ABOVE_AVERAGE || kind == HABIT_GOAL_BELOW_AVERAGE
+}
+
+// A number, time or length recorded before the days counted, oldest first;
+// only the latest HABIT_BENCHMARK_COUNT are kept.
+HabitAnswerStatsAddEarlierValue :: (stats: *HabitAnswerStats, value: s32) {
+    if value < 0 {
+        return
+    }
+    if stats.earlier_count >= HABIT_BENCHMARK_COUNT {
+        index: s32 = 1
+        while index < HABIT_BENCHMARK_COUNT {
+            stats.earlier[index - 1] = stats.earlier[index]
+            index += 1
+        }
+        stats.earlier_count = HABIT_BENCHMARK_COUNT - 1
+    }
+    stats.earlier[stats.earlier_count] = value
+    stats.earlier_count += 1
+}
+
+// An answer recorded before the days counted.
+HabitAnswerStatsAddEarlier :: (stats: *HabitAnswerStats, value: string) {
+    if stats.answer_type == HABIT_ANSWER_TIME {
+        hours: s32 = 0
+        minutes: s32 = 0
+        if HabitTimeParts(value, *hours, *minutes) {
+            HabitAnswerStatsAddEarlierValue(stats, hours * 60 + minutes)
+        }
+    } else if stats.answer_type == HABIT_ANSWER_NUMBER {
+        HabitAnswerStatsAddEarlierValue(stats, HabitAnswerNumber(value))
+    }
 }
 
 // A whole number of up to nine digits, or -1.
@@ -75,7 +156,8 @@ HabitAnswerNumber :: (value: string) -> s32 {
 
 // Whether a number, time or length meets a goal: 1 good, 0 not, -1 when
 // the goal says nothing about it. A time goal between a later and an
-// earlier time spans midnight.
+// earlier time spans midnight. Average goals are judged by
+// HabitBenchmarkMet.
 HabitGoalMet :: (goal: HabitGoal, value: s32) -> s32 {
     if goal.kind == HABIT_GOAL_AT_LEAST {
         return ifx value >= goal.low then 1 else 0
@@ -99,31 +181,47 @@ HabitAnswerStatsDay :: (stats: *HabitAnswerStats, slot: s32) {
     }
 }
 
-// Counts a number, time or length of the day at slot. Entries come in the
-// order of their days.
-HabitAnswerStatsAddValue :: (stats: *HabitAnswerStats, slot: s32, value: s32) {
+// Whether a value meets an average goal against an average in
+// hundredths: as good as the average or better counts. -1 without an
+// average.
+HabitBenchmarkMet :: (kind: s32, value: s32, average_x100: s64) -> s32 {
+    if average_x100 < 0 {
+        return -1
+    }
+    scaled := cast(s64)value * 100
+    if kind == HABIT_GOAL_ABOVE_AVERAGE {
+        return ifx scaled >= average_x100 then 1 else 0
+    }
+    if kind == HABIT_GOAL_BELOW_AVERAGE {
+        return ifx scaled <= average_x100 then 1 else 0
+    }
+    return -1
+}
+
+// Counts a number, time or length of the day at slot, of an entry that
+// started at. Entries come in the order they started; they are judged
+// when the statistics finish.
+HabitAnswerStatsAddValue :: (stats: *HabitAnswerStats, slot: s32, value: s32,
+    at: s64) {
     if slot < 0 || slot >= HABIT_ANSWER_STATS_DAYS || value < 0 ||
     stats.point_count >= HABIT_ANSWER_POINT_MAX {
         return
     }
     point := *stats.points[stats.point_count]
+    point.* = HabitAnswerPoint.{}
     point.slot = slot
     point.value = value
-    point.good = HabitGoalMet(stats.goal, value)
-    if point.good >= 0 {
-        stats.judged += 1
-        if point.good == 1 {
-            stats.good += 1
-        }
-    }
+    point.good = -1
+    point.at = at
+    point.benchmark = -1
     stats.point_count += 1
     stats.answered += 1
     HabitAnswerStatsDay(stats, slot)
 }
 
-// Counts an answer of the day at slot.
+// Counts an answer of the day at slot, of an entry that started at.
 HabitAnswerStatsAdd :: (stats: *HabitAnswerStats, slot: s32, local_date: s32,
-    value: string) {
+    at: s64, value: string) {
     if slot < 0 || slot >= HABIT_ANSWER_STATS_DAYS || value.count == 0 {
         return
     }
@@ -137,9 +235,10 @@ HabitAnswerStatsAdd :: (stats: *HabitAnswerStats, slot: s32, local_date: s32,
         } else {
             stats.no += 1
         }
-        if stats.goal.kind == HABIT_GOAL_YES || stats.goal.kind == HABIT_GOAL_NO {
+        goal := HabitAnswerStatsGoalAt(stats, at)
+        if goal.kind == HABIT_GOAL_YES || goal.kind == HABIT_GOAL_NO {
             stats.judged += 1
-            if yes == (stats.goal.kind == HABIT_GOAL_YES) {
+            if yes == (goal.kind == HABIT_GOAL_YES) {
                 stats.good += 1
             }
         }
@@ -171,24 +270,31 @@ HabitAnswerStatsAdd :: (stats: *HabitAnswerStats, slot: s32, local_date: s32,
         hours: s32 = 0
         minutes: s32 = 0
         if HabitTimeParts(value, *hours, *minutes) {
-            HabitAnswerStatsAddValue(stats, slot, hours * 60 + minutes)
+            HabitAnswerStatsAddValue(stats, slot, hours * 60 + minutes, at)
         }
         return
     }
-    HabitAnswerStatsAddValue(stats, slot, HabitAnswerNumber(value))
+    HabitAnswerStatsAddValue(stats, slot, HabitAnswerNumber(value), at)
 }
 
 // Where the day's clock is cut for times: at the end of the longest
-// stretch of the day without an answer. Times before the cut count as the
+// stretch of the day without an answer, among the days counted and the
+// values before them. Times before the cut count as the
 // next day's, so bedtimes such as 23:30 and 00:30 average to midnight,
 // while times through the day, such as 07:00 to 09:00, keep midnight as
 // the cut (-1).
 HabitAnswerTimeCut :: (stats: *HabitAnswerStats) -> s32 {
-    sorted: [HABIT_ANSWER_POINT_MAX]s32
+    sorted: [HABIT_ANSWER_POINT_MAX + HABIT_BENCHMARK_COUNT]s32
     count: s32 = 0
     index: s32 = 0
-    while index < stats.point_count {
-        value := stats.points[index].value
+    // The earlier values an average starts from count too.
+    while index < stats.point_count + stats.earlier_count {
+        value: s32 = 0
+        if index < stats.point_count {
+            value = stats.points[index].value
+        } else {
+            value = stats.earlier[index - stats.point_count]
+        }
         place := count
         while place > 0 && sorted[place - 1] > value {
             sorted[place] = sorted[place - 1]
@@ -216,9 +322,72 @@ HabitAnswerTimeCut :: (stats: *HabitAnswerStats) -> s32 {
     return cut
 }
 
-// Sums the numbers, times and lengths, with their lowest and highest. Times
-// before the cut (HabitAnswerTimeCut) count a day later; they are shown
-// modulo a day.
+// The average of the latest values, in hundredths, or -1 without any.
+HabitBenchmarkAverage :: (values: []s32, count: s32) -> s64 {
+    if count <= 0 {
+        return -1
+    }
+    sum: s64 = 0
+    index: s32 = 0
+    while index < count {
+        sum += cast(s64)values[index]
+        index += 1
+    }
+    return (sum * 100 + cast(s64)count / 2) / cast(s64)count
+}
+
+// Judges each value by the goal it had when it was recorded: a fixed goal
+// by its bounds, an average goal against the average of the up to
+// HABIT_BENCHMARK_COUNT values before it, from the days counted and
+// before them.
+HabitAnswerStatsJudge :: (stats: *HabitAnswerStats) {
+    latest: [HABIT_BENCHMARK_COUNT]s32
+    count: s32 = 0
+    while count < stats.earlier_count {
+        latest[count] = stats.earlier[count]
+        count += 1
+    }
+    index: s32 = 0
+    while index < stats.point_count {
+        point := *stats.points[index]
+        point.goal = HabitAnswerStatsGoalAt(stats, point.at)
+        point.benchmark = -1
+        if HabitGoalIsAverage(point.goal.kind) {
+            point.benchmark = HabitBenchmarkAverage(latest[:], count)
+            point.good = HabitBenchmarkMet(point.goal.kind, point.value,
+                point.benchmark)
+        } else {
+            // Fixed time goals compare times of day.
+            value := point.value
+            if stats.answer_type == HABIT_ANSWER_TIME {
+                value = value % HABIT_MINUTES_PER_DAY
+            }
+            point.good = HabitGoalMet(point.goal, value)
+        }
+        if point.good >= 0 {
+            stats.judged += 1
+            if point.good == 1 {
+                stats.good += 1
+            }
+        }
+        if count >= HABIT_BENCHMARK_COUNT {
+            shift: s32 = 1
+            while shift < HABIT_BENCHMARK_COUNT {
+                latest[shift - 1] = latest[shift]
+                shift += 1
+            }
+            count = HABIT_BENCHMARK_COUNT - 1
+        }
+        latest[count] = point.value
+        count += 1
+        index += 1
+    }
+    stats.benchmark = HabitBenchmarkAverage(latest[:], count)
+}
+
+// Sums the numbers, times and lengths, with their lowest and highest, and
+// judges them. Times before the cut (HabitAnswerTimeCut) count a day
+// later, earlier ones too; they are shown modulo a day.
 HabitAnswerStatsFinish :: (stats: *HabitAnswerStats) {
     if stats.answer_type == HABIT_ANSWER_TIME {
         cut := HabitAnswerTimeCut(stats)
@@ -230,8 +399,16 @@ HabitAnswerStatsFinish :: (stats: *HabitAnswerStats) {
                 }
                 index += 1
             }
+            index = 0
+            while index < stats.earlier_count {
+                if stats.earlier[index] < cut {
+                    stats.earlier[index] += HABIT_MINUTES_PER_DAY
+                }
+                index += 1
+            }
         }
     }
+    HabitAnswerStatsJudge(stats)
     stats.sum = 0
     stats.lowest = -1
     stats.highest = -1

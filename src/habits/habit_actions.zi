@@ -66,7 +66,7 @@ habit_save_entry :: (app: *InnerBreeze, index: s32, day: s32,
         return false
     }
     habit := *app.habits.items[index]
-    saved: [HABIT_ID_SIZE]u8
+    saved: [HABIT_ENTRY_ID_SIZE]u8
     if storage_habit_entry_save(entry_id, AppTextFromCString(*habit.id[0],
         HABIT_ID_SIZE), day, started_at, ended_at, answers, count,
         saved[:]) == 0 {
@@ -101,7 +101,7 @@ habit_end_span :: (app: *InnerBreeze, index: s32) -> bool {
         return false
     }
     habit := *app.habits.items[index]
-    entry := AppTextFromCString(*habit.running_entry[0], HABIT_ID_SIZE)
+    entry := AppTextFromCString(*habit.running_entry[0], HABIT_ENTRY_ID_SIZE)
     if entry.count == 0 {
         return false
     }
@@ -112,14 +112,14 @@ habit_end_span :: (app: *InnerBreeze, index: s32) -> bool {
     if !storage_habit_entry_load(entry, *started, *ended, answers[:], *count) {
         return false
     }
-    entry_id: [HABIT_ID_SIZE]u8
+    entry_id: [HABIT_ENTRY_ID_SIZE]u8
     unused AppCopyText(entry, entry_id[:])
     now := UnixNow()
     if now < started {
         now = started
     }
     return habit_save_entry(app, index, habit.running_day,
-        AppTextFromCString(*entry_id[0], HABIT_ID_SIZE), started, now,
+        AppTextFromCString(*entry_id[0], HABIT_ENTRY_ID_SIZE), started, now,
         answers[:], count)
 }
 
@@ -142,17 +142,25 @@ habit_set_questions :: (app: *InnerBreeze, index: s32,
 }
 
 // Makes a habit mark its days, count them up to target, or measure spans
-// from start to end; it counts or measures spans, not both.
+// from start to end, judged by span_goal; it counts or measures spans, not
+// both.
 habit_set_tracking :: (app: *InnerBreeze, index: s32, counting: bool,
-    target: s32, span: bool) -> bool {
+    target: s32, span: bool, span_goal: HabitGoal) -> bool {
     if app == null || index < 0 || index >= app.habits.count ||
-    target < 1 || target > HABIT_COUNTER_TARGET_MAX || (counting && span) {
+    target < 1 || target > HABIT_COUNTER_TARGET_MAX || (counting && span) ||
+    span_goal.kind == HABIT_GOAL_YES || span_goal.kind == HABIT_GOAL_NO ||
+    span_goal.low < 0 || span_goal.high < 0 ||
+    (span_goal.kind == HABIT_GOAL_BETWEEN && span_goal.low > span_goal.high) {
         return false
     }
     habit := *app.habits.items[index]
     habit.counter_enabled = ifx counting then 1 else 0
     habit.counter_target = target
     habit.span = ifx span then 1 else 0
+    habit.span_goal = HabitGoal.{}
+    if span {
+        habit.span_goal = span_goal
+    }
     habits_save(*app.habits)
     storage_habit_running_span(habit)
     unused app_auto_sync(app)

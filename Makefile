@@ -996,6 +996,7 @@ $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path qrcode=build/packages/qrcode/src \
+		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--module-path build/packages/daochi-client \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
@@ -1011,6 +1012,7 @@ $(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path qrcode=build/packages/qrcode/src \
+		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--module-path build/packages/daochi-client \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
@@ -1031,6 +1033,7 @@ $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODU
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path qrcode=build/packages/qrcode/src \
+		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--module-path build/packages/daochi-client \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
@@ -1059,6 +1062,7 @@ zi-c-plan9: $(KRY_GEN_STAMP)
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path qrcode=build/packages/qrcode/src \
+		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--include-dir build/packages/kryon/include --include-dir src \
 		--include-dir $(KRY_GEN_DIR) --include-dir vendor-builds/sqlite \

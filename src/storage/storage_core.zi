@@ -349,6 +349,10 @@ storage_enqueue_sync_habit_entry :: (entry_id: string) -> s32 {
     return storage_enqueue_sync_entity("habit_entry", entry_id, 0)
 }
 
+storage_enqueue_sync_habit_change :: (change_id: string) -> s32 {
+    return storage_enqueue_sync_entity("habit_change", change_id, 0)
+}
+
 #program_export
 storage_enqueue_all_sync_state :: () {
     owns_transaction: s32
@@ -368,6 +372,7 @@ storage_enqueue_all_sync_state :: () {
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_list',id,0,strftime('%s','now') FROM elist_lists WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_item',id,0,strftime('%s','now') FROM elist_items WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,strftime('%s','now') FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_change',id,0,strftime('%s','now') FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi','app_used_leaderboard') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     if owns_transaction != 0 {
@@ -909,6 +914,9 @@ storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "questions", AppTextFromCString(SqliteColumnText(stmt, 17), 65536))
     storage_json_append_int_field(json, "span", cast(s64)sqlite3_column_int(stmt, 18))
+    storage_json_append_int_field(json, "span_goal", cast(s64)sqlite3_column_int(stmt, 19))
+    storage_json_append_int_field(json, "span_low", cast(s64)sqlite3_column_int(stmt, 20))
+    storage_json_append_int_field(json, "span_high", cast(s64)sqlite3_column_int(stmt, 21))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -983,6 +991,35 @@ storage_append_habit_entry_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 6))
     storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 7))
+    storage_json_builder_append_text(json, "}")
+}
+
+// A change of a habit's settings: when it was made, what changed, and the
+// values before and after as text.
+storage_append_habit_change_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "habit_id",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "changed_at", SqliteColumnInt64(stmt, 2))
+    storage_json_append_int_field(json, "kind", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_append_int_field(json, "question", SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "question_text",
+        AppTextFromCString(SqliteColumnText(stmt, 5), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "before",
+        AppTextFromCString(SqliteColumnText(stmt, 6), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "after",
+        AppTextFromCString(SqliteColumnText(stmt, 7), 8192))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 8))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 9))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -1103,7 +1140,7 @@ storage_append_dated_payload_json :: (json: *StorageJsonBuilder, sql: string, id
 storage_append_habit_payload_json :: (json: *StorageJsonBuilder, habit_id: string) -> s32 {
     return storage_append_id_payload_json(
         json,
-        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span FROM habits WHERE user_id=?1 AND id=?2",
+        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high FROM habits WHERE user_id=?1 AND id=?2",
         habit_id, storage_append_habit_row_json)
 }
 
@@ -1133,6 +1170,13 @@ storage_append_habit_entry_payload_json :: (json: *StorageJsonBuilder, entry_id:
         json,
         "SELECT id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at FROM habit_entries WHERE user_id=?1 AND id=?2",
         entry_id, storage_append_habit_entry_row_json)
+}
+
+storage_append_habit_change_payload_json :: (json: *StorageJsonBuilder, change_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at FROM habit_changes WHERE user_id=?1 AND id=?2",
+        change_id, storage_append_habit_change_row_json)
 }
 
 storage_append_elist_item_payload_json :: (json: *StorageJsonBuilder, item_id: string) -> s32 {
@@ -1192,14 +1236,17 @@ storage_sync_op_is_delete :: (entity_type: string, entity_id: string, local_date
             deleted = 1
         }
     } else if storage_compare_text(entity_type, "elist_list") == 0  || storage_compare_text(entity_type, "elist_item") == 0 ||
-    storage_compare_text(entity_type, "habit_entry") == 0 {
-        // A list, item or entry is a deletion only once it is marked
-        // deleted or is gone.
+    storage_compare_text(entity_type, "habit_entry") == 0 ||
+    storage_compare_text(entity_type, "habit_change") == 0 {
+        // A list, item, entry or change is a deletion only once it is
+        // marked deleted or is gone.
         sql := "SELECT deleted_at FROM elist_items WHERE user_id=?1 AND id=?2"
         if storage_compare_text(entity_type, "elist_list") == 0 {
             sql = "SELECT deleted_at FROM elist_lists WHERE user_id=?1 AND id=?2"
         } else if storage_compare_text(entity_type, "habit_entry") == 0 {
             sql = "SELECT deleted_at FROM habit_entries WHERE user_id=?1 AND id=?2"
+        } else if storage_compare_text(entity_type, "habit_change") == 0 {
+            sql = "SELECT deleted_at FROM habit_changes WHERE user_id=?1 AND id=?2"
         }
         if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
             return 0
@@ -1284,6 +1331,8 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
         found = storage_append_elist_item_payload_json(json, entity_id)
     } else if storage_compare_text(entity_type, "habit_entry") == 0 {
         found = storage_append_habit_entry_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_change") == 0 {
+        found = storage_append_habit_change_payload_json(json, entity_id)
     }
     if found == 0 {
         storage_json_builder_append_text(json, "{}")
@@ -1323,6 +1372,9 @@ storage_encrypted_collection_for_entity :: (entity_type: string, entity_id: stri
     }
     if storage_compare_text(entity_type, "habit_entry") == 0 {
         return "private.inbe.v1.habit-entries"
+    }
+    if storage_compare_text(entity_type, "habit_change") == 0 {
+        return "private.inbe.v1.habit-changes"
     }
     return ""
 }
@@ -2004,6 +2056,9 @@ storage_decrypted_array_name :: (collection: string) -> string {
     if storage_compare_text(collection, "private.inbe.v1.habit-entries") == 0 {
         return "habit_entries"
     }
+    if storage_compare_text(collection, "private.inbe.v1.habit-changes") == 0 {
+        return "habit_changes"
+    }
     return ""
 }
 
@@ -2163,6 +2218,8 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         ok = storage_apply_sync_elist_items_json(record_response)
     } else if storage_compare_text(array_name, "habit_entries") == 0 {
         ok = storage_apply_sync_habit_entries_json(record_response)
+    } else if storage_compare_text(array_name, "habit_changes") == 0 {
+        ok = storage_apply_sync_habit_changes_json(record_response)
     } else {
         ok = ifx (storage_apply_sync_session_rounds_json(record_response) != 0  && storage_apply_sync_sessions_json(record_response) != 0) then (1) else (0)
     }
@@ -2542,8 +2599,9 @@ storage_apply_remote_full_snapshot :: (response_json: string) -> s32 {
     return ok
 }
 
-storage_clear_local_sync_data_sqls: [10] string = .[
+storage_clear_local_sync_data_sqls: [11] string = .[
 "DELETE FROM habit_entries",
+"DELETE FROM habit_changes",
 "DELETE FROM elist_items",
 "DELETE FROM elist_lists",
 "DELETE FROM meditation_logs",
@@ -2607,8 +2665,9 @@ storage_sync_status :: (status: *StorageSyncStatus) -> s32 {
     return 1
 }
 
-storage_purge_synced_deleted_data_sqls: [5] string = .[
+storage_purge_synced_deleted_data_sqls: [6] string = .[
 "DELETE FROM habit_entries WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit_entry')",
+"DELETE FROM habit_changes WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit_change')",
 "DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at>0 AND id NOT IN  (SELECT entity_id FROM sync_outbox WHERE entity_type='session'))",
 "DELETE FROM sessions WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='session')",
 "DELETE FROM habit_days WHERE completed=0 AND count=0 AND session_count=0 AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.entity_type='habit_day' AND o.entity_id=habit_days.habit_id AND o.local_date=habit_days.local_date)",

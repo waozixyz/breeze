@@ -132,6 +132,8 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.questions = app.habits.items[index].questions
     app.habit_edit.question_count = app.habits.items[index].question_count
     app.habit_edit.span = app.habits.items[index].span
+    app.habit_edit.span_goal = app.habits.items[index].span_goal
+    habit_edit_span_fill(app)
     habit_edit_goal_fill_all(app)
     AppCopyText(AppTextFromCString(*app.habits.items[index].name[0],
         HABIT_NAME_SIZE), app.habit_edit.text[:])
@@ -446,11 +448,14 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     if section == 1 {
         return habit_edit_schedule_height(app, width)
     }
-    // Counter mode, the span toggle and practice links, with the target
-    // under its toggle, then the questions.
+    // Counter mode, the span toggle and practice links, with the target or
+    // which spans are good under their toggle, then the questions.
     height := AppScale(52 + 52 + 44) + habit_edit_questions_height(app)
     if app.habit_edit.counter_enabled != 0 {
         height += AppScale(52)
+    }
+    if app.habit_edit.span != 0 {
+        height += habit_edit_span_goal_height(app.habit_edit.span_goal)
     }
     return height
 }
@@ -485,8 +490,11 @@ habit_edit_questions_height :: (app: *InnerBreeze) -> s32 {
 }
 
 // The goals an answer type offers, as options with their kinds: none for
-// text, yes or no, and otherwise at least, at most or between, which a
-// time reads as after and before.
+// text, yes or no, and otherwise above or below the average, then at
+// least, at most or between; a time reads them as later, earlier, after
+// and before.
+HABIT_EDIT_GOAL_OPTIONS :: 6
+
 habit_edit_goal_options :: (answer_type: s32, options: []DropdownOption,
     kinds: []s32) -> s32 {
     if answer_type == HABIT_ANSWER_TEXT {
@@ -502,15 +510,21 @@ habit_edit_goal_options :: (answer_type: s32, options: []DropdownOption,
         return 3
     }
     time := answer_type == HABIT_ANSWER_TIME
-    options[1].label = LocaleText(ifx time then "habit_goal_after"
+    options[1].label = LocaleText(ifx time then "habit_goal_later_than_average"
+        else "habit_goal_above_average")
+    kinds[1] = HABIT_GOAL_ABOVE_AVERAGE
+    options[2].label = LocaleText(ifx time then "habit_goal_earlier_than_average"
+        else "habit_goal_below_average")
+    kinds[2] = HABIT_GOAL_BELOW_AVERAGE
+    options[3].label = LocaleText(ifx time then "habit_goal_after"
         else "habit_goal_at_least")
-    kinds[1] = HABIT_GOAL_AT_LEAST
-    options[2].label = LocaleText(ifx time then "habit_goal_before"
+    kinds[3] = HABIT_GOAL_AT_LEAST
+    options[4].label = LocaleText(ifx time then "habit_goal_before"
         else "habit_goal_at_most")
-    kinds[2] = HABIT_GOAL_AT_MOST
-    options[3].label = LocaleText("habit_goal_between")
-    kinds[3] = HABIT_GOAL_BETWEEN
-    return 4
+    kinds[4] = HABIT_GOAL_AT_MOST
+    options[5].label = LocaleText("habit_goal_between")
+    kinds[5] = HABIT_GOAL_BETWEEN
+    return 6
 }
 
 habit_edit_goal_has_values :: (kind: s32) -> bool {
@@ -653,13 +667,13 @@ habit_edit_goal_bound :: (app: *InnerBreeze, slot: s32, high: bool,
 // from and to. Returns the y below them.
 habit_edit_goal :: (app: *InnerBreeze, slot: s32, answer_type: s32,
     goal: *HabitGoal, label: string, x: s32, y: s32, width: s32) -> s32 {
-    options: [4]DropdownOption
-    kinds: [4]s32
+    options: [HABIT_EDIT_GOAL_OPTIONS]DropdownOption
+    kinds: [HABIT_EDIT_GOAL_OPTIONS]s32
     count := habit_edit_goal_options(answer_type, options[:], kinds[:])
     if count == 0 {
         return y
     }
-    menu_w := AppScale(160)
+    menu_w := habit_edit_goal_menu_width(width)
     habit_edit_row_label(app, label, x, y, width - menu_w - AppScale(8))
     menu: DropdownProps
     menu.id = 7770 + slot
@@ -810,9 +824,10 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
         menu.selected_index = edit.questions[index].answer_type - 1
         chosen := Dropdown(app.ui.session, menu, types[:])
         if chosen.changed {
-            // Another answer type starts without a goal.
+            // Another answer type starts with its own goal.
             edit.questions[index].answer_type = chosen.selected_index + 1
-            edit.questions[index].goal = HabitGoal.{}
+            edit.questions[index].goal = HabitGoalDefault(
+                edit.questions[index].answer_type)
             habit_edit_goal_fill(app, index, edit.questions[index].answer_type,
                 edit.questions[index].goal)
         }
@@ -1565,6 +1580,153 @@ habit_edit_routine :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
     }
 }
 
+// The goal menu's width: wide enough for "Earlier than my average", and
+// leaving its label room on a narrow card.
+habit_edit_goal_menu_width :: (width: s32) -> s32 {
+    menu_w := AppScale(220)
+    if menu_w > width * 3 / 5 {
+        menu_w = width * 3 / 5
+    }
+    return menu_w
+}
+
+// A span goal's lengths as typed, in hours and minutes: the low bound in
+// span_typed 0 and 1, the high one in 2 and 3. Their fields' codes follow
+// the questions' goal fields.
+HABIT_EDIT_SPAN_FIELD_CODE :: HABIT_QUESTION_MAX * 2
+
+habit_edit_span_fill :: (app: *InnerBreeze) {
+    edit := *app.habit_edit
+    values: [2]s32 = .[edit.span_goal.low, edit.span_goal.high]
+    for bound: cast(s32)0..cast(s32)1 {
+        unused AppFormatS32(values[bound] / 60, edit.span_typed[bound * 2][:])
+        minutes: [8]u8
+        unused AppFormatS32(values[bound] % 60, minutes[:])
+        if values[bound] % 60 < 10 {
+            unused AppCopyText("0", edit.span_typed[bound * 2 + 1][:])
+            unused AppAppendText(AppTextFromCString(*minutes[0], 8),
+                edit.span_typed[bound * 2 + 1][:])
+        } else {
+            unused AppCopyText(AppTextFromCString(*minutes[0], 8),
+                edit.span_typed[bound * 2 + 1][:])
+        }
+    }
+}
+
+// The rows of a span habit's goal: "Good when", then a length for at
+// least or at most, or two for between.
+habit_edit_span_goal_height :: (goal: HabitGoal) -> s32 {
+    height := AppScale(52)
+    if goal.kind == HABIT_GOAL_AT_LEAST || goal.kind == HABIT_GOAL_AT_MOST {
+        height += AppScale(52)
+    } else if goal.kind == HABIT_GOAL_BETWEEN {
+        height += AppScale(104)
+    }
+    return height
+}
+
+// One length of a span goal, typed as hours and minutes at the row's end,
+// after its label. Returns the length in minutes, or -1 while either part
+// is empty.
+habit_edit_span_length :: (app: *InnerBreeze, bound: s32, label: string,
+    x: s32, y: s32, width: s32) -> s32 {
+    edit := *app.habit_edit
+    unit_w := AppTextWidth(LocaleText("habit_unit_hours"), AppFontSize())
+    minutes_unit := AppTextWidth(LocaleText("habit_unit_minutes"), AppFontSize())
+    if minutes_unit > unit_w {
+        unit_w = minutes_unit
+    }
+    unit_w += AppScale(12)
+    hours_w := AppScale(64)
+    minutes_w := AppScale(56)
+    fields_w := hours_w + unit_w + minutes_w + unit_w
+    habit_edit_row_label(app, label, x, y, width - fields_w - AppScale(8))
+    field_x := x + width - fields_w
+    parts: [2]s32
+    units: [2]string = .["habit_unit_hours", "habit_unit_minutes"]
+    for part: cast(s32)0..cast(s32)1 {
+        part_w := ifx part == 0 then hours_w else minutes_w
+        typed := edit.span_typed[bound * 2 + part][:]
+        unused habit_edit_goal_field(app, HABIT_EDIT_SPAN_FIELD_CODE + bound * 2 + part,
+            Rectangle.{cast(float32)field_x, cast(float32)(y + AppScale(4)),
+                cast(float32)part_w, cast(float32)AppScale(44)}, typed,
+            ifx part == 0 then 3 else 2)
+        parts[part] = HabitTimeTypedNumber(AppTextFromCString(*typed[0],
+            cast(s32)typed.count))
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(field_x + part_w),
+                    cast(float32)(y + AppScale(4)), cast(float32)unit_w,
+                    cast(float32)AppScale(44)},
+                .text = LocaleText(units[part]),
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+        field_x += part_w + unit_w
+    }
+    if parts[0] < 0 || parts[1] < 0 || parts[1] > 59 {
+        return -1
+    }
+    return parts[0] * 60 + parts[1]
+}
+
+// Which spans are good: any, shorter or longer than the average of the
+// spans before them, or at least, at most or between lengths typed in hours
+// and minutes, such as at most 8 hours for an eating window.
+habit_edit_span_goal :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    edit := *app.habit_edit
+    options: [6]DropdownOption
+    kinds: [6]s32 = .[HABIT_GOAL_NONE, HABIT_GOAL_BELOW_AVERAGE,
+    HABIT_GOAL_ABOVE_AVERAGE, HABIT_GOAL_AT_LEAST, HABIT_GOAL_AT_MOST,
+    HABIT_GOAL_BETWEEN]
+    options[0].label = LocaleText("habit_span_goal_any")
+    options[1].label = LocaleText("habit_span_goal_shorter")
+    options[2].label = LocaleText("habit_span_goal_longer")
+    options[3].label = LocaleText("habit_goal_at_least")
+    options[4].label = LocaleText("habit_goal_at_most")
+    options[5].label = LocaleText("habit_goal_between")
+    menu_w := habit_edit_goal_menu_width(width)
+    habit_edit_row_label(app, LocaleText("habit_goal_label"), x, y,
+        width - menu_w - AppScale(8))
+    menu: DropdownProps
+    menu.id = 7615
+    menu.bounds = Rectangle.{cast(float32)(x + width - menu_w),
+        cast(float32)(y + AppScale(4)), cast(float32)menu_w,
+        cast(float32)AppScale(44)}
+    option: s32 = 0
+    while option < 6 {
+        if kinds[option] == edit.span_goal.kind {
+            menu.selected_index = option
+        }
+        option += 1
+    }
+    chosen := Dropdown(app.ui.session, menu, options[:])
+    if chosen.changed {
+        edit.span_goal.kind = kinds[chosen.selected_index]
+        // A length starts at 8 hours, or keeps the one typed.
+        if edit.span_goal.low <= 0 && edit.span_goal.high <= 0 {
+            edit.span_goal.low = 8 * 60
+            edit.span_goal.high = 8 * 60
+            habit_edit_span_fill(app)
+        }
+    }
+    y += AppScale(52)
+    kind := edit.span_goal.kind
+    if kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_BETWEEN {
+        low := habit_edit_span_length(app, 0, LocaleText(ifx kind == HABIT_GOAL_BETWEEN
+            then "habit_goal_between" else "habit_goal_at_least"), x, y, width)
+        if low >= 0 {
+            edit.span_goal.low = low
+        }
+        y += AppScale(52)
+    }
+    if kind == HABIT_GOAL_AT_MOST || kind == HABIT_GOAL_BETWEEN {
+        high := habit_edit_span_length(app, 1, LocaleText(ifx kind == HABIT_GOAL_BETWEEN
+            then "habit_goal_and" else "habit_goal_at_most"), x, y, width)
+        if high >= 0 {
+            edit.span_goal.high = high
+        }
+    }
+}
+
 habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
     width: s32, viewport_y: s32, viewport_h: s32, content_h: s32) {
     counter_props := ToggleProps.{
@@ -1651,9 +1813,15 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
         app.habit_edit.span = ifx span.value then 1 else 0
         if span.value {
             app.habit_edit.counter_enabled = 0
+            app.habit_edit.span_goal = HabitSpanGoalDefault()
+            habit_edit_span_fill(app)
         }
     }
     y += AppScale(52)
+    if app.habit_edit.span != 0 {
+        habit_edit_span_goal(app, x, y, width)
+        y += habit_edit_span_goal_height(app.habit_edit.span_goal)
+    }
     linked: s32 = 0
     index: s32 = 0
     while index < EXERCISE_COUNT {

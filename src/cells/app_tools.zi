@@ -119,6 +119,8 @@ AppToolGoalName :: (kind: s32) -> string {
     if kind == HABIT_GOAL_BETWEEN { return "between" }
     if kind == HABIT_GOAL_YES { return "yes" }
     if kind == HABIT_GOAL_NO { return "no" }
+    if kind == HABIT_GOAL_ABOVE_AVERAGE { return "above_average" }
+    if kind == HABIT_GOAL_BELOW_AVERAGE { return "below_average" }
     return "none"
 }
 
@@ -128,6 +130,8 @@ AppToolGoalKind :: (name: string) -> s32 {
     if name == "between" { return HABIT_GOAL_BETWEEN }
     if name == "yes" { return HABIT_GOAL_YES }
     if name == "no" { return HABIT_GOAL_NO }
+    if name == "above_average" { return HABIT_GOAL_ABOVE_AVERAGE }
+    if name == "below_average" { return HABIT_GOAL_BELOW_AVERAGE }
     if name == "none" || name == "" { return HABIT_GOAL_NONE }
     return -1
 }
@@ -141,7 +145,56 @@ AppToolGoalBound :: (out: *Vec(u8), name: string, value: s32, answer_type: s32) 
     }
     text: [16]u8
     BuilderPrint(out, ",\"%\":", name)
+    if answer_type == HABIT_ANSWER_SPAN {
+        LumiJsonString(out, AppToolLengthText(value, text[:]))
+        return
+    }
     LumiJsonString(out, HabitAnswerTimeText(value, text[:]))
+}
+
+// A span's length as Lumi writes it, hours and minutes: "8:00", "36:30".
+AppToolLengthText :: (minutes: s32, output: []u8) -> string {
+    args: [2]FormatArg
+    args[0].number = minutes / 60
+    args[1].number = minutes % 60
+    unused FormatTemplate("%d:%02d", args[:], output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// A length written "H:MM", with up to three digits of hours, in minutes,
+// or -1.
+AppToolLength :: (text: string) -> s32 {
+    colon: s64 = -1
+    index: s64 = 0
+    while index < text.count {
+        if text[index] == cast(u8)58 {
+            colon = index
+        }
+        index += 1
+    }
+    if colon < 1 || colon > 3 || text.count - colon != 3 {
+        return -1
+    }
+    hours: s32 = 0
+    minutes: s32 = 0
+    index = 0
+    while index < text.count {
+        if index != colon {
+            if !HabitTimeDigit(text[index]) {
+                return -1
+            }
+            if index < colon {
+                hours = hours * 10 + cast(s32)text[index] - 48
+            } else {
+                minutes = minutes * 10 + cast(s32)text[index] - 48
+            }
+        }
+        index += 1
+    }
+    if minutes > 59 {
+        return -1
+    }
+    return hours * 60 + minutes
 }
 
 AppToolGoalContext :: (out: *Vec(u8), goal: HabitGoal, answer_type: s32) {
@@ -164,6 +217,9 @@ AppToolTrackingContext :: (out: *Vec(u8), habit: *Habit) {
     }
     BuilderPrint(out, ",\"tracking\":{\"mode\":\"%\",\"target\":%", mode,
         habit_counter_target(habit))
+    if habit.span != 0 {
+        AppToolGoalContext(out, habit.span_goal, HABIT_ANSWER_SPAN)
+    }
     BuilderPrint(out, "},\"questions\":[")
     index: s32 = 0
     while index < habit.question_count {
@@ -343,16 +399,24 @@ AppToolReadGoal :: (document: string, object_at: s32, answer_type: s32,
     goal.* = HabitGoal.{}
     good_bytes: [16]u8
     good_at := FieldAt(document, object_at, "good")
+    if good_at < 0 {
+        // Without "good", numbers and times are judged against their
+        // average, as in the editor.
+        goal.* = HabitGoalDefault(answer_type)
+        return ""
+    }
     good := ""
-    if good_at >= 0 {
-        count := ReadStringText(document, good_at, good_bytes[:])
-        if count > 0 && count < 16 {
-            good = TextFromBytes(good_bytes[:count])
-        }
+    count := ReadStringText(document, good_at, good_bytes[:])
+    if count > 0 && count < 16 {
+        good = TextFromBytes(good_bytes[:count])
     }
     kind := AppToolGoalKind(good)
     if kind < 0 {
-        return "good must be none, at_least, at_most, between, yes or no"
+        return "good must be none, above_average, below_average, at_least, at_most, between, yes or no"
+    }
+    if HabitGoalIsAverage(kind) && answer_type != HABIT_ANSWER_NUMBER &&
+    answer_type != HABIT_ANSWER_TIME && answer_type != HABIT_ANSWER_SPAN {
+        return "above_average and below_average judge number and time answers only"
     }
     yes_no := kind == HABIT_GOAL_YES || kind == HABIT_GOAL_NO
     if answer_type == HABIT_ANSWER_TEXT && kind != HABIT_GOAL_NONE {
@@ -378,7 +442,9 @@ AppToolReadGoal :: (document: string, object_at: s32, answer_type: s32,
             } else if at >= 0 {
                 text_bytes: [16]u8
                 count := ReadStringText(document, at, text_bytes[:])
-                if count > 0 && count < 16 {
+                if count > 0 && count < 16 && answer_type == HABIT_ANSWER_SPAN {
+                    value = AppToolLength(TextFromBytes(text_bytes[:count]))
+                } else if count > 0 && count < 16 {
                     hours: s32 = 0
                     minutes: s32 = 0
                     if HabitTimeParts(TextFromBytes(text_bytes[:count]),
@@ -389,6 +455,9 @@ AppToolReadGoal :: (document: string, object_at: s32, answer_type: s32,
             }
             if value < 0 && answer_type == HABIT_ANSWER_NUMBER {
                 return "low and high must be whole numbers"
+            }
+            if value < 0 && answer_type == HABIT_ANSWER_SPAN {
+                return "a span's low and high are lengths written H:MM, as 8:00"
             }
             if value < 0 {
                 return "low and high must be written H:MM"
@@ -508,7 +577,24 @@ AppHabitTrackingTool :: (app: *InnerBreeze, arguments: string) -> string {
         }
         target = cast(s32)number.value
     }
-    if !habit_set_tracking(app, index, mode == "count", target, mode == "span") {
+    // A span habit's spans are good by their length: at least, at most or
+    // between lengths, or against their average. A habit that starts
+    // measuring spans takes shorter than the average unless told.
+    span_goal := ifx habit.span != 0 then habit.span_goal else HabitSpanGoalDefault()
+    if FieldAt(arguments, 0, "good") >= 0 {
+        if mode != "span" {
+            return ToolFailure("good judges spans only")
+        }
+        failure := AppToolReadGoal(arguments, 0, HABIT_ANSWER_SPAN, *span_goal)
+        if failure.count > 0 {
+            return ToolFailure(failure)
+        }
+        if span_goal.kind == HABIT_GOAL_YES || span_goal.kind == HABIT_GOAL_NO {
+            return ToolFailure("yes and no are the good answers of yes_no questions only")
+        }
+    }
+    if !habit_set_tracking(app, index, mode == "count", target, mode == "span",
+        span_goal) {
         return ToolFailure("the tracking could not be saved")
     }
     out: Vec(u8)
