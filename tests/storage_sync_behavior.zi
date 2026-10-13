@@ -1262,6 +1262,33 @@ test_review_no_changes_resolves_automatically :: () {
     storage_close()
 }
 
+// A snapshot that waits for review merges by itself: local records stay,
+// remote records arrive, and its receipt advances. A device with Patterns
+// sessions and other changes on the server waits for one.
+test_waiting_review_merges :: () {
+    remote_records("review-waiting-remote", REMOTE_SQL)
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, "UPDATE sessions SET activity=3;")
+    root := local_device("review-waiting-local", TextFromCString(*seed.bytes[0]), "DELETE FROM sync_outbox;")
+    check_true("apply the snapshot", storage_apply_sync_response_json(snapshot_response(58, "waiting-receipt")) != 0)
+    check_true("snapshot waits for review", storage_sync_review_pending() != 0)
+    check_true("waiting review merges", storage_sync_review_merge_pending() != 0)
+    check_true("merged review is cleared", storage_sync_review_pending() == 0)
+    check_int("local session kept", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='local-session'"), 1)
+    check_int("remote session merged", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='remote-session'"), 1)
+    check_int("local habit kept", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='local-habit'"), 1)
+    check_int("remote habit merged", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='remote-habit'"), 1)
+    check_int("merge records its receipt", cast(s32)storage_meta_int64("sync_last_server_version", 0), 58)
+    check_true("nothing waiting merges nothing", storage_sync_review_merge_pending() == 0)
+    invalid := "{\"protocol_version\":6,\"changes\":{\"encrypted_records\":[{\"collection\":\"private.inbe.v1.sessions\",\"id\":\"bad\",\"key_id\":\"bad\",\"nonce\":\"bad\",\"ciphertext\":\"bad\"}]}}"
+    check_true("save unreadable review", storage_sync_review_write_json(invalid) != 0)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    check_true("unreadable review is not merged", storage_sync_review_merge_pending() == 0 &&
+        storage_sync_review_pending() != 0)
+    storage_close()
+}
+
 test_review_completion_changes :: () {
     remote_seed: TextBuffer
     append(*remote_seed, REMOTE_SQL)
@@ -1613,5 +1640,6 @@ Check :: () -> s32 {
     test_review_social_differences()
     test_review_completion_changes()
     test_review_no_changes_resolves_automatically()
+    test_waiting_review_merges()
     return failures
 }
