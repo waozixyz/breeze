@@ -1,7 +1,7 @@
 """Lumi's set_habit_tracking and set_habit_questions tools on an owned
 private Xvfb window.
 
-Lumi makes a habit count or measure spans with good lengths, and sets the
+Lumi makes a habit count or measure spans from start to end, and sets the
 questions it asks with their good answers; a question keeps its id while
 its words stay, and everything survives a restart.
 """
@@ -132,15 +132,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
         assert yoga['tracking']['mode'] in ('check', 'count') and yoga['questions'] == [], yoga
         identifier = yoga['id']
 
-        result = tracking(window, id=identifier, mode='span', good='at_least', low='16:00')
-        assert result['ok'] and result['tracking'] == dict(
-            mode='span', target=1, good='at_least', low='16:00'), result
+        result = tracking(window, id=identifier, mode='span')
+        assert result['ok'] and result['tracking'] == dict(mode='span', target=1), result
         result = tracking(window, id=identifier, mode='count', target=3)
         assert result['tracking'] == dict(mode='count', target=3), result
-        result = tracking(window, id=identifier, mode='span', good='between',
-                          low='8:30', high='18:00')
-        assert result['tracking'] == dict(mode='span', target=3, good='between',
-                                          low='8:30', high='18:00'), result
+        result = tracking(window, id=identifier, mode='span')
+        assert result['tracking'] == dict(mode='span', target=3), result
 
         result = questions(window, identifier, MEAL)
         assert result['ok'], result
@@ -179,9 +176,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
             assert result['ok'] is False and error in result['error'], (items, result)
         for wrong, error in [
                 (dict(mode='timer'), 'mode'),
-                (dict(mode='count', target=0), 'target'),
-                (dict(mode='span', good='at_least', low='100:00'), 'H:MM'),
-                (dict(mode='span', good='yes'), 'yes and no')]:
+                (dict(mode='count', target=0), 'target')]:
             result = tracking(window, id=identifier, **wrong)
             assert result['ok'] is False and error in result['error'], (wrong, result)
         assert tracking(window, id='no-such-habit', mode='check')['ok'] is False
@@ -189,8 +184,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
 
     with application(profile, 'restart') as window:
         yoga = habit(window, 'Yoga')
-        assert yoga['tracking'] == dict(mode='span', target=3, good='between',
-                                        low='8:30', high='18:00'), yoga
+        assert yoga['tracking'] == dict(mode='span', target=3), yoga
         assert [item['text'] for item in yoga['questions']] == [
             'Plates', 'When did I start eating?', 'Bedtime'], yoga
         result = questions(window, yoga['id'], [])

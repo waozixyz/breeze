@@ -99,33 +99,32 @@ shows faded. The context lists each habit's schedule and notification hour.
 
 A habit keeps what happens on its days as entries. It can ask questions, set
 under "Ask when done" in its editor: each has its words, an answer type (text,
-a whole number, a time or yes or no) and what counts as good (at least, at
-most or between two values, a time after, before or between two times, or a
-yes or a no). A habit can instead measure spans ("Measure start to end", which
-turns counter mode off): a tap starts a span and the next ends it, a running
-span's day shows half filled, and its "Good length" judges each span. Without
-questions or spans a tap marks the day as before. With them the Habits package
-answers a day tap with `HABITS_DAY_QUESTIONS` or `HABITS_DAY_SPAN`: an open
-day takes a new entry in the entry dialog (its time, or a span's start and
-end, then the questions), and a day with entries opens the day's screen, which
-also shows its practice sessions, to add, change or delete entries or end a
-running span. A day with an entry (for spans an ended one) is done. Counting
-habits open the day's entries from their count dialog. Questions and the span
-setting are stored on the habit (`habits.questions` as JSON, `habits.span`,
-`span_goal`, `span_low`, `span_high`); entries are rows of `habit_entries`
-with a start, an end (0 while a span runs) and their answers as JSON, each
-answer keeping the question's id and words, so an entry reads the same after a
-question changes or goes. Entries sync as their own encrypted records
-(`private.inbe.v1.habit-entries`) with deletions; an older app keeps a
-habit's questions and span and skips entries. The habit's statistics add up
-the last 30 days: spans' average and longest length, how many were good, a
-bar per span against the goal, and when they started and ended on average;
-for each question the average and total of numbers, the average and earliest
-to latest of times (cut at the day's longest unanswered stretch, so bedtimes
-around midnight average correctly), how often the answer was yes, how many
-answers were on target, and the latest written answers. Online Lumi sets a
-habit's tracking with `set_habit_tracking` (check, count with a target, or
-span with good lengths) and its questions and good answers with
+a whole number, a time or yes or no) and what counts as good (at least, at most
+or between two values, a time after, before or between two times, or a yes or a
+no). A habit can instead measure spans ("Measure start to end", which turns
+counter mode off): a tap starts a span and the next ends it, and a running
+span's day shows half filled. Spans measure the time from start to end for any
+reason and are not judged. Without questions or spans a tap marks the day as
+before. With them the Habits package answers a day tap with
+`HABITS_DAY_QUESTIONS` or `HABITS_DAY_SPAN`: an open day takes a new entry in
+the entry dialog (its time, or a span's start and end, then the questions), and
+a day with entries opens the day's screen, which also shows its practice
+sessions, to add, change or delete entries or end a running span. A day with an
+entry (for spans an ended one) is done. Counting habits open the day's entries
+from their count dialog. Questions and the span setting are stored on the habit
+(`habits.questions` as JSON, `habits.span`); entries are rows of
+`habit_entries` with a start, an end (0 while a span runs) and their answers as
+JSON, each answer keeping the question's id and words, so an entry reads the
+same after a question changes or goes. Entries sync as their own encrypted
+records (`private.inbe.v1.habit-entries`) with deletions; an older app keeps a
+habit's questions and span and skips entries. The habit's statistics add up the
+last 30 days: spans' average and longest length, a bar per span, and when they
+started and ended on average; for each question the average and total of
+numbers, the average and earliest to latest of times (cut at the day's longest
+unanswered stretch, so bedtimes around midnight average correctly), how often
+the answer was yes, how many answers were on target, and the latest written
+answers. Online Lumi sets a habit's tracking with `set_habit_tracking` (check,
+count with a target, or span) and its questions and good answers with
 `set_habit_questions`; her context lists both for each habit.
 
 `/donate` and `show_donation_links` show the existing Bitcoin and Monero addresses
