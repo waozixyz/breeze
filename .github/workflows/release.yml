@@ -808,6 +808,14 @@ jobs:
             --stacktrace
           make android-copy-release-apks
           make android-copy-bundle
+          # F-Droid rebuilds the universal APK with -PfDroidBuild and copies
+          # this APK's signature onto it, so the two must match byte for byte.
+          ./droid/gradlew -p droid assembleRelease -PfDroidBuild=true \
+            -Pkeystore.path="$HOME/.android/inbe-release.keystore" \
+            -Pkeystore.alias="$KEY_ALIAS" \
+            -Pkeystore.password="$KEYSTORE_PASSWORD" \
+            --stacktrace
+          make android-copy-fdroid-apk
 
       - name: Preserve Android Native Crash Symbols
         uses: actions/upload-artifact@v4
@@ -826,7 +834,8 @@ jobs:
             echo "Could not read APP_VERSION_STRING"
             exit 1
           fi
-          for apk in "build/android/inbe-$VERSION.apk" "build/android/inbe-$VERSION-gplay.apk"; do
+          for apk in "build/android/inbe-$VERSION.apk" "build/android/inbe-$VERSION-gplay.apk" \
+            "build/android/inbe-$VERSION-fdroid.apk"; do
             if [ ! -f "$apk" ]; then
               echo "Missing universal APK: $apk"
               exit 1
@@ -983,12 +992,12 @@ jobs:
             channels+=("--channel" "rpm-$arch=$rpm")
           done
           # Directly installed APKs update themselves from these channels;
-          # the Google Play build updates through the store.
+          # the Google Play and F-Droid builds update through their stores.
           while IFS= read -r apk; do
             abi="$(basename "$apk" .apk)"
             abi="${abi#inbe-$VERSION}"
             case "$abi" in
-              -gplay) continue ;;
+              -gplay|-fdroid) continue ;;
               "") channels+=("--channel" "android=$apk") ;;
               *) channels+=("--channel" "android$abi=$apk") ;;
             esac

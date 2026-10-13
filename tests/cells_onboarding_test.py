@@ -125,6 +125,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     with application(profile, "resume-apps") as (window, log):
         capture(window, "resumed-apps")
         tap(window, 180, 104)
+        # With the guide closed, Apps asks once about app updates. The first
+        # "allow" read belongs to Don't allow, left of or above Allow.
+        capture(window, "resumed-apps-updates-question")
+        decline = subprocess.run(
+            [sys.executable, str(ROOT / "tests/rendered_word.py"),
+             str(OUTPUT / "resumed-apps-updates-question.png"), "allow"],
+            text=True, capture_output=True, timeout=60)
+        assert decline.returncode == 0, "Apps did not ask about app updates"
+        tap(window, *map(int, decline.stdout.split()))
+        wait_setting(profile, "package_updates_allowed", 0)
+        tap(window, 180, 104)
         command("xdotool", "type", "--clearmodifiers", "Lists")
         time.sleep(.3)
         tap(window, 180, 228)
@@ -135,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         user = db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0]
         db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?,?,?,0,0,1)",
                    ("choice-preserved-list", user, "Saved while Lists is enabled"))
-        values = {"habits_guide_seen": 1, "tutorial_seen": 1, "cells_auto_update": 0,
+        values = {"habits_guide_seen": 1, "tutorial_seen": 1, "package_updates_allowed": 0,
                   "apps_last_update_check": 1900000000}
         for key, value in values.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "

@@ -16,9 +16,12 @@
 #import, file "../widgets/bottom_nav.zi";
 #import, file "../cells/module_host.zi";
 #import, file "../cells/catalog.zi";
+#import, file "../cells/package_manager.zi";
 #import "button_props"
 #import "button_widget"
 #import "control_props"
+#import "modal_props"
+#import "modal_widget"
 #import "geometry"
 #import "drawing_props"
 #import "layout"
@@ -455,5 +458,43 @@ app_draw_launcher :: (app: *InnerBreeze) {
             save_settings(app)
             app_block_current_click(app)
         }
+    } else {
+        app_launcher_ask_package_updates(app)
     }
+}
+
+// Apps is where packages are chosen and installed, so it asks once whether
+// they may update by themselves. Both answers are one equal tap; closing the
+// question without an answer asks again on a later start.
+launcher_package_updates_closed: bool;
+
+app_launcher_ask_package_updates :: (app: *InnerBreeze) {
+    if launcher_package_updates_closed || !PackageAutomaticUnasked() {
+        return
+    }
+    actions: [2]ActionModalAction = .[
+    ActionModalAction.{.label = LocaleText("package_updates_decline"),
+        .tone = cast(ButtonTone)ButtonToneNeutral,
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+    ActionModalAction.{.label = LocaleText("package_updates_allow"),
+        .tone = cast(ButtonTone)ButtonToneNeutral,
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+    ]
+    props: ActionModalProps = .{}
+    props.key = KeyHash("inbe/apps/package-updates")
+    props.title = LocaleText("package_updates_title")
+    props.message = LocaleText("package_updates_message")
+    props.max_width = 420
+    answer := ActionModal(app.ui.session, props, actions[:2]).action
+    if answer == 0 {
+        return
+    }
+    if answer == 1 {
+        PackageSetAutomatic(false)
+    } else if answer == 2 {
+        PackageSetAutomatic(true)
+    } else {
+        launcher_package_updates_closed = true
+    }
+    app_block_current_click(app)
 }

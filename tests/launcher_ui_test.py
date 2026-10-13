@@ -165,7 +165,7 @@ with contextlib.ExitStack() as stack:
                            "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                            "main_tab": 3, "tutorial_seen": 1, "habits_guide_seen": 1,
                            "theme": 9, "theme_source": 0, "theme_mode": 2,
-                           "cells_auto_update": 0, "apps_last_update_check": 1900000000})
+                           "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
             cases = [(390, 844, 0, 10, count) for count in (3, 4, 5)]
             cases += [(320, 844, 0, 10, 5), (390, 844, 4, 10, 5),
                       (390, 844, 0, 15, 5), (900, 500, 1, 10, 5),
@@ -288,6 +288,18 @@ with contextlib.ExitStack() as stack:
                     capture(window, name + f"-apps-guide-{step + 1}")
                     key(window, "Right")
                 assert settings(profile)["launcher_guide_seen"] == "1", "Apps guide did not finish"
+                # Apps then asks once whether packages may update themselves.
+                # Declining is the first "allow" read: left of, or above, Allow.
+                capture(window, name + "-apps-updates-question")
+                assert "package_updates_allowed" not in settings(profile)
+                decline = subprocess.run(
+                    ["python3", str(ROOT / "tests/rendered_word.py"),
+                     str(OUTPUT / (name + "-apps-updates-question.png")), "allow"],
+                    text=True, capture_output=True, timeout=60)
+                assert decline.returncode == 0, "Apps did not ask about app updates"
+                click(window, *map(int, decline.stdout.split()))
+                assert settings(profile).get("package_updates_allowed") == "0", log.read_text()
+                capture(window, name + "-apps-after-updates-question")
                 # Practices is the third pinned card in the same grid as the rest.
                 click(window, *card(width, mobile, 2))
                 assert settings(profile)["apps_setup_done"] == "1", log.read_text()
@@ -296,7 +308,7 @@ with contextlib.ExitStack() as stack:
                            "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                            "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
                            "ui_scale": 10, "navigation_placement": 0, "theme": 9,
-                           "theme_source": 0, "theme_mode": 2, "cells_auto_update": 0,
+                           "theme_source": 0, "theme_mode": 2, "package_updates_allowed": 0,
                            "apps_last_update_check": 1900000000,
                            "launcher_favorite_count": 2, "launcher_favorite_0": 1,
                            "launcher_favorite_1": 2})

@@ -297,12 +297,46 @@ PackageCancel :: () {
     }
 }
 
+// Packages come from Waozi's node, not from the store that installed the
+// app, so automatic updates wait for the person to allow them. The answer
+// has its own key: "cells_auto_update" was saved as on without being asked.
+// The answer stays in memory because the pump asks every frame.
+PACKAGE_UPDATES_KEY :: "package_updates_allowed"
+PACKAGE_UPDATES_UNASKED :: -1
+PACKAGE_UPDATES_UNREAD :: -2
+package_updates_answer: s32 = PACKAGE_UPDATES_UNREAD;
+package_updates_possible: s32 = -1;
+
+PackageUpdatesAnswer :: () -> s32 {
+    if package_updates_answer == PACKAGE_UPDATES_UNREAD {
+        package_updates_answer = SettingsReadInt(PACKAGE_UPDATES_KEY, PACKAGE_UPDATES_UNASKED)
+    }
+    return package_updates_answer
+}
+
 PackageAutomaticEnabled :: () -> bool {
-    return SettingsReadInt("cells_auto_update", 1) != 0
+    return PackageUpdatesAnswer() == 1
+}
+
+PackageUpdatesPossible :: () -> bool {
+    if package_updates_possible < 0 {
+        possible := !DataTemporary() && PackagePublisherConfigured()
+        package_updates_possible = ifx possible then 1 else 0
+    }
+    return package_updates_possible == 1
+}
+
+// The question is asked once, where packages can be downloaded at all.
+PackageAutomaticUnasked :: () -> bool {
+    if PackageUpdatesAnswer() != PACKAGE_UPDATES_UNASKED {
+        return false
+    }
+    return PackageUpdatesPossible()
 }
 
 PackageSetAutomatic :: (enabled: bool) {
-    unused SettingsStoreInt("cells_auto_update", ifx enabled then 1 else 0)
+    package_updates_answer = ifx enabled then 1 else 0
+    unused SettingsStoreInt(PACKAGE_UPDATES_KEY, package_updates_answer)
     if !enabled {
         if package_automatic && package_index >= 0 {
             FileDownloadRelease(*package_download)

@@ -100,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
             values = {"language": "en", "language_system": 0, "language_setup_done": 1,
                       "apps_setup_done": 0, "enabled_apps": 22, "lumi_introduced": 1,
-                      "cells_auto_update": 0, "apps_last_update_check": 1900000000,
+                      "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                       "tutorial_seen": 1, "habits_guide_seen": 1, "launcher_guide_seen": 1,
                       "ui_scale": 10,
                       "navigation_placement": 1, "navigation_collapsed": 0,

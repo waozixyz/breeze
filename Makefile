@@ -675,7 +675,7 @@ MEDITATION_AUDIO_TRACKS := \
 
 include mk/package-freebsd.mk
 
-.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
+.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-fdroid-apk android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons social-install social-login social-draft social-x-draft social-post social-x-post social-x-post-dry-run social-post-dry-run
 .PHONY: zi-check
 .PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
 .NOTPARALLEL: all native test visual-test ci zi-check dist windows windows64 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
@@ -2642,6 +2642,16 @@ android-copy-release-apks: | $(ANDROID_BUILD_DIR)
 	fi; \
 	cp "$$gplay_universal" "$(ANDROID_BUILD_DIR)/$(APP_NAME)-$(APP_VERSION)-gplay.apk"
 
+# F-Droid rebuilds this universal APK with -PfDroidBuild and copies its
+# signature, so run after a signed assembleRelease -PfDroidBuild=true.
+android-copy-fdroid-apk: | $(ANDROID_BUILD_DIR)
+	@fdroid_universal="$$(find droid/app/build/outputs/apk -path '*/release/*' -name "app-universal-release*.apk" | head -n 1)"; \
+	if [ -z "$$fdroid_universal" ] || [ ! -f "$$fdroid_universal" ]; then \
+		echo "No universal F-Droid APK was produced"; \
+		exit 1; \
+	fi; \
+	cp "$$fdroid_universal" "$(ANDROID_BUILD_DIR)/$(APP_NAME)-$(APP_VERSION)-fdroid.apk"
+
 android-copy-bundle: | $(ANDROID_BUILD_DIR)
 	bash scripts/check-android-optimization.sh droid/app/build/outputs/bundle/gplay/app-gplay.aab
 	@found=0; \
@@ -2955,7 +2965,7 @@ test: sync-recovery-test
 
 # Validate before producing release packages, including direct artifact targets.
 $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) $(CLICK_TARGET) $(CHROME_WEB_STORE_ZIP) $(FIREFOX_ADDONS_ZIP): | version-check
-android-release android-bundle android-copy-release-apks android-copy-bundle windows-setup site: version-check
+android-release android-bundle android-copy-release-apks android-copy-fdroid-apk android-copy-bundle windows-setup site: version-check
 
 # Actual artifacts are gated too, including direct and incremental builds.
 $(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws

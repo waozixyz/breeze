@@ -166,6 +166,8 @@ class VersionTest(unittest.TestCase):
         script = self.root / "scripts/list-expected-release-assets.sh"
         result = subprocess.run(["sh", str(script)], capture_output=True, text=True, check=True)
         self.assertIn(f"inbe-{self.version}.apk", result.stdout.splitlines())
+        # F-Droid's metadata compares its build with this signed APK.
+        self.assertIn(f"inbe-{self.version}-fdroid.apk", result.stdout.splitlines())
         for invalid in ("", "Unreleased", "2.0", "2.0.0\n3.0.0", "02.0.0"):
             with self.subTest(version=invalid):
                 result = subprocess.run(["sh", str(script), invalid], capture_output=True, check=False)

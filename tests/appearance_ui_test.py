@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         user = db.execute('SELECT id FROM users LIMIT 1').fetchone()[0]
         settings = dict(enabled_apps='31', language='en', language_setup_done='1',
                         apps_setup_done='1', tutorial_seen='1', habits_guide_seen='1',
-                        lumi_introduced='1', cells_auto_update='0')
+                        lumi_introduced='1', package_updates_allowed='0')
         for name in ('lists', 'habits', 'practices', 'diary', 'lumi'):
             settings['app_used_' + name] = '1'
         for key, value in settings.items():

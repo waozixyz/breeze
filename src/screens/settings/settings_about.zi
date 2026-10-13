@@ -25,6 +25,7 @@ update_host_text :: (value: *u8) -> string {
 #import, file "../../app/app_modal_state.zi";
 #import, file "../../core/version.zi";
 #import, file "../../cells/package_manager.zi";
+#import, file "settings_ui.zi";
 #import, file "../../cells/catalog.zi";
 #import, file "../../cells/versions.zi";
 #import "open_uri"
@@ -98,7 +99,37 @@ settings_about_content_height :: (content_w: s32) -> s32 {
 
     pending_root := ifx PackageRootPending() then AppScale(28) else 0
     return AppScale(448) + update_row + pending_root + AppParagraphHeight(description.text, description.width,
-        description.font, description.line_gap) + about_link_icons_height(content_w)
+        description.font, description.line_gap) + about_link_icons_height(content_w) +
+    about_package_updates_height(content_w)
+}
+
+// Changes the answer to the Apps question about package updates.
+about_package_updates_height :: (content_w: s32) -> s32 {
+    if !PackageUpdatesPossible() {
+        return 0
+    }
+    note_h := AppParagraphHeight(LocaleText("package_updates_note"), content_w,
+        AppFontSize(), AppScale(4))
+    return toggle_row_height(LocaleText("package_updates_setting"), content_w) +
+    note_h + AppScale(20)
+}
+
+about_draw_package_updates :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
+    if !PackageUpdatesPossible() {
+        return
+    }
+    allowed: s32 = ifx PackageAutomaticEnabled() then 1 else 0
+    if draw_toggle_row(app, x, w, y, LocaleText("package_updates_setting"), *allowed) {
+        PackageSetAutomatic(allowed != 0)
+    }
+    note := LocaleText("package_updates_note")
+    note_h := AppParagraphHeight(note, w, AppFontSize(), AppScale(4))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)w, cast(float32)note_h},
+            .text = note, .font = AppFontSize(),
+            .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += note_h + AppScale(20)
 }
 
 ABOUT_SOCIAL_DISCORD :: 0
@@ -249,6 +280,7 @@ settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
         }
     }
     y.* += AppScale(20)
+    about_draw_package_updates(app, x, w, y)
 
     if update_available() != 0 {
         if update_can_self_update() != 0 {
