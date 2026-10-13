@@ -10,6 +10,7 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "plot=$root/build/packages/plot/src" \
     --module-path "$root/build/packages/kss/src" \
     --module-path "oqs=$root/build/packages/oqs/src" \
     --module-path "qrcode=$root/build/packages/qrcode/src" \

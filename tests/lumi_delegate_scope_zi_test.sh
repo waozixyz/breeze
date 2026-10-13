@@ -14,6 +14,7 @@ export YUE_DESKTOP_RECOVERY=0
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "qrcode=$root/build/packages/qrcode/src" \
     --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "plot=$root/build/packages/plot/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" --entry lumi_delegate_scope_behavior:Check \
     -o "$work/generated" "$root/tests/lumi_delegate_scope_behavior.zi" "$root/tests/sync_test_host.zi" "$root/tests/delegate_account_host.zi"
