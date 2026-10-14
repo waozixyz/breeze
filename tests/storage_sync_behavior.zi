@@ -552,6 +552,42 @@ test_older_records_download_again_once :: () {
     storage_close()
 }
 
+// A record's fields this version doesn't read, such as ones a newer version
+// added, go back out with it under this version's own changes, so an older
+// version never removes them for the account's other devices.
+test_unknown_record_fields_go_back_out :: () {
+    first := make_root("sync-fields-a")
+    second := make_root("sync-fields-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    habits_a = Habits.{}
+    check_true("add habit", habits_add_custom(*habits_a, "Cold Shower", Green(), 0, 0) == 0)
+    habits_save(*habits_a)
+    habits_free(*habits_a)
+    check_true("device a payload", build_payload())
+    records := records_array()
+    storage_close()
+
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    check_true("device b applies", storage_apply_sync_response_json(response_with(5, records)) != 0)
+    storage_close()
+    check_int("device b keeps the record as it arrived",
+        raw_count(second, "SELECT COUNT(*) FROM sync_record_copies WHERE collection='private.inbe.v1.habits'"), 1)
+    // A field from a newer version that this one doesn't read.
+    raw_exec(second, "UPDATE sync_record_copies SET json=json_set(json,'$.future_field','kept') WHERE collection='private.inbe.v1.habits'")
+    check_true("reopen device b", storage_init(second) != 0)
+    habits_b = Habits.{}
+    check_true("device b loads", storage_habits_load(cast(*void)*habits_b) != 0)
+    habits_b.items[0].icon = 23
+    habits_save(*habits_b)
+    habits_free(*habits_b)
+    check_true("device b payload", build_payload())
+    storage_close()
+    check_int("the change goes out with the field it doesn't know",
+        raw_count(second, "SELECT COUNT(*) FROM sync_record_copies WHERE collection='private.inbe.v1.habits' AND json_extract(json,'$.future_field')='kept' AND json_extract(json,'$.icon')=23"), 1)
+}
+
 // Device A's records applied on device B come out as the same habits.
 test_records_round_trip_between_devices :: () {
     first := make_root("sync-device-a")
@@ -1698,6 +1734,7 @@ Check :: () -> s32 {
     test_orphan_habit_days_reset_cursor()
     test_habit_name_repair_runs_once()
     test_older_records_download_again_once()
+    test_unknown_record_fields_go_back_out()
     test_records_round_trip_between_devices()
     test_cell_records_round_trip()
     test_cell_record_identity()
