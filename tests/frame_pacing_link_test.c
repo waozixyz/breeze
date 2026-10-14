@@ -5,11 +5,18 @@
 #include "app/app_frame_pacing.h"
 
 static int android_platform;
+static bool guide_animating;
 
 int32_t
 AndroidPlatform(void)
 {
     return android_platform;
+}
+
+bool
+LumiGuideAnimating(void)
+{
+    return guide_animating;
 }
 
 int
@@ -66,6 +73,16 @@ main(void)
     }
     assert(decision.state.target_fps == 15);
     app.session_window.screen = ScreenSession;
+    decision = app_update_frame_pacing(&app, sample);
+    assert(decision.apply_target && decision.state.target_fps == 60);
+
+    /* Lumi flying, typing or speaking in a guide keeps the active rate. */
+    app.session_window.screen = ScreenHabits;
+    for (int frame = 0; frame < 14; frame++) {
+        decision = app_update_frame_pacing(&app, sample);
+    }
+    assert(decision.state.target_fps == 15);
+    guide_animating = true;
     decision = app_update_frame_pacing(&app, sample);
     assert(decision.apply_target && decision.state.target_fps == 60);
     return 0;
