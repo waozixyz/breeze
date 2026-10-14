@@ -24,13 +24,29 @@ PROMPT = (
 )
 
 
+SHORT_PROMPT = (
+    "Instrumental score for a premium 30-second vertical promo of a mindful-living app. No vocals. "
+    "Warm, hopeful and cinematic, 76 BPM, D major, same sound as a calm East Asian-tinged storybook film. "
+    "0-4 s: airy pads, a soft felt-piano motif and a small firefly chime. "
+    "4-10 s: gentle bamboo flute melody over piano with light guzheng plucks. "
+    "10-17 s: graceful guzheng and erhu phrase over a slow soft taiko heartbeat and warm low strings. "
+    "17-24 s: uplifting lift with warm strings and piano arpeggios. "
+    "24-30 s: resolve to a tender final chord with a sparkling chime and a clean natural ending. "
+    "Mixed spaciously so a narrator's voice sits clearly on top: no busy midrange, no loud drums."
+)
+
+
 def main():
-    takes = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+    short = "--short" in sys.argv
+    args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    takes = int(args[0]) if args else 2
+    prompt = SHORT_PROMPT if short else PROMPT
+    prefix = "short-score" if short else "score"
     OUT.mkdir(parents=True, exist_ok=True)
     for take in range(1, takes + 1):
         body = {"model": "google/lyria-3-pro-preview", "modalities": ["text", "audio"],
                 "audio": {"format": "mp3"}, "stream": True,
-                "messages": [{"role": "user", "content": PROMPT}]}
+                "messages": [{"role": "user", "content": prompt}]}
         request = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps(body).encode(),
                                          headers={"Authorization": "Bearer " + key(), "Content-Type": "application/json"})
         chunks = []
@@ -46,10 +62,10 @@ def main():
                         chunks.append(audio["data"])
         if not chunks:
             sys.exit("Lyria returned no audio")
-        path = OUT / f"score-{take}.mp3"
+        path = OUT / f"{prefix}-{take}.mp3"
         path.write_bytes(b"".join(base64.b64decode(chunk) for chunk in chunks))
         print(path)
-    (OUT / "score-prompt.txt").write_text(PROMPT + "\n")
+    (OUT / f"{prefix}-prompt.txt").write_text(prompt + "\n")
 
 
 if __name__ == "__main__":

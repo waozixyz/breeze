@@ -147,7 +147,9 @@ listing language.
 `design/promo-film/` holds the trailer's sources: `film.json` (clips, voice
 times, app-screen inserts), `narrate.py` (Lumi's voice), `score.py` (music),
 `mix.py`, `keyframes.py` and `compose.py`, which renders the cut with the real
-app screens into `build/promo-video/`.
+app screens into `build/promo-video/`. `mix.py --short` and
+`compose.py --short` render the 36-second vertical short from `short.json`,
+the portrait keyframes in `keyframes-vertical/` and sections of the same score.
 Screenshot publishing still requires the complete current
 capture, visual review, export and locked build preflight.
 
