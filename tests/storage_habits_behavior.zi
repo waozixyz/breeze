@@ -812,6 +812,58 @@ test_average_goals_and_changes :: () {
     storage_close()
 }
 
+// A device keeps its habit list in memory while sync stores newer settings
+// and days underneath. Saving that older copy writes only what the person
+// changed since it was loaded, so the synced values survive here and on
+// the account's other devices, and a habit deleted elsewhere stays deleted.
+test_stale_copy_keeps_synced_values :: () {
+    root := make_root("habit-stale-copy")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('sit',(SELECT id FROM users LIMIT 1),'Sit ups',1,2,3,0,0,0,0,0,1782200000),('cold',(SELECT id FROM users LIMIT 1),'Cold shower',4,5,6,0,0,0,1,0,1782200000);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('sit',20261012,0,0,0,1782200000),('sit',20261013,0,0,0,1782200000);")
+    check_true("reopen db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_a) != 0)
+    check_int("both habits load", habits_a.count, 2)
+    // Sync stores newer settings, a done day and a deletion.
+    exec_db_sql("UPDATE habits SET icon=5,color_r=90,questions='[{\"id\":1,\"type\":\"number\",\"text\":\"How many?\"}]',span=1,span_goal=2,span_high=480,updated_at=1782300000 WHERE id='sit';UPDATE habit_days SET completed=1,count=1,updated_at=1782300000 WHERE habit_id='sit' AND local_date=20261013;UPDATE habits SET deleted_at=1782300000,updated_at=1782300000 WHERE id='cold';DELETE FROM sync_outbox;")
+    sit := find_habit(*habits_a, "Sit ups")
+    check_true("sit ups in memory", sit != null)
+    if sit == null { return }
+    // The person renames it and marks another day.
+    unused AppCopyText("Sit-ups", sit.name[:])
+    day := habit_find_day(sit, 20261012)
+    check_true("the other day is in memory", day >= 0)
+    if day >= 0 { sit.days[day].completed = 1; sit.days[day].count = 1 }
+    habits_save(*habits_a)
+    check_int("the rename is saved",
+        read_db_count("SELECT COUNT(*) FROM habits WHERE id='sit' AND name='Sit-ups'"), 1)
+    check_int("synced settings stay",
+        read_db_count("SELECT COUNT(*) FROM habits WHERE id='sit' AND icon=5 AND color_r=90 AND span=1 AND span_goal=2 AND span_high=480 AND json_array_length(questions)=1"), 1)
+    check_true("memory takes the synced settings",
+        sit.icon == 5 && sit.color.r == 90 && sit.span == 1 && sit.question_count == 1)
+    check_int("the synced day stays done",
+        read_db_count("SELECT COUNT(*) FROM habit_days WHERE habit_id='sit' AND local_date=20261013 AND completed=1 AND count=1 AND updated_at=1782300000"), 1)
+    check_int("the day the person marked is saved",
+        read_db_count("SELECT COUNT(*) FROM habit_days WHERE habit_id='sit' AND local_date=20261012 AND completed=1"), 1)
+    check_int("only the marked day waits to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_day'"), 1)
+    check_int("a habit deleted elsewhere stays deleted",
+        read_db_count("SELECT COUNT(*) FROM habits WHERE id='cold' AND deleted_at=1782300000"), 1)
+    // A colour change is logged and syncs like every other setting.
+    exec_db_sql("DELETE FROM sync_outbox;")
+    sit.color = Color.{.r = 200, .g = 10, .b = 20, .a = 255}
+    habits_save(*habits_a)
+    records: [8]HabitChangeRecord
+    count := storage_habit_changes_load("sit", records[:])
+    check_true("the colour change is in the habit's log",
+        count >= 1 && records[0].change.kind == HABIT_CHANGE_COLOR)
+    check_int("the colour and its log entry wait to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN ('habit','habit_change')"), 2)
+    habits_free(*habits_a)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -832,5 +884,6 @@ Check :: () -> s32 {
     test_habit_questions_and_entries()
     test_entry_statistics()
     test_average_goals_and_changes()
+    test_stale_copy_keeps_synced_values()
     return failures
 }
