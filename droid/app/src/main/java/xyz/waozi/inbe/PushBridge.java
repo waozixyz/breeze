@@ -126,6 +126,23 @@ final class PushBridge {
         });
     }
 
+    // "None" in the picker: unregister and forget the distributor, so push
+    // notifications stay off until one is chosen again.
+    static void disable(final MainActivity activity) {
+        if (BuildConfig.GPLAY && callGplay("disable",
+                new Class<?>[] {MainActivity.class}, activity) != null) {
+            return;
+        }
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                UnifiedPush.unregister(activity, "inbe");
+                UnifiedPush.removeDistributor(activity);
+                PushServiceImpl.forgetEndpoint(activity);
+            }
+        });
+    }
+
     private static Object callGplay(String name, Class<?>[] parameterTypes, Object... args) {
         try {
             Method method = Class.forName("xyz.waozi.inbe.GplayPushBridge").getDeclaredMethod(name, parameterTypes);
