@@ -51,6 +51,11 @@ void __wrap_app_apply_nav_route(InnerBreeze *app, int32_t route)
     (void)route;
     assert(0);
 }
+/* Lumi is online with its agreement, so Telegram linking is allowed. */
+bool __wrap_lumi_connection_LumiNodeTrafficAllowed(void)
+{
+    return true;
+}
 bool __wrap_lumi_telegram_LumiTelegramOpen(String start)
 {
     (void)start;

@@ -27,6 +27,7 @@ done < "$work/c-files"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -Wl,--wrap=storage_get_setting_text -Wl,--wrap=storage_has_sync_account \
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=lumi_telegram_LumiTelegramOpen \
+    -Wl,--wrap=lumi_connection_LumiNodeTrafficAllowed \
     -Wl,--wrap=LocaleText -Wl,--wrap=FrameTextHold \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/screens/settings" \
     "$@" "$liboqs" -lm -o "$work/test"
