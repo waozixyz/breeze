@@ -552,6 +552,70 @@ test_older_records_download_again_once :: () {
     storage_close()
 }
 
+// An updated device downloads every record before it sends its changes, so
+// a record it got without some fields never goes out without them.
+test_updated_device_downloads_before_sending :: () {
+    root := make_root("sync-download-first")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    local: Habits
+    check_true("add habit", habits_add_custom(*local, "Read", Green(), 0, 0) == 0)
+    habits_save(*local)
+    habits_free(*local)
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','530');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_habit_name_repair_v1_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_zero_habit_day_repair_v1_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_record_fields','1');")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_true("the download comes first", contains(payload(), "\"since_server_version\":0"))
+    check_int("nothing is sent before the download", record_count(), 0)
+    check_true("apply the download", storage_apply_sync_response_json(empty_response(530)) != 0)
+    check_true("payload builds again", build_payload())
+    check_true("the change goes out after it", record_count() > 0)
+    storage_close()
+}
+
+// A habit an older version received without some settings gets them from
+// the account's record during the download, even where it looks newer.
+test_updated_device_fills_missing_settings :: () {
+    first := make_root("sync-fill-a")
+    second := make_root("sync-fill-b")
+    check_true("init device a", storage_init(first) != 0)
+    set_account()
+    source: Habits
+    check_true("add habit", habits_add_custom(*source, "Cold Shower", Green(), 0, 0) == 0)
+    source.items[0].icon = 17
+    weekly: HabitSchedule
+    weekly.repeat = HABIT_REPEAT_WEEKLY
+    weekly.weekdays = 1 + 4 + 8
+    check_true("weekly schedule", HabitScheduleSet(*source.items[0], weekly, 20260620, false))
+    habits_save(*source)
+    habits_free(*source)
+    check_true("device a payload", build_payload())
+    records := records_array()
+    storage_close()
+
+    check_true("init device b", storage_init(second) != 0)
+    set_account()
+    check_true("device b applies", storage_apply_sync_response_json(response_with(5, records)) != 0)
+    storage_close()
+    // As an older version kept it: without the icon or schedule, and edited
+    // later, so the account's record looks older.
+    raw_exec(second, "UPDATE habits SET icon=0,schedule='',updated_at=4102444800 WHERE name='Cold Shower';INSERT OR REPLACE INTO meta(key,value) VALUES('sync_record_fields','1');")
+    check_true("reopen device b", storage_init(second) != 0)
+    check_true("device b downloads again", storage_apply_sync_response_json(response_with(6, records)) != 0)
+    filled: Habits
+    check_true("device b loads", storage_habits_load(cast(*void)*filled) != 0)
+    habit := find_habit(*filled, "Cold Shower")
+    check_true("device b has the habit", habit != null)
+    check_int("the icon is filled", habit.icon, 17)
+    check_true("the schedule is filled", habit.schedule_count > 0)
+    if habit.schedule_count > 0 {
+        check_int("the weekly days are back", habit.schedules[habit.schedule_count - 1].weekdays, 13)
+    }
+    habits_free(*filled)
+    storage_close()
+}
+
 // A record's fields this version doesn't read, such as ones a newer version
 // added, go back out with it under this version's own changes, so an older
 // version never removes them for the account's other devices.
@@ -1735,6 +1799,8 @@ Check :: () -> s32 {
     test_habit_name_repair_runs_once()
     test_older_records_download_again_once()
     test_unknown_record_fields_go_back_out()
+    test_updated_device_downloads_before_sending()
+    test_updated_device_fills_missing_settings()
     test_records_round_trip_between_devices()
     test_cell_records_round_trip()
     test_cell_record_identity()

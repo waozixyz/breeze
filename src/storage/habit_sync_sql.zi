@@ -168,6 +168,38 @@ NOT EXISTS ( SELECT 1 FROM sync_outbox  WHERE entity_type='habit' AND entity_id=
 local_date=0))
 SQL
 
+// While a device downloads every record again after an update (see
+// STORAGE_SYNC_RECORD_FIELDS in storage_core.zi), a habit it received in an
+// older version may lack settings that version didn't keep. Those settings
+// come from the account's record even where the device's habit looks newer;
+// settings the device already has stay.
+SyncHabitsFillMissingSQL :: #string SQL
+WITH incoming AS (SELECT value FROM json_each(?1,'$.changes.habits') UNION ALL
+SELECT value FROM json_each(?1,'$.data.habits'))
+UPDATE habits SET
+icon=CASE WHEN habits.icon=0 THEN COALESCE(r.icon,0) ELSE habits.icon END,
+weekdays=CASE WHEN habits.weekdays=0 THEN COALESCE(r.weekdays,0) ELSE habits.weekdays END,
+reminder_hour=CASE WHEN habits.reminder_hour<0 THEN COALESCE(r.reminder_hour,-1) ELSE habits.reminder_hour END,
+schedule=CASE WHEN habits.schedule='' THEN COALESCE(r.schedule,'') ELSE habits.schedule END,
+questions=CASE WHEN habits.questions='' THEN COALESCE(r.questions,'') ELSE habits.questions END,
+span_goal=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_goal,0) ELSE habits.span_goal END,
+span_low=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_low,0) ELSE habits.span_low END,
+span_high=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_high,0) ELSE habits.span_high END,
+span=CASE WHEN habits.span=0 THEN COALESCE(r.span,0) ELSE habits.span END
+FROM (SELECT CAST(json_extract(value,'$.id') AS TEXT) AS id,
+CAST(json_extract(value,'$.icon') AS INTEGER) AS icon,
+CAST(json_extract(value,'$.weekdays') AS INTEGER) AS weekdays,
+CAST(json_extract(value,'$.reminder_hour') AS INTEGER) AS reminder_hour,
+CAST(json_extract(value,'$.schedule') AS TEXT) AS schedule,
+CAST(json_extract(value,'$.questions') AS TEXT) AS questions,
+CAST(json_extract(value,'$.span') AS INTEGER) AS span,
+CAST(json_extract(value,'$.span_goal') AS INTEGER) AS span_goal,
+CAST(json_extract(value,'$.span_low') AS INTEGER) AS span_low,
+CAST(json_extract(value,'$.span_high') AS INTEGER) AS span_high
+FROM incoming WHERE COALESCE(json_extract(value,'$.deleted_at'),0)=0) AS r
+WHERE habits.id=r.id AND habits.deleted_at=0
+SQL
+
 SyncHabitDaysSQL :: #string SQL
 INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) SELECT
 COALESCE(json_extract(value,'$.habit_id'),''),
