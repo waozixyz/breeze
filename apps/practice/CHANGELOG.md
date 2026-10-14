@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.5] - 2026-10-13
+
+- Maintenance release for Inner Breeze 2.1.33.
+- Requires Inner Breeze 2.1.28 or later.
+
 ## [1.1.4] - 2026-10-10
 
 - Requires Inner Breeze 2.1.28 or later.
