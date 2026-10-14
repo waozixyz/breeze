@@ -8,8 +8,8 @@ answer and a habit request still works on the device, while the provider
 receives nothing. The title bar's connection button opens the terms; after
 agreeing, the provider gets the request with the key only in its
 Authorization header. Switched off, nothing is sent again. The title bar's
-wrench opens Settings > Lumi, which shows the provider and reopens the
-terms. Screenshots of each step are kept in build/lumi-harness-ui-test.
+wrench opens Lumi's own settings page, which shows the provider and
+reopens the terms, and one tap on its Back returns to the chat. Screenshots of each step are kept in build/lumi-harness-ui-test.
 """
 import ast
 import contextlib
@@ -160,6 +160,15 @@ def tap_title_button(window, size, button):
     scale /= 10
     centre = 12 + 20 if button == 'wrench' else 12 + 40 + 4 + 20
     tap(window, width - round(centre * scale), round(26 * scale))
+
+
+def tap_back(window, size):
+    """Back leads the settings page's title bar, 52 units tall, right of
+    the 88-unit navigation rail of a desktop window."""
+    width, height, scale = size
+    scale /= 10
+    rail = 88 if width > height else 0
+    tap(window, round((rail + 32) * scale), round(26 * scale))
 
 
 def terms_open(window, label):
@@ -315,13 +324,23 @@ def run(name, size, port):
             answer = send(window, profile, 'another joke please', name + '-4')
             assert len(Provider.requests) == 1, 'Lumi reached the provider while switched off'
 
-            # The wrench opens Settings > Lumi.
+            # The wrench opens Lumi's settings page; one tap on Back returns
+            # to the chat.
             tap_title_button(window, size, 'wrench')
             time.sleep(0.8)
             found = words(window, name + '-settings-lumi-words')
-            assert any(row['text'] == 'Read' for row in found), 'The wrench did not open Settings > Lumi'
-            assert any(row['text'] == 'Model' for row in found), 'Settings > Lumi shows no provider'
+            assert any(row['text'] == 'Read' for row in found), "The wrench did not open Lumi's settings"
+            assert any(row['text'] == 'Model' for row in found), "Lumi's settings show no provider"
+            assert not any(row['text'] == 'Device' for row in found), "The wrench opened the app's Settings"
             capture(window, name + '-settings-lumi')
+            tap_back(window, size)
+            time.sleep(0.8)
+            found = words(window, name + '-settings-back-words')
+            assert not any(row['text'] == 'Model' for row in found), 'One tap on Back did not leave the settings'
+            assert any(row['text'] == 'another' for row in found), 'Back did not return to the chat'
+            capture(window, name + '-settings-back')
+            tap_title_button(window, size, 'wrench')
+            time.sleep(0.8)
             assert setting(profile, 'lumi_provider_key') == KEY
             tap_word(window, 'Read', name + '-read-terms')
             time.sleep(0.8)
@@ -338,4 +357,4 @@ try:
 finally:
     server.shutdown()
 print('Lumi harness UI: terms on opening once a run, offline until agreed, connection button, '
-      f'own provider request and the wrench to Settings > Lumi passed; screenshots in {OUTPUT.relative_to(ROOT)}')
+      f"own provider request, and the wrench to Lumi's settings and Back passed; screenshots in {OUTPUT.relative_to(ROOT)}")

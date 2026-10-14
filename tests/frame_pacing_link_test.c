@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "app/app_frame_pacing.h"
+#include "smooth_frames.h"
 
 static int android_platform;
 static bool guide_animating;
@@ -85,5 +86,22 @@ main(void)
     guide_animating = true;
     decision = app_update_frame_pacing(&app, sample);
     assert(decision.apply_target && decision.state.target_fps == 60);
+
+    /* An app package asking for smooth frames keeps the active rate until
+       they are spent, then the phone settles back to its idle rate. */
+    guide_animating = false;
+    for (int frame = 0; frame < 14; frame++) {
+        decision = app_update_frame_pacing(&app, sample);
+    }
+    assert(decision.state.target_fps == 15);
+    AppRequestSmoothFrames(20);
+    for (int frame = 0; frame < 20; frame++) {
+        decision = app_update_frame_pacing(&app, sample);
+        assert(decision.state.target_fps == 60);
+    }
+    for (int frame = 0; frame < 14; frame++) {
+        decision = app_update_frame_pacing(&app, sample);
+    }
+    assert(decision.state.target_fps == 15);
     return 0;
 }

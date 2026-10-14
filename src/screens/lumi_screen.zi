@@ -16,6 +16,8 @@
 #import, file "../cells/lumi_chart.zi";
 #import, file "../cells/lumi_online.zi";
 #import, file "../cells/lumi_connection.zi";
+#import, file "lumi_settings.zi";
+#import, file "../app/app_modal_state.zi";
 #import, file "../cells/lumi_habit_tools.zi";
 #import, file "../cells/lumi_telegram.zi";
 #import, file "../app/exercise_types.zi";
@@ -106,8 +108,10 @@ lumi_rows_measured: s32;
 // The chat changed while its rows were still being measured.
 lumi_rows_history_pending: bool;
 lumi_pending_route: s32 = -1;
-// The title bar's wrench opens Settings > Lumi after the frame.
-lumi_pending_settings: bool;
+// The title bar's wrench opens Lumi's settings page in place of the chat;
+// its Back returns to the chat.
+lumi_settings_open: bool;
+lumi_settings_scroll: s32;
 // Opening Lumi shows its online terms until they are answered, once a run:
 // after "Not now" they wait for the next run or the connection button.
 lumi_agreement_due: bool;
@@ -153,7 +157,7 @@ app_lumi_reset :: () {
     lumi_draft_width = 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
-    lumi_pending_settings = false
+    lumi_settings_open = false
     lumi_history_loading = false
     lumi_choosing_habit = false
     lumi_choosing_diary = false
@@ -275,7 +279,18 @@ app_lumi_show_agreement :: (app: *InnerBreeze) {
         return
     }
     lumi_ui.agreement = ifx LumiAiAgreed() then 2 else 1
+    lumi_settings_open = false
     app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
+}
+
+// Back on Lumi's settings page returns to the chat.
+#program_export
+app_lumi_settings_back :: (app: *InnerBreeze) -> bool {
+    if app == null || app.breathing.screen != ScreenLumi || !lumi_settings_open {
+        return false
+    }
+    lumi_settings_open = false
+    return true
 }
 
 // Opening a conversation never submits it: the user supplies the desired look.
@@ -714,7 +729,8 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "OpenLumiSettingsHost" && count == 0 {
-        lumi_pending_settings = true
+        lumi_settings_open = true
+        lumi_settings_scroll = 0
         result.* = HostScalar("bool", 1)
         return 1
     }
@@ -1061,8 +1077,16 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_ui.follow_end = true
         lumi_ui.scroll = 1000000
         lumi_agreement_due = true
+        lumi_settings_open = false
     }
     lumi_last_drawn = opened_at
+    if lumi_settings_open {
+        if lumi_settings_page_draw(app, *lumi_settings_scroll) {
+            lumi_settings_open = false
+            app_block_current_click(app)
+        }
+        return
+    }
     LumiPrepareTools(app)
     lumi_ui.session = app.ui.session
     if lumi_ui.follow_end && (lumi_ui.width != app.ui.view_width || lumi_ui.height != app.ui.view_height) {
@@ -1149,7 +1173,6 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.input.commit = enter && !lumi_ui.input.shift
     lumi_pending_route = -1
     lumi_pending_practice = -1
-    lumi_pending_settings = false
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     CellsUiBegin(LumiUiCall, cast(*void)app)
     response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
@@ -1163,12 +1186,6 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     if lumi_pending_route >= 0 {
         app_apply_nav_route(app, lumi_pending_route)
-    }
-    if lumi_pending_settings {
-        lumi_pending_settings = false
-        app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
-        app.settings_tab = SETTINGS_TAB_LUMI
-        app.settings_overview = 0
     }
 }
 

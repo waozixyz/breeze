@@ -1,6 +1,7 @@
-// Settings > Lumi: whether the person agreed to Lumi's online terms, and
-// where Lumi's AI requests go: Inner Breeze's server, or their own
-// OpenAI-compatible provider with its base URL, API key and model. The
+// Lumi's own settings page, opened by the wrench in Lumi's title bar and
+// left with Back to the chat: whether the person agreed to Lumi's online
+// terms, and where Lumi's AI requests go: Inner Breeze's server, or their
+// own OpenAI-compatible provider with its base URL, API key and model. The
 // terms themselves are shown in Lumi, where they are agreed to. The key is
 // written to this device's settings only; it is never shown again, never
 // synced and never handed to Lumi's package.
@@ -21,21 +22,30 @@
 #import "text_buffer"
 #import "keys"
 #import "drawing_props"
-#import, file "../../app/app_types.zi";
-#import, file "../../app/locale.zi";
-#import, file "../../app/metrics.zi";
-#import, file "../../app/text_buffers.zi";
-#import, file "../../platform/raylib_text_input.zi";
-#import, file "../../storage/storage_core.zi";
-#import, file "../../cells/lumi_connection.zi";
-#import, file "../lumi_screen.zi";
-#import, file "settings_ui.zi";
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "dropdown_props"
+#import "layout"
+#import, file "../app/app_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../cells/lumi_connection.zi";
+#import, file "lumi_screen.zi";
+#import, file "settings/settings_ui.zi";
 
 using TextWrap;
 using ButtonTone;
 using ButtonEmphasis;
 
-SettingsLumiField :: struct {
+LumiSettingsField :: struct {
     value: [LUMI_PROVIDER_URL_MAX]u8
     cursor: s32
     anchor: s32
@@ -44,70 +54,68 @@ SettingsLumiField :: struct {
     composition: CompositionState
 }
 
-settings_lumi_url: SettingsLumiField;
-settings_lumi_key: SettingsLumiField;
-settings_lumi_model: SettingsLumiField;
-settings_lumi_loaded: bool;
+lumi_settings_url: LumiSettingsField;
+lumi_settings_key: LumiSettingsField;
+lumi_settings_model: LumiSettingsField;
+lumi_settings_loaded: bool;
 // 1 saved, 2 the address or model does not work.
-settings_lumi_notice: s32;
+lumi_settings_notice: s32;
 
 SETTINGS_LUMI_FIELD :: 48
 SETTINGS_LUMI_LABEL :: 26
 
-settings_lumi_text_height :: (text: string, width: s32) -> s32 {
+lumi_settings_text_height :: (text: string, width: s32) -> s32 {
     prepared := PrepareText(TextProps.{.text = text, .font = AppFontSize(),
             .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0},
             .wrap = cast(TextWrap)TextWrapAuto}, DefaultTextFace())
     return cast(s32)prepared.bounds.height + AppScale(12)
 }
 
-settings_lumi_status :: () -> string {
+lumi_settings_status :: () -> string {
     return LocaleText(ifx LumiAiAgreed() && LumiNodeAgreed() then "lumi_settings_agreed" else "lumi_settings_not_agreed")
 }
 
-settings_lumi_terms_body :: (width: s32) -> s32 {
-    return settings_lumi_text_height(settings_lumi_status(), width) + AppScale(56)
+lumi_settings_terms_body :: (width: s32) -> s32 {
+    return lumi_settings_text_height(lumi_settings_status(), width) + AppScale(56)
 }
 
-settings_lumi_connection_body :: (width: s32) -> s32 {
+lumi_settings_connection_body :: (width: s32) -> s32 {
     height := AppScale(54)
     if !LumiOwnProviderSelected() {
         return height
     }
     height += AppScale((SETTINGS_LUMI_LABEL + SETTINGS_LUMI_FIELD + 10) * 3)
-    height += settings_lumi_text_height(LocaleText("lumi_settings_own_note"), width)
-    if settings_lumi_notice != 0 {
-        height += settings_lumi_text_height(LocaleText(ifx settings_lumi_notice == 1 then
+    height += lumi_settings_text_height(LocaleText("lumi_settings_own_note"), width)
+    if lumi_settings_notice != 0 {
+        height += lumi_settings_text_height(LocaleText(ifx lumi_settings_notice == 1 then
             "lumi_settings_saved" else "lumi_settings_invalid"), width)
     }
     return height + AppScale(56)
 }
 
-#program_export
-settings_lumi_content_height :: (app: *InnerBreeze, width: s32) -> s32 {
-    unused app
+lumi_settings_content_height :: (width: s32) -> s32 {
     inner := settings_section_inner_width(width)
-    return settings_section_height(LocaleText("lumi_settings_terms"), settings_lumi_terms_body(inner)) +
-    settings_section_height(LocaleText("lumi_settings_connection"), settings_lumi_connection_body(inner))
+    return settings_section_height(LocaleText("lumi_settings_terms"), lumi_settings_terms_body(inner)) +
+    settings_section_height(LocaleText("lumi_settings_connection"), lumi_settings_connection_body(inner))
 }
 
-settings_lumi_load :: () {
-    if settings_lumi_loaded {
+lumi_settings_load :: () {
+    if lumi_settings_loaded {
         return
     }
-    settings_lumi_loaded = true
-    settings_lumi_url = SettingsLumiField.{}
-    settings_lumi_model = SettingsLumiField.{}
-    settings_lumi_key = SettingsLumiField.{}
-    unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), settings_lumi_url.value[:])
-    unused AppCopyText(storage_get_setting_text(LumiProviderModelSetting), settings_lumi_model.value[:])
-    settings_lumi_url.cursor = cast(s32)TextUntilNul(settings_lumi_url.value[:]).count
-    settings_lumi_model.cursor = cast(s32)TextUntilNul(settings_lumi_model.value[:]).count
+    lumi_settings_loaded = true
+    lumi_settings_url = LumiSettingsField.{}
+    lumi_settings_model = LumiSettingsField.{}
+    lumi_settings_key = LumiSettingsField.{}
+    unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), lumi_settings_url.value[:])
+    unused AppCopyText(storage_get_setting_text(LumiProviderModelSetting), lumi_settings_model.value[:])
+    lumi_settings_url.cursor = cast(s32)TextUntilNul(lumi_settings_url.value[:]).count
+    lumi_settings_model.cursor = cast(s32)TextUntilNul(lumi_settings_model.value[:]).count
 }
 
 // A labelled one-line field. The key's field is secure: it shows dots and
 // never copies its text out.
-settings_lumi_field :: (app: *InnerBreeze, field: *SettingsLumiField, id: s32,
+lumi_settings_field :: (app: *InnerBreeze, field: *LumiSettingsField, id: s32,
     label: string, placeholder: string, secure: bool, max_bytes: s32,
     x: s32, width: s32, y: *s32) {
     Text(app.ui.session, TextProps.{.text = label, .font = AppSmallFontSize(),
@@ -152,15 +160,15 @@ settings_lumi_field :: (app: *InnerBreeze, field: *SettingsLumiField, id: s32,
 }
 
 // Saves the address and model, and a newly typed key, when they work.
-settings_lumi_save :: () {
+lumi_settings_save :: () {
     url: [LUMI_PROVIDER_URL_MAX]u8
     model: [LUMI_PROVIDER_MODEL_MAX]u8
-    unused AppCopyText(LumiLineTrimmed(TextUntilNul(settings_lumi_url.value[:])), url[:])
-    unused AppCopyText(LumiLineTrimmed(TextUntilNul(settings_lumi_model.value[:])), model[:])
-    key := AppTextFromCString(*settings_lumi_key.value[0], LUMI_PROVIDER_URL_MAX)
+    unused AppCopyText(LumiLineTrimmed(TextUntilNul(lumi_settings_url.value[:])), url[:])
+    unused AppCopyText(LumiLineTrimmed(TextUntilNul(lumi_settings_model.value[:])), model[:])
+    key := AppTextFromCString(*lumi_settings_key.value[0], LUMI_PROVIDER_URL_MAX)
     if !LumiProviderUrlValid(TextUntilNul(url[:])) || !LumiProviderModelValid(TextUntilNul(model[:])) ||
     !LumiProviderKeyValid(key) {
-        settings_lumi_notice = 2
+        lumi_settings_notice = 2
         return
     }
     storage_settings_begin_write()
@@ -170,9 +178,9 @@ settings_lumi_save :: () {
         storage_set_setting_text(LumiProviderKeySetting, key)
     }
     storage_settings_end_write()
-    SecureWipe(*settings_lumi_key.value[0], LUMI_PROVIDER_URL_MAX)
-    settings_lumi_key = SettingsLumiField.{}
-    settings_lumi_notice = 1
+    SecureWipe(*lumi_settings_key.value[0], LUMI_PROVIDER_URL_MAX)
+    lumi_settings_key = LumiSettingsField.{}
+    lumi_settings_notice = 1
 }
 
 LumiLineTrimmed :: (text: string) -> string {
@@ -187,24 +195,23 @@ LumiLineTrimmed :: (text: string) -> string {
     return text[start:end]
 }
 
-settings_lumi_button :: (app: *InnerBreeze, id: s32, label: string, x: s32, y: s32,
+lumi_settings_button :: (app: *InnerBreeze, id: s32, label: string, x: s32, y: s32,
     width: s32, tone: ButtonTone, emphasis: ButtonEmphasis) -> bool {
     return Button(app.ui.session, ButtonProps.{.id = id, .label = label,
             .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
                 cast(float32)AppScale(44)}, .tone = tone, .emphasis = emphasis}) != 0
 }
 
-#program_export
-settings_lumi_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
+lumi_settings_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     if app == null || y == null {
         return
     }
-    settings_lumi_load()
+    lumi_settings_load()
     inner := settings_section_inner_width(width)
     terms := settings_section_begin(app, x, width, y, LocaleText("lumi_settings_terms"),
-        settings_lumi_terms_body(inner))
-    status := settings_lumi_status()
-    status_height := settings_lumi_text_height(status, terms.inner_width)
+        lumi_settings_terms_body(inner))
+    status := lumi_settings_status()
+    status_height := lumi_settings_text_height(status, terms.inner_width)
     Text(app.ui.session, TextProps.{.text = status, .font = AppFontSize(),
             .wrap = cast(TextWrap)TextWrapAuto,
             .bounds = Rectangle.{cast(float32)terms.inner_x, cast(float32)(y.* + AppScale(6)),
@@ -213,16 +220,16 @@ settings_lumi_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     agreed := LumiAiAgreed() && LumiNodeAgreed()
     half := (terms.inner_width - AppScale(8)) / 2
     read_width := ifx agreed then half else terms.inner_width
-    if settings_lumi_button(app, 7801, LocaleText("lumi_settings_read_terms"), terms.inner_x, y.*,
+    if lumi_settings_button(app, 7801, LocaleText("lumi_settings_read_terms"), terms.inner_x, y.*,
         read_width, cast(ButtonTone)ButtonToneNeutral, cast(ButtonEmphasis)ButtonEmphasisSoft) {
         if LumiOwnProviderSelected() && !LumiOwnProviderReady() {
             // The terms name the provider's address; ask for it first.
-            settings_lumi_notice = 2
+            lumi_settings_notice = 2
         } else {
             app_lumi_show_agreement(app)
         }
     }
-    if agreed && settings_lumi_button(app, 7802, LocaleText("lumi_agreement_withdraw"),
+    if agreed && lumi_settings_button(app, 7802, LocaleText("lumi_agreement_withdraw"),
         terms.inner_x + half + AppScale(8), y.*, half, cast(ButtonTone)ButtonToneDanger,
         cast(ButtonEmphasis)ButtonEmphasisSoft) {
         unused LumiWithdraw()
@@ -231,7 +238,7 @@ settings_lumi_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     settings_section_end(y)
 
     connection := settings_section_begin(app, x, width, y, LocaleText("lumi_settings_connection"),
-        settings_lumi_connection_body(inner))
+        lumi_settings_connection_body(inner))
     own := LumiOwnProviderSelected()
     options: [2]SegmentOption = .[SegmentOption.{.label = LocaleText("lumi_settings_node")},
     SegmentOption.{.label = LocaleText("lumi_settings_own")}]
@@ -245,32 +252,32 @@ settings_lumi_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     choice := SegmentedControl(app.ui.session, props, options[:])
     if choice.changed {
         storage_set_setting_text(LumiProviderSetting, ifx choice.selected_index == 1 then "own" else "")
-        settings_lumi_notice = 0
+        lumi_settings_notice = 0
     }
     y.* += AppScale(54)
     if !LumiOwnProviderSelected() {
         settings_section_end(y)
         return
     }
-    settings_lumi_field(app, *settings_lumi_url, 7804, LocaleText("lumi_settings_url"),
+    lumi_settings_field(app, *lumi_settings_url, 7804, LocaleText("lumi_settings_url"),
         "https://api.openai.com/v1", false, LUMI_PROVIDER_URL_MAX - 1, connection.inner_x,
         connection.inner_width, y)
     key_saved := storage_get_setting_text(LumiProviderKeySetting).count > 0
-    settings_lumi_field(app, *settings_lumi_key, 7805, LocaleText("lumi_settings_key"),
+    lumi_settings_field(app, *lumi_settings_key, 7805, LocaleText("lumi_settings_key"),
         ifx key_saved then LocaleText("lumi_settings_key_saved") else "", true,
         LUMI_PROVIDER_KEY_MAX - 1, connection.inner_x, connection.inner_width, y)
-    settings_lumi_field(app, *settings_lumi_model, 7806, LocaleText("lumi_settings_model"),
+    lumi_settings_field(app, *lumi_settings_model, 7806, LocaleText("lumi_settings_model"),
         "", false, LUMI_PROVIDER_MODEL_MAX - 1, connection.inner_x, connection.inner_width, y)
     note := LocaleText("lumi_settings_own_note")
-    note_height := settings_lumi_text_height(note, connection.inner_width)
+    note_height := lumi_settings_text_height(note, connection.inner_width)
     Text(app.ui.session, TextProps.{.text = note, .font = AppSmallFontSize(),
             .wrap = cast(TextWrap)TextWrapAuto,
             .bounds = Rectangle.{cast(float32)connection.inner_x, cast(float32)y.*,
                 cast(float32)connection.inner_width, cast(float32)note_height}})
     y.* += note_height
-    if settings_lumi_notice != 0 {
-        notice := LocaleText(ifx settings_lumi_notice == 1 then "lumi_settings_saved" else "lumi_settings_invalid")
-        notice_height := settings_lumi_text_height(notice, connection.inner_width)
+    if lumi_settings_notice != 0 {
+        notice := LocaleText(ifx lumi_settings_notice == 1 then "lumi_settings_saved" else "lumi_settings_invalid")
+        notice_height := lumi_settings_text_height(notice, connection.inner_width)
         Text(app.ui.session, TextProps.{.text = notice, .font = AppFontSize(),
                 .wrap = cast(TextWrap)TextWrapAuto,
                 .bounds = Rectangle.{cast(float32)connection.inner_x, cast(float32)y.*,
@@ -279,16 +286,53 @@ settings_lumi_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     }
     half = (connection.inner_width - AppScale(8)) / 2
     save_width := ifx key_saved then half else connection.inner_width
-    if settings_lumi_button(app, 7807, LocaleText("save_button"), connection.inner_x, y.*,
+    if lumi_settings_button(app, 7807, LocaleText("save_button"), connection.inner_x, y.*,
         save_width, cast(ButtonTone)ButtonToneAccent, cast(ButtonEmphasis)ButtonEmphasisFilled) {
-        settings_lumi_save()
+        lumi_settings_save()
     }
-    if key_saved && settings_lumi_button(app, 7808, LocaleText("lumi_settings_remove_key"),
+    if key_saved && lumi_settings_button(app, 7808, LocaleText("lumi_settings_remove_key"),
         connection.inner_x + half + AppScale(8), y.*, half, cast(ButtonTone)ButtonToneNeutral,
         cast(ButtonEmphasis)ButtonEmphasisSoft) {
         storage_set_setting_text(LumiProviderKeySetting, "")
-        settings_lumi_notice = 0
+        lumi_settings_notice = 0
     }
     y.* += AppScale(56)
     settings_section_end(y)
+}
+
+LUMI_SETTINGS_TITLE :: 52
+
+// The page: Lumi's title bar with Back, then its settings in a scroll.
+// Returns true when Back was pressed.
+lumi_settings_page_draw :: (app: *InnerBreeze, scroll: *s32) -> bool {
+    title_h := AppScale(LUMI_SETTINGS_TITLE)
+    bar: TitleBarProps
+    bar.key = KeyHash("lumi/settings/title")
+    bar.title = "Lumi"
+    bar.height = title_h
+    bar.bounds = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width, cast(float32)title_h}
+    bar.has_leading_action = true
+    bar.leading_label = LocaleText("back_button")
+    options: [1]DropdownOption
+    if TitleBar(app.ui.session, bar, options[0:0]).clicked_leading {
+        return true
+    }
+    column := CenteredColumnFor(app.ui.view_width, AppScale(720), AppScale(16))
+    top := title_h + AppScale(8)
+    bottom := app.ui.view_height - app_content_bottom_reserved(app)
+    props: ScrollProps
+    props.key = KeyHash("lumi/settings/scroll")
+    props.bounds = Rectangle.{0.0, cast(float32)top, cast(float32)app.ui.view_width,
+        cast(float32)(bottom - top)}
+    props.content_height = lumi_settings_content_height(column.width) + AppScale(16)
+    props.scroll_offset = scroll.*
+    props.scale = MetricsScale()
+    result := Scroll(app.ui.session, props)
+    scroll.* = result.scroll_offset
+    if result.opened {
+        y := cast(s32)result.content.y
+        lumi_settings_draw(app, column.x, column.width, *y)
+        unused End(app.ui.session)
+    }
+    return false
 }
