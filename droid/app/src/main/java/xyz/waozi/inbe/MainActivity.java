@@ -986,6 +986,10 @@ public class MainActivity extends NativeActivity {
         PushBridge.configure(this);
     }
 
+    public void disableUnifiedPush() {
+        PushBridge.disable(this);
+    }
+
     public String paymentChannel() {
         return PaymentBridge.channel();
     }

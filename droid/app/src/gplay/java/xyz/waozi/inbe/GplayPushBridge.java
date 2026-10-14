@@ -24,6 +24,14 @@ final class GplayPushBridge {
         return new String[] {""};
     }
 
+    static void disable(MainActivity activity) {
+        lastToken = null;
+        try {
+            FirebaseMessaging.getInstance().deleteToken();
+        } catch (IllegalStateException ignored) {
+        }
+    }
+
     static void configureWith(MainActivity activity, String pkg) {
         configure(activity);
     }

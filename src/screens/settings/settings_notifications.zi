@@ -6,6 +6,10 @@
 #import "geometry"
 #import "modal_props"
 #import "modal_widget"
+#import "modal_frame_widget"
+#import "image_props"
+#import "layout"
+#import "tree"
 #import "session"
 #import "spinbox"
 #import "spinbox_props"
@@ -30,6 +34,8 @@
 using ButtonTone;
 using ButtonEmphasis;
 using TextAlign;
+using ContentAlignment;
+using ImageFit;
 
 settings_notifications_button_row_height :: () -> s32 {
     return AppScale(56)
@@ -245,6 +251,29 @@ settings_notifications_close_picker :: (app: *InnerBreeze) {
     }
 }
 
+// Choosing how push notifications arrive: one row per installed distributor
+// with its icon, name and app, then None to turn them off.
+SETTINGS_PUSH_ROW :: 64
+
+settings_notifications_push_row :: (app: *InnerBreeze, id: s32, label: string,
+    detail: string, icon: string, x: s32, y: s32, width: s32) -> bool {
+    props: ButtonProps
+    props.id = id
+    props.key = cast(u64)id
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+        cast(float32)AppScale(SETTINGS_PUSH_ROW)}
+    props.label = label
+    props.detail = detail
+    props.content_alignment = cast(ContentAlignment)ContentAlignmentStart
+    props.tone = cast(ButtonTone)ButtonToneNeutral
+    props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    if icon.count > 0 {
+        props.image = ImageProps.{.asset_path = icon, .alt_text = label,
+            .fit = cast(ImageFit)ImageFitContain, .smooth = true}
+    }
+    return Button(app.ui.session, props) != 0
+}
+
 #program_export
 settings_notifications_handle_overlays :: (app: *InnerBreeze) {
     if app == null || AndroidPlatform() == 0  || app.push_picker_open == 0 {
@@ -257,29 +286,56 @@ settings_notifications_handle_overlays :: (app: *InnerBreeze) {
     if count > APP_PUSH_DISTRIBUTOR_MAX {
         count = APP_PUSH_DISTRIBUTOR_MAX
     }
-    actions: [APP_PUSH_DISTRIBUTOR_MAX + 1]ActionModalAction
+    row := AppScale(SETTINGS_PUSH_ROW)
+    gap := AppScale(8)
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("notifications/push-picker"), .id = 720,
+            .title = LocaleText("notifications_push_picker_title"), .strong_title = true,
+            .width = AppScale(440), .height = (count + 1) * (row + gap) + AppScale(74),
+            .scale = MetricsScale()})
+    if frame.dismissed {
+        settings_notifications_close_picker(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    width := cast(s32)content.width
+    y := cast(s32)content.y
     index: s32 = 0
     while index < count {
-        actions[index].label = AppTextFromCString(
-            *app.push_distributor_labels[index][0], 64)
-        actions[index].tone = cast(ButtonTone)ButtonToneNeutral
-        actions[index].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        label := AppTextFromCString(*app.push_distributor_labels[index][0], 64)
+        package := AppTextFromCString(*app.push_distributors[index][0], 96)
+        icon := AppTextFromCString(*app.push_distributor_icons[index][0], 256)
+        // Google's own service on Play builds is not an app to name.
+        detail: [160]u8
+        named := false
+        for byte: package {
+            if byte == cast(u8)46 {
+                named = true
+            }
+        }
+        if named {
+            args: [1]FormatArg = .[FormatArg.{.text = package, .is_text = true}]
+            FormatTemplate(LocaleText("notifications_push_uses_app"), args[:], detail[:])
+        }
+        if settings_notifications_push_row(app, 7210 + index, label,
+            FrameTextHold(*app.ui.frame_text, AppTextFromCString(*detail[0], 160)), icon,
+            x, y, width) {
+            PushConfigureWith(app, index)
+            settings_notifications_close_picker(app)
+        }
+        y += row + gap
         index += 1
     }
-    actions[count].label = LocaleText("close_button")
-    actions[count].tone = cast(ButtonTone)ButtonToneNeutral
-    actions[count].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    props: ActionModalProps
-    props.id = 720
-    props.title = LocaleText("notifications_push_picker_title")
-    props.max_width = AppScale(440)
-    result := ActionModal(app.ui.session, props, actions[:count + 1])
-    if result.action > 0 && result.action <= count {
-        PushConfigureWith(app, result.action - 1)
-        settings_notifications_close_picker(app)
-    } else if result.action != 0 {
+    if settings_notifications_push_row(app, 7219, LocaleText("notifications_push_none"),
+        LocaleText("notifications_push_none_detail"), "", x, y, width) {
+        PushDisable()
         settings_notifications_close_picker(app)
     }
+    unused End(app.ui.session)
 }
 
 settings_notifications_draw_push :: (app: *InnerBreeze,

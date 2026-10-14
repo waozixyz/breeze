@@ -68,6 +68,12 @@ public class PushServiceImpl extends PushService {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(PREF_ENDPOINT, null);
     }
 
+    // Push turned off: no endpoint until a distributor is chosen again.
+    public static void forgetEndpoint(Context context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(PREF_ENDPOINT).remove(PREF_AUTH).remove(PREF_P256DH).apply();
+    }
+
     private SharedPreferences prefs() {
         return getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
