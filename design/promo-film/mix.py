@@ -3,10 +3,12 @@
 
 Reads the chosen takes and score from audio/ beside this script and writes
 build/promo-video/audio/soundtrack.wav (48 kHz stereo, -14 LUFS) and
-soundtrack.mp3, the audio the film is cut to.
+soundtrack.mp3, the audio the film is cut to. --short mixes short.json, the
+vertical short, into short-soundtrack.wav/.mp3.
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -42,11 +44,33 @@ def smooth(gate, attack, release):
     return out
 
 
+def spliced(score, length):
+    """The vertical short's bed: score sections joined just before their onsets."""
+    source = load(SOURCES / score["file"], 2)
+    music = np.zeros((length, 2), np.float32)
+    fade = int(score["crossfade"] * RATE)
+    for source_from, source_to, at in score["segments"]:
+        piece = source[int(source_from * RATE):int(source_to * RATE) + fade].copy()
+        ramp = np.sin(np.linspace(0, np.pi / 2, fade))[:, None]
+        if at > 0:
+            piece[:fade] *= ramp
+        piece[-fade:] *= ramp[::-1]
+        start = int(at * RATE)
+        end = min(length, start + len(piece))
+        music[start:end] += piece[:end - start]
+    return music
+
+
 def main():
-    film = json.loads((HERE / "film.json").read_text())
+    short = "--short" in sys.argv
+    film = json.loads((HERE / ("short.json" if short else "film.json")).read_text())
+    name = "short-soundtrack" if short else "soundtrack"
     length = int(film["format"]["length"] * RATE)
-    music = load(SOURCES / film["score"]["file"], 2)[:length]
-    music = np.pad(music, ((0, length - len(music)), (0, 0)))
+    if short:
+        music = spliced(film["score"], length)
+    else:
+        music = load(SOURCES / film["score"]["file"], 2)[:length]
+        music = np.pad(music, ((0, length - len(music)), (0, 0)))
     # The score's own last chord decays fast; ease it out under the title.
     fade_from, fade_to = (int(second * RATE) for second in film["score"]["fade_out"])
     music[fade_from:fade_to] *= np.cos(np.linspace(0, np.pi / 2, fade_to - fade_from))[:, None] ** 2
@@ -66,11 +90,11 @@ def main():
     AUDIO.mkdir(parents=True, exist_ok=True)
     raw = AUDIO / "premix.f32"
     raw.write_bytes(mix.astype(np.float32).tobytes())
-    wav = AUDIO / "soundtrack.wav"
+    wav = AUDIO / f"{name}.wav"
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "f32le", "-ar", str(RATE), "-ac", "2", "-i", str(raw),
                     "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", str(RATE), "-c:a", "pcm_s16le", str(wav)], check=True)
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k",
-                    str(AUDIO / "soundtrack.mp3")], check=True)
+                    str(AUDIO / f"{name}.mp3")], check=True)
     raw.unlink()
     print(wav)
 

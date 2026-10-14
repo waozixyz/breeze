@@ -3,6 +3,7 @@
 
   compose.py --animatic            storyboard keyframes with slow camera moves
   compose.py --base FILM.mp4       the generated film (16:9, cut to the soundtrack)
+  compose.py --short               the 1080x1920 vertical short from short.json
 
 Options: --from S --to S render a range, --still S writes one frame as PNG.
 Output goes to build/promo-video/.
@@ -23,6 +24,7 @@ BUILD = ROOT / "build/promo-video"
 SCREENS = ROOT / "fastlane/metadata/android/en-US/images/phoneScreenshots"
 SUN_FRAMES = ROOT / "assets/practices/sunsalutation/characters/01-sunrise-ponytail"
 WIDTH, HEIGHT, FPS = 1920, 1080, 24
+KEYFRAMES = HERE / "keyframes"
 APP_BACKGROUND = (245, 248, 246)
 APP_TEXT = (31, 42, 40)
 NOTO = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
@@ -113,7 +115,10 @@ def tai_chi_screen(local, key, title, subtitle, video):
     screen = capture("04-sun-salutation").copy()
     blank(screen, (290, 40, 800, 160))
     blank(screen, (0, 190, 1080, 1780))
-    centered_text(screen, title, 556, 74, font(NOTO, 50))
+    size = 50
+    while ImageDraw.Draw(screen).textlength(title, font=font(NOTO, size)) > 470:
+        size -= 2
+    centered_text(screen, title, 556, 74 + (50 - size) // 2, font(NOTO, size))
     centered_text(screen, subtitle, 540, 231, font(NOTO, 36))
     frame = LESSONS[key].next()
     if frame is not None:
@@ -178,7 +183,11 @@ def place_phone(frame, device, side, local, length):
     if alpha <= 0:
         return
     float_y = 6 * math.sin(2 * math.pi * local / 4.5)
-    if side == "center":
+    if side == "bottom":
+        # Vertical short: lower centre, left of TikTok's buttons, rising in.
+        x = round(480 - device.width / 2)
+        y = round(1590 - PHONE_H - SHADOW_PAD + float_y + 240 * (1 - enter) + 90 * leave)
+    elif side == "center":
         # An app reveal: the scene softens behind a phone rising into the middle.
         soft = frame.filter(ImageFilter.GaussianBlur(16 * alpha))
         dark = Image.new("RGBA", frame.size, (8, 12, 24, round(110 * alpha)))
@@ -228,9 +237,42 @@ def end_card():
     return card
 
 
+@lru_cache(None)
+def end_card_vertical():
+    card = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    shade = np.zeros((HEIGHT, WIDTH, 4), np.uint8)
+    rows = np.linspace(0, 1, HEIGHT)
+    title = np.clip(1 - np.abs(rows - 0.33) / 0.3, 0, 1) ** 1.4 * 150
+    footer = np.clip(1 - np.abs(rows - 0.7) / 0.14, 0, 1) ** 1.2 * 170
+    shade[..., 3] = np.maximum(title, footer)[:, None]
+    shade[..., :3] = (6, 12, 30)
+    card.alpha_composite(Image.fromarray(shade, "RGBA"))
+    center = 520
+    glow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse((center - 210, 300, center + 210, 680), fill=(255, 214, 140, 70))
+    card.alpha_composite(glow.filter(ImageFilter.GaussianBlur(60)))
+    logo = Image.open(ROOT / "assets/app/source-icon.png").convert("RGBA").resize((330, 330), Image.LANCZOS)
+    card.alpha_composite(logo, (center - 165, 330))
+    centered_text(card, "Inner Breeze", center, 720, font(QUICKSAND_BOLD, 124), (255, 250, 238, 255))
+    centered_text(card, "Breathe  ·  Move  ·  Grow", center, 880, font(QUICKSAND_MEDIUM, 50), (247, 220, 160, 255))
+    badges = [Image.open(ROOT / f"assets/app/badge-{name}.png").convert("RGBA") for name in ("google-play", "f-droid")]
+    badges = [badge.resize((round(badge.width * 100 / badge.height), 100), Image.LANCZOS) for badge in badges]
+    gap = 26
+    x = center - (sum(badge.width for badge in badges) + gap) // 2
+    for badge in badges:
+        card.alpha_composite(badge, (x, 1270))
+        x += badge.width + gap
+    centered_text(card, "Free, private and open source", center, 1410, font(QUICKSAND_MEDIUM, 40), (232, 236, 246, 255))
+    return card
+
+
 def keyframe(shot):
-    image = Image.open(HERE / "keyframes" / f"shot-{shot:02d}.jpg").convert("RGB")
-    band = round(image.width * 9 / 16)
+    image = Image.open(KEYFRAMES / f"shot-{shot:02d}.jpg").convert("RGB")
+    if image.width * HEIGHT > image.height * WIDTH:
+        band = round(image.height * WIDTH / HEIGHT)
+        left = (image.width - band) // 2
+        return image.crop((left, 0, left + band, image.height))
+    band = round(image.width * HEIGHT / WIDTH)
     top = (image.height - band) // 2
     return image.crop((0, top, image.width, top + band))
 
@@ -252,6 +294,19 @@ def animatic_frame(film, time):
     return crop.resize((WIDTH, HEIGHT), Image.BILINEAR)
 
 
+def insert_screen(insert, local):
+    """The insert's screen at this moment; one phone can change screens."""
+    screens = insert.get("screens") or [[insert["screen"], 0.0]]
+    current = [index for index, (name, at) in enumerate(screens) if at <= local][-1]
+    screen = INSERTS[screens[current][0]](local - screens[current][1])
+    if current > 0:
+        mix = ease_in_out((local - screens[current][1]) / 0.35)
+        if mix < 1:
+            previous = INSERTS[screens[current - 1][0]](local - screens[current - 1][1])
+            screen = Image.blend(previous.convert("RGB"), screen.convert("RGB"), mix)
+    return screen
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--animatic", action="store_true")
@@ -259,12 +314,18 @@ def main():
     parser.add_argument("--start", type=float, default=0.0)
     parser.add_argument("--end", type=float)
     parser.add_argument("--still", type=float)
+    parser.add_argument("--short", action="store_true")
     parser.add_argument("--out")
     args = parser.parse_args()
-    film = json.loads((HERE / "film.json").read_text())
+    global WIDTH, HEIGHT, KEYFRAMES
+    if args.short:
+        WIDTH, HEIGHT, KEYFRAMES = 1080, 1920, HERE / "keyframes-vertical"
+    film = json.loads((HERE / ("short.json" if args.short else "film.json")).read_text())
     length = film["format"]["length"]
     end = args.end if args.end is not None else length
-    name = "inner-breeze-a-day-with-lumi" + ("-animatic" if args.animatic else "")
+    name = "inner-breeze-a-day-with-lumi" + ("-short" if args.short else "-animatic" if args.animatic else "")
+    soundtrack = BUILD / ("audio/short-soundtrack.wav" if args.short else "audio/soundtrack.wav")
+    card_at = film.get("end_card", 59.0)
     out = Path(args.out) if args.out else BUILD / f"{name}.mp4"
     base = None
     if args.base:
@@ -276,7 +337,7 @@ def main():
         writer = subprocess.Popen(
             ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{WIDTH}x{HEIGHT}",
              "-r", str(FPS), "-i", "-", "-ss", str(args.start), "-to", str(end),
-             "-i", str(BUILD / "audio/soundtrack.wav"), "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset",
+             "-i", str(soundtrack), "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset",
              "slow", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
              "-shortest", str(out)], stdin=subprocess.PIPE)
     first = round(args.start * FPS)
@@ -295,11 +356,11 @@ def main():
         for insert in film["inserts"]:
             start, stop = insert["from"], insert["to"]
             if start <= time < stop:
-                device = phone(INSERTS[insert["screen"]](time - start))
+                device = phone(insert_screen(insert, time - start))
                 place_phone(frame, device, insert["side"], time - start, stop - start)
-        if time >= 59.0:
-            card = end_card()
-            fade = ease_in_out((time - 59.0) / 0.9)
+        if time >= card_at:
+            card = end_card_vertical() if args.short else end_card()
+            fade = ease_in_out((time - card_at) / 0.9)
             if fade < 1:
                 card = card.copy()
                 card.putalpha(card.getchannel("A").point(lambda value: round(value * fade)))

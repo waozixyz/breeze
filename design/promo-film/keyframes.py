@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Paint one storyboard keyframe per shot with Codex image generation.
 
-Usage: keyframes.py [SHOT...]. Writes build/promo-video/keyframes/shot-NN.png
+Usage: keyframes.py [--vertical] [SHOT...]. Writes build/promo-video/keyframes/shot-NN.png
 (1536x1024 from Codex; the film uses its central 16:9 band). Runs up to
 four Codex sessions at once and keeps existing keyframes unless named.
 Approved keyframes are stored as 1536x864 JPEGs in keyframes/ beside this
@@ -30,8 +30,8 @@ IMAGES = Path.home() / ".codex/generated_images"
 def paint(frame):
     target = OUT / f"shot-{frame['shot']:02d}.png"
     log = OUT / f"shot-{frame['shot']:02d}.log"
-    # "keyframe-NN" names an earlier shot's painted keyframe, for continuity.
-    images = [str(OUT / f"shot-{name[9:]}.png") if name.startswith("keyframe-") else str(REFERENCES[name])
+    # "keyframe-NN" names an approved landscape keyframe, for continuity.
+    images = [str(HERE / "keyframes" / f"shot-{name[9:]}.jpg") if name.startswith("keyframe-") else str(REFERENCES[name])
               for name in frame["refs"]]
     with open(log, "w") as output:
         subprocess.run(["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", str(OUT),
@@ -46,9 +46,13 @@ def paint(frame):
 
 
 def main():
+    global OUT
+    vertical = "--vertical" in sys.argv
+    if vertical:
+        OUT = ROOT / "build/promo-video/keyframes-vertical"
     OUT.mkdir(parents=True, exist_ok=True)
-    frames = json.loads((HERE / "keyframes.json").read_text())
-    wanted = {int(arg) for arg in sys.argv[1:]}
+    frames = json.loads((HERE / ("keyframes-vertical.json" if vertical else "keyframes.json")).read_text())
+    wanted = {int(arg) for arg in sys.argv[1:] if not arg.startswith("--")}
     todo = [frame for frame in frames
             if (frame["shot"] in wanted) or (not wanted and not (OUT / f"shot-{frame['shot']:02d}.png").exists())]
     with ThreadPoolExecutor(4) as pool:
