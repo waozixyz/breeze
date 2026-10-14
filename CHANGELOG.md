@@ -10,7 +10,7 @@
 - Sun Salutation follows your breath.
 - Span habits: one Good when, length first in statistics.
 ### Fixed
-- Habit settings sync fully to devices updated from older versions.
+- Synced habit settings and days never revert to older copies.
 - Android: opens about two seconds faster.
 - Desktop tray shows the current logo.
 - Progress bars fill visibly in every theme.
