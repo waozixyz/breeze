@@ -1304,7 +1304,12 @@ async function openPracticeHome(client) {
       return { ok: false, reason: 'missing practice start hooks' };
     ${wasmHookEvalHelper()}
     await callWasmHook('app_web_test_show_practice_home');
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // An idle app draws at 30 fps, so wait for the frame that lays out
+    // Start rather than a fixed number of browser frames.
+    const deadline = Date.now() + 3000;
+    do {
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    } while (Module._app_web_test_practice_start_click_x() < 0 && Date.now() < deadline);
     return { ok: true, screen: Module._app_web_test_screen() };
   })()))()`, true);
   if (!state?.ok)
