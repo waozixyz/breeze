@@ -2968,6 +2968,12 @@ sync-recovery-test: build-laws $(ZI2C_BIN)
 
 test: sync-recovery-test
 
+.PHONY: sync-record-fields-test
+sync-record-fields-test:
+	python3 tests/sync_record_fields_test.py
+
+test: sync-record-fields-test
+
 # Validate before producing release packages, including direct artifact targets.
 $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) $(CLICK_TARGET) $(CHROME_WEB_STORE_ZIP) $(FIREFOX_ADDONS_ZIP): | version-check
 android-release android-bundle android-copy-release-apks android-copy-fdroid-apk android-copy-bundle windows-setup site: version-check

@@ -437,6 +437,7 @@ storage_reset_sync_state :: () {
     storage_set_meta_int64(STORAGE_SYNC_HABIT_NAME_REPAIR_KEY, 0)
     storage_set_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, 0)
     exec_sql("DELETE FROM sync_outbox")
+    exec_sql("DELETE FROM sync_record_copies")
     if storage_has_sync_account() != 0 {
         storage_enqueue_all_sync_state()
     }
@@ -1491,6 +1492,60 @@ storage_encrypted_record_cleanup :: (plain: *StorageJsonBuilder, aad: *StorageJs
     return ok
 }
 
+// Keeps a synced record with every field it has, as it arrived or left.
+storage_sync_record_copy_store :: (collection: string, record_id: string, json: string) {
+    stmt: *void = null
+    if storage_db_handle() == null || collection.count == 0 || record_id.count == 0 {
+        return
+    }
+    sql: [256]u8
+    AppCopyText("INSERT INTO sync_record_copies(collection,id,json) SELECT ?1,?2,?3 WHERE json_valid(?3) ON CONFLICT(collection,id) DO UPDATE SET json=excluded.json", sql[:])
+    if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, collection)
+    bind_text(stmt, 2, record_id)
+    bind_text(stmt, 3, json)
+    unused SqliteStep(stmt)
+    SqliteFinalize(stmt)
+}
+
+// A record goes out with every field it last had, under this version's own
+// fields, so an older version never removes fields a newer one added. The
+// merged record becomes the kept copy.
+storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, record_id: string) {
+    stmt: *void = null
+    if storage_db_handle() == null || plain.ok == 0 || plain.data == null {
+        return
+    }
+    own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+    sql: [256]u8
+    AppCopyText("SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
+    if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, collection)
+    bind_text(stmt, 2, record_id)
+    bind_text(stmt, 3, own)
+    merged: StorageJsonBuilder
+    merged.ok = 1
+    if SqliteStep(stmt) == SQLITE_ROW {
+        value := SqliteColumnText(stmt, 0)
+        if value != null {
+            storage_json_builder_append(*merged, value)
+        }
+    }
+    SqliteFinalize(stmt)
+    if merged.ok != 0 && merged.data != null && merged.len > 0 {
+        storage_json_builder_free(plain)
+        plain.* = merged
+    } else {
+        storage_json_builder_free(*merged)
+    }
+    storage_sync_record_copy_store(collection, record_id,
+        AppTextFromCString(plain.data, cast(s32)(plain.len + 1)))
+}
+
 storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
     plain: StorageJsonBuilder
     aad: StorageJsonBuilder
@@ -1506,6 +1561,10 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     }
     plain.ok = 1
     storage_append_sync_op_payload(*plain, entity_type, entity_id, local_date)
+    if plain.ok == 0 || plain.data == null {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    storage_sync_record_merge(*plain, collection, record_id)
     if plain.ok == 0 || plain.data == null {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
@@ -2372,6 +2431,10 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
             }
             ok = ifx (record_id.count > 0 && key_id.count > 0 && nonce.count > 0  && ciphertext.count > 0  && storage_decrypt_record(collection, record_id, key_id, nonce,
                 ciphertext, content_hash, *plaintext) != 0) then (1) else (0)
+            if ok != 0 {
+                storage_sync_record_copy_store(collection, record_id,
+                    AppTextFromCString(plaintext, 2147483647))
+            }
             if ok == 0 {
                 LogStorageText(LOG_WARNING, "SYNC: encrypted record decrypt failed: ",
                     collection)
@@ -2611,7 +2674,8 @@ storage_apply_remote_full_snapshot :: (response_json: string) -> s32 {
     return ok
 }
 
-storage_clear_local_sync_data_sqls: [11] string = .[
+storage_clear_local_sync_data_sqls: [12] string = .[
+"DELETE FROM sync_record_copies",
 "DELETE FROM habit_entries",
 "DELETE FROM habit_changes",
 "DELETE FROM elist_items",
