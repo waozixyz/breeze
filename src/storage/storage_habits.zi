@@ -688,6 +688,7 @@ storage_habits_load :: (habits_ptr: *void) -> s32 {
         SqliteFinalize(stmt)
     }
     habits.loaded = 1
+    storage_habit_bases_capture(habits)
     if habits.count > 0 {
         return 1
     }
@@ -717,7 +718,172 @@ storage_mark_habits_initialized :: () {
 
 // What storage_habits_save compares and records, kept off the stack.
 storage_habit_stored: Habit;
+storage_habit_merged: Habit;
 storage_habit_changes_buffer: [HABIT_CHANGE_MAX]HabitChange;
+
+// Each habit with its days as the habit list was last loaded or saved. A
+// save writes only what changed in memory since then: sync may have stored
+// newer values underneath, and an unchanged older copy must not replace
+// them on this device or, through sync, on the account's other devices.
+storage_habit_bases: [HABIT_MAX]Habit;
+storage_habit_base_count: s32;
+storage_habit_base_owner: *Habits;
+
+storage_habit_bases_capture :: (habits: *Habits) {
+    i: s32 = 0
+    while i < storage_habit_base_count {
+        habit_free_days(*storage_habit_bases[i])
+        i += 1
+    }
+    storage_habit_base_count = 0
+    storage_habit_base_owner = habits
+    if habits == null {
+        return
+    }
+    i = 0
+    while i < habits.count && i < HABIT_MAX {
+        base: *Habit = *storage_habit_bases[i]
+        source: *Habit = *habits.items[i]
+        base.* = source.*
+        base.days = null
+        base.day_count = 0
+        base.day_capacity = 0
+        if source.day_count > 0 && habit_reserve_days(base, source.day_count) != 0 {
+            d: s32 = 0
+            while d < source.day_count {
+                base.days[d] = source.days[d]
+                d += 1
+            }
+            base.day_count = source.day_count
+        }
+        i += 1
+    }
+    storage_habit_base_count = i
+}
+
+storage_habit_deleted :: (habit_id: string) -> bool {
+    stmt: *void = null
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM habits WHERE id=?1 AND deleted_at<>0", -1, *stmt, null) != SQLITE_OK {
+        return false
+    }
+    bind_text(stmt, 1, habit_id)
+    deleted := SqliteStep(stmt) == SQLITE_ROW
+    SqliteFinalize(stmt)
+    return deleted
+}
+
+storage_habit_base_for :: (habits: *Habits, id: string) -> *Habit {
+    if habits == null || habits != storage_habit_base_owner {
+        return null
+    }
+    i: s32 = 0
+    while i < storage_habit_base_count {
+        if AppTextFromCString(*storage_habit_bases[i].id[0], HABIT_ID_SIZE) == id {
+            return *storage_habit_bases[i]
+        }
+        i += 1
+    }
+    return null
+}
+
+// A day as habit_days stores it: done when counted or marked, with a count
+// of at least one when done.
+storage_habit_day_stored_count :: (day: *HabitDay) -> s32 {
+    if day.count > 0 {
+        return day.count
+    }
+    return ifx day.completed != 0 then 1 else 0
+}
+
+// Whether the base had this day as it is now, so saving it changes nothing
+// the person did since the habits were loaded.
+storage_habit_day_unchanged :: (base: *Habit, day: *HabitDay) -> bool {
+    if base == null {
+        return false
+    }
+    d: s32 = 0
+    while d < base.day_count {
+        if base.days[d].day_index == day.day_index {
+            return storage_habit_day_stored_count(*base.days[d]) ==
+            storage_habit_day_stored_count(day)
+        }
+        d += 1
+    }
+    return false
+}
+
+storage_habit_schedule_text :: (habit: *Habit, output: []u8) -> string {
+    return HabitScheduleWrite(habit, output)
+}
+
+storage_habit_questions_equal :: (left: *Habit, right: *Habit) -> bool {
+    a: StorageJsonBuilder
+    b: StorageJsonBuilder
+    a.ok = 1
+    b.ok = 1
+    if left.question_count > 0 {
+        storage_habit_questions_json(left, *a)
+    }
+    if right.question_count > 0 {
+        storage_habit_questions_json(right, *b)
+    }
+    same := a.len == b.len && (a.len == 0 || (a.data != null && b.data != null &&
+        AppTextFromCString(a.data, cast(s32)(a.len + 1)) == AppTextFromCString(b.data, cast(s32)(b.len + 1))))
+    storage_json_builder_free(*a)
+    storage_json_builder_free(*b)
+    return same
+}
+
+// The stored habit with every setting the person changed in memory since
+// the base on top; settings they left alone keep the stored values, which
+// sync may have made newer. The result goes back into memory too.
+storage_habit_merge :: (local: *Habit, base: *Habit, stored: *Habit) {
+    merged: *Habit = *storage_habit_merged
+    merged.* = stored.*
+    if AppTextFromCString(*local.name[0], HABIT_NAME_SIZE) != AppTextFromCString(*base.name[0], HABIT_NAME_SIZE) {
+        merged.name = local.name
+    }
+    if AppTextFromCString(*local.description[0], HABIT_DESCRIPTION_SIZE) !=
+    AppTextFromCString(*base.description[0], HABIT_DESCRIPTION_SIZE) {
+        merged.description = local.description
+    }
+    if local.color.r != base.color.r || local.color.g != base.color.g ||
+    local.color.b != base.color.b || local.color.a != base.color.a {
+        merged.color = local.color
+    }
+    if local.sync_mode != base.sync_mode { merged.sync_mode = local.sync_mode }
+    if local.sync_activity != base.sync_activity { merged.sync_activity = local.sync_activity }
+    if local.counter_enabled != base.counter_enabled { merged.counter_enabled = local.counter_enabled }
+    if local.counter_target != base.counter_target { merged.counter_target = local.counter_target }
+    if local.weekdays != base.weekdays { merged.weekdays = local.weekdays }
+    if local.reminder_hour != base.reminder_hour { merged.reminder_hour = local.reminder_hour }
+    if local.deactivated != base.deactivated { merged.deactivated = local.deactivated }
+    if local.icon != base.icon { merged.icon = local.icon }
+    local_schedule: [HABIT_SCHEDULE_TEXT_SIZE]u8
+    base_schedule: [HABIT_SCHEDULE_TEXT_SIZE]u8
+    if storage_habit_schedule_text(local, local_schedule[:]) != storage_habit_schedule_text(base, base_schedule[:]) {
+        merged.schedules = local.schedules
+        merged.schedule_count = local.schedule_count
+    }
+    if !storage_habit_questions_equal(local, base) {
+        merged.questions = local.questions
+        merged.question_count = local.question_count
+    }
+    if local.span != base.span || local.span_goal.kind != base.span_goal.kind ||
+    local.span_goal.low != base.span_goal.low || local.span_goal.high != base.span_goal.high {
+        merged.span = local.span
+        merged.span_goal = local.span_goal
+    }
+    // Days and the running span belong to the list in memory.
+    merged.days = local.days
+    merged.day_count = local.day_count
+    merged.day_capacity = local.day_capacity
+    merged.running_entry = local.running_entry
+    merged.running_day = local.running_day
+    merged.running_since = local.running_since
+    local.* = merged.*
+}
 
 // Records changes of a habit's settings made at a time; each syncs.
 storage_habit_changes_record :: (habit_id: string, at: s64,
@@ -881,6 +1047,15 @@ storage_habits_save :: (habits_ptr: *void) {
             // The habit as stored, to record what this save changes.
             stored := storage_habit_settings_load(AppTextFromCString(*habit.id[0],
                 40), *storage_habit_stored)
+            base := storage_habit_base_for(habits, AppTextFromCString(*habit.id[0], 40))
+            if stored && base != null {
+                storage_habit_merge(habit, base, *storage_habit_stored)
+            }
+            // Deleted underneath since the list was loaded, by sync: an
+            // older copy must not bring it back.
+            if !stored && base != null && storage_habit_deleted(AppTextFromCString(*habit.id[0], 40)) {
+                i += 1; continue
+            }
             sqlite3_reset(habit_stmt)
             sqlite3_clear_bindings(habit_stmt)
             bind_text(habit_stmt, 1, AppTextFromCString(*habit.id[0], 40))
@@ -943,7 +1118,7 @@ storage_habits_save :: (habits_ptr: *void) {
             {
                 d: s32 = 0
                 while d < habit.day_count {
-                    if day_stmt == null {
+                    if day_stmt == null || storage_habit_day_unchanged(base, *habit.days[d]) {
                         d += 1; continue
                     }
                     sqlite3_reset(day_stmt)
@@ -1025,6 +1200,7 @@ storage_habits_save :: (habits_ptr: *void) {
     exec_sql("DELETE FROM sync_seen_habits;")
     exec_sql("DELETE FROM sync_loaded_habits;")
     exec_sql("COMMIT")
+    storage_habit_bases_capture(habits)
     storage_materialize_session_habit_days()
     storage_schedule_persist()
 }
