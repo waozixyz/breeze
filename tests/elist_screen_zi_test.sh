@@ -29,7 +29,7 @@ mkdir -p "$work/c"
     "$root/tests/elist_screen_link_test.c" \
     "$work/c/screens/elist_screen.c" "$work/c/text_buffers.c" \
     "$work/c/byte_text_linux.c" \
-    "$work/c/module_host.c" "$work/c/value_codec.c" \
+    "$work/c/module_host.c" "$work/c/smooth_frames.c" "$work/c/value_codec.c" \
     "$work/c/package_files.c" "$work/c/format.c" \
     "$work/c/asset_paths.c" "$work/c/assets.c" \
     "$work/c/sun_salutation_inventory.c" \
