@@ -3,15 +3,16 @@
 ### Added
 - Lumi guides you through each screen.
 - Lumi understands habit requests offline.
-- Lumi asks before going online; a button switches it.
-- Your own AI provider, in Lumi's settings.
-- Tap Lumi in her chat and she swirls.
+- Lumi asks before going online.
+- Your own AI provider for Lumi.
+- Tap Lumi and she swirls.
 ### Changed
-- Sun Salutation follows your breath, pose by pose.
-- Span habits have one Good when; statistics show length first.
+- Sun Salutation follows your breath.
+- Span habits: one Good when, length first in statistics.
 ### Fixed
+- Habit settings sync fully to devices updated from older versions.
 - Android: opens about two seconds faster.
-- The desktop tray shows the current logo.
+- Desktop tray shows the current logo.
 - Progress bars fill visibly in every theme.
 
 ## [2.1.32] - 2026-10-13
