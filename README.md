@@ -141,8 +141,13 @@ approved public or unlisted YouTube upload with embedding enabled before it can
 be added to the listing. Pass `--video-url https://www.youtube.com/watch?v=VIDEO_ID`
 to the listing uploader, or configure `PLAY_VIDEO_URL`. To update only the
 video, use `PLAY_COMMIT=1 python3 scripts/upload-play-screenshots.py --video-only --video-url URL`.
-The approved [Lumi preview](https://www.youtube.com/watch?v=XESpbMRaz4o) is
-available on YouTube and configured in the English Google Play listing.
+The [Inner Breeze trailer](https://www.youtube.com/watch?v=GTly6Fu5zPk),
+"A Day with Lumi", is public on YouTube and configured in every Google Play
+listing language.
+`design/promo-film/` holds the trailer's sources: `film.json` (clips, voice
+times, app-screen inserts), `narrate.py` (Lumi's voice), `score.py` (music),
+`mix.py`, `keyframes.py` and `compose.py`, which renders the cut with the real
+app screens into `build/promo-video/`.
 Screenshot publishing still requires the complete current
 capture, visual review, export and locked build preflight.
 
