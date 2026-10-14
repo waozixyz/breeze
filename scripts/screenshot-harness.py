@@ -112,6 +112,15 @@ def check_image(path, size, expected=()):
             # document layout pass reads those without changing the capture.
             text += "\n" + subprocess.check_output(["tesseract", str(path), "stdout", "--psm", "3"], stderr=subprocess.DEVNULL, text=True, timeout=30)
             normalized = " ".join(text.casefold().split())
+        if any(phrase.casefold() not in normalized for phrase in expected):
+            # Small tablet UI scales can fall under Tesseract's glyph size;
+            # read an enlarged copy, still requiring every phrase.
+            with tempfile.TemporaryDirectory(prefix="ocr-") as folder:
+                larger = Path(folder) / "larger.png"
+                with Image.open(path) as image:
+                    image.resize((image.width * 2, image.height * 2), Image.LANCZOS).save(larger)
+                text += "\n" + subprocess.check_output(["tesseract", str(larger), "stdout", "--psm", "3"], stderr=subprocess.DEVNULL, text=True, timeout=60)
+            normalized = " ".join(text.casefold().split())
         for phrase in expected:
             require(phrase.casefold() in normalized, f"missing rendered text {phrase!r}: {path}")
         return text
