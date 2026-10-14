@@ -71,6 +71,14 @@ class PackageVersionsTest(unittest.TestCase):
         self.write(value)
         self.assertEqual(versions.validate(self.root), value)
 
+    def test_root_package_needs_the_newest_bundled_host(self):
+        value = copy.deepcopy(self.ledger)
+        value["apps"]["inbe"]["host_api"] = value["oldest_host_api"]
+        value["apps"]["lumi"]["host_api"] = value["oldest_host_api"] + 1
+        self.write(value)
+        with self.assertRaisesRegex(ValueError, "the root package carries it"):
+            versions.validate(self.root)
+
     def test_host_interface_range(self):
         newer = self.ledger["host_api"] + 1
         for field, candidate in (("oldest_host_api", newer), ("oldest_host_api", 0),

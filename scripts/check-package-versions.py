@@ -46,6 +46,13 @@ def validate(root):
         date.fromisoformat(headings[0][1])
         if headings[0][0] != component["version"]:
             raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --cell {name}")
+    # The root package carries every app for offline use, so a host that
+    # cannot run one of them cannot open the root package either.
+    root_host = ledger["apps"]["inbe"].get("host_api", ledger["host_api"])
+    for name, component in ledger["apps"].items():
+        if component.get("host_api", ledger["host_api"]) > root_host:
+            raise ValueError(f"inbe: host_api {root_host} is older than {name}'s; "
+                             "the root package carries it")
     return ledger
 
 
