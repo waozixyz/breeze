@@ -535,6 +535,23 @@ test_habit_name_repair_runs_once :: () {
     storage_close()
 }
 
+// A device whose records arrived in an older app version, which kept only
+// the fields it knew, downloads every record again once after updating.
+test_older_records_download_again_once :: () {
+    root := make_root("sync-record-fields")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    storage_close()
+    raw_exec(root, "INSERT OR REPLACE INTO meta(key,value) VALUES('sync_last_server_version','530');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_full_upload_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_backfill_v2_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_habit_name_repair_v1_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_zero_habit_day_repair_v1_done','1');INSERT OR REPLACE INTO meta(key,value) VALUES('sync_record_fields','1');")
+    check_true("reopen db", storage_init(root) != 0)
+    check_true("payload builds", build_payload())
+    check_true("older records are downloaded again", contains(payload(), "\"since_server_version\":0"))
+    check_true("apply the full download", storage_apply_sync_response_json(empty_response(530)) != 0)
+    check_true("payload builds again", build_payload())
+    check_true("the full download runs once", contains(payload(), "\"since_server_version\":530"))
+    storage_close()
+}
+
 // Device A's records applied on device B come out as the same habits.
 test_records_round_trip_between_devices :: () {
     first := make_root("sync-device-a")
@@ -1680,6 +1697,7 @@ Check :: () -> s32 {
     test_outbox_keeps_edits_after_snapshot()
     test_orphan_habit_days_reset_cursor()
     test_habit_name_repair_runs_once()
+    test_older_records_download_again_once()
     test_records_round_trip_between_devices()
     test_cell_records_round_trip()
     test_cell_record_identity()
