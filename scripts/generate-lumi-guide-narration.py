@@ -289,9 +289,13 @@ def verified_match(config, code, text, transcript):
             expected = expected.replace(japanese_spelling(heard), japanese_spelling(intended))
             equivalent = equivalent.replace(japanese_spelling(heard), japanese_spelling(intended))
     else:
+        # Both sides take the same spelling, so a line written with either
+        # form still matches its recording.
         for heard, intended in spellings.items():
             equivalent = re.sub(r'\b' + re.escape(heard) + r'\b', intended,
                                 equivalent, flags=re.IGNORECASE)
+            expected = re.sub(r'\b' + re.escape(heard) + r'\b', intended,
+                              expected, flags=re.IGNORECASE)
     if config.get('verify_directions') and direction_tokens(expected, code) != direction_tokens(equivalent, code):
         return 0.0
     if config.get('verify_numbers'):
