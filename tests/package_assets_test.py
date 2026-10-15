@@ -50,7 +50,7 @@ import json
 catalog = json.loads(practices['assets/practices/catalog.json'])
 content = {}
 for pack in catalog['packs']:
-    suffix = '.' + pack['language'] if pack['language'] else ''
+    suffix = ('.' + pack['language'] if pack['language'] else '') + ('.' + pack['voice'] if pack.get('voice') else '')
     data = (ROOT / 'build/practice-content' / (pack['practice'] + suffix + '.zib')).read_bytes()
     from hashlib import sha256
     assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
