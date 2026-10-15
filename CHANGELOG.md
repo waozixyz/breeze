@@ -2,7 +2,7 @@
 
 ## [2.1.34] - 2026-10-15
 ### Added
-- Profile shows Dew credit, with Monero top-ups and prepaid 1 GB storage on the Waozi node: US$1 monthly or US$10 yearly, outside Google Play.
+- Profile shows Dew credit, with Monero top-ups and prepaid 1 GB storage on the Waozi node: fixed monthly or yearly XMR prices, outside Google Play.
 - Share a list with a friend after they accept an invitation inside Lists.
 ### Changed
 - Lists uses compact, scrollable tabs and larger task controls.
