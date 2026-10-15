@@ -23,7 +23,10 @@ for name in NAMES:
     data = (ROOT / 'build/practice-content' / (name + '.zib')).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     (fixtures / (digest + '.zib')).write_bytes(data)
-    packs.append(dict(practice=name, language='', sha256=digest, size=len(data)))
+    pack = dict(practice=name, language='', sha256=digest, size=len(data))
+    if name == 'taichi':
+        pack['product'] = 'inbe.practice.taichi'
+    packs.append(pack)
 for code in ('en', 'es'):
     assets = work / code / 'assets'
     voice = assets / ('practices/taichi/voice/' + code)
@@ -36,7 +39,8 @@ for code in ('en', 'es'):
     data = bundle.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     (fixtures / (digest + '.zib')).write_bytes(data)
-    packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data)))
+    packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data),
+                      product='inbe.practice.taichi'))
 (fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
 (fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.
@@ -78,4 +82,4 @@ assert not list(cache.glob('practice-taichi.??.zib'))
 assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
-print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation, removal and shipped Wim Hof passed')
+print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation, removal, shipped Wim Hof and granted paid packs passed')

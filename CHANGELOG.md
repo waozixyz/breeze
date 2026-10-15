@@ -6,7 +6,7 @@
 ### Added
 - Dew in Profile: Monero top-ups and monthly/yearly 1 GB node storage at fixed XMR prices, outside Google Play.
 - Share a list after a friend accepts its invitation.
-- 24-form Tai Chi with progress, characters, music and spoken guidance.
+- 24-form Tai Chi with progress, characters, music and spoken guidance, unlocked once with Dew (not on Google Play).
 ### Changed
 
 - Reliable Dew balances, with minimum top-ups and confirmations.

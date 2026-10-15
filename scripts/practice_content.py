@@ -159,7 +159,8 @@ def catalog_from_bundle(data):
                 not isinstance(digest, str) or len(digest) != 64 or
                 any(c not in '0123456789abcdef' for c in digest) or
                 type(size) is not int or not 8 <= size <= MAXIMUM or
-                (practice, language) in seen):
+                (practice, language) in seen or
+                not isinstance(pack.get('product', ''), str)):
             raise ValueError('invalid or duplicate practice pack')
         seen.add((practice, language))
     if {(name, '') for name in NAMES} - seen:
@@ -200,8 +201,12 @@ def prepare(compiler):
             data = path.read_bytes()
             if len(data) > min(MAXIMUM, configuration['maximum_pack_bytes']):
                 raise ValueError('practice pack exceeds its size budget')
-            packs.append(dict(practice=practice, language=language,
-                              sha256=sha256(data).hexdigest(), size=len(data)))
+            pack = dict(practice=practice, language=language,
+                        sha256=sha256(data).hexdigest(), size=len(data))
+            # Paid practices name their unlock; the node gates their packs.
+            if practice in configuration['products']:
+                pack['product'] = configuration['products'][practice]
+            packs.append(pack)
     target = ROOT / 'build/package-assets/practices' / CATALOG
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(schema=1, packs=packs), separators=(',', ':')) + '\n')

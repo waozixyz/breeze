@@ -2,17 +2,32 @@
 #import, file "../src/app/assets.zi";
 #import, file "../src/app/locale.zi";
 #import, file "../src/storage/temporary_data.zi";
+#import, file "../src/app/text_buffers.zi";
 c :: #system_library "c";
 FixtureCatalog :: () -> string #foreign c;
 FixtureAsset :: (path: string) -> AssetView #foreign c;
 FixtureMode :: (mode: s32) #foreign c;
 FixtureCatalogMode :: (mode: s32) #foreign c;
 FixtureShipped :: (value: s32) #foreign c;
+FixtureGrantedStarts :: () -> s32 #foreign c;
 FixtureStarts :: () -> s32 #foreign c;
 FixtureTaiChiSaved :: () -> bool #foreign c;
 
 FixtureProvider :: (path: string) -> AssetView {
     return FixtureAsset(path)
+}
+
+// 1 grants Tai Chi's packs, 0 keeps the grant pending, -1 refuses it.
+fixture_grant_mode: s32 = 1;
+
+FixtureGrant :: (product: string, output: []u8) -> s32 {
+    if product != "inbe.practice.taichi" || fixture_grant_mode < 0 {
+        return -1
+    }
+    if fixture_grant_mode == 0 {
+        return 0
+    }
+    return ifx AppCopyText("fixture-grant", output) then 1 else -1
 }
 
 #program_export
@@ -22,6 +37,7 @@ CheckPracticeDownloads :: () -> s32 {
         return 15
     }
     AssetBindProvider(FixtureProvider)
+    practice_grant = FixtureGrant
     PracticeDownloadsPump(0, false, true)
     if practice_pack_count != 7 || PracticeContentReady(0) {
         return 1
@@ -196,6 +212,39 @@ CheckPracticeDownloads :: () -> s32 {
     if !PracticeInstalled(0) {
         return 28
     }
+    // Paid packs download only with the host's grant in their path; they
+    // wait while it is requested and fail when it is refused. Google Play,
+    // without Dew, hides them.
+    if PracticeProduct(4) != "inbe.practice.taichi" || PracticeProduct(0).count != 0 ||
+    FixtureGrantedStarts() < 1 {
+        return 29
+    }
+    PracticeContentRemove(4)
+    fixture_grant_mode = 0
+    before = FixtureStarts()
+    PracticeContentRequest(4, false)
+    PracticeDownloadsPump(4, false, true)
+    if FixtureStarts() != before || PracticeContentStatus(4) != 1 {
+        return 30
+    }
+    fixture_grant_mode = 1
+    PracticeDownloadsPump(4, false, true)
+    PracticeDownloadsPump(4, false, true)
+    if FixtureStarts() != before + 1 || !PracticeContentReady(4) {
+        return 31
+    }
+    PracticeContentRemove(4)
+    fixture_grant_mode = -1
+    PracticeContentRequest(4, false)
+    PracticeDownloadsPump(4, false, true)
+    if FixtureStarts() != before + 1 || PracticeContentStatus(4) != 3 {
+        return 32
+    }
+    practice_paid_allowed = false
+    if !PracticeHidden(4) || PracticeInstalled(4) || PracticeHidden(0) || !PracticeInstalled(0) {
+        return 33
+    }
+    practice_paid_allowed = true
     PracticeDownloadsClose()
     return 0
 }

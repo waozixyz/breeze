@@ -8,6 +8,9 @@
 #import, file "../../src/practices/practice_registry.zi";
 #import, file "../../src/practices/practice_downloads.zi";
 #import, file "../../src/storage/temporary_data.zi";
+#import, file "../../src/storage/dew.zi";
+#import, file "../../src/storage/practice_unlocks.zi";
+#import "text_buffer"
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -26,7 +29,46 @@ using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
 
+// A paid practice that this account has not unlocked, and that is not on
+// this device, offers its unlock instead of a download.
+PracticeDownloadLocked :: (practice: s32) -> bool {
+    product := PracticeProduct(practice)
+    return product.count > 0 && !UnlockOwned(product) && !PracticeInstalled(practice)
+}
+
+PracticeDownloadPriceText :: (app: *InnerBreeze, key: string) -> string {
+    price: [32]u8
+    unused DewFormat(unlock_price, DewUnits, price[:])
+    args: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(price[:]), .is_text = true}]
+    buffer: [256]u8
+    unused FormatTemplate(LocaleText(key), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
 PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
+    if PracticeDownloadLocked(practice) {
+        if !DewReady() {
+            return LocaleText("practice_unlock_account")
+        }
+        if UnlockBuying() {
+            return LocaleText("practice_unlock_busy")
+        }
+        if unlock_notice.count > 0 {
+            return LocaleText(unlock_notice)
+        }
+        if UnlockOffer() {
+            price: [32]u8
+            regular: [32]u8
+            unused DewFormat(unlock_price, DewUnits, price[:])
+            unused DewFormat(unlock_regular_price, DewUnits, regular[:])
+            args: [2]FormatArg = .[FormatArg.{.text = TextUntilNul(price[:]), .is_text = true},
+            FormatArg.{.text = TextUntilNul(regular[:]), .is_text = true}]
+            buffer: [256]u8
+            unused FormatTemplate(LocaleText("practice_unlock_offer"), args[:], buffer[:])
+            return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+        }
+        return PracticeDownloadPriceText(app, "practice_unlock_status")
+    }
     if PracticePackFind(practice, "") < 0 && PracticeContentReady(practice) {
         return LocaleText("practice_download_included")
     }
@@ -83,7 +125,8 @@ PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s
     if narrow && !included {
         height += AppScale(52)
     }
-    if PracticeContentName(practice) == "taichi" && app.voice_narration_enabled != 0 {
+    if PracticeContentName(practice) == "taichi" && app.voice_narration_enabled != 0 &&
+    !PracticeDownloadLocked(practice) {
         language_h := AppParagraphHeight(PracticeDownloadLanguageText(app), width, AppFontSize(), AppScale(3))
         voice_h := AppParagraphHeight(PracticeDownloadVoiceText(practice), status_w, AppFontSize(), AppScale(3))
         if voice_h < AppScale(44) {
@@ -119,7 +162,18 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
     button_y := ifx narrow then y + status_h + AppScale(8) else y
     button_w := ifx narrow then width else AppScale(200)
     included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
-    if !included && Button(app.ui.session, ButtonProps.{
+    locked := PracticeDownloadLocked(practice)
+    if locked {
+        if DewReady() && Button(app.ui.session, ButtonProps.{
+                .id = 17420 + practice,
+                .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                    cast(float32)button_w, cast(float32)AppScale(44)},
+                .label = PracticeDownloadPriceText(app, "practice_unlock_button"),
+                .disabled = practice_active(app) != null || UnlockBuying(),
+                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            UnlockStart()
+        }
+    } else if !included && Button(app.ui.session, ButtonProps.{
             .id = 17410 + practice * 2,
             .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
                 cast(float32)button_w, cast(float32)AppScale(44)},
@@ -140,7 +194,7 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
             PracticeContentRequest(practice, app.voice_narration_enabled != 0)
         }
     }
-    if PracticeContentName(practice) != "taichi" || app.voice_narration_enabled == 0 {
+    if PracticeContentName(practice) != "taichi" || app.voice_narration_enabled == 0 || locked {
         return
     }
     y += status_h + AppScale(12)
@@ -186,6 +240,15 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
 #program_export
 PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
     PracticeContentReviewNext()
+    UnlockRefresh()
+    // A finished unlock downloads what it unlocked.
+    if UnlockTakeBought() {
+        for practice: cast(s32)0..cast(s32)4 {
+            if PracticeProduct(practice) == UnlockTaiChi {
+                PracticeContentRequest(practice, app.voice_narration_enabled != 0)
+            }
+        }
+    }
     width := app.ui.view_width - AppScale(32)
     if width > AppScale(720) {
         width = AppScale(720)
@@ -210,6 +273,9 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
     content_h: s32 = 0
     focus_y: s32 = 0
     for practice: cast(s32)0..cast(s32)4 {
+        if PracticeHidden(practice) {
+            continue
+        }
         if app.practice_downloads_scroll == -(practice + 1) {
             focus_y = content_h
         }
@@ -225,6 +291,9 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
     if scroll.opened {
         y := cast(s32)scroll.content.y
         for practice: cast(s32)0..cast(s32)4 {
+            if PracticeHidden(practice) {
+                continue
+            }
             PracticeDownloadRow(app, practice, cast(s32)scroll.content.x, y, row_width)
             y += PracticeDownloadRowHeight(app, practice, row_width)
         }

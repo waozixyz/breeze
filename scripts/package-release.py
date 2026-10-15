@@ -113,7 +113,7 @@ def stage(store, key_path, key_id, publishers_path=None):
         value['data_schema'] = 1
         value['artifacts'] = [dict(variant='module', sha256=pack['sha256'], size=len(data))]
         value['signature'] = key.sign(signing_message(value)).hex()
-        content_payloads.append((pack['sha256'], data, value))
+        content_payloads.append((pack['sha256'], data, value, pack.get('product', '')))
     # Validate all old pointers before publishing any new one. Use the same
     # per-app lock name as Daochi's staging tool.
     with ExitStack() as stack:
@@ -139,11 +139,15 @@ def stage(store, key_path, key_id, publishers_path=None):
             if archive.exists() and archive.read_bytes() != encoded:
                 raise ValueError("release sequence is already occupied")
         # Content is installed before the harness advertises its hashes.
-        for digest, data, value in content_payloads:
+        for digest, data, value, product in content_payloads:
             directory = store / 'inbe.practices'
             payload = directory / (digest + '.zib')
             if payload.exists() and payload.read_bytes() != data:
                 raise ValueError('immutable practice payload differs')
+            # A paid pack is marked for the node before it can be served, so
+            # Daochi only hands it out with a grant for its unlock.
+            if product:
+                atomic_write(directory / (digest + '.zib.product'), product.encode())
             atomic_write(payload, data)
             atomic_write(directory / (digest + '.zib.release-v2.json'),
                          (json.dumps(value, separators=(',', ':')) + '\n').encode())
