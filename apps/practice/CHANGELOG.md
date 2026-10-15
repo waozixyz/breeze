@@ -3,6 +3,7 @@
 ## [1.2.0] - 2026-10-15
 
 - Practise the 24-form Tai Chi course with saved progress, character choices and audio controls.
+- Unlock Tai Chi once with Dew, shown with its discount and download size; your purchase is recognised on every device of your account (not on Google Play).
 - Download each practice separately and keep it available offline.
 - Download narration for the selected language without downloading practice artwork again.
 - Remove downloaded content while keeping practice progress.

@@ -15,7 +15,6 @@
     InsetsPracticeToStart :: (practice: s32) -> s32 #foreign c "android_practice_to_start";
     InsetsImportMusic :: (path: *u8, practice: s32) -> s32 #foreign c "android_debug_import_music_for_practice";
     InsetsStartMusicDownload :: () -> s32 #foreign c "android_debug_start_music_download";
-    InsetsCanOpenDonation :: () -> s32 #foreign c "android_can_open_donation_reminder";
 
     NativeVoidFn :: #type (*JniEnv, *void) -> void #c_call;
     NativeIntegerFn :: #type (*JniEnv, *void, s32) -> void #c_call;
@@ -55,7 +54,6 @@
     }
     insets_mutex: AndroidMutex;
     pending_practice_start: s32 = -1;
-    pending_donation_reminder: s32;
 
     NativeWakeLockReady :: (env: *JniEnv, activity: *void) {
         android_wakelock_set_activity(env, activity)
@@ -117,18 +115,6 @@
         return 0
     }
 
-    NativeOpenDonation :: (env: *JniEnv, activity: *void) -> u8 {
-        unused env
-        unused activity
-        if InsetsCanOpenDonation() == 0 {
-            return 0
-        }
-        AndroidMutexLock(*insets_mutex)
-        pending_donation_reminder = 1
-        AndroidMutexUnlock(*insets_mutex)
-        return 1
-    }
-
     #program_export
     JNI_OnLoad :: (vm: *JniVm, reserved: *void) -> s32 {
         unused reserved
@@ -144,9 +130,9 @@
         if klass == null {
             return -1
         }
-        methods: [21]NativeMethod
-        names: [21][64]u8
-        signatures: [21][128]u8
+        methods: [20]NativeMethod
+        names: [20][64]u8
+        signatures: [20][128]u8
         CopyCString("nativeSetInsets", names[0][:])
         CopyCString("(IIIIIIIII)V", signatures[0][:])
         methods[0].name = *names[0][0]
@@ -237,23 +223,18 @@
         methods[17].name = *names[17][0]
         methods[17].signature = *signatures[17][0]
         methods[17].procedure.boolean = NativeStartMusicDownload
-        CopyCString("nativeDebugOpenDonationReminder", names[18][:])
-        CopyCString("()Z", signatures[18][:])
+        CopyCString("nativeTextInputState", names[18][:])
+        CopyCString("(JJ[BII)V", signatures[18][:])
         methods[18].name = *names[18][0]
         methods[18].signature = *signatures[18][0]
-        methods[18].procedure.boolean = NativeOpenDonation
-        CopyCString("nativeTextInputState", names[19][:])
-        CopyCString("(JJ[BII)V", signatures[19][:])
+        methods[18].procedure.text_state = AndroidNativeTextInputState
+        CopyCString("nativeSetWindowSize", names[19][:])
+        CopyCString("(II)V", signatures[19][:])
         methods[19].name = *names[19][0]
         methods[19].signature = *signatures[19][0]
-        methods[19].procedure.text_state = AndroidNativeTextInputState
-        CopyCString("nativeSetWindowSize", names[20][:])
-        CopyCString("(II)V", signatures[20][:])
-        methods[20].name = *names[20][0]
-        methods[20].signature = *signatures[20][0]
-        methods[20].procedure.size = AndroidNativeSetWindowSize
+        methods[19].procedure.size = AndroidNativeSetWindowSize
         result = env.functions.RegisterNatives(env, klass,
-            cast(*void)*methods[0], 21)
+            cast(*void)*methods[0], 20)
         env.functions.DeleteLocalRef(env, klass)
         if result != 0 {
             return result
@@ -275,24 +256,11 @@ android_take_pending_practice_start :: () -> s32 {
 }
 
 #program_export
-android_take_pending_donation_reminder :: () -> s32 {
-    #if #defined(ANDROID_BUILD) {
-        AndroidMutexLock(*insets_mutex)
-        pending := pending_donation_reminder
-        pending_donation_reminder = 0
-        AndroidMutexUnlock(*insets_mutex)
-        return pending
-    }
-    return 0
-}
-
-#program_export
 android_insets_init :: () {
     #if #defined(ANDROID_BUILD) {
         InsetsLifecycleReset()
         AndroidMutexLock(*insets_mutex)
         pending_practice_start = -1
-        pending_donation_reminder = 0
         AndroidMutexUnlock(*insets_mutex)
     }
 }

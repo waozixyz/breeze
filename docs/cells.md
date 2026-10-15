@@ -80,7 +80,7 @@ developer inbox only after Daochi returns the matching report ID. A failed or
 invalid acknowledgement leaves the approved report queued for retry and adds a
 failure notice once, including across restarts. Inbox receipt does not mean a
 developer has reviewed the report or started a fix.
-Lumi can display typed chart and donation cards alongside text replies. Ask
+Lumi can display typed chart cards alongside text replies. Ask
 `/progress sessions 7`, `/progress meditation 30`, `/progress retention 7`, or
 `/progress habits 7` (1–31 days including today). Charts use the active account's
 saved history, omit deleted records, fill empty days with zero, and persist as
@@ -141,11 +141,12 @@ sets a habit's tracking with `set_habit_tracking` (check, count with a target,
 or span with its good length) and its questions and good answers with
 `set_habit_questions`; her context lists both for each habit.
 
-`/donate` and `show_donation_links` show the existing Bitcoin and Monero addresses
-with copy, wallet and Trocador actions. Only a user click opens a destination.
-The host chooses every address and URL from Inbe's donation configuration. Old
-text-only chat history remains readable. Cards persist in the same account-scoped
-local conversation and render with standard Kryon Text, Box and Button widgets.
+Inner Breeze has no donations; Dew is how people pay. Donation cards that older
+versions saved stay in the synced history but are no longer shown, and Lumi
+packages before 1.5.0 still import the retired donation calls, which return
+nothing. Old text-only chat history remains readable. Cards persist in the same
+account-scoped local conversation and render with standard Kryon Text, Box and
+Button widgets.
 
 The app publishes its MCP tool schemas in `assets/mcp/tools.json`, including
 `get_settings`, `set_theme`, `set_theme_mode`, `set_setting`, `open_view` and

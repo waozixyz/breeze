@@ -13,6 +13,8 @@
 - Manage practice downloads and selected-language narration in one modal on the Practice screen.
 - Compact Lists tabs and larger task controls.
 - Every practice is optional: Practice shows only installed ones, and Wim Hof comes installed and can be removed.
+### Removed
+- Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
 ### Fixed
 - Android: closing the floating practice window with its X ends the practice.
 - Practice downloads show their real size, and each practice's pictures come only with its download.
