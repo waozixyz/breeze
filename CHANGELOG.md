@@ -12,6 +12,8 @@
 - Reliable Dew balances, with minimum top-ups and confirmations.
 - Manage practice downloads and selected-language narration in one modal on the Practice screen.
 - Compact Lists tabs and larger task controls.
+### Fixed
+- Android: closing the floating practice window with its X ends the practice.
 
 ## [2.1.33] - 2026-10-13
 ### Added

@@ -5,6 +5,7 @@
 #import, file "session_screen.zi";
 #import, file "session_window.zi";
 #import, file "app_route_state.zi";
+#import, file "app_route_url.zi";
 #import, file "modal_rules.zi";
 #import, file "app_modal_state.zi";
 #import, file "app_nav_state.zi";
@@ -102,6 +103,31 @@ app_session_window_close :: (app: *InnerBreeze) {
         app.session_window.screen = ScreenStart
         app_switch_route(app, route)
     }
+}
+
+// Closing Android's floating window with its X ends its practice at once,
+// keeping what leaving it would offer to save: nobody is in the app to answer
+// the exit prompt. A page open behind the practice's in-app window stays.
+// This runs outside the app's frame, so the change is reported; otherwise
+// the next frame follows the router back into the practice.
+app_session_window_end :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    practice := practice_active(app)
+    if practice == null || practice.end == null {
+        return
+    }
+    minimized := app.session_window.screen != ScreenStart
+    route := app_current_route(app)
+    // Stops its timer, wake lock and notification in the background.
+    practice_active_background_stop(app)
+    practice.end(app)
+    if minimized {
+        app.session_window.screen = ScreenStart
+        app_switch_route(app, route)
+    }
+    app_observe_direct_route_change(app, route)
 }
 
 // Draws the running practice's exit prompt over the open page.

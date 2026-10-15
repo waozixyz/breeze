@@ -70,6 +70,9 @@ public class MainActivity extends NativeActivity {
     // shows the practice instead of the page behind its in-app window. It is
     // static because native state also outlives a recreated activity.
     private static int pictureWindowReturns;
+    // Flips each time the floating window is closed, which ends its
+    // practice. Static for the same reason.
+    private static int pictureWindowCloses;
 
     // Called by the native frame thread. A volatile snapshot avoids changing
     // practice state from Android's UI callbacks.
@@ -93,8 +96,9 @@ public class MainActivity extends NativeActivity {
     }
 
     private void refreshPictureWindowState() {
-        pictureWindowGeneration = (pictureWindowGeneration + 1) & 0x0fffffff;
-        pictureWindowState = (pictureWindowGeneration << 3) | ((pictureWindowReturns & 1) << 2)
+        pictureWindowGeneration = (pictureWindowGeneration + 1) & 0x07ffffff;
+        pictureWindowState = (pictureWindowGeneration << 4) | ((pictureWindowCloses & 1) << 3)
+                | ((pictureWindowReturns & 1) << 2)
                 | (supportsPictureWindow() ? 1 : 0)
                 | (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()
                     && !activityStopped ? 2 : 0);
@@ -192,7 +196,9 @@ public class MainActivity extends NativeActivity {
         pictureWindowEntering = false;
         // Closing the floating window stops the activity first; opening it
         // back into the app leaves the activity started.
-        if (!visible && !activityStopped) {
+        if (!visible && activityStopped) {
+            pictureWindowCloses++;
+        } else if (!visible) {
             pictureWindowReturns++;
         }
         refreshPictureWindowState();

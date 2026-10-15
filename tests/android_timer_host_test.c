@@ -113,9 +113,8 @@ main(void)
     android_timer_start();
     android_timer_activate();
     wait_for_callbacks(2);
-    android_timer_deactivate();
-    pthread_mutex_lock(android_timer_get_mutex());
-    pthread_mutex_unlock(android_timer_get_mutex());
+    /* No tick runs after the frame quiesces the timer. */
+    android_timer_quiesce();
     count = count_callbacks();
     nanosleep(&quiet, NULL);
     assert(count_callbacks() == count);
