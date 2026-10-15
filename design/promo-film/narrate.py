@@ -5,6 +5,9 @@ Writes build/promo-video/audio/<key>-<take>.wav (24 kHz mono) and
 takes.json with each take's transcript, match and length. Existing takes
 are kept; pass --again to replace them. Store the chosen take as FLAC in
 audio/ beside this script and name it in film.json's voices.
+
+--config FILE reads another film's narration.json (default: the one beside
+this script) and --out DIR keeps its takes apart.
 """
 import base64
 import difflib
@@ -64,9 +67,21 @@ def words(text):
 
 
 def main():
-    config = json.loads((HERE / "narration.json").read_text())
-    again = "--again" in sys.argv
-    only = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    global OUT
+    arguments = sys.argv[1:]
+    config_path = HERE / "narration.json"
+    for flag in ("--config", "--out"):
+        if flag in arguments:
+            at = arguments.index(flag)
+            value = Path(arguments[at + 1]).resolve()
+            del arguments[at:at + 2]
+            if flag == "--config":
+                config_path = value
+            else:
+                OUT = value
+    config = json.loads(config_path.read_text())
+    again = "--again" in arguments
+    only = [arg for arg in arguments if not arg.startswith("--")]
     OUT.mkdir(parents=True, exist_ok=True)
     receipt_path = OUT / "takes.json"
     receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
