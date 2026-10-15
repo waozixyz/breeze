@@ -76,6 +76,24 @@ still there.
   drawings from the hand's shape and which way the palm faces. Back arms,
   legs, head, torso and front arms are drawn in that order.
 
+## Flat characters
+
+Jade Woman (`?figure=jadeWoman`: dark hair in a bun with a light orange
+tie, jade jacket, indigo trousers) and Lake Man (`?figure=lakeMan`: short
+dark hair, lake-blue jacket, earth-brown trousers) are the 3D characters
+drawn like a flat illustration, matching the flat Sun Salutation style
+(`docs/sun-salutation-flat.md` in Inbe). They are looks in
+`src/view/characters.js` with `flat: true`: two-tone toon materials
+(`flatMaterial` in `src/view/figure.js`; cloth takes a clear shade, skin a
+light one), calm closed eyes, and dark bands at the sleeve and trouser cuffs.
+The stage's flat lighting turns the sky light off, makes ambient and sun add
+up to π so the lit tone is the colour itself, and keeps the sun beside the
+camera so the side you see is lit.
+
+```sh
+node tools/render.mjs --item lesson-1/all --figure jadeWoman --label --video --out ../../build/tai-chi-flat --name lesson-1-jade-woman
+```
+
 ## How it works
 
 - `src/rig.js`: proportions as fractions of height, per figure.
