@@ -142,7 +142,7 @@ LumiOnlineStart :: (input: string) -> bool {
     out: Vec(u8)
     BuilderPrint(*out, "[")
     count := LumiStoreCount()
-    first := count - 4
+    first := count - LUMI_REQUEST_MESSAGE_LIMIT
     if first < 0 { first = 0 }
     for index: first..count - 1 {
         row := LumiStoreRow(index)
@@ -254,6 +254,17 @@ LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
     (route == LUMI_AI_OWN) != lumi_online_provider_turn {
         return false
     }
+    first := LumiRequestHistoryStart(lumi_online_messages)
+    if first < 0 {
+        return false
+    }
+    if first != ElementAt(lumi_online_messages, 0, 0) {
+        // Retire only older chat history as tool results need more room.
+        // Executed calls and their results remain in this turn; none replay.
+        messages := PackageText("[", lumi_online_messages[first:])
+        PackageFree(lumi_online_messages)
+        lumi_online_messages = messages
+    }
     context := AppToolContext(app)
     defer { PackageFree(context) }
     #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
@@ -318,12 +329,17 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
     calls_at := FieldAt(document, at, "tool_calls")
     calls := ArrayCount(document, calls_at)
     if calls <= 0 {
-        text: [4097]u8
-        count := ReadStringText(document, FieldAt(document, at, "content"), text[:])
-        if count <= 0 || count >= text.count {
+        // Own providers may return more than the node's 4 KiB answer cap.
+        // Bound decoding by the transfer buffer, then use the archive's
+        // existing UTF-8 splitting instead of rejecting a successful reply.
+        decoded := ReadStringValue(document, FieldAt(document, at, "content"),
+            ifx lumi_online_provider_turn then cast(s32)lumi_online_response.count - 1 else 4096)
+        text := BuilderFinish(decoded.value)
+        defer { PackageFree(text) }
+        if !decoded.valid || text.count == 0 {
             return false
         }
-        LumiOnlineAppend(TextFromBytes(text[:count]))
+        LumiOnlineAppend(text)
         return true
     }
     if !LumiToolRoundAllowed(lumi_online_round, calls, lumi_tool_count) {
