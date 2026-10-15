@@ -214,26 +214,6 @@ TORSOS = {
         "seat": ((-2, -8), 20),
         "neck": (114, 2),
     },
-    "tunicMale": {
-        "outline": [
-            (-12, 33, 0), (10, 28), (40, 25), (72, 27), (97, 25.5), (110, 14.5), (116.5, 7),
-            (118, -7), (114.5, -19), (98, -27), (68, -25), (40, -23.5), (12, -29),
-            (-14, -36, 0), (-16.5, -2),
-        ],
-        "hem": [(-9, -50), (-11.5, -2), (-7, 50)],
-        "seat": ((-2, -8), 20),
-        "neck": (115, 1.5),
-    },
-    "fitted": {
-        "outline": [
-            (-7, 24, 0), (12, 21), (40, 17.5), (64, 20), (80, 23.5), (98, 18.5), (111, 10),
-            (116.5, 4), (117.5, -6), (114, -14.5), (98, -21), (70, -19), (42, -17.5),
-            (16, -22.5), (-9, -27.5, 0), (-10.5, -2),
-        ],
-        "hem": [(-4.5, -50), (-6.5, -2), (-3, 50)],
-        "seat": ((-2, -9), 19),
-        "neck": (114, 2),
-    },
     "male": {
         "outline": [
             (-7, 24, 0), (12, 22), (42, 21), (72, 24.5), (98, 24), (111, 14), (116.5, 6),
@@ -252,7 +232,6 @@ TORSOS = {
 LEGS = {
     "loose": {"thigh": (19.5, 17.5, 14.0), "shin": (14.0, 13.6), "end": (12, 11.5),
               "band": (13, 4.5, 9.4, 9.0)},
-    "leggings": {"thigh": (18.0, 15.8, 11.4), "shin": (11.2, 11.9), "end": (3.5, 7.8), "band": None},
     "trousers": {"thigh": (19.0, 17.0, 13.2), "shin": (13.0, 12.6), "end": (4.5, 10.6),
                  "band": (10, 4.5, 10.6, 10.6)},
 }
@@ -262,9 +241,7 @@ LEGS = {
 # cuff band (from, to units before the wrist, half widths).
 SLEEVES = {
     "bell": {"upper": (11.2, 10.6, 8.8), "elbow": 8.6, "end": (6, 10.4), "cuff": (6.5, 0.5, 10.3, 11.4)},
-    "bellMale": {"upper": (12.2, 11.6, 9.6), "elbow": 9.4, "end": (6, 11.2), "cuff": (6.5, 0.5, 11.1, 12.2)},
-    "fitted": {"upper": (10.2, 9.6, 7.6), "elbow": 7.4, "end": (1.5, 6.4), "cuff": (5.5, 1.5, 6.5, 6.6)},
-    "fittedMale": {"upper": (11.4, 10.8, 8.6), "elbow": 8.4, "end": (1.5, 7.2), "cuff": (5.5, 1.5, 7.3, 7.4)},
+    "fitted": {"upper": (11.4, 10.8, 8.6), "elbow": 8.4, "end": (1.5, 7.2), "cuff": (5.5, 1.5, 7.3, 7.4)},
 }
 
 # Heads, in their own frame: the neck base at the origin, facing +x, up is
@@ -310,45 +287,14 @@ HAIRS = {
         ],
         "bun": ((-7.5, -89), 15),
         "strand": {"roots": [(-20.5, -40), (-17, -30)], "count": 9,
-                   "width": [(0, 11), (0.5, 7.4), (1, 3.5)], "tie": False},
+                   "width": [(0, 11), (0.5, 7.4), (1, 3.5)]},
         "ear": False,
-    },
-    "ponytail": {
-        "cap": [
-            (26, -63.5), (30.5, -56.5, 0), (22, -58.5), (14, -55.5), (8, -51), (4, -49.5),
-            (-3, -51.5), (-8, -46), (-12, -35), (-19, -30), (-27, -38), (-30.5, -52),
-            (-25, -69), (-8, -81), (12, -79.5),
-        ],
-        "bun": None,
-        "strand": {"roots": [(-25, -57), (-29.5, -52)], "count": 7,
-                   "width": [(0, 5), (0.08, 5.5), (0.3, 9.5), (0.75, 6), (1, 2.2)], "tie": True},
-        "ear": True,
-    },
-    "bun": {
-        "cap": [
-            (26, -63.5), (30.5, -56.5, 0), (22, -58.5), (14, -55.5), (8, -51), (4, -49.5),
-            (-3, -51.5), (-8, -46), (-12, -35), (-19, -30), (-27, -38), (-30.5, -52),
-            (-25, -69), (-8, -81), (12, -79.5),
-        ],
-        "bun": ((-20, -75), 13),
-        "strand": None,
-        "ear": True,
     },
     "crop": {
         "cap": [
             (25, -67), (31.5, -64.5, 0), (23, -62), (14, -58), (9, -52), (7.5, -44), (8, -38.5, 0),
             (4, -44), (-2, -51), (-9, -46), (-13, -36), (-20, -36.5), (-25.5, -47), (-25.5, -63),
             (-12, -81), (8, -84), (21, -78),
-        ],
-        "bun": None,
-        "strand": None,
-        "ear": True,
-    },
-    "short": {
-        "cap": [
-            (25, -66), (28, -62.5, 0), (19, -62), (12, -57), (8.5, -50), (7.5, -44), (8, -39, 0),
-            (4, -44), (-2, -51), (-9, -46), (-13, -36), (-20, -36.5), (-25.5, -47), (-25.5, -63),
-            (-12, -80.5), (8, -82), (20, -77),
         ],
         "bun": None,
         "strand": None,
@@ -700,16 +646,6 @@ class Figure:
         if hairstyle["ear"]:
             fill(ctx, [head(smooth(EAR))], colors["skin"])
             stroke(ctx, head(smooth(EAR_FOLD, closed=False, samples=4)), colors["mouth"], 1.0)
-        strand = hairstyle["strand"]
-        if strand and strand["tie"]:
-            # The tie wraps the strand a little below where it leaves the head.
-            points = self.hair.points
-            direction = GIRL.normalize(sub(points[2], points[1]))
-            normal = (direction[1], -direction[0])
-            center = add(points[1], mul(direction, 1.5))
-            half = strand["width"][1][1] - 1.2
-            stroke(ctx, [add(center, mul(normal, half)), sub(center, mul(normal, half))],
-                   colors["accent"], 4.4)
 
     def draw_bun_details(self, ctx, head):
         """Wrapped strands across the bun, and the tie where it meets the head."""
@@ -810,9 +746,10 @@ def render(rig, style, character, output, width, height, fps):
     encode(rig, timeline, output / f"{character['id']}.mp4", width, height, fps, frames)
 
 
-def render_grid(rig, style, characters, output, width, height, fps, columns=3):
-    """All characters side by side, numbered, to choose between them."""
+def render_grid(rig, style, characters, output, width, height, fps):
+    """All characters side by side, numbered, to compare them."""
     figures = [Figure(rig, style, character, width, height, fps) for character in characters]
+    columns = min(3, len(figures))
     rows = math.ceil(len(figures) / columns)
     grid = cairo.ImageSurface(cairo.FORMAT_ARGB32, width * columns, height * rows)
     ctx = cairo.Context(grid)
