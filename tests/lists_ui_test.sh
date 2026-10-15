@@ -81,12 +81,24 @@ with sqlite3.connect(sys.argv[1]) as db:
     db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)", (user,"friends.list",json.dumps({"friends":[{"user_id_hash":"a"*64,"alias":"Alice"}]})))
 SEED
 sleep 0.7
-tap 60 162
+# The fixture node is unreachable: a failed refresh keeps the lists and shows
+# no notice, so Share stays in its usual place.
+import -window "$window" "$test_dir/connected-offline.png"
+if tesseract "$test_dir/connected-offline.png" stdout 2>/dev/null | rg -qi 'could|fail|error|unconfirmed'; then
+    echo "FAIL a failed refresh shows a notice ($test_dir/connected-offline.png)"; exit 1
+fi
+tap 60 90
 sleep 0.3
 import -window "$window" "$test_dir/friends.png"
-tesseract "$test_dir/friends.png" stdout 2>/dev/null | rg -qi 'Alice'
-tap 820 398
+# Sparse-text mode reads the lone friend name beside its Invite button.
+tesseract "$test_dir/friends.png" stdout --psm 11 2>/dev/null | rg -qi 'Alice'
+tap 820 326
 sleep 0.4
+# The first failed delivery is retried quietly; nothing alarming is shown.
+import -window "$window" "$test_dir/invite-retrying.png"
+if tesseract "$test_dir/invite-retrying.png" stdout 2>/dev/null | rg -qi 'could|fail|error|unconfirmed'; then
+    echo "FAIL a first failed delivery shows an error ($test_dir/invite-retrying.png)"; exit 1
+fi
 python3 - "$db" <<'CHECK'
 import json, sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as db:
@@ -107,11 +119,14 @@ with sqlite3.connect(sys.argv[1]) as db:
     db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)", (user,"lists.shared/"+"b"*64+"/http://127.0.0.1:10",json.dumps(incoming)))
 SEED
 sleep 0.7
-tap 180 162
+tap 180 90
 sleep 0.3
 import -window "$window" "$test_dir/incoming.png"
 tesseract "$test_dir/incoming.png" stdout 2>/dev/null | rg -qi 'Weekend trip'
-tap 80 322
+if tesseract "$test_dir/incoming.png" stdout 2>/dev/null | rg -qi 'could|fail|error|unconfirmed'; then
+    echo "FAIL a failed refresh shows a notice ($test_dir/incoming.png)"; exit 1
+fi
+tap 80 250
 sleep 0.4
 python3 - "$db" <<'CHECK'
 import json, sqlite3, sys

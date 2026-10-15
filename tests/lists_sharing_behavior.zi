@@ -52,7 +52,8 @@ Reply :: (output: []u8) -> bool {
         writer = WriteText(writer, TextUntilNul(account.public_id[:]))
         writer = WriteText(writer, "\",\"title\":\"Weekend\",\"alias\":\"alice\",\"status\":\"pending\"}")
     }
-    writer = WriteText(writer, "]}")
+    // The node ends every JSON reply with a newline.
+    writer = WriteText(writer, "]}\n")
     return writer.valid
 }
 
@@ -201,6 +202,72 @@ Check :: () -> s32 {
     Finish()
     check_true("definite conflict clears the attempt", !ListsNetworkPending() && lists_status == 4)
     check_true("conflict preserves the draft", AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE) == "Keep my draft")
+
+    // A failed refresh keeps the confirmed lists and says nothing.
+    status_code = 503
+    lists_status = 0
+    ListsNetworkStart(ListsMessage.{.action = LISTS_REFRESH})
+    Finish()
+    check_true("a failed refresh stays silent", lists_status == 0 && !ListsNetworkPending())
+    // An uncertain change goes again by itself; only repeated failures ask.
+    frame.next_id = "quiet-request"
+    message.request_body = ListsBuildCommand(message, frame, list, rows[:])
+    before := calls
+    ListsNetworkStart(message)
+    Finish()
+    check_true("a first failure is quiet", ListsNetworkPending() && lists_status == 1 && !ListsNetworkNeedsRetry())
+    ListsNetworkTick(*app, 4.0, false)
+    check_true("a quiet retry waits first", !ListsNetworkBusy() && calls == before + 1)
+    ListsNetworkTick(*app, 100.0, false)
+    Finish()
+    ListsNetworkTick(*app, 100.0, false)
+    Finish()
+    check_int("each quiet retry sends the same change", calls, before + 3)
+    check_true("repeated failures ask for Retry", ListsNetworkNeedsRetry() && lists_status == 1)
+    status_code = 200
+    ListsNetworkTick(*app, 200.0, false)
+    Finish()
+    check_true("a later retry confirms the change", !ListsNetworkPending() && lists_status == 2 &&
+        !ListsNetworkNeedsRetry())
+    // A change made while a refresh is on its way follows it.
+    ListsNetworkStart(ListsMessage.{.action = LISTS_REFRESH})
+    frame.next_id = "follow-request"
+    message.request_body = ListsBuildCommand(message, frame, list, rows[:])
+    ListsNetworkStart(message)
+    check_true("a change during a refresh waits for it", ListsNetworkPending() && lists_status == 1)
+    Finish()
+    check_true("the waiting change is sent after the refresh", !ListsNetworkPending() && lists_status == 2)
+
+    // Each device seeds the same starter Inbox, so syncing devices share one.
+    check_int("the starter Inbox has the shared ID", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001' AND updated_at=1 AND deleted_at=0"), 1)
+    check_int("the starter tasks have shared IDs", read_db_count(
+        "SELECT COUNT(*) FROM elist_items WHERE list_id='00000000-0000-4000-8000-00000000a001' AND updated_at=1"), 3)
+    // A copy an older version seeded on another device goes once synced here.
+    check_true("another device's starter Inbox", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT 'other-starter',user_id,title,5,0,99 FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001'") != 0)
+    check_true("its starter tasks", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'other-'||sort_order,user_id,'other-starter',title,'',0,sort_order,0,99 FROM elist_items WHERE list_id='00000000-0000-4000-8000-00000000a001'") != 0)
+    check_true("lists reload", storage_elist_load(cast(*void)*app.elist) != 0)
+    check_int("one starter Inbox remains", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id IN ('other-starter','00000000-0000-4000-8000-00000000a001') AND deleted_at=0"), 1)
+    check_int("the shared starter is the one kept", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001' AND deleted_at=0"), 1)
+    // A copy whose starter tasks are still arriving is not mistaken for a used
+    // Inbox, so every device keeps the same one and never removes them all.
+    check_true("a copy still syncing", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT 'partial-starter',user_id,title,0,0,1 FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001'") != 0)
+    check_true("with part of its tasks", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'partial-'||sort_order,user_id,'partial-starter',title,'',0,sort_order,0,1 FROM elist_items WHERE list_id='00000000-0000-4000-8000-00000000a001' AND sort_order<2") != 0)
+    check_true("lists reload with the partial copy", storage_elist_load(cast(*void)*app.elist) != 0)
+    check_int("the shared starter stays beside a partial copy", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001' AND deleted_at=0"), 1)
+    check_int("the partial copy waits for its tasks", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id='partial-starter' AND deleted_at=0"), 1)
+    check_true("the partial copy leaves", elist_exec_sql("UPDATE elist_lists SET deleted_at=2 WHERE id='partial-starter'") != 0)
+    // A used Inbox is never removed; an untouched starter beside it is.
+    check_true("a used Inbox", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT 'used-inbox',user_id,title,6,0,100 FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001'") != 0)
+    check_true("with its own task", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'used-task',user_id,'used-inbox','Call mum','',0,0,0,100 FROM elist_lists WHERE id='used-inbox'") != 0)
+    check_true("lists reload again", storage_elist_load(cast(*void)*app.elist) != 0)
+    check_int("the used Inbox stays", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='used-inbox' AND deleted_at=0"), 1)
+    check_int("the untouched starter beside it goes", read_db_count(
+        "SELECT COUNT(*) FROM elist_lists WHERE id='00000000-0000-4000-8000-00000000a001' AND deleted_at=0"), 0)
     ListsNetworkStart(ListsMessage.{.action = LISTS_REFRESH})
     storage_set_setting_text("sync_server_url", "https://different.test")
     ListsNetworkTick(*app, 3.0, false)
