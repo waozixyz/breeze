@@ -1,0 +1,240 @@
+// Paid practices are unlocked with Dew on the Waozi node. The node charges its
+// own price, keeps the unlock and serves the practice's packs only with a
+// short-lived grant, so a device never unlocks a practice for itself.
+#import "auth"
+#import "json_scan"
+#import "text_buffer"
+#import "byte_text_linux"
+#import, file "storage_core.zi";
+#import, file "sync_async.zi";
+#import, file "dew.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/text_buffers.zi";
+
+UnlockTaiChi :: "inbe.practice.taichi"
+UnlockRead :: 1
+UnlockBuy :: 2
+UnlockGrant :: 3
+
+unlock_operation: StoredOperation;
+unlock_transfer: NetworkTransfer;
+unlock_response: [4096]u8;
+unlock_identity: [65]u8;
+unlock_action: s32;
+unlock_owned: bool;
+unlock_bought: bool;
+// What the node charges now, and its regular price outside a trial offer.
+unlock_price: s64 = 1000000;
+unlock_regular_price: s64 = 1000000;
+unlock_trial_until: s64;
+unlock_grant: [512]u8;
+unlock_grant_expires: s64;
+unlock_grant_failed: bool;
+unlock_next_read: s64;
+unlock_notice: string;
+
+UnlockReset :: () {
+    CancelStoredOperation(*unlock_operation)
+    unlock_identity = .{}
+    unlock_owned = false
+    unlock_bought = false
+    unlock_grant = .{}
+    unlock_grant_expires = 0
+    unlock_grant_failed = false
+    unlock_next_read = 0
+    unlock_notice = ""
+}
+
+UnlockTrue :: (json: string, at: s32) -> bool {
+    end := ValueEnd(json, at, 0)
+    return at >= 0 && end > at && json[at:end] == "true"
+}
+
+// The last unlock seen for this account, so an offline device still knows it.
+UnlockContext :: () {
+    if !DewReady() {
+        if unlock_identity[0] != cast(u8)0 {
+            UnlockReset()
+        }
+        return
+    }
+    identity: [65]u8
+    unused AppCopyText(storage_get_setting_text("sync_public_id"), identity[:])
+    if TextUntilNul(identity[:]) == TextUntilNul(unlock_identity[:]) {
+        return
+    }
+    UnlockReset()
+    unlock_identity = identity
+    cached: [256]u8
+    unused storage_get_social_cache_json("practice.unlocks", *cached[0], 256)
+    json := TextUntilNul(cached[:])
+    owner: [65]u8
+    unlock_owned = ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) == 64 &&
+    TextUntilNul(owner[:]) == TextUntilNul(identity[:]) && UnlockTrue(json, FieldAt(json, 0, "taichi"))
+}
+
+UnlockRemember :: (owned: bool) {
+    unlock_owned = owned
+    cached: [256]u8
+    unused AppCopyText("{\"account_id\":\"", cached[:])
+    unused AppAppendText(TextUntilNul(unlock_identity[:]), cached[:])
+    unused AppAppendText(ifx owned then "\",\"taichi\":true}" else "\",\"taichi\":false}", cached[:])
+    unused storage_set_social_cache_json("practice.unlocks", TextUntilNul(cached[:]))
+}
+
+UnlockBegin :: (action: s32, method: string, path: string, body: string) -> bool {
+    if !DewReady() || unlock_operation.active {
+        return false
+    }
+    unlock_response = .{}
+    unlock_action = action
+    return BeginStoredRequest(*unlock_operation, DewNode, NetworkTransport(*unlock_transfer),
+        method, path, body, unlock_response[:], true)
+}
+
+// {"unlocks":[{"product":...}],"products":[{"product":...,"price_units":N,
+// "regular_price_units":N,"trial_until":unix}]}
+UnlockParseList :: (json: string) -> bool {
+    unlocks := FieldAt(json, 0, "unlocks")
+    products := FieldAt(json, 0, "products")
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || unlocks < 0 || products < 0 {
+        return false
+    }
+    owned := false
+    for index: cast(s32)0..ArrayCount(json, unlocks) - 1 {
+        name: [64]u8
+        unused ReadStringText(json, FieldAt(json, ElementAt(json, unlocks, index), "product"), name[:])
+        owned = owned || TextUntilNul(name[:]) == UnlockTaiChi
+    }
+    for index: cast(s32)0..ArrayCount(json, products) - 1 {
+        at := ElementAt(json, products, index)
+        name: [64]u8
+        price: s64
+        unused ReadStringText(json, FieldAt(json, at, "product"), name[:])
+        regular: s64
+        trial: s64
+        if TextUntilNul(name[:]) == UnlockTaiChi &&
+        DewInteger(json, FieldAt(json, at, "price_units"), *price) && price > 0 &&
+        DewInteger(json, FieldAt(json, at, "regular_price_units"), *regular) && regular >= price &&
+        DewInteger(json, FieldAt(json, at, "trial_until"), *trial) {
+            unlock_price = price
+            unlock_regular_price = regular
+            unlock_trial_until = trial
+        }
+    }
+    UnlockRemember(owned)
+    return true
+}
+
+UnlockParseGrant :: (json: string) -> bool {
+    grant: [512]u8
+    expires: s64
+    count := ReadStringText(json, FieldAt(json, 0, "grant"), grant[:])
+    if count < 16 || count >= 511 || !DewInteger(json, FieldAt(json, 0, "expires_at"), *expires) ||
+    expires <= DewNow() {
+        return false
+    }
+    // The grant becomes one segment of the download path.
+    for byte: TextUntilNul(grant[:]) {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) || (byte >= cast(u8)65 && byte <= cast(u8)90) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) || byte == cast(u8)45 || byte == cast(u8)95 ||
+            byte == cast(u8)46) {
+            return false
+        }
+    }
+    unlock_grant = grant
+    unlock_grant_expires = expires
+    return true
+}
+
+UnlockTick :: () {
+    UnlockContext()
+    if !unlock_operation.active || !PollStoredOperation(*unlock_operation) {
+        return
+    }
+    status := unlock_operation.request.status
+    ok := unlock_operation.result == cast(s32)AuthResult.AUTH_OK
+    json := TextUntilNul(unlock_response[:])
+    if unlock_action == UnlockRead {
+        if ok {
+            unused UnlockParseList(json)
+        }
+        unlock_next_read = DewNow() + 60
+    } else if unlock_action == UnlockBuy {
+        name: [64]u8
+        unused ReadStringText(json, FieldAt(json, 0, "product"), name[:])
+        if ok && TextUntilNul(name[:]) == UnlockTaiChi && UnlockTrue(json, FieldAt(json, 0, "unlocked")) {
+            UnlockRemember(true)
+            unlock_bought = true
+            unlock_notice = ""
+        } else {
+            unlock_notice = ifx status == 402 then "practice_unlock_funds" else "practice_unlock_error"
+        }
+    } else if unlock_action == UnlockGrant {
+        if !ok || !UnlockParseGrant(json) {
+            unlock_grant_failed = true
+            if status == 403 {
+                UnlockRemember(false)
+            }
+        }
+    }
+}
+
+// Read the account's unlocks and the node's price while Manage practices is open.
+UnlockRefresh :: () {
+    UnlockTick()
+    if DewReady() && !unlock_operation.active && DewNow() >= unlock_next_read {
+        unlock_next_read = DewNow() + 60
+        unused UnlockBegin(UnlockRead, "GET", "/api/v1/unlocks", "")
+    }
+}
+
+UnlockStart :: () {
+    UnlockTick()
+    unlock_notice = ""
+    if !UnlockBegin(UnlockBuy, "POST", "/api/v1/unlocks", "{\"product\":\"inbe.practice.taichi\"}") {
+        unlock_notice = "practice_unlock_error"
+    }
+}
+
+// A trial offer shows the regular price beside the one charged.
+UnlockOffer :: () -> bool {
+    return unlock_trial_until > DewNow() && unlock_regular_price > unlock_price
+}
+
+UnlockOwned :: (product: string) -> bool {
+    UnlockContext()
+    return product == UnlockTaiChi && unlock_owned
+}
+
+UnlockBuying :: () -> bool {
+    return unlock_operation.active && unlock_action == UnlockBuy
+}
+
+UnlockTakeBought :: () -> bool {
+    bought := unlock_bought
+    unlock_bought = false
+    return bought
+}
+
+// A download of a paid pack asks for its grant: 1 with the grant written to
+// output, 0 while it is requested, -1 when this account may not download it.
+#program_export
+UnlockPackGrant :: (product: string, output: []u8) -> s32 {
+    UnlockTick()
+    if product != UnlockTaiChi || !DewReady() {
+        return -1
+    }
+    if unlock_grant[0] != cast(u8)0 && unlock_grant_expires > DewNow() + 60 {
+        return ifx AppCopyText(TextUntilNul(unlock_grant[:]), output) then 1 else -1
+    }
+    if unlock_grant_failed {
+        unlock_grant_failed = false
+        return -1
+    }
+    if !unlock_owned {
+        return -1
+    }
+    unused UnlockBegin(UnlockGrant, "POST", "/api/v1/unlocks/grant", "{\"product\":\"inbe.practice.taichi\"}")
+    return 0
+}

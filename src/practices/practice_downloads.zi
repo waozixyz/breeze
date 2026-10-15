@@ -33,7 +33,18 @@ PracticePack :: struct {
     // Installed on this device: downloaded, or shipped with the app and not
     // removed. Read without opening the pack, for Practice's home.
     present: bool
+    // A paid practice's packs name its unlock; the node serves them only
+    // with a grant for it.
+    product: [48]u8
 }
+
+// The host supplies grants for paid packs: 1 with the grant written, 0 while
+// it is requested, -1 when this account may not download the pack.
+PracticeGrantFn :: #type (product: string, output: []u8) -> s32;
+practice_grant: PracticeGrantFn;
+// Paid practices are bought with Dew, which the Google Play build does not
+// offer, so there they are neither listed nor downloaded.
+practice_paid_allowed: bool = true;
 
 practice_packs: [PracticePackCapacity]PracticePack;
 practice_pack_count: s32;
@@ -293,6 +304,16 @@ PracticeCatalogParse :: (data: string, output: []PracticePack) -> s32 {
             language[0] > cast(u8)122 || language[1] < cast(u8)97 || language[1] > cast(u8)122) {
             return -1
         }
+        product := PackageField(data, at, "product", pack.product[:])
+        // A paid pack never turns free because its product is unreadable.
+        if FieldAt(data, at, "product") >= 0 && product.count == 0 {
+            return -1
+        }
+        for byte: product {
+            if !((byte >= cast(u8)97 && byte <= cast(u8)122) || byte == cast(u8)46 || byte == cast(u8)95) {
+                return -1
+            }
+        }
         hash := PackageField(data, at, "sha256", pack.hash[:])
         pack.size = PackageNumber(data, at, "size")
         if pack.practice < 0 || hash.count != 64 || pack.size < 8 || pack.size > PackageMaximumBytes {
@@ -378,10 +399,20 @@ PracticeContentReady :: (practice: s32) -> bool {
         (index >= 0 && practice_packs[index].bundle != null))
 }
 
+PracticeProduct :: (practice: s32) -> string {
+    PracticeCatalogLoad()
+    index := PracticePackFind(practice, "")
+    return ifx index < 0 then "" else TextFromCString(*practice_packs[index].product[0])
+}
+
+PracticeHidden :: (practice: s32) -> bool {
+    return !practice_paid_allowed && PracticeProduct(practice).count > 0
+}
+
 // Practice's home offers only installed practices.
 PracticeInstalled :: (practice: s32) -> bool {
     PracticeCatalogLoad()
-    if practice_catalog_invalid {
+    if practice_catalog_invalid || PracticeHidden(practice) {
         return false
     }
     // Older signed packages carry every practice's assets.
@@ -632,6 +663,23 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
                 practice_packs[index].status = 2
                 continue
             }
+            // A paid pack waits for its grant, which joins its path.
+            grant: [512]u8
+            product := TextFromCString(*practice_packs[index].product[0])
+            if product.count > 0 {
+                granted: s32 = -1
+                if practice_paid_allowed && practice_grant != null {
+                    granted = practice_grant(product, grant[:])
+                }
+                if granted == 0 {
+                    practice_packs[index].requested = true
+                    return
+                }
+                if granted < 0 {
+                    practice_packs[index].status = 3
+                    continue
+                }
+            }
             practice_transfer_index = index
             directory := PackageDirectory()
             unused storage_ensure_dir(directory)
@@ -639,7 +687,11 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
             path := PracticePackPath(index, true)
             route := PackageText("https://api.waozi.xyz/api/v2/packages/inbe.practices/",
                 TextFromCString(*practice_packs[index].hash[0]))
-            url := PackageText(route, ".zib")
+            file := PackageText(route, ".zib")
+            separator := PackageText(file, ifx product.count > 0 then "/" else "")
+            url := PackageText(separator, TextFromCString(*grant[0]))
+            PackageFree(file)
+            PackageFree(separator)
             practice_transfer = FileDownload.{}
             practice_transfer.maximum_bytes = cast(u64)practice_packs[index].size
             started := FileDownloadStart(*practice_transfer, url, path)

@@ -13,6 +13,7 @@ static char database[4096];
 static int mode, starts;
 static int bad_catalog;
 static int shipped;
+static int granted_starts;
 static void *allocations[64];
 static size_t allocation_count;
 
@@ -53,6 +54,7 @@ AssetView FixtureAsset(String path) {
 void FixtureMode(int32_t value) { mode = value; }
 void FixtureCatalogMode(int32_t value) { bad_catalog = value; }
 void FixtureShipped(int32_t value) { shipped = value; }
+int32_t FixtureGrantedStarts(void) { return granted_starts; }
 int32_t FixtureStarts(void) { return starts; }
 bool FixtureTaiChiSaved(void) {
     char path[4096];
@@ -66,7 +68,14 @@ void app_web_storage_flush(void) {}
 
 bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, String destination) {
     const char prefix[] = "https://api.waozi.xyz/api/v2/packages/inbe.practices/";
-    assert(url.length == sizeof prefix - 1 + 64 + 4);
+    const char grant[] = "/fixture-grant";
+    // A paid pack's grant is the last path segment; free packs have none.
+    if (url.length == sizeof prefix - 1 + 64 + 4 + sizeof grant - 1) {
+        assert(memcmp(url.data + sizeof prefix - 1 + 68, grant, sizeof grant - 1) == 0);
+        granted_starts++;
+    } else {
+        assert(url.length == sizeof prefix - 1 + 64 + 4);
+    }
     assert(memcmp(url.data, prefix, sizeof prefix - 1) == 0);
     char name[69];
     memcpy(name, url.data + sizeof prefix - 1, 68);
