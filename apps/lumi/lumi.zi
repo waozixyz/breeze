@@ -23,6 +23,8 @@ LumiLocaleHost :: (key: string) -> string #foreign host_api;
 LumiLocaleRevisionHost :: () -> s64 #foreign host_api;
 command_revision: s64 = -1;
 command_cache: LumiCommands;
+// A practice Lumi offered to download or unlock; the next message answers.
+offered_practice: s32 = -1;
 ReadLumiToolsHost :: () -> LumiTools #foreign host_api;
 SetLumiHabitChoiceHost :: (choosing: bool) #foreign host_api;
 SetLumiDiaryChoiceHost :: (choosing: bool) #foreign host_api;
@@ -66,6 +68,7 @@ LumiCommandSet :: () -> LumiCommands {
         .start_whm = LumiLocaleHost("lumi_start_whm"),
         .start_meditation = LumiLocaleHost("lumi_start_meditation"),
         .start_sun = LumiLocaleHost("lumi_start_sun"), .start_patterns = LumiLocaleHost("lumi_start_patterns"),
+        .start_taichi = LumiLocaleHost("lumi_start_taichi"),
         .lists = LumiLocaleHost("lumi_open_lists"), .habits = LumiLocaleHost("lumi_open_habits"),
         .practices = LumiLocaleHost("lumi_open_practices"), .diary = LumiLocaleHost("lumi_open_diary"),
         .write_diary = LumiLocaleHost("lumi_write_diary"),
@@ -200,6 +203,32 @@ LumiHabitRespond :: (input: string, tools: LumiTools) -> bool {
     return true
 }
 
+// A practice that is not on this device is offered before it starts: free
+// ones to download, paid ones to unlock with Dew. Returns whether Lumi answered.
+LumiPracticeOffer :: (practice: s32, tools: LumiTools) -> bool {
+    if practice < 0 || practice > 4 {
+        return false
+    }
+    bit := 1 << practice
+    if (tools.practices_installed & bit) != 0 {
+        return false
+    }
+    names: [5]string = .["exercise_wim_hof", "exercise_meditation", "exercise_sun_salutation",
+    "exercise_patterns", "exercise_tai_chi"]
+    key := "lumi_practice_download_ask"
+    if (tools.practices_hidden & bit) != 0 {
+        key = "lumi_practice_unavailable"
+    } else {
+        offered_practice = practice
+        if (tools.practices_locked & bit) != 0 {
+            key = "lumi_practice_unlock_ask"
+        }
+    }
+    values: [1]string = .[LumiLocaleHost(names[practice])]
+    AppendLumiChatHost(LumiFill(LumiLocaleHost(key), values[:]), false)
+    return true
+}
+
 LumiRespond :: (input: string) {
     input = LumiTrim(input)
     if input.count == 0 || input.count >= LUMI_INPUT_MAX {
@@ -207,6 +236,23 @@ LumiRespond :: (input: string) {
     }
     AppendLumiChatHost(input, true)
     tools := ReadLumiToolsHost()
+    if offered_practice >= 0 {
+        // Lumi asked whether to download or unlock a practice: yes opens
+        // Manage practices at it, no drops it, and anything else is a new request.
+        practice := offered_practice
+        offered_practice = -1
+        LumiHabitLanguage()
+        answer := LumiYesNo(input, *habit_active, LumiEnglishCompiled())
+        if answer == 1 {
+            opened := PerformLumiActionHost(LumiAction.{.kind = LUMI_START_PRACTICE, .practice = practice})
+            AppendLumiChatHost(LumiLocaleHost(ifx opened then "lumi_practice_manage" else "lumi_unavailable"), false)
+            return
+        }
+        if answer == 2 {
+            AppendLumiChatHost(LumiLocaleHost("lumi_cancelled"), false)
+            return
+        }
+    }
     if tools.confirming_delete {
         // Lumi asked whether to delete a habit: yes deletes, no keeps it,
         // and anything else keeps it and is read as a new request.
@@ -287,6 +333,9 @@ LumiRespond :: (input: string) {
                 SetLumiHabitChoiceHost(true)
             }
         }
+    }
+    if action.kind == LUMI_START_PRACTICE && tools.practices_known && LumiPracticeOffer(action.practice, tools) {
+        return
     }
     if action.kind != 0 {
         if PerformLumiActionHost(action) {

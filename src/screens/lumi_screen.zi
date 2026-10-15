@@ -116,6 +116,14 @@ lumi_settings_scroll: s32;
 lumi_agreement_due: bool;
 lumi_agreement_prompted: bool;
 lumi_pending_practice: s32 = -1;
+// What a practice needs before it can start, supplied by the app: one of
+// the LUMI_PRACTICE_* states. Without it, Lumi starts practices directly.
+LUMI_PRACTICE_INSTALLED :: 0
+LUMI_PRACTICE_DOWNLOAD :: 1
+LUMI_PRACTICE_LOCKED :: 2
+LUMI_PRACTICE_HIDDEN :: 3
+LumiPracticeStatusFn :: #type (practice: s32) -> s32;
+lumi_practice_status: LumiPracticeStatusFn;
 lumi_choosing_habit: bool;
 lumi_choosing_diary: bool;
 // Text handed to Lumi's package for the current call only.
@@ -737,10 +745,26 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "ReadLumiToolsHost" && count == 0 {
-        result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = lumi_ui.available_apps,
-                .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
-                .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary,
-                .confirming_delete = LumiDeletePending()}, *lumi_tools_codec)
+        tools := LumiTools.{.available_apps = lumi_ui.available_apps,
+            .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
+            .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary,
+            .confirming_delete = LumiDeletePending(), .practices_known = lumi_practice_status != null}
+        // Lumi asks to download or unlock a practice before starting it.
+        for practice: cast(s32)0..EXERCISE_COUNT - 1 {
+            if lumi_practice_status == null {
+                break
+            }
+            bit := 1 << practice
+            status := lumi_practice_status(practice)
+            if status == LUMI_PRACTICE_HIDDEN {
+                tools.practices_hidden |= bit
+            } else if status == LUMI_PRACTICE_INSTALLED {
+                tools.practices_installed |= bit
+            } else if status == LUMI_PRACTICE_LOCKED {
+                tools.practices_locked |= bit
+            }
+        }
+        result.* = WidgetEncodeLumiTools(tools, *lumi_tools_codec)
         return 1
     }
     if name == "SetLumiHabitChoiceHost" && count == 1 && HostScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
@@ -993,6 +1017,12 @@ LumiPrepareTools :: (app: *InnerBreeze) {
     }
     lumi_ui.task_count = lumi_tasks.item_count
     lumi_ui.available_apps = app.enabled_apps & CellsInstalledMask()
+    lumi_ui.practices_hidden = 0
+    for practice: cast(s32)0..EXERCISE_COUNT - 1 {
+        if lumi_practice_status != null && lumi_practice_status(practice) == LUMI_PRACTICE_HIDDEN {
+            lumi_ui.practices_hidden |= 1 << practice
+        }
+    }
     if (lumi_ui.available_apps & APP_DIARY) == 0 {
         lumi_choosing_diary = false
     }
@@ -1029,7 +1059,10 @@ LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
     response := LumiRun(LumiMessage.{.action = LUMI_SEND, .input = input})
     CellsUiEnd()
     WidgetHostEnd()
-    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) {
+    // A practice not on this device opens Manage practices instead, which
+    // Lumi has already announced.
+    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) &&
+    (lumi_practice_status == null || lumi_practice_status(lumi_pending_practice) == LUMI_PRACTICE_INSTALLED) {
         LumiStoreAppend(LocaleText("lumi_unavailable"), false)
     }
     if lumi_pending_route >= 0 {
@@ -1152,7 +1185,10 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
     CellsUiEnd()
     WidgetHostEnd()
-    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) {
+    // A practice not on this device opens Manage practices instead, which
+    // Lumi has already announced.
+    if lumi_pending_practice >= 0 && !app_start_practice(app, lumi_pending_practice) &&
+    (lumi_practice_status == null || lumi_practice_status(lumi_pending_practice) == LUMI_PRACTICE_INSTALLED) {
         LumiStoreAppend(LocaleText("lumi_unavailable"), false)
     }
     if response.succeeded && response.action == LUMI_SEND && !LumiStoreSave() {
