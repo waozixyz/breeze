@@ -4,7 +4,7 @@
 
 
 ### Added
-- Dew in Profile: Monero top-ups and monthly/yearly 1 GB node storage at fixed XMR prices, outside Google Play.
+- Dew in Profile: top up with Monero beside your balance, and pick Free, 1 GB or 5 GB storage priced in Dew for a month or a year, outside Google Play.
 - Share a list after a friend accepts its invitation.
 - 24-form Tai Chi with progress, characters, music and spoken guidance, unlocked once with Dew (not on Google Play).
 ### Changed
