@@ -124,6 +124,9 @@ TaiChiPreview :: struct {
     frame: TaiChiFrame
     framing: TaiChiFraming
     half_width: float64
+    // The pose's lowest and highest points on the picture plane.
+    low: float64
+    high: float64
 }
 
 tai_chi_previews: [TAI_CHI_ITEM_CAPACITY * TAI_CHI_CHARACTER_COUNT]TaiChiPreview;
@@ -150,13 +153,13 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32,
         camera = TaiChiCameraUpdate(camera, view, solved.pelvis,
             pose.channels[TAI_CHI_FACING], 0.0, true)
         preview.framing = TaiChiFramingFor(camera, view)
-        // A little breathing room for limbs inside a small card.
-        preview.framing.view_height *= 1.12
         images := TaiChiImagesFor(character)
         memory: TaiChiLayoutMemory
         preview.frame = TaiChiLayout(*solved, *rig, *images,
             preview.framing.camera, *memory)
         preview.half_width = 0.0
+        preview.low = 1000.0
+        preview.high = -1000.0
         points: [TAI_CHI_MESH_CAPACITY]TaiChiVector2
         for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
             piece := preview.frame.pieces[index]
@@ -165,7 +168,14 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32,
             TaiChiPieceVertices(*piece, grid[0], grid[1], points[:count])
             for point: cast(s32)0..count - 1 {
                 preview.half_width = TaiChiMax(preview.half_width, TaiChiAbs(points[point].x))
+                preview.low = TaiChiMin(preview.low, points[point].y)
+                preview.high = TaiChiMax(preview.high, points[point].y)
             }
+        }
+        // The pose fills its card with a little room above and below.
+        if preview.high > preview.low {
+            preview.framing.view_center = (preview.low + preview.high) / 2.0
+            preview.framing.view_height = (preview.high - preview.low) * 1.15
         }
         preview.generation = tai_chi_course_generation
         preview.ready = true
