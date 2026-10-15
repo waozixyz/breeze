@@ -1731,19 +1731,23 @@ async function installPracticeContentFixtures(client) {
   })()`, true);
 }
 
-async function verifyTaiChiCourse(client) {
+async function startCachedPractice(client, practice) {
   await pageJson(client, `(async () => {
     ${wasmHookEvalHelper()}
-    await callWasmHook('app_web_launch_practice', [4]);
+    await callWasmHook('app_web_launch_practice', [${practice}]);
   })()`, true);
   await waitRouteTransition(client);
   await waitAnimationFrames(client, 6);
   // The first frame mounts the verified local content before Start opens it.
   await pageJson(client, `(async () => {
     ${wasmHookEvalHelper()}
-    await callWasmHook('app_web_launch_practice', [4]);
+    await callWasmHook('app_web_launch_practice', [${practice}]);
   })()`, true);
   await waitRouteTransition(client);
+}
+
+async function verifyTaiChiCourse(client) {
+  await startCachedPractice(client, 4);
   const state = await pageJson(client, `(() => ({
     screen: Module._app_web_test_screen(),
     selected: Module._app_web_test_practice_selected(),
@@ -1760,10 +1764,7 @@ async function verifyTaiChiCourse(client) {
 }
 
 async function sunSalutationChecks(client, browser) {
-  await pageJson(client, `(async () => {
-    ${wasmHookEvalHelper()}
-    await callWasmHook('app_web_launch_practice', [2]);
-  })()`, true);
+  await startCachedPractice(client, 2);
   await waitAnimationFrames(client, 3);
   await waitRouteTransition(client);
   const launched = await pageJson(client, `(() => ({

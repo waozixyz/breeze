@@ -214,6 +214,9 @@ downloads the matching voice; switching back reuses its verified cache. Missing
 narration is shown explicitly and never falls back to another spoken language.
 Each practice/language has one verified cache slot, so an update replaces its
 previous copy. Remove also clears cached languages retired from the catalog.
+Manuals, tray shortcuts and app links use the same checked start path. Temporary
+mini sessions can reuse public cached content; new downloads stay transient and
+do not alter the full profile's saved content or practice records.
 
 `apps/practice/content.json` owns the inventory and narration paths. The small
 `assets/practices/catalog.json` is built into the signed Practices harness and
