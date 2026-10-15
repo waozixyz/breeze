@@ -1,0 +1,296 @@
+// Dew is prepaid storage credit on the Waozi node. The node owns the balance,
+// payment confirmations and expiry; a device never grants itself credit.
+#import "auth"
+#import "json_scan"
+#import "text_buffer"
+#import "byte_text_linux"
+Clock :: #import "date_time_linux";
+#import, file "storage_core.zi";
+#import, file "delegate_store.zi";
+#import, file "sync_async.zi";
+#import, file "sync_nodes.zi";
+#import, file "sync_node_storage.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/text_buffers.zi";
+
+DewNow :: () -> s64 {
+    return Clock.UnixNow()
+}
+
+DewNode :: "https://api.waozi.xyz"
+DewUnits :: 1000000
+DewRead :: 1
+DewUpgrade :: 2
+DewAddress :: 3
+
+DewAccount :: struct {
+    known: bool
+    enabled: bool
+    balance: s64
+    used_bytes: s64
+    limit_bytes: s64
+    expires_at: s64
+}
+
+dew_account: DewAccount;
+dew_operation: StoredOperation;
+dew_transfer: NetworkTransfer;
+dew_response: [8192]u8;
+dew_identity: [65]u8;
+dew_attempt: [256]u8;
+dew_address: [128]u8;
+dew_rate_atomic: s64;
+dew_rate_units: s64;
+dew_confirmations: s64;
+dew_action: s32;
+dew_next_refresh: float64;
+dew_notice: string;
+dew_sync_requested: bool;
+
+DewReady :: () -> bool {
+    return StoredAccountMode() == AccountModeOwner && storage_sync_enabled() != 0 &&
+    SyncNodeSameAddress(storage_get_setting_text("sync_server_url"), DewNode)
+}
+
+DewCancel :: () {
+    CancelStoredOperation(*dew_operation)
+    dew_account = DewAccount.{}
+    dew_identity = .{}
+    dew_attempt = .{}
+    dew_address = .{}
+    dew_action = 0
+    dew_next_refresh = 0.0
+    dew_notice = ""
+    dew_sync_requested = false
+}
+
+DewTakeSyncRequest :: () -> bool {
+    requested := dew_sync_requested
+    dew_sync_requested = false
+    return requested
+}
+
+DewContext :: () {
+    if !DewReady() {
+        DewCancel()
+        return
+    }
+    identity: [65]u8
+    unused AppCopyText(storage_get_setting_text("sync_public_id"), identity[:])
+    if TextUntilNul(identity[:]) == TextUntilNul(dew_identity[:]) {
+        return
+    }
+    DewCancel()
+    dew_identity = identity
+    unused storage_get_social_cache_json("dew.upgrade", *dew_attempt[0], 256)
+    if FieldAt(TextUntilNul(dew_attempt[:]), 0, "request_id") < 0 {
+        dew_attempt[0] = cast(u8)0
+    }
+}
+
+// Read integer units without converting credit through floating point.
+DewInteger :: (json: string, at: s32, value: *s64) -> bool {
+    if at < 0 || at >= cast(s32)json.count {
+        return false
+    }
+    cursor := at
+    number: s64 = 0
+    while cursor < cast(s32)json.count && json[cursor] >= cast(u8)48 && json[cursor] <= cast(u8)57 {
+        digit := cast(s64)(json[cursor] - cast(u8)48)
+        if number > (9223372036854775807 - digit) / 10 {
+            return false
+        }
+        number = number * 10 + digit
+        cursor += 1
+    }
+    if cursor == at || ValueEnd(json, at, 0) != cursor {
+        return false
+    }
+    value.* = number
+    return true
+}
+
+DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> bool {
+    owner: [65]u8
+    asset: [32]u8
+    plan := FieldAt(json, 0, "plan")
+    units: s64
+    if ValueEnd(json, 0, 0) != cast(s32)json.count || plan < 0 ||
+    ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != identity ||
+    ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
+    TextUntilNul(asset[:]) != "waozi:token" ||
+    !DewInteger(json, FieldAt(json, 0, "units_per_dew"), *units) || units != DewUnits ||
+    !DewInteger(json, FieldAt(json, plan, "balance"), *account.balance) ||
+    !DewInteger(json, FieldAt(json, plan, "limit_bytes"), *account.limit_bytes) ||
+    !DewInteger(json, FieldAt(json, plan, "expires_at"), *account.expires_at) ||
+    !DewInteger(json, FieldAt(json, 0, "used_bytes"), *account.used_bytes) {
+        return false
+    }
+    enabled := FieldAt(json, 0, "enabled")
+    if enabled < 0 {
+        return false
+    }
+    end := ValueEnd(json, enabled, 0)
+    if end <= enabled || (json[enabled:end] != "true" && json[enabled:end] != "false") {
+        return false
+    }
+    account.enabled = json[enabled:end] == "true"
+    account.known = true
+    return true
+}
+
+// Six decimal places match the existing signed ledger; trailing zeros vanish.
+DewFormat :: (units: s64, divisor: s64, output: []u8) -> bool {
+    if units < 0 || divisor <= 0 || !AppFormatS64(units / divisor, output) {
+        return false
+    }
+    remainder := units % divisor
+    if remainder == 0 {
+        return true
+    }
+    if !AppAppendText(".", output) {
+        return false
+    }
+    scale := divisor / 10
+    while scale > 0 {
+        digit: [2]u8
+        digit[0] = cast(u8)(48 + remainder / scale)
+        if !AppAppendText(TextUntilNul(digit[:]), output) {
+            return false
+        }
+        remainder %= scale
+        if remainder == 0 {
+            return true
+        }
+        scale /= 10
+    }
+    return true
+}
+
+DewBegin :: (action: s32, path: string, body: string) -> bool {
+    if !DewReady() || dew_operation.active {
+        return false
+    }
+    dew_response = .{}
+    dew_action = action
+    if !BeginStoredRequest(*dew_operation, DewNode, NetworkTransport(*dew_transfer),
+        ifx action == DewUpgrade then "POST" else "GET", path, body, dew_response[:], true) {
+        dew_notice = "profile_dew_error"
+        return false
+    }
+    dew_notice = ""
+    return true
+}
+
+DewBuyStorage :: (period: string) {
+    DewContext()
+    if !DewReady() || dew_operation.active || !dew_account.known || !dew_account.enabled {
+        return
+    }
+    if dew_attempt[0] == cast(u8)0 {
+        if period != "monthly" && period != "yearly" {
+            return
+        }
+        request_id: [37]u8
+        storage_make_uuid(*request_id[0])
+        unused AppCopyText("{\"period\":\"", dew_attempt[:])
+        unused AppAppendText(period, dew_attempt[:])
+        unused AppAppendText("\",\"request_id\":\"", dew_attempt[:])
+        unused AppAppendText(TextUntilNul(request_id[:]), dew_attempt[:])
+        unused AppAppendText("\"}", dew_attempt[:])
+        if storage_set_social_cache_json("dew.upgrade", TextUntilNul(dew_attempt[:])) == 0 {
+            dew_attempt[0] = cast(u8)0
+            dew_notice = "profile_dew_error"
+            return
+        }
+    }
+    attempt := dew_attempt
+    unused DewBegin(DewUpgrade, "/api/v1/storage/plan", TextUntilNul(attempt[:]))
+}
+
+DewTopUp :: () {
+    DewContext()
+    unused DewBegin(DewAddress, "/api/v1/tokens/purchases/monero/address", "")
+}
+
+DewParseAddress :: (json: string) -> bool {
+    owner: [65]u8
+    address: [128]u8
+    if ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != TextUntilNul(dew_identity[:]) ||
+    ReadStringText(json, FieldAt(json, 0, "address"), address[:]) != 95 {
+        return false
+    }
+    alphabet := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    for byte: TextUntilNul(address[:]) {
+        found := false
+        for allowed: alphabet {
+            found = found || byte == allowed
+        }
+        if !found {
+            return false
+        }
+    }
+    rate := FieldAt(json, 0, "rate")
+    if rate < 0 ||
+    !DewInteger(json, FieldAt(json, rate, "xmr_atomic_units"), *dew_rate_atomic) || dew_rate_atomic <= 0 ||
+    !DewInteger(json, FieldAt(json, rate, "token_units"), *dew_rate_units) || dew_rate_units <= 0 ||
+    !DewInteger(json, FieldAt(json, 0, "confirmations_required"), *dew_confirmations) || dew_confirmations <= 0 {
+        return false
+    }
+    dew_address = address
+    return true
+}
+
+DewTick :: (visible: bool, now: float64) {
+    DewContext()
+    if dew_operation.active {
+        if !PollStoredOperation(*dew_operation) {
+            return
+        }
+        if dew_operation.result == cast(s32)AuthResult.AUTH_OK {
+            json := TextUntilNul(dew_response[:])
+            if dew_action == DewAddress {
+                if !DewParseAddress(json) {
+                    dew_notice = "profile_dew_error"
+                }
+            } else {
+                received: DewAccount
+                if DewParseAccount(json, TextUntilNul(dew_identity[:]), *received) {
+                    dew_account = received
+                    storage := SyncNodeStorage.{
+                        .known = true,
+                        .used_bytes = received.used_bytes,
+                        .limit_bytes = received.limit_bytes,
+                        .checked_at = DewNow(),
+                        .full = received.limit_bytes > 0 && received.used_bytes >= received.limit_bytes}
+                    SyncNodeStorageWrite(DewNode, storage)
+                    if dew_action == DewUpgrade {
+                        unused storage_set_social_cache_json("dew.upgrade", "{}")
+                        dew_attempt[0] = cast(u8)0
+                        dew_sync_requested = true
+                    }
+                } else {
+                    dew_account.known = false
+                    dew_notice = "profile_dew_error"
+                }
+            }
+        } else {
+            dew_notice = "profile_dew_error"
+            status := dew_operation.request.status
+            if dew_action == DewUpgrade && (status == 400 || status == 402 || status == 409) {
+                unused storage_set_social_cache_json("dew.upgrade", "{}")
+                dew_attempt[0] = cast(u8)0
+                if status == 402 {
+                    dew_notice = "profile_dew_funds"
+                }
+            }
+        }
+        dew_next_refresh = now + 15.0
+    }
+    if visible && DewReady() && !dew_operation.active && now >= dew_next_refresh {
+        unused DewBegin(DewRead, "/api/v1/storage/plan", "")
+        dew_next_refresh = now + 15.0
+    }
+}
