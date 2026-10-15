@@ -5,6 +5,7 @@
 #import "json_scan"
 #import "text_buffer"
 #import "byte_text_linux"
+#import "net_http"
 #import, file "storage_core.zi";
 #import, file "sync_async.zi";
 #import, file "dew.zi";
@@ -31,6 +32,10 @@ unlock_grant: [512]u8;
 unlock_grant_expires: s64;
 unlock_grant_failed: bool;
 unlock_next_read: s64;
+unlock_prices_transfer: NetworkTransfer;
+unlock_prices_response: [2048]u8;
+unlock_prices_active: bool;
+unlock_prices_next: s64;
 unlock_notice: string;
 
 UnlockReset :: () {
@@ -92,19 +97,11 @@ UnlockBegin :: (action: s32, method: string, path: string, body: string) -> bool
         method, path, body, unlock_response[:], true)
 }
 
-// {"unlocks":[{"product":...}],"products":[{"product":...,"price_units":N,
-// "regular_price_units":N,"trial_until":unix}]}
-UnlockParseList :: (json: string) -> bool {
-    unlocks := FieldAt(json, 0, "unlocks")
+// "products":[{"product":...,"price_units":N,"regular_price_units":N,"trial_until":unix}]
+UnlockParsePrices :: (json: string) -> bool {
     products := FieldAt(json, 0, "products")
-    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || unlocks < 0 || products < 0 {
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || products < 0 {
         return false
-    }
-    owned := false
-    for index: cast(s32)0..ArrayCount(json, unlocks) - 1 {
-        name: [64]u8
-        unused ReadStringText(json, FieldAt(json, ElementAt(json, unlocks, index), "product"), name[:])
-        owned = owned || TextUntilNul(name[:]) == UnlockTaiChi
     }
     for index: cast(s32)0..ArrayCount(json, products) - 1 {
         at := ElementAt(json, products, index)
@@ -122,8 +119,48 @@ UnlockParseList :: (json: string) -> bool {
             unlock_trial_until = trial
         }
     }
+    return true
+}
+
+// {"unlocks":[{"product":...}],"products":[...]}
+UnlockParseList :: (json: string) -> bool {
+    unlocks := FieldAt(json, 0, "unlocks")
+    if unlocks < 0 || !UnlockParsePrices(json) {
+        return false
+    }
+    owned := false
+    for index: cast(s32)0..ArrayCount(json, unlocks) - 1 {
+        name: [64]u8
+        unused ReadStringText(json, FieldAt(json, ElementAt(json, unlocks, index), "product"), name[:])
+        owned = owned || TextUntilNul(name[:]) == UnlockTaiChi
+    }
     UnlockRemember(owned)
     return true
+}
+
+// The node's prices are public, so its offer shows before anyone signs in.
+UnlockPricesRefresh :: () {
+    transport := NetworkTransport(*unlock_prices_transfer)
+    if unlock_prices_active {
+        status: s32
+        state := transport.poll(transport.context, *status)
+        if state < 0 {
+            return
+        }
+        unlock_prices_active = false
+        if state == 1 && status == 200 {
+            unused UnlockParsePrices(TextUntilNul(unlock_prices_response[:]))
+        }
+        return
+    }
+    if DewNow() < unlock_prices_next {
+        return
+    }
+    unlock_prices_next = DewNow() + 600
+    unlock_prices_response = .{}
+    unlock_prices_active = transport.start(transport.context, HttpRequest.{.method = "GET",
+            .url = "https://api.waozi.xyz/api/v1/unlocks/products", .accept = "application/json"},
+        unlock_prices_response[:])
 }
 
 UnlockParseGrant :: (json: string) -> bool {
@@ -182,6 +219,7 @@ UnlockTick :: () {
 
 // Read the account's unlocks and the node's price while Manage practices is open.
 UnlockRefresh :: () {
+    UnlockPricesRefresh()
     UnlockTick()
     if DewReady() && !unlock_operation.active && DewNow() >= unlock_next_read {
         unlock_next_read = DewNow() + 60

@@ -20,6 +20,7 @@
 #import "scroll_props"
 #import "scroll_widget"
 #import "text_props"
+#import "text_align"
 #import "text_widget"
 #import "tree"
 #import "session"
@@ -28,6 +29,7 @@
 using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
+using TextAlign;
 
 // A paid practice that this account has not unlocked, and that is not on
 // this device, offers its unlock instead of a download.
@@ -43,6 +45,39 @@ PracticeDownloadPriceText :: (app: *InnerBreeze, key: string) -> string {
     buffer: [256]u8
     unused FormatTemplate(LocaleText(key), args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+PracticeDownloadPriceHeight :: () -> s32 {
+    return AppFontSize() + AppScale(16)
+}
+
+// The Dew a paid practice needs, with the regular price struck through
+// while the node runs an offer.
+PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    font := AppFontSize() + AppScale(6)
+    height := PracticeDownloadPriceHeight()
+    text: [32]u8
+    unused DewFormat(unlock_price, DewUnits, text[:])
+    unused AppAppendText(" Dew", text[:])
+    price := FrameTextHold(*app.ui.frame_text, TextUntilNul(text[:]))
+    left := x
+    if UnlockOffer() {
+        regular_text: [32]u8
+        unused DewFormat(unlock_regular_price, DewUnits, regular_text[:])
+        unused AppAppendText(" Dew", regular_text[:])
+        regular := FrameTextHold(*app.ui.frame_text, TextUntilNul(regular_text[:]))
+        regular_w := AppTextWidth(regular, AppFontSize())
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)regular_w, cast(float32)height},
+                .text = regular, .font = AppFontSize(), .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapNone, .disabled = true, .strikethrough = true})
+        left += regular_w + AppScale(12)
+    }
+    strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)price.count}]
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)(x + width - left), cast(float32)height},
+            .text = price, .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapNone, .strong = strong[:]})
 }
 
 PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
@@ -121,6 +156,9 @@ PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s
         status_h = AppScale(44)
     }
     height := name_h + AppScale(8) + status_h + AppScale(24)
+    if PracticeDownloadLocked(practice) {
+        height += PracticeDownloadPriceHeight() + AppScale(8)
+    }
     included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
     if narrow && !included {
         height += AppScale(52)
@@ -148,6 +186,11 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
             .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)name_h},
             .text = name, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
     y += name_h + AppScale(8)
+    locked := PracticeDownloadLocked(practice)
+    if locked {
+        PracticeDownloadPrice(app, x, y, width)
+        y += PracticeDownloadPriceHeight() + AppScale(8)
+    }
     status := PracticeContentStatus(practice)
     narrow := width < AppScale(520)
     status_w := ifx narrow then width else width - AppScale(212)
@@ -162,7 +205,6 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
     button_y := ifx narrow then y + status_h + AppScale(8) else y
     button_w := ifx narrow then width else AppScale(200)
     included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
-    locked := PracticeDownloadLocked(practice)
     if locked {
         if DewReady() && Button(app.ui.session, ButtonProps.{
                 .id = 17420 + practice,
