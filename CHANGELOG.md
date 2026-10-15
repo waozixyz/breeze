@@ -1,4 +1,11 @@
 # Changelog
+
+## [2.1.34] - 2026-10-15
+### Added
+- Share a list with a friend after they accept an invitation inside Lists.
+### Changed
+- Lists uses compact, scrollable tabs and larger task controls.
+
 ## [2.1.33] - 2026-10-13
 ### Added
 - Lumi guides you through each screen.

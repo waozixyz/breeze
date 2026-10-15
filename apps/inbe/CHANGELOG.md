@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.31] - 2026-10-15
+
+- Bring Lists 1.1.0 with friend invitations and shared task editing.
+- Requires Inner Breeze 2.1.34 or later.
+
+
 ## [2.1.30] - 2026-10-13
 
 - Bring Lumi 1.4.0, Habits 1.0.5, Practices 1.1.5, Lists 1.0.6, Diary 1.1.10 and Leaderboard 1.0.2.

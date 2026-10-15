@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0] - 2026-10-15
+
+- Share selected lists with existing friends and edit accepted lists together.
+- Accept or decline invitations inside Lists, with no app-wide interruptions.
+- Compact tabs keep short list names together and scroll when needed.
+- Requires Inner Breeze 2.1.34 or later.
+
+
 ## [1.0.6] - 2026-10-13
 
 - Maintenance release for Inner Breeze 2.1.33.

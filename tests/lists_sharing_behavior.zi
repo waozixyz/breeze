@@ -1,0 +1,213 @@
+// Real account credentials, SQLite persistence and request lifecycle. Only the
+// HTTP transport is synthetic; server access rules have separate HTTP tests.
+#import, file "../src/cells/lists_network.zi";
+#import, file "../src/cells/lists_types.zi";
+#import, file "../src/cells/lists_ui_types.zi";
+#import, file "../src/storage/lists_shared_storage.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/account_types.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/screens/elist_types.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../apps/lists/sharing.zi";
+#import, file "storage_test_support.zi";
+#import "keys"
+#import "async_client"
+#import "net_http"
+#import "wire"
+#import "transaction"
+#import "text_buffer"
+#import "json_scan"
+#import "text"
+#import "vec"
+
+c :: #system_library "c";
+Now :: (out: *s64) -> s64 #foreign c "time";
+account: AccountKeys;
+app: InnerBreeze;
+status_code: s32 = 200;
+accepted: bool;
+calls: s32;
+last_body: [262144]u8;
+sender :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+Reply :: (output: []u8) -> bool {
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"lists\":[")
+    if accepted {
+        writer = WriteText(writer, "{\"id\":\"shared-list\",\"owner\":\"")
+        writer = WriteText(writer, sender)
+        writer = WriteText(writer, "\",\"title\":\"Weekend\",\"revision\":1,\"items\":[{\"id\":\"shared-task\",\"title\":\"Pack bag\",\"comment\":\"For Saturday\",\"done\":0}]}")
+    }
+    writer = WriteText(writer, "],\"invitations\":[")
+    if !accepted {
+        writer = WriteText(writer, "{\"id\":\"invitation-1\",\"list_id\":\"shared-list\",\"owner\":\"")
+        writer = WriteText(writer, sender)
+        writer = WriteText(writer, "\",\"target\":\"")
+        writer = WriteText(writer, TextUntilNul(account.public_id[:]))
+        writer = WriteText(writer, "\",\"title\":\"Weekend\",\"alias\":\"alice\",\"status\":\"pending\"}")
+    }
+    writer = WriteText(writer, "]}")
+    return writer.valid
+}
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    challenge := "https://lists.test/api/v1/sync/challenge?user_id="
+    if request.url.count == challenge.count + 64 && request.url[:challenge.count] == challenge {
+        return AppCopyText("{\"nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", output)
+    }
+    if request.url == "https://lists.test/api/v1/sync/login" {
+        writer := Writer.{output, 0, true}
+        writer = WriteText(writer, "{\"auth_token\":\"synthetic-lists-token\",\"expires_in_seconds\":3600,\"server_time\":")
+        writer = WriteDecimal(writer, Now(null))
+        writer = WriteText(writer, "}")
+        return writer.valid
+    }
+    check_true("Lists uses only its endpoint", request.url == "https://lists.test/api/v1/lists")
+    calls += 1
+    unused AppCopyText(request.body, last_body[:])
+    return Reply(output)
+}
+
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    status.* = ifx lists_operation.request.stage == 3 then status_code else 200
+    return 1
+}
+
+FakeCancel :: (context: *void) {
+    unused context
+}
+
+#program_export
+ListsTestTransport :: () -> AsyncTransport {
+    return AsyncTransport.{null, FakeStart, FakePoll, FakeCancel}
+}
+
+Finish :: () {
+    for step: cast(s32)0..39 {
+        ListsNetworkTick(*app, 2.0, false)
+        if !ListsNetworkBusy() {
+            return
+        }
+    }
+    check_true("Lists request completes", false)
+}
+
+#program_export
+Check :: () -> s32 {
+    check_true("fixture transport ready", ListsTestTransport().start != null)
+    guard := support_begin("/tmp/inbe-lists-test/")
+    if guard != 0 {
+        return guard
+    }
+    check_true("database opens", storage_init("/tmp/inbe-lists-test/data") != 0)
+    ListsNetworkTick(*app, 1.0, true)
+    check_int("offline never requests", calls, 0)
+    check_true("account created", CreateAccountKeys(*account) != 0)
+    check_true("account saved", sync_account_save(*account,
+        cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
+        cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    storage_set_setting_text("sync_server_url", "https://lists.test")
+    storage_set_sync_enabled(1)
+    ListsNetworkTick(*app, 1.0, true)
+    Finish()
+    check_int("authenticated refresh completes", lists_operation.result, 0)
+    check_int("one refresh", calls, 1)
+    cache := ListsSharedCache()
+    check_int("pending invitation is cached", ArrayCount(cache, FieldAt(cache, 0, "invitations")), 1)
+    check_int("no shared content before acceptance", ArrayCount(cache, FieldAt(cache, 0, "lists")), 0)
+
+    message := ListsMessage.{.action = LISTS_ACCEPT}
+    frame := ListsUiFrame.{.next_id = "accept-request"}
+    list := ListsUiRow.{.id = "shared-list", .title = "Weekend", .revision = 1}
+    rows: [2]ListsUiRow
+    rows[0] = ListsUiRow.{.id = "shared-task", .parent_id = "shared-list", .title = "Pack bag", .comment = "For Saturday"}
+    rows[1] = ListsUiRow.{.id = "private-task", .parent_id = "private-list", .title = "Private"}
+    message.request_body = ListsBuildCommand(message, frame, list, rows[:], "", "invitation-1")
+    accepted = true
+    ListsNetworkStart(message)
+    Finish()
+    check_true("confirmed acceptance clears its attempt", !ListsNetworkPending())
+    check_true("shared records load with private records", storage_elist_load(cast(*void)*app.elist) != 0)
+    found: bool
+    for index: cast(s32)0..app.elist.list_count - 1 {
+        if AppTextFromCString(*app.elist.lists[index].id[0], 37) == "shared-list" {
+            found = app.elist.lists[index].shared && !app.elist.lists[index].owner &&
+            !app.elist.lists[index].incomplete
+        }
+    }
+    check_true("accepted list is a complete collaborator observation", found)
+    check_true("shared content is not a private DB copy", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='shared-list'") == 0)
+    check_true("old private projection fixture", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT 'shared-list',id,'Original',9,0,1 FROM users LIMIT 1") != 0)
+    check_true("old private item fixture", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'old-task',id,'shared-list','Original task','',0,0,0,1 FROM users LIMIT 1") != 0)
+    check_int("private writer cannot rename a shared projection", storage_elist_update_list("shared-list", "Stale rename", 0), 0)
+    check_int("private writer cannot add to a shared projection", storage_elist_create_item("shared-list", "Stale task", "", null), 0)
+    check_int("private writer cannot edit a shared projection", storage_elist_update_item("old-task", "Stale task", "", 1, 0), 0)
+    check_int("private writer cannot delete a shared item", storage_elist_delete_item("old-task"), 0)
+    check_int("private writer cannot delete a shared list", storage_elist_delete_list("shared-list"), 0)
+
+    frame.next_id = "save-request"
+    frame.value = "A \"quoted\" task\n二"
+    message.action = LISTS_COMMIT
+    message.editing_item = 0
+    message.request_body = ListsBuildCommand(message, frame, list, rows[:])
+    json := message.request_body
+    check_true("serializer produces complete JSON", ValueEnd(json, 0, 0) == cast(s32)json.count)
+    document := FieldAt(json, 0, "list")
+    items := FieldAt(json, document, "items")
+    check_int("other private list stays out of sharing", ArrayCount(json, items), 1)
+    value: [128]u8
+    unused ReadStringText(json, FieldAt(json, ElementAt(json, items, 0), "title"), value[:])
+    check_true("quoted Unicode text round trips", TextUntilNul(value[:]) == frame.value)
+    long_document: Vec(u8)
+    BuilderPrint(*long_document, "{\"request_id\":\"large-request\",\"padding\":\"")
+    for index: cast(s32)0..11999 {
+        BuilderPrint(*long_document, "x")
+    }
+    BuilderPrint(*long_document, "\"}")
+    long_json := BuilderFinish(long_document)
+    check_true("large collaboration cache saves", ListsCacheWrite("lists.cache-test", long_json) != 0)
+    long_copy: [16384]u8
+    check_true("large collaboration cache is not truncated at 8 KB",
+        ListsCacheRead("lists.cache-test", *long_copy[0], 16384) != 0 &&
+        TextUntilNul(long_copy[:]) == long_json)
+    PackageFree(long_json)
+    unused AppCopyText("Keep my draft", app.elist.input[:])
+    status_code = 503
+    ListsNetworkStart(message)
+    Finish()
+    check_true("uncertain save is retained", ListsNetworkPending())
+    check_true("failure retains the draft", AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE) == "Keep my draft")
+    attempt: [262144]u8 = lists_attempt
+    lists_identity[0] = cast(u8)0
+    ListsNetworkContext()
+    check_true("uncertain request survives restart", TextUntilNul(attempt[:]) == TextUntilNul(lists_attempt[:]))
+    ListsNetworkTick(*app, 2.0, false)
+    unused AppCopyText("Keep my draft", app.elist.input[:])
+    retry := ListsMessage.{.action = LISTS_RETRY}
+    ListsNetworkStart(retry)
+    Finish()
+    check_true("retry sends the original request", TextUntilNul(last_body[:]) == TextUntilNul(attempt[:]))
+    check_true("failure retains the draft", AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE) == "Keep my draft")
+    status_code = 409
+    ListsNetworkStart(retry)
+    Finish()
+    check_true("definite conflict clears the attempt", !ListsNetworkPending() && lists_status == 4)
+    check_true("conflict preserves the draft", AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE) == "Keep my draft")
+    ListsNetworkStart(ListsMessage.{.action = LISTS_REFRESH})
+    storage_set_setting_text("sync_server_url", "https://different.test")
+    ListsNetworkTick(*app, 3.0, false)
+    check_true("server switch cancels old delivery", !ListsNetworkBusy())
+    check_true("server switch hides the old cache", ListsSharedCache() == "{\"lists\":[],\"invitations\":[]}")
+    check_int("server switch clears old visible rows", app.elist.list_count, 0)
+    storage_close()
+    remove_tree("/tmp/inbe-lists-test/")
+    return failures
+}
