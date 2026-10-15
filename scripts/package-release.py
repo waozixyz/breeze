@@ -105,7 +105,8 @@ def stage(store, key_path, key_id, publishers_path=None):
     store.mkdir(parents=True, exist_ok=True)
     content_payloads = []
     for pack in catalog_from_bundle(payloads['practices']):
-        filename = pack['practice'] + ('.' + pack['language'] if pack['language'] else '') + '.zib'
+        filename = (pack['practice'] + ('.' + pack['language'] if pack['language'] else '') +
+                    ('.' + pack['voice'] if pack.get('voice') else '') + '.zib')
         data = (ROOT / 'build/practice-content' / filename).read_bytes()
         if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
             raise ValueError('practice content differs from its signed catalog')
