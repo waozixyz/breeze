@@ -83,9 +83,6 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../storage/delegate_store.zi";
 #import, file "app_route_state.zi";
 #import, file "app_route_url.zi";
-#import, file "app_donation.zi";
-#import, file "donation_modal.zi";
-#import, file "app_donation_reminder.zi";
 #import, file "app_profile.zi";
 #import, file "app_frame_pacing.zi";
 #import, file "app_frame_transition.zi";
@@ -937,36 +934,6 @@ draw_profile_picture_picker_modal :: (app: *InnerBreeze) {
     }
 }
 
-draw_donation_reminder_modal :: (app: *InnerBreeze) {
-    modal_result: s32
-    actions: [3] ActionModalAction = .[
-    ActionModalAction.{}, ActionModalAction.{}, ActionModalAction.{}
-    ]
-    props: ActionModalProps = .{}
-    if app == null {
-        return
-    }
-    actions[0].label = LocaleText("donation_reminder_donate_button")
-    actions[0].tone = cast(ButtonTone)ButtonToneAccent
-    actions[0].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    actions[1].label = LocaleText("donation_reminder_skip_button")
-    actions[1].tone = cast(ButtonTone)ButtonToneNeutral
-    actions[1].emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    actions[2].label = LocaleText("donation_reminder_dismiss_button")
-    actions[2].tone = cast(ButtonTone)ButtonToneDanger
-    actions[2].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    props.title = LocaleText("donation_reminder_title")
-    props.message = LocaleText("donation_reminder_message")
-    props.max_width = 420
-    modal_result = ActionModal(app.ui.session, props, actions[:3]).action
-    if modal_result == -1 {
-        app_record_donation_reminder_seen(app)
-        app_close_modal(app)
-    } else if modal_result > 0 {
-        app_handle_donation_reminder_action(app, modal_result)
-    }
-}
-
 draw_global_modal :: (app: *InnerBreeze) {
     modal_result: s32
     if app == null || app.modal.active == 0 {
@@ -976,14 +943,6 @@ draw_global_modal :: (app: *InnerBreeze) {
         return
     }
     if settings_data_draw_modals(app) != 0 {
-        return
-    }
-    if app.modal.type == cast(ModalType)ModalDonationReminder {
-        draw_donation_reminder_modal(app)
-        return
-    }
-    if app.modal.type == cast(ModalType)ModalAboutDonation {
-        draw_about_donation_modal(app)
         return
     }
     if app.modal.type == cast(ModalType)ModalMeditationNetworkError {
@@ -1104,14 +1063,6 @@ updateapp :: (app: *InnerBreeze) {
     frame_route = app_current_route(app)
     #if #defined(ANDROID_BUILD) {
         {
-            if android_take_pending_donation_reminder() != 0 {
-                if app.modal.active != 0 {
-                    app_close_modal(app)
-                }
-                app_open_modal(app, cast(ModalType)ModalDonationReminder)
-            }
-        }
-        {
             practice_id: s32 = android_take_pending_practice_start()
             if practice_id >= 0 {
                 active_break: s32
@@ -1162,11 +1113,6 @@ updateapp :: (app: *InnerBreeze) {
     habits_guide_active = habits_screen_first_run_guide_active(app)
     screen_guide_active = ScreenGuideActive(app)
     app_clear_invalid_screen_local_modal(app)
-    if !AppMiniMode() {
-        // Lumi's guide on another screen keeps the reminder away too.
-        app_maybe_open_donation_reminder(app, first_run_guide_active,
-            ifx screen_guide_active != SCREEN_GUIDE_NONE then 1 else habits_guide_active)
-    }
     // These modals cover the practice page, which must then not draw the
     // same manual or configuration a second time with the same widget keys.
     practice_fullscreen_modal = app.modal.active != 0 &&

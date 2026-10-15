@@ -55,8 +55,6 @@ LumiLoadOlderHost :: () -> bool #foreign host_api;
 LumiDeleteRowHost :: (index: s32) -> bool #foreign host_api;
 LumiFirstVisibleRowHost :: (scroll: s32) -> s32 #foreign host_api;
 LumiRowOffsetHost :: (index: s32) -> s32 #foreign host_api;
-ReadLumiDonationHost :: (coin: s32) -> LumiDonation #foreign host_api;
-LumiDonationActionHost :: (coin: s32, action: s32) -> bool #foreign host_api;
 SetLumiOnlineHost :: (online: bool) -> s32 #foreign host_api;
 LumiAgreementHost :: (choice: s32) -> bool #foreign host_api;
 SmoothFramesHost :: (frames: s32) -> bool #foreign host_api;
@@ -68,8 +66,6 @@ agreement_bytes: [8192]u8;
 agreement_strong: [32]TextRange;
 chart_selected_key: u64;
 chart_selected_point: s32;
-donation_notice: string;
-donation_notice_row: s32 = -1;
 
 // Visible replies are unchanged between frames. Keep a bounded copy so
 // scrolling, account changes and edited rows cannot reuse borrowed host text.
@@ -104,7 +100,7 @@ LumiMenuCommand :: struct {
     choice_only: bool
 }
 
-LUMI_MENU_COMMANDS :: 16
+LUMI_MENU_COMMANDS :: 15
 menu_revision: s64 = -1;
 menu_commands: [LUMI_MENU_COMMANDS]LumiMenuCommand;
 menu_scroll: s32;
@@ -340,7 +336,6 @@ MenuCommands :: (revision: s64) -> []LumiMenuCommand {
                 .requirement = LUMI_PRACTICES},
             LumiMenuCommand.{.name = "/feedback", .description = LumiViewLocaleHost("lumi_command_feedback"),
                 .needs_text = true},
-            LumiMenuCommand.{.name = "/donate", .description = LumiViewLocaleHost("lumi_show_donations")},
             LumiMenuCommand.{.name = "/cancel", .description = LumiViewLocaleHost("cancel_button"),
                 .choice_only = true}]
         menu_commands = table
@@ -499,61 +494,6 @@ ProgressCard :: (row: LumiChatRow, index: s32, x: s32, y: s32, width: s32) {
         Text(frame.session, TextProps.{.key = cast(u64)(key + 35),
                 .bounds = Bounds(x, y + Scale(196), width, Scale(40)),
                 .text = LumiViewLocaleHost("lumi_chart_empty"), .font = Scale(14)})
-    }
-}
-
-DonationCoins :: () -> s32 {
-    count: s32 = 0
-    for coin: cast(s32)0..cast(s32)1 {
-        if ReadLumiDonationHost(coin).address.count > 0 {
-            count += 1
-        }
-    }
-    return count
-}
-
-DonationCard :: (index: s32, x: s32, y: s32, width: s32) {
-    labels: [3]string = .[LumiViewLocaleHost("copy_address_button"),
-    LumiViewLocaleHost("open_wallet_button"), LumiViewLocaleHost("trocador_button")]
-    for coin: cast(s32)0..cast(s32)1 {
-        donation := ReadLumiDonationHost(coin)
-        address := donation.address
-        // A build without that coin, such as Monero on Google Play, leaves it empty.
-        if address.count == 0 {
-            continue
-        }
-        if width < Scale(360) && address.count > 42 {
-            abbreviated: Vec(u8)
-            BuilderPrint(*abbreviated, "%…%", address[:16], address[address.count - 12:])
-            address = BuilderFinish(abbreviated)
-        }
-        key := 340000 + index * 16 + coin * 8
-        Text(frame.session, TextProps.{.key = cast(u64)key,
-                .bounds = Bounds(x, y, width, Scale(24)), .text = donation.name, .font = frame.font})
-        Text(frame.session, TextProps.{.key = cast(u64)(key + 1),
-                .bounds = Bounds(x, y + Scale(26), width, Scale(62)),
-                .text = address, .font = Scale(12), .selectable = true})
-        for action: cast(s32)0..cast(s32)2 {
-            if Button(frame.session, ButtonProps.{.id = 320000 + index * 8 + coin * 3 + action,
-                    .bounds = Bounds(x, y + Scale(92 + action * 46), width, Scale(42)),
-                    .label = labels[action], .tone = cast(ButtonTone)ButtonToneNeutral,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-                succeeded := LumiDonationActionHost(coin, action)
-                donation_notice_row = index
-                donation_notice = ""
-                if action == 0 && succeeded {
-                    donation_notice = "address_copied"
-                } else if !succeeded {
-                    donation_notice = ifx action == 1 then "wallet_not_installed_toast" else "lumi_unavailable"
-                }
-            }
-        }
-        y += Scale(232)
-    }
-    if donation_notice_row == index && donation_notice.count > 0 {
-        Text(frame.session, TextProps.{.key = cast(u64)(340000 + index * 16 + 15),
-                .bounds = Bounds(x, y, width, Scale(36)),
-                .text = LumiViewLocaleHost(donation_notice), .font = Scale(12)})
     }
 }
 
@@ -847,7 +787,6 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             }
             text_top := Scale(ifx row.user then 12 else 32)
             card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
-                ifx row.kind == LUMI_CHAT_DONATIONS then 36 + 232 * DonationCoins() else
                 ifx row.kind == LUMI_CHAT_FEEDBACK then 54 else 0)
             text_height := row_height - text_top - Scale(16) - card_height
             props := TextProps.{.key = cast(u64)(300403 + index * 4),
@@ -864,8 +803,6 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             card_top := top + text_top + text_height + Scale(8)
             if row.kind == LUMI_CHAT_PROGRESS {
                 ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))
-            } else if row.kind == LUMI_CHAT_DONATIONS {
-                DonationCard(index, left + Scale(14), card_top, bubble_width - Scale(28))
             } else if row.kind == LUMI_CHAT_FEEDBACK {
                 pending := LumiFeedbackChoiceHost(row.payload, 0)
                 if Button(frame.session, ButtonProps.{.id = 351000 + index * 2,
@@ -930,15 +867,15 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
         // messages are selected.
     }
     typed := LumiTrim(frame.value)
-    candidates: [20]string = .[commands.start_whm, commands.complete_habit,
+    candidates: [19]string = .[commands.start_whm, commands.complete_habit,
     commands.start_meditation, commands.start_sun, commands.start_patterns,
     commands.add, commands.complete, commands.reopen,
     commands.lists, commands.habits, commands.practices, commands.diary,
     commands.settings, commands.appearance, commands.dark, commands.light, commands.system, commands.write_diary,
-    commands.progress, commands.donations]
-    requirements: [20]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
+    commands.progress]
+    requirements: [19]s32 = .[LUMI_PRACTICES, LUMI_HABITS, LUMI_PRACTICES,
     LUMI_PRACTICES, LUMI_PRACTICES, LUMI_LISTS, LUMI_LISTS, LUMI_LISTS,
-    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY, LUMI_PRACTICES, 0]
+    LUMI_LISTS, LUMI_HABITS, LUMI_PRACTICES, LUMI_DIARY, 0, 0, 0, 0, 0, LUMI_DIARY, LUMI_PRACTICES]
     suggestion_count: s32 = 0
     selected: bool
     // The command list replaces the suggestion chips while it is open.
@@ -983,13 +920,13 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
     }
     if typed.count > 0 {
         prepared: s32 = 0
-        while candidate_ready < 20 && prepared < LUMI_CANDIDATES_PER_FRAME {
+        while candidate_ready < cast(s32)candidates.count && prepared < LUMI_CANDIDATES_PER_FRAME {
             candidate_actions[candidate_ready] = LumiIntent(candidates[candidate_ready], commands)
             candidate_ready += 1
             prepared += 1
         }
     }
-    for index: cast(s32)0..cast(s32)19 {
+    for index: cast(s32)0..cast(s32)candidates.count - 1 {
         if typed.count == 0 || frame.choosing_diary || action.kind == LUMI_COMPLETE_HABIT || suggestion_count >= limit ||
         index >= candidate_ready {
             break

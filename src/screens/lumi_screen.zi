@@ -37,7 +37,6 @@
 #import, file "../app/route_types.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/assets.zi";
-#import, file "../app/app_donation.zi";
 #import "open_uri"
 #import, file "../app/metrics.zi";
 #import, file "../app/text_buffers.zi";
@@ -349,7 +348,7 @@ LumiRowAccessNow :: () -> LumiRowAccess {
 }
 
 // Retain archived message text without invoking tools embedded in older
-// progress, donation or feedback cards from the full owner installation.
+// progress or feedback cards from the full owner installation.
 LumiVisibleRow :: (row: LumiChatRow, access: LumiRowAccess) -> LumiChatRow {
     if !access.history {
         return LumiChatRow.{}
@@ -484,9 +483,6 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
             return false
         }
         return LumiStoreAppendCard(LocaleText(LumiChartTitleKey(action.practice)), false, LUMI_CHAT_PROGRESS, payload)
-    }
-    if action.kind == LUMI_SHOW_DONATIONS {
-        return LumiStoreAppendCard(LocaleText("about_donation_message"), false, LUMI_CHAT_DONATIONS, "")
     }
     if action.kind == LUMI_SET_THEME {
         return AppSetTheme(app, action.title)
@@ -681,43 +677,14 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostScalar("bool", ifx succeeded then 1 else 0)
         return 1
     }
-    if name == "ReadLumiDonationHost" && count == 1 &&
-    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
-        coin := cast(s32)arguments[0].integer
-        if coin < 0 || coin > 1 {
-            return 0
-        }
-        // Without Monero the second coin is empty, and Lumi's card leaves it out.
-        if coin == 1 && !app_monero_available() {
-            result.* = WidgetEncodeLumiDonation(LumiDonation.{}, *lumi_donation_codec)
-            return 1
-        }
-        donation := LumiDonation.{.name = ifx coin == 0 then "Bitcoin" else "Monero",
-            .address = ifx coin == 0 then app_bitcoin_donation_address() else app_monero_donation_address()}
-        result.* = WidgetEncodeLumiDonation(donation, *lumi_donation_codec)
+    // Lumi packages before 1.5.0 still ask for donation cards, which Inner
+    // Breeze no longer offers: they read nothing and do nothing.
+    if name == "ReadLumiDonationHost" && count == 1 {
+        result.* = WidgetEncodeLumiDonation(LumiDonation.{}, *lumi_donation_codec)
         return 1
     }
-    if name == "LumiDonationActionHost" && count == 2 &&
-    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
-    HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
-        coin := cast(s32)arguments[0].integer
-        action := cast(s32)arguments[1].integer
-        if coin < 0 || coin > 1 || action < 0 || action > 2 {
-            return 0
-        }
-        succeeded: bool
-        if coin == 1 && !app_monero_available() {
-            result.* = HostScalar("bool", 0)
-            return 1
-        }
-        if action == 0 {
-            succeeded = TextInputWriteClipboard(ifx coin == 0 then app_bitcoin_donation_address() else app_monero_donation_address())
-        } else if action == 1 {
-            succeeded = OpenUri(ifx coin == 0 then app_bitcoin_wallet_url() else app_monero_wallet_url())
-        } else {
-            succeeded = OpenUri(ifx coin == 0 then app_bitcoin_trocador_url() else app_monero_trocador_url())
-        }
-        result.* = HostScalar("bool", ifx succeeded then 1 else 0)
+    if name == "LumiDonationActionHost" && count == 2 {
+        result.* = HostScalar("bool", 0)
         return 1
     }
     if name == "StartLumiOnlineHost" && count == 1 &&
@@ -886,8 +853,6 @@ LumiMeasuredRow :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
         height := cast(s32)prepared.bounds.height + cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
         if row.kind == LUMI_CHAT_PROGRESS {
             height += AppScale(242)
-        } else if row.kind == LUMI_CHAT_DONATIONS {
-            height += AppScale(36 + 232 * (ifx app_monero_available() then 2 else 1))
         } else if row.kind == LUMI_CHAT_FEEDBACK {
             height += AppScale(54)
         }

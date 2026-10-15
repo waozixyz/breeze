@@ -7,6 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -176,7 +177,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     profile = Path(directory)
     with application(profile, "standalone", standalone=True) as window:
         tool_names = {tool["name"] for tool in state(window)["mcp"]["tools"]}
-        assert {"show_progress_chart", "show_donation_links"} <= tool_names
+        assert "show_progress_chart" in tool_names and "show_donation_links" not in tool_names
         capture(window, "standalone")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
@@ -226,26 +227,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         tap(window, 797, 425)
         time.sleep(0.4)
         capture(window, "progress-selected")
+        # Donations are gone: /donate is no command and adds no card.
         send(window, profile, "/donate")
-        assert chat(profile)[-1]["kind"] == 2
-        time.sleep(0.5)
-        capture(window, "donation-cards")
-        tap_rendered_button(window, "Copy")
-        expected_address = re.search(r'app_bitcoin_donation_address.*?return "([^"]+)"',
-                                     (ROOT / "src/app/app_donation.zi").read_text(), re.S)[1]
-        assert command("xclip", "-selection", "clipboard", "-o") == expected_address
-        uri_receipt = OUTPUT / "rich-cards-uri.txt"
-        tap_rendered_button(window, "Wallet")
-        wait_for(lambda: uri_receipt.exists(), "Wallet action did not reach the URI host")
-        assert uri_receipt.read_text().startswith("bitcoin:" + expected_address)
-        uri_receipt.unlink()
-        tap_rendered_button(window, "Trocador")
-        wait_for(lambda: uri_receipt.exists(), "Donation link did not reach the URI host")
-        assert uri_receipt.read_text().startswith("https://trocador.app/")
-        assert "address=" + expected_address in uri_receipt.read_text()
-        command("xdotool", "windowsize", window, "390", "720")
-        time.sleep(0.5)
-        capture(window, "donation-narrow")
+        assert all(row.get("kind") != 2 for row in chat(profile))
     # Keep the original conversation fixtures independent of chart records.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("DELETE FROM settings WHERE key LIKE 'cell.lumi.message.%'")
@@ -276,13 +260,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         wait_for(lambda: len(chat(profile)) == before + 4, "The completed command was not sent")
         assert chat(profile)[-2]["text"] == "/todo Water plants"
         assert query(profile, "SELECT done FROM elist_items WHERE title='Water plants'") == [(0,)]
-        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/do")
+        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/he")
         time.sleep(0.4)
         capture(window, "command-filter")
-        # /done, then /donate: tap the second row.
+        # The only match, /help, sits next to the draft: tap it.
         tap(window, 490, 626)
         wait_for(lambda: len(chat(profile)) == before + 6, "A tapped command was not sent")
-        assert chat(profile)[-2]["text"] == "/donate" and chat(profile)[-1]["kind"] == 2
+        assert chat(profile)[-2]["text"] == "/help" and "I can help" in chat(profile)[-1]["text"]
         send(window, profile, "/todo Read five pages", button=True)
         assert query(profile, "SELECT done FROM elist_items WHERE title='Read five pages'") == [(0,)]
         send(window, profile, "/done Read five")
@@ -390,6 +374,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         wait_for(lambda: state(window)["breath"] > breath, "WHM did not advance")
         assert state(window)["screen"] == 1 and not state(window)["paused"]
         capture(window, "whm-started")
+    # Practices other than Wim Hof are downloads; install them as Manage
+    # practices would before Lumi starts them.
+    (profile / "packages").mkdir(exist_ok=True)
+    for name in ("meditation", "sunsalutation", "patterns"):
+        shutil.copyfile(ROOT / "build/practice-content" / (name + ".zib"),
+                        profile / "packages" / ("practice-" + name + ".zib"))
     for label, command_text, practice_id in [
         ("meditation-typo", "start meditaiton", 1),
         ("meditation-uppercase", "START MEDITATION", 1),
@@ -429,8 +419,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
                     "multiline Diary append", "Diary restart persistence", "durable history retention",
-                    "progress zero and recorded values", "donation address copy", "wallet URI",
-                    "official browser donation link", "narrow donation card", "large tool catalog",
+                    "progress zero and recorded values", "no donations", "large tool catalog",
                     "command button and list", "Enter picks a command", "command waits for its text",
                     "tapped command"],
     }, indent=2) + "\n")

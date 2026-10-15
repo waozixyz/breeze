@@ -99,8 +99,9 @@ LumiStoreLoad :: () {
         }
         if !lumi_store_error { storage_set_setting_int("lumi_archive_migrated", 1) }
     }
+    // Deleted messages and the retired donation cards stay out of the chat.
     statement: *void
-    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL AND COALESCE(json_extract(value,'$.kind'),0)!=2 ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
         lumi_store_error = true
         return
     }
@@ -221,7 +222,7 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
     if text.count == 0 || text.count >= LUMI_INPUT_MAX {
         return false
     }
-    if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_FEEDBACK ||
+    if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_FEEDBACK || kind == LUMI_CHAT_RETIRED ||
     (kind != LUMI_CHAT_TEXT && user) ||
     (kind == LUMI_CHAT_PROGRESS && !LumiChartRead(payload).valid) ||
     (kind == LUMI_CHAT_FEEDBACK && payload.count != 32) ||

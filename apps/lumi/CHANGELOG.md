@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.0] - 2026-10-15
+### Removed
+- Donation links and the /donate command. Dew is how you pay in Inner Breeze.
+
 ## [1.4.0] - 2026-10-13
 ### Added
 - Lumi understands habit requests on your device, in every app language: add, rename, pause, resume or delete a habit, set its days and reminder, count it or measure it from start to end, and give it questions with what a good answer is. For example “add a habit push ups every day at 8”, “jumping rope should ask how many I did, higher is better” or “my eating window is good at most 8 hours”. Lumi asks before it deletes a habit.
