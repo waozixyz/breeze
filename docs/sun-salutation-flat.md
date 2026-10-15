@@ -1,0 +1,46 @@
+# Flat Sun Salutation characters
+
+`scripts/render-sun-salutation-flat.py` draws the Sun Salutation in a clean,
+flat vector style: flat colours, no textures or gradients, one darker tone
+for the far limbs and shades. It reuses the pose timeline, inverse
+kinematics and hair simulation of `scripts/render-sun-salutation-girl.py`
+and `docs/sun-salutation-girl.json`, so the yoga form is the same as the
+painted animation; only the drawing differs.
+
+```sh
+python3 scripts/render-sun-salutation-flat.py                          # first character's video
+python3 scripts/render-sun-salutation-flat.py --character sage-bun     # one character
+python3 scripts/render-sun-salutation-flat.py --all                    # every character
+python3 scripts/render-sun-salutation-flat.py --grid                   # all side by side, numbered
+python3 scripts/render-sun-salutation-flat.py --character sage-bun --still 25.5
+```
+
+Videos go straight into `build/sun-salutation-flat/` as `<id>.mp4` and
+`choose-characters.mp4` (1536 × 1024, or 768 × 512 cells in the grid, 30 fps,
+69 s, one chapter per step). Stills go to `build/sun-salutation-flat/stills/`;
+delete them after review. It needs Python 3 with pycairo, FFmpeg with
+libx264, and the girl renderer's NumPy and Pillow for its import.
+
+## Characters
+
+`docs/sun-salutation-flat.json` lists the characters. Each picks a torso,
+legs, sleeves, face and hair by name and gives its colours: skin, hair, top,
+pants, the sleeve cuff and the small light orange accent (hair ties). Far
+limbs, shades and hair highlights are derived from those colours.
+
+The shapes behind those names are tables in the script:
+
+- `TORSOS`: the top's outline along the spine, its hem band, the seat and
+  the neck base (`tunic`, `tunicMale`, `fitted`, `male`).
+- `LEGS` and `SLEEVES`: limb radii, where trousers and sleeves end and their
+  bands (`loose`, `leggings`, `trousers`; `bell`, `fitted` and male widths).
+- `FACES`: the profile, scale, neck, blush, brow and mouth (`female`, `male`).
+- `HAIRS`: the cap, an optional bun and an optional hanging strand that
+  swings with the hair simulation (`bunLong`, `ponytail`, `bun`, `crop`,
+  `short`). Men use short styles without swinging hair.
+
+Limbs are hulls of circles along their bones, and parts of one colour fill as
+one shape, so joints never show seams. Feet solve their own floor contact:
+flat when standing, on tucked toes behind her in plank, on the instep in
+upward-facing dog. `POSE_CHANGES` lowers a few ankles so the drawn feet
+reach the floor.
