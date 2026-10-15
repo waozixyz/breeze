@@ -1,0 +1,228 @@
+// Practice download management, rendered by the current supervising host.
+#import, file "../../src/app/app_types.zi";
+#import, file "../../src/app/app_modal_state.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "../../src/app/locale.zi";
+#import, file "../../src/app/metrics.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/practices/practice_registry.zi";
+#import, file "../../src/practices/practice_downloads.zi";
+#import, file "../../src/storage/temporary_data.zi";
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import "session"
+#import "layout"
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+
+PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
+    if PracticePackFind(practice, "") < 0 && PracticeContentReady(practice) {
+        return LocaleText("practice_download_included")
+    }
+    status := PracticeContentStatus(practice)
+    text := LocaleText(ifx status == 2 then "practice_download_ready" else
+        ifx status == 3 then "practice_download_failed" else
+        ifx status == 1 then "practice_download_busy" else "practice_download_size")
+    if status == 1 || status == 3 {
+        return text
+    }
+    buffer: [256]u8
+    amount := (PracticeContentBytes(practice) + 1024 * 1024 - 1) / (1024 * 1024)
+    args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
+    unused FormatTemplate(text, args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+PracticeDownloadLanguageText :: (app: *InnerBreeze) -> string {
+    buffer: [256]u8
+    selected_language := LocaleLanguageAt(LocaleActiveIndex())
+    language := selected_language.label
+    args: [1]FormatArg = .[FormatArg.{.text = language, .is_text = true}]
+    unused FormatTemplate(LocaleText("practice_download_language"), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+PracticeDownloadVoiceText :: (practice: s32) -> string {
+    voice := PracticeVoiceStatus(practice)
+    return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
+        ifx voice == 2 then "practice_voice_ready" else
+        ifx voice == 3 then "practice_download_failed" else
+        ifx voice == 1 then "practice_voice_busy" else "voice_narration_label")
+}
+
+PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
+    definition := practice_get(practice)
+    name := LocaleText(definition.label_key)
+    name_h := AppParagraphHeight(name, width, AppFontSize(), AppScale(3))
+    narrow := width < AppScale(520)
+    status_w := ifx narrow then width else width - AppScale(212)
+    status_h := AppParagraphHeight(PracticeDownloadStatusText(app, practice),
+        status_w, AppFontSize(), AppScale(3))
+    if status_h < AppScale(44) {
+        status_h = AppScale(44)
+    }
+    height := name_h + AppScale(8) + status_h + AppScale(24)
+    included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+    if narrow && !included {
+        height += AppScale(52)
+    }
+    if PracticeContentName(practice) == "taichi" && app.voice_narration_enabled != 0 {
+        language_h := AppParagraphHeight(PracticeDownloadLanguageText(app), width, AppFontSize(), AppScale(3))
+        voice_h := AppParagraphHeight(PracticeDownloadVoiceText(practice), status_w, AppFontSize(), AppScale(3))
+        if voice_h < AppScale(44) {
+            voice_h = AppScale(44)
+        }
+        height += language_h + AppScale(8) + voice_h + AppScale(12)
+        if narrow {
+            height += AppScale(52)
+        }
+    }
+    return height
+}
+
+PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
+    definition := practice_get(practice)
+    name := LocaleText(definition.label_key)
+    name_h := AppParagraphHeight(name, width, AppFontSize(), AppScale(3))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)name_h},
+            .text = name, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    y += name_h + AppScale(8)
+    status := PracticeContentStatus(practice)
+    narrow := width < AppScale(520)
+    status_w := ifx narrow then width else width - AppScale(212)
+    text := PracticeDownloadStatusText(app, practice)
+    status_h := AppParagraphHeight(text, status_w, AppFontSize(), AppScale(3))
+    if status_h < AppScale(44) {
+        status_h = AppScale(44)
+    }
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)status_w, cast(float32)status_h},
+            .text = text, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    button_y := ifx narrow then y + status_h + AppScale(8) else y
+    button_w := ifx narrow then width else AppScale(200)
+    included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+    if !included && Button(app.ui.session, ButtonProps.{
+            .id = 17410 + practice * 2,
+            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(44)},
+            .label = LocaleText(ifx status == 2 then "practice_download_remove" else
+            ifx status == 1 then "cancel_button" else
+            ifx status == 3 then "practice_download_retry" else "practice_download_button"),
+            .disabled = practice_active(app) != null || (status != 1 && !PracticePackReviewed(practice, "")),
+            .tone = cast(ButtonTone)(ifx status == 2 || status == 1 then ButtonToneNeutral else ButtonToneAccent),
+            .emphasis = cast(ButtonEmphasis)(ifx status == 2 || status == 1 then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
+        if status == 2 {
+            PracticeContentRemove(practice)
+        } else if status == 1 {
+            PracticeContentCancel(practice)
+        } else {
+            if DataTemporary() {
+                app.exercise_type = practice
+            }
+            PracticeContentRequest(practice, app.voice_narration_enabled != 0)
+        }
+    }
+    if PracticeContentName(practice) != "taichi" || app.voice_narration_enabled == 0 {
+        return
+    }
+    y += status_h + AppScale(12)
+    if narrow && !included {
+        y += AppScale(52)
+    }
+    language := PracticeDownloadLanguageText(app)
+    language_h := AppParagraphHeight(language, width, AppFontSize(), AppScale(3))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)language_h},
+            .text = language, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    y += language_h + AppScale(8)
+    voice := PracticeVoiceStatus(practice)
+    voice_label := PracticeDownloadVoiceText(practice)
+    voice_h := AppParagraphHeight(voice_label, status_w, AppFontSize(), AppScale(3))
+    if voice_h < AppScale(44) {
+        voice_h = AppScale(44)
+    }
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)status_w, cast(float32)voice_h},
+            .text = voice_label, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    button_y = ifx narrow then y + voice_h + AppScale(8) else y
+    if status == 2 && (voice == 0 || voice == 1 || voice == 3) && Button(app.ui.session, ButtonProps.{
+            .id = 17411 + practice * 2,
+            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(44)},
+            .label = LocaleText(ifx voice == 1 then "cancel_button" else
+            ifx voice == 3 then "practice_voice_retry" else "practice_voice_download"),
+            .disabled = practice_active(app) != null ||
+            (voice != 1 && !PracticePackReviewed(practice, LocaleActiveCode())),
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        if voice == 1 {
+            PracticeContentCancel(practice)
+        } else {
+            if DataTemporary() {
+                app.exercise_type = practice
+            }
+            PracticeContentRequest(practice, true)
+        }
+    }
+}
+
+#program_export
+PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
+    PracticeContentReviewNext()
+    width := app.ui.view_width - AppScale(32)
+    if width > AppScale(720) {
+        width = AppScale(720)
+    }
+    height := app.ui.view_height - AppScale(48)
+    if height > AppScale(720) {
+        height = AppScale(720)
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("practices/downloads/modal"), .title = LocaleText("practice_manage_button"),
+            .width = width, .height = height, .scale = MetricsScale(),
+            .title_at_start = true, .strong_title = true,
+            .has_right_action = true, .right_label = LocaleText("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    row_width := cast(s32)frame.layout.content.width - AppScale(10)
+    content_h: s32 = 0
+    focus_y: s32 = 0
+    for practice: cast(s32)0..cast(s32)4 {
+        if app.practice_downloads_scroll == -(practice + 1) {
+            focus_y = content_h
+        }
+        content_h += PracticeDownloadRowHeight(app, practice, row_width)
+    }
+    if app.practice_downloads_scroll < 0 {
+        app.practice_downloads_scroll = focus_y
+    }
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("practices/downloads/scroll"), .bounds = frame.layout.content,
+            .content_height = content_h, .scroll_offset = app.practice_downloads_scroll})
+    app.practice_downloads_scroll = scroll.scroll_offset
+    if scroll.opened {
+        y := cast(s32)scroll.content.y
+        for practice: cast(s32)0..cast(s32)4 {
+            PracticeDownloadRow(app, practice, cast(s32)scroll.content.x, y, row_width)
+            y += PracticeDownloadRowHeight(app, practice, row_width)
+        }
+        End(app.ui.session)
+    }
+    End(app.ui.session)
+}

@@ -206,8 +206,11 @@ after them. The list shows icons, names and controls without status paragraphs.
 ## Practice content and narration
 
 `build/practice-content/*.zib` contains the separate practice data and language
-packs. Practices shows the size before downloading, offers retry and cancel,
-and keeps downloads for offline use. Remove deletes the practice's local content
+packs. Practice → Manage practices opens one scrolling modal for every practice,
+with sizes, offline status, download/retry/cancel, removal and selected-language
+narration. Start opens the manager when its practice needs content. Downloads
+continue inside the modal without changing the selected practice, and unselected
+downloads are verified and saved without mounting their artwork. Remove deletes the practice's local content
 and narration while preserving progress. Only the selected practice and narration
 language are mounted in memory. Changing language reuses artwork and loads or
 downloads the matching voice; switching back reuses its verified cache. Missing
