@@ -76,6 +76,34 @@ def capture(window, name):
     return image, text
 
 
+def click_word(window, name, target):
+    image, text = capture(window, name)
+    assert target in text, text
+    tsv = command('tesseract', str(image), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
+    words = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
+    matches = [row for row in words if row['text'] == target]
+    if matches:
+        word = matches[-1]
+        x = int(word['left']) + int(word['width']) // 2
+        y = int(word['top']) + int(word['height']) // 2
+    else:
+        # Mint-filled action text is read from its enlarged crop by capture().
+        with Image.open(image) as picture:
+            rgb = picture.convert('RGB')
+            rows = [y for y in range(picture.height // 2, picture.height)
+                    if sum(1 for x in range(picture.width)
+                           if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
+                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 3]
+            assert rows, 'Action button not found: ' + target
+            x = picture.width * 3 // 4
+            y = (rows[0] + rows[-1]) // 2
+    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
+    command('xdotool', 'mousedown', '1')
+    time.sleep(.15)
+    command('xdotool', 'mouseup', '1')
+    time.sleep(.6)
+
+
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     profile = Path(temporary)
     process, _ = launch(profile, 'initialize')
@@ -94,6 +122,13 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     try:
         _, text = capture(window, 'download')
         assert 'Download practice' in text, text
+        click_word(window, 'manual-open', 'How')
+        for page in range(3):
+            click_word(window, 'manual-page-' + str(page), 'Next')
+        click_word(window, 'manual-finish', 'Start')
+        _, text = capture(window, 'manual-needs-download')
+        assert 'How to' in text and any(action in text for action in
+            ('Download practice', 'Cancel download', 'Retry download')), text
     finally:
         stop(process)
     catalog = json.loads((ROOT / 'build/package-assets/practices/assets/practices/catalog.json').read_text())
@@ -142,4 +177,4 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             assert 'Available offline' in text and 'Narration ready offline' in text and 'Start' in text, text
         finally:
             stop(process)
-print('Private Practices UI: download, offline-ready, removal with saved progress and narrow layout passed')
+print('Private Practices UI: manual download guard, offline-ready, removal with saved progress and narrow layout passed')

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const char *fixtures;
 static char database[4096];
@@ -46,6 +47,11 @@ AssetView FixtureAsset(String path) {
 void FixtureMode(int32_t value) { mode = value; }
 void FixtureCatalogMode(int32_t value) { bad_catalog = value; }
 int32_t FixtureStarts(void) { return starts; }
+bool FixtureTaiChiSaved(void) {
+    char path[4096];
+    snprintf(path, sizeof path, "%s/cache/packages/practice-taichi.zib", fixtures);
+    return access(path, F_OK) == 0;
+}
 String __wrap_storage_db_path(void) { return StringView(database, strlen(database)); }
 EmbeddedAssetEntry *asset_entry_at(size_t index) { (void)index; return NULL; }
 size_t asset_entry_total(void) { return 0; }

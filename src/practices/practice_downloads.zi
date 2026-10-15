@@ -333,9 +333,6 @@ PracticeContentBytes :: (practice: s32) -> s64 {
 }
 
 PracticeContentRequest :: (practice: s32, narration: bool) {
-    if DataTemporary() {
-        return
-    }
     base := PracticePackFind(practice, "")
     voice := PracticePackFind(practice, LocaleActiveCode())
     for index: cast(s32)0..practice_pack_count - 1 {
@@ -377,9 +374,11 @@ PracticeContentRemove :: (practice: s32) {
         practice_packs[index].checked = true
     }
     // Include languages retired from a newer catalog, without touching progress.
-    PracticeCacheRemove(practice)
+    if !DataTemporary() {
+        PracticeCacheRemove(practice)
+        sync_web_storage()
+    }
     AssetNotifyChanged()
-    sync_web_storage()
 }
 
 PracticeDownloadsAsset :: (path: string) -> AssetView {
@@ -414,7 +413,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
         return
     }
     PracticeCatalogLoad()
-    if DataTemporary() || practice_catalog.count == 0 || practice_catalog_invalid {
+    if practice_catalog.count == 0 || practice_catalog_invalid {
         return
     }
     language := LocaleActiveCode()
@@ -518,12 +517,14 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     bytes := PackageRead(temporary, PackageMaximumBytes)
     bundle := ifx state == FileDownloadStatus.Ready then PracticePackOpen(index, bytes) else null
     PackageFree(bytes)
-    if bundle != null && RenamePath(temporary, destination) {
+    if bundle != null && (DataTemporary() || RenamePath(temporary, destination)) {
         CloseBundle(practice_packs[index].bundle)
         practice_packs[index].bundle = bundle
         practice_packs[index].status = 2
         AssetNotifyChanged()
-        sync_web_storage()
+        if !DataTemporary() {
+            sync_web_storage()
+        }
     } else {
         CloseBundle(bundle)
         practice_packs[index].status = 3
