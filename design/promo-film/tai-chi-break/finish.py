@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lay the narration and score under the rendered film: finish.py [FILM.mp4] [OUT.mp4].
+"""Lay the narration and score under the rendered film: finish.py [--vertical] [FILM.mp4] [OUT.mp4].
 
 Defaults: build/promo-video/tai-chi-break/film.mp4 (tools/render.mjs) and
 build/promo-video/tai-chi-break/inner-breeze-tai-chi-break.mp4, with
@@ -12,6 +12,10 @@ pumps between words. One fixed gain brings the mix to -14 LUFS and a limiter
 holds the peaks; nothing rides the level. The picture is
 re-encoded at a size social platforms and Telegram accept (under 50 MB) from
 the CRF 15 master. Also writes poster.jpg, a frame of the courtyard title.
+
+--vertical finishes the 1080x1920 cut (tools/render.mjs --aspect portrait):
+film-vertical.mp4 into inner-breeze-tai-chi-break-vertical.mp4 and
+poster-vertical.jpg, with the same narration and mix.
 """
 import json
 import subprocess
@@ -23,8 +27,10 @@ OUT = HERE.parents[2] / "build/promo-video/tai-chi-break"
 LENGTH = 53.0
 SCORE = f"atrim=0:{LENGTH},afade=t=out:st={LENGTH - 0.8}:d=0.8"
 
-film = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT / "film.mp4"
-final = Path(sys.argv[2]) if len(sys.argv) > 2 else OUT / "inner-breeze-tai-chi-break.mp4"
+arguments = [argument for argument in sys.argv[1:] if argument != "--vertical"]
+suffix = "-vertical" if "--vertical" in sys.argv else ""
+film = Path(arguments[0]) if arguments else OUT / f"film{suffix}.mp4"
+final = Path(arguments[1]) if len(arguments) > 1 else OUT / f"inner-breeze-tai-chi-break{suffix}.mp4"
 lines = json.loads((HERE / "narration.json").read_text())["lines"]
 
 # Stretches of talking: merge lines less than MERGE seconds apart.
@@ -75,5 +81,5 @@ subprocess.run([
     "-bufsize", "14M", "-profile:v", "high", "-level", "4.2", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-t", str(LENGTH), "-movflags", "+faststart", str(final)], check=True)
 subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", "26.0", "-i", str(final), "-frames:v", "1", "-q:v", "2",
-                str(final.with_name("poster.jpg"))], check=True)
+                str(final.with_name(f"poster{suffix}.jpg"))], check=True)
 print(final)

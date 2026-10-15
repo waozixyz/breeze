@@ -10,14 +10,14 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { HEIGHT, WIDTH } from '/design/promo-film/three/src/world.js'
+import { FRAME_HEIGHT, FRAME_WIDTH, PORTRAIT } from './aspect.js'
 import { createOverlay } from './overlay.js'
 import { CUTS, LENGTH, buildShots } from './shots.js'
 
 const params = new URLSearchParams(location.search)
 const job = params.get('render')
-const width = Number(params.get('width') ?? WIDTH)
-const height = Number(params.get('height') ?? HEIGHT)
+const width = Number(params.get('width') ?? FRAME_WIDTH)
+const height = Number(params.get('height') ?? FRAME_HEIGHT)
 const fps = Number(params.get('fps') ?? 30)
 // Cross-dissolves at the cuts: [time, seconds, light]. A light dissolve
 // passes through a warm glow, the screen's light opening into dawn.
@@ -25,8 +25,32 @@ const DISSOLVES = [
     [CUTS.ledge, 1.2, 1], [CUTS.courtyard, 1.0, 0], [CUTS.pair, 0.9, 0], [CUTS.back, 1.2, 1], [CUTS.card, 1.1, 0],
 ]
 
-// Words on screen, in film time.
+// Words on screen, in film time. A portrait frame keeps them inside the
+// area that TikTok, Shorts and Reels leave clear: below the top 220 px,
+// above the bottom 420 px and away from the buttons on the right.
+function portraitTitles(overlay, t) {
+    overlay.begin()
+    overlay.line('your agents are building.', t, 1.3, 5.6, { y: 1350, size: 64, x: 520 })
+    overlay.line('you don’t have to\nwatch every line.', t, 6.5, 11.2, { y: 1330, size: 64, x: 520 })
+    overlay.line('step away for a moment.', t, CUTS.ledge + 0.9, CUTS.courtyard - 0.3, { y: 520, size: 62, x: 520 })
+    overlay.line('find your calm', t, CUTS.courtyard + 0.8, CUTS.courtyard + 5.0, { x: 80, align: 'left', y: 470, size: 76 })
+    overlay.line('while they work.', t, CUTS.courtyard + 1.3, CUTS.courtyard + 5.0, { x: 80, align: 'left', y: 562, size: 76 })
+    overlay.title('Tai Chi in Inner Breeze', 'a guided course with spoken lessons', t, CUTS.courtyard + 5.6, CUTS.pair - 0.2, { x: 80, y: 470, size: 68, sublineSize: 34 })
+    overlay.movement('Wave Hands Like Clouds', 'movement 10 of 24', t, CUTS.courtyard + 1.2, CUTS.pair - 0.4, { x: 80, y: 290 })
+    overlay.fact('the full 24-form, in 8 lessons', t, CUTS.pair + 0.7, CUTS.pair + 3.5, { x: 80, y: 520, size: 46 })
+    overlay.fact('spoken guidance in 12 languages', t, CUTS.pair + 3.8, CUTS.pair + 6.6, { x: 80, y: 520, size: 46 })
+    overlay.fact('a female or male voice', t, CUTS.pair + 6.9, CUTS.back - 0.4, { x: 80, y: 520, size: 46 })
+    overlay.movement('Part the Wild Horse’s Mane', 'movement 2 of 24', t, CUTS.pair + 0.9, CUTS.back - 0.5, { x: 80, y: 290 })
+    overlay.line('back to your project,\nwith a clear head.', t, CUTS.back + 2.8, CUTS.card - 0.2, { y: 1330, size: 62, x: 520 })
+    overlay.card(t, CUTS.card + 0.8, LENGTH + 1, { y: 1010 })
+    overlay.end()
+}
+
 function titles(overlay, t) {
+    if (PORTRAIT) {
+        portraitTitles(overlay, t)
+        return
+    }
     overlay.begin()
     overlay.line('your agents are building.', t, 1.3, 5.6)
     overlay.line('you don’t have to watch every line.', t, 6.5, 11.2)
@@ -62,22 +86,25 @@ async function main() {
     renderer.outputColorSpace = SRGBColorSpace
 
     const shots = await buildShots()
-    const overlay = createOverlay()
+    const overlay = createOverlay(width, height)
     report(`built ${shots.length} shots`)
 
     const targets = [0, 1].map(() => new WebGLRenderTarget(width, height, { type: HalfFloatType, colorSpace: LinearSRGBColorSpace, samples: 4 }))
     const mixMaterial = new ShaderMaterial({
-        uniforms: { a: { value: targets[0].texture }, b: { value: targets[1].texture }, k: { value: 0 }, light: { value: 0 }, debug: { value: params.has('debug') ? 1 : 0 } },
+        uniforms: {
+            a: { value: targets[0].texture }, b: { value: targets[1].texture }, k: { value: 0 }, light: { value: 0 }, debug: { value: params.has('debug') ? 1 : 0 },
+            shape: { value: PORTRAIT ? new Vector2(1.0, 1.78) : new Vector2(1.6, 1.0) },
+        },
         vertexShader: /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
         fragmentShader: /* glsl */ `
-uniform sampler2D a; uniform sampler2D b; uniform float k; uniform float light; uniform float debug;
+uniform sampler2D a; uniform sampler2D b; uniform float k; uniform float light; uniform float debug; uniform vec2 shape;
 varying vec2 vUv;
 void main() {
     vec4 c = mix(texture2D(a, vUv), texture2D(b, vUv), k);
     // A light dissolve blooms through warm white at its middle.
     float swell = sin(3.14159265 * k);
     swell *= swell * light;
-    vec2 d = (vUv - vec2(0.5, 0.62)) * vec2(1.6, 1.0);
+    vec2 d = (vUv - vec2(0.5, 0.62)) * shape;
     float centre = exp(-dot(d, d) * 3.0);
     c.rgb = mix(c.rgb, vec3(1.0, 0.91, 0.78) * (0.8 + centre * 0.4), swell * (0.28 + centre * 0.26));
     bool bad = any(isnan(c)) || any(isinf(c)) || max(c.r, max(c.g, c.b)) > 60.0;

@@ -34,6 +34,20 @@ drawn into a canvas (`src/overlay.js`) and laid over the graded picture.
   `finish.py` keeps the score low and steady under each stretch of talking
   and lets it rise only in the real pauses, without any pumping.
 
+## Portrait cut
+
+`?aspect=portrait` (`tools/render.mjs --aspect portrait`) renders the same
+53 s at 1080x1920 for TikTok, YouTube Shorts and Facebook Reels
+(`src/aspect.js`). The camera keeps its vertical field of view and pans
+across the plates by turning around its own centre, so the painting
+re-projects without parallax tears. The terminal stacks each lane (name,
+task, bar) in the middle of the monitor, the only part a portrait frame
+sees; the push-in stops while the lanes still fit. Lumi rises up the frame
+on the ledge and the end card, the monk stands a little right of centre,
+and the two teachers stand closer, the teacher a step behind. Titles keep
+out of the top 220 px, the bottom 420 px and the buttons on the right.
+`finish.py --vertical` lays the same narration and mix under it.
+
 ## Run
 
 ```sh
@@ -41,6 +55,8 @@ node ../three/tools/serve.mjs     # preview at /design/promo-film/tai-chi-break/
 node design/promo-film/tai-chi-break/tools/render.mjs --stills 3,21,44 --out build/promo-video/tai-chi-break/stills/x.mp4
 node design/promo-film/tai-chi-break/tools/render.mjs        # build/promo-video/tai-chi-break/film.mp4
 python3 design/promo-film/tai-chi-break/finish.py            # + score → inner-breeze-tai-chi-break.mp4, poster.jpg
+node design/promo-film/tai-chi-break/tools/render.mjs --aspect portrait    # film-vertical.mp4
+python3 design/promo-film/tai-chi-break/finish.py --vertical # → inner-breeze-tai-chi-break-vertical.mp4
 ```
 
 Run the render commands from the Inbe root. Renders use headless Chromium
