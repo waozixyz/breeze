@@ -10,15 +10,17 @@ static uint8_t *clip;
 static size_t clip_size;
 static uint8_t *playing_bytes;
 static String language;
+static String voice_choice;
+static const char *prefix = "assets/practices/taichi/voice/en/";
 static int plays, stops, unloads, pauses, resumes, updates;
 static float volume;
 
 String LocaleActiveCode(void) { return language; }
+String practice_downloads_PracticeVoiceChoice(void) { return voice_choice; }
 void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 
 AssetView AssetRead(String path)
 {
-    const char *prefix = "assets/practices/taichi/voice/en/";
     bool found = path.length > strlen(prefix) &&
         memcmp(path.data, prefix, strlen(prefix)) == 0;
     return (AssetView){.data = StringView((char *)clip, clip_size), .found = found};
@@ -97,7 +99,19 @@ int main(int argc, char **argv)
     app.sound_volume = 0;
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == 3);
+
+    /* The male voice reads its own folder, and the cue starts again in it. */
+    app.sound_volume = 60;
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == 4);
+    voice_choice = StringLiteral("male");
+    prefix = "assets/practices/taichi/voice-male/en/";
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == 5);
+    prefix = "assets/practices/sunsalutation/voice-male/en/";
+    assert(practice_narration_PracticeNarrationSeconds(StringLiteral("sunsalutation"), cue) > .2);
+    assert(practice_narration_PracticeTaiChiReadingSeconds(cue) == 0.0);
     free(clip);
-    puts("Practice narration: language, owned audio, volume, pause/resume and mute passed");
+    puts("Practice narration: language, voice, owned audio, volume, pause/resume and mute passed");
     return 0;
 }

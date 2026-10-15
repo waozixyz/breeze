@@ -328,5 +328,27 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                 assert 'Narration ready offline' in text and 'Narration language' not in text, text
         finally:
             stop(process)
+    # Sun Salutation speaks in its own free packs; a man speaks with the male voice.
+    with sqlite3.connect(profile / 'inbe.db') as database:
+        for key, value in {'exercise_type': 2, 'sun_salutation_character': 2}.items():
+            database.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,?) '
+                             'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value',
+                             (user, key, str(value), int(time.time())))
+    for name in ('sunsalutation', 'sunsalutation.en.male'):
+        shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zib'),
+                        cache / ('practice-' + name + '.zib'))
+    process, window = launch(profile, 'sun-customize', 1280, 900)
+    try:
+        click_word(window, 'sun-customize-open', 'Customize')
+        time.sleep(1)
+        command('xdotool', 'mousemove', '--window', window, '640', '450')
+        command('xdotool', 'click', '--repeat', '20', '--delay', '80', '5')
+        time.sleep(.5)
+        _, text = capture(window, 'sun-customize-narration')
+        assert 'Voice narration' in text and 'Female voice' in text and 'Male voice' in text, text
+        assert 'Narration ready offline' in text, text
+    finally:
+        stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '
-      'restore without download, installed-only home, saved progress, language and narrow layout passed')
+      'restore without download, installed-only home, saved progress, language, narrow layout '
+      'and Sun Salutation narration passed')

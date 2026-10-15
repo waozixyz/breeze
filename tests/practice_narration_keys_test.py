@@ -20,3 +20,14 @@ for broken in (b'TCH3' + course[4:], course[:-1], b'TCH2\xff\xff\xff\xff'):
         continue
     raise AssertionError('Malformed course accepted')
 print(f'All {len(expected)} shipped course narration lines are covered; unspoken labels are excluded')
+
+# Sun Salutation speaks one line per breath, each recorded in every voice.
+import re
+labels = (ROOT / 'src/practices/sun_salutation/sun_salutation_labels.zi').read_text()
+spoken = set(re.findall(r'"(sun_salutation_voice_[a-z_]+)"', labels))
+content = json.loads((ROOT / 'apps/practice/content.json').read_text())
+for name in ('sunsalutation', 'sunsalutation_male'):
+    speech = json.loads((ROOT / content['narration'][name]['config']).read_text())
+    lines = json.loads((ROOT / speech['keys_file']).read_text())
+    assert set(lines) == spoken, f'{name}: narration lines differ from the spoken keys'
+print(f'All {len(spoken)} Sun Salutation breath lines are recorded in both voices')
