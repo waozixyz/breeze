@@ -85,6 +85,9 @@ shipped = practices['assets/practices/default/whm.zib']
 assert len(shipped) == whm['size'] and sha256(shipped).hexdigest() == whm['sha256']
 assert {name for name in practices if name.startswith('assets/practices/default/')} == {
     'assets/practices/default/whm.zib'}
+# Meditation and Breathing Patterns ship too, added without a download.
+assert {name for name in practices if name.startswith('assets/practices/shipped/')} == {
+    'assets/practices/shipped/meditation.zib', 'assets/practices/shipped/patterns.zib'}
 paths, sources, unique_animation = inventory()
 packaged_animation = {name for name in content if '/characters/' in name}
 assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}

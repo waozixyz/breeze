@@ -45,6 +45,11 @@ AssetView FixtureAsset(String path) {
         if (!pack.data) pack = read_fixture("default-whm.zib");
         result.data = pack;
         result.found = true;
+    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/shipped/patterns.zib"))) {
+        static String pack;
+        if (!pack.data) pack = read_fixture("shipped-patterns.zib");
+        result.data = pack;
+        result.found = true;
     } else if (StringEqual(path, StringLiteral("locales/index.txt"))) {
         result.data = StringLiteral("en|English\nes|Español\n");
         result.found = true;

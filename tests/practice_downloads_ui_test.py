@@ -189,12 +189,14 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         whm_kb = (sizes['whm'] + 1023) // 1024
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         assert 'Available offline' in text and str(whm_kb) + ' KB' in text and 'Remove' in text, text
-        assert 'Download size: ' + str(meditation_kb) + ' KB' in text and '1 MB' not in text, text
-        # The first filled action downloads Meditation from the live node, so
-        # the transfer runs, finishes or fails; wait until it settles.
+        # Meditation and Breathing Patterns ship with the app; Sun Salutation downloads.
+        assert 'Included in this version' in text and 'Download size: 23 MB' in text, text
+        assert not (cache / 'practice-meditation.zib').exists()
+        # The first filled action adds Meditation from the app's own copy, at once.
         click_mint(window, 'manager-download')
         _, text = capture(window, 'manager-downloading')
-        assert any(status in text.lower() for status in ('downloading', 'download failed', 'available offline')), text
+        assert 'Downloading' not in text and str(meditation_kb) + ' KB' in text, text
+        assert (cache / 'practice-meditation.zib').read_bytes() == (ROOT / 'build/practice-content/meditation.zib').read_bytes()
         deadline = time.monotonic() + 60
         while 'downloading' in text.lower() and time.monotonic() < deadline:
             time.sleep(1)
@@ -206,7 +208,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                 break
             click_word(window, 'manager-remove', 'Remove')
             _, text = capture(window, 'removed')
-        assert 'Available offline' not in text and 'Download practice' in text, text
+        # Removed, the shipped practices offer themselves again without a download.
+        assert 'Available offline' not in text and 'Included in this version' in text, text
+        assert not (cache / 'practice-meditation.zib').exists()
         close_manager(window)
         _, text = capture(window, 'empty')
         assert 'No practices installed' in text and 'Start' not in text, text
@@ -219,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'No practices installed' in text, text
         click_mint(window, 'empty-manage')
         _, text = capture(window, 'manager-removed')
-        assert 'Download practice' in text and 'Remove' not in text, text
+        assert 'Included in this version' in text and 'Remove' not in text, text
         # Wim Hof comes back from the app's own copy, without a download.
         click_mint(window, 'manager-restore')
         _, text = capture(window, 'manager-restored')

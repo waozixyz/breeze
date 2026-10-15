@@ -219,13 +219,17 @@ def prepare(compiler):
     target = ROOT / 'build/package-assets/practices' / CATALOG
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(schema=1, packs=packs), separators=(',', ':')) + '\n')
-    # Default practices ship inside Practices, installed until removed.
-    for practice in configuration['default']:
-        if practice not in NAMES:
-            raise ValueError('unknown default practice')
-        shipped = ROOT / 'build/package-assets/practices/assets/practices/default' / (practice + '.zib')
-        shipped.parent.mkdir(parents=True, exist_ok=True)
-        shipped.write_bytes((output / (practice + '.zib')).read_bytes())
+    # Default practices ship inside Practices, installed until removed; other
+    # small ones ship too, added from the app without a download.
+    for folder, names in (('default', configuration['default']), ('shipped', configuration.get('shipped', []))):
+        for practice in names:
+            if practice not in NAMES or practice in configuration['products']:
+                raise ValueError('unknown or paid shipped practice')
+            shipped = ROOT / 'build/package-assets/practices/assets/practices' / folder / (practice + '.zib')
+            shipped.parent.mkdir(parents=True, exist_ok=True)
+            shipped.write_bytes((output / (practice + '.zib')).read_bytes())
+    if set(configuration['default']) & set(configuration.get('shipped', [])):
+        raise ValueError('a practice is either installed by default or only shipped')
     print(f'Prepared {len(packs)} separate practice content packs')
 
 
