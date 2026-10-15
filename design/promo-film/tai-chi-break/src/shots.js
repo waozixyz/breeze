@@ -8,6 +8,7 @@ import {
     distanceFactor, ease, filmCamera, glow, lerp, mist, motes, plate, texture, track, worldAt, worldPerPixel,
 } from '/design/promo-film/three/src/world.js'
 import { createTerminal } from './terminal.js'
+import { PORTRAIT, aim, frame, pick } from './aspect.js'
 
 const THREE_PLATES = '../../three/plates/'
 // The empty monitor screen in plates/studio.jpg, in plate pixels.
@@ -22,7 +23,7 @@ export const CUTS = {
 function stage() {
     const scene = new Scene()
     scene.background = new Color(0x000000)
-    return { scene, camera: filmCamera() }
+    return { scene, camera: frame(filmCamera()) }
 }
 
 function drift(camera, t, start, end, from, to) {
@@ -142,7 +143,7 @@ async function studio({ start, end, camera: cameraAt, terminalState, light }) {
         starRect: [1400, 0, 1920, 140], starAmount: 0.4,
     })
     const f = distanceFactor(room.depth(958, 380))
-    const terminal = createTerminal(2048, Math.round(2048 * (SCREEN[3] - SCREEN[1]) / (SCREEN[2] - SCREEN[0])))
+    const terminal = createTerminal(2048, Math.round(2048 * (SCREEN[3] - SCREEN[1]) / (SCREEN[2] - SCREEN[0])), { portrait: PORTRAIT })
     const monitor = screen(terminal, f)
     const spill = backLight('#6f8dff')
     const lantern = backLight('#ffc978')
@@ -155,6 +156,7 @@ async function studio({ start, end, camera: cameraAt, terminalState, light }) {
             setTime(t, room, cup)
             monitor.material.uniforms.time.value = t
             camera.position.set(...cameraAt(t))
+            aim(camera, 958)
             const state = terminalState(t)
             terminal.draw({ t, ...state })
             const swell = light(t)
@@ -174,7 +176,7 @@ export async function buildShots() {
     shots.push(await studio({
         start: 0, end: CUTS.ledge,
         // A slow push towards the monitor, then through its light.
-        camera: path([
+        camera: path(pick([
             { t: -0.5, x: 0.22, y: -0.06, z: 0.25 },
             { t: 5.5, x: 0.1, y: 0.0, z: -0.75 },
             { t: 10.6, x: -0.02, y: 0.1, z: -1.65 },
@@ -183,7 +185,16 @@ export async function buildShots() {
             { t: 12.1, x: 0.0, y: 0.55, z: -3.2 },
             { t: 13.1, x: 0.0, y: 0.78, z: -4.35 },
             { t: 14.0, x: 0.0, y: 0.8, z: -4.7 },
-        ]),
+        ], [
+            // Portrait sees the middle of the monitor; the push stops while
+            // the stacked lanes still fit, then goes on into the light.
+            { t: -0.5, x: 0.0, y: -0.02, z: 0.25 },
+            { t: 5.5, x: 0.0, y: 0.1, z: -0.45 },
+            { t: 10.6, x: 0.0, y: 0.25, z: -1.15 },
+            { t: 12.1, x: 0.0, y: 0.6, z: -3.2 },
+            { t: 13.1, x: 0.0, y: 0.78, z: -4.35 },
+            { t: 14.0, x: 0.0, y: 0.8, z: -4.7 },
+        ])),
         terminalState: (t) => ({ crawl: Math.min(1, t / CUTS.ledge), elapsed: 754 + t * 1.6 }),
         // The screen's light swells into the cut to the clouds.
         light: (t) => Math.pow(ease((t - 11.2) / 1.8), 1.6),
@@ -201,19 +212,28 @@ export async function buildShots() {
         const trail = createTrail({ width: 22, intensity: 1.0, samples: 160 })
         scene.add(ledge.mesh, sun, haze, fog, flies, trail.mesh, lumi.group)
         const s = CUTS.ledge
-        const path = flight([
+        const path = flight(pick([
             { t: s - 0.4, x: 330, y: 980, f: 0.62, s: 120 },
             { t: s + 1.2, x: 560, y: 720, f: 0.66, s: 112 },
             { t: s + 2.8, x: 820, y: 560, f: 0.72, s: 104 },
             { t: s + 4.2, x: 1120, y: 470, f: 0.78, s: 96 },
             { t: s + 5.4, x: 1420, y: 360, f: 0.84, s: 88 },
             { t: s + 6.6, x: 1640, y: 250, f: 0.9, s: 80 },
-        ])
+        ], [
+            // Portrait: Lumi rises up the frame while the camera pans after her.
+            { t: s - 0.4, x: 760, y: 1010, f: 0.62, s: 120 },
+            { t: s + 1.2, x: 880, y: 800, f: 0.66, s: 112 },
+            { t: s + 2.8, x: 1010, y: 640, f: 0.72, s: 104 },
+            { t: s + 4.2, x: 1130, y: 500, f: 0.78, s: 96 },
+            { t: s + 5.4, x: 1240, y: 360, f: 0.84, s: 88 },
+            { t: s + 6.6, x: 1340, y: 230, f: 0.9, s: 80 },
+        ]))
         return {
             start: CUTS.ledge, end: CUTS.courtyard, scene, camera,
             update(t) {
                 setTime(t, ledge, fog, haze, flies)
                 drift(camera, t, s - 0.6, CUTS.courtyard + 0.5, [-0.18, -0.12, 0.1], [0.14, 0.12, -0.5])
+                aim(camera, lerp(840, 1260, ease((t - s + 0.6) / (CUTS.courtyard - s + 1.1))))
                 placeGlow(sun, 1725, 122, 1, 560, 0.6 + Math.sin(t * 0.9) * 0.05)
                 const p = path(t)
                 const appear = ease((t - s + 0.2) / 0.8)
@@ -230,7 +250,8 @@ export async function buildShots() {
         const sun = backLight('#ffd690')
         const monk = await createPuppet('monk', 'lesson-4/cloud-hands/demo', { from: 2.0, yaw: 0 })
         monk.plane.material.uniforms.tint.value = new Color(1.0, 0.94, 0.86)
-        monk.place(1360, 985, 640, distanceFactor(courtyard.depth(1360, 985)))
+        const [monkX, monkY, monkHeight] = pick([1360, 985, 640], [1360, 960, 600])
+        monk.place(monkX, monkY, monkHeight, distanceFactor(courtyard.depth(monkX, monkY)))
         const sparkles = motes({ count: 34, box: [300, 260, 1700, 900], f: [0.55, 0.9], color: '#ffe0a0', size: [3, 7], drift: 35, blink: 0.7, seed: 17 })
         const fog = mist({ box: [0, 520, 1920, 820], f: 0.97, color: '#fff0d8', amount: 0.14, speed: 0.02 })
         scene.add(courtyard.mesh, sun, fog, monk.plane, sparkles)
@@ -240,6 +261,7 @@ export async function buildShots() {
             update(t, renderer) {
                 setTime(t, courtyard, sparkles, fog)
                 drift(camera, t, s - 0.5, CUTS.pair + 0.5, [0.2, 0.0, 0.05], [0.02, 0.05, -0.55])
+                aim(camera, lerp(1300, 1345, ease((t - s + 0.5) / (CUTS.pair - s + 1.0))), 580)
                 placeGlow(sun, 1850, 70, 1, 760, 0.66)
                 monk.draw(renderer, t - s)
             },
@@ -257,8 +279,11 @@ export async function buildShots() {
         for (const puppet of [dolma, monk]) {
             puppet.plane.material.uniforms.tint.value = new Color(1.0, 0.94, 0.86)
         }
-        dolma.place(1610, 925, 530, distanceFactor(courtyard.depth(1610, 925)))
-        monk.place(1130, 1010, 630, distanceFactor(courtyard.depth(1130, 1010)))
+        // Portrait brings the two closer, the teacher a step behind the monk.
+        const [dolmaX, dolmaY, dolmaHeight] = pick([1610, 925, 530], [1505, 925, 470])
+        const [pairX, pairY, pairHeight] = pick([1130, 1010, 630], [1265, 1000, 560])
+        dolma.place(dolmaX, dolmaY, dolmaHeight, distanceFactor(courtyard.depth(dolmaX, dolmaY)))
+        monk.place(pairX, pairY, pairHeight, distanceFactor(courtyard.depth(pairX, pairY)))
         const sparkles = motes({ count: 30, box: [300, 260, 1700, 900], f: [0.55, 0.9], color: '#ffe0a0', size: [3, 7], drift: 35, blink: 0.7, seed: 23 })
         scene.add(courtyard.mesh, sun, dolma.plane, monk.plane, sparkles)
         const s = CUTS.pair
@@ -267,6 +292,7 @@ export async function buildShots() {
             update(t, renderer) {
                 setTime(t, courtyard, sparkles)
                 drift(camera, t, s - 0.5, CUTS.back + 0.5, [-0.26, 0.04, 0.0], [0.16, 0.06, -0.3])
+                aim(camera, lerp(1360, 1400, ease((t - s + 0.5) / (CUTS.back - s + 1.0))), 580)
                 placeGlow(sun, 1850, 70, 1, 760, 0.66)
                 dolma.draw(renderer, t - s)
                 monk.draw(renderer, t - s)
@@ -278,13 +304,19 @@ export async function buildShots() {
     shots.push(await studio({
         start: CUTS.back, end: CUTS.card,
         // Out of the light, back from the monitor, and a slow settle.
-        camera: path([
+        camera: path(pick([
             { t: CUTS.back - 0.9, x: 0.0, y: 0.8, z: -4.7 },
             { t: CUTS.back, x: 0.0, y: 0.78, z: -4.35 },
             { t: CUTS.back + 1.2, x: 0.0, y: 0.5, z: -3.0 },
             { t: CUTS.back + 3.4, x: -0.06, y: 0.08, z: -1.45 },
             { t: CUTS.card + 0.6, x: -0.2, y: -0.02, z: -0.6 },
-        ]),
+        ], [
+            { t: CUTS.back - 0.9, x: 0.0, y: 0.8, z: -4.7 },
+            { t: CUTS.back, x: 0.0, y: 0.78, z: -4.35 },
+            { t: CUTS.back + 1.2, x: 0.0, y: 0.55, z: -3.0 },
+            { t: CUTS.back + 3.4, x: 0.0, y: 0.25, z: -1.15 },
+            { t: CUTS.card + 0.6, x: 0.0, y: 0.1, z: -0.6 },
+        ])),
         terminalState: (t) => ({ crawl: 1, done: ease((t - CUTS.back - 0.4) / 2.2), elapsed: 1960 + (t - CUTS.back) * 1.6 }),
         // The light settles back into the screen after the cut.
         light: (t) => Math.pow(1 - ease((t - CUTS.back + 0.1) / 1.9), 1.6),
@@ -317,7 +349,7 @@ void main() { vec4 c = texture2D(map, vUv); gl_FragColor = vec4(c.rgb, c.a * opa
         const trail = createTrail({ width: 34, intensity: 1.3, samples: 220 })
         scene.add(night.mesh, flies, trail.mesh, halo, icon, lumi.group)
         const s = CUTS.card
-        const path = flight([
+        const path = flight(pick([
             { t: s - 0.4, x: 100, y: 990, f: 0.5, s: 130 },
             { t: s + 1.0, x: 470, y: 860, f: 0.56, s: 120 },
             { t: s + 2.3, x: 860, y: 930, f: 0.62, s: 110 },
@@ -325,15 +357,25 @@ void main() { vec4 c = texture2D(map, vUv); gl_FragColor = vec4(c.rgb, c.a * opa
             { t: s + 4.8, x: 1500, y: 640, f: 0.74, s: 92 },
             { t: s + 6.0, x: 1680, y: 470, f: 0.8, s: 86 },
             { t: s + 7.6, x: 1820, y: 300, f: 0.84, s: 80 },
-        ])
+        ], [
+            // Portrait: a narrower loop across the water and up past the words.
+            { t: s - 0.4, x: 640, y: 1010, f: 0.5, s: 120 },
+            { t: s + 1.0, x: 760, y: 900, f: 0.56, s: 112 },
+            { t: s + 2.3, x: 930, y: 960, f: 0.62, s: 104 },
+            { t: s + 3.6, x: 1120, y: 880, f: 0.68, s: 96 },
+            { t: s + 4.8, x: 1215, y: 700, f: 0.74, s: 90 },
+            { t: s + 6.0, x: 1228, y: 520, f: 0.8, s: 84 },
+            { t: s + 7.6, x: 1250, y: 330, f: 0.84, s: 78 },
+        ]))
         const iconF = 0.5
         return {
             start: CUTS.card, end: LENGTH, scene, camera,
             update(t) {
                 setTime(t, night, flies)
                 drift(camera, t, s - 0.6, LENGTH, [0, -0.12, 0], [0.04, 0.2, -0.25])
+                aim(camera, 960)
                 const appear = ease((t - s - 0.6) / 1.2)
-                const sizePx = 230
+                const sizePx = pick(230, 190)
                 icon.position.copy(worldAt(960, 300, iconF))
                 icon.scale.setScalar(sizePx * worldPerPixel(iconF))
                 icon.material.uniforms.opacity.value = appear

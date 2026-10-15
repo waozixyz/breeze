@@ -3,7 +3,10 @@
 // frame is drawn from timeline time. Reuses the trailer's file server.
 //
 //   node tools/render.mjs [--from 0] [--to 53] [--fps 30] [--out build/promo-video/tai-chi-break/film.mp4]
-//                         [--stills 3,20.5] [--gl swiftshader]
+//                         [--stills 3,20.5] [--gl swiftshader] [--aspect portrait]
+//
+// --aspect portrait renders the 1080x1920 cut for TikTok, Shorts and Reels
+// (default output film-vertical.mp4).
 
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -56,10 +59,11 @@ function encoder(path, fps, width, height) {
 }
 
 const options = parseArgs(process.argv)
-const width = Number(options.width ?? 1920)
-const height = Number(options.height ?? 1080)
+const portrait = options.aspect === 'portrait'
+const width = Number(options.width ?? (portrait ? 1080 : 1920))
+const height = Number(options.height ?? (portrait ? 1920 : 1080))
 const fps = Number(options.fps ?? 30)
-const out = resolve(INBE_ROOT, options.out ?? `${OUTPUT}/film.mp4`)
+const out = resolve(INBE_ROOT, options.out ?? `${OUTPUT}/${portrait ? 'film-vertical' : 'film'}.mp4`)
 const stills = options.stills ? options.stills.split(',') : null
 const server = await startServer()
 const job = `break${process.pid}`
@@ -95,6 +99,9 @@ if (stills) {
 }
 if (options.debug) {
     query.set('debug', '1')
+}
+if (portrait) {
+    query.set('aspect', 'portrait')
 }
 const page = server.url.replace(/three\/$/, 'tai-chi-break/')
 const browser = launchBrowser(`${page}index.html?${query}`, width, height, options.gl)
