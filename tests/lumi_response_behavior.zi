@@ -1,26 +1,29 @@
 #import, file "../src/cells/lumi_response.zi";
+#import "vec"
+#import "text"
+#import "json_scan"
 
 #scope_export
 Answer :: () -> s32 {
     response := "{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}}"
     if LumiResponseMessageAt(response) < 0 ||
-        LumiResponseMessageAt("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}}\n") < 0 ||
-        LumiResponseMessageAt("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}} \r\n\t") < 0 {
+    LumiResponseMessageAt("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}}\n") < 0 ||
+    LumiResponseMessageAt("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}} \r\n\t") < 0 {
         return 1
     }
     if LumiResponseMessageAt("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"}}garbage") >= 0 ||
-        LumiResponseMessageAt("{\"message\":") >= 0 ||
-        LumiResponseMessageAt("{}\n") >= 0 {
+    LumiResponseMessageAt("{\"message\":") >= 0 ||
+    LumiResponseMessageAt("{}\n") >= 0 {
         return 2
     }
     id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     receipt := "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
     if !LumiFeedbackReceiptMatches(receipt, id) ||
-        !LumiFeedbackReceiptMatches(" \n\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" \r\n\t", id) {
+    !LumiFeedbackReceiptMatches(" \n\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" \r\n\t", id) {
         return 3
     }
     invalid: [8]string = .["true", "{}", "\"short\"", "null", "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"garbage",
-        "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"", "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""]
+    "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"", "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""]
     for value: invalid {
         if LumiFeedbackReceiptMatches(value, id) {
             return 4
@@ -28,6 +31,34 @@ Answer :: () -> s32 {
     }
     if LumiFeedbackReceiptMatches(receipt, "short") {
         return 5
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    for index: cast(s32)0..21 {
+        BuilderPrint(*out, "%{\"role\":\"%\",\"content\":\"message %\"}",
+            ifx index == 0 then "" else ",", ifx index == 3 then "user" else "assistant", index)
+    }
+    BuilderPrint(*out, "]")
+    history := BuilderFinish(out)
+    first := LumiRequestHistoryStart(history)
+    if first != ElementAt(history, 0, 2) {
+        return 6
+    }
+    // An over-budget exchange starting at the current user cannot be
+    // repaired by discarding a tool call or its result.
+    too_long: Vec(u8)
+    BuilderPrint(*too_long, "[{\"role\":\"user\",\"content\":\"current\"}")
+    for index: cast(s32)0..19 {
+        BuilderPrint(*too_long, ",{\"role\":\"tool\",\"tool_call_id\":\"id\",\"content\":\"result\"}")
+    }
+    BuilderPrint(*too_long, "]")
+    exchange := BuilderFinish(too_long)
+    if LumiRequestHistoryStart(exchange) >= 0 ||
+    LumiRequestHistoryStart("[]") >= 0 ||
+    LumiRequestHistoryStart("[{\"role\":\"user\"}]junk") >= 0 ||
+    LumiRequestHistoryStart("[{\"role\":\"assistant\"}]") >= 0 ||
+    LumiRequestHistoryStart("[{\"role\":\"user\",\"content\":\"hello\"}]") != 1 {
+        return 7
     }
     return 42
 }

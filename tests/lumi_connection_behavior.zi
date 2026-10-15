@@ -17,6 +17,7 @@
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/db.zi";
+#import, file "../src/storage/data.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/storage_core.zi";
 #import, file "../src/storage/cell_records.zi";
@@ -34,6 +35,8 @@
 #import "vec"
 #import "text"
 #import "byte_text_linux"
+#import "json_scan"
+#import, file "../src/cells/app_tools.zi";
 
 c :: #system_library "c";
 TestNow :: (out: *s64) -> s64 #foreign c "time";
@@ -50,7 +53,52 @@ icon_habits: Habits;
 provider_url: [256]u8;
 provider_token: [128]u8;
 provider_body: [65536]u8;
+continuation_test: bool;
+continuation_round: s32;
+tool_executions: s32;
+provider_reply: string;
 TEST_KEY :: "sk-test-lumi-provider-0123456789"
+
+ContinuationReply :: (request: HttpRequest, output: []u8) -> bool {
+    messages := FieldAt(request.body, 0, "messages")
+    count := ArrayCount(request.body, messages)
+    check_true("tool continuations fit the node's twenty-message limit", count <= 20)
+    check_true("the current request survives history trimming",
+        contains(request.body, "finish the six-step request"))
+    if count > 20 {
+        return false
+    }
+    // Every assistant tool call must still have its matching result directly
+    // after it. Dropping an in-flight tool message would be an invalid repair.
+    for index: cast(s32)0..count - 1 {
+        at := ElementAt(request.body, messages, index)
+        calls := FieldAt(request.body, at, "tool_calls")
+        for call: cast(s32)0..ArrayCount(request.body, calls) - 1 {
+            item := ElementAt(request.body, calls, call)
+            result := ElementAt(request.body, messages, index + call + 1)
+            id: [129]u8
+            result_id: [129]u8
+            check_true("each tool call retains its result", result >= 0 &&
+                ToolString(request.body[item:ValueEnd(request.body, item, 0)], "id", id[:]) ==
+                ToolString(request.body[result:ValueEnd(request.body, result, 0)], "tool_call_id", result_id[:]))
+        }
+    }
+    if continuation_round == 6 {
+        return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"The six steps are complete\"}}", output)
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"message\":{\"role\":\"assistant\",\"tool_calls\":[")
+    calls := ifx continuation_round < 3 then 3 else 1
+    for index: cast(s32)0..calls - 1 {
+        BuilderPrint(*out, "%{\"id\":\"step-%-%\",\"type\":\"function\",\"function\":{\"name\":\"read_context\",\"arguments\":\"{}\"}}",
+            ifx index == 0 then "" else ",", continuation_round, index)
+    }
+    BuilderPrint(*out, "]}}")
+    response := BuilderFinish(out)
+    defer { PackageFree(response) }
+    continuation_round += 1
+    return AppCopyText(response, output)
+}
 
 // Records the request and answers it as the server or provider would.
 ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -72,6 +120,9 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
     }
     if request.url == "https://api.waozi.xyz/api/v1/chat/completions" {
         chat_requests += 1
+        if continuation_test {
+            return ContinuationReply(request, output)
+        }
         return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the server\"},\"remaining\":19}", output)
     }
     if request.url == "https://api.waozi.xyz/api/v1/chat/spelling" {
@@ -95,6 +146,15 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         unused AppCopyText(request.url, provider_url[:])
         unused AppCopyText(request.token, provider_token[:])
         unused AppCopyText(request.body, provider_body[:])
+        if provider_reply.count > 0 {
+            out: Vec(u8)
+            BuilderPrint(*out, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":")
+            LumiJsonString(*out, provider_reply)
+            BuilderPrint(*out, "}}]}")
+            response := BuilderFinish(out)
+            defer { PackageFree(response) }
+            return AppCopyText(response, output)
+        }
         return AppCopyText("{\"id\":\"x\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the provider\"},\"finish_reason\":\"stop\"}]}", output)
     }
     check_true("no other address is contacted", false)
@@ -151,7 +211,7 @@ Check :: () -> s32 {
     }
     english_catalog = "[lumi_offline_unknown]\nOFFLINE\n---\n[lumi_online_setup]\nSETUP\n---\n[lumi_online_unavailable]\nUNAVAILABLE\n---\n[lumi_provider_rejected]\nREJECTED\n---\n"
     install_english_catalog()
-    root := "/tmp/inbe-lumi-connection-test/data"
+    root := data_root()
     check_true("fixture database initialized", storage_init(root) != 0)
     check_true("owner created", CreateAccountKeys(*owner) != 0)
     check_true("owner saved", sync_account_save(*owner,
@@ -190,6 +250,24 @@ Check :: () -> s32 {
     Pump(*app)
     check_int("one request to the server's AI", chat_requests, 1)
     check_true("the server's answer arrives", LastRow() == "Hello from the server")
+    LumiStoreAppend("Remember the blue notebook", true)
+    for index: cast(s32)0..5 {
+        LumiStoreAppend("An earlier exchange", index % 2 == 0)
+    }
+    check_true("a follow-up starts", Ask("what did I ask you to remember?"))
+    check_true("recent conversation is not cut to four messages",
+        contains(lumi_online_messages, "Remember the blue notebook"))
+    Pump(*app)
+
+    continuation_test = true
+    check_true("a six-step tool request starts", Ask("finish the six-step request"))
+    Pump(*app)
+    Pump(*app)
+    check_int("all six permitted tool rounds finish", continuation_round, 6)
+    check_int("each tool executes exactly once", tool_executions, 12)
+    check_true("the final answer arrives after the tools", LastRow() == "The six steps are complete")
+    check_true("the completed turn releases its state", !LumiOnlineWaiting())
+    continuation_test = false
     check_true("spelling starts after agreeing", DiarySpellingStart("Helo") == "" && DiarySpellingWaiting())
     spelled := DiarySpellingPoll()
     for step: cast(s32)0..19 {
@@ -270,6 +348,25 @@ Check :: () -> s32 {
     check_true("the user's message is sent", contains(body, "hello"))
     check_true("the key is never in the body", !contains(body, TEST_KEY))
     check_true("the provider's answer arrives", LastRow() == "Hello from the provider")
+    long_reply: Vec(u8)
+    for index: cast(s32)0..1799 {
+        BuilderPrint(*long_reply, "茶")
+    }
+    provider_reply = BuilderFinish(long_reply)
+    before_long_reply := LumiStoreCount()
+    check_true("a long provider reply starts", Ask("give me the complete reply"))
+    Pump(*app)
+    received: Vec(u8)
+    for index: before_long_reply + 1..LumiStoreCount() - 1 {
+        row := LumiStoreRow(index)
+        check_true("long reply chunks are assistant messages", !row.user)
+        BuilderPrint(*received, "%", row.text)
+    }
+    received_text := BuilderFinish(received)
+    check_true("provider replies over four kilobytes arrive intact", received_text == provider_reply)
+    PackageFree(received_text)
+    PackageFree(provider_reply)
+    provider_reply = ""
     check_true("the key is never synced", !CellRecordValid(LumiProviderKeySetting) &&
         !AppPreferenceValid(LumiProviderKeySetting))
 
@@ -293,6 +390,6 @@ Check :: () -> s32 {
     LumiOnlineCancel()
     SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()
-    remove_tree("/tmp/inbe-lumi-connection-test/")
+    remove_tree(root)
     return failures
 }

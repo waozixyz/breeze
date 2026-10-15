@@ -3,7 +3,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compiler=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
-work="$root/build/lumi-connection-test"
+work=${3:-"$root/build/lumi-connection-test"}
 exec 9>"$work.lock"
 flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
@@ -60,6 +60,7 @@ String __wrap_app_tools_AppToolExecute(InnerBreeze *app, String name, String arg
     (void)app;
     (void)name;
     (void)arguments;
+    tool_executions += 1;
     return package_files_PackageText((String){.data = "{\"ok\":true}", .length = 11},
         (String){.data = "", .length = 0});
 }
@@ -90,10 +91,14 @@ monocypher="$root/build/packages/monocypher/src"
     -Wl,--wrap=lumi_screen_LumiSubmit \
     -ldl -lpthread -lz -lm -o "$work/test"
 # The provider's key must never reach any output, even with request tracing.
-INBE_NETWORK_TRACE=1 APP_DATA_ROOT=/tmp/inbe-lumi-connection-test/data "$work/test" > "$work/output.txt" 2>&1 ||
+mkdir -p /tmp/inbe-lumi-connection-test
+test_root=$(mktemp -d /tmp/inbe-lumi-connection-test/run.XXXXXX)
+trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+INBE_NETWORK_TRACE=1 APP_DATA_ROOT="$test_root" "$work/test" > "$work/output.txt" 2>&1 ||
     { cat "$work/output.txt"; exit 1; }
 if grep -q 'sk-test-lumi-provider' "$work/output.txt"; then
     echo 'the provider key reached the output' >&2
     exit 1
 fi
 printf '%s\n' 'Lumi connection: nothing sent before agreeing or offline, diary spelling and habit icons included; server and own provider after agreeing; key only in its header; withdrawal passed'
+printf '%s\n' 'Lumi conversation: recent history, six tool rounds without replay and complete long UTF-8 replies passed'
