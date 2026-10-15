@@ -32,8 +32,6 @@ export const FIGURES = {
     mannequin: { height: 1.70 },
     sageBun: { height: 1.66, shoulderHalfWidth: 0.102, hipHalfWidth: 0.054 },
     sageMale: { height: 1.78, shoulderHalfWidth: 0.114, hipHalfWidth: 0.050 },
-    jadeWoman: { height: 1.65, shoulderHalfWidth: 0.102, hipHalfWidth: 0.054 },
-    lakeMan: { height: 1.77, shoulderHalfWidth: 0.114, hipHalfWidth: 0.050 },
     monk: { height: 1.72, shoulderHalfWidth: 0.1, hipHalfWidth: 0.052 },
     tibetanWoman: { height: 1.62, shoulderHalfWidth: 0.098, hipHalfWidth: 0.056 },
 }

@@ -1,6 +1,4 @@
-// The course characters: Sage Bun and Sage Male in loose Tai Chi clothes,
-// and the flat Jade Woman and Lake Man, drawn in two tones like a flat
-// illustration (calm closed eyes, dark sleeve cuffs; see flatMaterial).
+// The course characters: Sage Bun and Sage Male in loose Tai Chi clothes.
 //
 // Cloth is skinned so it bends smoothly: the jacket follows the pelvis and
 // the three spine pieces (its hem gives a little to the thighs), sleeves
@@ -14,7 +12,7 @@ import {
 } from 'three'
 import { standingPose } from '../pose.js'
 import { solvePose } from '../solve.js'
-import { FLAT_SHADE, addMesh, buildHand, curlHand, flatMaterial, material, registerStyle } from './figure.js'
+import { addMesh, buildHand, curlHand, material, registerStyle } from './figure.js'
 import { ellipsoid, taperedCapsule } from './parts.js'
 
 const SIDES = ['L', 'R']
@@ -61,60 +59,6 @@ const LOOKS = {
         jacketShape: {
             hem: 0.122, hip: 0.114, waist: 0.103, chest: 0.11, shoulder: 0.114,
             hemDepth: 0.088, waistDepth: 0.072, chestDepth: 0.08, bust: 0,
-        },
-        neckRadius: 0.029,
-        handSize: 1.0,
-    },
-    jadeWoman: {
-        flat: true,
-        face: 'calm',
-        skin: 0xf1c7a6,
-        skinShade: 0xe0ad8c,
-        blush: 0xec9f8f,
-        lips: 0xc9806f,
-        eyes: 0x2a2238,
-        brows: 0x2a2238,
-        hair: 0x2a2238,
-        hairTie: 0xf2a65e,
-        jacket: 0x3f8f7a,
-        buttons: 0x2f705f,
-        cuff: 0x2e3d63,
-        trousers: 0x2e3d63,
-        trousersInside: 0x232f4d,
-        legCuff: 0x232f4d,
-        slipper: 0x2a2238,
-        sole: 0xeee8dc,
-        style: 'bun',
-        jacketShape: {
-            hem: 0.134, hip: 0.12, waist: 0.104, chest: 0.105, shoulder: 0.103,
-            hemDepth: 0.095, waistDepth: 0.073, chestDepth: 0.079, bust: 0.004,
-        },
-        neckRadius: 0.025,
-        handSize: 0.95,
-    },
-    lakeMan: {
-        flat: true,
-        face: 'calm',
-        skin: 0xd9a07c,
-        skinShade: 0xc68c69,
-        blush: null,
-        lips: 0xa8705c,
-        eyes: 0x2a2238,
-        brows: 0x2a2238,
-        hair: 0x2a2238,
-        hairTie: 0x2a2238,
-        jacket: 0x3f6f8f,
-        buttons: 0x2f5470,
-        cuff: 0x6e4c36,
-        trousers: 0x6e4c36,
-        trousersInside: 0x553a29,
-        legCuff: 0x553a29,
-        slipper: 0x2a2238,
-        sole: 0xeee8dc,
-        style: 'short',
-        jacketShape: {
-            hem: 0.126, hip: 0.116, waist: 0.105, chest: 0.111, shoulder: 0.114,
-            hemDepth: 0.09, waistDepth: 0.073, chestDepth: 0.08, bust: 0,
         },
         neckRadius: 0.029,
         handSize: 1.0,
@@ -305,7 +249,6 @@ function buildCharacter(figure, rig, options, lookName) {
     const look = LOOKS[lookName]
     const H = rig.height
     const g = figure.groups
-    figure.flat = Boolean(look.flat)
     // A little self-light keeps faces warm on the dark stage instead of
     // shading the chin like a beard.
     const glow = (color, share) => {
@@ -314,33 +257,25 @@ function buildCharacter(figure, rig, options, lookName) {
         const b = (color & 255) * share
         return (Math.round(r) << 16) | (Math.round(g2) << 8) | Math.round(b)
     }
-    // Flat looks keep only which faces they show; lit looks have their
-    // roughness and glow.
-    const surface = (color, extra = {}, shade = FLAT_SHADE.cloth) => (look.flat
-        ? flatMaterial(figure, color, extra.side ? { side: extra.side } : {}, shade)
-        : material(figure, color, extra))
-    const skin = surface(look.skin, { roughness: 0.62, emissive: glow(look.skin, 0.16) }, FLAT_SHADE.skin)
-    const skinShade = surface(look.skinShade, { roughness: 0.65, emissive: glow(look.skinShade, 0.12) }, FLAT_SHADE.skin)
+    const skin = material(figure, look.skin, { roughness: 0.62, emissive: glow(look.skin, 0.16) })
+    const skinShade = material(figure, look.skinShade, { roughness: 0.65, emissive: glow(look.skinShade, 0.12) })
     // On the dark stage, cloth and hair carry a little light of their own so
     // the figure stays clear of the background.
     const lift = options.theme === 'dark' ? 0.12 : 0
-    const cloth = (color, extra = {}) => surface(color, { roughness: 0.88, emissive: glow(color, lift), ...extra })
+    const cloth = (color, extra = {}) => material(figure, color, { roughness: 0.88, emissive: glow(color, lift), ...extra })
     const jacket = cloth(look.jacket, { side: DoubleSide })
     const sleeve = cloth(look.jacket)
     const trousers = cloth(look.trousers, { roughness: 0.9 })
     const trousersInside = cloth(look.trousersInside, { roughness: 0.92 })
     const hair = cloth(look.hair, { roughness: 0.7 })
-    const hairTie = surface(look.hairTie, { roughness: 0.7 })
-    const dark = surface(look.eyes, { roughness: 0.4 })
-    const brows = surface(look.brows, { roughness: 0.8 })
-    const lips = surface(look.lips, { roughness: 0.6 })
-    const white = surface(0xffffff, { roughness: 0.3 })
-    const buttons = surface(look.buttons, { roughness: 0.6 })
-    const slipper = surface(look.slipper, { roughness: 0.85 })
-    const sole = surface(look.sole, { roughness: 0.9 })
-    const blush = look.blush ? surface(look.blush, {}, FLAT_SHADE.skin) : null
-    const cuff = look.cuff !== undefined ? surface(look.cuff, { side: DoubleSide }) : null
-    const legCuff = look.legCuff !== undefined ? surface(look.legCuff, { side: DoubleSide }) : null
+    const hairTie = material(figure, look.hairTie, { roughness: 0.7 })
+    const dark = material(figure, look.eyes, { roughness: 0.4 })
+    const brows = material(figure, look.brows, { roughness: 0.8 })
+    const lips = material(figure, look.lips, { roughness: 0.6 })
+    const white = material(figure, 0xffffff, { roughness: 0.3 })
+    const buttons = material(figure, look.buttons, { roughness: 0.6 })
+    const slipper = material(figure, look.slipper, { roughness: 0.85 })
+    const sole = material(figure, look.sole, { roughness: 0.9 })
 
     // Bind pose: the standing pose, solved for this figure.
     const rest = solvePose(standingPose(), rig)
@@ -486,12 +421,6 @@ function buildCharacter(figure, rig, options, lookName) {
         // Shoulder cap and elbow filler, rigid.
         addMesh(g[`upperArm${side}`], new SphereGeometry(0.03 * H, 20, 14), sleeve, [0, -0.022 * H, 0])
         addMesh(g[`foreArm${side}`], new SphereGeometry(0.031 * H, 16, 12), sleeve)
-        // A dark band at the end of the sleeve, like a lined wide cuff.
-        if (cuff) {
-            const band = 0.026 * H
-            addMesh(g[`foreArm${side}`], new CylinderGeometry(0.0318 * H, 0.0322 * H, band, 28, 1, true), cuff,
-                [0, -(rig.foreArm - 0.012 * H - band / 2), 0])
-        }
         // Inside of the cuff and the wrist.
         addMesh(g[`hand${side}`], taperedCapsule(0.0165 * H, 0.0175 * H, 0.03 * H, 14), skin, [0, 0.028 * H, 0])
         buildHand(figure, side, g[`hand${side}`], rig, skin, look.handSize)
@@ -514,11 +443,6 @@ function buildCharacter(figure, rig, options, lookName) {
         addMesh(g[`shin${side}`], new SphereGeometry(0.041 * H, 18, 12), trousers, [0, 0.002 * H, 0.002 * H])
         // Ankle under the cuff.
         addMesh(g[`shin${side}`], taperedCapsule(0.022 * H, 0.021 * H, 0.03 * H, 12), trousersInside, [0, -rig.shin + 0.03 * H, 0])
-        if (legCuff) {
-            const band = 0.03 * H
-            addMesh(g[`shin${side}`], new CylinderGeometry(0.0335 * H, 0.0335 * H, band, 28, 1, true), legCuff,
-                [0, -rig.shin + 0.006 * H + band / 2, 0])
-        }
 
         // Slipper: cloth upper and pale sole; the toe box bends at the ball.
         const foot = g[`foot${side}`]
@@ -535,7 +459,7 @@ function buildCharacter(figure, rig, options, lookName) {
 
     // Neck and head.
     addMesh(g.neck, taperedCapsule(look.neckRadius * H, look.neckRadius * H * 1.05, 0.05 * H, 16), skin, [0, 0.045 * H, 0.002 * H])
-    buildHead(figure, rig, look, { skin, skinShade, hair, hairTie, dark, brows, lips, white, blush })
+    buildHead(figure, rig, look, { skin, skinShade, hair, hairTie, dark, brows, lips, white })
 
     figure.updateHand = (side, shapeWeights) => curlHand(figure, side, shapeWeights)
     figure.afterUpdate = (solved) => {
@@ -564,27 +488,13 @@ function buildHead(figure, rig, look, mats) {
         const share = 1 - Math.pow((x - skull.x) / skull.rx, 2) - Math.pow((y - skull.y) / skull.ry, 2)
         return skull.z + skull.rz * Math.sqrt(Math.max(share, 0))
     }
-    const calm = look.face === 'calm'
     for (const sign of [1, -1]) {
         const x = sign * 0.021 * H
         const y = 0.066 * H
-        if (calm) {
-            // Closed, peaceful eyes: a thin arc curving down, and a blush.
-            const eye = addMesh(head, new TorusGeometry(0.0078 * H, 0.0013 * H, 6, 18, Math.PI * 0.7), mats.dark,
-                [x, y + 0.004 * H, faceZ(x, y) + 0.0002 * H])
-            eye.rotation.set(0, sign * 0.32, Math.PI * 1.15)
-            if (mats.blush) {
-                const cheek = addMesh(head, ellipsoid(0.0085 * H, 0.0062 * H, 0.003 * H, 14, 10), mats.blush,
-                    [sign * 0.031 * H, 0.049 * H, faceZ(sign * 0.031 * H, 0.049 * H) - 0.0012 * H])
-                cheek.rotation.y = sign * 0.55
-            }
-        } else {
-            const eye = addMesh(head, ellipsoid(0.0072 * H, 0.0098 * H, 0.004 * H, 16, 12), mats.dark, [x, y, faceZ(x, y) - 0.0016 * H])
-            eye.rotation.y = sign * 0.32
-            addMesh(head, new SphereGeometry(0.0022 * H, 8, 6), mats.white, [x + 0.0025 * H, y + 0.0035 * H, faceZ(x, y) + 0.0018 * H])
-        }
-        const browRadius = calm ? 0.0012 * H : 0.0019 * H
-        const brow = addMesh(head, taperedCapsule(browRadius, browRadius * 0.85, 0.016 * H, 8), mats.brows,
+        const eye = addMesh(head, ellipsoid(0.0072 * H, 0.0098 * H, 0.004 * H, 16, 12), mats.dark, [x, y, faceZ(x, y) - 0.0016 * H])
+        eye.rotation.y = sign * 0.32
+        addMesh(head, new SphereGeometry(0.0022 * H, 8, 6), mats.white, [x + 0.0025 * H, y + 0.0035 * H, faceZ(x, y) + 0.0018 * H])
+        const brow = addMesh(head, taperedCapsule(0.0019 * H, 0.0016 * H, 0.016 * H, 8), mats.brows,
             [x - sign * 0.008 * H, y + 0.0185 * H, faceZ(x, y + 0.018 * H) - 0.0006 * H])
         brow.rotation.set(0, sign * 0.3, sign * (Math.PI / 2 + 0.12))
         // Ears.
@@ -625,5 +535,3 @@ function buildHead(figure, rig, look, mats) {
 
 registerStyle('sageBun', (figure, rig, options) => buildCharacter(figure, rig, options, 'sageBun'))
 registerStyle('sageMale', (figure, rig, options) => buildCharacter(figure, rig, options, 'sageMale'))
-registerStyle('jadeWoman', (figure, rig, options) => buildCharacter(figure, rig, options, 'jadeWoman'))
-registerStyle('lakeMan', (figure, rig, options) => buildCharacter(figure, rig, options, 'lakeMan'))

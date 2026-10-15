@@ -20,10 +20,7 @@ if (renderMode) {
     document.body.classList.add('render')
 }
 
-const FIGURE_LABELS = {
-    mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', jadeWoman: 'Jade Woman', lakeMan: 'Lake Man',
-    monk: 'Monk', tibetanWoman: 'Tibetan Woman',
-}
+const FIGURE_LABELS = { mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', monk: 'Monk', tibetanWoman: 'Tibetan Woman' }
 // Painted 2D characters: cut-out paintings over the same solved body.
 const PAINTED = {
     monk: 'characters/monk/character.json',
@@ -97,7 +94,6 @@ async function setFigure(name) {
         painted.setBackground(THEMES[state.theme]?.background ?? THEMES.light.background)
     } else {
         figure = createFigure(rig, name, { theme: state.theme })
-        stage.setFlat(figure.flat)
         stage.scene.add(figure.root)
         ghost = createFigure(rig, name, { theme: state.theme })
         ghost.setGhost(0.22)
