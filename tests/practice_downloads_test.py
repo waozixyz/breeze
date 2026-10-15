@@ -57,6 +57,7 @@ packs.append(dict(practice='taichi', language='en', voice='male', sha256=digest,
                   product='inbe.practice.taichi'))
 (fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
 (fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
+(fixtures / 'shipped-patterns.zib').write_bytes((ROOT / 'build/practice-content/patterns.zib').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.
 (fixtures / 'cache/packages/practice-whm.zib').write_bytes(b'old release')
 (fixtures / 'cache/packages/practice-taichi.fr.zib').write_bytes(b'retired language')

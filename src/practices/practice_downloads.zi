@@ -118,19 +118,37 @@ PracticePackPath :: (index: s32, temporary: bool) -> string {
     return PackageText(slot, ifx temporary then ".download" else ".zib")
 }
 
-// Wim Hof ships with the app, so it is installed until it is removed.
-PracticeShippedBytes :: (index: s32) -> string {
+// Small practices ship with the app: those in default/ are installed until
+// removed, and those in shipped/ are added from the app without a download.
+PracticeShippedFrom :: (index: s32, folder: string) -> string {
     if index < 0 || index >= practice_pack_count || practice_packs[index].language[0] != cast(u8)0 {
         return ""
     }
-    prefix := PackageText("assets/practices/default/", PracticeContentName(practice_packs[index].practice))
+    directory := PackageText("assets/practices/", folder)
+    prefix := PackageText(directory, PracticeContentName(practice_packs[index].practice))
     path := PackageText(prefix, ".zib")
     defer {
+        PackageFree(directory)
         PackageFree(prefix)
         PackageFree(path)
     }
     view := AssetRead(path)
     return ifx view.found then view.data else ""
+}
+
+PracticeDefaultBytes :: (index: s32) -> string {
+    return PracticeShippedFrom(index, "default/")
+}
+
+PracticeShippedBytes :: (index: s32) -> string {
+    bytes := PracticeDefaultBytes(index)
+    return ifx bytes.count > 0 then bytes else PracticeShippedFrom(index, "shipped/")
+}
+
+// The practice comes with the app, so adding it needs no network.
+PracticeShipped :: (practice: s32) -> bool {
+    PracticeCatalogLoad()
+    return PracticeShippedBytes(PracticePackFind(practice, "")).count > 0
 }
 
 // Removing a shipped practice leaves this marker, so it stays removed.
@@ -161,7 +179,7 @@ PracticePackPresent :: (index: s32) -> bool {
     if path.count > 0 && PathExists(path) {
         return true
     }
-    return PracticeShippedBytes(index).count > 0 && (removed.count == 0 || !PathExists(removed))
+    return PracticeDefaultBytes(index).count > 0 && (removed.count == 0 || !PathExists(removed))
 }
 
 // The downloaded copy, or the one shipped with the app while installed.
@@ -556,16 +574,25 @@ PracticeVoiceBytes :: (practice: s32) -> s64 {
 PracticeContentRequest :: (practice: s32, narration: bool) {
     base := PracticePackFind(practice, "")
     voice := PracticePackFind(practice, LocaleActiveCode())
-    // A removed practice that ships with the app comes back without a download.
+    // A practice that ships with the app is added or restored without a download.
     if base >= 0 && !practice_packs[base].present && PracticeShippedBytes(base).count > 0 {
         removed := PracticeRemovedPath(practice)
         if removed.count > 0 {
             unused RemoveFile(removed)
-            if !DataTemporary() {
-                sync_web_storage()
-            }
         }
         PackageFree(removed)
+        // A practice not installed by default is kept as its own cached copy.
+        if PracticeDefaultBytes(base).count == 0 {
+            path := PracticePackPath(base, false)
+            directory := PackageDirectory()
+            unused storage_ensure_dir(directory)
+            PackageFree(directory)
+            unused PackageWrite(path, PracticeShippedBytes(base))
+            PackageFree(path)
+        }
+        if !DataTemporary() {
+            sync_web_storage()
+        }
         practice_packs[base].present = true
         practice_packs[base].status = 2
         practice_packs[base].checked = false
@@ -647,7 +674,7 @@ PracticeContentRemove :: (practice: s32) {
         PracticeCacheRemove(practice)
         base := PracticePackFind(practice, "")
         removed := PracticeRemovedPath(practice)
-        if PracticeShippedBytes(base).count > 0 && removed.count > 0 {
+        if PracticeDefaultBytes(base).count > 0 && removed.count > 0 {
             unused PackageWrite(removed, "1")
         }
         PackageFree(removed)

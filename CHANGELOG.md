@@ -13,7 +13,7 @@
 - Manage practice downloads in one window on the Practice screen.
 - Tai Chi narration in a female or male voice, chosen in Tai Chi's Customize; the monk speaks with the male voice.
 - Compact Lists tabs and larger task controls.
-- Every practice is optional: Practice shows only installed ones, and Wim Hof comes installed and can be removed.
+- Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.
 ### Removed
 - Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
