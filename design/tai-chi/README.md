@@ -76,6 +76,31 @@ still there.
   drawings from the hand's shape and which way the palm faces. Back arms,
   legs, head, torso and front arms are drawn in that order.
 
+## Flat characters
+
+Jade Woman (`?figure=jadeWoman`) and Indigo Man (`?figure=indigoMan`) are
+drawn in 2D like a flat vector illustration, matching Inbe's flat Sun
+Salutation characters Jade bun and Indigo crop (`docs/sun-salutation-flat.md`
+in Inbe). `src/flat/figure.js` draws them with Canvas 2D over the same
+solved skeleton the painted figures use, projected flat along the view
+(`FlatView`):
+
+- arms and legs are hulls of circles at the joints and of rings at the
+  cuffs, so they read from any side; parts of one colour fill as one path;
+- the jacket is a loft of rings along the spine, filled as the union of the
+  hulls of neighbouring rings, with a darker hem, collar and wrap line;
+- the head is ray cast against a few ellipsoids in its own frame (skull,
+  hair, jaw, nose, ears, bun) and coloured flat by zone, so the hairline and
+  bun turn with it; closed eyes, brows, blush and mouth are strokes on it;
+- the far arm and leg take a darker tone, and an arm in front casts a crisp
+  shade on the jacket.
+
+Looks (colours, jacket profile, hair) are `FLAT_LOOKS` in that file.
+
+```sh
+node tools/render.mjs --item lesson-1/all --figure jadeWoman --label --video --out ../../build/tai-chi-flat --name lesson-1-jade-woman
+```
+
 ## How it works
 
 - `src/rig.js`: proportions as fractions of height, per figure.
