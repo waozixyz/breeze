@@ -1,0 +1,142 @@
+// Account-scoped collaboration cache. Shared rows are observations, never
+// copied into the private encrypted list outbox as another person's records.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import, file "storage_core.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+ListsSharedCacheCapacity :: 1048576
+shared_cache: [ListsSharedCacheCapacity]u8;
+
+ListsCacheKey :: (kind: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%/%/", kind, storage_get_setting_text("sync_public_id"))
+    BuilderPrint(*out, "%", storage_get_setting_text("sync_server_url"))
+    return BuilderFinish(out)
+}
+
+ListsCacheRead :: (kind: string, out: *u8, size: s64) -> s32 {
+    key := ListsCacheKey(kind)
+    defer { PackageFree(key) }
+    return storage_get_social_cache_json(key, out, size)
+}
+
+ListsCacheWrite :: (kind: string, value: string) -> s32 {
+    key := ListsCacheKey(kind)
+    defer { PackageFree(key) }
+    return storage_set_social_cache_json(key, value)
+}
+
+ListsSharedCache :: () -> string {
+    if ListsCacheRead("lists.shared", *shared_cache[0],
+        ListsSharedCacheCapacity) == 0 {
+        return "{\"lists\":[],\"invitations\":[]}"
+    }
+    return AppTextFromCString(*shared_cache[0], ListsSharedCacheCapacity)
+}
+
+ListsCopyJson :: (json: string, object: s32, field: string, out: []u8) {
+    decoded := ReadStringValue(json, FieldAt(json, object, field), cast(s32)out.count - 1)
+    text := BuilderFinish(decoded.value)
+    defer { PackageFree(text) }
+    unused AppCopyText(ifx decoded.valid then text else "", out)
+}
+
+ListsSharedId :: (id: string) -> bool {
+    json := ListsSharedCache()
+    lists := FieldAt(json, 0, "lists")
+    for index: cast(s32)0..ArrayCount(json, lists) - 1 {
+        row := ElementAt(json, lists, index)
+        value: [37]u8
+        ListsCopyJson(json, row, "id", value[:])
+        if AppTextFromCString(*value[0], 37) == id {
+            return true
+        }
+    }
+    return false
+}
+
+ListsMergeShared :: (state: *EListState) {
+    json := ListsSharedCache()
+    array := FieldAt(json, 0, "lists")
+    // Remove original private projections once a list is explicitly shared,
+    // including owner tombstones received on another device.
+    index: s32 = 0
+    while index < state.list_count {
+        linked: bool = false
+        for remote: cast(s32)0..ArrayCount(json, array) - 1 {
+            row := ElementAt(json, array, remote)
+            id: [37]u8
+            ListsCopyJson(json, row, "id", id[:])
+            if AppTextFromCString(*id[0], 37) ==
+            AppTextFromCString(*state.lists[index].id[0], 37) {
+                linked = true
+                break
+            }
+        }
+        if !linked {
+            index += 1
+            continue
+        }
+        removed := state.lists[index].id
+        for following: index..state.list_count - 2 {
+            state.lists[following] = state.lists[following + 1]
+        }
+        state.list_count -= 1
+        item: s32 = 0
+        while item < state.item_count {
+            if AppTextFromCString(*state.items[item].list_id[0], 37) !=
+            AppTextFromCString(*removed[0], 37) {
+                item += 1
+                continue
+            }
+            for following: item..state.item_count - 2 {
+                state.items[following] = state.items[following + 1]
+            }
+            state.item_count -= 1
+        }
+    }
+    for remote: cast(s32)0..ArrayCount(json, array) - 1 {
+        row := ElementAt(json, array, remote)
+        if state.list_count >= ELIST_LIST_MAX ||
+        ReadNumber(json, FieldAt(json, row, "deleted")).value != 0.0 {
+            continue
+        }
+        list := *state.lists[state.list_count]
+        list.* = EListList.{}
+        ListsCopyJson(json, row, "id", list.id[:])
+        ListsCopyJson(json, row, "title", list.title[:])
+        list.shared = true
+        owner: [65]u8
+        ListsCopyJson(json, row, "owner", owner[:])
+        list.owner = AppTextFromCString(*owner[0], 65) == storage_get_setting_text("sync_public_id")
+        list.revision = cast(s64)ReadNumber(json, FieldAt(json, row, "revision")).value
+        state.list_count += 1
+        items := FieldAt(json, row, "items")
+        list.item_total = ArrayCount(json, items)
+        for item_index: cast(s32)0..ArrayCount(json, items) - 1 {
+            if state.item_count >= ELIST_ITEM_MAX {
+                break
+            }
+            source := ElementAt(json, items, item_index)
+            item := *state.items[state.item_count]
+            item.* = EListItem.{}
+            ListsCopyJson(json, source, "id", item.id[:])
+            unused AppCopyText(AppTextFromCString(*list.id[0], 37), item.list_id[:])
+            ListsCopyJson(json, source, "title", item.title[:])
+            ListsCopyJson(json, source, "comment", item.comment[:])
+            item.done = cast(s32)ReadNumber(json, FieldAt(json, source, "done")).value
+            item.sort_order = item_index
+            state.item_count += 1
+        }
+    }
+    if state.selected_list >= state.list_count {
+        state.selected_list = state.list_count - 1
+    }
+    if state.selected_list < 0 && state.list_count > 0 {
+        state.selected_list = 0
+    }
+}

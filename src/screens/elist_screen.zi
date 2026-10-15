@@ -1,6 +1,10 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/lists_types.zi";
 #import, file "../cells/lists_visibility.zi";
+#import, file "../cells/lists_network.zi";
+#import, file "../storage/lists_shared_storage.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../../apps/lists/sharing.zi";
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
@@ -8,6 +12,7 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
 #import, file "../app/locale.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../storage/storage_elist.zi";
+#import, file "../storage/storage_core.zi";
 #import "layout"
 #import "layout_props"
 #import "layout_widget"
@@ -166,6 +171,10 @@ elist_accept_message :: (app: *InnerBreeze, message: ListsMessage) {
         state.input_error = 1
         return
     }
+    if message.remote {
+        ListsNetworkStart(message)
+        return
+    }
     state.input_error = message.input_error
     if message.changed {
         state.visibility_valid = false
@@ -239,6 +248,7 @@ elist_set_done :: (app: *InnerBreeze, index: s32,
 // typed device observations, bounded saved rows and retained input state.
 #import "bundle_host"
 #import "byte_text_linux"
+#import "json_scan"
 #import, file "../cells/lists_ui_types.zi";
 #import, file "../cells/app_codec.zi";
 #import "widget_host"
@@ -249,6 +259,13 @@ using HostValueKind;
 lists_ui: ListsUiFrame;
 lists_ui_codec: WidgetListsUiFrameCodec;
 lists_row_codec: WidgetListsUiRowCodec;
+lists_friends: [8192]u8;
+lists_sharing_source: string;
+lists_person_codec: WidgetListsUiPersonCodec;
+lists_person_text: [7][512]u8;
+lists_pending_number: [24]u8;
+lists_prepared_body: string;
+lists_request_codec: WidgetListsUiRequestCodec;
 
 ListsUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
@@ -271,6 +288,8 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
         app.elist.input_scroll_x = observed.scroll_x
         app.elist.input_focused = ifx observed.focused then 1 else 0
         app.elist.scroll = observed.scroll
+        app.elist.tab_scroll = observed.tab_scroll
+        app.elist.panel = observed.panel
         if observed.clipboard_write {
             unused TextInputWriteClipboard(observed.clipboard_text)
         }
@@ -295,6 +314,10 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             row.id = AppTextFromCString(*source.id[0], 37)
             row.title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE)
             row.sort_order = source.sort_order
+            row.shared = source.shared
+            row.owner = source.owner
+            row.revision = source.revision
+            row.incomplete = source.incomplete
         }
         result.* = WidgetEncodeListsUiRow(row, *lists_row_codec)
         return 1
@@ -307,14 +330,89 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             .data = HostTextData(text), .length = cast(usize)text.count}
         return 1
     }
+    if name == "ReadListsSharingRowHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
+        invitation := arguments[1].integer != 0
+        source := ifx invitation then lists_sharing_source else AppTextFromCString(*lists_friends[0], 8192)
+        array := FieldAt(source, 0, ifx invitation then "invitations" else "friends")
+        index := cast(s32)arguments[0].integer
+        row: ListsUiPerson
+        if index >= 0 && index < ArrayCount(source, array) {
+            object := ElementAt(source, array, index)
+            fields: [7]string = .[ifx invitation then "id" else "user_id_hash", "alias", "owner", "target", "list_id", "title", "status"]
+            for field: cast(s32)0..6 {
+                ListsCopyJson(source, object, fields[field], lists_person_text[field][:])
+            }
+            row.id = AppTextFromCString(*lists_person_text[0][0], 512)
+            row.alias = AppTextFromCString(*lists_person_text[1][0], 512)
+            row.owner = AppTextFromCString(*lists_person_text[2][0], 512)
+            row.target = AppTextFromCString(*lists_person_text[3][0], 512)
+            row.list_id = AppTextFromCString(*lists_person_text[4][0], 512)
+            row.title = AppTextFromCString(*lists_person_text[5][0], 512)
+            row.status = AppTextFromCString(*lists_person_text[6][0], 512)
+        }
+        result.* = WidgetEncodeListsUiPerson(row, *lists_person_codec)
+        return 1
+    }
+    if name == "PrepareListsCommandHost" && count == 1 && WidgetValidListsUiRequest(arguments[0]) {
+        request := WidgetDecodeListsUiRequest(arguments[0], *lists_request_codec)
+        list: ListsUiRow
+        if request.action != LISTS_ACCEPT && request.action != LISTS_DECLINE &&
+        request.selected_list >= 0 && request.selected_list < app.elist.list_count {
+            source := *app.elist.lists[request.selected_list]
+            if source.incomplete {
+                return 0
+            }
+            list.id = AppTextFromCString(*source.id[0], 37)
+            list.title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE)
+            list.revision = source.revision
+        }
+        list.id = request.list_id
+        rows: [ELIST_ITEM_MAX]ListsUiRow
+        for index: cast(s32)0..app.elist.item_count - 1 {
+            source := *app.elist.items[index]
+            rows[index] = ListsUiRow.{.id = AppTextFromCString(*source.id[0], 37),
+                .parent_id = AppTextFromCString(*source.list_id[0], 37),
+                .title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE),
+                .comment = AppTextFromCString(*source.comment[0], ELIST_COMMENT_SIZE),
+                .done = source.done}
+        }
+        message := ListsMessage.{.action = request.action, .index = request.index,
+            .editing_item = request.editing_item, .done = request.done}
+        observed := ListsUiFrame.{.value = request.value, .next_id = request.next_id}
+        PackageFree(lists_prepared_body)
+        lists_prepared_body = ListsBuildCommand(message, observed, list,
+            rows[:app.elist.item_count], request.target, request.invitation)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(lists_prepared_body), .length = cast(usize)lists_prepared_body.count}
+        return 1
+    }
     return 0
 }
 
 draw_elist_screen :: (app: *InnerBreeze) {
+    ListsNetworkContext()
     if app.elist.loaded == 0 {
         elist_reload(app)
     }
     typed: [ELIST_TITLE_SIZE]u8
+    next_id := ListsNetworkNextId()
+    defer { PackageFree(next_id) }
+    unused storage_get_social_cache_json("friends.list", *lists_friends[0], 8192)
+    lists_sharing_source = ListsSharedCache()
+    invitations := FieldAt(lists_sharing_source, 0, "invitations")
+    incoming: s32 = 0
+    for index: cast(s32)0..ArrayCount(lists_sharing_source, invitations) - 1 {
+        row := ElementAt(lists_sharing_source, invitations, index)
+        target := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "target"))
+        status := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "status"))
+        if SpanEqualsASCII(lists_sharing_source, target, storage_get_setting_text("sync_public_id")) &&
+        SpanEqualsASCII(lists_sharing_source, status, "pending") {
+            incoming += 1
+        }
+    }
+    unused AppFormatS64(incoming, lists_pending_number[:])
     lists_ui = ListsUiFrame.{.session = app.ui.session,
         .width = app.ui.view_width, .height = app.ui.view_height,
         .bottom = app_content_bottom_reserved(app), .scale = MetricsScale(),
@@ -322,7 +420,15 @@ draw_elist_screen :: (app: *InnerBreeze) {
         .value = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE),
         .cursor = app.elist.input_cursor, .anchor = app.elist.input_anchor,
         .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
-        .scroll = app.elist.scroll}
+        .scroll = app.elist.scroll, .tab_scroll = app.elist.tab_scroll,
+        .panel = app.elist.panel, .sharing_status = lists_status,
+        .sharing_busy = ListsNetworkBusy(), .sharing_pending = ListsNetworkPending(),
+        .connected = ListsNetworkReady(), .public_id = storage_get_setting_text("sync_public_id"),
+        .friend_count = ArrayCount(AppTextFromCString(*lists_friends[0], 8192),
+            FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),
+        .invitation_count = ArrayCount(lists_sharing_source, FieldAt(lists_sharing_source, 0, "invitations")),
+        .pending_count_text = AppTextFromCString(*lists_pending_number[0], 24),
+        .next_id = next_id}
     message := elist_message_for(*app.elist, LISTS_FRAME, -1)
     message.now = GetTime()
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
@@ -330,6 +436,10 @@ draw_elist_screen :: (app: *InnerBreeze) {
     message = ListsUiRun(message)
     CellsUiEnd()
     WidgetHostEnd()
+    lists_ui = ListsUiFrame.{}
+    lists_sharing_source = ""
+    PackageFree(lists_prepared_body)
+    lists_prepared_body = ""
     if !message.succeeded {
         app.request_quit = 1
         return

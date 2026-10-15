@@ -3204,3 +3204,9 @@ device-info-test: $(ZIRAN_BIN)
 	@build/device-info-test/device_info_behavior
 
 test: device-info-test
+
+.PHONY: lists-sharing-test
+lists-sharing-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/lists_sharing_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: lists-sharing-test

@@ -1,0 +1,101 @@
+// Lists owns the collaboration document and the meaning of each edit. The
+// wrapper provides authenticated transport and account-scoped cached bytes.
+#import "text"
+#import "vec"
+#import, file "../../src/cells/lists_types.zi";
+#import, file "../../src/cells/lists_ui_types.zi";
+
+ListsJsonString :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte == cast(u8)10 {
+            BuilderPrint(out, "\\n")
+        } else if byte == cast(u8)13 {
+            BuilderPrint(out, "\\r")
+        } else if byte == cast(u8)9 {
+            BuilderPrint(out, "\\t")
+        } else if byte < cast(u8)32 {
+            hex := "0123456789abcdef"
+            BuilderPrint(out, "\\u00")
+            unused VecPush(out.*, hex[byte / cast(u8)16])
+            unused VecPush(out.*, hex[byte % cast(u8)16])
+        } else {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+ListsBuildCommand :: (message: ListsMessage, frame: ListsUiFrame,
+    list: ListsUiRow, rows: []ListsUiRow, target: string = "",
+    invitation: string = "") -> string {
+    action := "save"
+    if message.action == LISTS_INVITE {
+        action = "invite"
+    } else if message.action == LISTS_ACCEPT {
+        action = "accept"
+    } else if message.action == LISTS_DECLINE {
+        action = "decline"
+    } else if message.action == LISTS_DELETE_LIST {
+        action = "delete"
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"request_id\":")
+    ListsJsonString(*out, frame.next_id)
+    BuilderPrint(*out, ",\"action\":")
+    ListsJsonString(*out, action)
+    BuilderPrint(*out, ",\"target\":")
+    ListsJsonString(*out, target)
+    BuilderPrint(*out, ",\"invitation_id\":")
+    ListsJsonString(*out, invitation)
+    BuilderPrint(*out, ",\"list\":{\"id\":")
+    ListsJsonString(*out, list.id)
+    BuilderPrint(*out, ",\"title\":")
+    title := list.title
+    if message.action == LISTS_COMMIT && message.editing_item == -3 {
+        title = frame.value
+    }
+    ListsJsonString(*out, title)
+    BuilderPrint(*out, ",\"revision\":%,\"items\":[", list.revision)
+    count: s32 = 0
+    for index: cast(s32)0..cast(s32)rows.count - 1 {
+        row := rows[index]
+        if row.parent_id != list.id ||
+        (message.action == LISTS_DELETE_ITEM && index == message.index) {
+            continue
+        }
+        if message.action == LISTS_COMMIT && index == message.editing_item {
+            row.title = frame.value
+        }
+        if message.action == LISTS_SET_DONE && index == message.index {
+            row.done = message.done
+        }
+        if count > 0 {
+            BuilderPrint(*out, ",")
+        }
+        ListsWriteItem(*out, row)
+        count += 1
+    }
+    if message.action == LISTS_COMMIT && message.editing_item == -1 {
+        if count > 0 {
+            BuilderPrint(*out, ",")
+        }
+        ListsWriteItem(*out, ListsUiRow.{.id = frame.next_id, .title = frame.value})
+    }
+    BuilderPrint(*out, "]}}")
+    return BuilderFinish(out)
+}
+
+ListsWriteItem :: (out: *Vec(u8), row: ListsUiRow) {
+    BuilderPrint(out, "{\"id\":")
+    ListsJsonString(out, row.id)
+    BuilderPrint(out, ",\"title\":")
+    ListsJsonString(out, row.title)
+    BuilderPrint(out, ",\"comment\":")
+    ListsJsonString(out, row.comment)
+    BuilderPrint(out, ",\"done\":%}", row.done)
+}

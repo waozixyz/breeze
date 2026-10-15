@@ -1,0 +1,168 @@
+// Transport, receipts and storage for Lists. This uses the ordinary portable
+// authenticated request path on native, Android and web; no global prompts.
+#import "auth"
+#import "json_scan"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "../storage/sync_async.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/lists_shared_storage.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/app_types.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "lists_types.zi";
+#import, file "package_files.zi";
+
+lists_operation: StoredOperation;
+lists_transfer: NetworkTransfer;
+lists_response: [ListsSharedCacheCapacity]u8;
+lists_attempt: [262144]u8;
+lists_identity: [128]u8;
+lists_public_id: [65]u8;
+lists_server: [512]u8;
+lists_next_id: [37]u8;
+lists_refresh_at: float64;
+lists_status: s32;
+lists_writing: bool;
+lists_confirm_action: s32;
+lists_confirm_list: [37]u8;
+lists_context_changed: bool;
+
+ListsNetworkContext :: () {
+    user := AppTextFromCString(storage_user_id_buffer(), 128)
+    server: [512]u8
+    public_id: [65]u8
+    unused AppCopyText(storage_get_setting_text("sync_server_url"), server[:])
+    unused AppCopyText(storage_get_setting_text("sync_public_id"), public_id[:])
+    if user == TextUntilNul(lists_identity[:]) && TextUntilNul(server[:]) == TextUntilNul(lists_server[:]) &&
+    TextUntilNul(public_id[:]) == TextUntilNul(lists_public_id[:]) {
+        return
+    }
+    CancelStoredOperation(*lists_operation)
+    unused AppCopyText(user, lists_identity[:])
+    lists_server = server
+    lists_public_id = public_id
+    lists_response[0] = cast(u8)0
+    lists_attempt[0] = cast(u8)0
+    unused ListsCacheRead("lists.attempt", *lists_attempt[0], 262144)
+    if FieldAt(TextUntilNul(lists_attempt[:]), 0, "request_id") < 0 {
+        lists_attempt[0] = cast(u8)0
+    }
+    lists_status = ifx lists_attempt[0] != cast(u8)0 then 3 else 0
+    lists_next_id[0] = cast(u8)0
+    lists_refresh_at = 0.0
+    lists_confirm_action = 0
+    lists_context_changed = true
+}
+
+ListsNetworkReady :: () -> bool {
+    return storage_sync_enabled() != 0 && StoredAccountMode() == AccountModeOwner &&
+    storage_get_setting_text("sync_server_url").count > 0
+}
+
+ListsNetworkNextId :: () -> string {
+    if lists_next_id[0] == cast(u8)0 {
+        storage_make_uuid(*lists_next_id[0])
+    }
+    return PackageText(TextUntilNul(lists_next_id[:]), "")
+}
+
+ListsNetworkPending :: () -> bool {
+    return lists_attempt[0] != cast(u8)0
+}
+
+ListsNetworkBusy :: () -> bool {
+    return lists_operation.active
+}
+
+ListsNetworkStart :: (message: ListsMessage) {
+    ListsNetworkContext()
+    if lists_operation.active || !ListsNetworkReady() {
+        lists_status = 5
+        return
+    }
+    writing := message.action != LISTS_REFRESH
+    if writing && message.action != LISTS_RETRY {
+        if ListsNetworkPending() || message.request_body.count == 0 ||
+        !AppCopyText(message.request_body, lists_attempt[:]) ||
+        ListsCacheWrite("lists.attempt", message.request_body) == 0 {
+            lists_status = 3
+            return
+        }
+        lists_confirm_action = message.action
+        unused AppCopyText(message.selected_id, lists_confirm_list[:])
+        lists_next_id[0] = cast(u8)0
+    }
+    if writing && !ListsNetworkPending() {
+        return
+    }
+    lists_response[0] = cast(u8)0
+    if !BeginStoredRequest(*lists_operation, TextUntilNul(lists_server[:]),
+        NetworkTransport(*lists_transfer), ifx writing then "POST" else "GET",
+        "/api/v1/lists", ifx writing then TextUntilNul(lists_attempt[:]) else "",
+        lists_response[:], true) {
+        lists_status = 3
+        return
+    }
+    lists_writing = writing
+    if writing {
+        lists_status = 1
+    }
+}
+
+ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
+    ListsNetworkContext()
+    if lists_context_changed {
+        app.elist = EListState.{.editing_item = -1}
+        lists_context_changed = false
+    }
+    if lists_operation.active {
+        if !PollStoredOperation(*lists_operation) {
+            return
+        }
+        // Poll already discards replies if account, server or consent changed.
+        if lists_operation.result == cast(s32)AuthResult.AUTH_OK {
+            json := TextUntilNul(lists_response[:])
+            valid := ValueEnd(json, 0, 0) == cast(s32)json.count &&
+            ArrayCount(json, FieldAt(json, 0, "lists")) >= 0 &&
+            ArrayCount(json, FieldAt(json, 0, "invitations")) >= 0
+            if valid && ListsCacheWrite("lists.shared", json) != 0 {
+                app.elist.loaded = 0
+                if lists_writing {
+                    unused ListsCacheWrite("lists.attempt", "{}")
+                    lists_attempt[0] = cast(u8)0
+                    if lists_confirm_action == LISTS_COMMIT {
+                        app.elist.input[0] = cast(u8)0
+                        app.elist.input_cursor = 0
+                        app.elist.input_anchor = 0
+                        app.elist.editing_item = -1
+                        app.elist.input_error = 0
+                    }
+                    lists_status = 2
+                } else if !ListsNetworkPending() {
+                    lists_status = 0
+                }
+            } else {
+                lists_status = 3
+            }
+        } else {
+            status := lists_operation.request.status
+            lists_status = ifx status == 409 then 4 else ifx status == 404 then 5 else 3
+            if lists_writing && status >= 400 && status < 500 && status != 408 && status != 429 {
+                unused ListsCacheWrite("lists.attempt", "{}")
+                lists_attempt[0] = cast(u8)0
+            }
+        }
+        lists_refresh_at = now + 10.0
+    }
+    if visible && !lists_operation.active && ListsNetworkReady() && now >= lists_refresh_at {
+        message: ListsMessage
+        message.action = LISTS_REFRESH
+        ListsNetworkStart(message)
+        lists_refresh_at = now + 10.0
+    }
+}

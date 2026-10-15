@@ -10,6 +10,7 @@ sqlite3_changes :: (db: *void) -> s32 #foreign c3;
 #import, file "../screens/elist_types.zi";
 #import, file "sqlite.zi";
 #import, file "sql_transaction.zi";
+#import, file "lists_shared_storage.zi";
 #import "byte_text_linux"
 #import "mapped_file_linux"
 #import, file "../app/locale.zi";
@@ -55,16 +56,22 @@ storage_elist_load :: (value: *void) -> s32 {
     if storage_db_handle() == null || state == null {
         return 0
     }
+    selected: [37]u8
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        selected = state.lists[state.selected_list].id
+    }
     state.visibility_valid = false
     state.list_count = 0
     state.item_count = 0
-    if SqlitePrepareText(storage_db_handle(), "SELECT id,title,sort_order,deleted_at,updated_at FROM elist_lists WHERE user_id=?1 AND deleted_at=0 ORDER BY sort_order,updated_at,id",
+    if SqlitePrepareText(storage_db_handle(), "SELECT id,title,sort_order,deleted_at,updated_at,(SELECT COUNT(*) FROM elist_items i WHERE i.list_id=elist_lists.id AND i.deleted_at=0) FROM elist_lists WHERE user_id=?1 AND deleted_at=0 ORDER BY sort_order,updated_at,id",
         -1, *statement, null) != SQLITE_OK {
         return 0
     }
     elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
     while state.list_count < ELIST_LIST_MAX  && SqliteStep(statement) == SQLITE_ROW {
         list := *state.lists[state.list_count]
+        list.* = EListList.{}
+        list.owner = true
         state.list_count += 1
 
         AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), 4096), list.id[:])
@@ -72,6 +79,7 @@ storage_elist_load :: (value: *void) -> s32 {
         list.sort_order = SqliteColumnInt(statement, 2)
         list.deleted_at = SqliteColumnInt64(statement, 3)
         list.updated_at = SqliteColumnInt64(statement, 4)
+        list.item_total = SqliteColumnInt(statement, 5)
     }
     SqliteFinalize(statement)
     if storage_elist_initialized() == 0 {
@@ -104,6 +112,24 @@ storage_elist_load :: (value: *void) -> s32 {
         item.updated_at = SqliteColumnInt64(statement, 7)
     }
     SqliteFinalize(statement)
+    ListsMergeShared(state)
+    for list_index: cast(s32)0..state.list_count - 1 {
+        loaded: s32 = 0
+        for item_index: cast(s32)0..state.item_count - 1 {
+            if AppTextFromCString(*state.items[item_index].list_id[0], 37) ==
+            AppTextFromCString(*state.lists[list_index].id[0], 37) {
+                loaded += 1
+            }
+        }
+        state.lists[list_index].incomplete = loaded != state.lists[list_index].item_total
+    }
+    for index: cast(s32)0..state.list_count - 1 {
+        if AppTextFromCString(*state.lists[index].id[0], 37) ==
+        AppTextFromCString(*selected[0], 37) {
+            state.selected_list = index
+            break
+        }
+    }
     if state.selected_list >= state.list_count {
         state.selected_list = state.list_count - 1
     }
@@ -169,6 +195,9 @@ storage_elist_update_list :: (id: string, title: string,
     if storage_db_handle() == null || id.count == 0 || title.count == 0 || title[0] == #char "\0" {
         return 0
     }
+    if ListsSharedId(id) {
+        return 0
+    }
     if SqlitePrepareText(storage_db_handle(), "UPDATE elist_lists SET title=?3,sort_order=?4,updated_at=?5 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
         -1, *statement, null) != SQLITE_OK {
         return 0
@@ -228,7 +257,7 @@ elist_delete_list_transaction :: (id: string, changed_at: s64) -> s32 {
 
 #program_export
 storage_elist_delete_list :: (id: string) -> s32 {
-    if storage_db_handle() == null || id.count == 0 || elist_exec_sql("BEGIN IMMEDIATE") == 0 {
+    if storage_db_handle() == null || id.count == 0 || ListsSharedId(id) || elist_exec_sql("BEGIN IMMEDIATE") == 0 {
         return 0
     }
     if elist_delete_list_transaction(id, storage_next_change_time()) == 0 {
@@ -250,6 +279,9 @@ storage_elist_create_item :: (list_id: string, title: string,
     result: s32
 
     if storage_db_handle() == null || list_id.count == 0 || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    if ListsSharedId(list_id) {
         return 0
     }
     storage_make_uuid(*id[0])
@@ -275,6 +307,24 @@ storage_elist_create_item :: (list_id: string, title: string,
     return result
 }
 
+// A shared list has one canonical server copy. Private writers (including
+// offline tools) must not modify the original private projection after sharing.
+elist_item_is_shared :: (id: string) -> bool {
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT list_id FROM elist_items WHERE id=?1 AND user_id=?2", -1, *statement, null) != SQLITE_OK {
+        return true
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    list_id: [37]u8
+    if SqliteStep(statement) == SQLITE_ROW {
+        unused AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), 37), list_id[:])
+    }
+    SqliteFinalize(statement)
+    return ListsSharedId(AppTextFromCString(*list_id[0], 37))
+}
+
 #program_export
 storage_elist_update_item :: (id: string, title: string,
     comment: string, done: s32,
@@ -283,6 +333,9 @@ storage_elist_update_item :: (id: string, title: string,
     result: s32
 
     if storage_db_handle() == null || id.count == 0 || title.count == 0 || title[0] == #char "\0" {
+        return 0
+    }
+    if elist_item_is_shared(id) {
         return 0
     }
     if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET title=?3,comment=?4,done=?5,sort_order=?6,updated_at=?7 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
@@ -307,6 +360,9 @@ storage_elist_delete_item :: (id: string) -> s32 {
     result: s32
 
     if storage_db_handle() == null || id.count == 0 {
+        return 0
+    }
+    if elist_item_is_shared(id) {
         return 0
     }
     if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET deleted_at=?3,updated_at=?3 WHERE id=?1 AND user_id=?2 AND deleted_at=0",

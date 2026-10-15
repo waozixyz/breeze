@@ -2,6 +2,7 @@
 #include "module_host.h"
 #include "lists_visibility.h"
 #include "diary_types.h"
+#include "lists_types.h"
 
 #include <assert.h>
 #include <string.h>
@@ -12,6 +13,13 @@ static int save_succeeds = 1;
 static int sync_calls;
 static int saved_done;
 static char saved_comment[ELIST_COMMENT_SIZE];
+
+void
+lists_network_ListsNetworkStart(ListsMessage message)
+{
+    (void)message;
+    assert(!"Private Lists fixture started a sharing request");
+}
 
 /* The Lists fixture must never invoke another app's private file effects. */
 DiaryFileResult

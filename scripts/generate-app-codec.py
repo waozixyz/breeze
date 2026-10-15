@@ -16,7 +16,7 @@ KRYON_MODULES = ['session', 'geometry', 'drawing_props', 'text_props', 'image_pr
                  'toggle_props', 'tab_bar_props', 'box_props']
 APP_TYPES = ['diary_ui_types', 'inbe_ui_types', 'lists_ui_types', 'lumi_ui_types',
              'lumi_types', 'leaderboard_ui_types']
-ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'LumiUiFrame',
+ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'ListsUiPerson', 'ListsUiRequest', 'LumiUiFrame',
          'LumiChatRow', 'LumiTask', 'LumiAction', 'LumiTools', 'LumiDonation',
          'LeaderboardUiFrame', 'LeaderboardUiRow']
 
