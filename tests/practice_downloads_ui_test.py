@@ -45,6 +45,7 @@ def launch(profile, name, width=390, height=844):
         if found.returncode == 0 and (profile / 'inbe.db').exists():
             window = found.stdout.splitlines()[0]
             command('xdotool', 'windowsize', window, str(width), str(height))
+            command('xdotool', 'windowmove', window, '0', '0')
             time.sleep(2)
             return process, window
         time.sleep(.1)
@@ -59,7 +60,14 @@ def capture(window, name):
     with Image.open(image) as picture:
         enlarged = output / (name + '-ocr.png')
         picture.resize((picture.width * 2, picture.height * 2)).save(enlarged)
+        # Isolate the header action from detailed banner artwork on narrow
+        # screens. Keep the full original capture as the visual evidence.
+        header = picture.crop((max(0, picture.width - 160), 16, picture.width - 16, 60))
+        header = ImageOps.invert(ImageOps.grayscale(header)).resize((576, 176))
+        header_path = output / (name + '-header.png')
+        header.save(header_path)
     text += '\n' + command('tesseract', str(enlarged), 'stdout', '--psm', '11')
+    text += '\n' + command('tesseract', str(header_path), 'stdout', '--psm', '7')
     # OCR's page segmentation skips the dark text on the mint action fill.
     # Read that actual rendered button separately, retaining the full image.
     with Image.open(image) as picture:
@@ -68,7 +76,7 @@ def capture(window, name):
         for y in range(picture.height // 2, picture.height):
             mint = sum(1 for x in range(picture.width)
                        if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30 and 130 < c[2] < 220)(rgb.getpixel((x, y))))
-            if mint > picture.width // 3:
+            if mint > min(200, picture.width // 3):
                 rows.append(y)
         if rows:
             for index in range(len(rows) - 1, 0, -1):
@@ -100,6 +108,10 @@ def click_word(window, name, target):
         word = matches[-1]
         x = int(word['left']) + int(word['width']) // 2
         y = int(word['top']) + int(word['height']) // 2
+    elif target == 'Manage':
+        with Image.open(image) as picture:
+            x = picture.width - 85
+        y = 38
     else:
         # Mint-filled action text is read from its enlarged crop by capture().
         with Image.open(image) as picture:
@@ -107,7 +119,7 @@ def click_word(window, name, target):
             rows = [y for y in range(picture.height // 2, picture.height)
                     if sum(1 for x in range(picture.width)
                            if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
-                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 3]
+                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > min(200, picture.width // 3)]
             assert rows, 'Action button not found: ' + target
             for index in range(len(rows) - 1, 0, -1):
                 if rows[index] - rows[index - 1] > 12:
