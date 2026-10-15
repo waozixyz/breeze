@@ -27,6 +27,12 @@ drawn into a canvas (`src/overlay.js`) and laid over the graded picture.
 - `src/puppets.js`: the trailer's painted Tai Chi teachers, with `FlatView`
   imported from `painted/layout.js`, where it now lives.
 - `audio/score.mp3`: Lyria take 1 of `score.py` (`audio/score-prompt.txt`).
+- `narration.json`: the narrator's lines, their start times and chosen takes,
+  spoken in the male Tai Chi voice (Gemini TTS `Algieba`) by
+  `../narrate.py --config narration.json --out build/promo-video/tai-chi-break/voice`.
+  The chosen takes, levelled to -16 LUFS, are `audio/voice/KEY.flac`.
+  `finish.py` keeps the score low and steady under each stretch of talking
+  and lets it rise only in the real pauses, without any pumping.
 
 ## Run
 
