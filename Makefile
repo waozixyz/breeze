@@ -3210,3 +3210,9 @@ lists-sharing-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 	@sh tests/lists_sharing_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lists-sharing-test
+
+.PHONY: dew-test
+dew-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+	@sh tests/dew_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: dew-test

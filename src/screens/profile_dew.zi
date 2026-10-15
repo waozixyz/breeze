@@ -1,0 +1,173 @@
+#import "geometry"
+#import "box_props"
+#import "box_widget"
+#import "text_props"
+#import "text_widget"
+#import "button_props"
+#import "control_props"
+#import "button_widget"
+#import "open_uri"
+#import "drawing_props"
+#import "text_buffer"
+#import, file "../storage/dew.zi";
+#import, file "../storage/sync_async.zi";
+#import, file "../platform/dew_payment.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "qr_code_view.zi";
+
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+ProfileDewText :: (app: *InnerBreeze, text: string, x: s32, y: *s32,
+    width: s32, font: s32, draw: bool) {
+    height := AppParagraphHeight(text, width, font, 0)
+    if draw {
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)height},
+                .text = FrameTextHold(*app.ui.frame_text, text),
+                .font = font,
+                .wrap = cast(TextWrap)TextWrapAuto})
+    }
+    y.* += height + AppScale(8)
+}
+
+ProfileDewButton :: (app: *InnerBreeze, label: string, x: s32, y: *s32,
+    width: s32, disabled: bool, draw: bool) -> bool {
+    height := AppScale(44)
+    clicked := false
+    if draw {
+        clicked = Button(app.ui.session, ButtonProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)height},
+                .label = label,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = disabled}) != 0
+    }
+    y.* += height + AppScale(8)
+    return clicked
+}
+
+// Measuring and drawing use the same wrapped lines and controls.
+ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
+    draw: bool) {
+    ProfileDewText(app, LocaleText("profile_dew_title"), x, y, width, AppFontSize(), draw)
+    value: [48]u8
+    if dew_account.known && DewReady() {
+        unused DewFormat(dew_account.balance, DewUnits, value[:])
+        unused AppAppendText(" Dew", value[:])
+    } else {
+        unused AppCopyText("—", value[:])
+    }
+    ProfileDewText(app, TextUntilNul(value[:]), x, y, width, AppScale(Text24), draw)
+    if !DewReady() {
+        ProfileDewText(app, LocaleText("profile_dew_connect"), x, y, width, AppSmallFontSize(), draw)
+        return
+    }
+    if !dew_account.known {
+        ProfileDewText(app, LocaleText(ifx dew_notice.count > 0 then "profile_dew_error"
+            else "profile_dew_loading"), x, y, width, AppSmallFontSize(), draw)
+        return
+    }
+    plan: [96]u8
+    if dew_account.limit_bytes > 10485760 && dew_account.expires_at > DewNow() {
+        days := (dew_account.expires_at - DewNow() + 86399) / 86400
+        unused FormatNumberTemplate(LocaleText("profile_dew_paid"), cast(s32)days, plan[:])
+    } else {
+        unused AppCopyText(LocaleText("profile_dew_free"), plan[:])
+    }
+    ProfileDewText(app, TextUntilNul(plan[:]), x, y, width, AppFontSize(), draw)
+    if dew_notice.count > 0 {
+        ProfileDewText(app, LocaleText(dew_notice), x, y, width, AppSmallFontSize(), draw)
+    }
+    if dew_account.used_bytes >= dew_account.limit_bytes && dew_account.limit_bytes > 0 {
+        ProfileDewText(app, LocaleText("profile_dew_full"), x, y, width, AppSmallFontSize(), draw)
+    }
+    if !dew_account.enabled {
+        ProfileDewText(app, LocaleText("profile_dew_disabled"), x, y, width, AppSmallFontSize(), draw)
+        return
+    }
+    ProfileDewText(app, LocaleText("profile_dew_rates"), x, y, width, AppSmallFontSize(), draw)
+    busy := dew_operation.active
+    if dew_attempt[0] != cast(u8)0 {
+        if ProfileDewButton(app, LocaleText("profile_dew_retry"), x, y, width, busy, draw) {
+            DewBuyStorage("")
+        }
+    } else {
+        if ProfileDewButton(app, LocaleText("profile_dew_month"), x, y, width, busy, draw) {
+            DewBuyStorage("monthly")
+        }
+        if ProfileDewButton(app, LocaleText("profile_dew_year"), x, y, width, busy, draw) {
+            DewBuyStorage("yearly")
+        }
+    }
+    if ProfileDewButton(app, LocaleText("profile_dew_topup"), x, y, width, busy, draw) {
+        DewTopUp()
+    }
+    if dew_address[0] == cast(u8)0 {
+        return
+    }
+    hint: [384]u8
+    unused FormatNumberTemplate(LocaleText("profile_dew_topup_hint"), cast(s32)dew_confirmations, hint[:])
+    ProfileDewText(app, TextUntilNul(hint[:]), x, y, width, AppSmallFontSize(), draw)
+    xmr: [48]u8
+    dew: [48]u8
+    unused DewFormat(dew_rate_atomic, 1000000000000LL, xmr[:])
+    unused DewFormat(dew_rate_units, DewUnits, dew[:])
+    arguments: [2]FormatArg = .[
+    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
+    unused FormatTemplate(LocaleText("profile_dew_rate"), arguments[:], hint[:])
+    ProfileDewText(app, TextUntilNul(hint[:]), x, y, width, AppSmallFontSize(), draw)
+    side := width
+    if side > AppScale(200) {
+        side = AppScale(200)
+    }
+    uri: [144]u8
+    unused AppCopyText("monero:", uri[:])
+    unused AppAppendText(TextUntilNul(dew_address[:]), uri[:])
+    if draw {
+        unused DrawQrCode(app.ui.session, TextUntilNul(uri[:]),
+            Rectangle.{cast(float32)(x + (width - side) / 2), cast(float32)y.*,
+                cast(float32)side, cast(float32)side})
+    }
+    y.* += side + AppScale(8)
+    ProfileDewText(app, TextUntilNul(dew_address[:]), x, y, width, AppSmallFontSize(), draw)
+    if ProfileDewButton(app, LocaleText("copy_address_button"), x, y, width, false, draw) {
+        unused TextInputWriteClipboard(TextUntilNul(dew_address[:]))
+    }
+    if ProfileDewButton(app, LocaleText("open_wallet_button"), x, y, width, false, draw) {
+        unused OpenUri(TextUntilNul(uri[:]))
+    }
+}
+
+ProfileDewHeight :: (app: *InnerBreeze, width: s32) -> s32 {
+    if !DewAvailable() {
+        return 0
+    }
+    y := AppScale(14)
+    ProfileDewContent(app, 0, *y, width - AppScale(28), false)
+    return y + AppScale(20)
+}
+
+ProfileDewDraw :: (app: *InnerBreeze, x: s32, y: *s32, width: s32) {
+    height := ProfileDewHeight(app, width)
+    if height == 0 {
+        return
+    }
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)width, cast(float32)(height - AppScale(8))},
+            .fill = DarkenColor(StyleTokenColor("canvas"), 7),
+            .radius = cast(float32)AppScale(12)})
+    inner := y.* + AppScale(14)
+    ProfileDewContent(app, x + AppScale(14), *inner, width - AppScale(28), true)
+    y.* += height
+}

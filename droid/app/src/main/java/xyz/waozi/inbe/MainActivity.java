@@ -994,6 +994,10 @@ public class MainActivity extends NativeActivity {
         return PaymentBridge.channel();
     }
 
+    public boolean dewAvailable() {
+        return !BuildConfig.GPLAY;
+    }
+
     public void purchaseTokens(final String productId, final String accountId, final String authToken) {
         PaymentBridge.purchaseTokens(this, productId, accountId, authToken);
     }
