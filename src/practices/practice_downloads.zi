@@ -6,6 +6,7 @@
 #import "json_scan"
 #import "byte_text_linux"
 #import "crypto"
+#import "vec"
 #import, file "../app/assets.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/text_buffers.zi";
@@ -38,12 +39,22 @@ PracticePack :: struct {
     // A paid practice's packs name its unlock; the node serves them only
     // with a grant for it.
     product: [48]u8
+    // Automatic retries of this download since it was asked for.
+    attempts: s32
 }
 
 // The host supplies grants for paid packs: 1 with the grant written, 0 while
 // it is requested, -1 when this account may not download the pack.
 PracticeGrantFn :: #type (product: string, output: []u8) -> s32;
 practice_grant: PracticeGrantFn;
+// The host drops a grant the node turned down, so a retry asks for a new one.
+PracticeGrantForgetFn :: #type () -> ();
+practice_grant_forget: PracticeGrantForgetFn;
+// The host's log; the grant never appears in a message.
+PracticeLogFn :: #type (warning: bool, message: string) -> ();
+practice_log: PracticeLogFn;
+// A failed download tries again this many times before it reports failure.
+PracticeDownloadRetries :: 2
 // Paid practices are bought with Dew, which the Google Play build does not
 // offer, so there they are neither listed nor downloaded.
 practice_paid_allowed: bool = true;
@@ -269,6 +280,44 @@ PracticePackOpen :: (index: s32, bytes: string) -> *void {
         previous = path
     }
     return bundle
+}
+
+PracticeDownloadLog :: (index: s32, warning: bool, event: string, reason: string) {
+    if practice_log == null || index < 0 || index >= practice_pack_count {
+        return
+    }
+    pack := practice_packs[index]
+    out: Vec(u8)
+    BuilderPrint(*out, "PRACTICE: % pack %", event, PracticeContentName(pack.practice))
+    if pack.language[0] != cast(u8)0 {
+        BuilderPrint(*out, "/%", TextFromCString(*pack.language[0]))
+    }
+    if pack.voice[0] != cast(u8)0 {
+        BuilderPrint(*out, "/%", TextFromCString(*pack.voice[0]))
+    }
+    if reason.count > 0 {
+        BuilderPrint(*out, " after %", reason)
+    }
+    message := BuilderFinish(out)
+    practice_log(warning, message)
+    PackageFree(message)
+}
+
+// A failed grant or transfer is asked for again, with a fresh grant for a
+// paid pack, before the manager shows the failure.
+PracticeDownloadFailed :: (index: s32, reason: string) {
+    if practice_packs[index].attempts < PracticeDownloadRetries {
+        practice_packs[index].attempts += 1
+        practice_packs[index].requested = true
+        practice_packs[index].status = 1
+        if practice_packs[index].product[0] != cast(u8)0 && practice_grant_forget != null {
+            practice_grant_forget()
+        }
+        PracticeDownloadLog(index, true, "retrying", reason)
+        return
+    }
+    practice_packs[index].status = 3
+    PracticeDownloadLog(index, true, "failed", reason)
 }
 
 PracticeDownloadsCancel :: () {
@@ -529,6 +578,7 @@ PracticeContentRequest :: (practice: s32, narration: bool) {
         practice_packs[index].status != 2 {
             practice_packs[index].requested = true
             practice_packs[index].status = 1
+            practice_packs[index].attempts = 0
         }
     }
 }
@@ -734,7 +784,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
                     return
                 }
                 if granted < 0 {
-                    practice_packs[index].status = 3
+                    PracticeDownloadFailed(index, "no grant")
                     continue
                 }
             }
@@ -756,9 +806,11 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
             PackageFree(path)
             PackageFree(route)
             PackageFree(url)
-            if !started {
-                practice_packs[index].status = 3
+            if started {
+                PracticeDownloadLog(index, false, "downloading", "")
+            } else {
                 PracticeDownloadsCancel()
+                PracticeDownloadFailed(index, "no transfer")
             }
             return
         }
@@ -789,12 +841,18 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
         practice_packs[index].status = 2
         practice_packs[index].cache_checked = true
         practice_packs[index].present = true
+        practice_packs[index].attempts = 0
+        PracticeDownloadLog(index, false, "installed", "")
         if !DataTemporary() {
             sync_web_storage()
         }
     } else {
         CloseBundle(bundle)
-        practice_packs[index].status = 3
+        PackageFree(temporary)
+        PackageFree(destination)
+        PracticeDownloadsCancel()
+        PracticeDownloadFailed(index, ifx state == FileDownloadStatus.Ready then "an unverified file" else "a transfer error")
+        return
     }
     PackageFree(temporary)
     PackageFree(destination)

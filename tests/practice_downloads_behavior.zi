@@ -89,15 +89,31 @@ CheckPracticeDownloads :: () -> s32 {
         return 5
     }
 
-    // A corrupt download never becomes ready; a manual retry repairs it.
+    // A corrupt download never becomes ready. It is tried again by itself,
+    // with a fresh grant, and reported as failed only after the last try.
     PracticeDownloadsPump(4, false, true)
     FixtureMode(1)
+    corrupt_before := FixtureStarts()
+    PracticeContentRequest(4, false)
+    for step: cast(s32)0..cast(s32)11 {
+        PracticeDownloadsPump(4, false, true)
+    }
+    if PracticeContentReady(4) || PracticeContentStatus(4) != 3 ||
+    FixtureStarts() != corrupt_before + 1 + PracticeDownloadRetries {
+        return 6
+    }
+    // One bad transfer recovers on its own when the next try succeeds.
     PracticeContentRequest(4, false)
     PracticeDownloadsPump(4, false, true)
     PracticeDownloadsPump(4, false, true)
-    if PracticeContentReady(4) || PracticeContentStatus(4) != 3 {
-        return 6
+    FixtureMode(0)
+    for step: cast(s32)0..cast(s32)5 {
+        PracticeDownloadsPump(4, false, true)
     }
+    if !PracticeContentReady(4) || PracticeContentStatus(4) != 2 {
+        return 38
+    }
+    PracticeContentRemove(4)
     FixtureMode(0)
     PracticeContentRequest(4, false)
     PracticeDownloadsPump(4, false, true)
@@ -272,7 +288,10 @@ CheckPracticeDownloads :: () -> s32 {
     PracticeContentRemove(4)
     fixture_grant_mode = -1
     PracticeContentRequest(4, false)
-    PracticeDownloadsPump(4, false, true)
+    // A refused grant is asked for again, then reported; nothing downloads.
+    for step: cast(s32)0..cast(s32)5 {
+        PracticeDownloadsPump(4, false, true)
+    }
     if FixtureStarts() != before + 1 || PracticeContentStatus(4) != 3 {
         return 32
     }
