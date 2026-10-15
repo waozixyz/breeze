@@ -39,7 +39,8 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
     owner = 'inbe'
     if path.startswith(('assets/practices/', 'assets/sounds/')):
         owner = 'practices'
-    if path.startswith('assets/practices/') and not file.name.startswith('banner-'):
+    # Each practice's pictures, banners included, ship only in its pack.
+    if path.startswith('assets/practices/'):
         practice = path.split('/')[2]
         owner = 'practice-' + practice
         if '/voice/' in path:

@@ -205,6 +205,13 @@ def prepare(compiler):
     target = ROOT / 'build/package-assets/practices' / CATALOG
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(schema=1, packs=packs), separators=(',', ':')) + '\n')
+    # Default practices ship inside Practices, installed until removed.
+    for practice in configuration['default']:
+        if practice not in NAMES:
+            raise ValueError('unknown default practice')
+        shipped = ROOT / 'build/package-assets/practices/assets/practices/default' / (practice + '.zib')
+        shipped.parent.mkdir(parents=True, exist_ok=True)
+        shipped.write_bytes((output / (practice + '.zib')).read_bytes())
     print(f'Prepared {len(packs)} separate practice content packs')
 
 

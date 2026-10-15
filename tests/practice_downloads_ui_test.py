@@ -134,6 +134,33 @@ def click_word(window, name, target):
     time.sleep(.6)
 
 
+def click_mint(window, name, first=True):
+    """Press a filled mint action that OCR cannot read, by its rendered fill."""
+    image, _ = capture(window, name)
+    with Image.open(image) as picture:
+        rgb = picture.convert('RGB')
+        rows = [y for y in range(130, picture.height - 40)
+                if sum(1 for x in range(picture.width)
+                       if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
+                           and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 4]
+        assert rows, 'No filled action in ' + name
+        y = rows[0] + 15 if first else rows[-1] - 15
+        x = picture.width // 2
+    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
+    command('xdotool', 'mousedown', '1')
+    time.sleep(.15)
+    command('xdotool', 'mouseup', '1')
+    time.sleep(1)
+
+
+def close_manager(window):
+    command('xdotool', 'mousemove', '--window', window, '350', '86')
+    command('xdotool', 'mousedown', '1')
+    time.sleep(.15)
+    command('xdotool', 'mouseup', '1')
+    time.sleep(.5)
+
+
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     profile = Path(temporary)
     process, _ = launch(profile, 'initialize')
@@ -148,61 +175,52 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         for key, value in settings.items():
             database.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) '
                 'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user, key, str(value)))
-    process, window = launch(profile, 'download')
-    try:
-        _, text = capture(window, 'download')
-        assert 'Manage practices' in text and 'Start' in text, text
-        assert 'Download size' not in text and 'Available offline' not in text, text
-        click_word(window, 'manual-open', 'How')
-        for page in range(3):
-            click_word(window, 'manual-page-' + str(page), 'Next')
-        click_word(window, 'manual-finish', 'Start')
-        _, text = capture(window, 'manual-needs-download')
-        assert 'Manage practices' in text and 'Meditation' in text, text
-        # Download the first row's real rendered action, rather than the next
-        # practice's identical button lower in the scrolling manager.
-        with Image.open(output / 'manual-needs-download.png') as picture:
-            rgb = picture.convert('RGB')
-            rows = [y for y in range(130, picture.height - 80)
-                    if sum(1 for x in range(picture.width)
-                           if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
-                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 3]
-            assert rows, 'The first download action is missing'
-            y = rows[0] + 15
-            command('xdotool', 'mousemove', '--window', window, str(picture.width // 2), str(y))
-        command('xdotool', 'mousedown', '1')
-        time.sleep(.15)
-        command('xdotool', 'mouseup', '1')
-        time.sleep(1)
-        _, text = capture(window, 'manager-downloading')
-        assert 'Manage practices' in text and any(status in text.lower() for status in
-            ('downloading', 'download failed')), text
-    finally:
-        stop(process)
     cache = profile / 'packages'
-    cache.mkdir(exist_ok=True)
-    shutil.copyfile(ROOT / 'build/practice-content/whm.zib', cache / 'practice-whm.zib')
-    process, window = launch(profile, 'ready')
+    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zib')).stat().st_size
+             for name in ('whm', 'meditation', 'sunsalutation')}
+    process, window = launch(profile, 'installed')
     try:
-        _, text = capture(window, 'ready')
-        assert 'Start' in text and 'Manage practices' in text and 'Remove' not in text, text
+        # Wim Hof ships installed; it is the only practice on the home.
+        _, text = capture(window, 'installed')
+        assert 'Manage practices' in text and 'Start' in text and '/ 5' not in text, text
         click_word(window, 'manager-open', 'Manage')
         time.sleep(1)
-        _, text = capture(window, 'manager-ready')
-        assert 'Available offline' in text and 'Remove' in text, text
+        _, text = capture(window, 'manager')
+        whm_kb = (sizes['whm'] + 1023) // 1024
+        meditation_kb = (sizes['meditation'] + 1023) // 1024
+        assert 'Available offline' in text and str(whm_kb) + ' KB' in text and 'Remove' in text, text
+        assert 'Download size: ' + str(meditation_kb) + ' KB' in text and '1 MB' not in text, text
+        # The first filled action downloads Meditation; nothing is published
+        # to this private display, so the transfer runs or fails.
+        click_mint(window, 'manager-download')
+        _, text = capture(window, 'manager-downloading')
+        assert any(status in text.lower() for status in ('downloading', 'download failed')), text
         click_word(window, 'manager-remove', 'Remove')
         _, text = capture(window, 'removed')
-        assert 'Manage practices' in text and 'Download practice' in text, text
-        command('xdotool', 'mousemove', '--window', window, '350', '86')
-        command('xdotool', 'mousedown', '1')
-        time.sleep(.15)
-        command('xdotool', 'mouseup', '1')
-        time.sleep(.5)
-        _, text = capture(window, 'manager-closed')
-        assert 'Start' in text and 'Available offline' not in text, text
+        assert 'Available offline' not in text and 'Download practice' in text, text
+        close_manager(window)
+        _, text = capture(window, 'empty')
+        assert 'No practices installed' in text and 'Start' not in text, text
     finally:
         stop(process)
-    assert not (cache / 'practice-whm.zib').exists()
+    assert (cache / 'practice-whm.removed').exists()
+    process, window = launch(profile, 'still-removed')
+    try:
+        _, text = capture(window, 'still-removed')
+        assert 'No practices installed' in text, text
+        click_mint(window, 'empty-manage')
+        _, text = capture(window, 'manager-removed')
+        assert 'Download practice' in text and 'Remove' not in text, text
+        # Wim Hof comes back from the app's own copy, without a download.
+        click_mint(window, 'manager-restore')
+        _, text = capture(window, 'manager-restored')
+        assert 'Available offline' in text and 'Remove' in text, text
+        close_manager(window)
+        _, text = capture(window, 'restored')
+        assert 'Start' in text and 'No practices installed' not in text, text
+    finally:
+        stop(process)
+    assert not (cache / 'practice-whm.removed').exists()
     with sqlite3.connect(profile / 'inbe.db') as database:
         value = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'tai_chi_progress')).fetchone()[0]
@@ -210,6 +228,14 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         selected = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                     (user, 'exercise_type')).fetchone()[0]
         assert selected == '0', 'Managing downloads switched the practice underneath'
+    # A downloaded practice joins the home, with its banner from its own pack.
+    shutil.copyfile(ROOT / 'build/practice-content/meditation.zib', cache / 'practice-meditation.zib')
+    process, window = launch(profile, 'two-installed')
+    try:
+        _, text = capture(window, 'two-installed')
+        assert '1 / 2' in text or '1/2' in text, text
+    finally:
+        stop(process)
     process, window = launch(profile, 'narrow', 320, 640)
     try:
         _, text = capture(window, 'narrow')
@@ -246,4 +272,5 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             assert 'English' in text, text
         finally:
             stop(process)
-print('Private Practices modal: manual/start entry, live transfer, offline removal, saved progress, language and narrow layout passed')
+print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '
+      'restore without download, installed-only home, saved progress, language and narrow layout passed')
