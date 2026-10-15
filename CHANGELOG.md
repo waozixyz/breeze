@@ -13,6 +13,7 @@
 - Manage practice downloads and selected-language narration in one modal on the Practice screen.
 - Compact Lists tabs and larger task controls.
 - Every practice is optional: Practice shows only installed ones, and Wim Hof comes installed and can be removed.
+- Lumi asks to download or unlock a practice before starting one that isn't on your device.
 ### Removed
 - Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
 ### Fixed

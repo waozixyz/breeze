@@ -374,6 +374,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         wait_for(lambda: state(window)["breath"] > breath, "WHM did not advance")
         assert state(window)["screen"] == 1 and not state(window)["paused"]
         capture(window, "whm-started")
+    # Without a practice on this device Lumi asks first: no drops the offer,
+    # yes opens Manage practices at it, and nothing starts either way.
+    with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("UPDATE settings SET value='4' WHERE key='main_tab'")
+    with application(profile, "practice-offer", recommended=True) as window:
+        send(window, profile, "start sun salutation")
+        offer = chat(profile)[-1]["text"]
+        assert offer.startswith("Sun Salutation") and offer.endswith("Download it now?"), offer
+        send(window, profile, "no")
+        assert chat(profile)[-1]["text"] == "Cancelled."
+        send(window, profile, "start meditation")
+        assert chat(profile)[-1]["text"].endswith("Download it now?")
+        send(window, profile, "yes")
+        assert chat(profile)[-1]["text"] == "Opening Manage practices."
+        time.sleep(0.6)
+        assert not state(window)["practice_running"]
+        capture(window, "practice-offer")
     # Practices other than Wim Hof are downloads; install them as Manage
     # practices would before Lumi starts them.
     (profile / "packages").mkdir(exist_ok=True)
@@ -419,7 +436,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
                     "multiline Diary append", "Diary restart persistence", "durable history retention",
-                    "progress zero and recorded values", "no donations", "large tool catalog",
+                    "progress zero and recorded values", "no donations", "download offer", "large tool catalog",
                     "command button and list", "Enter picks a command", "command waits for its text",
                     "tapped command"],
     }, indent=2) + "\n")
