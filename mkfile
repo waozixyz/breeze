@@ -18,6 +18,7 @@ hostsrc=build/plan9/app_embedded_assets.c
 APPCPPFLAGS=-I$ROOT/src -I$ROOT/src/app -I$ROOT/src/core -I$ROOT/src/screens \
 	-I$ROOT/src/screens/settings -I$ROOT/src/practices -I$ROOT/src/practices/whm \
 	-I$ROOT/src/practices/meditation -I$ROOT/src/practices/sun_salutation \
+	-I$ROOT/src/practices/tai_chi \
 	-I$ROOT/src/storage -I$ROOT/src/platform -I$ROOT/src/platform/android \
 	-I$ROOT/src/third_party -I$ROOT/vendor-builds/sqlite \
 	-I$ROOT/build/plan9/generated -I$ROOT/build/plan9/generated/src \

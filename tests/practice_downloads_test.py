@@ -1,0 +1,79 @@
+"""Exercise actual content mounting, offline cache and language downloads."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from practice_content import NAMES
+
+work = ROOT / 'build/practice-downloads-test'
+if work.exists():
+    shutil.rmtree(work)
+work.mkdir(parents=True)
+fixtures = work / 'fixtures'
+(fixtures / 'cache/packages').mkdir(parents=True)
+compiler = ROOT / 'build/ziran-toolchain/bin/ziran'
+packs = []
+for name in NAMES:
+    data = (ROOT / 'build/practice-content' / (name + '.zib')).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    (fixtures / (digest + '.zib')).write_bytes(data)
+    packs.append(dict(practice=name, language='', sha256=digest, size=len(data)))
+for code in ('en', 'es'):
+    assets = work / code / 'assets'
+    voice = assets / ('practices/taichi/voice/' + code)
+    voice.mkdir(parents=True)
+    (voice / 'test.ogg').write_bytes(b'fixture audio')
+    bundle = work / (code + '.zib')
+    subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
+        '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
+        str(ROOT / 'apps/practice/content.zi')], check=True)
+    data = bundle.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    (fixtures / (digest + '.zib')).write_bytes(data)
+    packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data)))
+(fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
+# Stale content in a stable cache slot must be verified and replaced.
+(fixtures / 'cache/packages/practice-whm.zib').write_bytes(b'old release')
+(fixtures / 'cache/packages/practice-taichi.fr.zib').write_bytes(b'retired language')
+preserved = {
+    'progress.json': b'preserve progress',
+    'practice-taichi.bad.zib': b'unrelated file',
+    'practice-taichix.zib': b'other namespace',
+}
+for name, data in preserved.items():
+    (fixtures / 'cache/packages' / name).write_bytes(data)
+generated = work / 'generated'
+arguments = [str(compiler), 'build', '--target=c', '--no-main', '--root', str(ROOT / 'tests'),
+             '--define', 'PLATFORM_DESKTOP']
+for path in ('src', 'build/packages/ziran/std', 'build/packages/kryon/src/ui',
+             'build/packages/kryon/src/backend', 'build/packages/daochi-client'):
+    arguments += ['--module-path', str(ROOT / path)]
+arguments += ['--module-path', 'oqs=' + str(ROOT / 'build/packages/oqs/src'),
+              '--module-path', 'kryon=' + str(ROOT / 'build/packages/kryon/src/ui')]
+subprocess.run([*arguments, '-o', str(generated), str(ROOT / 'tests/practice_downloads_behavior.zi')], check=True)
+monocypher = ROOT / 'build/packages/monocypher/src'
+subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
+    '-ffunction-sections', '-fdata-sections', '-I' + str(generated),
+    '-I' + str(ROOT / 'build/packages/ziran/include'), '-I' + str(monocypher),
+    '-I' + str(monocypher / 'optional'), str(ROOT / 'tests/practice_downloads_host.c'),
+    *map(str, generated.rglob('*.c')), str(monocypher / 'monocypher.c'),
+    str(monocypher / 'optional/monocypher-ed25519.c'),
+    str(ROOT / 'build/ziran-toolchain/libziran.a'), '-Wl,--gc-sections',
+    '-Wl,--wrap=file_download_FileDownloadStart', '-Wl,--wrap=file_download_FileDownloadPoll',
+    '-Wl,--wrap=file_download_FileDownloadRelease', '-Wl,--wrap=storage_db_path',
+    '-lm', '-o', str(work / 'test')], check=True)
+subprocess.run([str(work / 'test'), str(fixtures)], check=True,
+               env={key: value for key, value in os.environ.items()
+                    if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')})
+cache = fixtures / 'cache/packages'
+assert not list(cache.glob('practice-taichi.??.zib'))
+assert hashlib.sha256((cache / 'practice-whm.zib').read_bytes()).hexdigest() == packs[0]['sha256']
+for name, data in preserved.items():
+    assert (cache / name).read_bytes() == data
+print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation and removal passed')

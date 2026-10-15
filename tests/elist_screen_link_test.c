@@ -3,6 +3,7 @@
 #include "lists_visibility.h"
 #include "diary_types.h"
 #include "lists_types.h"
+#include "assets.h"
 
 #include <assert.h>
 #include <string.h>
@@ -13,6 +14,25 @@ static int save_succeeds = 1;
 static int sync_calls;
 static int saved_done;
 static char saved_comment[ELIST_COMMENT_SIZE];
+
+String
+storage_db_path(void)
+{
+    return StringLiteral("");
+}
+
+EmbeddedAssetEntry *
+asset_entry_at(size_t index)
+{
+    (void)index;
+    return NULL;
+}
+
+size_t
+asset_entry_total(void)
+{
+    return 0;
+}
 
 void
 lists_network_ListsNetworkStart(ListsMessage message)

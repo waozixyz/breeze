@@ -7,8 +7,9 @@ Leaderboard is installed for every profile but is not pinned by default.
 Selections are stored per app and synced with the account. Lumi always ships with
 Inner Breeze. Her selection controls her sidebar shortcut, while her harness and
 tools remain available.
-The root contains shared fonts, translations, themes and icons; Practices owns
-its images and sounds. Each feature can add private package resources under
+The root contains shared fonts, translations, themes and icons. Practices keeps
+small previews, controls and shared cues. Heavy content is downloaded per
+practice and works offline afterwards. Each feature can add private resources under
 `assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/`, `assets/diary/`
 or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
@@ -201,6 +202,61 @@ from the editable list. Existing
 profiles retain their selection and saved sidebar order.
 Each cell appears once, with active shortcuts in sidebar order and hidden cells
 after them. The list shows icons, names and controls without status paragraphs.
+
+## Practice content and narration
+
+`build/practice-content/*.zib` contains the separate practice data and language
+packs. Practices shows the size before downloading, offers retry and cancel,
+and keeps downloads for offline use. Remove deletes the practice's local content
+and narration while preserving progress. Only the selected practice and narration
+language are mounted in memory. Changing language reuses artwork and loads or
+downloads the matching voice; switching back reuses its verified cache. Missing
+narration is shown explicitly and never falls back to another spoken language.
+Each practice/language has one verified cache slot, so an update replaces its
+previous copy. Remove also clears cached languages retired from the catalog.
+
+`apps/practice/content.json` owns the inventory and narration paths. The small
+`assets/practices/catalog.json` is built into the signed Practices harness and
+authenticates each resource pack's exact hash and size. Packs use the existing
+`inbe.practices` artifact endpoint and publisher, are restricted to their own
+practice/language prefix, and are never instantiated as programs. Publishing
+places verified content before the harness advertises its hashes. New content
+requires a new Practices release; the wrapper is unchanged for data that fits
+the existing practice renderer and schema.
+
+Tai Chi narration uses the existing speech/transcription pipeline:
+
+```sh
+python3 scripts/generate-lumi-guide-narration.py --practice taichi
+python3 scripts/generate-lumi-guide-narration.py --practice taichi --check
+```
+
+Generation uses `OPENROUTER_API_KEY` from the operator's private environment,
+checks recordings against translated text and saves a resumable receipt. Model,
+voice, compression and equivalent spoken spellings are configured in
+`design/tai-chi/narration.json`. Only changed or missing recordings are generated
+again. `--locale CODE` limits generation or checks to one language. Incomplete or
+stale languages are excluded from the catalog. Cues follow cue volume and
+narration settings, pause with the practice, and stop on exit. Step-by-step
+movement leaves time for the downloaded recording.
+The course exporter also writes `design/tai-chi/narration-lines.json` from the
+actual step cues and movement names. Menu labels are excluded. The coverage
+check catches course changes that need a new narration inventory; packs check
+the staged recording hashes against the verified receipt before publication.
+The same configuration owns per-language verifier models, bounded token limits
+and vocabulary hints. Verification keeps raw transcripts, accepts configured
+equivalent spellings, and separately checks direction and numeric tokens.
+
+The node needs the signed archive receiver and its catalog helper. Install them
+independently of publishing content:
+
+```sh
+python3 scripts/install-package-receiver.py --ssh-target USER@NODE --store /absolute/node/package-store
+```
+
+The store must already exist. The installer restricts the launcher to that store
+and refuses to replace an unrelated launcher or unmanaged receiver directory.
+It does not publish packages, change SSH keys or restart the node.
 
 ## Updates and versions
 

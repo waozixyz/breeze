@@ -46,7 +46,16 @@ assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zib', 'cells/habits.zib', 'cells/practices.zib',
     'cells/lists.zib', 'cells/diary.zib', 'cells/leaderboard.zib'}
 practices = assets(root['cells/practices.zib'])
-combined = root | practices
+import json
+catalog = json.loads(practices['assets/practices/catalog.json'])
+content = {}
+for pack in catalog['packs']:
+    suffix = '.' + pack['language'] if pack['language'] else ''
+    data = (ROOT / 'build/practice-content' / (pack['practice'] + suffix + '.zib')).read_bytes()
+    from hashlib import sha256
+    assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
+    content.update(assets(data))
+combined = root | practices | content
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
 paths = set(re.findall(r'"((?:assets/)?(?:practices|easteregg|pet)/[^"\n]+\.(?:png|jpg|jpeg))"', source))
 assert paths
@@ -69,11 +78,12 @@ for name in root:
         f'development artwork shipped: {name}'
 assert not any(name.endswith('/banner.png') for name in practices)
 paths, sources, unique_animation = inventory()
-packaged_animation = {name for name in practices if '/characters/' in name}
+packaged_animation = {name for name in content if '/characters/' in name}
 assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}
 for index, original in enumerate(paths):
     stored = paths[sources[index]].relative_to(ROOT).as_posix()
-    assert practices[stored] == original.read_bytes(), f'animation frame changed: {original}'
+    assert content[stored] == original.read_bytes(), f'animation frame changed: {original}'
+assert not any('/characters/' in name or name.endswith('/course.zip') for name in practices)
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
 assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zib'}, entries

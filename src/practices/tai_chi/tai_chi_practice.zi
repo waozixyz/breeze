@@ -1,0 +1,427 @@
+// Separate course and character modals, both using the real painted poses.
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_settings.zi";
+#import "layout"
+#import "session"
+#import, file "../../app/locale.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/cards.zi";
+#import, file "../../app/metrics.zi";
+#import "geometry"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "scroll"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_rules.zi";
+#import, file "tai_chi_entry.zi";
+#import, file "tai_chi_draw.zi";
+#import, file "../../app/app_modal_state.zi";
+#import "modal_props"
+#import "modal_frame_widget"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "slider_props"
+#import "slider_widget"
+#import "toggle_props"
+#import "toggle_widget"
+#import, file "../../app/lumi_guide.zi";
+#import, file "../meditation/meditation_music.zi";
+#import, file "../../app/exercise_types.zi";
+
+using ModalType;
+using ButtonTone;
+using ButtonEmphasis;
+using ContentAlignment;
+using TextWrap;
+using ExerciseType;
+
+// MingCute's regular check_circle icon (Apache-2.0), copied from
+// kryonlabs/mingcute's generated shapes, for an item already practised.
+TAI_CHI_DONE_ICON :: "F:M8.46431 11.2095C8.07379 10.819 7.44063 10.819 7.0501 11.2095C6.65958 11.6 6.65958 12.2332 7.0501 12.6237L7.75721 11.9166L8.46431 11.2095ZM10.5856 14.745L9.87853 15.4522C10.2691 15.8427 10.9022 15.8427 11.2927 15.4522L10.5856 14.745ZM16.9496 9.7953C17.3401 9.40478 17.3401 8.77161 16.9496 8.38109C16.5591 7.99056 15.9259 7.99056 15.5354 8.38109L16.2425 9.08819L16.9496 9.7953ZM21 12H20C20 16.4183 16.4183 20 12 20V21V22C17.5228 22 22 17.5228 22 12H21ZM12 21V20C7.58172 20 4 16.4183 4 12H3H2C2 17.5228 6.47715 22 12 22V21ZM3 12H4C4 7.58172 7.58172 4 12 4V3V2C6.47715 2 2 6.47715 2 12H3ZM12 3V4C16.4183 4 20 7.58172 20 12H21H22C22 6.47715 17.5228 2 12 2V3ZM7.75721 11.9166L7.0501 12.6237L9.87853 15.4522L10.5856 14.745L11.2927 14.0379L8.46431 11.2095L7.75721 11.9166ZM10.5856 14.745L11.2927 15.4522L16.9496 9.7953L16.2425 9.08819L15.5354 8.38109L9.87853 14.0379L10.5856 14.745Z"
+
+
+// "1:05" for a duration in seconds.
+TaiChiDurationText :: (app: *InnerBreeze, seconds: float64) -> string {
+    whole := cast(s32)(seconds + 0.5)
+    buffer: [16]u8
+    args: [2]FormatArg = .[FormatArg.{.number = whole / 60}, FormatArg.{.number = whole % 60}]
+    FormatTemplate("%d:%02d", args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 16))
+}
+
+TaiChiItemDetail :: (app: *InnerBreeze, item: TaiChiItem) -> string {
+    duration := TaiChiDurationText(app, item.duration * 1.0)
+    if item.version < 0 {
+        return duration
+    }
+    buffer: [160]u8
+    args: [2]FormatArg = .[
+    FormatArg.{.text = LocaleText(TaiChiCourseString(item.version)), .is_text = true},
+    FormatArg.{.text = duration, .is_text = true}
+    ]
+    FormatTemplate("%s · %s", args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 160))
+}
+
+TaiChiProgressLine :: (app: *InnerBreeze) -> string {
+    buffer: [160]u8
+    args: [2]FormatArg = .[
+    FormatArg.{.number = TaiChiDoneCount(app.tai_chi)},
+    FormatArg.{.number = tai_chi_course.item_count}
+    ]
+    FormatTemplate(LocaleText("tai_chi_progress"), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 160))
+}
+
+// A preview card is one large target, with its real course pose above
+// the title. Unique keys keep every painted part distinct across cards.
+TaiChiPreviewCard :: (app: *InnerBreeze, bounds: Rectangle, item: s32,
+    character: s32, title: string, detail: string, selected: bool,
+    done: bool, key: u64) -> bool {
+    session := app.ui.session
+    clicked := Button(session, ButtonProps.{
+            .key = key, .bounds = bounds, .selected = selected,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+            .label = ""}) != 0
+    padding := cast(float32)AppScale(14)
+    text_y := bounds.y + bounds.height - cast(float32)AppScale(76)
+    preview := Rectangle.{bounds.x + padding, bounds.y + padding,
+        bounds.width - padding * 2.0,
+        bounds.height - cast(float32)AppScale(94)}
+    TaiChiDrawPreview(session, item, character, preview, key + cast(u64)1000, title)
+    Text(session, TextProps.{
+            .bounds = Rectangle.{bounds.x + padding, text_y,
+                bounds.width - padding * 2.0, cast(float32)AppScale(44)},
+            .text = title, .font = AppFontSize(),
+            .wrap = cast(TextWrap)TextWrapAuto})
+    Text(session, TextProps.{
+            .bounds = Rectangle.{bounds.x + padding, text_y + cast(float32)AppScale(48),
+                bounds.width - padding * 2.0, cast(float32)AppScale(24)},
+            .text = detail, .font = AppSmallFontSize(),
+            .class_name = MutedTextClass(),
+            .wrap = cast(TextWrap)TextWrapEllipsis})
+    if done {
+        // The completion mark occupies its own corner above the preview.
+        unused Button(session, ButtonProps.{
+                .key = key + cast(u64)2000,
+                .bounds = Rectangle.{bounds.x + bounds.width - cast(float32)AppScale(38),
+                    bounds.y + cast(float32)AppScale(8), cast(float32)AppScale(30), cast(float32)AppScale(30)},
+                .icon_only = true, .icon_shape = TAI_CHI_DONE_ICON,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = true})
+    }
+    return clicked
+}
+
+TaiChiChooseLesson :: (lesson: s32) {
+    if lesson != tai_chi_selected_lesson {
+        tai_chi_selected_lesson = lesson
+        tai_chi_course_scroll = 0
+        tai_chi_reveal_next = false
+    }
+}
+
+TaiChiCourseNavigation :: (app: *InnerBreeze, bounds: Rectangle) {
+    gap := AppScale(8)
+    row_h := AppScale(58)
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("inbe/tai_chi/lessons"), .bounds = bounds,
+            .content_height = tai_chi_course.lesson_count * (row_h + gap),
+            .scroll_offset = tai_chi_lesson_scroll})
+    tai_chi_lesson_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return
+    }
+    for index: cast(s32)0..tai_chi_course.lesson_count - 1 {
+        lesson := tai_chi_course.lessons[index]
+        if Button(app.ui.session, ButtonProps.{
+                .key = KeyHash("inbe/tai_chi/lesson") + cast(u64)index,
+                .bounds = Rectangle.{scroll.content.x, scroll.content.y + cast(float32)(index * (row_h + gap)),
+                    bounds.width - cast(float32)AppScale(10), cast(float32)row_h},
+                .label = LocaleText(TaiChiCourseString(lesson.title)),
+                .selected = index == tai_chi_selected_lesson,
+                .tone = cast(ButtonTone)(ifx index == tai_chi_selected_lesson then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)(ifx index == tai_chi_selected_lesson then ButtonEmphasisFilled else ButtonEmphasisSoft),
+                .content_alignment = cast(ContentAlignment)ContentAlignmentStart}) != 0 {
+            TaiChiChooseLesson(index)
+        }
+    }
+    End(app.ui.session)
+}
+
+TaiChiCourseCards :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    lesson := tai_chi_course.lessons[tai_chi_selected_lesson]
+    gap := AppScale(14)
+    columns: s32 = ifx bounds.width >= cast(float32)AppScale(460) then 2 else 1
+    card_w := (cast(s32)bounds.width - gap * (columns - 1) - AppScale(10)) / columns
+    card_h := AppScale(252)
+    heading := LocaleText(TaiChiCourseString(lesson.title))
+    heading_h := SectionTitleHeight(heading, cast(s32)bounds.width - AppScale(12))
+    summary := LocaleText(TaiChiCourseString(lesson.summary))
+    summary_h := AppParagraphHeight(summary, cast(s32)bounds.width - AppScale(12), AppFontSize(), AppScale(3))
+    header_h := heading_h + gap + summary_h + gap * 2
+    rows := (lesson.item_count + columns - 1) / columns
+    if tai_chi_reveal_next {
+        tai_chi_reveal_next = false
+        offset := TaiChiItemToPlay(app.tai_chi) - lesson.item_first
+        if offset >= columns {
+            tai_chi_course_scroll = header_h + (offset / columns) * (card_h + gap)
+        }
+    }
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("inbe/tai_chi/items"), .bounds = bounds,
+            .content_height = header_h + rows * (card_h + gap),
+            .scroll_offset = tai_chi_course_scroll})
+    tai_chi_course_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return false
+    }
+    unused SectionTitle(app.ui.session, heading, cast(s32)scroll.content.x,
+        cast(s32)scroll.content.y, cast(s32)bounds.width - AppScale(12))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{scroll.content.x,
+                scroll.content.y + cast(float32)(heading_h + gap),
+                bounds.width - cast(float32)AppScale(12), cast(float32)summary_h},
+            .text = summary, .class_name = MutedTextClass(),
+            .wrap = cast(TextWrap)TextWrapAuto})
+    for offset: cast(s32)0..lesson.item_count - 1 {
+        item_index := lesson.item_first + offset
+        item := tai_chi_course.items[item_index]
+        card := Rectangle.{scroll.content.x + cast(float32)((offset % columns) * (card_w + gap)),
+            scroll.content.y + cast(float32)(header_h + (offset / columns) * (card_h + gap)),
+            cast(float32)card_w, cast(float32)card_h}
+        // Do not build or submit offscreen painted meshes.
+        if card.y + card.height < bounds.y || card.y > bounds.y + bounds.height {
+            continue
+        }
+        if TaiChiPreviewCard(app, card, item_index, app.tai_chi.character,
+            LocaleText(TaiChiCourseString(item.title)), TaiChiItemDetail(app, item),
+            item_index == TaiChiItemToPlay(app.tai_chi), app.tai_chi.done[item_index],
+            KeyHash("inbe/tai_chi/item-card") + cast(u64)item_index * cast(u64)4096) {
+            // Close both widget scopes before changing the route.
+            End(app.ui.session)
+            End(app.ui.session)
+            app.tai_chi.item = item_index
+            save_settings(app)
+            tai_chi_practice_start_item(app, item_index)
+            return true
+        }
+    }
+    End(app.ui.session)
+    return false
+}
+
+// Returns true when a card started playback and closed the modal scope.
+TaiChiCourseBody :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    progress_h := AppScale(32)
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)progress_h},
+            .text = TaiChiProgressLine(app), .class_name = MutedTextClass(),
+            .wrap = cast(TextWrap)TextWrapEllipsis})
+    bounds.y += cast(float32)(progress_h + AppScale(10))
+    bounds.height -= cast(float32)(progress_h + AppScale(10))
+    if bounds.width >= cast(float32)AppScale(700) {
+        sidebar := bounds
+        sidebar.width = cast(float32)AppScale(190)
+        TaiChiCourseNavigation(app, sidebar)
+        bounds.x += sidebar.width + cast(float32)AppScale(24)
+        bounds.width -= sidebar.width + cast(float32)AppScale(24)
+    } else {
+        options: [TAI_CHI_LESSON_CAPACITY]DropdownOption
+        for index: cast(s32)0..tai_chi_course.lesson_count - 1 {
+            options[index].label = LocaleText(TaiChiCourseString(tai_chi_course.lessons[index].title))
+        }
+        choice := Dropdown(app.ui.session, DropdownProps.{
+                .key = KeyHash("inbe/tai_chi/lesson-select"),
+                .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)AppScale(48)},
+                .selected_index = tai_chi_selected_lesson}, options[:tai_chi_course.lesson_count])
+        if choice.changed {
+            TaiChiChooseLesson(choice.selected_index)
+        }
+        bounds.y += cast(float32)AppScale(62)
+        bounds.height -= cast(float32)AppScale(62)
+    }
+    return TaiChiCourseCards(app, bounds)
+}
+
+TaiChiCharacterBody :: (app: *InnerBreeze, bounds: Rectangle) {
+    gap := AppScale(16)
+    card_w := (cast(s32)bounds.width - gap) / 2
+    card_h := cast(s32)bounds.height
+    if card_h > AppScale(380) {
+        card_h = AppScale(380)
+    }
+    preview_item := TaiChiCourseItemIndex("lesson-4/single-whip/demo")
+    if preview_item < 0 {
+        preview_item = 0
+    }
+    for character: cast(s32)0..tai_chi_course.character_count - 1 {
+        title := LocaleText(TaiChiCourseString(tai_chi_course.characters[character].name))
+        card := Rectangle.{bounds.x + cast(float32)(character * (card_w + gap)), bounds.y,
+            cast(float32)card_w, cast(float32)card_h}
+        if TaiChiPreviewCard(app, card, preview_item, character, title, "",
+            app.tai_chi.character == character, false,
+            KeyHash("inbe/tai_chi/character-card") + cast(u64)character * cast(u64)4096) {
+            app.tai_chi.character = character
+            save_settings(app)
+        }
+    }
+}
+
+TaiChiAudioSettings :: (app: *InnerBreeze, x: s32, width: s32, top: s32) {
+    y := top
+    meditation_music_draw_practice_settings(app, EXERCISE_TAI_CHI,
+        x, width, *y, 0, 1)
+    y += AppScale(12)
+    music := DiscreteSlider(app.ui.session, DiscreteSliderProps.{
+            .id = 15420,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(56)},
+            .label = LocaleText("music_volume_label"),
+            .value = app.music_volume, .min = 0, .max = 100})
+    if music.changed {
+        app.music_volume = music.value
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y += AppScale(74)
+    cue := DiscreteSlider(app.ui.session, DiscreteSliderProps.{
+            .id = 15421,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(56)},
+            .label = LocaleText("cue_volume_label"),
+            .value = app.sound_volume, .min = 0, .max = 100})
+    if cue.changed {
+        app.sound_volume = cue.value
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y += AppScale(74)
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(28)},
+            .text = LocaleText("voice_narration_label")})
+    y += AppScale(36)
+    narration := Toggle(app.ui.session, ToggleProps.{
+            .id = 15422,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(44)},
+            .value = app.voice_narration_enabled != 0,
+            .off_label = LocaleText("toggle_off"),
+            .on_label = LocaleText("toggle_on")})
+    if narration.changed {
+        app.voice_narration_enabled = ifx narration.value then 1 else 0
+        if !narration.value {
+            LumiGuideSilence()
+        }
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y += AppScale(56)
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width,
+                cast(float32)AppParagraphHeight(LocaleText("tai_chi_narration_hint"),
+                width, AppFontSize(), AppScale(3))},
+            .text = LocaleText("tai_chi_narration_hint"),
+            .class_name = MutedTextClass()})
+}
+
+TaiChiCustomizeBody :: (app: *InnerBreeze, bounds: Rectangle) {
+    gap := AppScale(24)
+    wide := bounds.width >= cast(float32)AppScale(700)
+    audio_w := cast(s32)bounds.width - AppScale(10)
+    character_w := audio_w
+    if wide {
+        character_w = (audio_w - gap) / 2
+        audio_w -= character_w + gap
+    }
+    audio_h := meditation_music_measure_practice_settings(app,
+        EXERCISE_TAI_CHI, audio_w, 0, 1) + AppScale(12 + 74 * 2 + 92) +
+    AppParagraphHeight(LocaleText("tai_chi_narration_hint"), audio_w,
+        AppFontSize(), AppScale(3))
+    title := LocaleText("tai_chi_character_label")
+    title_h := SectionTitleHeight(title, character_w)
+    character_h := title_h + AppScale(12 + 280)
+    content_h := audio_h + gap + character_h
+    if wide {
+        content_h = audio_h
+        if content_h < character_h {
+            content_h = character_h
+        }
+    }
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("inbe/tai_chi/customize/scroll"),
+            .bounds = bounds, .content_height = content_h + AppScale(16),
+            .scroll_offset = tai_chi_customize_scroll})
+    tai_chi_customize_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return
+    }
+    x := cast(s32)scroll.content.x
+    y := cast(s32)scroll.content.y
+    character_x := x
+    character_y := y + audio_h + gap
+    audio_x := x
+    if wide {
+        character_y = y
+        audio_x = x + character_w + gap
+    }
+    TaiChiAudioSettings(app, audio_x, audio_w, y)
+    unused SectionTitle(app.ui.session, title,
+        character_x, character_y, character_w)
+    TaiChiCharacterBody(app, Rectangle.{cast(float32)character_x,
+            cast(float32)(character_y + title_h + AppScale(12)),
+            cast(float32)character_w, cast(float32)AppScale(280)})
+    End(app.ui.session)
+}
+
+#program_export
+tai_chi_modal_draw :: (app: *InnerBreeze) {
+    if app == null || !TaiChiCourseLoad() {
+        return
+    }
+    app.tai_chi = TaiChiNormalizeSettings(app.tai_chi)
+    course := app.modal.type == cast(ModalType)ModalTaiChiCourse
+    width := app.ui.view_width - AppScale(32)
+    max_width := ifx course then AppScale(1060) else AppScale(940)
+    if width > max_width {
+        width = max_width
+    }
+    height := app.ui.view_height - AppScale(48)
+    max_height := AppScale(740)
+    if height > max_height {
+        height = max_height
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("inbe/tai_chi/modal"),
+            .title = LocaleText(ifx course then "tai_chi_course_title" else "practice_configure_button"),
+            .width = width, .height = height, .scale = MetricsScale(),
+            .title_at_start = true, .strong_title = true,
+            .has_right_action = true, .right_label = LocaleText("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    if course {
+        if TaiChiCourseBody(app, frame.layout.content) {
+            return
+        }
+    } else {
+        TaiChiCustomizeBody(app, frame.layout.content)
+    }
+    End(app.ui.session)
+}

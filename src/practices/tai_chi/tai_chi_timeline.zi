@@ -1,0 +1,440 @@
+// Samples a list of keyed poses into a continuous motion, as the course
+// studio's timeline does (design/tai-chi/src/timeline.js).
+//
+// Body channels use monotone cubic curves, so weight, sinking and turning
+// never overshoot. Hands use Catmull-Rom curves, so they travel in smooth
+// arcs through their keys. Feet that stay on the floor never slide: a foot
+// that keeps its heel, ball or ankle point pivots about it exactly, and a
+// foot that moves lifts off.
+#import "math"
+#import, file "tai_chi_math.zi";
+#import, file "tai_chi_course.zi";
+
+TAI_CHI_TIMELINE_CAPACITY :: 512
+// A step this much short of its reading time is long enough.
+TAI_CHI_READING_SLACK :: 0.001
+TAI_CHI_SAME_POINT :: 0.002
+// Optional spoken timing supplied by the host before starting an item.
+TaiChiReadingSeconds :: #type (key: string) -> float64;
+tai_chi_reading_seconds: TaiChiReadingSeconds;
+tai_chi_reading_enabled: bool;
+TAI_CHI_PIVOT_RAISE :: 0.20943951023931953
+TAI_CHI_STEP_PEEL :: 0.12
+// The reference figure's heel and ball offsets from the ankle point, which
+// the choreography's feet are measured with.
+TAI_CHI_REFERENCE_HEEL_BACK :: 0.051
+TAI_CHI_REFERENCE_BALL :: 0.1445
+
+// Channel numbers, in course.bin's order.
+TAI_CHI_FACING :: 0
+TAI_CHI_LOAD :: 1
+TAI_CHI_SINK :: 2
+TAI_CHI_HIPS :: 3
+TAI_CHI_CHEST :: 4
+TAI_CHI_LEAN :: 5
+TAI_CHI_BEND :: 6
+TAI_CHI_SHIFT_FORWARD :: 7
+TAI_CHI_SHIFT_SIDE :: 8
+// Each foot: yaw, pitch, lift, x, z, then the hand shape (palm, fist,
+// hook) of the same side; the right side follows the left.
+TAI_CHI_FOOT_LEFT :: 9
+TAI_CHI_FOOT_RIGHT :: 17
+TAI_CHI_FOOT_YAW :: 0
+TAI_CHI_FOOT_PITCH :: 1
+TAI_CHI_FOOT_LIFT :: 2
+TAI_CHI_FOOT_X :: 3
+TAI_CHI_FOOT_Z :: 4
+TAI_CHI_FOOT_SHAPE :: 5
+// Each hand: at, palm, fingers and elbow, three values each.
+TAI_CHI_HAND_LEFT :: 25
+TAI_CHI_HAND_RIGHT :: 37
+TAI_CHI_HAND_AT :: 0
+TAI_CHI_HAND_PALM :: 3
+TAI_CHI_HAND_FINGERS :: 6
+TAI_CHI_HAND_ELBOW :: 9
+
+TAI_CHI_FOOT_STILL :: 0
+TAI_CHI_FOOT_HEEL :: 1
+TAI_CHI_FOOT_BALL :: 2
+TAI_CHI_FOOT_ANKLE :: 3
+TAI_CHI_FOOT_STEP :: 4
+
+TaiChiLook :: struct {
+    kind: s32
+    yaw: float64
+    pitch: float64
+}
+
+// A sampled pose: the channels, and the gaze moving from one key's to the
+// next by `look_blend`.
+TaiChiPose :: struct {
+    channels: [TAI_CHI_CHANNEL_COUNT]float64
+    look_from: TaiChiLook
+    look_to: TaiChiLook
+    look_blend: float64
+}
+
+TaiChiTimelineKey :: struct {
+    t: float64
+    cue: s32
+    // Seconds the cue's words need on screen.
+    read: float64
+    // A copy that pauses on the key before it, after a cued step.
+    held: bool
+    look: TaiChiLook
+    channels: [TAI_CHI_CHANNEL_COUNT]float64
+}
+
+TaiChiTimeline :: struct {
+    keys: [TAI_CHI_TIMELINE_CAPACITY]TaiChiTimelineKey
+    tangents: [TAI_CHI_TIMELINE_CAPACITY][TAI_CHI_CHANNEL_COUNT]float64
+    // Per key segment, how each foot moves: left then right.
+    foot_motions: [TAI_CHI_TIMELINE_CAPACITY][2]s32
+    count: s32
+    start: float64
+    duration: float64
+}
+
+TaiChiFootBase :: (side: s32) -> s32 {
+    return ifx side == 0 then TAI_CHI_FOOT_LEFT else TAI_CHI_FOOT_RIGHT
+}
+
+TaiChiHandBase :: (side: s32) -> s32 {
+    return ifx side == 0 then TAI_CHI_HAND_LEFT else TAI_CHI_HAND_RIGHT
+}
+
+// --- Building ------------------------------------------------------------------
+
+TaiChiTimelinePush :: (timeline: *TaiChiTimeline, key: TaiChiKey, t: float64, held: bool) -> bool {
+    if timeline.count >= TAI_CHI_TIMELINE_CAPACITY {
+        return false
+    }
+    entry := *timeline.keys[timeline.count]
+    entry.t = t
+    entry.cue = ifx held then -1 else key.cue
+    entry.read = ifx held then 0.0 else key.read
+    entry.held = held
+    entry.look.kind = key.look_kind
+    entry.look.yaw = key.look_yaw
+    entry.look.pitch = key.look_pitch
+    entry.channels = key.channels
+    timeline.count += 1
+    return true
+}
+
+// The key whose segment starts showing the words of cued key `index`: the
+// key before it, or one earlier when that key is a lead-in (no words of its
+// own and not a pause).
+TaiChiCueStart :: (timeline: *TaiChiTimeline, index: s32) -> s32 {
+    lead := index - 1
+    if lead >= 1 && timeline.keys[lead].cue < 0 && !timeline.keys[lead].held {
+        return lead - 1
+    }
+    return lead
+}
+
+// Slows every cued step whose words would not stay on screen for their
+// reading time, until they do. Pauses after a step count as reading time.
+TaiChiTimelineSlowForReading :: (timeline: *TaiChiTimeline) {
+    index: s32 = 1
+    while index < timeline.count && timeline.keys[index].cue < 0 {
+        index += 1
+    }
+    while index < timeline.count {
+        next := index + 1
+        while next < timeline.count && timeline.keys[next].cue < 0 {
+            next += 1
+        }
+        start := TaiChiCueStart(timeline, index)
+        end := timeline.count - 1
+        if next < timeline.count {
+            end = TaiChiCueStart(timeline, next)
+        }
+        shown := timeline.keys[end].t - timeline.keys[start].t
+        motion := timeline.keys[index].t - timeline.keys[start].t
+        need := timeline.keys[index].read
+        if shown < need - TAI_CHI_READING_SLACK && motion > 0.0 {
+            stretch := (need - shown) / motion
+            origin := timeline.keys[start].t
+            for later: start + 1..timeline.count - 1 {
+                if later <= index {
+                    timeline.keys[later].t += (timeline.keys[later].t - origin) * stretch
+                } else {
+                    timeline.keys[later].t += need - shown
+                }
+            }
+        }
+        index = next
+    }
+}
+
+// The item's keys from the form or its own key set, moved to start at time
+// zero and stretched by its scale, pausing after every key that ends a
+// cued step for its hold; an item with step words slows each step until
+// its words can be read.
+TaiChiTimelineForItem :: (timeline: *TaiChiTimeline, item: TaiChiItem) -> bool {
+    timeline.count = 0
+    first: s32 = 0
+    last: s32 = 0
+    if item.source == TAI_CHI_SOURCE_KEY_SET {
+        set := tai_chi_course.key_sets[item.first]
+        first = set.first
+        last = set.first + set.count - 1
+    } else {
+        set := tai_chi_course.key_sets[0]
+        first = set.first + item.first
+        last = set.first + item.last
+    }
+    origin := tai_chi_course.keys[first].t
+    shift: float64 = 0.0
+    for index: first..last {
+        key := tai_chi_course.keys[index]
+        if item.step_words && key.cue >= 0 && tai_chi_reading_enabled && tai_chi_reading_seconds != null {
+            spoken := tai_chi_reading_seconds(TaiChiCourseString(key.cue))
+            if spoken > key.read { key.read = spoken }
+        }
+        t := (key.t - origin) * item.scale + shift
+        if !TaiChiTimelinePush(timeline, key, t, false) {
+            return false
+        }
+        if item.hold > 0.0 && key.cue >= 0 && index != last {
+            shift += item.hold
+            if !TaiChiTimelinePush(timeline, key, t + item.hold, true) {
+                return false
+            }
+        }
+    }
+    if item.step_words {
+        TaiChiTimelineSlowForReading(timeline)
+    }
+    TaiChiTimelinePrepare(timeline)
+    return timeline.count >= 2
+}
+
+TaiChiGroundPoint :: (x: float64, z: float64, yaw: float64, which: s32) -> TaiChiVector2 {
+    offset: float64 = 0.0
+    if which == TAI_CHI_FOOT_HEEL {
+        offset = -TAI_CHI_REFERENCE_HEEL_BACK
+    } else if which == TAI_CHI_FOOT_BALL {
+        offset = TAI_CHI_REFERENCE_BALL
+    }
+    return TaiChiV2(x + Sin(yaw) * offset, z + Cos(yaw) * offset)
+}
+
+TaiChiSamePoint :: (a: TaiChiVector2, b: TaiChiVector2) -> bool {
+    return TaiChiHypot(a.x - b.x, a.y - b.y) < TAI_CHI_SAME_POINT
+}
+
+// How a foot gets from one key to the next.
+TaiChiFootMotion :: (a: *TaiChiTimelineKey, b: *TaiChiTimelineKey, base: s32) -> s32 {
+    ax := a.channels[base + TAI_CHI_FOOT_X]
+    az := a.channels[base + TAI_CHI_FOOT_Z]
+    ayaw := a.channels[base + TAI_CHI_FOOT_YAW]
+    bx := b.channels[base + TAI_CHI_FOOT_X]
+    bz := b.channels[base + TAI_CHI_FOOT_Z]
+    byaw := b.channels[base + TAI_CHI_FOOT_YAW]
+    same_ankle := TaiChiSamePoint(TaiChiV2(ax, az), TaiChiV2(bx, bz))
+    if same_ankle && TaiChiAbs(ayaw - byaw) < 0.000001 {
+        return TAI_CHI_FOOT_STILL
+    }
+    if TaiChiSamePoint(TaiChiGroundPoint(ax, az, ayaw, TAI_CHI_FOOT_HEEL), TaiChiGroundPoint(bx, bz, byaw, TAI_CHI_FOOT_HEEL)) {
+        return TAI_CHI_FOOT_HEEL
+    }
+    if TaiChiSamePoint(TaiChiGroundPoint(ax, az, ayaw, TAI_CHI_FOOT_BALL), TaiChiGroundPoint(bx, bz, byaw, TAI_CHI_FOOT_BALL)) {
+        return TAI_CHI_FOOT_BALL
+    }
+    if same_ankle {
+        return TAI_CHI_FOOT_ANKLE
+    }
+    return TAI_CHI_FOOT_STEP
+}
+
+// Monotone tangents for body channels, Catmull-Rom ones for hands.
+TaiChiTimelinePrepare :: (timeline: *TaiChiTimeline) {
+    count := timeline.count
+    for channel: cast(s32)0..TAI_CHI_CHANNEL_COUNT - 1 {
+        timeline.tangents[0][channel] = 0.0
+        timeline.tangents[count - 1][channel] = 0.0
+        index: s32 = 1
+        while index < count - 1 {
+            before := timeline.keys[index].t - timeline.keys[index - 1].t
+            after := timeline.keys[index + 1].t - timeline.keys[index].t
+            previous := timeline.keys[index - 1].channels[channel]
+            value := timeline.keys[index].channels[channel]
+            next := timeline.keys[index + 1].channels[channel]
+            tangent: float64 = 0.0
+            if channel < TAI_CHI_BODY_CHANNEL_COUNT {
+                slope_before := (value - previous) / before
+                slope_after := (next - value) / after
+                if slope_before * slope_after > 0.0 {
+                    tangent = 3.0 * (before + after) /
+                        ((2.0 * after + before) / slope_before + (after + 2.0 * before) / slope_after)
+                }
+            } else {
+                held := TaiChiAbs(value - previous) < 0.000000001 || TaiChiAbs(next - value) < 0.000000001
+                if !held {
+                    tangent = (next - previous) / (timeline.keys[index + 1].t - timeline.keys[index - 1].t)
+                }
+            }
+            timeline.tangents[index][channel] = tangent
+            index += 1
+        }
+    }
+    for index: cast(s32)0..count - 2 {
+        for side: cast(s32)0..1 {
+            timeline.foot_motions[index][side] = TaiChiFootMotion(*timeline.keys[index],
+                *timeline.keys[index + 1], TaiChiFootBase(side))
+        }
+    }
+    timeline.start = timeline.keys[0].t
+    timeline.duration = timeline.keys[count - 1].t - timeline.start
+}
+
+// --- Sampling ------------------------------------------------------------------
+
+TaiChiHermite :: (y0: float64, y1: float64, m0: float64, m1: float64, span: float64, u: float64) -> float64 {
+    u2 := u * u
+    u3 := u2 * u
+    return (2.0 * u3 - 3.0 * u2 + 1.0) * y0 + (u3 - 2.0 * u2 + u) * span * m0 +
+        (-2.0 * u3 + 3.0 * u2) * y1 + (u3 - u2) * span * m1
+}
+
+TaiChiSegment :: struct {
+    index: s32
+    u: float64
+}
+
+TaiChiSegmentAt :: (timeline: *TaiChiTimeline, time: float64) -> TaiChiSegment {
+    count := timeline.count
+    if time <= timeline.keys[0].t {
+        return TaiChiSegment.{.index = 0, .u = 0.0}
+    }
+    if time >= timeline.keys[count - 1].t {
+        return TaiChiSegment.{.index = count - 2, .u = 1.0}
+    }
+    low: s32 = 0
+    high := count - 1
+    while high - low > 1 {
+        middle := (low + high) / 2
+        if timeline.keys[middle].t <= time {
+            low = middle
+        } else {
+            high = middle
+        }
+    }
+    span := timeline.keys[low + 1].t - timeline.keys[low].t
+    u: float64 = 1.0
+    if span > 0.0 {
+        u = (time - timeline.keys[low].t) / span
+    }
+    return TaiChiSegment.{.index = low, .u = u}
+}
+
+TaiChiChannelAt :: (timeline: *TaiChiTimeline, index: s32, channel: s32, span: float64, u: float64) -> float64 {
+    return TaiChiHermite(timeline.keys[index].channels[channel], timeline.keys[index + 1].channels[channel],
+        timeline.tangents[index][channel], timeline.tangents[index + 1][channel], span, u)
+}
+
+// The pose at `time` (from the timeline's start).
+TaiChiTimelineSample :: (timeline: *TaiChiTimeline, time: float64) -> TaiChiPose {
+    segment := TaiChiSegmentAt(timeline, timeline.start + time)
+    index := segment.index
+    u := segment.u
+    from := *timeline.keys[index]
+    to := *timeline.keys[index + 1]
+    span := to.t - from.t
+    pose: TaiChiPose
+    for channel: cast(s32)0..TAI_CHI_CHANNEL_COUNT - 1 {
+        pose.channels[channel] = TaiChiChannelAt(timeline, index, channel, span, u)
+    }
+    for side: cast(s32)0..1 {
+        base := TaiChiFootBase(side)
+        motion := timeline.foot_motions[index][side]
+        ax := from.channels[base + TAI_CHI_FOOT_X]
+        az := from.channels[base + TAI_CHI_FOOT_Z]
+        ayaw := from.channels[base + TAI_CHI_FOOT_YAW]
+        if motion == TAI_CHI_FOOT_STILL || motion == TAI_CHI_FOOT_ANKLE {
+            pose.channels[base + TAI_CHI_FOOT_X] = ax
+            pose.channels[base + TAI_CHI_FOOT_Z] = az
+        } else if motion == TAI_CHI_FOOT_HEEL || motion == TAI_CHI_FOOT_BALL {
+            pivot := TaiChiGroundPoint(ax, az, ayaw, motion)
+            offset := ifx motion == TAI_CHI_FOOT_HEEL then TAI_CHI_REFERENCE_HEEL_BACK else -TAI_CHI_REFERENCE_BALL
+            yaw := pose.channels[base + TAI_CHI_FOOT_YAW]
+            pose.channels[base + TAI_CHI_FOOT_X] = pivot.x + Sin(yaw) * offset
+            pose.channels[base + TAI_CHI_FOOT_Z] = pivot.y + Cos(yaw) * offset
+            // A flat foot turning on its heel lifts its toes a little, and
+            // one turning on its ball lifts its heel.
+            wave := Sin(TAI_CHI_PI * u)
+            raise := TAI_CHI_PIVOT_RAISE * wave * wave
+            pitch := pose.channels[base + TAI_CHI_FOOT_PITCH]
+            if motion == TAI_CHI_FOOT_HEEL {
+                pose.channels[base + TAI_CHI_FOOT_PITCH] = TaiChiMax(pitch, raise)
+            } else {
+                pose.channels[base + TAI_CHI_FOOT_PITCH] = TaiChiMin(pitch, -raise)
+            }
+        } else {
+            // A step: a foot leaving the floor peels off before it
+            // travels, and a landing foot finishes turning and moving
+            // before it touches down.
+            from_floor := from.channels[base + TAI_CHI_FOOT_LIFT] < 0.0001
+            to_floor := to.channels[base + TAI_CHI_FOOT_LIFT] < 0.0001
+            begin := ifx from_floor then TAI_CHI_STEP_PEEL else 0.0
+            finish := ifx to_floor then TAI_CHI_STEP_PEEL else 0.0
+            travel := TaiChiClamp((u - begin) / (1.0 - begin - finish), 0.0, 1.0)
+            if from_floor && to_floor {
+                bx := to.channels[base + TAI_CHI_FOOT_X]
+                bz := to.channels[base + TAI_CHI_FOOT_Z]
+                distance := TaiChiHypot(ax - bx, az - bz)
+                arc := TaiChiMin(0.05, 0.15 * distance)
+                pose.channels[base + TAI_CHI_FOOT_LIFT] += arc * Sin(TAI_CHI_PI * TaiChiSmoothstep(u))
+                travel = TaiChiSmoothstep(travel)
+            }
+            pose.channels[base + TAI_CHI_FOOT_X] = TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_X, span, travel)
+            pose.channels[base + TAI_CHI_FOOT_Z] = TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_Z, span, travel)
+            pose.channels[base + TAI_CHI_FOOT_YAW] = TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_YAW, span, travel)
+        }
+    }
+    for side: cast(s32)0..1 {
+        shape := TaiChiFootBase(side) + TAI_CHI_FOOT_SHAPE
+        total: float64 = 0.0
+        for part: cast(s32)0..2 {
+            total += TaiChiMax(0.0, pose.channels[shape + part])
+        }
+        if total == 0.0 {
+            total = 1.0
+        }
+        for part: cast(s32)0..2 {
+            pose.channels[shape + part] = TaiChiMax(0.0, pose.channels[shape + part]) / total
+        }
+        lift := TaiChiFootBase(side) + TAI_CHI_FOOT_LIFT
+        pose.channels[lift] = TaiChiMax(0.0, pose.channels[lift])
+    }
+    pose.channels[TAI_CHI_LOAD] = TaiChiClamp(pose.channels[TAI_CHI_LOAD], 0.0, 1.0)
+    pose.look_from = from.look
+    pose.look_to = to.look
+    pose.look_blend = TaiChiSmoothstep(u)
+    return pose
+}
+
+// The words for the step being played at `time`: those of the key the
+// motion is heading to, else past a lead-in key the one after's, else the
+// last words shown, which stay until new words start. The first key's own
+// words belong to the motion before the item and never show.
+TaiChiTimelineCue :: (timeline: *TaiChiTimeline, time: float64) -> s32 {
+    segment := TaiChiSegmentAt(timeline, timeline.start + time)
+    next := segment.index + 1
+    if timeline.keys[next].cue >= 0 {
+        return timeline.keys[next].cue
+    }
+    if !timeline.keys[next].held && next + 1 < timeline.count && timeline.keys[next + 1].cue >= 0 {
+        return timeline.keys[next + 1].cue
+    }
+    index := segment.index
+    while index >= 1 {
+        if timeline.keys[index].cue >= 0 {
+            return timeline.keys[index].cue
+        }
+        index -= 1
+    }
+    return -1
+}

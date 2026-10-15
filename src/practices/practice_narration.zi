@@ -1,0 +1,103 @@
+// One local cue at a time, using only the selected language's downloaded audio.
+#import "byte_text_linux"
+#import, file "../app/assets.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/audio.zi";
+#import, file "../app/audio_policy.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/ogg_length.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../platform/audio_runtime.zi";
+#import, file "../platform/media_types.zi";
+#import, file "../cells/package_files.zi";
+
+PracticeVoiceCapacity :: 262144
+practice_voice: MusicHandle;
+practice_voice_bytes: [PracticeVoiceCapacity]u8;
+practice_voice_key: [128]u8;
+practice_voice_language: [16]u8;
+practice_voice_paused: bool;
+
+PracticeNarrationClip :: (practice: string, key: string) -> AssetView {
+    base := PackageText("assets/practices/", practice)
+    voice := PackageText(base, "/voice/")
+    localized := PackageText(voice, LocaleActiveCode())
+    directory := PackageText(localized, "/")
+    line := PackageText(directory, key)
+    path := PackageText(line, ".ogg")
+    defer {
+        PackageFree(base)
+        PackageFree(voice)
+        PackageFree(localized)
+        PackageFree(directory)
+        PackageFree(line)
+        PackageFree(path)
+    }
+    return AssetRead(path)
+}
+
+PracticeNarrationStop :: () {
+    if practice_voice.id != cast(u64)0 {
+        audio_stop_music(practice_voice)
+        audio_unload_music(practice_voice)
+    }
+    practice_voice = MusicHandle.{}
+    practice_voice_key[0] = cast(u8)0
+    practice_voice_paused = false
+}
+
+PracticeTaiChiReadingSeconds :: (key: string) -> float64 {
+    clip := PracticeNarrationClip("taichi", key)
+    if !clip.found {
+        return 0.0
+    }
+    return cast(float64)OggVorbisMilliseconds(clip.data) / 1000.0 + 0.2
+}
+
+PracticeNarrationUpdate :: (app: *InnerBreeze, practice: string, key: string) {
+    if app.voice_narration_enabled == 0 || app.sound_volume <= 0 || key.count == 0 {
+        PracticeNarrationStop()
+        return
+    }
+    language := LocaleActiveCode()
+    changed := TextFromCString(*practice_voice_key[0]) != key ||
+    TextFromCString(*practice_voice_language[0]) != language
+    if changed {
+        PracticeNarrationStop()
+        unused AppCopyText(key, practice_voice_key[:])
+        unused AppCopyText(language, practice_voice_language[:])
+        clip := PracticeNarrationClip(practice, key)
+        if clip.found && clip.data.count > 0 && clip.data.count <= PracticeVoiceCapacity &&
+        OggVorbisMilliseconds(clip.data) > 0 {
+            app_audio_ensure_ready(app)
+            if app.audio_ready != 0 {
+                for index: cast(s64)0..clip.data.count - 1 {
+                    practice_voice_bytes[index] = clip.data[index]
+                }
+                practice_voice = audio_load_music_memory(".ogg", *practice_voice_bytes[0],
+                    cast(s32)clip.data.count, false)
+                if audio_music_valid(practice_voice) {
+                    audio_play_music(practice_voice)
+                }
+            }
+        }
+    }
+    if practice_voice.id == cast(u64)0 {
+        return
+    }
+    volume := SoundVolumeFor(app.sound_volume, 1.0)
+    audio_set_music_volume(practice_voice, volume)
+    paused := app.session_paused != 0
+    if paused != practice_voice_paused {
+        if paused {
+            audio_pause_music(practice_voice)
+        }
+        else {
+            audio_resume_music(practice_voice)
+        }
+        practice_voice_paused = paused
+    }
+    if !paused {
+        audio_update_music(practice_voice)
+    }
+}

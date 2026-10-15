@@ -12,6 +12,8 @@ const CROUCH_SINK = 0.44
 const RISING_SINK = 0.26
 const LONG_BOW_SINK = 0.24
 const ROOSTER_SINK = 0.06
+// Rising as the weight settles keeps the front knee over the foot.
+const SETTLE_SINK = 0.13
 
 // A hook hand held out to the `side`, fingertips pointing down.
 function hook(k, side, at = [0.68, -0.06, 0.18]) {
@@ -78,7 +80,7 @@ function snakeAndRooster(f, low, across) {
     }, `Bow onto the ${lowName} leg and hook the ${standName} toes in`)
     f.key(0.9, (k) => {
         k.load(low)
-        k.sink(0.2)
+        k.sink(SETTLE_SINK)
     }, `Settle all the weight onto the ${lowName} leg`)
     f.key(3.0, (k) => {
         k.sink(ROOSTER_SINK)

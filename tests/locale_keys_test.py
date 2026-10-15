@@ -14,7 +14,8 @@ root = Path(__file__).resolve().parent.parent
 failures = []
 
 PRACTICE_LABELS = ["exercise_wim_hof", "exercise_patterns",
-                   "exercise_meditation", "exercise_sun_salutation"]
+                   "exercise_meditation", "exercise_sun_salutation",
+                   "exercise_tai_chi"]
 
 # Keys picked by name at run time, so no literal use appears in the sources.
 DYNAMIC_KEYS = """
@@ -42,6 +43,27 @@ theme_dawn theme_sage theme_sepia theme_mono theme_mint theme_cobalt
 tutorial_step_intro tutorial_step_method tutorial_step_breathe
 tutorial_step_exhale_hold tutorial_step_inhale_hold
 """.split() + ["sun_salutation_step_%d" % i for i in range(1, 13)]
+
+
+def tai_chi_course_keys():
+    """The Tai Chi course's words: locale keys named in course.bin's strings."""
+    data = (root / "assets/practices/taichi/course.bin").read_bytes()
+    if data[:4] != b"TCH2":
+        failures.append("assets/practices/taichi/course.bin is not a course file")
+        return []
+    count = int.from_bytes(data[4:8], "little")
+    at = 8
+    keys = []
+    for _ in range(count):
+        length = int.from_bytes(data[at:at + 2], "little")
+        value = data[at + 2:at + 2 + length].decode("utf-8")
+        at += 2 + length
+        if value.startswith("tai_chi_text_"):
+            keys.append(value)
+    return keys
+
+
+DYNAMIC_KEYS += tai_chi_course_keys()
 
 
 def load_keys(path):

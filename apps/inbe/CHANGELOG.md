@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.32] - 2026-10-15
+
+- Bring Practices 1.2.0 with separate practice and language downloads.
+- Requires Inner Breeze 2.1.34 or later.
+
 ## [2.1.31] - 2026-10-15
 
 - Bring Lists 1.1.0 with friend invitations and shared task editing.

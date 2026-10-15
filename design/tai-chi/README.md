@@ -18,6 +18,13 @@ later (see "App playback" below).
 - **Full form**: normal tempo (front view, mirrored, so it moves like your
   reflection) and a slow learning tempo (from behind).
 
+Drills and breakdowns teach step by step: each step's words show from the
+start of its motion until the next words, and a step too short to read its
+words (`readingTime` in `src/course.js`: 0.8 s plus 14 characters a second,
+at least 2 s) is slowed until they can be read. Items at the form's tempo
+(demos, whole lessons, follow-alongs, the full form) keep their tempo; the
+app names the movement for them instead of the steps' words.
+
 ## Run
 
 ```sh
@@ -98,11 +105,24 @@ still there.
 
 ## App playback
 
-Pre-rendered frames do not fit: Sun Salutation's 991 frames per character
-are about 10 MB, and the app package budget is 38 MB in total, while the
-24-form at the same frame rate would be about 100 MB per character. The
-exported keyed poses for the whole course are about 350 KB (21 KB
-gzipped); the full form baked to joint rotations at 30 fps is about 1.8 MB
-per figure (1.2 MB gzipped). Either needs a player in
-the app, which means a reusable 3D or projected-skeleton primitive in Kryon
-first. That is a separate decision.
+Inner Breeze plays the course itself as the Tai Chi practice. Frames would
+not fit (Sun Salutation's 991 frames per character are about 10 MB; the
+24-form would be about 100 MB per character), so the app samples and solves
+the key poses the way the studio does:
+
+- `node tools/export-app.mjs` writes `assets/practices/taichi/course.bin`
+  (key poses, rigs, part anchors and the course outline; its layout is
+  described at the top of the tool), the two painted characters at 0.65
+  scale with 256-colour palettes, the floor shadow, the course words as
+  locale entries in `text/en.txt`, and `tests/fixtures/tai-chi-reference.json`.
+- `src/practices/tai_chi/` in Inbe ports `timeline.js`, `solve.js`,
+  `painted/layout.js` and the studio's camera to Ziran and draws each
+  painted piece warped over its grid with Kryon's `ImageProps.mesh`.
+- `sh tests/tai_chi_zi_test.sh` in Inbe checks the port against the
+  reference: channels, joints, drawing choices, draw order and piece
+  vertices for both characters must match.
+
+After changing choreography, the solver or the painted layout, run the
+export again, commit the new `course.bin` and reference, and translate any
+new words in `text/<lang>.txt` (the export prints how many there are); the
+course words live in Inbe's `locales/*.txt` as `tai_chi_text_*` entries.

@@ -4,6 +4,11 @@
 // it. Each movement has three versions: a demo at normal speed, a slow
 // breakdown that pauses on every step with its cue, and a follow-along that
 // does the movement on both sides.
+//
+// Items show words in one of two ways (`cues`). Drills and breakdowns teach
+// step by step ('steps'): each step's words, with the step slowed until
+// they can be read. Items played at the form's tempo ('moves') name the
+// movement instead, since their steps pass too quickly to read.
 
 import { Form } from './form.js'
 import { clonePose, mirrorPose, rotatePose, stanceCenter, standingPose, translatePose } from './pose.js'
@@ -15,10 +20,75 @@ const BREAKDOWN_SLOWDOWN = 1.7
 const BREAKDOWN_HOLD = 1.6
 const SLOW_FORM = 1.5
 
+// A step this much short of its reading time is long enough.
+const READING_SLACK = 0.001
+
+// How long a step's words need on screen: a moment to notice them, then
+// about 14 characters a second, and never less than 2 seconds.
+export function readingTime(cue) {
+    return Math.max(2, 0.8 + cue.length / 14)
+}
+
+// The key whose segment starts showing the words of cued key `index`: the
+// key before it, or one earlier when that key is a lead-in (no words of its
+// own and not a pause).
+function cueStart(keys, index) {
+    const lead = index - 1
+    return lead >= 1 && !keys[lead].cue && !keys[lead].held ? lead - 1 : lead
+}
+
+// The words shown on the segment from key `index` to the next: the next
+// key's, else past a lead-in key the one after's, else the last words
+// shown, which stay until new words start. Key 0's own words belong to the
+// motion before the item and never show.
+export function cueAt(keys, index) {
+    const next = keys[index + 1]
+    if (next?.cue) {
+        return next.cue
+    }
+    if (next && !next.held && keys[index + 2]?.cue) {
+        return keys[index + 2].cue
+    }
+    for (let back = index; back >= 1; back -= 1) {
+        if (keys[back].cue) {
+            return keys[back].cue
+        }
+    }
+    return null
+}
+
+// Slows every cued step whose words would not stay on screen for their
+// reading time, until they do. Pauses after a step count as reading time.
+function slowForReading(keys) {
+    const cued = []
+    for (let index = 1; index < keys.length; index += 1) {
+        if (keys[index].cue) {
+            cued.push(index)
+        }
+    }
+    for (let n = 0; n < cued.length; n += 1) {
+        const index = cued[n]
+        const start = cueStart(keys, index)
+        const end = n + 1 < cued.length ? cueStart(keys, cued[n + 1]) : keys.length - 1
+        const shown = keys[end].t - keys[start].t
+        const motion = keys[index].t - keys[start].t
+        const need = readingTime(keys[index].cue)
+        if (shown >= need - READING_SLACK || motion <= 0) {
+            continue
+        }
+        const stretch = (need - shown) / motion
+        const origin = keys[start].t
+        for (let later = start + 1; later < keys.length; later += 1) {
+            keys[later].t += later <= index ? (keys[later].t - origin) * stretch : need - shown
+        }
+    }
+    return keys
+}
+
 // Keys from `start` to `end` (inclusive), moved to start at time 0 and
 // stretched by `scale`; `holdAfterCue` pauses on every key that ends a cued
-// step.
-function retime(keys, { scale = 1, holdAfterCue = 0 } = {}) {
+// step, and `readable` slows steps until their words can be read.
+function retime(keys, { scale = 1, holdAfterCue = 0, readable = false } = {}) {
     const result = []
     const origin = keys[0].t
     let shift = 0
@@ -32,7 +102,7 @@ function retime(keys, { scale = 1, holdAfterCue = 0 } = {}) {
             result.push({ ...key, t: t + holdAfterCue, cue: null, held: true })
         }
     }
-    return result
+    return readable ? slowForReading(result) : result
 }
 
 function sliceMarks(moves, startIndex, endIndex, keys) {
@@ -94,12 +164,15 @@ export function buildCourse() {
             id: `foundations/${drill.id}`,
             title: drill.title,
             kind: 'drill',
+            cues: 'steps',
             view: drill.view ?? 'front',
             summary: drill.summary,
             build() {
                 const drillForm = new Form(standingPose())
                 drillForm.move(drill.id, drill.title, (f) => drill.build(f))
-                return { keys: drillForm.keys, marks: marksOf(drillForm) }
+                const keys = retime(drillForm.keys, { readable: true })
+                const end = keys[keys.length - 1].t
+                return { keys, marks: marksOf(drillForm).map((mark) => ({ ...mark, start: 0, end })) }
             },
         }))
         return { id: lesson.id, title: lesson.title, summary: lesson.summary, items: drills }
@@ -117,6 +190,7 @@ export function buildCourse() {
                 id: `lesson-${lesson.number}/all`,
                 title: `Whole lesson`,
                 kind: 'lesson',
+                cues: 'moves',
                 view: 'behind',
                 build() {
                     const keys = retime(fullKeys.slice(first.startIndex, last.endIndex + 1))
@@ -133,6 +207,7 @@ export function buildCourse() {
                 title: `${move.number}. ${move.title}`,
                 version: 'Demo',
                 kind: 'demo',
+                cues: 'moves',
                 view: 'behind',
                 build() {
                     return { keys: retime(slice()), marks: marks() }
@@ -143,9 +218,10 @@ export function buildCourse() {
                 title: `${move.number}. ${move.title}`,
                 version: 'Breakdown',
                 kind: 'breakdown',
+                cues: 'steps',
                 view: 'behind',
                 build() {
-                    const keys = retime(slice(), { scale: BREAKDOWN_SLOWDOWN, holdAfterCue: BREAKDOWN_HOLD })
+                    const keys = retime(slice(), { scale: BREAKDOWN_SLOWDOWN, holdAfterCue: BREAKDOWN_HOLD, readable: true })
                     const end = keys[keys.length - 1].t
                     return { keys, marks: marks().map((mark) => ({ ...mark, start: 0, end })) }
                 },
@@ -155,6 +231,7 @@ export function buildCourse() {
                 title: `${move.number}. ${move.title}`,
                 version: 'Follow-along',
                 kind: 'follow',
+                cues: 'moves',
                 view: 'behind',
                 build() {
                     const drill = followAlong(definition, clonePose(move.startPose))
@@ -177,6 +254,7 @@ export function buildCourse() {
             id: `lesson-${lesson.number}/standalone`,
             title: `Lesson ${lesson.number} on its own`,
             kind: 'lesson',
+            cues: 'moves',
             view: 'behind',
             build() {
                 const lessonForm = new Form(startPose)
@@ -192,11 +270,11 @@ export function buildCourse() {
     const fullMarks = marksOf(form)
     const fullItems = [
         addItem({
-            id: 'full/normal', title: 'Full form', version: 'Normal tempo', kind: 'full', view: 'front', mirror: true,
+            id: 'full/normal', title: 'Full form', version: 'Normal tempo', kind: 'full', cues: 'moves', view: 'front', mirror: true,
             build: () => ({ keys: retime(fullKeys), marks: fullMarks }),
         }),
         addItem({
-            id: 'full/slow', title: 'Full form', version: 'Slow learning tempo', kind: 'full', view: 'behind',
+            id: 'full/slow', title: 'Full form', version: 'Slow learning tempo', kind: 'full', cues: 'moves', view: 'behind',
             build: () => ({ keys: retime(fullKeys, { scale: SLOW_FORM }), marks: fullMarks.map((mark) => ({ ...mark, start: mark.start * SLOW_FORM, end: mark.end * SLOW_FORM })) }),
         }),
     ]

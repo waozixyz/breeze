@@ -5,7 +5,7 @@ import {
     MeshBasicMaterial, Shape, ShapeGeometry, Vector3,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { buildCourse, timelineFor } from './course.js'
+import { buildCourse, cueAt, timelineFor } from './course.js'
 import { checkTimeline } from './checks.js'
 import { makeRig } from './rig.js'
 import { solvePose } from './solve.js'
@@ -404,11 +404,7 @@ function updateHud(sample) {
         title.innerHTML = html
     }
     const cue = document.getElementById('cue')
-    let text = sample.to.cue ?? ''
-    if (!text && sample.from.held) {
-        text = state.data.keys.slice(0, sample.index + 1).reverse().find((key) => key.cue)?.cue ?? ''
-    }
-    const cueHtml = text ? text : ''
+    const cueHtml = cueAt(state.data.keys, sample.index) ?? ''
     if (cue.innerHTML !== cueHtml) {
         cue.innerHTML = cueHtml
     }

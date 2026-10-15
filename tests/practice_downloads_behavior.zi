@@ -1,0 +1,125 @@
+#import, file "../src/practices/practice_downloads.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/app/locale.zi";
+c :: #system_library "c";
+FixtureCatalog :: () -> string #foreign c;
+FixtureAsset :: (path: string) -> AssetView #foreign c;
+FixtureMode :: (mode: s32) #foreign c;
+FixtureCatalogMode :: (mode: s32) #foreign c;
+FixtureStarts :: () -> s32 #foreign c;
+
+FixtureProvider :: (path: string) -> AssetView {
+    return FixtureAsset(path)
+}
+
+#program_export
+CheckPracticeDownloads :: () -> s32 {
+    if PracticeCatalogValid("{\"schema\":1,\"packs\":[]}") ||
+    PracticeCatalogValid("{\"schema\":2,\"packs\":[]}") {
+        return 15
+    }
+    AssetBindProvider(FixtureProvider)
+    PracticeDownloadsPump(0, false, true)
+    if practice_pack_count != 7 || PracticeContentReady(0) {
+        return 1
+    }
+    PracticeContentRequest(0, false)
+    PracticeDownloadsPump(0, false, true)
+    // Repeated requests while transferring must not enqueue the pack twice.
+    PracticeContentRequest(0, false)
+    PracticeDownloadsPump(0, false, true)
+    if !PracticeContentReady(0) || PracticeContentStatus(0) != 2 {
+        return 2
+    }
+    PracticeDownloadsPump(0, false, true)
+    if FixtureStarts() != 1 {
+        return 16
+    }
+    if !PracticeDownloadsAsset("assets/practices/whm/1.png").found {
+        return 3
+    }
+    if PracticeDownloadsAsset("locales/en.txt").found ||
+    PracticeDownloadsAsset("assets/practices/whm/../taichi/pack.json").found {
+        return 4
+    }
+
+    // An invalid replacement cannot discard working, verified content.
+    FixtureCatalogMode(1)
+    AssetNotifyChanged()
+    PracticeDownloadsPump(0, false, true)
+    if !PracticeContentReady(0) || !PracticeDownloadsAsset("assets/practices/whm/1.png").found {
+        return 18
+    }
+    FixtureCatalogMode(0)
+    AssetNotifyChanged()
+    PracticeDownloadsPump(0, false, true)
+
+    // Moving away unmounts memory but going back uses the verified disk cache.
+    before := FixtureStarts()
+    PracticeDownloadsPump(4, false, true)
+    PracticeContentRequest(0, false)
+    PracticeDownloadsPump(0, false, true)
+    if !PracticeContentReady(0) || FixtureStarts() != before {
+        return 5
+    }
+
+    // A corrupt download never becomes ready; a manual retry repairs it.
+    PracticeDownloadsPump(4, false, true)
+    FixtureMode(1)
+    PracticeContentRequest(4, false)
+    PracticeDownloadsPump(4, false, true)
+    PracticeDownloadsPump(4, false, true)
+    if PracticeContentReady(4) || PracticeContentStatus(4) != 3 {
+        return 6
+    }
+    FixtureMode(0)
+    PracticeContentRequest(4, false)
+    PracticeDownloadsPump(4, false, true)
+    PracticeDownloadsPump(4, false, true)
+    if !PracticeContentReady(4) {
+        return 7
+    }
+
+    base_bundle := practice_packs[PracticePackFind(4, "")].bundle
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if PracticeVoiceStatus(4) != 2 ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+        return 8
+    }
+    before = FixtureStarts()
+    active_locale_index = 1
+    // A running practice retains its borrowed course and audio bytes.
+    PracticeDownloadsPump(4, true, false)
+    if FixtureStarts() != before {
+        return 9
+    }
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before + 1 || !PracticeContentReady(4) || PracticeVoiceStatus(4) != 2 {
+        return 10
+    }
+    if PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
+        return 11
+    }
+    before = FixtureStarts()
+    active_locale_index = 0
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before || PracticeVoiceStatus(4) != 2 {
+        return 12
+    }
+    if practice_packs[PracticePackFind(4, "")].bundle != base_bundle {
+        return 17
+    }
+    PracticeContentRemove(4)
+    if PracticeContentReady(4) || PracticeVoiceStatus(4) != 0 {
+        return 13
+    }
+    PracticeDownloadsPump(0, false, true)
+    if !PracticeContentReady(0) {
+        return 14
+    }
+    PracticeDownloadsClose()
+    return 0
+}

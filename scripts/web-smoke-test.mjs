@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createServer } from 'node:http';
-import { createReadStream, mkdtempSync, rmSync, existsSync, accessSync, constants, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, mkdtempSync, rmSync, existsSync, accessSync, constants, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -142,6 +142,19 @@ function isInside(base, path) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
+  const practiceFixture = url.pathname.replace('/__test_practice_content__/', '');
+  if (url.pathname.startsWith('/__test_practice_content__/') &&
+      ['whm.zib', 'meditation.zib', 'sunsalutation.zib', 'patterns.zib', 'taichi.zib', 'taichi.en.zib'].includes(practiceFixture)) {
+    const fixture = new URL('../build/practice-content/' + practiceFixture, import.meta.url);
+    if (!existsSync(fixture)) {
+      res.writeHead(404);
+      res.end('Build the practice content fixtures before running the smoke test');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    createReadStream(fixture).pipe(res);
+    return;
+  }
   if (url.pathname === '/__test_assets__/bell.ogg') {
     res.writeHead(200, { 'content-type': 'audio/ogg' });
     createReadStream(new URL('../assets/sounds/bell.ogg', import.meta.url)).pipe(res);
@@ -1363,6 +1376,7 @@ async function verifyPracticeCarouselSwipe(client) {
   const y = target.rect.top + (target.y - target.rect.top) * 0.4;
   const distance = target.rect.width * 0.4;
   async function drag(dx, dy) {
+    await waitRouteTransition(client);
     const startX = x - dx / 2;
     const startY = y - dy / 2;
     await client.send('Input.dispatchMouseEvent', {
@@ -1374,7 +1388,9 @@ async function verifyPracticeCarouselSwipe(client) {
         type: 'mouseMoved', x: startX + dx * step / 6, y: startY + dy * step / 6,
         button: 'left', buttons: 1
       });
-      await waitAnimationFrames(client, 1);
+      // The app samples idle input at 30 fps; one 60 Hz browser frame
+      // can otherwise skip a move entirely.
+      await waitAnimationFrames(client, 2);
     }
     await client.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: startX + dx, y: startY + dy, button: 'left', clickCount: 1
@@ -1399,12 +1415,13 @@ async function verifyPracticeCarouselSwipe(client) {
   if (await selected() !== initial) throw new Error('artwork tap changed practice');
   const visited = new Set([initial]);
   let previous = initial;
-  for (let i = 0; i < 4; i++) {
+  const practiceCount = 5;
+  for (let i = 0; i < practiceCount; i++) {
     const current = await swipeToNext(-distance, previous, `carousel swipe ${i + 1}`);
-    if (i < 3 && visited.has(current))
+    if (i < practiceCount - 1 && visited.has(current))
       throw new Error(`carousel repeated practice early on swipe ${i + 1}: ${current}`);
-    if (i === 3 && current !== initial)
-      throw new Error(`carousel did not wrap after four swipes (selected=${current}, initial=${initial})`);
+    if (i === practiceCount - 1 && current !== initial)
+      throw new Error(`carousel did not wrap after ${practiceCount} swipes (selected=${current}, initial=${initial})`);
     visited.add(current);
     previous = current;
   }
@@ -1703,6 +1720,45 @@ async function verifyRenderingLiveBidi(client, context) {
     throw new Error(`page is not rendering: ${state.reason}`);
 }
 
+async function installPracticeContentFixtures(client) {
+  await pageJson(client, `(async () => {
+    FS.mkdirTree('/home/inbe/packages');
+    for (const name of ['whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'taichi.en']) {
+      const response = await fetch('/__test_practice_content__/' + name + '.zib');
+      if (!response.ok) throw new Error('Missing practice fixture: ' + name);
+      FS.writeFile('/home/inbe/packages/practice-' + name + '.zib', new Uint8Array(await response.arrayBuffer()));
+    }
+  })()`, true);
+}
+
+async function verifyTaiChiCourse(client) {
+  await pageJson(client, `(async () => {
+    ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_launch_practice', [4]);
+  })()`, true);
+  await waitRouteTransition(client);
+  await waitAnimationFrames(client, 6);
+  // The first frame mounts the verified local content before Start opens it.
+  await pageJson(client, `(async () => {
+    ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_launch_practice', [4]);
+  })()`, true);
+  await waitRouteTransition(client);
+  const state = await pageJson(client, `(() => ({
+    screen: Module._app_web_test_screen(),
+    selected: Module._app_web_test_practice_selected(),
+    course: Module._app_web_test_tai_chi_course_open()
+  }))()`);
+  if (state.screen !== 0 || state.selected !== 4 || state.course !== 1)
+    throw new Error(`Tai Chi did not open its course chooser: ${JSON.stringify(state)}`);
+  await verifyRenderingLive(client);
+  const picture = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+  mkdirSync('build/tai-chi-ui-test', { recursive: true });
+  writeFileSync('build/tai-chi-ui-test/web-course.png', Buffer.from(picture.data, 'base64'));
+  await dispatchCanvasClick(client, 1, 1);
+  console.log('web Tai Chi: course chooser opens and renders');
+}
+
 async function sunSalutationChecks(client, browser) {
   await pageJson(client, `(async () => {
     ${wasmHookEvalHelper()}
@@ -1873,6 +1929,7 @@ try {
     await verifyLanguageRouteDoesNotOverrideSavedOnboarding(pageClient, port);
     await verifyFirstRunGuideCanvasFlow(pageClient);
     await verifyHabitsClickDoesNotReload(pageClient);
+    await installPracticeContentFixtures(pageClient);
     await verifyPracticeCarouselSwipe(pageClient);
     await verifyPracticeStartClick(pageClient);
     await verifyPracticeCompletionPersistence(pageClient);
@@ -1938,9 +1995,11 @@ try {
     await verifySyncKeyImport(client);
     // Check an empty habit day before completion links a session to it.
     await verifyHabitsClickDoesNotReload(client);
+    await installPracticeContentFixtures(client);
     await verifyPracticeCarouselSwipe(client);
     await verifyPracticeStartClick(client);
     await verifyPracticeCompletionPersistence(client);
+    await verifyTaiChiCourse(client);
     await sunSalutationChecks(client, 'chromium');
   }
   console.log(`web smoke: PASS (${renderer})`);

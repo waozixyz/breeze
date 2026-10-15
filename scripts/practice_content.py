@@ -16,6 +16,82 @@ NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi')
 MAXIMUM = 64 * 1024 * 1024
 
 
+def course_narration_keys(data):
+    """Read spoken cue references from the same bounded TCH2 data as the app."""
+    if data[:4] != b'TCH2' or len(data) > MAXIMUM:
+        raise ValueError('unsupported Tai Chi course')
+    at = 4
+
+    def take(size):
+        nonlocal at
+        if size < 0 or at + size > len(data):
+            raise ValueError('truncated Tai Chi course')
+        value = data[at:at + size]
+        at += size
+        return value
+
+    def unsigned():
+        return struct.unpack('<I', take(4))[0]
+
+    def signed():
+        return struct.unpack('<i', take(4))[0]
+
+    def count(maximum):
+        value = unsigned()
+        if value > maximum:
+            raise ValueError('Tai Chi course section exceeds its bound')
+        return value
+
+    strings = [take(struct.unpack('<H', take(2))[0]).decode('utf-8')
+               for _ in range(count(10000))]
+    sets = []
+    # TCH2 stores 49 pose channels, 26 rig fields and 96 bytes per image.
+    for _ in range(count(256)):
+        keys = []
+        for _ in range(count(50000)):
+            take(4)
+            keys.append(signed())
+            take(212)
+        sets.append(keys)
+    for _ in range(count(16)):
+        take(8 + 26 * 4)
+        take(count(1024) * 96)
+    spoken = set()
+
+    def cue(index):
+        if index < 0:
+            return
+        if index >= len(strings) or not strings[index].startswith('tai_chi_text_'):
+            raise ValueError('invalid Tai Chi spoken cue')
+        spoken.add(strings[index])
+
+    for _ in range(count(64)):
+        take(4)
+        for _ in range(count(256)):
+            take(12)
+            for _ in range(count(1024)):
+                take(12)
+                flags = take(5)
+                first, last = signed(), signed()
+                take(12)
+                marks = [(signed(), take(8)) for _ in range(count(1024))]
+                if flags[4]:
+                    if flags[3] == 1 and 0 <= first < len(sets):
+                        keys = sets[first]
+                    elif flags[3] == 0 and sets and 0 <= first <= last < len(sets[0]):
+                        keys = sets[0][first:last + 1]
+                    else:
+                        raise ValueError('invalid Tai Chi narrated timeline')
+                    for index in keys:
+                        cue(index)
+                else:
+                    for index, _ in marks:
+                        cue(index)
+    if at != len(data):
+        raise ValueError('trailing Tai Chi course bytes')
+    return sorted(spoken)
+
+
 def bundle_assets(data):
     """Read the bounded ZIB v26 resource table; never execute a bundle."""
     if data[:8] != b'ZIB\0\x1a\0\0\0' or len(data) > MAXIMUM:
@@ -95,6 +171,10 @@ def prepare(compiler):
     configuration = json.loads((ROOT / 'apps/practice/content.json').read_text())
     if configuration['schema'] != 1 or tuple(configuration['practices']) != NAMES:
         raise ValueError('unsupported practice content configuration')
+    speech = json.loads((ROOT / configuration['narration']['taichi']['config']).read_text())
+    declared = json.loads((ROOT / speech['keys_file']).read_text())
+    if course_narration_keys((ROOT / 'assets/practices/taichi/course.bin').read_bytes()) != declared:
+        raise ValueError('export Tai Chi again to update its narration inventory')
     output = ROOT / 'build/practice-content'
     output.mkdir(parents=True, exist_ok=True)
     packs = []
@@ -103,10 +183,10 @@ def prepare(compiler):
         directories += sorted((ROOT / 'build/package-assets').glob('practice-' + practice + '-voice-*'))
         for directory in directories:
             language = directory.name.split('-voice-', 1)[1] if '-voice-' in directory.name else ''
-            if language and not narration_current(configuration, practice, language):
+            assets = directory / 'assets'
+            if language and not narration_current(configuration, practice, language, assets):
                 print(f'{practice}/{language}: incomplete narration excluded from the catalog')
                 continue
-            assets = directory / 'assets'
             assets.mkdir(parents=True, exist_ok=True)
             # Even timer-only practices have a versioned content identity.
             identity = assets / 'practices' / practice / ('voice/' + language if language else '') / 'pack.json'
@@ -128,7 +208,7 @@ def prepare(compiler):
     print(f'Prepared {len(packs)} separate practice content packs')
 
 
-def narration_current(configuration, practice, language):
+def narration_current(configuration, practice, language, assets=None):
     """Partial or stale recordings never become an advertised language pack."""
     import importlib.util
     settings = configuration['narration'].get(practice)
@@ -143,10 +223,23 @@ def narration_current(configuration, practice, language):
     speech.LOCALES = ROOT / settings['text_directory']
     speech.VOICE = ROOT / settings['output_directory']
     config = json.loads((ROOT / settings['config']).read_text())
-    keys = sorted(speech.entries(ROOT / config['keys_from']))
+    keys = speech.narration_keys(config)
     receipt = json.loads(receipt_path.read_text())
-    return all(speech.current(receipt, config, language, key, text)
-               for _, key, text in speech.wanted(config, [language], keys))
+    for _, key, text in speech.wanted(config, [language], keys):
+        if not speech.current(receipt, config, language, key, text):
+            return False
+        if assets is not None:
+            staged = assets / 'practices' / practice / 'voice' / language / (key + '.ogg')
+            if not staged.is_file() or sha256(staged.read_bytes()).hexdigest() != receipt['clips'][language + '/' + key]['sha256']:
+                return False
+    # Package only actual spoken cues, excluding unused labels and partial files.
+    if assets is not None:
+        voice = assets / 'practices' / practice / 'voice' / language
+        wanted = {key + '.ogg' for key in keys} | {'pack.json'}
+        for path in voice.iterdir():
+            if path.is_file() and path.name not in wanted:
+                path.unlink()
+    return True
 
 
 if __name__ == '__main__':

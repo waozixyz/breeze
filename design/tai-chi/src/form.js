@@ -15,6 +15,9 @@ import { Timeline, footMotion } from './timeline.js'
 
 const DEG = Math.PI / 180
 const PIVOT_SHARE = 0.35
+// How low the figure sits while it steps between the two sides of a
+// follow-along.
+const RESET_SINK = 0.06
 
 function other(side) {
     return side === 'L' ? 'R' : 'L'
@@ -435,7 +438,10 @@ export class Form {
             pose.chest = lerp(start.chest, target.chest, u)
             pose.lean = lerp(start.lean, target.lean, u)
             pose.bend = lerp(start.bend, target.bend, u)
-            pose.sink = lerp(start.sink, target.sink, u)
+            // Stand a little taller while stepping into place, so a
+            // knee never drives past its toes on a long stance.
+            const sink = lerp(start.sink, target.sink, u)
+            pose.sink = sink + (Math.min(sink, RESET_SINK) - sink) * Math.sin(Math.PI * u)
             pose.shift = lerpArray(start.shift, target.shift, u)
             pose.deep = Boolean(start.deep || target.deep)
             pose.look = 'fwd'
@@ -446,7 +452,11 @@ export class Form {
         for (const move of moves) {
             const { side } = move
             const support = other(side)
-            this.key(1.1, (k) => {
+            // The weight crosses between the feet at no more than about
+            // 0.3 m/s on average, so wide stances take longer to leave.
+            const feetApart = Math.hypot(this.pose.feet.L.x - this.pose.feet.R.x, this.pose.feet.L.z - this.pose.feet.R.z)
+            const shareMoving = support === 'L' ? 1 - this.pose.load : this.pose.load
+            this.key(Math.min(3.2, Math.max(1.1, (feetApart * shareMoving) / 0.3)), (k) => {
                 blend(k.pose)
                 k.load(support)
             }, first ? cue : null)

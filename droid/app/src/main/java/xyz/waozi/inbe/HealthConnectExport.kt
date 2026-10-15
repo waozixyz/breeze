@@ -109,6 +109,17 @@ object HealthConnectExport {
                         metadata = HcMetadata.manualEntry(),
                         exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_YOGA,
                         title = context.getString(R.string.health_connect_title_yoga)))
+            } else if (activityId == 4) {
+                // Health Connect has no Tai Chi type; it is a martial art.
+                records.add(
+                    ExerciseSessionRecord(
+                        startTime = startTime,
+                        startZoneOffset = null,
+                        endTime = endTime,
+                        endZoneOffset = null,
+                        metadata = HcMetadata.manualEntry(),
+                        exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_MARTIAL_ARTS,
+                        title = context.getString(R.string.health_connect_title_tai_chi)))
             } else {
                 records.add(
                     MindfulnessSessionRecord(
