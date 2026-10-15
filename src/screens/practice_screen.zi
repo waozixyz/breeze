@@ -632,10 +632,7 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     bottom_gap: s32 = ifx (bottom_reserved > 0) then (AppScale(28)) else (AppScale(20))
     button_y := hero_h - bottom_gap - rows * button_h - (rows - 1) * action_gap
     pager_h := practice_home_carousel_controls_height(app)
-    voice_row := PracticeContentName(app.exercise_type) == "taichi" && app.voice_narration_enabled != 0
-    download_h := ifx voice_row then AppScale(128) else AppScale(64)
-    download_y := button_y - download_h
-    pager_y := download_y - AppScale(10) - pager_h
+    pager_y := button_y - AppScale(10) - pager_h
     title_layout := practice_home_title_layout(app, x, content_w)
     title_block_h := title_layout.height + AppScale(28)
     if title_block_h < AppScale(100) {
@@ -713,6 +710,20 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         TraceLog(3, "APP PROBE: home title complete")
     }
 
+    manage_label := LocaleText("practice_manage_button")
+    manage_w := AppTextWidth(manage_label, AppFontSize()) + AppScale(32)
+    if manage_w > content_view_w - AppScale(32) {
+        manage_w = content_view_w - AppScale(32)
+    }
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17400,
+            .bounds = Rectangle.{cast(float32)(content_view_x + content_view_w - manage_w - AppScale(16)),
+                cast(float32)AppScale(16), cast(float32)manage_w, cast(float32)AppScale(44)},
+            .label = manage_label, .disabled = app.modal.active != 0,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .pill = true}) != 0 {
+        app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
+    }
+
     current_index := practice_ordered_index(app, app.exercise_type)
     selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y, cast(float32)pager_w, cast(float32)pager_h}, practice_home_count(app), current_index, app.modal.active, 7090)
     if selected_index >= 0 && selected_index != current_index {
@@ -723,60 +734,9 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         cast(float32)primary_w, cast(float32)button_h
     }
     content_ready := PracticeContentReady(app.exercise_type)
-    content_status := PracticeContentStatus(app.exercise_type)
-    download_status := LocaleText(ifx content_ready then "practice_download_ready" else
-        ifx content_status == 3 then "practice_download_failed" else
-        ifx content_status == 1 then "practice_download_busy" else "practice_download_size")
-    size_text: [192]u8
-    amount := (PracticeContentBytes(app.exercise_type) + 1024 * 1024 - 1) / (1024 * 1024)
-    args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
-    if content_ready || content_status == 0 {
-        unused FormatTemplate(download_status, args[:], size_text[:])
-        download_status = AppTextFromCString(*size_text[0], 192)
-    }
-    remove_w := ifx content_ready then AppScale(100) else 0
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(content_view_x + (content_view_w - total_w) / 2),
-                cast(float32)download_y, cast(float32)(total_w - remove_w), cast(float32)AppScale(40)},
-            .text = FrameTextHold(*app.ui.frame_text, download_status),
-            .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    if content_ready && Button(app.ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)(content_view_x + (content_view_w + total_w) / 2 - remove_w),
-                cast(float32)download_y, cast(float32)remove_w, cast(float32)AppScale(40)},
-            .label = LocaleText("practice_download_remove"),
-            .disabled = app.modal.active != 0 || practice_active(app) != null,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        PracticeContentRemove(app.exercise_type)
-        return 1
-    }
-    if voice_row {
-        voice_status := PracticeVoiceStatus(app.exercise_type)
-        voice_label := LocaleText(ifx voice_status < 0 then "practice_voice_unavailable" else
-            ifx voice_status == 2 then "practice_voice_ready" else
-            ifx voice_status == 3 then "practice_download_failed" else
-            ifx voice_status == 1 then "practice_voice_busy" else "voice_narration_label")
-        retry := voice_status == 3
-        Text(app.ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(content_view_x + (content_view_w - total_w) / 2),
-                    cast(float32)(download_y + AppScale(56)),
-                    cast(float32)(total_w - (ifx retry then AppScale(140) else 0)), cast(float32)AppScale(64)},
-                .text = voice_label, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-        if retry && Button(app.ui.session, ButtonProps.{
-                .bounds = Rectangle.{cast(float32)(content_view_x + (content_view_w + total_w) / 2 - AppScale(140)),
-                    cast(float32)(download_y + AppScale(56)), cast(float32)AppScale(140), cast(float32)AppScale(48)},
-                .label = LocaleText("practice_voice_retry"),
-                .disabled = app.modal.active != 0,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            PracticeContentRequest(app.exercise_type, true)
-        }
-    }
     if Button(CurrentApp().ui.session, ButtonProps.{
             .bounds = app.practice_home_bounds_start,
-            .label = LocaleText(ifx content_ready then "practice_start_button" else
-            ifx content_status == 1 then "cancel_button" else
-            ifx content_status == 3 then "practice_download_retry" else "practice_download_button"),
+            .label = LocaleText("practice_start_button"),
             .disabled = app.modal.active != 0,
             .tone = cast(ButtonTone)ButtonToneAccent,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
@@ -784,11 +744,8 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
             .pill = true
         }) != 0 {
         if !content_ready {
-            if content_status == 1 {
-                PracticeContentCancel(app.exercise_type)
-                return 1
-            }
-            PracticeContentRequest(app.exercise_type, app.voice_narration_enabled != 0)
+            app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
+            app.practice_downloads_scroll = -(app.exercise_type + 1)
             return 1
         }
         // One practice runs at a time: Start brings back the practice that

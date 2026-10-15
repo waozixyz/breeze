@@ -16,6 +16,7 @@ kss = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / "build/packag
 client = root / "build/packages/daochi-client"
 game2d = root / "build/packages/game2d/src"
 sources = sorted((root / "src").rglob("*.zi"))
+sources.append(root / "apps/practice/downloads_view.zi")
 legacy = sorted((root / "src").rglob("*.kry"))
 
 if legacy:

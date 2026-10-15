@@ -29,6 +29,7 @@ PracticePack :: struct {
     // 0 not installed, 1 queued/downloading, 2 ready, 3 failed.
     status: s32
     checked: bool
+    cache_checked: bool
 }
 
 practice_packs: [PracticePackCapacity]PracticePack;
@@ -337,11 +338,43 @@ PracticeContentRequest :: (practice: s32, narration: bool) {
     voice := PracticePackFind(practice, LocaleActiveCode())
     for index: cast(s32)0..practice_pack_count - 1 {
         if (index == base || (narration && index == voice)) &&
-        practice_packs[index].bundle == null && practice_packs[index].status != 1 {
+        practice_packs[index].bundle == null && practice_packs[index].status != 1 &&
+        practice_packs[index].status != 2 {
             practice_packs[index].requested = true
             practice_packs[index].status = 1
         }
     }
+}
+
+// Review one cache slot per frame for the manager, without mounting its data.
+PracticeContentReviewNext :: () {
+    for index: cast(s32)0..practice_pack_count - 1 {
+        pack := *practice_packs[index]
+        if pack.cache_checked || pack.status == 1 {
+            continue
+        }
+        pack.cache_checked = true
+        if pack.bundle != null {
+            continue
+        }
+        path := PracticePackPath(index, false)
+        bytes := PackageRead(path, PackageMaximumBytes)
+        bundle := PracticePackOpen(index, bytes)
+        PackageFree(path)
+        PackageFree(bytes)
+        if bundle != null {
+            pack.status = 2
+        } else if pack.status == 2 {
+            pack.status = 0
+        }
+        CloseBundle(bundle)
+        return
+    }
+}
+
+PracticePackReviewed :: (practice: s32, language: string) -> bool {
+    index := PracticePackFind(practice, language)
+    return index < 0 || practice_packs[index].cache_checked
 }
 
 PracticeContentCancel :: (practice: s32) {
@@ -372,6 +405,7 @@ PracticeContentRemove :: (practice: s32) {
         practice_packs[index].requested = false
         practice_packs[index].status = 0
         practice_packs[index].checked = true
+        practice_packs[index].cache_checked = true
     }
     // Include languages retired from a newer catalog, without touching progress.
     if !DataTemporary() {
@@ -429,16 +463,26 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
             wanted := pack.practice == selected &&
             (pack.language[0] == cast(u8)0 || (narration && TextFromCString(*pack.language[0]) == language))
             if !wanted {
-                if practice_transfer_index == index {
-                    PracticeDownloadsCancel()
-                }
-                pack.requested = false
-                if pack.status == 1 {
-                    pack.status = 0
+                // Explicit base downloads continue when another practice is
+                // shown. A changed narration preference cancels only voices.
+                stale_voice := pack.language[0] != cast(u8)0 &&
+                (!narration || TextFromCString(*pack.language[0]) != language)
+                if stale_voice || DataTemporary() {
+                    if practice_transfer_index == index {
+                        PracticeDownloadsCancel()
+                    }
+                    pack.requested = false
+                    if pack.status == 1 {
+                        pack.status = 0
+                    }
                 }
                 if pack.bundle != null {
                     CloseBundle(pack.bundle)
                     pack.bundle = null
+                    if DataTemporary() {
+                        pack.status = 0
+                        pack.cache_checked = false
+                    }
                     AssetNotifyChanged()
                 }
             } else {
@@ -454,6 +498,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
             continue
         }
         pack.checked = true
+        pack.cache_checked = true
         if pack.bundle != null {
             continue
         }
@@ -519,9 +564,18 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     PackageFree(bytes)
     if bundle != null && (DataTemporary() || RenamePath(temporary, destination)) {
         CloseBundle(practice_packs[index].bundle)
-        practice_packs[index].bundle = bundle
+        wanted := practice_packs[index].practice == selected &&
+        (practice_packs[index].language[0] == cast(u8)0 ||
+            (narration && TextFromCString(*practice_packs[index].language[0]) == language))
+        if wanted || DataTemporary() {
+            practice_packs[index].bundle = bundle
+            AssetNotifyChanged()
+        } else {
+            practice_packs[index].bundle = null
+            CloseBundle(bundle)
+        }
         practice_packs[index].status = 2
-        AssetNotifyChanged()
+        practice_packs[index].cache_checked = true
         if !DataTemporary() {
             sync_web_storage()
         }

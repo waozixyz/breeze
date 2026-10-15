@@ -56,6 +56,10 @@ def capture(window, name):
     image = output / (name + '.png')
     command('import', '-window', window, str(image))
     text = command('tesseract', str(image), 'stdout', '--psm', '11')
+    with Image.open(image) as picture:
+        enlarged = output / (name + '-ocr.png')
+        picture.resize((picture.width * 2, picture.height * 2)).save(enlarged)
+    text += '\n' + command('tesseract', str(enlarged), 'stdout', '--psm', '11')
     # OCR's page segmentation skips the dark text on the mint action fill.
     # Read that actual rendered button separately, retaining the full image.
     with Image.open(image) as picture:
@@ -75,12 +79,13 @@ def capture(window, name):
             columns = [x for x in range(picture.width)
                        if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
                            and 130 < c[2] < 220)(rgb.getpixel((x, middle)))]
-            button = picture.crop((columns[0] + 3, rows[0] + 3, columns[-1] - 2, rows[-1] - 2))
-            button = ImageOps.grayscale(button).point(lambda value: 255 if value > 120 else 0)
-            button = button.resize((button.width * 3, button.height * 3))
-            button_path = output / (name + '-action.png')
-            button.save(button_path)
-            text += '\n' + command('tesseract', str(button_path), 'stdout', '--psm', '7')
+            if len(columns) > 12 and rows[-1] - rows[0] > 8:
+                button = picture.crop((columns[0] + 3, rows[0] + 3, columns[-1] - 2, rows[-1] - 2))
+                button = ImageOps.grayscale(button).point(lambda value: 255 if value > 120 else 0)
+                button = button.resize((button.width * 3, button.height * 3))
+                button_path = output / (name + '-action.png')
+                button.save(button_path)
+                text += '\n' + command('tesseract', str(button_path), 'stdout', '--psm', '7')
     (output / (name + '.txt')).write_text(text)
     return image, text
 
@@ -134,37 +139,55 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     process, window = launch(profile, 'download')
     try:
         _, text = capture(window, 'download')
-        assert 'Download practice' in text, text
+        assert 'Manage practices' in text and 'Start' in text, text
+        assert 'Download size' not in text and 'Available offline' not in text, text
         click_word(window, 'manual-open', 'How')
         for page in range(3):
             click_word(window, 'manual-page-' + str(page), 'Next')
         click_word(window, 'manual-finish', 'Start')
         _, text = capture(window, 'manual-needs-download')
-        assert 'How to' in text and any(action in text.lower() for action in
-            ('download practice', 'cancel', 'retry download')), text
-        assert any(status in text.lower() for status in ('downloading', 'download failed')), text
+        assert 'Manage practices' in text and 'Meditation' in text, text
+        # Download the first row's real rendered action, rather than the next
+        # practice's identical button lower in the scrolling manager.
+        with Image.open(output / 'manual-needs-download.png') as picture:
+            rgb = picture.convert('RGB')
+            rows = [y for y in range(130, picture.height - 80)
+                    if sum(1 for x in range(picture.width)
+                           if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
+                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 3]
+            assert rows, 'The first download action is missing'
+            y = rows[0] + 15
+            command('xdotool', 'mousemove', '--window', window, str(picture.width // 2), str(y))
+        command('xdotool', 'mousedown', '1')
+        time.sleep(.15)
+        command('xdotool', 'mouseup', '1')
+        time.sleep(1)
+        _, text = capture(window, 'manager-downloading')
+        assert 'Manage practices' in text and any(status in text.lower() for status in
+            ('downloading', 'download failed')), text
     finally:
         stop(process)
-    catalog = json.loads((ROOT / 'build/package-assets/practices/assets/practices/catalog.json').read_text())
-    pack = next(pack for pack in catalog['packs'] if pack['practice'] == 'whm' and not pack['language'])
     cache = profile / 'packages'
     cache.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / 'build/practice-content/whm.zib', cache / 'practice-whm.zib')
     process, window = launch(profile, 'ready')
     try:
-        image, text = capture(window, 'ready')
-        assert 'Available offline' in text and 'Start' in text and 'Remove' in text, text
-        tsv = command('tesseract', str(image), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-        word = next(row for row in csv.DictReader(io.StringIO(tsv), delimiter='\t') if row['text'] == 'Remove')
-        x = int(word['left']) + int(word['width']) // 2
-        y = int(word['top']) + int(word['height']) // 2
-        command('xdotool', 'mousemove', '--window', window, str(x), str(y))
+        _, text = capture(window, 'ready')
+        assert 'Start' in text and 'Manage practices' in text and 'Remove' not in text, text
+        click_word(window, 'manager-open', 'Manage')
+        time.sleep(1)
+        _, text = capture(window, 'manager-ready')
+        assert 'Available offline' in text and 'Remove' in text, text
+        click_word(window, 'manager-remove', 'Remove')
+        _, text = capture(window, 'removed')
+        assert 'Manage practices' in text and 'Download practice' in text, text
+        command('xdotool', 'mousemove', '--window', window, '350', '86')
         command('xdotool', 'mousedown', '1')
         time.sleep(.15)
         command('xdotool', 'mouseup', '1')
-        time.sleep(1)
-        _, text = capture(window, 'removed')
-        assert 'Download practice' in text, text
+        time.sleep(.5)
+        _, text = capture(window, 'manager-closed')
+        assert 'Start' in text and 'Available offline' not in text, text
     finally:
         stop(process)
     assert not (cache / 'practice-whm.zib').exists()
@@ -172,10 +195,21 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         value = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'tai_chi_progress')).fetchone()[0]
         assert value.startswith('1'), 'Content removal changed saved practice progress'
+        selected = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
+                                    (user, 'exercise_type')).fetchone()[0]
+        assert selected == '0', 'Managing downloads switched the practice underneath'
     process, window = launch(profile, 'narrow', 320, 640)
     try:
         _, text = capture(window, 'narrow')
-        assert 'Download practice' in text, text
+        assert 'Manage practices' in text and 'Start' in text, text
+        click_word(window, 'narrow-open', 'Manage')
+        _, text = capture(window, 'narrow-manager')
+        assert 'Meditation' in text, text
+        command('xdotool', 'mousemove', '--window', window, '160', '350')
+        command('xdotool', 'click', '--repeat', '10', '--delay', '80', '5')
+        time.sleep(.5)
+        _, text = capture(window, 'narrow-manager-bottom')
+        assert 'Tai Chi' in text, text
     finally:
         stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -184,11 +218,20 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                              (str(value), user, key))
     shutil.copyfile(ROOT / 'build/practice-content/taichi.zib', cache / 'practice-taichi.zib')
     shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zib', cache / 'practice-taichi.en.zib')
-    for name, width, height in [('taichi-ready', 390, 844), ('taichi-narrow', 320, 640)]:
+    for name, width, height in [('taichi-ready', 390, 844), ('taichi-narrow', 320, 640),
+                                ('desktop-manager', 1280, 900)]:
         process, window = launch(profile, name, width, height)
         try:
             _, text = capture(window, name)
-            assert 'Available offline' in text and 'Narration ready offline' in text and 'Start' in text, text
+            assert 'Start' in text and 'Manage practices' in text and 'Available offline' not in text, text
+            click_word(window, name + '-open', 'Manage')
+            time.sleep(1)
+            command('xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2))
+            command('xdotool', 'click', '--repeat', '16', '--delay', '80', '5')
+            time.sleep(.5)
+            _, text = capture(window, name + '-manager')
+            assert 'Tai Chi' in text and 'Available offline' in text and 'Narration ready offline' in text, text
+            assert 'English' in text, text
         finally:
             stop(process)
-print('Private Practices UI: manual download guard, offline-ready, removal with saved progress and narrow layout passed')
+print('Private Practices modal: manual/start entry, live transfer, offline removal, saved progress, language and narrow layout passed')
