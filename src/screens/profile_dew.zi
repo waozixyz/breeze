@@ -38,6 +38,14 @@ using ModalType;
 // The storage plans window: 0 is Free, then each paid size.
 profile_storage_tab: s32;
 profile_storage_scroll: s32;
+// The top-up window asks the node for this account's Monero address once
+// per opening; an answer without an address is a failure to retry.
+profile_topup_scroll: s32;
+profile_topup_started: bool;
+profile_topup_failed: bool;
+profile_topup_copied: bool;
+// Top-up minimums under 0.001 XMR are not worth naming.
+TopUpMinimumShown :: 1000000000
 
 ProfileDewText :: (app: *InnerBreeze, text: string, x: s32, y: *s32,
     width: s32, font: s32, draw: bool) {
@@ -128,7 +136,7 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         ProfileDewText(app, TextUntilNul(value[:]), x, *text_y, width - button_w - AppScale(12), AppScale(Text24), draw)
         button_y := row_y + (row_h - AppScale(44)) / 2
         if ProfileDewButton(app, label, x + width - button_w, *button_y, button_w, busy, draw) {
-            DewTopUp()
+            ProfileTopUpOpen(app)
         }
         y.* = row_y + row_h + AppScale(8)
     } else {
@@ -167,46 +175,6 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
     } else if ProfileDewButton(app, LocaleText("profile_dew_plans"), x, y, width, false, draw) {
         ProfileStoragePlansOpen(app)
     }
-    if dew_address[0] == cast(u8)0 {
-        return
-    }
-    hint: [384]u8
-    minimum: [48]u8
-    unused DewFormat(dew_minimum_atomic, 1000000000000LL, minimum[:])
-    hint_arguments: [2]FormatArg = .[
-    FormatArg.{.text = TextUntilNul(minimum[:]), .is_text = true},
-    FormatArg.{.number = cast(s32)dew_confirmations}]
-    unused FormatTemplate(LocaleText("profile_dew_topup_hint"), hint_arguments[:], hint[:])
-    ProfileDewText(app, TextUntilNul(hint[:]), x, y, width, AppSmallFontSize(), draw)
-    xmr: [48]u8
-    dew: [48]u8
-    unused DewFormat(dew_rate_atomic, 1000000000000LL, xmr[:])
-    unused DewFormat(dew_rate_units, DewUnits, dew[:])
-    arguments: [2]FormatArg = .[
-    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
-    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
-    unused FormatTemplate(LocaleText("profile_dew_rate"), arguments[:], hint[:])
-    ProfileDewText(app, TextUntilNul(hint[:]), x, y, width, AppSmallFontSize(), draw)
-    side := width
-    if side > AppScale(200) {
-        side = AppScale(200)
-    }
-    uri: [144]u8
-    unused AppCopyText("monero:", uri[:])
-    unused AppAppendText(TextUntilNul(dew_address[:]), uri[:])
-    if draw {
-        unused DrawQrCode(app.ui.session, TextUntilNul(uri[:]),
-            Rectangle.{cast(float32)(x + (width - side) / 2), cast(float32)y.*,
-                cast(float32)side, cast(float32)side})
-    }
-    y.* += side + AppScale(8)
-    ProfileDewText(app, TextUntilNul(dew_address[:]), x, y, width, AppSmallFontSize(), draw)
-    if ProfileDewButton(app, LocaleText("copy_address_button"), x, y, width, false, draw) {
-        unused TextInputWriteClipboard(TextUntilNul(dew_address[:]))
-    }
-    if ProfileDewButton(app, LocaleText("open_wallet_button"), x, y, width, false, draw) {
-        unused OpenUri(TextUntilNul(uri[:]))
-    }
 }
 
 ProfileDewHeight :: (app: *InnerBreeze, width: s32) -> s32 {
@@ -233,6 +201,39 @@ ProfileDewDraw :: (app: *InnerBreeze, x: s32, y: *s32, width: s32) {
     y.* += height
 }
 
+// "10 Dew = 0.01 XMR, about 3.45 USD" from the node's published rates; the USD
+// part only while the node has a current Monero price.
+ProfileDewExchangeText :: (output: []u8) -> bool {
+    units: s64 = 10 * DewUnits
+    atomic := DewXmrAtomic(units)
+    if atomic <= 0 {
+        return false
+    }
+    dew: [48]u8
+    xmr: [48]u8
+    usd: [48]u8
+    unused DewFormat(units, DewUnits, dew[:])
+    unused DewFormat(atomic, 1000000000000LL, xmr[:])
+    cents := DewUsdCents(atomic)
+    if cents <= 0 {
+        arguments: [2]FormatArg = .[
+        FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
+        FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true}]
+        return FormatTemplate(LocaleText("profile_dew_exchange_xmr"), arguments[:], output)
+    }
+    unused AppFormatS64(cents / 100, usd[:])
+    unused AppAppendText(".", usd[:])
+    unused AppAppendText(ifx cents % 100 < 10 then "0" else "", usd[:])
+    remainder: [8]u8
+    unused AppFormatS64(cents % 100, remainder[:])
+    unused AppAppendText(TextUntilNul(remainder[:]), usd[:])
+    arguments: [3]FormatArg = .[
+    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(usd[:]), .is_text = true}]
+    return FormatTemplate(LocaleText("profile_dew_exchange"), arguments[:], output)
+}
+
 ProfileStoragePlansOpen :: (app: *InnerBreeze) {
     // A waiting purchase opens on the size it asked for.
     profile_storage_tab = DewAttemptSize()
@@ -248,6 +249,9 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
     line: [192]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    if ProfileDewExchangeText(line[:]) {
+        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    }
     labels: [1 + DewPlanCount][24]u8
     unused AppCopyText(LocaleText("profile_dew_plan_free"), labels[0][:])
     for index: cast(s32)0..DewPlanCount - 1 {
@@ -345,6 +349,7 @@ ProfileStoragePlansModalDraw :: (app: *InnerBreeze) {
     if height > app.ui.view_height - AppScale(48) {
         height = app.ui.view_height - AppScale(48)
     }
+    DewRatesRefresh()
     frame := ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash("profile/storage/modal"), .title = LocaleText("profile_dew_plans"),
             .width = width, .height = height, .scale = MetricsScale(),
@@ -368,6 +373,160 @@ ProfileStoragePlansModalDraw :: (app: *InnerBreeze) {
     if scroll.opened {
         y := cast(s32)scroll.content.y
         ProfileStoragePlansContent(app, cast(s32)scroll.content.x, *y, content_w, true)
+        End(app.ui.session)
+    }
+    End(app.ui.session)
+}
+
+ProfileTopUpOpen :: (app: *InnerBreeze) {
+    profile_topup_scroll = 0
+    profile_topup_started = false
+    profile_topup_failed = false
+    profile_topup_copied = false
+    app_open_modal(app, cast(ModalType)ModalDewTopUp)
+}
+
+// Starts the address request once the shared Dew request is free, and notices
+// when it finished without an address.
+ProfileTopUpPump :: () {
+    if dew_operation.active {
+        return
+    }
+    if dew_address[0] != cast(u8)0 {
+        profile_topup_failed = false
+        return
+    }
+    if profile_topup_started {
+        profile_topup_failed = true
+        return
+    }
+    if profile_topup_failed {
+        return
+    }
+    DewTopUp()
+    profile_topup_started = dew_operation.active
+}
+
+// A Monero address is one 95-character word; it is shown in lines that fit.
+ProfileTopUpAddressText :: (output: []u8) {
+    address := TextUntilNul(dew_address[:])
+    at: s64 = 0
+    while at < address.count {
+        end := at + 32
+        if end > address.count {
+            end = address.count
+        }
+        if at > 0 {
+            unused AppAppendText("\n", output)
+        }
+        unused AppAppendText(address[at:end], output)
+        at = end
+    }
+}
+
+ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
+    line: [384]u8
+    ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    if dew_address[0] == cast(u8)0 {
+        if profile_topup_failed {
+            ProfileDewText(app, LocaleText("profile_dew_topup_error"), x, y, width, AppFontSize(), draw)
+            if ProfileDewButton(app, LocaleText("retry_button"), x, y, width, dew_operation.active, draw) {
+                profile_topup_started = false
+                profile_topup_failed = false
+            }
+        } else {
+            ProfileDewText(app, LocaleText("profile_dew_topup_loading"), x, y, width, AppFontSize(), draw)
+        }
+        return
+    }
+    xmr: [48]u8
+    dew: [48]u8
+    unused DewFormat(dew_rate_atomic, 1000000000000LL, xmr[:])
+    unused DewFormat(dew_rate_units, DewUnits, dew[:])
+    rate_arguments: [2]FormatArg = .[
+    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
+    unused FormatTemplate(LocaleText("profile_dew_rate"), rate_arguments[:], line[:])
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppFontSize(), draw)
+    // A minimum below one Dew's worth is noise, so only a real one is named.
+    line = .{}
+    if dew_minimum_atomic >= TopUpMinimumShown {
+        minimum: [48]u8
+        unused DewFormat(dew_minimum_atomic, 1000000000000LL, minimum[:])
+        hint_arguments: [2]FormatArg = .[
+        FormatArg.{.text = TextUntilNul(minimum[:]), .is_text = true},
+        FormatArg.{.number = cast(s32)dew_confirmations}]
+        unused FormatTemplate(LocaleText("profile_dew_topup_hint"), hint_arguments[:], line[:])
+    } else {
+        send_arguments: [1]FormatArg = .[FormatArg.{.number = cast(s32)dew_confirmations}]
+        unused FormatTemplate(LocaleText("profile_dew_topup_send"), send_arguments[:], line[:])
+    }
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    side := width
+    if side > AppScale(220) {
+        side = AppScale(220)
+    }
+    uri: [144]u8
+    unused AppCopyText("monero:", uri[:])
+    unused AppAppendText(TextUntilNul(dew_address[:]), uri[:])
+    if draw {
+        unused DrawQrCode(app.ui.session, TextUntilNul(uri[:]),
+            Rectangle.{cast(float32)(x + (width - side) / 2), cast(float32)y.*,
+                cast(float32)side, cast(float32)side})
+    }
+    y.* += side + AppScale(12)
+    address: [160]u8
+    ProfileTopUpAddressText(address[:])
+    ProfileDewText(app, TextUntilNul(address[:]), x, y, width, AppSmallFontSize(), draw)
+    half := (width - AppScale(8)) / 2
+    row_y := y.*
+    copy_y := row_y
+    if ProfileDewButton(app, LocaleText(ifx profile_topup_copied then "address_copied" else "copy_address_button"),
+        x, *copy_y, half, false, draw) {
+        profile_topup_copied = TextInputWriteClipboard(TextUntilNul(dew_address[:]))
+    }
+    wallet_y := row_y
+    if ProfileDewButton(app, LocaleText("open_wallet_button"), x + width - half, *wallet_y, half, false, draw) {
+        unused OpenUri(TextUntilNul(uri[:]))
+    }
+    y.* = copy_y
+}
+
+ProfileTopUpModalDraw :: (app: *InnerBreeze) {
+    ProfileTopUpPump()
+    width := app.ui.view_width - AppScale(32)
+    if width > AppScale(480) {
+        width = AppScale(480)
+    }
+    measured: s32 = 0
+    ProfileTopUpContent(app, 0, *measured, width - AppScale(46), false)
+    height := measured + AppScale(96)
+    if height > app.ui.view_height - AppScale(48) {
+        height = app.ui.view_height - AppScale(48)
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("profile/topup/modal"), .title = LocaleText("profile_dew_topup_title"),
+            .width = width, .height = height, .scale = MetricsScale(),
+            .title_at_start = true, .strong_title = true,
+            .has_right_action = true, .right_label = LocaleText("close_button")})
+    if frame.dismissed || frame.right_clicked || !DewReady() || !dew_account.known {
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content_w := cast(s32)frame.layout.content.width - AppScale(10)
+    content_h: s32 = 0
+    ProfileTopUpContent(app, 0, *content_h, content_w, false)
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("profile/topup/scroll"), .bounds = frame.layout.content,
+            .content_height = content_h, .scroll_offset = profile_topup_scroll})
+    profile_topup_scroll = scroll.scroll_offset
+    if scroll.opened {
+        y := cast(s32)scroll.content.y
+        ProfileTopUpContent(app, cast(s32)scroll.content.x, *y, content_w, true)
         End(app.ui.session)
     }
     End(app.ui.session)

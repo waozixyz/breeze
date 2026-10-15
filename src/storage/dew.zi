@@ -4,6 +4,7 @@
 #import "json_scan"
 #import "text_buffer"
 #import "byte_text_linux"
+#import "net_http"
 Clock :: #import "date_time_linux";
 #import, file "storage_core.zi";
 #import, file "delegate_store.zi";
@@ -46,7 +47,21 @@ DewAccount :: struct {
     plans: [DewPlanCount]DewStoragePlan
 }
 
+// The node's Monero price in US cents and its Dew funding ratio. Shown
+// for orientation only; the node charges Dew and credits Monero by itself.
+DewRates :: struct {
+    known: bool
+    usd_cents_per_xmr: s64
+    xmr_atomic_units: s64
+    token_units: s64
+}
+
 dew_account: DewAccount;
+dew_rates: DewRates;
+dew_rates_transfer: NetworkTransfer;
+dew_rates_response: [1024]u8;
+dew_rates_active: bool;
+dew_rates_next: s64;
 dew_operation: StoredOperation;
 dew_transfer: NetworkTransfer;
 dew_response: [8192]u8;
@@ -391,4 +406,62 @@ DewTick :: (visible: bool, now: float64) {
         unused DewBegin(DewRead, "/api/v1/storage/plan", "")
         dew_next_refresh = now + 15.0
     }
+}
+
+// {"xmr_usd_cents":N,"updated_at":unix,"sources":[...],"xmr_atomic_units":N,"token_units":N}
+// A zero price means the node has no current rate.
+DewParseRates :: (json: string, rates: *DewRates) -> bool {
+    updated: s64
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count ||
+    !DewInteger(json, FieldAt(json, 0, "xmr_usd_cents"), *rates.usd_cents_per_xmr) ||
+    !DewInteger(json, FieldAt(json, 0, "updated_at"), *updated) ||
+    !DewInteger(json, FieldAt(json, 0, "xmr_atomic_units"), *rates.xmr_atomic_units) ||
+    !DewInteger(json, FieldAt(json, 0, "token_units"), *rates.token_units) {
+        return false
+    }
+    rates.known = rates.xmr_atomic_units > 0 && rates.token_units > 0
+    return true
+}
+
+// Public, so it needs no account; refreshed at most every ten minutes.
+DewRatesRefresh :: () {
+    transport := NetworkTransport(*dew_rates_transfer)
+    if dew_rates_active {
+        status: s32
+        state := transport.poll(transport.context, *status)
+        if state < 0 {
+            return
+        }
+        dew_rates_active = false
+        received: DewRates
+        if state == 1 && status == 200 && DewParseRates(TextUntilNul(dew_rates_response[:]), *received) {
+            dew_rates = received
+        }
+        return
+    }
+    if DewNow() < dew_rates_next {
+        return
+    }
+    dew_rates_next = DewNow() + 600
+    dew_rates_response = .{}
+    dew_rates_active = transport.start(transport.context, HttpRequest.{.method = "GET",
+            .url = "https://api.waozi.xyz/api/v1/rates", .accept = "application/json"},
+        dew_rates_response[:])
+}
+
+// Dew units in Monero atomic units at the node's funding ratio.
+DewXmrAtomic :: (units: s64) -> s64 {
+    if !dew_rates.known {
+        return 0
+    }
+    return cast(s64)(cast(float64)units * cast(float64)dew_rates.xmr_atomic_units /
+        cast(float64)dew_rates.token_units + 0.5)
+}
+
+// Monero atomic units in US cents, or 0 without a current rate.
+DewUsdCents :: (atomic: s64) -> s64 {
+    if !dew_rates.known || dew_rates.usd_cents_per_xmr <= 0 {
+        return 0
+    }
+    return cast(s64)(cast(float64)atomic * cast(float64)dew_rates.usd_cents_per_xmr / 1000000000000.0 + 0.5)
 }
