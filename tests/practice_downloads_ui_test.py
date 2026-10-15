@@ -285,8 +285,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     # nothing reaches a node.
     account = 'a' * 64
     with sqlite3.connect(profile / 'inbe.db') as database:
+        # Unowned, Tai Chi gave way to Wim Hof; the owner selects it again.
         for key, value in {'sync_public_id': account, 'sync_public_key': 'fixture-public',
-                           'sync_private_key': 'fixture-private', 'sync_enabled': 0}.items():
+                           'sync_private_key': 'fixture-private', 'sync_enabled': 0,
+                           'exercise_type': 4}.items():
             database.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,?) '
                              'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value',
                              (user, key, str(value), int(time.time())))
@@ -299,14 +301,24 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         try:
             _, text = capture(window, name)
             assert 'Start' in text and 'Manage practices' in text and 'Available offline' not in text, text
+            # The account's purchase is known from the first frame: Tai Chi stays selected.
+            assert 'Tai Chi' in text, text
             click_word(window, name + '-open', 'Manage')
             time.sleep(1)
             command('xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2))
             command('xdotool', 'click', '--repeat', '16', '--delay', '80', '5')
             time.sleep(.5)
             _, text = capture(window, name + '-manager')
-            assert 'Tai Chi' in text and 'Available offline' in text and 'Narration ready offline' in text, text
-            assert 'English' in text, text
+            # Manage practices shows each practice's download, never narration.
+            assert 'Tai Chi' in text and 'Available offline' in text, text
+            assert 'Narration' not in text and 'English' not in text, text
+            if name == 'desktop-manager':
+                # Tai Chi's Customize holds the narration language and its pack.
+                close_manager(window)
+                click_word(window, name + '-customize', 'Customize')
+                time.sleep(1)
+                _, text = capture(window, name + '-customize-open')
+                assert 'Narration language: English' in text and 'Narration ready offline' in text, text
         finally:
             stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '

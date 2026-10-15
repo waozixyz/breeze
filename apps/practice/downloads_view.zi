@@ -158,23 +158,6 @@ PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
-PracticeDownloadLanguageText :: (app: *InnerBreeze) -> string {
-    buffer: [256]u8
-    selected_language := LocaleLanguageAt(LocaleActiveIndex())
-    language := selected_language.label
-    args: [1]FormatArg = .[FormatArg.{.text = language, .is_text = true}]
-    unused FormatTemplate(LocaleText("practice_download_language"), args[:], buffer[:])
-    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
-}
-
-PracticeDownloadVoiceText :: (practice: s32) -> string {
-    voice := PracticeVoiceStatus(practice)
-    return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
-        ifx voice == 2 then "practice_voice_ready" else
-        ifx voice == 3 then "practice_download_failed" else
-        ifx voice == 1 then "practice_voice_busy" else "voice_narration_label")
-}
-
 PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
     definition := practice_get(practice)
     name := LocaleText(definition.label_key)
@@ -193,18 +176,6 @@ PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s
     included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
     if narrow && !included {
         height += AppScale(52)
-    }
-    if PracticeContentName(practice) == "taichi" && app.voice_narration_enabled != 0 &&
-    !PracticeDownloadLocked(practice) {
-        language_h := AppParagraphHeight(PracticeDownloadLanguageText(app), width, AppFontSize(), AppScale(3))
-        voice_h := AppParagraphHeight(PracticeDownloadVoiceText(practice), status_w, AppFontSize(), AppScale(3))
-        if voice_h < AppScale(44) {
-            voice_h = AppScale(44)
-        }
-        height += language_h + AppScale(8) + voice_h + AppScale(12)
-        if narrow {
-            height += AppScale(52)
-        }
     }
     return height
 }
@@ -265,47 +236,6 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
                 app.exercise_type = practice
             }
             PracticeContentRequest(practice, app.voice_narration_enabled != 0)
-        }
-    }
-    if PracticeContentName(practice) != "taichi" || app.voice_narration_enabled == 0 || locked {
-        return
-    }
-    y += status_h + AppScale(12)
-    if narrow && !included {
-        y += AppScale(52)
-    }
-    language := PracticeDownloadLanguageText(app)
-    language_h := AppParagraphHeight(language, width, AppFontSize(), AppScale(3))
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)language_h},
-            .text = language, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    y += language_h + AppScale(8)
-    voice := PracticeVoiceStatus(practice)
-    voice_label := PracticeDownloadVoiceText(practice)
-    voice_h := AppParagraphHeight(voice_label, status_w, AppFontSize(), AppScale(3))
-    if voice_h < AppScale(44) {
-        voice_h = AppScale(44)
-    }
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)status_w, cast(float32)voice_h},
-            .text = voice_label, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    button_y = ifx narrow then y + voice_h + AppScale(8) else y
-    if status == 2 && (voice == 0 || voice == 1 || voice == 3) && Button(app.ui.session, ButtonProps.{
-            .id = 17411 + practice * 2,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText(ifx voice == 1 then "cancel_button" else
-            ifx voice == 3 then "practice_voice_retry" else "practice_voice_download"),
-            .disabled = practice_active(app) != null ||
-            (voice != 1 && !PracticePackReviewed(practice, LocaleActiveCode())),
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        if voice == 1 {
-            PracticeContentCancel(practice)
-        } else {
-            if DataTemporary() {
-                app.exercise_type = practice
-            }
-            PracticeContentRequest(practice, true)
         }
     }
 }

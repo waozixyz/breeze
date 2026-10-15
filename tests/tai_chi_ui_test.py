@@ -124,10 +124,11 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         assert 'Voice narration' in text, text
         hint_path = OUTPUT / 'narration-hint.png'
         with Image.open(OUTPUT / 'characters.png') as picture:
-            hint = ImageOps.grayscale(picture.crop((640, 475, 1100, 580))).resize((920, 210))
+            hint = ImageOps.grayscale(picture.crop((640, 475, 1100, 620))).resize((1380, 435))
             ImageEnhance.Contrast(hint).enhance(2).save(hint_path)
         hint = command('tesseract', str(hint_path), 'stdout', '--psm', '6')
-        assert 'Tai Chi instructions' in hint and 'selected language' in hint, hint
+        # The narration language and its pack live here, under the switch.
+        assert 'Narration language' in hint and 'Tai Chi instructions' in hint and 'selected language' in hint, hint
         click(window, 760, 294)
         click(window, 865, 368)
         click(window, 755, 446)
