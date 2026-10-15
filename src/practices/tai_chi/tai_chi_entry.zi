@@ -1,0 +1,103 @@
+c :: #system_library "c";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/assets.zi";
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/manual_seen_actions.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/activity_start.zi";
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_rules.zi";
+#import, file "../practice_narration.zi";
+#import, file "tai_chi_timeline.zi";
+
+using ExerciseType;
+using ModalType;
+
+// The audio player remains an Inbe host effect until its module is migrated.
+meditation_music_start_session :: (app: *InnerBreeze) #foreign c;
+
+tai_chi_course_generation: u64;
+// Transient chooser state; character and course progress remain in settings.
+tai_chi_selected_lesson: s32;
+tai_chi_course_scroll: s32;
+tai_chi_lesson_scroll: s32;
+tai_chi_reveal_next: bool;
+tai_chi_customize_scroll: s32;
+
+// The course from the Practices package, read again when a new package
+// replaces the assets.
+#program_export
+TaiChiCourseLoad :: () -> bool {
+    generation := AssetGeneration()
+    if tai_chi_course.loaded && tai_chi_course_generation == generation {
+        return true
+    }
+    tai_chi_course.loaded = false
+    asset := AssetRead(TAI_CHI_COURSE_PATH)
+    if !asset.found {
+        return false
+    }
+    tai_chi_course_generation = generation
+    return TaiChiCourseParseArchive(*tai_chi_course, asset.data)
+}
+
+// Plays `item` of the course.
+#program_export
+tai_chi_practice_start_item :: (app: *InnerBreeze, item: s32) {
+    if app == null || !ActivityStartAllowed() || !TaiChiCourseLoad() {
+        return
+    }
+    mark_exercise_manual_seen(app, EXERCISE_TAI_CHI)
+    tai_chi_reading_seconds = PracticeTaiChiReadingSeconds
+    tai_chi_reading_enabled = app.voice_narration_enabled != 0
+    PracticeNarrationStop()
+    app.tai_chi = TaiChiNormalizeSettings(app.tai_chi)
+    app.tai_chi = TaiChiStartItem(app.tai_chi, item)
+    if app.tai_chi.built_item < 0 {
+        return
+    }
+    app.session_paused = 0
+    app_close_modal(app)
+    app_switch_screen(app, ScreenTaiChi)
+    meditation_music_start_session(app)
+}
+
+// Start opens the course at the lesson containing the suggested item.
+#program_export
+tai_chi_practice_start :: (app: *InnerBreeze) {
+    if app == null || !TaiChiCourseLoad() {
+        return
+    }
+    next := TaiChiItemToPlay(app.tai_chi)
+    tai_chi_selected_lesson = 0
+    for index: cast(s32)0..tai_chi_course.lesson_count - 1 {
+        lesson := tai_chi_course.lessons[index]
+        if next >= lesson.item_first && next < lesson.item_first + lesson.item_count {
+            tai_chi_selected_lesson = index
+        }
+    }
+    tai_chi_course_scroll = 0
+    tai_chi_lesson_scroll = tai_chi_selected_lesson * AppScale(66)
+    tai_chi_reveal_next = true
+    // Tray and web shortcuts can enter from a different practice screen.
+    // The chooser belongs over Tai Chi's home, just like Start there.
+    route := app_current_route(app)
+    route.screen = ScreenStart
+    route.practice_tab = PRACTICE_TAB_PLAY
+    app_switch_route(app, route)
+    app_open_modal(app, cast(ModalType)ModalTaiChiCourse)
+}
+
+#program_export
+tai_chi_customize_open :: (app: *InnerBreeze) {
+    if app == null || !TaiChiCourseLoad() {
+        return
+    }
+    tai_chi_customize_scroll = 0
+    app_open_modal(app, cast(ModalType)ModalTaiChiCustomize)
+}

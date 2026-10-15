@@ -25,6 +25,7 @@ mkdir -p "$work/generated"
 cat > "$work/generated/main.c" <<'C'
 #include "session_results_behavior.h"
 #include <stdio.h>
+void __wrap_meditation_music_stop(void *app) { (void)app; }
 int main(void)
 {
     int result = Check();
@@ -41,7 +42,7 @@ C
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/build/ziran-toolchain/libziran.a" \
     "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
-    -Wl,--gc-sections -ldl -lpthread -lz -lm -latomic -o "$work/test"
+    -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -ldl -lpthread -lz -lm -latomic -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-session-results-zi-test/data
 export APP_DATA_ROOT

@@ -79,7 +79,7 @@ int main(void)
 C
 monocypher="$root/build/packages/monocypher/src"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
-    -I"$root/build/packages/ziran/include" -I"$work/generated" \
+    -I"$root/build/packages/ziran/include" -iquote "$work/generated" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \

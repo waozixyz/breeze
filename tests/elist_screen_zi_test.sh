@@ -31,6 +31,9 @@ mkdir -p "$work/c"
     "$work/c/byte_text_linux.c" \
     "$work/c/module_host.c" "$work/c/smooth_frames.c" "$work/c/value_codec.c" \
     "$work/c/package_files.c" "$work/c/format.c" \
+    "$work/c/practice_downloads.c" "$work/c/package_release.c" \
+    "$work/c/file_download.c" "$work/c/file_linux.c" "$work/c/json_scan.c" \
+    "$work/c/c_string.c" \
     "$work/c/asset_paths.c" "$work/c/assets.c" \
     "$work/c/sun_salutation_inventory.c" \
     "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \

@@ -13,6 +13,7 @@ LOG_ERROR :: 5
 GetTime :: () -> float64 #foreign c;
 PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "modal_rules.zi";
+#import, file "../practices/tai_chi/tai_chi_practice.zi";
 #import, file "../habits/habit_types.zi";
 #import, file "../core/types.zi";
 #import, file "app_types.zi";
@@ -105,6 +106,8 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../screens/lumi_screen.zi";
 #import, file "../screens/leaderboard_screen.zi";
 #import, file "../cells/package_manager.zi";
+#import, file "../practices/practice_downloads.zi";
+#import, file "assets.zi";
 #import, file "../cells/catalog.zi";
 #import, file "../cells/inbe_types.zi";
 #import, file "app_style.zi";
@@ -995,6 +998,11 @@ draw_global_modal :: (app: *InnerBreeze) {
             meditation_music_start_download(app)
         }
     }
+    if app.modal.type == cast(ModalType)ModalTaiChiCourse ||
+        app.modal.type == cast(ModalType)ModalTaiChiCustomize {
+        tai_chi_modal_draw(app)
+        return
+    }
     if app.modal.type == cast(ModalType)ModalAppIconPicker {
         settings_screen_draw_app_icon_modal(app)
         return
@@ -1164,7 +1172,7 @@ updateapp :: (app: *InnerBreeze) {
     back_requested := IsKeyPressed(APP_KEY_BACK) ||
     (app.launcher_open && IsKeyPressed(APP_KEY_ESCAPE))
     #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
-        if IsKeyPressed(KEY_BACKSPACE)  && ((app.breathing.screen == ScreenStart && app.practice_tab != PRACTICE_TAB_PLAY)  || app.breathing.screen == ScreenSession || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation || app.breathing.screen == ScreenPatterns) {
+        if IsKeyPressed(KEY_BACKSPACE)  && ((app.breathing.screen == ScreenStart && app.practice_tab != PRACTICE_TAB_PLAY)  || app.breathing.screen == ScreenSession || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation || app.breathing.screen == ScreenPatterns || app.breathing.screen == ScreenTaiChi) {
             back_requested = true
         }
     }
@@ -1299,6 +1307,13 @@ updateapp :: (app: *InnerBreeze) {
         } else if app.breathing.screen == ScreenSunSalutation {
             {
                 practice: *PracticeDefinition = practice_get(EXERCISE_SUN_SALUTATION)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenTaiChi {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_TAI_CHI)
                 if practice.draw_active_session != null {
                     practice.draw_active_session(app, center_x, center_y)
                 }
@@ -1646,6 +1661,16 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     if !app_practice_holds_frame_work(app) {
         app_lumi_pump(app)
         PackagePump(app.enabled_apps, cast(s32)PackageNow())
+        content_generation := AssetGeneration()
+        PracticeDownloadsPump(app.exercise_type, app.voice_narration_enabled != 0,
+            practice_active(app) == null && app.modal.active == 0)
+        if content_generation != AssetGeneration() {
+            #if #defined(PLATFORM_WEB) {
+                InvalidateCanvasAssets()
+            } else {
+                InvalidateRaylibAssets()
+            }
+        }
     }
     if app.app_choices_pending && practice_active(app) == null && app.modal.active == 0 &&
     app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&

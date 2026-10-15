@@ -30,6 +30,12 @@ void RasterImage(String path, uint32_t texture, Rectangle source,
     (void)clip; (void)origin; (void)rotation; (void)radius; (void)tint;
     assert(0);
 }
+void RasterImageMesh(String path, uint32_t texture, Rectangle source,
+    Slice points, int32_t columns, int32_t rows, Rectangle clip, Color tint) {
+    (void)path; (void)texture; (void)source; (void)points;
+    (void)columns; (void)rows; (void)clip; (void)tint;
+    assert(0);
+}
 
 void app_device_resize(int32_t width, int32_t height) {
     (void)width; (void)height; assert(0);

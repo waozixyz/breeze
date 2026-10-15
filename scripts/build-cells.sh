@@ -18,6 +18,7 @@ python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
+python3 scripts/practice_content.py "$ziran"
 mkdir -p "$output" build/bundled-cells
 rm -f "$output/practice.zib"
 for feature in lists habits practices diary lumi leaderboard; do

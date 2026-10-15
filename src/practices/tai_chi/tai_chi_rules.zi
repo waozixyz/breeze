@@ -1,0 +1,297 @@
+// The Tai Chi practice: which course item plays, how far the course has
+// been practised, the playback clock, and the camera that follows the
+// figure, as the course studio's camera does.
+#import "math"
+#import, file "tai_chi_math.zi";
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_timeline.zi";
+#import, file "tai_chi_solve.zi";
+#import, file "tai_chi_layout.zi";
+
+TAI_CHI_CHARACTER_COUNT :: 2
+// Lesson progress is saved as hexadecimal digits, four items per digit.
+TAI_CHI_PROGRESS_DIGITS :: 40
+
+// How a camera view frames the figure: its yaw (fixed, or relative to the
+// way the figure faces), distance, height and the height it looks at.
+TaiChiViewSpec :: struct {
+    yaw: float64
+    fixed: bool
+    distance: float64
+    height: float64
+    target: float64
+}
+
+TaiChiCameraState :: struct {
+    initialized: bool
+    center: TaiChiVector3
+    yaw: float64
+}
+
+TaiChiPracticeState :: struct {
+    character: s32
+    // The course item last chosen and not yet finished; -1 suggests the
+    // first not yet done.
+    item: s32
+    done: [TAI_CHI_ITEM_CAPACITY]bool
+    time: float64
+    // Seconds of practice in this session, for its record.
+    practised: float64
+    // Whether this profile has been given its Tai Chi habit, so a habit
+    // deleted on purpose does not come back.
+    habit_made: s32
+    built_item: s32
+    camera: TaiChiCameraState
+    memory: TaiChiLayoutMemory
+}
+
+tai_chi_timeline: TaiChiTimeline;
+
+TaiChiViewSpecFor :: (view: s32) -> TaiChiViewSpec {
+    spec: TaiChiViewSpec
+    if view == TAI_CHI_VIEW_FRONT {
+        spec.yaw = 0.0
+        spec.fixed = true
+        spec.distance = 5.2
+        spec.height = 1.35
+        spec.target = 0.88
+        return spec
+    }
+    spec.yaw = TAI_CHI_PI
+    spec.fixed = false
+    spec.distance = 4.4
+    spec.height = 1.75
+    spec.target = 0.95
+    return spec
+}
+
+// --- Course and progress -------------------------------------------------------
+
+// Loads course.bin once from the package's assets.
+TaiChiCourseReady :: (bytes: string) -> bool {
+    if tai_chi_course.loaded {
+        return true
+    }
+    return TaiChiCourseParse(*tai_chi_course, bytes)
+}
+
+TaiChiFirstOpenItem :: (state: TaiChiPracticeState) -> s32 {
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        if !state.done[index] {
+            return index
+        }
+    }
+    return 0
+}
+
+// The item suggested next: the one last chosen, else the first not yet done.
+TaiChiItemToPlay :: (state: TaiChiPracticeState) -> s32 {
+    if state.item >= 0 && state.item < tai_chi_course.item_count {
+        return state.item
+    }
+    return TaiChiFirstOpenItem(state)
+}
+
+TaiChiDoneCount :: (state: TaiChiPracticeState) -> s32 {
+    count: s32 = 0
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        if state.done[index] {
+            count += 1
+        }
+    }
+    return count
+}
+
+TaiChiHexDigit :: (value: s32) -> u8 {
+    if value < 10 {
+        return cast(u8)(48 + value)
+    }
+    return cast(u8)(87 + value)
+}
+
+TaiChiHexValue :: (digit: u8) -> s32 {
+    if digit >= cast(u8)48 && digit <= cast(u8)57 {
+        return cast(s32)digit - 48
+    }
+    if digit >= cast(u8)97 && digit <= cast(u8)102 {
+        return cast(s32)digit - 87
+    }
+    return 0
+}
+
+// Writes the done items as hexadecimal digits, item 0 in the lowest bit of
+// the first digit, ending with a zero byte. Returns the digit count.
+TaiChiProgressText :: (state: TaiChiPracticeState, out: []u8) -> s32 {
+    count: s32 = 0
+    while count < TAI_CHI_PROGRESS_DIGITS && count < cast(s32)out.count - 1 {
+        value: s32 = 0
+        for bit: cast(s32)0..3 {
+            item := count * 4 + bit
+            if item < TAI_CHI_ITEM_CAPACITY && state.done[item] {
+                value = value | (1 << bit)
+            }
+        }
+        out[count] = TaiChiHexDigit(value)
+        count += 1
+    }
+    out[count] = cast(u8)0
+    return count
+}
+
+TaiChiProgressRead :: (state: TaiChiPracticeState, text: string) -> TaiChiPracticeState {
+    for item: cast(s32)0..TAI_CHI_ITEM_CAPACITY - 1 {
+        state.done[item] = false
+    }
+    digit: s32 = 0
+    while digit < cast(s32)text.count && digit < TAI_CHI_PROGRESS_DIGITS {
+        value := TaiChiHexValue(text[digit])
+        for bit: cast(s32)0..3 {
+            item := digit * 4 + bit
+            if item < TAI_CHI_ITEM_CAPACITY {
+                state.done[item] = (value & (1 << bit)) != 0
+            }
+        }
+        digit += 1
+    }
+    return state
+}
+
+TaiChiNormalizeSettings :: (state: TaiChiPracticeState) -> TaiChiPracticeState {
+    if state.character < 0 || state.character >= TAI_CHI_CHARACTER_COUNT {
+        state.character = 0
+    }
+    if state.item < -1 || state.item >= TAI_CHI_ITEM_CAPACITY {
+        state.item = -1
+    }
+    return state
+}
+
+// --- Playback --------------------------------------------------------------------
+
+// Builds the item's timeline and starts it from the beginning.
+TaiChiStartItem :: (state: TaiChiPracticeState, item: s32) -> TaiChiPracticeState {
+    state.item = item
+    state.time = 0.0
+    state.practised = 0.0
+    state.built_item = -1
+    state.camera.initialized = false
+    memory: TaiChiLayoutMemory
+    state.memory = memory
+    if item >= 0 && item < tai_chi_course.item_count &&
+        TaiChiTimelineForItem(*tai_chi_timeline, tai_chi_course.items[item]) {
+        state.built_item = item
+    }
+    return state
+}
+
+TaiChiDuration :: (state: TaiChiPracticeState) -> float64 {
+    if state.built_item < 0 {
+        return 0.0
+    }
+    return tai_chi_timeline.duration
+}
+
+TaiChiAdvanceResult :: struct {
+    state: TaiChiPracticeState
+    finished: bool
+}
+
+TaiChiAdvance :: (state: TaiChiPracticeState, seconds: float64) -> TaiChiAdvanceResult {
+    result: TaiChiAdvanceResult
+    if seconds > 0.0 && seconds < 1.0 {
+        state.time += seconds
+        state.practised += seconds
+    }
+    duration := TaiChiDuration(state)
+    if state.time >= duration {
+        state.time = duration
+        result.finished = state.built_item >= 0
+    }
+    result.state = state
+    return result
+}
+
+// The times of the cued steps: the start of the step after or before
+// `time`, for the skip controls.
+TaiChiNextStepTime :: (state: TaiChiPracticeState, forward: bool) -> float64 {
+    if state.built_item < 0 {
+        return 0.0
+    }
+    origin := tai_chi_timeline.start
+    if forward {
+        for index: cast(s32)1..tai_chi_timeline.count - 1 {
+            key := tai_chi_timeline.keys[index - 1]
+            t := key.t - origin
+            if tai_chi_timeline.keys[index].cue >= 0 && t > state.time + 0.05 {
+                return t
+            }
+        }
+        return tai_chi_timeline.duration
+    }
+    best: float64 = 0.0
+    for index: cast(s32)1..tai_chi_timeline.count - 1 {
+        key := tai_chi_timeline.keys[index - 1]
+        t := key.t - origin
+        if tai_chi_timeline.keys[index].cue >= 0 && t < state.time - 1.0 {
+            best = t
+        }
+    }
+    return best
+}
+
+// Jumps to `time`; the camera moves there at once instead of gliding.
+TaiChiSeek :: (state: TaiChiPracticeState, time: float64) -> TaiChiPracticeState {
+    state.time = TaiChiClamp(time, 0.0, TaiChiDuration(state))
+    state.camera.initialized = false
+    return state
+}
+
+// --- Camera ------------------------------------------------------------------------
+
+// Follows the pelvis smoothly, and the way the figure faces in views that
+// travel with it; `snap` jumps straight there.
+TaiChiCameraUpdate :: (camera: TaiChiCameraState, view: TaiChiViewSpec, pelvis: TaiChiVector3, facing: float64,
+    dt: float64, snap: bool) -> TaiChiCameraState {
+    target_yaw := view.yaw
+    if !view.fixed {
+        target_yaw = facing + view.yaw
+    }
+    follow := TaiChiFlat3(pelvis)
+    if !camera.initialized || snap {
+        camera.center = follow
+        camera.yaw = target_yaw
+        camera.initialized = true
+        return camera
+    }
+    k := 1.0 - Exp(-dt * 2.2)
+    camera.center = TaiChiLerp3(camera.center, follow, k)
+    delta := target_yaw - camera.yaw
+    while delta > TAI_CHI_PI {
+        delta -= 2.0 * TAI_CHI_PI
+    }
+    while delta < -TAI_CHI_PI {
+        delta += 2.0 * TAI_CHI_PI
+    }
+    camera.yaw += delta * (1.0 - Exp(-dt * 1.6))
+    return camera
+}
+
+// The painted figure is seen flat along the camera's direction, framed a
+// little closer than the camera would show it.
+TaiChiFraming :: struct {
+    camera: TaiChiCamera
+    view_height: float64
+    view_center: float64
+}
+
+TaiChiFramingFor :: (camera: TaiChiCameraState, view: TaiChiViewSpec) -> TaiChiFraming {
+    framing: TaiChiFraming
+    framing.camera.yaw = camera.yaw
+    framing.camera.tilt = TaiChiMin(14.0 * TAI_CHI_DEGREE, TaiChiMax(0.0, Atan2(view.height - view.target, view.distance)))
+    framing.camera.center = camera.center
+    distance := TaiChiMax(2.5, TaiChiHypot(view.distance, view.height - view.target))
+    // tan(17°), half of the camera's 34° field of view.
+    framing.view_height = 2.0 * distance * 0.30573068145866034 * 0.8
+    framing.view_center = TaiChiMax(0.85, view.target)
+    return framing
+}

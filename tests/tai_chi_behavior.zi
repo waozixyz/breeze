@@ -1,0 +1,245 @@
+// The Tai Chi course loads, and the app's motion matches the course
+// studio's: sampled poses, solved joints and painted pieces are compared with
+// tests/fixtures/tai-chi-reference.json, written by
+// design/tai-chi/tools/export-app.mjs from the same course.bin.
+#import "file"
+#import "json_scan"
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../src/practices/tai_chi/tai_chi_course.zi";
+#import, file "../src/practices/tai_chi/tai_chi_timeline.zi";
+#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
+#import, file "../src/practices/tai_chi/tai_chi_layout.zi";
+
+TAI_CHI_TEST_GRID_COLUMNS :: 2
+TAI_CHI_TEST_GRID_ROWS :: 6
+
+test_timeline: TaiChiTimeline;
+test_worst: float64;
+
+TestNumber :: (text: string, at: s32) -> float64 {
+    return ReadNumber(text, at).value
+}
+
+TestElementNumber :: (text: string, array_at: s32, index: s32) -> float64 {
+    return TestNumber(text, ElementAt(text, array_at, index))
+}
+
+TestStringIs :: (text: string, at: s32, expected: string) -> bool {
+    span := ReadString(text, at)
+    return span.valid && SpanEqualsASCII(text, span, expected)
+}
+
+TestClose :: (got: float64, want: float64, tolerance: float64) -> bool {
+    difference := TaiChiAbs(got - want)
+    if difference > test_worst {
+        test_worst = difference
+    }
+    return difference <= tolerance
+}
+
+TestVectorClose :: (got: TaiChiVector3, text: string, at: s32, tolerance: float64) -> bool {
+    return TestClose(got.x, TestElementNumber(text, at, 0), tolerance) &&
+        TestClose(got.y, TestElementNumber(text, at, 1), tolerance) &&
+        TestClose(got.z, TestElementNumber(text, at, 2), tolerance)
+}
+
+TestJoint :: (solved: *TaiChiSolved, index: s32) -> TaiChiVector3 {
+    if index == 0 { return solved.pelvis }
+    if index == 1 { return solved.neck_base }
+    if index == 2 { return solved.shoulder_center }
+    if index == 3 { return solved.shoulders[0] }
+    if index == 4 { return solved.elbows[1] }
+    if index == 5 { return solved.wrists[0] }
+    if index == 6 { return solved.wrists[1] }
+    if index == 7 { return solved.knees[0] }
+    if index == 8 { return solved.knees[1] }
+    if index == 9 { return solved.ankles[0] }
+    if index == 10 { return solved.heels[1] }
+    if index == 11 { return solved.toes[0] }
+    if index == 12 { return solved.head_top }
+    return solved.com
+}
+
+TestPieceIndex :: (text: string, at: s32) -> s32 {
+    names: [TAI_CHI_PIECE_COUNT]string = .["shadowL", "shadowR", "shadowBody", "torso", "head", "armL", "armR",
+        "handL", "handR", "legL", "legR", "shoeL", "shoeR"]
+    for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
+        if TestStringIs(text, at, names[index]) {
+            return index
+        }
+    }
+    return -1
+}
+
+// One reference sample: 0 when it matches, otherwise a code for what
+// differs.
+TestSample :: (text: string, sample: s32) -> s32 {
+    character: s32 = 0
+    if TestStringIs(text, FieldAt(text, sample, "character"), "tibetanWoman") {
+        character = 1
+    }
+    item := cast(s32)TestNumber(text, FieldAt(text, sample, "item"))
+    if item < 0 || item >= tai_chi_course.item_count {
+        return 10
+    }
+    if !TaiChiTimelineForItem(*test_timeline, tai_chi_course.items[item]) {
+        return 11
+    }
+    time := TestNumber(text, FieldAt(text, sample, "time"))
+    pose := TaiChiTimelineSample(*test_timeline, time)
+    channels := FieldAt(text, sample, "channels")
+    for channel: cast(s32)0..TAI_CHI_CHANNEL_COUNT - 1 {
+        if !TestClose(pose.channels[channel], TestElementNumber(text, channels, channel), 0.0002) {
+            return 100 + channel
+        }
+    }
+    rig := TaiChiRigFor(character)
+    solved := TaiChiSolvePose(*pose, *rig)
+    joints := FieldAt(text, sample, "joints")
+    for joint: cast(s32)0..13 {
+        if !TestVectorClose(TestJoint(*solved, joint), text, ElementAt(text, joints, joint), 0.0005) {
+            return 200 + joint
+        }
+    }
+    camera_at := FieldAt(text, sample, "camera")
+    center := FieldAt(text, camera_at, "center")
+    camera: TaiChiCamera
+    camera.yaw = TestNumber(text, FieldAt(text, camera_at, "yaw"))
+    camera.tilt = TestNumber(text, FieldAt(text, camera_at, "tilt"))
+    camera.center = TaiChiV3(TestElementNumber(text, center, 0), 0.0, TestElementNumber(text, center, 1))
+    images := TaiChiFigureImagesFor(character)
+    if !images.valid {
+        return 12
+    }
+    memory: TaiChiLayoutMemory
+    frame := TaiChiLayout(*solved, *rig, *images, camera, *memory)
+    order := FieldAt(text, sample, "order")
+    for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
+        if TestPieceIndex(text, ElementAt(text, order, index)) != frame.order[index] {
+            return 300 + index
+        }
+    }
+    pieces := FieldAt(text, sample, "pieces")
+    count := ArrayCount(text, pieces)
+    points: [TAI_CHI_TEST_GRID_COLUMNS * TAI_CHI_TEST_GRID_ROWS]TaiChiVector2
+    for index: cast(s32)0..count - 1 {
+        entry := ElementAt(text, pieces, index)
+        piece_index := TestPieceIndex(text, FieldAt(text, entry, "name"))
+        if piece_index < 0 {
+            return 13
+        }
+        piece := frame.pieces[piece_index]
+        image_at := FieldAt(text, entry, "image")
+        same_image := TestStringIs(text, image_at, "shadow")
+        if piece.image >= 0 {
+            same_image = TestStringIs(text, image_at, TaiChiCourseString(tai_chi_course.images[piece.image].role))
+        }
+        if !same_image {
+            return 400 + piece_index
+        }
+        TaiChiPieceVertices(*piece, TAI_CHI_TEST_GRID_COLUMNS, TAI_CHI_TEST_GRID_ROWS, points[:])
+        expected := FieldAt(text, entry, "points")
+        for point: cast(s32)0..TAI_CHI_TEST_GRID_COLUMNS * TAI_CHI_TEST_GRID_ROWS - 1 {
+            pair := ElementAt(text, expected, point)
+            if !TestClose(points[point].x, TestElementNumber(text, pair, 0), 0.0005) ||
+                !TestClose(points[point].y, TestElementNumber(text, pair, 1), 0.0005) {
+                return 500 + piece_index
+            }
+        }
+    }
+    return 0
+}
+
+// The reading time of words `cue`, from a key that shows them.
+TestReadingTime :: (timeline: *TaiChiTimeline, cue: s32) -> float64 {
+    for index: cast(s32)0..timeline.count - 1 {
+        if timeline.keys[index].cue == cue {
+            return timeline.keys[index].read
+        }
+    }
+    return 0.0
+}
+
+// Whether every run of the same words on screen lasts its reading time.
+TestWordsReadable :: (timeline: *TaiChiTimeline) -> bool {
+    step: float64 = 0.02
+    shown: s32 = -1
+    since: float64 = 0.0
+    time: float64 = 0.0
+    while time <= timeline.duration + step {
+        cue := ifx time < timeline.duration then TaiChiTimelineCue(timeline, time) else -2
+        if cue != shown {
+            if shown >= 0 && time - since < TestReadingTime(timeline, shown) - 3.0 * step {
+                return false
+            }
+            shown = cue
+            since = time
+        }
+        time += step
+    }
+    return true
+}
+
+#program_export
+Check :: () -> s32 {
+    bytes, ok := ReadEntireFile("assets/practices/taichi/course.bin")
+    if !ok {
+        return 1
+    }
+    if !TaiChiCourseParse(*tai_chi_course, bytes) {
+        return 2
+    }
+    archive, archive_ok := ReadEntireFile("build/tai-chi-zi-test/course.zip")
+    if !archive_ok || !TaiChiCourseParseArchive(*tai_chi_course, archive) {
+        return 40
+    }
+    if TaiChiCourseParseArchive(*tai_chi_course, archive[:archive.count / 2]) ||
+        TaiChiCourseParseArchive(*tai_chi_course, bytes) {
+        return 41
+    }
+    if !TaiChiCourseParseArchive(*tai_chi_course, archive) {
+        return 42
+    }
+    if tai_chi_course.key_set_count < 2 || tai_chi_course.character_count != 2 || tai_chi_course.module_count != 3 {
+        return 3
+    }
+    if TaiChiCourseItemIndex("full/normal") < 0 || TaiChiCourseImage(0, "torso.front") < 0 {
+        return 4
+    }
+    // Every item builds a timeline that fits and lasts as long as in the
+    // studio, and in items taught step by step every step's words stay on
+    // screen long enough to read.
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        item := tai_chi_course.items[index]
+        if !TaiChiTimelineForItem(*test_timeline, item) {
+            return 5
+        }
+        if !TestClose(test_timeline.duration, item.duration, 0.01) {
+            return 8
+        }
+        if item.step_words && !TestWordsReadable(*test_timeline) {
+            return 9
+        }
+    }
+    reference, found := ReadEntireFile("tests/fixtures/tai-chi-reference.json")
+    if !found {
+        return 6
+    }
+    samples := FieldAt(reference, 0, "samples")
+    count := ArrayCount(reference, samples)
+    if count < 10 {
+        return 7
+    }
+    for index: cast(s32)0..count - 1 {
+        result := TestSample(reference, ElementAt(reference, samples, index))
+        if result != 0 {
+            return result * 100 + index
+        }
+    }
+    return 0
+}
+
+#program_export
+CheckWorst :: () -> float64 {
+    return test_worst
+}

@@ -14,10 +14,14 @@ c :: #system_library "c";
 #import, file "sun_salutation/sun_salutation_entry.zi";
 #import, file "sun_salutation/sun_salutation_manual.zi";
 #import, file "sun_salutation/sun_salutation_session.zi";
+#import, file "tai_chi/tai_chi_entry.zi";
+#import, file "tai_chi/tai_chi_practice.zi";
+#import, file "tai_chi/tai_chi_session.zi";
 #import, file "patterns/patterns_practice.zi";
 #import, file "patterns/patterns_entry.zi";
 #import, file "patterns/patterns_manual.zi";
 #import, file "whm/whm_practice.zi";
+#import, file "practice_downloads.zi";
 #import, file "whm/whm_session.zi";
 #import, file "whm/whm_manual.zi";
 #import, file "whm/whm_config.zi";
@@ -61,9 +65,13 @@ PracticeDefinition :: struct {
     init: PracticeVoidFn
     destroy: PracticeVoidFn
     start: PracticeVoidFn
+    start_downloaded: PracticeVoidFn
     draw_manual: PracticeVoidFn
     close_manual: PracticeCloseManualFn
     draw_config: PracticeVoidFn
+    // Start opens the configuration screen to choose what to practise, so
+    // the practice home shows no separate settings button.
+    config_on_start: bool
     leave_config: PracticeVoidFn
     update: PracticeVoidFn
     draw_setup_modal: PracticeVoidFn
@@ -161,7 +169,36 @@ practice_initialize_definitions :: () {
     patterns.draw_window = patterns_draw_window
     practices[3] = patterns
 
+    tai_chi: PracticeDefinition
+    tai_chi.id = cast(ExerciseType)EXERCISE_TAI_CHI
+    tai_chi.label_key = "exercise_tai_chi"
+    tai_chi.start = tai_chi_practice_start
+    tai_chi.draw_config = tai_chi_modal_draw
+    tai_chi.config_on_start = false
+    tai_chi.draw_active_session = tai_chi_draw_screen
+    tai_chi.request_exit = tai_chi_request_exit
+    tai_chi.exit_prompt = tai_chi_handle_exit_modal
+    tai_chi.is_active = practice_tai_chi_is_active
+    tai_chi.advance_elapsed = tai_chi_advance_elapsed
+    tai_chi.draw_window = tai_chi_draw_window
+    practices[4] = tai_chi
+
+    for index: cast(s32)0..cast(s32)(EXERCISE_COUNT - 1) {
+        practices[index].start_downloaded = practices[index].start
+        practices[index].start = practice_start_downloaded
+    }
     practices_initialized = true
+}
+
+practice_start_downloaded :: (app: *InnerBreeze) {
+    if app == null { return }
+    id := practice_clamp_id(app.exercise_type)
+    if !PracticeContentReady(id) {
+        PracticeContentRequest(id, app.voice_narration_enabled != 0)
+        return
+    }
+    start := practices[id].start_downloaded
+    if start != null { start(app) }
 }
 
 practice_whm_is_active :: (app: *InnerBreeze) -> s32 {
@@ -177,6 +214,10 @@ practice_meditation_is_active :: (app: *InnerBreeze) -> s32 {
 
 practice_sun_salutation_is_active :: (app: *InnerBreeze) -> s32 {
     return ifx (app_session_screen(app) == ScreenSunSalutation) then (1) else (0)
+}
+
+practice_tai_chi_is_active :: (app: *InnerBreeze) -> s32 {
+    return ifx (app_session_screen(app) == ScreenTaiChi) then (1) else (0)
 }
 
 practice_patterns_is_active :: (app: *InnerBreeze) -> s32 {
@@ -198,6 +239,9 @@ practice_label :: (id: s32) -> string {
     }
     if id == EXERCISE_PATTERNS {
         return LocaleText("exercise_patterns")
+    }
+    if id == EXERCISE_TAI_CHI {
+        return LocaleText("exercise_tai_chi")
     }
     return LocaleText("exercise_wim_hof")
 }

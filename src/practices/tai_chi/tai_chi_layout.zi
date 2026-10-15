@@ -1,0 +1,705 @@
+// Where the painted pieces of a Tai Chi character go, as the course studio
+// lays them out (design/tai-chi/src/painted/layout.js).
+//
+// Every joint is projected onto the picture plane of a camera that looks
+// along a view yaw with a slight downward tilt. Arms and legs are painted
+// straight and bend along their projected bones; the torso follows the
+// projected spine; the head, hands and shoes are rigid drawings picked by
+// how each part is turned toward the viewer, mirrored for the other side.
+// Units are metres; screen y points up.
+#import "math"
+#import, file "tai_chi_math.zi";
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_solve.zi";
+
+// Degrees past a view boundary before a drawing changes, so a part that
+// hovers on a boundary does not flicker between two drawings.
+TAI_CHI_VIEW_HYSTERESIS :: 5.0
+TAI_CHI_TORSO_ROWS :: 32
+TAI_CHI_SHADOW_SIZE :: 128.0
+
+TAI_CHI_PIECE_SHADOW_LEFT :: 0
+TAI_CHI_PIECE_SHADOW_RIGHT :: 1
+TAI_CHI_PIECE_SHADOW_BODY :: 2
+TAI_CHI_PIECE_TORSO :: 3
+TAI_CHI_PIECE_HEAD :: 4
+TAI_CHI_PIECE_ARM :: 5
+TAI_CHI_PIECE_HAND :: 7
+TAI_CHI_PIECE_LEG :: 9
+TAI_CHI_PIECE_SHOE :: 11
+TAI_CHI_PIECE_COUNT :: 13
+
+TAI_CHI_PIECE_AFFINE :: 0
+TAI_CHI_PIECE_LIMB :: 1
+TAI_CHI_PIECE_STRIP_TORSO :: 2
+TAI_CHI_PIECE_SHOE_SIDE :: 3
+
+// Drawing names, in the order of `TaiChiFigureImages`.
+TAI_CHI_VIEW_COUNT :: 5
+TAI_CHI_HAND_PALM :: 0
+TAI_CHI_HAND_BACK :: 1
+TAI_CHI_HAND_EDGE :: 2
+TAI_CHI_HAND_FIST_FRONT :: 3
+TAI_CHI_HAND_FIST_SIDE :: 4
+TAI_CHI_HAND_HOOK :: 5
+TAI_CHI_SHOE_OUTER :: 0
+TAI_CHI_SHOE_INNER :: 1
+// Rigid shoes by view: front, three-quarter, (side has none), three-
+// quarter back, back.
+TAI_CHI_SHOE_FRONT :: 2
+TAI_CHI_SHOE_THREE_QUARTER :: 3
+TAI_CHI_SHOE_THREE_QUARTER_BACK :: 4
+TAI_CHI_SHOE_BACK :: 5
+
+// The course images of one character, found once by role.
+TaiChiFigureImages :: struct {
+    valid: bool
+    head: [TAI_CHI_VIEW_COUNT]s32
+    torso: [TAI_CHI_VIEW_COUNT]s32
+    arm: s32
+    leg: s32
+    hands: [6]s32
+    shoes: [6]s32
+}
+
+TaiChiFlatView :: struct {
+    yaw: float64
+    tilt: float64
+    center: TaiChiVector3
+    toward: TaiChiVector3
+    flat_toward: TaiChiVector3
+    right: TaiChiVector3
+    up: TaiChiVector3
+}
+
+TaiChiViewChoice :: struct {
+    set: bool
+    index: s32
+    mirror: bool
+}
+
+// Drawing choices kept between frames for hysteresis.
+TaiChiLayoutMemory :: struct {
+    torso: TaiChiViewChoice
+    head: TaiChiViewChoice
+    shoes: [2]TaiChiViewChoice
+    arm_flips: [2]float64
+    leg_flips: [2]float64
+    hand_flips: [2]float64
+    // The last hand drawing plus one; zero before the first frame.
+    hands: [2]s32
+}
+
+// One placed piece. Affine pieces put the image point `anchor` on `at`,
+// one pixel right moving by `x_axis` and one pixel down by `y_axis`. Limbs
+// bend along root → joint → end. The torso follows its spine points. Side
+// shoes bend at the ball.
+TaiChiPiece :: struct {
+    kind: s32
+    // A course image, or -1 for the shadow.
+    image: s32
+    opacity: float64
+    at: TaiChiVector2
+    anchor: TaiChiVector2
+    x_axis: TaiChiVector2
+    y_axis: TaiChiVector2
+    root: TaiChiVector2
+    joint: TaiChiVector2
+    end: TaiChiVector2
+    upper_share: float64
+    pixel: float64
+    flip: float64
+    mirror: bool
+    spine: [5]TaiChiVector2
+    lengths: [5]float64
+    heel: TaiChiVector2
+    ball: TaiChiVector2
+    toe: TaiChiVector2
+    foot_up: TaiChiVector2
+    toes_up: TaiChiVector2
+    ball_share: float64
+}
+
+TaiChiFrame :: struct {
+    pieces: [TAI_CHI_PIECE_COUNT]TaiChiPiece
+    // Pieces back to front.
+    order: [TAI_CHI_PIECE_COUNT]s32
+}
+
+TaiChiCamera :: struct {
+    yaw: float64
+    tilt: float64
+    center: TaiChiVector3
+}
+
+// --- Images ----------------------------------------------------------------------
+
+TaiChiFigureImagesFor :: (character: s32) -> TaiChiFigureImages {
+    images: TaiChiFigureImages
+    views: [TAI_CHI_VIEW_COUNT]string = .["front", "threeQuarter", "side", "threeQuarterBack", "back"]
+    hands: [6]string = .["hands.palm", "hands.back", "hands.edge", "hands.fistFront", "hands.fistSide", "hands.hook"]
+    shoes: [6]string = .["shoes.outer", "shoes.inner", "shoes.front", "shoes.threeQuarter", "shoes.threeQuarterBack", "shoes.back"]
+    heads: [TAI_CHI_VIEW_COUNT]string = .["head.front", "head.threeQuarter", "head.side", "head.threeQuarterBack", "head.back"]
+    torsos: [TAI_CHI_VIEW_COUNT]string = .["torso.front", "torso.threeQuarter", "torso.side", "torso.threeQuarterBack", "torso.back"]
+    images.valid = true
+    for index: cast(s32)0..TAI_CHI_VIEW_COUNT - 1 {
+        images.head[index] = TaiChiCourseImage(character, heads[index])
+        images.torso[index] = TaiChiCourseImage(character, torsos[index])
+        images.valid = images.valid && images.head[index] >= 0 && images.torso[index] >= 0
+    }
+    for index: cast(s32)0..5 {
+        images.hands[index] = TaiChiCourseImage(character, hands[index])
+        images.shoes[index] = TaiChiCourseImage(character, shoes[index])
+        images.valid = images.valid && images.hands[index] >= 0 && images.shoes[index] >= 0
+    }
+    images.arm = TaiChiCourseImage(character, "arm")
+    images.leg = TaiChiCourseImage(character, "leg")
+    images.valid = images.valid && images.arm >= 0 && images.leg >= 0
+    return images
+}
+
+// Named point `slot` of an image, in pixels.
+TaiChiImagePoint :: (image: s32, slot: s32) -> TaiChiVector2 {
+    points := tai_chi_course.images[image].points
+    return TaiChiV2(points[slot * 2], points[slot * 2 + 1])
+}
+
+TaiChiImageWidth :: (image: s32) -> float64 {
+    if image < 0 {
+        return TAI_CHI_SHADOW_SIZE
+    }
+    return tai_chi_course.images[image].width
+}
+
+TaiChiImageHeight :: (image: s32) -> float64 {
+    if image < 0 {
+        return TAI_CHI_SHADOW_SIZE
+    }
+    return tai_chi_course.images[image].height
+}
+
+// --- Flat view -------------------------------------------------------------------
+
+TaiChiFlatViewSet :: (view: *TaiChiFlatView, camera: TaiChiCamera) {
+    view.yaw = camera.yaw
+    view.tilt = camera.tilt
+    view.center = TaiChiFlat3(camera.center)
+    view.toward = TaiChiV3(Sin(camera.yaw) * Cos(camera.tilt), Sin(camera.tilt), Cos(camera.yaw) * Cos(camera.tilt))
+    view.flat_toward = TaiChiV3(Sin(camera.yaw), 0.0, Cos(camera.yaw))
+    view.right = TaiChiV3(Cos(camera.yaw), 0.0, -Sin(camera.yaw))
+    view.up = TaiChiCross3(view.toward, view.right)
+}
+
+TaiChiProject :: (view: *TaiChiFlatView, point: TaiChiVector3) -> TaiChiVector2 {
+    offset := TaiChiSub3(point, view.center)
+    return TaiChiV2(TaiChiDot3(offset, view.right), TaiChiDot3(offset, view.up))
+}
+
+TaiChiProjectVector :: (view: *TaiChiFlatView, vector: TaiChiVector3) -> TaiChiVector2 {
+    return TaiChiV2(TaiChiDot3(vector, view.right), TaiChiDot3(vector, view.up))
+}
+
+TaiChiDepth :: (view: *TaiChiFlatView, point: TaiChiVector3) -> float64 {
+    return TaiChiDot3(TaiChiSub3(point, view.center), view.toward)
+}
+
+// Where a horizontal direction points: 0 at the viewer, +90° to the
+// screen's right, ±180° away.
+TaiChiFacing :: (view: *TaiChiFlatView, direction: TaiChiVector3) -> float64 {
+    return Atan2(TaiChiDot3(direction, view.right), TaiChiDot3(direction, view.flat_toward))
+}
+
+// --- View choice -----------------------------------------------------------------
+
+// The drawing for a part facing `angle`. Front and back drawings keep their
+// last mirroring so they do not flip while facing straight on.
+TaiChiPickView :: (angle: float64, memory: *TaiChiViewChoice) -> TaiChiViewChoice {
+    degrees := TaiChiAbs(angle) / TAI_CHI_DEGREE
+    // Rounded to the nearest view; the angle is never negative here.
+    index := cast(s32)(degrees / 45.0 + 0.5)
+    if index > 4 {
+        index = 4
+    }
+    if memory.set && TaiChiAbs(degrees - cast(float64)memory.index * 45.0) < 22.5 + TAI_CHI_VIEW_HYSTERESIS {
+        index = memory.index
+    }
+    mirror := angle < 0.0
+    if (index == 0 || index == 4) && memory.set && memory.index == index {
+        mirror = memory.mirror
+    }
+    memory.set = true
+    memory.index = index
+    memory.mirror = mirror
+    return memory.*
+}
+
+// A sign that keeps its last value while `value` is close to zero.
+TaiChiStickySign :: (value: float64, memory: *float64, dead: float64) -> float64 {
+    if TaiChiAbs(value) > dead || memory.* == 0.0 {
+        memory.* = ifx value >= 0.0 then 1.0 else -1.0
+    }
+    return memory.*
+}
+
+// --- Pieces ----------------------------------------------------------------------
+
+TaiChiShadowPiece :: (view: *TaiChiFlatView, center: TaiChiVector3, width: float64, depth: float64, strength: float64) -> TaiChiPiece {
+    piece: TaiChiPiece
+    piece.kind = TAI_CHI_PIECE_AFFINE
+    piece.image = -1
+    piece.at = TaiChiProject(view, center)
+    piece.anchor = TaiChiV2(TAI_CHI_SHADOW_SIZE / 2.0, TAI_CHI_SHADOW_SIZE / 2.0)
+    piece.x_axis = TaiChiV2(width / TAI_CHI_SHADOW_SIZE, 0.0)
+    piece.y_axis = TaiChiV2(0.0, -(depth * Sin(TaiChiMax(view.tilt, 4.0 * TAI_CHI_DEGREE)) + 0.012) / TAI_CHI_SHADOW_SIZE)
+    piece.opacity = strength
+    return piece
+}
+
+TaiChiLimbPiece :: (image: s32, root: TaiChiVector2, joint: TaiChiVector2, end: TaiChiVector2, upper_length: float64,
+    lower_length: float64, anterior: TaiChiVector2, memory: *float64) -> TaiChiPiece {
+    upper := TaiChiSub2(joint, root)
+    lower := TaiChiSub2(end, joint)
+    upper_direction := TaiChiUnit2(upper, TaiChiUnit2(lower, TaiChiV2(0.0, -1.0)))
+    lower_direction := TaiChiUnit2(lower, upper_direction)
+    // The painting's +x is the limb's front when its anterior value is 1.
+    joint_normal := TaiChiClockwise(TaiChiScale2(TaiChiUnit2(TaiChiAdd2(upper_direction, lower_direction), upper_direction), -1.0))
+    values := tai_chi_course.images[image].values
+    piece: TaiChiPiece
+    piece.kind = TAI_CHI_PIECE_LIMB
+    piece.image = image
+    piece.opacity = 1.0
+    piece.root = root
+    piece.joint = joint
+    piece.end = end
+    piece.upper_share = upper_length / (upper_length + lower_length)
+    piece.pixel = (upper_length + lower_length) / (TaiChiImagePoint(image, 1).y - TaiChiImagePoint(image, 0).y)
+    piece.flip = TaiChiStickySign(TaiChiDot2(joint_normal, anterior), memory, 0.08) * values[0]
+    return piece
+}
+
+TaiChiPieceOpaque :: (image: s32) -> TaiChiPiece {
+    piece: TaiChiPiece
+    piece.kind = TAI_CHI_PIECE_AFFINE
+    piece.image = image
+    piece.opacity = 1.0
+    return piece
+}
+
+// The torso's spine path at a share of its real length (below 0 above the
+// neck, beyond 1 below the hips).
+TaiChiSpineAt :: (piece: *TaiChiPiece, share: float64) -> TaiChiVector2 {
+    total := piece.lengths[4]
+    target := share * total
+    index: s32 = 1
+    while index < 4 && piece.lengths[index] < target {
+        index += 1
+    }
+    span := piece.lengths[index] - piece.lengths[index - 1]
+    if span == 0.0 {
+        span = 1.0
+    }
+    u := (target - piece.lengths[index - 1]) / span
+    return TaiChiLerp2(piece.spine[index - 1], piece.spine[index], u)
+}
+
+TaiChiTorsoRow :: struct {
+    center: TaiChiVector2
+    across: TaiChiVector2
+    axis_x: float64
+}
+
+// The torso strip's row `row` of `rows`: its centre on the spine, the
+// direction of the image's +x and the image x of the spine there.
+TaiChiTorsoRowAt :: (piece: *TaiChiPiece, row: s32, rows: s32) -> TaiChiTorsoRow {
+    image := piece.image
+    neck := TaiChiImagePoint(image, 0)
+    hip := TaiChiImagePoint(image, 1)
+    height := TaiChiImageHeight(image)
+    span := hip.y - neck.y
+    before_row := ifx row > 0 then row - 1 else 0
+    after_row := ifx row < rows - 1 then row + 1 else rows - 1
+    y := (cast(float64)row / cast(float64)(rows - 1)) * height
+    before_y := (cast(float64)before_row / cast(float64)(rows - 1)) * height
+    after_y := (cast(float64)after_row / cast(float64)(rows - 1)) * height
+    before := TaiChiSpineAt(piece, (before_y - neck.y) / span)
+    after := TaiChiSpineAt(piece, (after_y - neck.y) / span)
+    // Down the spine; its clockwise normal is the image's right.
+    down := TaiChiUnit2(TaiChiSub2(after, before), TaiChiV2(0.0, -1.0))
+    across := TaiChiClockwise(TaiChiScale2(down, -1.0))
+    if piece.mirror {
+        across = TaiChiScale2(across, -1.0)
+    }
+    share := TaiChiClamp((y - neck.y) / span, 0.0, 1.0)
+    result: TaiChiTorsoRow
+    result.center = TaiChiSpineAt(piece, (y - neck.y) / span)
+    result.across = across
+    result.axis_x = neck.x + (hip.x - neck.x) * share
+    return result
+}
+
+// An image point on the placed torso, found between its rows.
+TaiChiTorsoPoint :: (piece: *TaiChiPiece, point: TaiChiVector2) -> TaiChiVector2 {
+    rows: s32 = TAI_CHI_TORSO_ROWS
+    row_float := (point.y / TaiChiImageHeight(piece.image)) * cast(float64)(rows - 1)
+    row := cast(s32)row_float
+    if row > rows - 2 {
+        row = rows - 2
+    }
+    if row < 0 {
+        row = 0
+    }
+    u := row_float - cast(float64)row
+    a := TaiChiTorsoRowAt(piece, row, rows)
+    b := TaiChiTorsoRowAt(piece, row + 1, rows)
+    center := TaiChiLerp2(a.center, b.center, u)
+    across := TaiChiLerp2(a.across, b.across, u)
+    axis_x := a.axis_x + (b.axis_x - a.axis_x) * u
+    return TaiChiAdd2(center, TaiChiScale2(across, (point.x - axis_x) * piece.pixel))
+}
+
+TaiChiHandPiece :: (side: s32, solved: *TaiChiSolved, view: *TaiChiFlatView, images: *TaiChiFigureImages,
+    memory: *TaiChiLayoutMemory, hand_scale: float64) -> TaiChiPiece {
+    quat := solved.hand_quats[side]
+    fingers := TaiChiAxis(quat, 0.0, -1.0, 0.0)
+    palm_normal := TaiChiAxis(quat, 0.0, 0.0, 1.0)
+    thumb := TaiChiScale3(TaiChiAxis(quat, 1.0, 0.0, 0.0), TaiChiSideSign(side))
+    shape := solved.hand_shapes[side]
+    facing := TaiChiDot3(palm_normal, view.toward)
+    name: s32 = TAI_CHI_HAND_EDGE
+    if shape[2] > 0.5 {
+        name = TAI_CHI_HAND_HOOK
+    } else if shape[1] > 0.5 {
+        name = ifx TaiChiAbs(facing) > 0.45 then TAI_CHI_HAND_FIST_FRONT else TAI_CHI_HAND_FIST_SIDE
+    } else {
+        previous := memory.hands[side] - 1
+        palm_limit := ifx previous == TAI_CHI_HAND_PALM then 0.27 else 0.35
+        back_limit := ifx previous == TAI_CHI_HAND_BACK then 0.27 else 0.35
+        if facing > palm_limit {
+            name = TAI_CHI_HAND_PALM
+        } else if facing < -back_limit {
+            name = TAI_CHI_HAND_BACK
+        }
+    }
+    memory.hands[side] = name + 1
+    image := images.hands[name]
+    values := tai_chi_course.images[image].values
+    wrist := TaiChiProject(view, solved.wrists[side])
+    main := TaiChiProjectVector(view, fingers)
+    forearm := TaiChiUnit2(TaiChiSub2(wrist, TaiChiProject(view, solved.elbows[side])), TaiChiV2(0.0, -1.0))
+    // Fingers pointing at the viewer: lean the drawing along the forearm.
+    reach := TaiChiLength2(main)
+    if reach < 0.35 {
+        main = TaiChiLerp2(forearm, TaiChiUnit2(main, forearm), reach / 0.35)
+    }
+    along := TaiChiUnit2(main, forearm)
+    shorten := TaiChiClamp(reach, 0.6, 1.0)
+    across_thumb := values[3] > 0.5
+    target := TaiChiProjectVector(view, ifx across_thumb then thumb else palm_normal)
+    flip := TaiChiStickySign(TaiChiDot2(TaiChiClockwise(along), target), *memory.hand_flips[side], 0.05) * values[2]
+    image_wrist := TaiChiImagePoint(image, 0)
+    image_tip := TaiChiImagePoint(image, 1)
+    // Image axes: from the wrist to the tip is "main"; its clockwise
+    // normal is "across".
+    image_main := TaiChiUnit2(TaiChiV2(image_tip.x - image_wrist.x, -(image_tip.y - image_wrist.y)), TaiChiV2(0.0, 1.0))
+    image_across := TaiChiClockwise(image_main)
+    screen_across := TaiChiScale2(TaiChiClockwise(along), flip)
+    piece := TaiChiPieceOpaque(image)
+    piece.at = wrist
+    piece.anchor = image_wrist
+    piece.x_axis = TaiChiAdd2(TaiChiScale2(along, image_main.x * hand_scale * shorten),
+        TaiChiScale2(screen_across, image_across.x * hand_scale))
+    piece.y_axis = TaiChiAdd2(TaiChiScale2(along, -image_main.y * hand_scale * shorten),
+        TaiChiScale2(screen_across, -image_across.y * hand_scale))
+    return piece
+}
+
+TaiChiShoePiece :: (side: s32, solved: *TaiChiSolved, view: *TaiChiFlatView, images: *TaiChiFigureImages,
+    memory: *TaiChiLayoutMemory, rig: *TaiChiRig, shoe_scale: float64) -> TaiChiPiece {
+    foot_quat := solved.foot_quats[side]
+    toes_quat := solved.toes_quats[side]
+    forward := TaiChiFlat3(TaiChiAxis(foot_quat, 0.0, 0.0, 1.0))
+    choice := TaiChiPickView(TaiChiFacing(view, forward), *memory.shoes[side])
+    if choice.index == 2 {
+        outward := TaiChiScale3(TaiChiAxis(foot_quat, 1.0, 0.0, 0.0), TaiChiSideSign(side))
+        name := ifx TaiChiDot3(outward, view.toward) >= 0.0 then TAI_CHI_SHOE_OUTER else TAI_CHI_SHOE_INNER
+        piece := TaiChiPieceOpaque(images.shoes[name])
+        piece.kind = TAI_CHI_PIECE_SHOE_SIDE
+        piece.heel = TaiChiProject(view, solved.heels[side])
+        piece.ball = TaiChiProject(view, solved.balls[side])
+        piece.toe = TaiChiProject(view, solved.toes[side])
+        piece.foot_up = TaiChiProjectVector(view, TaiChiAxis(foot_quat, 0.0, 1.0, 0.0))
+        piece.toes_up = TaiChiProjectVector(view, TaiChiAxis(toes_quat, 0.0, 1.0, 0.0))
+        piece.ball_share = (rig.heel_back + rig.ball) / (rig.heel_back + rig.toe_tip)
+        piece.pixel = shoe_scale
+        return piece
+    }
+    shoe_by_view: [5]s32 = .[TAI_CHI_SHOE_FRONT, TAI_CHI_SHOE_THREE_QUARTER, TAI_CHI_SHOE_FRONT,
+        TAI_CHI_SHOE_THREE_QUARTER_BACK, TAI_CHI_SHOE_BACK]
+    image := images.shoes[shoe_by_view[choice.index]]
+    up := TaiChiUnit2(TaiChiProjectVector(view, TaiChiAxis(foot_quat, 0.0, 1.0, 0.0)), TaiChiV2(0.0, 1.0))
+    right := TaiChiClockwise(up)
+    if choice.mirror {
+        right = TaiChiScale2(right, -1.0)
+    }
+    piece := TaiChiPieceOpaque(image)
+    piece.at = TaiChiProject(view, solved.ankles[side])
+    piece.anchor = TaiChiImagePoint(image, 0)
+    piece.x_axis = TaiChiScale2(right, shoe_scale)
+    piece.y_axis = TaiChiScale2(up, -shoe_scale)
+    return piece
+}
+
+TaiChiDepthOfArm :: (view: *TaiChiFlatView, solved: *TaiChiSolved, side: s32) -> float64 {
+    return (TaiChiDepth(view, solved.shoulders[side]) + TaiChiDepth(view, solved.elbows[side]) +
+        TaiChiDepth(view, solved.wrists[side])) / 3.0
+}
+
+TaiChiDepthOfLeg :: (view: *TaiChiFlatView, solved: *TaiChiSolved, side: s32) -> float64 {
+    return (TaiChiDepth(view, solved.hips[side]) + TaiChiDepth(view, solved.knees[side]) +
+        TaiChiDepth(view, solved.ankles[side])) / 3.0
+}
+
+// The pieces of one frame and the order to draw them, back to front.
+TaiChiLayout :: (solved: *TaiChiSolved, rig: *TaiChiRig, images: *TaiChiFigureImages, camera: TaiChiCamera,
+    memory: *TaiChiLayoutMemory) -> TaiChiFrame {
+    frame: TaiChiFrame
+    view: TaiChiFlatView
+    TaiChiFlatViewSet(*view, camera)
+
+    // Scales in metres per image pixel. The torso maps its neck-to-hip span
+    // onto the spine; the head is drawn to the rig's neck-to-crown height;
+    // hands and shoes share one scale per sheet.
+    front_torso := images.torso[0]
+    torso_scale := (rig.spine[0] + rig.spine[1] + rig.spine[2] + rig.hip_drop) /
+        (TaiChiImagePoint(front_torso, 1).y - TaiChiImagePoint(front_torso, 0).y)
+    front_head := images.head[0]
+    head_scale := (rig.neck + rig.head_height) / (TaiChiImagePoint(front_head, 0).y - TaiChiImagePoint(front_head, 1).y)
+    palm := images.hands[TAI_CHI_HAND_PALM]
+    hand_scale := rig.hand_length / TaiChiLength2(TaiChiSub2(TaiChiImagePoint(palm, 1), TaiChiImagePoint(palm, 0)))
+    outer := images.shoes[TAI_CHI_SHOE_OUTER]
+    shoe_scale := (rig.heel_back + rig.toe_tip) / TaiChiLength2(TaiChiSub2(TaiChiImagePoint(outer, 1), TaiChiImagePoint(outer, 0)))
+
+    order_count: s32 = 0
+    // Shadows on the floor.
+    for side: cast(s32)0..1 {
+        ankle := solved.ankles[side]
+        lift := TaiChiMax(0.0, ankle.y - rig.ankle_height)
+        strength := TaiChiMax(0.0, 1.0 - lift / 0.25) * 0.8
+        frame.pieces[TAI_CHI_PIECE_SHADOW_LEFT + side] = TaiChiShadowPiece(*view, TaiChiFlat3(ankle), 0.32, 0.18, strength)
+        frame.order[order_count] = TAI_CHI_PIECE_SHADOW_LEFT + side
+        order_count += 1
+    }
+    frame.pieces[TAI_CHI_PIECE_SHADOW_BODY] = TaiChiShadowPiece(*view, TaiChiFlat3(solved.pelvis), 0.7, 0.4, 0.55)
+    frame.order[order_count] = TAI_CHI_PIECE_SHADOW_BODY
+    order_count += 1
+
+    // Torso along the spine from the neck base to the middle of the hips.
+    chest_forward := TaiChiFlat3(TaiChiAxis(solved.chest_quat, 0.0, 0.0, 1.0))
+    torso_choice := TaiChiPickView(TaiChiFacing(*view, chest_forward), *memory.torso)
+    torso := TaiChiPieceOpaque(images.torso[torso_choice.index])
+    torso.kind = TAI_CHI_PIECE_STRIP_TORSO
+    torso.mirror = torso_choice.mirror
+    torso.pixel = torso_scale
+    hip_center := TaiChiAdd3(solved.pelvis, TaiChiRotate(TaiChiV3(0.0, -rig.hip_drop, 0.0), solved.pelvis_quat))
+    spine: [5]TaiChiVector3 = .[solved.neck_base, solved.chest, solved.spine1, solved.pelvis, hip_center]
+    torso.lengths[0] = 0.0
+    for index: cast(s32)0..4 {
+        torso.spine[index] = TaiChiProject(*view, spine[index])
+        if index > 0 {
+            torso.lengths[index] = torso.lengths[index - 1] + TaiChiDistance3(spine[index], spine[index - 1])
+        }
+    }
+    frame.pieces[TAI_CHI_PIECE_TORSO] = torso
+    torso_image := torso.image
+    neck_at := TaiChiTorsoPoint(*torso, TaiChiImagePoint(torso_image, 0))
+    armholes: [2]TaiChiVector2
+    armholes[0] = TaiChiTorsoPoint(*torso, TaiChiImagePoint(torso_image, 2))
+    armholes[1] = TaiChiTorsoPoint(*torso, TaiChiImagePoint(torso_image, 3))
+    chest_depth := TaiChiDepth(*view, solved.shoulder_center)
+
+    // Arms start at the painted armholes nearest their real shoulders.
+    real_left := TaiChiProject(*view, solved.shoulders[0])
+    real_right := TaiChiProject(*view, solved.shoulders[1])
+    straight := TaiChiLength2(TaiChiSub2(real_left, armholes[0])) + TaiChiLength2(TaiChiSub2(real_right, armholes[1]))
+    crossed := TaiChiLength2(TaiChiSub2(real_left, armholes[1])) + TaiChiLength2(TaiChiSub2(real_right, armholes[0]))
+    arm_front: [2]bool
+    for side: cast(s32)0..1 {
+        root := armholes[side]
+        if straight > crossed {
+            root = armholes[1 - side]
+        }
+        shoulder := solved.shoulders[side]
+        elbow := solved.elbows[side]
+        wrist := solved.wrists[side]
+        inside := TaiChiSub3(TaiChiScale3(TaiChiAdd3(shoulder, wrist), 0.5), elbow)
+        anterior := TaiChiAxis(solved.chest_quat, 0.0, 0.0, 1.0)
+        if TaiChiLength3(inside) > 0.02 {
+            anterior = TaiChiNormalize3(inside)
+        }
+        frame.pieces[TAI_CHI_PIECE_ARM + side] = TaiChiLimbPiece(images.arm, root, TaiChiProject(*view, elbow),
+            TaiChiProject(*view, wrist), rig.upper_arm, rig.fore_arm, TaiChiProjectVector(*view, anterior), *memory.arm_flips[side])
+        frame.pieces[TAI_CHI_PIECE_HAND + side] = TaiChiHandPiece(side, solved, *view, images, memory, hand_scale)
+        arm_front[side] = TaiChiDepthOfArm(*view, solved, side) > chest_depth - 0.05
+    }
+
+    leg_depths: [2]float64
+    for side: cast(s32)0..1 {
+        hip := solved.hips[side]
+        knee := solved.knees[side]
+        ankle := solved.ankles[side]
+        outward := TaiChiSub3(knee, TaiChiScale3(TaiChiAdd3(hip, ankle), 0.5))
+        anterior := TaiChiAxis(solved.foot_quats[side], 0.0, 0.0, 1.0)
+        if TaiChiLength3(outward) > 0.02 {
+            anterior = TaiChiNormalize3(outward)
+        }
+        frame.pieces[TAI_CHI_PIECE_LEG + side] = TaiChiLimbPiece(images.leg, TaiChiProject(*view, hip), TaiChiProject(*view, knee),
+            TaiChiProject(*view, ankle), rig.thigh, rig.shin, TaiChiProjectVector(*view, anterior), *memory.leg_flips[side])
+        frame.pieces[TAI_CHI_PIECE_SHOE + side] = TaiChiShoePiece(side, solved, *view, images, memory, rig, shoe_scale)
+        leg_depths[side] = TaiChiDepthOfLeg(*view, solved, side)
+    }
+
+    head_forward := TaiChiFlat3(TaiChiAxis(solved.head_quat, 0.0, 0.0, 1.0))
+    head_choice := TaiChiPickView(TaiChiFacing(*view, head_forward), *memory.head)
+    head_image := images.head[head_choice.index]
+    head_up := TaiChiUnit2(TaiChiProjectVector(*view, TaiChiAxis(solved.head_quat, 0.0, 1.0, 0.0)), TaiChiV2(0.0, 1.0))
+    head_right := TaiChiClockwise(head_up)
+    if head_choice.mirror {
+        head_right = TaiChiScale2(head_right, -1.0)
+    }
+    head := TaiChiPieceOpaque(head_image)
+    head.at = neck_at
+    head.anchor = TaiChiImagePoint(head_image, 0)
+    head.x_axis = TaiChiScale2(head_right, head_scale)
+    head.y_axis = TaiChiScale2(head_up, -head_scale)
+    frame.pieces[TAI_CHI_PIECE_HEAD] = head
+
+    for side: cast(s32)0..1 {
+        if !arm_front[side] {
+            frame.order[order_count] = TAI_CHI_PIECE_ARM + side
+            frame.order[order_count + 1] = TAI_CHI_PIECE_HAND + side
+            order_count += 2
+        }
+    }
+    back_leg: s32 = 0
+    if leg_depths[1] < leg_depths[0] {
+        back_leg = 1
+    }
+    for step: cast(s32)0..1 {
+        side := ifx step == 0 then back_leg else 1 - back_leg
+        frame.order[order_count] = TAI_CHI_PIECE_SHOE + side
+        frame.order[order_count + 1] = TAI_CHI_PIECE_LEG + side
+        order_count += 2
+    }
+    frame.order[order_count] = TAI_CHI_PIECE_HEAD
+    frame.order[order_count + 1] = TAI_CHI_PIECE_TORSO
+    order_count += 2
+    // Front arms, the one with the farther elbow first.
+    first_front: s32 = 0
+    if arm_front[0] && arm_front[1] && TaiChiDepth(*view, solved.elbows[1]) < TaiChiDepth(*view, solved.elbows[0]) {
+        first_front = 1
+    }
+    for step: cast(s32)0..1 {
+        side := ifx step == 0 then first_front else 1 - first_front
+        if arm_front[side] {
+            frame.order[order_count] = TAI_CHI_PIECE_ARM + side
+            frame.order[order_count + 1] = TAI_CHI_PIECE_HAND + side
+            order_count += 2
+        }
+    }
+    return frame
+}
+
+// --- Vertices --------------------------------------------------------------------
+
+TaiChiLimbCenter :: struct {
+    point: TaiChiVector2
+    tangent: TaiChiVector2
+}
+
+// A straight painted limb bent along root → joint → end: the centre of the
+// strip at image row `y` and the direction along the limb there.
+TaiChiLimbCenterAt :: (piece: *TaiChiPiece, y: float64) -> TaiChiLimbCenter {
+    root_y := TaiChiImagePoint(piece.image, 0).y
+    end_y := TaiChiImagePoint(piece.image, 1).y
+    joint_y := root_y + (end_y - root_y) * piece.upper_share
+    half_width := TaiChiImageWidth(piece.image) * 0.5
+    upper := TaiChiSub2(piece.joint, piece.root)
+    lower := TaiChiSub2(piece.end, piece.joint)
+    upper_direction := TaiChiUnit2(upper, TaiChiUnit2(lower, TaiChiV2(0.0, -1.0)))
+    lower_direction := TaiChiUnit2(lower, upper_direction)
+    // Round the joint over about a limb's half width, less on short
+    // (foreshortened) bones.
+    round := TaiChiMin(half_width * 0.9, TaiChiMin(0.45 * (joint_y - root_y), 0.45 * (end_y - joint_y)))
+    result: TaiChiLimbCenter
+    if y <= joint_y - round {
+        result.point = TaiChiAdd2(piece.root, TaiChiScale2(upper, (y - root_y) / (joint_y - root_y)))
+        result.tangent = upper_direction
+        return result
+    }
+    if y >= joint_y + round {
+        result.point = TaiChiAdd2(piece.joint, TaiChiScale2(lower, (y - joint_y) / (end_y - joint_y)))
+        result.tangent = lower_direction
+        return result
+    }
+    before := TaiChiAdd2(piece.root, TaiChiScale2(upper, (joint_y - round - root_y) / (joint_y - root_y)))
+    after := TaiChiAdd2(piece.joint, TaiChiScale2(lower, round / (end_y - joint_y)))
+    u := (y - (joint_y - round)) / (2.0 * round)
+    result.point = TaiChiAdd2(TaiChiAdd2(TaiChiScale2(before, (1.0 - u) * (1.0 - u)), TaiChiScale2(piece.joint, 2.0 * u * (1.0 - u))),
+        TaiChiScale2(after, u * u))
+    tangent := TaiChiAdd2(TaiChiScale2(TaiChiSub2(piece.joint, before), 2.0 * (1.0 - u)), TaiChiScale2(TaiChiSub2(after, piece.joint), 2.0 * u))
+    result.tangent = TaiChiUnit2(tangent, upper_direction)
+    return result
+}
+
+// Grid points (`columns` × `rows`, row by row from the image's top) of a
+// piece over its image. `points` must hold columns × rows entries.
+TaiChiPieceVertices :: (piece: *TaiChiPiece, columns: s32, rows: s32, points: []TaiChiVector2) {
+    width := TaiChiImageWidth(piece.image)
+    height := TaiChiImageHeight(piece.image)
+    for row: cast(s32)0..rows - 1 {
+        y := (cast(float64)row / cast(float64)(rows - 1)) * height
+        center: TaiChiVector2
+        across: TaiChiVector2
+        axis_x: float64 = 0.0
+        width_scale: float64 = 0.0
+        if piece.kind == TAI_CHI_PIECE_LIMB {
+            limb := TaiChiLimbCenterAt(piece, y)
+            values := tai_chi_course.images[piece.image].values
+            center = limb.point
+            across = TaiChiScale2(TaiChiClockwise(TaiChiScale2(limb.tangent, -1.0)), piece.flip)
+            axis_x = TaiChiImagePoint(piece.image, 0).x
+            width_scale = piece.pixel * values[1]
+        } else if piece.kind == TAI_CHI_PIECE_STRIP_TORSO {
+            torso_row := TaiChiTorsoRowAt(piece, row, rows)
+            center = torso_row.center
+            across = torso_row.across
+            axis_x = torso_row.axis_x
+            width_scale = piece.pixel
+        }
+        for column: cast(s32)0..columns - 1 {
+            x := (cast(float64)column / cast(float64)(columns - 1)) * width
+            point: TaiChiVector2
+            if piece.kind == TAI_CHI_PIECE_AFFINE {
+                point = TaiChiAdd2(piece.at, TaiChiAdd2(TaiChiScale2(piece.x_axis, x - piece.anchor.x),
+                    TaiChiScale2(piece.y_axis, y - piece.anchor.y)))
+            } else if piece.kind == TAI_CHI_PIECE_SHOE_SIDE {
+                image_heel := TaiChiImagePoint(piece.image, 0)
+                image_toe := TaiChiImagePoint(piece.image, 1)
+                ball_x := image_heel.x + (image_toe.x - image_heel.x) * piece.ball_share
+                base: TaiChiVector2
+                up: TaiChiVector2
+                if x <= ball_x {
+                    base = TaiChiLerp2(piece.heel, piece.ball, (x - image_heel.x) / (ball_x - image_heel.x))
+                    up = piece.foot_up
+                } else {
+                    base = TaiChiLerp2(piece.ball, piece.toe, (x - ball_x) / (image_toe.x - ball_x))
+                    up = TaiChiLerp2(piece.foot_up, piece.toes_up, TaiChiMin(1.0, (x - ball_x) / ((image_toe.x - ball_x) * 0.5)))
+                }
+                point = TaiChiAdd2(base, TaiChiScale2(up, (image_heel.y - y) * piece.pixel))
+            } else {
+                point = TaiChiAdd2(center, TaiChiScale2(across, (x - axis_x) * width_scale))
+            }
+            points[row * columns + column] = point
+        }
+    }
+}

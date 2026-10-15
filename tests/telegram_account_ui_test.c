@@ -49,6 +49,12 @@ void RasterImage(String asset_path, uint32_t texture_id, Rectangle source,
     (void)clip; (void)origin; (void)rotation; (void)radius; (void)tint;
     assert(0);
 }
+void RasterImageMesh(String path, uint32_t texture, Rectangle source,
+    Slice points, int32_t columns, int32_t rows, Rectangle clip, Color tint) {
+    (void)path; (void)texture; (void)source; (void)points;
+    (void)columns; (void)rows; (void)clip; (void)tint;
+    assert(0);
+}
 int32_t GetCharPressed(void) { return 0; }
 bool IsKeyPressed(int32_t key) { (void)key; return false; }
 bool IsKeyPressedRepeat(int32_t key) { (void)key; return false; }

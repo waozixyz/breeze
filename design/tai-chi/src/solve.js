@@ -13,6 +13,8 @@ import { Matrix4, Quaternion, Vector3 } from 'three'
 const UP = new Vector3(0, 1, 0)
 const DEG = Math.PI / 180
 const KNEE_GIVE = 0.03
+// How far a loaded front knee may pass the toes, in metres.
+const KNEE_PAST_TOES = 0.025
 
 export const SIDES = ['L', 'R']
 
@@ -201,7 +203,9 @@ function raiseHeelToReach(side, footPose, share, pelvisXZ, height, pelvisQuat, f
     // on a foot that trails behind the hip.
     const hip = hipJoint(side, pelvisXZ, height - KNEE_GIVE * rig.scale, pelvisQuat, rig)
     const ahead = (footPose.x * rig.scale - hip.x) * Math.sin(facing) + (footPose.z * rig.scale - hip.z) * Math.cos(facing)
-    if (ahead > 0.05 * rig.scale) {
+    // Fades in as the foot falls behind the hip, so the heel never pops up.
+    const trailing = 1 - smoothRamp(ahead, -0.02 * rig.scale, 0.06 * rig.scale)
+    if (trailing <= 0) {
         return null
     }
     const legReach = rig.legLength * 0.995
@@ -209,7 +213,7 @@ function raiseHeelToReach(side, footPose, share, pelvisXZ, height, pelvisQuat, f
     if (reachWith(0) <= legReach) {
         return null
     }
-    const most = 42 * DEG * room
+    const most = 60 * DEG * room * trailing
     if (reachWith(most) > legReach) {
         return placeFoot({ ...footPose, pitch: pitch - most }, rig)
     }
@@ -250,6 +254,65 @@ function reachablePelvisHeight(target, pelvisXZ, pelvisQuat, feet, footPoses, ri
     return height
 }
 
+function smoothRamp(value, from, to) {
+    const u = Math.min(1, Math.max(0, (value - from) / (to - from)))
+    return u * u * (3 - 2 * u)
+}
+
+// A loaded front knee stays over the foot, not past the toes: where it
+// would pass them the pelvis rises just enough to keep it there, as a
+// teacher corrects a stance by sinking less. The correction fades in with
+// the weight and with how far the foot is in front, so it never jumps.
+function kneeSafePelvisHeight(height, pelvisXZ, pelvisQuat, feet, pose, rig) {
+    let raise = 0
+    const facing = forwardOf(pose.facing)
+    for (const side of SIDES) {
+        const foot = feet[side]
+        const footPose = pose.feet[side]
+        const share = side === 'L' ? pose.load : 1 - pose.load
+        const otherFoot = feet[side === 'L' ? 'R' : 'L']
+        const ahead = foot.heel.clone().sub(otherFoot.heel).dot(facing)
+        const weight = smoothRamp(share, 0.4, 0.6) * smoothRamp(ahead, 0.18 * rig.scale, 0.28 * rig.scale) *
+            (1 - smoothRamp(footPose.lift ?? 0, 0.0015, 0.02))
+        if (weight <= 0) {
+            continue
+        }
+        const toward = foot.toeTip.clone().sub(foot.heel).setY(0)
+        if (toward.lengthSq() < 1e-8) {
+            continue
+        }
+        toward.normalize()
+        const sign = sideSign(side)
+        const footSide = leftOf(foot.yaw).multiplyScalar(sign)
+        const pole = foot.forward.clone().add(footSide.multiplyScalar(0.1)).add(new Vector3(0, 0.05, 0))
+        const pastToes = (lift) => {
+            const hip = hipJoint(side, pelvisXZ, height + lift, pelvisQuat, rig)
+            const knee = solveTwoBone(hip, foot.ankle, rig.thigh, rig.shin, pole).middle
+            return knee.clone().sub(foot.ankle).setY(0).dot(toward) - rig.toeTip
+        }
+        const allowed = KNEE_PAST_TOES * rig.scale
+        if (pastToes(0) <= allowed) {
+            continue
+        }
+        let low = 0
+        let high = 0.12 * rig.scale
+        if (pastToes(high) > allowed) {
+            raise = Math.max(raise, high * weight)
+            continue
+        }
+        for (let step = 0; step < 14; step += 1) {
+            const middle = (low + high) / 2
+            if (pastToes(middle) > allowed) {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        raise = Math.max(raise, high * weight)
+    }
+    return height + raise
+}
+
 // Solves a sampled pose. Angles in the pose are radians. The pelvis is
 // placed so that the centre of mass, not just the pelvis, sits over the
 // weighted point between the feet.
@@ -270,12 +333,14 @@ function solveBody(pose, rig, correction) {
 
     // Pelvis: over the weighted support point of the feet.
     // Each foot bears weight at its middle when flat, at the heel or ball
-    // when it stands on one of them.
-    const support = (foot) => {
+    // when it stands on one of them. A heel that rises by itself (to reach)
+    // hands its weight to the ball over a wider pitch, so the pelvis
+    // follows it smoothly.
+    const support = (foot, ramp = 3.5 * DEG) => {
         const middle = foot.ankle.clone().setY(0).addScaledVector(foot.forward, 0.03 * scale)
         const pitch = foot.pitch
         const contact = (pitch >= 0 ? foot.heel : foot.ball).clone().setY(0)
-        return middle.lerp(contact, Math.min(1, Math.abs(pitch) / (3.5 * DEG)))
+        return middle.lerp(contact, Math.min(1, Math.abs(pitch) / ramp))
     }
     const loadLeft = Math.min(1, Math.max(0, pose.load))
     const pelvisXZ = support(feet.L).multiplyScalar(loadLeft).add(support(feet.R).multiplyScalar(1 - loadLeft))
@@ -291,23 +356,27 @@ function solveBody(pose, rig, correction) {
     const pelvisQuat = bodyQuat(hipYaw, lean * 0.4, bend * 0.3)
     const targetHeight = rig.pelvisHeight - (pose.sink ?? 0) * scale
     let raisedAny = false
+    const raisedSide = { L: false, R: false }
     for (const side of SIDES) {
         const share = side === 'L' ? loadLeft : 1 - loadLeft
         const raised = raiseHeelToReach(side, pose.feet[side], share, pelvisXZ, targetHeight, pelvisQuat, pose.facing, rig)
         if (raised) {
             feet[side] = raised
             raisedAny = true
+            raisedSide[side] = true
         }
     }
     if (raisedAny) {
         // A raised heel moves that foot's weight onto its ball.
-        const moved = support(feet.L).multiplyScalar(loadLeft).add(support(feet.R).multiplyScalar(1 - loadLeft))
+        const supportOf = (side) => support(feet[side], raisedSide[side] ? 14 * DEG : 3.5 * DEG)
+        const moved = supportOf('L').multiplyScalar(loadLeft).add(supportOf('R').multiplyScalar(1 - loadLeft))
         const offset = moved.sub(support(placeFoot(pose.feet.L, rig)).multiplyScalar(loadLeft)
             .add(support(placeFoot(pose.feet.R, rig)).multiplyScalar(1 - loadLeft)))
         pelvisXZ.add(offset)
         balanceTarget.add(offset)
     }
-    const pelvisHeight = reachablePelvisHeight(targetHeight, pelvisXZ, pelvisQuat, feet, pose.feet, rig)
+    const kneeSafeHeight = kneeSafePelvisHeight(targetHeight, pelvisXZ, pelvisQuat, feet, pose, rig)
+    const pelvisHeight = reachablePelvisHeight(kneeSafeHeight, pelvisXZ, pelvisQuat, feet, pose.feet, rig)
     const pelvis = new Vector3(pelvisXZ.x, pelvisHeight, pelvisXZ.z)
     segments.pelvis = { pos: pelvis, quat: pelvisQuat }
     joints.pelvis = pelvis

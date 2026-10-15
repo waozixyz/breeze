@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0] - 2026-10-15
+
+- Practise the 24-form Tai Chi course with saved progress, character choices and audio controls.
+- Download each practice separately and keep it available offline.
+- Download narration for the selected language without downloading practice artwork again.
+- Remove downloaded content while keeping practice progress.
+- Requires Inner Breeze 2.1.34 or later.
+
 ## [1.1.5] - 2026-10-13
 
 - Maintenance release for Inner Breeze 2.1.33.

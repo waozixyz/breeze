@@ -28,6 +28,7 @@ break_rest_show_skip break_rest_show_postpone break_daily_enabled
 break_daily_limit break_daily_postpone break_daily_max_prompts
 break_daily_show_skip break_daily_show_postpone practice_music_track_wim_hof
 practice_music_track_meditation practice_music_track_sun_salutation
+practice_music_track_tai_chi
 """.split())
 # Keys saved with formatted indices; their loaders use the same shape.
 DERIVED = set()

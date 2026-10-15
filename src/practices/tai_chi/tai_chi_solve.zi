@@ -1,0 +1,614 @@
+// Turns a sampled Tai Chi pose into joint positions and segment rotations,
+// as the course studio's solver does (design/tai-chi/src/solve.js).
+//
+// World axes: +Y up, the figure starts facing +Z, its left is +X. A yaw of
+// θ faces (sin θ, 0, cos θ), so a positive yaw turns the figure left. Side 0
+// is the left, side 1 the right.
+#import "math"
+#import, file "tai_chi_math.zi";
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_timeline.zi";
+
+TAI_CHI_KNEE_GIVE :: 0.03
+// How far a loaded front knee may pass the toes, in metres.
+TAI_CHI_KNEE_PAST_TOES :: 0.025
+
+// Body proportions in metres, as exported per character (RIG_FIELDS in
+// design/tai-chi/tools/export-app.mjs).
+TaiChiRig :: struct {
+    scale: float64
+    height: float64
+    ankle_height: float64
+    heel_back: float64
+    ball: float64
+    toe_tip: float64
+    foot_half_width: float64
+    shin: float64
+    thigh: float64
+    hip_half_width: float64
+    hip_drop: float64
+    spine: [3]float64
+    neck: float64
+    head_height: float64
+    shoulder_half_width: float64
+    shoulder_drop: float64
+    upper_arm: float64
+    fore_arm: float64
+    palm_offset: float64
+    hand_length: float64
+    leg_length: float64
+    arm_length: float64
+    hip_height: float64
+    pelvis_height: float64
+}
+
+TaiChiRigFor :: (character: s32) -> TaiChiRig {
+    values := tai_chi_course.characters[character].rig
+    rig: TaiChiRig
+    rig.scale = values[0]
+    rig.height = values[1]
+    rig.ankle_height = values[2]
+    rig.heel_back = values[3]
+    rig.ball = values[4]
+    rig.toe_tip = values[5]
+    rig.foot_half_width = values[6]
+    rig.shin = values[7]
+    rig.thigh = values[8]
+    rig.hip_half_width = values[9]
+    rig.hip_drop = values[10]
+    rig.spine[0] = values[11]
+    rig.spine[1] = values[12]
+    rig.spine[2] = values[13]
+    rig.neck = values[14]
+    rig.head_height = values[15]
+    rig.shoulder_half_width = values[16]
+    rig.shoulder_drop = values[17]
+    rig.upper_arm = values[18]
+    rig.fore_arm = values[19]
+    rig.palm_offset = values[20]
+    rig.hand_length = values[21]
+    rig.leg_length = values[22]
+    rig.arm_length = values[23]
+    rig.hip_height = values[24]
+    rig.pelvis_height = values[25]
+    return rig
+}
+
+// A foot set on the floor (or lifted): its ankle, frame and contact points.
+TaiChiPlacedFoot :: struct {
+    ankle: TaiChiVector3
+    quat: TaiChiQuaternion
+    heel: TaiChiVector3
+    ball: TaiChiVector3
+    toe_tip: TaiChiVector3
+    toes_quat: TaiChiQuaternion
+    forward: TaiChiVector3
+    yaw: float64
+    pitch: float64
+}
+
+// A foot's placement in the pose: floor point under the ankle, yaw, pitch
+// (positive raises the toes about the heel, negative the heel about the
+// ball) and lift, for the reference figure.
+TaiChiFootPose :: struct {
+    x: float64
+    z: float64
+    yaw: float64
+    pitch: float64
+    lift: float64
+}
+
+TaiChiSolved :: struct {
+    pelvis: TaiChiVector3
+    pelvis_quat: TaiChiQuaternion
+    spine1: TaiChiVector3
+    chest: TaiChiVector3
+    chest_quat: TaiChiQuaternion
+    head_quat: TaiChiQuaternion
+    neck_base: TaiChiVector3
+    shoulder_center: TaiChiVector3
+    head_center: TaiChiVector3
+    head_top: TaiChiVector3
+    com: TaiChiVector3
+    balance_target: TaiChiVector3
+    load: float64
+    shoulders: [2]TaiChiVector3
+    elbows: [2]TaiChiVector3
+    wrists: [2]TaiChiVector3
+    palms: [2]TaiChiVector3
+    hand_quats: [2]TaiChiQuaternion
+    hand_shapes: [2][3]float64
+    hips: [2]TaiChiVector3
+    knees: [2]TaiChiVector3
+    ankles: [2]TaiChiVector3
+    heels: [2]TaiChiVector3
+    balls: [2]TaiChiVector3
+    toes: [2]TaiChiVector3
+    foot_quats: [2]TaiChiQuaternion
+    toes_quats: [2]TaiChiQuaternion
+}
+
+TaiChiSideSign :: (side: s32) -> float64 {
+    return ifx side == 0 then 1.0 else -1.0
+}
+
+TaiChiForwardOf :: (yaw: float64) -> TaiChiVector3 {
+    return TaiChiV3(Sin(yaw), 0.0, Cos(yaw))
+}
+
+TaiChiLeftOf :: (yaw: float64) -> TaiChiVector3 {
+    return TaiChiV3(Cos(yaw), 0.0, -Sin(yaw))
+}
+
+TaiChiYawQuat :: (yaw: float64) -> TaiChiQuaternion {
+    return TaiChiAxisAngle(TaiChiV3(0.0, 1.0, 0.0), yaw)
+}
+
+// Yaw, then forward lean about the local left axis, then side bend about
+// the local forward axis (positive bends toward the left).
+TaiChiBodyQuat :: (yaw: float64, lean: float64, bend: float64) -> TaiChiQuaternion {
+    q := TaiChiYawQuat(yaw)
+    q = TaiChiMultiply(q, TaiChiAxisAngle(TaiChiV3(1.0, 0.0, 0.0), lean))
+    return TaiChiMultiply(q, TaiChiAxisAngle(TaiChiV3(0.0, 0.0, 1.0), -bend))
+}
+
+// A frame whose +Y is `y_axis` and whose +Z is as close to `z_hint` as
+// possible, then `fallback_z`.
+TaiChiFrameQuat :: (y_axis: TaiChiVector3, z_hint: TaiChiVector3, fallback_z: TaiChiVector3, has_fallback: bool) -> TaiChiQuaternion {
+    y := TaiChiNormalize3(y_axis)
+    z := TaiChiAddScaled3(z_hint, y, -TaiChiDot3(z_hint, y))
+    if TaiChiLengthSquared3(z) < 0.00000001 && has_fallback {
+        z = TaiChiAddScaled3(fallback_z, y, -TaiChiDot3(fallback_z, y))
+    }
+    if TaiChiLengthSquared3(z) < 0.00000001 {
+        z = ifx TaiChiAbs(y.x) < 0.9 then TaiChiV3(1.0, 0.0, 0.0) else TaiChiV3(0.0, 0.0, 1.0)
+        z = TaiChiAddScaled3(z, y, -TaiChiDot3(z, y))
+    }
+    z = TaiChiNormalize3(z)
+    x := TaiChiNormalize3(TaiChiCross3(y, z))
+    return TaiChiFromBasis(x, y, z)
+}
+
+TaiChiTwoBone :: struct {
+    middle: TaiChiVector3
+    end: TaiChiVector3
+}
+
+// Two-bone inverse kinematics: the middle joint and the clamped end.
+TaiChiSolveTwoBone :: (root: TaiChiVector3, target: TaiChiVector3, upper: float64, lower: float64, pole: TaiChiVector3) -> TaiChiTwoBone {
+    to_target := TaiChiSub3(target, root)
+    distance := TaiChiLength3(to_target)
+    direction := TaiChiV3(0.0, -1.0, 0.0)
+    if distance > 0.000001 {
+        direction = TaiChiScale3(to_target, 1.0 / distance)
+    }
+    reach := upper + lower
+    distance = TaiChiMin(TaiChiMax(distance, TaiChiAbs(upper - lower) + 0.0001), reach * 0.9999)
+    cosine := (upper * upper + distance * distance - lower * lower) / (2.0 * upper * distance)
+    along := upper * cosine
+    across := upper * Sqrt(TaiChiMax(0.0, 1.0 - cosine * cosine))
+    bend := TaiChiAddScaled3(pole, direction, -TaiChiDot3(pole, direction))
+    if TaiChiLengthSquared3(bend) < 0.00000001 {
+        bend = TaiChiAddScaled3(TaiChiV3(0.0, 0.0, 1.0), direction, -direction.z)
+    }
+    bend = TaiChiNormalize3(bend)
+    result: TaiChiTwoBone
+    result.middle = TaiChiAddScaled3(TaiChiAddScaled3(root, direction, along), bend, across)
+    result.end = TaiChiAddScaled3(root, direction, distance)
+    return result
+}
+
+TaiChiFootPoseOf :: (pose: *TaiChiPose, side: s32) -> TaiChiFootPose {
+    base := TaiChiFootBase(side)
+    foot: TaiChiFootPose
+    foot.x = pose.channels[base + TAI_CHI_FOOT_X]
+    foot.z = pose.channels[base + TAI_CHI_FOOT_Z]
+    foot.yaw = pose.channels[base + TAI_CHI_FOOT_YAW]
+    foot.pitch = pose.channels[base + TAI_CHI_FOOT_PITCH]
+    foot.lift = pose.channels[base + TAI_CHI_FOOT_LIFT]
+    return foot
+}
+
+TaiChiPlaceFoot :: (foot: TaiChiFootPose, rig: *TaiChiRig) -> TaiChiPlacedFoot {
+    up := TaiChiV3(0.0, 1.0, 0.0)
+    forward := TaiChiForwardOf(foot.yaw)
+    left := TaiChiLeftOf(foot.yaw)
+    ground := TaiChiV3(foot.x * rig.scale, 0.0, foot.z * rig.scale)
+    lift := foot.lift * rig.scale
+    tilt := TaiChiAxisAngle(left, -foot.pitch)
+    contact: TaiChiVector3
+    from_contact: TaiChiVector3
+    if foot.pitch >= 0.0 {
+        contact = TaiChiAddScaled3(ground, forward, -rig.heel_back)
+        from_contact = TaiChiAddScaled3(TaiChiScale3(forward, rig.heel_back), up, rig.ankle_height)
+    } else {
+        contact = TaiChiAddScaled3(ground, forward, rig.ball)
+        from_contact = TaiChiAddScaled3(TaiChiScale3(forward, -rig.ball), up, rig.ankle_height)
+    }
+    placed: TaiChiPlacedFoot
+    placed.ankle = TaiChiAddScaled3(TaiChiAdd3(contact, TaiChiRotate(from_contact, tilt)), up, lift)
+    placed.quat = TaiChiMultiply(tilt, TaiChiYawQuat(foot.yaw))
+    placed.heel = TaiChiAdd3(placed.ankle, TaiChiRotate(TaiChiV3(0.0, -rig.ankle_height, -rig.heel_back), placed.quat))
+    placed.ball = TaiChiAdd3(placed.ankle, TaiChiRotate(TaiChiV3(0.0, -rig.ankle_height, rig.ball), placed.quat))
+    // Toes stay on the floor while the heel is up, and follow the foot
+    // once it lifts.
+    placed.toes_quat = placed.quat
+    if foot.pitch < 0.0 {
+        follow := TaiChiMin(1.0, lift / (0.04 * rig.scale))
+        placed.toes_quat = TaiChiSlerp(TaiChiYawQuat(foot.yaw), placed.quat, follow)
+    }
+    placed.toe_tip = TaiChiAdd3(placed.ball, TaiChiRotate(TaiChiV3(0.0, 0.0, rig.toe_tip - rig.ball), placed.toes_quat))
+    placed.forward = forward
+    placed.yaw = foot.yaw
+    placed.pitch = foot.pitch
+    return placed
+}
+
+// How firmly a foot is on the floor: 1 on the floor, 0 from 3 cm up.
+TaiChiGroundedness :: (foot: TaiChiFootPose) -> float64 {
+    return TaiChiClamp(1.0 - foot.lift / 0.03, 0.0, 1.0)
+}
+
+TaiChiHipOffset :: (side: s32, pelvis_quat: TaiChiQuaternion, rig: *TaiChiRig) -> TaiChiVector3 {
+    return TaiChiRotate(TaiChiV3(TaiChiSideSign(side) * rig.hip_half_width, -rig.hip_drop, 0.0), pelvis_quat)
+}
+
+TaiChiHipJoint :: (side: s32, pelvis_xz: TaiChiVector3, height: float64, pelvis_quat: TaiChiQuaternion, rig: *TaiChiRig) -> TaiChiVector3 {
+    return TaiChiAdd3(TaiChiV3(pelvis_xz.x, height, pelvis_xz.z), TaiChiHipOffset(side, pelvis_quat, rig))
+}
+
+TaiChiHeelRaise :: struct {
+    raised: bool
+    foot: TaiChiPlacedFoot
+}
+
+// A lightly loaded foot that cannot reach the floor from the hip rolls up
+// onto its ball, as a back foot does when the weight moves forward.
+TaiChiRaiseHeelToReach :: (side: s32, foot: TaiChiFootPose, share: float64, pelvis_xz: TaiChiVector3, height: float64,
+    pelvis_quat: TaiChiQuaternion, facing: float64, rig: *TaiChiRig) -> TaiChiHeelRaise {
+    result: TaiChiHeelRaise
+    room := TaiChiClamp((0.45 - share) / 0.3, 0.0, 1.0)
+    if room <= 0.0 || foot.pitch > 0.01 {
+        return result
+    }
+    // Small shortfalls are taken up by bending the knees a little lower;
+    // the heel rises only for the rest, and only on a foot that trails
+    // behind the hip, fading in so it never pops up.
+    hip := TaiChiHipJoint(side, pelvis_xz, height - TAI_CHI_KNEE_GIVE * rig.scale, pelvis_quat, rig)
+    ahead := (foot.x * rig.scale - hip.x) * Sin(facing) + (foot.z * rig.scale - hip.z) * Cos(facing)
+    trailing := 1.0 - TaiChiSmoothRamp(ahead, -0.02 * rig.scale, 0.06 * rig.scale)
+    if trailing <= 0.0 {
+        return result
+    }
+    leg_reach := rig.leg_length * 0.995
+    if TaiChiReachWith(foot, 0.0, hip, rig) <= leg_reach {
+        return result
+    }
+    most := 60.0 * TAI_CHI_DEGREE * room * trailing
+    raise := most
+    if TaiChiReachWith(foot, most, hip, rig) <= leg_reach {
+        low: float64 = 0.0
+        high := most
+        for step: cast(s32)0..17 {
+            middle := (low + high) / 2.0
+            if TaiChiReachWith(foot, middle, hip, rig) > leg_reach {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        raise = high
+    }
+    raised := foot
+    raised.pitch = foot.pitch - raise
+    result.raised = true
+    result.foot = TaiChiPlaceFoot(raised, rig)
+    return result
+}
+
+TaiChiReachWith :: (foot: TaiChiFootPose, extra: float64, hip: TaiChiVector3, rig: *TaiChiRig) -> float64 {
+    raised := foot
+    raised.pitch = foot.pitch - extra
+    return TaiChiDistance3(TaiChiPlaceFoot(raised, rig).ankle, hip)
+}
+
+// The pelvis height that keeps every foot on the floor reachable; a foot
+// that is lifting constrains it less the higher it is.
+TaiChiReachablePelvisHeight :: (target: float64, pelvis_xz: TaiChiVector3, pelvis_quat: TaiChiQuaternion,
+    feet: []TaiChiPlacedFoot, foot_poses: []TaiChiFootPose, rig: *TaiChiRig) -> float64 {
+    height := target
+    leg_reach := rig.leg_length * 0.995
+    for side: cast(s32)0..1 {
+        weight := TaiChiGroundedness(foot_poses[side])
+        if weight <= 0.0 {
+            continue
+        }
+        hip_offset := TaiChiHipOffset(side, pelvis_quat, rig)
+        dx := pelvis_xz.x + hip_offset.x - feet[side].ankle.x
+        dz := pelvis_xz.z + hip_offset.z - feet[side].ankle.z
+        horizontal := TaiChiHypot(dx, dz)
+        vertical := Sqrt(TaiChiMax(leg_reach * leg_reach - horizontal * horizontal, 0.0))
+        allowed := feet[side].ankle.y + vertical - hip_offset.y
+        if allowed < target {
+            height = TaiChiMin(height, target + (allowed - target) * weight)
+        }
+    }
+    return height
+}
+
+TaiChiLegPole :: (foot: TaiChiPlacedFoot, side: s32) -> TaiChiVector3 {
+    foot_side := TaiChiScale3(TaiChiLeftOf(foot.yaw), TaiChiSideSign(side))
+    return TaiChiAdd3(TaiChiAddScaled3(foot.forward, foot_side, 0.1), TaiChiV3(0.0, 0.05, 0.0))
+}
+
+TaiChiKneePastToes :: (side: s32, foot: TaiChiPlacedFoot, toward: TaiChiVector3, pelvis_xz: TaiChiVector3,
+    height: float64, pelvis_quat: TaiChiQuaternion, rig: *TaiChiRig) -> float64 {
+    hip := TaiChiHipJoint(side, pelvis_xz, height, pelvis_quat, rig)
+    knee := TaiChiSolveTwoBone(hip, foot.ankle, rig.thigh, rig.shin, TaiChiLegPole(foot, side)).middle
+    return TaiChiDot3(TaiChiFlat3(TaiChiSub3(knee, foot.ankle)), toward) - rig.toe_tip
+}
+
+// A loaded front knee stays over the foot, not past the toes: where it
+// would pass them the pelvis rises just enough to keep it there. The
+// correction fades in with the weight and with how far the foot is in
+// front, so it never jumps.
+TaiChiKneeSafePelvisHeight :: (height: float64, pelvis_xz: TaiChiVector3, pelvis_quat: TaiChiQuaternion,
+    feet: []TaiChiPlacedFoot, foot_poses: []TaiChiFootPose, load: float64, facing_yaw: float64, rig: *TaiChiRig) -> float64 {
+    raise: float64 = 0.0
+    facing := TaiChiForwardOf(facing_yaw)
+    for side: cast(s32)0..1 {
+        foot := feet[side]
+        share := ifx side == 0 then load else 1.0 - load
+        ahead := TaiChiDot3(TaiChiSub3(foot.heel, feet[1 - side].heel), facing)
+        weight := TaiChiSmoothRamp(share, 0.4, 0.6) * TaiChiSmoothRamp(ahead, 0.18 * rig.scale, 0.28 * rig.scale) *
+            (1.0 - TaiChiSmoothRamp(foot_poses[side].lift, 0.0015, 0.02))
+        if weight <= 0.0 {
+            continue
+        }
+        toward := TaiChiFlat3(TaiChiSub3(foot.toe_tip, foot.heel))
+        if TaiChiLengthSquared3(toward) < 0.00000001 {
+            continue
+        }
+        toward = TaiChiNormalize3(toward)
+        allowed := TAI_CHI_KNEE_PAST_TOES * rig.scale
+        if TaiChiKneePastToes(side, foot, toward, pelvis_xz, height, pelvis_quat, rig) <= allowed {
+            continue
+        }
+        low: float64 = 0.0
+        high := 0.12 * rig.scale
+        if TaiChiKneePastToes(side, foot, toward, pelvis_xz, height + high, pelvis_quat, rig) > allowed {
+            raise = TaiChiMax(raise, high * weight)
+            continue
+        }
+        for step: cast(s32)0..13 {
+            middle := (low + high) / 2.0
+            if TaiChiKneePastToes(side, foot, toward, pelvis_xz, height + middle, pelvis_quat, rig) > allowed {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        raise = TaiChiMax(raise, high * weight)
+    }
+    return height + raise
+}
+
+// Where a foot bears weight: its middle when flat, its heel or ball when it
+// stands on one, reached over `ramp` of pitch.
+TaiChiSupport :: (foot: TaiChiPlacedFoot, ramp: float64, scale: float64) -> TaiChiVector3 {
+    middle := TaiChiAddScaled3(TaiChiFlat3(foot.ankle), foot.forward, 0.03 * scale)
+    contact := ifx foot.pitch >= 0.0 then TaiChiFlat3(foot.heel) else TaiChiFlat3(foot.ball)
+    return TaiChiLerp3(middle, contact, TaiChiMin(1.0, TaiChiAbs(foot.pitch) / ramp))
+}
+
+TaiChiLook3 :: struct {
+    yaw: float64
+    pitch: float64
+}
+
+// Yaw and pitch of a gaze, given the solved body so far.
+TaiChiGazeAngles :: (look: TaiChiLook, chest_yaw: float64, head_base: TaiChiVector3, palms: []TaiChiVector3) -> TaiChiLook3 {
+    result: TaiChiLook3
+    if look.kind == TAI_CHI_LOOK_AHEAD {
+        result.yaw = chest_yaw
+        return result
+    }
+    if look.kind == TAI_CHI_LOOK_LEFT_HAND || look.kind == TAI_CHI_LOOK_RIGHT_HAND {
+        hand := ifx look.kind == TAI_CHI_LOOK_LEFT_HAND then 0 else 1
+        to_hand := TaiChiSub3(palms[hand], head_base)
+        horizontal := TaiChiHypot(to_hand.x, to_hand.z)
+        yaw := Atan2(to_hand.x, to_hand.z)
+        while yaw - chest_yaw > TAI_CHI_PI {
+            yaw -= 2.0 * TAI_CHI_PI
+        }
+        while yaw - chest_yaw < -TAI_CHI_PI {
+            yaw += 2.0 * TAI_CHI_PI
+        }
+        // Eyes follow the hand; the head turns most of the way and does
+        // not drop all the way to a low hand.
+        relative := TaiChiClamp((yaw - chest_yaw) * 0.85, -65.0 * TAI_CHI_DEGREE, 65.0 * TAI_CHI_DEGREE)
+        pitch := Atan2(-to_hand.y, TaiChiMax(horizontal, 0.05)) * 0.6 + look.pitch * TAI_CHI_DEGREE
+        result.yaw = chest_yaw + relative + look.yaw * TAI_CHI_DEGREE
+        result.pitch = TaiChiClamp(pitch, -25.0 * TAI_CHI_DEGREE, 45.0 * TAI_CHI_DEGREE)
+        return result
+    }
+    result.yaw = chest_yaw + look.yaw * TAI_CHI_DEGREE
+    result.pitch = look.pitch * TAI_CHI_DEGREE
+    return result
+}
+
+TaiChiChestLocal :: (side: s32, x: float64, y: float64, z: float64, chest_quat: TaiChiQuaternion) -> TaiChiVector3 {
+    return TaiChiRotate(TaiChiV3(x * TaiChiSideSign(side), y, z), chest_quat)
+}
+
+TaiChiSolveBody :: (pose: *TaiChiPose, rig: *TaiChiRig, correction: TaiChiVector3) -> TaiChiSolved {
+    solved: TaiChiSolved
+    scale := rig.scale
+    foot_poses: [2]TaiChiFootPose
+    feet: [2]TaiChiPlacedFoot
+    for side: cast(s32)0..1 {
+        foot_poses[side] = TaiChiFootPoseOf(pose, side)
+        feet[side] = TaiChiPlaceFoot(foot_poses[side], rig)
+    }
+
+    // Pelvis: over the weighted support point of the feet.
+    flat_ramp := 3.5 * TAI_CHI_DEGREE
+    load := TaiChiClamp(pose.channels[TAI_CHI_LOAD], 0.0, 1.0)
+    facing := pose.channels[TAI_CHI_FACING]
+    pelvis_xz := TaiChiAdd3(TaiChiScale3(TaiChiSupport(feet[0], flat_ramp, scale), load),
+        TaiChiScale3(TaiChiSupport(feet[1], flat_ramp, scale), 1.0 - load))
+    pelvis_xz = TaiChiAddScaled3(pelvis_xz, TaiChiForwardOf(facing), pose.channels[TAI_CHI_SHIFT_FORWARD] * scale)
+    pelvis_xz = TaiChiAddScaled3(pelvis_xz, TaiChiLeftOf(facing), pose.channels[TAI_CHI_SHIFT_SIDE] * scale)
+    balance_target := pelvis_xz
+    pelvis_xz = TaiChiAdd3(pelvis_xz, correction)
+    hip_yaw := facing + pose.channels[TAI_CHI_HIPS]
+    chest_yaw := facing + pose.channels[TAI_CHI_CHEST]
+    lean := pose.channels[TAI_CHI_LEAN]
+    bend := pose.channels[TAI_CHI_BEND]
+    pelvis_quat := TaiChiBodyQuat(hip_yaw, lean * 0.4, bend * 0.3)
+    target_height := rig.pelvis_height - pose.channels[TAI_CHI_SINK] * scale
+    raised: [2]bool
+    for side: cast(s32)0..1 {
+        share := ifx side == 0 then load else 1.0 - load
+        heel := TaiChiRaiseHeelToReach(side, foot_poses[side], share, pelvis_xz, target_height, pelvis_quat, facing, rig)
+        if heel.raised {
+            feet[side] = heel.foot
+            raised[side] = true
+        }
+    }
+    if raised[0] || raised[1] {
+        // A raised heel hands its weight to the ball over a wider pitch, so
+        // the pelvis follows it smoothly.
+        moved := TaiChiV3(0.0, 0.0, 0.0)
+        before := TaiChiV3(0.0, 0.0, 0.0)
+        for side: cast(s32)0..1 {
+            share := ifx side == 0 then load else 1.0 - load
+            ramp := ifx raised[side] then 14.0 * TAI_CHI_DEGREE else flat_ramp
+            moved = TaiChiAddScaled3(moved, TaiChiSupport(feet[side], ramp, scale), share)
+            before = TaiChiAddScaled3(before, TaiChiSupport(TaiChiPlaceFoot(foot_poses[side], rig), flat_ramp, scale), share)
+        }
+        offset := TaiChiSub3(moved, before)
+        pelvis_xz = TaiChiAdd3(pelvis_xz, offset)
+        balance_target = TaiChiAdd3(balance_target, offset)
+    }
+    knee_safe := TaiChiKneeSafePelvisHeight(target_height, pelvis_xz, pelvis_quat, feet[:], foot_poses[:], load, facing, rig)
+    pelvis_height := TaiChiReachablePelvisHeight(knee_safe, pelvis_xz, pelvis_quat, feet[:], foot_poses[:], rig)
+    pelvis := TaiChiV3(pelvis_xz.x, pelvis_height, pelvis_xz.z)
+    solved.pelvis = pelvis
+    solved.pelvis_quat = pelvis_quat
+    solved.balance_target = balance_target
+    solved.load = load
+
+    // Spine: twist, lean and bend spread over three pieces.
+    twist_share: [3]float64 = .[0.3, 0.65, 1.0]
+    lean_share: [3]float64 = .[0.6, 0.85, 1.0]
+    bend_share: [3]float64 = .[0.5, 0.8, 1.0]
+    origin := pelvis
+    chest_quat := TaiChiIdentity()
+    for index: cast(s32)0..2 {
+        yaw := hip_yaw + (chest_yaw - hip_yaw) * twist_share[index]
+        quat := TaiChiBodyQuat(yaw, lean * lean_share[index], bend * bend_share[index])
+        if index == 1 {
+            solved.spine1 = origin
+        }
+        if index == 2 {
+            solved.chest = origin
+            chest_quat = quat
+        }
+        origin = TaiChiAdd3(origin, TaiChiRotate(TaiChiV3(0.0, rig.spine[index], 0.0), quat))
+    }
+    solved.chest_quat = chest_quat
+    neck_base := origin
+    solved.neck_base = neck_base
+    shoulder_center := TaiChiAdd3(neck_base, TaiChiRotate(TaiChiV3(0.0, -rig.shoulder_drop, 0.0), chest_quat))
+    solved.shoulder_center = shoulder_center
+
+    // Arms.
+    for side: cast(s32)0..1 {
+        hand := TaiChiHandBase(side)
+        shape := TaiChiFootBase(side) + TAI_CHI_FOOT_SHAPE
+        at := hand + TAI_CHI_HAND_AT
+        palm_at := hand + TAI_CHI_HAND_PALM
+        fingers_at := hand + TAI_CHI_HAND_FINGERS
+        elbow_at := hand + TAI_CHI_HAND_ELBOW
+        palm := TaiChiAddScaled3(shoulder_center,
+            TaiChiChestLocal(side, pose.channels[at], pose.channels[at + 1], pose.channels[at + 2], chest_quat), scale)
+        fingers := TaiChiNormalize3(TaiChiChestLocal(side, pose.channels[fingers_at], pose.channels[fingers_at + 1], pose.channels[fingers_at + 2], chest_quat))
+        palm_normal := TaiChiNormalize3(TaiChiChestLocal(side, pose.channels[palm_at], pose.channels[palm_at + 1], pose.channels[palm_at + 2], chest_quat))
+        hand_quat := TaiChiFrameQuat(TaiChiScale3(fingers, -1.0), palm_normal, TaiChiChestLocal(side, 0.0, 0.0, 1.0, chest_quat), true)
+        hand_y := TaiChiAxis(hand_quat, 0.0, 1.0, 0.0)
+        hand_z := TaiChiAxis(hand_quat, 0.0, 0.0, 1.0)
+        hook_share := pose.channels[shape + 2]
+        palm_offset := rig.palm_offset * (1.0 - 0.45 * hook_share)
+        wrist_target := TaiChiAddScaled3(TaiChiAddScaled3(palm, hand_y, palm_offset), hand_z, -0.008 * rig.height)
+        sign := TaiChiSideSign(side)
+        shoulder_rest := TaiChiAdd3(shoulder_center, TaiChiRotate(TaiChiV3(sign * rig.shoulder_half_width, 0.0, -0.004 * rig.height), chest_quat))
+        // Long reaches draw the shoulder a little toward the hand.
+        reach := TaiChiDistance3(wrist_target, shoulder_rest)
+        excess := TaiChiMax(0.0, reach - rig.arm_length * 0.92)
+        shoulder := TaiChiAddScaled3(shoulder_rest, TaiChiNormalize3(TaiChiSub3(wrist_target, shoulder_rest)),
+            TaiChiMin(excess * 0.4, 0.03 * rig.height))
+        pole := TaiChiChestLocal(side, pose.channels[elbow_at], pose.channels[elbow_at + 1], pose.channels[elbow_at + 2], chest_quat)
+        arm := TaiChiSolveTwoBone(shoulder, wrist_target, rig.upper_arm, rig.fore_arm, pole)
+        solved.shoulders[side] = shoulder
+        solved.elbows[side] = arm.middle
+        solved.wrists[side] = arm.end
+        solved.hand_quats[side] = hand_quat
+        solved.palms[side] = TaiChiAddScaled3(TaiChiAddScaled3(arm.end, hand_y, -palm_offset), hand_z, 0.008 * rig.height)
+        for part: cast(s32)0..2 {
+            solved.hand_shapes[side][part] = pose.channels[shape + part]
+        }
+    }
+
+    // Neck and head.
+    head_base := TaiChiAdd3(neck_base, TaiChiRotate(TaiChiV3(0.0, rig.neck + 0.06 * rig.height, 0.03 * rig.height), chest_quat))
+    look_from := TaiChiGazeAngles(pose.look_from, chest_yaw, head_base, solved.palms[:])
+    look_to := TaiChiGazeAngles(pose.look_to, chest_yaw, head_base, solved.palms[:])
+    blend := pose.look_blend
+    head_yaw := look_from.yaw + (look_to.yaw - look_from.yaw) * blend
+    // The head stays near level when the torso leans: it keeps a third of
+    // the lean.
+    head_pitch := look_from.pitch + (look_to.pitch - look_from.pitch) * blend + lean * 0.35
+    head_quat := TaiChiBodyQuat(head_yaw, head_pitch, bend * 0.5)
+    neck_quat := TaiChiSlerp(chest_quat, head_quat, 0.5)
+    head_pivot := TaiChiAdd3(neck_base, TaiChiRotate(TaiChiV3(0.0, rig.neck, 0.0), neck_quat))
+    solved.head_quat = head_quat
+    solved.head_center = TaiChiAdd3(head_pivot, TaiChiRotate(TaiChiV3(0.0, 0.065 * rig.height, 0.012 * rig.height), head_quat))
+    solved.head_top = TaiChiAdd3(head_pivot, TaiChiRotate(TaiChiV3(0.0, rig.head_height, 0.0), head_quat))
+
+    // Legs: knees track over the toes.
+    for side: cast(s32)0..1 {
+        foot := feet[side]
+        hip := TaiChiAdd3(pelvis, TaiChiHipOffset(side, pelvis_quat, rig))
+        leg := TaiChiSolveTwoBone(hip, foot.ankle, rig.thigh, rig.shin, TaiChiLegPole(foot, side))
+        // If the leg could not reach, the foot hangs from the real ankle.
+        offset := TaiChiSub3(leg.end, foot.ankle)
+        solved.hips[side] = hip
+        solved.knees[side] = leg.middle
+        solved.ankles[side] = leg.end
+        solved.heels[side] = TaiChiAdd3(foot.heel, offset)
+        solved.balls[side] = TaiChiAdd3(foot.ball, offset)
+        solved.toes[side] = TaiChiAdd3(foot.toe_tip, offset)
+        solved.foot_quats[side] = foot.quat
+        solved.toes_quats[side] = foot.toes_quat
+    }
+
+    // A rough centre of mass: pelvis weighted with the trunk and head.
+    com := TaiChiScale3(pelvis, 0.55)
+    com = TaiChiAddScaled3(com, shoulder_center, 0.3)
+    com = TaiChiAddScaled3(com, solved.head_center, 0.08)
+    com = TaiChiAddScaled3(com, TaiChiAdd3(solved.knees[0], solved.knees[1]), 0.035)
+    solved.com = com
+    return solved
+}
+
+// Solves a sampled pose. The pelvis is placed so that the centre of mass,
+// not just the pelvis, sits over the weighted point between the feet.
+TaiChiSolvePose :: (pose: *TaiChiPose, rig: *TaiChiRig) -> TaiChiSolved {
+    first := TaiChiSolveBody(pose, rig, TaiChiV3(0.0, 0.0, 0.0))
+    correction := TaiChiFlat3(TaiChiSub3(first.balance_target, first.com))
+    if TaiChiLength3(correction) < 0.0001 {
+        return first
+    }
+    return TaiChiSolveBody(pose, rig, correction)
+}

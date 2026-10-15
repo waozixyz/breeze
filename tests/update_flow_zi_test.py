@@ -104,7 +104,7 @@ def build_probe(work, compiler, env):
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
         "-I", str(ROOT / "build/packages/ziran/include"), "-I", str(output),
         "-I", str(ROOT / "build/packages/curl/include"),
-        *map(str, sources), *sdl, f"-l:{curl_name}", "-o", str(executable),
+        *map(str, sources), *sdl, f"-l:{curl_name}", "-lz", "-o", str(executable),
     ], cwd=ROOT, check=True, env=env)
     return executable
 

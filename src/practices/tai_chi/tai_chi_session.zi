@@ -1,0 +1,344 @@
+#import, file "../../cells/shared_state.zi";
+c3 :: #system_library "c";
+GetFrameTime :: () -> float32 #foreign c3;
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
+sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
+habits_ensure_tai_chi :: (habits: *Habits) #foreign c3;
+save_settings :: (app: *InnerBreeze) #foreign c3 "save_settings";
+#import, file "../../habits/habit_types.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../core/types.zi";
+#import, file "../../app/app_types.zi";
+#import, file "../../app/session_screen.zi";
+#import "layout"
+#import "layout_props"
+#import "layout_widget"
+#import "tree"
+#import, file "../../app/app_notifications.zi";
+#import, file "../../app/app.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/app_route_state.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../app/widgets.zi";
+#import, file "../../app/cards.zi";
+#import, file "../../app/app_nav_state.zi";
+#import, file "../../app/practice_title_bar.zi";
+#import, file "../meditation/meditation_music.zi";
+#import, file "../practice_audio_controls.zi";
+#import, file "../session_results.zi";
+#import, file "../../storage/data.zi";
+#import "control_props"
+#import "image_props"
+#import "progress_props"
+#import "progress_widget"
+#import "text_props"
+#import "text_align"
+#import, file "../../app/exercise_types.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/current_app.zi";
+#import "image_widget"
+#import "text_widget"
+#import "drawing_props"
+#import "geometry"
+#import "session"
+#import "modal_props"
+#import "modal_widget"
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_timeline.zi";
+#import, file "tai_chi_rules.zi";
+#import, file "tai_chi_draw.zi";
+#import, file "tai_chi_entry.zi";
+#import, file "../practice_narration.zi";
+
+using ModalType;
+using ExerciseType;
+using TextWrap;
+using TextAlign;
+using ButtonTone;
+using ButtonEmphasis;
+
+TaiChiExitToStart :: (app: *InnerBreeze) {
+    PracticeNarrationStop()
+    app.tai_chi = TaiChiSeek(app.tai_chi, 0.0)
+    app.session_paused = 0
+    meditation_music_stop(app)
+    app_close_modal(app)
+    app_switch_screen(app, ScreenStart)
+}
+
+// The item played to its end: it counts as practised, the session is
+// recorded for the Tai Chi habit, and the results show its time.
+TaiChiFinish :: (app: *InnerBreeze) {
+    PracticeNarrationStop()
+    result_path: [FS_PATH_MAX]u8
+    result_path[0] = cast(u8)0
+    send_session_complete(app)
+    seconds := cast(s32)(app.tai_chi.practised + 0.5)
+    if seconds < 1 {
+        seconds = 1
+    }
+    item := app.tai_chi.built_item
+    if item >= 0 && item < TAI_CHI_ITEM_CAPACITY {
+        app.tai_chi.done[item] = true
+    }
+    // The course suggests the next item not yet done.
+    app.tai_chi.item = -1
+    save_settings(app)
+    if data_save_session_path_for_activity(*seconds, 1, 0, EXERCISE_TAI_CHI,
+        *result_path[0], size_of(type_of(result_path))) != 0 {
+        if app.tai_chi.habit_made == 0 {
+            habits_ensure_tai_chi(*app.habits)
+            app.tai_chi.habit_made = 1
+            save_settings(app)
+        }
+        sync_habits_for_activity(app, EXERCISE_TAI_CHI)
+        app_auto_sync(app)
+    }
+    app.session_paused = 0
+    meditation_music_stop(app)
+    app_close_modal(app)
+    app_prepare_session_results(app, EXERCISE_TAI_CHI, seconds, 0, null, null, 0, *result_path[0])
+    app_switch_screen(app, ScreenResults)
+}
+
+#program_export
+tai_chi_handle_exit_modal :: (app: *InnerBreeze) -> s32 {
+    if app == null || app.modal.active == 0 ||
+        app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        return 0
+    }
+    actions: [2]ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("exit_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+    ]
+    modal_result := ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = LocaleText("all_progress_lost_message")}, actions[:2]).action
+    if modal_result == 1 {
+        app_close_modal(app)
+    } else if modal_result == 2 {
+        TaiChiExitToStart(app)
+        return 2
+    }
+    return 1
+}
+
+#program_export
+tai_chi_request_exit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+}
+
+TaiChiAdvanceBy :: (app: *InnerBreeze, seconds: float64) {
+    PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    next := TaiChiAdvance(app.tai_chi, seconds)
+    app.tai_chi = next.state
+    if next.finished {
+        TaiChiFinish(app)
+    }
+}
+
+// Keeps the form moving while the practice runs in its small window.
+#program_export
+tai_chi_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
+    if app == null || app_session_screen(app) != ScreenTaiChi || app.session_paused != 0 {
+        return
+    }
+    TaiChiAdvanceBy(app, cast(float64)elapsed_ms / 1000.0)
+}
+
+// The movement named at `time`: the one playing, between movements the
+// next one, and after the last movement the last.
+TaiChiMovementTitle :: (item: TaiChiItem, time: float64) -> s32 {
+    title: s32 = -1
+    for index: item.mark_first..item.mark_first + item.mark_count - 1 {
+        mark := tai_chi_course.marks[index]
+        title = mark.title
+        if time < mark.end {
+            return title
+        }
+    }
+    return title
+}
+
+// The words on screen: the current step's in an item taught step by step,
+// else the movement's name, since steps at the form's tempo pass too
+// quickly to read.
+TaiChiCueKey :: (app: *InnerBreeze) -> string {
+    if app.tai_chi.built_item < 0 {
+        return ""
+    }
+    item := tai_chi_course.items[app.tai_chi.built_item]
+    cue: s32 = -1
+    if item.step_words {
+        cue = TaiChiTimelineCue(*tai_chi_timeline, app.tai_chi.time)
+    } else {
+        cue = TaiChiMovementTitle(item, app.tai_chi.time)
+    }
+    if cue < 0 {
+        return ""
+    }
+    return TaiChiCourseString(cue)
+}
+
+TaiChiCueText :: (app: *InnerBreeze) -> string {
+    return LocaleText(TaiChiCueKey(app))
+}
+
+TaiChiItemTitle :: (item: s32) -> string {
+    if item < 0 || item >= tai_chi_course.item_count {
+        return LocaleText("exercise_tai_chi")
+    }
+    return LocaleText(TaiChiCourseString(tai_chi_course.items[item].title))
+}
+
+// Above step words, the movement playing now in an item of several,
+// else the item's version (demo, breakdown, follow-along).
+TaiChiSubtitle :: (app: *InnerBreeze) -> string {
+    item_index := app.tai_chi.built_item
+    if item_index < 0 {
+        return ""
+    }
+    item := tai_chi_course.items[item_index]
+    if item.step_words && item.mark_count > 1 {
+        for index: item.mark_first..item.mark_first + item.mark_count - 1 {
+            mark := tai_chi_course.marks[index]
+            if app.tai_chi.time >= mark.start && app.tai_chi.time < mark.end {
+                return LocaleText(TaiChiCourseString(mark.title))
+            }
+        }
+    }
+    if item.version >= 0 {
+        return LocaleText(TaiChiCourseString(item.version))
+    }
+    return ""
+}
+
+#program_export
+tai_chi_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
+    PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    TaiChiDrawFigure(app.ui.session, *app.tai_chi, picture, cast(float64)GetFrameTime(), false,
+        LocaleText("exercise_tai_chi"))
+    status[0] = 0
+    text := TaiChiCueText(app)
+    if text.count == 0 {
+        text = TaiChiItemTitle(app.tai_chi.built_item)
+    }
+    return text
+}
+
+TaiChiDrawCue :: (app: *InnerBreeze, top_y: s32) -> s32 {
+    side := AppScale(24)
+    width := app.ui.view_width - side * 2
+    subtitle := TaiChiSubtitle(app)
+    y := top_y
+    if subtitle.count > 0 {
+        font := AppScale(Text16)
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)side, cast(float32)y, cast(float32)width, 0},
+            .text = subtitle,
+            .font = font,
+            .class_name = MutedTextClass(),
+            .align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapEllipsis})
+        y += AppTextLineHeight(font) + AppScale(4)
+    }
+    cue := TaiChiCueText(app)
+    cue_font := AppScale(Text20)
+    // Room for two lines, so the figure does not jump as cues change.
+    if cue.count > 0 {
+        Text(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)side, cast(float32)y, cast(float32)width,
+                cast(float32)(AppTextLineHeight(cue_font) * 2)},
+            .text = cue,
+            .font = cue_font,
+            .align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    }
+    return y + AppTextLineHeight(cue_font) * 2
+}
+
+TaiChiDrawProgress :: (app: *InnerBreeze, y: s32) {
+    bar_w := app.ui.view_width - AppScale(96)
+    if bar_w > AppScale(420) {
+        bar_w = AppScale(420)
+    }
+    duration := TaiChiDuration(app.tai_chi)
+    bar: ProgressProps
+    bar.key = KeyHash("inbe/practices/tai_chi/progress")
+    bar.bounds = Rectangle.{cast(float32)((app.ui.view_width - bar_w) / 2), cast(float32)y,
+        cast(float32)bar_w, cast(float32)AppScale(10)}
+    bar.min = 0
+    bar.max = 1000
+    if duration > 0.0 {
+        bar.value = cast(s32)(app.tai_chi.time / duration * 1000.0)
+    }
+    Progress(CurrentApp().ui.session, bar)
+}
+
+#program_export
+tai_chi_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    if app == null {
+        return
+    }
+    if tai_chi_handle_exit_modal(app) != 0 {
+        return
+    }
+    if app.tai_chi.built_item < 0 {
+        TaiChiExitToStart(app)
+        return
+    }
+    title_h := PracticeTitleBarHeight()
+    if PracticeTitleBar(app, TaiChiItemTitle(app.tai_chi.built_item), title_h) {
+        tai_chi_request_exit(app)
+        return
+    }
+    practice_draw_audio_controls(app)
+
+    controls: [3]IconRowAction
+    controls[0] = IconRowAction.{.icon = ActionIcon.IconBack, .disabled = app.tai_chi.time <= 0.0}
+    pause_icon := ActionIcon.IconPause
+    if app.session_paused != 0 {
+        pause_icon = ActionIcon.IconPlay
+    }
+    controls[1] = IconRowAction.{.icon = pause_icon}
+    controls[2] = IconRowAction.{.icon = ActionIcon.IconNext}
+    row := PracticeControlRow(IconRowRequest.{
+        .center_x = center_x,
+        .view_width = app.ui.view_width,
+        .view_height = app.ui.view_height,
+        .count = 3,
+        .items = *controls[0]
+    })
+
+    figure_top := TaiChiDrawCue(app, title_h + AppScale(12)) + AppScale(8)
+    progress_y := row.y - AppScale(22)
+    figure_bottom := progress_y - AppScale(12)
+    TaiChiDrawProgress(app, progress_y)
+    snap := app.tai_chi.time <= 0.0
+    TaiChiDrawFigure(app.ui.session, *app.tai_chi,
+        Rectangle.{cast(float32)AppScale(12), cast(float32)figure_top,
+            cast(float32)(app.ui.view_width - AppScale(24)), cast(float32)(figure_bottom - figure_top)},
+        cast(float64)GetFrameTime(), snap, LocaleText("exercise_tai_chi"))
+
+    if row.clicked_index == {
+        case 0;
+            PracticeNarrationStop()
+            app.tai_chi = TaiChiSeek(app.tai_chi, TaiChiNextStepTime(app.tai_chi, false))
+            return
+        case 1;
+            app.session_paused = ifx app.session_paused != 0 then 0 else 1
+            return
+        case 2;
+            PracticeNarrationStop()
+            app.tai_chi = TaiChiSeek(app.tai_chi, TaiChiNextStepTime(app.tai_chi, true))
+            return
+    }
+
+    PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    if app.session_paused == 0 {
+        TaiChiAdvanceBy(app, cast(float64)GetFrameTime())
+    }
+    unused center_y
+}

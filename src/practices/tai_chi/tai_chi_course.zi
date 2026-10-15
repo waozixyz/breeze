@@ -1,0 +1,454 @@
+// The Tai Chi course as exported by design/tai-chi/tools/export-app.mjs:
+// key poses, the painted characters and the outline of modules, lessons and
+// items. The layout of course.bin is described in that tool.
+#import "binary"
+#import "byte_text_linux"
+#import "zip"
+#import "zip_linux"
+
+c :: #system_library "c";
+TaiChiCourseAlloc :: (size: usize) -> *void #foreign c "malloc";
+TaiChiCourseFree :: (bytes: *void) #foreign c "free";
+
+TAI_CHI_COURSE_PATH :: "assets/practices/taichi/course.zip"
+TAI_CHI_COURSE_BYTES_MAX :: 1048576
+// Body channels, then hand channels, in the timeline's order.
+TAI_CHI_CHANNEL_COUNT :: 49
+TAI_CHI_BODY_CHANNEL_COUNT :: 25
+TAI_CHI_RIG_FIELD_COUNT :: 26
+TAI_CHI_IMAGE_POINT_COUNT :: 16
+TAI_CHI_IMAGE_VALUE_COUNT :: 4
+
+TAI_CHI_KEY_CAPACITY :: 2048
+TAI_CHI_KEY_SET_CAPACITY :: 64
+TAI_CHI_STRING_CAPACITY :: 1024
+TAI_CHI_STRING_BYTES :: 32768
+TAI_CHI_CHARACTER_CAPACITY :: 4
+TAI_CHI_IMAGE_CAPACITY :: 64
+TAI_CHI_MODULE_CAPACITY :: 8
+TAI_CHI_LESSON_CAPACITY :: 32
+TAI_CHI_ITEM_CAPACITY :: 160
+TAI_CHI_MARK_CAPACITY :: 1024
+
+// Item kinds and camera views, as numbered in course.bin.
+TAI_CHI_KIND_DRILL :: 0
+TAI_CHI_KIND_LESSON :: 1
+TAI_CHI_KIND_DEMO :: 2
+TAI_CHI_KIND_BREAKDOWN :: 3
+TAI_CHI_KIND_FOLLOW :: 4
+TAI_CHI_KIND_FULL :: 5
+TAI_CHI_VIEW_FRONT :: 0
+TAI_CHI_VIEW_BEHIND :: 1
+TAI_CHI_SOURCE_FORM :: 0
+TAI_CHI_SOURCE_KEY_SET :: 1
+
+// Where the gaze goes: ahead, a hand, or turned by angles only.
+TAI_CHI_LOOK_AHEAD :: 0
+TAI_CHI_LOOK_LEFT_HAND :: 1
+TAI_CHI_LOOK_RIGHT_HAND :: 2
+TAI_CHI_LOOK_ANGLES :: 3
+
+TaiChiKey :: struct {
+    t: float64
+    cue: s32
+    // Seconds the cue's words need on screen to be read.
+    read: float64
+    look_kind: s32
+    // Degrees, as in the choreography.
+    look_yaw: float64
+    look_pitch: float64
+    channels: [TAI_CHI_CHANNEL_COUNT]float64
+}
+
+TaiChiKeySet :: struct {
+    first: s32
+    count: s32
+}
+
+// A painted part: its picture, size in pixels, named points and values.
+// Points by role (pairs of x, y in pixels): head neck and crown; torso
+// neck, hip and both armholes; limb root and end; hand wrist and fingertip;
+// side shoe heel and toe; other shoes the ankle. Values: anterior,
+// thickness, sign and whether the hand's across direction is the thumb.
+TaiChiImage :: struct {
+    role: s32
+    path: s32
+    width: float64
+    height: float64
+    points: [TAI_CHI_IMAGE_POINT_COUNT]float64
+    values: [TAI_CHI_IMAGE_VALUE_COUNT]float64
+}
+
+TaiChiCharacter :: struct {
+    id: s32
+    name: s32
+    rig: [TAI_CHI_RIG_FIELD_COUNT]float64
+    image_first: s32
+    image_count: s32
+}
+
+TaiChiMark :: struct {
+    title: s32
+    start: float64
+    end: float64
+}
+
+TaiChiItem :: struct {
+    id: s32
+    title: s32
+    version: s32
+    kind: s32
+    view: s32
+    mirror: bool
+    source: s32
+    // Each step's words, slowed until they can be read, rather than the
+    // movement's name.
+    step_words: bool
+    first: s32
+    last: s32
+    scale: float64
+    hold: float64
+    duration: float64
+    mark_first: s32
+    mark_count: s32
+}
+
+TaiChiLesson :: struct {
+    title: s32
+    subtitle: s32
+    summary: s32
+    item_first: s32
+    item_count: s32
+}
+
+TaiChiModule :: struct {
+    title: s32
+    lesson_first: s32
+    lesson_count: s32
+}
+
+TaiChiCourse :: struct {
+    loaded: bool
+    string_starts: [TAI_CHI_STRING_CAPACITY]s32
+    string_lengths: [TAI_CHI_STRING_CAPACITY]s32
+    string_count: s32
+    string_bytes: [TAI_CHI_STRING_BYTES]u8
+    string_bytes_used: s32
+    keys: [TAI_CHI_KEY_CAPACITY]TaiChiKey
+    key_count: s32
+    key_sets: [TAI_CHI_KEY_SET_CAPACITY]TaiChiKeySet
+    key_set_count: s32
+    characters: [TAI_CHI_CHARACTER_CAPACITY]TaiChiCharacter
+    character_count: s32
+    images: [TAI_CHI_IMAGE_CAPACITY]TaiChiImage
+    image_count: s32
+    modules: [TAI_CHI_MODULE_CAPACITY]TaiChiModule
+    module_count: s32
+    lessons: [TAI_CHI_LESSON_CAPACITY]TaiChiLesson
+    lesson_count: s32
+    items: [TAI_CHI_ITEM_CAPACITY]TaiChiItem
+    item_count: s32
+    marks: [TAI_CHI_MARK_CAPACITY]TaiChiMark
+    mark_count: s32
+}
+
+tai_chi_course: TaiChiCourse;
+
+// --- Reading -----------------------------------------------------------------
+
+TaiChiReader :: struct {
+    bytes: string
+    at: s32
+    failed: bool
+}
+
+// Each read moves past its field; reading past the end marks the reader
+// failed.
+TaiChiReaderTake :: (reader: *TaiChiReader, size: s32) -> s32 {
+    at := reader.at
+    if reader.failed || at + size > cast(s32)reader.bytes.count {
+        reader.failed = true
+        return -1
+    }
+    reader.at += size
+    return at
+}
+
+TaiChiReadU8 :: (reader: *TaiChiReader) -> s32 {
+    at := TaiChiReaderTake(reader, 1)
+    if at < 0 {
+        return 0
+    }
+    return cast(s32)reader.bytes[at]
+}
+
+TaiChiReadU16 :: (reader: *TaiChiReader) -> s32 {
+    return cast(s32)ReadU16LE(reader.bytes, TaiChiReaderTake(reader, 2))
+}
+
+TaiChiReadS32 :: (reader: *TaiChiReader) -> s32 {
+    return ReadS32LE(reader.bytes, TaiChiReaderTake(reader, 4))
+}
+
+TaiChiReadF32 :: (reader: *TaiChiReader) -> float64 {
+    return ReadF32LE(reader.bytes, TaiChiReaderTake(reader, 4))
+}
+
+TaiChiReadCount :: (reader: *TaiChiReader, capacity: s32) -> s32 {
+    count := TaiChiReadS32(reader)
+    if count < 0 || count > capacity {
+        reader.failed = true
+        return 0
+    }
+    return count
+}
+
+TaiChiReadStringIndex :: (reader: *TaiChiReader, course: *TaiChiCourse) -> s32 {
+    index := TaiChiReadS32(reader)
+    if index < -1 || index >= course.string_count {
+        reader.failed = true
+        return -1
+    }
+    return index
+}
+
+// --- Loading -------------------------------------------------------------------
+
+TaiChiReadStrings :: (reader: *TaiChiReader, course: *TaiChiCourse) {
+    course.string_count = TaiChiReadCount(reader, TAI_CHI_STRING_CAPACITY)
+    course.string_bytes_used = 0
+    for index: cast(s32)0..course.string_count - 1 {
+        length := TaiChiReadU16(reader)
+        if reader.failed || reader.at + length > cast(s32)reader.bytes.count ||
+        course.string_bytes_used + length > TAI_CHI_STRING_BYTES {
+            reader.failed = true
+            return
+        }
+        course.string_starts[index] = course.string_bytes_used
+        course.string_lengths[index] = length
+        byte: s32 = 0
+        while byte < length {
+            course.string_bytes[course.string_bytes_used + byte] = reader.bytes[reader.at + byte]
+            byte += 1
+        }
+        course.string_bytes_used += length
+        reader.at += length
+    }
+}
+
+TaiChiReadKeySets :: (reader: *TaiChiReader, course: *TaiChiCourse) {
+    course.key_set_count = TaiChiReadCount(reader, TAI_CHI_KEY_SET_CAPACITY)
+    course.key_count = 0
+    for set: cast(s32)0..course.key_set_count - 1 {
+        count := TaiChiReadCount(reader, TAI_CHI_KEY_CAPACITY - course.key_count)
+        if reader.failed || count < 2 {
+            reader.failed = true
+            return
+        }
+        course.key_sets[set].first = course.key_count
+        course.key_sets[set].count = count
+        for index: cast(s32)0..count - 1 {
+            key := *course.keys[course.key_count]
+            key.t = TaiChiReadF32(reader)
+            key.cue = TaiChiReadStringIndex(reader, course)
+            key.read = TaiChiReadF32(reader)
+            key.look_kind = TaiChiReadU8(reader)
+            unused TaiChiReadU8(reader)
+            unused TaiChiReadU8(reader)
+            unused TaiChiReadU8(reader)
+            key.look_yaw = TaiChiReadF32(reader)
+            key.look_pitch = TaiChiReadF32(reader)
+            for channel: cast(s32)0..TAI_CHI_CHANNEL_COUNT - 1 {
+                key.channels[channel] = TaiChiReadF32(reader)
+            }
+            course.key_count += 1
+        }
+    }
+}
+
+TaiChiReadCharacters :: (reader: *TaiChiReader, course: *TaiChiCourse) {
+    course.character_count = TaiChiReadCount(reader, TAI_CHI_CHARACTER_CAPACITY)
+    course.image_count = 0
+    for index: cast(s32)0..course.character_count - 1 {
+        character := *course.characters[index]
+        character.id = TaiChiReadStringIndex(reader, course)
+        character.name = TaiChiReadStringIndex(reader, course)
+        for field: cast(s32)0..TAI_CHI_RIG_FIELD_COUNT - 1 {
+            character.rig[field] = TaiChiReadF32(reader)
+        }
+        count := TaiChiReadCount(reader, TAI_CHI_IMAGE_CAPACITY - course.image_count)
+        character.image_first = course.image_count
+        character.image_count = count
+        for image_index: cast(s32)0..count - 1 {
+            image := *course.images[course.image_count]
+            image.role = TaiChiReadStringIndex(reader, course)
+            image.path = TaiChiReadStringIndex(reader, course)
+            image.width = TaiChiReadF32(reader)
+            image.height = TaiChiReadF32(reader)
+            for point: cast(s32)0..TAI_CHI_IMAGE_POINT_COUNT - 1 {
+                image.points[point] = TaiChiReadF32(reader)
+            }
+            for value: cast(s32)0..TAI_CHI_IMAGE_VALUE_COUNT - 1 {
+                image.values[value] = TaiChiReadF32(reader)
+            }
+            course.image_count += 1
+        }
+    }
+}
+
+TaiChiReadOutline :: (reader: *TaiChiReader, course: *TaiChiCourse) {
+    course.module_count = TaiChiReadCount(reader, TAI_CHI_MODULE_CAPACITY)
+    course.lesson_count = 0
+    course.item_count = 0
+    course.mark_count = 0
+    for module_index: cast(s32)0..course.module_count - 1 {
+        module := *course.modules[module_index]
+        module.title = TaiChiReadStringIndex(reader, course)
+        lessons := TaiChiReadCount(reader, TAI_CHI_LESSON_CAPACITY - course.lesson_count)
+        module.lesson_first = course.lesson_count
+        module.lesson_count = lessons
+        for lesson_index: cast(s32)0..lessons - 1 {
+            lesson := *course.lessons[course.lesson_count]
+            course.lesson_count += 1
+            lesson.title = TaiChiReadStringIndex(reader, course)
+            lesson.subtitle = TaiChiReadStringIndex(reader, course)
+            lesson.summary = TaiChiReadStringIndex(reader, course)
+            items := TaiChiReadCount(reader, TAI_CHI_ITEM_CAPACITY - course.item_count)
+            lesson.item_first = course.item_count
+            lesson.item_count = items
+            for item_index: cast(s32)0..items - 1 {
+                item := *course.items[course.item_count]
+                course.item_count += 1
+                item.id = TaiChiReadStringIndex(reader, course)
+                item.title = TaiChiReadStringIndex(reader, course)
+                item.version = TaiChiReadStringIndex(reader, course)
+                item.kind = TaiChiReadU8(reader)
+                item.view = TaiChiReadU8(reader)
+                item.mirror = TaiChiReadU8(reader) != 0
+                item.source = TaiChiReadU8(reader)
+                item.step_words = TaiChiReadU8(reader) != 0
+                item.first = TaiChiReadS32(reader)
+                item.last = TaiChiReadS32(reader)
+                item.scale = TaiChiReadF32(reader)
+                item.hold = TaiChiReadF32(reader)
+                item.duration = TaiChiReadF32(reader)
+                marks := TaiChiReadCount(reader, TAI_CHI_MARK_CAPACITY - course.mark_count)
+                item.mark_first = course.mark_count
+                item.mark_count = marks
+                for mark_index: cast(s32)0..marks - 1 {
+                    mark := *course.marks[course.mark_count]
+                    course.mark_count += 1
+                    mark.title = TaiChiReadStringIndex(reader, course)
+                    mark.start = TaiChiReadF32(reader)
+                    mark.end = TaiChiReadF32(reader)
+                }
+                if !TaiChiItemSourceValid(course, item) {
+                    reader.failed = true
+                }
+            }
+        }
+    }
+}
+
+TaiChiItemSourceValid :: (course: *TaiChiCourse, item: *TaiChiItem) -> bool {
+    if item.source == TAI_CHI_SOURCE_KEY_SET {
+        return item.first >= 0 && item.first < course.key_set_count
+    }
+    if item.source != TAI_CHI_SOURCE_FORM || course.key_set_count < 1 {
+        return false
+    }
+    return item.first >= 0 && item.last > item.first &&
+    item.last < course.key_sets[0].count &&
+    item.scale > 0.0 && item.hold >= 0.0
+}
+
+// Reads course.bin into `course`. A file that is cut short or does not
+// match the layout leaves the course unloaded.
+#program_export
+TaiChiCourseParse :: (course: *TaiChiCourse, bytes: string) -> bool {
+    course.loaded = false
+    if bytes.count < 4 || bytes[0] != cast(u8)84 || bytes[1] != cast(u8)67 ||
+    bytes[2] != cast(u8)72 || bytes[3] != cast(u8)50 {
+        return false
+    }
+    reader := TaiChiReader.{.bytes = bytes, .at = 4, .failed = false}
+    TaiChiReadStrings(*reader, course)
+    TaiChiReadKeySets(*reader, course)
+    TaiChiReadCharacters(*reader, course)
+    TaiChiReadOutline(*reader, course)
+    if reader.failed || reader.at != cast(s32)bytes.count {
+        return false
+    }
+    course.loaded = true
+    return true
+}
+
+// The package carries an exact, compressed copy of the exported course.
+// Bound the allocation and check the ZIP checksum before parsing its data.
+TaiChiCourseParseArchive :: (course: *TaiChiCourse, bytes: string) -> bool {
+    course.loaded = false
+    if bytes.count == 0 || bytes.count > TAI_CHI_COURSE_BYTES_MAX {
+        return false
+    }
+    compressed := cast(*u8)TaiChiCourseAlloc(cast(usize)bytes.count)
+    if compressed == null {
+        return false
+    }
+    defer {
+        TaiChiCourseFree(cast(*void)compressed)
+    }
+    archive := BytesFromPointer(compressed, cast(u64)bytes.count)
+    index: s64 = 0
+    while index < bytes.count {
+        archive[index] = bytes[index]
+        index += 1
+    }
+    entry := FindZipEntry(archive, "course.bin")
+    if !entry.found || entry.size == 0 || entry.size > TAI_CHI_COURSE_BYTES_MAX {
+        return false
+    }
+    buffer := cast(*u8)TaiChiCourseAlloc(cast(usize)entry.size)
+    if buffer == null {
+        return false
+    }
+    unpacked := BytesFromPointer(buffer, entry.size)
+    valid := ExtractZipEntry(archive, entry, unpacked)
+    if valid {
+        valid = TaiChiCourseParse(course, TextFromBytes(unpacked))
+    }
+    TaiChiCourseFree(cast(*void)buffer)
+    return valid
+}
+
+// --- Lookups -------------------------------------------------------------------
+
+// Text from the loaded course's string table, borrowed from it.
+TaiChiCourseString :: (index: s32) -> string {
+    if index < 0 || index >= tai_chi_course.string_count {
+        return ""
+    }
+    start := tai_chi_course.string_starts[index]
+    return TextFromBytes(tai_chi_course.string_bytes[start:start + tai_chi_course.string_lengths[index]])
+}
+
+TaiChiCourseImage :: (character: s32, role: string) -> s32 {
+    if character < 0 || character >= tai_chi_course.character_count {
+        return -1
+    }
+    entry := tai_chi_course.characters[character]
+    for index: entry.image_first..entry.image_first + entry.image_count - 1 {
+        if TaiChiCourseString(tai_chi_course.images[index].role) == role {
+            return index
+        }
+    }
+    return -1
+}
+
+TaiChiCourseItemIndex :: (id: string) -> s32 {
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        if TaiChiCourseString(tai_chi_course.items[index].id) == id {
+            return index
+        }
+    }
+    return -1
+}
