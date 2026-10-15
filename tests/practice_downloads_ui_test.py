@@ -190,13 +190,22 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         assert 'Available offline' in text and str(whm_kb) + ' KB' in text and 'Remove' in text, text
         assert 'Download size: ' + str(meditation_kb) + ' KB' in text and '1 MB' not in text, text
-        # The first filled action downloads Meditation; nothing is published
-        # to this private display, so the transfer runs or fails.
+        # The first filled action downloads Meditation from the live node, so
+        # the transfer runs, finishes or fails; wait until it settles.
         click_mint(window, 'manager-download')
         _, text = capture(window, 'manager-downloading')
-        assert any(status in text.lower() for status in ('downloading', 'download failed')), text
-        click_word(window, 'manager-remove', 'Remove')
-        _, text = capture(window, 'removed')
+        assert any(status in text.lower() for status in ('downloading', 'download failed', 'available offline')), text
+        deadline = time.monotonic() + 60
+        while 'downloading' in text.lower() and time.monotonic() < deadline:
+            time.sleep(1)
+            _, text = capture(window, 'manager-downloading')
+        assert 'downloading' not in text.lower(), text
+        # Remove every installed practice, the shipped Wim Hof last.
+        for attempt in range(3):
+            if 'Remove' not in text:
+                break
+            click_word(window, 'manager-remove', 'Remove')
+            _, text = capture(window, 'removed')
         assert 'Available offline' not in text and 'Download practice' in text, text
         close_manager(window)
         _, text = capture(window, 'empty')
