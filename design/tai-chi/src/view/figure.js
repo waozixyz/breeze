@@ -4,7 +4,8 @@
 // local frame (see solve.js); `update` copies the solved world transforms.
 
 import {
-    BoxGeometry, Group, Mesh, MeshStandardMaterial, SphereGeometry,
+    BoxGeometry, DataTexture, Group, Mesh, MeshStandardMaterial, MeshToonMaterial, NearestFilter,
+    RedFormat, SphereGeometry,
 } from 'three'
 import { ellipsoid, taperedCapsule } from './parts.js'
 
@@ -99,6 +100,34 @@ export function createFigure(rig, style = 'mannequin', options = {}) {
 
 export function material(figure, color, extra = {}) {
     const made = new MeshStandardMaterial({ color, roughness: 0.75, metalness: 0, ...extra })
+    figure.materials.push(made)
+    return made
+}
+
+// Flat characters are drawn in two tones, like a flat illustration: their
+// colour where the surface faces the light, and one shade where it turns
+// away, with a hard edge between. The stage's flat lighting (see stage.js)
+// makes the lit tone the colour itself.
+// `shade` is how much of the sun the shaded side keeps: cloth turns a clear
+// step darker, skin only a little, so faces never look smudged.
+export const FLAT_SHADE = { cloth: 0.58, skin: 0.8 }
+const flatSteps = new Map()
+
+function flatGradient(shade) {
+    if (!flatSteps.has(shade)) {
+        const value = Math.round(shade * 255)
+        const steps = new DataTexture(new Uint8Array([value, value, value, value, 255, 255, 255, 255]), 8, 1, RedFormat)
+        steps.minFilter = NearestFilter
+        steps.magFilter = NearestFilter
+        steps.generateMipmaps = false
+        steps.needsUpdate = true
+        flatSteps.set(shade, steps)
+    }
+    return flatSteps.get(shade)
+}
+
+export function flatMaterial(figure, color, extra = {}, shade = FLAT_SHADE.cloth) {
+    const made = new MeshToonMaterial({ color, gradientMap: flatGradient(shade), ...extra })
     figure.materials.push(made)
     return made
 }

@@ -6,6 +6,10 @@ import {
     RepeatWrapping, Scene, SRGBColorSpace, Vector3, WebGLRenderer,
 } from 'three'
 
+// Share of the flat characters' light that comes from everywhere; the
+// rest comes from the sun beside the camera.
+const FLAT_AMBIENT = 0.45
+
 export const THEMES = {
     light: {
         background: '#f1ece0',
@@ -96,12 +100,14 @@ export function createStage(canvas, { preserveDrawingBuffer = false } = {}) {
     const overlay = new Group()
     scene.add(overlay)
 
+    const center = new Vector3()
     const stage = {
         renderer,
         scene,
         camera,
         overlay,
         theme: 'light',
+        flat: false,
         setTheme(name) {
             const theme = THEMES[name] ?? THEMES.light
             stage.theme = name
@@ -117,11 +123,27 @@ export function createStage(canvas, { preserveDrawingBuffer = false } = {}) {
             hemi.intensity = theme.hemiIntensity
             sun.color.set(theme.sun)
             sun.intensity = theme.sunIntensity
+            stage.setFlat(stage.flat)
+        },
+        // Flat characters (see figure.js) take their colours unchanged
+        // where they face the light: the sky light is off, and the ambient
+        // and sun add up to π, which cancels Lambert's 1/π. The sun then
+        // shines from beside the camera, so the side you see is lit and
+        // only the edges turning away take the shade.
+        setFlat(flat) {
+            stage.flat = flat
+            const theme = THEMES[stage.theme] ?? THEMES.light
+            hemi.intensity = flat ? 0 : theme.hemiIntensity
+            ambient.intensity = flat ? Math.PI * FLAT_AMBIENT : 0.15
+            sun.intensity = flat ? Math.PI * (1 - FLAT_AMBIENT) : theme.sunIntensity
+            sun.shadow.radius = flat ? 8 : 4
+            sun.shadow.intensity = flat ? 0.45 : 1
         },
         // Keeps the light and its shadow box over the figure.
-        follow(center) {
-            sun.target.position.copy(center).setY(0)
-            sun.position.copy(center).add(new Vector3(2.5, 6, 3.5))
+        follow(point) {
+            center.copy(point)
+            sun.target.position.copy(point).setY(0)
+            sun.position.copy(point).add(new Vector3(2.5, 6, 3.5))
         },
         resize(width, height) {
             renderer.setSize(width, height, false)
@@ -129,6 +151,11 @@ export function createStage(canvas, { preserveDrawingBuffer = false } = {}) {
             camera.updateProjectionMatrix()
         },
         render() {
+            if (stage.flat) {
+                const toCamera = camera.position.clone().sub(center).setY(0).normalize()
+                const right = new Vector3(toCamera.z, 0, -toCamera.x)
+                sun.position.copy(center).addScaledVector(toCamera, 4.5).addScaledVector(right, 2).setY(center.y + 2.6)
+            }
             renderer.render(scene, camera)
         },
     }
