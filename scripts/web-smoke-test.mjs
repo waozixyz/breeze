@@ -144,7 +144,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   const practiceFixture = url.pathname.replace('/__test_practice_content__/', '');
   if (url.pathname.startsWith('/__test_practice_content__/') &&
-      ['whm.zib', 'meditation.zib', 'sunsalutation.zib', 'patterns.zib', 'taichi.zib', 'taichi.en.zib'].includes(practiceFixture)) {
+      ['whm.zib', 'meditation.zib', 'sunsalutation.zib', 'patterns.zib', 'taichi.zib', 'taichi.en.zib', 'taichi.es.zib'].includes(practiceFixture)) {
     const fixture = new URL('../build/practice-content/' + practiceFixture, import.meta.url);
     if (!existsSync(fixture)) {
       res.writeHead(404);
@@ -1723,7 +1723,7 @@ async function verifyRenderingLiveBidi(client, context) {
 async function installPracticeContentFixtures(client) {
   await pageJson(client, `(async () => {
     FS.mkdirTree('/home/inbe/packages');
-    for (const name of ['whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'taichi.en']) {
+    for (const name of ['whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'taichi.en', 'taichi.es']) {
       const response = await fetch('/__test_practice_content__/' + name + '.zib');
       if (!response.ok) throw new Error('Missing practice fixture: ' + name);
       FS.writeFile('/home/inbe/packages/practice-' + name + '.zib', new Uint8Array(await response.arrayBuffer()));
