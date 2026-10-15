@@ -1,5 +1,6 @@
 // Real account keys, authentication and persistence; only HTTP is synthetic.
 #import, file "../src/storage/dew.zi";
+#import, file "../src/storage/practice_unlocks.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/sync_account.zi";
 #import, file "../src/storage/db.zi";
@@ -27,6 +28,7 @@ response_plans: bool = true;
 requests: s32;
 last_body: [256]u8;
 address_requests: s32;
+unlock_requests: s32;
 address_network: string = "mainnet";
 address_asset: string = "waozi:token";
 address_confirmations: s64 = 10;
@@ -88,6 +90,12 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         check_true("address lookup uses authenticated GET", request.method == "GET" && request.body.count == 0)
         return AddressReply(output)
     }
+    // The account bought Tai Chi on another device.
+    if request.url == "https://api.waozi.xyz/api/v1/unlocks" {
+        unlock_requests += 1
+        check_true("unlocks are read with an authenticated GET", request.method == "GET" && request.body.count == 0)
+        return AppCopyText("{\"unlocks\":[{\"product\":\"inbe.practice.taichi\",\"receipt_id\":\"r1\",\"created_at\":1}],\"products\":[{\"product\":\"inbe.practice.taichi\",\"price_units\":1000000,\"regular_price_units\":10000000,\"trial_until\":1807801200}]}", output)
+    }
     check_true("only the storage endpoint is requested", request.url == "https://api.waozi.xyz/api/v1/storage/plan")
     requests += 1
     unused AppCopyText(request.body, last_body[:])
@@ -142,6 +150,25 @@ Check :: () -> s32 {
     check_int("one balance request", requests, 1)
     check_int("balance request authenticated", dew_operation.result, 0)
     check_true("confirmed balance loaded", dew_account.known && dew_account.balance == 1234567)
+    // A purchase made on another device shows here before anything is
+    // downloaded: the account's unlocks are read once after it connects.
+    check_true("Tai Chi not owned before the account is read", !UnlockOwned(UnlockTaiChi))
+    for step: cast(s32)0..79 {
+        UnlockSync()
+        if unlock_requests > 0 && !unlock_operation.active {
+            break
+        }
+    }
+    check_int("the account's unlocks are read once", unlock_requests, 1)
+    unlock_context_second = -1
+    check_true("the account's Tai Chi purchase is recognised", UnlockOwned(UnlockTaiChi))
+    for step: cast(s32)0..9 {
+        UnlockSync()
+    }
+    check_int("no repeated background reads", unlock_requests, 1)
+    UnlockReset()
+    unlock_context_second = -1
+    check_true("the purchase is remembered for the account offline", UnlockOwned(UnlockTaiChi))
     check_true("storage sizes and Dew prices come from the node",
         dew_account.free_bytes == 10485760 &&
         dew_account.plans[0].limit_bytes == 1073741824 && dew_account.plans[0].monthly_units == 200000000 &&

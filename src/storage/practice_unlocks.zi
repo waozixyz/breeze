@@ -9,6 +9,7 @@
 #import, file "storage_core.zi";
 #import, file "sync_async.zi";
 #import, file "dew.zi";
+#import, file "delegate_store.zi";
 #import, file "../platform/network_transport.zi";
 #import, file "../app/text_buffers.zi";
 
@@ -33,6 +34,11 @@ unlock_grant: [512]u8;
 unlock_grant_expires: s64;
 unlock_grant_failed: bool;
 unlock_next_read: s64;
+// Each account's unlocks are read once after it connects, so a purchase made
+// on another device shows before anything is downloaded here.
+unlock_account_read: bool;
+// The account is looked up at most once a second; Practice asks every frame.
+unlock_context_second: s64 = -1;
 unlock_prices_transfer: NetworkTransfer;
 unlock_prices_response: [2048]u8;
 unlock_prices_active: bool;
@@ -48,6 +54,7 @@ UnlockReset :: () {
     unlock_grant_expires = 0
     unlock_grant_failed = false
     unlock_next_read = 0
+    unlock_account_read = false
     unlock_notice = ""
 }
 
@@ -58,7 +65,14 @@ UnlockTrue :: (json: string, at: s32) -> bool {
 
 // The last unlock seen for this account, so an offline device still knows it.
 UnlockContext :: () {
-    if !DewReady() {
+    now := DewNow()
+    if now == unlock_context_second {
+        return
+    }
+    unlock_context_second = now
+    // Ownership stays with the account on this device, even with sync off;
+    // only reading it from the node needs the connection.
+    if StoredAccountMode() != AccountModeOwner {
         if unlock_identity[0] != cast(u8)0 {
             UnlockReset()
         }
@@ -225,6 +239,19 @@ UnlockRefresh :: () {
     if DewReady() && !unlock_operation.active && DewNow() >= unlock_next_read {
         unlock_next_read = DewNow() + 60
         unused UnlockBegin(UnlockRead, "GET", "/api/v1/unlocks", "")
+    }
+}
+
+// Runs every frame outside Google Play: reads a newly connected account's
+// unlocks once and finishes any request in flight.
+UnlockSync :: () {
+    UnlockTick()
+    if unlock_account_read || unlock_operation.active || !DewReady() {
+        return
+    }
+    if UnlockBegin(UnlockRead, "GET", "/api/v1/unlocks", "") {
+        unlock_account_read = true
+        unlock_next_read = DewNow() + 60
     }
 }
 

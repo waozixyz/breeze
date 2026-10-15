@@ -265,6 +265,34 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                              (str(value), user, key))
     shutil.copyfile(ROOT / 'build/practice-content/taichi.zib', cache / 'practice-taichi.zib')
     shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zib', cache / 'practice-taichi.en.zib')
+    # A Tai Chi pack on the device without an account that bought it stays
+    # locked: off the home, offered at its price with its size.
+    process, window = launch(profile, 'taichi-unowned', 1280, 900)
+    try:
+        _, text = capture(window, 'taichi-unowned')
+        assert 'Tai Chi' not in text and 'Start' in text, text
+        click_word(window, 'taichi-unowned-open', 'Manage')
+        time.sleep(1)
+        command('xdotool', 'mousemove', '--window', window, '640', '450')
+        command('xdotool', 'click', '--repeat', '16', '--delay', '80', '5')
+        time.sleep(.5)
+        _, text = capture(window, 'taichi-unowned-manager')
+        assert 'Tai Chi' in text and 'Dew' in text and 'Download size' in text, text
+        assert 'Narration ready offline' not in text, text
+    finally:
+        stop(process)
+    # The account's purchase, remembered on this device; sync stays off, so
+    # nothing reaches a node.
+    account = 'a' * 64
+    with sqlite3.connect(profile / 'inbe.db') as database:
+        for key, value in {'sync_public_id': account, 'sync_public_key': 'fixture-public',
+                           'sync_private_key': 'fixture-private', 'sync_enabled': 0}.items():
+            database.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,?) '
+                             'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value',
+                             (user, key, str(value), int(time.time())))
+        database.execute('INSERT OR REPLACE INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,?)',
+                         (user, 'practice.unlocks', '{"account_id":"' + account + '","taichi":true}',
+                          int(time.time())))
     for name, width, height in [('taichi-ready', 390, 844), ('taichi-narrow', 320, 640),
                                 ('desktop-manager', 1280, 900)]:
         process, window = launch(profile, name, width, height)
