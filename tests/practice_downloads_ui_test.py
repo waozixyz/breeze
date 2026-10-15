@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from PIL import Image
+from PIL import Image, ImageOps
 
 assert int(os.environ.get('DISPLAY', ':0').split(':')[-1].split('.')[0]) >= 300
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,10 +64,19 @@ def capture(window, name):
         for y in range(picture.height // 2, picture.height):
             mint = sum(1 for x in range(picture.width)
                        if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30 and 130 < c[2] < 220)(rgb.getpixel((x, y))))
-            if mint > picture.width // 2:
+            if mint > picture.width // 3:
                 rows.append(y)
         if rows:
-            button = picture.crop((0, max(0, rows[0] - 3), picture.width, min(picture.height, rows[-1] + 4)))
+            for index in range(len(rows) - 1, 0, -1):
+                if rows[index] - rows[index - 1] > 12:
+                    rows = rows[index:]
+                    break
+            middle = (rows[0] + rows[-1]) // 2
+            columns = [x for x in range(picture.width)
+                       if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
+                           and 130 < c[2] < 220)(rgb.getpixel((x, middle)))]
+            button = picture.crop((columns[0] + 3, rows[0] + 3, columns[-1] - 2, rows[-1] - 2))
+            button = ImageOps.grayscale(button).point(lambda value: 255 if value > 120 else 0)
             button = button.resize((button.width * 3, button.height * 3))
             button_path = output / (name + '-action.png')
             button.save(button_path)
@@ -95,6 +104,10 @@ def click_word(window, name, target):
                            if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
                                and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 3]
             assert rows, 'Action button not found: ' + target
+            for index in range(len(rows) - 1, 0, -1):
+                if rows[index] - rows[index - 1] > 12:
+                    rows = rows[index:]
+                    break
             x = picture.width * 3 // 4
             y = (rows[0] + rows[-1]) // 2
     command('xdotool', 'mousemove', '--window', window, str(x), str(y))
@@ -127,8 +140,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             click_word(window, 'manual-page-' + str(page), 'Next')
         click_word(window, 'manual-finish', 'Start')
         _, text = capture(window, 'manual-needs-download')
-        assert 'How to' in text and any(action in text for action in
-            ('Download practice', 'Cancel download', 'Retry download')), text
+        assert 'How to' in text and any(action in text.lower() for action in
+            ('download practice', 'cancel', 'retry download')), text
+        assert any(status in text.lower() for status in ('downloading', 'download failed')), text
     finally:
         stop(process)
     catalog = json.loads((ROOT / 'build/package-assets/practices/assets/practices/catalog.json').read_text())
