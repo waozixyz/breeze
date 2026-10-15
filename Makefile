@@ -3238,7 +3238,7 @@ practice-downloads-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
 practice-downloads-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
-		xvfb-run -a -n 900 -s '-screen 0 1000x1000x24 -nolisten tcp' \
+		xvfb-run -a -n 900 -s '-screen 0 1600x1000x24 -nolisten tcp' \
 		python3 tests/practice_downloads_ui_test.py $(abspath $(TARGET))
 
 test: practice-downloads-test
