@@ -1,0 +1,119 @@
+// The voice narration switch in a practice's Customize, with the voice and
+// its download while narration is on. Spoken guidance comes in the app
+// language's own pack, in the chosen voice, downloaded with the practice or
+// here after the voice or language changes.
+#import, file "../core/types.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_settings.zi";
+#import "session"
+#import "layout"
+#import "tree"
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import "geometry"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "text_props"
+#import "text_widget"
+#import "text_align"
+#import "toggle_props"
+#import "toggle_widget"
+#import "segmented_control_widget"
+#import "segmented_control_props"
+#import, file "../app/lumi_guide.zi";
+#import, file "practice_downloads.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+using TextAlign;
+
+PracticeNarrationStatus :: (voice: s32) -> string {
+    return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
+        ifx voice == 2 then "practice_voice_ready" else
+        ifx voice == 3 then "practice_download_failed" else
+        ifx voice == 1 then "practice_voice_busy" else "")
+}
+
+PracticeNarrationSettingsHeight :: (app: *InnerBreeze) -> s32 {
+    height := AppScale(36 + 56)
+    if app.voice_narration_enabled != 0 {
+        height += AppScale(42 + 12 + 44 + 16)
+    }
+    return height
+}
+
+// Returns the voice picked now (0 the default voice, 1 male), else -1.
+PracticeNarrationSettings :: (app: *InnerBreeze, practice: s32, male: bool,
+    x: s32, width: s32, y: *s32) -> s32 {
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)width, cast(float32)AppScale(28)},
+            .text = LocaleText("voice_narration_label")})
+    y.* += AppScale(36)
+    narration := Toggle(app.ui.session, ToggleProps.{
+            .id = 15422,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)width, cast(float32)AppScale(44)},
+            .value = app.voice_narration_enabled != 0,
+            .off_label = LocaleText("toggle_off"),
+            .on_label = LocaleText("toggle_on")})
+    if narration.changed {
+        app.voice_narration_enabled = ifx narration.value then 1 else 0
+        if !narration.value {
+            LumiGuideSilence()
+        }
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y.* += AppScale(56)
+    if app.voice_narration_enabled == 0 {
+        return -1
+    }
+    PracticeContentReviewNext()
+    picked: s32 = -1
+    options: [2]SegmentOption = .[SegmentOption.{.label = LocaleText("practice_voice_female")},
+    SegmentOption.{.label = LocaleText("practice_voice_male")}]
+    props: SegmentedControlProps
+    props.key = KeyHash("inbe/practice/customize/voice") + cast(u64)practice
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(42)}
+    props.height = AppScale(42)
+    props.selected_index = ifx male then 1 else 0
+    props.has_selection = true
+    choice := SegmentedControl(app.ui.session, props, options[:])
+    if choice.changed {
+        picked = choice.selected_index
+        male = choice.selected_index == 1
+    }
+    y.* += AppScale(42 + 12)
+    // The male recording may not exist in every language yet.
+    available := !male || PracticeVoiceAvailable(practice, LocaleActiveCode(), "male")
+    voice := ifx available then PracticeVoiceStatus(practice) else -1
+    button_w := AppScale(180)
+    if button_w > width / 2 {
+        button_w = width / 2
+    }
+    actionable := PracticeContentStatus(practice) == 2 && (voice == 0 || voice == 1 || voice == 3)
+    status_w := ifx actionable then width - button_w - AppScale(12) else width
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)status_w, cast(float32)AppScale(44)},
+            .text = PracticeNarrationStatus(voice), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    if actionable && Button(app.ui.session, ButtonProps.{
+            .id = 15423,
+            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)y.*,
+                cast(float32)button_w, cast(float32)AppScale(44)},
+            .label = LocaleText(ifx voice == 1 then "cancel_button" else
+            ifx voice == 3 then "practice_voice_retry" else "practice_voice_download"),
+            .disabled = voice != 1 && !PracticePackReviewed(practice, LocaleActiveCode()),
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        if voice == 1 {
+            PracticeContentCancel(practice)
+        } else {
+            PracticeContentRequest(practice, true)
+        }
+    }
+    y.* += AppScale(44 + 16)
+    return picked
+}

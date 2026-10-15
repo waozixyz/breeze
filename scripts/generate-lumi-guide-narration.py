@@ -359,7 +359,7 @@ def main():
     parser.add_argument("--regenerate", action="store_true",
         help="speak the selected lines again even when they are current")
     parser.add_argument("--jobs", type=int, default=6)
-    parser.add_argument("--practice", choices=("taichi", "taichi_male"),
+    parser.add_argument("--practice", choices=tuple(json.loads((ROOT / "apps/practice/content.json").read_text())["narration"]),
         help="generate a practice's separate language packs with the same verified speech pipeline")
     args = parser.parse_args()
     if args.practice:

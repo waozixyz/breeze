@@ -39,6 +39,7 @@
 #import, file "../meditation/meditation_music.zi";
 #import, file "../../app/exercise_types.zi";
 #import, file "../practice_downloads.zi";
+#import, file "../practice_voice_settings.zi";
 
 using ModalType;
 using ButtonTone;
@@ -293,75 +294,6 @@ TaiChiCharacterBody :: (app: *InnerBreeze, bounds: Rectangle) {
     }
 }
 
-TaiChiNarrationStatus :: (voice: s32) -> string {
-    return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
-        ifx voice == 2 then "practice_voice_ready" else
-        ifx voice == 3 then "practice_download_failed" else
-        ifx voice == 1 then "practice_voice_busy" else "")
-}
-
-// Spoken guidance comes in the app language's own pack, in the chosen voice,
-// downloaded with Tai Chi or here after the voice or language changes.
-TaiChiNarrationHeight :: (app: *InnerBreeze, width: s32) -> s32 {
-    unused width
-    if app.voice_narration_enabled == 0 {
-        return 0
-    }
-    return AppScale(42 + 12 + 44 + 16)
-}
-
-TaiChiNarration :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
-    if app.voice_narration_enabled == 0 {
-        return
-    }
-    PracticeContentReviewNext()
-    male := TaiChiMaleVoice(app.tai_chi)
-    options: [2]SegmentOption = .[SegmentOption.{.label = LocaleText("tai_chi_voice_female")},
-    SegmentOption.{.label = LocaleText("tai_chi_voice_male")}]
-    props: SegmentedControlProps
-    props.key = KeyHash("inbe/tai_chi/customize/voice")
-    props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(42)}
-    props.height = AppScale(42)
-    props.selected_index = ifx male then 1 else 0
-    props.has_selection = true
-    choice := SegmentedControl(app.ui.session, props, options[:])
-    if choice.changed {
-        app.tai_chi.voice = choice.selected_index
-        app.settings_dirty = 1
-        save_settings(app)
-        male = choice.selected_index == 1
-    }
-    y.* += AppScale(42 + 12)
-    // The male recording may not exist in every language yet.
-    available := !male || PracticeVoiceAvailable(EXERCISE_TAI_CHI, LocaleActiveCode(), "male")
-    voice := ifx available then PracticeVoiceStatus(EXERCISE_TAI_CHI) else -1
-    button_w := AppScale(180)
-    if button_w > width / 2 {
-        button_w = width / 2
-    }
-    actionable := PracticeContentStatus(EXERCISE_TAI_CHI) == 2 && (voice == 0 || voice == 1 || voice == 3)
-    status_w := ifx actionable then width - button_w - AppScale(12) else width
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)status_w, cast(float32)AppScale(44)},
-            .text = TaiChiNarrationStatus(voice), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
-            .vertical_align = cast(TextAlign)TextAlignCenter})
-    if actionable && Button(app.ui.session, ButtonProps.{
-            .id = 15423,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)y.*,
-                cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText(ifx voice == 1 then "cancel_button" else
-            ifx voice == 3 then "practice_voice_retry" else "practice_voice_download"),
-            .disabled = voice != 1 && !PracticePackReviewed(EXERCISE_TAI_CHI, LocaleActiveCode()),
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        if voice == 1 {
-            PracticeContentCancel(EXERCISE_TAI_CHI)
-        } else {
-            PracticeContentRequest(EXERCISE_TAI_CHI, true)
-        }
-    }
-    y.* += AppScale(44 + 16)
-}
-
 TaiChiAudioSettings :: (app: *InnerBreeze, x: s32, width: s32, top: s32) {
     y := top
     meditation_music_draw_practice_settings(app, EXERCISE_TAI_CHI,
@@ -391,28 +323,13 @@ TaiChiAudioSettings :: (app: *InnerBreeze, x: s32, width: s32, top: s32) {
         save_settings(app)
     }
     y += AppScale(74)
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)width, cast(float32)AppScale(28)},
-            .text = LocaleText("voice_narration_label")})
-    y += AppScale(36)
-    narration := Toggle(app.ui.session, ToggleProps.{
-            .id = 15422,
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)width, cast(float32)AppScale(44)},
-            .value = app.voice_narration_enabled != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if narration.changed {
-        app.voice_narration_enabled = ifx narration.value then 1 else 0
-        if !narration.value {
-            LumiGuideSilence()
-        }
+    voice := PracticeNarrationSettings(app, EXERCISE_TAI_CHI, TaiChiMaleVoice(app.tai_chi),
+        x, width, *y)
+    if voice >= 0 {
+        app.tai_chi.voice = voice
         app.settings_dirty = 1
         save_settings(app)
     }
-    y += AppScale(56)
-    TaiChiNarration(app, x, width, *y)
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y,
                 cast(float32)width,
@@ -432,9 +349,9 @@ TaiChiCustomizeBody :: (app: *InnerBreeze, bounds: Rectangle) {
         audio_w -= character_w + gap
     }
     audio_h := meditation_music_measure_practice_settings(app,
-        EXERCISE_TAI_CHI, audio_w, 0, 1) + AppScale(12 + 74 * 2 + 92) +
+        EXERCISE_TAI_CHI, audio_w, 0, 1) + AppScale(12 + 74 * 2) +
     AppParagraphHeight(LocaleText("tai_chi_narration_hint"), audio_w,
-        AppFontSize(), AppScale(3)) + TaiChiNarrationHeight(app, audio_w)
+        AppFontSize(), AppScale(3)) + PracticeNarrationSettingsHeight(app)
     title := LocaleText("tai_chi_character_label")
     title_h := SectionTitleHeight(title, character_w)
     character_h := title_h + AppScale(12 + 280)
