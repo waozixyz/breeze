@@ -265,6 +265,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                              (str(value), user, key))
     shutil.copyfile(ROOT / 'build/practice-content/taichi.zib', cache / 'practice-taichi.zib')
     shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zib', cache / 'practice-taichi.en.zib')
+    shutil.copyfile(ROOT / 'build/practice-content/taichi.en.male.zib', cache / 'practice-taichi.en.male.zib')
     # A Tai Chi pack on the device without an account that bought it stays
     # locked: off the home, offered at its price with its size.
     process, window = launch(profile, 'taichi-unowned', 1280, 900)
@@ -318,7 +319,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                 click_word(window, name + '-customize', 'Customize')
                 time.sleep(1)
                 _, text = capture(window, name + '-customize-open')
-                assert 'Narration language: English' in text and 'Narration ready offline' in text, text
+                # The monk speaks with the male voice; both recordings are here.
+                assert 'Female voice' in text and 'Male voice' in text, text
+                assert 'Narration ready offline' in text and 'Narration language' not in text, text
         finally:
             stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '

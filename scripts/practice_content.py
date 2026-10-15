@@ -152,18 +152,20 @@ def catalog_from_bundle(data):
     for pack in packs:
         practice = pack.get('practice')
         language = pack.get('language')
+        voice = pack.get('voice', '')
         digest = pack.get('sha256')
         size = pack.get('size')
         if (practice not in NAMES or not isinstance(language, str) or
+                voice not in ('', 'male') or (voice and not language) or
                 (language and (len(language) != 2 or not language.isascii() or not language.islower())) or
                 not isinstance(digest, str) or len(digest) != 64 or
                 any(c not in '0123456789abcdef' for c in digest) or
                 type(size) is not int or not 8 <= size <= MAXIMUM or
-                (practice, language) in seen or
+                (practice, language, voice) in seen or
                 not isinstance(pack.get('product', ''), str)):
             raise ValueError('invalid or duplicate practice pack')
-        seen.add((practice, language))
-    if {(name, '') for name in NAMES} - seen:
+        seen.add((practice, language, voice))
+    if {(name, '', '') for name in NAMES} - seen:
         raise ValueError('practice catalog lacks base content')
     return packs
 
@@ -184,17 +186,22 @@ def prepare(compiler):
         directories += sorted((ROOT / 'build/package-assets').glob('practice-' + practice + '-voice-*'))
         for directory in directories:
             language = directory.name.split('-voice-', 1)[1] if '-voice-' in directory.name else ''
+            # practice-taichi-voice-en-male holds the male recording.
+            language, _, voice = language.partition('-')
             assets = directory / 'assets'
-            if language and not narration_current(configuration, practice, language, assets):
-                print(f'{practice}/{language}: incomplete narration excluded from the catalog')
+            if language and not narration_current(configuration, practice, language, assets, voice):
+                print(f'{practice}/{language}{"/" + voice if voice else ""}: incomplete narration excluded from the catalog')
                 continue
             assets.mkdir(parents=True, exist_ok=True)
             # Even timer-only practices have a versioned content identity.
-            identity = assets / 'practices' / practice / ('voice/' + language if language else '') / 'pack.json'
+            folder = ('voice-male/' if voice else 'voice/') + language if language else ''
+            identity = assets / 'practices' / practice / folder / 'pack.json'
             identity.parent.mkdir(parents=True, exist_ok=True)
-            identity.write_text(json.dumps(dict(schema=1, practice=practice, language=language),
-                                           separators=(',', ':')) + '\n')
-            path = output / (practice + ('.' + language if language else '') + '.zib')
+            fields = dict(schema=1, practice=practice, language=language)
+            if voice:
+                fields['voice'] = voice
+            identity.write_text(json.dumps(fields, separators=(',', ':')) + '\n')
+            path = output / (practice + ('.' + language if language else '') + ('.' + voice if voice else '') + '.zib')
             subprocess.run([str(compiler), 'bundle', '--root', str(ROOT),
                 '--entry', 'content:Main', '--asset-dir', 'assets=' + str(assets),
                 '-o', str(path), str(ROOT / 'apps/practice/content.zi')], check=True)
@@ -203,6 +210,8 @@ def prepare(compiler):
                 raise ValueError('practice pack exceeds its size budget')
             pack = dict(practice=practice, language=language,
                         sha256=sha256(data).hexdigest(), size=len(data))
+            if voice:
+                pack['voice'] = voice
             # Paid practices name their unlock; the node gates their packs.
             if practice in configuration['products']:
                 pack['product'] = configuration['products'][practice]
@@ -220,10 +229,11 @@ def prepare(compiler):
     print(f'Prepared {len(packs)} separate practice content packs')
 
 
-def narration_current(configuration, practice, language, assets=None):
+def narration_current(configuration, practice, language, assets=None, voice=''):
     """Partial or stale recordings never become an advertised language pack."""
     import importlib.util
-    settings = configuration['narration'].get(practice)
+    settings = configuration['narration'].get(practice + ('_' + voice if voice else ''))
+    folder = 'voice-male' if voice else 'voice'
     if not settings:
         return False
     receipt_path = ROOT / settings['receipt']
@@ -241,14 +251,14 @@ def narration_current(configuration, practice, language, assets=None):
         if not speech.current(receipt, config, language, key, text):
             return False
         if assets is not None:
-            staged = assets / 'practices' / practice / 'voice' / language / (key + '.ogg')
+            staged = assets / 'practices' / practice / folder / language / (key + '.ogg')
             if not staged.is_file() or sha256(staged.read_bytes()).hexdigest() != receipt['clips'][language + '/' + key]['sha256']:
                 return False
     # Package only actual spoken cues, excluding unused labels and partial files.
     if assets is not None:
-        voice = assets / 'practices' / practice / 'voice' / language
+        recordings = assets / 'practices' / practice / folder / language
         wanted = {key + '.ogg' for key in keys} | {'pack.json'}
-        for path in voice.iterdir():
+        for path in recordings.iterdir():
             if path.is_file() and path.name not in wanted:
                 path.unlink()
     return True

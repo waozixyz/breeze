@@ -355,7 +355,7 @@ def main():
     parser.add_argument("--regenerate", action="store_true",
         help="speak the selected lines again even when they are current")
     parser.add_argument("--jobs", type=int, default=6)
-    parser.add_argument("--practice", choices=("taichi",),
+    parser.add_argument("--practice", choices=("taichi", "taichi_male"),
         help="generate a practice's separate language packs with the same verified speech pipeline")
     args = parser.parse_args()
     if args.practice:
@@ -368,7 +368,7 @@ def main():
         import fcntl
         lock_directory = ROOT / 'backup/narration'
         lock_directory.mkdir(parents=True, exist_ok=True)
-        generation_lock = (lock_directory / (CONFIG.parent.name + '.lock')).open('a')
+        generation_lock = (lock_directory / (CONFIG.stem + '.lock')).open('a')
         try:
             fcntl.flock(generation_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
