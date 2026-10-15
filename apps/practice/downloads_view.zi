@@ -74,35 +74,55 @@ PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
         left += regular_w + AppScale(12)
     }
     strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)price.count}]
+    price_w := AppTextWidth(price, font)
     Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)(x + width - left), cast(float32)height},
+            .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)price_w, cast(float32)height},
             .text = price, .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap = cast(TextWrap)TextWrapNone, .strong = strong[:]})
+    if UnlockOffer() {
+        left += price_w + AppScale(12)
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)(x + width - left), cast(float32)height},
+                .text = LocaleText("practice_unlock_offer"), .font = AppSmallFontSize(),
+                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone, .disabled = true})
+    }
+}
+
+// Narration downloads with its practice, so it counts in the size; small
+// packs show kilobytes instead of a rounded-up megabyte.
+PracticeDownloadSizeText :: (app: *InnerBreeze, practice: s32, output: []u8) {
+    bytes := PracticeContentBytes(practice)
+    if app.voice_narration_enabled != 0 && PracticeVoiceStatus(practice) >= 0 {
+        bytes += PracticeVoiceBytes(practice)
+    }
+    small := bytes < 1024 * 1024
+    text := LocaleText(ifx PracticeContentStatus(practice) == 2 then (ifx small then "practice_download_ready_kb" else "practice_download_ready") else
+        ifx small then "practice_download_size_kb" else "practice_download_size")
+    amount := ifx small then (bytes + 1023) / 1024 else (bytes + 512 * 1024) / (1024 * 1024)
+    args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
+    unused FormatTemplate(text, args[:], output)
 }
 
 PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
+    buffer: [256]u8
     if PracticeDownloadLocked(practice) {
+        // A locked practice shows its size too, under any notice about unlocking.
+        notice := ""
         if !DewReady() {
-            return LocaleText("practice_unlock_account")
+            notice = LocaleText("practice_unlock_account")
+        } else if UnlockBuying() {
+            notice = LocaleText("practice_unlock_busy")
+        } else if unlock_notice.count > 0 {
+            notice = LocaleText(unlock_notice)
         }
-        if UnlockBuying() {
-            return LocaleText("practice_unlock_busy")
+        if notice.count > 0 {
+            unused AppCopyText(notice, buffer[:])
+            unused AppAppendText("\n", buffer[:])
         }
-        if unlock_notice.count > 0 {
-            return LocaleText(unlock_notice)
-        }
-        if UnlockOffer() {
-            price: [32]u8
-            regular: [32]u8
-            unused DewFormat(unlock_price, DewUnits, price[:])
-            unused DewFormat(unlock_regular_price, DewUnits, regular[:])
-            args: [2]FormatArg = .[FormatArg.{.text = TextUntilNul(price[:]), .is_text = true},
-            FormatArg.{.text = TextUntilNul(regular[:]), .is_text = true}]
-            buffer: [256]u8
-            unused FormatTemplate(LocaleText("practice_unlock_offer"), args[:], buffer[:])
-            return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
-        }
-        return PracticeDownloadPriceText(app, "practice_unlock_status")
+        size: [128]u8
+        PracticeDownloadSizeText(app, practice, size[:])
+        unused AppAppendText(TextUntilNul(size[:]), buffer[:])
+        return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
     }
     if PracticePackFind(practice, "") < 0 && PracticeContentReady(practice) {
         return LocaleText("practice_download_included")
@@ -111,19 +131,7 @@ PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
     if status == 1 || status == 3 {
         return LocaleText(ifx status == 3 then "practice_download_failed" else "practice_download_busy")
     }
-    // Narration downloads with its practice, so it counts in the size.
-    bytes := PracticeContentBytes(practice)
-    if app.voice_narration_enabled != 0 && PracticeVoiceStatus(practice) >= 0 {
-        bytes += PracticeVoiceBytes(practice)
-    }
-    // Small packs show kilobytes instead of a rounded-up megabyte.
-    small := bytes < 1024 * 1024
-    text := LocaleText(ifx status == 2 then (ifx small then "practice_download_ready_kb" else "practice_download_ready") else
-        ifx small then "practice_download_size_kb" else "practice_download_size")
-    amount := ifx small then (bytes + 1023) / 1024 else (bytes + 512 * 1024) / (1024 * 1024)
-    buffer: [256]u8
-    args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
-    unused FormatTemplate(text, args[:], buffer[:])
+    PracticeDownloadSizeText(app, practice, buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
