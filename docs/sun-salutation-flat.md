@@ -9,10 +9,10 @@ painted animation; only the drawing differs.
 
 ```sh
 python3 scripts/render-sun-salutation-flat.py                          # first character's video
-python3 scripts/render-sun-salutation-flat.py --character sage-bun     # one character
+python3 scripts/render-sun-salutation-flat.py --character indigo-crop  # one character
 python3 scripts/render-sun-salutation-flat.py --all                    # every character
 python3 scripts/render-sun-salutation-flat.py --grid                   # all side by side, numbered
-python3 scripts/render-sun-salutation-flat.py --character sage-bun --still 25.5
+python3 scripts/render-sun-salutation-flat.py --character indigo-crop --still 25.5
 ```
 
 Videos go straight into `build/sun-salutation-flat/` as `<id>.mp4` and
@@ -23,7 +23,8 @@ libx264, and the girl renderer's NumPy and Pillow for its import.
 
 ## Characters
 
-`docs/sun-salutation-flat.json` lists the characters. Each picks a torso,
+`docs/sun-salutation-flat.json` lists the characters: Jade bun for women
+and Indigo crop for men (owner's choice, 2026-10-15). Each picks a torso,
 legs, sleeves, face and hair by name and gives its colours: skin, hair, top,
 pants, the sleeve cuff and the small light orange accent (hair ties). Far
 limbs, shades and hair highlights are derived from those colours.
@@ -31,13 +32,13 @@ limbs, shades and hair highlights are derived from those colours.
 The shapes behind those names are tables in the script:
 
 - `TORSOS`: the top's outline along the spine, its hem band, the seat and
-  the neck base (`tunic`, `tunicMale`, `fitted`, `male`).
+  the neck base (`tunic`, `male`).
 - `LEGS` and `SLEEVES`: limb radii, where trousers and sleeves end and their
-  bands (`loose`, `leggings`, `trousers`; `bell`, `fitted` and male widths).
+  bands (`loose`, `trousers`; `bell`, `fitted`).
 - `FACES`: the profile, scale, neck, blush, brow and mouth (`female`, `male`).
 - `HAIRS`: the cap, an optional bun and an optional hanging strand that
-  swings with the hair simulation (`bunLong`, `ponytail`, `bun`, `crop`,
-  `short`). Men use short styles without swinging hair.
+  swings with the hair simulation (`bunLong`, `crop`). Men have short hair
+  that never swings: no ponytails or buns.
 
 Limbs are hulls of circles along their bones, and parts of one colour fill as
 one shape, so joints never show seams. Feet solve their own floor contact:
