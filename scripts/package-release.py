@@ -22,6 +22,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+from practice_content import catalog_from_bundle, bundle_assets
 NAMES = ("habits", "practices", "lumi", "lists", "diary", "leaderboard", "inbe")
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}\Z")
 VERSION = re.compile(r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\Z")
@@ -101,6 +103,17 @@ def stage(store, key_path, key_id, publishers_path=None):
         releases[name] = value
         payloads[name] = data
     store.mkdir(parents=True, exist_ok=True)
+    content_payloads = []
+    for pack in catalog_from_bundle(payloads['practices']):
+        filename = pack['practice'] + ('.' + pack['language'] if pack['language'] else '') + '.zib'
+        data = (ROOT / 'build/practice-content' / filename).read_bytes()
+        if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
+            raise ValueError('practice content differs from its signed catalog')
+        value = dict(releases['practices'])
+        value['data_schema'] = 1
+        value['artifacts'] = [dict(variant='module', sha256=pack['sha256'], size=len(data))]
+        value['signature'] = key.sign(signing_message(value)).hex()
+        content_payloads.append((pack['sha256'], data, value))
     # Validate all old pointers before publishing any new one. Use the same
     # per-app lock name as Daochi's staging tool.
     with ExitStack() as stack:
@@ -125,6 +138,15 @@ def stage(store, key_path, key_id, publishers_path=None):
                 raise ValueError("immutable payload does not match its hash")
             if archive.exists() and archive.read_bytes() != encoded:
                 raise ValueError("release sequence is already occupied")
+        # Content is installed before the harness advertises its hashes.
+        for digest, data, value in content_payloads:
+            directory = store / 'inbe.practices'
+            payload = directory / (digest + '.zib')
+            if payload.exists() and payload.read_bytes() != data:
+                raise ValueError('immutable practice payload differs')
+            atomic_write(payload, data)
+            atomic_write(directory / (digest + '.zib.release-v2.json'),
+                         (json.dumps(value, separators=(',', ':')) + '\n').encode())
         for name in NAMES:
             value = releases[name]
             directory = store / value["app_id"]
@@ -151,6 +173,13 @@ def rollout_value(percent, hours):
     return dict(percent=percent, hours=hours)
 
 
+def stored_practice_packs(store):
+    directory = store / 'inbe.practices'
+    value = json.loads((directory / 'latest-v2.json').read_bytes())
+    data = (directory / (value['artifacts'][0]['sha256'] + '.zib')).read_bytes()
+    return catalog_from_bundle(data)
+
+
 def publish(store, target, remote_store, rollout=None):
     if not re.fullmatch(r"[a-zA-Z0-9_.@-]+", target) or target.startswith("-"):
         raise ValueError("invalid SSH target")
@@ -171,6 +200,10 @@ def publish(store, target, remote_store, rollout=None):
                 for filename in ("latest-v2.json", payload, payload + ".release-v2.json",
                                  f"release-{value['sequence']}.json"):
                     path = directory / filename
+                    tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
+            for pack in stored_practice_packs(store):
+                for suffix in ('.zib', '.zib.release-v2.json'):
+                    path = store / 'inbe.practices' / (pack['sha256'] + suffix)
                     tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
             if rollout is not None:
                 encoded = json.dumps(rollout_value(rollout["percent"], rollout["hours"])).encode()
@@ -226,7 +259,22 @@ def verify_origin(store, origin, open_url=open_public_url):
                 checksum.update(block)
         if size != artifact["size"] or checksum.hexdigest() != digest:
             raise ValueError(f"{app_id}: public package hash or size differs from the signed publication")
-    print("Verified public signed metadata and package bytes for the root and all six cells")
+    for pack in stored_practice_packs(store):
+        route = origin + '/api/v2/packages/inbe.practices/' + pack['sha256'] + '.zib'
+        checksum = sha256()
+        size = 0
+        with open_url(route, timeout=30) as response:
+            while True:
+                block = response.read(65536)
+                if not block:
+                    break
+                size += len(block)
+                if size > pack['size']:
+                    raise ValueError('public practice content exceeds its catalog size')
+                checksum.update(block)
+        if size != pack['size'] or checksum.hexdigest() != pack['sha256']:
+            raise ValueError('public practice content differs from its signed catalog')
+    print("Verified public signed metadata, app packages and practice content")
 
 
 def version_tuple(value):
@@ -338,7 +386,7 @@ def import_archive(archive, store, publishers_path=None):
             if member.name in entries:
                 raise ValueError("duplicate archive member")
             total += member.size
-            if len(entries) >= 28 or total > 7 * 64 * 1024 * 1024 + 1024 * 1024:
+            if len(entries) >= 158 or total > 1024 * 1024 * 1024:
                 raise ValueError("archive exceeds the release size limit")
             entries[member.name] = tar.extractfile(member).read()
     # The node accepts archives built before and after Leaderboard became an
@@ -377,12 +425,40 @@ def import_archive(archive, store, publishers_path=None):
                 raise ValueError("release sequence is already occupied")
             releases[app_id] = (value, encoded, data, old != value)
         root = releases["inbe"]
+        content_payloads = []
+        expected_entries = set()
+        for app_id, (value, encoded, data, _) in releases.items():
+            digest = value['artifacts'][0]['sha256']
+            expected_entries.update((f'{app_id}/latest-v2.json', f'{app_id}/{digest}.zib',
+                f'{app_id}/{digest}.zib.release-v2.json', f"{app_id}/release-{value['sequence']}.json"))
+        for pack in catalog_from_bundle(releases['inbe.practices'][2]):
+            path = 'inbe.practices/' + pack['sha256'] + '.zib'
+            expected_entries.update((path, path + '.release-v2.json'))
+            data = entries[path]
+            encoded = entries[path + '.release-v2.json']
+            value = json.loads(encoded)
+            validate_release(value, 'inbe.practices', publishers)
+            if (value['data_schema'] != 1 or value['artifacts'][0]['sha256'] != pack['sha256'] or
+                    value['artifacts'][0]['size'] != pack['size'] or len(data) != pack['size'] or
+                    sha256(data).hexdigest() != pack['sha256']):
+                raise ValueError('practice content differs from its signed catalog')
+            bundle_assets(data)
+            content_payloads.append((path, data, encoded))
+        if set(entries) - expected_entries:
+            raise ValueError('archive contains unreferenced content')
         for dependency in root[0]["dependencies"]:
             child, _, payload, _ = releases[dependency["app_id"]]
             artifact = child["artifacts"][0]
             if dependency != dict(app_id=child["app_id"], version=child["version"],
                                   sha256=artifact["sha256"], size=artifact["size"]) or root[2].count(payload) != 1:
                 raise ValueError("root does not contain its exact signed cell dependency")
+        # Content precedes both the harness and the root that references it.
+        for path, data, encoded in content_payloads:
+            target = store / path
+            if target.exists() and target.read_bytes() != data:
+                raise ValueError('immutable practice content differs')
+            atomic_write(target, data)
+            atomic_write(store / (path + '.release-v2.json'), encoded)
         # Dependencies go first. Publishing the root is the final step.
         for app_id in sorted(present, key=lambda value: value == "inbe"):
             value, encoded, data, changed = releases[app_id]
