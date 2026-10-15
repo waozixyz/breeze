@@ -12,7 +12,7 @@ import tempfile
 import time
 import wave
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/tai-chi-ui-test'
@@ -121,7 +121,13 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         text = capture(window, 'characters')
         assert 'monk' in text.lower() and 'woman' in text.lower(), text
         assert 'Background music' in text and 'Music volume' in text and 'Cue volume' in text, text
-        assert 'Voice narration' in text and 'written' in text, text
+        assert 'Voice narration' in text, text
+        hint_path = OUTPUT / 'narration-hint.png'
+        with Image.open(OUTPUT / 'characters.png') as picture:
+            hint = ImageOps.grayscale(picture.crop((640, 475, 1100, 580))).resize((920, 210))
+            ImageEnhance.Contrast(hint).enhance(2).save(hint_path)
+        hint = command('tesseract', str(hint_path), 'stdout', '--psm', '6')
+        assert 'Tai Chi instructions' in hint and 'selected language' in hint, hint
         click(window, 760, 294)
         click(window, 865, 368)
         click(window, 755, 446)
