@@ -22,6 +22,8 @@ PracticePackCapacity :: 65
 PracticePack :: struct {
     practice: s32
     language: [16]u8
+    // A narration pack's voice: "" for the default voice, or "male".
+    voice: [8]u8
     hash: [65]u8
     size: s64
     bundle: *void
@@ -58,6 +60,9 @@ practice_transfer: FileDownload;
 practice_transfer_index: s32 = -1;
 practice_selected: s32 = -1;
 practice_language: [16]u8;
+// The narration voice chosen in Customize, and the one the packs follow now.
+practice_voice_choice: [8]u8;
+practice_voice_selected: [8]u8;
 practice_narration_selected: bool;
 practice_catalog_invalid: bool;
 
@@ -89,12 +94,17 @@ PracticePackPath :: (index: s32, temporary: bool) -> string {
     }
     separator := PackageText(name, ".")
     localized := PackageText(separator, language)
+    voice := TextFromCString(*practice_packs[index].voice[0])
+    voiced := PackageText(localized, ifx voice.count > 0 then "." else "")
+    slot := PackageText(voiced, voice)
     defer {
         PackageFree(separator)
         PackageFree(localized)
+        PackageFree(voiced)
+        PackageFree(slot)
     }
-    // One slot per practice/language. A verified update replaces the old copy.
-    return PackageText(localized, ifx temporary then ".download" else ".zib")
+    // One slot per practice, language and voice. A verified update replaces the old copy.
+    return PackageText(slot, ifx temporary then ".download" else ".zib")
 }
 
 // Wim Hof ships with the app, so it is installed until it is removed.
@@ -168,10 +178,16 @@ PracticeCacheFileOwned :: (practice: s32, name: string) -> bool {
     if rest == ".zib" || rest == ".download" {
         return true
     }
-    return rest.count >= 4 && rest[0] == cast(u8)46 &&
-    rest[1] >= cast(u8)97 && rest[1] <= cast(u8)122 &&
-    rest[2] >= cast(u8)97 && rest[2] <= cast(u8)122 &&
-    (rest[3:] == ".zib" || rest[3:] == ".download")
+    if rest.count < 4 || rest[0] != cast(u8)46 ||
+    rest[1] < cast(u8)97 || rest[1] > cast(u8)122 ||
+    rest[2] < cast(u8)97 || rest[2] > cast(u8)122 {
+        return false
+    }
+    tail := rest[3:]
+    if tail.count > 5 && tail[:5] == ".male" {
+        tail = tail[5:]
+    }
+    return tail == ".zib" || tail == ".download"
 }
 
 PracticeCacheRemove :: (practice: s32) {
@@ -214,10 +230,12 @@ PracticePackAcceptsPath :: (pack: PracticePack, path: string) -> bool {
     rest := path[root.count + name.count + 1:]
     language := TextFromCString(*pack.language[0])
     if language.count == 0 {
-        return rest.count < 6 || rest[:6] != "voice/"
+        return (rest.count < 6 || rest[:6] != "voice/") && (rest.count < 11 || rest[:11] != "voice-male/")
     }
-    return rest.count > 7 + language.count && rest[:6] == "voice/" &&
-    rest[6:6 + language.count] == language && rest[6 + language.count] == cast(u8)47
+    directory := ifx TextFromCString(*pack.voice[0]) == "male" then "voice-male/" else "voice/"
+    return rest.count > directory.count + language.count + 1 && rest[:directory.count] == directory &&
+    rest[directory.count:directory.count + language.count] == language &&
+    rest[directory.count + language.count] == cast(u8)47
 }
 
 PracticePackOpen :: (index: s32, bytes: string) -> *void {
@@ -308,6 +326,10 @@ PracticeCatalogParse :: (data: string, output: []PracticePack) -> s32 {
             language[0] > cast(u8)122 || language[1] < cast(u8)97 || language[1] > cast(u8)122) {
             return -1
         }
+        voice := PackageField(data, at, "voice", pack.voice[:])
+        if voice.count != 0 && (voice != "male" || language.count == 0) {
+            return -1
+        }
         product := PackageField(data, at, "product", pack.product[:])
         // A paid pack never turns free because its product is unreadable.
         if FieldAt(data, at, "product") >= 0 && product.count == 0 {
@@ -331,7 +353,8 @@ PracticeCatalogParse :: (data: string, output: []PracticePack) -> s32 {
         }
         for earlier: cast(s32)0..index - 1 {
             old := output[earlier]
-            if old.practice == pack.practice && TextFromCString(*old.language[0]) == language {
+            if old.practice == pack.practice && TextFromCString(*old.language[0]) == language &&
+            TextFromCString(*old.voice[0]) == voice {
                 return -1
             }
         }
@@ -386,14 +409,40 @@ PracticeCatalogLoad :: () {
     practice_catalog_generation = AssetGeneration()
 }
 
+// The base pack for "", otherwise the language's pack in the chosen voice.
 PracticePackFind :: (practice: s32, language: string) -> s32 {
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := practice_packs[index]
-        if pack.practice == practice && TextFromCString(*pack.language[0]) == language {
+        if pack.practice == practice && PracticePackMatches(*pack, language, PracticeVoiceChoice()) {
             return index
         }
     }
     return -1
+}
+
+PracticePackMatches :: (pack: *PracticePack, language: string, voice: string) -> bool {
+    return TextFromCString(*pack.language[0]) == language &&
+    (language.count == 0 || TextFromCString(*pack.voice[0]) == voice)
+}
+
+PracticeVoiceChoice :: () -> string {
+    return TextFromCString(*practice_voice_choice[0])
+}
+
+PracticeVoiceAvailable :: (practice: s32, language: string, voice: string) -> bool {
+    PracticeCatalogLoad()
+    for index: cast(s32)0..practice_pack_count - 1 {
+        if practice_packs[index].practice == practice && language.count > 0 &&
+        PracticePackMatches(*practice_packs[index], language, voice) {
+            return true
+        }
+    }
+    return false
+}
+
+// Customize picks the narration voice: "" for the default voice, or "male".
+PracticeVoiceSelect :: (voice: string) {
+    unused AppCopyText(ifx voice == "male" then voice else "", practice_voice_choice[:])
 }
 
 PracticeContentReady :: (practice: s32) -> bool {
@@ -594,21 +643,22 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     }
     language := LocaleActiveCode()
     changed := selected != practice_selected || language != TextFromCString(*practice_language[0]) ||
-    narration != practice_narration_selected
+    narration != practice_narration_selected || PracticeVoiceChoice() != TextFromCString(*practice_voice_selected[0])
     if changed {
         practice_selected = selected
         practice_narration_selected = narration
         unused AppCopyText(language, practice_language[:])
-        // Keep cached bytes on disk, mounting only this practice and language.
+        unused AppCopyText(PracticeVoiceChoice(), practice_voice_selected[:])
+        // Keep cached bytes on disk, mounting only this practice, language and voice.
         for index: cast(s32)0..practice_pack_count - 1 {
             pack := *practice_packs[index]
             wanted := pack.practice == selected &&
-            (pack.language[0] == cast(u8)0 || (narration && TextFromCString(*pack.language[0]) == language))
+            (pack.language[0] == cast(u8)0 || (narration && PracticePackMatches(pack, language, PracticeVoiceChoice())))
             if !wanted {
                 // Explicit base downloads continue when another practice is
                 // shown. A changed narration preference cancels only voices.
                 stale_voice := pack.language[0] != cast(u8)0 &&
-                (!narration || TextFromCString(*pack.language[0]) != language)
+                (!narration || !PracticePackMatches(pack, language, PracticeVoiceChoice()))
                 if stale_voice || DataTemporary() {
                     if practice_transfer_index == index {
                         PracticeDownloadsCancel()
@@ -635,7 +685,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := *practice_packs[index]
         wanted := pack.practice == selected &&
-        (pack.language[0] == cast(u8)0 || (narration && TextFromCString(*pack.language[0]) == language))
+        (pack.language[0] == cast(u8)0 || (narration && PracticePackMatches(pack, language, PracticeVoiceChoice())))
         if !wanted || pack.checked {
             continue
         }
@@ -728,7 +778,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
         CloseBundle(practice_packs[index].bundle)
         wanted := practice_packs[index].practice == selected &&
         (practice_packs[index].language[0] == cast(u8)0 ||
-            (narration && TextFromCString(*practice_packs[index].language[0]) == language))
+            (narration && PracticePackMatches(*practice_packs[index], language, PracticeVoiceChoice())))
         if wanted || DataTemporary() {
             practice_packs[index].bundle = bundle
             AssetNotifyChanged()

@@ -41,6 +41,20 @@ for code in ('en', 'es'):
     (fixtures / (digest + '.zib')).write_bytes(data)
     packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data),
                       product='inbe.practice.taichi'))
+# The male recording is a separate English pack in its own folder.
+assets = work / 'en-male' / 'assets'
+voice = assets / 'practices/taichi/voice-male/en'
+voice.mkdir(parents=True)
+(voice / 'test.ogg').write_bytes(b'fixture male audio')
+bundle = work / 'en-male.zib'
+subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
+    '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
+    str(ROOT / 'apps/practice/content.zi')], check=True)
+data = bundle.read_bytes()
+digest = hashlib.sha256(data).hexdigest()
+(fixtures / (digest + '.zib')).write_bytes(data)
+packs.append(dict(practice='taichi', language='en', voice='male', sha256=digest, size=len(data),
+                  product='inbe.practice.taichi'))
 (fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
 (fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.

@@ -46,6 +46,10 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
         if '/voice/' in path:
             code = path.split('/voice/', 1)[1].split('/')[0]
             owner += '-voice-' + code
+        elif '/voice-male/' in path:
+            # The male recording is its own pack per language.
+            code = path.split('/voice-male/', 1)[1].split('/')[0]
+            owner += '-voice-' + code + '-male'
     for feature in ('habits', 'lists', 'diary', 'lumi'):
         if path.startswith('assets/' + feature + '/'):
             owner = feature

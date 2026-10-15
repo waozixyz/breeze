@@ -33,6 +33,8 @@
 #import "slider_widget"
 #import "toggle_props"
 #import "toggle_widget"
+#import "segmented_control_widget"
+#import "segmented_control_props"
 #import, file "../../app/lumi_guide.zi";
 #import, file "../meditation/meditation_music.zi";
 #import, file "../../app/exercise_types.zi";
@@ -285,35 +287,27 @@ TaiChiCharacterBody :: (app: *InnerBreeze, bounds: Rectangle) {
             app.tai_chi.character == character, false,
             KeyHash("inbe/tai_chi/character-card") + cast(u64)character * cast(u64)4096) {
             app.tai_chi.character = character
+            app.tai_chi.voice = -1
             save_settings(app)
         }
     }
 }
 
-TaiChiNarrationLanguage :: (app: *InnerBreeze) -> string {
-    buffer: [256]u8
-    selected_language := LocaleLanguageAt(LocaleActiveIndex())
-    args: [1]FormatArg = .[FormatArg.{.text = selected_language.label, .is_text = true}]
-    unused FormatTemplate(LocaleText("practice_download_language"), args[:], buffer[:])
-    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
-}
-
-TaiChiNarrationStatus :: () -> string {
-    voice := PracticeVoiceStatus(EXERCISE_TAI_CHI)
+TaiChiNarrationStatus :: (voice: s32) -> string {
     return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
         ifx voice == 2 then "practice_voice_ready" else
         ifx voice == 3 then "practice_download_failed" else
         ifx voice == 1 then "practice_voice_busy" else "")
 }
 
-// Spoken guidance comes in the selected language's own pack, downloaded
-// with Tai Chi or here after the language changes.
+// Spoken guidance comes in the app language's own pack, in the chosen voice,
+// downloaded with Tai Chi or here after the voice or language changes.
 TaiChiNarrationHeight :: (app: *InnerBreeze, width: s32) -> s32 {
+    unused width
     if app.voice_narration_enabled == 0 {
         return 0
     }
-    return AppParagraphHeight(TaiChiNarrationLanguage(app), width, AppFontSize(), AppScale(3)) +
-    AppScale(8 + 44 + 16)
+    return AppScale(42 + 12 + 44 + 16)
 }
 
 TaiChiNarration :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
@@ -321,13 +315,26 @@ TaiChiNarration :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
         return
     }
     PracticeContentReviewNext()
-    language := TaiChiNarrationLanguage(app)
-    language_h := AppParagraphHeight(language, width, AppFontSize(), AppScale(3))
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)language_h},
-            .text = language, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    y.* += language_h + AppScale(8)
-    voice := PracticeVoiceStatus(EXERCISE_TAI_CHI)
+    male := TaiChiMaleVoice(app.tai_chi)
+    options: [2]SegmentOption = .[SegmentOption.{.label = LocaleText("tai_chi_voice_female")},
+    SegmentOption.{.label = LocaleText("tai_chi_voice_male")}]
+    props: SegmentedControlProps
+    props.key = KeyHash("inbe/tai_chi/customize/voice")
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(42)}
+    props.height = AppScale(42)
+    props.selected_index = ifx male then 1 else 0
+    props.has_selection = true
+    choice := SegmentedControl(app.ui.session, props, options[:])
+    if choice.changed {
+        app.tai_chi.voice = choice.selected_index
+        app.settings_dirty = 1
+        save_settings(app)
+        male = choice.selected_index == 1
+    }
+    y.* += AppScale(42 + 12)
+    // The male recording may not exist in every language yet.
+    available := !male || PracticeVoiceAvailable(EXERCISE_TAI_CHI, LocaleActiveCode(), "male")
+    voice := ifx available then PracticeVoiceStatus(EXERCISE_TAI_CHI) else -1
     button_w := AppScale(180)
     if button_w > width / 2 {
         button_w = width / 2
@@ -336,7 +343,7 @@ TaiChiNarration :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
     status_w := ifx actionable then width - button_w - AppScale(12) else width
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)status_w, cast(float32)AppScale(44)},
-            .text = TaiChiNarrationStatus(), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
+            .text = TaiChiNarrationStatus(voice), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
             .vertical_align = cast(TextAlign)TextAlignCenter})
     if actionable && Button(app.ui.session, ButtonProps.{
             .id = 15423,
