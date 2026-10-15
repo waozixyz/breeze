@@ -23,6 +23,16 @@ DewRead :: 1
 DewUpgrade :: 2
 DewAddress :: 3
 
+// The node's paid storage sizes, in the order the app offers them.
+DewPlanCount :: 2
+DewPlanSizes: [2]string = .["1gb", "5gb"];
+
+DewStoragePlan :: struct {
+    limit_bytes: s64
+    monthly_units: s64
+    yearly_units: s64
+}
+
 DewAccount :: struct {
     known: bool
     enabled: bool
@@ -30,8 +40,10 @@ DewAccount :: struct {
     used_bytes: s64
     limit_bytes: s64
     expires_at: s64
-    monthly_xmr_atomic_units: s64
-    yearly_xmr_atomic_units: s64
+    free_bytes: s64
+    // 1 + the index of the account's paid size, or 0 without a paid plan.
+    plan_size: s32
+    plans: [DewPlanCount]DewStoragePlan
 }
 
 dew_account: DewAccount;
@@ -117,12 +129,23 @@ DewInteger :: (json: string, at: s32, value: *s64) -> bool {
     return true
 }
 
+DewPlanSlot :: (size: string) -> s32 {
+    for index: cast(s32)0..DewPlanCount - 1 {
+        if size == DewPlanSizes[index] {
+            return index
+        }
+    }
+    return -1
+}
+
 DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> bool {
     owner: [65]u8
     asset: [32]u8
+    size: [16]u8
     plan := FieldAt(json, 0, "plan")
+    plans := FieldAt(json, 0, "plans")
     units: s64
-    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || plan < 0 ||
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || plan < 0 || plans < 0 ||
     ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
     TextUntilNul(owner[:]) != identity ||
     ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
@@ -131,11 +154,28 @@ DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> boo
     !DewInteger(json, FieldAt(json, plan, "balance"), *account.balance) ||
     !DewInteger(json, FieldAt(json, plan, "limit_bytes"), *account.limit_bytes) ||
     !DewInteger(json, FieldAt(json, plan, "expires_at"), *account.expires_at) ||
-    !DewInteger(json, FieldAt(json, 0, "monthly_xmr_atomic_units"), *account.monthly_xmr_atomic_units) ||
-    !DewInteger(json, FieldAt(json, 0, "yearly_xmr_atomic_units"), *account.yearly_xmr_atomic_units) ||
+    !DewInteger(json, FieldAt(json, 0, "free_bytes"), *account.free_bytes) ||
     !DewInteger(json, FieldAt(json, 0, "used_bytes"), *account.used_bytes) {
         return false
     }
+    // Sizes this app does not know yet are skipped; each known size is priced by the node.
+    for index: cast(s32)0..ArrayCount(json, plans) - 1 {
+        at := ElementAt(json, plans, index)
+        size = .{}
+        unused ReadStringText(json, FieldAt(json, at, "size"), size[:])
+        slot := DewPlanSlot(TextUntilNul(size[:]))
+        if slot >= 0 {
+            offer := *account.plans[slot]
+            if !DewInteger(json, FieldAt(json, at, "limit_bytes"), *offer.limit_bytes) ||
+            !DewInteger(json, FieldAt(json, at, "monthly_units"), *offer.monthly_units) ||
+            !DewInteger(json, FieldAt(json, at, "yearly_units"), *offer.yearly_units) {
+                return false
+            }
+        }
+    }
+    size = .{}
+    unused ReadStringText(json, FieldAt(json, plan, "size"), size[:])
+    account.plan_size = DewPlanSlot(TextUntilNul(size[:])) + 1
     enabled := FieldAt(json, 0, "enabled")
     if enabled < 0 {
         return false
@@ -145,8 +185,12 @@ DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> boo
         return false
     }
     account.enabled = json[enabled:end] == "true"
-    if account.enabled && (account.monthly_xmr_atomic_units == 0 || account.yearly_xmr_atomic_units == 0) {
-        return false
+    if account.enabled {
+        for offer: account.plans {
+            if offer.limit_bytes <= account.free_bytes || offer.monthly_units <= 0 || offer.yearly_units <= 0 {
+                return false
+            }
+        }
     }
     account.known = true
     return true
@@ -195,19 +239,22 @@ DewBegin :: (action: s32, path: string, body: string) -> bool {
     return true
 }
 
-DewBuyStorage :: (period: string) {
+// The size and period are chosen once per request; a retry resends that request.
+DewBuyStorage :: (size: string, period: string) {
     DewContext()
     if !DewReady() || dew_operation.active || !dew_account.known || !dew_account.enabled {
         return
     }
     if dew_attempt[0] == cast(u8)0 {
-        if period != "monthly" && period != "yearly" {
+        if (period != "monthly" && period != "yearly") || DewPlanSlot(size) < 0 {
             return
         }
         request_id: [37]u8
         storage_make_uuid(*request_id[0])
         unused AppCopyText("{\"period\":\"", dew_attempt[:])
         unused AppAppendText(period, dew_attempt[:])
+        unused AppAppendText("\",\"size\":\"", dew_attempt[:])
+        unused AppAppendText(size, dew_attempt[:])
         unused AppAppendText("\",\"request_id\":\"", dew_attempt[:])
         unused AppAppendText(TextUntilNul(request_id[:]), dew_attempt[:])
         unused AppAppendText("\"}", dew_attempt[:])
@@ -219,6 +266,17 @@ DewBuyStorage :: (period: string) {
     }
     attempt := dew_attempt
     unused DewBegin(DewUpgrade, "/api/v1/storage/plan", TextUntilNul(attempt[:]))
+}
+
+// The size a waiting purchase asked for, as 1 + its index, or 0 without one.
+DewAttemptSize :: () -> s32 {
+    if dew_attempt[0] == cast(u8)0 {
+        return 0
+    }
+    size: [16]u8
+    attempt := TextUntilNul(dew_attempt[:])
+    unused ReadStringText(attempt, FieldAt(attempt, 0, "size"), size[:])
+    return DewPlanSlot(TextUntilNul(size[:])) + 1
 }
 
 DewTopUp :: () {

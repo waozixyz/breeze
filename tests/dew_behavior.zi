@@ -22,6 +22,8 @@
 owner: AccountKeys;
 response_status: s32 = 200;
 response_balance: s64 = 1234567;
+response_size: string = "";
+response_plans: bool = true;
 requests: s32;
 last_body: [256]u8;
 address_requests: s32;
@@ -35,9 +37,18 @@ Reply :: (output: []u8) -> bool {
     writer := Writer.{output, 0, true}
     writer = WriteText(writer, "{\"account_id\":\"")
     writer = WriteText(writer, TextUntilNul(owner.public_id[:]))
-    writer = WriteText(writer, "\",\"asset_id\":\"waozi:token\",\"units_per_dew\":1000000,\"enabled\":true,\"monthly_xmr_atomic_units\":1000000000,\"yearly_xmr_atomic_units\":10000000000,\"used_bytes\":1024,\"plan\":{\"balance\":")
+    writer = WriteText(writer, "\",\"asset_id\":\"waozi:token\",\"units_per_dew\":1000000,\"enabled\":true,\"free_bytes\":10485760,")
+    // A size this app does not know yet sits between the known ones.
+    if response_plans {
+        writer = WriteText(writer, "\"plans\":[{\"size\":\"1gb\",\"limit_bytes\":1073741824,\"monthly_units\":200000000,\"yearly_units\":2000000000},")
+        writer = WriteText(writer, "{\"size\":\"10gb\",\"limit_bytes\":10737418240,\"monthly_units\":900000000,\"yearly_units\":9000000000},")
+        writer = WriteText(writer, "{\"size\":\"5gb\",\"limit_bytes\":5368709120,\"monthly_units\":600000000,\"yearly_units\":6000000000}],")
+    }
+    writer = WriteText(writer, "\"monthly_units\":200000000,\"yearly_units\":2000000000,\"used_bytes\":1024,\"plan\":{\"balance\":")
     writer = WriteDecimal(writer, response_balance)
-    writer = WriteText(writer, ",\"limit_bytes\":10485760,\"expires_at\":0}}\n")
+    writer = WriteText(writer, ",\"size\":\"")
+    writer = WriteText(writer, response_size)
+    writer = WriteText(writer, "\",\"limit_bytes\":10485760,\"expires_at\":0}}\n")
     return writer.valid
 }
 
@@ -131,7 +142,13 @@ Check :: () -> s32 {
     check_int("one balance request", requests, 1)
     check_int("balance request authenticated", dew_operation.result, 0)
     check_true("confirmed balance loaded", dew_account.known && dew_account.balance == 1234567)
-    check_true("storage prices come from the node in XMR", dew_account.monthly_xmr_atomic_units == 1000000000 && dew_account.yearly_xmr_atomic_units == 10000000000)
+    check_true("storage sizes and Dew prices come from the node",
+        dew_account.free_bytes == 10485760 &&
+        dew_account.plans[0].limit_bytes == 1073741824 && dew_account.plans[0].monthly_units == 200000000 &&
+        dew_account.plans[0].yearly_units == 2000000000 &&
+        dew_account.plans[1].limit_bytes == 5368709120 && dew_account.plans[1].monthly_units == 600000000 &&
+        dew_account.plans[1].yearly_units == 6000000000)
+    check_true("free account has no paid size", dew_account.plan_size == 0)
     buffer: [48]u8
     check_true("fractional Dew preserves precision", DewFormat(dew_account.balance, DewUnits, buffer[:]) && TextUntilNul(buffer[:]) == "1.234567")
     check_true("zero is a real balance", DewFormat(0, DewUnits, buffer[:]) && TextUntilNul(buffer[:]) == "0")
@@ -178,17 +195,33 @@ Check :: () -> s32 {
     parsed: DewAccount
     check_true("extra JSON documents rejected", !DewParseAccount("{}\n{}", TextUntilNul(owner.public_id[:]), *parsed))
 
+    response_plans = false
+    noplans: [8192]u8
+    unused Reply(noplans[:])
+    check_true("account without sized plans rejected",
+        !DewParseAccount(TextUntilNul(noplans[:]), TextUntilNul(owner.public_id[:]), *parsed))
+    response_plans = true
+
+    requests_before := requests
+    DewBuyStorage("2gb", "monthly")
+    check_true("unknown size sends nothing", requests == requests_before && dew_attempt[0] == cast(u8)0)
     response_balance = 234567
-    DewBuyStorage("monthly")
+    response_size = "5gb"
+    DewBuyStorage("5gb", "monthly")
+    check_true("waiting purchase remembers its size", DewAttemptSize() == 2)
     Finish()
     check_true("upgrade finishes with confirmed balance", dew_account.balance == 234567 && dew_attempt[0] == cast(u8)0)
+    check_true("account size comes from the node", dew_account.plan_size == 2)
     check_true("confirmed upgrade wakes sync once", DewTakeSyncRequest() && !DewTakeSyncRequest())
     period: [16]u8
+    sent_size: [16]u8
     body := TextUntilNul(last_body[:])
     check_true("period sent", ReadStringText(body, FieldAt(body, 0, "period"), period[:]) == 7 && TextUntilNul(period[:]) == "monthly")
+    check_true("size sent", ReadStringText(body, FieldAt(body, 0, "size"), sent_size[:]) == 3 && TextUntilNul(sent_size[:]) == "5gb")
+    response_size = ""
 
     response_status = 503
-    DewBuyStorage("yearly")
+    DewBuyStorage("1gb", "yearly")
     Finish()
     check_true("uncertain purchase keeps its request", dew_attempt[0] != cast(u8)0)
     attempt: [256]u8 = dew_attempt
@@ -197,12 +230,12 @@ Check :: () -> s32 {
     response_status = 200
     Finish()
     check_true("uncertain request survives restart", TextUntilNul(dew_attempt[:]) == TextUntilNul(attempt[:]))
-    DewBuyStorage("monthly")
+    DewBuyStorage("5gb", "monthly")
     Finish()
     check_true("retry preserves the original yearly purchase", TextUntilNul(last_body[:]) == TextUntilNul(attempt[:]))
 
     response_status = 402
-    DewBuyStorage("monthly")
+    DewBuyStorage("1gb", "monthly")
     Finish()
     check_true("insufficient credit is explained", dew_notice == "profile_dew_funds" && dew_attempt[0] == cast(u8)0)
     unused DewTakeSyncRequest()
