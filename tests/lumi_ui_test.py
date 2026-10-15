@@ -384,6 +384,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert offer.startswith("Sun Salutation") and offer.endswith("Download it now?"), offer
         send(window, profile, "no")
         assert chat(profile)[-1]["text"] == "Cancelled."
+        # Tai Chi is paid: without the account's unlock Lumi offers to unlock it.
+        send(window, profile, "start tai chi")
+        assert chat(profile)[-1]["text"] == "Tai Chi is unlocked with Dew. Unlock it now?", chat(profile)[-1]
+        send(window, profile, "no")
+        assert chat(profile)[-1]["text"] == "Cancelled."
         send(window, profile, "start meditation")
         assert chat(profile)[-1]["text"].endswith("Download it now?")
         send(window, profile, "yes")
