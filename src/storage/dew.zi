@@ -44,6 +44,7 @@ dew_address: [128]u8;
 dew_rate_atomic: s64;
 dew_rate_units: s64;
 dew_confirmations: s64;
+dew_minimum_atomic: s64;
 dew_action: s32;
 dew_next_refresh: float64;
 dew_notice: string;
@@ -60,6 +61,10 @@ DewCancel :: () {
     dew_identity = .{}
     dew_attempt = .{}
     dew_address = .{}
+    dew_rate_atomic = 0
+    dew_rate_units = 0
+    dew_confirmations = 0
+    dew_minimum_atomic = 0
     dew_action = 0
     dew_next_refresh = 0.0
     dew_notice = ""
@@ -117,7 +122,7 @@ DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> boo
     asset: [32]u8
     plan := FieldAt(json, 0, "plan")
     units: s64
-    if ValueEnd(json, 0, 0) != cast(s32)json.count || plan < 0 ||
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || plan < 0 ||
     ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
     TextUntilNul(owner[:]) != identity ||
     ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
@@ -218,15 +223,33 @@ DewBuyStorage :: (period: string) {
 
 DewTopUp :: () {
     DewContext()
-    unused DewBegin(DewAddress, "/api/v1/tokens/purchases/monero/address", "")
+    if DewBegin(DewAddress, "/api/v1/tokens/purchases/monero/address", "") {
+        dew_address = .{}
+        dew_rate_atomic = 0
+        dew_rate_units = 0
+        dew_confirmations = 0
+        dew_minimum_atomic = 0
+    }
 }
 
 DewParseAddress :: (json: string) -> bool {
     owner: [65]u8
     address: [128]u8
-    if ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
+    asset: [32]u8
+    network: [16]u8
+    atomic: s64
+    units: s64
+    confirmations: s64
+    minimum: s64
+    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count ||
+    ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
     TextUntilNul(owner[:]) != TextUntilNul(dew_identity[:]) ||
-    ReadStringText(json, FieldAt(json, 0, "address"), address[:]) != 95 {
+    ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
+    TextUntilNul(asset[:]) != "waozi:token" ||
+    ReadStringText(json, FieldAt(json, 0, "network"), network[:]) != 7 ||
+    TextUntilNul(network[:]) != "mainnet" ||
+    ReadStringText(json, FieldAt(json, 0, "address"), address[:]) != 95 ||
+    (address[0] != cast(u8)52 && address[0] != cast(u8)56) {
         return false
     }
     alphabet := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -241,12 +264,18 @@ DewParseAddress :: (json: string) -> bool {
     }
     rate := FieldAt(json, 0, "rate")
     if rate < 0 ||
-    !DewInteger(json, FieldAt(json, rate, "xmr_atomic_units"), *dew_rate_atomic) || dew_rate_atomic <= 0 ||
-    !DewInteger(json, FieldAt(json, rate, "token_units"), *dew_rate_units) || dew_rate_units <= 0 ||
-    !DewInteger(json, FieldAt(json, 0, "confirmations_required"), *dew_confirmations) || dew_confirmations <= 0 {
+    !DewInteger(json, FieldAt(json, rate, "xmr_atomic_units"), *atomic) || atomic <= 0 ||
+    !DewInteger(json, FieldAt(json, rate, "token_units"), *units) || units <= 0 ||
+    !DewInteger(json, FieldAt(json, 0, "confirmations_required"), *confirmations) ||
+    confirmations <= 0 || confirmations > 2147483647 ||
+    !DewInteger(json, FieldAt(json, 0, "minimum_atomic_amount"), *minimum) || minimum <= 0 {
         return false
     }
     dew_address = address
+    dew_rate_atomic = atomic
+    dew_rate_units = units
+    dew_confirmations = confirmations
+    dew_minimum_atomic = minimum
     return true
 }
 
@@ -265,6 +294,7 @@ DewTick :: (visible: bool, now: float64) {
             } else {
                 received: DewAccount
                 if DewParseAccount(json, TextUntilNul(dew_identity[:]), *received) {
+                    previous := SyncNodeStorageRead(DewNode)
                     dew_account = received
                     storage := SyncNodeStorage.{
                         .known = true,
@@ -273,6 +303,9 @@ DewTick :: (visible: bool, now: float64) {
                         .checked_at = DewNow(),
                         .full = received.limit_bytes > 0 && received.used_bytes >= received.limit_bytes}
                     SyncNodeStorageWrite(DewNode, storage)
+                    if previous.known && previous.full && !storage.full {
+                        dew_sync_requested = true
+                    }
                     if dew_action == DewUpgrade {
                         unused storage_set_social_cache_json("dew.upgrade", "{}")
                         dew_attempt[0] = cast(u8)0

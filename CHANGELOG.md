@@ -5,6 +5,8 @@
 - Profile shows Dew credit, with Monero top-ups and prepaid 1 GB storage on the Waozi node: fixed monthly or yearly XMR prices, outside Google Play.
 - Share a list with a friend after they accept an invitation inside Lists.
 ### Changed
+
+- Dew balances and upgrades load reliably, and top-ups show the minimum payment and required confirmations.
 - Lists uses compact, scrollable tabs and larger task controls.
 
 ## [2.1.33] - 2026-10-13

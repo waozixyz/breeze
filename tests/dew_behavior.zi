@@ -15,6 +15,7 @@
 #import "byte_text_linux"
 #import "json_scan"
 #import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/sync_node_storage.zi";
 #import, file "../src/storage/storage_core.zi";
 #import, file "../src/app/text_buffers.zi";
 
@@ -24,7 +25,11 @@ response_balance: s64 = 1234567;
 requests: s32;
 last_body: [256]u8;
 address_requests: s32;
-TestAddress :: "4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+address_network: string = "mainnet";
+address_asset: string = "waozi:token";
+address_confirmations: s64 = 10;
+address_atomic: s64 = 1000000000000LL;
+TestAddress :: "8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 Reply :: (output: []u8) -> bool {
     writer := Writer.{output, 0, true}
@@ -32,7 +37,25 @@ Reply :: (output: []u8) -> bool {
     writer = WriteText(writer, TextUntilNul(owner.public_id[:]))
     writer = WriteText(writer, "\",\"asset_id\":\"waozi:token\",\"units_per_dew\":1000000,\"enabled\":true,\"monthly_xmr_atomic_units\":1000000000,\"yearly_xmr_atomic_units\":10000000000,\"used_bytes\":1024,\"plan\":{\"balance\":")
     writer = WriteDecimal(writer, response_balance)
-    writer = WriteText(writer, ",\"limit_bytes\":10485760,\"expires_at\":0}}")
+    writer = WriteText(writer, ",\"limit_bytes\":10485760,\"expires_at\":0}}\n")
+    return writer.valid
+}
+
+AddressReply :: (output: []u8) -> bool {
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"account_id\":\"")
+    writer = WriteText(writer, TextUntilNul(owner.public_id[:]))
+    writer = WriteText(writer, "\",\"asset_id\":\"")
+    writer = WriteText(writer, address_asset)
+    writer = WriteText(writer, "\",\"network\":\"")
+    writer = WriteText(writer, address_network)
+    writer = WriteText(writer, "\",\"address\":\"")
+    writer = WriteText(writer, TestAddress)
+    writer = WriteText(writer, "\",\"rate\":{\"xmr_atomic_units\":")
+    writer = WriteDecimal(writer, address_atomic)
+    writer = WriteText(writer, ",\"token_units\":5000000},\"confirmations_required\":")
+    writer = WriteDecimal(writer, address_confirmations)
+    writer = WriteText(writer, ",\"minimum_atomic_amount\":1000}\n")
     return writer.valid
 }
 
@@ -52,13 +75,7 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     if request.url == "https://api.waozi.xyz/api/v1/tokens/purchases/monero/address" {
         address_requests += 1
         check_true("address lookup uses authenticated GET", request.method == "GET" && request.body.count == 0)
-        writer := Writer.{output, 0, true}
-        writer = WriteText(writer, "{\"account_id\":\"")
-        writer = WriteText(writer, TextUntilNul(owner.public_id[:]))
-        writer = WriteText(writer, "\",\"address\":\"")
-        writer = WriteText(writer, TestAddress)
-        writer = WriteText(writer, "\",\"rate\":{\"xmr_atomic_units\":1000000000000,\"token_units\":5000000},\"confirmations_required\":10}")
-        return writer.valid
+        return AddressReply(output)
     }
     check_true("only the storage endpoint is requested", request.url == "https://api.waozi.xyz/api/v1/storage/plan")
     requests += 1
@@ -132,6 +149,34 @@ Check :: () -> s32 {
     check_true("Monero address belongs to the connected account", TextUntilNul(dew_address[:]) == TestAddress)
     check_true("Monero quote preserves atomic units", dew_rate_atomic == 1000000000000LL && dew_rate_units == 5000000 && dew_confirmations == 10)
     check_true("foreign Monero account rejected", !DewParseAddress("{\"account_id\":\"another-account\"}"))
+    check_true("minimum Monero deposit loaded", dew_minimum_atomic == 1000)
+    invalid: [8192]u8
+    address_network = "stagenet"
+    unused AddressReply(invalid[:])
+    check_true("test network payment rejected", !DewParseAddress(TextUntilNul(invalid[:])))
+    address_network = "mainnet"
+    address_asset = "other:token"
+    unused AddressReply(invalid[:])
+    check_true("foreign payment asset rejected", !DewParseAddress(TextUntilNul(invalid[:])))
+    address_asset = "waozi:token"
+    address_atomic = 99
+    address_confirmations = 0
+    unused AddressReply(invalid[:])
+    check_true("invalid quote rejected atomically", !DewParseAddress(TextUntilNul(invalid[:])) &&
+        dew_rate_atomic == 1000000000000LL && dew_confirmations == 10 && dew_minimum_atomic == 1000)
+    address_atomic = 1000000000000LL
+    address_confirmations = 10
+    response_status = 503
+    DewTopUp()
+    check_true("new address lookup hides the previous quote", dew_address[0] == cast(u8)0)
+    Finish()
+    check_true("failed lookup cannot show a stale payment address", dew_address[0] == cast(u8)0)
+    response_status = 200
+    DewTopUp()
+    Finish()
+    check_true("safe payment lookup recovers", TextUntilNul(dew_address[:]) == TestAddress)
+    parsed: DewAccount
+    check_true("extra JSON documents rejected", !DewParseAccount("{}\n{}", TextUntilNul(owner.public_id[:]), *parsed))
 
     response_balance = 234567
     DewBuyStorage("monthly")
@@ -160,6 +205,13 @@ Check :: () -> s32 {
     DewBuyStorage("monthly")
     Finish()
     check_true("insufficient credit is explained", dew_notice == "profile_dew_funds" && dew_attempt[0] == cast(u8)0)
+    unused DewTakeSyncRequest()
+    SyncNodeStorageWrite(DewNode, SyncNodeStorage.{.known = true,
+            .used_bytes = 10485760, .limit_bytes = 10485760, .checked_at = DewNow(), .full = true})
+    response_status = 200
+    DewTick(true, 100.0)
+    Finish()
+    check_true("allowance refreshed from another device wakes sync once", DewTakeSyncRequest() && !DewTakeSyncRequest())
     storage_set_setting_text("sync_public_id", "another-account")
     DewContext()
     check_true("account change clears the old balance", !dew_account.known && dew_address[0] == cast(u8)0)
