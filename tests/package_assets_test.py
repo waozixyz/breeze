@@ -77,6 +77,14 @@ for name in root:
         'test-background', 'source-icon', 'readme-', 'badge-', '-prompt.')), \
         f'development artwork shipped: {name}'
 assert not any(name.endswith('/banner.png') for name in practices)
+# Practice pictures ship only in their packs; Wim Hof's pack ships installed.
+assert not any(name.endswith('.png') for name in practices), \
+    [name for name in practices if name.endswith('.png')]
+whm = next(pack for pack in catalog['packs'] if pack['practice'] == 'whm' and not pack['language'])
+shipped = practices['assets/practices/default/whm.zib']
+assert len(shipped) == whm['size'] and sha256(shipped).hexdigest() == whm['sha256']
+assert {name for name in practices if name.startswith('assets/practices/default/')} == {
+    'assets/practices/default/whm.zib'}
 paths, sources, unique_animation = inventory()
 packaged_animation = {name for name in content if '/characters/' in name}
 assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}

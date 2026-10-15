@@ -38,6 +38,7 @@ for code in ('en', 'es'):
     (fixtures / (digest + '.zib')).write_bytes(data)
     packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data)))
 (fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
+(fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.
 (fixtures / 'cache/packages/practice-whm.zib').write_bytes(b'old release')
 (fixtures / 'cache/packages/practice-taichi.fr.zib').write_bytes(b'retired language')
@@ -73,7 +74,8 @@ subprocess.run([str(work / 'test'), str(fixtures)], check=True,
                     if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')})
 cache = fixtures / 'cache/packages'
 assert not list(cache.glob('practice-taichi.??.zib'))
-assert hashlib.sha256((cache / 'practice-whm.zib').read_bytes()).hexdigest() == packs[0]['sha256']
+# Wim Hof ends installed from the app's own copy, with no removal marker.
+assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
-print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation and removal passed')
+print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation, removal and shipped Wim Hof passed')

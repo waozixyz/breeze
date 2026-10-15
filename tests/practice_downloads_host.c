@@ -12,6 +12,7 @@ static const char *fixtures;
 static char database[4096];
 static int mode, starts;
 static int bad_catalog;
+static int shipped;
 static void *allocations[64];
 static size_t allocation_count;
 
@@ -38,6 +39,11 @@ AssetView FixtureAsset(String path) {
         if (!catalog.data) catalog = FixtureCatalog();
         result.data = bad_catalog ? StringLiteral("{\"schema\":1,\"packs\":[]}") : catalog;
         result.found = true;
+    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/default/whm.zib"))) {
+        static String pack;
+        if (!pack.data) pack = read_fixture("default-whm.zib");
+        result.data = pack;
+        result.found = true;
     } else if (StringEqual(path, StringLiteral("locales/index.txt"))) {
         result.data = StringLiteral("en|English\nes|Español\n");
         result.found = true;
@@ -46,6 +52,7 @@ AssetView FixtureAsset(String path) {
 }
 void FixtureMode(int32_t value) { mode = value; }
 void FixtureCatalogMode(int32_t value) { bad_catalog = value; }
+void FixtureShipped(int32_t value) { shipped = value; }
 int32_t FixtureStarts(void) { return starts; }
 bool FixtureTaiChiSaved(void) {
     char path[4096];

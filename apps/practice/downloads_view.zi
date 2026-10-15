@@ -31,14 +31,20 @@ PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
         return LocaleText("practice_download_included")
     }
     status := PracticeContentStatus(practice)
-    text := LocaleText(ifx status == 2 then "practice_download_ready" else
-        ifx status == 3 then "practice_download_failed" else
-        ifx status == 1 then "practice_download_busy" else "practice_download_size")
     if status == 1 || status == 3 {
-        return text
+        return LocaleText(ifx status == 3 then "practice_download_failed" else "practice_download_busy")
     }
+    // Narration downloads with its practice, so it counts in the size.
+    bytes := PracticeContentBytes(practice)
+    if app.voice_narration_enabled != 0 && PracticeVoiceStatus(practice) >= 0 {
+        bytes += PracticeVoiceBytes(practice)
+    }
+    // Small packs show kilobytes instead of a rounded-up megabyte.
+    small := bytes < 1024 * 1024
+    text := LocaleText(ifx status == 2 then (ifx small then "practice_download_ready_kb" else "practice_download_ready") else
+        ifx small then "practice_download_size_kb" else "practice_download_size")
+    amount := ifx small then (bytes + 1023) / 1024 else (bytes + 512 * 1024) / (1024 * 1024)
     buffer: [256]u8
-    amount := (PracticeContentBytes(practice) + 1024 * 1024 - 1) / (1024 * 1024)
     args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
     unused FormatTemplate(text, args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
