@@ -26,6 +26,10 @@ lists_public_id: [65]u8;
 lists_server: [512]u8;
 lists_next_id: [37]u8;
 lists_refresh_at: float64;
+// A change the node has not confirmed is sent again quietly, after a pause
+// that grows with each failure; only repeated failures ask for the person.
+lists_retry_at: float64;
+lists_failures: s32;
 lists_status: s32;
 lists_writing: bool;
 lists_confirm_action: s32;
@@ -52,9 +56,11 @@ ListsNetworkContext :: () {
     if FieldAt(TextUntilNul(lists_attempt[:]), 0, "request_id") < 0 {
         lists_attempt[0] = cast(u8)0
     }
-    lists_status = ifx lists_attempt[0] != cast(u8)0 then 3 else 0
+    lists_status = ifx lists_attempt[0] != cast(u8)0 then 1 else 0
     lists_next_id[0] = cast(u8)0
     lists_refresh_at = 0.0
+    lists_retry_at = 0.0
+    lists_failures = 0
     lists_confirm_action = 0
     lists_context_changed = true
 }
@@ -75,17 +81,27 @@ ListsNetworkPending :: () -> bool {
     return lists_attempt[0] != cast(u8)0
 }
 
+// Only a change that has failed several times needs the person's Retry; the
+// first failures are retried without a word.
+ListsNetworkNeedsRetry :: () -> bool {
+    return ListsNetworkPending() && !lists_operation.active && lists_failures >= ListsQuietRetries
+}
+
+ListsQuietRetries :: 3
+
 ListsNetworkBusy :: () -> bool {
     return lists_operation.active
 }
 
 ListsNetworkStart :: (message: ListsMessage) {
     ListsNetworkContext()
-    if lists_operation.active || !ListsNetworkReady() {
-        lists_status = 5
+    writing := message.action != LISTS_REFRESH
+    if !ListsNetworkReady() {
+        if writing {
+            lists_status = 5
+        }
         return
     }
-    writing := message.action != LISTS_REFRESH
     if writing && message.action != LISTS_RETRY {
         if ListsNetworkPending() || message.request_body.count == 0 ||
         !AppCopyText(message.request_body, lists_attempt[:]) ||
@@ -96,8 +112,17 @@ ListsNetworkStart :: (message: ListsMessage) {
         lists_confirm_action = message.action
         unused AppCopyText(message.selected_id, lists_confirm_list[:])
         lists_next_id[0] = cast(u8)0
+        lists_failures = 0
+        lists_retry_at = 0.0
     }
     if writing && !ListsNetworkPending() {
+        return
+    }
+    // A refresh or the earlier change is on its way; this change follows it.
+    if lists_operation.active {
+        if writing {
+            lists_status = 1
+        }
         return
     }
     lists_response[0] = cast(u8)0
@@ -105,13 +130,24 @@ ListsNetworkStart :: (message: ListsMessage) {
         NetworkTransport(*lists_transfer), ifx writing then "POST" else "GET",
         "/api/v1/lists", ifx writing then TextUntilNul(lists_attempt[:]) else "",
         lists_response[:], true) {
-        lists_status = 3
+        // Nothing was sent: a change waits for its next quiet retry.
+        if writing {
+            lists_status = 1
+        }
         return
     }
     lists_writing = writing
     if writing {
         lists_status = 1
     }
+}
+
+// An uncertain change stays saved on this device and goes again after a pause.
+ListsNetworkRetryLater :: (now: float64) {
+    lists_failures += 1
+    pauses: [3]float64 = .[5.0, 20.0, 60.0]
+    lists_retry_at = now + pauses[ifx lists_failures > 3 then 2 else lists_failures - 1]
+    lists_status = 1
 }
 
 ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
@@ -127,11 +163,12 @@ ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
         // Poll already discards replies if account, server or consent changed.
         if lists_operation.result == cast(s32)AuthResult.AUTH_OK {
             json := TextUntilNul(lists_response[:])
-            valid := ValueEnd(json, 0, 0) == cast(s32)json.count &&
+            valid := Space(json, ValueEnd(json, 0, 0)) == cast(s32)json.count &&
             ArrayCount(json, FieldAt(json, 0, "lists")) >= 0 &&
             ArrayCount(json, FieldAt(json, 0, "invitations")) >= 0
             if valid && ListsCacheWrite("lists.shared", json) != 0 {
                 app.elist.loaded = 0
+                lists_failures = 0
                 if lists_writing {
                     unused ListsCacheWrite("lists.attempt", "{}")
                     lists_attempt[0] = cast(u8)0
@@ -146,18 +183,31 @@ ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
                 } else if !ListsNetworkPending() {
                     lists_status = 0
                 }
-            } else {
-                lists_status = 3
+            } else if lists_writing {
+                ListsNetworkRetryLater(now)
             }
         } else {
             status := lists_operation.request.status
-            lists_status = ifx status == 409 then 4 else ifx status == 404 then 5 else 3
-            if lists_writing && status >= 400 && status < 500 && status != 408 && status != 429 {
+            // The node refused this change for good: a stale revision, an
+            // inaccessible list, or a change it will never accept.
+            definite := status == 400 || status == 403 || status == 404 || status == 409
+            if lists_writing && definite {
                 unused ListsCacheWrite("lists.attempt", "{}")
                 lists_attempt[0] = cast(u8)0
+                lists_failures = 0
+                lists_status = ifx status == 409 then 4 else ifx status == 404 then 5 else 3
+            } else if lists_writing {
+                ListsNetworkRetryLater(now)
             }
+            // A failed refresh keeps the last confirmed lists and says nothing.
         }
-        lists_refresh_at = now + 10.0
+        lists_refresh_at = now + ifx lists_operation.result == cast(s32)AuthResult.AUTH_OK then 10.0 else 30.0
+    }
+    if ListsNetworkPending() && !lists_operation.active && ListsNetworkReady() && now >= lists_retry_at {
+        message: ListsMessage
+        message.action = LISTS_RETRY
+        ListsNetworkStart(message)
+        return
     }
     if visible && !lists_operation.active && ListsNetworkReady() && now >= lists_refresh_at {
         message: ListsMessage

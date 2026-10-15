@@ -48,6 +48,138 @@ storage_elist_initialized :: () -> s32 {
     return ifx (result != SQLITE_DONE) then (1) else (0)
 }
 
+// The starter Inbox has the same IDs on every device, dated at the start of
+// time, so devices that each seed it share one list and any real edit wins.
+ElistStarterList :: "00000000-0000-4000-8000-00000000a001"
+ElistStarterItems: [3]string = .["00000000-0000-4000-8000-00000000a002",
+"00000000-0000-4000-8000-00000000a003", "00000000-0000-4000-8000-00000000a004"];
+
+elist_seed_starter :: () -> bool {
+    titles: [3]string = .[LocaleText("elist_default_item_breathe"), LocaleText("elist_default_item_walk"),
+    LocaleText("elist_default_item_water")]
+    user := AppTextFromCString(storage_user_id_buffer(), 128)
+    statement: *void = null
+    if elist_exec_sql("BEGIN IMMEDIATE") == 0 {
+        return false
+    }
+    // Another profile on this device may already hold these IDs.
+    if SqlitePrepareText(storage_db_handle(), "INSERT OR IGNORE INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?1,?2,?3,0,0,1)",
+        -1, *statement, null) != SQLITE_OK {
+        elist_exec_sql("ROLLBACK")
+        return false
+    }
+    elist_bind_text(statement, 1, ElistStarterList)
+    elist_bind_text(statement, 2, user)
+    elist_bind_text(statement, 3, LocaleText("elist_default_list"))
+    inserted := SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) == 1
+    SqliteFinalize(statement)
+    for index: cast(s32)0..cast(s32)2 {
+        if !inserted {
+            break
+        }
+        statement = null
+        if SqlitePrepareText(storage_db_handle(), "INSERT OR IGNORE INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) VALUES(?1,?2,?3,?4,'',0,?5,0,1)",
+            -1, *statement, null) != SQLITE_OK {
+            inserted = false
+            break
+        }
+        elist_bind_text(statement, 1, ElistStarterItems[index])
+        elist_bind_text(statement, 2, user)
+        elist_bind_text(statement, 3, ElistStarterList)
+        elist_bind_text(statement, 4, titles[index])
+        SqliteBindInt(statement, 5, index)
+        inserted = SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) == 1
+        SqliteFinalize(statement)
+    }
+    if !inserted || elist_exec_sql("COMMIT") == 0 {
+        elist_exec_sql("ROLLBACK")
+        return false
+    }
+    unused storage_enqueue_sync_elist_list(ElistStarterList)
+    for item: ElistStarterItems {
+        unused storage_enqueue_sync_elist_item(item)
+    }
+    return true
+}
+
+// A starter Inbox nobody has touched: its three starter tasks, open, without
+// notes. A used one has a task, tick or note of the person's own; a copy whose
+// starter tasks are still arriving is neither.
+elist_starter_state :: (id: string, untouched: *bool, used: *bool) {
+    untouched.* = false
+    used.* = false
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*),COUNT(DISTINCT title),COALESCE(SUM(title IN (?2,?3,?4)),0),COALESCE(SUM(done),0),COALESCE(SUM(length(comment)),0) FROM elist_items WHERE list_id=?1 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    elist_bind_text(statement, 1, id)
+    elist_bind_text(statement, 2, LocaleText("elist_default_item_breathe"))
+    elist_bind_text(statement, 3, LocaleText("elist_default_item_walk"))
+    elist_bind_text(statement, 4, LocaleText("elist_default_item_water"))
+    if SqliteStep(statement) == SQLITE_ROW {
+        count := SqliteColumnInt(statement, 0)
+        starters := SqliteColumnInt(statement, 2)
+        marked := SqliteColumnInt(statement, 3) != 0 || SqliteColumnInt(statement, 4) != 0
+        untouched.* = count == 3 && SqliteColumnInt(statement, 1) == 3 && starters == 3 && !marked
+        used.* = starters < count || marked
+    }
+    SqliteFinalize(statement)
+}
+
+elist_untouched_starter :: (id: string) -> bool {
+    untouched: bool
+    used: bool
+    elist_starter_state(id, *untouched, *used)
+    return untouched
+}
+
+elist_used_inbox :: (id: string) -> bool {
+    untouched: bool
+    used: bool
+    elist_starter_state(id, *untouched, *used)
+    return used
+}
+
+// Devices that each made their own starter Inbox before syncing leave the
+// account with copies. Untouched copies go once another Inbox remains.
+elist_remove_duplicate_starters :: (state: *EListState) -> bool {
+    title := LocaleText("elist_default_list")
+    inboxes: s32 = 0
+    for index: cast(s32)0..state.list_count - 1 {
+        if AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == title &&
+        !ListsSharedId(AppTextFromCString(*state.lists[index].id[0], 37)) {
+            inboxes += 1
+        }
+    }
+    if inboxes < 2 {
+        return false
+    }
+    // Keep a list someone uses, else the shared starter, else the first.
+    keep: s32 = -1
+    for pass: cast(s32)0..cast(s32)2 {
+        for index: cast(s32)0..state.list_count - 1 {
+            id := AppTextFromCString(*state.lists[index].id[0], 37)
+            if keep >= 0 || AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) != title ||
+            ListsSharedId(id) {
+                continue
+            }
+            if (pass == 0 && elist_used_inbox(id)) || (pass == 1 && id == ElistStarterList) || pass == 2 {
+                keep = index
+            }
+        }
+    }
+    removed := false
+    for index: cast(s32)0..state.list_count - 1 {
+        id := AppTextFromCString(*state.lists[index].id[0], 37)
+        if index != keep && AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == title &&
+        !ListsSharedId(id) && elist_untouched_starter(id) {
+            removed = storage_elist_delete_list(id) != 0 || removed
+        }
+    }
+    return removed
+}
+
 #program_export
 storage_elist_load :: (value: *void) -> s32 {
     state := cast(*EListState)value
@@ -82,7 +214,14 @@ storage_elist_load :: (value: *void) -> s32 {
         list.item_total = SqliteColumnInt(statement, 5)
     }
     SqliteFinalize(statement)
+    if elist_remove_duplicate_starters(state) {
+        return storage_elist_load(value)
+    }
     if storage_elist_initialized() == 0 {
+        if elist_seed_starter() {
+            storage_set_setting_int("elist_initialized", 1)
+            return storage_elist_load(value)
+        }
         created_id: [37]u8 = .[0]
         if storage_elist_create_list(LocaleText("elist_default_list"), *created_id[0]) != 0 {
             storage_set_setting_int("elist_initialized", 1)
