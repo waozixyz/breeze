@@ -13,6 +13,7 @@ import { createFigure, styleNames } from './view/figure.js'
 import './view/characters.js'
 import { THEMES, VIEWS, createCameraRig, createStage } from './view/stage.js'
 import { createPaintedFigure, loadCharacter } from './painted/figure.js'
+import { FLAT_LOOKS, createFlatFigure } from './flat/figure.js'
 
 const params = new URLSearchParams(location.search)
 const renderMode = params.has('render')
@@ -20,7 +21,10 @@ if (renderMode) {
     document.body.classList.add('render')
 }
 
-const FIGURE_LABELS = { mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', monk: 'Monk', tibetanWoman: 'Tibetan Woman' }
+const FIGURE_LABELS = {
+    mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', monk: 'Monk', tibetanWoman: 'Tibetan Woman',
+    jadeWoman: 'Jade Woman', indigoMan: 'Indigo Man',
+}
 // Painted 2D characters: cut-out paintings over the same solved body.
 const PAINTED = {
     monk: 'characters/monk/character.json',
@@ -63,7 +67,12 @@ let painted = null
 const characters = new Map()
 
 function figureNames() {
-    return [...Object.keys(PAINTED), ...styleNames()]
+    return [...Object.keys(PAINTED), ...Object.keys(FLAT_LOOKS), ...styleNames()]
+}
+
+// Painted and flat figures are drawn in 2D over the solved body.
+function isFlatDrawing(name) {
+    return Boolean(PAINTED[name] || FLAT_LOOKS[name])
 }
 
 async function setFigure(name) {
@@ -91,6 +100,9 @@ async function setFigure(name) {
             return
         }
         painted = createPaintedFigure(character, rig)
+        painted.setBackground(THEMES[state.theme]?.background ?? THEMES.light.background)
+    } else if (FLAT_LOOKS[name]) {
+        painted = createFlatFigure(FLAT_LOOKS[name], rig)
         painted.setBackground(THEMES[state.theme]?.background ?? THEMES.light.background)
     } else {
         figure = createFigure(rig, name, { theme: state.theme })
@@ -311,11 +323,11 @@ function renderToolbar() {
     }
     toggle('Mirror', 'mirror', () => canvas.classList.toggle('mirrored', state.mirror), 'Flip the picture left to right, like a mirror')
     // Footprints and the next-pose ghost are drawn in the 3D scene only.
-    if (!PAINTED[state.figure]) {
+    if (!isFlatDrawing(state.figure)) {
         toggle('Footprints', 'footprints')
     }
     toggle('Weight', 'weight', () => { document.getElementById('weight').style.display = state.weight ? '' : 'none' })
-    if (!PAINTED[state.figure]) {
+    if (!isFlatDrawing(state.figure)) {
         toggle('Next pose', 'ghost', () => { ghost.root.visible = state.ghost }, 'Show the next key pose as a ghost')
     }
     toggle('Checks', 'checks', () => { if (state.checks) { runChecks() } else { document.getElementById('checks').classList.add('hidden') } }, 'Run the motion checks for this item')
