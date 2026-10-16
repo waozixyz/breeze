@@ -23,6 +23,13 @@ DewUnits :: 1000000
 DewRead :: 1
 DewUpgrade :: 2
 DewAddress :: 3
+DewGift :: 4
+
+// Where a gift to a friend stands, for the window that sends it.
+DewGiftNone :: 0
+DewGiftSending :: 1
+DewGiftSent :: 2
+DewGiftRefused :: 3
 
 // The node's paid storage sizes, in the order the app offers them.
 DewPlanCount :: 2
@@ -76,6 +83,14 @@ dew_action: s32;
 dew_next_refresh: float64;
 dew_notice: string;
 dew_sync_requested: bool;
+// A gift waiting for the node's answer, as the request it sends, kept until
+// the node confirms or refuses it so an uncertain send repeats the same ID.
+dew_gift_attempt: [192]u8;
+dew_gift_retry_at: float64;
+dew_gift_state: s32;
+dew_gift_notice: string;
+dew_gift_recipient: [65]u8;
+dew_gift_units: s64;
 
 DewReady :: () -> bool {
     return StoredAccountMode() == AccountModeOwner && storage_sync_enabled() != 0 &&
@@ -96,6 +111,12 @@ DewCancel :: () {
     dew_next_refresh = 0.0
     dew_notice = ""
     dew_sync_requested = false
+    dew_gift_attempt = .{}
+    dew_gift_retry_at = 0.0
+    dew_gift_state = DewGiftNone
+    dew_gift_notice = ""
+    dew_gift_recipient = .{}
+    dew_gift_units = 0
 }
 
 DewTakeSyncRequest :: () -> bool {
@@ -119,6 +140,13 @@ DewContext :: () {
     unused storage_get_social_cache_json("dew.upgrade", *dew_attempt[0], 256)
     if FieldAt(TextUntilNul(dew_attempt[:]), 0, "request_id") < 0 {
         dew_attempt[0] = cast(u8)0
+    }
+    // A gift still unconfirmed when the app closed is sent again as it was.
+    unused storage_get_social_cache_json("dew.gift", *dew_gift_attempt[0], 192)
+    if DewGiftAttemptLoad() {
+        dew_gift_state = DewGiftSending
+    } else {
+        dew_gift_attempt[0] = cast(u8)0
     }
 }
 
@@ -245,8 +273,12 @@ DewBegin :: (action: s32, path: string, body: string) -> bool {
     }
     dew_response = .{}
     dew_action = action
+    method := "GET"
+    if action == DewUpgrade || action == DewGift {
+        method = "POST"
+    }
     if !BeginStoredRequest(*dew_operation, DewNode, NetworkTransport(*dew_transfer),
-        ifx action == DewUpgrade then "POST" else "GET", path, body, dew_response[:], true) {
+        method, path, body, dew_response[:], true) {
         dew_notice = "profile_dew_error"
         return false
     }
@@ -292,6 +324,81 @@ DewAttemptSize :: () -> s32 {
     attempt := TextUntilNul(dew_attempt[:])
     unused ReadStringText(attempt, FieldAt(attempt, 0, "size"), size[:])
     return DewPlanSlot(TextUntilNul(size[:])) + 1
+}
+
+// Reads the waiting gift's friend and amount; false without a whole request.
+DewGiftAttemptLoad :: () -> bool {
+    attempt := TextUntilNul(dew_gift_attempt[:])
+    recipient: [65]u8
+    request_id: [65]u8
+    units: s64
+    if attempt.count == 0 ||
+    ReadStringText(attempt, FieldAt(attempt, 0, "recipient"), recipient[:]) != 64 ||
+    ReadStringText(attempt, FieldAt(attempt, 0, "request_id"), request_id[:]) < 8 ||
+    !DewInteger(attempt, FieldAt(attempt, 0, "units"), *units) || units <= 0 {
+        return false
+    }
+    dew_gift_recipient = recipient
+    dew_gift_units = units
+    return true
+}
+
+// Sends `units` to the friend whose account ID is `recipient`. The request is
+// saved first, so it is repeated with the same ID until the node answers.
+DewSendGift :: (recipient: string, units: s64) -> bool {
+    DewContext()
+    if !DewReady() || dew_gift_attempt[0] != cast(u8)0 || recipient.count != 64 || units <= 0 ||
+    TextUntilNul(dew_identity[:]) == recipient {
+        return false
+    }
+    request_id: [37]u8
+    storage_make_uuid(*request_id[0])
+    amount: [24]u8
+    unused AppFormatS64(units, amount[:])
+    attempt: [192]u8
+    unused AppCopyText("{\"recipient\":\"", attempt[:])
+    unused AppAppendText(recipient, attempt[:])
+    unused AppAppendText("\",\"units\":", attempt[:])
+    unused AppAppendText(TextUntilNul(amount[:]), attempt[:])
+    unused AppAppendText(",\"request_id\":\"", attempt[:])
+    unused AppAppendText(TextUntilNul(request_id[:]), attempt[:])
+    unused AppAppendText("\"}", attempt[:])
+    if storage_set_social_cache_json("dew.gift", TextUntilNul(attempt[:])) == 0 {
+        dew_gift_state = DewGiftRefused
+        dew_gift_notice = "dew_gift_failed"
+        return false
+    }
+    dew_gift_attempt = attempt
+    unused DewGiftAttemptLoad()
+    dew_gift_state = DewGiftSending
+    dew_gift_notice = ""
+    dew_gift_retry_at = 0.0
+    return true
+}
+
+// Forgets the waiting gift once the node has answered it for certain.
+DewGiftSettle :: (state: s32, notice: string) {
+    unused storage_set_social_cache_json("dew.gift", "{}")
+    dew_gift_attempt[0] = cast(u8)0
+    dew_gift_state = state
+    dew_gift_notice = notice
+}
+
+// The node's answer must name the request it was sent, with the sender's new balance.
+DewParseGift :: (json: string, balance: *s64) -> bool {
+    attempt := TextUntilNul(dew_gift_attempt[:])
+    sent_id: [65]u8
+    answer_id: [65]u8
+    recipient: [65]u8
+    units: s64
+    unused ReadStringText(attempt, FieldAt(attempt, 0, "request_id"), sent_id[:])
+    return Space(json, ValueEnd(json, 0, 0)) == cast(s32)json.count &&
+    ReadStringText(json, FieldAt(json, 0, "request_id"), answer_id[:]) >= 8 &&
+    TextUntilNul(answer_id[:]) == TextUntilNul(sent_id[:]) &&
+    ReadStringText(json, FieldAt(json, 0, "recipient"), recipient[:]) == 64 &&
+    TextUntilNul(recipient[:]) == TextUntilNul(dew_gift_recipient[:]) &&
+    DewInteger(json, FieldAt(json, 0, "units"), *units) && units == dew_gift_units &&
+    DewInteger(json, FieldAt(json, 0, "balance"), balance)
 }
 
 DewTopUp :: () {
@@ -354,13 +461,26 @@ DewParseAddress :: (json: string) -> bool {
 
 DewTick :: (visible: bool, now: float64) {
     DewContext()
+    refresh_soon := false
     if dew_operation.active {
         if !PollStoredOperation(*dew_operation) {
             return
         }
         if dew_operation.result == cast(s32)AuthResult.AUTH_OK {
             json := TextUntilNul(dew_response[:])
-            if dew_action == DewAddress {
+            if dew_action == DewGift {
+                balance: s64
+                if DewParseGift(json, *balance) {
+                    if dew_account.known {
+                        dew_account.balance = balance
+                    }
+                    DewGiftSettle(DewGiftSent, "")
+                    refresh_soon = true
+                } else {
+                    dew_gift_notice = "dew_gift_waiting"
+                    dew_gift_retry_at = now + 15.0
+                }
+            } else if dew_action == DewAddress {
                 if !DewParseAddress(json) {
                     dew_notice = "profile_dew_error"
                 }
@@ -389,6 +509,19 @@ DewTick :: (visible: bool, now: float64) {
                     dew_notice = "profile_dew_error"
                 }
             }
+        } else if dew_action == DewGift {
+            status := dew_operation.request.status
+            if status == 402 {
+                DewGiftSettle(DewGiftRefused, "dew_gift_funds")
+            } else if status == 403 {
+                DewGiftSettle(DewGiftRefused, "dew_gift_not_friend")
+            } else if status == 400 || status == 409 {
+                DewGiftSettle(DewGiftRefused, "dew_gift_failed")
+            } else {
+                // Without a certain answer the same request goes again shortly.
+                dew_gift_notice = "dew_gift_waiting"
+                dew_gift_retry_at = now + 15.0
+            }
         } else {
             dew_notice = "profile_dew_error"
             status := dew_operation.request.status
@@ -401,6 +534,17 @@ DewTick :: (visible: bool, now: float64) {
             }
         }
         dew_next_refresh = now + 15.0
+        if refresh_soon {
+            dew_next_refresh = now
+        }
+    }
+    // A waiting gift goes before anything else the node is asked.
+    if dew_gift_attempt[0] != cast(u8)0 && DewReady() && !dew_operation.active &&
+    now >= dew_gift_retry_at {
+        attempt := dew_gift_attempt
+        unused DewBegin(DewGift, "/api/v1/tokens/gifts", TextUntilNul(attempt[:]))
+        dew_gift_retry_at = now + 15.0
+        return
     }
     if visible && DewReady() && !dew_operation.active && now >= dew_next_refresh {
         unused DewBegin(DewRead, "/api/v1/storage/plan", "")
