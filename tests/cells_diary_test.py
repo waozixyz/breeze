@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -48,7 +49,7 @@ def wait_for_text(entry, matches, message):
 
 
 @contextlib.contextmanager
-def application(profile, label, import_source=None):
+def application(profile, label, import_source=None, size=(900, 720)):
     with (OUTPUT / f"{label}.log").open("w") as log:
         environment = ENV | {"APP_DATA_ROOT": str(profile)}
         if import_source is not None:
@@ -68,9 +69,11 @@ def application(profile, label, import_source=None):
                 time.sleep(0.1)
             else:
                 raise AssertionError("Standalone Diary window did not appear")
-            command("xdotool", "windowsize", window, "900", "720")
+            command("xdotool", "windowsize", window, str(size[0]), str(size[1]))
             command("xdotool", "windowfocus", window)
             time.sleep(1.5)
+            # Fresh profiles can show the first-run Lumi guide over the editor.
+            tap(window, size[0] // 2 + 112, 114)
             yield window
             assert app.poll() is None, "Diary crashed"
         finally:
@@ -150,5 +153,60 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     (source / entry.name).write_text(json.dumps(dict(original, text="Changed source")))
     with application(migrated, "migration-restart", source):
         assert json.loads(target.read_text()) == original, "import overwrote an existing Inbe entry"
+
+    # Render the same stored attachments at phone width and the reporter's
+    # scale in both sage modes, including an unavailable photo. The fixture
+    # contains three references; navigation and removal must preserve text.
+    blue_path = source / "photo-blue.bin"
+    Image.new("RGB", (100, 60), (24, 90, 220)).save(blue_path, format="JPEG")
+    (source / entry.name).write_text(json.dumps(dict(original, photos=[
+        *original["photos"], dict(file=blue_path.name, name="Blue photo"),
+        dict(file="photo-missing.bin", name="Missing photo")])))
+    for dark in (0, 1):
+        phone = profile / f"phone-{dark}"
+        phone_source = profile / f"phone-source-{dark}"
+        phone_source.mkdir()
+        for name in (entry.name, "photo-local.bin", blue_path.name):
+            (phone_source / name).write_bytes((source / name).read_bytes())
+        # Initialize an isolated profile before setting its appearance.
+        with application(phone, f"phone-init-{dark}", phone_source):
+            pass
+        with sqlite3.connect(phone / "inbe.db") as database:
+            owner = database.execute("select user_id from settings limit 1").fetchone()[0]
+            for key, value in {"theme": 7, "theme_source": 0, "theme_mode": 1 + dark,
+                               "dark_mode": dark, "ui_scale": 10}.items():
+                database.execute("insert into settings(user_id,key,value,updated_at) values(?,?,?,?) "
+                                 "on conflict(user_id,key) do update set value=excluded.value",
+                                 (owner, key, str(value), int(time.time())))
+        with application(phone, f"sage-{dark}", size=(390, 844)) as window:
+            phone_entry = next((phone / "diary").glob("*/" + entry.name))
+            command("xdotool", "mousemove", "--window", window, "200", "800")
+            command("xdotool", "click", "--repeat", "16", "--delay", "70", "5")
+            time.sleep(0.5)
+            capture(window, f"sage-{dark}-first")
+            with Image.open(OUTPUT / f"sage-{dark}-first.png") as image:
+                red = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
+                          if color[0] > 200 and color[1] < 100 and color[2] < 120)
+                assert red > 1000, "First photo not visible at phone scale"
+            # The page's bottom is stable: its last row has the three controls.
+            tap(window, 310, 763)
+            capture(window, f"sage-{dark}-second")
+            with Image.open(OUTPUT / f"sage-{dark}-second.png") as image:
+                blue = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
+                           if color[2] > 180 and color[0] < 100 and color[1] < 140)
+                assert blue > 1000, "Next photo not visible at phone scale"
+            tap(window, 310, 763)
+            capture(window, f"sage-{dark}-missing")
+            assert json.loads(phone_entry.read_text())["text"] == original["text"]
+            tap(window, 195, 763)
+            deadline = time.monotonic() + 5
+            while len(json.loads(phone_entry.read_text())["photos"]) != 2:
+                assert time.monotonic() < deadline, "Photo removal was not saved"
+                time.sleep(0.1)
+            assert json.loads(phone_entry.read_text())["text"] == original["text"]
+        with application(phone, f"sage-{dark}-restart", size=(390, 844)):
+            assert len(json.loads(phone_entry.read_text())["photos"]) == 2
+            assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
     print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
+    print("Diary photos: multiple images, missing files, navigation, removal and restart at phone width in light/dark sage passed")

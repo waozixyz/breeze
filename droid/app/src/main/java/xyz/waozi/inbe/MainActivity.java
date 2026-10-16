@@ -640,8 +640,12 @@ public class MainActivity extends NativeActivity {
             @Override
             public void run() {
                 try {
-                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    Intent intent = kind == DiaryPhotoImport.KIND
+                            ? DiaryPhotoImport.pickerIntent()
+                            : new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    if (Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    }
                     String[] mimeTypes = parseMimeTypes(mimeTypesCsv);
                     intent.setType(primaryMimeType(mimeTypes));
                     if (mimeTypes.length > 0) {
@@ -649,7 +653,18 @@ public class MainActivity extends NativeActivity {
                     }
                     pendingImportKind = kind;
                     Log.d(TAG, "Opening import picker - kind=" + kind + ", mimeTypes=" + mimeTypesCsv + ", parsed=" + Arrays.toString(mimeTypes));
-                    startActivityForResult(intent, REQUEST_IMPORT_ZIP);
+                    try {
+                        startActivityForResult(intent, REQUEST_IMPORT_ZIP);
+                    } catch (android.content.ActivityNotFoundException unavailable) {
+                        if (kind != DiaryPhotoImport.KIND
+                                || Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
+                            throw unavailable;
+                        }
+                        Intent fallback = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                        fallback.setType("image/*");
+                        startActivityForResult(fallback, REQUEST_IMPORT_ZIP);
+                    }
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to open import picker", e);
                     nativeImportCancelled(kind);
@@ -868,6 +883,19 @@ public class MainActivity extends NativeActivity {
         Log.d(TAG, "File selected for import - kind=" + pendingImportKind + ", uri=" + uri);
 
         File importDir = new File(getCacheDir(), "imports");
+        if (pendingImportKind == DiaryPhotoImport.KIND) {
+            // Decoding and compression must not block input or lifecycle events.
+            new Thread(() -> {
+                try {
+                    File photo = DiaryPhotoImport.copy(getContentResolver(), uri, importDir);
+                    nativeImportSelectedFile(DiaryPhotoImport.KIND, photo.getAbsolutePath());
+                } catch (Exception | OutOfMemoryError error) {
+                    Log.e(TAG, "Failed to prepare diary photo", error);
+                    nativeImportSelectedFile(DiaryPhotoImport.KIND, "");
+                }
+            }, "diary-photo-import").start();
+            return;
+        }
         String extension = extensionForUri(uri);
         String displayName = sanitizeFileName(displayNameForUri(uri));
         String importName;
@@ -907,9 +935,6 @@ public class MainActivity extends NativeActivity {
                 long totalBytes = 0;
                 while ((read = input.read(buffer)) != -1) {
                     totalBytes += read;
-                    if (pendingImportKind == 4 && totalBytes > 16L * 1024 * 1024) {
-                        throw new java.io.IOException("Diary photo exceeds 16 MiB");
-                    }
                     output.write(buffer, 0, read);
                 }
                 Log.d(TAG, "File copied successfully - kind=" + pendingImportKind + ", path=" + importFile.getAbsolutePath() + ", size=" + totalBytes + " bytes");

@@ -3097,6 +3097,10 @@ test: app-preferences-sync-test
 cells-diary-test: $(TARGET)
 	sh tests/cells_diary_test.sh $(abspath $(TARGET))
 
+.PHONY: android-diary-photo-test
+android-diary-photo-test:
+	sh tests/android_diary_photo_test.sh
+
 .PHONY: package-version-test
 package-version-test:
 	python3 scripts/check-package-versions.py
