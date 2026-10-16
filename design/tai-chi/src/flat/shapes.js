@@ -859,7 +859,8 @@ export function createFlatShapes(look, rig) {
         for (const item of frontArms) {
             armOps(item, ops, body.clip)
         }
-        return ops
+        // A shape whose points all fall in a line has nothing to fill.
+        return ops.filter((op) => op.kind !== 'fill' || op.points.length >= 3)
     }
 
     return { paint, colors }

@@ -1,20 +1,21 @@
-// The Tai Chi course loads, and the app's motion matches the course
-// studio's: sampled poses, solved joints and painted pieces are compared with
-// tests/fixtures/tai-chi-reference.json, written by
-// design/tai-chi/tools/export-app.mjs from the same course.bin.
+// The Tai Chi course loads, and the app's motion and figure match the course
+// studio's: sampled poses, solved joints and the flat figure's paint
+// operations are compared with tests/fixtures/tai-chi-reference.json,
+// written by design/tai-chi/tools/export-app.mjs from the same course.bin.
+// A filled shape is compared by its area, centroid and bounds, a line by its
+// ends and number of points.
 #import "file"
 #import "json_scan"
 #import, file "../src/practices/tai_chi/tai_chi_math.zi";
 #import, file "../src/practices/tai_chi/tai_chi_course.zi";
 #import, file "../src/practices/tai_chi/tai_chi_timeline.zi";
 #import, file "../src/practices/tai_chi/tai_chi_solve.zi";
-#import, file "../src/practices/tai_chi/tai_chi_layout.zi";
-
-TAI_CHI_TEST_GRID_COLUMNS :: 2
-TAI_CHI_TEST_GRID_ROWS :: 6
+#import, file "../src/practices/tai_chi/tai_chi_view.zi";
+#import, file "../src/practices/tai_chi/tai_chi_flat.zi";
 
 test_timeline: TaiChiTimeline;
 test_worst: float64;
+test_frame: TaiChiFlatFrame;
 
 TestNumber :: (text: string, at: s32) -> float64 {
     return ReadNumber(text, at).value
@@ -60,22 +61,82 @@ TestJoint :: (solved: *TaiChiSolved, index: s32) -> TaiChiVector3 {
     return solved.com
 }
 
-TestPieceIndex :: (text: string, at: s32) -> s32 {
-    names: [TAI_CHI_PIECE_COUNT]string = .["shadowL", "shadowR", "shadowBody", "torso", "head", "armL", "armR",
-        "handL", "handR", "legL", "legR", "shoeL", "shoeR"]
-    for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
-        if TestStringIs(text, at, names[index]) {
-            return index
-        }
+// A "#rrggbb" colour as 0xRRGGBB.
+TestColor :: (text: string, at: s32) -> u32 {
+    span := ReadString(text, at)
+    color: u32 = 0
+    if !span.valid || span.end - span.start != 7 {
+        return 0xffffffff
     }
-    return -1
+    for index: span.start + 1..span.end - 1 {
+        digit := cast(u32)text[index]
+        value: u32 = 0
+        if digit >= cast(u32)48 && digit <= cast(u32)57 {
+            value = digit - cast(u32)48
+        } else if digit >= cast(u32)97 && digit <= cast(u32)102 {
+            value = digit - cast(u32)87
+        } else {
+            return 0xffffffff
+        }
+        color = (color << cast(u32)4) | value
+    }
+    return color
+}
+
+// Area, centroid and bounds of a filled shape against the reference.
+TestFill :: (text: string, entry: s32, points: []TaiChiVector2) -> bool {
+    area: float64 = 0.0
+    cx: float64 = 0.0
+    cy: float64 = 0.0
+    low := points[0]
+    high := points[0]
+    count := cast(s32)points.count
+    for index: cast(s32)0..count - 1 {
+        a := points[index]
+        b := points[(index + 1) % count]
+        cross := a.x * b.y - b.x * a.y
+        area += cross
+        cx += (a.x + b.x) * cross
+        cy += (a.y + b.y) * cross
+        low = TaiChiV2(TaiChiMin(low.x, a.x), TaiChiMin(low.y, a.y))
+        high = TaiChiV2(TaiChiMax(high.x, a.x), TaiChiMax(high.y, a.y))
+    }
+    area = area / 2.0
+    if TaiChiAbs(area) > 0.000000000001 {
+        cx = cx / (6.0 * area)
+        cy = cy / (6.0 * area)
+    } else {
+        cx = points[0].x
+        cy = points[0].y
+    }
+    center := FieldAt(text, entry, "center")
+    box := FieldAt(text, entry, "box")
+    return TestClose(area, TestNumber(text, FieldAt(text, entry, "area")), 0.00002) &&
+        TestClose(cx, TestElementNumber(text, center, 0), 0.0005) &&
+        TestClose(cy, TestElementNumber(text, center, 1), 0.0005) &&
+        TestClose(low.x, TestElementNumber(text, box, 0), 0.0005) &&
+        TestClose(low.y, TestElementNumber(text, box, 1), 0.0005) &&
+        TestClose(high.x, TestElementNumber(text, box, 2), 0.0005) &&
+        TestClose(high.y, TestElementNumber(text, box, 3), 0.0005)
+}
+
+// The ends and number of points of a line against the reference.
+TestLine :: (text: string, entry: s32, op: TaiChiFlatOp, points: []TaiChiVector2) -> bool {
+    ends := FieldAt(text, entry, "ends")
+    last := points[points.count - 1]
+    return cast(s32)TestNumber(text, FieldAt(text, entry, "count")) == op.count &&
+        TestClose(op.width, TestNumber(text, FieldAt(text, entry, "width")), 0.000002) &&
+        TestClose(points[0].x, TestElementNumber(text, ends, 0), 0.0005) &&
+        TestClose(points[0].y, TestElementNumber(text, ends, 1), 0.0005) &&
+        TestClose(last.x, TestElementNumber(text, ends, 2), 0.0005) &&
+        TestClose(last.y, TestElementNumber(text, ends, 3), 0.0005)
 }
 
 // One reference sample: 0 when it matches, otherwise a code for what
 // differs.
 TestSample :: (text: string, sample: s32) -> s32 {
     character: s32 = 0
-    if TestStringIs(text, FieldAt(text, sample, "character"), "tibetanWoman") {
+    if TestStringIs(text, FieldAt(text, sample, "character"), "indigoMan") {
         character = 1
     }
     item := cast(s32)TestNumber(text, FieldAt(text, sample, "item"))
@@ -107,44 +168,27 @@ TestSample :: (text: string, sample: s32) -> s32 {
     camera.yaw = TestNumber(text, FieldAt(text, camera_at, "yaw"))
     camera.tilt = TestNumber(text, FieldAt(text, camera_at, "tilt"))
     camera.center = TaiChiV3(TestElementNumber(text, center, 0), 0.0, TestElementNumber(text, center, 1))
-    images := TaiChiFigureImagesFor(character)
-    if !images.valid {
+    TaiChiFlatPaint(*test_frame, *solved, *rig, character, camera)
+    ops := FieldAt(text, sample, "ops")
+    if ArrayCount(text, ops) != test_frame.op_count {
         return 12
     }
-    memory: TaiChiLayoutMemory
-    frame := TaiChiLayout(*solved, *rig, *images, camera, *memory)
-    order := FieldAt(text, sample, "order")
-    for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
-        if TestPieceIndex(text, ElementAt(text, order, index)) != frame.order[index] {
+    for index: cast(s32)0..test_frame.op_count - 1 {
+        entry := ElementAt(text, ops, index)
+        op := test_frame.ops[index]
+        points := test_frame.points[op.first:op.first + op.count]
+        fill_at := FieldAt(text, entry, "fill")
+        is_fill := fill_at >= 0
+        if is_fill != (op.kind == TAI_CHI_FLAT_FILL) {
             return 300 + index
         }
-    }
-    pieces := FieldAt(text, sample, "pieces")
-    count := ArrayCount(text, pieces)
-    points: [TAI_CHI_TEST_GRID_COLUMNS * TAI_CHI_TEST_GRID_ROWS]TaiChiVector2
-    for index: cast(s32)0..count - 1 {
-        entry := ElementAt(text, pieces, index)
-        piece_index := TestPieceIndex(text, FieldAt(text, entry, "name"))
-        if piece_index < 0 {
-            return 13
+        color_at := ifx is_fill then fill_at else FieldAt(text, entry, "line")
+        if TestColor(text, color_at) != op.color || !TestClose(op.alpha, TestNumber(text, FieldAt(text, entry, "alpha")), 0.000002) {
+            return 400 + index
         }
-        piece := frame.pieces[piece_index]
-        image_at := FieldAt(text, entry, "image")
-        same_image := TestStringIs(text, image_at, "shadow")
-        if piece.image >= 0 {
-            same_image = TestStringIs(text, image_at, TaiChiCourseString(tai_chi_course.images[piece.image].role))
-        }
-        if !same_image {
-            return 400 + piece_index
-        }
-        TaiChiPieceVertices(*piece, TAI_CHI_TEST_GRID_COLUMNS, TAI_CHI_TEST_GRID_ROWS, points[:])
-        expected := FieldAt(text, entry, "points")
-        for point: cast(s32)0..TAI_CHI_TEST_GRID_COLUMNS * TAI_CHI_TEST_GRID_ROWS - 1 {
-            pair := ElementAt(text, expected, point)
-            if !TestClose(points[point].x, TestElementNumber(text, pair, 0), 0.0005) ||
-                !TestClose(points[point].y, TestElementNumber(text, pair, 1), 0.0005) {
-                return 500 + piece_index
-            }
+        matches := ifx is_fill then TestFill(text, entry, points) else TestLine(text, entry, op, points)
+        if !matches {
+            return 500 + index
         }
     }
     return 0
@@ -203,7 +247,8 @@ Check :: () -> s32 {
     if tai_chi_course.key_set_count < 2 || tai_chi_course.character_count != 2 || tai_chi_course.module_count != 3 {
         return 3
     }
-    if TaiChiCourseItemIndex("full/normal") < 0 || TaiChiCourseImage(0, "torso.front") < 0 {
+    if TaiChiCourseItemIndex("full/normal") < 0 || TaiChiCourseString(tai_chi_course.characters[0].id) != "jadeWoman" ||
+        TaiChiCourseString(tai_chi_course.characters[1].id) != "indigoMan" {
         return 4
     }
     // Every item builds a timeline that fits and lasts as long as in the

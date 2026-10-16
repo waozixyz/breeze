@@ -1,0 +1,1242 @@
+// The flat Tai Chi figures, as the course studio draws them
+// (design/tai-chi/src/flat/shapes.js): the solved skeleton seen flat along
+// the view becomes paint operations, back to front, filled convex polygons
+// and stroked lines in metres with screen y up. Arms and legs are hulls of
+// circles and cuff rings; the jacket is the hull of each pair of
+// neighbouring rings along the spine; the head is a few ellipsoids, its
+// outline in the hair colour, then the face cut along the hairline, jaw,
+// nose and ears by depth, the fringe, the bun and its tie, and the closed
+// eyes, brows, blush and mouth. The steps follow the studio's, so the app
+// draws the studio's figure.
+#import "math"
+#import, file "tai_chi_math.zi";
+#import, file "tai_chi_course.zi";
+#import, file "tai_chi_solve.zi";
+#import, file "tai_chi_view.zi";
+
+TAI_CHI_FLAT_RING_POINTS :: 24
+TAI_CHI_FLAT_OUTLINE_POINTS :: 32
+TAI_CHI_FLAT_CIRCLE_POINTS :: 20
+TAI_CHI_FLAT_TORSO_STATIONS :: 20
+TAI_CHI_FLAT_CLIP_STATIONS :: 8
+TAI_CHI_FLAT_HIP_SHARE :: 0.524
+TAI_CHI_FLAT_JACKET_ROWS :: 15
+TAI_CHI_FLAT_OP_CAPACITY :: 512
+TAI_CHI_FLAT_POINT_CAPACITY :: 16384
+// The most points gathered for one hull or produced by one clip.
+TAI_CHI_FLAT_SCRATCH :: 192
+TAI_CHI_FLAT_FILL :: 0
+TAI_CHI_FLAT_LINE :: 1
+
+TaiChiFlatOp :: struct {
+    kind: s32
+    // 0xRRGGBB.
+    color: u32
+    alpha: float64
+    width: float64
+    first: s32
+    count: s32
+}
+
+TaiChiFlatFrame :: struct {
+    ops: [TAI_CHI_FLAT_OP_CAPACITY]TaiChiFlatOp
+    op_count: s32
+    points: [TAI_CHI_FLAT_POINT_CAPACITY]TaiChiVector2
+    point_count: s32
+}
+
+// A range of points in the frame's pool.
+TaiChiFlatShape :: struct {
+    first: s32
+    count: s32
+}
+
+TaiChiFlatLook :: struct {
+    skin: u32
+    hair: u32
+    top: u32
+    pants: u32
+    cuff: u32
+    accent: u32
+    features: u32
+    mouth: u32
+    blush: u32
+    // Rows of height share at rest, half width, half depth, forward offset.
+    jacket: [TAI_CHI_FLAT_JACKET_ROWS][4]float64
+    limbs: float64
+    neck: float64
+    head_scale: float64
+    blush_alpha: float64
+    lashes: bool
+    brow: float64
+    ears: bool
+    bun: bool
+    crop: bool
+    hair_axis: TaiChiVector3
+    hair_edge: float64
+    fringe: bool
+    fringe_axis: TaiChiVector3
+    fringe_edge: float64
+}
+
+TaiChiFlatPalette :: struct {
+    skin: u32
+    hair: u32
+    top: u32
+    pants: u32
+    cuff: u32
+    accent: u32
+    features: u32
+    mouth: u32
+    blush: u32
+    top_far: u32
+    top_shade: u32
+    pants_far: u32
+    pants_shade: u32
+    cuff_far: u32
+    cuff_inside: u32
+    skin_far: u32
+    shadow: u32
+}
+
+// --- Looks -----------------------------------------------------------------------
+
+TaiChiFlatJacketRow :: (look: *TaiChiFlatLook, row: s32, share: float64, half: float64, depth: float64, forward: float64) {
+    look.jacket[row][0] = share
+    look.jacket[row][1] = half
+    look.jacket[row][2] = depth
+    look.jacket[row][3] = forward
+}
+
+// The jacket rows of the 3D characters (design/tai-chi/src/view/characters.js).
+TaiChiFlatJacket :: (look: *TaiChiFlatLook, hem: float64, hip: float64, waist: float64, chest: float64, shoulder: float64,
+    hem_depth: float64, waist_depth: float64, chest_depth: float64, bust: float64) {
+    TaiChiFlatJacketRow(look, 0, 0.478, hem, hem_depth, -0.006)
+    TaiChiFlatJacketRow(look, 1, 0.495, hem - 0.004, hem_depth - 0.003, -0.005)
+    TaiChiFlatJacketRow(look, 2, 0.52, hip, hem_depth - 0.01, -0.004)
+    TaiChiFlatJacketRow(look, 3, 0.56, hip - 0.005, waist_depth + 0.004, -0.002)
+    TaiChiFlatJacketRow(look, 4, 0.6, waist, waist_depth, 0.0)
+    TaiChiFlatJacketRow(look, 5, 0.64, waist, waist_depth, 0.002)
+    TaiChiFlatJacketRow(look, 6, 0.68, (waist + chest) / 2.0, chest_depth - 0.004, 0.005 + bust * 0.5)
+    TaiChiFlatJacketRow(look, 7, 0.715, chest, chest_depth, 0.007 + bust)
+    TaiChiFlatJacketRow(look, 8, 0.75, chest + 0.005, chest_depth - 0.003, 0.006 + bust * 0.6)
+    TaiChiFlatJacketRow(look, 9, 0.775, shoulder - 0.003, chest_depth - 0.01, 0.002)
+    TaiChiFlatJacketRow(look, 10, 0.795, shoulder, chest_depth - 0.017, 0.0)
+    TaiChiFlatJacketRow(look, 11, 0.807, shoulder - 0.012, chest_depth - 0.022, -0.001)
+    TaiChiFlatJacketRow(look, 12, 0.817, shoulder - 0.032, chest_depth - 0.026, -0.002)
+    TaiChiFlatJacketRow(look, 13, 0.826, shoulder * 0.55, 0.05, -0.002)
+    TaiChiFlatJacketRow(look, 14, 0.834, 0.05, 0.044, 0.0)
+}
+
+// Jade woman and Indigo man, as FLAT_LOOKS in the studio's shapes.js.
+TaiChiFlatLookFor :: (character: s32) -> TaiChiFlatLook {
+    look: TaiChiFlatLook
+    id := ""
+    if character >= 0 && character < tai_chi_course.character_count {
+        id = TaiChiCourseString(tai_chi_course.characters[character].id)
+    }
+    if id == "indigoMan" {
+        look.skin = 0xe6aa7c
+        look.hair = 0x7a4a2e
+        look.top = 0x4f5c94
+        look.pants = 0xc4ab78
+        look.cuff = 0x424e80
+        look.accent = 0xf2a65e
+        look.features = 0x3a2a26
+        look.mouth = 0xa8705c
+        look.blush = 0xd98f7a
+        TaiChiFlatJacket(*look, 0.126, 0.116, 0.105, 0.111, 0.114, 0.09, 0.073, 0.08, 0.0)
+        look.limbs = 1.06
+        look.neck = 0.029
+        look.head_scale = 1.06
+        look.blush_alpha = 0.0
+        look.lashes = false
+        look.brow = 0.0024
+        look.ears = true
+        look.bun = false
+        look.crop = true
+        look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.9, -0.435))
+        look.hair_edge = 0.0
+        look.fringe = false
+        return look
+    }
+    look.skin = 0xf1c7a6
+    look.hair = 0x2a2238
+    look.top = 0x3f8f7a
+    look.pants = 0x2e3d63
+    look.cuff = 0x2e3d63
+    look.accent = 0xf2a65e
+    look.features = 0x2a2238
+    look.mouth = 0xc9806f
+    look.blush = 0xec9f8f
+    TaiChiFlatJacket(*look, 0.134, 0.12, 0.104, 0.105, 0.103, 0.095, 0.073, 0.079, 0.004)
+    look.limbs = 1.0
+    look.neck = 0.025
+    look.head_scale = 1.08
+    look.blush_alpha = 0.5
+    look.lashes = true
+    look.brow = 0.0016
+    look.ears = false
+    look.bun = true
+    look.crop = false
+    look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.814, -0.581))
+    look.hair_edge = -0.094
+    look.fringe = true
+    look.fringe_axis = TaiChiNormalize3(TaiChiV3(0.3, 0.62, 0.72))
+    look.fringe_edge = 0.866
+    return look
+}
+
+// --- Colours ---------------------------------------------------------------------
+
+TaiChiFlatChannel :: (color: u32, shift: u32) -> float64 {
+    return cast(float64)((color >> shift) & cast(u32)255)
+}
+
+// A channel rounded as JavaScript's Math.round and kept in 0…255.
+TaiChiFlatRound :: (value: float64) -> u32 {
+    if value <= 0.0 {
+        return 0
+    }
+    rounded := cast(s64)(value + 0.5)
+    if rounded > 255 {
+        return 255
+    }
+    return cast(u32)rounded
+}
+
+TaiChiFlatShadeChannel :: (value: float64, amount: float64) -> u32 {
+    if amount >= 0.0 {
+        return TaiChiFlatRound(value * (1.0 - amount))
+    }
+    return TaiChiFlatRound(value + (255.0 - value) * -amount)
+}
+
+// Darkened by `amount`, or lightened by a negative amount.
+TaiChiFlatShade :: (color: u32, amount: float64) -> u32 {
+    red := TaiChiFlatShadeChannel(TaiChiFlatChannel(color, 16), amount)
+    green := TaiChiFlatShadeChannel(TaiChiFlatChannel(color, 8), amount)
+    blue := TaiChiFlatShadeChannel(TaiChiFlatChannel(color, 0), amount)
+    return (red << cast(u32)16) | (green << cast(u32)8) | blue
+}
+
+TaiChiFlatMixChannel :: (a: u32, b: u32, shift: u32, share: float64) -> u32 {
+    from := TaiChiFlatChannel(a, shift)
+    to := TaiChiFlatChannel(b, shift)
+    return TaiChiFlatRound(from + (to - from) * share)
+}
+
+TaiChiFlatMix :: (a: u32, b: u32, share: float64) -> u32 {
+    red := TaiChiFlatMixChannel(a, b, 16, share)
+    green := TaiChiFlatMixChannel(a, b, 8, share)
+    blue := TaiChiFlatMixChannel(a, b, 0, share)
+    return (red << cast(u32)16) | (green << cast(u32)8) | blue
+}
+
+TaiChiFlatPaletteFor :: (look: *TaiChiFlatLook) -> TaiChiFlatPalette {
+    palette: TaiChiFlatPalette
+    palette.skin = look.skin
+    palette.hair = look.hair
+    palette.top = look.top
+    palette.pants = look.pants
+    palette.cuff = look.cuff
+    palette.accent = look.accent
+    palette.features = look.features
+    palette.mouth = look.mouth
+    palette.blush = look.blush
+    palette.top_far = TaiChiFlatShade(look.top, 0.2)
+    palette.top_shade = TaiChiFlatShade(look.top, 0.14)
+    palette.pants_far = TaiChiFlatShade(look.pants, 0.22)
+    palette.pants_shade = TaiChiFlatShade(look.pants, 0.16)
+    palette.cuff_far = TaiChiFlatShade(look.cuff, 0.2)
+    palette.cuff_inside = TaiChiFlatShade(look.cuff, 0.35)
+    palette.skin_far = TaiChiFlatShade(look.skin, 0.1)
+    palette.shadow = 0x3c2d1e
+    return palette
+}
+
+// --- Points and hulls ------------------------------------------------------------
+
+TaiChiFlatScratch :: struct {
+    points: [TAI_CHI_FLAT_SCRATCH]TaiChiVector2
+    count: s32
+}
+
+TaiChiFlatPush :: (scratch: *TaiChiFlatScratch, point: TaiChiVector2) {
+    if scratch.count < TAI_CHI_FLAT_SCRATCH {
+        scratch.points[scratch.count] = point
+        scratch.count += 1
+    }
+}
+
+TaiChiFlatCircle :: (scratch: *TaiChiFlatScratch, center: TaiChiVector2, radius: float64) {
+    for index: cast(s32)0..TAI_CHI_FLAT_CIRCLE_POINTS - 1 {
+        angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_CIRCLE_POINTS * TAI_CHI_PI * 2.0
+        TaiChiFlatPush(scratch, TaiChiV2(center.x + Cos(angle) * radius, center.y + Sin(angle) * radius))
+    }
+}
+
+TaiChiFlatBefore :: (a: TaiChiVector2, b: TaiChiVector2) -> bool {
+    if a.x != b.x {
+        return a.x < b.x
+    }
+    return a.y < b.y
+}
+
+TaiChiFlatCross :: (o: TaiChiVector2, a: TaiChiVector2, b: TaiChiVector2) -> float64 {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+}
+
+// The convex hull of the scratch points, counter-clockwise with y up,
+// written to the frame's pool.
+TaiChiFlatHull :: (frame: *TaiChiFlatFrame, scratch: *TaiChiFlatScratch) -> TaiChiFlatShape {
+    shape: TaiChiFlatShape
+    count := scratch.count
+    // Points in order of x, then y.
+    for index: cast(s32)1..count - 1 {
+        point := scratch.points[index]
+        at := index - 1
+        while at >= 0 && TaiChiFlatBefore(point, scratch.points[at]) {
+            scratch.points[at + 1] = scratch.points[at]
+            at -= 1
+        }
+        scratch.points[at + 1] = point
+    }
+    if count < 3 || frame.point_count + count * 2 > TAI_CHI_FLAT_POINT_CAPACITY {
+        return shape
+    }
+    hull: [TAI_CHI_FLAT_SCRATCH * 2]TaiChiVector2
+    size: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        point := scratch.points[index]
+        while size >= 2 && TaiChiFlatCross(hull[size - 2], hull[size - 1], point) <= 0.000000000001 {
+            size -= 1
+        }
+        hull[size] = point
+        size += 1
+    }
+    lower := size
+    at := count - 1
+    while at >= 0 {
+        point := scratch.points[at]
+        while size >= lower + 2 && TaiChiFlatCross(hull[size - 2], hull[size - 1], point) <= 0.000000000001 {
+            size -= 1
+        }
+        hull[size] = point
+        size += 1
+        at -= 1
+    }
+    // The lower chain without its last point, then the upper without its
+    // last, as the studio's monotone chain.
+    shape.first = frame.point_count
+    for index: cast(s32)0..lower - 2 {
+        frame.points[frame.point_count] = hull[index]
+        frame.point_count += 1
+    }
+    for index: lower..size - 2 {
+        frame.points[frame.point_count] = hull[index]
+        frame.point_count += 1
+    }
+    shape.count = frame.point_count - shape.first
+    return shape
+}
+
+// The part of the convex `subject` inside the convex `clip`, both
+// counter-clockwise, written to the frame's pool.
+TaiChiFlatClip :: (frame: *TaiChiFlatFrame, subject: *TaiChiFlatScratch, clip: TaiChiFlatShape) -> TaiChiFlatShape {
+    shape: TaiChiFlatShape
+    input: TaiChiFlatScratch
+    output := subject.*
+    for edge: cast(s32)0..clip.count - 1 {
+        if output.count == 0 {
+            break
+        }
+        a := frame.points[clip.first + edge]
+        b := frame.points[clip.first + (edge + 1) % clip.count]
+        input = output
+        output.count = 0
+        for at: cast(s32)0..input.count - 1 {
+            current := input.points[at]
+            previous := input.points[(at + input.count - 1) % input.count]
+            current_inside := (b.x - a.x) * (current.y - a.y) - (b.y - a.y) * (current.x - a.x) >= 0.0
+            previous_inside := (b.x - a.x) * (previous.y - a.y) - (b.y - a.y) * (previous.x - a.x) >= 0.0
+            if current_inside {
+                if !previous_inside {
+                    TaiChiFlatPush(*output, TaiChiFlatCut(previous, current, a, b))
+                }
+                TaiChiFlatPush(*output, current)
+            } else if previous_inside {
+                TaiChiFlatPush(*output, TaiChiFlatCut(previous, current, a, b))
+            }
+        }
+    }
+    if output.count < 3 || frame.point_count + output.count > TAI_CHI_FLAT_POINT_CAPACITY {
+        return shape
+    }
+    shape.first = frame.point_count
+    for index: cast(s32)0..output.count - 1 {
+        frame.points[frame.point_count] = output.points[index]
+        frame.point_count += 1
+    }
+    shape.count = output.count
+    return shape
+}
+
+TaiChiFlatCut :: (p: TaiChiVector2, q: TaiChiVector2, a: TaiChiVector2, b: TaiChiVector2) -> TaiChiVector2 {
+    dx := q.x - p.x
+    dy := q.y - p.y
+    ex := b.x - a.x
+    ey := b.y - a.y
+    denominator := dx * ey - dy * ex
+    t: float64 = 0.0
+    if denominator != 0.0 {
+        t = ((a.x - p.x) * ey - (a.y - p.y) * ex) / denominator
+    }
+    return TaiChiV2(p.x + dx * t, p.y + dy * t)
+}
+
+// Two unit vectors square to the unit vector `direction`.
+TaiChiFlatPerpendiculars :: (direction: TaiChiVector3) -> [2]TaiChiVector3 {
+    helper := ifx TaiChiAbs(direction.y) < 0.9 then TaiChiV3(0.0, 1.0, 0.0) else TaiChiV3(1.0, 0.0, 0.0)
+    result: [2]TaiChiVector3
+    result[0] = TaiChiNormalize3(TaiChiCross3(direction, helper))
+    result[1] = TaiChiNormalize3(TaiChiCross3(direction, result[0]))
+    return result
+}
+
+// --- Painter ---------------------------------------------------------------------
+
+TaiChiFlatPainter :: struct {
+    view: TaiChiFlatView
+    look: TaiChiFlatLook
+    palette: TaiChiFlatPalette
+    height: float64
+    hip_drop: float64
+    hand_length: float64
+    head_scale: float64
+    frame: *TaiChiFlatFrame
+}
+
+TaiChiFlatFill :: (painter: *TaiChiFlatPainter, shape: TaiChiFlatShape, color: u32, alpha: float64) {
+    frame := painter.frame
+    if shape.count < 3 || frame.op_count >= TAI_CHI_FLAT_OP_CAPACITY {
+        return
+    }
+    op := *frame.ops[frame.op_count]
+    op.kind = TAI_CHI_FLAT_FILL
+    op.color = color
+    op.alpha = alpha
+    op.width = 0.0
+    op.first = shape.first
+    op.count = shape.count
+    frame.op_count += 1
+}
+
+TaiChiFlatLine :: (painter: *TaiChiFlatPainter, scratch: *TaiChiFlatScratch, color: u32, width: float64, alpha: float64) {
+    frame := painter.frame
+    if scratch.count < 2 || frame.op_count >= TAI_CHI_FLAT_OP_CAPACITY ||
+        frame.point_count + scratch.count > TAI_CHI_FLAT_POINT_CAPACITY {
+        return
+    }
+    op := *frame.ops[frame.op_count]
+    op.kind = TAI_CHI_FLAT_LINE
+    op.color = color
+    op.alpha = alpha
+    op.width = width
+    op.first = frame.point_count
+    op.count = scratch.count
+    for index: cast(s32)0..scratch.count - 1 {
+        frame.points[frame.point_count] = scratch.points[index]
+        frame.point_count += 1
+    }
+    frame.op_count += 1
+}
+
+TaiChiFlatProject :: (painter: *TaiChiFlatPainter, point: TaiChiVector3) -> TaiChiVector2 {
+    return TaiChiProject(*painter.view, point)
+}
+
+TaiChiFlatDepth :: (painter: *TaiChiFlatPainter, point: TaiChiVector3) -> float64 {
+    return TaiChiDepth(*painter.view, point)
+}
+
+// Adds the projected sphere (center, radius) to the scratch points.
+TaiChiFlatSphere :: (painter: *TaiChiFlatPainter, scratch: *TaiChiFlatScratch, center: TaiChiVector3, radius: float64) {
+    TaiChiFlatCircle(scratch, TaiChiFlatProject(painter, center), radius)
+}
+
+// Adds a projected ring of `radius` round `direction` at `center`.
+TaiChiFlatRing :: (painter: *TaiChiFlatPainter, scratch: *TaiChiFlatScratch, center: TaiChiVector3, direction: TaiChiVector3,
+    radius: float64) {
+    axes := TaiChiFlatPerpendiculars(direction)
+    for index: cast(s32)0..TAI_CHI_FLAT_RING_POINTS - 1 {
+        angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_RING_POINTS * TAI_CHI_PI * 2.0
+        point := TaiChiAddScaled3(TaiChiAddScaled3(center, axes[0], Cos(angle) * radius), axes[1], Sin(angle) * radius)
+        TaiChiFlatPush(scratch, TaiChiFlatProject(painter, point))
+    }
+}
+
+// --- Torso -----------------------------------------------------------------------
+
+TaiChiFlatSpine :: struct {
+    hip_center: TaiChiVector3
+    points: [5]TaiChiVector3
+    starts: [5]float64
+    pelvis_quat: TaiChiQuaternion
+    chest_quat: TaiChiQuaternion
+    turn_from: float64
+    turn_to: float64
+}
+
+TaiChiFlatSpineFor :: (solved: *TaiChiSolved, rig: *TaiChiRig) -> TaiChiFlatSpine {
+    spine: TaiChiFlatSpine
+    spine.pelvis_quat = solved.pelvis_quat
+    spine.chest_quat = solved.chest_quat
+    spine.hip_center = TaiChiAdd3(solved.pelvis, TaiChiAxis(solved.pelvis_quat, 0.0, -rig.hip_drop, 0.0))
+    spine.points[0] = spine.hip_center
+    spine.points[1] = solved.pelvis
+    spine.points[2] = solved.spine1
+    spine.points[3] = solved.chest
+    spine.points[4] = solved.neck_base
+    spine.starts[0] = 0.0
+    for index: cast(s32)1..4 {
+        spine.starts[index] = spine.starts[index - 1] + TaiChiDistance3(spine.points[index], spine.points[index - 1])
+    }
+    spine.turn_from = (spine.starts[1] + spine.starts[2]) / 2.0
+    spine.turn_to = (spine.starts[3] + spine.starts[4]) / 2.0
+    return spine
+}
+
+TaiChiFlatSpinePoint :: (spine: *TaiChiFlatSpine, s: float64) -> TaiChiVector3 {
+    if s <= 0.0 {
+        return TaiChiAddScaled3(spine.hip_center, TaiChiAxis(spine.pelvis_quat, 0.0, 1.0, 0.0), s)
+    }
+    total := spine.starts[4]
+    if s >= total {
+        return TaiChiAddScaled3(spine.points[4], TaiChiAxis(spine.chest_quat, 0.0, 1.0, 0.0), s - total)
+    }
+    index: s32 = 0
+    while s > spine.starts[index + 1] {
+        index += 1
+    }
+    share := (s - spine.starts[index]) / (spine.starts[index + 1] - spine.starts[index])
+    return TaiChiLerp3(spine.points[index], spine.points[index + 1], share)
+}
+
+TaiChiFlatRingFrame :: struct {
+    center: TaiChiVector3
+    x: TaiChiVector3
+    z: TaiChiVector3
+    a: float64
+    b: float64
+}
+
+// The jacket's ring at a height share.
+TaiChiFlatJacketRing :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, share: float64) -> TaiChiFlatRingFrame {
+    rows := painter.look.jacket
+    values: [3]float64
+    values[0] = rows[0][1]
+    values[1] = rows[0][2]
+    values[2] = rows[0][3]
+    if share > rows[0][0] {
+        values[0] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][1]
+        values[1] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][2]
+        values[2] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][3]
+        for index: cast(s32)1..TAI_CHI_FLAT_JACKET_ROWS - 1 {
+            if share <= rows[index][0] {
+                u := (share - rows[index - 1][0]) / (rows[index][0] - rows[index - 1][0])
+                for column: cast(s32)0..2 {
+                    values[column] = rows[index - 1][column + 1] + (rows[index][column + 1] - rows[index - 1][column + 1]) * u
+                }
+                break
+            }
+        }
+    }
+    height := painter.height
+    s := (share - TAI_CHI_FLAT_HIP_SHARE) * height
+    quat := TaiChiSlerp(spine.pelvis_quat, spine.chest_quat, TaiChiSmoothRamp(s, spine.turn_from, spine.turn_to))
+    ring: TaiChiFlatRingFrame
+    ring.x = TaiChiAxis(quat, 1.0, 0.0, 0.0)
+    ring.z = TaiChiAxis(quat, 0.0, 0.0, 1.0)
+    ring.center = TaiChiAddScaled3(TaiChiFlatSpinePoint(spine, s), ring.z, values[2] * height)
+    ring.a = values[0] * height
+    ring.b = values[1] * height
+    return ring
+}
+
+TaiChiFlatRingPoint :: (ring: TaiChiFlatRingFrame, angle: float64) -> TaiChiVector3 {
+    return TaiChiAddScaled3(TaiChiAddScaled3(ring.center, ring.x, Cos(angle) * ring.a), ring.z, Sin(angle) * ring.b)
+}
+
+TaiChiFlatProjectRing :: (painter: *TaiChiFlatPainter, ring: TaiChiFlatRingFrame, scratch: *TaiChiFlatScratch) {
+    for index: cast(s32)0..TAI_CHI_FLAT_RING_POINTS - 1 {
+        angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_RING_POINTS * TAI_CHI_PI * 2.0
+        TaiChiFlatPush(scratch, TaiChiFlatProject(painter, TaiChiFlatRingPoint(ring, angle)))
+    }
+}
+
+// The hulls of neighbouring rings between two height shares, filled in
+// `color`, or only kept in `kept` when it is given.
+TaiChiFlatLoft :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, from: float64, to: float64, stations: s32,
+    color: u32, kept: []TaiChiFlatShape) {
+    previous: TaiChiFlatScratch
+    current: TaiChiFlatScratch
+    both: TaiChiFlatScratch
+    for station: cast(s32)0..stations {
+        current.count = 0
+        share := from + (to - from) * cast(float64)station / cast(float64)stations
+        TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share), *current)
+        if station > 0 {
+            both.count = 0
+            for index: cast(s32)0..previous.count - 1 {
+                TaiChiFlatPush(*both, previous.points[index])
+            }
+            for index: cast(s32)0..current.count - 1 {
+                TaiChiFlatPush(*both, current.points[index])
+            }
+            shape := TaiChiFlatHull(painter.frame, *both)
+            if kept.count > 0 {
+                kept[station - 1] = shape
+            } else {
+                TaiChiFlatFill(painter, shape, color, 1.0)
+            }
+        }
+        previous = current
+    }
+}
+
+// A point on the jacket's front, `across` from -1 (her right) to 1 (her
+// left) at a height share, with how much it faces the viewer.
+TaiChiFlatJacketSurface :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, share: float64, across: float64,
+    facing: *float64) -> TaiChiVector2 {
+    ring := TaiChiFlatJacketRing(painter, spine, share)
+    x := across * ring.a
+    z := ring.b * Sqrt(TaiChiMax(0.0, 1.0 - across * across))
+    point := TaiChiAddScaled3(TaiChiAddScaled3(ring.center, ring.x, x), ring.z, z)
+    normal := TaiChiNormalize3(TaiChiAdd3(TaiChiScale3(ring.x, x / (ring.a * ring.a)), TaiChiScale3(ring.z, z / (ring.b * ring.b))))
+    facing.* = TaiChiDot3(normal, painter.view.toward)
+    return TaiChiFlatProject(painter, point)
+}
+
+// Strokes the runs of points that face the viewer.
+TaiChiFlatFacingRun :: (painter: *TaiChiFlatPainter, run: *TaiChiFlatScratch, point: TaiChiVector2, facing: float64,
+    color: u32, width: float64) {
+    if facing > 0.05 {
+        TaiChiFlatPush(run, point)
+        return
+    }
+    if run.count > 1 {
+        TaiChiFlatLine(painter, run, color, width, 1.0)
+    }
+    run.count = 0
+}
+
+TaiChiFlatTorsoLines :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine) {
+    height := painter.height
+    run: TaiChiFlatScratch
+    // The wrap line from the collar across her chest to her right side.
+    for step: cast(s32)0..16 {
+        u := cast(float64)step / 16.0
+        share := 0.826 + (0.6 - 0.826) * u
+        facing: float64
+        point := TaiChiFlatJacketSurface(painter, spine, share, 0.22 + (-0.78 - 0.22) * TaiChiSmoothRamp(u, 0.0, 1.0), *facing)
+        TaiChiFlatFacingRun(painter, *run, point, facing, painter.palette.top_shade, 0.0045 * height)
+    }
+    if run.count > 1 {
+        TaiChiFlatLine(painter, *run, painter.palette.top_shade, 0.0045 * height, 1.0)
+    }
+    run.count = 0
+    // The collar: the top ring all round.
+    ring := TaiChiFlatJacketRing(painter, spine, painter.look.jacket[TAI_CHI_FLAT_JACKET_ROWS - 1][0])
+    for index: cast(s32)0..TAI_CHI_FLAT_RING_POINTS {
+        angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_RING_POINTS * TAI_CHI_PI * 2.0
+        normal := TaiChiNormalize3(TaiChiAdd3(TaiChiScale3(ring.x, Cos(angle) / ring.a), TaiChiScale3(ring.z, Sin(angle) / ring.b)))
+        TaiChiFlatFacingRun(painter, *run, TaiChiFlatProject(painter, TaiChiFlatRingPoint(ring, angle)),
+            TaiChiDot3(normal, painter.view.toward), painter.palette.top_shade, 0.006 * height)
+    }
+    if run.count > 1 {
+        TaiChiFlatLine(painter, *run, painter.palette.top_shade, 0.006 * height, 1.0)
+    }
+}
+
+// --- Limbs -----------------------------------------------------------------------
+
+TaiChiFlatLeg :: struct {
+    depth: float64
+    far: float64
+    thigh: TaiChiFlatShape
+    shin: TaiChiFlatShape
+    band: TaiChiFlatShape
+    foot: TaiChiFlatShape
+    ankle: TaiChiFlatShape
+}
+
+TaiChiFlatLegFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s32) -> TaiChiFlatLeg {
+    leg: TaiChiFlatLeg
+    height := painter.height
+    k := painter.look.limbs * height
+    hip := solved.hips[side]
+    knee := solved.knees[side]
+    ankle := solved.ankles[side]
+    up := TaiChiNormalize3(TaiChiSub3(knee, ankle))
+    scratch: TaiChiFlatScratch
+    TaiChiFlatSphere(painter, *scratch, hip, 0.052 * k)
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(hip, knee, 0.45), 0.049 * k)
+    TaiChiFlatSphere(painter, *scratch, knee, 0.04 * k)
+    leg.thigh = TaiChiFlatHull(painter.frame, *scratch)
+    end := TaiChiAddScaled3(ankle, up, 0.035 * height)
+    scratch.count = 0
+    TaiChiFlatSphere(painter, *scratch, knee, 0.039 * k)
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(knee, ankle, 0.35), 0.0375 * k)
+    TaiChiFlatRing(painter, *scratch, end, up, 0.034 * k)
+    leg.shin = TaiChiFlatHull(painter.frame, *scratch)
+    scratch.count = 0
+    TaiChiFlatRing(painter, *scratch, TaiChiAddScaled3(ankle, up, 0.075 * height), up, 0.0335 * k)
+    TaiChiFlatRing(painter, *scratch, end, up, 0.0345 * k)
+    leg.band = TaiChiFlatHull(painter.frame, *scratch)
+    scratch.count = 0
+    TaiChiFlatSphere(painter, *scratch, ankle, 0.0185 * height)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(ankle, up, 0.045 * height), 0.0175 * height)
+    leg.ankle = TaiChiFlatHull(painter.frame, *scratch)
+    // The bare foot: heel, ball and toes sit on the sole.
+    foot_up := TaiChiAxis(solved.foot_quats[side], 0.0, 1.0, 0.0)
+    toes_up := TaiChiAxis(solved.toes_quats[side], 0.0, 1.0, 0.0)
+    scratch.count = 0
+    TaiChiFlatSphere(painter, *scratch, ankle, 0.02 * height)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.heels[side], foot_up, 0.019 * height), 0.019 * height)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.balls[side], foot_up, 0.021 * height), 0.021 * height)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.toes[side], toes_up, 0.013 * height), 0.013 * height)
+    leg.foot = TaiChiFlatHull(painter.frame, *scratch)
+    leg.depth = (TaiChiFlatDepth(painter, hip) + TaiChiFlatDepth(painter, knee) + TaiChiFlatDepth(painter, ankle)) / 3.0
+    return leg
+}
+
+TaiChiFlatArm :: struct {
+    depth: float64
+    shoulder_depth: float64
+    elbow_depth: float64
+    far: float64
+    upper: TaiChiFlatShape
+    forearm: TaiChiFlatShape
+    cuff: TaiChiFlatShape
+    opening: TaiChiFlatShape
+    has_opening: bool
+    hand_first: bool
+    hand: TaiChiFlatShape
+    thumb: TaiChiFlatShape
+}
+
+TaiChiFlatHand :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s32, arm: *TaiChiFlatArm) {
+    height := painter.height
+    quat := solved.hand_quats[side]
+    fingers := TaiChiAxis(quat, 0.0, -1.0, 0.0)
+    palm_normal := TaiChiAxis(quat, 0.0, 0.0, 1.0)
+    thumb := TaiChiProjectVector(*painter.view, TaiChiScale3(TaiChiAxis(quat, 1.0, 0.0, 0.0), TaiChiSideSign(side)))
+    fist := solved.hand_shapes[side][1]
+    hook := solved.hand_shapes[side][2]
+    wrist_point := solved.wrists[side]
+    wrist := TaiChiFlatProject(painter, wrist_point)
+    tip := TaiChiFlatProject(painter, TaiChiAddScaled3(wrist_point, fingers, painter.hand_length))
+    reach := 1.0 - 0.42 * fist - 0.25 * hook
+    along := TaiChiV2((tip.x - wrist.x) * reach, (tip.y - wrist.y) * reach)
+    open := TaiChiAbs(TaiChiDot3(palm_normal, painter.view.toward))
+    half := (0.0125 + (0.023 - 0.0125) * open) * height * painter.look.limbs
+    scratch: TaiChiFlatScratch
+    TaiChiFlatCircle(*scratch, wrist, half * 0.8)
+    TaiChiFlatCircle(*scratch, TaiChiAdd2(wrist, TaiChiScale2(along, 0.38)), half)
+    TaiChiFlatCircle(*scratch, TaiChiAdd2(wrist, TaiChiScale2(along, 0.66)), half * 0.95)
+    TaiChiFlatCircle(*scratch, TaiChiAdd2(wrist, TaiChiScale2(along, 0.94)), half * (0.68 + 0.25 * fist))
+    arm.hand = TaiChiFlatHull(painter.frame, *scratch)
+    thumb_size := TaiChiHypot(thumb.x, thumb.y)
+    if thumb_size > 0.25 && fist < 0.6 {
+        out := TaiChiV2(thumb.x / thumb_size, thumb.y / thumb_size)
+        base := TaiChiAdd2(wrist, TaiChiScale2(along, 0.32))
+        thumb_tip := TaiChiV2(base.x + out.x * half * 1.15 + along.x * 0.18, base.y + out.y * half * 1.15 + along.y * 0.18)
+        scratch.count = 0
+        TaiChiFlatCircle(*scratch, base, half * 0.5)
+        TaiChiFlatCircle(*scratch, thumb_tip, half * 0.38)
+        arm.thumb = TaiChiFlatHull(painter.frame, *scratch)
+    }
+}
+
+TaiChiFlatArmFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s32) -> TaiChiFlatArm {
+    arm: TaiChiFlatArm
+    height := painter.height
+    k := painter.look.limbs * height
+    shoulder := solved.shoulders[side]
+    elbow := solved.elbows[side]
+    wrist := solved.wrists[side]
+    toward := TaiChiNormalize3(TaiChiSub3(wrist, elbow))
+    scratch: TaiChiFlatScratch
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.12), 0.029 * k)
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.45), 0.029 * k)
+    TaiChiFlatSphere(painter, *scratch, elbow, 0.027 * k)
+    arm.upper = TaiChiFlatHull(painter.frame, *scratch)
+    end := TaiChiAddScaled3(wrist, toward, -0.014 * height)
+    opening: TaiChiFlatScratch
+    TaiChiFlatRing(painter, *opening, end, toward, 0.03 * k)
+    scratch.count = 0
+    TaiChiFlatSphere(painter, *scratch, elbow, 0.0265 * k)
+    for index: cast(s32)0..opening.count - 1 {
+        TaiChiFlatPush(*scratch, opening.points[index])
+    }
+    arm.forearm = TaiChiFlatHull(painter.frame, *scratch)
+    scratch.count = 0
+    TaiChiFlatRing(painter, *scratch, TaiChiAddScaled3(wrist, toward, -0.03 * height), toward, 0.0295 * k)
+    for index: cast(s32)0..opening.count - 1 {
+        TaiChiFlatPush(*scratch, opening.points[index])
+    }
+    arm.cuff = TaiChiFlatHull(painter.frame, *scratch)
+    // The hand points at the viewer when the sleeve opening faces them.
+    out := TaiChiDot3(toward, painter.view.toward)
+    if out > 0.3 {
+        arm.opening = TaiChiFlatHull(painter.frame, *opening)
+        arm.has_opening = true
+    }
+    arm.hand_first = out <= 0.0
+    TaiChiFlatHand(painter, solved, side, *arm)
+    arm.depth = (TaiChiFlatDepth(painter, shoulder) + TaiChiFlatDepth(painter, elbow) + TaiChiFlatDepth(painter, wrist)) / 3.0
+    arm.shoulder_depth = TaiChiFlatDepth(painter, shoulder)
+    arm.elbow_depth = TaiChiFlatDepth(painter, elbow)
+    return arm
+}
+
+TaiChiFlatLegPaint :: (painter: *TaiChiFlatPainter, leg: *TaiChiFlatLeg) {
+    palette := painter.palette
+    skin := TaiChiFlatMix(palette.skin, palette.skin_far, leg.far)
+    TaiChiFlatFill(painter, leg.foot, skin, 1.0)
+    TaiChiFlatFill(painter, leg.ankle, skin, 1.0)
+    pants := TaiChiFlatMix(palette.pants, palette.pants_far, leg.far)
+    TaiChiFlatFill(painter, leg.thigh, pants, 1.0)
+    TaiChiFlatFill(painter, leg.shin, pants, 1.0)
+    TaiChiFlatFill(painter, leg.band, TaiChiFlatMix(palette.pants_shade, palette.pants_far, leg.far), 1.0)
+}
+
+TaiChiFlatArmPaint :: (painter: *TaiChiFlatPainter, arm: *TaiChiFlatArm, clips: []TaiChiFlatShape) {
+    palette := painter.palette
+    skin := TaiChiFlatMix(palette.skin, palette.skin_far, arm.far)
+    if arm.hand_first {
+        TaiChiFlatFill(painter, arm.hand, skin, 1.0)
+        TaiChiFlatFill(painter, arm.thumb, skin, 1.0)
+    }
+    if clips.count > 0 {
+        // The arm casts a crisp shade on the jacket where it crosses it.
+        sleeves: [2]TaiChiFlatShape
+        sleeves[0] = arm.upper
+        sleeves[1] = arm.forearm
+        for sleeve: sleeves {
+            moved: TaiChiFlatScratch
+            for index: cast(s32)0..sleeve.count - 1 {
+                point := painter.frame.points[sleeve.first + index]
+                TaiChiFlatPush(*moved, TaiChiV2(point.x - 0.0075 * painter.height, point.y - 0.01 * painter.height))
+            }
+            for clip: clips {
+                TaiChiFlatFill(painter, TaiChiFlatClip(painter.frame, *moved, clip), palette.top_shade, 1.0)
+            }
+        }
+    }
+    top := TaiChiFlatMix(palette.top, palette.top_far, arm.far)
+    TaiChiFlatFill(painter, arm.upper, top, 1.0)
+    TaiChiFlatFill(painter, arm.forearm, top, 1.0)
+    TaiChiFlatFill(painter, arm.cuff, TaiChiFlatMix(palette.cuff, palette.cuff_far, arm.far), 1.0)
+    if arm.has_opening {
+        TaiChiFlatFill(painter, arm.opening, palette.cuff_inside, 1.0)
+    }
+    if !arm.hand_first {
+        TaiChiFlatFill(painter, arm.hand, skin, 1.0)
+        TaiChiFlatFill(painter, arm.thumb, skin, 1.0)
+    }
+}
+
+// --- Head ------------------------------------------------------------------------
+
+TaiChiFlatPart :: struct {
+    center: TaiChiVector3
+    radii: TaiChiVector3
+}
+
+TaiChiFlatHead :: struct {
+    quat: TaiChiQuaternion
+    inverse: TaiChiQuaternion
+    pivot: TaiChiVector3
+}
+
+TaiChiFlatPartOf :: (painter: *TaiChiFlatPainter, cx: float64, cy: float64, cz: float64, rx: float64, ry: float64,
+    rz: float64) -> TaiChiFlatPart {
+    k := painter.head_scale
+    part: TaiChiFlatPart
+    part.center = TaiChiV3(cx * k, cy * k, cz * k)
+    part.radii = TaiChiV3(rx * k, ry * k, rz * k)
+    return part
+}
+
+TaiChiFlatSkull :: (painter: *TaiChiFlatPainter) -> TaiChiFlatPart {
+    return TaiChiFlatPartOf(painter, 0.0, 0.068, 0.012, 0.058, 0.071, 0.063)
+}
+
+TaiChiFlatConjugate :: (q: TaiChiQuaternion) -> TaiChiQuaternion {
+    return TaiChiQuaternion.{.x = -q.x, .y = -q.y, .z = -q.z, .w = q.w}
+}
+
+TaiChiFlatHeadFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) -> TaiChiFlatHead {
+    head: TaiChiFlatHead
+    head.quat = solved.head_quat
+    head.inverse = TaiChiFlatConjugate(solved.head_quat)
+    // solve places the head centre 0.065 up and 0.012 forward of the pivot.
+    offset := TaiChiRotate(TaiChiV3(0.0, 0.065 * painter.height, 0.012 * painter.height), head.quat)
+    head.pivot = TaiChiSub3(solved.head_center, offset)
+    return head
+}
+
+TaiChiFlatPartPoint :: (head: *TaiChiFlatHead, part: TaiChiFlatPart, u: TaiChiVector3) -> TaiChiVector3 {
+    local := TaiChiV3(part.center.x + part.radii.x * u.x, part.center.y + part.radii.y * u.y, part.center.z + part.radii.z * u.z)
+    return TaiChiAdd3(TaiChiRotate(local, head.quat), head.pivot)
+}
+
+TaiChiFlatPartFacing :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart, u: TaiChiVector3) -> float64 {
+    normal := TaiChiV3(u.x / part.radii.x, u.y / part.radii.y, u.z / part.radii.z)
+    return TaiChiDot3(TaiChiNormalize3(TaiChiRotate(normal, head.quat)), painter.view.toward)
+}
+
+// The unit-sphere directions of an ellipsoid's outline as seen: the great
+// circle whose surface normals are square to the view.
+TaiChiFlatOutlineAxes :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart) -> [2]TaiChiVector3 {
+    toward := TaiChiRotate(painter.view.toward, head.inverse)
+    w := TaiChiNormalize3(TaiChiV3(toward.x / part.radii.x, toward.y / part.radii.y, toward.z / part.radii.z))
+    return TaiChiFlatPerpendiculars(w)
+}
+
+TaiChiFlatCircleDirection :: (axes: [2]TaiChiVector3, index: s32) -> TaiChiVector3 {
+    angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_OUTLINE_POINTS * TAI_CHI_PI * 2.0
+    return TaiChiAdd3(TaiChiScale3(axes[0], Cos(angle)), TaiChiScale3(axes[1], Sin(angle)))
+}
+
+TaiChiFlatOutline :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart) -> TaiChiFlatShape {
+    axes := TaiChiFlatOutlineAxes(painter, head, part)
+    scratch: TaiChiFlatScratch
+    for index: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS - 1 {
+        TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, part, TaiChiFlatCircleDirection(axes, index))))
+    }
+    return TaiChiFlatHull(painter.frame, *scratch)
+}
+
+// A point of the circle u · ring_axis = edge on the unit sphere.
+TaiChiFlatRimDirection :: (ring_axis: TaiChiVector3, axes: [2]TaiChiVector3, edge: float64, index: s32) -> TaiChiVector3 {
+    across := Sqrt(TaiChiMax(0.0, 1.0 - edge * edge))
+    angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_OUTLINE_POINTS * TAI_CHI_PI * 2.0
+    return TaiChiAdd3(TaiChiAdd3(TaiChiScale3(ring_axis, edge), TaiChiScale3(axes[0], Cos(angle) * across)),
+        TaiChiScale3(axes[1], Sin(angle) * across))
+}
+
+// The part of the cap u · cap_axis > edge of an ellipsoid that the viewer
+// sees: its outline inside the cap and the visible part of the cap's rim.
+TaiChiFlatCap :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart, cap_axis: TaiChiVector3,
+    edge: float64) -> TaiChiFlatShape {
+    scratch: TaiChiFlatScratch
+    axes := TaiChiFlatOutlineAxes(painter, head, part)
+    for index: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS - 1 {
+        u := TaiChiFlatCircleDirection(axes, index)
+        if TaiChiDot3(u, cap_axis) > edge {
+            TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, part, u)))
+        }
+    }
+    rim := TaiChiFlatPerpendiculars(cap_axis)
+    for index: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS - 1 {
+        u := TaiChiFlatRimDirection(cap_axis, rim, edge, index)
+        if TaiChiFlatPartFacing(painter, head, part, u) >= 0.0 {
+            TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, part, u)))
+        }
+    }
+    if scratch.count < 3 {
+        empty: TaiChiFlatShape
+        return empty
+    }
+    return TaiChiFlatHull(painter.frame, *scratch)
+}
+
+// Strokes the visible runs of the circle u · ring_axis = edge on a part.
+TaiChiFlatRim :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart, ring_axis: TaiChiVector3,
+    edge: float64, color: u32, width: float64) {
+    rim := TaiChiFlatPerpendiculars(ring_axis)
+    run: TaiChiFlatScratch
+    for index: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS {
+        u := TaiChiFlatRimDirection(ring_axis, rim, edge, index)
+        if TaiChiFlatPartFacing(painter, head, part, u) > 0.05 {
+            TaiChiFlatPush(*run, TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, part, u)))
+        } else {
+            if run.count > 1 {
+                TaiChiFlatLine(painter, *run, color, width, 1.0)
+            }
+            run.count = 0
+        }
+    }
+    if run.count > 1 {
+        TaiChiFlatLine(painter, *run, color, width, 1.0)
+    }
+}
+
+TaiChiFlatPartDepth :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, part: TaiChiFlatPart) -> float64 {
+    return TaiChiFlatDepth(painter, TaiChiAdd3(TaiChiRotate(part.center, head.quat), head.pivot))
+}
+
+TaiChiFlatSurfacePoint :: struct {
+    world: TaiChiVector3
+    facing: float64
+}
+
+// A point on the front of a part at head-frame x, y (× height) and how
+// much it faces the viewer.
+TaiChiFlatOnFace :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, x: float64, y: float64,
+    part: TaiChiFlatPart) -> TaiChiFlatSurfacePoint {
+    k := painter.head_scale
+    dx := (x * k - part.center.x) / part.radii.x
+    dy := (y * k - part.center.y) / part.radii.y
+    dz := Sqrt(TaiChiMax(0.0, 1.0 - dx * dx - dy * dy))
+    u := TaiChiV3(dx, dy, dz)
+    result: TaiChiFlatSurfacePoint
+    result.world = TaiChiFlatPartPoint(head, part, u)
+    result.facing = TaiChiFlatPartFacing(painter, head, part, u)
+    return result
+}
+
+// An arc on the face, `width` across, bowing by `bow` (down for closed
+// eyes and the mouth, up for brows).
+TaiChiFlatArc :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, anchor: TaiChiFlatSurfacePoint, width: float64, bow: float64,
+    scratch: *TaiChiFlatScratch) {
+    k := painter.head_scale
+    x_axis := TaiChiAxis(head.quat, 1.0, 0.0, 0.0)
+    y_axis := TaiChiAxis(head.quat, 0.0, 1.0, 0.0)
+    scratch.count = 0
+    for step: cast(s32)0..10 {
+        t := cast(float64)step / 5.0 - 1.0
+        point := TaiChiAddScaled3(TaiChiAddScaled3(anchor.world, x_axis, t * width * k), y_axis, bow * k * (1.0 - t * t))
+        TaiChiFlatPush(scratch, TaiChiFlatProject(painter, point))
+    }
+}
+
+TaiChiFlatFeatures :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead) {
+    k := painter.head_scale
+    look := painter.look
+    palette := painter.palette
+    skull := TaiChiFlatSkull(painter)
+    jaw := TaiChiFlatPartOf(painter, 0.0, 0.043, 0.022, 0.041, 0.034, 0.043)
+    x_axis := TaiChiAxis(head.quat, 1.0, 0.0, 0.0)
+    y_axis := TaiChiAxis(head.quat, 0.0, 1.0, 0.0)
+    scratch: TaiChiFlatScratch
+    signs: [2]float64 = .[1.0, -1.0]
+    for sign: signs {
+        eye := TaiChiFlatOnFace(painter, head, sign * 0.021, 0.064, skull)
+        alpha := TaiChiSmoothRamp(eye.facing, 0.12, 0.35)
+        if alpha <= 0.0 {
+            continue
+        }
+        if look.blush_alpha > 0.0 {
+            cheek := TaiChiFlatOnFace(painter, head, sign * 0.03, 0.049, skull)
+            scratch.count = 0
+            for step: cast(s32)0..19 {
+                angle := cast(float64)step / 20.0 * TAI_CHI_PI * 2.0
+                point := TaiChiAddScaled3(TaiChiAddScaled3(cheek.world, x_axis, Cos(angle) * 0.0095 * k), y_axis, Sin(angle) * 0.0065 * k)
+                TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, point))
+            }
+            TaiChiFlatFill(painter, TaiChiFlatHull(painter.frame, *scratch), palette.blush,
+                look.blush_alpha * TaiChiSmoothRamp(cheek.facing, 0.15, 0.4))
+        }
+        TaiChiFlatArc(painter, head, eye, 0.0095, -0.0034, *scratch)
+        TaiChiFlatLine(painter, *scratch, palette.features, 0.0026 * k, alpha)
+        if look.lashes {
+            scratch.count = 0
+            TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, TaiChiAddScaled3(eye.world, x_axis, sign * 0.0098 * k)))
+            TaiChiFlatPush(*scratch, TaiChiFlatProject(painter,
+                TaiChiAddScaled3(TaiChiAddScaled3(eye.world, x_axis, sign * 0.0135 * k), y_axis, -0.0028 * k)))
+            TaiChiFlatLine(painter, *scratch, palette.features, 0.002 * k, alpha)
+        }
+        brow := TaiChiFlatOnFace(painter, head, sign * 0.022, 0.085, skull)
+        TaiChiFlatArc(painter, head, brow, 0.0105, 0.0022, *scratch)
+        TaiChiFlatLine(painter, *scratch, palette.hair, look.brow * k, alpha)
+    }
+    mouth := TaiChiFlatOnFace(painter, head, 0.0, 0.0385, jaw)
+    mouth_alpha := TaiChiSmoothRamp(mouth.facing, 0.2, 0.45)
+    if mouth_alpha > 0.0 {
+        TaiChiFlatArc(painter, head, mouth, 0.0068, -0.0018, *scratch)
+        TaiChiFlatLine(painter, *scratch, palette.mouth, 0.0022 * k, mouth_alpha)
+    }
+    nose := TaiChiFlatOnFace(painter, head, 0.0, 0.0455, skull)
+    nose_alpha := TaiChiSmoothRamp(nose.facing, 0.3, 0.6) * 0.7
+    if nose_alpha > 0.0 {
+        TaiChiFlatArc(painter, head, nose, 0.0042, -0.0012, *scratch)
+        TaiChiFlatLine(painter, *scratch, palette.mouth, 0.0019 * k, nose_alpha)
+    }
+}
+
+TaiChiFlatBun :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, bun: TaiChiFlatPart, skull: TaiChiFlatPart) {
+    TaiChiFlatFill(painter, TaiChiFlatOutline(painter, head, bun), painter.palette.hair, 1.0)
+    // The tie round the bun where it meets the head.
+    base := TaiChiV3((skull.center.x - bun.center.x) / bun.radii.x, (skull.center.y - bun.center.y) / bun.radii.y,
+        (skull.center.z - bun.center.z) / bun.radii.z)
+    TaiChiFlatRim(painter, head, bun, TaiChiNormalize3(base), 0.58, painter.palette.accent, 0.0095 * painter.head_scale)
+}
+
+TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
+    head := TaiChiFlatHeadFor(painter, solved)
+    look := painter.look
+    palette := painter.palette
+    skull := TaiChiFlatSkull(painter)
+    shell := TaiChiFlatPartOf(painter, 0.0, 0.068, 0.012, 0.0625, 0.0765, 0.0675)
+    bun := TaiChiFlatPartOf(painter, 0.0, 0.135, -0.044, 0.031, 0.028, 0.03)
+    parts: [4]TaiChiFlatPart
+    part_count: s32 = 2
+    parts[0] = TaiChiFlatPartOf(painter, 0.0, 0.043, 0.022, 0.041, 0.034, 0.043)
+    parts[1] = TaiChiFlatPartOf(painter, 0.0, 0.051, 0.0715, 0.0068, 0.009, 0.0068)
+    if look.ears {
+        parts[2] = TaiChiFlatPartOf(painter, 0.056, 0.06, 0.0, 0.0085, 0.014, 0.01)
+        parts[3] = TaiChiFlatPartOf(painter, -0.056, 0.06, 0.0, 0.0085, 0.014, 0.01)
+        part_count = 4
+    }
+    skull_depth := TaiChiFlatPartDepth(painter, *head, skull)
+    in_front: [4]bool
+    for index: cast(s32)0..part_count - 1 {
+        in_front[index] = TaiChiFlatPartDepth(painter, *head, parts[index]) - skull_depth > 0.004 * painter.head_scale
+    }
+    bun_behind := look.bun && TaiChiFlatPartDepth(painter, *head, bun) - skull_depth <= 0.004 * painter.head_scale
+    if bun_behind {
+        TaiChiFlatBun(painter, *head, bun, skull)
+    }
+    for index: cast(s32)0..part_count - 1 {
+        if !in_front[index] {
+            TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, parts[index]), palette.skin, 1.0)
+        }
+    }
+    TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, shell), palette.hair, 1.0)
+    TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, shell, TaiChiScale3(look.hair_axis, -1.0), -look.hair_edge),
+        palette.skin, 1.0)
+    for index: cast(s32)0..part_count - 1 {
+        if in_front[index] {
+            TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, parts[index]), palette.skin, 1.0)
+        }
+    }
+    if look.fringe {
+        TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, shell, look.fringe_axis, look.fringe_edge), palette.hair, 1.0)
+    }
+    if look.crop {
+        crop: [4]TaiChiFlatPart
+        crop[0] = TaiChiFlatPartOf(painter, 0.004, 0.123, 0.012, 0.054, 0.026, 0.06)
+        crop[1] = TaiChiFlatPartOf(painter, 0.012, 0.121, 0.054, 0.034, 0.014, 0.022)
+        crop[2] = TaiChiFlatPartOf(painter, 0.056, 0.074, 0.012, 0.006, 0.016, 0.012)
+        crop[3] = TaiChiFlatPartOf(painter, -0.056, 0.074, 0.012, 0.006, 0.016, 0.012)
+        for part: crop {
+            TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, part), palette.hair, 1.0)
+        }
+    }
+    if look.bun && !bun_behind {
+        TaiChiFlatBun(painter, *head, bun, skull)
+    }
+    TaiChiFlatFeatures(painter, *head)
+}
+
+// --- Frame -----------------------------------------------------------------------
+
+TaiChiFlatShadow :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) -> TaiChiFlatShape {
+    min_x := TaiChiMin(TaiChiMin(solved.ankles[0].x, solved.ankles[1].x), solved.pelvis.x)
+    max_x := TaiChiMax(TaiChiMax(solved.ankles[0].x, solved.ankles[1].x), solved.pelvis.x)
+    min_z := TaiChiMin(TaiChiMin(solved.ankles[0].z, solved.ankles[1].z), solved.pelvis.z)
+    max_z := TaiChiMax(TaiChiMax(solved.ankles[0].z, solved.ankles[1].z), solved.pelvis.z)
+    rx := (max_x - min_x) / 2.0 + 0.24
+    rz := (max_z - min_z) / 2.0 + 0.2
+    scratch: TaiChiFlatScratch
+    for step: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS - 1 {
+        angle := cast(float64)step / cast(float64)TAI_CHI_FLAT_OUTLINE_POINTS * TAI_CHI_PI * 2.0
+        point := TaiChiV3((min_x + max_x) / 2.0 + Cos(angle) * rx, 0.0, (min_z + max_z) / 2.0 + Sin(angle) * rz)
+        TaiChiFlatPush(*scratch, TaiChiFlatProject(painter, point))
+    }
+    return TaiChiFlatHull(painter.frame, *scratch)
+}
+
+// The farther of two parts takes the darker tone, blended as they pass.
+TaiChiFlatFar :: (depth: float64, other: float64) -> float64 {
+    return TaiChiSmoothRamp(other - depth, 0.0, 0.07)
+}
+
+// The frame's paint operations, back to front, as the studio's
+// createFlatShapes(look, rig).paint(solved, view).
+TaiChiFlatPaint :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *TaiChiRig, character: s32, camera: TaiChiCamera) {
+    frame.op_count = 0
+    frame.point_count = 0
+    painter: TaiChiFlatPainter
+    TaiChiFlatViewSet(*painter.view, camera)
+    painter.look = TaiChiFlatLookFor(character)
+    painter.palette = TaiChiFlatPaletteFor(*painter.look)
+    painter.height = rig.height
+    painter.hip_drop = rig.hip_drop
+    painter.hand_length = rig.hand_length
+    painter.head_scale = rig.height * painter.look.head_scale
+    painter.frame = frame
+    palette := painter.palette
+    height := rig.height
+    chest_depth := TaiChiFlatDepth(*painter, solved.shoulder_center)
+
+    shadow := TaiChiFlatShadow(*painter, solved)
+    arms: [2]TaiChiFlatArm
+    legs: [2]TaiChiFlatLeg
+    for side: cast(s32)0..1 {
+        arms[side] = TaiChiFlatArmFor(*painter, solved, side)
+    }
+    for side: cast(s32)0..1 {
+        legs[side] = TaiChiFlatLegFor(*painter, solved, side)
+    }
+    arms[0].far = TaiChiFlatFar(arms[0].shoulder_depth, arms[1].shoulder_depth)
+    arms[1].far = TaiChiFlatFar(arms[1].shoulder_depth, arms[0].shoulder_depth)
+    legs[0].far = TaiChiFlatFar(legs[0].depth, legs[1].depth)
+    legs[1].far = TaiChiFlatFar(legs[1].depth, legs[0].depth)
+    spine := TaiChiFlatSpineFor(solved, rig)
+    rows := painter.look.jacket
+    bottom := rows[0][0]
+    top := rows[TAI_CHI_FLAT_JACKET_ROWS - 1][0]
+    clips: [TAI_CHI_FLAT_CLIP_STATIONS]TaiChiFlatShape
+    TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_CLIP_STATIONS, 0, clips[:])
+    scratch: TaiChiFlatScratch
+    pelvis_up := TaiChiAxis(solved.pelvis_quat, 0.0, 1.0, 0.0)
+    TaiChiFlatSphere(*painter, *scratch, solved.hips[0], 0.05 * height * painter.look.limbs)
+    TaiChiFlatSphere(*painter, *scratch, solved.hips[1], 0.05 * height * painter.look.limbs)
+    TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height), 0.04 * height * painter.look.limbs)
+    seat := TaiChiFlatHull(frame, *scratch)
+    head := TaiChiFlatHeadFor(*painter, solved)
+    scratch.count = 0
+    TaiChiFlatSphere(*painter, *scratch, solved.neck_base, painter.look.neck * height)
+    TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(head.pivot, TaiChiAxis(head.quat, 0.0, 1.0, 0.0), 0.02 * height),
+        painter.look.neck * height * 0.96)
+    neck := TaiChiFlatHull(frame, *scratch)
+
+    TaiChiFlatFill(*painter, shadow, palette.shadow, 0.13)
+    no_clips: []TaiChiFlatShape
+    for side: cast(s32)0..1 {
+        if arms[side].depth <= chest_depth - 0.05 {
+            TaiChiFlatArmPaint(*painter, *arms[side], no_clips)
+        }
+    }
+    TaiChiFlatFill(*painter, seat, palette.pants, 1.0)
+    // The farther leg first.
+    far_first := ifx legs[0].depth <= legs[1].depth then 0 else 1
+    TaiChiFlatLegPaint(*painter, *legs[far_first])
+    TaiChiFlatLegPaint(*painter, *legs[1 - far_first])
+    TaiChiFlatFill(*painter, neck, palette.skin, 1.0)
+    TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_TORSO_STATIONS, palette.top, no_clips)
+    TaiChiFlatLoft(*painter, *spine, bottom, bottom + 0.022, 2, palette.top_shade, no_clips)
+    TaiChiFlatTorsoLines(*painter, *spine)
+    TaiChiFlatHeadPaint(*painter, solved)
+    front: [2]s32
+    front_count: s32 = 0
+    for side: cast(s32)0..1 {
+        if arms[side].depth > chest_depth - 0.05 {
+            front[front_count] = side
+            front_count += 1
+        }
+    }
+    if front_count == 2 && arms[front[1]].elbow_depth < arms[front[0]].elbow_depth {
+        swap := front[0]
+        front[0] = front[1]
+        front[1] = swap
+    }
+    for index: cast(s32)0..front_count - 1 {
+        TaiChiFlatArmPaint(*painter, *arms[front[index]], clips[:])
+    }
+}

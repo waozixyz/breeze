@@ -294,8 +294,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         time.sleep(.5)
         _, text = capture(window, 'taichi-unowned-manager')
         assert 'Tai Chi' in text and 'Dew' in text and 'Download size' in text, text
-        # A locked practice offers no narration; the monk's male voice is absent.
-        assert 'Male voice' not in text, text
+        # A locked practice offers no narration; Jade woman's female voice is absent.
+        assert 'Female voice' not in text, text
     finally:
         stop(process)
     # The account's purchase, remembered on this device; sync stays off, so
@@ -327,13 +327,13 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             if name == 'desktop-manager':
                 # Each narration is chosen per language under its practice, in
                 # the voice from Customize, and Lumi's guide has its own.
-                assert 'Male voice' in text and 'On this device: English' in text, text
+                assert 'Female voice' in text and 'On this device: English' in text, text
                 assert "Lumi's guide" in text and 'Tap a language' in text, text
                 close_manager(window)
                 click_word(window, name + '-customize', 'Customize')
                 time.sleep(1)
                 _, text = capture(window, name + '-customize-open')
-                # The monk speaks with the male voice in its downloaded language.
+                # Jade woman speaks with the female voice in its downloaded language.
                 assert 'Female voice' in text and 'Male voice' in text, text
                 assert 'Plays in English' in text, text
         finally:

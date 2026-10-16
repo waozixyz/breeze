@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
 
     with application('tai_chi_customize') as window:
         text = capture(window, 'characters')
-        assert 'monk' in text.lower() and 'woman' in text.lower(), text
+        assert 'jade woman' in text.lower() and 'indigo man' in text.lower(), text
         assert 'Background music' in text and 'Music volume' in text and 'Cue volume' in text, text
         assert 'Voice narration' in text, text
         hint_path = OUTPUT / 'narration-hint.png'
@@ -155,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
             picture.crop((0, 0, 88, 900)).resize((352, 3600)).save(sidebar)
         navigation = command('tesseract', str(sidebar), 'stdout', '--psm', '11')
         assert 'Habits' in navigation and 'Diary' in navigation, navigation
-        assert 'monk' not in text.lower(), text
+        assert 'indigo man' not in text.lower(), text
         click(window, 500, 855)
         text = capture(window, 'start-opens-course')
         assert 'Course' in text and 'Lesson 1' in text, text
@@ -164,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         assert 'Start' in text and 'Course' not in text, text
         click(window, 850, 855)
         text = capture(window, 'customize-reopens')
-        assert 'monk' in text.lower() and 'woman' in text.lower(), text
+        assert 'jade woman' in text.lower() and 'indigo man' in text.lower(), text
 
     # Use an existing custom-track slot with a disposable WAV. Previewing it
     # exercises the real music player without a download or desktop audio.
@@ -223,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         command('xdotool', 'click', '--repeat', '6', '--delay', '100', '5')
         time.sleep(.5)
         text = capture(window, 'narrow-characters')
-        assert 'monk' in text.lower() and 'woman' in text.lower(), text
+        assert 'jade woman' in text.lower() and 'indigo man' in text.lower(), text
 
     with application('tai_chi_choose') as window:
         text = capture(window, 'course')

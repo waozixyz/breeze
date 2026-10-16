@@ -6,7 +6,7 @@
 #import, file "tai_chi_course.zi";
 #import, file "tai_chi_timeline.zi";
 #import, file "tai_chi_solve.zi";
-#import, file "tai_chi_layout.zi";
+#import, file "tai_chi_view.zi";
 
 TAI_CHI_CHARACTER_COUNT :: 2
 // Lesson progress is saved as hexadecimal digits, four items per digit.
@@ -30,6 +30,9 @@ TaiChiCameraState :: struct {
 
 TaiChiPracticeState :: struct {
     character: s32
+    // The angle she is seen from (TAI_CHI_VIEW_*): front, mirrored like a
+    // mirror, unless another is chosen.
+    view: s32
     // Narration voice: 0 the default voice, 1 male, -1 the character's own.
     voice: s32
     // The course item last chosen and not yet finished; -1 suggests the
@@ -44,11 +47,12 @@ TaiChiPracticeState :: struct {
     habit_made: s32
     built_item: s32
     camera: TaiChiCameraState
-    memory: TaiChiLayoutMemory
 }
 
 tai_chi_timeline: TaiChiTimeline;
 
+// The studio's camera views (design/tai-chi/src/view/stage.js). The front
+// stays with the audience; the others travel with her facing.
 TaiChiViewSpecFor :: (view: s32) -> TaiChiViewSpec {
     spec: TaiChiViewSpec
     if view == TAI_CHI_VIEW_FRONT {
@@ -57,6 +61,22 @@ TaiChiViewSpecFor :: (view: s32) -> TaiChiViewSpec {
         spec.distance = 5.2
         spec.height = 1.35
         spec.target = 0.88
+        return spec
+    }
+    if view == TAI_CHI_VIEW_SIDE {
+        spec.yaw = -TAI_CHI_PI / 2.0
+        spec.fixed = false
+        spec.distance = 4.6
+        spec.height = 1.2
+        spec.target = 0.85
+        return spec
+    }
+    if view == TAI_CHI_VIEW_THREE_QUARTER {
+        spec.yaw = TAI_CHI_PI / 4.0
+        spec.fixed = false
+        spec.distance = 4.8
+        spec.height = 1.6
+        spec.target = 0.85
         return spec
     }
     spec.yaw = TAI_CHI_PI
@@ -162,6 +182,9 @@ TaiChiNormalizeSettings :: (state: TaiChiPracticeState) -> TaiChiPracticeState {
     if state.character < 0 || state.character >= TAI_CHI_CHARACTER_COUNT {
         state.character = 0
     }
+    if state.view < 0 || state.view >= TAI_CHI_VIEW_COUNT {
+        state.view = TAI_CHI_VIEW_FRONT
+    }
     if state.item < -1 || state.item >= TAI_CHI_ITEM_CAPACITY {
         state.item = -1
     }
@@ -177,8 +200,6 @@ TaiChiStartItem :: (state: TaiChiPracticeState, item: s32) -> TaiChiPracticeStat
     state.practised = 0.0
     state.built_item = -1
     state.camera.initialized = false
-    memory: TaiChiLayoutMemory
-    state.memory = memory
     if item >= 0 && item < tai_chi_course.item_count &&
         TaiChiTimelineForItem(*tai_chi_timeline, tai_chi_course.items[item]) {
         state.built_item = item
@@ -298,10 +319,17 @@ TaiChiFramingFor :: (camera: TaiChiCameraState, view: TaiChiViewSpec) -> TaiChiF
     return framing
 }
 
-// The monk (character 0) speaks with the male voice unless another is chosen.
+// Seen from the front she is mirrored, so her left is on your left, as in
+// a mirror.
+TaiChiViewMirrored :: (view: s32) -> bool {
+    return view == TAI_CHI_VIEW_FRONT
+}
+
+// Indigo man (character 1) speaks with the male voice unless another is
+// chosen.
 TaiChiMaleVoice :: (state: TaiChiPracticeState) -> bool {
     if state.voice >= 0 {
         return state.voice == 1
     }
-    return state.character == 0
+    return state.character == 1
 }
