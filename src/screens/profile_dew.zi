@@ -31,6 +31,7 @@
 #import, file "../app/modal_rules.zi";
 #import, file "../app/app_modal_state.zi";
 #import, file "qr_code_view.zi";
+#import, file "dew_worth.zi";
 
 using TextWrap;
 using TextAlign;
@@ -65,14 +66,15 @@ ProfileDewText :: (app: *InnerBreeze, text: string, x: s32, y: *s32,
 }
 
 ProfileDewButton :: (app: *InnerBreeze, label: string, x: s32, y: *s32,
-    width: s32, disabled: bool, draw: bool) -> bool {
-    height := AppScale(44)
+    width: s32, disabled: bool, draw: bool, detail: string = "") -> bool {
+    height := AppScale(ifx detail.count > 0 then 58 else 44)
     clicked := false
     if draw {
         clicked = Button(app.ui.session, ButtonProps.{
                 .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
                     cast(float32)width, cast(float32)height},
                 .label = FrameTextHold(*app.ui.frame_text, label),
+                .detail = FrameTextHold(*app.ui.frame_text, detail),
                 .tone = cast(ButtonTone)ButtonToneAccent,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
                 .disabled = disabled}) != 0
@@ -175,13 +177,23 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
             button_w = width / 2
         }
         row_y := y.*
-        text_h := AppParagraphHeight(TextUntilNul(value[:]), width - button_w - AppScale(12), AppScale(Text24), 0)
-        row_h := AppScale(44)
-        if text_h > row_h {
-            row_h = text_h
+        text_w := width - button_w - AppScale(12)
+        text_h := AppParagraphHeight(TextUntilNul(value[:]), text_w, AppScale(Text24), 0)
+        worth: [128]u8
+        worth_h: s32 = 0
+        if DewWorthText(dew_account.balance, worth[:]) {
+            worth_h = AppScale(2) + AppParagraphHeight(TextUntilNul(worth[:]), text_w, AppSmallFontSize(), 0)
         }
-        text_y := row_y + (row_h - text_h) / 2
-        ProfileDewText(app, TextUntilNul(value[:]), x, *text_y, width - button_w - AppScale(12), AppScale(Text24), draw)
+        row_h := AppScale(44)
+        if text_h + worth_h > row_h {
+            row_h = text_h + worth_h
+        }
+        text_y := row_y + (row_h - text_h - worth_h) / 2
+        worth_y := text_y + text_h + AppScale(2)
+        ProfileDewText(app, TextUntilNul(value[:]), x, *text_y, text_w, AppScale(Text24), draw)
+        if worth_h > 0 {
+            ProfileDewText(app, TextUntilNul(worth[:]), x, *worth_y, text_w, AppSmallFontSize(), draw)
+        }
         button_y := row_y + (row_h - AppScale(44)) / 2
         if ProfileDewButton(app, label, x + width - button_w, *button_y, button_w, busy, draw) {
             ProfileTopUpOpen(app)
@@ -240,6 +252,9 @@ ProfileDewDraw :: (app: *InnerBreeze, x: s32, y: *s32, width: s32) {
     if height == 0 {
         return
     }
+    if dew_account.known && DewReady() {
+        DewRatesRefresh()
+    }
     Box(app.ui.session, BoxProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
                 cast(float32)width, cast(float32)(height - AppScale(8))},
@@ -263,19 +278,12 @@ ProfileDewExchangeText :: (output: []u8) -> bool {
     usd: [48]u8
     unused DewFormat(units, DewUnits, dew[:])
     unused DewFormat(atomic, 1000000000000LL, xmr[:])
-    cents := DewUsdCents(atomic)
-    if cents <= 0 {
+    if !DewUsdText(atomic, usd[:]) {
         arguments: [2]FormatArg = .[
         FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
         FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true}]
         return FormatTemplate(LocaleText("profile_dew_exchange_xmr"), arguments[:], output)
     }
-    unused AppFormatS64(cents / 100, usd[:])
-    unused AppAppendText(".", usd[:])
-    unused AppAppendText(ifx cents % 100 < 10 then "0" else "", usd[:])
-    remainder: [8]u8
-    unused AppFormatS64(cents % 100, remainder[:])
-    unused AppAppendText(TextUntilNul(remainder[:]), usd[:])
     arguments: [3]FormatArg = .[
     FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
     FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
@@ -297,6 +305,7 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
     draw: bool) {
     line: [192]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
+    DewAppendWorth(dew_account.balance, line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
     if ProfileDewExchangeText(line[:]) {
         ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
@@ -363,12 +372,16 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         }
     } else {
         offer := dew_account.plans[tab - 1]
+        worth: [128]u8
         ProfileDewFormatDew(offer.monthly_units, LocaleText("profile_dew_month"), line[:])
-        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw) {
+        unused DewWorthText(offer.monthly_units, worth[:])
+        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw, TextUntilNul(worth[:])) {
             DewBuyStorage(DewPlanSizes[tab - 1], "monthly")
         }
         ProfileDewFormatDew(offer.yearly_units, LocaleText("profile_dew_year"), line[:])
-        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw) {
+        worth = .{}
+        unused DewWorthText(offer.yearly_units, worth[:])
+        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw, TextUntilNul(worth[:])) {
             DewBuyStorage(DewPlanSizes[tab - 1], "yearly")
         }
     }
@@ -477,6 +490,7 @@ ProfileTopUpAddressText :: (output: []u8) {
 ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
     line: [384]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
+    DewAppendWorth(dew_account.balance, line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
     if dew_address[0] == cast(u8)0 {
         if profile_topup_failed {
@@ -498,16 +512,33 @@ ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bo
     FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
     FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
     unused FormatTemplate(LocaleText("profile_dew_rate"), rate_arguments[:], line[:])
+    rate_usd: [48]u8
+    if DewUsdText(dew_rate_atomic, rate_usd[:]) {
+        about: [96]u8
+        usd_arguments: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(rate_usd[:]), .is_text = true}]
+        unused FormatTemplate(LocaleText("dew_about_usd"), usd_arguments[:], about[:])
+        unused AppAppendText(" · ", line[:])
+        unused AppAppendText(TextUntilNul(about[:]), line[:])
+    }
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppFontSize(), draw)
     // A minimum below one Dew's worth is noise, so only a real one is named.
     line = .{}
     if dew_minimum_atomic >= TopUpMinimumShown {
         minimum: [48]u8
         unused DewFormat(dew_minimum_atomic, 1000000000000LL, minimum[:])
-        hint_arguments: [2]FormatArg = .[
-        FormatArg.{.text = TextUntilNul(minimum[:]), .is_text = true},
-        FormatArg.{.number = cast(s32)dew_confirmations}]
-        unused FormatTemplate(LocaleText("profile_dew_topup_hint"), hint_arguments[:], line[:])
+        minimum_usd: [48]u8
+        if DewUsdText(dew_minimum_atomic, minimum_usd[:]) {
+            hint_arguments: [3]FormatArg = .[
+            FormatArg.{.text = TextUntilNul(minimum[:]), .is_text = true},
+            FormatArg.{.text = TextUntilNul(minimum_usd[:]), .is_text = true},
+            FormatArg.{.number = cast(s32)dew_confirmations}]
+            unused FormatTemplate(LocaleText("profile_dew_topup_hint_usd"), hint_arguments[:], line[:])
+        } else {
+            hint_arguments: [2]FormatArg = .[
+            FormatArg.{.text = TextUntilNul(minimum[:]), .is_text = true},
+            FormatArg.{.number = cast(s32)dew_confirmations}]
+            unused FormatTemplate(LocaleText("profile_dew_topup_hint"), hint_arguments[:], line[:])
+        }
     } else {
         send_arguments: [1]FormatArg = .[FormatArg.{.number = cast(s32)dew_confirmations}]
         unused FormatTemplate(LocaleText("profile_dew_topup_send"), send_arguments[:], line[:])
@@ -557,6 +588,7 @@ ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bo
 
 ProfileTopUpModalDraw :: (app: *InnerBreeze) {
     ProfileTopUpPump()
+    DewRatesRefresh()
     width := app.ui.view_width - AppScale(32)
     if width > AppScale(480) {
         width = AppScale(480)

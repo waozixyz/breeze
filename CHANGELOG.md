@@ -4,7 +4,7 @@
 
 
 ### Added
-- Dew in Profile: top up with Monero in its own window, and pick Free, 1 GB or 5 GB storage priced in Dew, with Dew shown in XMR and US dollars. Monero is offered only outside Google Play.
+- Dew in Profile: top up with Monero in its own window, and pick Free, 1 GB or 5 GB storage priced in Dew. Every Dew amount, from your balance and plan prices to the Tai Chi price, also shows its value in XMR and US dollars, and top-ups show the dollar value of Monero. Monero is offered only outside Google Play.
 - Share a list after a friend accepts its invitation.
 - 24-form Tai Chi with progress, characters, music and spoken guidance, unlocked once with Dew and recognised on every device of your account, with its discount and download size shown before unlocking (not on Google Play).
 ### Changed
