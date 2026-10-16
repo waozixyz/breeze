@@ -21,6 +21,7 @@
 ### Removed
 - Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
 ### Fixed
+- Sync no longer gets stuck on Review sync changes: Android merges large changes again, and a closed review stays closed until your account has newer data.
 - Android: closing the floating practice window with its X ends the practice.
 - Practice downloads show their real size, and each practice's pictures come only with its download.
 
