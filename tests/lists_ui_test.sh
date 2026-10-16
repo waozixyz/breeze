@@ -41,6 +41,20 @@ sql() { sqlite3 -cmd '.timeout 2000' "$db" "$1"; }
 expect() {
     [[ "$1" == "$2" ]] || { echo "FAIL $3: got '$1', expected '$2' ($test_dir)"; exit 1; }
 }
+# A dialog's words, read from a capture enlarged three times with the dimmed
+# page under it thresholded away.
+dialog_text() {
+    convert "$1" -colorspace Gray -resize 300% -threshold 45% png:- |
+        tesseract stdin stdout --psm 11 "${@:2}" 2>/dev/null
+}
+# Taps the middle of a word in a dialog, such as one of its buttons.
+tap_word() {
+    local point
+    point="$(dialog_text "$1" -c tessedit_create_tsv=1 |
+        awk -F '\t' -v word="$2" '$12 == word { print int(($7 + $9 / 2) / 3), int(($8 + $10 / 2) / 3); exit }')"
+    [[ -n "$point" ]] || { echo "FAIL no '$2' to tap in $1"; exit 1; }
+    tap ${point}
+}
 tap 245 34
 tap 300 146
 xdotool type --clearmodifiers 'Weekend task'
@@ -60,15 +74,18 @@ xdotool keydown Return sleep 0.15 keyup Return
 sleep 0.5
 expect "$(sql "SELECT l.title FROM elist_items i JOIN elist_lists l ON i.list_id=l.id WHERE i.title='Pack bag'")" 'Travel' 'new list is selected'
 import -window "$window" "$test_dir/tabs.png"
+# Share and Invitations open in a dialog over the list; a tap beside it
+# closes it.
 tap 60 90
 sleep 0.4
 import -window "$window" "$test_dir/share-offline.png"
-tesseract "$test_dir/share-offline.png" stdout 2>/dev/null | rg -qi 'connect|account|sharing'
-tap 60 90
+dialog_text "$test_dir/share-offline.png" | rg -qi 'connect|account|sharing'
+tap 450 690
 tap 190 90
 sleep 0.4
 import -window "$window" "$test_dir/invitations-offline.png"
-tesseract "$test_dir/invitations-offline.png" stdout 2>/dev/null | rg -qi 'invitation'
+dialog_text "$test_dir/invitations-offline.png" | rg -qi 'invitation'
+tap 450 690
 # Synthetic credentials make the connected panel available without a real
 # account or HTTP delivery. The request must still pass through the actual
 # bundle, typed host codec, document builder and durable-attempt storage.
@@ -90,9 +107,8 @@ fi
 tap 60 90
 sleep 0.3
 import -window "$window" "$test_dir/friends.png"
-# Sparse-text mode reads the lone friend name beside its Invite button.
-tesseract "$test_dir/friends.png" stdout --psm 11 2>/dev/null | rg -qi 'Alice'
-tap 820 326
+dialog_text "$test_dir/friends.png" | rg -qi 'Alice'
+tap_word "$test_dir/friends.png" Invite
 sleep 0.4
 # The first failed delivery is retried quietly; nothing alarming is shown.
 import -window "$window" "$test_dir/invite-retrying.png"
@@ -119,14 +135,15 @@ with sqlite3.connect(sys.argv[1]) as db:
     db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)", (user,"lists.shared/"+"b"*64+"/http://127.0.0.1:10",json.dumps(incoming)))
 SEED
 sleep 0.7
+tap 450 690
 tap 180 90
 sleep 0.3
 import -window "$window" "$test_dir/incoming.png"
-tesseract "$test_dir/incoming.png" stdout 2>/dev/null | rg -qi 'Weekend trip'
+dialog_text "$test_dir/incoming.png" | rg -qi 'Weekend trip'
 if tesseract "$test_dir/incoming.png" stdout 2>/dev/null | rg -qi 'could|fail|error|unconfirmed'; then
     echo "FAIL a failed refresh shows a notice ($test_dir/incoming.png)"; exit 1
 fi
-tap 80 250
+tap_word "$test_dir/incoming.png" Accept
 sleep 0.4
 python3 - "$db" <<'CHECK'
 import json, sqlite3, sys
