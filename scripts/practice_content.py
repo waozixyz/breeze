@@ -1,7 +1,9 @@
 """Small signed Practices catalog and immutable resource packs.
 
 The catalog is an asset of the signed Practices harness. Its exact hashes bind
-each practice and language to a resource-only ZIB. All blobs use the existing
+each practice and language to a resource-only ZIB. Lumi's guide narration is
+listed separately under "guide", one pack per language, so hosts that predate
+it keep reading the practice list unchanged. All blobs use the existing
 inbe.practices publisher and Daochi artifact endpoint, with no new registry IDs.
 """
 import json
@@ -13,6 +15,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = 'assets/practices/catalog.json'
 NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi')
+GUIDE = 'guide'
 MAXIMUM = 64 * 1024 * 1024
 
 
@@ -167,7 +170,23 @@ def catalog_from_bundle(data):
         seen.add((practice, language, voice))
     if {(name, '', '') for name in NAMES} - seen:
         raise ValueError('practice catalog lacks base content')
-    return packs
+    guide = catalog.get('guide', [])
+    if not isinstance(guide, list) or len(guide) > 32:
+        raise ValueError('invalid guide narration catalog')
+    languages = set()
+    for pack in guide:
+        language = pack.get('language')
+        digest = pack.get('sha256')
+        size = pack.get('size')
+        if (not isinstance(language, str) or len(language) != 2 or not language.isascii() or
+                not language.islower() or language in languages or
+                not isinstance(digest, str) or len(digest) != 64 or
+                any(c not in '0123456789abcdef' for c in digest) or
+                type(size) is not int or not 8 <= size <= MAXIMUM):
+            raise ValueError('invalid or duplicate guide narration pack')
+        languages.add(language)
+    return packs + [dict(practice=GUIDE, language=pack['language'], sha256=pack['sha256'],
+                         size=pack['size']) for pack in guide]
 
 
 def prepare(compiler):
@@ -181,8 +200,10 @@ def prepare(compiler):
     output = ROOT / 'build/practice-content'
     output.mkdir(parents=True, exist_ok=True)
     packs = []
-    for practice in NAMES:
-        directories = [ROOT / ('build/package-assets/practice-' + practice)]
+    guide = []
+    for practice in NAMES + (GUIDE,):
+        # Lumi's guide has narration only, without a base pack.
+        directories = [] if practice == GUIDE else [ROOT / ('build/package-assets/practice-' + practice)]
         directories += sorted((ROOT / 'build/package-assets').glob('practice-' + practice + '-voice-*'))
         for directory in directories:
             language = directory.name.split('-voice-', 1)[1] if '-voice-' in directory.name else ''
@@ -208,6 +229,11 @@ def prepare(compiler):
             data = path.read_bytes()
             if len(data) > min(MAXIMUM, configuration['maximum_pack_bytes']):
                 raise ValueError('practice pack exceeds its size budget')
+            if practice == GUIDE:
+                if voice:
+                    raise ValueError("Lumi's guide has one voice")
+                guide.append(dict(language=language, sha256=sha256(data).hexdigest(), size=len(data)))
+                continue
             pack = dict(practice=practice, language=language,
                         sha256=sha256(data).hexdigest(), size=len(data))
             if voice:
@@ -218,7 +244,7 @@ def prepare(compiler):
             packs.append(pack)
     target = ROOT / 'build/package-assets/practices' / CATALOG
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(dict(schema=1, packs=packs), separators=(',', ':')) + '\n')
+    target.write_text(json.dumps(dict(schema=1, packs=packs, guide=guide), separators=(',', ':')) + '\n')
     # Default practices ship inside Practices, installed until removed; other
     # small ones ship too, added from the app without a download.
     for folder, names in (('default', configuration['default']), ('shipped', configuration.get('shipped', []))):
@@ -230,7 +256,7 @@ def prepare(compiler):
             shipped.write_bytes((output / (practice + '.zib')).read_bytes())
     if set(configuration['default']) & set(configuration.get('shipped', [])):
         raise ValueError('a practice is either installed by default or only shipped')
-    print(f'Prepared {len(packs)} separate practice content packs')
+    print(f'Prepared {len(packs)} separate practice content packs and {len(guide)} guide narration packs')
 
 
 def narration_current(configuration, practice, language, assets=None, voice=''):

@@ -55,7 +55,20 @@ digest = hashlib.sha256(data).hexdigest()
 (fixtures / (digest + '.zib')).write_bytes(data)
 packs.append(dict(practice='taichi', language='en', voice='male', sha256=digest, size=len(data),
                   product='inbe.practice.taichi'))
-(fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs)) + '\n')
+# Lumi's guide lists its narration on its own, one free pack per language.
+assets = work / 'guide-en' / 'assets'
+voice = assets / 'practices/guide/voice/en'
+voice.mkdir(parents=True)
+(voice / 'test.ogg').write_bytes(b'fixture guide audio')
+bundle = work / 'guide-en.zib'
+subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
+    '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
+    str(ROOT / 'apps/practice/content.zi')], check=True)
+data = bundle.read_bytes()
+digest = hashlib.sha256(data).hexdigest()
+(fixtures / (digest + '.zib')).write_bytes(data)
+guide = [dict(language='en', sha256=digest, size=len(data))]
+(fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs, guide=guide)) + '\n')
 (fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
 (fixtures / 'shipped-patterns.zib').write_bytes((ROOT / 'build/practice-content/patterns.zib').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.
@@ -97,4 +110,5 @@ assert not list(cache.glob('practice-taichi.??.zib'))
 assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
-print('Practice downloads: verified content, corrupt-download retry, offline cache, language isolation, removal, shipped Wim Hof and granted paid packs passed')
+print('Practice downloads: verified content, corrupt-download retry, offline cache, chosen narration languages, '
+      "Lumi's guide narration, removal, shipped Wim Hof and granted paid packs passed")

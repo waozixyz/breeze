@@ -6,7 +6,7 @@
 - Unlock Tai Chi once with Dew, shown with its discount and download size; your purchase is recognised on every device of your account (not on Google Play).
 - Download each practice separately and keep it available offline.
 - Meditation and Breathing Patterns come with the app: adding them needs no download.
-- Download narration for the selected language without downloading practice artwork again.
+- Pick narration languages separately for each practice and for Lumi's guide; narration downloads only in the languages you pick.
 - Tai Chi narration comes in a female and a male voice; the monk speaks with the male voice unless you choose another in Customize.
 - Remove downloaded content while keeping practice progress.
 - Requires Inner Breeze 2.1.34 or later.

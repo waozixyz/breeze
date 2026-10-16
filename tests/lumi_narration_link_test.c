@@ -11,7 +11,12 @@ static int unloads;
 static bool available = true;
 static float volume;
 
-String LocaleActiveCode(void) { return StringView("en", 2); }
+String practice_downloads_PracticeNarrationLanguage(int32_t content, String voice)
+{
+    (void)content;
+    (void)voice;
+    return StringView("en", 2);
+}
 double GetTime(void) { return 1.0; }
 void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 

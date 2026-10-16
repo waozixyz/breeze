@@ -55,6 +55,18 @@ for pack in catalog['packs']:
     from hashlib import sha256
     assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
     content.update(assets(data))
+# Lumi's guide narration is downloaded per language, never shipped in Lumi.
+codes = [line.split('|', 1)[0] for line in (ROOT / 'locales/index.txt').read_text().splitlines() if '|' in line]
+assert sorted(pack['language'] for pack in catalog['guide']) == sorted(codes)
+for pack in catalog['guide']:
+    data = (ROOT / 'build/practice-content' / ('guide.' + pack['language'] + '.zib')).read_bytes()
+    assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
+    spoken = assets(data)
+    folder = 'assets/practices/guide/voice/' + pack['language'] + '/'
+    assert all(name.startswith(folder) for name in spoken), sorted(spoken)[:3]
+    content.update(spoken)
+lumi = assets(root['cells/lumi.zib'])
+assert not any(name.endswith('.ogg') for name in lumi), [name for name in lumi if name.endswith('.ogg')][:3]
 combined = root | practices | content
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
 paths = set(re.findall(r'"((?:assets/)?(?:practices|easteregg|pet)/[^"\n]+\.(?:png|jpg|jpeg))"', source))

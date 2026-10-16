@@ -111,13 +111,10 @@ PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     }
 }
 
-// Narration downloads with its practice, so it counts in the size; small
+// The practice alone; its narration languages are chosen below it. Small
 // packs show kilobytes instead of a rounded-up megabyte.
 PracticeDownloadSizeText :: (app: *InnerBreeze, practice: s32, output: []u8) {
     bytes := PracticeContentBytes(practice)
-    if app.voice_narration_enabled != 0 && PracticeVoiceStatus(practice) >= 0 {
-        bytes += PracticeVoiceBytes(practice)
-    }
     small := bytes < 1024 * 1024
     text := LocaleText(ifx PracticeInstalled(practice) && PracticeContentStatus(practice) == 2 then (ifx small then "practice_download_ready_kb" else "practice_download_ready") else
         ifx small then "practice_download_size_kb" else "practice_download_size")
@@ -181,6 +178,9 @@ PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s
     if narrow && !included {
         height += AppScale(52)
     }
+    if PracticeDownloadNarrated(practice) {
+        height += AppScale(16) + PracticeNarrationBlockHeight(app, practice, width)
+    }
     return height
 }
 
@@ -211,6 +211,13 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
     button_y := ifx narrow then y + status_h + AppScale(8) else y
     button_w := ifx narrow then width else AppScale(200)
     included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+    if PracticeDownloadNarrated(practice) {
+        narration_y := y + status_h + AppScale(16)
+        if narrow && !included {
+            narration_y += AppScale(52)
+        }
+        PracticeNarrationBlock(app, practice, x, narration_y, width)
+    }
     if locked {
         if DewReady() && Button(app.ui.session, ButtonProps.{
                 .id = 17420 + practice,
@@ -240,9 +247,151 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
             if DataTemporary() {
                 app.exercise_type = practice
             }
-            PracticeContentRequest(practice, app.voice_narration_enabled != 0)
+            PracticeContentRequest(practice)
         }
     }
+}
+
+// A practice offers narration once it is on this device and unlocked;
+// Lumi's guide always does.
+PracticeDownloadNarrated :: (content: s32) -> bool {
+    if content != PracticeGuide && (!PracticeInstalled(content) || PracticeDownloadLocked(content)) {
+        return false
+    }
+    return PracticeVoiceRecorded(content, PracticeVoiceFor(content))
+}
+
+// "Voice narration · Female voice", in the voice chosen in Customize.
+PracticeNarrationHeading :: (app: *InnerBreeze, content: s32) -> string {
+    buffer: [256]u8
+    unused AppCopyText(LocaleText("voice_narration_label"), buffer[:])
+    unused AppAppendText(" · ", buffer[:])
+    unused AppAppendText(LocaleText(ifx PracticeVoiceFor(content) == "male" then "practice_voice_male" else "practice_voice_female"),
+        buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+// What the chips hold: a download in progress, a failure, the languages on
+// this device with their size, or how to add one.
+PracticeNarrationSummary :: (app: *InnerBreeze, content: s32) -> string {
+    voice := PracticeVoiceFor(content)
+    busy := ""
+    failed := ""
+    present: [256]u8
+    for rank: cast(s32)0..LocaleLanguageCount() - 1 {
+        language := LocaleLanguageAt(rank)
+        state := PracticeNarrationState(PracticeNarrationPack(content, language.code, voice))
+        if state == 1 && busy.count == 0 {
+            busy = language.label
+        } else if state == 3 && failed.count == 0 {
+            failed = language.label
+        } else if state == 2 {
+            if present[0] != cast(u8)0 {
+                unused AppAppendText(", ", present[:])
+            }
+            unused AppAppendText(language.label, present[:])
+        }
+    }
+    if busy.count == 0 && failed.count == 0 && present[0] == cast(u8)0 {
+        return LocaleText("practice_narration_pick")
+    }
+    buffer: [512]u8
+    if busy.count > 0 || failed.count > 0 {
+        args: [1]FormatArg = .[FormatArg.{.text = ifx busy.count > 0 then busy else failed, .is_text = true}]
+        unused FormatTemplate(LocaleText(ifx busy.count > 0 then "practice_narration_busy" else "practice_narration_failed"),
+            args[:], buffer[:])
+        return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 512))
+    }
+    bytes := PracticeNarrationBytes(content, voice)
+    small := bytes < 1024 * 1024
+    amount := ifx small then (bytes + 1023) / 1024 else (bytes + 512 * 1024) / (1024 * 1024)
+    args: [2]FormatArg = .[FormatArg.{.text = TextUntilNul(present[:]), .is_text = true},
+    FormatArg.{.number = cast(s32)amount}]
+    unused FormatTemplate(LocaleText(ifx small then "practice_narration_ready_kb" else "practice_narration_ready"),
+        args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 512))
+}
+
+// One pill per recorded language, in the app's language order, wrapping into
+// rows. A tap downloads that language, cancels it, or removes it. Returns
+// the height the chips take, and draws them only when asked.
+PracticeNarrationChips :: (app: *InnerBreeze, content: s32, x: s32, y: s32, width: s32, draw: bool) -> s32 {
+    voice := PracticeVoiceFor(content)
+    gap := AppScale(8)
+    chip_h := AppScale(44)
+    left := x
+    top := y
+    any := false
+    for rank: cast(s32)0..LocaleLanguageCount() - 1 {
+        language := LocaleLanguageAt(rank)
+        index := PracticeNarrationPack(content, language.code, voice)
+        if index < 0 {
+            continue
+        }
+        chip_w := AppTextWidth(language.label, AppFontSize()) + AppScale(36)
+        if chip_w > width {
+            chip_w = width
+        }
+        if left > x && left + chip_w > x + width {
+            left = x
+            top += chip_h + gap
+        }
+        any = true
+        if draw {
+            state := PracticeNarrationState(index)
+            if Button(app.ui.session, ButtonProps.{
+                    .id = 17500 + content * 64 + rank,
+                    .bounds = Rectangle.{cast(float32)left, cast(float32)top, cast(float32)chip_w, cast(float32)chip_h},
+                    .label = language.label, .pill = true, .selected = state == 2,
+                    .disabled = practice_active(app) != null || !PracticeNarrationReviewed(index),
+                    // A downloading chip stays tappable to cancel; the line under the chips names it.
+                    .tone = cast(ButtonTone)(ifx state == 3 then ButtonToneDanger else
+                    ifx state == 2 || state == 1 then ButtonToneAccent else ButtonToneNeutral),
+                    .emphasis = cast(ButtonEmphasis)(ifx state == 2 then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0 {
+                PracticeNarrationToggle(index)
+            }
+        }
+        left += chip_w + gap
+    }
+    return ifx any then top - y + chip_h else 0
+}
+
+PracticeNarrationBlockHeight :: (app: *InnerBreeze, content: s32, width: s32) -> s32 {
+    heading_h := AppParagraphHeight(PracticeNarrationHeading(app, content), width, AppFontSize(), AppScale(3))
+    summary_h := AppParagraphHeight(PracticeNarrationSummary(app, content), width, AppFontSize(), AppScale(3))
+    return heading_h + AppScale(8) + PracticeNarrationChips(app, content, 0, 0, width, false) +
+    AppScale(8) + summary_h
+}
+
+PracticeNarrationBlock :: (app: *InnerBreeze, content: s32, x: s32, y: s32, width: s32) {
+    heading := PracticeNarrationHeading(app, content)
+    heading_h := AppParagraphHeight(heading, width, AppFontSize(), AppScale(3))
+    strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)heading.count}]
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)heading_h},
+            .text = heading, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto, .strong = strong[:]})
+    y += heading_h + AppScale(8)
+    y += PracticeNarrationChips(app, content, x, y, width, true) + AppScale(8)
+    summary := PracticeNarrationSummary(app, content)
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+                cast(float32)AppParagraphHeight(summary, width, AppFontSize(), AppScale(3))},
+            .text = summary, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+// Lumi's guide has no practice to download, only its narration.
+PracticeGuideRowHeight :: (app: *InnerBreeze, width: s32) -> s32 {
+    name_h := AppParagraphHeight(LocaleText("lumi_guide_narration_name"), width, AppFontSize(), AppScale(3))
+    return name_h + AppScale(8) + PracticeNarrationBlockHeight(app, PracticeGuide, width) + AppScale(24)
+}
+
+PracticeGuideRow :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    name := LocaleText("lumi_guide_narration_name")
+    name_h := AppParagraphHeight(name, width, AppFontSize(), AppScale(3))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)name_h},
+            .text = name, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    PracticeNarrationBlock(app, PracticeGuide, x, y + name_h + AppScale(8), width)
 }
 
 #program_export
@@ -253,7 +402,7 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
     if UnlockTakeBought() {
         for practice: cast(s32)0..cast(s32)4 {
             if PracticeProduct(practice) == UnlockTaiChi {
-                PracticeContentRequest(practice, app.voice_narration_enabled != 0)
+                PracticeContentRequest(practice)
             }
         }
     }
@@ -289,6 +438,10 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
         }
         content_h += PracticeDownloadRowHeight(app, practice, row_width)
     }
+    guide := PracticeDownloadNarrated(PracticeGuide)
+    if guide {
+        content_h += PracticeGuideRowHeight(app, row_width)
+    }
     if app.practice_downloads_scroll < 0 {
         app.practice_downloads_scroll = focus_y
     }
@@ -304,6 +457,9 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
             }
             PracticeDownloadRow(app, practice, cast(s32)scroll.content.x, y, row_width)
             y += PracticeDownloadRowHeight(app, practice, row_width)
+        }
+        if guide {
+            PracticeGuideRow(app, cast(s32)scroll.content.x, y, row_width)
         }
         End(app.ui.session)
     }

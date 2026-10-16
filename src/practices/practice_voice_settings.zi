@@ -1,15 +1,17 @@
 // The voice narration switch in a practice's Customize, with the voice and
-// its download while narration is on. Spoken guidance comes in the app
-// language's own pack, in the chosen voice, downloaded with the practice or
-// here after the voice or language changes.
+// the language it speaks while narration is on. Its languages are downloaded
+// in Manage practices; it speaks the app's language when that one is there.
 #import, file "../core/types.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/app_settings.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "../app/modal_rules.zi";
 #import "session"
 #import "layout"
 #import "tree"
 #import, file "../app/locale.zi";
 #import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
 #import "geometry"
 #import "button_props"
 #import "button_widget"
@@ -28,12 +30,17 @@ using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
 using TextAlign;
+using ModalType;
 
-PracticeNarrationStatus :: (voice: s32) -> string {
-    return LocaleText(ifx voice < 0 then "practice_voice_unavailable" else
-        ifx voice == 2 then "practice_voice_ready" else
-        ifx voice == 3 then "practice_download_failed" else
-        ifx voice == 1 then "practice_voice_busy" else "")
+// "Plays in English", or that no language is downloaded yet.
+PracticeNarrationStatus :: (app: *InnerBreeze, language: string) -> string {
+    if language.count == 0 {
+        return LocaleText("practice_narration_none")
+    }
+    buffer: [256]u8
+    args: [1]FormatArg = .[FormatArg.{.text = PracticeLanguageLabel(language), .is_text = true}]
+    unused FormatTemplate(LocaleText("practice_narration_plays"), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
 PracticeNarrationSettingsHeight :: (app: *InnerBreeze) -> s32 {
@@ -87,32 +94,26 @@ PracticeNarrationSettings :: (app: *InnerBreeze, practice: s32, male: bool,
         male = choice.selected_index == 1
     }
     y.* += AppScale(42 + 12)
-    // The male recording may not exist in every language yet.
-    available := !male || PracticeVoiceAvailable(practice, LocaleActiveCode(), "male")
-    voice := ifx available then PracticeVoiceStatus(practice) else -1
+    language := PracticeNarrationLanguage(practice, ifx male then "male" else "")
     button_w := AppScale(180)
     if button_w > width / 2 {
         button_w = width / 2
     }
-    actionable := PracticeContentStatus(practice) == 2 && (voice == 0 || voice == 1 || voice == 3)
-    status_w := ifx actionable then width - button_w - AppScale(12) else width
+    // Without a downloaded language, Manage practices is where to choose one.
+    choose := language.count == 0
+    status_w := ifx choose then width - button_w - AppScale(12) else width
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)status_w, cast(float32)AppScale(44)},
-            .text = PracticeNarrationStatus(voice), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
+            .text = PracticeNarrationStatus(app, language), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
             .vertical_align = cast(TextAlign)TextAlignCenter})
-    if actionable && Button(app.ui.session, ButtonProps.{
+    if choose && Button(app.ui.session, ButtonProps.{
             .id = 15423,
             .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)y.*,
                 cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText(ifx voice == 1 then "cancel_button" else
-            ifx voice == 3 then "practice_voice_retry" else "practice_voice_download"),
-            .disabled = voice != 1 && !PracticePackReviewed(practice, LocaleActiveCode()),
+            .label = LocaleText("practice_manage_button"),
             .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        if voice == 1 {
-            PracticeContentCancel(practice)
-        } else {
-            PracticeContentRequest(practice, true)
-        }
+        app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
+        app.practice_downloads_scroll = -(practice + 1)
     }
     y.* += AppScale(44 + 16)
     return picked

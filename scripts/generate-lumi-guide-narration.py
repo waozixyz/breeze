@@ -3,7 +3,8 @@
 
 Each guide line listed in design/lumi-guide/narration.json is read from
 locales/<code>.txt and spoken by the configured voice into
-assets/lumi/voice/<code>/<key>.ogg. The receipt beside the configuration
+assets/practices/guide/voice/<code>/<key>.ogg, one downloadable pack per
+language. The receipt beside the configuration
 records a hash of each line's text and settings, so only changed lines are
 generated again. Every new clip is transcribed and kept only when the
 transcript matches its line.
@@ -33,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "design/lumi-guide/narration.json"
 RECEIPT = ROOT / "design/lumi-guide/receipt.json"
 LOCALES = ROOT / "locales"
-VOICE = ROOT / "assets/lumi/voice"
+VOICE = ROOT / "assets/practices/guide/voice"
 SPEECH = "https://openrouter.ai/api/v1/audio/speech"
 CHAT = "https://openrouter.ai/api/v1/chat/completions"
 ATTEMPTS = 4
