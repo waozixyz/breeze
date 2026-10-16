@@ -1642,6 +1642,11 @@ test: raylib-text-input-zi-test
 android-text-input-zi-test: $(ZI2C_BIN)
 	sh tests/android_text_input_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
 
+.PHONY: android-text-selection-test
+android-text-selection-test:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		$(GRADLE) --no-daemon --project-dir tests/android-text-selection test
+
 test: android-text-input-zi-test
 
 .PHONY: main-platform-zi-test
