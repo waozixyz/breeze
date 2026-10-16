@@ -20,6 +20,7 @@
 #import "tree"
 #import, file "../storage/dew.zi";
 #import, file "../storage/sync_async.zi";
+#import, file "../storage/sync_node_storage.zi";
 #import, file "../platform/dew_payment.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../app/app_types.zi";
@@ -97,6 +98,51 @@ ProfileDewSizeText :: (bytes: s64, output: []u8) {
     unused FormatNumberTemplate(LocaleText("profile_dew_mb"), cast(s32)(bytes / 1048576), output)
 }
 
+// What the account holds against its allowance, with the node cards' bar.
+ProfileDewUsage :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
+    if dew_account.limit_bytes <= 0 {
+        return
+    }
+    storage := SyncNodeStorage.{.known = true,
+        .used_bytes = dew_account.used_bytes, .limit_bytes = dew_account.limit_bytes}
+    bar_h := AppScale(8)
+    if draw {
+        Box(app.ui.session, BoxProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)bar_h},
+                .fill = DarkenColor(StyleTokenColor("canvas"), 18),
+                .radius = cast(float32)bar_h / 2.0})
+        fill_w := cast(s32)(cast(s64)width * cast(s64)SyncNodeStoragePercent(storage) / 100)
+        if storage.used_bytes > 0 && fill_w < bar_h {
+            fill_w = bar_h
+        }
+        color := StyleTokenColor("accent")
+        if storage.used_bytes >= storage.limit_bytes {
+            color = StyleTokenColorOr("storage-full", Color.{179, 38, 30, 255})
+        } else if SyncNodeStorageNearlyFull(storage) {
+            color = StyleTokenColorOr("storage-warning", Color.{163, 98, 0, 255})
+        }
+        if fill_w > 0 {
+            Box(app.ui.session, BoxProps.{
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                        cast(float32)fill_w, cast(float32)bar_h},
+                    .fill = color,
+                    .radius = cast(float32)bar_h / 2.0})
+        }
+    }
+    y.* += bar_h + AppScale(8)
+    used: [32]u8
+    limit: [32]u8
+    line: [96]u8
+    unused SyncStorageFormatBytes(storage.used_bytes, used[:])
+    unused SyncStorageFormatBytes(storage.limit_bytes, limit[:])
+    arguments: [2]FormatArg = .[
+    FormatArg.{.text = TextUntilNul(used[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(limit[:]), .is_text = true}]
+    unused FormatTemplate(LocaleText("profile_node_storage_used_of"), arguments[:], line[:])
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+}
+
 ProfileDewDaysLeft :: () -> s32 {
     return cast(s32)((dew_account.expires_at - DewNow() + 86399) / 86400)
 }
@@ -166,6 +212,7 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         unused AppCopyText(LocaleText("profile_dew_free"), plan[:])
     }
     ProfileDewText(app, TextUntilNul(plan[:]), x, y, width, AppFontSize(), draw)
+    ProfileDewUsage(app, x, y, width, draw)
     if dew_notice.count > 0 {
         ProfileDewText(app, LocaleText(dew_notice), x, y, width, AppSmallFontSize(), draw)
     }
@@ -254,6 +301,7 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
     if ProfileDewExchangeText(line[:]) {
         ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
     }
+    ProfileDewUsage(app, x, y, width, draw)
     labels: [1 + DewPlanCount][24]u8
     unused AppCopyText(LocaleText("profile_dew_plan_free"), labels[0][:])
     for index: cast(s32)0..DewPlanCount - 1 {

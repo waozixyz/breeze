@@ -16,6 +16,7 @@
 - Compact Lists tabs and larger task controls.
 - Lists tabs look like tabs: the open list is underlined, with no box around the row.
 - Top up Dew centers the Monero address under its QR code.
+- Profile shows how much of your storage is used, with a bar, next to your plan and in Storage plans.
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.
 ### Removed
