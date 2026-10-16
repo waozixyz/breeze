@@ -46,6 +46,9 @@ PracticePack :: struct {
     product: [48]u8
     // Automatic retries of this download since it was asked for.
     attempts: s32
+    // A narration language the person removed or stopped, so it does not
+    // download by itself again.
+    declined: bool
 }
 
 // The host supplies grants for paid packs: 1 with the grant written, 0 while
@@ -80,6 +83,8 @@ practice_narration_language: [16]u8;
 practice_guide_language: [16]u8;
 // Each practice's narration voice from Customize, and the selected one's now.
 practice_voices: [PracticeContentCount][8]u8;
+// Each practice's narration language from Customize; "" follows the app's.
+practice_narration_choices: [PracticeContentCount][16]u8;
 practice_voice_selected: [8]u8;
 practice_narration_selected: bool;
 practice_catalog_invalid: bool;
@@ -102,6 +107,18 @@ PracticeContentIndex :: (name: string) -> s32 {
 }
 
 PracticePackPath :: (index: s32, temporary: bool) -> string {
+    return PracticePackFile(index, ifx temporary then ".download" else ".zib")
+}
+
+// A narration language the person removed keeps this marker beside its slot.
+PracticeNarrationDeclinedPath :: (index: s32) -> string {
+    if index < 0 || index >= practice_pack_count || practice_packs[index].language[0] == cast(u8)0 {
+        return ""
+    }
+    return PracticePackFile(index, ".removed")
+}
+
+PracticePackFile :: (index: s32, suffix: string) -> string {
     directory := PackageDirectory()
     defer {
         PackageFree(directory)
@@ -117,7 +134,7 @@ PracticePackPath :: (index: s32, temporary: bool) -> string {
     }
     language := TextFromCString(*practice_packs[index].language[0])
     if language.count == 0 {
-        return PackageText(name, ifx temporary then ".download" else ".zib")
+        return PackageText(name, suffix)
     }
     separator := PackageText(name, ".")
     localized := PackageText(separator, language)
@@ -131,7 +148,7 @@ PracticePackPath :: (index: s32, temporary: bool) -> string {
         PackageFree(slot)
     }
     // One slot per practice, language and voice. A verified update replaces the old copy.
-    return PackageText(slot, ifx temporary then ".download" else ".zib")
+    return PackageText(slot, suffix)
 }
 
 // Small practices ship with the app: those in default/ are installed until
@@ -232,7 +249,7 @@ PracticeCacheFileOwned :: (practice: s32, name: string) -> bool {
     if tail.count > 5 && tail[:5] == ".male" {
         tail = tail[5:]
     }
-    return tail == ".zib" || tail == ".download"
+    return tail == ".zib" || tail == ".download" || tail == ".removed"
 }
 
 PracticeCacheRemove :: (practice: s32) {
@@ -526,6 +543,9 @@ PracticeCatalogLoad :: () {
         for index: cast(s32)0..count - 1 {
             practice_packs[index] = packs[index]
             practice_packs[index].present = PracticePackPresent(index)
+            declined := PracticeNarrationDeclinedPath(index)
+            practice_packs[index].declined = declined.count > 0 && PathExists(declined)
+            PackageFree(declined)
         }
     }
     practice_catalog_generation = AssetGeneration()
@@ -580,6 +600,23 @@ PracticeVoiceSelect :: (practice: s32, voice: string) {
     unused AppCopyText(ifx voice == "male" then voice else "", practice_voices[practice][:])
 }
 
+// Customize picks a practice's narration language; "" follows the app's.
+PracticeNarrationPrefer :: (content: s32, language: string) {
+    if content < 0 || content >= PracticeContentCount {
+        return
+    }
+    unused AppCopyText(ifx PracticeCatalogLanguage(language) then language else "",
+        practice_narration_choices[content][:])
+}
+
+// The language narration should speak: the one chosen in Customize, else the app's.
+PracticeNarrationPreferred :: (content: s32) -> string {
+    if content >= 0 && content < PracticeContentCount && practice_narration_choices[content][0] != cast(u8)0 {
+        return TextFromCString(*practice_narration_choices[content][0])
+    }
+    return LocaleActiveCode()
+}
+
 // The narration pack of content in this language and voice, or -1.
 PracticeNarrationPack :: (content: s32, language: string, voice: string) -> s32 {
     PracticeCatalogLoad()
@@ -607,10 +644,12 @@ PracticeNarrationState :: (index: s32) -> s32 {
     return ifx pack.bundle != null || pack.status == 2 || pack.present then 2 else 0
 }
 
-// Narration speaks the app's language when it is on this device, otherwise
-// another downloaded language in the app's language order; "" without any.
+// Narration speaks the language chosen for it when that one is on this
+// device, then the app's, then another downloaded language in the app's
+// language order; "" without any.
 PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
     PracticeCatalogLoad()
+    preferred := PracticeNarrationPreferred(content)
     app_language := LocaleActiveCode()
     best: s32 = -1
     best_rank: s32 = 0
@@ -621,10 +660,10 @@ PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
             continue
         }
         language := TextFromCString(*pack.language[0])
-        if language == app_language {
+        if language == preferred {
             return language
         }
-        rank := PracticeLanguageRank(language)
+        rank := ifx language == app_language then -1 else PracticeLanguageRank(language)
         if best < 0 || rank < best_rank {
             best = index
             best_rank = rank
@@ -648,44 +687,73 @@ PracticeLanguageRank :: (code: string) -> s32 {
     return count
 }
 
-// The bytes of every narration language of this voice on this device.
-PracticeNarrationBytes :: (content: s32, voice: string) -> s64 {
-    PracticeCatalogLoad()
-    bytes: s64 = 0
-    for index: cast(s32)0..practice_pack_count - 1 {
-        pack := *practice_packs[index]
-        if pack.practice == content && pack.language[0] != cast(u8)0 &&
-        TextFromCString(*pack.voice[0]) == voice && PracticeNarrationState(index) == 2 {
-            bytes += pack.size
-        }
-    }
-    return bytes
-}
-
-// The manager reads a slot's verified state before offering its chip.
-PracticeNarrationReviewed :: (index: s32) -> bool {
-    return index >= 0 && index < practice_pack_count &&
-    (practice_packs[index].cache_checked || practice_packs[index].status == 1)
-}
-
-// A language chip: downloads its narration, cancels that download, or
-// removes the language from this device. Nothing else changes.
-PracticeNarrationToggle :: (index: s32) {
+// Downloads this narration language now and lets it download by itself again.
+PracticeNarrationDownload :: (index: s32) {
     if index < 0 || index >= practice_pack_count {
         return
     }
+    PracticeNarrationDeclined(index, false)
     state := PracticeNarrationState(index)
-    if state == 1 {
-        PracticePackCancel(index)
-        return
-    }
-    if state == 2 {
-        PracticePackRemove(index)
+    if state == 1 || state == 2 {
         return
     }
     practice_packs[index].requested = true
     practice_packs[index].status = 1
     practice_packs[index].attempts = 0
+}
+
+// Stops or removes this narration language, which then stays off this
+// device until it is downloaded again.
+PracticeNarrationDecline :: (index: s32) {
+    if index < 0 || index >= practice_pack_count {
+        return
+    }
+    PracticePackRemove(index)
+    PracticeNarrationDeclined(index, true)
+}
+
+PracticeNarrationDeclined :: (index: s32, declined: bool) {
+    if practice_packs[index].declined == declined {
+        return
+    }
+    practice_packs[index].declined = declined
+    if DataTemporary() {
+        return
+    }
+    path := PracticeNarrationDeclinedPath(index)
+    if path.count > 0 && declined {
+        directory := PackageDirectory()
+        unused storage_ensure_dir(directory)
+        PackageFree(directory)
+        unused PackageWrite(path, "1")
+    } else if path.count > 0 {
+        unused RemoveFile(path)
+    }
+    PackageFree(path)
+    sync_web_storage()
+}
+
+// The bytes of the narration that follows a practice: its pack in the language
+// and voice it should speak, unless that language was removed.
+PracticeNarrationFollowingBytes :: (content: s32) -> s64 {
+    index := PracticeNarrationPack(content, PracticeNarrationPreferred(content), PracticeVoiceFor(content))
+    return ifx index < 0 || practice_packs[index].declined then 0 else practice_packs[index].size
+}
+
+// Narration downloads by itself in the language it should speak, unless the
+// person removed that language. A failed download waits for the next start.
+PracticeNarrationEnsure :: (content: s32) {
+    index := PracticeNarrationPack(content, PracticeNarrationPreferred(content), PracticeVoiceFor(content))
+    if index < 0 {
+        return
+    }
+    pack := *practice_packs[index]
+    if pack.declined || pack.present || pack.bundle != null || pack.status != 0 {
+        return
+    }
+    pack.requested = true
+    pack.status = 1
+    pack.attempts = 0
 }
 
 PracticePackCancel :: (index: s32) {
@@ -772,7 +840,7 @@ PracticeContentBytes :: (practice: s32) -> s64 {
     return ifx index < 0 then 0 else practice_packs[index].size
 }
 
-// Downloads or adds a practice. Its narration is chosen separately.
+// Downloads or adds a practice. Its narration follows on its own.
 PracticeContentRequest :: (practice: s32) {
     base := PracticePackFind(practice, "")
     // A practice that ships with the app is added or restored without a download.
@@ -859,6 +927,8 @@ PracticeContentRemove :: (practice: s32) {
         practice_packs[index].checked = true
         practice_packs[index].cache_checked = true
         practice_packs[index].present = false
+        // Adding the practice again brings its narration back by itself.
+        practice_packs[index].declined = false
     }
     // Include languages retired from a newer catalog, without touching progress.
     if !DataTemporary() {
@@ -940,8 +1010,8 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
         unused AppCopyText(voice, practice_voice_selected[:])
         unused AppCopyText(spoken, practice_narration_language[:])
         unused AppCopyText(guide_spoken, practice_guide_language[:])
-        // Keep cached bytes on disk, mounting only what plays now. Every
-        // download was asked for, so it continues whatever is shown.
+        // Keep cached bytes on disk, mounting only what plays now. A download
+        // continues whatever is shown.
         for index: cast(s32)0..practice_pack_count - 1 {
             pack := *practice_packs[index]
             if PracticePackWanted(pack) {
@@ -965,6 +1035,15 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
                     pack.cache_checked = false
                 }
                 AssetNotifyChanged()
+            }
+        }
+    }
+    // Narration follows each practice on this device; with temporary data
+    // only the practice shown keeps what it downloads.
+    if narration {
+        for content: cast(s32)0..PracticeContentCount - 1 {
+            if content == PracticeGuide || (PracticeInstalled(content) && (!DataTemporary() || content == selected)) {
+                PracticeNarrationEnsure(content)
             }
         }
     }

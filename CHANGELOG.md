@@ -12,7 +12,7 @@
 - Reliable Dew balances, with minimum top-ups and confirmations.
 - Manage practice downloads in one window on the Practice screen.
 - Tai Chi narration in a female or male voice, chosen in Tai Chi's Customize; the monk speaks with the male voice.
-- Narration downloads only in the languages you pick, separately for each practice and for Lumi's guide, in Manage practices. Lumi's guide voice no longer comes inside the app.
+- Choose each practice's narration language in its Customize, from a list where an icon downloads or removes each language. Narration in the app's language downloads by itself, and Lumi's guide voice now downloads in the app's language instead of coming inside the app.
 - Compact Lists tabs and larger task controls.
 - Lists tabs look like tabs: the open list is underlined, with no box around the row.
 - Top up Dew centers the Monero address under its QR code.
