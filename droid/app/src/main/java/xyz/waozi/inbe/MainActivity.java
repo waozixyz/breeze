@@ -60,6 +60,7 @@ public class MainActivity extends NativeActivity {
     private boolean firstFrameReady;
     private long startupStarted;
     private TextInputView textInputView;
+    private volatile TextSelectionMenu textSelectionMenu;
     private boolean textInputVisible;
     private volatile int pictureWindowState;
     private volatile boolean pictureWindowEnabled;
@@ -446,6 +447,27 @@ public class MainActivity extends NativeActivity {
                     multiline);
             }
         });
+    }
+
+    public void setTextSelectionMenu(long token, float x, float y, int flags) {
+        runOnUiThread(() -> {
+            if (textSelectionMenu != null && !isFinishing() && !isDestroyed()) {
+                textSelectionMenu.show(token, x, y, flags);
+            }
+        });
+    }
+
+    public int takeTextSelectionMenuAction(long token) {
+        TextSelectionMenu menu = textSelectionMenu;
+        return menu == null ? -1 : menu.take(token);
+    }
+
+    public byte[] readClipboardText() {
+        return TextClipboard.read(this);
+    }
+
+    public boolean writeClipboardText(byte[] text) {
+        return TextClipboard.write(this, text);
     }
 
     @Override
@@ -1078,6 +1100,7 @@ public class MainActivity extends NativeActivity {
             }
         });
         addContentView(textInputView, new ViewGroup.LayoutParams(1, 1));
+        textSelectionMenu = new TextSelectionMenu(getWindow().getDecorView());
         showStartup();
 
         synchronized (cachedInsets) {

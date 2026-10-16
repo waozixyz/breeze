@@ -1,0 +1,60 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+layout.buildDirectory = file('../../build/android-text-selection-test')
+def sdkProperties = new Properties()
+def sdkFile = file('../../droid/local.properties')
+if (sdkFile.exists()) {
+    sdkFile.withInputStream { sdkProperties.load(it) }
+}
+def sdk = System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME') ?: sdkProperties.getProperty('sdk.dir')
+if (!sdk) {
+    throw new GradleException('Set ANDROID_SDK_ROOT or droid/local.properties sdk.dir for Android text tests')
+}
+sourceSets {
+    main.java {
+        srcDir '../../droid/app/src/main/java'
+        include '**/TextSelectionMenu.java', '**/TextInputView.java', '**/TextClipboard.java'
+    }
+    test.java.srcDir '.'
+}
+dependencies {
+    compileOnly files("${sdk}/platforms/android-36/android.jar")
+    testImplementation files("${sdk}/platforms/android-36/android.jar")
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
+}
+
+// Robolectric's AndroidX dependencies contain classes.jar inside their AARs.
+def aarDirectory = layout.buildDirectory.dir('aar-classes')
+tasks.register('extractAndroidTestAars') {
+    inputs.files(configurations.testRuntimeClasspath)
+    outputs.dir(aarDirectory)
+    doLast {
+        aarDirectory.get().asFile.listFiles()?.each { it.setWritable(true) }
+        configurations.testRuntimeClasspath.files.findAll { it.name.endsWith('.aar') }.each { aar ->
+            copy {
+                from zipTree(aar)
+                include 'classes.jar'
+                into aarDirectory
+                rename 'classes.jar', "${aar.name}.jar"
+                fileMode 0644
+            }
+        }
+    }
+}
+test {
+    dependsOn 'extractAndroidTestAars'
+    classpath += files(aarDirectory.map { fileTree(it) { include '*.jar' } })
+    systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat 'full'
+    }
+}
