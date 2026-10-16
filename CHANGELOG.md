@@ -15,6 +15,7 @@
 - Choose each practice's narration language in its Customize, from a list where an icon downloads or removes each language. Narration in the app's language downloads by itself, and Lumi's guide voice now downloads in the app's language instead of coming inside the app.
 - Compact Lists tabs and larger task controls.
 - Lists tabs look like tabs: the open list is underlined, with no box around the row.
+- Lists' Share and Invitations open in a compact dialog over the list.
 - Top up Dew centers the Monero address under its QR code.
 - Profile shows how much of your storage is used, with a bar, next to your plan and in Storage plans.
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.

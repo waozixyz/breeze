@@ -4,6 +4,7 @@
 
 - Share selected lists with existing friends and edit accepted lists together.
 - Accept or decline invitations inside Lists, with no app-wide interruptions.
+- Share and Invitations open in a compact dialog over the list.
 - Compact tabs keep short list names together and scroll when needed.
 - Requires Inner Breeze 2.1.34 or later.
 
