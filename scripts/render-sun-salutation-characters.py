@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Export the four approved characters to transparent app frames, offscreen.
+"""Export the flat Sun Salutation characters to transparent app frames.
 
-Reuses the review pipeline's painted parts and attachment points, with the
-app's three-second transitions. No image-generation service is called.
+Draws each character of docs/sun-salutation-flat.json with
+scripts/render-sun-salutation-flat.py on a clear stage, with the app's
+three-second transitions: the woman first, then the man. No image-generation
+service is called.
 """
 from __future__ import annotations
 
@@ -12,23 +14,26 @@ from pathlib import Path
 import subprocess
 import sys
 
+import cairo
 import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-PROPOSALS = ROOT / "character-proposals/2026-09-30-banner-style"
 DIRECTORY = "assets/practices/sunsalutation/characters"
 TABLE = ROOT / "src/practices/sun_salutation/sun_salutation_frames.zi"
 MANIFEST = ROOT / "docs/sun-salutation-characters.json"
+# After each move the app keeps playing while the hanging hair settles, so
+# the held pose does not freeze it mid-swing.
+SETTLE_SECONDS = 1.0
 
 
-def load_pipeline():
+def load_flat_renderer():
     spec = importlib.util.spec_from_file_location(
-        "inbe_approved_characters", PROPOSALS / "build_proposals.py"
+        "sun_salutation_flat", ROOT / "scripts/render-sun-salutation-flat.py"
     )
-    pipeline = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(pipeline)
-    return pipeline
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def bounds(alpha):
@@ -38,38 +43,41 @@ def bounds(alpha):
     return [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
 
 
-def export_character(pipeline, concept):
-    module, rig = pipeline.configure_renderer(concept)
+def export_character(flat, rig, style, character, number):
     sprites = rig["sprites"]
-    # Hair is part of each bound/short hairstyle, so no settling frames are
-    # needed after the move. Keep the established app timing and frame rate.
-    sprites["settle"] = 0
-    rig["themes"]["clear"]["far"] = [50, 65, 49, .13]
+    fps = sprites["fps"]
     camera = rig["camera"]
     width = round(camera["designWidth"] * sprites["scale"] / 2) * 2
     height = round(camera["designHeight"] * sprites["scale"] / 2) * 2
-    # Supersample the articulated meshes before reducing to the app's size.
-    # This smooths moving contours without increasing the texture dimensions.
+    # Supersample the shapes before reducing to the app's size. This smooths
+    # moving contours without increasing the texture dimensions.
     sample_scale = 2
-    character = module.Girl(
-        rig, "clear", width * sample_scale, height * sample_scale, sprites["fps"]
-    )
-    surface = module.cairo.ImageSurface(module.cairo.FORMAT_ARGB32, width, height)
-    context = module.cairo.Context(surface)
+    figure = flat.Figure(rig, dict(style, background=None), character,
+                         width * sample_scale, height * sample_scale, fps)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    context = cairo.Context(surface)
     context.scale(1 / sample_scale, 1 / sample_scale)
-    context.set_operator(module.cairo.OPERATOR_SOURCE)
-    directory = ROOT / DIRECTORY / concept["id"]
+    context.set_operator(cairo.OPERATOR_SOURCE)
+    # Each move is followed by the first second of its hold, while the hair
+    # settles. The app holds the pose on that last frame, so the rest of the
+    # hold is left out: the hair carries on from there into the next move.
+    times = flat.GIRL.sprite_times(dict(rig, sprites=dict(sprites, settle=SETTLE_SECONDS)),
+                                   figure.timeline)
+    name = f"{number:02d}-{character['id']}"
+    directory = ROOT / DIRECTORY / name
     directory.mkdir(parents=True, exist_ok=True)
     expected = set()
     steps = []
-    for step, times in enumerate(module.sprite_times(rig, character.timeline)):
-        # Hold only one transition in memory, rather than all four loops.
+    for step, step_times in enumerate(times):
+        # Hold only one transition in memory, rather than the whole round.
         frames = []
         coverage = np.zeros((height, width), dtype=bool)
-        for second in times:
-            character.frame(second)
-            context.set_source_surface(character.surface)
-            context.get_source().set_filter(module.cairo.FILTER_BEST)
+        for second in step_times:
+            if figure.hair_time is not None and second - figure.hair_time > 1.5 * figure.frame_step:
+                figure.hair_time = second - figure.frame_step
+            figure.frame(second)
+            context.set_source_surface(figure.surface)
+            context.get_source().set_filter(cairo.FILTER_BEST)
             context.paint()
             surface.flush()
             stride = surface.get_stride()
@@ -95,15 +103,16 @@ def export_character(pipeline, concept):
             picture.save(directory / filename, optimize=True)
             expected.add(filename)
         steps.append({"frames": len(frames), "box": box, "held": held})
-        print(f"{concept['id']}: pose {step + 1}/12", flush=True)
+        print(f"{name}: pose {step + 1}/{len(times)}", flush=True)
     for stale in directory.glob("*.png"):
         if stale.name not in expected:
             stale.unlink()
     return {
-        "id": concept["id"], "name": concept["name"],
-        "directory": f"{DIRECTORY}/{concept['id']}/", "steps": steps,
-        "fps": sprites["fps"],
-        "transition_frames": round(rig["timing"]["transition"] * sprites["fps"]),
+        "id": name, "name": character["name"],
+        "directory": f"{DIRECTORY}/{name}/", "steps": steps,
+        "fps": fps,
+        "transition_frames": round(rig["timing"]["transition"] * fps),
+        "move_frames": steps[1]["frames"],
     }
 
 
@@ -128,6 +137,8 @@ def write_tables(characters):
     counts = [step["frames"] for step in first["steps"]]
     if any([step["frames"] for step in c["steps"]] != counts for c in characters):
         raise RuntimeError("All characters must share the same frame timing")
+    if counts[0] != 1 or any(count != first["move_frames"] for count in counts[1:]):
+        raise RuntimeError("Every move must have the same number of frames")
     lines = [
         "// Generated by scripts/render-sun-salutation-characters.py; do not edit.",
         "// Each character has twelve poses. Geometry is indexed character * 12 + step.",
@@ -138,6 +149,8 @@ def write_tables(characters):
         f"SUN_SALUTATION_STAGE_H :: {height}",
         f"SUN_SALUTATION_FRAME_FPS :: {first['fps']}",
         f"SUN_SALUTATION_TRANSITION_FRAMES :: {first['transition_frames']}",
+        "// Frames of every pose after the first: the move, then the hair settling.",
+        f"SUN_SALUTATION_MOVE_FRAMES :: {first['move_frames']}",
         "",
         f"sun_salutation_frame_directories: [{len(characters)}]string = .[",
         *[f'    "{character["directory"]}",' for character in characters],
@@ -162,8 +175,18 @@ def write_tables(characters):
 
 
 def main():
-    pipeline = load_pipeline()
-    characters = [export_character(pipeline, concept) for concept in pipeline.CONCEPTS]
+    flat = load_flat_renderer()
+    rig = flat.load_rig()
+    style = json.loads(flat.CHARACTERS.read_text())
+    characters = [export_character(flat, rig, style, character, number)
+                  for number, character in enumerate(style["characters"], 1)]
+    # Characters no longer listed leave no frames behind.
+    listed = {Path(character["directory"]).name for character in characters}
+    for directory in (ROOT / DIRECTORY).iterdir():
+        if directory.is_dir() and directory.name not in listed:
+            for stale in directory.glob("*.png"):
+                stale.unlink()
+            directory.rmdir()
     write_tables(characters)
     subprocess.run([sys.executable, str(ROOT / "scripts/optimize-animation-pngs.py")],
                    check=True)

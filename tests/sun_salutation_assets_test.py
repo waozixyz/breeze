@@ -18,7 +18,7 @@ def main():
     manifest = json.loads((ROOT / "docs/sun-salutation-characters.json").read_text())
     table = (ROOT / "src/practices/sun_salutation/sun_salutation_frames.zi").read_text()
     characters = manifest["characters"]
-    assert len(characters) == 4, "All four approved characters must ship"
+    assert len(characters) == 2, "The woman and the man must ship"
     stage = manifest["stage"]
     directories = re.findall(r'"(assets/practices/sunsalutation/characters/[^\"]+/)"', table)
     assert directories == [c["directory"] for c in characters], "Runtime character order differs"
@@ -32,11 +32,12 @@ def main():
     held_signatures = set()
     for character in characters:
         assert character["fps"] == 30 and character["transition_frames"] == 90
+        assert character["move_frames"] >= character["transition_frames"]
         assert len(character["steps"]) == 12
         expected = set()
         directory = ROOT / character["directory"]
         for step, entry in enumerate(character["steps"]):
-            assert entry["frames"] == (1 if step == 0 else 90)
+            assert entry["frames"] == (1 if step == 0 else character["move_frames"])
             left, top, right, bottom = entry["box"]
             assert stage["left"] <= left < right <= stage["left"] + stage["width"]
             assert stage["top"] <= top < bottom <= stage["top"] + stage["height"]
@@ -60,9 +61,9 @@ def main():
                     assert str(path.relative_to(ROOT)) in embedded, "Frame not embedded: " + str(path)
                 total += 1
         assert {p.name for p in directory.glob("*.png")} == expected, "Missing or stale frames"
-    assert len(held_signatures) == 4, "The four characters must have distinct artwork"
+    assert len(held_signatures) == 2, "The two characters must have distinct artwork"
     assert not (ROOT / "assets/practices/sunsalutation/girl").exists(), "Retired character still ships"
-    print(f"Validated {total} transparent frames: four characters, twelve poses each")
+    print(f"Validated {total} transparent frames: two characters, twelve poses each")
 
 
 if __name__ == "__main__":

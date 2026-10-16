@@ -668,8 +668,14 @@ class Figure:
         self.update_hair(p, time)
         camera = self.rig["camera"]
         ctx.save()
-        ctx.set_source_rgb(*colour(self.background))
-        ctx.paint()
+        if self.background is None:
+            # A clear stage, for the app's frames.
+            ctx.set_operator(cairo.OPERATOR_CLEAR)
+            ctx.paint()
+            ctx.set_operator(cairo.OPERATOR_OVER)
+        else:
+            ctx.set_source_rgb(*colour(self.background))
+            ctx.paint()
         ctx.scale(self.width / camera["designWidth"], self.height / camera["designHeight"])
         ctx.translate(camera["centerX"], camera["groundY"])
         ctx.scale(camera["scale"], camera["scale"])

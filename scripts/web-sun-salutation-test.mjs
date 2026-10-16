@@ -5,6 +5,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const inventory = readFileSync(new URL('../src/practices/sun_salutation/sun_salutation_inventory.zi', import.meta.url), 'utf8');
 const frameSources = [...inventory.matchAll(/sun_salutation_frame_sources_\d+:[^=]+=[^[]*\[([^\]]+)\]/g)]
   .flatMap(match => match[1].split(',').map(value => value.trim()).filter(Boolean).map(Number));
+// Every pose after the first has the same frames: the move, then the hair settling.
+const frameTable = readFileSync(new URL('../src/practices/sun_salutation/sun_salutation_frames.zi', import.meta.url), 'utf8');
+const moveFrames = Number(frameTable.match(/SUN_SALUTATION_MOVE_FRAMES :: (\d+)/)[1]);
+const characterFrames = 1 + 11 * moveFrames;
 
 const stateExpression = `(() => {
   const canvas = Module.canvas;
@@ -124,9 +128,9 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     const root = 'assets/practices/sunsalutation/characters';
     const characters = [...new Set([...files.keys()].filter(name => name.startsWith(root + '/'))
       .map(name => name.slice(root.length + 1).split('/')[0]))].sort();
-    if (characters.length !== 4) throw new Error('expected four Sun Salutation characters');
+    if (characters.length !== 2) throw new Error('expected two Sun Salutation characters');
     const frameSources = ${JSON.stringify(frameSources)};
-    if (frameSources.length !== 3964) throw new Error('incomplete animation timeline');
+    if (frameSources.length !== 2 * ${characterFrames}) throw new Error('incomplete animation timeline');
     const storedPaths = [...files.keys()].filter(name => name.startsWith(root + '/') && name.endsWith('.png'));
     if (storedPaths.length !== new Set(frameSources).size) throw new Error('stored animation inventory differs');
     let totalFrames = 0;
@@ -135,7 +139,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       const directory = root + '/' + character;
       const paths = [];
       for (let pose = 1; pose <= 12; pose++) {
-        for (let frame = 1; frame <= (pose === 1 ? 1 : 90); frame++) {
+        for (let frame = 1; frame <= (pose === 1 ? 1 : ${moveFrames}); frame++) {
           paths.push(String(pose).padStart(2, '0') + '-' + String(frame).padStart(3, '0') + '.png');
         }
       }
@@ -146,11 +150,11 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       for (const [frameIndex, path] of paths.entries()) {
         const step = Number(path.slice(0, 2)) - 1;
         if (step < 0 || step >= 12) throw new Error('invalid pose path ' + path);
-        const source = frameSources[characters.indexOf(character) * 991 + frameIndex];
-        const sourceCharacter = Math.floor(source / 991);
-        const sourceFrame = source % 991;
-        const sourcePose = sourceFrame === 0 ? 1 : 2 + Math.floor((sourceFrame - 1) / 90);
-        const sourceIndex = sourceFrame === 0 ? 1 : 1 + (sourceFrame - 1) % 90;
+        const source = frameSources[characters.indexOf(character) * ${characterFrames} + frameIndex];
+        const sourceCharacter = Math.floor(source / ${characterFrames});
+        const sourceFrame = source % ${characterFrames};
+        const sourcePose = sourceFrame === 0 ? 1 : 2 + Math.floor((sourceFrame - 1) / ${moveFrames});
+        const sourceIndex = sourceFrame === 0 ? 1 : 1 + (sourceFrame - 1) % ${moveFrames};
         const sourcePath = root + '/' + characters[sourceCharacter] + '/' +
           String(sourcePose).padStart(2, '0') + '-' + String(sourceIndex).padStart(3, '0') + '.png';
         const bytes = files.get(sourcePath);
@@ -190,7 +194,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
         }
         steps[step]++;
       }
-      if (steps[0] !== 1 || steps.slice(1).some(count => count !== 90))
+      if (steps[0] !== 1 || steps.slice(1).some(count => count !== ${moveFrames}))
         throw new Error('incomplete pose frames ' + JSON.stringify(steps));
       totalFrames += paths.length;
     }
@@ -277,7 +281,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
           width: Module._app_web_test_control_width(613), height: Module._app_web_test_control_height(613)
         }))()`);
         if (picker.width <= 0 || picker.height <= 0) throw new Error('Character selector is missing');
-        for (const character of [1, 2, 3, 0]) {
+        for (const character of [1, 0]) {
           await click(picker.x + picker.width / 2, picker.y + picker.height / 2);
           await delay(200);
           await click(picker.x + picker.width / 2, picker.y + picker.height * (character + 1.5));
