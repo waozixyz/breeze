@@ -1,0 +1,49 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+layout.buildDirectory = file('../../build/android-diary-photo-test')
+def sdk = System.getenv('ANDROID_SDK_ROOT') ?: '/home/wao/Android/Sdk'
+sourceSets {
+    main.java {
+        srcDir '../../droid/app/src/main/java'
+        include '**/DiaryPhotoImport.java'
+    }
+    test.java.srcDir '.'
+}
+dependencies {
+    compileOnly files("${sdk}/platforms/android-36/android.jar")
+    testImplementation files("${sdk}/platforms/android-36/android.jar")
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16'
+}
+
+def aarDirectory = layout.buildDirectory.dir('aar-classes')
+tasks.register('extractAndroidTestAars') {
+    inputs.files(configurations.testRuntimeClasspath)
+    outputs.dir(aarDirectory)
+    doLast {
+        configurations.testRuntimeClasspath.files.findAll { it.name.endsWith('.aar') }.each { aar ->
+            copy {
+                from zipTree(aar)
+                include 'classes.jar'
+                into aarDirectory
+                rename 'classes.jar', "${aar.name}.jar"
+            }
+        }
+    }
+}
+test {
+    dependsOn 'extractAndroidTestAars'
+    classpath += files(aarDirectory.map { fileTree(it) { include '*.jar' } })
+    systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat 'full'
+    }
+}

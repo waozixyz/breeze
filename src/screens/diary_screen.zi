@@ -13,6 +13,7 @@
 #import, file "../cells/diary_history.zi";
 #import, file "../cells/diary_spelling.zi";
 #import "file_picker"
+#import "file_linux"
 #import, file "../platform/environment.zi";
 #import, file "../platform/android/android_import.zi";
 #import "android_picker"
@@ -40,6 +41,7 @@
 #import, file "../cells/package_files.zi";
 #import, file "../storage/sync_node_storage.zi";
 #import, file "../storage/storage_core.zi";
+#import, file "../storage/state.zi";
 
 using AndroidImportKind;
 using ImageFit;
@@ -61,6 +63,7 @@ diary_photo_waiting: bool;
 diary_photo_year: s32;
 diary_photo_month: s32;
 diary_photo_day: s32;
+diary_photo_owner: string;
 diary_photo_error: bool;
 // The host words a refused photo itself; the Diary app shows its photo error.
 diary_photo_no_room: [320]u8;
@@ -158,9 +161,10 @@ app_diary_reset :: () {
 
 DiaryAcceptPhoto :: (path: string) {
     if path.count == 0 || diary_state.load_error || !diary_loaded ||
+    diary_photo_owner != AppTextFromCString(storage_user_id_buffer(), 64) ||
     diary_state.year != diary_photo_year || diary_state.month != diary_photo_month ||
     diary_state.day != diary_photo_day {
-        diary_photo_error = path.count > 0
+        diary_photo_error = true
         return
     }
     filename := DiaryStoreAttach(path)
@@ -200,7 +204,13 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
         diary_photo_waiting = false
         app.file_dialog_active = 0
         if result == .AndroidPickerSelected {
-            DiaryAcceptPhoto(AppTextFromCString(*path[0], cast(s32)path.count))
+            selected := AppTextFromCString(*path[0], cast(s32)path.count)
+            DiaryAcceptPhoto(selected)
+            // This is the Android picker's disposable compressed copy, never
+            // the original photo or the account's saved attachment.
+            if selected.count > 0 {
+                unused RemoveFile(selected)
+            }
         }
     }
     if !diary_photo_requested { return }
@@ -210,6 +220,8 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
     diary_photo_year = diary_state.year
     diary_photo_month = diary_state.month
     diary_photo_day = diary_state.day
+    PackageFree(diary_photo_owner)
+    diary_photo_owner = PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
     if !app_diary_save() { diary_photo_error = true; return }
     app.file_dialog_active = 1
     if AndroidPlatform() != 0 {
