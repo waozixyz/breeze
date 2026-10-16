@@ -23,12 +23,14 @@ if (renderMode) {
 
 const FIGURE_LABELS = {
     mannequin: 'Mannequin', sageBun: 'Sage Bun', sageMale: 'Sage Male', monk: 'Monk', tibetanWoman: 'Tibetan Woman',
-    jadeWoman: 'Jade Woman', indigoMan: 'Indigo Man',
+    jadeWoman: 'Jade Woman', indigoMan: 'Indigo Man', paintedMonk: 'Monk (painted)',
+    paintedTibetanWoman: 'Tibetan Woman (painted)',
 }
-// Painted 2D characters: cut-out paintings over the same solved body.
+// Painted 2D characters, cut-out paintings over the same solved body, kept
+// to compare with the flat ones; each has the body of its flat namesake.
 const PAINTED = {
-    monk: 'characters/monk/character.json',
-    tibetanWoman: 'characters/tibetan-woman/character.json',
+    paintedMonk: { file: 'characters/monk/character.json', body: 'monk' },
+    paintedTibetanWoman: { file: 'characters/tibetan-woman/character.json', body: 'tibetanWoman' },
 }
 const DEG = Math.PI / 180
 const course = buildCourse()
@@ -80,7 +82,7 @@ async function setFigure(name) {
         name = 'mannequin'
     }
     state.figure = name
-    rig = makeRig(name)
+    rig = makeRig(PAINTED[name]?.body ?? name)
     for (const old of [figure, ghost]) {
         if (old) {
             stage.scene.remove(old.root)
@@ -93,7 +95,7 @@ async function setFigure(name) {
     painted = null
     if (PAINTED[name]) {
         if (!characters.has(name)) {
-            characters.set(name, loadCharacter(PAINTED[name]))
+            characters.set(name, loadCharacter(PAINTED[name].file))
         }
         const character = await characters.get(name)
         if (state.figure !== name) {

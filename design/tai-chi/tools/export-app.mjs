@@ -48,11 +48,13 @@ const INBE_ROOT = resolve(STUDIO_ROOT, '..', '..')
 const ASSET_DIR = join(INBE_ROOT, 'assets', 'practices', 'taichi')
 const TEXT_FILE = join(STUDIO_ROOT, 'text', 'en.txt')
 const REFERENCE_FILE = join(INBE_ROOT, 'tests', 'fixtures', 'tai-chi-reference.json')
-// The app's characters, in the order it lists them: the woman first, the
-// man (who speaks with the male voice) second.
+// The app's characters, in the order it lists them; the men speak with the
+// male voice (the app keeps each look's details in tai_chi_flat.zi).
 const CHARACTERS = [
     { id: 'jadeWoman', name: 'Jade woman' },
     { id: 'indigoMan', name: 'Indigo man' },
+    { id: 'tibetanWoman', name: 'Tibetan woman' },
+    { id: 'monk', name: 'Tibetan monk' },
 ]
 
 const KINDS = ['drill', 'lesson', 'demo', 'breakdown', 'follow', 'full']
@@ -447,11 +449,11 @@ for (const entry of characters) {
     for (const id of REFERENCE_ITEMS) {
         const item = course.items.get(id)
         const { timeline } = timelineFor(item)
-        for (const fraction of [0, 0.137, 0.41, 0.73, 1]) {
+        for (const fraction of [0, 0.41, 0.73]) {
             const time = timeline.duration * fraction
             const pose = timeline.sample(timeline.start + time).pose
             const solved = solvePose(pose, entry.rig)
-            const camera = { yaw: 0.6 + fraction * 2.5, tilt: 0.12, center: solved.joints.pelvis.clone().setY(0) }
+            const camera = { yaw: 0.6 + fraction * 3.4, tilt: 0.12, center: solved.joints.pelvis.clone().setY(0) }
             const view = new FlatView()
             view.set(camera.yaw, camera.tilt, camera.center)
             const ops = shapes.paint(solved, view)
