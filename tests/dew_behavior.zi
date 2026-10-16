@@ -33,6 +33,12 @@ address_network: string = "mainnet";
 address_asset: string = "waozi:token";
 address_confirmations: s64 = 10;
 address_atomic: s64 = 1000000000000LL;
+gift_requests: s32;
+gift_balance: s64;
+// Answers a gift as if for another request, which settles nothing.
+gift_reply_foreign: bool;
+last_gift_body: [256]u8;
+TestFriend :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 TestAddress :: "8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 Reply :: (output: []u8) -> bool {
@@ -72,6 +78,27 @@ AddressReply :: (output: []u8) -> bool {
     return writer.valid
 }
 
+// The node echoes the gift it was sent, with the sender's new balance.
+GiftReply :: (body: string, output: []u8) -> bool {
+    request_id: [65]u8
+    recipient: [65]u8
+    units: s64
+    unused ReadStringText(body, FieldAt(body, 0, "request_id"), request_id[:])
+    unused ReadStringText(body, FieldAt(body, 0, "recipient"), recipient[:])
+    unused DewInteger(body, FieldAt(body, 0, "units"), *units)
+    writer := Writer.{output, 0, true}
+    writer = WriteText(writer, "{\"request_id\":\"")
+    writer = WriteText(writer, ifx gift_reply_foreign then "another-request-id" else TextUntilNul(request_id[:]))
+    writer = WriteText(writer, "\",\"recipient\":\"")
+    writer = WriteText(writer, TextUntilNul(recipient[:]))
+    writer = WriteText(writer, "\",\"units\":")
+    writer = WriteDecimal(writer, units)
+    writer = WriteText(writer, ",\"balance\":")
+    writer = WriteDecimal(writer, gift_balance)
+    writer = WriteText(writer, ",\"receipt_id\":\"gift-receipt\"}\n")
+    return writer.valid
+}
+
 FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     unused context
     challenge := "https://api.waozi.xyz/api/v1/sync/challenge?user_id="
@@ -95,6 +122,12 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         unlock_requests += 1
         check_true("unlocks are read with an authenticated GET", request.method == "GET" && request.body.count == 0)
         return AppCopyText("{\"unlocks\":[{\"product\":\"inbe.practice.taichi\",\"receipt_id\":\"r1\",\"created_at\":1}],\"products\":[{\"product\":\"inbe.practice.taichi\",\"price_units\":1000000,\"regular_price_units\":10000000,\"trial_until\":1807801200}]}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/tokens/gifts" {
+        gift_requests += 1
+        check_true("gifts are sent with an authenticated POST", request.method == "POST")
+        unused AppCopyText(request.body, last_gift_body[:])
+        return GiftReply(request.body, output)
     }
     check_true("only the storage endpoint is requested", request.url == "https://api.waozi.xyz/api/v1/storage/plan")
     requests += 1
@@ -290,6 +323,80 @@ Check :: () -> s32 {
         "{\"xmr_usd_cents\":1.5,\"updated_at\":0,\"sources\":[],\"xmr_atomic_units\":1,\"token_units\":1}", *broken))
     dew_rates = DewRates.{}
     check_true("without rates nothing converts", DewXmrAtomic(10 * DewUnits) == 0)
+    // A gift to a friend moves whole requests: one at a time, never to
+    // oneself, and an uncertain one is sent again as it was.
+    response_status = 200
+    check_true("no gift to oneself", !DewSendGift(TextUntilNul(owner.public_id[:]), DewUnits))
+    check_true("no empty gift", !DewSendGift(TestFriend, 0))
+    check_true("no gift to a malformed account", !DewSendGift("bbbb", DewUnits))
+    check_int("refused gifts send nothing", gift_requests, 0)
+    response_balance = 11000000
+    DewTick(true, 200.0)
+    Finish()
+    check_true("balance known before gifting", dew_account.known && dew_account.balance == 11000000)
+    gift_balance = 9000000
+    check_true("gift accepted", DewSendGift(TestFriend, 2 * DewUnits))
+    check_true("one gift at a time", !DewSendGift(TestFriend, DewUnits))
+    check_true("a new gift is sending", dew_gift_state == DewGiftSending && dew_gift_units == 2 * DewUnits)
+    Finish()
+    check_int("one gift request", gift_requests, 1)
+    gift := TextUntilNul(last_gift_body[:])
+    gift_recipient: [65]u8
+    gift_request: [65]u8
+    gift_units: s64
+    check_true("gift names the friend", ReadStringText(gift, FieldAt(gift, 0, "recipient"), gift_recipient[:]) == 64 &&
+        TextUntilNul(gift_recipient[:]) == TestFriend)
+    check_true("gift sends integer units", DewInteger(gift, FieldAt(gift, 0, "units"), *gift_units) && gift_units == 2000000)
+    check_true("gift carries a request ID", ReadStringText(gift, FieldAt(gift, 0, "request_id"), gift_request[:]) >= 8)
+    check_true("confirmed gift shows the sender's new balance", dew_gift_state == DewGiftSent &&
+        dew_account.balance == 9000000 && dew_gift_attempt[0] == cast(u8)0)
+    saved_gift: [192]u8
+    unused storage_get_social_cache_json("dew.gift", *saved_gift[0], 192)
+    check_true("a confirmed gift is forgotten", TextUntilNul(saved_gift[:]) == "{}")
+
+    response_status = 503
+    check_true("second gift accepted", DewSendGift(TestFriend, DewUnits))
+    Finish()
+    check_true("uncertain gift is kept to send again", dew_gift_attempt[0] != cast(u8)0 &&
+        dew_gift_state == DewGiftSending && dew_gift_notice == "dew_gift_waiting")
+    uncertain: [192]u8 = dew_gift_attempt
+    DewTick(false, 2.0)
+    check_true("an uncertain gift waits before repeating", !dew_operation.active)
+    DewCancel()
+    DewContext()
+    check_true("uncertain gift survives restart", TextUntilNul(dew_gift_attempt[:]) == TextUntilNul(uncertain[:]) &&
+        dew_gift_state == DewGiftSending && dew_gift_units == DewUnits &&
+        TextUntilNul(dew_gift_recipient[:]) == TestFriend)
+    response_status = 200
+    gift_balance = 8000000
+    Finish()
+    check_true("the retry repeats the same request", TextUntilNul(last_gift_body[:]) == TextUntilNul(uncertain[:]))
+    check_true("retried gift confirmed once", dew_gift_state == DewGiftSent && dew_gift_attempt[0] == cast(u8)0)
+
+    gift_reply_foreign = true
+    check_true("third gift accepted", DewSendGift(TestFriend, DewUnits))
+    Finish()
+    check_true("an answer for another request settles nothing", dew_gift_attempt[0] != cast(u8)0 &&
+        dew_gift_notice == "dew_gift_waiting")
+    gift_reply_foreign = false
+    DewTick(false, 30.0)
+    Finish()
+    check_true("the gift settles when the node answers it", dew_gift_state == DewGiftSent && dew_gift_attempt[0] == cast(u8)0)
+
+    response_status = 402
+    check_true("unaffordable gift accepted for the node to judge", DewSendGift(TestFriend, 50 * DewUnits))
+    Finish()
+    check_true("missing Dew is explained", dew_gift_state == DewGiftRefused &&
+        dew_gift_notice == "dew_gift_funds" && dew_gift_attempt[0] == cast(u8)0)
+    response_status = 403
+    unused DewSendGift(TestFriend, DewUnits)
+    Finish()
+    check_true("gifts only reach friends", dew_gift_notice == "dew_gift_not_friend" && dew_gift_attempt[0] == cast(u8)0)
+    response_status = 409
+    unused DewSendGift(TestFriend, DewUnits)
+    Finish()
+    check_true("a refused request is not repeated", dew_gift_notice == "dew_gift_failed" && dew_gift_attempt[0] == cast(u8)0)
+    response_status = 200
     storage_set_setting_text("sync_public_id", "another-account")
     DewContext()
     check_true("account change clears the old balance", !dew_account.known && dew_address[0] == cast(u8)0)

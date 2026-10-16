@@ -1,0 +1,250 @@
+// The Gift Dew window: sends whole Dew from this account to a friend, with
+// what the amount is worth in Monero and US dollars at the node's rates.
+#import "geometry"
+#import "text_props"
+#import "text_widget"
+#import "text_field_widget"
+#import "text_input_props"
+#import "button_props"
+#import "control_props"
+#import "button_widget"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "layout"
+#import "tree"
+#import "text_buffer"
+#import, file "../storage/dew.zi";
+#import, file "../platform/dew_payment.zi";
+#import, file "../platform/raylib_text_input.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/draw.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/modal_rules.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "profile_dew.zi";
+#import, file "dew_worth.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ModalType;
+
+// MingCute's regular gift icon (Apache-2.0), copied from kryonlabs/mingcute's
+// generated shapes.
+DEW_GIFT_ICON :: "S2br:M5 12H19M5 12H19M5 12V18C5 19.1046 5.89543 20 7 20H17C18.1046 20 19 19.1046 19 18V12M5 12C4.44772 12 4 11.5523 4 11V8C4 7.44772 4.44772 7 5 7H19C19.5523 7 20 7.44772 20 8V11C20 11.5523 19.5523 12 19 12M12 20V7M12 7V6M12 7H11C9.34315 7 8 5.65685 8 4V3.5C8 3.22386 8.22386 3 8.5 3H9C10.6569 3 12 4.34315 12 6M12 7H13C14.6569 7 16 5.65685 16 4V3.5C16 3.22386 15.7761 3 15.5 3H15C13.3431 3 12 4.34315 12 6"
+// Gifts are whole Dew; nine digits is far more than any balance.
+DEW_GIFT_DIGITS :: 9
+DEW_GIFT_FOCUS :: 815
+
+profile_gift_recipient: [65]u8;
+profile_gift_name: [96]u8;
+profile_gift_amount: [16]u8;
+profile_gift_cursor: s32;
+profile_gift_anchor: s32;
+profile_gift_scroll_x: s32;
+profile_gift_focused: bool;
+profile_gift_scroll: s32;
+
+// Friends can be gifted Dew wherever Dew is sold, once this account is on
+// the Waozi node.
+ProfileDewGiftAvailable :: () -> bool {
+    return DewAvailable() && DewReady()
+}
+
+ProfileDewGiftOpen :: (app: *InnerBreeze, recipient: string, name: string) {
+    if !ProfileDewGiftAvailable() || recipient.count != 64 {
+        return
+    }
+    unused AppCopyText(recipient, profile_gift_recipient[:])
+    unused AppCopyText(name, profile_gift_name[:])
+    profile_gift_amount = .{}
+    profile_gift_cursor = 0
+    profile_gift_anchor = 0
+    profile_gift_scroll_x = 0
+    profile_gift_focused = true
+    profile_gift_scroll = 0
+    // A finished gift's outcome belongs to the window that sent it.
+    if dew_gift_attempt[0] == cast(u8)0 {
+        dew_gift_state = DewGiftNone
+        dew_gift_notice = ""
+    }
+    app_open_modal(app, cast(ModalType)ModalDewGift)
+}
+
+// The typed whole Dew in units, or 0 while nothing valid is typed.
+ProfileDewGiftUnits :: () -> s64 {
+    amount := TextUntilNul(profile_gift_amount[:])
+    if amount.count == 0 || amount.count > DEW_GIFT_DIGITS {
+        return 0
+    }
+    whole: s64 = 0
+    for byte: amount {
+        if byte < cast(u8)48 || byte > cast(u8)57 {
+            return 0
+        }
+        whole = whole * 10 + cast(s64)(byte - cast(u8)48)
+    }
+    return whole * DewUnits
+}
+
+// The last gift's outcome, when it went to the friend this window is for.
+ProfileDewGiftForThisFriend :: () -> bool {
+    return TextUntilNul(dew_gift_recipient[:]) == TextUntilNul(profile_gift_recipient[:])
+}
+
+ProfileDewGiftAmountField :: (app: *InnerBreeze, x: s32, y: s32, width: s32, waiting: bool) {
+    typed: [64]u8
+    field := TextField(app.ui.session, TextFieldProps.{
+            .key = KeyHash("profile/gift/amount"),
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(48)},
+            .value = FrameTextHold(*app.ui.frame_text, TextUntilNul(profile_gift_amount[:])),
+            .label = LocaleText("dew_gift_amount"),
+            .placeholder = LocaleText("dew_gift_amount"),
+            .cursor = profile_gift_cursor,
+            .anchor = profile_gift_anchor,
+            .scroll_x = profile_gift_scroll_x,
+            .focused = profile_gift_focused && !waiting,
+            .focus_id = DEW_GIFT_FOCUS,
+            .max_bytes = DEW_GIFT_DIGITS,
+            .max_codepoints = DEW_GIFT_DIGITS,
+            .numeric = true,
+            .disabled = waiting,
+            .input = SampleTextFieldInput(profile_gift_focused && !waiting, typed[:]),
+            .scale = MetricsScale()})
+    if field.edit.changed {
+        unused AppReplaceText(profile_gift_amount[:], field.edit.start,
+            field.edit.end, field.edit.replacement)
+    }
+    profile_gift_cursor = field.cursor
+    profile_gift_anchor = field.anchor
+    profile_gift_scroll_x = field.scroll_x
+    profile_gift_focused = field.focused
+    if field.clipboard_write {
+        unused TextInputWriteClipboard(field.clipboard_text)
+    }
+}
+
+// Measuring and drawing use the same wrapped lines and controls.
+ProfileDewGiftContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
+    line: [256]u8
+    name := TextUntilNul(profile_gift_name[:])
+    to_arguments: [1]FormatArg = .[FormatArg.{.text = name, .is_text = true}]
+    unused FormatTemplate(LocaleText("dew_gift_to"), to_arguments[:], line[:])
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppFontSize(), draw)
+    if !dew_account.known {
+        ProfileDewText(app, LocaleText(ifx dew_notice.count > 0 then "profile_dew_error"
+            else "profile_dew_loading"), x, y, width, AppSmallFontSize(), draw)
+        return
+    }
+    line = .{}
+    ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
+    DewAppendWorth(dew_account.balance, line[:])
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    line = .{}
+    if ProfileDewExchangeText(line[:]) {
+        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    }
+    y.* += AppScale(4)
+    waiting := dew_gift_attempt[0] != cast(u8)0
+    if draw {
+        ProfileDewGiftAmountField(app, x, y.*, width, waiting)
+    }
+    y.* += AppScale(48) + AppScale(8)
+    units := ProfileDewGiftUnits()
+    largest := dew_account.balance / DewUnits * DewUnits
+    // The line under the amount: what it is worth, or why it cannot be sent.
+    line = .{}
+    if units > dew_account.balance {
+        ProfileDewFormatDew(dew_account.balance, LocaleText("dew_gift_too_much"), line[:])
+    } else if units > 0 {
+        worth: [128]u8
+        if DewWorthText(units, worth[:]) {
+            worth_arguments: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(worth[:]), .is_text = true}]
+            unused FormatTemplate(LocaleText("dew_gift_worth"), worth_arguments[:], line[:])
+        }
+    } else if largest > 0 {
+        ProfileDewFormatDew(largest, LocaleText("dew_gift_up_to"), line[:])
+    } else {
+        unused AppCopyText(LocaleText("profile_dew_funds"), line[:])
+    }
+    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    // What happened to the last gift to this friend.
+    line = .{}
+    if waiting {
+        unused AppCopyText(LocaleText(ifx dew_gift_notice.count > 0 then dew_gift_notice
+            else "dew_gift_sending"), line[:])
+    } else if dew_gift_state == DewGiftSent && ProfileDewGiftForThisFriend() {
+        amount: [48]u8
+        unused DewFormat(dew_gift_units, DewUnits, amount[:])
+        sent_arguments: [2]FormatArg = .[
+        FormatArg.{.text = TextUntilNul(amount[:]), .is_text = true},
+        FormatArg.{.text = name, .is_text = true}]
+        unused FormatTemplate(LocaleText("dew_gift_sent"), sent_arguments[:], line[:])
+    } else if dew_gift_state == DewGiftRefused && ProfileDewGiftForThisFriend() &&
+    dew_gift_notice.count > 0 {
+        unused AppCopyText(LocaleText(dew_gift_notice), line[:])
+    }
+    if line[0] != cast(u8)0 {
+        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppFontSize(), draw)
+    }
+    line = .{}
+    if units > 0 {
+        ProfileDewFormatDew(units, LocaleText("dew_gift_send"), line[:])
+    } else {
+        unused AppCopyText(LocaleText("dew_gift_title"), line[:])
+    }
+    disabled := waiting || units <= 0 || units > dew_account.balance
+    if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, disabled, draw) {
+        if DewSendGift(TextUntilNul(profile_gift_recipient[:]), units) {
+            profile_gift_amount = .{}
+            profile_gift_cursor = 0
+            profile_gift_anchor = 0
+            profile_gift_scroll_x = 0
+        }
+    }
+    ProfileDewText(app, LocaleText("dew_gift_final"), x, y, width, AppSmallFontSize(), draw)
+}
+
+ProfileDewGiftModalDraw :: (app: *InnerBreeze) {
+    DewRatesRefresh()
+    width := app.ui.view_width - AppScale(32)
+    if width > AppScale(480) {
+        width = AppScale(480)
+    }
+    measured: s32 = 0
+    ProfileDewGiftContent(app, 0, *measured, width - AppScale(46), false)
+    height := measured + AppScale(96)
+    if height > app.ui.view_height - AppScale(48) {
+        height = app.ui.view_height - AppScale(48)
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("profile/gift/modal"), .title = LocaleText("dew_gift_title"),
+            .width = width, .height = height, .scale = MetricsScale(),
+            .title_at_start = true, .strong_title = true,
+            .has_right_action = true, .right_label = LocaleText("close_button")})
+    // Signing out or switching accounts closes the window.
+    if frame.dismissed || frame.right_clicked || !ProfileDewGiftAvailable() {
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content_w := cast(s32)frame.layout.content.width - AppScale(10)
+    content_h: s32 = 0
+    ProfileDewGiftContent(app, 0, *content_h, content_w, false)
+    scroll := Scroll(app.ui.session, ScrollProps.{
+            .key = KeyHash("profile/gift/scroll"), .bounds = frame.layout.content,
+            .content_height = content_h, .scroll_offset = profile_gift_scroll})
+    profile_gift_scroll = scroll.scroll_offset
+    if scroll.opened {
+        y := cast(s32)scroll.content.y
+        ProfileDewGiftContent(app, cast(s32)scroll.content.x, *y, content_w, true)
+        End(app.ui.session)
+    }
+    End(app.ui.session)
+}
