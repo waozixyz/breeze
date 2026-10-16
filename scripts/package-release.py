@@ -207,7 +207,9 @@ def publish(store, target, remote_store, rollout=None):
                     path = directory / filename
                     tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
             for pack in stored_practice_packs(store):
-                for suffix in ('.zib', '.zib.release-v2.json'):
+                # A paid pack's marker goes too, so the node gates it; an
+                # importer that cannot write markers refuses the upload.
+                for suffix in ('.zib', '.zib.release-v2.json') + (('.zib.product',) if pack.get('product') else ()):
                     path = store / 'inbe.practices' / (pack['sha256'] + suffix)
                     tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
             if rollout is not None:
@@ -391,7 +393,9 @@ def import_archive(archive, store, publishers_path=None):
             if member.name in entries:
                 raise ValueError("duplicate archive member")
             total += member.size
-            if len(entries) >= 158 or total > 1024 * 1024 * 1024:
+            # Four files per app, and up to 65 practice packs, each with its
+            # release and, when paid, its product marker.
+            if len(entries) >= 7 * 4 + 65 * 3 or total > 1024 * 1024 * 1024:
                 raise ValueError("archive exceeds the release size limit")
             entries[member.name] = tar.extractfile(member).read()
     # The node accepts archives built before and after Leaderboard became an
@@ -439,6 +443,11 @@ def import_archive(archive, store, publishers_path=None):
         for pack in catalog_from_bundle(releases['inbe.practices'][2]):
             path = 'inbe.practices/' + pack['sha256'] + '.zib'
             expected_entries.update((path, path + '.release-v2.json'))
+            product = pack.get('product', '')
+            if product:
+                expected_entries.add(path + '.product')
+                if entries.get(path + '.product') != product.encode():
+                    raise ValueError('paid practice content lacks its product marker')
             data = entries[path]
             encoded = entries[path + '.release-v2.json']
             value = json.loads(encoded)
@@ -448,7 +457,7 @@ def import_archive(archive, store, publishers_path=None):
                     sha256(data).hexdigest() != pack['sha256']):
                 raise ValueError('practice content differs from its signed catalog')
             bundle_assets(data)
-            content_payloads.append((path, data, encoded))
+            content_payloads.append((path, data, encoded, product))
         if set(entries) - expected_entries:
             raise ValueError('archive contains unreferenced content')
         for dependency in root[0]["dependencies"]:
@@ -458,10 +467,13 @@ def import_archive(archive, store, publishers_path=None):
                                   sha256=artifact["sha256"], size=artifact["size"]) or root[2].count(payload) != 1:
                 raise ValueError("root does not contain its exact signed cell dependency")
         # Content precedes both the harness and the root that references it.
-        for path, data, encoded in content_payloads:
+        for path, data, encoded, product in content_payloads:
             target = store / path
             if target.exists() and target.read_bytes() != data:
                 raise ValueError('immutable practice content differs')
+            # The marker precedes the pack, so Daochi never serves it ungated.
+            if product:
+                atomic_write(store / (path + '.product'), product.encode())
             atomic_write(target, data)
             atomic_write(store / (path + '.release-v2.json'), encoded)
         # Dependencies go first. Publishing the root is the final step.

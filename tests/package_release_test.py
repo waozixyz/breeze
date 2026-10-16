@@ -85,6 +85,24 @@ def main():
             assert not staging.exists()
             for value in values.values():
                 assert json.loads((remote / value["app_id"] / "latest-v2.json").read_bytes()) == value
+        # The node gates each paid pack by the marker the importer writes.
+        markers = sorted(store.glob("inbe.practices/*.zib.product"))
+        assert markers
+        for marker in markers:
+            assert (remote / marker.relative_to(store)).read_bytes() == marker.read_bytes()
+        unmarked = fixtures / "unmarked-upload"
+        unmarked.mkdir()
+        with tarfile.open(unmarked / "packages.tar", "w") as tar:
+            for path in sorted(store.rglob("*")):
+                if path.is_file() and path.name != ".publish.lock" and path != markers[0]:
+                    tar.add(path, arcname=str(path.relative_to(store)))
+        try:
+            release_tool.import_archive(unmarked / "packages.tar", fixtures / "unmarked-remote", publishers)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a paid pack without its product marker was accepted")
+        assert not (fixtures / "unmarked-remote" / markers[0].relative_to(store).with_suffix("")).exists()
         # A staged upload holds changed releases back until it is promoted or
         # expires; unchanged re-uploads keep the staging.
         def upload(name, rollout_text):
