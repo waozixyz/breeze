@@ -127,9 +127,9 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
             hint = ImageOps.grayscale(picture.crop((640, 475, 1100, 620))).resize((1380, 435))
             ImageEnhance.Contrast(hint).enhance(2).save(hint_path)
         hint = command('tesseract', str(hint_path), 'stdout', '--psm', '6')
-        # The narration voice and its pack live here, under the switch.
+        # The narration voice lives here, under the switch, with the language it speaks.
         assert 'Female voice' in text and 'Male voice' in text, text
-        assert 'Narration ready offline' in hint and 'Tai Chi instructions' in hint and 'selected language' in hint, hint
+        assert 'Plays in English' in hint and 'Tai Chi instructions' in hint and 'selected language' in hint, hint
         click(window, 760, 294)
         click(window, 865, 368)
         click(window, 755, 446)

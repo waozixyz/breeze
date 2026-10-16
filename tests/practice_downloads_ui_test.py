@@ -153,6 +153,17 @@ def click_mint(window, name, first=True):
     time.sleep(1)
 
 
+def read_manager(window, name, width, height, steps=8):
+    """Read the whole Manage practices list, scrolling a few rows at a time."""
+    _, text = capture(window, name + '-0')
+    for step in range(1, steps + 1):
+        command('xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2))
+        command('xdotool', 'click', '--repeat', '3', '--delay', '80', '5')
+        time.sleep(.4)
+        text += '\n' + capture(window, name + '-' + str(step))[1]
+    return text
+
+
 def close_manager(window):
     command('xdotool', 'mousemove', '--window', window, '350', '86')
     command('xdotool', 'mousedown', '1')
@@ -283,7 +294,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         time.sleep(.5)
         _, text = capture(window, 'taichi-unowned-manager')
         assert 'Tai Chi' in text and 'Dew' in text and 'Download size' in text, text
-        assert 'Narration ready offline' not in text, text
+        # A locked practice offers no narration; the monk's male voice is absent.
+        assert 'Male voice' not in text, text
     finally:
         stop(process)
     # The account's purchase, remembered on this device; sync stays off, so
@@ -310,22 +322,20 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             assert 'Tai Chi' in text, text
             click_word(window, name + '-open', 'Manage')
             time.sleep(1)
-            command('xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2))
-            command('xdotool', 'click', '--repeat', '16', '--delay', '80', '5')
-            time.sleep(.5)
-            _, text = capture(window, name + '-manager')
-            # Manage practices shows each practice's download, never narration.
+            text = read_manager(window, name + '-manager', width, height)
             assert 'Tai Chi' in text and 'Available offline' in text, text
-            assert 'Narration' not in text and 'English' not in text, text
             if name == 'desktop-manager':
-                # Tai Chi's Customize holds the narration language and its pack.
+                # Each narration is chosen per language under its practice, in
+                # the voice from Customize, and Lumi's guide has its own.
+                assert 'Male voice' in text and 'On this device: English' in text, text
+                assert "Lumi's guide" in text and 'Tap a language' in text, text
                 close_manager(window)
                 click_word(window, name + '-customize', 'Customize')
                 time.sleep(1)
                 _, text = capture(window, name + '-customize-open')
-                # The monk speaks with the male voice; both recordings are here.
+                # The monk speaks with the male voice in its downloaded language.
                 assert 'Female voice' in text and 'Male voice' in text, text
-                assert 'Narration ready offline' in text and 'Narration language' not in text, text
+                assert 'Plays in English' in text, text
         finally:
             stop(process)
     # Sun Salutation speaks in its own free packs; a man speaks with the male voice.
@@ -346,9 +356,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         time.sleep(.5)
         _, text = capture(window, 'sun-customize-narration')
         assert 'Voice narration' in text and 'Female voice' in text and 'Male voice' in text, text
-        assert 'Narration ready offline' in text, text
+        assert 'Plays in English' in text, text
     finally:
         stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '
-      'restore without download, installed-only home, saved progress, language, narrow layout '
+      'restore without download, installed-only home, saved progress, narration languages, narrow layout '
       'and Sun Salutation narration passed')

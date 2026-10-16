@@ -24,7 +24,7 @@ patterns = (
     'assets/practices/*/banner-dark.png',
     'assets/practices/sunsalutation/characters/*/*.png',
     'assets/practices/sunsalutation/voice/**/*', 'assets/practices/sunsalutation/voice-male/**/*',
-    'assets/practices/taichi/**/*',
+    'assets/practices/taichi/**/*', 'assets/practices/guide/voice/**/*',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',

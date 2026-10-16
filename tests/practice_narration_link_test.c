@@ -15,7 +15,14 @@ static const char *prefix = "assets/practices/taichi/voice/en/";
 static int plays, stops, unloads, pauses, resumes, updates;
 static float volume;
 
-String LocaleActiveCode(void) { return language; }
+/* The downloaded language the practice speaks; empty when none is. */
+String practice_downloads_PracticeNarrationLanguage(int32_t content, String voice)
+{
+    (void)content;
+    (void)voice;
+    return language;
+}
+int32_t practice_downloads_PracticeContentIndex(String name) { return (int32_t)name.length; }
 String practice_downloads_PracticeVoiceChoice(void) { return voice_choice; }
 void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 
@@ -88,7 +95,11 @@ int main(int argc, char **argv)
 
     language = StringLiteral("es");
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
-    assert(plays == 2 && stops == 2 && unloads == 2); /* No other-language fallback. */
+    assert(plays == 2 && stops == 2 && unloads == 2); /* Only the spoken language's clip plays. */
+    language = StringLiteral("");
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == 2); /* Without downloaded narration the practice is silent. */
+    assert(practice_narration_PracticeTaiChiReadingSeconds(cue) == 0.0);
     language = StringLiteral("en");
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == 3);

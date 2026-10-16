@@ -46,13 +46,13 @@ CheckPracticeDownloads :: () -> s32 {
     practice_grant = FixtureGrant
     practice_owned = FixtureOwned
     PracticeDownloadsPump(0, false, true)
-    if practice_pack_count != 8 || PracticeContentReady(0) {
+    if practice_pack_count != 9 || PracticeContentReady(0) {
         return 1
     }
-    PracticeContentRequest(0, false)
+    PracticeContentRequest(0)
     PracticeDownloadsPump(0, false, true)
     // Repeated requests while transferring must not enqueue the pack twice.
-    PracticeContentRequest(0, false)
+    PracticeContentRequest(0)
     PracticeDownloadsPump(0, false, true)
     if !PracticeContentReady(0) || PracticeContentStatus(0) != 2 {
         return 2
@@ -83,7 +83,7 @@ CheckPracticeDownloads :: () -> s32 {
     // Moving away unmounts memory but going back uses the verified disk cache.
     before := FixtureStarts()
     PracticeDownloadsPump(4, false, true)
-    PracticeContentRequest(0, false)
+    PracticeContentRequest(0)
     PracticeDownloadsPump(0, false, true)
     if !PracticeContentReady(0) || FixtureStarts() != before {
         return 5
@@ -94,7 +94,7 @@ CheckPracticeDownloads :: () -> s32 {
     PracticeDownloadsPump(4, false, true)
     FixtureMode(1)
     corrupt_before := FixtureStarts()
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     for step: cast(s32)0..cast(s32)11 {
         PracticeDownloadsPump(4, false, true)
     }
@@ -103,7 +103,7 @@ CheckPracticeDownloads :: () -> s32 {
         return 6
     }
     // One bad transfer recovers on its own when the next try succeeds.
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     PracticeDownloadsPump(4, false, true)
     PracticeDownloadsPump(4, false, true)
     FixtureMode(0)
@@ -115,7 +115,7 @@ CheckPracticeDownloads :: () -> s32 {
     }
     PracticeContentRemove(4)
     FixtureMode(0)
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     PracticeDownloadsPump(4, false, true)
     PracticeDownloadsPump(4, false, true)
     if !PracticeContentReady(4) {
@@ -123,11 +123,24 @@ CheckPracticeDownloads :: () -> s32 {
     }
 
     base_bundle := practice_packs[PracticePackFind(4, "")].bundle
+    // Narration downloads only when one of its languages is chosen.
+    english := PracticeNarrationPack(4, "en", "")
+    spanish := PracticeNarrationPack(4, "es", "")
+    before = FixtureStarts()
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
-    if PracticeVoiceStatus(4) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+    if FixtureStarts() != before || english < 0 || spanish < 0 ||
+    PracticeNarrationLanguage(4, "").count != 0 || PracticeNarrationState(english) != 0 {
         return 8
+    }
+    // It is mounted on the frame after it arrives, once it is the one spoken.
+    PracticeNarrationToggle(english)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before + 1 || PracticeNarrationState(english) != 2 ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+        return 42
     }
     before = FixtureStarts()
     active_locale_index = 1
@@ -136,45 +149,98 @@ CheckPracticeDownloads :: () -> s32 {
     if FixtureStarts() != before {
         return 9
     }
+    // In another app language it speaks the downloaded one, fetching nothing.
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before + 1 || !PracticeContentReady(4) || PracticeVoiceStatus(4) != 2 {
+    if FixtureStarts() != before || !PracticeContentReady(4) || PracticeNarrationLanguage(4, "") != "en" ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
         return 10
     }
-    if PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
+    // Choosing the app's language downloads it and speaks it from then on.
+    PracticeNarrationToggle(spanish)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before + 1 || PracticeNarrationState(spanish) != 2 ||
+    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
     !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
         return 11
     }
     before = FixtureStarts()
     active_locale_index = 0
     PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before || PracticeVoiceStatus(4) != 2 {
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before || PracticeNarrationLanguage(4, "") != "en" ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
         return 12
     }
-    // The male voice is its own pack: choosing it downloads that pack and
-    // serves its recording in place of the default voice, which stays cached.
+    // Removing a language frees only that one; another downloaded one speaks.
+    PracticeNarrationToggle(english)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if PracticeNarrationState(english) != 0 || PracticeNarrationState(spanish) != 2 ||
+    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
+        return 43
+    }
+    // The male voice has its own packs, chosen the same way, while the
+    // default voice's languages stay on this device.
+    male := PracticeNarrationPack(4, "en", "male")
     before = FixtureStarts()
-    PracticeVoiceSelect("male")
+    PracticeVoiceSelect(4, "male")
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before + 1 || PracticeVoiceStatus(4) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice-male/en/test.ogg").found ||
-    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+    if FixtureStarts() != before || PracticeNarrationLanguage(4, "male").count != 0 ||
+    PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
         return 36
     }
+    PracticeNarrationToggle(male)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before + 1 || PracticeNarrationState(male) != 2 ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice-male/en/test.ogg").found {
+        return 44
+    }
     before = FixtureStarts()
-    PracticeVoiceSelect("")
+    PracticeVoiceSelect(4, "")
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before || PracticeVoiceStatus(4) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+    if FixtureStarts() != before || PracticeNarrationState(spanish) != 2 ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
         return 37
+    }
+    // A download in progress can be cancelled from its chip.
+    PracticeNarrationToggle(english)
+    PracticeNarrationToggle(english)
+    PracticeDownloadsPump(4, true, true)
+    if PracticeNarrationState(english) != 0 {
+        return 45
+    }
+    // Lumi's guide speaks its own downloaded narration beside any practice.
+    guide := PracticeNarrationPack(PracticeGuide, "en", "")
+    PracticeNarrationToggle(guide)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if guide < 0 || PracticeNarrationState(guide) != 2 || PracticeNarrationLanguage(PracticeGuide, "") != "en" ||
+    !PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
+        return 46
+    }
+    PracticeDownloadsPump(4, false, true)
+    if PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
+        return 47
+    }
+    PracticeNarrationToggle(guide)
+    PracticeDownloadsPump(4, true, true)
+    if PracticeNarrationState(guide) != 0 || PracticeNarrationLanguage(PracticeGuide, "").count != 0 {
+        return 48
     }
     if practice_packs[PracticePackFind(4, "")].bundle != base_bundle {
         return 17
     }
     PracticeContentRemove(4)
-    if PracticeContentReady(4) || PracticeVoiceStatus(4) != 0 {
+    if PracticeContentReady(4) || PracticeNarrationState(spanish) != 0 || PracticeNarrationState(male) != 0 {
         return 13
     }
     PracticeDownloadsPump(0, false, true)
@@ -184,8 +250,8 @@ CheckPracticeDownloads :: () -> s32 {
     // The manager can queue other practices without mounting them or changing
     // the practice currently shown. Their verified files work offline later.
     before = FixtureStarts()
-    PracticeContentRequest(1, false)
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(1)
+    PracticeContentRequest(4)
     for turn: cast(s32)0..cast(s32)3 {
         PracticeDownloadsPump(0, false, true)
     }
@@ -211,7 +277,7 @@ CheckPracticeDownloads :: () -> s32 {
     // Mini sessions reuse public caches, but missing packs stay transient.
     DataSetTemporary(true)
     PracticeDownloadsPump(4, false, true)
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     PracticeDownloadsPump(4, false, true)
     PracticeDownloadsPump(4, false, true)
     if !PracticeContentReady(4) || FixtureTaiChiSaved() {
@@ -245,7 +311,7 @@ CheckPracticeDownloads :: () -> s32 {
     if PracticeInstalled(0) || PracticeContentReady(0) {
         return 26
     }
-    PracticeContentRequest(0, false)
+    PracticeContentRequest(0)
     PracticeDownloadsPump(0, false, true)
     if !PracticeInstalled(0) || !PracticeContentReady(0) || FixtureStarts() != before {
         return 27
@@ -259,7 +325,7 @@ CheckPracticeDownloads :: () -> s32 {
     if PracticeInstalled(3) || !PracticeShipped(3) {
         return 39
     }
-    PracticeContentRequest(3, false)
+    PracticeContentRequest(3)
     PracticeDownloadsPump(3, false, true)
     PracticeDownloadsPump(3, false, true)
     if !PracticeInstalled(3) || !PracticeContentReady(3) || FixtureStarts() != before {
@@ -280,7 +346,7 @@ CheckPracticeDownloads :: () -> s32 {
     PracticeContentRemove(4)
     fixture_grant_mode = 0
     before = FixtureStarts()
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     PracticeDownloadsPump(4, false, true)
     if FixtureStarts() != before || PracticeContentStatus(4) != 1 {
         return 30
@@ -303,7 +369,7 @@ CheckPracticeDownloads :: () -> s32 {
     }
     PracticeContentRemove(4)
     fixture_grant_mode = -1
-    PracticeContentRequest(4, false)
+    PracticeContentRequest(4)
     // A refused grant is asked for again, then reported; nothing downloads.
     for step: cast(s32)0..cast(s32)5 {
         PracticeDownloadsPump(4, false, true)
