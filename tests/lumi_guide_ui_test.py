@@ -66,11 +66,15 @@ with contextlib.ExitStack() as stack:
             return image.convert("RGB").copy()
 
     def text(window, name):
-        """The words on screen, read from an enlarged capture."""
+        """The words on screen, read from enlarged captures. The small step
+        label over the picture reads best in larger grey."""
         image = capture(window, name)
         enlarged = OUTPUT / (name + "-ocr.png")
         image.resize((image.width * 2, image.height * 2)).save(enlarged)
-        return " ".join(command("tesseract", str(enlarged), "stdout", "--psm", "11").lower().split())
+        grey = OUTPUT / (name + "-ocr-grey.png")
+        image.convert("L").resize((image.width * 3, image.height * 3)).save(grey)
+        return " ".join((command("tesseract", str(enlarged), "stdout", "--psm", "11") + " " +
+                         command("tesseract", str(grey), "stdout", "--psm", "11")).lower().split())
 
     def click(window, x, y):
         command("xdotool", "mousemove", "--window", window, str(x), str(y))
@@ -137,30 +141,31 @@ with contextlib.ExitStack() as stack:
                              "tutorial_seen": 0, "tutorial_step": 0, "habits_guide_seen": 1, "lumi_guides_seen": 127,
                              "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
         with application(profile, "guide") as (window, log):
-            # Lumi flies in and starts typing her first line; it is not all
-            # there yet.
+            # A first start has only Wim Hof installed, so there is no
+            # carousel step: the guide begins at Start. Lumi flies in and
+            # starts typing her first line; it is not all there yet.
             time.sleep(1.6)
             typing = text(window, "1-typing")
-            assert "step 1 of 3" in typing, typing
-            assert "pick one" not in typing, "The first line appeared at once: " + typing
+            assert "step 1 of 2" in typing, typing
+            assert "follow along" not in typing, "The first line appeared at once: " + typing
             # A tap on the bubble shows the whole line and stays on it.
             click(window, 450, 460)
             shown = text(window, "2-shown")
-            assert "step 1 of 3" in shown and "pick one" in shown, shown
+            assert "step 1 of 2" in shown and "follow along" in shown, shown
             assert settings(profile, user).get("tutorial_step", "0") == "0"
             # The next tap, anywhere but a button, goes to the next step.
             click(window, 120, 120)
             second = text(window, "3-second")
-            assert "step 2 of 3" in second, second
+            assert "step 2 of 2" in second, second
             assert settings(profile, user)["tutorial_step"] == "1"
-            # Right still goes on and Left goes back, whatever is typed.
-            key(window, "Right")
-            assert "step 3 of 3" in text(window, "4-third")
+            # Left goes back and Right goes on, whatever is typed.
             key(window, "Left")
-            assert "step 2 of 3" in text(window, "5-back")
+            assert "step 1 of 2" in text(window, "4-back")
+            key(window, "Right")
+            assert "step 2 of 2" in text(window, "5-again")
             # Escape closes the guide for good.
             key(window, "Escape")
             closed = text(window, "6-closed")
-            assert "step 2 of 3" not in closed and "step 3 of 3" not in closed, closed
+            assert "step 1 of 2" not in closed and "step 2 of 2" not in closed, closed
             assert settings(profile, user)["tutorial_seen"] == "1"
 print("Lumi guide UI test passed")

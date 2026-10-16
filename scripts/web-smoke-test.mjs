@@ -332,11 +332,14 @@ function connectBidi(wsUrl) {
     const pending = new Map();
     const events = [];
     let nextId = 1;
+    let closed = '';
 
     ws.addEventListener('open', () => {
       resolveConnect({
         events,
         send(method, params = {}) {
+          if (closed)
+            return Promise.reject(new Error(`${method}: ${closed}`));
           const id = nextId++;
           ws.send(JSON.stringify({ id, method, params }));
           return new Promise((resolveSend, rejectSend) => {
@@ -362,6 +365,14 @@ function connectBidi(wsUrl) {
       }
     });
     ws.addEventListener('error', event => reject(new Error(event.message || `WebSocket error for ${wsUrl}`)));
+    // A dropped connection fails waiting and later commands instead of
+    // leaving them unanswered.
+    ws.addEventListener('close', event => {
+      closed = `Firefox closed the BiDi connection (${event.code})`;
+      for (const item of pending.values())
+        item.reject(new Error(`${item.method}: ${closed}`));
+      pending.clear();
+    });
   });
 }
 
@@ -1136,8 +1147,12 @@ async function verifyFirstRunGuideCanvasFlow(client) {
   if (state.clipped !== 0)
     throw new Error(`Spanish first-run guide text is clipped: ${JSON.stringify(state)}`);
 
+  // With one practice installed the guide has no carousel step.
+  const guideSteps = await pageJson(client, 'Module._app_web_test_first_run_guide_count()');
+  if (guideSteps < 2)
+    throw new Error(`first-run guide has too few steps: ${guideSteps}`);
   let previousTarget = null;
-  for (let expected = 1; expected < 3; expected++) {
+  for (let expected = 1; expected < guideSteps; expected++) {
     let target;
     for (let attempt = 0; attempt < 30; attempt++) {
       target = await firstRunGuideButtonTarget(client, 'next');
@@ -1728,12 +1743,17 @@ async function installPracticeContentFixtures(client) {
       if (!response.ok) throw new Error('Missing practice fixture: ' + name);
       FS.writeFile('/home/inbe/packages/practice-' + name + '.zib', new Uint8Array(await response.arrayBuffer()));
     }
+    ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_test_review_practice_cache');
   })()`, true);
 }
 
 async function startCachedPractice(client, practice) {
+  // A reload since the fixtures went in starts the app with its own view of
+  // the cache and of what the account owns.
   await pageJson(client, `(async () => {
     ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_test_review_practice_cache');
     await callWasmHook('app_web_launch_practice', [${practice}]);
   })()`, true);
   await waitRouteTransition(client);
