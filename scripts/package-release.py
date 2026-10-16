@@ -231,6 +231,101 @@ def open_public_url(url, timeout):
     return urlopen(Request(url, headers={"User-Agent": "Inbe-Publisher/1.0"}), timeout=timeout)
 
 
+def stage_content_repair(store, practice, key_path, key_id, release_path, publishers_path=None):
+    """Prepare an immutable resource without advancing any app release."""
+    publishers = json.loads((publishers_path or ROOT / 'apps/publishers.json').read_text())
+    value = json.loads(release_path.read_bytes())
+    validate_release(value, 'inbe.practices', publishers)
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError('publisher key must be Ed25519')
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    if not any(p['key_id'] == key_id and p['public_key'] == public and
+               'inbe.practices' in p['app_ids'] for p in publishers):
+        raise ValueError('content repair key must match the shipped Practices publisher')
+    catalog = json.loads((ROOT / 'build/package-assets/practices/assets/practices/catalog.json').read_bytes())
+    matches = [p for p in catalog['packs'] if p['practice'] == practice and not p['language']]
+    if len(matches) != 1 or matches[0].get('product'):
+        raise ValueError('repair requires one free base practice pack')
+    pack = matches[0]
+    data = (ROOT / 'build/practice-content' / (practice + '.zib')).read_bytes()
+    if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
+        raise ValueError('repair content differs from the app catalog')
+    validate_repair_assets(data)
+    value = dict(value, data_schema=1, key_id=key_id,
+                 artifacts=[dict(variant='module', sha256=pack['sha256'], size=len(data))])
+    value['signature'] = key.sign(signing_message(value)).hex()
+    validate_release(value, 'inbe.practices', publishers)
+    directory = store / 'inbe.practices'
+    directory.mkdir(parents=True, exist_ok=True)
+    atomic_write(directory / (pack['sha256'] + '.zib'), data)
+    atomic_write(directory / (pack['sha256'] + '.zib.release-v2.json'),
+                 json.dumps(value, separators=(',', ':')).encode())
+    return pack['sha256']
+
+
+def validate_repair_assets(data):
+    """This repair is limited to Sun Salutation pictures, never paid content."""
+    assets = bundle_assets(data)
+    prefix = 'assets/practices/sunsalutation/'
+    if not assets or any(not path.startswith(prefix) or path.startswith(
+            (prefix + 'voice/', prefix + 'voice-male/')) for path in assets):
+        raise ValueError('repair may contain only Sun Salutation picture resources')
+
+
+def import_content_repair(entries, store, publishers):
+    if len(entries) != 2:
+        raise ValueError('repair must contain exactly one pack and its signature')
+    payloads = [name for name in entries if re.fullmatch(r'inbe\.practices/[0-9a-f]{64}\.zib', name)]
+    if len(payloads) != 1 or payloads[0] + '.release-v2.json' not in entries:
+        raise ValueError('invalid content repair archive')
+    name = payloads[0]
+    data = entries[name]
+    metadata = entries[name + '.release-v2.json']
+    value = json.loads(metadata)
+    validate_release(value, 'inbe.practices', publishers)
+    artifact = value['artifacts'][0]
+    digest = Path(name).stem
+    if (value['data_schema'] != 1 or artifact['sha256'] != digest or
+            artifact['size'] != len(data) or sha256(data).hexdigest() != digest):
+        raise ValueError('repair content does not match its signed artifact')
+    validate_repair_assets(data)
+    directory = store / 'inbe.practices'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (directory / '.publish.lock').open('a+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (store / (name + '.product')).exists():
+            raise ValueError('repair must not replace paid content')
+        for filename in (name, name + '.release-v2.json'):
+            target = store / filename
+            if target.exists() and target.read_bytes() != entries[filename]:
+                raise ValueError('repair must not replace immutable content')
+        atomic_write(store / name, data)
+        atomic_write(store / (name + '.release-v2.json'), metadata)
+
+
+def publish_content_repair(store, digest, target, remote_store):
+    if not re.fullmatch(r'[a-zA-Z0-9_.@-]+', target) or target.startswith('-'):
+        raise ValueError('invalid SSH target')
+    if not remote_store.startswith('/') or any(c in remote_store for c in '\n\r\0'):
+        raise ValueError('invalid remote store')
+    import tarfile
+    with tempfile.TemporaryDirectory(prefix='inbe-content-repair-') as temporary:
+        archive = Path(temporary) / 'repair.tar'
+        with tarfile.open(archive, 'w') as tar:
+            for suffix in ('.zib', '.zib.release-v2.json'):
+                path = store / 'inbe.practices' / (digest + suffix)
+                tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
+        options = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes']
+        if os.environ.get('INBE_SSH_IDENTITY'):
+            options += ['-i', os.environ['INBE_SSH_IDENTITY']]
+        if os.environ.get('INBE_SSH_KNOWN_HOSTS'):
+            options += ['-o', 'UserKnownHostsFile=' + os.environ['INBE_SSH_KNOWN_HOSTS']]
+        with archive.open('rb') as upload:
+            subprocess.run(['ssh', *options, '--', target,
+                            shlex.join(['inbe-packages', remote_store])], stdin=upload, check=True)
+
+
 def verify_origin(store, origin, open_url=open_public_url):
     """Require the public node to serve the exact signed files we published."""
     parsed = urlsplit(origin)
@@ -401,6 +496,13 @@ def import_archive(archive, store, publishers_path=None):
     # The node accepts archives built before and after Leaderboard became an
     # app, so the importer and the app can be updated in either order.
     present = {name.split("/")[0] for name in entries}
+    if present == {'inbe.practices'}:
+        if rollout is not None:
+            raise ValueError('content repair cannot change rollout')
+        import_content_repair(entries, store, publishers)
+        archive.unlink()
+        archive.parent.rmdir()
+        return
     if present != ids and present != ids - {"inbe.leaderboard"}:
         raise ValueError("archive must contain the root and every cell")
     with ExitStack() as stack:
@@ -533,8 +635,30 @@ def main():
     parser.add_argument("--publishers", type=Path, help="node-owned public publisher pins")
     parser.add_argument("--rollout", type=int, help="publish changed releases to this share of devices first")
     parser.add_argument("--rollout-hours", type=int, default=24, help="then to every device after these hours")
+    parser.add_argument('--repair-content', choices=['sunsalutation'],
+                        help='restore only the missing Sun Salutation picture pack')
+    parser.add_argument('--repair-release', type=Path, help='existing signed Practices metadata for a content repair')
     args = parser.parse_args()
     try:
+        if args.repair_content:
+            if not args.key or not args.key_id or not args.repair_release or args.rollout is not None:
+                parser.error('content repair needs --key, --key-id and --repair-release, without --rollout')
+            digest = stage_content_repair(args.store, args.repair_content, args.key,
+                                          args.key_id, args.repair_release, args.publishers)
+            if args.ssh_target:
+                if not args.remote_store or not args.verify_origin:
+                    parser.error('repair publication requires --remote-store and --verify-origin')
+                origin = args.verify_origin.rstrip('/')
+                parsed = urlsplit(origin)
+                if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
+                    raise ValueError('repair verification requires an HTTPS origin')
+                publish_content_repair(args.store, digest, args.ssh_target, args.remote_store)
+                expected = (args.store / 'inbe.practices' / (digest + '.zib')).read_bytes()
+                with open_public_url(origin + '/api/v2/packages/inbe.practices/' + digest + '.zib', 30) as response:
+                    if response.read(len(expected) + 1) != expected:
+                        raise ValueError('public repair differs from the app catalog')
+            print('Sun Salutation picture pack repaired' if args.ssh_target else 'Sun Salutation picture repair staged')
+            return
         if args.receive_archive:
             if not args.publishers:
                 parser.error("--publishers is required for the restricted upload receiver")
