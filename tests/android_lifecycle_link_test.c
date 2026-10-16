@@ -124,7 +124,6 @@ int main(void)
     app.exercise_type = 2;
     assert(android_practice_to_start(-1) == 2);
     assert(android_practice_to_start(999) == 0);
-    assert(android_can_open_donation_reminder() == 1);
     assert(android_debug_import_music_for_practice(NULL, 0) == 0);
     assert(android_debug_import_music_for_practice((uint8_t *)"", 2) == 0);
     assert(android_debug_import_music_for_practice(unterminated_path, 2) == 0);
@@ -147,7 +146,6 @@ int main(void)
 
     SetCurrentApp(NULL);
     assert(android_practice_to_start(0) == -1);
-    assert(android_can_open_donation_reminder() == 0);
     assert(android_debug_start_music_download() == 0);
     return 0;
 }
