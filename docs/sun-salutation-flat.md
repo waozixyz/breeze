@@ -45,3 +45,26 @@ one shape, so joints never show seams. Feet solve their own floor contact:
 flat when standing, on tucked toes behind her in plank, on the instep in
 upward-facing dog. `POSE_CHANGES` lowers a few ankles so the drawn feet
 reach the floor.
+
+## App frames
+
+The app plays the same characters from transparent PNG frames:
+
+```sh
+python3 scripts/render-sun-salutation-characters.py
+```
+
+It draws every listed character on a clear stage at the rig's sprite scale,
+the woman first and then the man, with the app's three-second moves: one
+held frame for the first pose, then for each of the other eleven 90 frames
+of the move and 30 more while the hanging hair settles
+(`SETTLE_SECONDS`). The app plays those during the hold and keeps the last
+one; the rest of the hold is left out, so the hair carries on from there
+into the next move. Frames are cropped to each move, quantized to 256
+colours and saved to `assets/practices/sunsalutation/characters/NN-<id>/`.
+It then writes `src/practices/sun_salutation/sun_salutation_frames.zi` and
+`docs/sun-salutation-characters.json`, recompresses the PNGs
+(`scripts/optimize-animation-pngs.py`, needs zopfli) and stores identical
+frames once (`scripts/animation_inventory.py`). A character no longer listed
+loses its frame folder. The app shows the first character as "Woman with
+bun" and the second as "Man with short hair", who speaks with the male voice.
