@@ -41,6 +41,9 @@ PracticePack :: struct {
     // Installed on this device: downloaded, or shipped with the app and not
     // removed. Read without opening the pack, for Practice's home.
     present: bool
+    // Taken off Practice. A downloaded copy stays on this device, so adding
+    // the practice back needs no download.
+    removed: bool
     // A paid practice's packs name its unlock; the node serves them only
     // with a grant for it.
     product: [48]u8
@@ -184,8 +187,10 @@ PracticeShipped :: (practice: s32) -> bool {
     return PracticeShippedBytes(PracticePackFind(practice, "")).count > 0
 }
 
-// Removing a shipped practice leaves this marker, so it stays removed.
-PracticeRemovedPath :: (practice: s32) -> string {
+// A practice's markers beside its packs: ".removed" keeps it off Practice,
+// and ".added" puts a practice that ships with the app on Practice without
+// a copy of its own.
+PracticeMarkerPath :: (practice: s32, suffix: string) -> string {
     directory := PackageDirectory()
     defer {
         PackageFree(directory)
@@ -199,20 +204,62 @@ PracticeRemovedPath :: (practice: s32) -> string {
         PackageFree(prefix)
         PackageFree(name)
     }
-    return PackageText(name, ".removed")
+    return PackageText(name, suffix)
+}
+
+PracticeMarked :: (practice: s32, suffix: string) -> bool {
+    path := PracticeMarkerPath(practice, suffix)
+    defer {
+        PackageFree(path)
+    }
+    return path.count > 0 && PathExists(path)
+}
+
+// Temporary data leaves the device's markers as they are.
+PracticeMark :: (practice: s32, suffix: string, marked: bool) {
+    if DataTemporary() {
+        return
+    }
+    path := PracticeMarkerPath(practice, suffix)
+    defer {
+        PackageFree(path)
+    }
+    if path.count == 0 {
+        return
+    }
+    if !marked {
+        unused RemoveFile(path)
+        return
+    }
+    directory := PackageDirectory()
+    unused storage_ensure_dir(directory)
+    PackageFree(directory)
+    unused PackageWrite(path, "1")
+}
+
+// The practice's own copy on this device, downloaded or left by an older
+// version.
+PracticePackStored :: (index: s32) -> bool {
+    path := PracticePackPath(index, false)
+    defer {
+        PackageFree(path)
+    }
+    return path.count > 0 && PathExists(path)
 }
 
 PracticePackPresent :: (index: s32) -> bool {
-    path := PracticePackPath(index, false)
-    removed := PracticeRemovedPath(practice_packs[index].practice)
-    defer {
-        PackageFree(path)
-        PackageFree(removed)
+    practice := practice_packs[index].practice
+    base := practice_packs[index].language[0] == cast(u8)0
+    if base && PracticeMarked(practice, ".removed") {
+        return false
     }
-    if path.count > 0 && PathExists(path) {
+    if PracticePackStored(index) {
         return true
     }
-    return PracticeDefaultBytes(index).count > 0 && (removed.count == 0 || !PathExists(removed))
+    if PracticeDefaultBytes(index).count > 0 {
+        return true
+    }
+    return PracticeShippedBytes(index).count > 0 && PracticeMarked(practice, ".added")
 }
 
 // The downloaded copy, or the one shipped with the app while installed.
@@ -543,6 +590,8 @@ PracticeCatalogLoad :: () {
         for index: cast(s32)0..count - 1 {
             practice_packs[index] = packs[index]
             practice_packs[index].present = PracticePackPresent(index)
+            practice_packs[index].removed = practice_packs[index].language[0] == cast(u8)0 &&
+            PracticeMarked(practice_packs[index].practice, ".removed")
             declined := PracticeNarrationDeclinedPath(index)
             practice_packs[index].declined = declined.count > 0 && PathExists(declined)
             PackageFree(declined)
@@ -823,8 +872,11 @@ PracticeInstalled :: (practice: s32) -> bool {
         return false
     }
     index := PracticePackFind(practice, "")
-    return index >= 0 && (practice_packs[index].bundle != null || practice_packs[index].status == 2 ||
-        practice_packs[index].present)
+    if index < 0 || practice_packs[index].removed {
+        return false
+    }
+    return practice_packs[index].bundle != null || practice_packs[index].status == 2 ||
+    practice_packs[index].present
 }
 
 PracticeContentStatus :: (practice: s32) -> s32 {
@@ -843,37 +895,81 @@ PracticeContentBytes :: (practice: s32) -> s64 {
 // Downloads or adds a practice. Its narration follows on its own.
 PracticeContentRequest :: (practice: s32) {
     base := PracticePackFind(practice, "")
-    // A practice that ships with the app is added or restored without a download.
-    if base >= 0 && !practice_packs[base].present && PracticeShippedBytes(base).count > 0 {
-        removed := PracticeRemovedPath(practice)
-        if removed.count > 0 {
-            unused RemoveFile(removed)
-        }
-        PackageFree(removed)
-        // A practice not installed by default is kept as its own cached copy.
-        if PracticeDefaultBytes(base).count == 0 {
-            path := PracticePackPath(base, false)
-            directory := PackageDirectory()
-            unused storage_ensure_dir(directory)
-            PackageFree(directory)
-            unused PackageWrite(path, PracticeShippedBytes(base))
-            PackageFree(path)
+    if base < 0 {
+        return
+    }
+    pack := *practice_packs[base]
+    // A copy on this device or in the app puts the practice back without a
+    // download. The app's copy needs no copy of its own.
+    if pack.removed || !pack.present {
+        pack.removed = false
+        PracticeMark(practice, ".removed", false)
+        // Only a copy already verified on this device is kept; anything else
+        // downloads again.
+        stored := pack.status == 2 && PracticePackStored(base)
+        shipped := PracticeShippedBytes(base).count > 0
+        if stored || shipped {
+            if !stored && PracticeDefaultBytes(base).count == 0 {
+                PracticeMark(practice, ".added", true)
+            }
+            pack.present = true
+            pack.status = 2
+            pack.checked = false
+            pack.cache_checked = true
+            AssetNotifyChanged()
         }
         if !DataTemporary() {
             sync_web_storage()
         }
-        practice_packs[base].present = true
-        practice_packs[base].status = 2
-        practice_packs[base].checked = false
-        practice_packs[base].cache_checked = true
-        AssetNotifyChanged()
     }
-    if base >= 0 && practice_packs[base].bundle == null && practice_packs[base].status != 1 &&
-    practice_packs[base].status != 2 {
-        practice_packs[base].requested = true
-        practice_packs[base].status = 1
-        practice_packs[base].attempts = 0
+    if pack.bundle == null && pack.status != 1 && pack.status != 2 {
+        pack.requested = true
+        pack.status = 1
+        pack.attempts = 0
     }
+}
+
+// Takes a practice off Practice. A downloaded copy and its narration stay on
+// this device, so adding it back needs no download.
+PracticeContentHide :: (practice: s32) {
+    base := PracticePackFind(practice, "")
+    if base < 0 {
+        return
+    }
+    for index: cast(s32)0..practice_pack_count - 1 {
+        if practice_packs[index].practice != practice {
+            continue
+        }
+        PracticePackCancel(index)
+        CloseBundle(practice_packs[index].bundle)
+        practice_packs[index].bundle = null
+    }
+    pack := *practice_packs[base]
+    pack.removed = true
+    pack.present = false
+    pack.checked = true
+    pack.cache_checked = true
+    PracticeMark(practice, ".removed", true)
+    PracticeMark(practice, ".added", false)
+    shipped := PracticeShippedBytes(base)
+    if shipped.count > 0 && !DataTemporary() {
+        // Older versions copied a practice that ships with the app when it
+        // was added; the app's own copy is enough.
+        path := PracticePackPath(base, false)
+        stored := PackageRead(path, PackageMaximumBytes)
+        if stored.count > 0 && stored == shipped {
+            unused RemoveFile(path)
+        }
+        PackageFree(stored)
+        PackageFree(path)
+    }
+    if shipped.count > 0 && !PracticePackStored(base) {
+        pack.status = 0
+    }
+    if !DataTemporary() {
+        sync_web_storage()
+    }
+    AssetNotifyChanged()
 }
 
 // Review one cache slot per frame for the manager, without mounting its data.
@@ -893,7 +989,8 @@ PracticeContentReviewNext :: () {
         } else if pack.status == 2 {
             pack.status = 0
         }
-        pack.present = bundle != null
+        // A removed practice's copy stays on this device but off Practice.
+        pack.present = bundle != null && !pack.removed
         CloseBundle(bundle)
         return
     }
@@ -927,6 +1024,7 @@ PracticeContentRemove :: (practice: s32) {
         practice_packs[index].checked = true
         practice_packs[index].cache_checked = true
         practice_packs[index].present = false
+        practice_packs[index].removed = false
         // Adding the practice again brings its narration back by itself.
         practice_packs[index].declined = false
     }
@@ -934,11 +1032,14 @@ PracticeContentRemove :: (practice: s32) {
     if !DataTemporary() {
         PracticeCacheRemove(practice)
         base := PracticePackFind(practice, "")
-        removed := PracticeRemovedPath(practice)
-        if PracticeDefaultBytes(base).count > 0 && removed.count > 0 {
-            unused PackageWrite(removed, "1")
+        // The app keeps its own copy of a practice it installs by default,
+        // so that practice stays off Practice; others can download again.
+        installed_by_default := PracticeDefaultBytes(base).count > 0
+        PracticeMark(practice, ".removed", installed_by_default)
+        PracticeMark(practice, ".added", false)
+        if base >= 0 {
+            practice_packs[base].removed = installed_by_default
         }
-        PackageFree(removed)
         sync_web_storage()
     }
     AssetNotifyChanged()
@@ -1050,6 +1151,10 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := *practice_packs[index]
         if !PracticePackWanted(pack) || pack.checked {
+            continue
+        }
+        // A removed practice is not mounted; the manager still reviews its copy.
+        if pack.removed {
             continue
         }
         pack.checked = true

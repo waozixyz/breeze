@@ -35,6 +35,11 @@ using ButtonEmphasis;
 using TextWrap;
 using TextAlign;
 
+// The practice whose row asks whether to delete its downloaded copy, or -1.
+practice_delete_asked: s32 = -1;
+
+PracticeTrashIcon :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+
 // A paid practice this account has not unlocked offers its unlock instead of
 // a download, even when its pack is on this device.
 PracticeDownloadLocked :: (practice: s32) -> bool {
@@ -133,18 +138,42 @@ PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
 }
 
 // Narration follows its practice in the language it speaks, so it counts in
-// the size; small packs show kilobytes instead of a rounded-up megabyte.
-PracticeDownloadSizeText :: (app: *InnerBreeze, practice: s32, output: []u8) {
+// the size.
+PracticeDownloadBytes :: (app: *InnerBreeze, practice: s32) -> s64 {
     bytes := PracticeContentBytes(practice)
     if app.voice_narration_enabled != 0 {
         bytes += PracticeNarrationFollowingBytes(practice)
     }
-    small := bytes < 1024 * 1024
-    text := LocaleText(ifx PracticeInstalled(practice) && PracticeContentStatus(practice) == 2 then (ifx small then "practice_download_ready_kb" else "practice_download_ready") else
-        ifx small then "practice_download_size_kb" else "practice_download_size")
-    amount := ifx small then (bytes + 1023) / 1024 else (bytes + 512 * 1024) / (1024 * 1024)
-    args: [1]FormatArg = .[FormatArg.{.number = cast(s32)amount}]
-    unused FormatTemplate(text, args[:], output)
+    return bytes
+}
+
+// Small packs show kilobytes instead of a rounded-up megabyte.
+PracticeDownloadSmall :: (bytes: s64) -> bool {
+    return bytes < 1024 * 1024
+}
+
+PracticeDownloadAmount :: (bytes: s64) -> s32 {
+    if PracticeDownloadSmall(bytes) {
+        return cast(s32)((bytes + 1023) / 1024)
+    }
+    return cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
+}
+
+// "Available offline" for a copy on this device or in the app, otherwise the
+// download size.
+PracticeDownloadSizeText :: (app: *InnerBreeze, practice: s32, offline: bool, output: []u8) {
+    bytes := PracticeDownloadBytes(app, practice)
+    key := "practice_download_size"
+    if offline {
+        key = "practice_download_ready"
+    }
+    if offline && PracticeDownloadSmall(bytes) {
+        key = "practice_download_ready_kb"
+    } else if PracticeDownloadSmall(bytes) {
+        key = "practice_download_size_kb"
+    }
+    args: [1]FormatArg = .[FormatArg.{.number = PracticeDownloadAmount(bytes)}]
+    unused FormatTemplate(LocaleText(key), args[:], output)
 }
 
 PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
@@ -164,105 +193,217 @@ PracticeDownloadStatusText :: (app: *InnerBreeze, practice: s32) -> string {
             unused AppAppendText("\n", buffer[:])
         }
         size: [128]u8
-        PracticeDownloadSizeText(app, practice, size[:])
+        PracticeDownloadSizeText(app, practice, false, size[:])
         unused AppAppendText(TextUntilNul(size[:]), buffer[:])
         return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
     }
     if PracticePackFind(practice, "") < 0 && PracticeContentReady(practice) {
-        return LocaleText("practice_download_included")
+        return LocaleText("practice_download_offline")
     }
     status := PracticeContentStatus(practice)
     if status == 1 || status == 3 {
         return LocaleText(ifx status == 3 then "practice_download_failed" else "practice_download_busy")
     }
-    // Shipped with the app: adding it needs no download.
-    if status != 2 && !PracticeInstalled(practice) && PracticeShipped(practice) {
-        return LocaleText("practice_download_included")
-    }
-    PracticeDownloadSizeText(app, practice, buffer[:])
+    // A practice that ships with the app is on this device whether added or not.
+    offline := status == 2 || PracticeShipped(practice)
+    PracticeDownloadSizeText(app, practice, offline, buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
-PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
+// "Delete Sun Salutation? This frees 24 MB. Your progress stays."
+PracticeDownloadDeleteText :: (app: *InnerBreeze, practice: s32) -> string {
+    bytes := PracticeDownloadBytes(app, practice)
+    size: [32]u8
+    size_args: [1]FormatArg = .[FormatArg.{.number = PracticeDownloadAmount(bytes)}]
+    unused FormatTemplate(LocaleText(ifx PracticeDownloadSmall(bytes) then "practice_size_kb" else "practice_size_mb"),
+        size_args[:], size[:])
     definition := practice_get(practice)
-    name := LocaleText(definition.label_key)
-    name_h := AppParagraphHeight(name, width, AppFontSize(), AppScale(3))
-    narrow := width < AppScale(520)
-    status_w := ifx narrow then width else width - AppScale(212)
-    status_h := AppParagraphHeight(PracticeDownloadStatusText(app, practice),
-        status_w, AppFontSize(), AppScale(3))
-    if status_h < AppScale(44) {
-        status_h = AppScale(44)
+    args: [2]FormatArg = .[
+    FormatArg.{.text = LocaleText(definition.label_key), .is_text = true},
+    FormatArg.{.text = TextUntilNul(size[:]), .is_text = true}]
+    buffer: [256]u8
+    unused FormatTemplate(LocaleText("practice_delete_confirm"), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+// Measuring and drawing a row share these sizes.
+PracticeDownloadRowShape :: struct {
+    name_h: s32
+    narrow: bool
+    // A row without its own button: content from an older app package.
+    included: bool
+    // A downloaded copy can be deleted to free its space; a practice that
+    // ships with the app cannot.
+    trash: bool
+    // The row asks before deleting, in place of its buttons.
+    asking: bool
+    status_w: s32
+    status_h: s32
+    question_h: s32
+    height: s32
+}
+
+PracticeDownloadShape :: (app: *InnerBreeze, practice: s32, width: s32) -> PracticeDownloadRowShape {
+    shape: PracticeDownloadRowShape
+    definition := practice_get(practice)
+    shape.name_h = AppParagraphHeight(LocaleText(definition.label_key), width, AppFontSize(), AppScale(3))
+    locked := PracticeDownloadLocked(practice)
+    shape.narrow = width < AppScale(520)
+    shape.included = PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+    shape.trash = !locked && !shape.included && !PracticeShipped(practice) &&
+    PracticeContentStatus(practice) == 2
+    shape.asking = shape.trash && practice_delete_asked == practice
+    shape.status_w = width
+    if !shape.narrow && !shape.asking {
+        shape.status_w = width - AppScale(212)
     }
-    height := name_h + AppScale(8) + status_h + AppScale(24)
-    if PracticeDownloadLocked(practice) {
-        height += PracticeDownloadPriceHeight() + AppScale(8)
+    if !shape.narrow && !shape.asking && shape.trash {
+        shape.status_w -= AppScale(52)
     }
-    included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
-    if narrow && !included {
-        height += AppScale(52)
+    shape.status_h = AppParagraphHeight(PracticeDownloadStatusText(app, practice),
+        shape.status_w, AppFontSize(), AppScale(3))
+    if shape.status_h < AppScale(44) {
+        shape.status_h = AppScale(44)
     }
-    return height
+    shape.height = shape.name_h + AppScale(8) + shape.status_h + AppScale(24)
+    if locked {
+        shape.height += PracticeDownloadPriceHeight() + AppScale(8)
+    }
+    if shape.asking {
+        shape.question_h = AppParagraphHeight(PracticeDownloadDeleteText(app, practice),
+            width, AppFontSize(), AppScale(3))
+        shape.height += AppScale(8) + shape.question_h + AppScale(8) + AppScale(44)
+    } else if shape.narrow && !shape.included {
+        shape.height += AppScale(52)
+    }
+    return shape
+}
+
+PracticeDownloadRowHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
+    return PracticeDownloadShape(app, practice, width).height
+}
+
+// Delete asks once, in the row: Cancel keeps the copy, Delete frees it.
+PracticeDownloadDeleteQuestion :: (app: *InnerBreeze, practice: s32, shape: PracticeDownloadRowShape,
+    x: s32, y: s32, width: s32) {
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)shape.question_h},
+            .text = PracticeDownloadDeleteText(app, practice), .font = AppFontSize(),
+            .wrap = cast(TextWrap)TextWrapAuto})
+    button_y := y + shape.question_h + AppScale(8)
+    button_w := (width - AppScale(8)) / 2
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17440 + practice,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(44)},
+            .label = LocaleText("cancel_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        practice_delete_asked = -1
+    }
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17450 + practice,
+            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(44)},
+            .label = LocaleText("delete_button"),
+            .disabled = practice_active(app) != null,
+            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        practice_delete_asked = -1
+        PracticeContentRemove(practice)
+    }
 }
 
 PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
+    shape := PracticeDownloadShape(app, practice, width)
+    // The copy went away by itself, such as a failed check: nothing to ask.
+    if practice_delete_asked == practice && !shape.trash {
+        practice_delete_asked = -1
+    }
     definition := practice_get(practice)
-    name := LocaleText(definition.label_key)
-    name_h := AppParagraphHeight(name, width, AppFontSize(), AppScale(3))
     Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)name_h},
-            .text = name, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    y += name_h + AppScale(8)
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)shape.name_h},
+            .text = LocaleText(definition.label_key), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    y += shape.name_h + AppScale(8)
     locked := PracticeDownloadLocked(practice)
     if locked {
         PracticeDownloadPrice(app, x, y, width)
         y += PracticeDownloadPriceHeight() + AppScale(8)
     }
-    status := PracticeContentStatus(practice)
-    narrow := width < AppScale(520)
-    status_w := ifx narrow then width else width - AppScale(212)
-    text := PracticeDownloadStatusText(app, practice)
-    status_h := AppParagraphHeight(text, status_w, AppFontSize(), AppScale(3))
-    if status_h < AppScale(44) {
-        status_h = AppScale(44)
-    }
     Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)status_w, cast(float32)status_h},
-            .text = text, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    button_y := ifx narrow then y + status_h + AppScale(8) else y
-    button_w := ifx narrow then width else AppScale(200)
-    included := PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)shape.status_w, cast(float32)shape.status_h},
+            .text = PracticeDownloadStatusText(app, practice), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    if shape.asking {
+        PracticeDownloadDeleteQuestion(app, practice, shape, x, y + shape.status_h + AppScale(8), width)
+        return
+    }
+    status := PracticeContentStatus(practice)
+    reviewed := PracticePackReviewed(practice, "")
+    trash_w: s32 = 0
+    if shape.trash {
+        trash_w = AppScale(52)
+    }
+    button_y := y
+    button_w := AppScale(200)
+    if shape.narrow {
+        button_y = y + shape.status_h + AppScale(8)
+        button_w = width - trash_w
+    }
+    button_x := x + width - trash_w - button_w
     if locked {
         if DewReady() && Button(app.ui.session, ButtonProps.{
                 .id = 17420 + practice,
-                .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
                     cast(float32)button_w, cast(float32)AppScale(44)},
                 .label = PracticeDownloadPriceText(app, "practice_unlock_button"),
                 .disabled = practice_active(app) != null || UnlockBuying(),
                 .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
             UnlockStart()
         }
-    } else if !included && Button(app.ui.session, ButtonProps.{
+        return
+    }
+    if shape.included {
+        return
+    }
+    // Remove takes the practice off Practice and keeps what is on this device.
+    installed := PracticeInstalled(practice)
+    removing := installed && status != 1 && status != 3
+    label := "practice_download_button"
+    if status == 1 {
+        label = "cancel_button"
+    } else if status == 3 {
+        label = "practice_download_retry"
+    } else if installed {
+        label = "practice_download_remove"
+    } else if status == 2 || PracticeShipped(practice) {
+        label = "practice_add_button"
+    }
+    quiet := status == 1 || removing
+    if Button(app.ui.session, ButtonProps.{
             .id = 17410 + practice * 2,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+            .bounds = Rectangle.{cast(float32)button_x, cast(float32)button_y,
                 cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText(ifx status == 2 then "practice_download_remove" else
-            ifx status == 1 then "cancel_button" else
-            ifx status == 3 then "practice_download_retry" else
-            ifx PracticeShipped(practice) then "practice_add_button" else "practice_download_button"),
-            .disabled = practice_active(app) != null || (status != 1 && !PracticePackReviewed(practice, "")),
-            .tone = cast(ButtonTone)(ifx status == 2 || status == 1 then ButtonToneNeutral else ButtonToneAccent),
-            .emphasis = cast(ButtonEmphasis)(ifx status == 2 || status == 1 then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
-        if status == 2 {
-            PracticeContentRemove(practice)
-        } else if status == 1 {
+            .label = LocaleText(label),
+            .disabled = practice_active(app) != null || (status != 1 && !reviewed),
+            .tone = cast(ButtonTone)(ifx quiet then ButtonToneNeutral else ButtonToneAccent),
+            .emphasis = cast(ButtonEmphasis)(ifx quiet then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
+        if status == 1 {
             PracticeContentCancel(practice)
+        } else if removing {
+            PracticeContentHide(practice)
         } else {
             if DataTemporary() {
                 app.exercise_type = practice
             }
             PracticeContentRequest(practice)
         }
+    }
+    if shape.trash && Button(app.ui.session, ButtonProps.{
+            .id = 17430 + practice,
+            .bounds = Rectangle.{cast(float32)(x + width - AppScale(44)), cast(float32)button_y,
+                cast(float32)AppScale(44), cast(float32)AppScale(44)},
+            .label = LocaleText("delete_button"), .icon_shape = PracticeTrashIcon, .icon_only = true,
+            .disabled = practice_active(app) != null || !reviewed,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        practice_delete_asked = practice
     }
 }
 
@@ -292,6 +433,7 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
             .title_at_start = true, .strong_title = true,
             .has_right_action = true, .right_label = LocaleText("close_button")})
     if frame.dismissed || frame.right_clicked {
+        practice_delete_asked = -1
         app_close_modal(app)
         return
     }

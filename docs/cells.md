@@ -211,13 +211,17 @@ packs. Practice → Manage practices opens one scrolling modal for every practic
 with sizes, offline status, download/retry/cancel, removal and selected-language
 narration. Start opens the manager when its practice needs content. Downloads
 continue inside the modal without changing the selected practice, and unselected
-downloads are verified and saved without mounting their artwork. Remove deletes the practice's local content
-and narration while preserving progress. Only the selected practice and narration
+downloads are verified and saved without mounting their artwork. Remove takes a
+practice off Practice and keeps its copy and narration on the device, so Add
+practice brings it back without a download. A downloaded practice also has a
+trash button that asks once, then deletes its local content and narration while
+preserving progress. Practices that ship with the app show their size as
+available offline; adding them uses the app's own copy. Only the selected practice and narration
 language are mounted in memory. Changing language reuses artwork and loads or
 downloads the matching voice; switching back reuses its verified cache. Missing
 narration is shown explicitly and never falls back to another spoken language.
 Each practice/language has one verified cache slot, so an update replaces its
-previous copy. Remove also clears cached languages retired from the catalog.
+previous copy. Delete also clears cached languages retired from the catalog.
 Manuals, tray shortcuts and app links use the same checked start path. Temporary
 mini sessions can reuse public cached content; new downloads stay transient and
 do not alter the full profile's saved content or practice records.
