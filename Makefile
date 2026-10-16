@@ -3129,6 +3129,7 @@ test: package-manifest-test
 .PHONY: package-upload-test
 package-upload-test:
 	python3 tests/package_upload_test.py
+	python3 tests/package_content_repair_test.py
 
 test: package-upload-test
 
