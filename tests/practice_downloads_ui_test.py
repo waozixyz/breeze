@@ -204,14 +204,19 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         whm_kb = (sizes['whm'] + 1023) // 1024
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         assert 'Available offline' in text and str(whm_kb) + ' KB' in text and 'Remove' in text, text
-        # Meditation and Breathing Patterns ship with the app; Sun Salutation downloads.
-        assert 'Included in this version' in text and 'Download size: 23 MB' in text, text
+        # Meditation and Breathing Patterns ship with the app, so they show
+        # their size offline before they are added; Sun Salutation downloads.
+        sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
+        assert str(meditation_kb) + ' KB' in text and 'Download size: ' + str(sun_mb) + ' MB' in text, text
+        assert 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
-        # The first filled action adds Meditation from the app's own copy, at once.
+        # The first filled action adds Meditation from the app's own copy, at
+        # once, without a copy of its own.
         click_mint(window, 'manager-download')
         _, text = capture(window, 'manager-downloading')
         assert 'Downloading' not in text and str(meditation_kb) + ' KB' in text, text
-        assert (cache / 'practice-meditation.zib').read_bytes() == (ROOT / 'build/practice-content/meditation.zib').read_bytes()
+        assert not (cache / 'practice-meditation.zib').exists()
+        assert (cache / 'practice-meditation.added').exists()
         deadline = time.monotonic() + 60
         while 'downloading' in text.lower() and time.monotonic() < deadline:
             time.sleep(1)
@@ -223,9 +228,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                 break
             click_word(window, 'manager-remove', 'Remove')
             _, text = capture(window, 'removed')
-        # Removed, the shipped practices offer themselves again without a download.
-        assert 'Available offline' not in text and 'Included in this version' in text, text
+        # Removed, the shipped practices offer themselves again without a
+        # download, still offline in the app.
+        assert 'Remove' not in text and 'Add practice' in text and 'Available offline' in text, text
+        assert 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
+        assert not (cache / 'practice-meditation.added').exists()
         close_manager(window)
         _, text = capture(window, 'empty')
         assert 'No practices installed' in text and 'Start' not in text, text
@@ -238,7 +246,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'No practices installed' in text, text
         click_mint(window, 'empty-manage')
         _, text = capture(window, 'manager-removed')
-        assert 'Included in this version' in text and 'Remove' not in text, text
+        assert 'Add practice' in text and 'Remove' not in text, text
         # Wim Hof comes back from the app's own copy, without a download.
         click_mint(window, 'manager-restore')
         _, text = capture(window, 'manager-restored')
@@ -257,7 +265,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                                     (user, 'exercise_type')).fetchone()[0]
         assert selected == '0', 'Managing downloads switched the practice underneath'
     # A downloaded practice joins the home, with its banner from its own pack.
+    # Downloading clears the earlier Remove, as adding it does.
     shutil.copyfile(ROOT / 'build/practice-content/meditation.zib', cache / 'practice-meditation.zib')
+    assert (cache / 'practice-meditation.removed').exists()
+    (cache / 'practice-meditation.removed').unlink()
     process, window = launch(profile, 'two-installed')
     try:
         _, text = capture(window, 'two-installed')
@@ -365,6 +376,61 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'English' in text and 'Plays in' not in text, text
     finally:
         stop(process)
+    # Remove keeps a downloaded practice on this device; the trash asks once,
+    # then deletes the copy and its narration and frees the space.
+    with sqlite3.connect(profile / 'inbe.db') as database:
+        for key, value in {'exercise_type': 2, 'voice_narration_enabled': 0}.items():
+            database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
+                             (str(value), user, key))
+    process, window = launch(profile, 'sun-delete', 1280, 900)
+    try:
+        click_word(window, 'sun-delete-open', 'Manage')
+        time.sleep(1)
+        command('xdotool', 'mousemove', '--window', window, '640', '450')
+        command('xdotool', 'click', '--repeat', '6', '--delay', '80', '5')
+        time.sleep(.5)
+        image, text = capture(window, 'sun-delete-manager')
+        assert 'Sun Salutation' in text and 'Available offline' in text and str(sun_mb) + ' MB' in text, text
+        tsv = command('tesseract', str(image), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
+        words = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
+        sun = [row for row in words if row['text'] == 'Salutation']
+        assert sun, text
+        sun_top = int(sun[-1]['top'])
+        removes = [row for row in words if row['text'] == 'Remove' and int(row['top']) > sun_top]
+        assert removes, text
+        remove = min(removes, key=lambda row: int(row['top']))
+        remove_x = int(remove['left']) + int(remove['width']) // 2
+        remove_y = int(remove['top']) + int(remove['height']) // 2
+
+        def press(x, y):
+            command('xdotool', 'mousemove', '--window', window, str(x), str(y))
+            command('xdotool', 'mousedown', '1')
+            time.sleep(.15)
+            command('xdotool', 'mouseup', '1')
+            time.sleep(.6)
+
+        # Remove keeps the downloaded copy; the row offers it back.
+        press(remove_x, remove_y)
+        assert (cache / 'practice-sunsalutation.zib').exists()
+        assert (cache / 'practice-sunsalutation.removed').exists()
+        # The trash sits beside that 200-unit button, past an 8-unit gap.
+        press(remove_x + 130, remove_y)
+        image, text = capture(window, 'sun-delete-asked')
+        assert 'Delete Sun Salutation?' in text and 'Your progress stays.' in text, text
+        assert (cache / 'practice-sunsalutation.zib').exists()
+        # Delete fills the right half under the question, where Remove was.
+        tsv = command('tesseract', str(image), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
+        words = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
+        cancel = [row for row in words if row['text'] == 'Cancel']
+        assert cancel, text
+        press(remove_x, int(cancel[-1]['top']) + int(cancel[-1]['height']) // 2)
+        _, text = capture(window, 'sun-deleted')
+        assert 'Download size: ' + str(sun_mb) + ' MB' in text, text
+        assert not (cache / 'practice-sunsalutation.zib').exists()
+        assert not (cache / 'practice-sunsalutation.en.male.zib').exists()
+        assert not (cache / 'practice-sunsalutation.removed').exists()
+    finally:
+        stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '
-      'restore without download, installed-only home, saved progress, narration languages, narrow layout '
-      'and Sun Salutation narration passed')
+      'restore without download, installed-only home, saved progress, narration languages, narrow layout, '
+      'Sun Salutation narration and delete passed')
