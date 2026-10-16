@@ -1,0 +1,53 @@
+// Dew amounts read alongside what they are worth in Monero and US dollars,
+// at the rates the node publishes.
+#import "text_buffer"
+#import, file "../storage/dew.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+
+// A Monero amount in dollars and cents, such as "1.11", while the node has a
+// current Monero price and the amount is worth at least a cent.
+DewUsdText :: (atomic: s64, output: []u8) -> bool {
+    cents := DewUsdCents(atomic)
+    if cents <= 0 {
+        return false
+    }
+    unused AppFormatS64(cents / 100, output)
+    unused AppAppendText(".", output)
+    unused AppAppendText(ifx cents % 100 < 10 then "0" else "", output)
+    remainder: [8]u8
+    unused AppFormatS64(cents % 100, remainder[:])
+    return AppAppendText(TextUntilNul(remainder[:]), output)
+}
+
+// "0.002 XMR, about 1.11 USD" for a Dew amount; only the Monero part without
+// a current dollar price, and false before the node's rates are known.
+DewWorthText :: (units: s64, output: []u8) -> bool {
+    if units <= 0 {
+        return false
+    }
+    atomic := DewXmrAtomic(units)
+    if atomic <= 0 {
+        return false
+    }
+    xmr: [48]u8
+    unused DewFormat(atomic, 1000000000000LL, xmr[:])
+    usd: [48]u8
+    if !DewUsdText(atomic, usd[:]) {
+        unused AppCopyText(TextUntilNul(xmr[:]), output)
+        return AppAppendText(" XMR", output)
+    }
+    arguments: [2]FormatArg = .[
+    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(usd[:]), .is_text = true}]
+    return FormatTemplate(LocaleText("dew_worth"), arguments[:], output)
+}
+
+// Adds " · 0.002 XMR, about 1.11 USD" to a line that names a Dew amount.
+DewAppendWorth :: (units: s64, output: []u8) {
+    worth: [128]u8
+    if DewWorthText(units, worth[:]) {
+        unused AppAppendText(" · ", output)
+        unused AppAppendText(TextUntilNul(worth[:]), output)
+    }
+}
