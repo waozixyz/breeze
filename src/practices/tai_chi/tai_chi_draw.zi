@@ -1,6 +1,11 @@
-// Draws the painted Tai Chi figure: the pose at the practice's time, solved
-// and laid out as the course studio does, each painted piece warped onto
-// its place with Kryon's image mesh.
+// Draws the flat Tai Chi figure: the pose at the practice's time, solved and
+// turned into paint operations as the course studio does (tai_chi_flat.zi),
+// each filled shape and line drawn as a tinted mesh with Kryon's image mesh
+// over flat-edge.png, one row of texels clear at both ends and opaque
+// between. A shape is a fan from its middle out past its edge, a line a
+// strip across it; with smooth scaling every edge gets a soft, even border.
+// The image's middle columns are the shape's inside: textures repeat, so
+// its two ends blend into each other and are only ever its outer edge.
 #import "geometry"
 #import "image_props"
 #import "image_widget"
@@ -10,38 +15,19 @@
 #import, file "tai_chi_course.zi";
 #import, file "tai_chi_timeline.zi";
 #import, file "tai_chi_solve.zi";
-#import, file "tai_chi_layout.zi";
+#import, file "tai_chi_view.zi";
+#import, file "tai_chi_flat.zi";
 #import, file "tai_chi_rules.zi";
 #import, file "tai_chi_entry.zi";
 
-TAI_CHI_SHADOW_PATH :: "assets/practices/taichi/shadow.png"
-// Rows along a bending strip and columns across a bending shoe.
-TAI_CHI_STRIP_ROWS :: 20
-TAI_CHI_SHOE_COLUMNS :: 8
-TAI_CHI_MESH_CAPACITY :: 64
+TAI_CHI_FLAT_EDGE_PATH :: "assets/practices/taichi/flat-edge.png"
+// Half the soft border of a filled shape, in pixels.
+TAI_CHI_FLAT_FEATHER :: 0.75
+// The thinnest line drawn, in pixels.
+TAI_CHI_FLAT_THINNEST :: 1.2
+TAI_CHI_FLAT_MESH_CAPACITY :: 4 * (TAI_CHI_FLAT_SCRATCH * 2 + 1)
 
-tai_chi_figure_images: [TAI_CHI_CHARACTER_COUNT]TaiChiFigureImages;
-tai_chi_figure_images_ready: [TAI_CHI_CHARACTER_COUNT]bool;
-
-TaiChiImagesFor :: (character: s32) -> TaiChiFigureImages {
-    if !tai_chi_figure_images_ready[character] {
-        tai_chi_figure_images[character] = TaiChiFigureImagesFor(character)
-        tai_chi_figure_images_ready[character] = true
-    }
-    return tai_chi_figure_images[character]
-}
-
-TaiChiMeshGrid :: (piece: *TaiChiPiece) -> [2]s32 {
-    grid: [2]s32
-    grid[0] = 2
-    grid[1] = 2
-    if piece.kind == TAI_CHI_PIECE_LIMB || piece.kind == TAI_CHI_PIECE_STRIP_TORSO {
-        grid[1] = TAI_CHI_STRIP_ROWS
-    } else if piece.kind == TAI_CHI_PIECE_SHOE_SIDE {
-        grid[0] = TAI_CHI_SHOE_COLUMNS
-    }
-    return grid
-}
+tai_chi_flat_frame: TaiChiFlatFrame;
 
 // Draws the figure at the practice's current time into `area`, following
 // it with the camera. `dt` moves the camera; `snap` places it at once.
@@ -54,25 +40,19 @@ TaiChiDrawFigure :: (session: Session, state: *TaiChiPracticeState, area: Rectan
     if character < 0 || character >= tai_chi_course.character_count {
         character = 0
     }
-    images := TaiChiImagesFor(character)
-    if !images.valid {
-        return
-    }
-    item := tai_chi_course.items[state.built_item]
-    view := TaiChiViewSpecFor(item.view)
+    view := TaiChiViewSpecFor(state.view)
     pose := TaiChiTimelineSample(*tai_chi_timeline, state.time)
     rig := TaiChiRigFor(character)
     solved := TaiChiSolvePose(*pose, *rig)
     state.camera = TaiChiCameraUpdate(state.camera, view, solved.pelvis, pose.channels[TAI_CHI_FACING], dt, snap)
     framing := TaiChiFramingFor(state.camera, view)
-    frame := TaiChiLayout(*solved, *rig, *images, framing.camera, *state.memory)
-
-    TaiChiPaintFrame(session, *frame, framing, item.mirror, area,
+    TaiChiFlatPaint(*tai_chi_flat_frame, *solved, *rig, character, framing.camera)
+    TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(state.view), area,
         KeyHash("inbe/practices/tai_chi/figure"), alt_text)
 }
 
-// Shared painting for the live player and cached course thumbnails.
-TaiChiPaintFrame :: (session: Session, frame: *TaiChiFrame, framing: TaiChiFraming,
+// Shared painting for the live player and the course thumbnails.
+TaiChiPaintFlat :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiChiFraming,
     mirrored: bool, area: Rectangle, key: u64, alt_text: string) {
     // Metres on the picture plane to pixels in the area: the view's height
     // fills the area's height, centred on its middle.
@@ -83,56 +63,106 @@ TaiChiPaintFrame :: (session: Session, frame: *TaiChiFrame, framing: TaiChiFrami
     if mirrored {
         mirror = -1.0
     }
-    points: [TAI_CHI_MESH_CAPACITY]TaiChiVector2
-    screen: [TAI_CHI_MESH_CAPACITY]Vector2
-    for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
-        piece := frame.pieces[frame.order[index]]
-        grid := TaiChiMeshGrid(*piece)
-        count := grid[0] * grid[1]
-        TaiChiPieceVertices(*piece, grid[0], grid[1], points[:count])
+    screen: [TAI_CHI_FLAT_MESH_CAPACITY]Vector2
+    for index: cast(s32)0..frame.op_count - 1 {
+        op := frame.ops[index]
+        points := frame.points[op.first:op.first + op.count]
+        count: s32 = 0
+        columns: s32 = 0
+        if op.kind == TAI_CHI_FLAT_FILL {
+            count = TaiChiFlatFanMesh(points, TAI_CHI_FLAT_FEATHER / pixels, screen[:])
+            columns = 4
+        } else {
+            width := TaiChiMax(op.width, TAI_CHI_FLAT_THINNEST / pixels)
+            count = TaiChiFlatStripMesh(points, width * 0.75, screen[:])
+            columns = 2
+        }
+        if count == 0 {
+            continue
+        }
         for point: cast(s32)0..count - 1 {
-            screen[point].x = cast(float32)(middle_x + points[point].x * pixels * mirror)
-            screen[point].y = cast(float32)(middle_y - (points[point].y - framing.view_center) * pixels)
+            screen[point].x = cast(float32)(middle_x + cast(float64)screen[point].x * pixels * mirror)
+            screen[point].y = cast(float32)(middle_y - (cast(float64)screen[point].y - framing.view_center) * pixels)
+        }
+        alpha := cast(u32)(TaiChiClamp(op.alpha, 0.0, 1.0) * 255.0 + 0.5)
+        if alpha == cast(u32)0 {
+            continue
         }
         picture: ImageProps
         picture.key = key + cast(u64)index
         picture.bounds = area
         picture.smooth = true
-        picture.alt_text = ifx index == TAI_CHI_PIECE_COUNT - 1 then alt_text else ""
-        if piece.image < 0 {
-            picture.asset_path = TAI_CHI_SHADOW_PATH
-            alpha := cast(u32)(TaiChiClamp(piece.opacity, 0.0, 1.0) * 255.0)
-            picture.tint = (cast(u32)0xffffff00) | alpha
-            if alpha == cast(u32)0 {
-                continue
-            }
-        } else {
-            picture.asset_path = TaiChiCourseString(tai_chi_course.images[piece.image].path)
-        }
-        picture.mesh.columns = grid[0]
-        picture.mesh.rows = grid[1]
+        picture.alt_text = ifx index == frame.op_count - 1 then alt_text else ""
+        picture.asset_path = TAI_CHI_FLAT_EDGE_PATH
+        picture.tint = (op.color << cast(u32)8) | alpha
+        picture.mesh.columns = columns
+        picture.mesh.rows = count / columns
         picture.mesh.points = screen[:count]
         Image(session, picture)
     }
 }
 
-// Each thumbnail is a solved frame of its actual item. Building these uses
-// a separate timeline, so opening a chooser cannot overwrite playback.
+// A filled convex shape as a fan of 4 columns (its middle twice, just
+// inside the edge, just outside it) by one row per point and the first
+// again, in metres; `feather` is half the soft border.
+TaiChiFlatFanMesh :: (points: []TaiChiVector2, feather: float64, mesh: []Vector2) -> s32 {
+    count := cast(s32)points.count
+    if count < 3 || (count + 1) * 4 > cast(s32)mesh.count {
+        return 0
+    }
+    middle := TaiChiV2(0.0, 0.0)
+    for point: points {
+        middle = TaiChiAdd2(middle, point)
+    }
+    middle = TaiChiScale2(middle, 1.0 / cast(float64)count)
+    for row: cast(s32)0..count {
+        point := points[row % count]
+        out := TaiChiUnit2(TaiChiSub2(point, middle), TaiChiV2(0.0, 1.0))
+        inside := TaiChiSub2(point, TaiChiScale2(out, feather))
+        outside := TaiChiAdd2(point, TaiChiScale2(out, feather))
+        mesh[row * 4] = Vector2.{cast(float32)middle.x, cast(float32)middle.y}
+        mesh[row * 4 + 1] = mesh[row * 4]
+        mesh[row * 4 + 2] = Vector2.{cast(float32)inside.x, cast(float32)inside.y}
+        mesh[row * 4 + 3] = Vector2.{cast(float32)outside.x, cast(float32)outside.y}
+    }
+    return (count + 1) * 4
+}
+
+// A line as a strip two points wide along it, `half` to each side.
+TaiChiFlatStripMesh :: (points: []TaiChiVector2, half: float64, mesh: []Vector2) -> s32 {
+    count := cast(s32)points.count
+    if count < 2 || count * 2 > cast(s32)mesh.count {
+        return 0
+    }
+    for row: cast(s32)0..count - 1 {
+        before := points[ifx row > 0 then row - 1 else row]
+        after := points[ifx row < count - 1 then row + 1 else row]
+        along := TaiChiUnit2(TaiChiSub2(after, before), TaiChiV2(1.0, 0.0))
+        side := TaiChiV2(-along.y, along.x)
+        left := TaiChiAdd2(points[row], TaiChiScale2(side, half))
+        right := TaiChiSub2(points[row], TaiChiScale2(side, half))
+        mesh[row * 2] = Vector2.{cast(float32)left.x, cast(float32)left.y}
+        mesh[row * 2 + 1] = Vector2.{cast(float32)right.x, cast(float32)right.y}
+    }
+    return count * 2
+}
+
+// Each thumbnail is a solved pose of its actual item, seen from the chosen
+// angle. Building these uses a separate timeline, so opening a chooser
+// cannot overwrite playback.
 TaiChiPreview :: struct {
     generation: u64
     ready: bool
-    frame: TaiChiFrame
+    view: s32
+    solved: TaiChiSolved
     framing: TaiChiFraming
     half_width: float64
-    // The pose's lowest and highest points on the picture plane.
-    low: float64
-    high: float64
 }
 
 tai_chi_previews: [TAI_CHI_ITEM_CAPACITY * TAI_CHI_CHARACTER_COUNT]TaiChiPreview;
 tai_chi_preview_timeline: TaiChiTimeline;
 
-TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32,
+TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32, angle: s32,
     area: Rectangle, key: u64, alt_text: string) {
     if item_index < 0 || item_index >= tai_chi_course.item_count ||
     character < 0 || character >= tai_chi_course.character_count {
@@ -140,44 +170,36 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32,
     }
     preview := *tai_chi_previews[item_index * TAI_CHI_CHARACTER_COUNT + character]
     item := tai_chi_course.items[item_index]
-    if !preview.ready || preview.generation != tai_chi_course_generation {
+    rig := TaiChiRigFor(character)
+    if !preview.ready || preview.generation != tai_chi_course_generation || preview.view != angle {
         if !TaiChiTimelineForItem(*tai_chi_preview_timeline, item) {
             return
         }
         pose := TaiChiTimelineSample(*tai_chi_preview_timeline,
             tai_chi_preview_timeline.duration * 0.45)
-        rig := TaiChiRigFor(character)
-        solved := TaiChiSolvePose(*pose, *rig)
-        view := TaiChiViewSpecFor(item.view)
+        preview.solved = TaiChiSolvePose(*pose, *rig)
+        view := TaiChiViewSpecFor(angle)
         camera: TaiChiCameraState
-        camera = TaiChiCameraUpdate(camera, view, solved.pelvis,
+        camera = TaiChiCameraUpdate(camera, view, preview.solved.pelvis,
             pose.channels[TAI_CHI_FACING], 0.0, true)
         preview.framing = TaiChiFramingFor(camera, view)
-        images := TaiChiImagesFor(character)
-        memory: TaiChiLayoutMemory
-        preview.frame = TaiChiLayout(*solved, *rig, *images,
-            preview.framing.camera, *memory)
+        TaiChiFlatPaint(*tai_chi_flat_frame, *preview.solved, *rig, character, preview.framing.camera)
         preview.half_width = 0.0
-        preview.low = 1000.0
-        preview.high = -1000.0
-        points: [TAI_CHI_MESH_CAPACITY]TaiChiVector2
-        for index: cast(s32)0..TAI_CHI_PIECE_COUNT - 1 {
-            piece := preview.frame.pieces[index]
-            grid := TaiChiMeshGrid(*piece)
-            count := grid[0] * grid[1]
-            TaiChiPieceVertices(*piece, grid[0], grid[1], points[:count])
-            for point: cast(s32)0..count - 1 {
-                preview.half_width = TaiChiMax(preview.half_width, TaiChiAbs(points[point].x))
-                preview.low = TaiChiMin(preview.low, points[point].y)
-                preview.high = TaiChiMax(preview.high, points[point].y)
-            }
+        low: float64 = 1000.0
+        high: float64 = -1000.0
+        for index: cast(s32)0..tai_chi_flat_frame.point_count - 1 {
+            point := tai_chi_flat_frame.points[index]
+            preview.half_width = TaiChiMax(preview.half_width, TaiChiAbs(point.x))
+            low = TaiChiMin(low, point.y)
+            high = TaiChiMax(high, point.y)
         }
         // The pose fills its card with a little room above and below.
-        if preview.high > preview.low {
-            preview.framing.view_center = (preview.low + preview.high) / 2.0
-            preview.framing.view_height = (preview.high - preview.low) * 1.15
+        if high > low {
+            preview.framing.view_center = (low + high) / 2.0
+            preview.framing.view_height = (high - low) * 1.15
         }
         preview.generation = tai_chi_course_generation
+        preview.view = angle
         preview.ready = true
     }
     // Fit the full pose horizontally as well as vertically on narrow
@@ -187,6 +209,7 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32,
         width_height := preview.half_width * 2.1 * cast(float64)area.height / cast(float64)area.width
         framing.view_height = TaiChiMax(framing.view_height, width_height)
     }
-    TaiChiPaintFrame(session, *preview.frame, framing, item.mirror,
+    TaiChiFlatPaint(*tai_chi_flat_frame, *preview.solved, *rig, character, framing.camera)
+    TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(angle),
         area, key, alt_text)
 }

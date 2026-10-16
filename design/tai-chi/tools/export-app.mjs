@@ -1,14 +1,14 @@
 // Exports the course for Inner Breeze: the key poses and timing the app
-// samples and solves itself, the two painted characters, the words to
-// translate, and a reference for the app's parity test.
+// samples and solves itself, the two flat characters (src/flat/shapes.js),
+// the words to translate, and a reference for the app's parity test.
 //
 //   node tools/export-app.mjs
 //
 // Writes (paths from the Inbe repository root):
-//   assets/practices/taichi/course.bin        keys, course outline, rigs, parts
-//   assets/practices/taichi/<character>/*.png  painted parts, scaled down
+//   assets/practices/taichi/course.bin        keys, course outline, rigs
+//   assets/practices/taichi/flat-edge.png      soft edges of the figure's shapes
 //   design/tai-chi/text/en.txt                 course words as locale entries
-//   tests/fixtures/tai-chi-reference.json      sampled poses, joints, pieces
+//   tests/fixtures/tai-chi-reference.json      sampled poses, joints, shapes
 //
 // course.bin is little-endian. Every string is a u16 byte length and UTF-8
 // bytes; a string index of -1 means none. Sections in order:
@@ -20,9 +20,10 @@
 //     only), 3 pad bytes, f32 look yaw (degrees), f32 look pitch (degrees),
 //     f32[CHANNELS.length] channels
 //   characters: u32 count; each s32 id, s32 name, f32[RIG_FIELDS.length] rig,
-//     u32 image count; per image s32 role, s32 path, f32 width, f32 height,
-//     f32[16] points (8 named points by role, see IMAGE_POINTS), f32[4]
-//     values (anterior, thickness, sign, across thumb)
+//     u32 image count (0: the flat characters are drawn, not painted); per
+//     image s32 role, s32 path, f32 width, f32 height, f32[16] points (8
+//     named points by role), f32[4] values (anterior, thickness, sign,
+//     across thumb)
 //   outline: u32 module count; each s32 title, u32 lesson count; each s32
 //     title, s32 subtitle, s32 summary, u32 item count; each s32 id,
 //     s32 title, s32 version, u8 kind, u8 view, u8 mirror, u8 source
@@ -37,7 +38,8 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { buildCourse, readingTime, timelineFor } from '../src/course.js'
-import { createPaintedLayout, imageFromSpec, pieceVertices, pieceImage } from '../src/painted/layout.js'
+import { FLAT_LOOKS, createFlatShapes } from '../src/flat/shapes.js'
+import { FlatView } from '../src/painted/layout.js'
 import { makeRig } from '../src/rig.js'
 import { solvePose } from '../src/solve.js'
 import { STUDIO_ROOT } from './serve.mjs'
@@ -46,14 +48,11 @@ const INBE_ROOT = resolve(STUDIO_ROOT, '..', '..')
 const ASSET_DIR = join(INBE_ROOT, 'assets', 'practices', 'taichi')
 const TEXT_FILE = join(STUDIO_ROOT, 'text', 'en.txt')
 const REFERENCE_FILE = join(INBE_ROOT, 'tests', 'fixtures', 'tai-chi-reference.json')
-// Painted parts are drawn about two thirds of their painted size on a
-// phone. Smaller copies with 256-colour palettes keep the package small;
-// at that size the palette is not visible.
-const PART_SCALE = 0.65
-
+// The app's characters, in the order it lists them: the woman first, the
+// man (who speaks with the male voice) second.
 const CHARACTERS = [
-    { id: 'monk', dir: 'monk', name: 'Tibetan monk' },
-    { id: 'tibetanWoman', dir: 'tibetan-woman', name: 'Tibetan woman' },
+    { id: 'jadeWoman', name: 'Jade woman' },
+    { id: 'indigoMan', name: 'Indigo man' },
 ]
 
 const KINDS = ['drill', 'lesson', 'demo', 'breakdown', 'follow', 'full']
@@ -103,16 +102,6 @@ function channelValue(pose, name) {
         return pose.hands[match[1]][match[2]][Number(match[3])]
     }
     return pose[name]
-}
-
-// Named points per image role, in slot order.
-const IMAGE_POINTS = {
-    head: ['neck', 'crown'],
-    torso: ['neck', 'hip', 'shoulder0', 'shoulder1'],
-    limb: ['root', 'end'],
-    hand: ['wrist', 'tip'],
-    shoeSide: ['heel', 'toe'],
-    shoe: ['ankle'],
 }
 
 // --- Strings ---------------------------------------------------------------
@@ -288,106 +277,27 @@ for (const set of keySets) {
 
 // --- Characters ----------------------------------------------------------------
 
-function pngSize(path) {
-    const data = readFileSync(path)
-    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) }
-}
+const characters = CHARACTERS.map((entry) => ({ ...entry, rig: makeRig(entry.id), look: FLAT_LOOKS[entry.id] }))
 
-function loadCharacter(entry) {
-    const base = join(STUDIO_ROOT, 'characters', entry.dir)
-    const definition = JSON.parse(readFileSync(join(base, 'character.json'), 'utf8'))
-    const images = []
-    const image = (role, kind, spec) => {
-        const size = pngSize(join(base, spec.file))
-        const { file, ...points } = spec
-        const described = imageFromSpec(points, size.width, size.height)
-        images.push({ role, kind, file, size, described })
-        return described
-    }
-    const group = (prefix, kind, specs) => Object.fromEntries(Object.entries(specs)
-        .filter(([, spec]) => spec && typeof spec === 'object' && spec.file)
-        .map(([name, spec]) => [name, image(`${prefix}.${name}`, kind(name), spec)]))
-    const character = {
-        head: group('head', () => 'head', definition.head.views),
-        torso: group('torso', () => 'torso', definition.torso.views),
-        arm: image('arm', 'limb', definition.arm),
-        leg: image('leg', 'limb', definition.leg),
-        hands: group('hands', () => 'hand', definition.hands),
-        shoes: group('shoes', (name) => (name === 'outer' || name === 'inner' ? 'shoeSide' : 'shoe'), definition.shoes),
-    }
-    return { definition, base, character, images }
-}
-
-const characters = CHARACTERS.map((entry) => ({ ...entry, ...loadCharacter(entry), rig: makeRig(entry.id) }))
-
-// Scaled copies of the painted parts.
-for (const entry of characters) {
-    const target = join(ASSET_DIR, entry.dir)
-    mkdirSync(target, { recursive: true })
-    const script = `
+// Shapes and lines are drawn as tinted meshes over this one-row image,
+// clear at both ends and opaque between: a fan from a shape's middle out
+// past its edge, a strip across a line. With smooth scaling the fade gives
+// every edge a soft, even border.
+const edgeScript = `
 import sys
 from PIL import Image
-scale = float(sys.argv[1])
-for source, target in zip(sys.argv[2::2], sys.argv[3::2]):
-    image = Image.open(source).convert('RGBA')
-    size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
-    small = image.resize(size, Image.LANCZOS)
-    small.quantize(colors=256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.FLOYDSTEINBERG).save(target, optimize=True)
-`
-    const pairs = entry.images.flatMap((image) => [join(entry.base, image.file), join(target, image.file.replace(/^parts\//, ''))])
-    execFileSync('python3', ['-I', '-c', script, String(PART_SCALE), ...pairs])
-}
-
-// The soft floor shadow, as the studio paints it on a canvas: warm brown
-// fading out from the middle.
-const shadowScript = `
-import sys
-from PIL import Image
-size = 128
-image = Image.new('RGBA', (size, size), (60, 45, 30, 0))
-pixels = image.load()
-for y in range(size):
-    for x in range(size):
-        r = ((x + 0.5 - size / 2) ** 2 + (y + 0.5 - size / 2) ** 2) ** 0.5 / (size / 2)
-        if r < 0.55:
-            a = 0.42 + (0.2 - 0.42) * r / 0.55
-        elif r < 1:
-            a = 0.2 * (1 - (r - 0.55) / 0.45)
-        else:
-            a = 0
-        pixels[x, y] = (60, 45, 30, round(a * 255))
+alphas = (0, 255, 255, 255, 255, 0)
+image = Image.new('RGBA', (len(alphas), 1))
+for x, alpha in enumerate(alphas):
+    image.putpixel((x, 0), (255, 255, 255, alpha))
 image.save(sys.argv[1], optimize=True)
 `
-execFileSync('python3', ['-I', '-c', shadowScript, join(ASSET_DIR, 'shadow.png')])
+mkdirSync(ASSET_DIR, { recursive: true })
+execFileSync('python3', ['-I', '-c', edgeScript, join(ASSET_DIR, 'flat-edge.png')])
 
 function rigValue(rig, field) {
     const match = /^spine(\d)$/.exec(field)
     return match ? rig.spine[Number(match[1])] : rig[field]
-}
-
-function imageRecord(image, entry) {
-    const described = image.described
-    const slots = new Array(16).fill(0)
-    const names = IMAGE_POINTS[image.kind]
-    names.forEach((name, slot) => {
-        let point = described[name]
-        if (name.startsWith('shoulder')) {
-            point = described.shoulders[Number(name.slice('shoulder'.length))]
-        }
-        if (name === 'crown' && !point) {
-            point = { x: 0, y: 0.02 * image.size.height }
-        }
-        slots[slot * 2] = point.x
-        slots[slot * 2 + 1] = point.y
-    })
-    return {
-        role: stringId(image.role),
-        path: stringId(`assets/practices/taichi/${entry.dir}/${image.file.replace(/^parts\//, '')}`),
-        width: image.size.width,
-        height: image.size.height,
-        slots,
-        values: [described.anterior ?? 1, described.thickness ?? 1, described.sign ?? 1, described.across === 'thumb' ? 1 : 0],
-    }
 }
 
 // --- Write course.bin --------------------------------------------------------
@@ -396,7 +306,7 @@ const characterRecords = characters.map((entry) => ({
     id: stringId(entry.id),
     name: textKey(entry.name),
     rig: RIG_FIELDS.map((field) => rigValue(entry.rig, field)),
-    images: entry.images.map((image) => imageRecord(image, entry)),
+    images: [],
 }))
 
 const writer = new Writer()
@@ -493,13 +403,14 @@ writeFileSync(join(STUDIO_ROOT, 'narration-lines.json'), `${JSON.stringify(narra
 // --- Parity reference ------------------------------------------------------------
 
 // For a handful of items and times: the sampled channels, solved joints and
-// the painted pieces seen from a fixed camera, laid out with no memory of
-// earlier frames, so the app's port can be checked number for number.
-const REFERENCE_ITEMS = ['foundations/hook', 'lesson-2/brush-knee/breakdown', 'lesson-6/snake-left/follow', 'full/normal']
+// the flat figure's paint operations seen from a fixed camera, so the app's
+// port can be checked number for number. A fill is compared by its area,
+// centroid and bounds (hull corners may differ where points are in line),
+// a line by its ends and its number of points.
+const REFERENCE_ITEMS = ['foundations/hook', 'lesson-1/wild-horse/demo', 'lesson-2/brush-knee/breakdown', 'lesson-6/snake-left/follow', 'full/normal']
 const REFERENCE_JOINTS = ['pelvis', 'neckBase', 'shoulderCenter', 'shoulderL', 'elbowR', 'wristL', 'wristR', 'kneeL', 'kneeR',
     'ankleL', 'heelR', 'toeL', 'headTop', 'com']
-const REFERENCE_PIECES = ['shadowL', 'shadowBody', 'torso', 'head', 'armL', 'armR', 'handL', 'handR', 'legL', 'legR', 'shoeL', 'shoeR']
-const reference = { channels: CHANNELS, joints: REFERENCE_JOINTS, pieces: REFERENCE_PIECES, grid: [2, 6], samples: [] }
+const reference = { channels: CHANNELS, joints: REFERENCE_JOINTS, samples: [] }
 const itemIds = []
 for (const module of course.modules) {
     for (const lesson of module.lessons) {
@@ -508,8 +419,31 @@ for (const module of course.modules) {
         }
     }
 }
+
+function fillSummary(points) {
+    let area = 0
+    let cx = 0
+    let cy = 0
+    for (let index = 0; index < points.length; index += 1) {
+        const a = points[index]
+        const b = points[(index + 1) % points.length]
+        const cross = a.x * b.y - b.x * a.y
+        area += cross
+        cx += (a.x + b.x) * cross
+        cy += (a.y + b.y) * cross
+    }
+    area /= 2
+    const xs = points.map((point) => point.x)
+    const ys = points.map((point) => point.y)
+    return {
+        area,
+        center: Math.abs(area) > 1e-12 ? [cx / (6 * area), cy / (6 * area)] : [xs[0], ys[0]],
+        box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+    }
+}
+
 for (const entry of characters) {
-    const imageGroups = { ...entry.character }
+    const shapes = createFlatShapes(entry.look, entry.rig)
     for (const id of REFERENCE_ITEMS) {
         const item = course.items.get(id)
         const { timeline } = timelineFor(item)
@@ -517,27 +451,26 @@ for (const entry of characters) {
             const time = timeline.duration * fraction
             const pose = timeline.sample(timeline.start + time).pose
             const solved = solvePose(pose, entry.rig)
-            const camera = { yaw: 0.6 + fraction, tilt: 0.12, center: solved.joints.pelvis.clone().setY(0) }
-            const placement = createPaintedLayout(imageGroups, entry.rig)
-            const frame = placement.layout(solved, camera)
+            const camera = { yaw: 0.6 + fraction * 2.5, tilt: 0.12, center: solved.joints.pelvis.clone().setY(0) }
+            const view = new FlatView()
+            view.set(camera.yaw, camera.tilt, camera.center)
+            const ops = shapes.paint(solved, view)
             reference.samples.push({
                 character: entry.id,
                 item: itemIds.indexOf(id),
                 time,
-                look: pose.look,
                 channels: CHANNELS.map((channel) => channelValue(pose, channel)),
                 joints: REFERENCE_JOINTS.map((name) => [solved.joints[name].x, solved.joints[name].y, solved.joints[name].z]),
                 camera: { yaw: camera.yaw, tilt: camera.tilt, center: [camera.center.x, camera.center.z] },
-                order: frame.order,
-                pieces: REFERENCE_PIECES.map((name) => {
-                    const piece = frame.pieces[name]
-                    const image = pieceImage({ ...imageGroups, shadow: { width: 128, height: 128 } }, piece.image)
-                    return {
-                        name,
-                        image: piece.image,
-                        points: pieceVertices(piece, image, reference.grid[0], reference.grid[1]).map((point) => [point.x, point.y]),
-                    }
-                }),
+                ops: ops.map((op) => (op.kind === 'fill'
+                    ? { fill: op.color, alpha: op.alpha, ...fillSummary(op.points) }
+                    : {
+                        line: op.color,
+                        alpha: op.alpha,
+                        width: op.width,
+                        count: op.points.length,
+                        ends: [op.points[0].x, op.points[0].y, op.points[op.points.length - 1].x, op.points[op.points.length - 1].y],
+                    })),
             })
         }
     }
