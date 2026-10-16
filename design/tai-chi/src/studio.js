@@ -584,8 +584,13 @@ function drawFrame(dt, snap = false) {
     return { sample, solved }
 }
 
+// Rendered frames with a title bar and cue words keep the figure between
+// them: pixels kept clear at the top and bottom, set by renderFrames.
+let labelClearance = null
+
 // The painted figure is seen flat along the 3D camera's direction, framed
-// like the 3D view but a little closer.
+// like the 3D view but a little closer. With label clearance the floor
+// shadow and raised hands fit between the title bar and the cue words.
 function drawPainted(solved) {
     const camera = stage.camera
     const target = state.view === 'free'
@@ -596,13 +601,21 @@ function drawPainted(solved) {
     const yaw = Math.atan2(offset.x, offset.z)
     const tilt = Math.min(14 * DEG, Math.max(0, Math.atan2(offset.y, flat)))
     const distance = Math.max(2.5, state.view === 'top' ? 4.4 : offset.length())
-    const viewHeight = 2 * distance * Math.tan((34 * DEG) / 2) * 0.8
+    let viewHeight = 2 * distance * Math.tan((34 * DEG) / 2) * 0.8
+    let viewCenter = Math.max(0.85, target.y)
+    if (labelClearance) {
+        const { height, top, bottom } = labelClearance
+        const low = -0.1
+        const high = rig.height * 1.3
+        viewHeight = (high - low) * height / (height - top - bottom)
+        viewCenter = high + (top * viewHeight) / height - viewHeight / 2
+    }
     painted.update(solved, {
         yaw,
         tilt,
         center: state.view === 'free' ? target : cameraRig.center,
         viewHeight,
-        viewCenter: Math.max(0.85, target.y),
+        viewCenter,
         aspect: camera.aspect,
     })
     painted.render(stage.renderer)
@@ -646,6 +659,8 @@ async function renderFrames() {
     stage.renderer.setPixelRatio(1)
     stage.resize(width, height)
     const label = params.get('label') === '1'
+    // The title bar is 46 pixels and the cue words sit in the bottom 52.
+    labelClearance = label ? { height, top: 58, bottom: 66 } : null
     const composite = document.createElement('canvas')
     composite.width = width
     composite.height = height

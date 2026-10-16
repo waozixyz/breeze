@@ -208,7 +208,7 @@ export function buildCourse() {
                 version: 'Demo',
                 kind: 'demo',
                 cues: 'moves',
-                view: 'behind',
+                view: 'threeQuarter',
                 build() {
                     return { keys: retime(slice()), marks: marks() }
                 },
