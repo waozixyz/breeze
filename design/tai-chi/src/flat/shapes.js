@@ -58,12 +58,40 @@ function jacketProfile(shape) {
     ]
 }
 
-// The colours match the flat Sun Salutation characters Jade bun and Indigo
-// crop (docs/sun-salutation-flat.json in Inbe). Sizes are × height. The
-// hair zone of the head is where u · axis > edge on the hair shell's unit
-// sphere; `fringe` is an extra cap of hair (axis, edge).
+// Legs and arms, × height: thigh radii at hip, middle and knee; shin radii
+// at knee and calf; where the trousers end (height above the ankle,
+// radius); their band (top height above the ankle, top and bottom radii).
+const LOOSE_LEGS = { thigh: [0.052, 0.049, 0.04], shin: [0.039, 0.0375], end: [0.035, 0.034], band: [0.075, 0.0335, 0.0345] }
+// Baggy trousers gathered at the ankle.
+const GATHERED_LEGS = { thigh: [0.057, 0.056, 0.048], shin: [0.047, 0.05], end: [0.03, 0.028], band: [0.066, 0.031, 0.029] }
+
+// A look with the defaults filled in. Colours: `sleeve` (the top's when
+// absent), `cuff`, `wrap` and `collar` (the top's shade), `band` (the
+// trousers' shade), `shoes` (bare feet when absent), `scalp` (a shaved
+// head's tone). `sash` bands are [from, to, colour] in height shares;
+// `jacketFrom` is where the top ends below. Hair is 'bun', 'crop', 'shaved'
+// or 'crown' (braids wound round the head, with yarn and beads).
+function makeLook(look) {
+    return {
+        male: false,
+        sleeves: 'long',
+        legs: LOOSE_LEGS,
+        sash: [],
+        jacketFrom: look.jacket[0][0],
+        collarWidth: 0.006,
+        limbs: 1,
+        ...look,
+        head: { fringe: null, crown: null, ears: false, ...look.head },
+    }
+}
+
+// Jade woman and Indigo man match the flat Sun Salutation characters Jade
+// bun and Indigo crop (docs/sun-salutation-flat.json in Inbe); the Tibetan
+// woman and monk follow the studio's painted pair (characters/*/source).
+// Sizes are × height. The hair zone of the head is where u · axis > edge
+// on the hair shell's unit sphere; `fringe` is an extra cap of hair.
 export const FLAT_LOOKS = {
-    jadeWoman: {
+    jadeWoman: makeLook({
         name: 'Jade Woman',
         colors: {
             skin: '#f1c7a6', hair: '#2a2238', top: '#3f8f7a', pants: '#2e3d63', cuff: '#2e3d63',
@@ -73,16 +101,16 @@ export const FLAT_LOOKS = {
             hem: 0.134, hip: 0.12, waist: 0.104, chest: 0.105, shoulder: 0.103,
             hemDepth: 0.095, waistDepth: 0.073, chestDepth: 0.079, bust: 0.004,
         }),
-        limbs: 1,
         neck: 0.025,
         head: {
-            scale: 1.08, blush: 0.5, lashes: true, brow: 0.0016, ears: false, bun: true, crop: false,
+            scale: 1.08, blush: 0.5, lashes: true, brow: 0.0016, hair: 'bun',
             hairAxis: [0, 0.814, -0.581], hairEdge: -0.094,
             fringe: { axis: [0.3, 0.62, 0.72], edge: 0.866 },
         },
-    },
-    indigoMan: {
+    }),
+    indigoMan: makeLook({
         name: 'Indigo Man',
+        male: true,
         colors: {
             skin: '#e6aa7c', hair: '#7a4a2e', top: '#4f5c94', pants: '#c4ab78', cuff: '#424e80',
             accent: '#f2a65e', features: '#3a2a26', mouth: '#a8705c', blush: '#d98f7a',
@@ -94,11 +122,58 @@ export const FLAT_LOOKS = {
         limbs: 1.06,
         neck: 0.029,
         head: {
-            scale: 1.06, blush: 0, lashes: false, brow: 0.0024, ears: true, bun: false, crop: true,
+            scale: 1.06, blush: 0, lashes: false, brow: 0.0024, ears: true, hair: 'crop',
             hairAxis: [0, 0.9, -0.435], hairEdge: 0,
-            fringe: null,
         },
-    },
+    }),
+    tibetanWoman: makeLook({
+        name: 'Tibetan Woman',
+        colors: {
+            skin: '#c98d64', hair: '#2a2025', top: '#2f6f7a', sleeve: '#efe6d6', cuff: '#ddd2bf',
+            pants: '#2c3558', band: '#222a46', wrap: '#235a63', collar: '#efe6d6', shoes: '#8a2a2a',
+            accent: '#b03a2e', features: '#2a2025', mouth: '#a8604f', blush: '#d98a78',
+        },
+        jacket: jacketProfile({
+            hem: 0.122, hip: 0.116, waist: 0.1, chest: 0.103, shoulder: 0.098,
+            hemDepth: 0.088, waistDepth: 0.07, chestDepth: 0.078, bust: 0.004,
+        }),
+        jacketFrom: 0.5,
+        collarWidth: 0.01,
+        legs: GATHERED_LEGS,
+        sash: [
+            [0.59, 0.6025, '#b8433a'], [0.6025, 0.615, '#e0913a'], [0.615, 0.6275, '#e8c547'],
+            [0.6275, 0.64, '#4f9a6a'], [0.64, 0.6525, '#3b6fa6'], [0.6525, 0.665, '#6e4c8a'],
+        ],
+        neck: 0.025,
+        head: {
+            scale: 1.08, blush: 0.45, lashes: true, brow: 0.0017, ears: true, hair: 'crown',
+            hairAxis: [0, 0.814, -0.581], hairEdge: -0.094,
+            crown: { axis: [0, 0.92, -0.39], edge: 0.38, width: 0.017, yarn: '#b03a2e', beads: ['#3aa6a0', '#e07a5f'] },
+        },
+    }),
+    monk: makeLook({
+        name: 'Tibetan Monk',
+        male: true,
+        sleeves: 'bare',
+        colors: {
+            skin: '#c98a5e', hair: '#3a2a26', scalp: '#b97a50', top: '#e9a92e', cuff: '#e9a92e',
+            pants: '#7a2629', band: '#5e1c1f', wrap: '#2f4f9e', collar: '#2f4f9e', shoes: '#26262b',
+            accent: '#f2a65e', features: '#3a2a26', mouth: '#9a5a48', blush: '#c47a5c',
+        },
+        jacket: jacketProfile({
+            hem: 0.122, hip: 0.115, waist: 0.104, chest: 0.112, shoulder: 0.112,
+            hemDepth: 0.088, waistDepth: 0.074, chestDepth: 0.082, bust: 0,
+        }),
+        jacketFrom: 0.5,
+        legs: GATHERED_LEGS,
+        sash: [[0.585, 0.655, '#6b1c22']],
+        limbs: 1.04,
+        neck: 0.029,
+        head: {
+            scale: 1.06, blush: 0, lashes: false, brow: 0.0022, ears: true, hair: 'shaved',
+            hairAxis: [0, 0.9, -0.435], hairEdge: 0.08,
+        },
+    }),
 }
 
 // --- Colours ---------------------------------------------------------------
@@ -124,15 +199,23 @@ export function mixColor(a, b, share) {
 }
 
 export function flatPalette(colors) {
+    const sleeve = colors.sleeve ?? colors.top
+    const topShade = shadeColor(colors.top, 0.14)
     return {
         ...colors,
-        topFar: shadeColor(colors.top, 0.2),
-        topShade: shadeColor(colors.top, 0.14),
+        sleeve,
+        sleeveFar: shadeColor(sleeve, 0.2),
+        topShade,
+        wrap: colors.wrap ?? topShade,
+        collar: colors.collar ?? topShade,
         pantsFar: shadeColor(colors.pants, 0.22),
-        pantsShade: shadeColor(colors.pants, 0.16),
+        band: colors.band ?? shadeColor(colors.pants, 0.16),
         cuffFar: shadeColor(colors.cuff, 0.2),
         cuffInside: shadeColor(colors.cuff, 0.35),
         skinFar: shadeColor(colors.skin, 0.1),
+        feet: colors.shoes ?? colors.skin,
+        feetFar: colors.shoes ? shadeColor(colors.shoes, 0.2) : shadeColor(colors.skin, 0.1),
+        scalp: colors.scalp ?? colors.skin,
         shadow: '#3c2d1e',
     }
 }
@@ -345,7 +428,7 @@ export function createFlatShapes(look, rig) {
     function torso(solved) {
         const path = spine(solved)
         const rows = look.jacket
-        const bottom = rows[0][0]
+        const bottom = look.jacketFrom
         const top = rows[rows.length - 1][0]
         // The collar: the top ring all round, with how much each point faces
         // the viewer.
@@ -368,6 +451,7 @@ export function createFlatShapes(look, rig) {
             body: loft(path, bottom, top, FLAT_TORSO_STATIONS),
             clip: loft(path, bottom, top, FLAT_CLIP_STATIONS),
             hem: loft(path, bottom, bottom + 0.022, 2),
+            sash: look.sash.map(([from, to, color]) => ({ shapes: loft(path, from, to, 2), color })),
             collar,
             wrap,
             hipCenter: path.hipCenter,
@@ -404,13 +488,15 @@ export function createFlatShapes(look, rig) {
         const ankle = joints[`ankle${side}`]
         const up = knee.clone().sub(ankle).normalize()
         const k = look.limbs * H
-        const thigh = spheres([[hip, 0.052 * k], [hip.clone().lerp(knee, 0.45), 0.049 * k], [knee, 0.04 * k]])
-        const end = ankle.clone().addScaledVector(up, 0.035 * H)
+        const legs = look.legs
+        const thigh = spheres([[hip, legs.thigh[0] * k], [hip.clone().lerp(knee, 0.45), legs.thigh[1] * k],
+            [knee, legs.thigh[2] * k]])
+        const end = ankle.clone().addScaledVector(up, legs.end[0] * H)
         const calf = knee.clone().lerp(ankle, 0.35)
-        const shin = hull([...circle2(project(knee), 0.039 * k), ...circle2(project(calf), 0.0375 * k),
-            ...ring2(end, up, 0.034 * k)])
-        const band = hull([...ring2(ankle.clone().addScaledVector(up, 0.075 * H), up, 0.0335 * k),
-            ...ring2(end, up, 0.0345 * k)])
+        const shin = hull([...circle2(project(knee), legs.shin[0] * k), ...circle2(project(calf), legs.shin[1] * k),
+            ...ring2(end, up, legs.end[1] * k)])
+        const band = hull([...ring2(ankle.clone().addScaledVector(up, legs.band[0] * H), up, legs.band[1] * k),
+            ...ring2(end, up, legs.band[2] * k)])
         const ankleSkin = spheres([[ankle, 0.0185 * H], [ankle.clone().addScaledVector(up, 0.045 * H), 0.0175 * H]])
         // The bare foot: heel, ball and toes sit on the sole.
         const footUp = axis(solved.segments[`foot${side}`].quat, 0, 1, 0)
@@ -472,25 +558,29 @@ export function createFlatShapes(look, rig) {
         const wrist = joints[`wrist${side}`]
         const toward = wrist.clone().sub(elbow).normalize()
         const k = look.limbs * H
+        // The hand points at the viewer when the sleeve opening faces them.
+        const out = toward.dot(view.toward)
+        const placed = {
+            side,
+            depth: (depth(shoulder) + depth(elbow) + depth(wrist)) / 3,
+            shoulderDepth: depth(shoulder),
+            elbowDepth: depth(elbow),
+            handFirst: out <= 0,
+            hand: hand(side, solved),
+        }
+        if (look.sleeves === 'bare') {
+            const upper = spheres([[shoulder.clone().lerp(elbow, 0.12), 0.024 * k], [shoulder.clone().lerp(elbow, 0.45), 0.022 * k],
+                [elbow, 0.019 * k]])
+            const forearm = spheres([[elbow, 0.0185 * k], [elbow.clone().lerp(wrist, 0.4), 0.019 * k], [wrist, 0.0165 * k]])
+            return { ...placed, bare: true, sleeve: [upper, forearm], cuff: null, opening: null, handFirst: false }
+        }
         const upper = spheres([[shoulder.clone().lerp(elbow, 0.12), 0.029 * k], [shoulder.clone().lerp(elbow, 0.45), 0.029 * k],
             [elbow, 0.027 * k]])
         const end = wrist.clone().addScaledVector(toward, -0.014 * H)
         const opening = ring2(end, toward, 0.03 * k)
         const forearm = hull([...circle2(project(elbow), 0.0265 * k), ...opening])
         const cuff = hull([...ring2(wrist.clone().addScaledVector(toward, -0.03 * H), toward, 0.0295 * k), ...opening])
-        // The hand points at the viewer when the sleeve opening faces them.
-        const out = toward.dot(view.toward)
-        return {
-            side,
-            depth: (depth(shoulder) + depth(elbow) + depth(wrist)) / 3,
-            shoulderDepth: depth(shoulder),
-            elbowDepth: depth(elbow),
-            sleeve: [upper, forearm],
-            cuff,
-            opening: out > 0.3 ? hull(opening) : null,
-            handFirst: out <= 0,
-            hand: hand(side, solved),
-        }
+        return { ...placed, bare: false, sleeve: [upper, forearm], cuff, opening: out > 0.3 ? hull(opening) : null }
     }
 
     // --- Head ---
@@ -619,6 +709,7 @@ export function createFlatShapes(look, rig) {
 
     function head(solved, ops) {
         const frame = headFrame(solved)
+        const hair = look.head.hair
         const hairAxis = new Vector3(...look.head.hairAxis).normalize()
         const skullDepth = centreDepth(frame, SKULL)
         const inFront = (item) => centreDepth(frame, item) - skullDepth > 0.004 * headScale
@@ -627,7 +718,8 @@ export function createFlatShapes(look, rig) {
         for (const item of [JAW, NOSE, ...(look.head.ears ? EARS : [])]) {
             ;(inFront(item) ? front : behind).push(outline(frame, item))
         }
-        const bunBehind = look.head.bun && !inFront(BUN)
+        const hasBun = hair === 'bun'
+        const bunBehind = hasBun && !inFront(BUN)
         const bun = () => {
             ops.push(fillOp(outline(frame, BUN), colors.hair))
             // The tie round the bun where it meets the head.
@@ -642,10 +734,19 @@ export function createFlatShapes(look, rig) {
         for (const shape of behind) {
             ops.push(fillOp(shape, colors.skin))
         }
-        ops.push(fillOp(outline(frame, SHELL), colors.hair))
-        const face = capRegion(frame, SHELL, hairAxis.clone().negate(), -look.head.hairEdge)
-        if (face) {
-            ops.push(fillOp(face, colors.skin))
+        if (hair === 'shaved') {
+            // The bare head, its shaved crown a shade darker.
+            ops.push(fillOp(outline(frame, SKULL), colors.skin))
+            const scalp = capRegion(frame, SKULL, hairAxis, look.head.hairEdge)
+            if (scalp) {
+                ops.push(fillOp(scalp, colors.scalp))
+            }
+        } else {
+            ops.push(fillOp(outline(frame, SHELL), colors.hair))
+            const face = capRegion(frame, SHELL, hairAxis.clone().negate(), -look.head.hairEdge)
+            if (face) {
+                ops.push(fillOp(face, colors.skin))
+            }
         }
         for (const shape of front) {
             ops.push(fillOp(shape, colors.skin))
@@ -656,15 +757,39 @@ export function createFlatShapes(look, rig) {
                 ops.push(fillOp(fringe, colors.hair))
             }
         }
-        if (look.head.crop) {
+        if (hair === 'crop') {
             for (const item of CROP) {
                 ops.push(fillOp(outline(frame, item), colors.hair))
             }
         }
-        if (look.head.bun && !bunBehind) {
+        if (hair === 'crown') {
+            crown(frame, ops)
+        }
+        if (hasBun && !bunBehind) {
             bun()
         }
         features(frame, ops)
+    }
+
+    // Braids wound round the head, red yarn through them, and beads.
+    function crown(frame, ops) {
+        const spec = look.head.crown
+        const ringAxis = new Vector3(...spec.axis).normalize()
+        for (const run of capRim(frame, SHELL, ringAxis, spec.edge)) {
+            ops.push(lineOp(run, colors.hair, spec.width * headScale))
+            ops.push(lineOp(run, spec.yarn, spec.width * 0.3 * headScale))
+        }
+        const [first, second] = perpendiculars(ringAxis)
+        const across = Math.sqrt(Math.max(0, 1 - spec.edge * spec.edge))
+        for (let index = 0; index < 10; index += 1) {
+            const angle = (index / 10) * Math.PI * 2
+            const u = ringAxis.clone().multiplyScalar(spec.edge).addScaledVector(first, Math.cos(angle) * across)
+                .addScaledVector(second, Math.sin(angle) * across)
+            if (ellipsoidFacing(frame, SHELL, u) > 0.2) {
+                const bead = circle2(project(ellipsoidPoint(frame, SHELL, u)), 0.0042 * headScale, 12)
+                ops.push(fillOp(hull(bead), spec.beads[index % spec.beads.length]))
+            }
+        }
     }
 
     function features(frame, ops) {
@@ -772,13 +897,12 @@ export function createFlatShapes(look, rig) {
     }
 
     function legOps(item, ops) {
-        for (const shape of item.skin) {
-            ops.push(fillOp(shape, mixColor(colors.skin, colors.skinFar, item.far)))
-        }
+        ops.push(fillOp(item.skin[0], mixColor(colors.feet, colors.feetFar, item.far)))
+        ops.push(fillOp(item.skin[1], mixColor(colors.skin, colors.skinFar, item.far)))
         for (const shape of item.pants) {
             ops.push(fillOp(shape, mixColor(colors.pants, colors.pantsFar, item.far)))
         }
-        ops.push(fillOp(item.band, mixColor(colors.pantsShade, colors.pantsFar, item.far)))
+        ops.push(fillOp(item.band, mixColor(colors.band, colors.pantsFar, item.far)))
     }
 
     function armOps(item, ops, torsoClip = null) {
@@ -804,9 +928,11 @@ export function createFlatShapes(look, rig) {
             }
         }
         for (const shape of item.sleeve) {
-            ops.push(fillOp(shape, mixColor(colors.top, colors.topFar, item.far)))
+            ops.push(fillOp(shape, item.bare ? skin : mixColor(colors.sleeve, colors.sleeveFar, item.far)))
         }
-        ops.push(fillOp(item.cuff, mixColor(colors.cuff, colors.cuffFar, item.far)))
+        if (item.cuff) {
+            ops.push(fillOp(item.cuff, mixColor(colors.cuff, colors.cuffFar, item.far)))
+        }
         if (item.opening) {
             ops.push(fillOp(item.opening, colors.cuffInside))
         }
@@ -851,8 +977,13 @@ export function createFlatShapes(look, rig) {
         for (const shape of body.hem) {
             ops.push(fillOp(shape, colors.topShade))
         }
-        facingRuns(body.wrap, colors.topShade, 0.0045 * H, ops)
-        facingRuns(body.collar, colors.topShade, 0.006 * H, ops)
+        for (const band of body.sash) {
+            for (const shape of band.shapes) {
+                ops.push(fillOp(shape, band.color))
+            }
+        }
+        facingRuns(body.wrap, colors.wrap, 0.0045 * H, ops)
+        facingRuns(body.collar, colors.collar, look.collarWidth * H, ops)
         head(solved, ops)
         const frontArms = arms.filter((candidate) => candidate.depth > chestDepth - 0.05)
             .sort((a, b) => a.elbowDepth - b.elbowDepth)

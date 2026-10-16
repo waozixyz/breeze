@@ -27,6 +27,12 @@ TAI_CHI_FLAT_POINT_CAPACITY :: 16384
 TAI_CHI_FLAT_SCRATCH :: 192
 TAI_CHI_FLAT_FILL :: 0
 TAI_CHI_FLAT_LINE :: 1
+TAI_CHI_FLAT_HAIR_BUN :: 0
+TAI_CHI_FLAT_HAIR_CROP :: 1
+TAI_CHI_FLAT_HAIR_SHAVED :: 2
+// Braids wound round the head, with yarn and beads.
+TAI_CHI_FLAT_HAIR_CROWN :: 3
+TAI_CHI_FLAT_SASH_CAPACITY :: 6
 
 TaiChiFlatOp :: struct {
     kind: s32
@@ -51,7 +57,11 @@ TaiChiFlatShape :: struct {
     count: s32
 }
 
+// A look as the studio's makeLook: the optional colours (sleeve, wrap,
+// collar, band, shoes, scalp) count only with their has_ flag; sizes are
+// × height.
 TaiChiFlatLook :: struct {
+    male: bool
     skin: u32
     hair: u32
     top: u32
@@ -61,8 +71,35 @@ TaiChiFlatLook :: struct {
     features: u32
     mouth: u32
     blush: u32
+    sleeve: u32
+    has_sleeve: bool
+    wrap: u32
+    has_wrap: bool
+    collar: u32
+    has_collar: bool
+    band: u32
+    has_band: bool
+    shoes: u32
+    has_shoes: bool
+    scalp: u32
+    has_scalp: bool
     // Rows of height share at rest, half width, half depth, forward offset.
     jacket: [TAI_CHI_FLAT_JACKET_ROWS][4]float64
+    // Where the top ends below, as a height share.
+    jacket_from: float64
+    collar_width: float64
+    bare_sleeves: bool
+    // Thigh radii at hip, middle and knee; shin radii at knee and calf;
+    // where the trousers end (height above the ankle, radius); their band
+    // (top height above the ankle, top and bottom radii).
+    leg_thigh: [3]float64
+    leg_shin: [2]float64
+    leg_end: [2]float64
+    leg_band: [3]float64
+    sash_count: s32
+    sash_from: [TAI_CHI_FLAT_SASH_CAPACITY]float64
+    sash_to: [TAI_CHI_FLAT_SASH_CAPACITY]float64
+    sash_color: [TAI_CHI_FLAT_SASH_CAPACITY]u32
     limbs: float64
     neck: float64
     head_scale: float64
@@ -70,13 +107,17 @@ TaiChiFlatLook :: struct {
     lashes: bool
     brow: float64
     ears: bool
-    bun: bool
-    crop: bool
+    hair_style: s32
     hair_axis: TaiChiVector3
     hair_edge: float64
     fringe: bool
     fringe_axis: TaiChiVector3
     fringe_edge: float64
+    crown_axis: TaiChiVector3
+    crown_edge: float64
+    crown_width: float64
+    crown_yarn: u32
+    crown_beads: [2]u32
 }
 
 TaiChiFlatPalette :: struct {
@@ -89,13 +130,19 @@ TaiChiFlatPalette :: struct {
     features: u32
     mouth: u32
     blush: u32
-    top_far: u32
+    sleeve: u32
+    sleeve_far: u32
     top_shade: u32
+    wrap: u32
+    collar: u32
     pants_far: u32
-    pants_shade: u32
+    band: u32
     cuff_far: u32
     cuff_inside: u32
     skin_far: u32
+    feet: u32
+    feet_far: u32
+    scalp: u32
     shadow: u32
 }
 
@@ -128,36 +175,157 @@ TaiChiFlatJacket :: (look: *TaiChiFlatLook, hem: float64, hip: float64, waist: f
     TaiChiFlatJacketRow(look, 14, 0.834, 0.05, 0.044, 0.0)
 }
 
-// Jade woman and Indigo man, as FLAT_LOOKS in the studio's shapes.js.
+TaiChiFlatSash :: (look: *TaiChiFlatLook, from: float64, to: float64, color: u32) {
+    if look.sash_count >= TAI_CHI_FLAT_SASH_CAPACITY {
+        return
+    }
+    look.sash_from[look.sash_count] = from
+    look.sash_to[look.sash_count] = to
+    look.sash_color[look.sash_count] = color
+    look.sash_count += 1
+}
+
+TaiChiFlatLegs :: (look: *TaiChiFlatLook, gathered: bool) {
+    if gathered {
+        // Baggy trousers gathered at the ankle.
+        look.leg_thigh[0] = 0.057
+        look.leg_thigh[1] = 0.056
+        look.leg_thigh[2] = 0.048
+        look.leg_shin[0] = 0.047
+        look.leg_shin[1] = 0.05
+        look.leg_end[0] = 0.03
+        look.leg_end[1] = 0.028
+        look.leg_band[0] = 0.066
+        look.leg_band[1] = 0.031
+        look.leg_band[2] = 0.029
+        return
+    }
+    look.leg_thigh[0] = 0.052
+    look.leg_thigh[1] = 0.049
+    look.leg_thigh[2] = 0.04
+    look.leg_shin[0] = 0.039
+    look.leg_shin[1] = 0.0375
+    look.leg_end[0] = 0.035
+    look.leg_end[1] = 0.034
+    look.leg_band[0] = 0.075
+    look.leg_band[1] = 0.0335
+    look.leg_band[2] = 0.0345
+}
+
+// The looks of the studio's FLAT_LOOKS (design/tai-chi/src/flat/shapes.js):
+// Jade woman, Indigo man, the Tibetan woman and the Tibetan monk.
 TaiChiFlatLookFor :: (character: s32) -> TaiChiFlatLook {
     look: TaiChiFlatLook
     id := ""
     if character >= 0 && character < tai_chi_course.character_count {
         id = TaiChiCourseString(tai_chi_course.characters[character].id)
     }
+    look.collar_width = 0.006
+    look.limbs = 1.0
+    TaiChiFlatLegs(*look, false)
+    look.accent = 0xf2a65e
     if id == "indigoMan" {
+        look.male = true
         look.skin = 0xe6aa7c
         look.hair = 0x7a4a2e
         look.top = 0x4f5c94
         look.pants = 0xc4ab78
         look.cuff = 0x424e80
-        look.accent = 0xf2a65e
         look.features = 0x3a2a26
         look.mouth = 0xa8705c
         look.blush = 0xd98f7a
         TaiChiFlatJacket(*look, 0.126, 0.116, 0.105, 0.111, 0.114, 0.09, 0.073, 0.08, 0.0)
+        look.jacket_from = look.jacket[0][0]
         look.limbs = 1.06
         look.neck = 0.029
         look.head_scale = 1.06
-        look.blush_alpha = 0.0
-        look.lashes = false
         look.brow = 0.0024
         look.ears = true
-        look.bun = false
-        look.crop = true
+        look.hair_style = TAI_CHI_FLAT_HAIR_CROP
         look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.9, -0.435))
         look.hair_edge = 0.0
-        look.fringe = false
+        return look
+    }
+    if id == "tibetanWoman" {
+        look.skin = 0xc98d64
+        look.hair = 0x2a2025
+        look.top = 0x2f6f7a
+        look.sleeve = 0xefe6d6
+        look.has_sleeve = true
+        look.cuff = 0xddd2bf
+        look.pants = 0x2c3558
+        look.band = 0x222a46
+        look.has_band = true
+        look.wrap = 0x235a63
+        look.has_wrap = true
+        look.collar = 0xefe6d6
+        look.has_collar = true
+        look.shoes = 0x8a2a2a
+        look.has_shoes = true
+        look.accent = 0xb03a2e
+        look.features = 0x2a2025
+        look.mouth = 0xa8604f
+        look.blush = 0xd98a78
+        TaiChiFlatJacket(*look, 0.122, 0.116, 0.1, 0.103, 0.098, 0.088, 0.07, 0.078, 0.004)
+        look.jacket_from = 0.5
+        look.collar_width = 0.01
+        TaiChiFlatLegs(*look, true)
+        TaiChiFlatSash(*look, 0.59, 0.6025, 0xb8433a)
+        TaiChiFlatSash(*look, 0.6025, 0.615, 0xe0913a)
+        TaiChiFlatSash(*look, 0.615, 0.6275, 0xe8c547)
+        TaiChiFlatSash(*look, 0.6275, 0.64, 0x4f9a6a)
+        TaiChiFlatSash(*look, 0.64, 0.6525, 0x3b6fa6)
+        TaiChiFlatSash(*look, 0.6525, 0.665, 0x6e4c8a)
+        look.neck = 0.025
+        look.head_scale = 1.08
+        look.blush_alpha = 0.45
+        look.lashes = true
+        look.brow = 0.0017
+        look.ears = true
+        look.hair_style = TAI_CHI_FLAT_HAIR_CROWN
+        look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.814, -0.581))
+        look.hair_edge = -0.094
+        look.crown_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.92, -0.39))
+        look.crown_edge = 0.38
+        look.crown_width = 0.017
+        look.crown_yarn = 0xb03a2e
+        look.crown_beads[0] = 0x3aa6a0
+        look.crown_beads[1] = 0xe07a5f
+        return look
+    }
+    if id == "monk" {
+        look.male = true
+        look.bare_sleeves = true
+        look.skin = 0xc98a5e
+        look.hair = 0x3a2a26
+        look.scalp = 0xb97a50
+        look.has_scalp = true
+        look.top = 0xe9a92e
+        look.cuff = 0xe9a92e
+        look.pants = 0x7a2629
+        look.band = 0x5e1c1f
+        look.has_band = true
+        look.wrap = 0x2f4f9e
+        look.has_wrap = true
+        look.collar = 0x2f4f9e
+        look.has_collar = true
+        look.shoes = 0x26262b
+        look.has_shoes = true
+        look.features = 0x3a2a26
+        look.mouth = 0x9a5a48
+        look.blush = 0xc47a5c
+        TaiChiFlatJacket(*look, 0.122, 0.115, 0.104, 0.112, 0.112, 0.088, 0.074, 0.082, 0.0)
+        look.jacket_from = 0.5
+        TaiChiFlatLegs(*look, true)
+        TaiChiFlatSash(*look, 0.585, 0.655, 0x6b1c22)
+        look.limbs = 1.04
+        look.neck = 0.029
+        look.head_scale = 1.06
+        look.brow = 0.0022
+        look.ears = true
+        look.hair_style = TAI_CHI_FLAT_HAIR_SHAVED
+        look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.9, -0.435))
+        look.hair_edge = 0.08
         return look
     }
     look.skin = 0xf1c7a6
@@ -165,20 +333,17 @@ TaiChiFlatLookFor :: (character: s32) -> TaiChiFlatLook {
     look.top = 0x3f8f7a
     look.pants = 0x2e3d63
     look.cuff = 0x2e3d63
-    look.accent = 0xf2a65e
     look.features = 0x2a2238
     look.mouth = 0xc9806f
     look.blush = 0xec9f8f
     TaiChiFlatJacket(*look, 0.134, 0.12, 0.104, 0.105, 0.103, 0.095, 0.073, 0.079, 0.004)
-    look.limbs = 1.0
+    look.jacket_from = look.jacket[0][0]
     look.neck = 0.025
     look.head_scale = 1.08
     look.blush_alpha = 0.5
     look.lashes = true
     look.brow = 0.0016
-    look.ears = false
-    look.bun = true
-    look.crop = false
+    look.hair_style = TAI_CHI_FLAT_HAIR_BUN
     look.hair_axis = TaiChiNormalize3(TaiChiV3(0.0, 0.814, -0.581))
     look.hair_edge = -0.094
     look.fringe = true
@@ -244,13 +409,19 @@ TaiChiFlatPaletteFor :: (look: *TaiChiFlatLook) -> TaiChiFlatPalette {
     palette.features = look.features
     palette.mouth = look.mouth
     palette.blush = look.blush
-    palette.top_far = TaiChiFlatShade(look.top, 0.2)
+    palette.sleeve = ifx look.has_sleeve then look.sleeve else look.top
+    palette.sleeve_far = TaiChiFlatShade(palette.sleeve, 0.2)
     palette.top_shade = TaiChiFlatShade(look.top, 0.14)
+    palette.wrap = ifx look.has_wrap then look.wrap else palette.top_shade
+    palette.collar = ifx look.has_collar then look.collar else palette.top_shade
     palette.pants_far = TaiChiFlatShade(look.pants, 0.22)
-    palette.pants_shade = TaiChiFlatShade(look.pants, 0.16)
+    palette.band = ifx look.has_band then look.band else TaiChiFlatShade(look.pants, 0.16)
     palette.cuff_far = TaiChiFlatShade(look.cuff, 0.2)
     palette.cuff_inside = TaiChiFlatShade(look.cuff, 0.35)
     palette.skin_far = TaiChiFlatShade(look.skin, 0.1)
+    palette.feet = ifx look.has_shoes then look.shoes else look.skin
+    palette.feet_far = ifx look.has_shoes then TaiChiFlatShade(look.shoes, 0.2) else TaiChiFlatShade(look.skin, 0.1)
+    palette.scalp = ifx look.has_scalp then look.scalp else look.skin
     palette.shadow = 0x3c2d1e
     return palette
 }
@@ -640,10 +811,10 @@ TaiChiFlatTorsoLines :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine) {
         share := 0.826 + (0.6 - 0.826) * u
         facing: float64
         point := TaiChiFlatJacketSurface(painter, spine, share, 0.22 + (-0.78 - 0.22) * TaiChiSmoothRamp(u, 0.0, 1.0), *facing)
-        TaiChiFlatFacingRun(painter, *run, point, facing, painter.palette.top_shade, 0.0045 * height)
+        TaiChiFlatFacingRun(painter, *run, point, facing, painter.palette.wrap, 0.0045 * height)
     }
     if run.count > 1 {
-        TaiChiFlatLine(painter, *run, painter.palette.top_shade, 0.0045 * height, 1.0)
+        TaiChiFlatLine(painter, *run, painter.palette.wrap, 0.0045 * height, 1.0)
     }
     run.count = 0
     // The collar: the top ring all round.
@@ -652,10 +823,10 @@ TaiChiFlatTorsoLines :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine) {
         angle := cast(float64)index / cast(float64)TAI_CHI_FLAT_RING_POINTS * TAI_CHI_PI * 2.0
         normal := TaiChiNormalize3(TaiChiAdd3(TaiChiScale3(ring.x, Cos(angle) / ring.a), TaiChiScale3(ring.z, Sin(angle) / ring.b)))
         TaiChiFlatFacingRun(painter, *run, TaiChiFlatProject(painter, TaiChiFlatRingPoint(ring, angle)),
-            TaiChiDot3(normal, painter.view.toward), painter.palette.top_shade, 0.006 * height)
+            TaiChiDot3(normal, painter.view.toward), painter.palette.collar, painter.look.collar_width * height)
     }
     if run.count > 1 {
-        TaiChiFlatLine(painter, *run, painter.palette.top_shade, 0.006 * height, 1.0)
+        TaiChiFlatLine(painter, *run, painter.palette.collar, painter.look.collar_width * height, 1.0)
     }
 }
 
@@ -675,24 +846,25 @@ TaiChiFlatLegFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s
     leg: TaiChiFlatLeg
     height := painter.height
     k := painter.look.limbs * height
+    look := painter.look
     hip := solved.hips[side]
     knee := solved.knees[side]
     ankle := solved.ankles[side]
     up := TaiChiNormalize3(TaiChiSub3(knee, ankle))
     scratch: TaiChiFlatScratch
-    TaiChiFlatSphere(painter, *scratch, hip, 0.052 * k)
-    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(hip, knee, 0.45), 0.049 * k)
-    TaiChiFlatSphere(painter, *scratch, knee, 0.04 * k)
+    TaiChiFlatSphere(painter, *scratch, hip, look.leg_thigh[0] * k)
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(hip, knee, 0.45), look.leg_thigh[1] * k)
+    TaiChiFlatSphere(painter, *scratch, knee, look.leg_thigh[2] * k)
     leg.thigh = TaiChiFlatHull(painter.frame, *scratch)
-    end := TaiChiAddScaled3(ankle, up, 0.035 * height)
+    end := TaiChiAddScaled3(ankle, up, look.leg_end[0] * height)
     scratch.count = 0
-    TaiChiFlatSphere(painter, *scratch, knee, 0.039 * k)
-    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(knee, ankle, 0.35), 0.0375 * k)
-    TaiChiFlatRing(painter, *scratch, end, up, 0.034 * k)
+    TaiChiFlatSphere(painter, *scratch, knee, look.leg_shin[0] * k)
+    TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(knee, ankle, 0.35), look.leg_shin[1] * k)
+    TaiChiFlatRing(painter, *scratch, end, up, look.leg_end[1] * k)
     leg.shin = TaiChiFlatHull(painter.frame, *scratch)
     scratch.count = 0
-    TaiChiFlatRing(painter, *scratch, TaiChiAddScaled3(ankle, up, 0.075 * height), up, 0.0335 * k)
-    TaiChiFlatRing(painter, *scratch, end, up, 0.0345 * k)
+    TaiChiFlatRing(painter, *scratch, TaiChiAddScaled3(ankle, up, look.leg_band[0] * height), up, look.leg_band[1] * k)
+    TaiChiFlatRing(painter, *scratch, end, up, look.leg_band[2] * k)
     leg.band = TaiChiFlatHull(painter.frame, *scratch)
     scratch.count = 0
     TaiChiFlatSphere(painter, *scratch, ankle, 0.0185 * height)
@@ -716,6 +888,7 @@ TaiChiFlatArm :: struct {
     shoulder_depth: float64
     elbow_depth: float64
     far: float64
+    bare: bool
     upper: TaiChiFlatShape
     forearm: TaiChiFlatShape
     cuff: TaiChiFlatShape
@@ -767,7 +940,27 @@ TaiChiFlatArmFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s
     elbow := solved.elbows[side]
     wrist := solved.wrists[side]
     toward := TaiChiNormalize3(TaiChiSub3(wrist, elbow))
+    // The hand points at the viewer when the sleeve opening faces them.
+    out := TaiChiDot3(toward, painter.view.toward)
+    TaiChiFlatHand(painter, solved, side, *arm)
+    arm.depth = (TaiChiFlatDepth(painter, shoulder) + TaiChiFlatDepth(painter, elbow) + TaiChiFlatDepth(painter, wrist)) / 3.0
+    arm.shoulder_depth = TaiChiFlatDepth(painter, shoulder)
+    arm.elbow_depth = TaiChiFlatDepth(painter, elbow)
     scratch: TaiChiFlatScratch
+    if painter.look.bare_sleeves {
+        arm.bare = true
+        TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.12), 0.024 * k)
+        TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.45), 0.022 * k)
+        TaiChiFlatSphere(painter, *scratch, elbow, 0.019 * k)
+        arm.upper = TaiChiFlatHull(painter.frame, *scratch)
+        scratch.count = 0
+        TaiChiFlatSphere(painter, *scratch, elbow, 0.0185 * k)
+        TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(elbow, wrist, 0.4), 0.019 * k)
+        TaiChiFlatSphere(painter, *scratch, wrist, 0.0165 * k)
+        arm.forearm = TaiChiFlatHull(painter.frame, *scratch)
+        arm.hand_first = false
+        return arm
+    }
     TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.12), 0.029 * k)
     TaiChiFlatSphere(painter, *scratch, TaiChiLerp3(shoulder, elbow, 0.45), 0.029 * k)
     TaiChiFlatSphere(painter, *scratch, elbow, 0.027 * k)
@@ -787,29 +980,22 @@ TaiChiFlatArmFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s
         TaiChiFlatPush(*scratch, opening.points[index])
     }
     arm.cuff = TaiChiFlatHull(painter.frame, *scratch)
-    // The hand points at the viewer when the sleeve opening faces them.
-    out := TaiChiDot3(toward, painter.view.toward)
     if out > 0.3 {
         arm.opening = TaiChiFlatHull(painter.frame, *opening)
         arm.has_opening = true
     }
     arm.hand_first = out <= 0.0
-    TaiChiFlatHand(painter, solved, side, *arm)
-    arm.depth = (TaiChiFlatDepth(painter, shoulder) + TaiChiFlatDepth(painter, elbow) + TaiChiFlatDepth(painter, wrist)) / 3.0
-    arm.shoulder_depth = TaiChiFlatDepth(painter, shoulder)
-    arm.elbow_depth = TaiChiFlatDepth(painter, elbow)
     return arm
 }
 
 TaiChiFlatLegPaint :: (painter: *TaiChiFlatPainter, leg: *TaiChiFlatLeg) {
     palette := painter.palette
-    skin := TaiChiFlatMix(palette.skin, palette.skin_far, leg.far)
-    TaiChiFlatFill(painter, leg.foot, skin, 1.0)
-    TaiChiFlatFill(painter, leg.ankle, skin, 1.0)
+    TaiChiFlatFill(painter, leg.foot, TaiChiFlatMix(palette.feet, palette.feet_far, leg.far), 1.0)
+    TaiChiFlatFill(painter, leg.ankle, TaiChiFlatMix(palette.skin, palette.skin_far, leg.far), 1.0)
     pants := TaiChiFlatMix(palette.pants, palette.pants_far, leg.far)
     TaiChiFlatFill(painter, leg.thigh, pants, 1.0)
     TaiChiFlatFill(painter, leg.shin, pants, 1.0)
-    TaiChiFlatFill(painter, leg.band, TaiChiFlatMix(palette.pants_shade, palette.pants_far, leg.far), 1.0)
+    TaiChiFlatFill(painter, leg.band, TaiChiFlatMix(palette.band, palette.pants_far, leg.far), 1.0)
 }
 
 TaiChiFlatArmPaint :: (painter: *TaiChiFlatPainter, arm: *TaiChiFlatArm, clips: []TaiChiFlatShape) {
@@ -835,10 +1021,12 @@ TaiChiFlatArmPaint :: (painter: *TaiChiFlatPainter, arm: *TaiChiFlatArm, clips: 
             }
         }
     }
-    top := TaiChiFlatMix(palette.top, palette.top_far, arm.far)
-    TaiChiFlatFill(painter, arm.upper, top, 1.0)
-    TaiChiFlatFill(painter, arm.forearm, top, 1.0)
-    TaiChiFlatFill(painter, arm.cuff, TaiChiFlatMix(palette.cuff, palette.cuff_far, arm.far), 1.0)
+    sleeve := ifx arm.bare then skin else TaiChiFlatMix(palette.sleeve, palette.sleeve_far, arm.far)
+    TaiChiFlatFill(painter, arm.upper, sleeve, 1.0)
+    TaiChiFlatFill(painter, arm.forearm, sleeve, 1.0)
+    if !arm.bare {
+        TaiChiFlatFill(painter, arm.cuff, TaiChiFlatMix(palette.cuff, palette.cuff_far, arm.far), 1.0)
+    }
     if arm.has_opening {
         TaiChiFlatFill(painter, arm.opening, palette.cuff_inside, 1.0)
     }
@@ -1076,6 +1264,49 @@ TaiChiFlatBun :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, bun: TaiCh
     TaiChiFlatRim(painter, head, bun, TaiChiNormalize3(base), 0.58, painter.palette.accent, 0.0095 * painter.head_scale)
 }
 
+// Braids wound round the head, red yarn through them, and beads.
+TaiChiFlatCrown :: (painter: *TaiChiFlatPainter, head: *TaiChiFlatHead, shell: TaiChiFlatPart) {
+    look := painter.look
+    k := painter.head_scale
+    rim := TaiChiFlatPerpendiculars(look.crown_axis)
+    run: TaiChiFlatScratch
+    for index: cast(s32)0..TAI_CHI_FLAT_OUTLINE_POINTS {
+        u := TaiChiFlatRimDirection(look.crown_axis, rim, look.crown_edge, index)
+        if TaiChiFlatPartFacing(painter, head, shell, u) > 0.05 {
+            TaiChiFlatPush(*run, TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, shell, u)))
+        } else {
+            TaiChiFlatBraid(painter, *run)
+            run.count = 0
+        }
+    }
+    TaiChiFlatBraid(painter, *run)
+    across := Sqrt(TaiChiMax(0.0, 1.0 - look.crown_edge * look.crown_edge))
+    for index: cast(s32)0..9 {
+        angle := cast(float64)index / 10.0 * TAI_CHI_PI * 2.0
+        u := TaiChiAdd3(TaiChiAdd3(TaiChiScale3(look.crown_axis, look.crown_edge), TaiChiScale3(rim[0], Cos(angle) * across)),
+            TaiChiScale3(rim[1], Sin(angle) * across))
+        if TaiChiFlatPartFacing(painter, head, shell, u) > 0.2 {
+            center := TaiChiFlatProject(painter, TaiChiFlatPartPoint(head, shell, u))
+            bead: TaiChiFlatScratch
+            for step: cast(s32)0..11 {
+                turn := cast(float64)step / 12.0 * TAI_CHI_PI * 2.0
+                TaiChiFlatPush(*bead, TaiChiV2(center.x + Cos(turn) * 0.0042 * k, center.y + Sin(turn) * 0.0042 * k))
+            }
+            TaiChiFlatFill(painter, TaiChiFlatHull(painter.frame, *bead), look.crown_beads[index % 2], 1.0)
+        }
+    }
+}
+
+// One visible run of the braids: the braid, then the yarn along it.
+TaiChiFlatBraid :: (painter: *TaiChiFlatPainter, run: *TaiChiFlatScratch) {
+    if run.count < 2 {
+        return
+    }
+    width := painter.look.crown_width * painter.head_scale
+    TaiChiFlatLine(painter, run, painter.palette.hair, width, 1.0)
+    TaiChiFlatLine(painter, run, painter.look.crown_yarn, width * 0.3, 1.0)
+}
+
 TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
     head := TaiChiFlatHeadFor(painter, solved)
     look := painter.look
@@ -1097,7 +1328,8 @@ TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
     for index: cast(s32)0..part_count - 1 {
         in_front[index] = TaiChiFlatPartDepth(painter, *head, parts[index]) - skull_depth > 0.004 * painter.head_scale
     }
-    bun_behind := look.bun && TaiChiFlatPartDepth(painter, *head, bun) - skull_depth <= 0.004 * painter.head_scale
+    has_bun := look.hair_style == TAI_CHI_FLAT_HAIR_BUN
+    bun_behind := has_bun && TaiChiFlatPartDepth(painter, *head, bun) - skull_depth <= 0.004 * painter.head_scale
     if bun_behind {
         TaiChiFlatBun(painter, *head, bun, skull)
     }
@@ -1106,9 +1338,15 @@ TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
             TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, parts[index]), palette.skin, 1.0)
         }
     }
-    TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, shell), palette.hair, 1.0)
-    TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, shell, TaiChiScale3(look.hair_axis, -1.0), -look.hair_edge),
-        palette.skin, 1.0)
+    if look.hair_style == TAI_CHI_FLAT_HAIR_SHAVED {
+        // The bare head, its shaved crown a shade darker.
+        TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, skull), palette.skin, 1.0)
+        TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, skull, look.hair_axis, look.hair_edge), palette.scalp, 1.0)
+    } else {
+        TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, shell), palette.hair, 1.0)
+        TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, shell, TaiChiScale3(look.hair_axis, -1.0), -look.hair_edge),
+            palette.skin, 1.0)
+    }
     for index: cast(s32)0..part_count - 1 {
         if in_front[index] {
             TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, parts[index]), palette.skin, 1.0)
@@ -1117,7 +1355,7 @@ TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
     if look.fringe {
         TaiChiFlatFill(painter, TaiChiFlatCap(painter, *head, shell, look.fringe_axis, look.fringe_edge), palette.hair, 1.0)
     }
-    if look.crop {
+    if look.hair_style == TAI_CHI_FLAT_HAIR_CROP {
         crop: [4]TaiChiFlatPart
         crop[0] = TaiChiFlatPartOf(painter, 0.004, 0.123, 0.012, 0.054, 0.026, 0.06)
         crop[1] = TaiChiFlatPartOf(painter, 0.012, 0.121, 0.054, 0.034, 0.014, 0.022)
@@ -1127,7 +1365,10 @@ TaiChiFlatHeadPaint :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved) {
             TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *head, part), palette.hair, 1.0)
         }
     }
-    if look.bun && !bun_behind {
+    if look.hair_style == TAI_CHI_FLAT_HAIR_CROWN {
+        TaiChiFlatCrown(painter, *head, shell)
+    }
+    if has_bun && !bun_behind {
         TaiChiFlatBun(painter, *head, bun, skull)
     }
     TaiChiFlatFeatures(painter, *head)
@@ -1189,7 +1430,7 @@ TaiChiFlatPaint :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *TaiChi
     legs[1].far = TaiChiFlatFar(legs[1].depth, legs[0].depth)
     spine := TaiChiFlatSpineFor(solved, rig)
     rows := painter.look.jacket
-    bottom := rows[0][0]
+    bottom := painter.look.jacket_from
     top := rows[TAI_CHI_FLAT_JACKET_ROWS - 1][0]
     clips: [TAI_CHI_FLAT_CLIP_STATIONS]TaiChiFlatShape
     TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_CLIP_STATIONS, 0, clips[:])
@@ -1221,6 +1462,10 @@ TaiChiFlatPaint :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *TaiChi
     TaiChiFlatFill(*painter, neck, palette.skin, 1.0)
     TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_TORSO_STATIONS, palette.top, no_clips)
     TaiChiFlatLoft(*painter, *spine, bottom, bottom + 0.022, 2, palette.top_shade, no_clips)
+    for band: cast(s32)0..painter.look.sash_count - 1 {
+        TaiChiFlatLoft(*painter, *spine, painter.look.sash_from[band], painter.look.sash_to[band], 2,
+            painter.look.sash_color[band], no_clips)
+    }
     TaiChiFlatTorsoLines(*painter, *spine)
     TaiChiFlatHeadPaint(*painter, solved)
     front: [2]s32
