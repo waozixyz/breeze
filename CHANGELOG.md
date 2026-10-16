@@ -14,6 +14,8 @@
 - Tai Chi narration in a female or male voice, chosen in Tai Chi's Customize; the monk speaks with the male voice.
 - Narration downloads only in the languages you pick, separately for each practice and for Lumi's guide, in Manage practices. Lumi's guide voice no longer comes inside the app.
 - Compact Lists tabs and larger task controls.
+- Lists tabs look like tabs: the open list is underlined, with no box around the row.
+- Top up Dew centers the Monero address under its QR code.
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.
 ### Removed
