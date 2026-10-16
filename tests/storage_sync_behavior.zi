@@ -28,6 +28,7 @@
 #import, file "../src/storage/cell_records.zi";
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/sqlite.zi";
 #import "json_scan"
 Core :: #import, file "../src/storage/storage_core.zi";
 
@@ -417,6 +418,23 @@ test_rejects_unknown_outbox_record :: () {
     check_true("unknown queued record rejects the payload", !build_payload())
     check_true("status stays available", storage_sync_status(*status) != 0)
     check_true("the record stays pending", status.queued_changes > 0)
+    storage_close()
+}
+
+// Android gives the app no writable temporary directory: a merge whose
+// statement journal spilled to a file failed with "disk I/O error" and rolled
+// back the whole review. The storage connection keeps temporary data in memory.
+test_temporary_data_in_memory :: () {
+    root := make_root("temp-store")
+    check_true("init db", storage_init(root) != 0)
+    statement: *void = null
+    store: s32 = -1
+    if SqlitePrepareText(storage_db_handle(), "PRAGMA temp_store", -1, *statement, null) == SQLITE_OK &&
+    SqliteStep(statement) == SQLITE_ROW {
+        store = SqliteColumnInt(statement, 0)
+    }
+    SqliteFinalize(statement)
+    check_true("temporary data stays in memory", store == 2)
     storage_close()
 }
 
@@ -1791,6 +1809,7 @@ Check :: () -> s32 {
     test_payload_excludes_local_settings()
     test_payload_includes_queued_edits()
     test_rejects_unknown_outbox_record()
+    test_temporary_data_in_memory()
     test_v6_encrypted_records()
     test_plaintext_private_response_ignored()
     test_large_outbox_batches()
