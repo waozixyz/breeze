@@ -1,11 +1,10 @@
-// The voice narration switch in a practice's Customize, with the voice and
-// the language it speaks while narration is on. Its languages are downloaded
-// in Manage practices; it speaks the app's language when that one is there.
+// The voice narration switch in a practice's Customize, with its voice and
+// the language it speaks. The language list chooses the spoken language, and
+// each language's icon downloads or removes it, as a translator's offline
+// languages do. The app's language downloads by itself.
 #import, file "../core/types.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/app_settings.zi";
-#import, file "../app/app_modal_state.zi";
-#import, file "../app/modal_rules.zi";
 #import "session"
 #import "layout"
 #import "tree"
@@ -13,46 +12,142 @@
 #import, file "../app/metrics.zi";
 #import, file "../app/text_buffers.zi";
 #import "geometry"
-#import "button_props"
-#import "button_widget"
 #import "control_props"
 #import "text_props"
 #import "text_widget"
-#import "text_align"
 #import "toggle_props"
 #import "toggle_widget"
 #import "segmented_control_widget"
 #import "segmented_control_props"
+#import "dropdown_props"
+#import "dropdown_widget"
 #import, file "../app/lumi_guide.zi";
 #import, file "practice_downloads.zi";
 
-using ButtonTone;
-using ButtonEmphasis;
 using TextWrap;
-using TextAlign;
-using ModalType;
 
-// "Plays in English", or that no language is downloaded yet.
-PracticeNarrationStatus :: (app: *InnerBreeze, language: string) -> string {
-    if language.count == 0 {
-        return LocaleText("practice_narration_none")
+// MingCute's regular download_2, delete_2 and close icons (Apache-2.0),
+// copied from kryonlabs/mingcute's generated shapes.
+NARRATION_DOWNLOAD_ICON :: "S2rr:M20 16V20C20 20.5523 19.5523 21 19 21H5C4.44772 21 4 20.5523 4 20V16M12 3V15M7.75736 11.4143L12 15.6569L16.2426 11.4143"
+NARRATION_REMOVE_ICON :: "S2rm:M5 6L5.87554 19.133C5.94558 20.1836 6.81818 21 7.87111 21H16.1289C17.1818 21 18.0544 20.1836 18.1245 19.133L19 6M8 6L8.77208 3.68377C8.90819 3.27543 9.29033 3 9.72076 3H14.2792C14.7097 3 15.0918 3.27543 15.2279 3.68377L16 6M10 11V16M14 11V16M4 6H20"
+NARRATION_CANCEL_ICON :: "S2rm:M5.63599 5.63672L18.3639 18.3646M5.63599 18.3647L18.3639 5.63682"
+NARRATION_LANGUAGE_MAX :: 32
+
+// A line under the language list while a language downloads, after one
+// failed, or while none is on this device; otherwise empty.
+PracticeNarrationStatus :: (app: *InnerBreeze, practice: s32, voice: string) -> string {
+    busy := ""
+    failed := ""
+    for rank: cast(s32)0..LocaleLanguageCount() - 1 {
+        language := LocaleLanguageAt(rank)
+        state := PracticeNarrationState(PracticeNarrationPack(practice, language.code, voice))
+        if state == 1 && busy.count == 0 {
+            busy = language.label
+        } else if state == 3 && failed.count == 0 {
+            failed = language.label
+        }
+    }
+    if busy.count == 0 && failed.count == 0 {
+        if PracticeNarrationLanguage(practice, voice).count == 0 {
+            return LocaleText("practice_narration_none")
+        }
+        return ""
     }
     buffer: [256]u8
-    args: [1]FormatArg = .[FormatArg.{.text = PracticeLanguageLabel(language), .is_text = true}]
-    unused FormatTemplate(LocaleText("practice_narration_plays"), args[:], buffer[:])
+    args: [1]FormatArg = .[FormatArg.{.text = ifx busy.count > 0 then busy else failed, .is_text = true}]
+    unused FormatTemplate(LocaleText(ifx busy.count > 0 then "practice_narration_busy" else "practice_narration_failed"),
+        args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
-PracticeNarrationSettingsHeight :: (app: *InnerBreeze) -> s32 {
+PracticeNarrationStatusHeight :: (app: *InnerBreeze, practice: s32, voice: string, width: s32) -> s32 {
+    status := PracticeNarrationStatus(app, practice, voice)
+    if status.count == 0 {
+        return 0
+    }
+    return AppParagraphHeight(status, width, AppFontSize(), AppScale(3)) + AppScale(12)
+}
+
+PracticeNarrationSettingsHeight :: (app: *InnerBreeze, practice: s32, male: bool, width: s32) -> s32 {
     height := AppScale(36 + 56)
     if app.voice_narration_enabled != 0 {
-        height += AppScale(42 + 12 + 44 + 16)
+        height += AppScale(42 + 12 + 44 + 16) +
+        PracticeNarrationStatusHeight(app, practice, ifx male then "male" else "", width)
     }
     return height
 }
 
-// Returns the voice picked now (0 the default voice, 1 male), else -1.
-PracticeNarrationSettings :: (app: *InnerBreeze, practice: s32, male: bool,
+// The languages this voice is recorded in. Choosing one makes narration speak
+// it, downloading it if needed; a row's icon downloads, stops or removes it.
+PracticeNarrationLanguages :: (app: *InnerBreeze, practice: s32, voice: string, choice: []u8,
+    x: s32, width: s32, y: *s32) {
+    options: [NARRATION_LANGUAGE_MAX]DropdownOption
+    packs: [NARRATION_LANGUAGE_MAX]s32
+    codes: [NARRATION_LANGUAGE_MAX]string
+    count: s32 = 0
+    for rank: cast(s32)0..LocaleLanguageCount() - 1 {
+        language := LocaleLanguageAt(rank)
+        index := PracticeNarrationPack(practice, language.code, voice)
+        if index < 0 || count >= NARRATION_LANGUAGE_MAX {
+            continue
+        }
+        state := PracticeNarrationState(index)
+        options[count] = DropdownOption.{.key = cast(u64)(rank + 1), .label = language.label,
+            .action_shape = ifx state == 2 then NARRATION_REMOVE_ICON else
+            ifx state == 1 then NARRATION_CANCEL_ICON else NARRATION_DOWNLOAD_ICON,
+            .action_label = LocaleText(ifx state == 2 then "practice_download_remove" else
+                ifx state == 1 then "cancel_button" else "practice_narration_download")}
+        packs[count] = index
+        codes[count] = language.code
+        count += 1
+    }
+    if count == 0 {
+        return
+    }
+    // The list shows the language that plays, or the one that will.
+    spoken := PracticeNarrationLanguage(practice, voice)
+    shown := ifx spoken.count > 0 then spoken else PracticeNarrationPreferred(practice)
+    selected: s32 = -1
+    for option: cast(s32)0..count - 1 {
+        if codes[option] == shown {
+            selected = option
+        }
+    }
+    pick := Dropdown(app.ui.session, DropdownProps.{
+            .key = KeyHash("inbe/practice/customize/narration-language") + cast(u64)practice,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(44)},
+            .selected_index = selected, .placeholder = LocaleText("language_label")},
+        options[0:count])
+    if pick.action_index >= 0 && pick.action_index < count {
+        index := packs[pick.action_index]
+        state := PracticeNarrationState(index)
+        if state == 1 || state == 2 {
+            PracticeNarrationDecline(index)
+        } else {
+            PracticeNarrationDownload(index)
+        }
+    }
+    if pick.changed && pick.selected_index >= 0 && pick.selected_index < count {
+        unused AppCopyText(codes[pick.selected_index], choice)
+        PracticeNarrationPrefer(practice, codes[pick.selected_index])
+        PracticeNarrationDownload(packs[pick.selected_index])
+        app.settings_dirty = 1
+        save_settings(app)
+    }
+    y.* += AppScale(44 + 16)
+    status := PracticeNarrationStatus(app, practice, voice)
+    if status.count > 0 {
+        status_h := AppParagraphHeight(status, width, AppFontSize(), AppScale(3))
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)status_h},
+                .text = status, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+        y.* += status_h + AppScale(12)
+    }
+}
+
+// Returns the voice picked now (0 the default voice, 1 male), else -1. The
+// language chosen in the list is written to choice.
+PracticeNarrationSettings :: (app: *InnerBreeze, practice: s32, male: bool, choice: []u8,
     x: s32, width: s32, y: *s32) -> s32 {
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
@@ -88,33 +183,12 @@ PracticeNarrationSettings :: (app: *InnerBreeze, practice: s32, male: bool,
     props.height = AppScale(42)
     props.selected_index = ifx male then 1 else 0
     props.has_selection = true
-    choice := SegmentedControl(app.ui.session, props, options[:])
-    if choice.changed {
-        picked = choice.selected_index
-        male = choice.selected_index == 1
+    choice_voice := SegmentedControl(app.ui.session, props, options[:])
+    if choice_voice.changed {
+        picked = choice_voice.selected_index
+        male = choice_voice.selected_index == 1
     }
     y.* += AppScale(42 + 12)
-    language := PracticeNarrationLanguage(practice, ifx male then "male" else "")
-    button_w := AppScale(180)
-    if button_w > width / 2 {
-        button_w = width / 2
-    }
-    // Without a downloaded language, Manage practices is where to choose one.
-    choose := language.count == 0
-    status_w := ifx choose then width - button_w - AppScale(12) else width
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)status_w, cast(float32)AppScale(44)},
-            .text = PracticeNarrationStatus(app, language), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto,
-            .vertical_align = cast(TextAlign)TextAlignCenter})
-    if choose && Button(app.ui.session, ButtonProps.{
-            .id = 15423,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)y.*,
-                cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText("practice_manage_button"),
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
-        app.practice_downloads_scroll = -(practice + 1)
-    }
-    y.* += AppScale(44 + 16)
+    PracticeNarrationLanguages(app, practice, ifx male then "male" else "", choice, x, width, y)
     return picked
 }

@@ -106,9 +106,13 @@ subprocess.run([str(work / 'test'), str(fixtures)], check=True,
                     if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')})
 cache = fixtures / 'cache/packages'
 assert not list(cache.glob('practice-taichi.??.zib'))
+# Removing Tai Chi forgets its removed languages; Lumi's guide keeps its own.
+assert not list(cache.glob('practice-taichi.*.removed'))
+assert (cache / 'practice-guide.en.removed').exists()
 # Wim Hof ends installed from the app's own copy, with no removal marker.
 assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
-print('Practice downloads: verified content, corrupt-download retry, offline cache, chosen narration languages, '
-      "Lumi's guide narration, removal, shipped Wim Hof and granted paid packs passed")
+print('Practice downloads: verified content, corrupt-download retry, offline cache, narration in the app '
+      "language, chosen and removed languages, Lumi's guide narration, removal, shipped Wim Hof and granted "
+      'paid packs passed')

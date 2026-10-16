@@ -123,23 +123,26 @@ CheckPracticeDownloads :: () -> s32 {
     }
 
     base_bundle := practice_packs[PracticePackFind(4, "")].bundle
-    // Narration downloads only when one of its languages is chosen.
     english := PracticeNarrationPack(4, "en", "")
     spanish := PracticeNarrationPack(4, "es", "")
+    guide := PracticeNarrationPack(PracticeGuide, "en", "")
+    // With narration off, nothing downloads it.
     before = FixtureStarts()
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before || english < 0 || spanish < 0 ||
-    PracticeNarrationLanguage(4, "").count != 0 || PracticeNarrationState(english) != 0 {
+    PracticeDownloadsPump(4, false, true)
+    PracticeDownloadsPump(4, false, true)
+    if FixtureStarts() != before || english < 0 || spanish < 0 || guide < 0 ||
+    PracticeNarrationState(english) != 0 || PracticeNarrationState(guide) != 0 {
         return 8
     }
-    // It is mounted on the frame after it arrives, once it is the one spoken.
-    PracticeNarrationToggle(english)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before + 1 || PracticeNarrationState(english) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+    // With it on, the practice and Lumi's guide download their narration in
+    // the app's language by themselves, mounted once it arrives.
+    for step: cast(s32)0..cast(s32)7 {
+        PracticeDownloadsPump(4, true, true)
+    }
+    if FixtureStarts() != before + 2 || PracticeNarrationState(english) != 2 ||
+    PracticeNarrationState(spanish) != 0 || PracticeNarrationState(guide) != 2 ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
+    !PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
         return 42
     }
     before = FixtureStarts()
@@ -149,57 +152,76 @@ CheckPracticeDownloads :: () -> s32 {
     if FixtureStarts() != before {
         return 9
     }
-    // In another app language it speaks the downloaded one, fetching nothing.
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before || !PracticeContentReady(4) || PracticeNarrationLanguage(4, "") != "en" ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
-        return 10
+    // In another app language the practice downloads and speaks that one;
+    // Lumi's guide, not recorded in it, keeps speaking English.
+    for step: cast(s32)0..cast(s32)5 {
+        PracticeDownloadsPump(4, true, true)
     }
-    // Choosing the app's language downloads it and speaks it from then on.
-    PracticeNarrationToggle(spanish)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
     if FixtureStarts() != before + 1 || PracticeNarrationState(spanish) != 2 ||
+    PracticeNarrationLanguage(4, "") != "es" || PracticeNarrationLanguage(PracticeGuide, "") != "en" ||
     PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
     !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
-        return 11
+        return 10
     }
+    // Back in English, the copy on this device speaks without a download.
     before = FixtureStarts()
     active_locale_index = 0
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
     if FixtureStarts() != before || PracticeNarrationLanguage(4, "") != "en" ||
     !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
+        return 11
+    }
+    // A language chosen in Customize speaks instead of the app's.
+    PracticeNarrationPrefer(4, "es")
+    PracticeDownloadsPump(4, true, true)
+    PracticeDownloadsPump(4, true, true)
+    if FixtureStarts() != before || PracticeNarrationLanguage(4, "") != "es" ||
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
         return 12
     }
-    // Removing a language frees only that one; another downloaded one speaks.
-    PracticeNarrationToggle(english)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if PracticeNarrationState(english) != 0 || PracticeNarrationState(spanish) != 2 ||
-    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
+    PracticeNarrationPrefer(4, "")
+    // Removing a language frees only that one and keeps it from coming back
+    // by itself; another downloaded language speaks.
+    PracticeNarrationDecline(english)
+    for step: cast(s32)0..cast(s32)3 {
+        PracticeDownloadsPump(4, true, true)
+    }
+    if FixtureStarts() != before || PracticeNarrationState(english) != 0 ||
+    PracticeNarrationState(spanish) != 2 || PracticeNarrationLanguage(4, "") != "es" ||
+    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
         return 43
     }
-    // The male voice has its own packs, chosen the same way, while the
-    // default voice's languages stay on this device.
+    if practice_packs[PracticePackFind(4, "")].bundle != base_bundle {
+        return 17
+    }
+    // It stays removed when the catalog loads again, until it is downloaded.
+    PracticeDownloadsClose()
+    for step: cast(s32)0..cast(s32)3 {
+        PracticeDownloadsPump(4, true, true)
+    }
+    if FixtureStarts() != before || PracticeNarrationState(english) != 0 {
+        return 49
+    }
+    PracticeNarrationDownload(english)
+    for step: cast(s32)0..cast(s32)5 {
+        PracticeDownloadsPump(4, true, true)
+    }
+    if FixtureStarts() != before + 1 || PracticeNarrationState(english) != 2 ||
+    PracticeNarrationLanguage(4, "") != "en" {
+        return 50
+    }
+    // The male voice has its own packs, which follow the app's language too,
+    // while the default voice's languages stay on this device.
     male := PracticeNarrationPack(4, "en", "male")
     before = FixtureStarts()
     PracticeVoiceSelect(4, "male")
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if FixtureStarts() != before || PracticeNarrationLanguage(4, "male").count != 0 ||
-    PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
-        return 36
+    for step: cast(s32)0..cast(s32)5 {
+        PracticeDownloadsPump(4, true, true)
     }
-    PracticeNarrationToggle(male)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
     if FixtureStarts() != before + 1 || PracticeNarrationState(male) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice-male/en/test.ogg").found {
+    !PracticeDownloadsAsset("assets/practices/taichi/voice-male/en/test.ogg").found ||
+    PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
         return 44
     }
     before = FixtureStarts()
@@ -207,37 +229,36 @@ CheckPracticeDownloads :: () -> s32 {
     PracticeDownloadsPump(4, true, true)
     PracticeDownloadsPump(4, true, true)
     if FixtureStarts() != before || PracticeNarrationState(spanish) != 2 ||
-    !PracticeDownloadsAsset("assets/practices/taichi/voice/es/test.ogg").found {
+    !PracticeDownloadsAsset("assets/practices/taichi/voice/en/test.ogg").found {
         return 37
     }
-    // A download in progress can be cancelled from its chip.
-    PracticeNarrationToggle(english)
-    PracticeNarrationToggle(english)
+    // A download in progress can be stopped, and does not start again by itself.
+    PracticeNarrationDecline(english)
+    PracticeNarrationDownload(english)
     PracticeDownloadsPump(4, true, true)
-    if PracticeNarrationState(english) != 0 {
+    PracticeNarrationDecline(english)
+    for step: cast(s32)0..cast(s32)3 {
+        PracticeDownloadsPump(4, true, true)
+    }
+    if PracticeNarrationState(english) != 0 || FixtureStarts() != before + 1 {
         return 45
     }
-    // Lumi's guide speaks its own downloaded narration beside any practice.
-    guide := PracticeNarrationPack(PracticeGuide, "en", "")
-    PracticeNarrationToggle(guide)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    PracticeDownloadsPump(4, true, true)
-    if guide < 0 || PracticeNarrationState(guide) != 2 || PracticeNarrationLanguage(PracticeGuide, "") != "en" ||
-    !PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
+    // Lumi's guide narration is mounted only while narration is on, and once
+    // removed it stays off this device.
+    if !PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
         return 46
     }
     PracticeDownloadsPump(4, false, true)
     if PracticeDownloadsAsset("assets/practices/guide/voice/en/test.ogg").found {
         return 47
     }
-    PracticeNarrationToggle(guide)
-    PracticeDownloadsPump(4, true, true)
-    if PracticeNarrationState(guide) != 0 || PracticeNarrationLanguage(PracticeGuide, "").count != 0 {
-        return 48
+    PracticeNarrationDecline(guide)
+    for step: cast(s32)0..cast(s32)3 {
+        PracticeDownloadsPump(4, true, true)
     }
-    if practice_packs[PracticePackFind(4, "")].bundle != base_bundle {
-        return 17
+    if PracticeNarrationState(guide) != 0 || PracticeNarrationLanguage(PracticeGuide, "").count != 0 ||
+    FixtureStarts() != before + 1 {
+        return 48
     }
     PracticeContentRemove(4)
     if PracticeContentReady(4) || PracticeNarrationState(spanish) != 0 || PracticeNarrationState(male) != 0 {

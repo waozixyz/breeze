@@ -174,6 +174,10 @@ def close_manager(window):
 
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     profile = Path(temporary)
+    # Lumi's guide narration downloads by itself in the app's language; its
+    # copy is already here, so the test reaches no server.
+    (profile / 'packages').mkdir()
+    shutil.copyfile(ROOT / 'build/practice-content/guide.en.zib', profile / 'packages/practice-guide.en.zib')
     process, _ = launch(profile, 'initialize')
     stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -294,8 +298,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         time.sleep(.5)
         _, text = capture(window, 'taichi-unowned-manager')
         assert 'Tai Chi' in text and 'Dew' in text and 'Download size' in text, text
-        # A locked practice offers no narration; Jade woman's female voice is absent.
-        assert 'Female voice' not in text, text
+        # Narration is chosen in each practice's Customize, never here.
+        assert 'Voice narration' not in text and 'Female voice' not in text, text
     finally:
         stop(process)
     # The account's purchase, remembered on this device; sync stays off, so
@@ -324,18 +328,20 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             time.sleep(1)
             text = read_manager(window, name + '-manager', width, height)
             assert 'Tai Chi' in text and 'Available offline' in text, text
+            assert 'Voice narration' not in text and "Lumi's guide" not in text, text
             if name == 'desktop-manager':
-                # Each narration is chosen per language under its practice, in
-                # the voice from Customize, and Lumi's guide has its own.
-                assert 'Female voice' in text and 'On this device: English' in text, text
-                assert "Lumi's guide" in text and 'Tap a language' in text, text
                 close_manager(window)
                 click_word(window, name + '-customize', 'Customize')
                 time.sleep(1)
                 _, text = capture(window, name + '-customize-open')
-                # Jade woman speaks with the female voice in its downloaded language.
-                assert 'Female voice' in text and 'Male voice' in text, text
-                assert 'Plays in English' in text, text
+                # Jade woman speaks with the female voice, in the language
+                # chosen in a list that downloads or removes each language.
+                assert 'Female voice' in text and 'Male voice' in text and 'English' in text, text
+                assert 'Plays in' not in text and 'Downloading' not in text, text
+                click_word(window, name + '-languages', 'English')
+                time.sleep(.5)
+                _, text = capture(window, name + '-languages-open')
+                assert 'Deutsch' in text and 'Italiano' in text, text
         finally:
             stop(process)
     # Sun Salutation speaks in its own free packs; a man speaks with the male voice.
@@ -356,7 +362,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         time.sleep(.5)
         _, text = capture(window, 'sun-customize-narration')
         assert 'Voice narration' in text and 'Female voice' in text and 'Male voice' in text, text
-        assert 'Plays in English' in text, text
+        assert 'English' in text and 'Plays in' not in text, text
     finally:
         stop(process)
 print('Private Practices modal: shipped Wim Hof, real sizes, live transfer, removal that stays, '

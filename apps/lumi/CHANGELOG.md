@@ -5,7 +5,7 @@
 - Lumi asks before starting a practice that isn't on your device: download it, or unlock it with Dew when it's paid. Yes opens Manage practices at that practice.
 - “Start Tai Chi” starts the Tai Chi practice.
 ### Changed
-- Lumi's guide voice is downloaded per language in Manage practices instead of coming with Lumi.
+- Lumi's guide voice downloads in the app's language instead of coming with Lumi.
 ### Removed
 - Donation links and the /donate command. Dew is how you pay in Inner Breeze.
 
