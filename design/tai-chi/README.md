@@ -81,21 +81,29 @@ still there.
 Jade Woman (`?figure=jadeWoman`) and Indigo Man (`?figure=indigoMan`) are
 drawn in 2D like a flat vector illustration, matching Inbe's flat Sun
 Salutation characters Jade bun and Indigo crop (`docs/sun-salutation-flat.md`
-in Inbe). `src/flat/figure.js` draws them with Canvas 2D over the same
-solved skeleton the painted figures use, projected flat along the view
-(`FlatView`):
+in Inbe). `src/flat/shapes.js` turns the solved skeleton, projected flat
+along the view (`FlatView`), into paint operations back to front: filled
+convex polygons and stroked lines. The studio draws them with Canvas 2D
+(`src/flat/figure.js`); Inbe draws the same operations with Kryon.
 
-- arms and legs are hulls of circles at the joints and of rings at the
-  cuffs, so they read from any side; parts of one colour fill as one path;
-- the jacket is a loft of rings along the spine, filled as the union of the
-  hulls of neighbouring rings, with a darker hem, collar and wrap line;
-- the head is ray cast against a few ellipsoids in its own frame (skull,
-  hair, jaw, nose, ears, bun) and coloured flat by zone, so the hairline and
-  bun turn with it; closed eyes, brows, blush and mouth are strokes on it;
-- the far arm and leg take a darker tone, and an arm in front casts a crisp
-  shade on the jacket.
+- Arms and legs are hulls of circles at the joints and of rings at the
+  cuffs, so they read from any side; parts of one colour overlap seamlessly.
+- The jacket is a loft of rings along the spine (the hull of each pair of
+  neighbouring rings), with a darker hem, collar and wrap line.
+- The head is a few ellipsoids in its own frame: the outline in the hair
+  colour, then the face, cut exactly where the hairline meets the outline,
+  then jaw, nose and ears in front or behind by depth, the fringe, the bun
+  and its tie, and the closed eyes, brows, blush and mouth.
+- The far arm and leg take a darker tone, and an arm in front casts a crisp
+  shade on the jacket (clipped to the jacket's convex pieces).
 
-Looks (colours, jacket profile, hair) are `FLAT_LOOKS` in that file.
+Only what Inbe's solver keeps is read, so the app can match it. Looks
+(colours, jacket profile, hair) are `FLAT_LOOKS` in `shapes.js`.
+
+Views: lessons, breakdowns and follow-alongs are seen from behind, so your
+left and right match hers; demos from the front three-quarter, so you see
+her face; the full form front-on and mirrored. With `--label`, renders frame
+the figure between the title bar and the cue words, so text never covers it.
 
 ```sh
 node tools/render.mjs --item lesson-1/all --figure jadeWoman --label --video --out ../../build/tai-chi-flat --name lesson-1-jade-woman
