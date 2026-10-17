@@ -6,7 +6,6 @@ mktime :: (tm: *Tm) -> s64 #foreign c;
 #import, file "mood_average.zi";
 #import "string_range"
 #import "byte_text_linux"
-#import "file_linux"
 #import, file "time_parts.zi";
 
 #import, file "../core/types.zi";
@@ -707,17 +706,20 @@ storage_session_change_clock :: () -> s64 {
     return storage_data_revision()
 }
 
+// SQLite reports the size of its own database file. Opening and closing
+// another descriptor on the live file would drop this connection's POSIX
+// locks, and another process closing its connection could then delete the
+// write-ahead log the app is still writing to.
 storage_total_size :: () -> s64 {
     if storage_has_any() == 0 {
         return 0
     }
-    path := storage_db_path()
-    if path.count == 0 { return 0 }
-    file := OpenRead(path)
-    if !file.valid { return 0 }
-    size := FileSize(file)
-    CloseFile(file)
-    return ifx (size > 0) then (size) else (0)
+    pages := db_select_int64_text("PRAGMA page_count", 0)
+    page_size := db_select_int64_text("PRAGMA page_size", 0)
+    if pages <= 0 || page_size <= 0 {
+        return 0
+    }
+    return pages * page_size
 }
 
 // Marks every entry and change of the user's habits deleted at ?1 and
