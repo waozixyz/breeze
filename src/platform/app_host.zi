@@ -60,6 +60,8 @@ SetTargetFPS :: (fps: s32) #foreign raylib;
 #import "zoom"
 #import "scroll_device"
 #import "touch_replay"
+// A UI test drives the app through KRYON_TEST_DRIVER; otherwise inactive.
+#import "test_driver"
 #if #defined(ANDROID_BUILD) {
     AndroidTouch :: #import "android_touch";
 }
@@ -265,13 +267,13 @@ app_frame_probe_count: s32;
 // focused control with Enter or Space. A frame without one of these keys
 // sends 0, which clears the last frame's key.
 AppNavigationKey :: () -> s32 {
-    if IsKeyPressed(KEY_TAB) {
+    if IsKeyPressed(KEY_TAB) || TestDriverKeyPressed(KEY_TAB) {
         return KeyTab
     }
-    if IsKeyPressed(KEY_ENTER) {
+    if IsKeyPressed(KEY_ENTER) || TestDriverKeyPressed(KEY_ENTER) {
         return KeyEnter
     }
-    if IsKeyPressed(KEY_SPACE) {
+    if IsKeyPressed(KEY_SPACE) || TestDriverKeyPressed(KEY_SPACE) {
         return KEY_SPACE
     }
     return 0
@@ -357,6 +359,12 @@ app_frame :: (app: *InnerBreeze) {
     if app.camera.zoom > 0.0 {
         mouse = ScreenToWorld(screen_mouse, app.camera)
     }
+    driven := TestDriverPointer(app.ui.session, PointerFrame.{mouse.x, mouse.y,
+            touch.down, touch.pressed, touch.released})
+    mouse = Vector2.{driven.x, driven.y}
+    touch.pressed = driven.pressed
+    touch.down = driven.down
+    touch.released = driven.released
     app.ui.mouse_x = cast(s32)mouse.x
     app.ui.mouse_y = cast(s32)mouse.y
     app.ui.keyboard_active = IsKeyPressed(KEY_TAB)  || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)  || IsKeyPressed(KEY_ESCAPE)
@@ -416,6 +424,9 @@ app_frame :: (app: *InnerBreeze) {
     #if #defined(PLATFORM_WEB) == false {
         modifiers = RaylibModifiers()
     }
+    if TestDriverKeyDown(KEY_LEFT_CONTROL) {
+        modifiers |= KeyModifierControl
+    }
     KeyboardSend(app.ui.session, AppNavigationKey())
     KeyboardModifiersSend(app.ui.session, modifiers)
     zoom_key: s32 = 0
@@ -424,14 +435,16 @@ app_frame :: (app: *InnerBreeze) {
         ZoomKeyKeypadAdd, ZoomKeyKeypadSubtract, ZoomKeyKeypadZero]
         zoom_index: s32 = 0
         while zoom_index < 6 {
-            if IsKeyPressed(zoom_keys[zoom_index]) {
+            if IsKeyPressed(zoom_keys[zoom_index]) ||
+            TestDriverKeyPressed(zoom_keys[zoom_index]) {
                 zoom_key = zoom_keys[zoom_index]
             }
             zoom_index += 1
         }
     }
     zoomed := app_zoom_frame(app.ui.session, CurrentDPIPlatform(),
-        app.ui_scale_tenths, GetMouseWheelMove(), modifiers, zoom_key)
+        app.ui_scale_tenths, TestDriverWheel(GetMouseWheelMove()), modifiers,
+        zoom_key)
     if zoomed.changed {
         app.ui_scale_tenths = zoomed.tenths
         app.settings_dirty = 1
@@ -541,6 +554,7 @@ app_frame :: (app: *InnerBreeze) {
             AndroidStartupComplete()
         }
     }
+    TestDriverFrame(app.ui.session)
     PumpSecondaryWindows()
     UpdatePracticeWindow(app)
     if app.ui.frame_target_changed {

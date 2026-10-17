@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 
-from PIL import Image, ImageChops
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/settings-sidebar-test"
@@ -28,7 +28,9 @@ def stop(process):
 
 with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextlib.ExitStack() as stack:
     profile = Path(temporary)
+    driver = UiDriver(OUTPUT / "driver")
     env = {key: value for key, value in os.environ.items() if key not in KEYS}
+    env.update(driver.environment())
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
                APP_DATA_ROOT=str(profile), INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
@@ -43,32 +45,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
     def command(*args):
         return subprocess.run(args, env=env, check=True, capture_output=True, text=True, timeout=5).stdout.strip()
 
-    def capture(window, name):
-        path = OUTPUT / (name + ".png")
-        command("import", "-window", window, str(path))
-        with Image.open(path) as image:
-            return image.convert("RGB").copy()
-
     def settings():
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             return dict(db.execute("SELECT key,value FROM settings"))
-
-    def settled_sidebar(window):
-        # Keep the exact pixel assertion, but let the selected/pressed
-        # transition finish before using it as the drag reference.
-        deadline = time.monotonic() + 3
-        previous = capture(window, "drag-started")
-        stable_frames = 0
-        while time.monotonic() < deadline:
-            time.sleep(.15)
-            current = capture(window, "drag-started")
-            difference = ImageChops.difference(previous.crop((0, 0, 344, 720)),
-                                              current.crop((0, 0, 344, 720)))
-            stable_frames = stable_frames + 1 if difference.getbbox() is None else 0
-            if stable_frames == 3:
-                return current
-            previous = current
-        raise AssertionError("Settings sidebars never settled before the slider drag")
 
     def wait_setting(key, expected):
         deadline = time.monotonic() + 5
@@ -80,19 +59,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
         saved = settings()
         return [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
 
-    def click(window, x, y, hold=.12):
-        command("xdotool", "mousemove", "--window", window, str(x), str(y))
-        time.sleep(.15)
-        command("xdotool", "mousedown", "1")
-        time.sleep(hold)
-        command("xdotool", "mouseup", "1")
-        time.sleep(.5)
+    def sidebars():
+        """Every widget left of the Appearance panel, where it sits."""
+        return [(node["key"], node["x"], node["y"], node["width"], node["height"])
+                for node in driver.tree() if node["visible"] and node["x"] + node["width"] <= 344]
 
     @contextlib.contextmanager
     def application(name):
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
             app = subprocess.Popen([str(BINARY)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+            driver.attach(app, log_path)
             try:
                 deadline = time.monotonic() + 15
                 window = ""
@@ -107,8 +84,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
                 assert window, log_path.read_text()
                 command("xdotool", "windowsize", window, "900", "720")
                 command("xdotool", "windowmove", window, "0", "0")
-                command("xdotool", "windowfocus", window)
-                time.sleep(.6)
+                driver.wait_idle(frames=3)
                 yield window, log_path
                 assert app.poll() is None, log_path.read_text()
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
@@ -138,46 +114,35 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
                    "VALUES('settings-preserved-habit',?,'Keep this habit',1,2,3,0,0,0,1)", (user,))
 
     with application("gestures") as (window, log):
-        capture(window, "initial")
-        click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
-        click(window, 690, 684)  # Settings is the right footer card beside Profile.
-        hub = capture(window, "settings-hub")
-        hub.crop((88, 0, 900, 60)).save(OUTPUT / "settings-title.png")
-        text = command("tesseract", str(OUTPUT / "settings-title.png"), "stdout", "--psm", "7")
-        assert "Settings" in text, "The Settings fixture opened a different app"
-        click(window, 200, 325)  # Appearance.
-        before = capture(window, "appearance")
-        text = command("tesseract", str(OUTPUT / "appearance.png"), "stdout")
-        assert "Scale factor" in text, "Appearance did not open before the slider gesture"
-        # Coordinates come from the 900x720 rendered Appearance panel.
-        command("xdotool", "mousemove", "--window", window, "650", "388")
-        time.sleep(.15)
-        command("xdotool", "mousedown", "1")
-        time.sleep(.3)
-        before = settled_sidebar(window)
-        for x, y in ((550, 398), (860, 400), (580, 380), (845, 393)):
-            command("xdotool", "mousemove", "--window", window, str(x), str(y))
-            time.sleep(.12)
+        driver.press(label="Apps", role="button")
+        driver.press(label="Settings", role="button")
+        # The Settings app, not another one, opened on its categories.
+        driver.wait(label="Device", role="button")
+        driver.press(contains="Appearance")
+        driver.wait(contains="Scale factor")
+        slider = driver.wait(role="slider")
+        x, y = UiDriver.center(slider)
+        driver.pointer(x, y)
+        driver.pointer(x, y, down=True)
+        driver.wait_idle(frames=3)
+        before = sidebars()
+        assert before, "No sidebar widgets to compare during the drag"
+        left, right = slider["x"] + 4, slider["x"] + slider["width"] - 4
+        for x_moved, y_moved in ((left, y + 10), (right, y + 12), (left + 30, y - 8), (right - 15, y + 5)):
+            driver.pointer(x_moved, y_moved, down=True)
             assert settings()["ui_scale"] == "10", "Scale changed while the slider was held"
-            held = capture(window, f"held-{x}")
-            difference = ImageChops.difference(before.crop((0, 0, 344, 720)),
-                                              held.crop((0, 0, 344, 720))).getbbox()
-            assert difference is None, f"Sidebars moved during drag: {difference}"
-        command("xdotool", "mouseup", "1")
-        time.sleep(.5)
-        assert settings()["ui_scale"] != "10", "Release did not commit the scale"
-        capture(window, "scaled-after-release")
-        command("xdotool", "keydown", "ctrl")
-        time.sleep(.15)
-        command("xdotool", "keydown", "0")
-        time.sleep(.15)
-        command("xdotool", "keyup", "0", "ctrl")
+            moved = [node for node in sidebars() if node not in before]
+            assert not moved, f"Sidebars moved during drag: {moved}"
+        driver.pointer(right - 15, y + 5, down=False)
+        driver.release_pointer()
+        deadline = time.monotonic() + 5
+        while settings()["ui_scale"] == "10":
+            assert time.monotonic() < deadline, "Release did not commit the scale"
+            time.sleep(.05)
+        driver.key(ord("0"), control=True)
         wait_setting("ui_scale", 10)
-        time.sleep(.5)
-        image = capture(window, "settings-without-apps-panel")
-        image.save(OUTPUT / "settings-without-apps-panel.png")
-        text = command("tesseract", str(OUTPUT / "settings-without-apps-panel.png"), "stdout")
-        assert "Apps and favorites" not in text, "Removed panel remains in Settings"
+        driver.wait_idle(frames=3)
+        assert not driver.find(contains="Apps and favorites"), "Removed panel remains in Settings"
         assert order() == [12, 1], "Settings changed the favorite order"
         assert settings()["enabled_apps"] == "22"
 
