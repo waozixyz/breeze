@@ -1,22 +1,22 @@
 """Private-display regression of the real Practices download controls."""
-import csv
-import io
-import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-from PIL import Image, ImageOps, ImageStat
+
+from ui_driver import UiDriver
 
 assert int(os.environ.get('DISPLAY', ':0').split(':')[-1].split('.')[0]) >= 300
 ROOT = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
 output = ROOT / 'build/practice-downloads-ui-test'
 output.mkdir(parents=True, exist_ok=True)
+driver = UiDriver(output / 'driver')
 
 
 def command(*arguments):
@@ -34,11 +34,16 @@ def stop(process):
 
 
 def launch(profile, name, width=390, height=844):
-    log = (output / (name + '.log')).open('w')
+    log_path = output / (name + '.log')
+    log = log_path.open('w')
     process = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zib')],
-        cwd=ROOT, env=os.environ | {'APP_DATA_ROOT': str(profile), 'APP_NO_TRAY': '1',
-        'SDL_AUDIODRIVER': 'dummy', 'YUE_DESKTOP_RECOVERY': '0'}, stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(200):
+        cwd=ROOT, env=os.environ | driver.environment() | {'APP_DATA_ROOT': str(profile),
+        'APP_NO_TRAY': '1', 'SDL_AUDIODRIVER': 'dummy', 'YUE_DESKTOP_RECOVERY': '0'},
+        stdout=log, stderr=subprocess.STDOUT)
+    driver.attach(process, log_path)
+    # A loaded machine can take a while to start the app.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         assert process.poll() is None, 'App exited: ' + name
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(process.pid)],
                                capture_output=True, text=True)
@@ -46,271 +51,112 @@ def launch(profile, name, width=390, height=844):
             window = found.stdout.splitlines()[0]
             command('xdotool', 'windowsize', window, str(width), str(height))
             command('xdotool', 'windowmove', window, '0', '0')
-            time.sleep(2)
+            driver.wait_idle(frames=3)
             return process, window
         time.sleep(.1)
     stop(process)
     raise AssertionError('App did not map its own window')
 
 
-def light_text(image, name):
-    """A dark screen's light text as black on white at twice the size, which
-    OCR reads on tinted bars too; None for a light screen."""
-    with Image.open(image) as picture:
-        gray = ImageOps.grayscale(picture)
-    if ImageStat.Stat(gray).mean[0] >= 110:
-        return None
-    path = output / (name + '-light-text.png')
-    gray.point(lambda value: 0 if value > 150 else 255).resize((gray.width * 2, gray.height * 2)).save(path)
-    return path
+def screen_text():
+    """What the window shows: every visible label."""
+    return driver.text()
 
 
-def capture(window, name):
-    image = output / (name + '.png')
-    command('import', '-window', window, str(image))
-    text = command('tesseract', str(image), 'stdout', '--psm', '11')
-    with Image.open(image) as picture:
-        enlarged = output / (name + '-ocr.png')
-        picture.resize((picture.width * 2, picture.height * 2)).save(enlarged)
-        # Isolate the header action from detailed banner artwork on narrow
-        # screens. Keep the full original capture as the visual evidence.
-        header = picture.crop((max(0, picture.width - 160), 16, picture.width - 16, 60))
-        header = ImageOps.invert(ImageOps.grayscale(header)).resize((576, 176))
-        header_path = output / (name + '-header.png')
-        header.save(header_path)
-    text += '\n' + command('tesseract', str(enlarged), 'stdout', '--psm', '11')
-    text += '\n' + command('tesseract', str(header_path), 'stdout', '--psm', '7')
-    # On a wide window the night artwork around a centred dialog defeats
-    # OCR's page segmentation; read the dialog's column on its own too.
-    with Image.open(image) as picture:
-        if picture.width > 800:
-            left = (picture.width - 760) // 2
-            column = output / (name + '-column.png')
-            picture.crop((left, 60, left + 760, picture.height - 60)).save(column)
-            text += '\n' + command('tesseract', str(column), 'stdout', '--psm', '11')
-    stale = output / (name + '-light-text.png')
-    if stale.exists():
-        stale.unlink()
-    light = light_text(image, name)
-    if light:
-        text += '\n' + command('tesseract', str(light), 'stdout', '--psm', '11')
-    # OCR's page segmentation skips the dark text on the mint action fill.
-    # Read that actual rendered button separately, retaining the full image.
-    with Image.open(image) as picture:
-        rgb = picture.convert('RGB')
-        rows = []
-        for y in range(picture.height // 2, picture.height):
-            mint = sum(1 for x in range(picture.width)
-                       if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30 and 130 < c[2] < 220)(rgb.getpixel((x, y))))
-            if mint > min(200, picture.width // 3):
-                rows.append(y)
-        if rows:
-            for index in range(len(rows) - 1, 0, -1):
-                if rows[index] - rows[index - 1] > 12:
-                    rows = rows[index:]
-                    break
-            middle = (rows[0] + rows[-1]) // 2
-            columns = [x for x in range(picture.width)
-                       if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
-                           and 130 < c[2] < 220)(rgb.getpixel((x, middle)))]
-            if len(columns) > 12 and rows[-1] - rows[0] > 8:
-                button = picture.crop((columns[0] + 3, rows[0] + 3, columns[-1] - 2, rows[-1] - 2))
-                button = ImageOps.grayscale(button).point(lambda value: 255 if value > 120 else 0)
-                button = button.resize((button.width * 3, button.height * 3))
-                button_path = output / (name + '-action.png')
-                button.save(button_path)
-                text += '\n' + command('tesseract', str(button_path), 'stdout', '--psm', '7')
-    (output / (name + '.txt')).write_text(text)
-    return image, text
+def manager_nodes():
+    """Every widget of the Manage practices dialog, also those scrolled away."""
+    nodes = driver.tree()
+    modals = [node for node in nodes if node['kind'] == 'modal']
+    assert modals, 'Manage practices is not open: ' + screen_text()
+    inside = {modals[-1]['index']}
+    found = []
+    for node in nodes:
+        if node['parent'] in inside:
+            inside.add(node['index'])
+            found.append(node)
+    return found
 
 
-def click_word(window, name, target):
-    image, text = capture(window, name)
-    assert target in text, text
-    matches = [row for row in words_of(image) if row['text'] == target]
-    if matches:
-        word = matches[-1]
-        x = int(word['left']) + int(word['width']) // 2
-        y = int(word['top']) + int(word['height']) // 2
-    elif target == 'Manage':
-        with Image.open(image) as picture:
-            x = picture.width - 85
-        y = 38
-    else:
-        # Mint-filled action text is read from its enlarged crop by capture().
-        with Image.open(image) as picture:
-            rgb = picture.convert('RGB')
-            rows = [y for y in range(picture.height // 2, picture.height)
-                    if sum(1 for x in range(picture.width)
-                           if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
-                               and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > min(200, picture.width // 3)]
-            assert rows, 'Action button not found: ' + target
-            for index in range(len(rows) - 1, 0, -1):
-                if rows[index] - rows[index - 1] > 12:
-                    rows = rows[index:]
-                    break
-            x = picture.width * 3 // 4
-            y = (rows[0] + rows[-1]) // 2
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.15)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(.6)
+def manager_text():
+    return '\n'.join(node['label'] for node in manager_nodes() if node['label'])
 
 
-def click_mint(window, name, first=True):
-    """Press a filled mint action that OCR cannot read, by its rendered fill."""
-    image, _ = capture(window, name)
-    with Image.open(image) as picture:
-        rgb = picture.convert('RGB')
-        rows = [y for y in range(130, picture.height - 40)
-                if sum(1 for x in range(picture.width)
-                       if (lambda c: 100 < c[0] < 200 and c[1] > c[0] + 30
-                           and 130 < c[2] < 220)(rgb.getpixel((x, y)))) > picture.width // 4]
-        assert rows, 'No filled action in ' + name
-        y = rows[0] + 15 if first else rows[-1] - 15
-        x = picture.width // 2
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.15)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(1)
+def manager_rows():
+    """The dialog's practices in order. Each row starts with its drag handle,
+    an unlabeled button, then its name, size, price and buttons."""
+    nodes = manager_nodes()
+    scroll = next(node for node in nodes if node['kind'] == 'scroll')
+    rows = []
+    for node in nodes:
+        if node['parent'] != scroll['index']:
+            continue
+        if node['kind'] == 'button' and not node['label']:
+            rows.append(dict(handle=node, name='', nodes=[]))
+            continue
+        assert rows, ('A practice row has no handle', node)
+        row = rows[-1]
+        if node['kind'] == 'text' and not row['name']:
+            row['name'] = node['label']
+        row['nodes'].append(node)
+    return rows
 
 
-def read_manager(window, name, width, height, steps=8):
-    """Read the whole Manage practices list, scrolling a few rows at a time."""
-    _, text = capture(window, name + '-0')
-    for step in range(1, steps + 1):
-        command('xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2))
-        command('xdotool', 'click', '--repeat', '3', '--delay', '80', '5')
-        time.sleep(.4)
-        text += '\n' + capture(window, name + '-' + str(step))[1]
-    return text
+def manager_row(name):
+    rows = [row for row in manager_rows() if row['name'].startswith(name)]
+    assert rows, f'No {name} row: ' + manager_text()
+    return rows[0]
 
 
-def close_manager(window):
-    command('xdotool', 'mousemove', '--window', window, '350', '86')
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.15)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(.5)
+def row_text(row):
+    return '\n'.join(node['label'] for node in row['nodes'] if node['label'])
 
 
-def words_of(image):
-    """Rendered words with their boxes, also from a wide window's dialog column."""
-    tsv = command('tesseract', str(image), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-    words = [row for row in csv.DictReader(io.StringIO(tsv), delimiter='\t') if row['text'].strip()]
-    column = Path(str(image)[:-4] + '-column.png')
-    if column.exists():
-        with Image.open(image) as picture:
-            left = (picture.width - 760) // 2
-        tsv = command('tesseract', str(column), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-        for row in csv.DictReader(io.StringIO(tsv), delimiter='\t'):
-            if row['text'].strip():
-                row['left'] = str(int(row['left']) + left)
-                row['top'] = str(int(row['top']) + 60)
-                words.append(row)
-    # Text on a filled button reads best at twice the size.
-    enlarged = Path(str(image)[:-4] + '-ocr.png')
-    if enlarged.exists():
-        tsv = command('tesseract', str(enlarged), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-        for row in csv.DictReader(io.StringIO(tsv), delimiter='\t'):
-            if row['text'].strip():
-                for field in ('left', 'top', 'width', 'height'):
-                    row[field] = str(int(row[field]) // 2)
-                words.append(row)
-    light = Path(str(image)[:-4] + '-light-text.png')
-    if light.exists():
-        tsv = command('tesseract', str(light), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-        for row in csv.DictReader(io.StringIO(tsv), delimiter='\t'):
-            if row['text'].strip():
-                for field in ('left', 'top', 'width', 'height'):
-                    row[field] = str(int(row[field]) // 2)
-                words.append(row)
-    return words
+def act(name, label):
+    """Press the button of a practice's row."""
+    buttons = [node for node in manager_row(name)['nodes'] if node['kind'] == 'button'
+               and node['label'] == label]
+    assert buttons, f'{name} has no {label} button: ' + manager_text()
+    driver.press(key=buttons[0]['key'])
+    driver.wait_idle(frames=2)
 
 
-def press(window, x, y):
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.15)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(.6)
+def open_manager():
+    driver.press(label='Manage practices', role='button')
+    driver.wait(label='Close', role='button')
+    driver.wait_idle(frames=2)
 
 
-def drag_row(window, name, practice_word, target_word):
-    """Drag a practice by the six-dot handle before its name onto another word."""
-    image, text = capture(window, name)
-    words = words_of(image)
-    practice = [row for row in words if row['text'] == practice_word]
-    target = [row for row in words if row['text'] == target_word]
-    assert practice and target, text
-    x = int(practice[-1]['left']) - 20
-    y = int(practice[-1]['top']) + int(practice[-1]['height']) // 2
-    to_x = int(target[0]['left']) + int(target[0]['width']) // 2
-    to_y = int(target[0]['top']) + int(target[0]['height']) // 2
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.2)
-    for step in range(1, 13):
-        command('xdotool', 'mousemove', '--window', window,
-                str(x + (to_x - x) * step // 12), str(y + (to_y - y) * step // 12))
-        time.sleep(.08)
-    time.sleep(.4)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(1)
+def close_manager():
+    close = [node for node in manager_nodes() if node['label'] == 'Close' and node['kind'] == 'button']
+    assert close, manager_text()
+    driver.press(key=close[0]['key'])
+    deadline = time.monotonic() + 10
+    while any(node['kind'] == 'modal' for node in driver.tree()):
+        assert time.monotonic() < deadline, 'Manage practices did not close'
+        time.sleep(.05)
+    driver.wait_idle(frames=2)
 
 
-def filled_button(image, practice):
-    """The centre of the first wide filled button at or below a practice's
-    name, found by its fill where OCR cannot read the text on it."""
-    with Image.open(image) as picture:
-        rgb = picture.convert('RGB')
-    left = int(practice['left'])
-    top = int(practice['top'])
-    base = rgb.getpixel((max(0, left - 4), max(0, top - 4)))
-
-    def run(y):
-        start = None
-        for x in range(left, rgb.width):
-            colour = rgb.getpixel((x, y))
-            filled = sum(abs(colour[i] - base[i]) for i in range(3)) > 60
-            if filled and start is None:
-                start = x
-            elif not filled and start is not None:
-                if x - start >= 120:
-                    return start, x
-                start = None
-        return None
-
-    for y in range(max(0, top - 12), min(rgb.height - 8, top + 160), 2):
-        # A button is filled on several lines in a row; a separator is not.
-        found = run(y)
-        if found and run(y + 4) and run(y + 8):
-            return (found[0] + found[1]) // 2, y + 14
-    return None
+def scroll_manager(steps):
+    """Turn the wheel over the dialog's list, one step a frame."""
+    scroll = next(node for node in manager_nodes() if node['kind'] == 'scroll')
+    x, y = UiDriver.center(scroll)
+    for _ in range(steps):
+        driver.pointer(x, y, wheel=-1)
+    driver.release_pointer()
+    driver.wait_idle(frames=2)
 
 
-def act(window, name, practice_word, label):
-    """Press the button of a practice's row: the first word label at or below
-    the practice's name, or the first filled button there when OCR cannot
-    read the text on a filled button."""
-    image, text = capture(window, name + '-row')
-    words = words_of(image)
-    practice = [row for row in words if row['text'] == practice_word]
-    assert practice, text
-    top = int(practice[-1]['top'])
-    buttons = sorted((row for row in words if row['text'] == label and
-                      top - 12 <= int(row['top']) <= top + 120), key=lambda row: int(row['top']))
-    if buttons:
-        press(window, int(buttons[0]['left']) + int(buttons[0]['width']) // 2,
-              int(buttons[0]['top']) + int(buttons[0]['height']) // 2)
-    else:
-        button = filled_button(image, practice[-1])
-        assert button, text
-        press(window, *button)
-    time.sleep(.6)
-    return text
+def wait_file(path, present=True):
+    """A marker or pack the press wrote or removed."""
+    deadline = time.monotonic() + 5
+    while path.exists() != present:
+        assert time.monotonic() < deadline, (path, 'present' if present else 'absent')
+        time.sleep(.05)
+
+
+def visible_label(contains):
+    return driver.find(contains=contains, visible=True)
 
 
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
@@ -336,47 +182,58 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
              for name in ('whm', 'meditation', 'sunsalutation')}
     process, window = launch(profile, 'installed')
     try:
-        # Wim Hof ships installed; it is the only practice on the home.
-        _, text = capture(window, 'installed')
-        assert 'Manage practices' in text and 'Start' in text and '/ 5' not in text, text
-        click_word(window, 'manager-open', 'Manage')
-        time.sleep(1)
-        _, text = capture(window, 'manager')
+        # Wim Hof ships installed; it is the only practice on the home, so
+        # there is no "1 / 5" between practices.
+        driver.wait(label='Manage practices', role='button')
+        driver.wait(label='Start Practice', role='button')
+        assert not any(re.fullmatch(r'\d+ / \d+', label) for label in driver.labels()), screen_text()
+        open_manager()
+        text = manager_text()
         whm_kb = (sizes['whm'] + 1023) // 1024
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
         # One list: Wim Hof is on Practice, so its button uninstalls it;
         # Meditation, Breathing Patterns and Sun Salutation install. Each row
         # has its size and one button, and no menu.
-        assert 'Uninstall' in text and 'On Practice' not in text and 'On device' not in text, text
-        assert str(whm_kb) + ' KB' in text and 'Comes with' not in text, text
-        assert str(meditation_kb) + ' KB' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
+        assert 'Uninstall' in row_text(manager_row('Wim')), text
+        assert 'On Practice' not in text and 'On device' not in text, text
+        assert str(whm_kb) + ' KB' in row_text(manager_row('Wim')) and 'Comes with' not in text, text
+        assert str(meditation_kb) + ' KB' in row_text(manager_row('Meditation')), text
+        assert str(sun_mb) + 'MB' in row_text(manager_row('Sun')).replace(' ', ''), text
+        for row in manager_rows():
+            buttons = [node for node in row['nodes'] if node['kind'] == 'button']
+            assert len(buttons) == 1, (row['name'], 'has more than one button', buttons)
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
         # Install adds Meditation from the app's own copy at once, without a
         # copy of its own.
-        act(window, 'manager-add-meditation', 'Meditation', 'Install')
-        _, text = capture(window, 'manager-added')
+        act('Meditation', 'Install')
+        text = manager_text()
         assert 'Downloading' not in text and str(meditation_kb) + ' KB' in text, text
+        assert 'Uninstall' in row_text(manager_row('Meditation')), text
+        wait_file(cache / 'practice-meditation.added')
         assert not (cache / 'practice-meditation.zib').exists()
-        assert (cache / 'practice-meditation.added').exists()
-        # Dropped on Wim Hof, Meditation takes its place in the order.
-        drag_row(window, 'manager-reorder', 'Meditation', 'Wim')
-        _, text = capture(window, 'manager-reordered')
-        assert 0 <= text.find('Meditation') < text.find('Wim'), text
+        # Dropped on Wim Hof by the six-dot handle before its name, Meditation
+        # takes its place in the order.
+        meditation = manager_row('Meditation')
+        wim = next(node for node in manager_row('Wim')['nodes'] if node['label'].startswith('Wim'))
+        driver.drag(UiDriver.center(meditation['handle']), UiDriver.center(wim), steps=12)
+        driver.wait_idle(frames=3)
+        names = [row['name'] for row in manager_rows()]
+        assert names.index('Meditation') < names.index('Wim Hof Breathing'), names
         # Uninstall takes both off Practice; they come with the app, so
         # nothing is deleted and nothing asks.
-        act(window, 'manager-hide-meditation', 'Meditation', 'Uninstall')
-        assert (cache / 'practice-meditation.removed').exists()
-        act(window, 'manager-hide-whm', 'Wim', 'Uninstall')
-        _, text = capture(window, 'removed')
+        act('Meditation', 'Uninstall')
+        wait_file(cache / 'practice-meditation.removed')
+        act('Wim', 'Uninstall')
+        text = manager_text()
         assert 'Uninstall' not in text and str(whm_kb) + ' KB' in text, text
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
         assert not (cache / 'practice-meditation.added').exists()
-        close_manager(window)
-        _, text = capture(window, 'empty')
-        assert 'No practices installed' in text and 'Start' not in text, text
+        close_manager()
+        driver.wait(contains='No practices installed')
+        assert not visible_label('Start'), screen_text()
     finally:
         stop(process)
     assert (cache / 'practice-whm.removed').exists()
@@ -387,19 +244,19 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert order and order[0] == '110324', order
     process, window = launch(profile, 'still-removed')
     try:
-        _, text = capture(window, 'still-removed')
-        assert 'No practices installed' in text, text
-        click_mint(window, 'empty-manage')
-        _, text = capture(window, 'manager-removed')
+        driver.wait(contains='No practices installed')
+        # The empty home's own Manage practices action opens the dialog.
+        open_manager()
+        text = manager_text()
         assert 'Uninstall' not in text and 'Remove' not in text, text
         # Wim Hof's Install adds it back from the app's own copy, without a
         # download.
-        act(window, 'manager-restore', 'Wim', 'Install')
-        _, text = capture(window, 'manager-restored')
-        assert 'Uninstall' in text and str(whm_kb) + ' KB' in text, text
-        close_manager(window)
-        _, text = capture(window, 'restored')
-        assert 'Start' in text and 'No practices installed' not in text, text
+        act('Wim', 'Install')
+        text = manager_text()
+        assert 'Uninstall' in row_text(manager_row('Wim')) and str(whm_kb) + ' KB' in text, text
+        close_manager()
+        driver.wait(label='Start Practice', role='button')
+        assert not visible_label('No practices installed'), screen_text()
     finally:
         stop(process)
     assert not (cache / 'practice-whm.removed').exists()
@@ -417,24 +274,19 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     (cache / 'practice-meditation.removed').unlink()
     process, window = launch(profile, 'two-installed')
     try:
-        _, text = capture(window, 'two-installed')
         # Meditation was dragged ahead of Wim Hof, so the selected Wim Hof is
         # second on Practice.
-        assert '2 / 2' in text or '2/2' in text, text
+        driver.wait(label='2 / 2')
     finally:
         stop(process)
     process, window = launch(profile, 'narrow', 320, 640)
     try:
-        _, text = capture(window, 'narrow')
-        assert 'Manage practices' in text and 'Start' in text, text
-        click_word(window, 'narrow-open', 'Manage')
-        _, text = capture(window, 'narrow-manager')
-        assert 'Meditation' in text, text
-        command('xdotool', 'mousemove', '--window', window, '160', '350')
-        command('xdotool', 'click', '--repeat', '10', '--delay', '80', '5')
-        time.sleep(.5)
-        _, text = capture(window, 'narrow-manager-bottom')
-        assert 'Tai Chi' in text, text
+        driver.wait(label='Manage practices', role='button')
+        driver.wait(label='Start Practice', role='button')
+        open_manager()
+        driver.wait(label='Meditation')
+        scroll_manager(10)
+        driver.wait(label='Tai Chi')
     finally:
         stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -448,16 +300,15 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     # locked: off the home, offered at its price with its size.
     process, window = launch(profile, 'taichi-unowned', 1280, 900)
     try:
-        _, text = capture(window, 'taichi-unowned')
-        assert 'Tai Chi' not in text and 'Start' in text, text
-        click_word(window, 'taichi-unowned-open', 'Manage')
-        time.sleep(1)
-        command('xdotool', 'mousemove', '--window', window, '640', '450')
-        command('xdotool', 'click', '--repeat', '16', '--delay', '80', '5')
-        time.sleep(.5)
-        _, text = capture(window, 'taichi-unowned-manager')
-        assert 'Tai Chi' in text and 'Dew' in text and 'MB' in text, text
+        driver.wait(label='Start Practice', role='button')
+        assert not visible_label('Tai Chi'), screen_text()
+        open_manager()
+        scroll_manager(16)
+        driver.wait(label='Tai Chi')
+        text = row_text(manager_row('Tai Chi'))
+        assert 'Dew' in text and 'MB' in manager_text(), manager_text()
         # Narration is chosen in each practice's Customize, never here.
+        text = manager_text()
         assert 'Voice narration' not in text and 'Female voice' not in text, text
     finally:
         stop(process)
@@ -479,30 +330,31 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                                 ('desktop-manager', 1280, 900)]:
         process, window = launch(profile, name, width, height)
         try:
-            _, text = capture(window, name)
-            assert 'Start' in text and 'Manage practices' in text and 'Available offline' not in text, text
+            driver.wait(label='Start Practice', role='button')
+            driver.wait(label='Manage practices', role='button')
+            assert not visible_label('Available offline'), screen_text()
             # The account's purchase is known from the first frame: Tai Chi stays selected.
-            assert 'Tai Chi' in text, text
-            click_word(window, name + '-open', 'Manage')
-            time.sleep(1)
-            text = read_manager(window, name + '-manager', width, height)
-            assert 'Tai Chi' in text, text
+            driver.wait(label='Tai Chi')
+            open_manager()
+            # The whole list, also the rows scrolled out of the dialog.
+            text = manager_text()
+            assert 'Tai Chi' in [row['name'] for row in manager_rows()], text
             # Bought: no Dew price or unlock button is left.
             assert 'Dew' not in text and 'Unlock' not in text, text
             assert 'Voice narration' not in text and "Lumi's guide" not in text, text
             if name == 'desktop-manager':
-                close_manager(window)
-                click_word(window, name + '-customize', 'Customize')
-                time.sleep(1)
-                _, text = capture(window, name + '-customize-open')
+                close_manager()
+                driver.press(label='Customize', role='button')
                 # Jade woman speaks with the female voice, in the language
                 # chosen in a list that downloads or removes each language.
-                assert 'Female voice' in text and 'Male voice' in text and 'English' in text, text
+                driver.wait(label='Female voice', role='button')
+                driver.wait(label='Male voice', role='button')
+                driver.wait(label='English', role='dropdown')
+                text = screen_text()
                 assert 'Plays in' not in text and 'Downloading' not in text, text
-                click_word(window, name + '-languages', 'English')
-                time.sleep(.5)
-                _, text = capture(window, name + '-languages-open')
-                assert 'Deutsch' in text and 'Italiano' in text, text
+                driver.press(label='English', role='dropdown')
+                driver.wait(label='Deutsch')
+                driver.wait(label='Italiano')
         finally:
             stop(process)
     # Sun Salutation speaks in its own free packs; a man speaks with the male voice.
@@ -516,14 +368,19 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                         cache / ('practice-' + name + '.zib'))
     process, window = launch(profile, 'sun-customize', 1280, 900)
     try:
-        click_word(window, 'sun-customize-open', 'Customize')
-        time.sleep(1)
-        command('xdotool', 'mousemove', '--window', window, '640', '450')
-        command('xdotool', 'click', '--repeat', '20', '--delay', '80', '5')
-        time.sleep(.5)
-        _, text = capture(window, 'sun-customize-narration')
-        assert 'Voice narration' in text and 'Female voice' in text and 'Male voice' in text, text
-        assert 'English' in text and 'Plays in' not in text, text
+        driver.press(label='Customize', role='button')
+        driver.wait(label='Background music')
+        parent = driver.find(label='Background music')[0]['parent']
+        scroll = next(node for node in driver.tree() if node['index'] == parent)
+        x, y = UiDriver.center(scroll)
+        for _ in range(20):
+            driver.pointer(x, y, wheel=-1)
+        driver.release_pointer()
+        driver.wait(label='Voice narration')
+        driver.wait(label='Female voice', role='button')
+        driver.wait(label='Male voice', role='button')
+        driver.wait(label='English', role='dropdown')
+        assert not visible_label('Plays in'), screen_text()
     finally:
         stop(process)
     # Uninstalling a downloaded practice asks once, then deletes the copy and
@@ -534,38 +391,36 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                              (str(value), user, key))
     process, window = launch(profile, 'sun-delete', 1280, 900)
     try:
-        click_word(window, 'sun-delete-open', 'Manage')
-        time.sleep(1)
-        _, text = capture(window, 'sun-delete-manager')
+        open_manager()
+        text = row_text(manager_row('Sun'))
         assert 'Sun Salutation' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
-        act(window, 'sun-delete', 'Sun', 'Uninstall')
-        image, text = capture(window, 'sun-delete-asked')
-        assert 'Uninstall Sun Salutation?' in text and 'Your progress stays.' in text, text
+        act('Sun', 'Uninstall')
+        row = manager_row('Sun')
+        question = [node for node in row['nodes'] if node['label'].startswith('Uninstall Sun Salutation?')]
+        assert question and 'Your progress stays.' in question[0]['label'], row_text(row)
+        question = question[0]
         assert (cache / 'practice-sunsalutation.zib').exists()
         # Uninstall fills the right half under the question, beside Cancel;
         # the question starts where both buttons do.
-        words = words_of(image)
-        cancel = [row for row in words if row['text'] == 'Cancel']
-        assert cancel, text
-        # The question's first word: the lowest Uninstall above Cancel (the
-        # row's own button sits higher, beside the name).
-        question = sorted((row for row in words if row['text'] == 'Uninstall' and
-                           int(row['top']) < int(cancel[-1]['top']) - 8), key=lambda row: int(row['top']))[-1:]
-        assert question, text
-        cancel_x = int(cancel[-1]['left']) + int(cancel[-1]['width']) // 2
-        start_x = int(question[0]['left'])
-        press(window, cancel_x + 2 * (cancel_x - start_x) + 8,
-              int(cancel[-1]['top']) + int(cancel[-1]['height']) // 2)
-        _, text = capture(window, 'sun-deleted')
+        buttons = [node for node in row['nodes'] if node['kind'] == 'button']
+        cancel = next(node for node in buttons if node['label'] == 'Cancel')
+        confirm = buttons[buttons.index(cancel) + 1]
+        assert confirm['label'] == 'Uninstall', buttons
+        assert question['y'] < cancel['y'] and confirm['y'] == cancel['y'], (question, cancel, confirm)
+        assert abs(confirm['width'] - cancel['width']) < 2 and confirm['x'] > cancel['x'] + cancel['width'] - 1, \
+            (cancel, confirm)
+        assert abs(question['x'] - cancel['x']) < 1, (question, cancel)
+        assert abs(question['x'] + question['width'] - confirm['x'] - confirm['width']) < 2, (question, confirm)
+        driver.press(key=confirm['key'])
         # The files are gone; the row still shows the download's size.
-        assert not (cache / 'practice-sunsalutation.zib').exists()
+        wait_file(cache / 'practice-sunsalutation.zib', present=False)
+        driver.wait_idle(frames=2)
+        text = row_text(manager_row('Sun'))
         assert str(sun_mb) + 'MB' in text.replace(' ', ''), text
         assert not (cache / 'practice-sunsalutation.en.male.zib').exists()
         assert not (cache / 'practice-sunsalutation.removed').exists()
-        # Its button installs again: Uninstall left the row (the filled
-        # Install button's text is not readable by OCR).
-        sun_row = text[text.index('Sun Salutation'):]
-        assert 'Uninstall' not in sun_row[:sun_row.find('Tai Chi') if 'Tai Chi' in sun_row else len(sun_row)], text
+        # Its button installs again: Uninstall left the row.
+        assert 'Uninstall' not in text and 'Install' in text, text
     finally:
         stop(process)
 print('Private Practices modal: one Install, Buy, Cancel or Uninstall button per practice, real sizes, '
