@@ -1,5 +1,9 @@
 # Chess changelog
 
+## [1.0.1] - 2026-10-17
+
+- Chess is out of beta: More apps lists it for everyone, without Show beta apps.
+
 ## [1.0.0] - 2026-10-17
 
 - Play chess against the computer at three levels, as White or Black, with
