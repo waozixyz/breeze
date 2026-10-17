@@ -132,8 +132,29 @@ def chat(profile):
     return [{key: value for key, value in json.loads(row[0]).items() if key != "time"} for row in rows]
 
 
-def send(window, profile, text, *, button=False):
+def send(window, profile, text, *, button=False, attempts=2):
     before = chat(profile)
+    for attempt in range(attempts):
+        type_message(window, profile, before, text, button)
+        # A slow runner can drop the keystrokes of an app that just started;
+        # nothing was sent then, so typing the message again is safe.
+        if attempt + 1 < attempts and not wait_quietly(
+                lambda: chat(profile) != before, 6.0):
+            continue
+        break
+    confirm_exchange(window, profile, before, text)
+
+
+def wait_quietly(condition, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def type_message(window, profile, before, text, button):
     tap(window, 490, 676)
     command("xdotool", "keydown", "--clearmodifiers", "ctrl+a")
     time.sleep(0.15)
@@ -155,6 +176,8 @@ def send(window, profile, text, *, button=False):
         time.sleep(0.15)
         command("xdotool", "keyup", "Return")
 
+
+def confirm_exchange(window, profile, before, text):
     def exchange_saved():
         rows = chat(profile)
         return (rows != before and len(rows) >= 2 and
