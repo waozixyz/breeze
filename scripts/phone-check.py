@@ -49,7 +49,7 @@ TOOLING = ("scripts/phone-check.py", "scripts/check-phone-check.py", "scripts/re
            "scripts/create-avd.sh", "scripts/android-audio-e2e.sh",
            "scripts/audio-envelope-match.py", "scripts/make_appcast.py",
            "scripts/list-expected-release-assets.sh", "scripts/install-git-hooks.sh",
-           "scripts/plan9-generated-check.rc", "packaging/size-budgets.json")
+           "scripts/plan9-generated-check.rc", "packaging/size-budgets.json", "mk/tests-*.mk")
 RECEIPTS = "releases/phone-checks"
 # The breathing circle animates for the whole measured window, so the app
 # must keep the display's refresh rate with only occasional late frames.

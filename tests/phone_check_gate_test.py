@@ -72,7 +72,7 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.record()
         later = {"docs/notes.md": "later documentation\n", "tests/extra.py": "\n",
                  "scripts/check-version.py": "stricter check\n", "scripts/web-smoke-test.mjs": "\n",
-                 "scripts/release.py": "\n", ".github/workflows/ci.yml": "\n",
+                 "scripts/release.py": "\n", ".github/workflows/ci.yml": "\n", "mk/tests-ui.mk": "\n",
                  "CHANGELOG.md": "## [3.0.0]\n- shorter store notes\n", "TODO.md": "\n"}
         for name, text in later.items():
             with self.subTest(path=name):
