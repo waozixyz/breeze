@@ -633,8 +633,10 @@ A release is one commit, made last:
    24.04 container with the locked packages: Secret Scan, package URLs, the
    large-file guard, `make test`, `make visual-test` and
    `make package-compat-test`. It does not run the browser add-on smoke
-   tests, shard 0's Daochi sync test or the platform builds. Outputs stay in
-   `build/release-ready/`, so later runs are incremental.
+   tests, shard 0's Daochi sync test or the platform builds. A run takes
+   about 90 minutes; outputs stay in `build/release-ready/`. The container
+   reads unchanged files from this checkout, so when another session edits
+   files during the run, it reports them and records no pass.
 3. With the development Moto connected (here or through the ThinkPad),
    `make release` builds the debug APK for its ABI (or takes `APK=...`),
    checks it and commits the receipt and any version files as

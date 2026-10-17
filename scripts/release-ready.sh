@@ -8,7 +8,9 @@
 # It sees this checkout through an overlay and resets it to HEAD there, so it
 # tests the committed content with the locked packages (no ziran.local.toml),
 # without untracked files or secrets; nothing it writes reaches the checkout.
-# Build outputs stay in build/release-ready/ for faster later runs.
+# Files nobody changed since HEAD are read live, so when another session
+# edits files during the run, the run names them and records no pass.
+# Build outputs stay in build/release-ready/; a run takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan (publishers, versions, secrets), Package URLs,
 # the large-file guard, Test (make test: all three shards, then
@@ -28,12 +30,31 @@ image_tag=$(cat .github/local-ci/Containerfile .github/apt/test-packages.txt | s
 image=localhost/inbe-ci:$image_tag
 commit=$(git rev-parse HEAD)
 
-content_of() {
-    python3 -c 'import importlib.util, sys
+# content COMMIT: what make release compares; tree: the tracked files on disk;
+# untracked: untracked files; leaked BEFORE COMMIT LIST: files that changed on
+# disk during the run while the container still read them from this checkout.
+state() {
+    python3 -c 'import importlib.util, subprocess, sys
 spec = importlib.util.spec_from_file_location("phone_check", "scripts/phone-check.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-print(module.release_content(module.ROOT, sys.argv[1]))' "$1"
+root = module.ROOT
+command = sys.argv[1]
+if command == "content":
+    print(module.release_content(root, sys.argv[2]))
+elif command == "tree":
+    print(module.working_tree(root))
+elif command == "untracked":
+    print(module.git(root, "ls-files", "--others", "--exclude-standard"), end="")
+else:
+    before, commit, listing = sys.argv[2:5]
+    after = module.working_tree(root)
+    names = lambda *argv: set(module.git(root, "diff-tree", "-r", "--name-only", "--no-renames", *argv).split())
+    # Files that differed from the commit at the start were rewritten inside
+    # the container and are its own; the others were read live.
+    leaked = names(before, after) - names(commit, before)
+    leaked |= set(module.git(root, "ls-files", "--others", "--exclude-standard").split()) - set(open(listing).read().split())
+    print("\n".join(sorted(leaked)))' "$@"
 }
 
 # Runs inside the container, from this variable rather than the script file,
@@ -101,7 +122,9 @@ if ! podman image exists "$image"; then
 fi
 
 rm -f "$output/stamp.json"
-content=$(content_of "$commit")
+content=$(state content "$commit")
+tree_before=$(state tree)
+state untracked > "$output/untracked-before"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "release-ready: testing $(git log -1 --format='%h %s' "$commit")"
 
@@ -122,6 +145,17 @@ podman run --rm --pull=never --userns=keep-id \
     -e HOME=/home/ubuntu -e CI=true -e RELEASE_READY_COMMIT="$commit" \
     -w /src "$image" sh -c "$inside" release-ready "$@" || status=$?
 
+# The container sees files nobody changed since HEAD live through the
+# overlay, so another session's edits during the run can reach the tests.
+leaked=$(state leaked "$tree_before" "$commit" "$output/untracked-before")
+rm -f "$output/untracked-before"
+if [ -n "$leaked" ]; then
+    count=$(printf '%s\n' "$leaked" | grep -c .)
+    echo "release-ready: $count files changed in the checkout during the run and may have reached" >&2
+    echo "the tests, so this is not a clean result; run again when other sessions are idle:" >&2
+    printf '%s\n' "$leaked" | head -n 10 | sed 's/^/  /' >&2
+    exit 3
+fi
 if [ "$status" -ne 0 ] || [ "$#" -gt 0 ]; then
     exit "$status"
 fi
