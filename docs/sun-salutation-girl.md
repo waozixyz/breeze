@@ -18,15 +18,6 @@ Pillow, and FFmpeg with libx264. Rendering is offscreen and deterministic: the
 same inputs give byte-identical video, and a still matches the same frame of
 the video, hair included.
 
-The same renderer is also written in Ziran, `scripts/sun_salutation_girl.zi`.
-`scripts/render-sun-salutation-girl-zi.sh` builds it to Python with Inbe's
-pinned toolchain (`zi2py`, with `LDLIBS=-lcairo` so its C calls reach
-Cairo) and runs it; set `STILL=seconds` for one frame and `THEME=dark` for
-the dark stage. It reads the same rig and parts and writes under
-`build/sun-salutation-girl-zi/`. It measures part images at a quarter of their
-size and resamples them with Cairo rather than Pillow, so its frames differ
-from the Python ones by a fraction of a pixel along edges.
-
 ## Inputs
 
 - `docs/sun-salutation-girl.json` holds everything that places her: the
@@ -67,27 +58,8 @@ coverage and the white top stays intact; nothing is keyed out afterwards.
 
 ## The app's frames
 
-`scripts/render-sun-salutation-characters.py` exports all four approved painted
-characters from `character-proposals/2026-09-30-banner-style/`. The original
-renderer’s `--sprites` option also invokes this exporter. Each character has
-991 transparent 256-colour PNGs: one held frame for the first pose and 90 frames
-for each of the eleven transitions at 30 fps. Short and bound hairstyles need
-no extra settling frames. Frames are rendered at 0.55 of the design size and
-saved under `assets/practices/sunsalutation/characters/<character>/`.
-
-The app exporter renders at twice the final resolution and downsamples the
-premultiplied surface before quantization. This smooths the articulated
-contours while keeping the existing texture dimensions and playback timing.
-White-background source paintings recover both edge coverage and the original
-paint color; retaining the white matte as opaque pixels would leave pale
-fringes on a dark background. Sources with real alpha keep their coverage.
-
-The generated `src/practices/sun_salutation/sun_salutation_frames.zi` places all
-four characters on one shared stage and supplies separate pose and thumbnail
-crop geometry for each. `docs/sun-salutation-characters.json` records the export.
-Customize saves the character choice; the live session, previews and guide all
-use it. Run `make sun-salutation-test sun-salutation-assets-test` to validate
-session behavior and decode all 3,964 shipped frames.
+The app plays the flat characters' frames; see
+[the flat renderer](sun-salutation-flat.md#app-frames).
 
 The app moves with the breath. Each pose is reached on one breath. The
 title bar shows only the step number; below it the session shows the pose's
