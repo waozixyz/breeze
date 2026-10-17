@@ -1,7 +1,7 @@
 // Practice download management, rendered by the current supervising host.
-// One list of practices. Each row has one state menu: On Practice, On device
-// or Not downloaded, Uninstall once it is downloaded, with what each choice
-// does; a paid practice offers its unlock instead. A row's handle drags it to another place in the order.
+// One list of practices. Each row has one button for what it needs: Install,
+// Buy for a paid practice, Cancel while it downloads, or Uninstall once it is
+// on Practice. A row's handle drags it to another place in the order.
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_settings.zi";
@@ -26,8 +26,6 @@
 #import "geometry"
 #import "modal_props"
 #import "modal_frame_widget"
-#import "overlay_props"
-#import "overlay_widget"
 #import "paint_queue"
 #import "reorder"
 #import "reorder_widget"
@@ -53,24 +51,18 @@ using WidgetKind;
 PRACTICE_HANDLE_WIDTH :: 44
 PRACTICE_ROW_PADDING :: 12
 PRACTICE_PILL_WIDTH :: 180
-PRACTICE_MENU_OPTION_HEIGHT :: 60
-// Rows narrower than this put the state menu under the practice's name.
+// Rows narrower than this put the button under the practice's name.
 PRACTICE_NARROW_WIDTH :: 460
 
-// Where a practice is: shown on Practice, kept on this device off Practice,
-// or not on this device.
-PRACTICE_STATE_ON_PRACTICE :: 0
-PRACTICE_STATE_ON_DEVICE :: 1
-PRACTICE_STATE_ABSENT :: 2
-
-PRACTICE_CHEVRON_ICON :: "S1.8rr:M6 9L12 15L18 9"
-PRACTICE_CHECK_ICON :: "S2rr:M5 12L10 17L19 7"
+// The one thing a row's button does.
+PRACTICE_ACTION_NONE :: 0
+PRACTICE_ACTION_INSTALL :: 1
+PRACTICE_ACTION_BUY :: 2
+PRACTICE_ACTION_CANCEL :: 3
+PRACTICE_ACTION_UNINSTALL :: 4
 
 // The practice whose row asks whether to delete its downloaded copy, or -1.
 practice_delete_asked: s32 = -1;
-// The practice whose state menu is open, or -1, and where its menu button is.
-practice_menu: s32 = -1;
-practice_menu_anchor: Rectangle;
 // The practice dragged by its handle, or -1: its row where it was grabbed,
 // the grab point inside the row, where the press began and the pointer now.
 practice_drag: s32 = -1;
@@ -254,14 +246,23 @@ PracticeDownloadOnPractice :: (practice: s32) -> bool {
     return !PracticeDownloadLocked(practice) && PracticeContentStatus(practice) == 1
 }
 
-PracticeDownloadState :: (practice: s32) -> s32 {
+// Buy for a paid practice not unlocked yet, Cancel while it downloads,
+// Uninstall once it is on Practice, Install otherwise. Practices from an
+// older app package have nothing to manage.
+PracticeDownloadAction :: (practice: s32) -> s32 {
+    if PracticeDownloadLocked(practice) {
+        return PRACTICE_ACTION_BUY
+    }
+    if PracticeDownloadIncluded(practice) {
+        return PRACTICE_ACTION_NONE
+    }
+    if PracticeContentStatus(practice) == 1 {
+        return PRACTICE_ACTION_CANCEL
+    }
     if PracticeDownloadOnPractice(practice) {
-        return PRACTICE_STATE_ON_PRACTICE
+        return PRACTICE_ACTION_UNINSTALL
     }
-    if PracticeShipped(practice) || PracticeContentStatus(practice) == 2 {
-        return PRACTICE_STATE_ON_DEVICE
-    }
-    return PRACTICE_STATE_ABSENT
+    return PRACTICE_ACTION_INSTALL
 }
 
 // The line under a practice's name: its size, or how its download is going.
@@ -298,81 +299,17 @@ PracticeDownloadNote :: (practice: s32) -> string {
     return ""
 }
 
-// The row's menu button names where the practice is, or its unlock.
-PracticeDownloadPillLabel :: (app: *InnerBreeze, practice: s32) -> string {
-    if PracticeDownloadLocked(practice) {
+PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -> string {
+    if action == PRACTICE_ACTION_BUY {
         return PracticeDownloadPriceText(app, "practice_unlock_button")
     }
-    if PracticeContentStatus(practice) == 1 {
-        return LocaleText("practice_download_busy")
+    if action == PRACTICE_ACTION_CANCEL {
+        return LocaleText("cancel_button")
     }
-    state := PracticeDownloadState(practice)
-    if state == PRACTICE_STATE_ON_PRACTICE {
-        return LocaleText("practice_state_on_practice")
-    }
-    if state == PRACTICE_STATE_ON_DEVICE {
-        return LocaleText("practice_state_on_device")
-    }
-    return LocaleText("practice_state_not_downloaded")
-}
-
-// The places a practice can be moved to, in its menu: each with what
-// choosing it does. A practice that ships with the app is always on this
-// device; one that is not on it cannot be kept there without being added.
-PracticeDownloadChoices :: struct {
-    states: [3]s32
-    count: s32
-}
-
-PracticeDownloadChoicesFor :: (practice: s32) -> PracticeDownloadChoices {
-    choices: PracticeDownloadChoices
-    status := PracticeContentStatus(practice)
-    shipped := PracticeShipped(practice)
-    choices.states[choices.count] = PRACTICE_STATE_ON_PRACTICE
-    choices.count += 1
-    if shipped || status == 2 {
-        choices.states[choices.count] = PRACTICE_STATE_ON_DEVICE
-        choices.count += 1
-    }
-    if !shipped {
-        choices.states[choices.count] = PRACTICE_STATE_ABSENT
-        choices.count += 1
-    }
-    return choices
-}
-
-// A downloaded practice is uninstalled; one that is not is Not downloaded.
-PracticeDownloadChoiceLabel :: (practice: s32, state: s32) -> string {
-    if state == PRACTICE_STATE_ON_PRACTICE {
-        return LocaleText("practice_state_on_practice")
-    }
-    if state == PRACTICE_STATE_ON_DEVICE {
-        return LocaleText("practice_state_on_device")
-    }
-    if PracticeContentStatus(practice) == 2 {
+    if action == PRACTICE_ACTION_UNINSTALL {
         return LocaleText("practice_uninstall")
     }
-    return LocaleText("practice_state_not_downloaded")
-}
-
-PracticeDownloadChoiceDetail :: (app: *InnerBreeze, practice: s32, state: s32) -> string {
-    status := PracticeContentStatus(practice)
-    if state == PRACTICE_STATE_ON_PRACTICE {
-        if PracticeDownloadState(practice) == PRACTICE_STATE_ABSENT {
-            return PracticeDownloadSizedText(app, practice, "practice_state_download")
-        }
-        return LocaleText("practice_state_shown")
-    }
-    if state == PRACTICE_STATE_ON_DEVICE {
-        return LocaleText("practice_state_hidden")
-    }
-    if status == 1 {
-        return LocaleText("practice_state_stop")
-    }
-    if status == 2 {
-        return PracticeDownloadSizedText(app, practice, "practice_state_frees")
-    }
-    return LocaleText("practice_state_absent")
+    return LocaleText("practice_install")
 }
 
 // Adds a practice to Practice, downloading it when it is not on this device.
@@ -383,27 +320,25 @@ PracticeDownloadAdd :: (app: *InnerBreeze, practice: s32) {
     PracticeContentRequest(practice)
 }
 
-// Moves a practice where its menu says. Not downloaded stops a download;
-// Uninstall asks once before deleting the downloaded copy.
-PracticeDownloadChoose :: (app: *InnerBreeze, practice: s32, state: s32) {
-    current := PracticeDownloadState(practice)
-    status := PracticeContentStatus(practice)
-    if state == PRACTICE_STATE_ON_PRACTICE {
-        if current != PRACTICE_STATE_ON_PRACTICE || status == 3 {
-            PracticeDownloadAdd(app, practice)
-        }
-        return
-    }
-    if state == PRACTICE_STATE_ON_DEVICE {
-        if current == PRACTICE_STATE_ON_PRACTICE {
-            PracticeContentHide(practice)
-        }
-        return
-    }
-    if status == 1 {
+// Does what a row's button says. Uninstalling a practice that comes with the
+// app only takes it off Practice; a downloaded one asks once before its
+// files are deleted.
+PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
+    practice_delete_asked = -1
+    if action == PRACTICE_ACTION_BUY {
+        UnlockStart()
+    } else if action == PRACTICE_ACTION_CANCEL {
         PracticeContentCancel(practice)
-    } else if status == 2 {
-        practice_delete_asked = practice
+    } else if action == PRACTICE_ACTION_INSTALL {
+        PracticeDownloadAdd(app, practice)
+    } else if action == PRACTICE_ACTION_UNINSTALL {
+        if PracticeDownloadStored(practice) {
+            practice_delete_asked = practice
+        } else if PracticeShipped(practice) {
+            PracticeContentHide(practice)
+        } else {
+            PracticeContentRemove(practice)
+        }
     }
 }
 
@@ -539,7 +474,6 @@ PracticeDownloadHandle :: (app: *InnerBreeze, practice: s32, row: Rectangle) {
         practice_drag_pointer = practice_drag_origin
         practice_drag_moving = false
         practice_drag_released = false
-        practice_menu = -1
     }
     if practice_drag == practice {
         practice_drag_seen = true
@@ -609,7 +543,7 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
                 cast(float32)width, cast(float32)(pad + shape.text_h + pad)})
     }
     PracticeDownloadFace(app, practice, shape, x, y, movable)
-    // The menu button: beside the name, or under it on a narrow row.
+    // The button: beside the name, or under it on a narrow row.
     pill_w := AppScale(PRACTICE_PILL_WIDTH)
     pill_x := x + width - pad - pill_w
     pill_y := y + pad
@@ -619,30 +553,22 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
         pill_y = y + pad + shape.text_h + AppScale(8)
     }
     pill := Rectangle.{cast(float32)pill_x, cast(float32)pill_y, cast(float32)pill_w, cast(float32)AppScale(44)}
-    busy := practice_active(app) != null
-    if PracticeDownloadLocked(practice) {
-        if Button(app.ui.session, ButtonProps.{
-                .id = 17420 + practice, .bounds = pill, .pill = true,
-                .label = PracticeDownloadPillLabel(app, practice),
-                .disabled = busy || !DewReady() || UnlockBuying(),
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            UnlockStart()
+    action := PracticeDownloadAction(practice)
+    if action != PRACTICE_ACTION_NONE {
+        disabled := practice_active(app) != null || practice_drag >= 0
+        if action == PRACTICE_ACTION_BUY {
+            disabled = disabled || !DewReady() || UnlockBuying()
+        } else if action == PRACTICE_ACTION_INSTALL {
+            disabled = disabled || !PracticePackReviewed(practice, "")
         }
-    } else if !PracticeDownloadIncluded(practice) {
+        uninstall := action == PRACTICE_ACTION_UNINSTALL || action == PRACTICE_ACTION_CANCEL
         if Button(app.ui.session, ButtonProps.{
                 .id = 17410 + practice * 2, .bounds = pill, .pill = true,
-                .label = PracticeDownloadPillLabel(app, practice),
-                .icon_shape = PRACTICE_CHEVRON_ICON,
-                .icon_placement = cast(IconPlacement)IconPlacementTrailing,
-                .selected = practice_menu == practice,
-                .disabled = busy || practice_drag >= 0 || !PracticePackReviewed(practice, ""),
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            practice_menu = ifx practice_menu == practice then -1 else practice
-            practice_menu_anchor = pill
-            practice_delete_asked = -1
-        }
-        if practice_menu == practice {
-            practice_menu_anchor = pill
+                .label = PracticeDownloadActionLabel(app, practice, action),
+                .selected = practice_delete_asked == practice, .disabled = disabled,
+                .tone = cast(ButtonTone)(ifx uninstall then ButtonToneNeutral else ButtonToneAccent),
+                .emphasis = cast(ButtonEmphasis)(ifx uninstall then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
+            PracticeDownloadAct(app, practice, action)
         }
     }
     if practice_delete_asked == practice {
@@ -651,88 +577,6 @@ PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width:
     }
 }
 
-// A practice's open menu floats under its button: each place it can go, what
-// choosing it does, and a check at the current one.
-PracticeDownloadMenu :: (app: *InnerBreeze) {
-    practice := practice_menu
-    if practice < 0 {
-        return
-    }
-    choices := PracticeDownloadChoicesFor(practice)
-    current := PracticeDownloadState(practice)
-    option_h := AppScale(PRACTICE_MENU_OPTION_HEIGHT)
-    inset := AppScale(6)
-    menu_w := cast(s32)practice_menu_anchor.width
-    if menu_w < AppScale(300) {
-        menu_w = AppScale(300)
-    }
-    if menu_w > app.ui.view_width - AppScale(16) {
-        menu_w = app.ui.view_width - AppScale(16)
-    }
-    menu_h := choices.count * option_h + inset * 2
-    menu_x := cast(s32)(practice_menu_anchor.x + practice_menu_anchor.width) - menu_w
-    if menu_x < AppScale(8) {
-        menu_x = AppScale(8)
-    }
-    menu_y := cast(s32)(practice_menu_anchor.y + practice_menu_anchor.height) + AppScale(4)
-    if menu_y + menu_h > app.ui.view_height - AppScale(8) {
-        menu_y = cast(s32)practice_menu_anchor.y - menu_h - AppScale(4)
-    }
-    if menu_y < AppScale(8) {
-        menu_y = AppScale(8)
-    }
-    bounds := Rectangle.{cast(float32)menu_x, cast(float32)menu_y, cast(float32)menu_w, cast(float32)menu_h}
-    overlay_props: DismissibleOverlayProps
-    overlay_props.key = KeyHash("practices/downloads/menu")
-    overlay_props.bounds = bounds
-    overlay_props.view_width = app.ui.view_width
-    overlay_props.view_height = app.ui.view_height
-    overlay := DismissibleOverlay(app.ui.session, overlay_props)
-    if overlay.closed {
-        practice_menu = -1
-        return
-    }
-    if overlay.panel_node < 0 || !TreePushScope(app.ui.session, overlay.panel_node) {
-        return
-    }
-    // A solid panel on the popup's own layer, as Kryon's dropdown menus have,
-    // so the rows under it never show through.
-    panel := StyleTokenColor("surface")
-    panel.a = cast(u8)255
-    radius := cast(float32)AppScale(12)
-    PaintRoundedFill(app.ui.session, overlay.panel_node, bounds, radius, 12, panel)
-    PaintRoundedOutline(app.ui.session, overlay.panel_node, bounds, radius, 12,
-        cast(float32)AppScale(1), Fade(StyleTokenColor("text"), 0.2))
-    chosen: s32 = -1
-    for index: cast(s32)0..choices.count - 1 {
-        state := choices.states[index]
-        props := ButtonProps.{
-            .id = 17600 + index,
-            .bounds = Rectangle.{cast(float32)(menu_x + inset), cast(float32)(menu_y + inset + index * option_h),
-                cast(float32)(menu_w - inset * 2), cast(float32)option_h},
-            .label = PracticeDownloadChoiceLabel(practice, state),
-            .detail = PracticeDownloadChoiceDetail(app, practice, state),
-            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-            .selected = state == current,
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}
-        if state == current {
-            props.icon_shape = PRACTICE_CHECK_ICON
-            props.icon_placement = cast(IconPlacement)IconPlacementTrailing
-        }
-        if Button(app.ui.session, props) != 0 {
-            chosen = state
-        }
-    }
-    End(app.ui.session)
-    if chosen >= 0 {
-        practice_menu = -1
-        PracticeDownloadChoose(app, practice, chosen)
-        app_block_current_click(app)
-    }
-}
-
-// The rows a dragged practice can take the place of, in order, and where the
-// practice a window was opened for begins.
 PracticeDownloadAreas :: struct {
     rows: [5]Rectangle
     row_practices: [5]s32
@@ -844,7 +688,6 @@ PracticeDownloadDrop :: (app: *InnerBreeze, scroll: ScrollResult, areas: Practic
 
 PracticeDownloadsModalClose :: (app: *InnerBreeze) {
     practice_delete_asked = -1
-    practice_menu = -1
     PracticeDownloadEndDrag()
     app_close_modal(app)
 }
@@ -903,6 +746,5 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
         End(app.ui.session)
     }
     PracticeDownloadDrop(app, scroll, areas, row_width)
-    PracticeDownloadMenu(app)
     End(app.ui.session)
 }
