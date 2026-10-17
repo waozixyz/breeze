@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage deterministic package resources, keeping large practice art in Practices."""
 from pathlib import Path
+import json
 import shutil
 import zipfile
 from animation_inventory import inventory
@@ -9,11 +10,13 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / 'build/package-assets'
 _, _, unique_animation = inventory()
 unique_animation = set(unique_animation)
+# Apps the node offers each keep their assets/<name>/ in their own package.
+NODE_APPS = tuple(sorted(json.loads((ROOT / 'apps/versions.json').read_text()).get('node_apps', {})))
 if OUTPUT.exists():
     shutil.rmtree(OUTPUT)
 for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard',
              'practice-whm', 'practice-meditation', 'practice-sunsalutation',
-             'practice-patterns', 'practice-taichi'):
+             'practice-patterns', 'practice-taichi') + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
@@ -31,7 +34,7 @@ patterns = (
     'locales/*.txt', 'themes/catalog_*.kss',
     'build/packages/kss/styles/*.kss', 'build/packages/kryon/icons/ui.png',
     'build/packages/kryon/icons/pfp.png',
-)
+) + tuple(f'assets/{name}/**/*' for name in NODE_APPS)
 for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}):
     if '-prompt.' in file.name:
         continue
@@ -52,7 +55,7 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
             # The male recording is its own pack per language.
             code = path.split('/voice-male/', 1)[1].split('/')[0]
             owner += '-voice-' + code + '-male'
-    for feature in ('habits', 'lists', 'diary', 'lumi'):
+    for feature in ('habits', 'lists', 'diary', 'lumi') + NODE_APPS:
         if path.startswith('assets/' + feature + '/'):
             owner = feature
     for prefix in ('build/packages/kss/', 'build/packages/kryon/'):

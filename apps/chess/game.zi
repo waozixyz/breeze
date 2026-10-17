@@ -1,0 +1,811 @@
+// The game on the board, the computer opponent and games with friends.
+// The engine holds the position of the game on the board; the board keeps
+// a copy of the pieces to draw, since a search moves the engine's pieces.
+#import "vec"
+#import, file "engine.zi";
+#import, file "../../src/cells/node_app_types.zi";
+host_api :: #system_library "host_api";
+// The account's private records of this app, synced between its devices.
+AppRecordHost :: (name: string) -> string #foreign host_api;
+SaveAppRecordHost :: (name: string, text: string) -> bool #foreign host_api;
+AppSharedHost :: (index: s32) -> AppShared #foreign host_api;
+AppSharedItemHost :: (shared: s32, item: s32) -> AppSharedItem #foreign host_api;
+AppInvitationHost :: (index: s32) -> AppInvitation #foreign host_api;
+// Queues a command; its progress shows in AppMessage.shared_status.
+SendAppSharedHost :: (command: AppSharedCommand, items: []AppSharedItem) -> bool #foreign host_api;
+
+CHESS_PLY_LIMIT :: 1200
+// Results beyond the engine's own: a game too long to keep is drawn, and
+// either side may resign.
+CHESS_DRAW_LENGTH :: 6
+CHESS_WHITE_RESIGNED :: 7
+CHESS_BLACK_RESIGNED :: 8
+
+CHESS_LEVEL_EASY :: 0
+CHESS_LEVEL_MEDIUM :: 1
+CHESS_LEVEL_HARD :: 2
+
+CHESS_ONLINE_MAX :: 16
+CHESS_INVITE_MAX :: 16
+// Moves of a game with a friend are kept in items of this many bytes.
+CHESS_CHUNK_BYTES :: 500
+CHESS_RECORD :: "computer"
+
+// Waiting for the node to take a change to a game with a friend.
+CHESS_PENDING_NONE :: 0
+CHESS_PENDING_MOVE :: 1
+CHESS_PENDING_RESIGN :: 2
+CHESS_PENDING_INVITE :: 3
+CHESS_PENDING_ANSWER :: 4
+CHESS_PENDING_REMOVE :: 5
+
+OnlineGame :: struct {
+    id: string
+    // Members must save a game under its owner's title.
+    title: string
+    revision: s32
+    owner: string
+    opponent: string
+    opponent_name: string
+    my_color: s32
+    owner_color: s32
+    moves: string
+    move_count: s32
+    // The color that resigned plus one, or zero.
+    resigned: s32
+    // The moves were replayed and found legal; result holds the outcome.
+    checked: bool
+    valid: bool
+    result: s32
+}
+
+ChessInvite :: struct {
+    id: string
+    shared_id: string
+    other: string
+    other_name: string
+    incoming: bool
+    status: string
+}
+
+// The board's game.
+board_moves: [CHESS_PLY_LIMIT]s32;
+board_count: s32;
+board_result: s32;
+board_shown: [64]s32;
+board_side: s32;
+board_check: s32 = -1;
+board_last_from: s32 = -1;
+board_last_to: s32 = -1;
+board_legal: [256]s32;
+board_legal_count: s32;
+// "Nf3", the last move in notation, for the status line.
+board_last_san: string;
+
+// The game against the computer.
+computer_level: s32 = CHESS_LEVEL_MEDIUM;
+computer_player: s32 = CHESS_WHITE;
+computer_seed: u64 = 1;
+computer_resigned: s32;
+computer_started: bool;
+computer_loaded: bool;
+computer_thinking: bool;
+computer_budget: s32 = 40;
+computer_last_now: float64;
+// The saved game, as last written.
+computer_record: string;
+
+// Games with friends, as the node last answered.
+online: [CHESS_ONLINE_MAX]OnlineGame;
+online_count: s32;
+invites: [CHESS_INVITE_MAX]ChessInvite;
+invite_count: s32;
+online_revision: s32 = -1;
+pending: s32;
+pending_game: string;
+pending_moves: string;
+invite_serial: s32;
+
+// Text helpers.
+
+#scope_file
+Digit :: (byte: u8) -> bool {
+    return byte >= #char "0" && byte <= #char "9"
+}
+
+#scope_export
+ChessNumber :: (text: string) -> s64 {
+    value: s64 = 0
+    for byte: text {
+        if !Digit(byte) || value > 100000000000 {
+            return -1
+        }
+        value = value * 10 + cast(s64)(byte - #char "0")
+    }
+    return ifx text.count == 0 then -1 else value
+}
+
+// The value after "key=" in a record of ";"-separated fields.
+ChessField :: (record: string, key: string) -> string {
+    at: s64 = 0
+    while at < record.count {
+        end := at
+        while end < record.count && record[end] != #char ";" {
+            end += 1
+        }
+        field := record[at:end]
+        if field.count > key.count && field[:key.count] == key && field[key.count] == #char "=" {
+            return field[key.count + 1:]
+        }
+        at = end + 1
+    }
+    return ""
+}
+
+ChessStartsWith :: (text: string, prefix: string) -> bool {
+    return text.count >= prefix.count && text[:prefix.count] == prefix
+}
+
+// Moves.
+
+// Plays coordinate moves separated by spaces from the start position into
+// the engine. False at the first move that is not legal.
+ChessReplay :: (text: string, out_count: *s32) -> bool {
+    ChessSearchCancel()
+    ChessReset()
+    count: s32 = 0
+    at: s64 = 0
+    while at < text.count {
+        while at < text.count && text[at] == #char " " {
+            at += 1
+        }
+        end := at
+        while end < text.count && text[end] != #char " " {
+            end += 1
+        }
+        if end > at {
+            if count >= CHESS_PLY_LIMIT || ChessPlayText(text[at:end]) == 0 {
+                out_count.* = count
+                return false
+            }
+            count += 1
+        }
+        at = end
+    }
+    out_count.* = count
+    return true
+}
+
+ChessMovesText :: (moves: []s32, count: s32) -> string {
+    out: Vec(u8)
+    index: s32 = 0
+    while index < count {
+        if index > 0 {
+            unused VecPush(out, #char " ")
+        }
+        BuilderPrint(*out, "%", ChessMoveText(moves[index]))
+        index += 1
+    }
+    return BuilderFinish(out)
+}
+
+// The outcome of the position the engine holds, resignations aside.
+ChessOutcome :: (count: s32) -> s32 {
+    status := ChessStatus()
+    if status == CHESS_PLAYING && count >= CHESS_PLY_LIMIT {
+        return CHESS_DRAW_LENGTH
+    }
+    return status
+}
+
+ChessFinished :: (result: s32) -> bool {
+    return result != CHESS_PLAYING
+}
+
+// The board.
+
+#scope_file
+// Copies what the board shows from the engine, at the game's position.
+BoardRefresh :: () {
+    rank: s32 = 0
+    while rank < 8 {
+        file: s32 = 0
+        while file < 8 {
+            board_shown[rank * 8 + file] = ChessPieceAt(ChessSquare(file, rank))
+            file += 1
+        }
+        rank += 1
+    }
+    board_side = ChessSideToMove()
+    board_check = -1
+    if ChessInCheck() {
+        board_check = ChessKingSquare(board_side)
+    }
+    status := ChessOutcome(board_count)
+    if board_result < CHESS_WHITE_RESIGNED {
+        board_result = status
+    }
+    board_legal_count = 0
+    if !ChessFinished(board_result) {
+        count := ChessGenerateLegal()
+        index: s32 = 0
+        while index < count {
+            board_legal[index] = ChessLegalAt(index)
+            index += 1
+        }
+        board_legal_count = count
+    }
+    board_last_from = -1
+    board_last_to = -1
+    if board_count > 0 {
+        board_last_from = ChessMoveFrom(board_moves[board_count - 1])
+        board_last_to = ChessMoveTo(board_moves[board_count - 1])
+    }
+}
+
+#scope_export
+// Sets the board to a game of coordinate moves. A game whose moves stop
+// being legal keeps the legal start of it.
+BoardLoad :: (text: string, resigned: s32) -> bool {
+    count: s32 = 0
+    valid := ChessReplay(text, *count)
+    // Read the moves back from the engine's own text, so the board's list
+    // matches what was played.
+    ChessReset()
+    board_count = 0
+    at: s64 = 0
+    while at < text.count && board_count < count {
+        while at < text.count && text[at] == #char " " {
+            at += 1
+        }
+        end := at
+        while end < text.count && text[end] != #char " " {
+            end += 1
+        }
+        if end > at {
+            move := ChessPlayText(text[at:end])
+            board_moves[board_count] = move
+            board_count += 1
+        }
+        at = end
+    }
+    board_result = CHESS_PLAYING
+    if resigned == CHESS_WHITE + 1 {
+        board_result = CHESS_WHITE_RESIGNED
+    } else if resigned == CHESS_BLACK + 1 {
+        board_result = CHESS_BLACK_RESIGNED
+    }
+    board_last_san = ""
+    BoardRefresh()
+    return valid
+}
+
+// The legal move from `from` to `to` on the board, or zero. A promotion
+// needs its piece.
+BoardFindMove :: (from: s32, to: s32, promotion: s32) -> s32 {
+    index: s32 = 0
+    while index < board_legal_count {
+        move := board_legal[index]
+        if ChessMoveFrom(move) == from && ChessMoveTo(move) == to &&
+        ChessMovePromotion(move) == promotion {
+            return move
+        }
+        index += 1
+    }
+    return 0
+}
+
+// Whether a move from `from` to `to` is a promotion that needs a piece.
+BoardNeedsPromotion :: (from: s32, to: s32) -> bool {
+    return BoardFindMove(from, to, CHESS_QUEEN) != 0
+}
+
+BoardHasMovesFrom :: (from: s32) -> bool {
+    index: s32 = 0
+    while index < board_legal_count {
+        if ChessMoveFrom(board_legal[index]) == from {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+BoardTargets :: (from: s32, to: s32) -> bool {
+    index: s32 = 0
+    while index < board_legal_count {
+        move := board_legal[index]
+        if ChessMoveFrom(move) == from && ChessMoveTo(move) == to {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// Plays a legal move of the board's game. The engine must hold that game.
+BoardPlay :: (move: s32) -> bool {
+    if move == 0 || ChessFinished(board_result) || board_count >= CHESS_PLY_LIMIT ||
+    BoardFindMove(ChessMoveFrom(move), ChessMoveTo(move), ChessMovePromotion(move)) != move {
+        return false
+    }
+    board_last_san = ChessMoveSan(move)
+    ChessMakeMove(move)
+    board_moves[board_count] = move
+    board_count += 1
+    BoardRefresh()
+    return true
+}
+
+BoardMovesText :: () -> string {
+    return ChessMovesText(board_moves[:], board_count)
+}
+
+BoardPieceAt :: (square: s32) -> s32 {
+    return board_shown[ChessRank(square) * 8 + ChessFile(square)]
+}
+
+// The computer.
+
+LevelDepth :: (level: s32) -> s32 {
+    if level == CHESS_LEVEL_EASY {
+        return 1
+    }
+    if level == CHESS_LEVEL_MEDIUM {
+        return 3
+    }
+    return 5
+}
+
+LevelNodes :: (level: s32) -> s32 {
+    if level == CHESS_LEVEL_EASY {
+        return 1500
+    }
+    if level == CHESS_LEVEL_MEDIUM {
+        return 5000
+    }
+    return 12000
+}
+
+// Easy misjudges positions by up to more than a pawn, so it blunders the
+// way a beginner does; Hard only varies its choice between equal moves.
+LevelNoise :: (level: s32) -> s32 {
+    if level == CHESS_LEVEL_EASY {
+        return 120
+    }
+    if level == CHESS_LEVEL_MEDIUM {
+        return 30
+    }
+    return 6
+}
+
+ComputerRecordText :: () -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "v1;level=%;color=%;seed=%;resigned=%;moves=",
+        computer_level, ifx computer_player == CHESS_WHITE then "w" else "b",
+        cast(s64)(computer_seed & cast(u64)0x7fffffffffff), computer_resigned)
+    BuilderPrint(*out, "%", BoardMovesText())
+    return BuilderFinish(out)
+}
+
+ComputerSave :: () {
+    computer_record = ComputerRecordText()
+    unused SaveAppRecordHost(CHESS_RECORD, computer_record)
+}
+
+// Loads the saved game against the computer onto the board.
+ComputerLoad :: () {
+    computer_loaded = true
+    computer_thinking = false
+    record := AppRecordHost(CHESS_RECORD)
+    computer_record = record
+    if !ChessStartsWith(record, "v1;") {
+        computer_started = false
+        unused BoardLoad("", 0)
+        return
+    }
+    level := ChessNumber(ChessField(record, "level"))
+    if level >= 0 && level <= CHESS_LEVEL_HARD {
+        computer_level = cast(s32)level
+    }
+    computer_player = ifx ChessField(record, "color") == "b" then CHESS_BLACK else CHESS_WHITE
+    seed := ChessNumber(ChessField(record, "seed"))
+    computer_seed = ifx seed > 0 then cast(u64)seed else 1
+    resigned := ChessNumber(ChessField(record, "resigned"))
+    computer_resigned = ifx resigned == 1 || resigned == 9 then cast(s32)resigned else 0
+    computer_started = true
+    unused BoardLoad(ChessField(record, "moves"), computer_resigned)
+}
+
+// Puts the game against the computer back on the board.
+ComputerShow :: () {
+    if !computer_loaded {
+        ComputerLoad()
+        return
+    }
+    computer_thinking = false
+    unused BoardLoad(ChessField(computer_record, "moves"), computer_resigned)
+}
+
+ComputerNewGame :: (level: s32, color: s32, time: s64) {
+    ChessSearchCancel()
+    ChessForget()
+    computer_level = level
+    computer_player = color
+    computer_seed = cast(u64)(time & 0x7fffffff) * cast(u64)2654435761 + cast(u64)(level * 7 + color)
+    computer_resigned = 0
+    computer_started = true
+    computer_thinking = false
+    unused BoardLoad("", 0)
+    ComputerSave()
+}
+
+ComputerResign :: () {
+    if !computer_started || ChessFinished(board_result) {
+        return
+    }
+    ChessSearchCancel()
+    computer_thinking = false
+    computer_resigned = computer_player + 1
+    board_result = ifx computer_player == CHESS_WHITE then CHESS_WHITE_RESIGNED else CHESS_BLACK_RESIGNED
+    board_legal_count = 0
+    ComputerSave()
+}
+
+ComputerTurn :: () -> bool {
+    return computer_started && !ChessFinished(board_result) && board_side != computer_player
+}
+
+// The person plays a move against the computer.
+ComputerPlay :: (move: s32) -> bool {
+    if !computer_started || board_side != computer_player || computer_thinking {
+        return false
+    }
+    if !BoardPlay(move) {
+        return false
+    }
+    ComputerSave()
+    return true
+}
+
+// Thinks for this frame. Each frame searches about as many positions as fit
+// in a calm frame: more while frames come quickly, fewer when one was slow.
+ComputerThink :: (now: float64) -> bool {
+    if !ComputerTurn() {
+        computer_thinking = false
+        return false
+    }
+    if !computer_thinking {
+        ChessSearchBegin(LevelDepth(computer_level), LevelNodes(computer_level),
+            computer_level != CHESS_LEVEL_EASY, LevelNoise(computer_level),
+            computer_seed + cast(u64)board_count)
+        computer_thinking = true
+        computer_last_now = now
+    } else {
+        elapsed := now - computer_last_now
+        computer_last_now = now
+        if elapsed > 0.026 && computer_budget > 10 {
+            computer_budget = computer_budget * 3 / 4
+        } else if elapsed < 0.020 && computer_budget < 2000 {
+            computer_budget = computer_budget * 5 / 4 + 1
+        }
+    }
+    if !ChessSearchRun(computer_budget) {
+        return true
+    }
+    computer_thinking = false
+    move := ChessSearchMove()
+    if move != 0 && BoardPlay(move) {
+        ComputerSave()
+    }
+    return false
+}
+
+// Games with friends.
+
+// A game's id: the app's name, a dash and 30 random hexadecimal digits, so
+// the whole id fits the node's 36 characters.
+ChessGameId :: (name: string, time: s64, salt: u64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%-", name)
+    state := cast(u64)time * cast(u64)0x9E3779B97F4A7C15 ^ salt
+    digits := "0123456789abcdef"
+    index: s32 = 0
+    while index < 30 {
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        unused VecPush(out, digits[cast(s64)(state & cast(u64)15)])
+        index += 1
+    }
+    return BuilderFinish(out)
+}
+
+// The items that hold a game: who plays which side, its moves in pieces of
+// at most CHESS_CHUNK_BYTES, and a resignation.
+OnlineItems :: (owner_color: s32, moves: string, resigned: s32, items: []AppSharedItem) -> s32 {
+    count: s32 = 0
+    items[0] = AppSharedItem.{.id = "game", .title = "chess v1",
+        .comment = ifx owner_color == CHESS_WHITE then "owner=white" else "owner=black"}
+    count = 1
+    at: s64 = 0
+    chunk: s32 = 1
+    while at < moves.count && count < cast(s32)items.count - 1 {
+        end := at + CHESS_CHUNK_BYTES
+        if end >= moves.count {
+            end = moves.count
+        } else {
+            while end > at && moves[end] != #char " " {
+                end -= 1
+            }
+        }
+        id: Vec(u8)
+        BuilderPrint(*id, "moves%", chunk)
+        items[count] = AppSharedItem.{.id = BuilderFinish(id), .title = "moves",
+            .comment = moves[at:end]}
+        count += 1
+        chunk += 1
+        at = end
+        while at < moves.count && moves[at] == #char " " {
+            at += 1
+        }
+    }
+    if resigned != 0 && count < cast(s32)items.count {
+        items[count] = AppSharedItem.{.id = "resign", .title = "resign",
+            .comment = ifx resigned == CHESS_WHITE + 1 then "white" else "black", .done = true}
+        count += 1
+    }
+    return count
+}
+
+#scope_file
+ChunkNumber :: (id: string) -> s32 {
+    if !ChessStartsWith(id, "moves") {
+        return -1
+    }
+    number := ChessNumber(id[5:])
+    if number < 1 || number > 1000 {
+        return -1
+    }
+    return cast(s32)number
+}
+
+// Reads one shared record into a game, or false when it is not a game.
+ReadOnline :: (index: s32, account: string, game: *OnlineGame) -> bool {
+    shared := AppSharedHost(index)
+    if !ChessStartsWith(shared.id, "chess-") || shared.item_count < 1 ||
+    shared.item_count > APP_SHARED_ITEMS_MAX {
+        return false
+    }
+    game.* = OnlineGame.{.id = shared.id, .title = shared.title, .revision = shared.revision,
+        .owner = shared.owner}
+    found_game := false
+    chunks: [APP_SHARED_ITEMS_MAX]string
+    chunk_count: s32 = 0
+    item: s32 = 0
+    while item < shared.item_count {
+        entry := AppSharedItemHost(index, item)
+        if entry.id == "game" {
+            found_game = true
+            game.owner_color = ifx entry.comment == "owner=black" then CHESS_BLACK else CHESS_WHITE
+        } else if entry.id == "resign" {
+            game.resigned = ifx entry.comment == "black" then CHESS_BLACK + 1 else CHESS_WHITE + 1
+        } else {
+            number := ChunkNumber(entry.id)
+            if number >= 1 && number <= APP_SHARED_ITEMS_MAX {
+                chunks[number - 1] = entry.comment
+                if number > chunk_count {
+                    chunk_count = number
+                }
+            }
+        }
+        item += 1
+    }
+    if !found_game {
+        return false
+    }
+    out: Vec(u8)
+    chunk: s32 = 0
+    while chunk < chunk_count {
+        if chunks[chunk].count > 0 {
+            if out.count > 0 {
+                unused VecPush(out, #char " ")
+            }
+            BuilderPrint(*out, "%", chunks[chunk])
+        }
+        chunk += 1
+    }
+    game.moves = BuilderFinish(out)
+    mine := shared.owner == account
+    game.my_color = ifx mine then game.owner_color else game.owner_color ^ 8
+    if !mine {
+        game.opponent = shared.owner
+        game.opponent_name = shared.owner_name
+    }
+    return true
+}
+
+#scope_export
+// Reads games and invitations again after the node's answer changed. Games
+// are replayed later, one per frame, by OnlineCheckNext.
+OnlineReload :: (message: AppMessage) {
+    online_revision = message.shared_revision
+    online_count = 0
+    invite_count = 0
+    index: s32 = 0
+    while index < message.invitation_count && invite_count < CHESS_INVITE_MAX {
+        invitation := AppInvitationHost(index)
+        if ChessStartsWith(invitation.shared_id, "chess-") {
+            incoming := invitation.target == message.account
+            invites[invite_count] = ChessInvite.{.id = invitation.id,
+                .shared_id = invitation.shared_id,
+                .other = ifx incoming then invitation.owner else invitation.target,
+                .other_name = ifx incoming then invitation.owner_name else invitation.target_name,
+                .incoming = incoming, .status = invitation.status}
+            invite_count += 1
+        }
+        index += 1
+    }
+    index = 0
+    while index < message.shared_count && online_count < CHESS_ONLINE_MAX {
+        game: OnlineGame
+        if ReadOnline(index, message.account, *game) {
+            // The owner learns the opponent from the invitation it sent.
+            if game.opponent.count == 0 {
+                invite: s32 = 0
+                while invite < invite_count {
+                    if invites[invite].shared_id == game.id && !invites[invite].incoming {
+                        game.opponent = invites[invite].other
+                        game.opponent_name = invites[invite].other_name
+                    }
+                    invite += 1
+                }
+            }
+            online[online_count] = game
+            online_count += 1
+        }
+        index += 1
+    }
+}
+
+// Replays one game that was not checked yet. False when none is left.
+OnlineCheckNext :: () -> bool {
+    index: s32 = 0
+    while index < online_count {
+        if !online[index].checked {
+            count: s32 = 0
+            game := *online[index]
+            game.valid = ChessReplay(game.moves, *count)
+            game.move_count = count
+            game.result = ChessOutcome(count)
+            if game.resigned == CHESS_WHITE + 1 && !ChessFinished(game.result) {
+                game.result = CHESS_WHITE_RESIGNED
+            } else if game.resigned == CHESS_BLACK + 1 && !ChessFinished(game.result) {
+                game.result = CHESS_BLACK_RESIGNED
+            }
+            game.checked = true
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+OnlineFind :: (id: string) -> s32 {
+    index: s32 = 0
+    while index < online_count {
+        if online[index].id == id {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+// The side to move in a game with `count` moves.
+ChessSideAfter :: (count: s32) -> s32 {
+    return ifx count % 2 == 0 then CHESS_WHITE else CHESS_BLACK
+}
+
+OnlineMyTurn :: (game: OnlineGame) -> bool {
+    return game.checked && game.valid && !ChessFinished(game.result) &&
+    ChessSideAfter(game.move_count) == game.my_color
+}
+
+// Sends the board's game with its new move, or a resignation.
+OnlineSend :: (index: s32, resigned: s32, kind: s32) -> bool {
+    if index < 0 || index >= online_count || pending != CHESS_PENDING_NONE {
+        return false
+    }
+    game := online[index]
+    moves := ifx kind == CHESS_PENDING_MOVE then BoardMovesText() else game.moves
+    items: [APP_SHARED_ITEMS_MAX]AppSharedItem
+    count := OnlineItems(game.owner_color, moves, resigned, items[:])
+    command := AppSharedCommand.{.action = APP_SHARED_SAVE, .id = game.id,
+        .title = game.title, .revision = game.revision}
+    if !SendAppSharedHost(command, items[:count]) {
+        return false
+    }
+    pending = kind
+    pending_game = game.id
+    pending_moves = moves
+    return true
+}
+
+// Mixes a friend's account ID into a number, so ids differ per friend.
+ChessFriendSalt :: (friend: string) -> u64 {
+    value: u64 = 1469598103934665603
+    for byte: friend {
+        value = (value ^ cast(u64)byte) * cast(u64)1099511628211
+    }
+    return value
+}
+
+// Invites a friend to a new game; the inviter's side is chosen by chance.
+// `moment` is the app clock, so two invitations in one second still differ.
+OnlineInvite :: (name: string, title: string, friend: string, time: s64, moment: float64) -> bool {
+    if pending != CHESS_PENDING_NONE || friend.count == 0 {
+        return false
+    }
+    invite_serial += 1
+    salt := ChessFriendSalt(friend) ^ cast(u64)(moment * 1000003.0) ^ (cast(u64)invite_serial << 40)
+    id := ChessGameId(name, time, salt)
+    owner_color: s32 = ifx ((salt >> 11) & cast(u64)1) == 0 then CHESS_WHITE else CHESS_BLACK
+    items: [2]AppSharedItem
+    count := OnlineItems(owner_color, "", 0, items[:])
+    command := AppSharedCommand.{.action = APP_SHARED_INVITE, .id = id, .title = title,
+        .target = friend}
+    if !SendAppSharedHost(command, items[:count]) {
+        return false
+    }
+    pending = CHESS_PENDING_INVITE
+    pending_game = id
+    pending_moves = ""
+    return true
+}
+
+OnlineAnswer :: (invite: ChessInvite, accept: bool) -> bool {
+    if pending != CHESS_PENDING_NONE {
+        return false
+    }
+    command := AppSharedCommand.{.action = ifx accept then APP_SHARED_ACCEPT else APP_SHARED_DECLINE,
+        .id = invite.shared_id, .invitation = invite.id}
+    empty: [1]AppSharedItem
+    if !SendAppSharedHost(command, empty[:0]) {
+        return false
+    }
+    pending = CHESS_PENDING_ANSWER
+    pending_game = invite.shared_id
+    pending_moves = ""
+    return true
+}
+
+// The inviter removes a game for both players: a finished one, a declined
+// invitation or one it no longer waits for.
+OnlineRemove :: (id: string) -> bool {
+    if pending != CHESS_PENDING_NONE {
+        return false
+    }
+    command := AppSharedCommand.{.action = APP_SHARED_DELETE, .id = id}
+    empty: [1]AppSharedItem
+    if !SendAppSharedHost(command, empty[:0]) {
+        return false
+    }
+    pending = CHESS_PENDING_REMOVE
+    pending_game = id
+    pending_moves = ""
+    return true
+}
+
+// Ends the wait once the node answered.
+OnlineSettle :: (status: s32) {
+    if pending == CHESS_PENDING_NONE {
+        return
+    }
+    if status == APP_SHARED_SENDING {
+        return
+    }
+    pending = CHESS_PENDING_NONE
+    pending_game = ""
+    pending_moves = ""
+}

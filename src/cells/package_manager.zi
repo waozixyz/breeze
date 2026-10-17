@@ -8,6 +8,7 @@
 #import, file "inbe_types.zi";
 #import, file "package_release.zi";
 #import, file "package_files.zi";
+#import, file "../storage/app_records.zi";
 #import, file "versions.zi";
 #import, file "host_api.zi";
 #import, file "../app/assets.zi";
@@ -23,17 +24,17 @@ using FileDownloadStatus;
 package_download: FileDownload;
 package_index: s32 = -1;
 package_phase: s32;
-package_requested: [PackageCount]bool;
+package_requested: [PackageSlots]bool;
 package_automatic: bool;
-package_requested_automatic: [PackageCount]bool;
+package_requested_automatic: [PackageSlots]bool;
 package_initialized: bool;
 package_release: PackageRelease;
 package_metadata: string;
 package_origin: [512]u8;
-package_versions: [PackageCount][32]u8;
-package_fallback_versions: [PackageCount][32]u8;
-package_cached_releases: [PackageCount]PackageRelease;
-package_status: [PackageCount]s32;
+package_versions: [PackageSlots][32]u8;
+package_fallback_versions: [PackageSlots][32]u8;
+package_cached_releases: [PackageSlots]PackageRelease;
+package_status: [PackageSlots]s32;
 package_revision: s32;
 // Update checks run daily, once after each start, and soon after a sync
 // reports a newer root package. The schedule stays in memory: the pump runs
@@ -44,7 +45,7 @@ package_sequence_hint: s32;
 package_hint_read_at: s32;
 // Downloaded packages prove themselves by running for a while after a start.
 package_started_at: s32;
-package_trial_counted: [PackageCount]bool;
+package_trial_counted: [PackageSlots]bool;
 package_trials_open: bool;
 PACKAGE_TRIAL_STARTS :: 3
 PACKAGE_TRIAL_SECONDS :: 10
@@ -53,7 +54,7 @@ PackageSettingText :: (key: string) -> string #foreign c "storage_get_setting_te
 
 // 0 idle, 1 downloading, 2 installed, 3 failure, 4 publisher not configured.
 PackageStatus :: (index: s32) -> s32 {
-    if index < 0 || index >= PackageCount {
+    if index < 0 || index >= PackageSlots {
         return 3
     }
     return package_status[index]
@@ -64,13 +65,20 @@ PackageRevision :: () -> s32 {
 }
 
 PackageAvailable :: (index: s32) -> bool {
-    if index < 0 || index >= PackageCount {
+    if index < 0 || index >= PackageSlots {
         return false
     }
     return PackageBundledSequence(index) > 0 || package_versions[index][0] != cast(u8)0
 }
 
 PackageTrustedKey :: (metadata: string, index: s32, output: []u8) -> bool {
+    return PackageTrustedKeyFor(metadata, PackageID(index), output)
+}
+
+PackageTrustedKeyFor :: (metadata: string, app_id: string, output: []u8) -> bool {
+    if app_id.count == 0 {
+        return false
+    }
     key_bytes: [64]u8
     key := PackageField(metadata, 0, "key_id", key_bytes[:])
     publishers := AssetRead("apps/publishers.json").data
@@ -88,7 +96,17 @@ PackageTrustedKey :: (metadata: string, index: s32, output: []u8) -> bool {
             for app: 0..app_count - 1 {
                 id: [64]u8
                 n := ReadStringText(publishers, ElementAt(publishers, apps, app), id[:])
-                if n > 0 && TextFromBytes(id[0:n]) == PackageID(index) {
+                if n > 0 && TextFromBytes(id[0:n]) == app_id {
+                    return PackageField(publishers, at, "public_key", output).count == 64
+                }
+            }
+            prefixes := FieldAt(publishers, at, "app_prefixes")
+            prefix_count := ArrayCount(publishers, prefixes)
+            for prefix_index: 0..prefix_count - 1 {
+                prefix: [64]u8
+                n := ReadStringText(publishers, ElementAt(publishers, prefixes, prefix_index), prefix[:])
+                if n > 1 && n < app_id.count && app_id[:n] == TextFromBytes(prefix[0:n]) &&
+                NodeAppNameValid(app_id[n:]) {
                     return PackageField(publishers, at, "public_key", output).count == 64
                 }
             }
@@ -117,7 +135,7 @@ PackagePayloadPath :: (index: s32, hash: string) -> string {
 }
 
 PackageInstalledBytes :: (index: s32) -> string {
-    if index < 0 || index >= PackageCount {
+    if index < 0 || index >= PackageSlots {
         return ""
     }
     package_versions[index][0] = cast(u8)0
@@ -164,7 +182,7 @@ PackageInstalledBytes :: (index: s32) -> string {
 // here: hashing every installed package on the frame thread at each update
 // check froze phones for seconds after launch.
 PackageInstalledMatches :: (index: s32, hash: string) -> bool {
-    if index < 0 || index >= PackageCount || DataTemporary() {
+    if index < 0 || index >= PackageSlots || DataTemporary() {
         return false
     }
     pointer := PackagePath(index, ".current.json")
@@ -213,6 +231,9 @@ PackageVersionCompare :: (left: string, right: string) -> s32 {
 }
 
 PackageFallbackVersion :: (index: s32) -> string {
+    if index >= PackageCount {
+        return ""
+    }
     if package_fallback_versions[index][0] != cast(u8)0 {
         return TextFromCString(*package_fallback_versions[index][0])
     }
@@ -253,7 +274,7 @@ PackageSequence :: (index: s32) -> s32 {
 }
 
 PackageVersion :: (index: s32) -> string {
-    if index < 0 || index >= PackageCount {
+    if index < 0 || index >= PackageSlots {
         return ""
     }
     if package_versions[index][0] != cast(u8)0 {
@@ -268,7 +289,7 @@ PackagePublisherConfigured :: () -> bool {
 }
 
 PackageRequest :: (index: s32) {
-    if index < 0 || index >= PackageCount || DataTemporary() {
+    if index < 0 || index >= PackageSlots || DataTemporary() {
         return
     }
     package_requested_automatic[index] = false
@@ -278,8 +299,8 @@ PackageRequest :: (index: s32) {
 
 PackageRequestAll :: (desired: s32) {
     PackageRequest(0)
-    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
-        if (desired & PackageBit(index)) != 0 {
+    for index: cast(s32)1..cast(s32)(PackageSlots - 1) {
+        if PackageWanted(index, desired) {
             PackageRequest(index)
         }
     }
@@ -292,7 +313,7 @@ PackageCancel :: () {
     package_index = -1
     package_phase = 0
     package_automatic = false
-    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+    for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
         package_requested[index] = false
     }
 }
@@ -347,7 +368,7 @@ PackageSetAutomatic :: (enabled: bool) {
             package_phase = 0
             package_automatic = false
         }
-        for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+        for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
             if package_requested_automatic[index] {
                 package_requested[index] = false
             }
@@ -444,7 +465,7 @@ PackageStoreTrialText :: (key: string, value: string) {
 // crashes at startup cannot keep the app from opening. Call this after
 // PackageInstalledBytes returned the package for use.
 PackageTrialAllows :: (index: s32) -> bool {
-    if index < 0 || index >= PackageCount {
+    if index < 0 || index >= PackageSlots {
         return false
     }
     hash := TextFromCString(*package_cached_releases[index].hash[0])
@@ -493,7 +514,7 @@ PackageTrialsProve :: (now: s32) {
         return
     }
     package_trials_open = false
-    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+    for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
         trial_key := PackageTrialKey("package_trial_", index)
         good_key := PackageTrialKey("package_good_", index)
         defer {
@@ -537,8 +558,8 @@ PackagePump :: (desired: s32, now: s32) {
     if package_index < 0 {
         if PackageAutomaticEnabled() && PackagePublisherConfigured() && now > 0 &&
         PackageCheckDue(now) {
-            for index: cast(s32)0..cast(s32)(PackageCount - 1) {
-                if (index == 0 || (desired & PackageBit(index)) != 0) && !package_requested[index] {
+            for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
+                if PackageWanted(index, desired) && !package_requested[index] {
                     package_requested[index] = true
                     package_requested_automatic[index] = true
                 }
@@ -546,7 +567,7 @@ PackagePump :: (desired: s32, now: s32) {
             unused SettingsStoreInt("apps_last_update_check", now)
             package_last_check = now
         }
-        for index: cast(s32)0..cast(s32)(PackageCount - 1) {
+        for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
             if package_requested[index] {
                 package_requested[index] = false
                 package_automatic = package_requested_automatic[index]
@@ -590,6 +611,7 @@ PackagePump :: (desired: s32, now: s32) {
         }
         package_metadata = PackageRead(metadata_path, 65536)
         public_key: [65]u8
+        public_key[0] = cast(u8)0
         if !PackageTrustedKey(package_metadata, package_index, public_key[:]) {
             index := package_index
             PackageFinish(false)

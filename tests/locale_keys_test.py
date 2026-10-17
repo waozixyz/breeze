@@ -42,6 +42,7 @@ theme_sky theme_ocean theme_forest theme_sunset theme_lavender theme_cherry
 theme_dawn theme_sage theme_sepia theme_mono theme_mint theme_cobalt
 tutorial_step_intro tutorial_step_method tutorial_step_breathe
 tutorial_step_exhale_hold tutorial_step_inhale_hold
+app_name_chess
 """.split() + ["sun_salutation_step_%d" % i for i in range(1, 13)]
 
 

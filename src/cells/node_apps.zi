@@ -1,0 +1,1231 @@
+// Apps the node offers beyond those bundled with Inner Breeze. More apps
+// lists every app the node's registry names "inbe.<name>" that has a release
+// this build can run. Installing one downloads it through the package
+// manager into one of a few device-local slots; it then runs in its own VM
+// through the generic app interface (node_app_types.zi), so a new app needs
+// no host code. Whether an app is installed syncs with the account.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "hosted_values"
+#import "widget_host"
+#import "hosted_app"
+#import "file_download"
+#import "text_buffer"
+#import "file_linux"
+#import, file "catalog.zi";
+#import, file "module_types.zi";
+#import, file "node_app_types.zi";
+#import, file "node_app_codec.zi";
+#import, file "package_manager.zi";
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "lists_network.zi";
+#import, file "lists_types.zi";
+#import, file "asset_paths.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../app/smooth_frames.zi";
+#import, file "../app/settings_store.zi";
+#import, file "../storage/app_records.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/lists_shared_storage.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/data.zi";
+
+using HostValueKind;
+using FileDownloadStatus;
+
+NODE_APP_OFFERS :: 16
+// How often the node's list of apps is read again while Apps is open.
+NODE_APP_CATALOG_SECONDS :: 21600
+NODE_APP_REGISTRY_BYTES :: 524288
+NODE_APP_SHARED_LIMIT :: 64
+NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
+
+NodeAppOffer :: struct {
+    name: [NODE_APP_NAME_MAX + 1]u8
+    title: [65]u8
+    // Published as beta: listed only while beta apps are shown.
+    beta: bool
+}
+
+// Beta apps show in More apps only on a device where Settings › About's
+// Show beta apps is on. The choice stays on this device.
+NODE_APP_BETA_KEY :: "node_apps_beta"
+
+NodeAppBetaShown :: () -> bool {
+    return SettingsReadInt(NODE_APP_BETA_KEY, 0) != 0
+}
+
+// Turning beta apps on reads the node's list again the next time Apps is
+// open, so a beta app published since the last read shows at once.
+NodeAppSetBetaShown :: (shown: bool) {
+    unused SettingsStoreInt(NODE_APP_BETA_KEY, ifx shown then 1 else 0)
+    if shown {
+        node_catalog_checked_at = 0
+        unused SettingsStoreInt("node_apps_checked_at", 0)
+    }
+}
+
+NodeAppRunner :: struct {
+    app: HostedApp
+    bundle_bytes: s64
+    received: bool
+    has_read: bool
+    has_write: bool
+}
+
+node_offers: [NODE_APP_OFFERS]NodeAppOffer;
+node_offer_count: s32;
+node_runners: [NodeAppSlots]NodeAppRunner;
+node_initialized: bool;
+node_identifying: bool;
+node_message: AppMessage;
+node_message_codec: WidgetAppMessageCodec;
+node_shared_codec: WidgetAppSharedCodec;
+node_item_codec: WidgetAppSharedItemCodec;
+node_invitation_codec: WidgetAppInvitationCodec;
+node_command_codec: WidgetAppSharedCommandCodec;
+node_ui_call: HostCall;
+node_ui_context: *void;
+node_ui_active: bool;
+node_package_revision: s32 = -1;
+node_reconciled_at: s32;
+node_record_text: string;
+// Reading the node's list of apps, then each app's latest release.
+node_catalog_download: FileDownload;
+node_catalog_phase: s32;
+node_catalog_checked_at: s32 = -1;
+node_candidates: [NODE_APP_OFFERS]NodeAppOffer;
+node_candidate_count: s32;
+node_candidate_next: s32;
+node_runnable: [NODE_APP_OFFERS]bool;
+// The shared records and invitations of the app being run, as offsets into
+// the shared-list cache, read again whenever that cache changes.
+node_shared_name: [NODE_APP_NAME_MAX + 1]u8;
+node_shared_seen: s32 = -1;
+node_shared_lists: [NODE_APP_SHARED_LIMIT]s32;
+node_shared_count: s32;
+node_shared_invites: [NODE_APP_SHARED_LIMIT]s32;
+node_invite_count: s32;
+// The cache those offsets point into, read once per change.
+node_shared_json: string;
+// A desktop owner or a test can offer one local package as if the node
+// listed it: INBE_NODE_APP_FILE=/absolute/path/<name>.zib. It passes the
+// same interface, identity and resource checks; publisher signatures apply
+// to network installs only, as for a local --bundle.
+node_local_path: [4096]u8;
+node_local_name: [NODE_APP_NAME_MAX + 1]u8;
+
+// Names and slots.
+
+NodeAppIndex :: (slot: s32) -> s32 {
+    return PackageCount + slot
+}
+
+NodeAppSlotKey :: (slot: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "node_app_slot_%", slot)
+    return BuilderFinish(out)
+}
+
+NodeAppName :: (slot: s32) -> string {
+    return PackageNodeAppName(slot)
+}
+
+NodeAppSlotFor :: (name: string) -> s32 {
+    if name.count == 0 {
+        return -1
+    }
+    slot: s32 = 0
+    while slot < NodeAppSlots {
+        if NodeAppName(slot) == name {
+            return slot
+        }
+        slot += 1
+    }
+    return -1
+}
+
+// "assets/<name>/<file>", to free with PackageFree.
+NodeAppAssetPath :: (name: string, file: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "assets/%/%", name, file)
+    return BuilderFinish(out)
+}
+
+NodeAppInstallKey :: (name: string) -> string {
+    return PackageText("app_used_", name)
+}
+
+// Installed on this account: chosen here or on another of its devices.
+NodeAppMarked :: (name: string) -> bool {
+    key := NodeAppInstallKey(name)
+    defer {
+        PackageFree(key)
+    }
+    return storage_get_setting_text(key) == "1"
+}
+
+NodeAppSetMark :: (name: string, installed: bool) {
+    key := NodeAppInstallKey(name)
+    defer {
+        PackageFree(key)
+    }
+    storage_set_setting_text(key, ifx installed then "1" else "0")
+}
+
+NodeAppAssign :: (slot: s32, name: string) {
+    key := NodeAppSlotKey(slot)
+    defer {
+        PackageFree(key)
+    }
+    bytes: [NODE_APP_NAME_MAX + 1]u8
+    unused AppCopyText(name, bytes[:])
+    unused SettingsStoreText(key, bytes[:])
+    PackageSetNodeApp(slot, name)
+}
+
+NodeAppRunning :: (slot: s32) -> bool {
+    return slot >= 0 && slot < NodeAppSlots && node_runners[slot].app.instance != null
+}
+
+NodeAppPackageSize :: (slot: s32) -> s64 {
+    if !NodeAppRunning(slot) {
+        return 0
+    }
+    return node_runners[slot].bundle_bytes
+}
+
+// What the launcher calls the app: its translated name when the root
+// package has one, otherwise the node's name for it.
+NodeAppTitle :: (name: string) -> string {
+    key := PackageText("app_name_", name)
+    defer {
+        PackageFree(key)
+    }
+    text := LocaleText(key)
+    if text != key {
+        return text
+    }
+    index: s32 = 0
+    while index < node_offer_count {
+        if TextUntilNul(node_offers[index].name[:]) == name {
+            return TextUntilNul(node_offers[index].title[:])
+        }
+        index += 1
+    }
+    return name
+}
+
+// The app's outline icon from its package, or a plain grid before then.
+NodeAppIconShape :: (slot: s32) -> string {
+    if NodeAppRunning(slot) {
+        path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
+        defer {
+            PackageFree(path)
+        }
+        asset := HostedAppAsset(*node_runners[slot].app, path)
+        if asset.found && asset.data.count > 6 && asset.data.count < 4096 && asset.data[:1] == "S" {
+            return asset.data
+        }
+    }
+    return NODE_APP_GENERIC_ICON
+}
+
+// The apps the node offers that this build can run, as last read.
+NodeAppOfferCount :: () -> s32 {
+    return node_offer_count
+}
+
+NodeAppOfferName :: (index: s32) -> string {
+    if index < 0 || index >= node_offer_count {
+        return ""
+    }
+    return TextUntilNul(node_offers[index].name[:])
+}
+
+// Whether More apps lists an offer: beta ones only while beta apps are shown.
+NodeAppOfferShown :: (index: s32) -> bool {
+    return index >= 0 && index < node_offer_count && (!node_offers[index].beta || NodeAppBetaShown())
+}
+
+NodeAppOffered :: (name: string) -> bool {
+    index: s32 = 0
+    while index < node_offer_count {
+        if TextUntilNul(node_offers[index].name[:]) == name {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// The offers are saved as "name|title" lines, with "|beta" after a beta
+// app's, so Apps lists them offline.
+NodeAppSaveOffers :: () {
+    out: Vec(u8)
+    index: s32 = 0
+    while index < node_offer_count {
+        BuilderPrint(*out, "%|%", TextUntilNul(node_offers[index].name[:]),
+            TextUntilNul(node_offers[index].title[:]))
+        if node_offers[index].beta {
+            BuilderPrint(*out, "|beta")
+        }
+        BuilderPrint(*out, "\n")
+        index += 1
+    }
+    text := BuilderFinish(out)
+    bytes: [2048]u8
+    unused AppCopyText(text, bytes[:])
+    unused SettingsStoreText("node_apps_offers", bytes[:])
+    PackageFree(text)
+}
+
+NodeAppLoadOffers :: () {
+    text := storage_get_setting_text("node_apps_offers")
+    node_offer_count = 0
+    at: s64 = 0
+    while at < text.count && node_offer_count < NODE_APP_OFFERS {
+        end := at
+        while end < text.count && text[end] != #char "\n" {
+            end += 1
+        }
+        line := text[at:end]
+        bar: s64 = 0
+        while bar < line.count && line[bar] != #char "|" {
+            bar += 1
+        }
+        if bar < line.count && NodeAppNameValid(line[:bar]) {
+            offer := *node_offers[node_offer_count]
+            offer.* = NodeAppOffer.{}
+            unused AppCopyText(line[:bar], offer.name[:])
+            title := line[bar + 1:]
+            if title.count >= 5 && title[title.count - 5:] == "|beta" {
+                offer.beta = true
+                title = title[:title.count - 5]
+            }
+            unused AppCopyText(title, offer.title[:])
+            node_offer_count += 1
+        }
+        at = end + 1
+    }
+}
+
+NodeAppLocal :: (name: string) -> bool {
+    return name.count > 0 && TextUntilNul(node_local_name[:]) == name
+}
+
+NodeAppLocalOffer :: () {
+    if node_local_name[0] == cast(u8)0 || NodeAppOffered(TextUntilNul(node_local_name[:])) ||
+    node_offer_count >= NODE_APP_OFFERS {
+        return
+    }
+    offer := *node_offers[node_offer_count]
+    offer.* = NodeAppOffer.{}
+    unused AppCopyText(TextUntilNul(node_local_name[:]), offer.name[:])
+    unused AppCopyText(TextUntilNul(node_local_name[:]), offer.title[:])
+    node_offer_count += 1
+}
+
+NodeAppLocalLoad :: () {
+    value := DataEnvironment("INBE_NODE_APP_FILE")
+    if value == null {
+        return
+    }
+    path := TextFromCString(value)
+    start := path.count
+    while start > 0 && path[start - 1] != #char "/" {
+        start -= 1
+    }
+    if path.count < 6 || path[0] != #char "/" || path[path.count - 4:] != ".zib" ||
+    !NodeAppNameValid(path[start:path.count - 4]) || !AppCopyText(path, node_local_path[:]) {
+        return
+    }
+    unused AppCopyText(path[start:path.count - 4], node_local_name[:])
+    NodeAppLocalOffer()
+}
+
+NodeAppsInitialize :: () {
+    if node_initialized {
+        return
+    }
+    node_initialized = true
+    NodeAppLoadOffers()
+    NodeAppLocalLoad()
+    slot: s32 = 0
+    while slot < NodeAppSlots {
+        key := NodeAppSlotKey(slot)
+        name := storage_get_setting_text(key)
+        PackageFree(key)
+        if NodeAppNameValid(name) && NodeAppSlotFor(name) < 0 {
+            PackageSetNodeApp(slot, name)
+            // Installed apps update like the bundled ones; a local file does not.
+            PackageSetNodeAppWanted(slot, !NodeAppLocal(name))
+        } else {
+            PackageSetNodeApp(slot, "")
+        }
+        slot += 1
+    }
+}
+
+// Installing and removing.
+
+// Starts installing an app the node offers and returns its slot, or -1
+// when every slot is taken. The pump and the settings load initialize the
+// slots first, so installing never changes the offers it may be given.
+NodeAppInstall :: (name: string) -> s32 {
+    if !NodeAppNameValid(name) {
+        return -1
+    }
+    slot := NodeAppSlotFor(name)
+    if slot < 0 {
+        free: s32 = 0
+        while free < NodeAppSlots && NodeAppName(free).count > 0 {
+            free += 1
+        }
+        if free >= NodeAppSlots {
+            return -1
+        }
+        slot = free
+        NodeAppAssign(slot, name)
+    }
+    if !NodeAppMarked(name) {
+        NodeAppSetMark(name, true)
+    }
+    PackageSetNodeAppWanted(slot, !NodeAppLocal(name))
+    if !NodeAppOpen(slot) && !NodeAppLocal(name) {
+        PackageRequest(NodeAppIndex(slot))
+    }
+    return slot
+}
+
+// Removes the app from this account's apps. Its records stay; its package
+// stays cached, so adding it back needs no download.
+NodeAppUninstall :: (slot: s32) {
+    if slot < 0 || slot >= NodeAppSlots {
+        return
+    }
+    name := NodeAppName(slot)
+    if name.count > 0 && NodeAppMarked(name) {
+        NodeAppSetMark(name, false)
+    }
+    NodeAppClose(slot)
+    PackageSetNodeAppWanted(slot, false)
+    NodeAppAssign(slot, "")
+}
+
+NodeAppClose :: (slot: s32) {
+    HostedAppClose(*node_runners[slot].app)
+    node_runners[slot] = NodeAppRunner.{}
+}
+
+// Follows choices synced from the account's other devices.
+NodeAppsReconcile :: () {
+    slot: s32 = 0
+    while slot < NodeAppSlots {
+        name := NodeAppName(slot)
+        if name.count > 0 && !NodeAppMarked(name) {
+            NodeAppClose(slot)
+            PackageSetNodeAppWanted(slot, false)
+            NodeAppAssign(slot, "")
+        }
+        slot += 1
+    }
+    index: s32 = 0
+    while index < node_offer_count {
+        name := TextUntilNul(node_offers[index].name[:])
+        if NodeAppSlotFor(name) < 0 && NodeAppMarked(name) {
+            unused NodeAppInstall(name)
+        }
+        index += 1
+    }
+}
+
+// Running.
+
+NodeAppCapability :: (name: string) -> bool {
+    return name == "ReadAppHost" || name == "WriteAppHost" || name == "ReadAppUiHost" ||
+    name == "AppLocaleHost" || name == "AppRecordHost" || name == "SaveAppRecordHost" ||
+    name == "AppFriendHost" || name == "AppSharedHost" || name == "AppSharedItemHost" ||
+    name == "AppInvitationHost" || name == "SendAppSharedHost" || name == "RefreshAppSharedHost" ||
+    name == "SmoothFramesHost"
+}
+
+// A node app may call the generic interface from any of its modules, and
+// the hosted Kryon widgets; nothing else.
+NodeAppAllows :: (context: *void, module_name: string, name: string) -> bool {
+    runner := cast(*NodeAppRunner)context
+    runner.has_read = runner.has_read || name == "ReadAppHost"
+    runner.has_write = runner.has_write || name == "WriteAppHost"
+    return NodeAppCapability(name) || WidgetHostSupports(module_name, name)
+}
+
+NodeAppSlotOf :: (runner: *NodeAppRunner) -> s32 {
+    slot: s32 = 0
+    while slot < NodeAppSlots {
+        if runner == *node_runners[slot] {
+            return slot
+        }
+        slot += 1
+    }
+    return -1
+}
+
+NodeAppText :: (value: HostValue) -> string {
+    return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
+}
+
+NodeAppString :: (text: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(text), .length = cast(usize)text.count}
+}
+
+NodeAppRecordKey :: (app: string, record: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "cell.%.%", app, record)
+    return BuilderFinish(out)
+}
+
+NodeAppRecordRead :: (key: string) -> string {
+    if !NodeAppRecordKeyValid(key) {
+        return ""
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value FROM settings WHERE user_id=?1 AND key=?2", -1,
+        *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), APP_RECORD_TEXT_MAX), "")
+}
+
+NodeAppCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    runner := cast(*NodeAppRunner)context
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 {
+        return 0
+    }
+    app_name := NodeAppName(slot)
+    name := TextFromCString(function)
+    if name == "ReadAppHost" && count == 0 {
+        message := ifx node_identifying then AppMessage.{.abi = MODULE_ABI} else node_message
+        result.* = WidgetEncodeAppMessage(message, *node_message_codec)
+        return 1
+    }
+    if name == "WriteAppHost" && count == 1 && !node_identifying {
+        if !WidgetValidAppMessage(arguments[0]) {
+            return 0
+        }
+        written := WidgetDecodeAppMessage(arguments[0], *node_message_codec)
+        node_message.succeeded = written.succeeded
+        runner.received = true
+        return 1
+    }
+    if node_identifying {
+        return 0
+    }
+    if name == "SmoothFramesHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        AppRequestSmoothFrames(cast(s32)arguments[0].integer)
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppRecordHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        record := NodeAppText(arguments[0])
+        PackageFree(node_record_text)
+        node_record_text = ""
+        if NodeAppRecordNameValid(record) {
+            key := NodeAppRecordKey(app_name, record)
+            node_record_text = NodeAppRecordRead(key)
+            PackageFree(key)
+        }
+        result.* = NodeAppString(node_record_text)
+        return 1
+    }
+    if name == "SaveAppRecordHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        record := NodeAppText(arguments[0])
+        text := NodeAppText(arguments[1])
+        saved := false
+        if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
+            key := NodeAppRecordKey(app_name, record)
+            storage_set_setting_text(key, text)
+            saved = storage_setting_text_equals(key, text) != 0
+            PackageFree(key)
+        }
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    if name == "AppSharedHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        NodeAppSharedLoad(app_name)
+        result.* = WidgetEncodeAppShared(NodeAppSharedAt(cast(s32)arguments[0].integer), *node_shared_codec)
+        return 1
+    }
+    if name == "AppSharedItemHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        NodeAppSharedLoad(app_name)
+        item := NodeAppSharedItemAt(cast(s32)arguments[0].integer, cast(s32)arguments[1].integer)
+        result.* = WidgetEncodeAppSharedItem(item, *node_item_codec)
+        return 1
+    }
+    if name == "AppInvitationHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        NodeAppSharedLoad(app_name)
+        result.* = WidgetEncodeAppInvitation(NodeAppInvitationAt(cast(s32)arguments[0].integer),
+            *node_invitation_codec)
+        return 1
+    }
+    if name == "SendAppSharedHost" && count == 2 && WidgetValidAppSharedCommand(arguments[0]) {
+        command := WidgetDecodeAppSharedCommand(arguments[0], *node_command_codec)
+        sent := NodeAppSharedSend(app_name, command, arguments[1])
+        result.* = HostScalar("bool", ifx sent then 1 else 0)
+        return 1
+    }
+    if name == "RefreshAppSharedHost" && count == 0 {
+        lists_refresh_at = 0.0
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if node_ui_active && node_ui_call != null {
+        return node_ui_call(node_ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+NodeAppRun :: (runner: *NodeAppRunner) -> bool {
+    answer: s64
+    runner.received = false
+    if !HostedAppRun(*runner.app, *answer) {
+        return false
+    }
+    if node_identifying {
+        return answer == cast(s64)MODULE_NODE_APP
+    }
+    return answer == 0 && runner.received
+}
+
+NodeAppStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
+    runner.has_read = false
+    runner.has_write = false
+    if !HostedAppOpen(*runner.app, bytes) ||
+    !HostedAppStart(*runner.app, NodeAppAllows, NodeAppCall, cast(*void)runner) {
+        return false
+    }
+    if !runner.has_read || !runner.has_write {
+        return false
+    }
+    previous := node_identifying
+    node_identifying = true
+    ready := NodeAppRun(runner)
+    node_identifying = previous
+    runner.bundle_bytes = bytes.count
+    return ready
+}
+
+// A node app's package holds its own resources under assets/<name>/ only.
+NodeAppAssetsValid :: (bundle: *void, name: string) -> bool {
+    count := BundleAssets(bundle)
+    if count > cast(u64)2048 {
+        return false
+    }
+    prefix := NodeAppAssetPath(name, "")
+    defer {
+        PackageFree(prefix)
+    }
+    asset: u64 = 0
+    while asset < count {
+        path := TextFromCString(BundleAssetPath(bundle, asset))
+        if path.count <= prefix.count || path[:prefix.count] != prefix ||
+        !PackageResourceValid(path, MODULE_INBE) {
+            return false
+        }
+        asset += 1
+    }
+    return true
+}
+
+// Checks a downloaded package before it is published: the generic
+// interface only, the node app's identity and its own resources.
+NodeAppValidate :: (slot: s32, bytes: string) -> bool {
+    if slot < 0 || slot >= NodeAppSlots || NodeAppName(slot).count == 0 {
+        return false
+    }
+    // The candidate runs as this slot, so its records and shared ids are
+    // checked against the right name.
+    saved := node_runners[slot]
+    node_runners[slot] = NodeAppRunner.{}
+    ok := NodeAppStart(*node_runners[slot], bytes) &&
+    NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))
+    HostedAppClose(*node_runners[slot].app)
+    node_runners[slot] = saved
+    return ok
+}
+
+// Opens the slot's installed package. False when none is installed yet.
+NodeAppOpen :: (slot: s32) -> bool {
+    if NodeAppRunning(slot) {
+        return true
+    }
+    bytes := ""
+    if NodeAppLocal(NodeAppName(slot)) {
+        bytes = PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
+    } else {
+        bytes = PackageInstalledBytes(NodeAppIndex(slot))
+        if bytes.count > 0 && !PackageTrialAllows(NodeAppIndex(slot)) {
+            PackageFree(bytes)
+            bytes = ""
+        }
+    }
+    defer {
+        PackageFree(bytes)
+    }
+    if bytes.count == 0 {
+        return false
+    }
+    NodeAppClose(slot)
+    if !NodeAppStart(*node_runners[slot], bytes) ||
+    !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot)) {
+        NodeAppClose(slot)
+        return false
+    }
+    return true
+}
+
+// Runs one call of an installed app with the host's message.
+NodeAppRunMessage :: (slot: s32, message: AppMessage) -> AppMessage {
+    message.abi = MODULE_ABI
+    message.succeeded = false
+    if !NodeAppRunning(slot) {
+        return message
+    }
+    runner := *node_runners[slot]
+    if runner.app.failed && !NodeAppRestart(slot) {
+        return message
+    }
+    node_message = message
+    if !NodeAppRun(runner) {
+        return message
+    }
+    return node_message
+}
+
+NodeAppAccepts :: (context: *void) -> bool {
+    runner := cast(*NodeAppRunner)context
+    if !runner.has_read || !runner.has_write {
+        return false
+    }
+    previous := node_identifying
+    node_identifying = true
+    ready := NodeAppRun(runner)
+    node_identifying = previous
+    return ready
+}
+
+// A trapped app gets a fresh instance, kept only once it identifies itself.
+NodeAppRestart :: (slot: s32) -> bool {
+    runner := *node_runners[slot]
+    runner.has_read = false
+    runner.has_write = false
+    return HostedAppRestart(*runner.app, NodeAppAllows, NodeAppCall, cast(*void)runner, NodeAppAccepts)
+}
+
+NodeAppUiBegin :: (callback: HostCall, context: *void) {
+    node_ui_call = callback
+    node_ui_context = context
+    node_ui_active = true
+}
+
+NodeAppUiEnd :: () {
+    node_ui_active = false
+}
+
+// Resources.
+
+NodeAppAssetSlot :: (path: string) -> s32 {
+    if path.count < 9 || path[:7] != "assets/" {
+        return -1
+    }
+    end: s64 = 7
+    while end < path.count && path[end] != #char "/" {
+        end += 1
+    }
+    if end >= path.count {
+        return -1
+    }
+    slot := NodeAppSlotFor(path[7:end])
+    if !NodeAppRunning(slot) {
+        return -1
+    }
+    return slot
+}
+
+NodeAppAssetAllowed :: (path: string) -> bool {
+    return NodeAppAssetSlot(path) >= 0 && PackageResourceValid(path, MODULE_INBE)
+}
+
+NodeAppAsset :: (path: string) -> AssetView {
+    slot := NodeAppAssetSlot(path)
+    if slot < 0 {
+        return AssetView.{}
+    }
+    asset := HostedAppAsset(*node_runners[slot].app, path)
+    if !asset.found {
+        return AssetView.{}
+    }
+    mime := "text/plain"
+    if path.count > 4 && path[path.count - 4:] == ".png" {
+        mime = "image/png"
+    }
+    return AssetView.{.found = true, .mime = mime, .data = asset.data}
+}
+
+// Records shared with friends: the app's own lists on the shared-list
+// service, recognised by the app's name and a dash at the start of the id.
+
+NodeAppJsonText :: (json: string, at: s32, key: string, output: []u8) -> string {
+    count := ReadStringText(json, FieldAt(json, at, key), output)
+    if count <= 0 || count >= output.count {
+        return ""
+    }
+    return TextFromBytes(output[0:count])
+}
+
+NodeAppSharedLoad :: (name: string) {
+    if node_shared_seen == ListsSharedRevision() && TextUntilNul(node_shared_name[:]) == name {
+        return
+    }
+    node_shared_seen = ListsSharedRevision()
+    unused AppCopyText(name, node_shared_name[:])
+    node_shared_count = 0
+    node_invite_count = 0
+    node_shared_json = ListsSharedCache()
+    json := node_shared_json
+    lists := FieldAt(json, 0, "lists")
+    count := ArrayCount(json, lists)
+    index: s32 = 0
+    while index < count && node_shared_count < NODE_APP_SHARED_LIMIT {
+        at := ElementAt(json, lists, index)
+        id: [64]u8
+        deleted := ReadNumber(json, FieldAt(json, at, "deleted"))
+        if NodeAppSharedIdValid(name, NodeAppJsonText(json, at, "id", id[:])) &&
+        !(deleted.valid && deleted.value != 0.0) {
+            node_shared_lists[node_shared_count] = at
+            node_shared_count += 1
+        }
+        index += 1
+    }
+    invitations := FieldAt(json, 0, "invitations")
+    count = ArrayCount(json, invitations)
+    index = 0
+    while index < count && node_invite_count < NODE_APP_SHARED_LIMIT {
+        at := ElementAt(json, invitations, index)
+        id: [64]u8
+        if NodeAppSharedIdValid(name, NodeAppJsonText(json, at, "list_id", id[:])) {
+            node_shared_invites[node_invite_count] = at
+            node_invite_count += 1
+        }
+        index += 1
+    }
+}
+
+NodeAppSharedCount :: (name: string) -> s32 {
+    NodeAppSharedLoad(name)
+    return node_shared_count
+}
+
+NodeAppInvitationCount :: (name: string) -> s32 {
+    NodeAppSharedLoad(name)
+    return node_invite_count
+}
+
+// Display names as Lists shows them: @alias, or the start of the ID.
+NodeAppPersonName :: (alias: string, id: string, output: []u8) -> string {
+    out: Vec(u8)
+    if alias.count > 0 {
+        BuilderPrint(*out, "@%", alias)
+    } else if id.count >= 4 {
+        BuilderPrint(*out, "%...", id[:4])
+    }
+    text := BuilderFinish(out)
+    unused AppCopyText(text, output)
+    PackageFree(text)
+    return TextUntilNul(output)
+}
+
+node_text_id: [64]u8;
+node_text_owner: [80]u8;
+node_text_owner_name: [80]u8;
+node_text_alias: [80]u8;
+node_text_title: [160]u8;
+node_text_comment: [600]u8;
+node_text_target: [80]u8;
+node_text_target_name: [80]u8;
+node_text_target_alias: [80]u8;
+node_text_status: [16]u8;
+node_text_list: [64]u8;
+
+NodeAppSharedAt :: (index: s32) -> AppShared {
+    if index < 0 || index >= node_shared_count {
+        return AppShared.{}
+    }
+    json := node_shared_json
+    at := node_shared_lists[index]
+    revision := ReadNumber(json, FieldAt(json, at, "revision"))
+    alias := NodeAppJsonText(json, at, "alias", node_text_alias[:])
+    owner := NodeAppJsonText(json, at, "owner", node_text_owner[:])
+    return AppShared.{.id = NodeAppJsonText(json, at, "id", node_text_id[:]),
+        .owner = owner, .owner_name = NodeAppPersonName(alias, owner, node_text_owner_name[:]),
+        .title = NodeAppJsonText(json, at, "title", node_text_title[:]),
+        .revision = ifx revision.valid then cast(s32)revision.value else 0,
+        .item_count = ArrayCount(json, FieldAt(json, at, "items"))}
+}
+
+NodeAppSharedItemAt :: (index: s32, item: s32) -> AppSharedItem {
+    if index < 0 || index >= node_shared_count {
+        return AppSharedItem.{}
+    }
+    json := node_shared_json
+    items := FieldAt(json, node_shared_lists[index], "items")
+    if item < 0 || item >= ArrayCount(json, items) {
+        return AppSharedItem.{}
+    }
+    at := ElementAt(json, items, item)
+    done := ReadNumber(json, FieldAt(json, at, "done"))
+    return AppSharedItem.{.id = NodeAppJsonText(json, at, "id", node_text_id[:]),
+        .title = NodeAppJsonText(json, at, "title", node_text_title[:]),
+        .comment = NodeAppJsonText(json, at, "comment", node_text_comment[:]),
+        .done = done.valid && done.value != 0.0}
+}
+
+NodeAppInvitationAt :: (index: s32) -> AppInvitation {
+    if index < 0 || index >= node_invite_count {
+        return AppInvitation.{}
+    }
+    json := node_shared_json
+    at := node_shared_invites[index]
+    owner := NodeAppJsonText(json, at, "owner", node_text_owner[:])
+    alias := NodeAppJsonText(json, at, "alias", node_text_alias[:])
+    target := NodeAppJsonText(json, at, "target", node_text_target[:])
+    target_alias := NodeAppJsonText(json, at, "target_alias", node_text_target_alias[:])
+    return AppInvitation.{.id = NodeAppJsonText(json, at, "id", node_text_id[:]),
+        .shared_id = NodeAppJsonText(json, at, "list_id", node_text_list[:]),
+        .title = NodeAppJsonText(json, at, "title", node_text_title[:]),
+        .owner = owner, .owner_name = NodeAppPersonName(alias, owner, node_text_owner_name[:]),
+        .target = target, .target_name = NodeAppPersonName(target_alias, target, node_text_target_name[:]),
+        .status = NodeAppJsonText(json, at, "status", node_text_status[:])}
+}
+
+NodeAppJsonString :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte < cast(u8)32 {
+            hex := "0123456789abcdef"
+            BuilderPrint(out, "\\u00")
+            unused VecPush(out.*, hex[byte / cast(u8)16])
+            unused VecPush(out.*, hex[byte % cast(u8)16])
+        } else {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+NodeAppTextValid :: (text: string, maximum: s64, required: bool) -> bool {
+    if text.count > maximum || (required && text.count == 0) {
+        return false
+    }
+    blank := true
+    for byte: text {
+        if byte != #char " " {
+            blank = false
+        }
+    }
+    return !(required && blank)
+}
+
+// Builds the shared-list command for a node app's change and queues it on
+// the same transport and retries Lists uses. Ids, titles and items are
+// checked here; the node checks friendship, ownership and revisions.
+NodeAppSharedSend :: (name: string, command: AppSharedCommand, items: HostValue) -> bool {
+    if !ListsNetworkReady() || ListsNetworkPending() || ListsNetworkBusy() ||
+    !NodeAppSharedIdValid(name, command.id) {
+        return false
+    }
+    action := ""
+    if command.action == APP_SHARED_SAVE {
+        action = "save"
+    } else if command.action == APP_SHARED_INVITE {
+        action = "invite"
+    } else if command.action == APP_SHARED_ACCEPT {
+        action = "accept"
+    } else if command.action == APP_SHARED_DECLINE {
+        action = "decline"
+    } else if command.action == APP_SHARED_DELETE {
+        action = "delete"
+    } else {
+        return false
+    }
+    writes := command.action == APP_SHARED_SAVE || command.action == APP_SHARED_INVITE
+    if writes && !NodeAppTextValid(command.title, APP_SHARED_TITLE_MAX, true) {
+        return false
+    }
+    if items.kind != cast(s32)HostSlice || items.length > cast(usize)APP_SHARED_ITEMS_MAX {
+        return false
+    }
+    if command.action == APP_SHARED_INVITE && (command.target.count != 64 || command.target ==
+        storage_get_setting_text("sync_public_id")) {
+        return false
+    }
+    out: Vec(u8)
+    request := ListsNetworkNextId()
+    BuilderPrint(*out, "{\"request_id\":")
+    NodeAppJsonString(*out, request)
+    PackageFree(request)
+    BuilderPrint(*out, ",\"action\":")
+    NodeAppJsonString(*out, action)
+    BuilderPrint(*out, ",\"target\":")
+    NodeAppJsonString(*out, command.target)
+    BuilderPrint(*out, ",\"invitation_id\":")
+    NodeAppJsonString(*out, command.invitation)
+    BuilderPrint(*out, ",\"list\":{\"id\":")
+    NodeAppJsonString(*out, command.id)
+    BuilderPrint(*out, ",\"title\":")
+    NodeAppJsonString(*out, command.title)
+    BuilderPrint(*out, ",\"revision\":%,\"items\":[", command.revision)
+    valid := true
+    index: s32 = 0
+    while index < cast(s32)items.length {
+        if !WidgetValidAppSharedItem(items.elements[index]) {
+            valid = false
+            break
+        }
+        item := WidgetDecodeAppSharedItem(items.elements[index], *node_item_codec)
+        if !NodeAppTextValid(item.id, APP_SHARED_ID_MAX, true) ||
+        !NodeAppTextValid(item.title, APP_SHARED_TITLE_MAX, true) ||
+        !NodeAppTextValid(item.comment, APP_SHARED_COMMENT_MAX, false) {
+            valid = false
+            break
+        }
+        if index > 0 {
+            BuilderPrint(*out, ",")
+        }
+        BuilderPrint(*out, "{\"id\":")
+        NodeAppJsonString(*out, item.id)
+        BuilderPrint(*out, ",\"title\":")
+        NodeAppJsonString(*out, item.title)
+        BuilderPrint(*out, ",\"comment\":")
+        NodeAppJsonString(*out, item.comment)
+        BuilderPrint(*out, ",\"done\":%}", ifx item.done then 1 else 0)
+        index += 1
+    }
+    BuilderPrint(*out, "]}}")
+    body := BuilderFinish(out)
+    defer {
+        PackageFree(body)
+    }
+    if !valid || body.count >= 262144 {
+        return false
+    }
+    message: ListsMessage
+    message.action = LISTS_INVITE
+    message.request_body = body
+    ListsNetworkStart(message)
+    return ListsNetworkPending()
+}
+
+// The node's list of apps.
+
+NodeAppCatalogPath :: (suffix: string) -> string {
+    directory := PackageDirectory()
+    defer {
+        PackageFree(directory)
+    }
+    if directory.count == 0 {
+        return ""
+    }
+    return PackageText(directory, suffix)
+}
+
+NodeAppCatalogStart :: (route: string, destination: string, maximum: s64) -> bool {
+    url := PackageText(TextFromCString(*package_origin[0]), route)
+    defer {
+        PackageFree(url)
+    }
+    FileDownloadRelease(*node_catalog_download)
+    node_catalog_download = FileDownload.{}
+    node_catalog_download.maximum_bytes = cast(u64)maximum
+    return FileDownloadStart(*node_catalog_download, url, destination)
+}
+
+// Reads the registry's apps named inbe.<name> that are active and not
+// bundled with Inner Breeze.
+NodeAppCatalogParse :: (json: string) {
+    node_candidate_count = 0
+    apps := FieldAt(json, 0, "apps")
+    count := ArrayCount(json, apps)
+    index: s32 = 0
+    while index < count && node_candidate_count < NODE_APP_OFFERS {
+        at := ElementAt(json, apps, index)
+        id: [64]u8
+        status: [16]u8
+        title: [65]u8
+        app_id := NodeAppJsonText(json, at, "app_id", id[:])
+        active := NodeAppJsonText(json, at, "status", status[:]) == "active"
+        if active && app_id.count > 5 && app_id[:5] == "inbe." && NodeAppNameValid(app_id[5:]) {
+            candidate := *node_candidates[node_candidate_count]
+            candidate.* = NodeAppOffer.{}
+            unused AppCopyText(app_id[5:], candidate.name[:])
+            display := NodeAppJsonText(json, at, "display_name", title[:])
+            unused AppCopyText(ifx display.count > 0 then display else app_id[5:], candidate.title[:])
+            node_runnable[node_candidate_count] = false
+            node_candidate_count += 1
+        }
+        index += 1
+    }
+}
+
+NodeAppCandidateStart :: () -> bool {
+    while node_candidate_next < node_candidate_count {
+        query := PackageLatestQuery()
+        out: Vec(u8)
+        BuilderPrint(*out, "/api/v2/packages/inbe.%", TextUntilNul(node_candidates[node_candidate_next].name[:]))
+        BuilderPrint(*out, "%", query)
+        route := BuilderFinish(out)
+        destination := NodeAppCatalogPath("/node-app.json")
+        started := NodeAppCatalogStart(route, destination, 65536)
+        PackageFree(query)
+        PackageFree(route)
+        PackageFree(destination)
+        if started {
+            return true
+        }
+        node_candidate_next += 1
+    }
+    return false
+}
+
+// Keeps the candidates with a signed release this build can run.
+NodeAppCatalogFinish :: () {
+    node_offer_count = 0
+    index: s32 = 0
+    while index < node_candidate_count {
+        if node_runnable[index] {
+            node_offers[node_offer_count] = node_candidates[index]
+            node_offer_count += 1
+        }
+        index += 1
+    }
+    NodeAppSaveOffers()
+    NodeAppLocalOffer()
+    node_catalog_phase = 0
+}
+
+// Reads the node's apps when Apps is open and the last read is old, then
+// checks each app's release. Runs every frame; work happens only on change.
+NodeAppsCatalogPump :: (now: s32, wanted: bool) {
+    if node_catalog_phase == 0 {
+        if !wanted || now <= 0 || !PackagePublisherConfigured() {
+            return
+        }
+        if node_catalog_checked_at < 0 {
+            node_catalog_checked_at = SettingsReadInt("node_apps_checked_at", 0)
+        }
+        if now - node_catalog_checked_at < NODE_APP_CATALOG_SECONDS && node_catalog_checked_at <= now {
+            return
+        }
+        node_catalog_checked_at = now
+        unused SettingsStoreInt("node_apps_checked_at", now)
+        destination := NodeAppCatalogPath("/node-apps.json")
+        defer {
+            PackageFree(destination)
+        }
+        if destination.count > 0 && NodeAppCatalogStart("/api/v1/apps", destination, NODE_APP_REGISTRY_BYTES) {
+            node_catalog_phase = 1
+        }
+        return
+    }
+    status := FileDownloadPoll(*node_catalog_download)
+    if status == FileDownloadStatus.Downloading {
+        return
+    }
+    if node_catalog_phase == 1 {
+        if status != FileDownloadStatus.Ready {
+            node_catalog_phase = 0
+            return
+        }
+        path := NodeAppCatalogPath("/node-apps.json")
+        json := PackageRead(path, NODE_APP_REGISTRY_BYTES)
+        NodeAppCatalogParse(json)
+        PackageFree(json)
+        unused RemoveFile(path)
+        PackageFree(path)
+        node_candidate_next = 0
+        if NodeAppCandidateStart() {
+            node_catalog_phase = 2
+        } else {
+            NodeAppCatalogFinish()
+        }
+        return
+    }
+    if status == FileDownloadStatus.Ready {
+        path := NodeAppCatalogPath("/node-app.json")
+        metadata := PackageRead(path, 65536)
+        id := PackageText("inbe.", TextUntilNul(node_candidates[node_candidate_next].name[:]))
+        key: [65]u8
+        node_runnable[node_candidate_next] = PackageTrustedKeyFor(metadata, id, key[:]) &&
+        PackageParseReleaseFor(metadata, id, -1, TextFromCString(*key[0])).valid
+        channel: [16]u8
+        node_candidates[node_candidate_next].beta = NodeAppJsonText(metadata, 0, "channel", channel[:]) == "beta"
+        PackageFree(id)
+        PackageFree(metadata)
+        unused RemoveFile(path)
+        PackageFree(path)
+    }
+    node_candidate_next += 1
+    if !NodeAppCandidateStart() {
+        NodeAppCatalogFinish()
+    }
+}
+
+// Opens packages the package manager finished installing and follows
+// account changes, at most every two seconds.
+NodeAppsPump :: (now: s32, catalog_wanted: bool) {
+    NodeAppsInitialize()
+    NodeAppsCatalogPump(now, catalog_wanted)
+    if PackageRevision() != node_package_revision {
+        node_package_revision = PackageRevision()
+        slot: s32 = 0
+        while slot < NodeAppSlots {
+            if NodeAppName(slot).count > 0 && !NodeAppRunning(slot) {
+                unused NodeAppOpen(slot)
+            }
+            slot += 1
+        }
+    }
+    if now - node_reconciled_at >= 2 || now < node_reconciled_at {
+        node_reconciled_at = now
+        NodeAppsReconcile()
+    }
+}

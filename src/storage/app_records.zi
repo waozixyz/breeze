@@ -1,0 +1,130 @@
+// Names for the apps the node offers and the account data they keep. Each
+// such app has a short name ("chess"); its installed mark syncs as
+// app_used_<name> in its own collection, and its private records as
+// cell.<name>.<record> in private.inbe.v1.app.<name>. Released apps reject
+// unknown keys in the older collections, so none of this goes there.
+
+NODE_APP_NAME_MIN :: 2
+NODE_APP_NAME_MAX :: 24
+NODE_APP_RECORD_NAME_MAX :: 64
+NodeAppInstallsCollection :: "private.inbe.v1.app-installs"
+NodeAppRecordsCollectionPrefix :: "private.inbe.v1.app."
+
+// Names the bundled apps and their records already use.
+NodeAppNameReserved :: (name: string) -> bool {
+    return name == "inbe" || name == "lists" || name == "habits" || name == "practices" ||
+    name == "practice" || name == "diary" || name == "lumi" || name == "leaderboard" ||
+    name == "feedback" || name == "app" || name == "apps"
+}
+
+// A lowercase letter, then lowercase letters and digits.
+NodeAppNameValid :: (name: string) -> bool {
+    if name.count < NODE_APP_NAME_MIN || name.count > NODE_APP_NAME_MAX ||
+    name[0] < #char "a" || name[0] > #char "z" || NodeAppNameReserved(name) {
+        return false
+    }
+    for byte: name {
+        letter := byte >= #char "a" && byte <= #char "z"
+        digit := byte >= #char "0" && byte <= #char "9"
+        if !letter && !digit {
+            return false
+        }
+    }
+    return true
+}
+
+// A record name an app chooses: lowercase letters, digits, dots and dashes.
+NodeAppRecordNameValid :: (name: string) -> bool {
+    if name.count < 1 || name.count > NODE_APP_RECORD_NAME_MAX {
+        return false
+    }
+    for byte: name {
+        letter := byte >= #char "a" && byte <= #char "z"
+        digit := byte >= #char "0" && byte <= #char "9"
+        if !letter && !digit && byte != #char "." && byte != #char "-" {
+            return false
+        }
+    }
+    return true
+}
+
+// The app's name in app_used_<name>, or empty.
+NodeAppInstallName :: (key: string) -> string {
+    if key.count <= 9 || key[:9] != "app_used_" || !NodeAppNameValid(key[9:]) {
+        return ""
+    }
+    return key[9:]
+}
+
+NodeAppInstallKeyValid :: (key: string) -> bool {
+    return NodeAppInstallName(key).count > 0
+}
+
+// The app's name in cell.<name>.<record>, or empty.
+NodeAppRecordOwner :: (key: string) -> string {
+    if key.count < 8 || key.count > 180 || key[:5] != "cell." {
+        return ""
+    }
+    end: s64 = 5
+    while end < key.count && key[end] != #char "." {
+        end += 1
+    }
+    if end >= key.count - 1 || !NodeAppNameValid(key[5:end]) ||
+    !NodeAppRecordNameValid(key[end + 1:]) {
+        return ""
+    }
+    return key[5:end]
+}
+
+NodeAppRecordKeyValid :: (key: string) -> bool {
+    return NodeAppRecordOwner(key).count > 0
+}
+
+// Whether a collection is one app's record collection.
+NodeAppRecordsCollectionValid :: (collection: string) -> bool {
+    prefix := NodeAppRecordsCollectionPrefix
+    return collection.count > prefix.count && collection[:prefix.count] == prefix &&
+    NodeAppNameValid(collection[prefix.count:])
+}
+
+// A shared record of an app: its name, a dash and at most 36 characters
+// in all. It is never shaped like the UUIDs Lists gives its lists.
+NodeAppSharedIdValid :: (name: string, id: string) -> bool {
+    if id.count <= name.count + 1 || id.count > 36 || id[:name.count] != name ||
+    id[name.count] != #char "-" {
+        return false
+    }
+    for byte: id[name.count + 1:] {
+        letter := byte >= #char "a" && byte <= #char "z"
+        digit := byte >= #char "0" && byte <= #char "9"
+        if !letter && !digit && byte != #char "-" {
+            return false
+        }
+    }
+    return !SharedIdLooksLikeList(id)
+}
+
+// Lists' own ids: 8-4-4-4-12 hexadecimal digits.
+SharedIdLooksLikeList :: (id: string) -> bool {
+    if id.count != 36 {
+        return false
+    }
+    index: s64 = 0
+    while index < 36 {
+        byte := id[index]
+        dash := index == 8 || index == 13 || index == 18 || index == 23
+        if dash {
+            if byte != #char "-" {
+                return false
+            }
+        } else {
+            hex := (byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f") ||
+            (byte >= #char "A" && byte <= #char "F")
+            if !hex {
+                return false
+            }
+        }
+        index += 1
+    }
+    return true
+}

@@ -1,10 +1,91 @@
 // Stable IDs and mask bits are shared by account preferences and packages.
+#import "byte_text_linux"
 #import, file "inbe_types.zi";
 
 PackageCount :: 7
 PackageMaximumBytes :: 67108864
 
+// Apps the node offers run in these device-local slots; their package
+// indexes follow the bundled packages' (PackageCount + slot).
+NodeAppSlots :: 8
+PackageSlots :: PackageCount + NodeAppSlots
+
+#scope_file
+node_app_names: [NodeAppSlots][25]u8;
+node_app_ids: [NodeAppSlots][32]u8;
+node_app_wanted: [NodeAppSlots]bool;
+
+CatalogCopy :: (prefix: string, value: string, output: []u8) {
+    count: s64 = 0
+    for byte: prefix {
+        if count < output.count - 1 {
+            output[count] = byte
+            count += 1
+        }
+    }
+    for byte: value {
+        if count < output.count - 1 {
+            output[count] = byte
+            count += 1
+        }
+    }
+    output[count] = cast(u8)0
+}
+
+CatalogText :: (bytes: []u8) -> string {
+    count: s64 = 0
+    while count < bytes.count && bytes[count] != cast(u8)0 {
+        count += 1
+    }
+    return TextFromBytes(bytes[0:count])
+}
+
+#scope_export
+// Names the app in a slot, such as "chess" (package ID inbe.chess), or
+// frees it with an empty name.
+PackageSetNodeApp :: (slot: s32, name: string) {
+    if slot < 0 || slot >= NodeAppSlots {
+        return
+    }
+    CatalogCopy("", name, node_app_names[slot][:])
+    if name.count == 0 {
+        node_app_ids[slot][0] = cast(u8)0
+        node_app_wanted[slot] = false
+        return
+    }
+    CatalogCopy("inbe.", name, node_app_ids[slot][:])
+}
+
+PackageNodeAppName :: (slot: s32) -> string {
+    if slot < 0 || slot >= NodeAppSlots {
+        return ""
+    }
+    return CatalogText(node_app_names[slot][:])
+}
+
+// An installed node app is kept up to date like a selected bundled one.
+PackageSetNodeAppWanted :: (slot: s32, wanted: bool) {
+    if slot >= 0 && slot < NodeAppSlots {
+        node_app_wanted[slot] = wanted
+    }
+}
+
+PackageWanted :: (index: s32, desired: s32) -> bool {
+    if index == 0 {
+        return true
+    }
+    if index > 0 && index < PackageCount {
+        return (desired & PackageBit(index)) != 0
+    }
+    slot := index - PackageCount
+    return slot >= 0 && slot < NodeAppSlots && node_app_wanted[slot] &&
+    node_app_names[slot][0] != cast(u8)0
+}
+
 PackageName :: (index: s32) -> string {
+    if index >= PackageCount && index < PackageSlots {
+        return PackageNodeAppName(index - PackageCount)
+    }
     names: [PackageCount]string = .["inbe", "lists", "habits", "practices", "diary", "lumi", "leaderboard"]
     if index < 0 || index >= PackageCount {
         return ""
@@ -13,6 +94,9 @@ PackageName :: (index: s32) -> string {
 }
 
 PackageID :: (index: s32) -> string {
+    if index >= PackageCount && index < PackageSlots {
+        return CatalogText(node_app_ids[index - PackageCount][:])
+    }
     ids: [PackageCount]string = .["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary", "inbe.lumi", "inbe.leaderboard"]
     if index < 0 || index >= PackageCount {
         return ""

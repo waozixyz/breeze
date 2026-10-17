@@ -17,6 +17,7 @@
 #import, file "route_list.zi";
 #import, file "bottom_nav_policy.zi";
 #import, file "launcher_policy.zi";
+#import, file "../cells/node_apps.zi";
 #import, file "app_route_state.zi";
 #import, file "locale.zi";
 #import, file "text_buffers.zi";
@@ -58,6 +59,10 @@ app_nav_route_bit :: (route: s32) -> s32 {
 
 #program_export
 app_nav_route_available :: (app: *InnerBreeze, route: s32) -> bool {
+    slot := AppNavNodeSlot(route)
+    if slot >= 0 {
+        return app != null && NodeAppName(slot).count > 0
+    }
     bit := app_nav_route_bit(route)
     if route == APP_NAV_ROUTE_LUMI {
         return app != null && (CellsInstalledMask() & APP_LUMI) != 0
@@ -144,7 +149,7 @@ app_nav_desktop_rail_enabled :: (app: *InnerBreeze) -> s32 {
     if app.breathing.screen == ScreenHabitSessionEdit  || app.breathing.screen == ScreenSession  || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation  || app.breathing.screen == ScreenPatterns  || app.breathing.screen == ScreenTaiChi  || app.breathing.screen == ScreenResults {
         return 0
     }
-    return cast(s32)(app.breathing.screen == ScreenStart  || app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenEList  || app.breathing.screen == ScreenLumi || app.breathing.screen == ScreenDiary  || app.breathing.screen == ScreenLeaderboard || app.breathing.screen == ScreenProfile  || app.breathing.screen == ScreenSettings || app.breathing.screen == ScreenAppSelection)
+    return cast(s32)(app.breathing.screen == ScreenStart  || app.breathing.screen == ScreenHabits  || app.breathing.screen == ScreenHabitEdit  || app.breathing.screen == ScreenEList  || app.breathing.screen == ScreenLumi || app.breathing.screen == ScreenDiary  || app.breathing.screen == ScreenLeaderboard || app.breathing.screen == ScreenNodeApp || app.breathing.screen == ScreenProfile  || app.breathing.screen == ScreenSettings || app.breathing.screen == ScreenAppSelection)
 }
 
 app_bottom_nav_configurable_route :: (route: s32) -> s32 {
@@ -300,6 +305,14 @@ app_apply_nav_route :: (app: *InnerBreeze, route: s32) {
     if app == null || !app_nav_route_available(app, route) {
         return
     }
+    slot := AppNavNodeSlot(route)
+    if slot >= 0 {
+        next := app_current_route(app)
+        next.screen = ScreenNodeApp
+        next.app_slot = slot
+        app_request_route(app, next)
+        return
+    }
 
     if route == {
         case APP_NAV_ROUTE_PROFILE;
@@ -394,6 +407,9 @@ app_page_height :: (app: *InnerBreeze, full_height: s32) -> s32 {
 #program_export
 app_nav_route_label :: (route: s32) -> string {
     if route == APP_NAV_ROUTE_APPS { return LocaleText("launcher_title") }
+    if AppNavNodeSlot(route) >= 0 {
+        return NodeAppTitle(NodeAppName(AppNavNodeSlot(route)))
+    }
     if route == APP_NAV_ROUTE_LUMI {
         return "Lumi"
     }
@@ -464,6 +480,9 @@ app_current_nav_route :: (app: *InnerBreeze) -> s32 {
     }
     if app.breathing.screen == ScreenLeaderboard {
         return APP_NAV_ROUTE_LEADERBOARD
+    }
+    if app.breathing.screen == ScreenNodeApp {
+        return AppNavNodeRoute(app.node_app_slot)
     }
     return APP_NAV_ROUTE_NONE
 }

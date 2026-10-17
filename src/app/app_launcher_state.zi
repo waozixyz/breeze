@@ -11,6 +11,7 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/catalog.zi";
 #import, file "../cells/package_manager.zi";
+#import, file "../cells/node_apps.zi";
 #import, file "session_window.zi";
 
 using AppNavRoute;
@@ -28,6 +29,27 @@ app_launcher_pins_changed :: (app: *InnerBreeze) {
 }
 
 app_launcher_uninstall :: (app: *InnerBreeze, route: s32) {
+    slot := AppNavNodeSlot(route)
+    if slot >= 0 {
+        pinned := app_launcher_is_favorite(app, route)
+        if pinned {
+            app.launcher_favorite_count = LauncherToggleFavorite(
+                app.launcher_favorites[:], app.launcher_favorite_count, route)
+        }
+        if app.breathing.screen == ScreenNodeApp && app.node_app_slot == slot {
+            app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
+        }
+        NodeAppUninstall(slot)
+        app.launcher_drag_key = 0
+        app.launcher_drag_moving = false
+        if pinned {
+            app_launcher_pins_changed(app)
+        } else {
+            save_settings(app)
+        }
+        app_block_current_click(app)
+        return
+    }
     bit := app_nav_route_bit(route)
     if bit == 0 { return }
     mask := app.enabled_apps & ~bit
@@ -84,7 +106,17 @@ app_launcher_toggle :: (app: *InnerBreeze) {
     app_block_current_click(app)
 }
 
+// Installs an app the node offers; its card then opens it.
+app_launcher_install_offer :: (app: *InnerBreeze, name: string) -> s32 {
+    slot := NodeAppInstall(name)
+    app_block_current_click(app)
+    return slot
+}
+
 app_launcher_install :: (app: *InnerBreeze, route: s32) -> bool {
+    if AppNavNodeSlot(route) >= 0 {
+        return app_nav_route_available(app, route)
+    }
     bit := app_nav_route_bit(route)
     if bit != 0 && (app.enabled_apps & bit) == 0 {
         if !CellsSetEnabled(app.enabled_apps | bit) { return false }

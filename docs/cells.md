@@ -379,6 +379,54 @@ public key on the node and publishing the signed packages. Automatic server
 publication additionally requires the GitHub signing and node deployment
 configuration above; a checked build does not establish that configuration.
 
+## Apps the node offers
+
+Besides the bundled apps, More apps lists every app Waozi's node offers: each
+registry entry `inbe.<name>` (`GET /api/v1/apps`, active, not a bundled ID)
+whose latest signed release (`/api/v2/packages/inbe.<name>/latest`) this host
+can run. The list is read while Apps is open, at most every six hours, and
+kept for offline use. Its title is the root package's translated
+`app_name_<name>` when there is one, otherwise the registry's display name,
+so an app added to the node appears without an app update. The publisher pin
+`inbe-2026-10` trusts its key for these apps through `"app_prefixes":
+["inbe."]`.
+
+Installing one assigns one of eight device-local slots (package indexes
+after the bundled seven, setting `node_app_slot_<n>`) and downloads it through
+the package manager with the same signature, hash, size, interface, trial
+and cache rules as the bundled apps. Such an app is never part of the root
+package or its dependencies. It runs in its own VM through one generic
+interface (`src/cells/node_app_types.zi`, host interface 12): frame and
+route messages, hosted Kryon widgets, `AppLocaleHost`, private records,
+friends and records shared with friends. It may draw only its own
+`assets/<name>/` resources and supplies its icon as
+`assets/<name>/sidebar.shape`. A new app that needs nothing more needs no
+host code and no APK.
+
+Whether such an app is installed syncs as `app_used_<name>` (`0` or `1`, with
+its time) in `private.inbe.v1.app-installs`, its private records as
+`cell.<name>.<record>` in `private.inbe.v1.app.<name>`, and its pin by name in
+`app_order`. Released versions skip these collections; a record this version
+cannot read changes nothing and never stops the sync. Removing the app keeps
+its records and its downloaded package.
+
+Records shared with friends use the shared-list service (`/api/v1/lists`)
+under ids `<name>-...`, which are never shaped like Lists' UUIDs: Lists shows
+neither these records nor their invitations. Invitations, answers, saves
+with revisions and removal follow the shared-list rules, so a friend accepts
+or declines and a stale save is refused. Their content is not end-to-end
+encrypted, like shared lists.
+
+Chess (`apps/chess/`) is the first such app: the computer at three levels
+(search depth 1, 3 and 5 with bounded positions, a few positions per frame
+so the app keeps drawing) and games with friends, one shared record per game
+with its moves in coordinates. `python3 scripts/package-release.py --node-app
+chess --store ... --key ... --key-id ...` stages its release; with
+`--ssh-target`, `--remote-store` and `--verify-origin` it publishes it. The
+App packages workflow never publishes these apps. For a local preview or a
+test, `INBE_NODE_APP_FILE=/absolute/path/chess.zib` offers that package as if
+the node did; it passes the same interface, identity and resource checks.
+
 ## Account app choices
 
 A new profile comes with Lumi, Habits and Practice installed and pinned, in

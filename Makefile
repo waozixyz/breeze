@@ -405,6 +405,9 @@ APP_CODEC_SCHEMAS := $(KRYON_DIR)/scripts/generate-widget-codecs.py $(KRYON_DIR)
 src/cells/app_codec.zi: scripts/generate-app-codec.py $(APP_CODEC_SCHEMAS)
 	python3 scripts/generate-app-codec.py
 
+src/cells/node_app_codec.zi: scripts/generate-node-app-codec.py src/cells/node_app_types.zi $(KRYON_DIR)/scripts/generate-widget-codecs.py $(KRYON_DIR)/src/backend/widget_codec.zi
+	python3 scripts/generate-node-app-codec.py
+
 .PHONY: app-codec-check
 app-codec-check:
 	python3 scripts/generate-app-codec.py --check
@@ -3059,6 +3062,31 @@ data-back-ui-test: $(TARGET)
 .PHONY: leaderboard-ui-test
 leaderboard-ui-test: $(TARGET)
 	@sh tests/leaderboard_ui_test.sh $(abspath $(TARGET))
+
+# Apps the node offers build on their own, never into the root package.
+NODE_APP_BUNDLES := $(BUILD_DIR)/node-apps/chess.zib
+$(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files assets/chess 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py $(ZIRAN_BIN)
+	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
+
+.PHONY: node-apps chess-engine-test chess-app-test node-app-records-test node-app-codec-check chess-ui-test
+node-apps: $(NODE_APP_BUNDLES)
+
+chess-engine-test: $(ZI2C_BIN)
+	sh tests/chess_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+node-app-records-test: $(ZI2C_BIN)
+	sh tests/node_app_records_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+chess-app-test: $(ZIRAN_BIN)
+	sh tests/chess_app_test.sh $(ZIRAN_BIN)
+
+node-app-codec-check:
+	python3 scripts/generate-node-app-codec.py --check
+
+chess-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
+	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/chess.zib)
+
+test: chess-engine-test node-app-records-test chess-app-test node-app-codec-check
 
 # Missing practice pictures fail the visual gate in CI and releases.
 .PHONY: practice-images-ui-test

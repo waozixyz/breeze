@@ -1,0 +1,151 @@
+// The screen of an app the node offers, such as Chess. The app draws itself
+// with hosted Kryon widgets; this screen supplies its frame, its text in the
+// person's language and the account's friends.
+#import "byte_text_linux"
+#import "text_buffer"
+#import "json_scan"
+#import "vec"
+#import "text"
+#import "session"
+#import "geometry"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import "widget_codec"
+#import, file "../cells/node_apps.zi";
+#import, file "../cells/node_app_types.zi";
+#import, file "../cells/node_app_codec.zi";
+#import, file "../cells/lists_network.zi";
+#import, file "../cells/hosted_assets.zi";
+#import, file "../cells/package_manager.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../core/types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/db.zi";
+#import, file "profile_social.zi";
+
+using HostValueKind;
+using TextWrap;
+
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
+app_request_social_refresh :: (app: *InnerBreeze) #foreign c;
+
+node_screen_frame: AppUiFrame;
+node_screen_frame_codec: WidgetAppUiFrameCodec;
+node_screen_person_codec: WidgetAppPersonCodec;
+node_screen_friend_id: [80]u8;
+node_screen_friend_name: [80]u8;
+node_screen_alias: [80]u8;
+// The account's public ID, copied: settings reads share one buffer.
+node_screen_account: [80]u8;
+
+NodeScreenFriends :: (app: *InnerBreeze) -> string {
+    if app.profile_friends_loaded == 0 {
+        load_friends_cache(app)
+    }
+    return AppTextFromCString(*app.profile_friends_json[0], 8192)
+}
+
+NodeScreenFriendCount :: (app: *InnerBreeze) -> s32 {
+    json := NodeScreenFriends(app)
+    count := ArrayCount(json, FieldAt(json, 0, "friends"))
+    return ifx count < 0 then 0 else count
+}
+
+NodeScreenFriend :: (app: *InnerBreeze, index: s32) -> AppPerson {
+    json := NodeScreenFriends(app)
+    friends := FieldAt(json, 0, "friends")
+    if index < 0 || index >= ArrayCount(json, friends) {
+        return AppPerson.{}
+    }
+    at := ElementAt(json, friends, index)
+    id := NodeAppJsonText(json, at, "user_id_hash", node_screen_friend_id[:])
+    alias := NodeAppJsonText(json, at, "alias", node_screen_alias[:])
+    return AppPerson.{.id = id, .name = NodeAppPersonName(alias, id, node_screen_friend_name[:])}
+}
+
+NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    app := cast(*InnerBreeze)context
+    name := TextFromCString(function)
+    if name == "ReadAppUiHost" && count == 0 {
+        result.* = WidgetEncodeAppUiFrame(node_screen_frame, *node_screen_frame_codec)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = NodeAppString(LocaleText(NodeAppText(arguments[0])))
+        return 1
+    }
+    if name == "AppFriendHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        person := NodeScreenFriend(app, cast(s32)arguments[0].integer)
+        result.* = WidgetEncodeAppPerson(person, *node_screen_person_codec)
+        return 1
+    }
+    return WidgetHostCall(context, module, function, arguments, count, result)
+}
+
+// Opening the app reads friends and shared records again.
+#program_export
+node_app_screen_enter :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    load_friends_cache(app)
+    app_request_social_refresh(app)
+    lists_refresh_at = 0.0
+}
+
+// While the app downloads, or when it cannot run, a line says so.
+NodeScreenNotice :: (app: *InnerBreeze, key: string) {
+    margin := AppScale(16)
+    Text(app.ui.session, TextProps.{.text = LocaleText(key), .font = AppFontSize(),
+            .wrap = cast(TextWrap)TextWrapAuto,
+            .bounds = Rectangle.{cast(float32)margin, cast(float32)AppScale(24),
+                cast(float32)(app.ui.view_width - margin * 2), cast(float32)AppScale(64)}})
+}
+
+#program_export
+node_app_screen_draw :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    slot := app.node_app_slot
+    name := NodeAppName(slot)
+    if name.count == 0 {
+        return
+    }
+    if !NodeAppRunning(slot) {
+        status := PackageStatus(NodeAppIndex(slot))
+        NodeScreenNotice(app, ifx status == 3 || status == 4 then "node_app_unavailable" else "node_app_installing")
+        return
+    }
+    node_screen_frame = AppUiFrame.{.session = app.ui.session, .width = app.ui.view_width,
+        .height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
+        .scale = MetricsScale(), .font = AppFontSize(), .now = GetTime(), .dark = app.dark_mode != 0}
+    unused AppCopyText(storage_get_setting_text("sync_public_id"), node_screen_account[:])
+    message := AppMessage.{.action = APP_FRAME, .screen = ScreenNodeApp, .name = name,
+        .locale = AppTextFromCString(*app.language[0], 16),
+        .account = TextUntilNul(node_screen_account[:]),
+        .signed_in = ListsNetworkReady(), .friend_count = NodeScreenFriendCount(app),
+        .shared_count = NodeAppSharedCount(name), .invitation_count = NodeAppInvitationCount(name),
+        .shared_revision = ListsSharedRevision(), .shared_status = lists_status,
+        .time = now_seconds()}
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    NodeAppUiBegin(NodeScreenUiCall, cast(*void)app)
+    unused NodeAppRunMessage(slot, message)
+    NodeAppUiEnd()
+    WidgetHostEnd()
+}

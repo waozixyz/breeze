@@ -35,6 +35,13 @@ lists_writing: bool;
 lists_confirm_action: s32;
 lists_confirm_list: [37]u8;
 lists_context_changed: bool;
+// Changes whenever the cached shared lists may have changed, so apps the
+// node offers read their shared records again only then.
+lists_shared_revision: s32 = 1;
+
+ListsSharedRevision :: () -> s32 {
+    return lists_shared_revision
+}
 
 ListsNetworkContext :: () {
     user := AppTextFromCString(storage_user_id_buffer(), 128)
@@ -63,6 +70,7 @@ ListsNetworkContext :: () {
     lists_failures = 0
     lists_confirm_action = 0
     lists_context_changed = true
+    lists_shared_revision += 1
 }
 
 ListsNetworkReady :: () -> bool {
@@ -167,6 +175,7 @@ ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
             ArrayCount(json, FieldAt(json, 0, "lists")) >= 0 &&
             ArrayCount(json, FieldAt(json, 0, "invitations")) >= 0
             if valid && ListsCacheWrite("lists.shared", json) != 0 {
+                lists_shared_revision += 1
                 app.elist.loaded = 0
                 lists_failures = 0
                 if lists_writing {
@@ -192,6 +201,7 @@ ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
             // inaccessible list, or a change it will never accept.
             definite := status == 400 || status == 403 || status == 404 || status == 409
             if lists_writing && definite {
+                lists_shared_revision += 1
                 unused ListsCacheWrite("lists.attempt", "{}")
                 lists_attempt[0] = cast(u8)0
                 lists_failures = 0

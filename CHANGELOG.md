@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.35] - 2026-10-17
+
+### Added
+- Chess, an optional app in More apps: play the computer at three levels, or invite a friend from your friend list.
+- More apps lists the optional apps your node offers, so new apps arrive without an app update.
+- Settings › About › Show beta apps lists apps your node is still testing.
+
 ## [2.1.34] - 2026-10-15
 
 

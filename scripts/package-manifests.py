@@ -67,7 +67,7 @@ def manifest_for(component, existing, key_id, public):
     if existing.get("lan_only") or existing.get("registration_node_id"):
         raise ValueError("refusing to change a node-restricted app registration")
     values = {field: existing[field] for field in FIELDS if existing.get(field)}
-    values.update(app_id=component["id"], display_name=NAMES[component["name"]],
+    values.update(app_id=component["id"], display_name=NAMES.get(component["name"]) or component["title"],
                   homepage_url="https://inbe.waozi.xyz/",
                   source_url="https://github.com/waozixyz/inbe", status="active",
                   current_client_version=component["version"])
@@ -119,7 +119,10 @@ def registrations(origin, key_path, approval_path, key_id, output, open_url=urlo
     if pin is None or not {app["id"] for app in versions["apps"].values()} <= set(pin["app_ids"]):
         raise ValueError("publisher must match the shipped pin for the root and every cell")
     prepared = {}
-    for name, component in versions["apps"].items():
+    node_apps = versions.get("node_apps", {})
+    if node_apps and "inbe." not in pin.get("app_prefixes", []):
+        raise ValueError("publisher pin must cover the apps the node offers")
+    for name, component in list(versions["apps"].items()) + list(node_apps.items()):
         try:
             request = Request(origin.rstrip("/") + "/api/v1/apps/" + component["id"],
                               headers={"User-Agent": "Inbe-Publisher/1.0", "Accept": "application/json"})

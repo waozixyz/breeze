@@ -9,17 +9,20 @@ root = Path(__file__).resolve().parent.parent
 names = {"inbe": "inbe", "lists": "lists", "habits": "habits",
          "practices": "practice", "diary": "diary", "lumi": "lumi",
          "leaderboard": "leaderboard"}
-if len(sys.argv) != 2 or sys.argv[1] not in names:
-    raise SystemExit("usage: ./update_version.sh --cell inbe|lists|habits|practices|diary|lumi|leaderboard")
+path = root / "apps/versions.json"
+ledger = json.loads(path.read_text())
+# Apps the node offers keep their own entries and are never bundled.
+node_apps = ledger.get("node_apps", {})
+if len(sys.argv) != 2 or (sys.argv[1] not in names and sys.argv[1] not in node_apps):
+    raise SystemExit("usage: ./update_version.sh --cell inbe|lists|habits|practices|diary|lumi|leaderboard|"
+                     + "|".join(sorted(node_apps)))
 name = sys.argv[1]
-changelog = (root / "apps" / names[name] / "CHANGELOG.md").read_text()
+changelog = (root / "apps" / names.get(name, name) / "CHANGELOG.md").read_text()
 version = re.search(r"^## \[((?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8}))\]", changelog, re.M)
 if not version:
     raise SystemExit("module changelog needs a numeric release entry")
-path = root / "apps/versions.json"
-ledger = json.loads(path.read_text())
 latest = version[1]
-component = ledger["apps"].get(name)
+component = node_apps.get(name) or ledger["apps"].get(name)
 if component is None:
     component = {"id": "inbe." + name, "version": latest, "sequence": 1,
                  "bundled": True}

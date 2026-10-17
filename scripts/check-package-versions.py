@@ -46,6 +46,29 @@ def validate(root):
         date.fromisoformat(headings[0][1])
         if headings[0][0] != component["version"]:
             raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --cell {name}")
+    # Apps the node offers are not bundled: they need no place in the root,
+    # and a newer host interface of theirs does not hold the root back.
+    for name, component in ledger.get("node_apps", {}).items():
+        if not re.fullmatch(r"[a-z][a-z0-9]{1,23}", name) or name in NAMES or name in ("practice", "feedback"):
+            raise ValueError(f"{name}: invalid node app name")
+        if component.get("id") != "inbe." + name:
+            raise ValueError(f"{name}: expected app ID inbe.{name}")
+        if not isinstance(component.get("title"), str) or not component["title"]:
+            raise ValueError(f"{name}: a node app needs the title the node lists")
+        if not isinstance(component.get("version"), str) or not re.fullmatch(VERSION, component["version"]):
+            raise ValueError(f"{name}: invalid numeric release version")
+        if type(component.get("sequence")) is not int or not 0 < component["sequence"] <= 2147483647:
+            raise ValueError(f"{name}: invalid release sequence")
+        if "bundled" in component:
+            raise ValueError(f"{name}: an app the node offers is never bundled")
+        host = component.get("host_api", ledger["host_api"])
+        if type(host) is not int or not ledger["oldest_host_api"] <= host <= ledger["host_api"]:
+            raise ValueError(f"{name}: host_api must be between oldest_host_api and host_api")
+        headings = re.findall(r"^## \[([^\]]+)\] - ([^\n]+)$",
+                              (root / "apps" / name / "CHANGELOG.md").read_text(), re.M)
+        if not headings or headings[0][0] != component["version"]:
+            raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --cell {name}")
+        date.fromisoformat(headings[0][1])
     # The root package carries every app for offline use, so a host that
     # cannot run one of them cannot open the root package either.
     root_host = ledger["apps"]["inbe"].get("host_api", ledger["host_api"])

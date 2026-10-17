@@ -1,0 +1,779 @@
+// Chess as a node app, run from its real package in the portable VM: two
+// players, Alice and Bob, on one fake node that keeps shared records the
+// way Daochi's shared lists do. The host answers the generic app interface
+// and the widget calls, taps squares and buttons, and reads what was drawn.
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/file"
+#import "vec"
+#import "hosted_app"
+#import "hosted_values"
+#import "widget_codec"
+#import "geometry"
+#import "text_props"
+#import "button_props"
+#import "press_props"
+#import "scroll_props"
+#import, file "../src/cells/module_types.zi";
+#import, file "../src/cells/node_app_types.zi";
+#import, file "../src/cells/node_app_codec.zi";
+
+using HostValueKind;
+
+TEXT_BYTES :: 32768
+FIELD :: 64
+LONG_FIELD :: 600
+NODE_LISTS :: 8
+NODE_ITEMS :: 32
+RECORDS :: 4
+PRESS_EVENTS :: 32
+
+FakeItem :: struct {
+    id: [FIELD]u8
+    title: [160]u8
+    comment: [LONG_FIELD]u8
+    done: bool
+}
+
+FakeList :: struct {
+    id: [FIELD]u8
+    owner: s32
+    title: [160]u8
+    revision: s32
+    deleted: bool
+    items: [NODE_ITEMS]FakeItem
+    item_count: s32
+}
+
+FakeInvite :: struct {
+    id: [FIELD]u8
+    list: s32
+    target: s32
+    // 0 pending, 1 accepted, 2 declined.
+    status: s32
+}
+
+PressEvent :: struct {
+    square: s32
+    flipped: bool
+    released: bool
+}
+
+Player :: struct {
+    app: HostedApp
+    index: s32
+    status: s32
+    received: bool
+    record_names: [RECORDS][FIELD]u8
+    record_texts: [RECORDS][16384]u8
+    text: [TEXT_BYTES]u8
+    text_length: s64
+    click: [FIELD]u8
+    presses: [PRESS_EVENTS]PressEvent
+    press_count: s32
+    press_next: s32
+}
+
+lists: [NODE_LISTS]FakeList;
+list_count: s32;
+invites: [NODE_LISTS]FakeInvite;
+invite_count: s32;
+node_revision: s32 = 1;
+players: [3]Player;
+frames: s32;
+identifying: bool;
+message_codec: WidgetAppMessageCodec;
+frame_codec: WidgetAppUiFrameCodec;
+person_codec: WidgetAppPersonCodec;
+shared_codec: WidgetAppSharedCodec;
+item_codec: WidgetAppSharedItemCodec;
+invitation_codec: WidgetAppInvitationCodec;
+command_codec: WidgetAppSharedCommandCodec;
+text_codec: WidgetTextPropsCodec;
+button_codec: WidgetButtonPropsCodec;
+press_codec: WidgetPressPropsCodec;
+press_result_codec: WidgetPressResultCodec;
+scroll_codec: WidgetScrollPropsCodec;
+scroll_result_codec: WidgetScrollResultCodec;
+
+Accounts :: (index: s32) -> string {
+    if index == 0 {
+        return "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+    return "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+}
+
+Names :: (index: s32) -> string {
+    return ifx index == 0 then "@alice" else "@bob"
+}
+
+// The account a player instance belongs to; the third is Alice again.
+AccountOf :: (player: *Player) -> s32 {
+    return ifx player.index == 1 then 1 else 0
+}
+
+Stored :: (bytes: []u8) -> string {
+    count: s64 = 0
+    while count < bytes.count && bytes[count] != cast(u8)0 {
+        count += 1
+    }
+    return TextFromBytes(bytes[0:count])
+}
+
+Copy :: (value: string, bytes: []u8) {
+    count := value.count
+    if count > bytes.count - 1 {
+        count = bytes.count - 1
+    }
+    index: s64 = 0
+    while index < count {
+        bytes[index] = value[index]
+        index += 1
+    }
+    bytes[count] = cast(u8)0
+}
+
+Borrowed :: (value: HostValue) -> string {
+    return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
+}
+
+StringResult :: (text: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(text), .length = cast(usize)text.count}
+}
+
+Contains :: (haystack: string, needle: string) -> bool {
+    if needle.count == 0 {
+        return true
+    }
+    at: s64 = 0
+    while at + needle.count <= haystack.count {
+        if haystack[at:at + needle.count] == needle {
+            return true
+        }
+        at += 1
+    }
+    return false
+}
+
+// Whether the last frame drew `text`.
+Saw :: (player: *Player, text: string) -> bool {
+    return Contains(TextFromBytes(player.text[0:player.text_length]), text)
+}
+
+Draw :: (player: *Player, value: string) {
+    index: s64 = 0
+    while index < value.count && player.text_length < TEXT_BYTES - 2 {
+        player.text[player.text_length] = value[index]
+        player.text_length += 1
+        index += 1
+    }
+    player.text[player.text_length] = cast(u8)10
+    player.text_length += 1
+}
+
+// The fake node.
+
+Visible :: (list: s32, account: s32) -> bool {
+    if lists[list].deleted {
+        return false
+    }
+    if lists[list].owner == account {
+        return true
+    }
+    index: s32 = 0
+    while index < invite_count {
+        if invites[index].list == list && invites[index].target == account && invites[index].status == 1 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+VisibleList :: (account: s32, position: s32) -> s32 {
+    seen: s32 = 0
+    index: s32 = 0
+    while index < list_count {
+        if Visible(index, account) {
+            if seen == position {
+                return index
+            }
+            seen += 1
+        }
+        index += 1
+    }
+    return -1
+}
+
+VisibleInvite :: (account: s32, position: s32) -> s32 {
+    seen: s32 = 0
+    index: s32 = 0
+    while index < invite_count {
+        invite := invites[index]
+        shown := !lists[invite.list].deleted &&
+        (lists[invite.list].owner == account || (invite.target == account && invite.status == 0))
+        if shown {
+            if seen == position {
+                return index
+            }
+            seen += 1
+        }
+        index += 1
+    }
+    return -1
+}
+
+CountLists :: (account: s32) -> s32 {
+    count: s32 = 0
+    while VisibleList(account, count) >= 0 {
+        count += 1
+    }
+    return count
+}
+
+CountInvites :: (account: s32) -> s32 {
+    count: s32 = 0
+    while VisibleInvite(account, count) >= 0 {
+        count += 1
+    }
+    return count
+}
+
+FindList :: (id: string) -> s32 {
+    index: s32 = 0
+    while index < list_count {
+        if Stored(lists[index].id[:]) == id {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+SetItems :: (list: s32, items: HostValue) -> bool {
+    if items.kind != cast(s32)HostSlice || items.length > cast(usize)NODE_ITEMS {
+        return false
+    }
+    count := cast(s32)items.length
+    index: s32 = 0
+    while index < count {
+        if !WidgetValidAppSharedItem(items.elements[index]) {
+            return false
+        }
+        item := WidgetDecodeAppSharedItem(items.elements[index], *item_codec)
+        if item.id.count == 0 || item.title.count == 0 || item.comment.count > 511 {
+            return false
+        }
+        Copy(item.id, lists[list].items[index].id[:])
+        Copy(item.title, lists[list].items[index].title[:])
+        Copy(item.comment, lists[list].items[index].comment[:])
+        lists[list].items[index].done = item.done
+        index += 1
+    }
+    lists[list].item_count = count
+    return true
+}
+
+// Applies a command as Daochi does and answers its status.
+Apply :: (account: s32, command: AppSharedCommand, items: HostValue) -> s32 {
+    if command.id.count < 7 || command.id[:6] != "chess-" || command.id.count > 36 {
+        return APP_SHARED_FAILED
+    }
+    list := FindList(command.id)
+    if command.action == APP_SHARED_INVITE {
+        if list >= 0 || list_count >= NODE_LISTS || command.target != Accounts(1 - account) {
+            return APP_SHARED_FAILED
+        }
+        list = list_count
+        list_count += 1
+        Copy(command.id, lists[list].id[:])
+        Copy(command.title, lists[list].title[:])
+        lists[list].owner = account
+        lists[list].revision = 1
+        if !SetItems(list, items) {
+            return APP_SHARED_FAILED
+        }
+        invites[invite_count] = FakeInvite.{.list = list, .target = 1 - account}
+        name: Vec(u8)
+        BuilderPrint(*name, "invite-%", invite_count)
+        Copy(BuilderFinish(name), invites[invite_count].id[:])
+        invite_count += 1
+        return APP_SHARED_DONE
+    }
+    if command.action == APP_SHARED_ACCEPT || command.action == APP_SHARED_DECLINE {
+        index: s32 = 0
+        while index < invite_count {
+            if Stored(invites[index].id[:]) == command.invitation && invites[index].target == account &&
+            invites[index].status == 0 {
+                invites[index].status = ifx command.action == APP_SHARED_ACCEPT then 1 else 2
+                return APP_SHARED_DONE
+            }
+            index += 1
+        }
+        return APP_SHARED_UNAVAILABLE
+    }
+    if list < 0 || !Visible(list, account) {
+        return APP_SHARED_UNAVAILABLE
+    }
+    if command.action == APP_SHARED_DELETE {
+        if lists[list].owner != account {
+            return APP_SHARED_FAILED
+        }
+        lists[list].deleted = true
+        lists[list].revision += 1
+        return APP_SHARED_DONE
+    }
+    if command.action != APP_SHARED_SAVE {
+        return APP_SHARED_FAILED
+    }
+    if command.revision != lists[list].revision {
+        return APP_SHARED_CONFLICT
+    }
+    if lists[list].owner != account && command.title != Stored(lists[list].title[:]) {
+        return APP_SHARED_FAILED
+    }
+    if !SetItems(list, items) {
+        return APP_SHARED_FAILED
+    }
+    lists[list].revision += 1
+    return APP_SHARED_DONE
+}
+
+// The host.
+
+Allows :: (context: *void, module: string, function: string) -> bool {
+    unused context
+    unused module
+    unused function
+    return true
+}
+
+RecordAt :: (player: *Player, name: string) -> s32 {
+    index: s32 = 0
+    while index < RECORDS {
+        if Stored(player.record_names[index][:]) == name {
+            return index
+        }
+        index += 1
+    }
+    return -1
+}
+
+PressFor :: (player: *Player, props: PressProps) -> PressResult {
+    if player.press_next >= player.press_count {
+        return PressResult.{}
+    }
+    event := player.presses[player.press_next]
+    player.press_next += 1
+    cell := props.bounds.width / 8.0
+    file := event.square & 7
+    rank := event.square >> 4
+    column := ifx event.flipped then 7 - file else file
+    row := ifx event.flipped then rank else 7 - rank
+    x := props.bounds.x + (cast(float32)column + 0.5) * cell
+    y := props.bounds.y + (cast(float32)row + 0.5) * cell
+    if event.released {
+        return PressResult.{.clicked = true, .released = true, .x = x, .y = y}
+    }
+    return PressResult.{.down = true, .x = x, .y = y}
+}
+
+Call :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    player := cast(*Player)context
+    account := AccountOf(player)
+    owner := TextFromCString(module)
+    name := TextFromCString(function)
+    if name == "ReadAppHost" && count == 0 {
+        message: AppMessage
+        message.abi = MODULE_ABI
+        if !identifying {
+            message.action = APP_FRAME
+            message.name = "chess"
+            message.locale = "en"
+            message.account = Accounts(account)
+            message.signed_in = true
+            message.friend_count = 1
+            message.shared_count = CountLists(account)
+            message.invitation_count = CountInvites(account)
+            message.shared_revision = node_revision
+            message.shared_status = player.status
+            message.time = cast(s64)(1760000000 + frames / 60)
+        }
+        result.* = WidgetEncodeAppMessage(message, *message_codec)
+        return 1
+    }
+    if name == "WriteAppHost" && count == 1 && WidgetValidAppMessage(arguments[0]) {
+        player.received = true
+        return 1
+    }
+    if name == "ReadAppUiHost" && count == 0 {
+        frame := AppUiFrame.{.width = 400, .height = 800, .scale = 1.0, .font = 16,
+            .now = cast(float64)frames / 60.0}
+        result.* = WidgetEncodeAppUiFrame(frame, *frame_codec)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 {
+        // Keys stand for their text, so checks read which text was drawn.
+        result.* = StringResult(Borrowed(arguments[0]))
+        return 1
+    }
+    if name == "AppRecordHost" && count == 1 {
+        at := RecordAt(player, Borrowed(arguments[0]))
+        text := ifx at >= 0 then Stored(player.record_texts[at][:]) else ""
+        result.* = StringResult(text)
+        return 1
+    }
+    if name == "SaveAppRecordHost" && count == 2 {
+        record_name := Borrowed(arguments[0])
+        at := RecordAt(player, record_name)
+        if at < 0 {
+            at = RecordAt(player, "")
+        }
+        if at < 0 || arguments[1].length >= cast(usize)16384 {
+            result.* = HostScalar("bool", 0)
+            return 1
+        }
+        Copy(record_name, player.record_names[at][:])
+        Copy(Borrowed(arguments[1]), player.record_texts[at][:])
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppFriendHost" && count == 1 {
+        other := 1 - account
+        result.* = WidgetEncodeAppPerson(AppPerson.{.id = Accounts(other), .name = Names(other)},
+            *person_codec)
+        return 1
+    }
+    if name == "AppSharedHost" && count == 1 {
+        list := VisibleList(account, cast(s32)arguments[0].integer)
+        shared: AppShared
+        if list >= 0 {
+            shared = AppShared.{.id = Stored(lists[list].id[:]), .owner = Accounts(lists[list].owner),
+                .owner_name = Names(lists[list].owner), .title = Stored(lists[list].title[:]),
+                .revision = lists[list].revision, .item_count = lists[list].item_count}
+        }
+        result.* = WidgetEncodeAppShared(shared, *shared_codec)
+        return 1
+    }
+    if name == "AppSharedItemHost" && count == 2 {
+        list := VisibleList(account, cast(s32)arguments[0].integer)
+        item_index := cast(s32)arguments[1].integer
+        item: AppSharedItem
+        if list >= 0 && item_index >= 0 && item_index < lists[list].item_count {
+            stored := *lists[list].items[item_index]
+            item = AppSharedItem.{.id = Stored(stored.id[:]), .title = Stored(stored.title[:]),
+                .comment = Stored(stored.comment[:]), .done = stored.done}
+        }
+        result.* = WidgetEncodeAppSharedItem(item, *item_codec)
+        return 1
+    }
+    if name == "AppInvitationHost" && count == 1 {
+        index := VisibleInvite(account, cast(s32)arguments[0].integer)
+        invitation: AppInvitation
+        if index >= 0 {
+            invite := invites[index]
+            statuses: [3]string = .["pending", "accepted", "declined"]
+            invitation = AppInvitation.{.id = Stored(invites[index].id[:]),
+                .shared_id = Stored(lists[invite.list].id[:]), .title = Stored(lists[invite.list].title[:]),
+                .owner = Accounts(lists[invite.list].owner), .owner_name = Names(lists[invite.list].owner),
+                .target = Accounts(invite.target), .target_name = Names(invite.target),
+                .status = statuses[invite.status]}
+        }
+        result.* = WidgetEncodeAppInvitation(invitation, *invitation_codec)
+        return 1
+    }
+    if name == "SendAppSharedHost" && count == 2 && WidgetValidAppSharedCommand(arguments[0]) {
+        command := WidgetDecodeAppSharedCommand(arguments[0], *command_codec)
+        player.status = Apply(account, command, arguments[1])
+        node_revision += 1
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "RefreshAppSharedHost" || name == "SmoothFramesHost" {
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if owner == "text_widget" && name == "TextHostedHost" && count == 2 {
+        text := WidgetDecodeTextProps(arguments[1], *text_codec)
+        Draw(player, text.text)
+        return 1
+    }
+    if owner == "button_widget" && name == "ButtonHostedHost" && count == 2 {
+        button := WidgetDecodeButtonProps(arguments[1], *button_codec)
+        Draw(player, button.label)
+        if button.detail.count > 0 {
+            Draw(player, button.detail)
+        }
+        pressed := !button.disabled && Stored(player.click[:]).count > 0 && button.label == Stored(player.click[:])
+        if pressed {
+            player.click[0] = cast(u8)0
+        }
+        result.* = HostScalar("s32", ifx pressed then 1 else 0)
+        return 1
+    }
+    if owner == "press_widget" && name == "PressHostedHost" && count == 2 {
+        props := WidgetDecodePressProps(arguments[1], *press_codec)
+        result.* = WidgetEncodePressResult(PressFor(player, props), *press_result_codec)
+        return 1
+    }
+    if owner == "scroll_widget" && name == "ScrollHostedHost" && count == 2 {
+        props := WidgetDecodeScrollProps(arguments[1], *scroll_codec)
+        scrolled := ScrollResult.{.opened = true, .viewport = props.bounds,
+            .content = Rectangle.{props.bounds.x, props.bounds.y, props.bounds.width,
+                cast(float32)props.content_height}}
+        result.* = WidgetEncodeScrollResult(scrolled, *scroll_result_codec)
+        return 1
+    }
+    if owner == "box_widget" && name == "BoxHostedHost" {
+        result.* = HostScalar("s32", 0)
+        return 1
+    }
+    if owner == "image_widget" && name == "ImageHostedHost" {
+        return 1
+    }
+    if owner == "tree" && name == "EndHostedHost" {
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    return 0
+}
+
+Open :: (player: *Player, index: s32, bytes: string) -> bool {
+    player.index = index
+    if !HostedAppOpen(*player.app, bytes) ||
+    !HostedAppStart(*player.app, Allows, Call, cast(*void)player) {
+        return false
+    }
+    identifying = true
+    answer: s64
+    ran := HostedAppRun(*player.app, *answer)
+    identifying = false
+    return ran && answer == cast(s64)MODULE_NODE_APP
+}
+
+// Runs one frame of a player's screen.
+Frame :: (player: *Player) -> bool {
+    frames += 1
+    player.text_length = 0
+    player.received = false
+    answer: s64
+    if !HostedAppRun(*player.app, *answer) || answer != 0 || !player.received {
+        return false
+    }
+    return true
+}
+
+// Runs frames until `text` is drawn, at most `limit` of them.
+Until :: (player: *Player, text: string, limit: s32) -> bool {
+    index: s32 = 0
+    while index < limit {
+        if !Frame(player) {
+            return false
+        }
+        if Saw(player, text) {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+Click :: (player: *Player, label: string) -> bool {
+    Copy(label, player.click[:])
+    index: s32 = 0
+    while index < 4 {
+        if !Frame(player) {
+            return false
+        }
+        if player.click[0] == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+Square :: (text: string) -> s32 {
+    return cast(s32)(text[1] - #char "1") * 16 + cast(s32)(text[0] - #char "a")
+}
+
+// Taps the two squares of a move, such as "e2e4", one frame per touch.
+Move :: (player: *Player, move: string, flipped: bool) -> bool {
+    player.press_count = 0
+    player.press_next = 0
+    squares: [2]s32 = .[Square(move[0:2]), Square(move[2:4])]
+    for square: squares {
+        player.presses[player.press_count] = PressEvent.{.square = square, .flipped = flipped}
+        player.presses[player.press_count + 1] = PressEvent.{.square = square, .flipped = flipped,
+            .released = true}
+        player.press_count += 2
+    }
+    index: s32 = 0
+    while index < 12 && player.press_next < player.press_count {
+        if !Frame(player) {
+            return false
+        }
+        index += 1
+    }
+    return player.press_next == player.press_count && Frame(player)
+}
+
+// A copy of a saved record, so it can be compared after later frames.
+RecordText :: (player: *Player, name: string) -> string {
+    at := RecordAt(player, name)
+    out: Vec(u8)
+    if at >= 0 {
+        BuilderPrint(*out, "%", Stored(player.record_texts[at][:]))
+    }
+    return BuilderFinish(out)
+}
+
+ComputerChecks :: (bytes: string) -> s32 {
+    alice := *players[0]
+    if !Open(alice, 0, bytes) { return 10 }
+    // A first start opens the choice of a game.
+    if !Until(alice, "chess_choose_game", 2) { return 11 }
+    if !Click(alice, "chess_level_easy") || !Click(alice, "chess_play_white") { return 12 }
+    if !Click(alice, "chess_start") { return 13 }
+    if !Until(alice, "chess_your_move", 3) { return 14 }
+    if !Move(alice, "e2e4", false) { return 15 }
+    record := RecordText(alice, "computer")
+    if !Contains(record, "level=0;color=w;") || !Contains(record, "moves=e2e4") { return 16 }
+    // The computer answers within a few hundred frames, then it is our turn.
+    if !Until(alice, "chess_your_move", 600) { return 17 }
+    record = RecordText(alice, "computer")
+    if !Contains(record, "moves=e2e4 ") { return 18 }
+    // An illegal move is refused and changes nothing.
+    if !Move(alice, "e4e6", false) { return 19 }
+    if RecordText(alice, "computer") != record { return 20 }
+    // A new instance, as after a restart or an update, continues the game.
+    again := *players[2]
+    again.record_names = alice.record_names
+    again.record_texts = alice.record_texts
+    if !Open(again, 2, bytes) || !Until(again, "chess_your_move", 3) { return 21 }
+    if !Click(again, "chess_resign") || !Until(again, "chess_you_resigned", 3) { return 22 }
+    if !Contains(RecordText(again, "computer"), "resigned=1;") { return 23 }
+    return 0
+}
+
+FriendChecks :: (bytes: string) -> s32 {
+    alice := *players[0]
+    bob := *players[1]
+    if !Open(bob, 1, bytes) { return 30 }
+    if !Click(alice, "chess_tab_friends") || !Until(alice, "@bob", 3) { return 31 }
+    if !Click(alice, "chess_invite") || list_count != 1 || invite_count != 1 { return 32 }
+    if !Until(alice, "chess_waiting_for", 3) { return 33 }
+    if !Click(bob, "chess_tab_friends") || !Until(bob, "chess_invites_you", 3) { return 34 }
+    if !Click(bob, "chess_accept") || invites[0].status != 1 { return 35 }
+    owner_white := Stored(lists[0].items[0].comment[:]) == "owner=white"
+    white := ifx owner_white then alice else bob
+    black := ifx owner_white then bob else alice
+    white_name := ifx owner_white then "@alice" else "@bob"
+    black_name := ifx owner_white then "@bob" else "@alice"
+    // Each opens the game from its list, under the other's name.
+    if !Until(white, black_name, 3) || !Click(white, black_name) { return 36 }
+    if !Until(white, "chess_your_move", 3) { return 37 }
+    if !Until(black, white_name, 3) || !Click(black, white_name) { return 38 }
+    if !Until(black, "chess_their_move", 3) { return 39 }
+    // Black may not move first: its board takes no touches.
+    if Move(black, "e7e5", true) || lists[0].revision != 1 { return 40 }
+    black.press_count = 0
+    black.press_next = 0
+    line: [4]string = .["f2f3", "e7e5", "g2g4", "d8h4"]
+    index: s32 = 0
+    while index < 4 {
+        mover := ifx index % 2 == 0 then white else black
+        waiting := ifx index % 2 == 0 then black else white
+        if !Until(mover, "chess_your_move", 10) { return 41 + index * 3 }
+        if !Move(mover, line[index], index % 2 == 1) { return 42 + index * 3 }
+        if lists[0].revision != index + 2 { return 43 + index * 3 }
+        index += 1
+        if index < 4 && !Until(waiting, "chess_your_move", 10) { return 53 }
+    }
+    if !Contains(Stored(lists[0].items[1].comment[:]), "f2f3 e7e5 g2g4 d8h4") { return 54 }
+    if !Until(black, "chess_you_won", 10) { return 55 }
+    if !Until(white, "chess_you_lost", 10) { return 56 }
+    // The inviter removes the finished game for both.
+    owner := ifx owner_white then white else black
+    member := ifx owner_white then black else white
+    if !Click(owner, "chess_remove") || !lists[0].deleted { return 57 }
+    if !Until(member, "chess_no_games", 10) { return 58 }
+    return 0
+}
+
+// Opens the shared game `list` on both sides and returns the white player.
+OpenGame :: (list: s32, white: **Player, black: **Player, flipped: *bool) -> bool {
+    alice := *players[0]
+    bob := *players[1]
+    owner_white := Stored(lists[list].items[0].comment[:]) == "owner=white"
+    white.* = ifx owner_white then alice else bob
+    black.* = ifx owner_white then bob else alice
+    flipped.* = false
+    white_name := ifx owner_white then "@alice" else "@bob"
+    black_name := ifx owner_white then "@bob" else "@alice"
+    return Until(white.*, black_name, 10) && Click(white.*, black_name) &&
+    Until(black.*, white_name, 10) && Click(black.*, white_name)
+}
+
+// Plays moves in turn, each side waiting until the board says it may move.
+PlayLine :: (list: s32, white: *Player, black: *Player, line: []string) -> s32 {
+    index: s32 = 0
+    while index < cast(s32)line.count {
+        mover := ifx index % 2 == 0 then white else black
+        revision := lists[list].revision
+        if !Until(mover, "chess_your_move", 10) { return 1 }
+        if !Move(mover, line[index], index % 2 == 1) { return 2 }
+        if lists[list].revision != revision + 1 { return 3 }
+        index += 1
+    }
+    return 0
+}
+
+InvitationChecks :: () -> s32 {
+    alice := *players[0]
+    bob := *players[1]
+    // A declined invitation shows as declined until its inviter removes it.
+    if !Until(alice, "@bob", 3) || !Click(alice, "chess_invite") || list_count != 2 { return 60 }
+    if !Until(bob, "chess_invites_you", 10) || !Click(bob, "chess_decline") || invites[1].status != 2 { return 61 }
+    if !Until(alice, "chess_declined", 10) || !Click(alice, "chess_remove") || !lists[1].deleted { return 62 }
+    // A pawn reaching the last rank asks which piece it becomes.
+    if !Until(alice, "chess_invite", 10) { return 63 }
+    if !Click(alice, "chess_invite") { return 76 }
+    if list_count != 3 { return 77 }
+    if !Until(bob, "chess_invites_you", 10) || !Click(bob, "chess_accept") { return 64 }
+    white: *Player
+    black: *Player
+    flipped: bool
+    if !OpenGame(2, *white, *black, *flipped) { return 65 }
+    line: [8]string = .["a2a4", "b7b5", "a4b5", "a7a6", "b5a6", "c8b7", "a6b7", "b8c6"]
+    played := PlayLine(2, white, black, line[:])
+    if played != 0 { return 65 + played }
+    if !Until(white, "chess_your_move", 10) || !Move(white, "b7a8", false) { return 69 }
+    if lists[2].revision != 9 || !Saw(white, "chess_piece_queen") { return 70 }
+    if !Click(white, "chess_piece_queen") || lists[2].revision != 10 { return 71 }
+    if !Contains(Stored(lists[2].items[1].comment[:]), "a6b7 b8c6 b7a8q") { return 72 }
+    if !Until(black, "chess_your_move", 10) { return 73 }
+    // Resigning ends the game for both.
+    if !Click(black, "chess_resign") || !Until(white, "chess_they_resigned", 10) { return 74 }
+    if !Until(black, "chess_you_resigned", 10) { return 75 }
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    bytes, read := ReadEntireFile("chess.zib")
+    if !read {
+        return 1
+    }
+    result := ComputerChecks(bytes)
+    if result != 0 {
+        return result
+    }
+    result = FriendChecks(bytes)
+    if result != 0 {
+        return result
+    }
+    return InvitationChecks()
+}

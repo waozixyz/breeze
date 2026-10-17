@@ -7,7 +7,9 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 publishers = json.loads((root / "apps/publishers.json").read_text())
-required = {value["id"] for value in json.loads((root / "apps/versions.json").read_text())["apps"].values()}
+ledger = json.loads((root / "apps/versions.json").read_text())
+required = {value["id"] for value in ledger["apps"].values()}
+node_apps = ledger.get("node_apps", {})
 if not isinstance(publishers, list) or not 0 < len(publishers) <= 32:
     raise SystemExit("Release requires registered public publisher pins in apps/publishers.json; see docs/cells.md")
 covered = set()
@@ -18,6 +20,12 @@ for publisher in publishers:
     key_id = publisher.get("key_id", "")
     public = publisher.get("public_key", "")
     apps = publisher.get("app_ids", [])
+    # A prefix also trusts the key for every app the node offers under it.
+    prefixes = publisher.get("app_prefixes", [])
+    if not isinstance(prefixes, list) or any(prefix != "inbe." for prefix in prefixes):
+        raise SystemExit("Publisher prefixes may only cover the apps the node offers (inbe.)")
+    if prefixes:
+        covered.update(value["id"] for value in node_apps.values())
     if not isinstance(key_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", key_id) or key_id in (".", "..") or key_id in seen:
         raise SystemExit("Invalid or duplicate publisher key ID")
     if not isinstance(public, str) or not re.fullmatch(r"[0-9a-f]{64}", public) or public == "0" * 64:
@@ -26,6 +34,6 @@ for publisher in publishers:
         raise SystemExit("Publisher must be scoped to known Inbe app IDs")
     covered.update(apps)
     seen.add(key_id)
-if covered != required:
+if not covered >= required or covered - required - {value["id"] for value in node_apps.values()}:
     raise SystemExit("Release requires publisher coverage for the root and all five cells")
 print("Publisher pins cover the root and all five cells")

@@ -3,6 +3,7 @@
 #import, file "../cells/lists_visibility.zi";
 #import, file "../cells/lists_network.zi";
 #import, file "../storage/lists_shared_storage.zi";
+#import, file "../storage/app_records.zi";
 #import, file "../cells/package_files.zi";
 #import, file "../../apps/lists/sharing.zi";
 c :: #system_library "c";
@@ -261,6 +262,10 @@ lists_ui_codec: WidgetListsUiFrameCodec;
 lists_row_codec: WidgetListsUiRowCodec;
 lists_friends: [8192]u8;
 lists_sharing_source: string;
+// The invitations to lists, as indexes into the shared cache's invitations:
+// other apps' invitations, such as to a Chess game, are left out.
+lists_invitation_rows: [64]s32;
+lists_invitation_count: s32;
 lists_person_codec: WidgetListsUiPersonCodec;
 lists_person_text: [7][512]u8;
 lists_pending_number: [24]u8;
@@ -337,6 +342,9 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
         source := ifx invitation then lists_sharing_source else AppTextFromCString(*lists_friends[0], 8192)
         array := FieldAt(source, 0, ifx invitation then "invitations" else "friends")
         index := cast(s32)arguments[0].integer
+        if invitation {
+            index = ifx index >= 0 && index < lists_invitation_count then lists_invitation_rows[index] else -1
+        }
         row: ListsUiPerson
         if index >= 0 && index < ArrayCount(source, array) {
             object := ElementAt(source, array, index)
@@ -403,8 +411,17 @@ draw_elist_screen :: (app: *InnerBreeze) {
     lists_sharing_source = ListsSharedCache()
     invitations := FieldAt(lists_sharing_source, 0, "invitations")
     incoming: s32 = 0
+    lists_invitation_count = 0
     for index: cast(s32)0..ArrayCount(lists_sharing_source, invitations) - 1 {
         row := ElementAt(lists_sharing_source, invitations, index)
+        list_id: [64]u8
+        ListsCopyJson(lists_sharing_source, row, "list_id", list_id[:])
+        if !SharedIdLooksLikeList(AppTextFromCString(*list_id[0], 64)) ||
+        lists_invitation_count >= cast(s32)lists_invitation_rows.count {
+            continue
+        }
+        lists_invitation_rows[lists_invitation_count] = index
+        lists_invitation_count += 1
         target := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "target"))
         status := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "status"))
         if SpanEqualsASCII(lists_sharing_source, target, storage_get_setting_text("sync_public_id")) &&
@@ -426,7 +443,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
         .connected = ListsNetworkReady(), .public_id = storage_get_setting_text("sync_public_id"),
         .friend_count = ArrayCount(AppTextFromCString(*lists_friends[0], 8192),
             FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),
-        .invitation_count = ArrayCount(lists_sharing_source, FieldAt(lists_sharing_source, 0, "invitations")),
+        .invitation_count = lists_invitation_count,
         .pending_count_text = AppTextFromCString(*lists_pending_number[0], 24),
         .next_id = next_id}
     message := elist_message_for(*app.elist, LISTS_FRAME, -1)

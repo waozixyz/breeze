@@ -17,6 +17,7 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/catalog.zi";
 #import, file "../cells/package_manager.zi";
+#import, file "../cells/node_apps.zi";
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -116,7 +117,8 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     }
     card.disabled = blocked
     card.fit_content = true
-    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0
+    // An app the node offers has a card only while it is installed.
+    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0 || AppNavNodeSlot(route) >= 0
     tapped := !card.disabled && app_launcher_drag_card(app, card, route, vertical)
     activated := Button(app.ui.session, card) != 0 || tapped
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
@@ -174,6 +176,47 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     if Button(app.ui.session, action) != 0 {
         if installed { app_launcher_uninstall(app, route) }
         else { unused app_launcher_install(app, route) }
+    }
+}
+
+// An app the node offers that is not installed: a tap or its download symbol
+// installs it and its card opens it from then on.
+app_launcher_draw_offer :: (app: *InnerBreeze, offer: s32, bounds: Rectangle) {
+    blocked := app.blocked_input_frame == app.breathing.frame
+    name := NodeAppOfferName(offer)
+    card: ButtonProps
+    card.id = 7400 + offer
+    card.bounds = bounds
+    card.label = NodeAppTitle(name)
+    card.icon_shape = NODE_APP_GENERIC_ICON
+    card.icon_placement = cast(IconPlacement)IconPlacementAbove
+    card.class_name = KssClassId(KssMakeName("launcher-tile"))
+    card.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    card.disabled = blocked
+    card.fit_content = true
+    if Button(app.ui.session, card) != 0 {
+        slot := app_launcher_install_offer(app, name)
+        if slot >= 0 {
+            app_launcher_activate(app, AppNavNodeRoute(slot))
+        }
+    }
+    action_size := AppScale(36)
+    action_inset := AppScale(4)
+    action: ButtonProps
+    action.id = 7450 + offer
+    action.bounds = Rectangle.{
+        bounds.x + bounds.width - cast(float32)(action_size + action_inset),
+        bounds.y + cast(float32)action_inset,
+        cast(float32)action_size, cast(float32)action_size}
+    action.label = LocaleText("launcher_install")
+    action.icon_only = true
+    action.icon_shape = "S1.6rr:M12 3V15M7 10L12 15L17 10M5 20H19"
+    action.class_name = KssClassId(KssMakeName("launcher-action"))
+    action.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    action.fit_content = true
+    action.disabled = blocked
+    if Button(app.ui.session, action) != 0 {
+        unused app_launcher_install_offer(app, name)
     }
 }
 
@@ -249,10 +292,15 @@ app_draw_launcher :: (app: *InnerBreeze) {
     if searched.clipboard_write { unused TextInputWriteClipboard(searched.clipboard_text) }
     query := AppTextFromCString(*app.launcher_search[0], 128)
     routes := LauncherRoutes()
-    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard"}
+    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard",
+        "", "", "", "", "", "", "", ""}
     matches: [LAUNCHER_APP_COUNT]s32
     match_count: s32 = 0
     for index: cast(s32)0..LAUNCHER_APP_COUNT - 1 {
+        // A slot without an installed app the node offers has no card.
+        if AppNavNodeSlot(routes[index]) >= 0 && !app_nav_route_available(app, routes[index]) {
+            continue
+        }
         if LauncherMatches(app_nav_route_label(routes[index]), query) ||
         LauncherMatches(canonical[index], query) {
             matches[match_count] = routes[index]
@@ -278,6 +326,15 @@ app_draw_launcher :: (app: *InnerBreeze) {
             more_count += 1
         }
     }
+    offers: [NODE_APP_OFFERS]s32
+    offer_count: s32 = 0
+    for offer: cast(s32)0..NodeAppOfferCount() - 1 {
+        name := NodeAppOfferName(offer)
+        if NodeAppOfferShown(offer) && NodeAppSlotFor(name) < 0 && LauncherMatches(NodeAppTitle(name), query) {
+            offers[offer_count] = offer
+            offer_count += 1
+        }
+    }
     tile_height := AppScale(88)
     gap := AppScale(12)
     // The tiles reflow into as many columns as the panel's width allows.
@@ -286,12 +343,12 @@ app_draw_launcher :: (app: *InnerBreeze) {
     cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
             .bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0}})
     pinned_rows := GridRowCount(cells, pinned_count)
-    more_rows := GridRowCount(cells, more_count)
+    more_rows := GridRowCount(cells, more_count + offer_count)
     pinned_height := AppScale(36) + pinned_rows * (tile_height + gap)
     more_height := AppScale(36) + more_rows * (tile_height + gap)
-    if more_count == 0 { more_height += AppScale(64) }
+    if more_count + offer_count == 0 { more_height += AppScale(64) }
     content_height := pinned_height + more_height
-    if match_count == 0 { content_height += AppScale(64) }
+    if match_count + offer_count == 0 { content_height += AppScale(64) }
     bottom_dock := app_content_bottom_reserved(app)
     footer_y := app.ui.view_height - bottom_dock - AppScale(72)
     body_y := search_y + AppScale(68)
@@ -335,9 +392,16 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 if section == 0 { pinned_slots[index] = bounds }
                 app_launcher_draw_card(app, route, bounds, true)
             }
+            if section == 1 {
+                for offer: cast(s32)0..offer_count - 1 {
+                    bounds := GridCellBounds(section_cells, count + offer, tile_height)
+                    app_launcher_draw_offer(app, offers[offer], bounds)
+                }
+                count += offer_count
+            }
             y += GridRowCount(section_cells, count) * (tile_height + gap)
         }
-        if match_count == 0 {
+        if match_count + offer_count == 0 {
             Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y,
                         cast(float32)width, cast(float32)AppScale(56)},
