@@ -208,20 +208,21 @@ after them. The list shows icons, names and controls without status paragraphs.
 
 `build/practice-content/*.zib` contains the separate practice data and language
 packs. Practice → Manage practices opens one scrolling list of practices in the
-order Practice shows them. Each row shows the practice's size (and whether it
-comes with the app, or how its download is going) and one state menu: On
-Practice, On device or Not downloaded, each with a muted line saying what
-choosing it does; a paid practice shows its unlock instead. Its six-dot handle
+order Practice shows them. Each row shows the practice's size (or how its
+download is going) and one state menu: On Practice, On device or Not
+downloaded, which reads Uninstall once the practice is downloaded, each with a
+muted line saying what choosing it does; a paid practice shows its unlock
+instead. Its six-dot handle
 drags it onto another practice to take that one's place in the order Practice
 and every practice list follow (saved as `practice_order`). Start opens the
 manager scrolled to its practice when the practice needs content. Downloads
 continue inside the modal without changing the selected practice, and
 unselected downloads are verified and saved without mounting their artwork. On
 device keeps a practice's copy and narration but takes it off Practice, so
-adding it back needs no download. Not downloaded stops a download, or asks once
-and then deletes a downloaded copy and its narration while preserving progress.
-Practices that ship with the app add back from the app's own copy and offer no
-Not downloaded. Only the selected practice and narration
+adding it back needs no download. Not downloaded stops a download; Uninstall
+asks once and then deletes a downloaded copy and its narration while preserving
+progress. Practices that ship with the app add back from the app's own copy and
+offer neither. Only the selected practice and narration
 language are mounted in memory. Changing language reuses artwork and loads or
 downloads the matching voice; switching back reuses its verified cache. Missing
 narration is shown explicitly and never falls back to another spoken language.

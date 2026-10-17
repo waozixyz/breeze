@@ -265,12 +265,15 @@ ProfileDewDraw :: (app: *InnerBreeze, x: s32, y: *s32, width: s32) {
     y.* += height
 }
 
-// "10 Dew = 0.01 XMR, about 3.45 USD" from the node's published rates; the USD
-// part only while the node has a current Monero price.
+// "0.1 XMR = 100 Dew, about 55.66 USD" from the node's published rates; the
+// USD part only while the node has a current Monero price.
 ProfileDewExchangeText :: (output: []u8) -> bool {
-    units: s64 = 10 * DewUnits
-    atomic := DewXmrAtomic(units)
-    if atomic <= 0 {
+    if !dew_rates.known {
+        return false
+    }
+    atomic: s64 = DewExampleAtomic
+    units := DewUnitsForXmr(atomic, dew_rates.xmr_atomic_units, dew_rates.token_units)
+    if units <= 0 {
         return false
     }
     dew: [48]u8
@@ -280,13 +283,13 @@ ProfileDewExchangeText :: (output: []u8) -> bool {
     unused DewFormat(atomic, 1000000000000LL, xmr[:])
     if !DewUsdText(atomic, usd[:]) {
         arguments: [2]FormatArg = .[
-        FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
-        FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true}]
+        FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+        FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
         return FormatTemplate(LocaleText("profile_dew_exchange_xmr"), arguments[:], output)
     }
     arguments: [3]FormatArg = .[
-    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
     FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
+    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true},
     FormatArg.{.text = TextUntilNul(usd[:]), .is_text = true}]
     return FormatTemplate(LocaleText("profile_dew_exchange"), arguments[:], output)
 }
@@ -504,16 +507,17 @@ ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bo
         }
         return
     }
+    // The address's rate, shown for 0.1 XMR like every Dew price.
     xmr: [48]u8
     dew: [48]u8
-    unused DewFormat(dew_rate_atomic, 1000000000000LL, xmr[:])
-    unused DewFormat(dew_rate_units, DewUnits, dew[:])
+    unused DewFormat(DewExampleAtomic, 1000000000000LL, xmr[:])
+    unused DewFormat(DewUnitsForXmr(DewExampleAtomic, dew_rate_atomic, dew_rate_units), DewUnits, dew[:])
     rate_arguments: [2]FormatArg = .[
     FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
     FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
     unused FormatTemplate(LocaleText("profile_dew_rate"), rate_arguments[:], line[:])
     rate_usd: [48]u8
-    if DewUsdText(dew_rate_atomic, rate_usd[:]) {
+    if DewUsdText(DewExampleAtomic, rate_usd[:]) {
         about: [96]u8
         usd_arguments: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(rate_usd[:]), .is_text = true}]
         unused FormatTemplate(LocaleText("dew_about_usd"), usd_arguments[:], about[:])

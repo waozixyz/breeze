@@ -293,7 +293,8 @@ def filled_button(image, practice):
 
 def choose(window, name, practice_word, detail_prefix):
     """Open a practice's state menu by the first menu button after its name,
-    then press the choice whose explanation starts with detail_prefix."""
+    then press the choice whose explanation starts with detail_prefix.
+    Returns the open menu's text."""
     image, text = capture(window, name + '-row')
     words = words_of(image)
     practice = [row for row in words if row['text'] == practice_word]
@@ -316,6 +317,7 @@ def choose(window, name, practice_word, detail_prefix):
     press(window, int(matches[-1]['left']) + int(matches[-1]['width']) // 2,
           int(matches[-1]['top']) + int(matches[-1]['height']) // 2)
     time.sleep(.6)
+    return text
 
 
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
@@ -352,9 +354,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
         # One list: Wim Hof is on Practice; Meditation and Breathing
         # Patterns come with the app, so they are on this device before they
-        # are added; Sun Salutation downloads. Each row has one state menu.
+        # are added; Sun Salutation downloads. Each row has one state menu
+        # and its size, without saying that it comes with the app.
         assert 'On Practice' in text and 'On device' in text and 'downloaded' in text, text
-        assert str(whm_kb) + ' KB' in text and 'Comes with the app' in text, text
+        assert str(whm_kb) + ' KB' in text and 'Comes with' not in text, text
         assert str(meditation_kb) + ' KB' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
@@ -374,7 +377,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert (cache / 'practice-meditation.removed').exists()
         choose(window, 'manager-hide-whm', 'Wim', 'Hidden')
         _, text = capture(window, 'removed')
-        assert 'On Practice' not in text and 'Comes with the app' in text, text
+        assert 'On Practice' not in text and str(whm_kb) + ' KB' in text, text
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
         assert not (cache / 'practice-meditation.added').exists()
@@ -400,7 +403,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         # a download.
         choose(window, 'manager-restore', 'Wim', 'Shown')
         _, text = capture(window, 'manager-restored')
-        assert 'On Practice' in text and 'Comes with the app' in text, text
+        assert 'On Practice' in text and str(whm_kb) + ' KB' in text, text
         close_manager(window)
         _, text = capture(window, 'restored')
         assert 'Start' in text and 'No practices installed' not in text, text
@@ -530,8 +533,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'English' in text and 'Plays in' not in text, text
     finally:
         stop(process)
-    # On device keeps a downloaded practice's copy off Practice; Not
-    # downloaded asks once, then deletes the copy and its narration.
+    # On device keeps a downloaded practice's copy off Practice; Uninstall
+    # asks once, then deletes the copy and its narration.
     with sqlite3.connect(profile / 'inbe.db') as database:
         for key, value in {'exercise_type': 2, 'voice_narration_enabled': 0}.items():
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
@@ -545,15 +548,17 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         choose(window, 'sun-hide', 'Sun', 'Hidden')
         assert (cache / 'practice-sunsalutation.zib').exists()
         assert (cache / 'practice-sunsalutation.removed').exists()
-        choose(window, 'sun-delete', 'Sun', 'Frees')
+        # A downloaded practice's menu offers Uninstall, not Not downloaded.
+        menu = choose(window, 'sun-delete', 'Sun', 'Frees')
+        assert 'Uninstall' in menu and 'Not downloaded' not in menu, menu
         image, text = capture(window, 'sun-delete-asked')
-        assert 'Delete Sun Salutation?' in text and 'Your progress stays.' in text, text
+        assert 'Uninstall Sun Salutation?' in text and 'Your progress stays.' in text, text
         assert (cache / 'practice-sunsalutation.zib').exists()
-        # Delete fills the right half under the question, beside Cancel; the
-        # question starts where both buttons do.
+        # Uninstall fills the right half under the question, beside Cancel;
+        # the question starts where both buttons do.
         words = words_of(image)
         cancel = [row for row in words if row['text'] == 'Cancel']
-        question = [row for row in words if row['text'] == 'Delete']
+        question = [row for row in words if row['text'] == 'Uninstall']
         assert cancel and question, text
         cancel_x = int(cancel[-1]['left']) + int(cancel[-1]['width']) // 2
         start_x = int(question[0]['left'])
@@ -568,6 +573,6 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     finally:
         stop(process)
 print('Private Practices modal: one state menu per practice, real sizes, On Practice / On device / '
-      'Not downloaded with what each does, reorder that Practice follows, removal that stays, '
+      'Not downloaded or Uninstall with what each does, reorder that Practice follows, removal that stays, '
       'restore without download, installed-only home, saved progress, owned Tai Chi without a price, '
       'narration languages, narrow layout, Sun Salutation narration and delete passed')
