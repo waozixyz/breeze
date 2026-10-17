@@ -14,7 +14,89 @@ practice_count :: () -> s32 {
     return EXERCISE_COUNT
 }
 
+// The order a person dragged the practices into in Manage practices, used
+// by Practice and everywhere practices are listed; the default order until
+// one is saved.
+practice_order_ids: [EXERCISE_COUNT]s32;
+practice_order_custom: bool;
+
 practice_ordered_id :: (index: s32) -> s32 {
+    if index < 0 {
+        index = 0
+    }
+    if index >= EXERCISE_COUNT {
+        index = EXERCISE_COUNT - 1
+    }
+    if practice_order_custom {
+        return practice_order_ids[index]
+    }
+    return practice_default_ordered_id(index)
+}
+
+// Settings keep the order as one number: 1 and then each practice's id,
+// such as 103124.
+practice_order_code :: () -> s32 {
+    code: s32 = 1
+    for index: cast(s32)0..cast(s32)EXERCISE_COUNT - 1 {
+        code = code * 10 + practice_ordered_id(index)
+    }
+    return code
+}
+
+// Reads a saved order; anything but each practice once keeps the default.
+practice_order_load :: (code: s32) {
+    practice_order_custom = false
+    ids: [EXERCISE_COUNT]s32
+    seen: s32 = 0
+    value := code
+    index := EXERCISE_COUNT - 1
+    while index >= 0 {
+        id := value % 10
+        value = value / 10
+        if id >= EXERCISE_COUNT || (seen & (cast(s32)1 << id)) != 0 {
+            return
+        }
+        seen |= cast(s32)1 << id
+        ids[index] = id
+        index -= 1
+    }
+    if value != 1 {
+        return
+    }
+    practice_order_ids = ids
+    practice_order_custom = true
+}
+
+// Moves a practice into another one's place: further down it goes after
+// that practice, further up before it.
+practice_order_move :: (practice: s32, target: s32) {
+    ids: [EXERCISE_COUNT]s32
+    from: s32 = -1
+    to: s32 = -1
+    for index: cast(s32)0..cast(s32)EXERCISE_COUNT - 1 {
+        ids[index] = practice_ordered_id(index)
+        if ids[index] == practice {
+            from = index
+        }
+        if ids[index] == target {
+            to = index
+        }
+    }
+    if from < 0 || to < 0 || from == to {
+        return
+    }
+    step: s32 = ifx from < to then 1 else -1
+    index := from
+    while index != to {
+        ids[index] = ids[index + step]
+        index += step
+    }
+    ids[to] = practice
+    practice_order_ids = ids
+    practice_order_custom = true
+}
+
+practice_default_ordered_id :: (index: s32) -> s32 {
     if index <= 0 {
         return EXERCISE_WIM_HOF
     }
