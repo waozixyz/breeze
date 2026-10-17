@@ -180,12 +180,13 @@ HabitScreenLayout :: (app: *InnerBreeze) -> HabitScreenGeometry {
 }
 
 HabitScreenScroll :: (app: *InnerBreeze, key: string,
-    bounds: Rectangle, content_height: s32) -> ScrollResult {
+    bounds: Rectangle, content_height: s32, keep_scrollbar: bool) -> ScrollResult {
     scroll_key := KeyHash(key)
     props: ScrollProps
     props.key = scroll_key
     props.bounds = bounds
     props.content_height = content_height
+    props.keep_scrollbar = keep_scrollbar
     props.scroll_offset = app.habits.scroll
     result := Scroll(app.ui.session, props)
     app.habits.scroll = result.scroll_offset
@@ -1061,6 +1062,31 @@ HabitScreenActiveIndices :: (app: *InnerBreeze, out: []s32) -> s32 {
     return count
 }
 
+// The habit rows' height with the tallest habit details and the inactive
+// habits open.
+HabitScreenOpenHeight :: (app: *InnerBreeze, active: []s32,
+    active_count: s32, deactivated_count: s32) -> s32 {
+    height := AppScale(80)
+    if active_count > 0 {
+        tallest: s32 = 0
+        position: s32 = 0
+        while position < active_count {
+            detail := HabitScreenRowDetailHeight(app, active[position])
+            if detail > tallest {
+                tallest = detail
+            }
+            position += 1
+        }
+        height = active_count * AppScale(HABITS_ROW_HEIGHT) + tallest
+    }
+    if app.habits.count > 0 {
+        height += AppScale(HABITS_INACTIVE_HEADER_HEIGHT) +
+            AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
+            deactivated_count * AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
+    }
+    return height
+}
+
 
 HabitScreenUpdateDrag :: (app: *InnerBreeze, point: Vector2) {
     app.habits.drag_pointer = point
@@ -1522,8 +1548,14 @@ HabitScreenOverview :: (app: *InnerBreeze,
         }
     }
     content_h := active_h + section_h
+    // When the rows would scroll with a habit's details and the inactive
+    // habits open, the scrollbar shows from the start: opening them then
+    // leaves the table's width, and so its day columns, as they are.
+    keep_scrollbar := HabitScreenOpenHeight(app, active[:], active_count,
+        deactivated_count) > cast(s32)viewport.height
     // The table's panel holds the day names and the rows, as tall as the
-    // rows need up to the space there is.
+    // rows need up to the space there is; the rows scroll within it, so a
+    // scrollbar shown before they fill the space ends with the panel.
     panel_rows_h := content_h
     if panel_rows_h > cast(s32)viewport.height {
         panel_rows_h = cast(s32)viewport.height
@@ -1558,8 +1590,9 @@ HabitScreenOverview :: (app: *InnerBreeze,
             }
         }
     }
-    scrolled := HabitScreenScroll(app, "inbe/habits/overview", viewport,
-        content_h)
+    scrolled := HabitScreenScroll(app, "inbe/habits/overview",
+        HabitScreenRect(geometry.x, rows_y, geometry.width, panel_rows_h),
+        content_h, keep_scrollbar)
     if !scrolled.opened { return }
     pad := AppScale(12)
     table_x := cast(s32)scrolled.content.x
@@ -1648,7 +1681,11 @@ HabitScreenOverview :: (app: *InnerBreeze,
     PaintRoundedFill(app.ui.session, -1, HabitScreenRect(geometry.x, rows_y,
         geometry.width, HabitScreenHairline()), 0.0, 1,
         Fade(StyleTokenColor("text"), 0.12))
-    HabitScreenDrop(app, scrolled, rows[:], active_count, 0,
+    // A row dropped below the panel, while the rows do not fill the space,
+    // still goes last.
+    drop_list := scrolled
+    drop_list.viewport = viewport
+    HabitScreenDrop(app, drop_list, rows[:], active_count, 0,
         RectangleIntersection(section, scrolled.viewport))
 }
 // A habit's pages are separate: its view (week or calendar), its
@@ -1739,7 +1776,8 @@ HabitScreenWeekly :: (app: *InnerBreeze,
     content_h := count * (row_h + gap) + AppScale(52)
     viewport := HabitScreenRect(geometry.x, top, geometry.width,
         geometry.height - (top - geometry.y))
-    scrolled := HabitScreenScroll(app, "inbe/habits/week", viewport, content_h)
+    scrolled := HabitScreenScroll(app, "inbe/habits/week", viewport,
+        content_h, false)
     if !scrolled.opened { return }
     first_row := (scrolled.scroll_offset - row_h) / (row_h + gap)
     if first_row < 0 { first_row = 0 }
