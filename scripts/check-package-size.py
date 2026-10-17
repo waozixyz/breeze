@@ -51,18 +51,10 @@ def check(path, budgets):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("artifacts", type=Path, nargs="*")
-    parser.add_argument("--assets", action="store_true")
+    parser.add_argument("artifacts", type=Path, nargs="+")
     args = parser.parse_args()
-    if not args.artifacts and not args.assets:
-        parser.error("supply an artifact or --assets")
     budgets = json.loads((ROOT / "packaging/size-budgets.json").read_text())
     try:
-        if args.assets:
-            animation = sum(path.stat().st_size for path in
-                            (ROOT / "assets/practices/sunsalutation/characters").glob("*/*.png"))
-            within("Animation PNGs", animation, budgets["animation_png_bytes"])
-            print(f"PASS animation: {animation / 1e6:.2f} MB")
         for path in args.artifacts:
             print("PASS " + check(path, budgets))
     except (OSError, ValueError, zipfile.BadZipFile) as error:

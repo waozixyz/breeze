@@ -31,11 +31,15 @@ limbs, shades and hair highlights are derived from those colours.
 
 The shapes behind those names are tables in the script:
 
-- `TORSOS`: the top's outline along the spine, its hem band, the seat and
-  the neck base (`tunic`, `male`).
+- `TORSOS`: the top's outline along the spine, its hem band, the seat, the
+  base of the head, where the neck enters the top, and how far the back of
+  the hem settles against the hips when lying back up (`tunic`, `male`).
 - `LEGS` and `SLEEVES`: limb radii, where trousers and sleeves end and their
   bands (`loose`, `trousers`; `bell`, `fitted`).
-- `FACES`: the profile, scale, neck, blush, brow and mouth (`female`, `male`).
+- `FACES`: the profile, scale, where the neck meets the head, blush, brow
+  and mouth (`female`, `male`). The neck bends between the top and the
+  head, so a lifted head never swings it out of the collar, and a shade
+  under the jaw (`JAW_SHADE`) sets the head on it.
 - `HAIRS`: the cap, an optional bun and an optional hanging strand that
   swings with the hair simulation (`bunLong`, `crop`). Men have short hair
   that never swings: no ponytails or buns.
@@ -44,7 +48,8 @@ Limbs are hulls of circles along their bones, and parts of one colour fill as
 one shape, so joints never show seams. Feet solve their own floor contact:
 flat when standing, on tucked toes behind her in plank, on the instep in
 upward-facing dog. `POSE_CHANGES` lowers a few ankles so the drawn feet
-reach the floor.
+reach the floor, and in plank keeps the head in line with the spine and the
+hips low enough that shoulders, seat and heels read as one straight line.
 
 ## App frames
 

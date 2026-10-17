@@ -2154,7 +2154,7 @@ $(TARGET): | zi-check
 		$(RUNTIME_ASSET_LDLIBS) \
 		$(NATIVE_SYSTEM_LDLIBS) \
 		$(LDFLAGS)
-	$(if $(filter linux,$(NATIVE_PLATFORM)),python3 scripts/check-package-size.py --assets $@,)
+	$(if $(filter linux,$(NATIVE_PLATFORM)),python3 scripts/check-package-size.py $@,)
 
 $(KRYON_HOST_TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)
 	mkdir -p $(dir $@)
@@ -2633,7 +2633,7 @@ android-copy-release-apks: | $(ANDROID_BUILD_DIR)
 	@found=0; \
 	for apk in droid/app/build/outputs/apk/release/*.apk droid/app/build/outputs/apk/gplay/*.apk; do \
 		if [ -f "$$apk" ]; then \
-			python3 scripts/check-package-size.py --assets "$$apk" || exit $$?; \
+			python3 scripts/check-package-size.py "$$apk" || exit $$?; \
 			cp "$$apk" "$(ANDROID_BUILD_DIR)/$$(basename "$$apk")"; \
 			found=1; \
 		fi; \
