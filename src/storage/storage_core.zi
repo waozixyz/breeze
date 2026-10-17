@@ -395,7 +395,10 @@ storage_enqueue_all_sync_state :: () {
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_item',id,0,strftime('%s','now') FROM elist_items WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,strftime('%s','now') FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_change',id,0,strftime('%s','now') FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
-    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi','app_used_leaderboard') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    // A default app choice (stored at AppDefaultTime) is not a choice and
+    // never goes out, so a new device cannot replace the account's apps.
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi','app_used_leaderboard') AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_order',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key='app_order' AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     if owns_transaction != 0 {
         exec_sql("COMMIT")
@@ -736,9 +739,38 @@ storage_set_setting_text :: (key: string, value: string) {
         if AppPreferenceValid(key) {
             unused storage_enqueue_sync_entity("app_preference", key, 0)
         }
+        if key == AppOrderKey {
+            unused storage_enqueue_sync_entity("app_order", key, 0)
+        }
         if storage_state_handle().settings_write_depth <= 0 {
             storage_schedule_persist()
         }
+    }
+}
+
+// Stores a default the owner didn't choose, such as a new profile's apps.
+// It never replaces a saved value, is never uploaded, and is stored at
+// AppDefaultTime, so a choice from the account's other devices replaces it.
+#program_export
+storage_set_setting_default_text :: (key: string, value: string) {
+    statement: *void = null
+    if storage_db_handle() == null || key.count == 0 {
+        return
+    }
+    if SqlitePrepareText(storage_db_handle(),
+        "INSERT INTO settings(user_id,key,value,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,key) DO NOTHING",
+        -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    bind_text(statement, 3, value)
+    SqliteBindInt64(statement, 4, AppDefaultTime)
+    rc := SqliteStep(statement)
+    SqliteFinalize(statement)
+    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 &&
+    storage_state_handle().settings_write_depth <= 0 {
+        storage_schedule_persist()
     }
 }
 
@@ -1294,6 +1326,18 @@ storage_append_app_preference_payload_json :: (json: *StorageJsonBuilder, key: s
     if !AppPreferenceValid(key) {
         return 0
     }
+    return storage_append_setting_record_json(json, key, 16)
+}
+
+storage_append_app_order_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if key != AppOrderKey {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 256)
+}
+
+// One setting as a synced record: its key, value and the time it changed.
+storage_append_setting_record_json :: (json: *StorageJsonBuilder, key: string, value_capacity: s32) -> s32 {
     statement: *void = null
     if SqlitePrepareText(storage_db_handle(),
         "SELECT value,updated_at FROM settings WHERE user_id=?1 AND key=?2", -1,
@@ -1311,7 +1355,7 @@ storage_append_app_preference_payload_json :: (json: *StorageJsonBuilder, key: s
     storage_json_builder_append_text(json, "{")
     storage_json_builder_key_value_text(json, "key", key)
     storage_json_builder_append_text(json, ",")
-    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), 16))
+    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), value_capacity))
     storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, SqliteColumnInt64(statement, 1))
     storage_json_builder_append_text(json, "}")
@@ -1342,6 +1386,8 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
         found = storage_append_cell_payload_json(json, entity_id)
     } else if entity_type == "app_preference" {
         found = storage_append_app_preference_payload_json(json, entity_id)
+    } else if entity_type == "app_order" {
+        found = storage_append_app_order_payload_json(json, entity_id)
     } else if storage_compare_text(entity_type, "habit") == 0 {
 
         found = storage_append_habit_payload_json(json, entity_id)
@@ -1375,6 +1421,9 @@ storage_encrypted_collection_for_entity :: (entity_type: string, entity_id: stri
     }
     if entity_type == "app_preference" {
         return "private.inbe.v1.app-preferences"
+    }
+    if entity_type == "app_order" {
+        return AppOrderCollection
     }
     if entity_type.count == 0 {
         return ""
@@ -2127,6 +2176,9 @@ storage_decrypted_array_name :: (collection: string) -> string {
     if collection == "private.inbe.v1.app-preferences" {
         return "app_preferences"
     }
+    if collection == AppOrderCollection {
+        return "app_order"
+    }
     if storage_compare_text(collection, "private.inbe.v1.habits") == 0 {
         return "habits"
     }
@@ -2295,6 +2347,17 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         ok = storage_exec_json_user_sql(SyncAppPreferencesSQL, record_response)
         if ok != 0 {
             storage_set_setting_int("apps_setup_done", 1)
+        }
+    } else if array_name == "app_order" {
+        // A record this version can't read, such as another key a newer
+        // version adds here, changes nothing and doesn't stop the sync.
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_order")
+        ok = 1
+        if Scan.ArrayCount(record_response, records) == 1 {
+            ok = storage_exec_json_user_sql(SyncAppOrderSQL, record_response)
+            if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                storage_set_setting_int(AppOrderReceivedKey, 1)
+            }
         }
     } else if storage_compare_text(array_name, "habits") == 0 {
 

@@ -54,4 +54,33 @@ assert value("cells_auto_update") == "0"
 assert value("package_sequence_diary") == "10"
 assert value("app_used_lists") == "1"
 assert value("app_used_practices") == "1"
-print("Account app choices: removals, independent merge, conflict handling, account isolation and device settings passed")
+
+# The pinned apps' order: the newest wins, a pending local order wins a tie,
+# and a record this version can't read changes nothing.
+order_sql = re.search(r"SyncAppOrderSQL :: #string SQL\n(.*?)\nSQL", source, re.S)[1]
+
+
+def order(value, timestamp, key="app_order"):
+    record = dict(key=key, value=value, updated_at=timestamp)
+    database.execute(order_sql, (json.dumps(dict(changes=dict(app_order=[record]))), "account"))
+
+
+order("lumi,diary,habits", "1970-01-01T00:03:20Z")
+assert value("app_order") == "lumi,diary,habits", "a first order was not taken"
+order("practices", "1970-01-01T00:01:40Z")
+assert value("app_order") == "lumi,diary,habits", "an older order replaced a newer one"
+database.execute("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES('app_order','app_order',0,200)")
+order("habits", "1970-01-01T00:03:20Z")
+assert value("app_order") == "lumi,diary,habits", "a remote order beat a pending local one at the same time"
+order("diary", "1970-01-01T00:05:00Z")
+assert value("app_order") == "diary"
+order("lumi", "1970-01-01T00:10:00Z", key="app_order_tablet")
+order("lumi", "invalid")
+order("x" * 256, "1970-01-01T00:10:00Z")
+record = dict(key="app_order", value=dict(apps="lumi"), updated_at="1970-01-01T00:10:00Z")
+database.execute(order_sql, (json.dumps(dict(changes=dict(app_order=[record]))), "account"))
+assert value("app_order") == "diary", "an unreadable order changed the pins"
+assert database.execute("SELECT COUNT(*) FROM settings WHERE key='app_order_tablet'").fetchone()[0] == 0
+order("", "1970-01-01T00:10:00Z")
+assert value("app_order") == "", "an empty order did not unpin everything"
+print("Account app choices: removals, independent merge, conflict handling, account isolation, device settings and pinned order passed")

@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 9, inserts
+    assert len(inserts) == 10, inserts
     return clear + inserts
 
 
@@ -60,6 +60,7 @@ def insert_row(database, table, values):
 ENTITIES = [
     ("habit", "h1", 0), ("habit", "h2", 0), ("habit_day", "h1", 20260101),
     ("app_preference", "app_used_lists", 0), ("app_preference", "app_used_diary", 0),
+    ("app_order", "app_order", 0),
     ("session", "s1", 0), ("elist_list", "l1", 0), ("elist_item", "i1", 0),
     ("habit_entry", "e1", 0), ("habit_change", "c1", 0),
     ("cell_record", "cell.lumi.message.history", 0),
@@ -87,6 +88,9 @@ def open_database():
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "app_order", "value": "lumi,diary", "updated_at": 2})
+    # A default nobody chose is never queued.
+    insert_row(database, "settings", {"user_id": "u1", "key": "app_used_leaderboard", "value": "0", "updated_at": 1})
     for key in ("cell.lumi.message.history", "cell.diary.entry.today", "cell.feedback.report"):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "{}", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})

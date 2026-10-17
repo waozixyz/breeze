@@ -75,10 +75,11 @@ load_bottom_nav_routes :: (app: *InnerBreeze) {
     if app == null {
         return
     }
+    // A new profile's apps, Lumi, Habits and Practice, in their order.
     app.bottom_nav_route_count =
     SettingsCacheInt("bottom_nav_route_count", 4)
     app.bottom_nav_routes[0] =
-    SettingsCacheInt("bottom_nav_route_0", APP_NAV_ROUTE_ELIST)
+    SettingsCacheInt("bottom_nav_route_0", APP_NAV_ROUTE_LUMI)
     app.bottom_nav_routes[1] =
     SettingsCacheInt("bottom_nav_route_1", APP_NAV_ROUTE_HABITS)
     app.bottom_nav_routes[2] =
@@ -112,9 +113,59 @@ load_bottom_nav_routes :: (app: *InnerBreeze) {
                     app.launcher_favorites[:], app.launcher_favorite_count, route)
             }
         } else {
-            app.launcher_favorite_count = LauncherDefaults(app.launcher_favorites[:],
-                DesktopPlatform() != 0)
+            app.launcher_favorite_count = LauncherDefaults(app.launcher_favorites[:])
         }
+    }
+    // Pins another device of the account changed arrived before this device
+    // took them, for example when it closed during a practice.
+    if SettingsCacheInt(AppOrderReceivedKey, 0) != 0 {
+        order: [LAUNCHER_ORDER_TEXT_MAX + 1]u8
+        unused SettingsCacheCopyText(AppOrderKey, order[:])
+        unused app_take_app_order(app, AppTextFromCString(*order[0], LAUNCHER_ORDER_TEXT_MAX + 1))
+    }
+}
+
+// The pinned apps another device of the account sent replace this device's
+// pins, once: a later change here stays here until the owner changes pins.
+#program_export
+app_take_app_order :: (app: *InnerBreeze, order: string) -> bool {
+    routes: [LAUNCHER_APP_COUNT]s32
+    count := LauncherOrderRoutes(order, routes[:])
+    changed := count != app.launcher_favorite_count
+    for index: cast(s32)0..count - 1 {
+        if routes[index] != app.launcher_favorites[index] {
+            changed = true
+        }
+    }
+    for index: cast(s32)0..count - 1 {
+        app.launcher_favorites[index] = routes[index]
+    }
+    app.launcher_favorite_count = count
+    if changed {
+        save_launcher_favorites(app)
+    }
+    unused SettingsStoreInt(AppOrderReceivedKey, 0)
+    return changed
+}
+
+// The owner changed the pins: their order goes to the account's other
+// devices. A default or an order from another device is never sent back.
+app_save_app_order :: (app: *InnerBreeze) {
+    if app == null || TelegramHostPresent() {
+        return
+    }
+    order: [LAUNCHER_ORDER_TEXT_MAX + 1]u8
+    unused LauncherOrderText(app.launcher_favorites[:], app.launcher_favorite_count, order[:])
+    unused SettingsStoreText(AppOrderKey, order[:])
+}
+
+save_launcher_favorites :: (app: *InnerBreeze) {
+    save_setting_int("launcher_favorite_count", app.launcher_favorite_count)
+    save_setting_int("launcher_favorite_0", app.launcher_favorites[0])
+    save_setting_int("launcher_favorite_1", app.launcher_favorites[1])
+    for index: cast(s32)2..cast(s32)app.launcher_favorites.count - 1 {
+        key := SettingsKeyIndexed("launcher_favorite_", index, "")
+        unused SettingsStoreInt(AppTextFromCString(*key.bytes[0], 48), app.launcher_favorites[index])
     }
 }
 
@@ -209,13 +260,7 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("navigation_mode", app.navigation_mode)
     save_setting_int("navigation_placement", app.navigation_placement)
     save_setting_int("navigation_collapsed", app.nav_rail_collapsed)
-    save_setting_int("launcher_favorite_count", app.launcher_favorite_count)
-    save_setting_int("launcher_favorite_0", app.launcher_favorites[0])
-    save_setting_int("launcher_favorite_1", app.launcher_favorites[1])
-    for index: cast(s32)2..cast(s32)app.launcher_favorites.count - 1 {
-        key := SettingsKeyIndexed("launcher_favorite_", index, "")
-        unused SettingsStoreInt(AppTextFromCString(*key.bytes[0], 48), app.launcher_favorites[index])
-    }
+    save_launcher_favorites(app)
     save_setting_int("profile_picture_icon", app.profile_picture_icon)
     save_setting_int("bottom_nav_route_count", app.bottom_nav_route_count)
     save_setting_int("bottom_nav_route_0", app.bottom_nav_routes[0])
@@ -754,10 +799,10 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     app.exercise_manual_seen_mask =
     manual_seen_mask & ((1 << EXERCISE_COUNT) - 1)
     load_language_setting(app, settings_missing)
-    // Existing profiles retain their app choices. Fresh profiles open the Apps
-    // library with every bundled app available, without an install chooser.
+    // Existing profiles retain their app choices. A new profile comes with
+    // Lumi, Habits and Practice; the other apps are added from More apps.
     app.enabled_apps = SettingsCacheInt("enabled_apps",
-        ifx settings_missing != 0 then APP_ALL else APP_LISTS | APP_RECOMMENDED) & APP_ALL
+        ifx settings_missing != 0 then APP_RECOMMENDED else APP_LISTS | APP_RECOMMENDED) & APP_ALL
     for index: cast(s32)1..cast(s32)(PackageCount - 1) {
         key := PackagePreferenceKey(index)
         if SettingsCacheContains(key) {
@@ -772,17 +817,18 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     }
     // Ordinary profiles migrate their saved app choices. A hosted delegate
     // reads those choices without creating owner preference outbox rows.
+    // A new profile already has Lumi among its default apps.
     if !TelegramHostPresent() && !SettingsCacheContains("lumi_introduced") {
-        if !SettingsCacheContains("app_used_lumi") {
+        if settings_missing == 0 && !SettingsCacheContains("app_used_lumi") {
             app.enabled_apps |= APP_LUMI
             save_setting_int("app_used_lumi", 1)
         }
         save_setting_int("enabled_apps", app.enabled_apps)
         save_setting_int("lumi_introduced", 1)
     }
-    // Leaderboard moved from Profile into its own app. Fresh profiles start
-    // with every app; existing ones get it installed once. Removing it later
-    // is respected.
+    // Leaderboard moved from Profile into its own app. Existing profiles get
+    // it installed once, and removing it later is respected. New profiles
+    // add it from More apps.
     if !TelegramHostPresent() && !SettingsCacheContains("leaderboard_introduced") {
         if settings_missing == 0 && !SettingsCacheContains("app_used_leaderboard") {
             app.enabled_apps |= APP_LEADERBOARD
@@ -790,6 +836,17 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
             save_setting_int("enabled_apps", app.enabled_apps)
         }
         save_setting_int("leaderboard_introduced", 1)
+    }
+    // Apps nobody chose, such as a new profile's, are stored as defaults: a
+    // choice from the account's other devices replaces them, and they are
+    // never sent, so a new device cannot remove the account's apps.
+    if !TelegramHostPresent() {
+        for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+            key := PackagePreferenceKey(index)
+            if !SettingsCacheContains(key) {
+                unused SettingsStoreDefaultBool(key, (app.enabled_apps & PackageBit(index)) != 0)
+            }
+        }
     }
     app.apps_selected = SettingsCacheInt("apps_setup_done",
         ifx settings_missing != 0 then 0 else 1)

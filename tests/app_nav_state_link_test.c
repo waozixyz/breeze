@@ -46,12 +46,11 @@ int main(void)
     memset(&app, 0, sizeof(app));
 
     app_reset_bottom_nav_routes(&app);
-    assert(app.bottom_nav_route_count == 5);
+    assert(app.bottom_nav_route_count == 4);
     assert(app.bottom_nav_routes[0] == AppNavRoute_APP_NAV_ROUTE_LUMI);
-    assert(app.bottom_nav_routes[1] == AppNavRoute_APP_NAV_ROUTE_ELIST);
-    assert(app.bottom_nav_routes[2] == AppNavRoute_APP_NAV_ROUTE_HABITS);
-    assert(app.bottom_nav_routes[3] == AppNavRoute_APP_NAV_ROUTE_PRACTICE);
-    assert(app.bottom_nav_routes[4] == AppNavRoute_APP_NAV_ROUTE_SETTINGS);
+    assert(app.bottom_nav_routes[1] == AppNavRoute_APP_NAV_ROUTE_HABITS);
+    assert(app.bottom_nav_routes[2] == AppNavRoute_APP_NAV_ROUTE_PRACTICE);
+    assert(app.bottom_nav_routes[3] == AppNavRoute_APP_NAV_ROUTE_SETTINGS);
     account_present = 0;
     account_alias = "";
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));

@@ -6,16 +6,43 @@ using AppNavRoute;
 #program_export
 Answer :: () -> s32 {
     favorites: [LAUNCHER_APP_COUNT]s32
-    if LauncherDefaults(favorites[:], true) != 5 ||
-    favorites[0] != APP_NAV_ROUTE_LUMI || favorites[4] != APP_NAV_ROUTE_DIARY {
+    // A new profile pins Lumi, Habits and Practice, in that order, on every
+    // device; the other apps wait in More apps.
+    if LauncherDefaults(favorites[:]) != 3 ||
+    favorites[0] != APP_NAV_ROUTE_LUMI || favorites[1] != APP_NAV_ROUTE_HABITS ||
+    favorites[2] != APP_NAV_ROUTE_PRACTICE {
         return 18
     }
-    // Leaderboard is installed with every profile but never pinned by default.
-    for index: cast(s32)0..cast(s32)4 {
-        if favorites[index] == APP_NAV_ROUTE_LEADERBOARD { return 20 }
+    short: [2]s32
+    if LauncherDefaults(short[:]) != 0 { return 19 }
+    order: [LAUNCHER_ORDER_TEXT_MAX + 1]u8
+    length := LauncherOrderText(favorites[:], 3, order[:])
+    if length != 21 || TextView(order[:length]) != "lumi,habits,practices" || order[length] != cast(u8)0 {
+        return 20
     }
-    if LauncherDefaults(favorites[:], false) != 3 ||
-    favorites[2] != APP_NAV_ROUTE_PRACTICE { return 19 }
+    // Every app round-trips by name; unknown and repeated names drop out.
+    read: [LAUNCHER_APP_COUNT]s32
+    if LauncherOrderRoutes("diary,chess,lumi,,diary,leaderboard,lists", read[:]) != 4 ||
+    read[0] != APP_NAV_ROUTE_DIARY || read[1] != APP_NAV_ROUTE_LUMI ||
+    read[2] != APP_NAV_ROUTE_LEADERBOARD || read[3] != APP_NAV_ROUTE_ELIST {
+        return 22
+    }
+    if LauncherOrderRoutes("", read[:]) != 0 || LauncherOrderText(read[:], 0, order[:]) != 0 ||
+    order[0] != cast(u8)0 {
+        return 23
+    }
+    every := LauncherRoutes()
+    length = LauncherOrderText(every[:], cast(s32)every.count, order[:])
+    if LauncherOrderRoutes(TextView(order[:length]), read[:]) != LAUNCHER_APP_COUNT {
+        return 24
+    }
+    for index: cast(s32)0..LAUNCHER_APP_COUNT - 1 {
+        if read[index] != every[index] { return 25 }
+    }
+    // A full buffer keeps whole names only.
+    tiny: [12]u8
+    length = LauncherOrderText(favorites[:], 3, tiny[:])
+    if length != 11 || TextView(tiny[:length]) != "lumi,habits" { return 26 }
     favorites[0] = APP_NAV_ROUTE_HABITS
     favorites[1] = APP_NAV_ROUTE_PRACTICE
     count := LauncherToggleFavorite(favorites[:], 2, APP_NAV_ROUTE_DIARY)
