@@ -295,7 +295,7 @@ with contextlib.ExitStack() as stack:
                 assert "package_updates_allowed" not in settings(profile)
                 decline = subprocess.run(
                     ["python3", str(ROOT / "tests/rendered_word.py"),
-                     str(OUTPUT / (name + "-apps-updates-question.png")), "allow"],
+                     str(OUTPUT / (name + "-apps-updates-question.png")), "allow", "--leftmost"],
                     text=True, capture_output=True, timeout=60)
                 assert decline.returncode == 0, "Apps did not ask about app updates"
                 click(window, *map(int, decline.stdout.split()))
