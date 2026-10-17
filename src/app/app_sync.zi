@@ -1,4 +1,6 @@
 #import "async_client"
+#import "auth"
+#import "text_buffer"
 #import, file "sync_safety_policy.zi";
 #import "byte_text_linux"
 #import "url"
@@ -32,8 +34,10 @@ GetTime :: () -> float64 #foreign c;
 #import, file "app_types.zi";
 #import, file "app.zi";
 #import, file "sync_safety.zi";
+#import, file "../cells/diary_blobs.zi";
 #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
     #import, file "../storage/sync_runtime.zi";
+    #import, file "../cells/diary_blobs_native.zi";
 }
 #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
     #import, file "../storage/sync_async.zi";
@@ -137,6 +141,16 @@ g_sync_events_retry_at: float64;
 #if ASYNC {
     g_sync_operation: StoredOperation;
     g_sync_transfer: NetworkTransfer;
+    // Diary photo copies move one request at a time after a good sync.
+    g_diary_blob: StoredBlob;
+    g_diary_pass: DiaryBlobPass;
+    g_diary_request: DiaryBlobRequest;
+    g_diary_output: *u8;
+    g_diary_output_bytes: s64;
+    g_diary_pass_active: bool;
+    g_diary_pass_due: bool;
+    g_diary_pass_url: [512]u8;
+    g_diary_pass_account: [72]u8;
     g_social_async: SocialRefresh;
     g_social_transfer: NetworkTransfer;
     g_social_streak_key: [96]u8;
@@ -429,6 +443,9 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
             if result == cast(SyncResult)SYNC_OK && storage_last_sync_changed() != 0 {
                 changed = 1
             }
+            if result == cast(SyncResult)SYNC_OK {
+                DiaryBlobsSendNative(AppTextFromCString(*args.url[0], 256))
+            }
             SyncWorkerFree(cast(*void)args)
         }
 
@@ -534,6 +551,80 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
     }
 }
 
+#if ASYNC {
+    app_diary_blobs_end :: () {
+        if g_diary_blob.active {
+            CancelStoredBlob(*g_diary_blob)
+        }
+        DiaryBlobAbandon(*g_diary_request)
+        if g_diary_output != null {
+            SyncWorkerFree(cast(*void)g_diary_output)
+            g_diary_output = null
+        }
+        g_diary_output_bytes = 0
+        g_diary_pass_active = false
+    }
+
+    // Moves Diary photo copies one request at a time, each frame, after a
+    // good sync (cells/diary_blobs.zi). A switched account ends the pass.
+    app_diary_blobs_tick :: () {
+        if g_diary_pass_active &&
+        storage_get_setting_text("sync_public_id") != AppTextFromCString(*g_diary_pass_account[0], 72) {
+            app_diary_blobs_end()
+            return
+        }
+        if g_diary_blob.active {
+            if !PollStoredBlob(*g_diary_blob) {
+                return
+            }
+            keep := false
+            length := g_diary_blob.length
+            if g_diary_blob.result == cast(s32)AuthResult.AUTH_OK && length >= 0 && length < g_diary_output_bytes {
+                keep = DiaryBlobFinish(*g_diary_pass, *g_diary_request, g_diary_blob.status,
+                    BytesFromPointer(g_diary_output, cast(u64)length))
+            }
+            DiaryBlobAbandon(*g_diary_request)
+            SyncWorkerFree(cast(*void)g_diary_output)
+            g_diary_output = null
+            g_diary_output_bytes = 0
+            if !keep {
+                app_diary_blobs_end()
+                return
+            }
+        }
+        if !g_diary_pass_active {
+            if !g_diary_pass_due || g_sync.sync_running != 0 {
+                return
+            }
+            g_diary_pass_due = false
+            if !DiaryBlobPlan(*g_diary_pass, AppTextFromCString(*g_diary_pass_url[0], 512)) {
+                return
+            }
+            unused AppCopyText(storage_get_setting_text("sync_public_id"), g_diary_pass_account[:])
+            g_diary_pass_active = true
+        }
+        if !DiaryBlobNext(*g_diary_pass, *g_diary_request) {
+            app_diary_blobs_end()
+            return
+        }
+        capacity: s64 = 4096
+        if g_diary_request.answer_bytes > capacity {
+            capacity = g_diary_request.answer_bytes
+        }
+        g_diary_output = cast(*u8)SyncWorkerAlloc(cast(usize)capacity)
+        if g_diary_output == null {
+            app_diary_blobs_end()
+            return
+        }
+        g_diary_output_bytes = capacity
+        if !BeginStoredBlob(*g_diary_blob, AppTextFromCString(*g_diary_pass_url[0], 512),
+            g_diary_request.method, TextUntilNul(g_diary_request.path[:]), g_diary_request.body,
+            BytesFromPointer(g_diary_output, cast(u64)capacity)) {
+            app_diary_blobs_end()
+        }
+    }
+}
+
 app_collect_finished_sync :: () {
     result: s32 = 0
     changed: s32 = 0
@@ -549,12 +640,17 @@ app_collect_finished_sync :: () {
         }
     }
     #if ASYNC {
+        app_diary_blobs_tick()
         if g_sync.sync_running == 0 || !PollStoredOperation(*g_sync_operation) {
             return
         }
         result = g_sync_operation.result
         changed = g_sync_operation.changed
         g_sync.sync_running = 0
+        if result == SYNC_OK {
+            unused AppCopyText(AppTextFromCString(*g_sync_operation.server[0], 512), g_diary_pass_url[:])
+            g_diary_pass_due = true
+        }
     }
     app_sync_record_result(result)
     if result == SYNC_OK {

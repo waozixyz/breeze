@@ -28,6 +28,10 @@
 #import "authorization"
 #import, file "../src/core/types.zi";
 #import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/diary_store.zi";
+#import, file "../src/cells/diary_records.zi";
+#import, file "../src/cells/diary_blobs_native.zi";
+#import "file_linux"
 
 // Two clients, a friend, and fresh installs syncing through a real Daochi
 // server (with a proxy that drops one response), from the first upload to
@@ -153,6 +157,54 @@ synchronize :: (url: string) {
         attempt += 1
     }
     check_true("sync drained the queued changes", false)
+}
+
+// A Diary photo travels as one sealed copy, which the node keeps at the
+// photo's size plus 16 bytes, and arrives whole on the account's other
+// device.
+expect_photo_copy :: (url: string, a: string, b: string) {
+    open_client(a)
+    png: [6000]u8
+    for index: cast(s32)0..cast(s32)5999 {
+        png[index] = cast(u8)((index * 13 + 7) % 251)
+    }
+    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
+    for index: cast(s32)0..7 {
+        png[index] = header[index]
+    }
+    image := TextFromBytes(png[:])
+    source: TextBuffer
+    append(*source, data_root())
+    append(*source, "/photo-source.png")
+    source_path := TextFromCString(*source.bytes[0])
+    unused RemoveFile(source_path)
+    file := OpenExclusivePrivate(source_path)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    check_true("write the photo to attach", CloseFile(file) && written)
+    name := DiaryStoreAttach(source_path)
+    check_true("attach the photo", name.count > 0)
+    DiaryStoreClose()
+    synchronize(url)
+    DiaryBlobsSendNative(url)
+    media := DiaryMediaRead(name)
+    check_true("the photo's copy is on the node", DiaryMediaUploaded(media))
+    synchronize(url)
+    blob_path: TextBuffer
+    append(*blob_path, data_root())
+    append(*blob_path, "/server.db.blobs/")
+    append(*blob_path, storage_get_setting_text("sync_public_id"))
+    append(*blob_path, "/inbe/")
+    append(*blob_path, TextFromBytes(media.blob[:64]))
+    check_int("the node keeps the photo's size plus 16 bytes",
+        cast(s32)PackageFileSize(TextFromCString(*blob_path.bytes[0])), 6016)
+    open_client(b)
+    synchronize(url)
+    check_true("the photo waits on the second device", !DiaryStoreRead(name).succeeded)
+    DiaryStoreClose()
+    DiaryBlobsSendNative(url)
+    check_true("the photo arrives whole on the second device", DiaryStoreRead(name).data == image)
+    DiaryStoreClose()
+    PackageFree(name)
 }
 
 mood_is :: (id: string, want: s32) -> bool {
@@ -309,6 +361,8 @@ Check :: () -> s32 {
     check_true("completion reaches other device", ActivityRead(live_document, *observed) && observed.active == 0)
     PackageFree(live_document)
     check_int("live activity does not duplicate results", storage_session_count(), 1)
+    expect_photo_copy(url, a, b)
+    open_client(b)
     check_true("complete the item", storage_elist_update_item(item_text, "Pack bag", "Passport", 1, 0) != 0)
     synchronize(url)
     open_client(a)

@@ -12,6 +12,7 @@ Auth :: #import "auth";
 #import, file "delegate_storage_types.zi";
 #import, file "delegate_storage.zi";
 #import "net_http"
+#import "http_transfer"
 #import "url"
 #import "byte_text_linux"
 Clock :: #import "date_time_linux";
@@ -399,4 +400,101 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
     }
     ReleaseStoredOperation(operation)
     return true
+}
+
+// One signed request for a sealed Diary copy (cells/diary_blobs.zi),
+// advanced each frame like a sync: PUT stores the body at path, GET answers
+// with the copy in output. It uses the sync's saved session; without one it
+// does not start, and the next sync signs in again.
+StoredBlob :: struct {
+    active: bool
+    transfer: HttpTransfer
+    transaction: [8192]u8
+    token: [4096]u8
+    url: [1024]u8
+    method: [8]u8
+    headers: [1]HttpHeader
+    status: s32
+    length: s64
+    result: s32
+}
+
+// The body and output must stay valid until PollStoredBlob finishes or
+// CancelStoredBlob returns.
+BeginStoredBlob :: (blob: *StoredBlob, server: string, method: string, path: string,
+    body: string, output: []u8) -> bool {
+    if blob == null || blob.active || StoredAccountMode() != AccountModeOwner {
+        return false
+    }
+    blob.* = StoredBlob.{}
+    blob.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    account: AccountKeys
+    if sync_account_load(*account) == 0 {
+        return false
+    }
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    material: DeviceKeyMaterial
+    if !LoadOrCreateDeviceKey(*material) {
+        return false
+    }
+    defer { WipeDeviceKey(*material) }
+    client: Client
+    client_id: [128]u8
+    normalized: [512]u8
+    if !AppCopyText(storage_sync_client_id(), client_id[:]) ||
+    !NormalizeUrl(server, normalized[:]) ||
+    !OpenAccountClient(TextUntilNul(normalized[:]), *account, TextUntilNul(client_id[:]), *client) {
+        return false
+    }
+    now := Clock.UnixNow()
+    session: Session
+    LoadSavedSession(*session, now)
+    if session.token[0] == cast(u8)0 {
+        return false
+    }
+    blob.result = cast(s32)AuthResult.AUTH_SIGN_FAILED
+    if PrepareRequestHeader(client, *session, DeviceFromKey(*material), now, null, NativeNonce,
+        method, path, body, blob.transaction[:]) != cast(AuthResult)AuthResult.AUTH_OK ||
+    !JoinUrl(TextUntilNul(normalized[:]), path, blob.url[:]) ||
+    !AppCopyText(TextUntilNul(session.token[:]), blob.token[:]) ||
+    !AppCopyText(method, blob.method[:]) {
+        return false
+    }
+    blob.headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(blob.transaction[:])}
+    request := HttpRequest.{.method = TextUntilNul(blob.method[:]), .url = TextUntilNul(blob.url[:]),
+        .token = TextUntilNul(blob.token[:]), .body = body, .headers = blob.headers[:]}
+    if body.count > 0 {
+        request.content_type = "application/octet-stream"
+    }
+    blob.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    // A copy of up to 16 MB needs longer than a sync's request.
+    if !HttpTransferStart(*blob.transfer, request, output, 180000) {
+        return false
+    }
+    blob.active = true
+    return true
+}
+
+// True once the request has finished; status and length then hold its
+// answer, and result is AUTH_OK when one arrived.
+PollStoredBlob :: (blob: *StoredBlob) -> bool {
+    if blob == null || !blob.active {
+        return true
+    }
+    state := HttpTransferPollLength(*blob.transfer, *blob.status, *blob.length)
+    if state < 0 {
+        return false
+    }
+    blob.active = false
+    blob.result = ifx (state == 1) then (cast(s32)AuthResult.AUTH_OK) else (cast(s32)AuthResult.AUTH_REQUEST_FAILED)
+    return true
+}
+
+CancelStoredBlob :: (blob: *StoredBlob) {
+    if blob == null || !blob.active {
+        return
+    }
+    HttpTransferCancel(*blob.transfer)
+    blob.active = false
+    blob.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
 }

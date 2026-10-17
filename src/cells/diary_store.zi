@@ -38,6 +38,10 @@ diary_prepared: bool;
 diary_account: string;
 diary_preview_name: string;
 diary_preview_bytes: string;
+// Bumped when a photo's file arrives from a node, so a placeholder shown for
+// it is read again.
+diary_blob_generation: s64;
+diary_preview_generation: s64;
 #if !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
     DiaryLock :: (descriptor: s32, operation: s32) -> s32 #foreign c "flock";
 }
@@ -189,6 +193,24 @@ DiaryStoreRead :: (name: string) -> DiaryFileResult {
     }
     result.missing = !PathExists(path)
     PackageFree(diary_file_bytes)
+    diary_file_bytes = ""
+    media := DiaryMediaRead(name)
+    if media.valid {
+        // A photo is its file. Until the file arrives from a node, it shows
+        // as not on this device.
+        diary_file_bytes = PackageRead(path, DIARY_FILE_LIMIT)
+        if !DiaryMediaMatches(media, diary_file_bytes) {
+            PackageFree(diary_file_bytes)
+            diary_file_bytes = ""
+            result.missing = false
+            result.succeeded = false
+            return result
+        }
+        result.missing = false
+        result.data = diary_file_bytes
+        result.succeeded = true
+        return result
+    }
     diary_file_bytes = DiaryRecordRead(name)
     if diary_file_bytes.count > 0 {
         result.missing = false
@@ -382,13 +404,23 @@ DiaryStorePreview :: (name: string) -> string {
     if !DiaryStoreNameValid(name) || !DiaryStorePrepare() {
         return ""
     }
-    if name != diary_preview_name {
+    if name != diary_preview_name || diary_preview_generation != diary_blob_generation {
         PackageFree(diary_preview_name)
         PackageFree(diary_preview_bytes)
         diary_preview_name = PackageText(name, "")
+        diary_preview_generation = diary_blob_generation
         path := DiaryStorePath(name)
         defer {
             PackageFree(path)
+        }
+        media := DiaryMediaRead(name)
+        if media.valid {
+            diary_preview_bytes = PackageRead(path, DIARY_FILE_LIMIT)
+            if !DiaryMediaMatches(media, diary_preview_bytes) {
+                PackageFree(diary_preview_bytes)
+                diary_preview_bytes = ""
+            }
+            return diary_preview_bytes
         }
         diary_preview_bytes = DiaryRecordRead(name)
         record_key := DiaryRecordKey(name)

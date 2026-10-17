@@ -28,11 +28,13 @@ mkdir -p "$work/generated"
 cat > "$work/generated/main.c" <<'C'
 #include <stdio.h>
 #include "sync_server_behavior.h"
+/* Diary files are flushed by the browser's storage only on the web. */
+void app_web_storage_flush(void) {}
 int main(void)
 {
     int result = Check();
     if (result != 0) fprintf(stderr, "sync server check failed with code %d\n", result);
-    if (result == 0) puts("PASS two-client sync, habit/session/list/alias/friend recovery, offline retry, conflict, backup restore, deletion");
+    if (result == 0) puts("PASS two-client sync, habit/session/list/alias/friend recovery, Diary photo copies, offline retry, conflict, backup restore, deletion");
     return result == 0 ? 0 : 1;
 }
 C
