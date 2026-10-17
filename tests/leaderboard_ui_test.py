@@ -3,14 +3,15 @@
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 
-from PIL import Image
-from native_visual_test import read_text
+from ui_driver import UiDriver
 
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 root = Path(__file__).resolve().parents[1]
@@ -19,31 +20,51 @@ output = root / "build/leaderboard-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
 LEADERBOARD_ROUTE = 9
+RANKED = re.compile(r"(\d+)\. @(\w+)$")
+# A private command folder, so concurrent runs never answer each other.
+driver_directory = tempfile.TemporaryDirectory(prefix="inbe-leaderboard-driver-")
+driver = UiDriver(driver_directory.name)
 
 
 def command(*args):
     return subprocess.check_output(args, text=True, timeout=5).strip()
 
 
-def click(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.12)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.15)
-    command("xdotool", "mouseup", "1")
-    # Move off the control so its hover state does not cover the selection.
-    time.sleep(0.3)
-    command("xdotool", "mousemove", "--window", window, "200", "600")
-    time.sleep(0.6)
+def rows():
+    """The board's ranked rows, top first: each friend's name and values."""
+    nodes = [node for node in driver.tree() if node["visible"]]
+    ranked = []
+    for node in nodes:
+        match = RANKED.match(node["label"])
+        if match:
+            values = [cell["label"] for cell in sorted(nodes, key=lambda cell: cell["x"])
+                      if cell["parent"] == node["parent"] and cell["y"] == node["y"]
+                      and cell["x"] > node["x"] and cell["kind"] == "text"]
+            ranked.append((node["y"], int(match.group(1)), match.group(2), values))
+    ranked.sort()
+    assert [rank for _, rank, _, _ in ranked] == list(range(1, len(ranked) + 1)), \
+        f"ranks are out of order: {ranked}"
+    return [(name, values) for _, _, name, values in ranked]
 
 
-def rows(window, name):
-    """The ranked names, in order, read from the board's rows."""
-    path = output / (name + ".png")
-    command("import", "-window", window, str(path))
-    with Image.open(path) as image:
-        text = read_text(image.crop((16, 160, 374, 450)), name)
-    return [word for word in text.split() if word in ("maple", "river", "cedar")], text
+def board(expected, timeout=10):
+    """The ranked rows once they list the expected names, or as they stand."""
+    deadline = time.monotonic() + timeout
+    while True:
+        shown = rows()
+        if [name for name, _ in shown] == expected or time.monotonic() >= deadline:
+            return shown
+        time.sleep(0.05)
+
+
+def choose(label):
+    """Press a practice or column tab and wait until it shows as selected."""
+    driver.press(label=label, role="button")
+    deadline = time.monotonic() + 10
+    while not any(node["selected"] for node in driver.find(label=label, role="button", visible=True)):
+        assert time.monotonic() < deadline, f"{label} did not become selected"
+        time.sleep(0.05)
+    driver.wait_idle(frames=2, timeout=2)
 
 
 def stop(process):
@@ -57,18 +78,29 @@ def stop(process):
 
 
 def launch(profile, name):
-    log = (output / (name + ".log")).open("w")
-    app = subprocess.Popen([str(binary)], cwd=root, env=os.environ | {"APP_DATA_ROOT": str(profile)},
+    log_path = output / (name + ".log")
+    log = log_path.open("w")
+    app = subprocess.Popen([str(binary)], cwd=root,
+                           env=os.environ | {"APP_DATA_ROOT": str(profile)} | driver.environment(),
                            stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(200):
-        assert app.poll() is None, (output / (name + ".log")).read_text()
+    driver.attach(app, log_path)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        assert app.poll() is None, log_path.read_text()
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                capture_output=True, text=True)
         if found.returncode == 0 and (profile / "inbe.db").exists():
             window = found.stdout.splitlines()[0]
             command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
             command("xdotool", "windowmove", window, "0", "0")
-            time.sleep(1.5)
+            # Wait until the app lays out the phone-sized window.
+            while True:
+                screen = next(node for node in driver.tree() if node["kind"] == "screen")
+                if (screen["width"], screen["height"]) == (WIDTH, HEIGHT):
+                    break
+                assert time.monotonic() < deadline, f"the app kept a {screen['width']}x{screen['height']} layout"
+                time.sleep(0.05)
+            driver.wait_idle(frames=3)
             return app, window
         time.sleep(0.1)
     stop(app)
@@ -121,18 +153,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
                        "VALUES(?,?,?,1)", (user, kind, json.dumps(value)))
     app, window = launch(profile, "board")
     try:
-        names, text = rows(window, "streak")
-        assert names == ["maple", "river", "cedar"], f"streak order: {text}"
-        click(window, 329, 134)
-        names, text = rows(window, "average")
-        assert names == ["river", "maple", "cedar"], f"average hold order: {text}"
+        streak = board(["maple", "river", "cedar"])
+        assert [name for name, _ in streak] == ["maple", "river", "cedar"], f"streak order: {streak}"
+        assert dict(streak)["cedar"][0] == "0", f"a friend without results is not at zero: {streak}"
+        choose("Avg hold")
+        average = board(["river", "maple", "cedar"])
+        assert [name for name, _ in average] == ["river", "maple", "cedar"], f"average hold order: {average}"
         # Practices are a two-column grid on phones; meditation is third.
-        click(window, 100, 80)
-        names, text = rows(window, "meditation")
-        assert names == ["river", "cedar"] and "0" in text and "15" in text, f"meditation: {text}"
-        click(window, 290, 32)
-        names, text = rows(window, "patterns")
-        assert sorted(names) == ["cedar", "river"], f"breathing patterns: {text}"
+        choose("Meditation")
+        meditation = board(["river", "cedar"])
+        assert [name for name, _ in meditation] == ["river", "cedar"] and "0:15" in dict(meditation)["river"], \
+            f"meditation: {meditation}"
+        choose("Breathing Patterns")
+        patterns = board(["cedar", "river"])
+        assert sorted(name for name, _ in patterns) == ["cedar", "river"], f"breathing patterns: {patterns}"
         log = (output / "board.log").read_text()
         assert "frame rejected" not in log, log
         assert app.poll() is None, log
@@ -142,10 +176,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
 with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     shot = output / "about.png"
     shot.unlink(missing_ok=True)
-    about = subprocess.run([str(binary), "--screenshot", str(shot), "--screenshot-scene", "settings_about",
-                            "--screenshot-width", "900", "--screenshot-height", "720"], cwd=root,
-                           env=os.environ | {"APP_DATA_ROOT": directory}, capture_output=True, text=True,
-                           timeout=60)
-    assert about.returncode == 0 and shot.exists(), about.stdout[-4000:] + about.stderr[-2000:]
-    assert "out of bounds" not in about.stdout + about.stderr, about.stdout[-4000:]
+    about = subprocess.Popen([str(binary), "--screenshot", str(shot), "--screenshot-scene", "settings_about",
+                              "--screenshot-width", "900", "--screenshot-height", "720"], cwd=root,
+                             env=os.environ | {"APP_DATA_ROOT": directory}, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = about.communicate(timeout=60)
+    finally:
+        stop(about)
+        # Screenshots keep their profile in a per-process folder.
+        shutil.rmtree(Path("/tmp") / f"inbe-screenshot-{about.pid}", ignore_errors=True)
+    assert about.returncode == 0 and shot.exists(), stdout[-4000:] + stderr[-2000:]
+    assert "out of bounds" not in stdout + stderr, stdout[-4000:]
+driver_directory.cleanup()
 print("Leaderboard: unpinned install, saved ranks, average hold, meditation time, patterns and About passed")

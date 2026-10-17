@@ -6,12 +6,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import time
 
-from PIL import Image, ImageOps, ImageStat
+from PIL import Image
+
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/native-visual-test"
@@ -40,39 +41,7 @@ def contrast(first, second):
     return (light + .05) / (dark + .05)
 
 
-def ocr_has_label(recognized, label):
-    """Whether OCR found a label. CI's tesseract 5.3.4 sometimes reads one
-    letter of a large single word wrong ("materlal"), so a one-word label
-    also matches a word of the same length with one different letter."""
-    if label in recognized:
-        return True
-    if " " in label or len(label) < 5:
-        return False
-    for word in recognized.split():
-        if len(word) == len(label) and sum(a != b for a, b in zip(word, label)) == 1:
-            return True
-    return False
-
-
-def read_text(image, name, single_line=False):
-    # Normalize the OCR input only; assertions inspect the original pixels.
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    gray = ImageOps.grayscale(image)
-    if ImageStat.Stat(gray).mean[0] < 128:
-        gray = ImageOps.invert(gray)
-    gray = ImageOps.autocontrast(gray)
-    resampling = Image.Resampling.NEAREST if single_line else Image.Resampling.LANCZOS
-    gray = gray.resize((gray.width * 3, gray.height * 3), resampling)
-    path = OUTPUT / (name + "-ocr.png")
-    gray.save(path)
-    result = subprocess.run(["tesseract", str(path), "stdout", "--psm",
-                             "7" if single_line else "11"],
-                            check=True, text=True, capture_output=True, timeout=10)
-    path.unlink()
-    return " ".join(re.findall(r"[a-z0-9%]+", result.stdout.lower()))
-
-
-def assert_selection(image, bounds, name, expected="apps", below_label=12):
+def assert_selection(image, bounds, name, expected="apps", below_label=12, node=None):
     tile = image.crop(bounds)
     width, height = tile.size
     # Sample the flat fill, top outline and surrounding page separately.
@@ -88,8 +57,11 @@ def assert_selection(image, bounds, name, expected="apps", below_label=12):
     assert ink_count >= 8, f"{name}: label has no readable glyph interiors"
     ratio = contrast(ink, fill)
     assert ratio >= 4.5, f"{name}: active label contrast is {ratio:.2f}:1"
-    recognized = read_text(label, name, single_line=True).replace(" ", "")
-    assert expected in recognized, f"{name}: {expected} label is clipped or missing: {recognized}"
+    # The tile is the widget the app reports there: its label, and the
+    # active route or app.
+    if node is not None:
+        assert node["label"].lower() == expected, f"{name}: {expected} label is missing: {node['label']}"
+        assert node["selected"], f"{name}: {expected} is not shown as active"
     return {"label_contrast": round(ratio, 2),
             "outline_contrast": round(contrast(edge, outside), 2)}
 
@@ -143,7 +115,7 @@ def main():
         "appearance_only": arguments.appearance_only,
         "expected_checks": ((0 if arguments.appearance_only else (25 if arguments.quick else 313))
                             + (2 if arguments.quick else 16)),
-        "appearance_ocr_range_percent": [220, 250] if arguments.quick else [100, 250],
+        "appearance_range_percent": [220, 250] if arguments.quick else [100, 250],
         "checks": evidence,
     }
     result_path = OUTPUT / "results.json"
@@ -162,7 +134,9 @@ def main():
 
 
 def run_cases(arguments, evidence):
+    driver = UiDriver(OUTPUT / "driver")
     environment = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV}
+    environment.update(driver.environment())
     environment.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1",
                        SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy",
                        LIBGL_ALWAYS_SOFTWARE="1", APP_SHOT_WINDOW="1", LANGUAGE="en")
@@ -181,6 +155,15 @@ def run_cases(arguments, evidence):
             return subprocess.run(args, env=environment, check=True, capture_output=True,
                                   text=True, timeout=5).stdout.strip()
 
+        def settle(seconds=.25, frames=3):
+            """Let hover and press transitions run, then draw a few more frames."""
+            time.sleep(seconds)
+            first = driver.send("status")["frame"]
+            deadline = time.monotonic() + 20
+            while driver.send("status")["frame"] < first + frames:
+                assert time.monotonic() < deadline, "The app stopped drawing frames"
+                time.sleep(.02)
+
         @contextlib.contextmanager
         def application(name, scene, width, height, scale=10, theme=9, dark=0):
             path = OUTPUT / (name + ".png")
@@ -191,6 +174,7 @@ def run_cases(arguments, evidence):
                                         "--screenshot-height", str(height), "--screenshot-ui-scale", str(scale),
                                         "--screenshot-theme", str(theme), "--screenshot-dark", str(dark)],
                                        cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
+                driver.attach(app, log_path)
                 try:
                     deadline = time.monotonic() + 20
                     window = ""
@@ -203,9 +187,26 @@ def run_cases(arguments, evidence):
                             break
                         time.sleep(.1)
                     assert window, f"{name}: app did not finish its first frame"
-                    command("xdotool", "windowfocus", window)
-                    command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
-                    time.sleep(.6)
+                    driver.wait_idle(frames=3)
+                    nodes = driver.tree()
+                    screen = next(node for node in nodes if node["kind"] == "screen")
+                    factor = width / screen["width"]
+
+                    def on_screen(node, bottom=height):
+                        """A widget's box in window pixels, as a crop box."""
+                        left = round((node["x"] - screen["x"]) * factor)
+                        top = round((node["y"] - screen["y"]) * factor)
+                        right = round((node["x"] + node["width"] - screen["x"]) * factor)
+                        lower = round((node["y"] + node["height"] - screen["y"]) * factor)
+                        return left, top, right, min(lower, bottom - 1)
+
+                    def point(x, y, down=False):
+                        """Hold the app's pointer at window pixels x, y."""
+                        driver.pointer(screen["x"] + x / factor, screen["y"] + y / factor, down=down)
+
+                    # Rest the pointer in the top right corner, away from every control.
+                    point(width - 2, 2)
+                    settle()
 
                     def capture(suffix=""):
                         target = OUTPUT / (name + suffix + ".png")
@@ -214,13 +215,22 @@ def run_cases(arguments, evidence):
                             assert image.size == (width, height), f"{name}: wrong viewport"
                             return image.convert("RGB").copy()
 
-                    yield window, capture
+                    yield window, capture, on_screen, point
                     assert app.poll() is None, log_path.read_text()
                     for failure in ("frame rejected", "portable execution failed", "portable subset"):
                         assert failure not in log_path.read_text(), log_path.read_text()
                 finally:
                     stop(app)
                     shutil.rmtree(Path("/tmp") / f"inbe-screenshot-{app.pid}", ignore_errors=True)
+
+        def in_navigation(nodes, label):
+            bars = {node["index"] for node in nodes if node["kind"] == "navigation_bar"}
+            return next(node for node in nodes if node["label"] == label and node["parent"] in bars)
+
+        def in_page(nodes, label):
+            bars = {node["index"] for node in nodes if node["kind"] == "navigation_bar"}
+            return next(node for node in nodes if node["label"] == label and node["kind"] == "button"
+                        and node["parent"] not in bars)
 
         # Every app palette must distinguish the active route at rest, on hover
         # and while pressed, on the actual desktop and phone compositions.
@@ -231,19 +241,27 @@ def run_cases(arguments, evidence):
                     name = f"selection-{layout}-{theme}-{dark}"
                     # Desktop Apps sits in the sidebar's bottom corner; the
                     # phone's compact dock is 56 units tall at the bottom edge.
-                    bounds = (12, 624, 76, 696) if layout == "desktop" else (261, 788, 377, 843)
                     below_label = 12 if layout == "desktop" else 6
-                    with application(name, "launcher", width, height, theme=theme, dark=dark) as (window, capture):
+                    with application(name, "launcher", width, height, theme=theme,
+                                     dark=dark) as (window, capture, on_screen, point):
+                        nodes = driver.tree()
+                        apps = in_navigation(nodes, "Apps")
+                        assert len(driver.find(key=apps["key"])) == 1, f"{name}: two widgets share a key"
+                        bounds = on_screen(apps)
+                        if layout == "desktop":
+                            assert bounds[0] < 100 and bounds[3] > height - 120, \
+                                f"{name}: Apps left the sidebar's bottom corner: {bounds}"
+                        else:
+                            assert bounds[1] >= height - 60, f"{name}: Apps left the bottom dock: {bounds}"
+                        middle = ((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
                         for state in ("idle", "hover", "pressed"):
                             if state != "idle":
-                                command("xdotool", "mousemove", "--window", window,
-                                        str((bounds[0] + bounds[2]) // 2), str((bounds[1] + bounds[3]) // 2))
-                            if state == "pressed":
-                                command("xdotool", "mousedown", "1")
-                            time.sleep(.25)
+                                point(*middle, down=state == "pressed")
+                                settle()
                             image = capture("-" + state)
+                            selected = driver.find(key=apps["key"])[0]
                             metrics = assert_selection(image, bounds, name + "-" + state,
-                                                       below_label=below_label)
+                                                       below_label=below_label, node=selected)
                             evidence.append({"case": name, "state": state, **metrics})
                             if (layout == "desktop" and dark == 0 and state == "idle"
                                     and theme == (9 if arguments.quick else 0)):
@@ -252,58 +270,78 @@ def run_cases(arguments, evidence):
                         # Cancel activation: releasing inside Apps toggles the
                         # launcher and would make the next card assertion inspect
                         # the Practice page instead of the app library.
-                        command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
-                        time.sleep(.15)
-                        command("xdotool", "mouseup", "1")
+                        point(width - 2, 2, down=True)
+                        point(width - 2, 2)
+                        settle(.15)
                         # Practice is the second pinned card. Apps reflows to five
                         # 144 wide cards on the desktop and keeps two on a phone.
-                        card = (264, 184, 408, 272) if layout == "desktop" else (201, 184, 370, 272)
-                        command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
+                        nodes = driver.tree()
+                        practice = in_page(nodes, "Practice")
+                        assert len(driver.find(key=practice["key"])) == 1, f"{name}: two widgets share a key"
+                        pinned = [node for node in nodes if node["parent"] == practice["parent"]
+                                  and node["kind"] == "button" and node["width"] == practice["width"]
+                                  and node["y"] == practice["y"]]
+                        assert pinned.index(practice) == 1, f"{name}: Practice is not the second pinned card"
+                        card = on_screen(practice)
+                        middle = ((card[0] + card[2]) // 2, (card[1] + card[3]) // 2)
                         for state in ("idle", "hover", "pressed"):
                             if state != "idle":
-                                command("xdotool", "mousemove", "--window", window,
-                                        str((card[0] + card[2]) // 2), str((card[1] + card[3]) // 2))
-                            if state == "pressed":
-                                command("xdotool", "mousedown", "1")
-                            time.sleep(.25)
+                                point(*middle, down=state == "pressed")
+                                settle()
                             image = capture("-card-" + state)
                             # App cards show their download size on a muted line just
-                            # below the name; read the name above that line.
+                            # below the name; check the name above that line.
+                            selected = driver.find(key=practice["key"])[0]
                             metrics = assert_selection(image, card, name + "-card-" + state, "practice",
-                                                       below_label=17)
+                                                       below_label=17, node=selected)
                             evidence.append({"case": name, "state": "card-" + state, **metrics})
                         # Finish the held press outside the card so it cannot open
                         # a route before the fixture's last frame is checked.
-                        command("xdotool", "mousemove", "--window", window, str(width - 2), "2")
-                        time.sleep(.15)
-                        command("xdotool", "mouseup", "1")
+                        point(width - 2, 2, down=True)
+                        point(width - 2, 2)
+                        settle(.15)
             print(f"Selection palettes passed for {layout}", flush=True)
 
         # Narrow Appearance labels must wrap and remain reachable when enlarged,
-        # including the reported 220%/250% failures. The pixel-reference test
-        # covers small glyphs down to 50%; OCR cannot reliably read 6px letters.
-        # The separate zoom test checks a readable title at all 21 scale values.
+        # including the reported 220%/250% failures: each label scrolls wholly
+        # into the page, inside the phone's width and above its dock, and its
+        # box shows every line it wraps to (Kryon reports hidden_lines). The
+        # pixel-reference test covers small glyphs down to 50%, and the zoom
+        # test checks a readable title at all 21 scale values.
         scales = (22, 25) if arguments.quick else range(10, 26)
         for scale in scales:
             labels = ("style", "color theme", "mode", "scale factor",
                       "navigation position", "material", "mono", "light",
                       "automatic", f"{scale * 10}%")
             name = f"appearance-phone-{scale * 10}"
-            with application(name, "theme_selection", 390, 844, scale=scale) as (window, capture):
-                texts = []
-                for step in range(18):
-                    image = capture(f"-scroll-{step}")
-                    texts.append(read_text(image.crop((0, 0, 390, max(1, 844 - round(84 * scale / 10)))),
-                                           name + str(step)))
-                    if all(label in " ".join(texts) for label in labels):
+            with application(name, "theme_selection", 390, 844, scale=scale) as (window, capture, on_screen, point):
+                shown = {}
+                frames = 0
+                for frames in range(1, 19):
+                    nodes = driver.tree()
+                    screen = next(node for node in nodes if node["kind"] == "screen")
+                    for node in nodes:
+                        label = node["label"].lower()
+                        whole = (node["visible"] and
+                                 abs(node["visible_x"] - node["x"]) < .5 and
+                                 abs(node["visible_y"] - node["y"]) < .5 and
+                                 abs(node["visible_width"] - node["width"]) < .5 and
+                                 abs(node["visible_height"] - node["height"]) < .5 and
+                                 node["x"] >= screen["x"] and
+                                 node["x"] + node["width"] <= screen["x"] + screen["width"])
+                        if label in labels and whole:
+                            shown[label] = node
+                    if all(label in shown for label in labels):
                         break
-                    command("xdotool", "mousemove", "--window", window, "210", "250")
-                    command("xdotool", "click", "5")
-                    time.sleep(.15)
-                recognized = " ".join(texts)
+                    # One wheel step down over the page, as a person scrolls.
+                    driver.pointer(screen["x"] + screen["width"] * .54, screen["y"] + screen["height"] * .3,
+                                   wheel=-1)
+                    driver.wait_idle(frames=2, timeout=2)
                 for label in labels:
-                    assert ocr_has_label(recognized, label), f"{name}: {label} label is clipped, missing or unreachable: {recognized}"
-                evidence.append({"case": name, "labels": recognized, "scroll_frames": len(texts)})
+                    assert label in shown, f"{name}: {label} label is clipped, missing or unreachable: {sorted(shown)}"
+                    assert shown[label]["hidden_lines"] == 0, \
+                        f"{name}: {label} label wraps to {shown[label]['hidden_lines']} lines its box cuts off"
+                evidence.append({"case": name, "labels": " ".join(sorted(shown)), "scroll_frames": frames})
 
 
 if __name__ == "__main__":

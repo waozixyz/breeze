@@ -3,14 +3,14 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 
-from PIL import Image
-from native_visual_test import read_text
+from ui_driver import UiDriver, UiDriverError
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/startup-quit-test"
@@ -31,8 +31,11 @@ def stop(process):
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, contextlib.ExitStack() as stack:
+    # A private command folder, so concurrent runs never answer each other.
+    driver = UiDriver(Path(temporary) / "driver")
     env = {key: value for key, value in os.environ.items() if key not in KEYS}
     env.pop("INBE_DIARY_IMPORT", None)
+    env.update(driver.environment())
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
                INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
@@ -48,16 +51,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
         return subprocess.run(args, env=env, check=True, capture_output=True,
                               text=True, timeout=5).stdout.strip()
 
-    def click(window, x, y):
-        command("xdotool", "mousemove", "--window", window, str(x), str(y))
-        time.sleep(.1)
-        command("xdotool", "mousedown", "1")
-        time.sleep(.1)
-        command("xdotool", "mouseup", "1")
-
     def settings(profile):
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             return dict(db.execute("SELECT key,value FROM settings"))
+
+    def wait_log(log, text, message):
+        deadline = time.monotonic() + 5
+        while text not in log.read_text():
+            assert time.monotonic() < deadline, message + "\n" + log.read_text()
+            time.sleep(.05)
+
+    def in_navigation(label):
+        """The sidebar's button with this label."""
+        nodes = driver.tree()
+        bars = {node["index"] for node in nodes if node["kind"] == "navigation_bar"}
+        matches = [node for node in nodes if node["label"] == label and node["parent"] in bars
+                   and node["visible"]]
+        assert len(matches) == 1, f"the sidebar has {len(matches)} {label} buttons"
+        return matches[0]
 
     @contextlib.contextmanager
     def application(profile, name, *args, preview=False):
@@ -68,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 environment["APP_SHOT_WINDOW"] = "1"
             app = subprocess.Popen([str(BINARY), *args], cwd=ROOT, env=environment,
                                    stdout=log, stderr=subprocess.STDOUT)
+            driver.attach(app, log_path)
             try:
                 deadline = time.monotonic() + 15
                 window = ""
@@ -81,12 +93,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                     time.sleep(.05)
                 assert window, log_path.read_text()
                 command("xdotool", "windowsize", window, "900", "720")
-                command("xdotool", "windowfocus", window)
-                time.sleep(.7)
+                # Wait until the app lays out the resized window and settles.
+                while True:
+                    screen = next(node for node in driver.tree() if node["kind"] == "screen")
+                    if (screen["width"], screen["height"]) == (900, 720):
+                        break
+                    assert time.monotonic() < deadline + 15, \
+                        f"{name}: the app kept a {screen['width']}x{screen['height']} layout"
+                    time.sleep(.05)
+                driver.wait_idle(frames=3)
                 yield app, window, log_path
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
             finally:
                 stop(app)
+                # Preview windows keep their profile in a per-process folder.
+                shutil.rmtree(Path("/tmp") / f"inbe-screenshot-{app.pid}", ignore_errors=True)
 
     receipts = {}
     # Both root artifacts open the ready-to-use Apps library and migrate old
@@ -110,15 +131,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
         with application(profile, profile.name + "-all", *args) as (app, window, log):
-            command("import", "-window", window, str(OUTPUT / (profile.name + "-checked.png")))
-            with Image.open(OUTPUT / (profile.name + "-checked.png")) as image:
-                text = read_text(image, profile.name + "-startup")
-            for label in ("apps", "lumi", "habits", "practice", "lists", "diary", "profile", "settings"):
-                assert label in text, f"{profile.name}: Apps omitted {label}"
+            # The Apps library lists every app, with Profile and Settings.
+            driver.wait(label="Apps", role="text")
+            for label in ("Lumi", "Habits", "Practice", "Lists", "Diary", "Profile", "Settings"):
+                assert driver.find(label=label, role="button", visible=True), \
+                    f"{profile.name}: Apps omitted {label}\n" + driver.text()
             # Opening the first app completes setup; the library itself does
             # not require a separate Next button or overwrite preferences.
-            click(window, 44, 218)  # Practice, the third favorite.
-            deadline = time.monotonic() + 2
+            # Practice is the third favorite in the sidebar.
+            driver.press(key=in_navigation("Practice")["key"])
+            deadline = time.monotonic() + 5
             while settings(profile).get("apps_setup_done") != "1":
                 assert time.monotonic() < deadline, "Apps setup did not complete\n" + log.read_text()
                 time.sleep(.05)
@@ -126,23 +148,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             assert saved["enabled_apps"] == "22", "Startup changed saved app preferences"
             order = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
             assert order == [12, 1, 2], "Defaults are not Lumi, Habits and Practice: " + str(order)
-            deadline = time.monotonic() + 2
-            while "->0" not in log.read_text():
-                assert time.monotonic() < deadline, "Practices click was ignored\n" + log.read_text()
-                time.sleep(.05)
-            command("import", "-window", window, str(OUTPUT / "practices-open.png"))
+            wait_log(log, "->0", "Practices click was ignored")
             # Diary is not installed; its card in More apps installs and
-            # opens it.
-            click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
-            time.sleep(.4)
-            # Diary, the first card in More apps, under the row of three
-            # pinned cards.
-            click(window, 160, 380)
-            deadline = time.monotonic() + 2
-            while "screen=0->22" not in log.read_text():
-                assert time.monotonic() < deadline, "Diary click was ignored\n" + log.read_text()
-                time.sleep(.05)
-            command("import", "-window", window, str(OUTPUT / "diary-open.png"))
+            # opens it. Apps sits in the sidebar's bottom corner.
+            apps = in_navigation("Apps")
+            screen = next(node for node in driver.tree() if node["kind"] == "screen")
+            assert apps["y"] - screen["y"] > 720 - 120, f"Apps left the sidebar's bottom corner: {apps}"
+            driver.press(key=apps["key"])
+            driver.wait(label="More apps")
+            driver.press(label="Diary", role="button")
+            wait_log(log, "screen=0->22", "Diary click was ignored")
+            driver.wait(label="Diary", role="title_bar")
             selected = settings(profile)
             assert selected["enabled_apps"] == "30", "Opening Diary changed unrelated app choices"
             receipts[profile.name] = dict(selection=int(selected["enabled_apps"]), order=order)
@@ -156,12 +172,22 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
     # prompt must also appear and work above the Apps overlay.
     for scene in ("close_prompt", "close_prompt_over_apps"):
         with application(Path(temporary) / scene, "quit-" + scene, "--screenshot",
-                         str(OUTPUT / (scene + ".png")), "--screenshot-scene", scene,
+                         str(Path(temporary) / (scene + ".png")), "--screenshot-scene", scene,
                          "--screenshot-width", "900", "--screenshot-height", "720",
                          preview=True) as (app, window, log):
-            command("import", "-window", window, str(OUTPUT / (scene + "-before.png")))
+            driver.wait(contains="keep Inner Breeze running")
+            if scene == "close_prompt_over_apps":
+                assert driver.find(label="More apps", visible=True), "The Apps overlay is not open"
+            quit_button = driver.wait(label="Quit", role="button")
             started = time.monotonic()
-            click(window, 526, 414)
+            try:
+                pressed = driver.press(label="Quit", role="button")
+            except UiDriverError:
+                # The app may exit before it answers the press.
+                assert app.poll() is not None, "Pressing Quit failed\n" + log.read_text()
+            else:
+                assert pressed["hit"] == quit_button["index"], \
+                    f"{scene}: the press reached widget {pressed['hit']}, not Quit, so the prompt is covered"
             try:
                 status = app.wait(timeout=1)
             except subprocess.TimeoutExpired:
