@@ -1593,14 +1593,14 @@ storage-thread-buffer-zi-test: $(ZI2C_BIN)
 test: storage-thread-buffer-zi-test
 
 .PHONY: sqlite-text-zi-test
-sqlite-text-zi-test: $(ZI2C_BIN)
+sqlite-text-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/sqlite_text_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: sqlite-text-zi-test
 
 .PHONY: sql-transaction-zi-test
-sql-transaction-zi-test: $(ZI2C_BIN)
+sql-transaction-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/sql_transaction_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
@@ -1975,7 +1975,7 @@ sync-safety-test: $(ZI2C_BIN)
 test: sync-safety-test
 
 .PHONY: account-activity-test
-account-activity-test: $(ZIRAN_BIN) $(LIBOQS_A)
+account-activity-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/account_activity_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: account-activity-test
@@ -3077,7 +3077,7 @@ $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(WEB_BUNDLE_RUNTIME)
 $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
 
 .PHONY: cells-test
-cells-test: cells $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A)
+cells-test: cells $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	sh tests/cells_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: cells-navigation-test
@@ -3306,15 +3306,15 @@ telegram-host-test:
 	@sh tests/telegram_host_test.sh
 
 .PHONY: lumi-telegram-input-test
-lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lumi_telegram_input_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lumi-telegram-input-test
 
-telegram-entry-protocol-test: $(ZIRAN_BIN) $(LIBOQS_A)
+telegram-entry-protocol-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/telegram_entry_protocol_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-telegram-account-flow-test: $(ZIRAN_BIN) $(LIBOQS_A)
+telegram-account-flow-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/telegram_account_flow_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 telegram-account-ui-test: $(ZIRAN_BIN)
@@ -3323,16 +3323,16 @@ telegram-account-ui-test: $(ZIRAN_BIN)
 settings-telegram-ui-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@sh tests/settings_telegram_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
 
-lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A)
+lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/lumi_authorization_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-delegate-account-test: $(ZIRAN_BIN) $(LIBOQS_A)
+delegate-account-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/delegate_account_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-storage-delegate-test: $(ZIRAN_BIN) $(LIBOQS_A)
+storage-delegate-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/storage_delegate_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A)
+lumi-delegate-scope-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/lumi_delegate_scope_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 telegram-authorization-test: telegram-bridge-test telegram-host-test telegram-entry-protocol-test telegram-account-flow-test telegram-account-ui-test settings-telegram-ui-test lumi-authorization-test delegate-account-test storage-delegate-test lumi-delegate-scope-test
@@ -3346,7 +3346,7 @@ android-geometry-probe-test:
 test: android-geometry-probe-test
 
 .PHONY: lumi-feedback-delivery-test
-lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lumi-feedback-delivery-test
@@ -3354,13 +3354,13 @@ test: lumi-feedback-delivery-test
 # Offline and before the agreement Lumi sends nothing; an own provider gets
 # its key only in its Authorization header.
 .PHONY: lumi-connection-test
-lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lumi_connection_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lumi-connection-test
 
 .PHONY: diary-spelling-test diary-history-test diary-markdown-test
-diary-spelling-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+diary-spelling-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/diary_spelling_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 diary-history-test: $(ZI2C_BIN)
@@ -3382,13 +3382,13 @@ device-info-test: $(ZIRAN_BIN)
 test: device-info-test
 
 .PHONY: dew-test
-dew-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+dew-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/dew_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: dew-test
 
 .PHONY: lists-sharing-test
-lists-sharing-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
+lists-sharing-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lists_sharing_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: lists-sharing-test
