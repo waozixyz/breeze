@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.1] - 2026-10-17
+
+- Maintenance release for Inner Breeze 2.1.35.
+
 ## [1.5.0] - 2026-10-15
 ### Added
 - Lumi asks before starting a practice that isn't on your device: download it, or unlock it with Dew when it's paid. Yes opens Manage practices at that practice.

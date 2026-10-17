@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.1] - 2026-10-17
+
+- Maintenance release for Inner Breeze 2.1.35.
+
 ## [1.1.0] - 2026-10-15
 
 - Share selected lists with existing friends and edit accepted lists together.

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.1] - 2026-10-17
+
+- Maintenance release for Inner Breeze 2.1.35.
+
 ## [1.2.0] - 2026-10-15
 
 - Practise the 24-form Tai Chi course with saved progress, character choices and audio controls.
