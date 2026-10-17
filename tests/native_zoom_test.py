@@ -83,8 +83,18 @@ def zoomed_tree(tenths, window_width):
 
 
 def content_width(screen, nodes, window_width):
-    """Width in window pixels of everything the screen lays out."""
-    shown = [node for node in nodes if node["visible"] and node["kind"] != "screen"]
+    """Width in window pixels of everything the screen lays out.
+
+    Canvas fills are boxes across the whole screen at every scale (to within
+    a unit, as the view's width is whole); they are background, not laid-out
+    content.
+    """
+    def background(node):
+        return (node["kind"] == "box" and node["x"] <= screen["x"] + 1 and
+                node["x"] + node["width"] >= screen["x"] + screen["width"] - 1)
+
+    shown = [node for node in nodes
+             if node["visible"] and node["kind"] != "screen" and not background(node)]
     assert shown, "nothing was laid out"
     left = min(node["visible_x"] for node in shown)
     right = max(node["visible_x"] + node["visible_width"] for node in shown)
