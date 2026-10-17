@@ -7,7 +7,7 @@
 - More apps lists your node's apps without an app update.
 - Settings › About › Show beta apps lists apps in testing.
 - Photos (beta): your photos by day on all devices, encrypted and kept once.
-- Diary is Markdown with photos inline, kept in your photo library; each day shows its photos below.
+- Diary is Markdown with photos inline, kept in your photo library; each day has a photo gallery.
 
 ### Changed
 - Photos go to every node with photo upload on.

@@ -32,6 +32,8 @@ using TextAlign;
 using TextWrap;
 using ButtonTone;
 using ButtonEmphasis;
+using IconPlacement;
+using ContentAlignment;
 host_api :: #system_library "host_api";
 ReadDiaryUiHost :: () -> DiaryUiFrame #foreign host_api;
 WriteDiaryUiHost :: (frame: DiaryUiFrame) #foreign host_api;
@@ -54,6 +56,9 @@ DIARY_PHOTO_ICON :: "S1.6rr:M3 5H21V19H3ZM3 16L8 11L13 16L16 13L21 18M17.5 8.5C1
 DIARY_UNDO_ICON :: "S1.8rr:M9 14L4 9L9 4M4 9H14C17.31 9 20 11.69 20 15C20 18.31 17.31 21 14 21H11"
 DIARY_REDO_ICON :: "S1.8rr:M15 14L20 9L15 4M20 9H10C6.69 9 4 11.69 4 15C4 18.31 6.69 21 10 21H13"
 DIARY_SPELLING_ICON :: "S2rr:M3 14L7.5 3L12 14M4.8 10H10.2M12 17L15.5 20.5L21.5 13"
+// The gallery row's chevron points down while the photos are hidden.
+DIARY_SHOW_ICON :: "S1.8rr:M6 9L12 15L18 9"
+DIARY_HIDE_ICON :: "S1.8rr:M6 15L12 9L18 15"
 
 DiaryObserve :: () -> DiaryUiFrame {
     return ReadDiaryUiHost()
@@ -134,11 +139,13 @@ DiaryEditorStyle :: (area: *TextAreaProps, text: string, editing: bool) {
     area.blocks = editor_blocks[:editor_preview.photo_count]
 }
 
-// Under the entry, every photo of the day in one row that scrolls sideways:
-// the media library's photos of that day, newest first, then the entry's
-// other photos in its order. A tap puts a photo's embed at the caret.
+// Under the entry, a Show gallery row opens every photo of the day in one
+// row that scrolls sideways: the media library's photos of that day, newest
+// first, then the entry's other photos in its order. A tap puts a photo's
+// embed at the caret. The gallery starts closed whenever a day opens.
 DIARY_DAY_PHOTOS :: 64
 DIARY_TILE :: 88
+DIARY_GALLERY_ROW :: 44
 
 DiaryDayPhoto :: struct {
     // What an embed of the photo links to.
@@ -190,12 +197,25 @@ DiaryDayPhotos :: (text: string) {
     }
 }
 
-// The room the photos take under the entry, or 0 on a day without photos.
+// The open gallery remembers its day, so another day opens with it closed.
+DiaryDayKey :: () -> s32 {
+    return state.year * 10000 + state.month * 100 + state.day
+}
+
+DiaryGalleryOpen :: () -> bool {
+    return frame.photos_open_day != 0 && frame.photos_open_day == DiaryDayKey()
+}
+
+// The room the gallery takes under the entry, or 0 on a day without photos.
 DiaryDayPhotosHeight :: () -> s32 {
     if day_photo_count == 0 {
         return 0
     }
-    return Scale(DIARY_TILE) + Scale(12)
+    height := Scale(12) + Scale(DIARY_GALLERY_ROW)
+    if DiaryGalleryOpen() {
+        height += Scale(8) + Scale(DIARY_TILE)
+    }
+    return height
 }
 
 // Puts a photo's embed on its own line at the caret: one edit, saved at once.
@@ -208,6 +228,29 @@ DiaryInsertPhoto :: (destination: string, name: string) {
     state.replacement = edit.replacement
     pending = true
     frame.save_at = frame.now
+}
+
+// The gallery row, a dropdown as Habits' inactive habits are, and under it
+// the open gallery.
+DiaryDayGallery :: (left: float32, top: float32, width: float32, editable: bool) {
+    open := DiaryGalleryOpen()
+    row := cast(float32)Scale(DIARY_GALLERY_ROW)
+    label := DiaryLocaleHost("diary_show_gallery")
+    if open {
+        label = DiaryLocaleHost("diary_hide_gallery")
+    }
+    if Button(frame.session, ButtonProps.{.id = 29017, .bounds = Rectangle.{left, top, width, row},
+            .label = label, .icon_shape = ifx open then DIARY_HIDE_ICON else DIARY_SHOW_ICON,
+            .icon_placement = cast(IconPlacement)IconPlacementTrailing,
+            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        frame.photos_open_day = ifx open then 0 else DiaryDayKey()
+        frame.photos_scroll = 0
+    }
+    if open {
+        DiaryDayPhotoStrip(left, top + row + cast(float32)Scale(8), width, editable)
+    }
 }
 
 DiaryDayPhotoStrip :: (left: float32, top: float32, width: float32, editable: bool) {
@@ -319,6 +362,7 @@ DiaryAction :: ( id: s32, label: string, bounds: Rectangle, enabled: bool = true
         pending = true
         frame.scroll = 0
         frame.photos_scroll = 0
+        frame.photos_open_day = 0
     }
 }
 
@@ -498,7 +542,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
                 .text = DiaryLocaleHost(status), .font = frame.font})
     }
     if photos_room > 0 {
-        DiaryDayPhotoStrip(left, area.bounds.y + area.bounds.height +
+        DiaryDayGallery(left, area.bounds.y + area.bounds.height +
             cast(float32)(notice_room + Scale(12)), width, editable && !frame.spelling_busy)
     }
     End(frame.session)

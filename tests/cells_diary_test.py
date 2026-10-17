@@ -12,6 +12,8 @@ import time
 
 from PIL import Image
 
+from ui_driver import UiDriver
+
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "build/cells-diary-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -20,6 +22,8 @@ ENV = os.environ.copy()
 ENV.update(APP_NO_TRAY="1", YUE_DESKTOP_RECOVERY="0")
 ENV.pop("INBE_DIARY_IMPORT", None)
 ENV.pop("HARMONY_DATA_ROOT", None)
+# Widgets are found and keys typed through Kryon's test driver.
+driver = UiDriver(OUTPUT / "driver")
 
 
 def command(*args):
@@ -58,22 +62,39 @@ def purple_pixels(path):
                        abs(color[2] - 176) < 24)
 
 
+def ink_bottom(path, box):
+    """The lowest row in box that differs from the box's background."""
+    left, top, right, bottom = box
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+    pixels = rgb.load()
+    background = pixels[right - 2, bottom - 2]
+    lowest = -1
+    for y in range(top, bottom):
+        for x in range(left, right):
+            if sum(abs(a - b) for a, b in zip(pixels[x, y], background)) > 90:
+                lowest = y
+                break
+    return lowest
+
+
 def wait_for_text(entry, matches, message):
     deadline = time.monotonic() + 10
     while not matches(json.loads(entry.read_text())["text"]):
-        assert time.monotonic() < deadline, message
+        assert time.monotonic() < deadline, f"{message}: {json.loads(entry.read_text())['text']!r}"
         time.sleep(0.1)
 
 
 @contextlib.contextmanager
 def application(profile, label, import_source=None, size=(900, 720)):
     with (OUTPUT / f"{label}.log").open("w") as log:
-        environment = ENV | {"APP_DATA_ROOT": str(profile)}
+        environment = ENV | {"APP_DATA_ROOT": str(profile)} | driver.environment()
         if import_source is not None:
             environment["INBE_DIARY_IMPORT"] = str(import_source)
         app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/cells/diary.zib")],
                                cwd=ROOT, env=environment,
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app)
         try:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -168,11 +189,29 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             "The photo was not drawn while its line was edited"
         # Away from that line its Markdown hides and the photo stays under
         # the text.
-        command("xdotool", "key", "--clearmodifiers", "ctrl+End")
+        driver.key("down")
         time.sleep(0.5)
         capture(window, "text-beside-photo")
         assert len(purple_pixels(OUTPUT / "text-beside-photo.png")) > 20000, \
             "The photo was not drawn under the text typed after it"
+        # While typing at the end of a line with an empty line under it, one
+        # caret shows, on the typed line: the frame that takes a key never
+        # draws a second one at the start of the line below.
+        driver.key("enter")
+        driver.key("up")
+        area = driver.find(role="text_area")[0]
+        assert area["value"][area["cursor"] - 1:area["cursor"] + 1] == "\n\n", "The caret is not on the empty line"
+        box = (area["x"] + 6, area["y"] + 6, area["x"] + area["width"] - 6, area["y"] + area["height"] - 6)
+        typed_rows = []
+        for index, letter in enumerate("Typed"):
+            driver.type(letter)
+            capture(window, f"typing-{index}")
+            typed_rows.append(ink_bottom(OUTPUT / f"typing-{index}.png", box))
+        wait_for_text(entry, lambda text: text.endswith(") right after\nTyped\n"), "Typing under the photo was not saved")
+        time.sleep(0.5)
+        capture(window, "typed")
+        settled = ink_bottom(OUTPUT / "typed.png", box)
+        assert max(typed_rows) <= settled + 2, f"A second caret showed under the typed line: {typed_rows} > {settled}"
         saved = json.loads(entry.read_text())
         tap(window, 288, 86)  # Calendar.
         capture(window, "calendar")
@@ -245,13 +284,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             time.sleep(0.5)
             capture(window, f"sage-{dark}-inline")
             red = red_pixels(OUTPUT / f"sage-{dark}-inline.png")
-            # The photo inside the entry is far larger than its tile below.
             assert len(red) > 20000, "Photo not drawn inside the entry at phone scale"
-            bottom = max(y for x, y in red)
-            tile = [(x, y) for x, y in red if y > bottom - 60]
-            assert 1000 < len(tile) < 20000, "The day's photos are not shown under the entry"
             assert phone_entry.read_text() == stored, "Viewing the day rewrote its entry"
-            tap(window, sum(x for x, y in tile) // len(tile), sum(y for x, y in tile) // len(tile))
+            # The day's gallery opens from its row, closed when the day opens.
+            driver.wait(label="Show gallery")
+            assert not driver.find(label="A photo", role="image"), "The gallery was open when the day opened"
+            driver.press(label="Show gallery")
+            driver.wait(label="Hide gallery")
+            driver.wait(label="A photo", role="image")
+            driver.press(label="A photo")
             deadline = time.monotonic() + 5
             while json.loads(phone_entry.read_text())["text"].count("](diary:photo-local.bin)") != 2:
                 assert time.monotonic() < deadline, "A tapped photo was not embedded in the entry"
@@ -259,9 +300,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             saved_photo = json.loads(phone_entry.read_text())
             assert saved_photo["text"].startswith(original["text"] + "\n\n![A photo](diary:photo-local.bin)")
             assert [row["file"] for row in saved_photo["photos"]] == files
+            # Undo takes the tapped photo out again; redo puts it back.
+            driver.press(label="Undo")
+            wait_for_text(phone_entry, lambda text: text.count("](diary:photo-local.bin)") == 1, "Undo kept the tapped photo")
+            driver.press(label="Redo")
+            wait_for_text(phone_entry, lambda text: text == saved_photo["text"], "Redo did not restore the tapped photo")
+            # Another day opens with its gallery closed, and so does this one
+            # when it opens again.
+            driver.press(label="Hide gallery")
+            driver.wait(label="Show gallery")
+            driver.press(label="Show gallery")
+            driver.press(label="‹")
+            driver.press(label="›")
+            driver.wait(label="Show gallery")
+            assert not driver.find(label="A photo", role="image"), "The gallery stayed open on another day"
         with application(phone, f"sage-{dark}-restart", size=(390, 844)):
             assert json.loads(phone_entry.read_text()) == saved_photo
             assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
-    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, calendar, restart and day navigation passed")
+    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, one caret while typing, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
-    print("Diary photos: older photo lists inside the entry, a missing file, no writes on viewing, a tapped day photo embedded, and restart at phone width in light/dark sage passed")
+    print("Diary photos: older photo lists inside the entry, a missing file, no writes on viewing, the gallery dropdown closed on every day it opens, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")
