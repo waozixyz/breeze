@@ -67,7 +67,7 @@ GetTime :: () -> float64 #foreign c;
 #import "text_props"
 #import, file "../../app/exercise_types.zi";
 #import, file "../../app/metrics.zi";
-#import, file "../../app/draw.zi";
+#import, file "../../app/color.zi";
 #import, file "../../app/current_app.zi";
 #import "button_widget"
 #import "text_widget"
@@ -76,6 +76,10 @@ GetTime :: () -> float64 #foreign c;
 #import "paint_queue"
 #import "session"
 #import "button_props"
+#import "box_props"
+#import "box_widget"
+#import "shape_props"
+#import "shape_widget"
 #import "toolbar_props"
 
 
@@ -821,11 +825,6 @@ draw_session_counter :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         })
 }
 
-color_with_alpha :: (color: Color, alpha: u8) -> Color {
-    color.a = alpha
-    return color
-}
-
 session_circle_progress :: (app: *InnerBreeze, total_ticks: *s32, progress: *float32,
     countdown: *s32) {
     total: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
@@ -928,29 +927,42 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
         return
     }
 
-    band_bg = color_with_alpha(contrast, 30)
-    band_fill = color_with_alpha(contrast, 72)
-    tick_pending = color_with_alpha(contrast, 96)
-    tick_done = color_with_alpha(contrast, 235)
-    ring = color_with_alpha(contrast, 175)
+    band_bg = color_with_alpha(contrast, 30.0 / 255.0)
+    band_fill = color_with_alpha(contrast, 72.0 / 255.0)
+    tick_pending = color_with_alpha(contrast, 96.0 / 255.0)
+    tick_done = color_with_alpha(contrast, 235.0 / 255.0)
+    ring = color_with_alpha(contrast, 175.0 / 255.0)
 
-    DrawCircleV(Vector2.{cast(float32)center_x, cast(float32)center_y}, radius, circle)
-    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius, outer_radius,
-        0.0f, 360.0f, 128, band_bg)
+    session := app.ui.session
+    center := Vector2.{cast(float32)center_x, cast(float32)center_y}
+    Circle(session, CircleProps.{.center = center, .radius = radius,
+            .fill = circle})
+    Ring(session, RingProps.{.center = center,
+            .inner_radius = inner_radius, .outer_radius = outer_radius,
+            .start_angle = 0.0f, .end_angle = 360.0f, .color = band_bg})
     if countdown != 0 {
         if progress < 1.0f {
-            DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius,
-                outer_radius, -450.0f, -90.0f - 360.0f * progress,
-                128, band_fill)
+            Ring(session, RingProps.{.center = center,
+                    .inner_radius = inner_radius, .outer_radius = outer_radius,
+                    .start_angle = -450.0f,
+                    .end_angle = -90.0f - 360.0f * progress,
+                    .color = band_fill})
         }
     } else if progress > 0.0f {
-        DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius, outer_radius,
-            -90.0f, -90.0f + 360.0f * progress, 128, band_fill)
+        Ring(session, RingProps.{.center = center,
+                .inner_radius = inner_radius, .outer_radius = outer_radius,
+                .start_angle = -90.0f,
+                .end_angle = -90.0f + 360.0f * progress,
+                .color = band_fill})
     }
-    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, inner_radius - 0.75f,
-        inner_radius + 0.75f, 0.0f, 360.0f, 128, ring)
-    DrawRing(Vector2.{cast(float32)center_x, cast(float32)center_y}, outer_radius - 0.75f,
-        outer_radius + 0.75f, 0.0f, 360.0f, 128, ring)
+    Ring(session, RingProps.{.center = center,
+            .inner_radius = inner_radius - 0.75f,
+            .outer_radius = inner_radius + 0.75f,
+            .start_angle = 0.0f, .end_angle = 360.0f, .color = ring})
+    Ring(session, RingProps.{.center = center,
+            .inner_radius = outer_radius - 0.75f,
+            .outer_radius = outer_radius + 0.75f,
+            .start_angle = 0.0f, .end_angle = 360.0f, .color = ring})
 
     {
         i: s32 = 0
@@ -970,8 +982,9 @@ draw_session_progress_circle :: (app: *InnerBreeze, center_x: s32, center_y: s32
             start: Vector2 = Vector2.{cast(float32)center_x + c * inner_radius, cast(float32)center_y + s * inner_radius}
             end: Vector2 = Vector2.{cast(float32)center_x + c * outer_radius, cast(float32)center_y + s * outer_radius}
 
-            DrawLineEx(start, end, cast(float32)thickness,
-                ifx (tick_colored) then (tick_done) else (tick_pending))
+            Line(session, LineProps.{.start = start, .end = end,
+                    .thickness = cast(float32)thickness,
+                    .color = ifx (tick_colored) then (tick_done) else (tick_pending)})
             i += 1
         }
     }
@@ -1372,15 +1385,19 @@ session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32,
             AppFormatS32(ifx (rounds > 0) then (cast(s32)(total / rounds)) else (0), seconds_text[:])
             AppCopyText(AppTextFromCString(*seconds_text[0], 16), lines[2][:])
         }
-        DrawRectangle(box_x, box_y, box_w, AppScale(29) * 3,
-            DarkenColor(StyleTokenColor("canvas"), 6))
+        Box(CurrentApp().ui.session, BoxProps.{
+                .bounds = Rectangle.{cast(float32)box_x, cast(float32)box_y,
+                    cast(float32)box_w, cast(float32)(AppScale(29) * 3)},
+                .fill = DarkenColor(StyleTokenColor("canvas"), 6)})
         {
             i: s32 = 0
             while i < 3 {
                 info_y := box_y + i * AppScale(29)
                 if i > 0 {
-                    DrawLine(box_x, info_y, box_x + box_w, info_y,
-                        DarkenColor(StyleTokenColor("canvas"), 30))
+                    Line(CurrentApp().ui.session, LineProps.{
+                            .start = Vector2.{cast(float32)box_x, cast(float32)info_y},
+                            .end = Vector2.{cast(float32)(box_x + box_w), cast(float32)info_y},
+                            .color = DarkenColor(StyleTokenColor("canvas"), 30)})
                 }
                 Text(CurrentApp().ui.session, TextProps.{
                         .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
@@ -1404,8 +1421,10 @@ session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32,
             row_font: s32 = AppFontSize()
             FormatTwoNumberTemplate(LocaleText("round_result_label"),
                 i + 1, round_times[i], row[:])
-            DrawRectangle(box_x, row_y - 1, box_w, row_h,
-                DarkenColor(StyleTokenColor("canvas"), 4))
+            Box(CurrentApp().ui.session, BoxProps.{
+                    .bounds = Rectangle.{cast(float32)box_x, cast(float32)(row_y - 1),
+                        cast(float32)box_w, cast(float32)row_h},
+                    .fill = DarkenColor(StyleTokenColor("canvas"), 4)})
             Text(CurrentApp().ui.session, TextProps.{
                     .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
                         cast(float32)(row_y - 1), cast(float32)(box_w - AppScale(20)),

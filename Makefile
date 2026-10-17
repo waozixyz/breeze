@@ -2071,11 +2071,6 @@ modal-rules-test: build-laws $(ZI2C_BIN)
 
 test: modal-rules-test
 
-.PHONY: direct-draw-plan-test
-test: direct-draw-plan-test
-direct-draw-plan-test: $(ZI2C_BIN)
-	@sh tests/direct_draw_plan_test.sh $(ZIRAN_BUILD_DIR)/bin
-
 .PHONY: elist-screen-test
 test: elist-screen-test
 elist-screen-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a

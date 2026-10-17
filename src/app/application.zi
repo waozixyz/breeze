@@ -136,9 +136,9 @@ PackageNow :: () -> s64 #foreign c "now_seconds";
 #import, file "../practices/meditation/meditation_music.zi";
 #import, file "metrics.zi";
 #import, file "dpi_state.zi";
-#import, file "draw.zi";
-#import, file "direct_draw_plan.zi";
 #import, file "current_app.zi";
+#import "box_props"
+#import "box_widget"
 #import "button_widget"
 #import "image_widget"
 #import "text_widget"
@@ -1435,11 +1435,10 @@ app_last_frame_status: s32;
 app_finish_frame :: (app: *InnerBreeze) {
     status: s32
     paint_unchanged: bool = false
-    // The previous frame is presented again only when the direct draws
-    // match too; otherwise the frame is repainted, widgets included.
-    direct_unchanged := DirectDrawFrameFinish()
+    // Everything the frame draws is widget paint, so the previous frame is
+    // presented again whenever that paint matches it.
     if app.ui.retained_target_active {
-        result := EndFrameRetained(app.ui.session, direct_unchanged)
+        result := EndFrameRetained(app.ui.session, true)
         status = cast(s32)result.status
         paint_unchanged = result.paint_unchanged
     } else {
@@ -1453,8 +1452,7 @@ app_finish_frame :: (app: *InnerBreeze) {
             TreeFrameErrorKind(app.ui.session))
     }
     app_last_frame_status = status
-    app.ui.retained_frame_unchanged = status == 0 && paint_unchanged &&
-    direct_unchanged
+    app.ui.retained_frame_unchanged = status == 0 && paint_unchanged
 }
 
 #program_export
@@ -1566,8 +1564,6 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     app_device_preferences_update(app)
     update_check_poll()
     app_refresh_theme(app)
-    DirectDrawFrameBegin(viewport)
-    DrawRectangleRec(viewport, StyleTokenColor("canvas"))
     content_w = full_width - rail_width
     if content_w < 1 {
         content_w = 1
@@ -1603,9 +1599,6 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     #if #defined(ANDROID_BUILD) {
         TextMenuSetTransform(render_scale, app.camera.offset.x, app.camera.offset.y)
     }
-    if PreviewMode() == 0 {
-        DirectDrawTransform(app.camera)
-    }
     // Retained hit testing and widget bounds use the same logical coordinates
     // as the camera. A left navigation rail occupies negative content x.
     frame_origin := Vector2.{0.0, 0.0}
@@ -1619,8 +1612,21 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         logical_frame) != 0 {
         return
     }
+    // The canvas under the whole viewport comes first, under every widget.
+    // The camera maps the logical frame onto the viewport; a preview draws
+    // without the camera.
+    canvas_bounds := logical_frame
     if PreviewMode() != 0 {
-        DrawRectangle(0, 0, view_width, view_height, StyleTokenColor("canvas"))
+        canvas_bounds = viewport
+    }
+    Box(app.ui.session, BoxProps.{.bounds = canvas_bounds,
+            .fill = StyleTokenColor("canvas")})
+    content_canvas := BoxProps.{
+        .bounds = Rectangle.{0.0, 0.0, cast(float32)view_width,
+            cast(float32)view_height},
+        .fill = StyleTokenColor("canvas")}
+    if PreviewMode() != 0 {
+        Box(app.ui.session, content_canvas)
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
@@ -1632,7 +1638,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
             full_width, full_height)
         BeginMode2D(app.camera)
-        DrawRectangle(0, 0, view_width, view_height, StyleTokenColor("canvas"))
+        Box(app.ui.session, content_canvas)
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
@@ -1764,8 +1770,6 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
         camera.zoom = scale
         camera.offset = Vector2.{viewport.x, viewport.y}
         AppMetricsConfigure(1.0)
-        DirectDrawFrameBegin(viewport)
-        DrawRectangleRec(viewport, StyleTokenColor("surface"))
         // A practice that finishes here shows that it has finished and its
         // results instead of its last picture, also while its screen waits
         // to be extended.
@@ -1779,6 +1783,9 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
         }
         if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/picture-window"), bounds) == 0 {
             BeginMode2D(camera)
+            // The camera maps the bounds onto the whole window.
+            Box(app.ui.session, BoxProps.{.bounds = bounds,
+                    .fill = StyleTokenColor("surface")})
             if finished {
                 practice_draw_results_window(app, bounds, result)
             } else {

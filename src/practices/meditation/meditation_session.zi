@@ -37,7 +37,7 @@ app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32,
 #import "text_props"
 #import, file "../../app/exercise_types.zi";
 #import, file "../../app/metrics.zi";
-#import, file "../../app/draw.zi";
+#import, file "../../app/color.zi";
 #import, file "../../app/current_app.zi";
 #import, file "../practice_window.zi";
 #import "button_widget"
@@ -48,6 +48,8 @@ app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32,
 #import "button_props"
 #import "modal_props"
 #import "modal_widget"
+#import "shape_props"
+#import "shape_widget"
 
 using SessionExitModalResult;
 using ModalType;
@@ -505,7 +507,7 @@ meditation_window_result :: (app: *InnerBreeze, result: *SessionResult) -> s32 {
 meditation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
     // The screen's circle is 86 units inside a halo 20 units wider.
     circle := PracticeWindowCircle(CurrentApp().ui.session, picture, 0.0, 86.0 / 106.0,
-        Fade(StyleTokenColor("accent"), 0.24f))
+        color_with_alpha(StyleTokenColor("accent"), 0.24f))
     time_text: [32]u8
     format_time(time_text[:], app.meditation.remaining_seconds)
     PracticeWindowLabel(app, circle, AppTextFromCString(*time_text[0], 32))
@@ -520,6 +522,18 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     circle_radius := AppScale(86)
     title_h := PracticeTitleBarHeight()
 
+    // On a short screen the circle reaches under the title bar, so it comes
+    // first. The question asked on leaving shows the page without it.
+    if app.modal.active == 0 ||
+    app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        center := Vector2.{cast(float32)center_x, cast(float32)center_y}
+        Circle(app.ui.session, CircleProps.{.center = center,
+                .radius = cast(float32)(circle_radius + AppScale(20)),
+                .fill = color_with_alpha(circle, 0.24f)})
+        Circle(app.ui.session, CircleProps.{.center = center,
+                .radius = cast(float32)circle_radius, .fill = circle})
+    }
+
     if PracticeTitleBar(app, LocaleText("meditation_title"), title_h) {
         meditation_request_exit(app)
         return
@@ -530,10 +544,6 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
 
     practice_draw_audio_controls(app)
-
-    DrawCircle(center_x, center_y, cast(float32)(circle_radius + AppScale(20)),
-        Fade(circle, 0.24f))
-    DrawCircle(center_x, center_y, cast(float32)circle_radius, circle)
 
     format_time(time_text[:], app.meditation.remaining_seconds)
     time_label := AppTextFromCString(*time_text[0], 32)

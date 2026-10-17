@@ -43,11 +43,13 @@ c3 :: #system_library "c";
 #import "control_props"
 #import "text_props"
 #import, file "../app/metrics.zi";
-#import, file "../app/draw.zi";
+#import, file "../app/color.zi";
 #import, file "../app/current_app.zi";
 #import "button_widget"
 #import "box_props"
 #import "box_widget"
+#import "shape_props"
+#import "shape_widget"
 #import "icon"
 #import "image_props"
 #import "image_widget"
@@ -322,13 +324,24 @@ profile_draw_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     }
 }
 
+// The corner radius that rounds off `roundness` of a box's shorter side.
+profile_corner_radius :: (roundness: float32, w: s32, h: s32) -> float32 {
+    shorter := w
+    if h < shorter {
+        shorter = h
+    }
+    return roundness * cast(float32)shorter * 0.5
+}
+
 profile_draw_metric_card :: (x: s32, w: s32, y: *s32, label: string,
     value: string) {
     h := AppScale(58)
     value_w := AppTextWidth(value, AppFontSize())
 
-    DrawRectangleRounded(Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h},
-        0.12f, 8, DarkenColor(StyleTokenColor("canvas"), 7))
+    Box(CurrentApp().ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h},
+            .fill = DarkenColor(StyleTokenColor("canvas"), 7),
+            .radius = profile_corner_radius(0.12, w, h)})
     Text(CurrentApp().ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y.* + AppScale(20)), 0, 0},
             .text = (label),
@@ -468,7 +481,7 @@ profile_draw_hub_route_divider :: (app: *InnerBreeze,
     PaintRoundedFill(app.ui.session, -1,
         Rectangle.{cast(float32)(x + AppScale(16)), cast(float32)y,
             cast(float32)(w - AppScale(32)), cast(float32)AppScale(1)},
-        0.0, 4, Fade(StyleTokenColor("text"), 0.10f))
+        0.0, 4, color_with_alpha(StyleTokenColor("text"), 0.10f))
 }
 
 profile_draw_hub_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
@@ -499,12 +512,17 @@ profile_draw_hub_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
             subtitle[:])
     }
 
-    DrawRectangleRounded(bounds, 0.14f, 12, DarkenColor(StyleTokenColor("canvas"), 8))
-    DrawRectangleGradientV(x, y.*, w, card_h,
-        Fade(StyleTokenColor("accent"), 0.32f),
-        Fade(StyleTokenColor("canvas"), 0.0f))
-    DrawRectangleRoundedLinesEx(bounds, 0.14f, 12, 1.0f,
-        DarkenColor(StyleTokenColor("accent"), 18))
+    radius := profile_corner_radius(0.14, w, card_h)
+    Box(app.ui.session, BoxProps.{.bounds = bounds,
+            .fill = DarkenColor(StyleTokenColor("canvas"), 8),
+            .radius = radius})
+    // The fade covers the whole rectangle, its corners too.
+    Box(app.ui.session, BoxProps.{.bounds = bounds,
+            .fill = color_with_alpha(StyleTokenColor("accent"), 0.32f),
+            .fill_bottom = color_with_alpha(StyleTokenColor("canvas"), 0.0f),
+            .has_fill_bottom = true,
+            .border = DarkenColor(StyleTokenColor("accent"), 18),
+            .radius = radius})
     profile_draw_avatar(app, avatar_x, avatar_y, avatar)
     profile_draw_fitted_text(AppTextFromCString(*title[0], 96),
         text_x, y.* + AppScale(34),
@@ -689,7 +707,10 @@ profile_draw_data_summary :: (x: s32, w: s32, y: *s32) {
 }
 
 profile_draw_divider :: (x: s32, w: s32, y: s32) {
-    DrawLine(x, y, x + w, y, DarkenColor(StyleTokenColor("canvas"), 28))
+    Line(CurrentApp().ui.session, LineProps.{
+            .start = Vector2.{cast(float32)x, cast(float32)y},
+            .end = Vector2.{cast(float32)(x + w), cast(float32)y},
+            .color = DarkenColor(StyleTokenColor("canvas"), 28)})
 }
 
 profile_tab_title :: (tab: s32) -> string {
@@ -717,9 +738,13 @@ profile_draw_tabs :: (app: *InnerBreeze, y: s32, h: s32) -> s32 {
     view_width: s32 = app.ui.view_width
     tab_w := view_width / PROFILE_TAB_COUNT
 
-    DrawRectangle(0, y, view_width, h, DarkenColor(StyleTokenColor("canvas"), 6))
-    DrawLine(0, y + h - 1, view_width, y + h - 1,
-        DarkenColor(StyleTokenColor("canvas"), 24))
+    Box(app.ui.session, BoxProps.{
+            .bounds = Rectangle.{0.0, cast(float32)y, cast(float32)view_width, cast(float32)h},
+            .fill = DarkenColor(StyleTokenColor("canvas"), 6)})
+    Line(app.ui.session, LineProps.{
+            .start = Vector2.{0.0, cast(float32)(y + h - 1)},
+            .end = Vector2.{cast(float32)view_width, cast(float32)(y + h - 1)},
+            .color = DarkenColor(StyleTokenColor("canvas"), 24)})
     {
         i: s32 = 0
         while i < PROFILE_TAB_COUNT {
@@ -727,6 +752,18 @@ profile_draw_tabs :: (app: *InnerBreeze, y: s32, h: s32) -> s32 {
             x := i * tab_w
             w := ifx (i == PROFILE_TAB_COUNT - 1) then (view_width - x) else (tab_w)
             selected := i == app.profile_tab
+            // The selected tab's underline lies under its button.
+            if selected {
+                line_w := w - AppScale(24)
+                if line_w < AppScale(24) {
+                    line_w = AppScale(24)
+                }
+                Box(app.ui.session, BoxProps.{
+                        .bounds = Rectangle.{cast(float32)(x + (w - line_w) / 2),
+                            cast(float32)(y + h - AppScale(2)),
+                            cast(float32)line_w, cast(float32)AppScale(2)},
+                        .fill = StyleTokenColor("text")})
+            }
             if Button(CurrentApp().ui.session, ButtonProps.{
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
                     .label = profile_tab_title(i),
@@ -734,14 +771,6 @@ profile_draw_tabs :: (app: *InnerBreeze, y: s32, h: s32) -> s32 {
                     .emphasis = cast(ButtonEmphasis)(ifx (selected) then (ButtonEmphasisSoft) else (ButtonEmphasisGhost)), .selected = selected
                 }) != 0 {
                 clicked = i
-            }
-            if selected {
-                line_w := w - AppScale(24)
-                if line_w < AppScale(24) {
-                    line_w = AppScale(24)
-                }
-                DrawRectangle(x + (w - line_w) / 2, y + h - AppScale(2),
-                    line_w, AppScale(2), StyleTokenColor("text"))
             }
 
             i += 1

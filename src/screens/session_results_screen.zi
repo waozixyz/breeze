@@ -16,7 +16,7 @@
 #import "text_props"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/metrics.zi";
-#import, file "../app/draw.zi";
+#import, file "../app/color.zi";
 #import, file "../app/locale.zi";
 #import, file "../storage/temporary_data.zi";
 #import, file "../app/text_buffers.zi";
@@ -28,6 +28,8 @@
 #import "button_props"
 #import "box_props"
 #import "box_widget"
+#import "shape_props"
+#import "shape_widget"
 #import "kss_parser"
 
 
@@ -186,10 +188,21 @@ session_result_text :: (label: string, x: s32, y: s32, w: s32, h: s32,
     })
 }
 
+// The corner radius that rounds off `roundness` of a box's shorter side.
+session_result_corner_radius :: (roundness: float32, w: s32, h: s32) -> float32 {
+    shorter := w
+    if h < shorter {
+        shorter = h
+    }
+    return roundness * cast(float32)shorter * 0.5
+}
+
 session_result_card :: (x: s32, y: s32, w: s32, h: s32) {
-    bounds := Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h }
-    DrawRectangleRounded(bounds, 0.12f, 10, StyleTokenColor("surface"))
-    DrawRectangleRoundedLinesEx(bounds, 0.12f, 10, 1.0f, StyleTokenColor("border"))
+    Box(CurrentApp().ui.session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
+            .fill = StyleTokenColor("surface"),
+            .border = StyleTokenColor("border"),
+            .radius = session_result_corner_radius(0.12, w, h)})
 }
 
 session_result_mood_picker :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
@@ -271,9 +284,10 @@ session_result_metrics :: (result: *SessionResult, x: s32, y: s32,
         cell_x := x + i * (cell_w + gap)
         actual_w := ifx (i == metric_count - 1) then (x + w - cell_x) else (cell_w)
         session_result_card(cell_x, y, actual_w, AppScale(78))
-        DrawLine(cell_x + AppScale(14), y + AppScale(12),
-                 cell_x + actual_w - AppScale(14), y + AppScale(12),
-                 Fade(session_result_accent(), ifx (i == 1) then (0.72f) else (0.34f)))
+        Line(CurrentApp().ui.session, LineProps.{
+                .start = Vector2.{cast(float32)(cell_x + AppScale(14)), cast(float32)(y + AppScale(12))},
+                .end = Vector2.{cast(float32)(cell_x + actual_w - AppScale(14)), cast(float32)(y + AppScale(12))},
+                .color = color_with_alpha(session_result_accent(), ifx (i == 1) then (0.72f) else (0.34f))})
         session_result_text(titles[i], cell_x + AppScale(5), y + AppScale(18),
                             actual_w - AppScale(10), AppScale(22),
                             AppFitFontSize(titles[i], actual_w - AppScale(12),
@@ -294,8 +308,28 @@ session_result_chart_height :: (result: *SessionResult) -> s32 {
     return ifx (result.round_count <= 1) then (AppScale(165)) else (AppScale(220))
 }
 
+// Where a round's point sits across the chart.
+session_result_chart_x :: (result: *SessionResult, index: s32, chart_x: s32,
+                           chart_w: s32) -> s32 {
+    if result.round_count > 1 {
+        return chart_x + index * chart_w / (result.round_count - 1)
+    }
+    return chart_x + chart_w / 2
+}
+
+// How high a round's point sits above the chart's baseline.
+session_result_chart_y :: (result: *SessionResult, index: s32, baseline: s32,
+                           chart_h: s32, scale_max: s32) -> s32 {
+    value := result.round_values[index]
+    if value < 0 {
+        value = 0
+    }
+    return baseline - value * chart_h / scale_max
+}
+
 session_result_chart :: (result: *SessionResult, x: s32, y: s32, w: s32,
                          best: s32) {
+    session := CurrentApp().ui.session
     chart_x := x + AppScale(34)
     chart_y := y + AppScale(72)
     chart_w := w - AppScale(68)
@@ -312,6 +346,21 @@ session_result_chart :: (result: *SessionResult, x: s32, y: s32, w: s32,
         label_step = 1
     }
     session_result_card(x, y, w, session_result_chart_height(result))
+    // A single round's glow reaches under the title, so it comes first.
+    if result.round_count <= 1 {
+        glow_center := Vector2.{cast(float32)(x + w / 2),
+            cast(float32)(y + AppScale(91))}
+        Circle(session, CircleProps.{.center = glow_center,
+                .radius = cast(float32)AppScale(62),
+                .fill = color_with_alpha(accent, 0.18f),
+                .edge = color_with_alpha(StyleTokenColor("surface"), 0.0f),
+                .has_edge = true})
+        Ring(session, RingProps.{.center = glow_center,
+                .inner_radius = cast(float32)AppScale(46),
+                .outer_radius = cast(float32)AppScale(48),
+                .start_angle = 0.0f, .end_angle = 360.0f,
+                .color = color_with_alpha(accent, 0.70f)})
+    }
     session_result_text(LocaleText("round_times_title"),
                         x + AppScale(18), y + AppScale(10), w - AppScale(36),
                         AppScale(32), AppScale(18), cast(TextAlign)TextAlignStart)
@@ -331,14 +380,6 @@ session_result_chart :: (result: *SessionResult, x: s32, y: s32, w: s32,
             session_result_format_number("results_rounds", 0,
                                          detail_label[:])
         }
-        DrawCircleGradient(Vector2.{cast(float32)(x + w / 2),
-                           cast(float32)(y + AppScale(91))},
-                           cast(float32)AppScale(62), Fade(accent, 0.18f),
-                           Fade(StyleTokenColor("surface"), 0.0f))
-        DrawRing(Vector2.{cast(float32)(x + w / 2),
-                  cast(float32)(y + AppScale(91))},
-                 cast(float32)AppScale(46), cast(float32)AppScale(48),
-                 0.0f, 360.0f, 72, Fade(accent, 0.70f))
         session_result_text(AppTextFromCString(*value_label[0], 32), x + AppScale(45), y + AppScale(57),
                             w - AppScale(90), AppScale(55), AppScale(38),
                             cast(TextAlign)TextAlignCenter)
@@ -346,51 +387,60 @@ session_result_chart :: (result: *SessionResult, x: s32, y: s32, w: s32,
                             w - AppScale(40), AppScale(25), AppScale(14),
                             cast(TextAlign)TextAlignCenter)
         return
-}
+    }
     {
         row: s32 = 0
         while row < 3 {
             guide_y := chart_y + row * chart_h / 2
-            DrawLine(chart_x, guide_y, chart_x + chart_w, guide_y,
-                     Fade(StyleTokenColor("border"), 0.55f))
+            Line(session, LineProps.{
+                    .start = Vector2.{cast(float32)chart_x, cast(float32)guide_y},
+                    .end = Vector2.{cast(float32)(chart_x + chart_w), cast(float32)guide_y},
+                    .color = color_with_alpha(StyleTokenColor("border"), 0.55f)})
             row += 1
+        }
+
+    }
+    // The lines and points come before every label, so the labels stay
+    // above the lines that reach them.
+    {
+        i: s32 = 0
+        while i < result.round_count {
+            point_x := session_result_chart_x(result, i, chart_x, chart_w)
+            point_y := session_result_chart_y(result, i, baseline, chart_h,
+                scale_max)
+            point := Vector2.{cast(float32)point_x, cast(float32)point_y}
+            Line(session, LineProps.{.start = point,
+                    .end = Vector2.{cast(float32)point_x, cast(float32)baseline},
+                    .color = color_with_alpha(accent, 0.18f)})
+            if i > 0 {
+                previous_x := session_result_chart_x(result, i - 1, chart_x,
+                    chart_w)
+                previous_y := session_result_chart_y(result, i - 1, baseline,
+                    chart_h, scale_max)
+                Line(session, LineProps.{
+                        .start = Vector2.{cast(float32)previous_x, cast(float32)previous_y},
+                        .end = point,
+                        .thickness = cast(float32)AppScale(3),
+                        .color = accent})
+            }
+            Circle(session, CircleProps.{.center = point,
+                    .radius = cast(float32)AppScale(5),
+                    .fill = StyleTokenColor("text")})
+            i += 1
         }
 
     }
     {
         i: s32 = 0
         while i < result.round_count {
-            value := result.round_values[i]
-            point_x := chart_x + (ifx (result.round_count > 1) then (i * chart_w / (result.round_count - 1)) else (chart_w / 2))
-            point_y: s32
-            if value < 0 {
-                value = 0
-            }
-            point_y = baseline - value * chart_h / scale_max
-            DrawLine(point_x, point_y, point_x, baseline,
-                     Fade(accent, 0.18f))
-            if i > 0 {
-                previous := result.round_values[i - 1]
-                previous_x := chart_x + (ifx (result.round_count > 1) then ((i - 1) * chart_w / (result.round_count - 1)) else (chart_w / 2))
-                previous_y: s32
-                if previous < 0 {
-                    previous = 0
-                }
-                previous_y = baseline - previous * chart_h / scale_max
-                DrawTriangle(Vector2.{cast(float32)previous_x, cast(float32)baseline},
-                             Vector2.{cast(float32)previous_x, cast(float32)previous_y},
-                             Vector2.{cast(float32)point_x, cast(float32)point_y},
-                             Fade(accent, 0.08f))
-                DrawTriangle(Vector2.{cast(float32)previous_x, cast(float32)baseline},
-                             Vector2.{cast(float32)point_x, cast(float32)point_y},
-                             Vector2.{cast(float32)point_x, cast(float32)baseline},
-                             Fade(accent, 0.08f))
-                DrawLineEx(Vector2.{cast(float32)previous_x, cast(float32)previous_y},
-                           Vector2.{cast(float32)point_x, cast(float32)point_y},
-                           cast(float32)AppScale(3), accent)
-            }
-            DrawCircle(point_x, point_y, cast(float32)AppScale(5), StyleTokenColor("text"))
             if i % label_step == 0 || i == result.round_count - 1 {
+                value := result.round_values[i]
+                if value < 0 {
+                    value = 0
+                }
+                point_x := session_result_chart_x(result, i, chart_x, chart_w)
+                point_y := session_result_chart_y(result, i, baseline, chart_h,
+                    scale_max)
                 value_label: [24] u8
                 index_label: [16] u8
                 session_result_format_number("results_metric_seconds", value, value_label[:])
@@ -428,9 +478,11 @@ session_result_round_list :: (result: *SessionResult, x: s32, y: s32,
             cell_y := y + AppScale(42) + row * AppScale(40)
             session_result_format_two_numbers("round_result_label",
                 i + 1, result.round_values[i], label[:])
-            DrawRectangleRounded(Rectangle.{cast(float32)cell_x, cast(float32)cell_y,
-                                  cast(float32)cell_w, cast(float32)AppScale(32)},
-                                 0.16f, 6, Fade(StyleTokenColor("link"), 0.08f))
+            Box(CurrentApp().ui.session, BoxProps.{
+                    .bounds = Rectangle.{cast(float32)cell_x, cast(float32)cell_y,
+                        cast(float32)cell_w, cast(float32)AppScale(32)},
+                    .fill = color_with_alpha(StyleTokenColor("link"), 0.08f),
+                    .radius = session_result_corner_radius(0.16, cell_w, AppScale(32))})
             session_result_text(AppTextFromCString(*label[0], 48), cell_x + AppScale(7), cell_y,
                                 cell_w - AppScale(14), AppScale(32),
                                 AppFitFontSize(AppTextFromCString(*label[0], 48), cell_w - AppScale(14),
@@ -480,9 +532,10 @@ session_result_other_summary :: (result: *SessionResult, x: s32, y: s32,
         i: s32 = 0
         while i < count {
             if i > 0 {
-                DrawLine(x + AppScale(16), y + AppScale(30 + i * 38),
-                         x + w - AppScale(16), y + AppScale(30 + i * 38),
-                         Fade(StyleTokenColor("border"), 0.70f))
+                Line(CurrentApp().ui.session, LineProps.{
+                        .start = Vector2.{cast(float32)(x + AppScale(16)), cast(float32)(y + AppScale(30 + i * 38))},
+                        .end = Vector2.{cast(float32)(x + w - AppScale(16)), cast(float32)(y + AppScale(30 + i * 38))},
+                        .color = color_with_alpha(StyleTokenColor("border"), 0.70f)})
             }
             session_result_text(AppTextFromCString(*labels[i][0], 80), x + AppScale(18),
                                 y + AppScale(30) + i * AppScale(38),
@@ -506,14 +559,20 @@ session_result_status :: (result: *SessionResult, x: s32, y: s32,
         icon = Color.{.r = 108, .g = 199, .b = 145, .a = 255}
     }
     status := LocaleText(status_key)
+    session := CurrentApp().ui.session
     session_result_card(x, y, w, AppScale(50))
-    DrawRectangleRounded(Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w,
-                          cast(float32)AppScale(50)}, 0.12f, 10, Fade(icon, 0.07f))
-    DrawRectangleRoundedLinesEx(Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w,
-                                 cast(float32)AppScale(50)}, 0.12f, 10, 1.0f,
-                                Fade(icon, 0.34f))
-    DrawCircle(x + AppScale(29), y + AppScale(25), cast(float32)AppScale(12), Fade(icon, 0.25f))
-    DrawCircle(x + AppScale(29), y + AppScale(25), cast(float32)AppScale(5), icon)
+    Box(session, BoxProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w,
+                cast(float32)AppScale(50)},
+            .fill = color_with_alpha(icon, 0.07f),
+            .border = color_with_alpha(icon, 0.34f),
+            .radius = session_result_corner_radius(0.12, w, AppScale(50))})
+    icon_center := Vector2.{cast(float32)(x + AppScale(29)), cast(float32)(y + AppScale(25))}
+    Circle(session, CircleProps.{.center = icon_center,
+            .radius = cast(float32)AppScale(12),
+            .fill = color_with_alpha(icon, 0.25f)})
+    Circle(session, CircleProps.{.center = icon_center,
+            .radius = cast(float32)AppScale(5), .fill = icon})
     session_result_text(status, x + AppScale(52), y + AppScale(7),
                         w - AppScale(68), AppScale(36),
                         AppFitFontSize(status, w - AppScale(68),
@@ -541,9 +600,12 @@ session_result_draw_content :: (app: *InnerBreeze, result: *SessionResult,
                                 box_x: s32, box_w: s32, top_y: s32,
                                 center_x: s32, best: s32, avg: s32) {
     content_y := top_y + AppScale(20)
-        DrawCircleGradient(Vector2.{cast(float32)center_x, cast(float32)(content_y + AppScale(20))},
-                       cast(float32)AppScale(170), Fade(session_result_accent(), 0.17f),
-                       Fade(StyleTokenColor("canvas"), 0.0f))
+    Circle(CurrentApp().ui.session, CircleProps.{
+            .center = Vector2.{cast(float32)center_x, cast(float32)(content_y + AppScale(20))},
+            .radius = cast(float32)AppScale(170),
+            .fill = color_with_alpha(session_result_accent(), 0.17f),
+            .edge = color_with_alpha(StyleTokenColor("canvas"), 0.0f),
+            .has_edge = true})
     session_result_text(LocaleText("results_title"), box_x, content_y,
                         box_w, AppScale(25), AppScale(14), cast(TextAlign)TextAlignStart)
     session_result_text(practice_label(result.activity), box_x,
