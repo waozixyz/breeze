@@ -19,7 +19,7 @@ class PackageVersionsTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.ledger = json.loads((ROOT / "apps/versions.json").read_text())
-        for source in versions.NAMES.values():
+        for source in [*versions.NAMES.values(), *self.ledger.get("node_apps", {})]:
             directory = self.root / "apps" / source
             directory.mkdir(parents=True)
             (directory / "CHANGELOG.md").write_text((ROOT / "apps" / source / "CHANGELOG.md").read_text())
@@ -66,8 +66,11 @@ class PackageVersionsTest(unittest.TestCase):
                 self.write(value)
                 with self.assertRaisesRegex(ValueError, "host_api must be between"):
                     versions.validate(self.root)
+        # Without one, a package needs the ledger's host, and so does the
+        # root package that carries it.
         value = copy.deepcopy(self.ledger)
         del value["apps"]["diary"]["host_api"]
+        del value["apps"]["inbe"]["host_api"]
         self.write(value)
         self.assertEqual(versions.validate(self.root), value)
 
