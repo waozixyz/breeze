@@ -29,8 +29,14 @@ missing_assets=$tmp_dir/missing-assets.txt
 if command -v gh >/dev/null 2>&1; then
 	gh release view "v$version" --repo waozixyz/inbe --json assets --jq '.assets[].name' > "$release_assets"
 else
-	curl -fsSL "https://api.github.com/repos/waozixyz/inbe/releases/tags/v$version" |
-		awk -F'"' '/"name":/ { print $4 }' > "$release_assets"
+	# An authenticated call avoids the shared anonymous API rate limit.
+	token=${GITHUB_TOKEN:-${GH_TOKEN:-}}
+	if [ -n "$token" ]; then
+		curl -fsSL -H "Authorization: Bearer $token" \
+			"https://api.github.com/repos/waozixyz/inbe/releases/tags/v$version"
+	else
+		curl -fsSL "https://api.github.com/repos/waozixyz/inbe/releases/tags/v$version"
+	fi | awk -F'"' '/"name":/ { print $4 }' > "$release_assets"
 fi
 
 sed -n "s#.*https://github.com/waozixyz/inbe/releases/download/v$version/\\([^\"?#]*\\).*#\\1#p" "$site_index" |

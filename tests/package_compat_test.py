@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from PIL import Image, ImageStat
@@ -42,7 +43,15 @@ SCRUBBED = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRES
 
 
 def fetch(url, limit):
-    request = urllib.request.Request(url, headers={"User-Agent": "Inbe-Compatibility-Test/1.0"})
+    headers = {"User-Agent": "Inbe-Compatibility-Test/1.0"}
+    # Anonymous GitHub API calls share 60 an hour per address, which CI
+    # runners exhaust; Actions passes its token as GITHUB_TOKEN. Release
+    # downloads redirect to signed storage URLs that must not carry it.
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and urllib.parse.urlsplit(url).hostname == "api.github.com":
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/vnd.github+json"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=60) as response:
         data = response.read(limit + 1)
     if len(data) > limit:
