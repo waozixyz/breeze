@@ -4,6 +4,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/cells-test
+# Apps the node offers reach the shared-list service, which links curl; the
+# system library is linked by name where there is no development symlink.
+curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
 mkdir -p "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
 sh "$root/scripts/build-cells.sh" "$ziran"
 # These are valid portable bundles with an identity handshake and all three
@@ -64,7 +67,7 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "$root/build/ziran-toolchain/libziran.a" \
     -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun -Wl,--wrap=BundleInstantiate -Wl,--wrap=BundleOpenBytes \
-    -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
+    -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d)
 trap 'rm -rf "$data"' EXIT HUP INT TERM

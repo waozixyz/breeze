@@ -565,23 +565,29 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         g_diary_pass_active = false
     }
 
-    // Moves Diary photo copies one request at a time, each frame, after a
-    // good sync (cells/diary_blobs.zi). A switched account ends the pass.
+    // Moves photo copies one request at a time, each frame, after a good
+    // sync (cells/diary_blobs.zi), to and from every node of the account.
+    // A switched account ends the pass.
     app_diary_blobs_tick :: () {
         if g_diary_pass_active &&
         storage_get_setting_text("sync_public_id") != AppTextFromCString(*g_diary_pass_account[0], 72) {
             app_diary_blobs_end()
             return
         }
-        if g_diary_blob.active {
+        if g_diary_blob.active || g_diary_output != null {
             if !PollStoredBlob(*g_diary_blob) {
                 return
             }
-            keep := false
+            keep := true
             length := g_diary_blob.length
-            if g_diary_blob.result == cast(s32)AuthResult.AUTH_OK && length >= 0 && length < g_diary_output_bytes {
+            result := g_diary_blob.result
+            if result == cast(s32)AuthResult.AUTH_OK && length >= 0 && length < g_diary_output_bytes {
                 keep = DiaryBlobFinish(*g_diary_pass, *g_diary_request, g_diary_blob.status,
                     BytesFromPointer(g_diary_output, cast(u64)length))
+            } else if result == cast(s32)AuthResult.AUTH_NO_ACCOUNT || result == cast(s32)AuthResult.AUTH_SIGN_FAILED {
+                keep = false
+            } else {
+                DiaryBlobFailed(*g_diary_pass, *g_diary_request)
             }
             DiaryBlobAbandon(*g_diary_request)
             SyncWorkerFree(cast(*void)g_diary_output)
@@ -617,10 +623,11 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
             return
         }
         g_diary_output_bytes = capacity
-        if !BeginStoredBlob(*g_diary_blob, AppTextFromCString(*g_diary_pass_url[0], 512),
+        if !BeginStoredBlob(*g_diary_blob, TextUntilNul(g_diary_request.node[:]),
             g_diary_request.method, TextUntilNul(g_diary_request.path[:]), g_diary_request.body,
             BytesFromPointer(g_diary_output, cast(u64)capacity)) {
-            app_diary_blobs_end()
+            // The answer is read on the next frame as a failure of this node.
+            return
         }
     }
 }

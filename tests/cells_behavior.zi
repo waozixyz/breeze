@@ -377,20 +377,32 @@ DiaryTestHash :: (data: []u8, output: []u8) -> string {
     return TextFromCString(*output[0])
 }
 
-// The pass's job for one photo, or 0; other Diary tests leave photos too.
-DiaryTestJob :: (pass: *DiaryBlobPass, name: string) -> s32 {
+// The pass's job for one photo, on any node or on the node at `node`, or 0;
+// other Diary tests leave photos too.
+DiaryTestNodeJob :: (pass: *DiaryBlobPass, name: string, node: string) -> s32 {
+    key := DiaryRecordKey(name)
+    defer { PackageFree(key) }
     for index: cast(s32)0..pass.count - 1 {
-        if TextUntilNul(pass.jobs[index].name[:]) == name {
+        address: [256]u8
+        unused DiaryBlobNode(pass, pass.jobs[index].node, address[:])
+        if TextUntilNul(pass.jobs[index].key[:]) == key &&
+        (node.count == 0 || TextUntilNul(address[:]) == node) {
             return pass.jobs[index].kind
         }
     }
     return 0
 }
 
+DiaryTestJob :: (pass: *DiaryBlobPass, name: string) -> s32 {
+    return DiaryTestNodeJob(pass, name, "")
+}
+
 // The pass's request for one photo, skipping the others.
 DiaryTestNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, name: string) -> bool {
+    key := DiaryRecordKey(name)
+    defer { PackageFree(key) }
     while DiaryBlobNext(pass, request) {
-        if TextUntilNul(request.name[:]) == name {
+        if TextUntilNul(request.key[:]) == key {
             return true
         }
         DiaryBlobAbandon(request)
@@ -470,15 +482,17 @@ CheckDiaryPhotoCopies :: () {
     Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]), 449)
     unused DiaryBlobPlan(*pass, other)
     Expect(DiaryTestJob(*pass, name) == 0, 459)
-    // A node without photo upload receives none; a full one stops uploads.
+    // A node without photo upload receives none; a full one stops uploads
+    // to it alone.
     third := "https://third-copies.test"
-    Expect(SyncNodeSetMediaUpload(third, false) && !DiaryBlobPlan(*pass, third), 450)
+    Expect(SyncNodeSetMediaUpload(third, false) && DiaryBlobPlan(*pass, third) &&
+        DiaryTestNodeJob(*pass, name, third) == 0, 450)
     Expect(SyncNodeSetMediaUpload(third, true) && DiaryBlobPlan(*pass, third) &&
-        DiaryTestNext(*pass, *request, name), 451)
+        DiaryTestNodeJob(*pass, name, third) == DIARY_BLOB_UPLOAD && DiaryTestNext(*pass, *request, name), 451)
     full := "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":20971000,\"limit_bytes\":20971520}}"
     full_text := PackageText(full, "")
     Expect(DiaryBlobFinish(*pass, *request, 413, DiaryTestBytes(full_text)) &&
-        pass.uploads_stopped && SyncNodeStorageRead(third).full, 452)
+        pass.stopped[request.node_index] && SyncNodeStorageRead(third).full, 452)
     PackageFree(full_text)
     // A photo from before copies, kept as hex chunks, uploads the same copy
     // and its chunks shrink to one byte each.

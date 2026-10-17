@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 10, inserts
+    assert len(inserts) == 13, inserts
     return clear + inserts
 
 
@@ -66,6 +66,15 @@ ENTITIES = [
     ("cell_record", "cell.lumi.message.history", 0),
     ("cell_record", "cell.diary.entry.today", 0),
     ("cell_record", "cell.feedback.report", 0),
+]
+
+# Apps the node offers and the account's media library: queued all or none,
+# alternating over the cases above, so the exhaustive check stays small.
+EXTRA = [
+    ("app_install", "app_used_chess", 0),
+    ("app_record", "cell.chess.computer", 0),
+    ("media_record", "cell.media." + "ab" * 32, 0),
+    ("media_record", "cell.media.preview." + "ab" * 32, 0),
 ]
 
 
@@ -93,6 +102,12 @@ def open_database():
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_leaderboard", "value": "0", "updated_at": 1})
     for key in ("cell.lumi.message.history", "cell.diary.entry.today", "cell.feedback.report"):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "{}", "updated_at": 2})
+    # Apps the node offers and the account's media library, each in its
+    # own collection; the library is never taken for an app's records.
+    insert_row(database, "settings", {"user_id": "u1", "key": "app_used_chess", "value": "1", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "cell.chess.computer", "value": "x", "updated_at": 2})
+    for key in ("cell.media." + "ab" * 32, "cell.media.preview." + "ab" * 32):
+        insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "{}", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})
     insert_row(database, "settings", {"user_id": "u2", "key": "cell.lumi.message.foreign", "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "telegram.sent.local", "value": "1", "updated_at": 2})
@@ -106,10 +121,12 @@ def outbox(database):
 
 def main():
     statements = restore_statements()
-    local = set(ENTITIES)
+    local = set(ENTITIES) | set(EXTRA)
     cases = 0
     for flags in itertools.product((0, 1), repeat=len(ENTITIES)):
         queued = {entity for entity, flag in zip(ENTITIES, flags) if flag}
+        if cases % 2 == 1:
+            queued |= set(EXTRA)
         database = open_database()
         for kind, identifier, date in queued:
             database.execute(

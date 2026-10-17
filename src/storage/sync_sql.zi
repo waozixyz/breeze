@@ -216,6 +216,22 @@ OR (excluded.updated_at = settings.updated_at AND excluded.value != settings.val
 ))
 SQL
 
+// The account's media library; the key was checked first.
+SyncMediaRecordsSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),
+ CAST(strftime('%s',json_extract(value,'$.updated_at')) AS INTEGER)
+FROM json_each(?1,'$.changes.media_records')
+WHERE strftime('%s',json_extract(value,'$.updated_at')) IS NOT NULL
+AND json_valid(json_extract(value,'$.value'))
+ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+WHERE excluded.updated_at > settings.updated_at
+OR (excluded.updated_at = settings.updated_at AND excluded.value != settings.value AND NOT EXISTS (
+ SELECT 1 FROM sync_outbox WHERE entity_type='media_record'
+ AND entity_id=settings.key AND local_date=0
+))
+SQL
+
 SyncCellRecordsSQL :: #string SQL
 INSERT INTO settings(user_id,key,value,updated_at)
 SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),

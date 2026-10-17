@@ -1,0 +1,333 @@
+// Photos from its real package, through the real node-app host and the
+// account's media library on a real database: the package is offered as a
+// local file (INBE_NODE_APP_FILE), installed into a slot and run frame by
+// frame. The test answers only the screen's calls (the frame, text in the
+// person's language and the widgets): it reads what was drawn, clicks
+// buttons by label and taps tiles. Picking a photo is the screen's part,
+// so the test adds the picked file the way the screen does.
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "file_linux"
+#import "text_buffer"
+#import "bundle_host"
+#import "hosted_app"
+#import "hosted_values"
+#import "widget_codec"
+#import "geometry"
+#import "text_props"
+#import "button_props"
+#import "press_props"
+#import "scroll_props"
+#import "image_props"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/cells/module_types.zi";
+#import, file "../src/cells/node_app_types.zi";
+#import, file "../src/cells/node_app_codec.zi";
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/hosted_assets.zi";
+#import, file "../src/cells/media_store.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/catalog.zi";
+
+
+
+TEXT_BYTES :: 65536
+
+drawn: [TEXT_BYTES]u8;
+drawn_length: s64;
+click: [128]u8;
+// A tile to tap this frame, by its place in the list, or -1.
+tap: s32 = -1;
+images: [16][160]u8;
+image_count: s32;
+frames: s32;
+frame_codec: WidgetAppUiFrameCodec;
+text_codec: WidgetTextPropsCodec;
+button_codec: WidgetButtonPropsCodec;
+press_codec: WidgetPressPropsCodec;
+press_result_codec: WidgetPressResultCodec;
+scroll_codec: WidgetScrollPropsCodec;
+scroll_result_codec: WidgetScrollResultCodec;
+image_codec: WidgetImagePropsCodec;
+
+Stored :: (bytes: []u8) -> string {
+    count: s64 = 0
+    while count < bytes.count && bytes[count] != cast(u8)0 {
+        count += 1
+    }
+    return TextFromBytes(bytes[0:count])
+}
+
+Copy :: (value: string, bytes: []u8) {
+    count := value.count
+    if count > bytes.count - 1 {
+        count = bytes.count - 1
+    }
+    index: s64 = 0
+    while index < count {
+        bytes[index] = value[index]
+        index += 1
+    }
+    bytes[count] = cast(u8)0
+}
+
+Borrowed :: (value: HostValue) -> string {
+    return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
+}
+
+Draw :: (value: string) {
+    index: s64 = 0
+    while index < value.count && drawn_length < TEXT_BYTES - 2 {
+        drawn[drawn_length] = value[index]
+        drawn_length += 1
+        index += 1
+    }
+    drawn[drawn_length] = cast(u8)10
+    drawn_length += 1
+}
+
+Saw :: (text: string) -> bool {
+    haystack := TextFromBytes(drawn[0:drawn_length])
+    at: s64 = 0
+    while at + text.count <= haystack.count {
+        if haystack[at:at + text.count] == text {
+            return true
+        }
+        at += 1
+    }
+    return false
+}
+
+// The screen's part of the interface.
+ScreenCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    unused context
+    owner := TextFromCString(module)
+    name := TextFromCString(function)
+    if name == "ReadAppUiHost" && count == 0 {
+        frame := AppUiFrame.{.width = 400, .height = 800, .scale = 1.0, .font = 16,
+            .now = cast(float64)frames / 60.0}
+        result.* = WidgetEncodeAppUiFrame(frame, *frame_codec)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 {
+        // Keys stand for their text, so checks read which text was drawn.
+        result.* = NodeAppString(Borrowed(arguments[0]))
+        return 1
+    }
+    if owner == "text_widget" && name == "TextHostedHost" && count == 2 {
+        Draw(WidgetDecodeTextProps(arguments[1], *text_codec).text)
+        return 1
+    }
+    if owner == "button_widget" && name == "ButtonHostedHost" && count == 2 {
+        button := WidgetDecodeButtonProps(arguments[1], *button_codec)
+        Draw(button.label)
+        pressed := !button.disabled && Stored(click[:]).count > 0 && button.label == Stored(click[:])
+        if pressed {
+            click[0] = cast(u8)0
+        }
+        result.* = HostScalar("s32", ifx pressed then 1 else 0)
+        return 1
+    }
+    if owner == "press_widget" && name == "PressHostedHost" && count == 2 {
+        props := WidgetDecodePressProps(arguments[1], *press_codec)
+        answer: PressResult
+        if tap >= 0 && props.id == 500000 + tap {
+            answer = PressResult.{.clicked = true, .released = true}
+            tap = -1
+        }
+        result.* = WidgetEncodePressResult(answer, *press_result_codec)
+        return 1
+    }
+    if owner == "scroll_widget" && name == "ScrollHostedHost" && count == 2 {
+        props := WidgetDecodeScrollProps(arguments[1], *scroll_codec)
+        scrolled := ScrollResult.{.opened = true, .viewport = props.bounds,
+            .content = Rectangle.{props.bounds.x, props.bounds.y, props.bounds.width,
+                cast(float32)props.content_height}}
+        result.* = WidgetEncodeScrollResult(scrolled, *scroll_result_codec)
+        return 1
+    }
+    if owner == "image_widget" && name == "ImageHostedHost" && count == 2 {
+        image := WidgetDecodeImageProps(arguments[1], *image_codec)
+        if image_count < 16 {
+            Copy(image.asset_path, images[image_count][:])
+            image_count += 1
+        }
+        return 1
+    }
+    if owner == "box_widget" && name == "BoxHostedHost" {
+        result.* = HostScalar("s32", 0)
+        return 1
+    }
+    if owner == "tree" && name == "EndHostedHost" {
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    return 0
+}
+
+Frame :: (slot: s32) -> bool {
+    frames += 1
+    drawn_length = 0
+    image_count = 0
+    message := AppMessage.{.action = APP_FRAME, .name = "photos", .locale = "en",
+        .time = cast(s64)(1792224000 + frames)}
+    NodeAppUiBegin(ScreenCall, null)
+    answer := NodeAppRunMessage(slot, message)
+    NodeAppUiEnd()
+    return answer.succeeded
+}
+
+Until :: (slot: s32, text: string, limit: s32) -> bool {
+    index: s32 = 0
+    while index < limit {
+        if !Frame(slot) {
+            return false
+        }
+        if Saw(text) {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+Click :: (slot: s32, label: string) -> bool {
+    Copy(label, click[:])
+    index: s32 = 0
+    while index < 4 {
+        if !Frame(slot) {
+            return false
+        }
+        if click[0] == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// The first image drawn whose path starts with `prefix`, or empty.
+ImageDrawn :: (prefix: string) -> string {
+    index: s32 = 0
+    while index < image_count {
+        path := Stored(images[index][:])
+        if path.count >= prefix.count && path[:prefix.count] == prefix {
+            return path
+        }
+        index += 1
+    }
+    return ""
+}
+
+// A JPEG-shaped file the test's decoder reads as a gradient.
+Photo :: (seed: s32) -> string {
+    out: Vec(u8)
+    unused VecPush(out, cast(u8)255)
+    unused VecPush(out, cast(u8)216)
+    unused VecPush(out, cast(u8)255)
+    index: s32 = 0
+    while index < 50000 {
+        unused VecPush(out, cast(u8)((index * 13 + seed) % 251))
+        index += 1
+    }
+    unused VecPush(out, cast(u8)255)
+    unused VecPush(out, cast(u8)217)
+    return BuilderFinish(out)
+}
+
+PickedFile :: (name: string, data: string) -> string {
+    buffer: TextBuffer
+    append(*buffer, data_root())
+    append(*buffer, "/")
+    append(*buffer, name)
+    path := PackageText(TextFromCString(*buffer.bytes[0]), "")
+    unused RemoveFile(path)
+    file := OpenExclusivePrivate(path)
+    written := file.valid && WriteTextAt(file, data, 0) == data.count
+    check_true("write the picked file", CloseFile(file) && written)
+    return path
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-photos-app-test")
+    if guard != 0 { return guard }
+    root := make_root("photos-app")
+    check_true("init the device", storage_init(root) != 0)
+    storage_set_setting_text("sync_public_id", "photos-test-account")
+    NodeAppsInitialize()
+    check_true("the local package is offered", NodeAppOffered("photos"))
+    slot := NodeAppInstall("photos")
+    check_true("Photos installs into a slot", slot >= 0)
+    check_true("its installed mark syncs", storage_get_setting_text("app_used_photos") == "1")
+    check_true("it opens", NodeAppOpen(slot))
+    // The library is the account's; an app the host does not grant it to
+    // cannot start with the same code.
+    bytes := PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
+    other := slot + 1
+    NodeAppAssign(other, "gallery")
+    check_true("another app may not reach the library", !NodeAppValidate(other, bytes))
+    NodeAppAssign(other, "")
+    check_true("Photos may", NodeAppValidate(slot, bytes))
+    PackageFree(bytes)
+
+    check_true("an empty library says so", Until(slot, "photos_empty", 3))
+    check_true("Add photo is offered", Saw("photos_add"))
+    check_true("Add photo asks for the picker", Click(slot, "photos_add"))
+    check_true("the picker is wanted", node_media_pick_requested)
+    check_true("adding shows while the picker is open", Until(slot, "photos_adding", 2))
+    // The screen opens the picker and adds the picked file.
+    node_media_pick_requested = false
+    picked := Photo(1)
+    NodeAppMediaPicked(MediaImportFile(PickedFile("IMG_0007.jpg", picked)), true)
+    check_true("the photo is added", Until(slot, "photos_added", 3))
+    check_true("its day is a heading", Saw("photos_today") || Saw("photos_month_"))
+    preview := PackageText(ImageDrawn("media/preview/"), "")
+    check_true("the gallery draws its preview", preview.count > 0)
+    check_true("the screen may draw it", HostedAssetAllowed(preview))
+    check_true("its bytes are there", MediaAssetView(preview).found)
+
+    // The same photo again is not added twice.
+    NodeAppMediaPicked(MediaImportFile(PickedFile("IMG_0007 copy.jpg", picked)), true)
+    check_true("a photo already there is said so", Until(slot, "photos_already_added", 3))
+    check_int("the library keeps one", MediaQuery("", false), 1)
+    // A file that is no photo is refused.
+    NodeAppMediaPicked(MediaImportFile(PickedFile("notes.txt", "just text")), true)
+    check_true("a file that is no photo is refused", Until(slot, "photos_add_failed", 3))
+
+    // Opening the photo shows it whole, with its name.
+    tap = 0
+    check_true("tapping the tile opens the photo", Until(slot, "photos_move_to_trash", 4))
+    check_true("the photo's name shows", Saw("IMG_0007.jpg"))
+    original := ImageDrawn("media/")
+    check_true("the viewer draws the original", original.count > 0 && original[:14] != "media/preview/")
+    check_true("the original may be drawn", HostedAssetAllowed(original) && MediaAssetView(original).data == picked)
+    check_true("Trash takes it", Click(slot, "photos_move_to_trash"))
+    check_true("the library is empty again", Until(slot, "photos_empty", 4))
+    check_true("Trash lists it", Click(slot, "photos_tab_trash") && Until(slot, "photos_trash_note", 2))
+    check_true("its preview shows in Trash", ImageDrawn("media/preview/").count > 0)
+    tap = 0
+    check_true("a photo in Trash opens", Until(slot, "photos_restore", 4))
+    check_true("restore it", Click(slot, "photos_restore"))
+    check_true("Trash is empty again", Until(slot, "photos_trash_empty", 4))
+    check_true("back to the library", Click(slot, "photos_tab_library"))
+    check_true("the photo is back", Until(slot, "photos_add", 2) && ImageDrawn("media/preview/").count > 0)
+    check_int("it is in the library", MediaQuery("", false), 1)
+    first := MediaQueryRow(0)
+    check_true("and out of Trash", !MediaRead(TextUntilNul(first.hash[:])).trashed)
+
+    // Removing the app keeps the account's photos.
+    NodeAppUninstall(slot)
+    check_true("removing Photos keeps its mark off", storage_get_setting_text("app_used_photos") == "0")
+    check_int("the library keeps its photos", MediaQuery("", false), 1)
+    PackageFree(preview)
+    storage_close()
+    return failures
+}

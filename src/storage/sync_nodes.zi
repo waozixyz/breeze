@@ -8,6 +8,10 @@
 #import, file "storage_core.zi";
 Core :: #import, file "storage_core.zi";
 #import, file "sync_session.zi";
+#import, file "media_node_session.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "state.zi";
 #import "crypto"
 #import, file "delegate_store.zi";
 #import, file "../cells/package_files.zi";
@@ -153,6 +157,23 @@ SyncNodePrefer :: (address: string) -> bool {
     return true
 }
 
+// A node leaving the account's list takes its media session and this
+// device's record of the copies it holds with it.
+SyncNodeForgetMedia :: (address: string) {
+    normalized: [256]u8
+    if !SyncNodeAddress(address, normalized[:]) { return }
+    value := AppTextFromCString(*normalized[0], 256)
+    MediaSessionForget(value)
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "DELETE FROM diary_blobs WHERE node=?1", -1,
+        *statement, null) != SQLITE_OK {
+        return
+    }
+    unused bind_text(statement, 1, value)
+    unused SqliteStep(statement)
+    SqliteFinalize(statement)
+}
+
 SyncNodeRemove :: (index: s32) -> bool {
     count := SyncNodeCount()
     if count <= 1 || index < 0 || index >= count { return false }
@@ -176,5 +197,6 @@ SyncNodeRemove :: (index: s32) -> bool {
     if removed == storage_get_setting_text("sync_preferred_node") {
         storage_set_setting_text("sync_preferred_node", storage_get_setting_text("sync_server_url"))
     }
+    SyncNodeForgetMedia(removed)
     return true
 }

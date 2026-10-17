@@ -22,6 +22,9 @@
 #import, file "package_manager.zi";
 #import, file "package_files.zi";
 #import, file "package_release.zi";
+#import, file "media_store.zi";
+#import, file "diary_store.zi";
+#import, file "../storage/temporary_data.zi";
 #import, file "lists_network.zi";
 #import, file "lists_types.zi";
 #import, file "asset_paths.zi";
@@ -450,6 +453,18 @@ NodeAppsReconcile :: () {
 
 // Running.
 
+// The account's media library, for the apps the host grants it.
+NodeAppMediaCapability :: (name: string) -> bool {
+    return name == "MediaQueryHost" || name == "MediaItemHost" || name == "MediaAssetHost" ||
+    name == "MediaPickHost" || name == "MediaStatusHost" || name == "MediaUpdateHost"
+}
+
+// Photos reads, adds and changes the account's library; no other app the
+// node offers may reach it.
+NodeAppMediaGranted :: (app: string) -> bool {
+    return app == "photos"
+}
+
 NodeAppCapability :: (name: string) -> bool {
     return name == "ReadAppHost" || name == "WriteAppHost" || name == "ReadAppUiHost" ||
     name == "AppLocaleHost" || name == "AppRecordHost" || name == "SaveAppRecordHost" ||
@@ -464,6 +479,9 @@ NodeAppAllows :: (context: *void, module_name: string, name: string) -> bool {
     runner := cast(*NodeAppRunner)context
     runner.has_read = runner.has_read || name == "ReadAppHost"
     runner.has_write = runner.has_write || name == "WriteAppHost"
+    if NodeAppMediaCapability(name) {
+        return NodeAppMediaGranted(NodeAppName(NodeAppSlotOf(runner)))
+    }
     return NodeAppCapability(name) || WidgetHostSupports(module_name, name)
 }
 
@@ -476,6 +494,113 @@ NodeAppSlotOf :: (runner: *NodeAppRunner) -> s32 {
         slot += 1
     }
     return -1
+}
+
+// The platform picker a granted app asked for, opened by the app's screen
+// after the frame, and what its last pick did.
+node_media_pick_requested: bool;
+node_media_status: MediaStatus;
+node_media_codec: WidgetMediaEntryCodec;
+node_media_status_codec: WidgetMediaStatusCodec;
+node_media_hash: [65]u8;
+node_media_name: [MEDIA_NAME_MAX + 1]u8;
+node_media_day: [11]u8;
+node_media_taken: [26]u8;
+node_media_format: [8]u8;
+node_media_asset: [96]u8;
+node_media_status_hash: [65]u8;
+node_media_today: [11]u8;
+
+// Records how a pick ended, for MediaStatusHost.
+NodeAppMediaPicked :: (result: MediaImport, picked: bool) {
+    node_media_status.picking = false
+    node_media_status.picks += 1
+    node_media_status.added = result.succeeded && !result.existed
+    node_media_status.existed = result.succeeded && result.existed
+    node_media_status.failed = picked && !result.succeeded
+    node_media_status_hash[0] = cast(u8)0
+    if result.succeeded {
+        unused AppCopyText(TextFromBytes(result.hash[:64]), node_media_status_hash[:])
+    }
+}
+
+NodeAppMediaEntry :: (index: s32) -> MediaEntry {
+    row := MediaQueryRow(index)
+    item := MediaRead(TextUntilNul(row.hash[:]))
+    if !item.valid {
+        return MediaEntry.{}
+    }
+    node_media_hash = item.hash
+    node_media_name = item.name
+    node_media_day = item.day
+    node_media_taken = item.taken
+    node_media_format = item.format
+    return MediaEntry.{.hash = TextUntilNul(node_media_hash[:]), .name = TextUntilNul(node_media_name[:]),
+        .day = TextUntilNul(node_media_day[:]), .taken = TextUntilNul(node_media_taken[:]),
+        .format = TextUntilNul(node_media_format[:]), .size = item.size, .trashed = item.trashed}
+}
+
+// The library calls of a granted app; 0 when `name` is none of them.
+NodeAppMediaCall :: (name: string, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if name == "MediaQueryHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
+        found := MediaQuery(NodeAppText(arguments[0]), arguments[1].integer != 0)
+        result.* = HostScalar("s32", cast(s64)found)
+        return 1
+    }
+    if name == "MediaItemHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        result.* = WidgetEncodeMediaEntry(NodeAppMediaEntry(cast(s32)arguments[0].integer), *node_media_codec)
+        return 1
+    }
+    if name == "MediaAssetHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
+        unused AppCopyText(MediaAsset(NodeAppText(arguments[0]), arguments[1].integer != 0),
+            node_media_asset[:])
+        result.* = NodeAppString(TextUntilNul(node_media_asset[:]))
+        return 1
+    }
+    if name == "MediaPickHost" && count == 0 {
+        started := !node_media_status.picking && !node_media_pick_requested && !DataTemporary()
+        if started {
+            node_media_pick_requested = true
+            node_media_status.picking = true
+        }
+        result.* = HostScalar("bool", ifx started then 1 else 0)
+        return 1
+    }
+    if name == "MediaStatusHost" && count == 0 {
+        status := node_media_status
+        status.hash = TextUntilNul(node_media_status_hash[:])
+        status.revision = MediaLibraryRevision()
+        clock := DiaryStoreClock()
+        node_media_today[0] = cast(u8)0
+        if clock.count >= 10 {
+            unused AppCopyText(clock[:10], node_media_today[:])
+        }
+        status.today = TextUntilNul(node_media_today[:])
+        result.* = WidgetEncodeMediaStatus(status, *node_media_status_codec)
+        return 1
+    }
+    if name == "MediaUpdateHost" && count == 3 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[2], "string", cast(s32)HostString) {
+        hash := NodeAppText(arguments[0])
+        field := NodeAppText(arguments[1])
+        value := NodeAppText(arguments[2])
+        changed := false
+        if field == "trashed" && (value == "0" || value == "1") {
+            changed = MediaSetTrashed(hash, value == "1")
+        } else if field == "name" && value.count <= MEDIA_NAME_MAX {
+            changed = MediaSetName(hash, value)
+        }
+        result.* = HostScalar("bool", ifx changed then 1 else 0)
+        return 1
+    }
+    return 0
 }
 
 NodeAppText :: (value: HostValue) -> string {
@@ -603,6 +728,12 @@ NodeAppCall :: (context: *void, module: *u8, function: *u8,
         lists_refresh_at = 0.0
         result.* = HostScalar("bool", 1)
         return 1
+    }
+    if NodeAppMediaCapability(name) {
+        if !NodeAppMediaGranted(app_name) {
+            return 0
+        }
+        return NodeAppMediaCall(name, arguments, count, result)
     }
     if node_ui_active && node_ui_call != null {
         return node_ui_call(node_ui_context, module, function, arguments, count, result)

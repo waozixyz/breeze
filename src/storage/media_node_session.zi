@@ -1,0 +1,91 @@
+// Photo and video copies travel on their own session with each node, never
+// the sync's: the account may keep its records on one node and its photos
+// on others. Each node's session is saved on this device only, under keys
+// made from the account and the node's address (SyncNodeCursorKey), and
+// the device is registered with the node once per new session.
+#import "auth"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "storage_core.zi";
+#import, file "sync_nodes.zi";
+#import, file "sync_session.zi";
+#import, file "device_key_store.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../app/text_buffers.zi";
+
+MediaSessionKey :: (address: string, field: string) -> string {
+    name := PackageText("media_auth_", field)
+    defer {
+        PackageFree(name)
+    }
+    return SyncNodeCursorKey(address, name)
+}
+
+MediaSessionRead :: (address: string, field: string) -> s64 {
+    key := MediaSessionKey(address, field)
+    defer {
+        PackageFree(key)
+    }
+    return ParsePositiveSeconds(storage_get_setting_text(key))
+}
+
+// The node's media session when it is still good at `now`, otherwise an
+// empty one.
+MediaSessionLoad :: (address: string, session: *Session, now: s64) {
+    session.* = Session.{}
+    if address.count == 0 {
+        return
+    }
+    key := MediaSessionKey(address, "token")
+    copied := CopyDeviceSetting(storage_get_setting_text(key), session.token[:])
+    PackageFree(key)
+    if !copied {
+        session.* = Session.{}
+        return
+    }
+    session.expires_at_local = MediaSessionRead(address, "expires")
+    session.server_time = MediaSessionRead(address, "server_time")
+    session.login_local_time = MediaSessionRead(address, "login_time")
+    if session.token[0] == cast(u8)0 || session.expires_at_local <= now || session.server_time == 0 ||
+    session.login_local_time == 0 {
+        session.* = Session.{}
+    }
+}
+
+MediaSessionWrite :: (address: string, field: string, value: string) {
+    key := MediaSessionKey(address, field)
+    storage_set_setting_text(key, value)
+    PackageFree(key)
+}
+
+MediaSessionSave :: (address: string, session: *Session) {
+    expires: [24]u8
+    server: [24]u8
+    login: [24]u8
+    if address.count == 0 || !AppFormatS64(session.expires_at_local, expires[:]) ||
+    !AppFormatS64(session.server_time, server[:]) ||
+    !AppFormatS64(session.login_local_time, login[:]) {
+        return
+    }
+    storage_settings_begin_write()
+    MediaSessionWrite(address, "token", TextUntilNul(session.token[:]))
+    MediaSessionWrite(address, "expires", TextUntilNul(expires[:]))
+    MediaSessionWrite(address, "server_time", TextUntilNul(server[:]))
+    MediaSessionWrite(address, "login_time", TextUntilNul(login[:]))
+    storage_settings_end_write()
+}
+
+// Forgets the node's session, as after a 401 or when the node is removed.
+MediaSessionForget :: (address: string) {
+    if address.count == 0 {
+        return
+    }
+    storage_settings_begin_write()
+    MediaSessionWrite(address, "token", "")
+    MediaSessionWrite(address, "expires", "")
+    MediaSessionWrite(address, "server_time", "")
+    MediaSessionWrite(address, "login_time", "")
+    storage_settings_end_write()
+}

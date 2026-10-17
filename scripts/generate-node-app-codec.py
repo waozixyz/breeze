@@ -13,7 +13,7 @@ KRYON = ROOT / 'build/packages/kryon'
 KRYON_MODULES = ['session']
 APP_TYPES = ['node_app_types']
 ROOTS = ['AppMessage', 'AppUiFrame', 'AppPerson', 'AppShared', 'AppSharedItem',
-         'AppInvitation', 'AppSharedCommand']
+         'AppInvitation', 'AppSharedCommand', 'MediaEntry', 'MediaStatus']
 
 command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
            '--output', str(ROOT / 'src/cells/node_app_codec.zi'),

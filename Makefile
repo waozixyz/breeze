@@ -3064,12 +3064,28 @@ leaderboard-ui-test: $(TARGET)
 	@sh tests/leaderboard_ui_test.sh $(abspath $(TARGET))
 
 # Apps the node offers build on their own, never into the root package.
-NODE_APP_BUNDLES := $(BUILD_DIR)/node-apps/chess.zib
-$(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files assets/chess 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py $(ZIRAN_BIN)
+NODE_APP_BUNDLES := $(BUILD_DIR)/node-apps/chess.zib $(BUILD_DIR)/node-apps/photos.zib
+$(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files assets/chess assets/photos 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py $(ZIRAN_BIN)
 	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
 
 .PHONY: node-apps chess-engine-test chess-app-test node-app-records-test node-app-codec-check chess-ui-test
+.PHONY: photos-app-test media-store-test media-metadata-test photos-ui-test
 node-apps: $(NODE_APP_BUNDLES)
+
+# Photos and the account's media library it shows.
+media-metadata-test: $(ZI2C_BIN)
+	sh tests/media_metadata_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+media-store-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	sh tests/media_store_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+photos-app-test: $(ZIRAN_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	sh tests/photos_app_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: media-metadata-test media-store-test photos-app-test
+
+photos-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
+	@sh tests/photos_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/photos.zib)
 
 chess-engine-test: $(ZI2C_BIN)
 	sh tests/chess_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin

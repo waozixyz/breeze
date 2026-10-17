@@ -396,7 +396,8 @@ after the bundled seven, setting `node_app_slot_<n>`) and downloads it through
 the package manager with the same signature, hash, size, interface, trial
 and cache rules as the bundled apps. Such an app is never part of the root
 package or its dependencies. It runs in its own VM through one generic
-interface (`src/cells/node_app_types.zi`, host interface 12): frame and
+interface (`src/cells/node_app_types.zi`, host interface 12, and 13 for the
+media library): frame and
 route messages, hosted Kryon widgets, `AppLocaleHost`, private records,
 friends and records shared with friends. It may draw only its own
 `assets/<name>/` resources and supplies its icon as
@@ -426,6 +427,80 @@ chess --store ... --key ... --key-id ...` stages its release; with
 App packages workflow never publishes these apps. For a local preview or a
 test, `INBE_NODE_APP_FILE=/absolute/path/chess.zib` offers that package as if
 the node did; it passes the same interface, identity and resource checks.
+
+## Photos and the account's media library
+
+Photos (`apps/photos/`, `inbe.photos`, host interface 13) is the second app
+the node offers: a newest-first grid of the library's photos under the day
+each was taken, a viewer with previous, next and Move to Trash, and Trash,
+where a photo can be restored. It is published as beta and installed from
+More apps like Chess.
+
+The library belongs to the account, not to Photos, so its photos stay when
+Photos is removed. The host keeps it (`src/cells/media_store.zi`): each photo
+is stored once by the SHA-256 of its bytes under
+`media/<account>/<sha256>`, with an upright JPEG preview of at most 512
+pixels (`<sha256>.preview`) made on import by Kryon's `ImagePreview`
+(`image_preview.zi`: the host decodes, portable Ziran scales by area
+averages, turns by the Exif orientation and writes a baseline JPEG). The
+capture day and time come from the file's Exif original date
+(`media_metadata.zi`), otherwise from the day it was added. Records sync in
+their own collection, `private.inbe.v1.media`, which released versions skip:
+
+| Key | Value |
+|---|---|
+| `cell.media.<sha256>` | `{"hash","size","type","name","day","taken","added","trashed"[,"blob","key"]}` |
+| `cell.media.preview.<sha256>` | `{"hash","size","type"[,"blob","key"]}` |
+
+The apply branch accepts any `cell.media.*` key with a JSON value, so a later
+version can add kinds of records; a record this version cannot read changes
+nothing and never stops a sync. `media` is a reserved app name, so these keys
+are never taken for an app's records.
+
+Apps reach the library only through the media calls, which the host grants
+to Photos alone (`NodeAppMediaGranted`); a package of another name that
+imports them cannot start. `MediaQueryHost(day, trashed)` lists one capture
+day or all, newest first, and `MediaItemHost(index)` reads an item of that
+list. `MediaAssetHost(hash, original)` answers the asset path to draw,
+`media/preview/<sha256>.jpg` or `media/<sha256>.<fmt>`, or `""` while neither
+is on the device; asking for an original asks for its download and shows the
+preview until it arrives. `MediaPickHost()` opens the platform picker after
+the frame (the desktop file dialog, or Android's photo picker, kind 6, which
+keeps the picked file's own bytes), `MediaStatusHost()` says what the last
+pick did, the library's revision and this device's date, and
+`MediaUpdateHost(hash, field, value)` changes `trashed` or `name`. The hosted
+asset policy draws `media/` paths of the current account's library only.
+
+Photo bytes travel as the Diary's sealed copies (`diary_records.zi`): a key
+made from the account's Diary copy key and the file's hash, ChaCha20-Poly1305
+with a fixed nonce, `PUT /api/v1/blobs/inbe/<sha256 of the copy>`. The same
+picture in Diary and in the library is therefore the same copy, uploaded once
+per node. The media pass (`diary_blobs.zi`) moves Diary photos, library
+originals and previews after each good sync:
+
+- Copies go to every node in the account's node list whose photo upload is
+  on (Profile › Data), not only the sync node. `diary_blobs(node, blob)`
+  remembers what each node holds; each pass starts with the node where the
+  previous one stopped, within its limit of 8 files and 32 MiB. A 413 marks
+  only that node full; a node that fails only loses its turn.
+- Downloads ask the sync node first, then the other nodes in list order; a
+  404 moves on to the next node. Previews download everywhere, originals only
+  where they are wanted (`media_wanted`, the last 32 photos opened here).
+- Blob requests never use the sync's session. Each node has its own media
+  session, saved on this device under `SyncNodeCursorKey(address,
+  "media_auth_*")`, opened with a login and a device registration on that
+  node (`media_node_session.zi`; blocking on the desktop's sync worker, frame
+  by frame on Android and the web) and opened again once after a 401.
+  Removing a node forgets its session and its `diary_blobs` rows. Delegate
+  (Telegram) accounts never move copies.
+
+`python3 scripts/package-release.py --node-app photos --beta --store ...
+--key ... --key-id ...` stages its beta release, as for Chess. `make
+media-store-test media-metadata-test photos-app-test` check the library, the
+Exif reader and the app through the real host; `make sync-server-test`
+(`DAOCHI_BIN=...`) adds a photo on one device and opens it on another through
+two real Daochi nodes, and `make photos-ui-test` adds a camera photo through
+the desktop picker on a private Xvfb display.
 
 ## Account app choices
 

@@ -29,6 +29,11 @@
 #import, file "../src/cells/catalog.zi";
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/media_records.zi";
+#import, file "../src/storage/media_node_session.zi";
+#import, file "../src/storage/sync_session.zi";
+#import "auth"
+#import "text_buffer"
 #import, file "../src/storage/sqlite.zi";
 #import "json_scan"
 Core :: #import, file "../src/storage/storage_core.zi";
@@ -1968,6 +1973,118 @@ test_app_order_syncs_between_devices :: () {
     storage_close()
 }
 
+MediaTestHash :: () -> string {
+    return "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988"
+}
+
+// The media library syncs in its own collection, private.inbe.v1.media,
+// which released versions skip as an unknown collection. A record of a kind
+// or shape this version cannot read changes nothing and never stops a sync.
+test_media_records_sync_between_devices :: () {
+    first := make_root("sync-media-a")
+    second := make_root("sync-media-b")
+    check_true("init media device a", storage_init(first) != 0)
+    set_account()
+    item_key := PackageText(MEDIA_RECORD_PREFIX, MediaTestHash())
+    preview_key := PackageText(MEDIA_PREVIEW_PREFIX, MediaTestHash())
+    item := "{\"hash\":\"1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\",\"size\":6000,\"type\":\"jpg\",\"name\":\"IMG_2041.jpg\",\"day\":\"2026-10-17\",\"taken\":\"2026-10-17T08:15:00\",\"added\":1792224000,\"trashed\":0}"
+    preview := "{\"hash\":\"aa2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\",\"size\":900,\"type\":\"jpg\"}"
+    storage_set_setting_text(item_key, item)
+    storage_set_setting_text(preview_key, preview)
+    check_int("both library records queue",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
+    check_int("no library record queues as an app's",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN ('app_record','cell_record')"), 0)
+    check_true("library payload builds", build_payload())
+    check_true("the library has its own collection", contains(payload(), MediaCollection))
+    check_true("no library record goes to an older collection",
+        !contains(payload(), "private.inbe.v1.app.media") && !contains(payload(), "private.inbe.v1.cells"))
+    check_true("library records are encrypted", !contains(payload(), "IMG_2041"))
+    copy: TextBuffer
+    append(*copy, records_array())
+    storage_enqueue_all_sync_state()
+    check_int("a backfill queues the library again",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
+    storage_close()
+
+    check_true("init media device b", storage_init(second) != 0)
+    set_account()
+    check_true("device b applies the library",
+        storage_apply_sync_response_json(response_with(4, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("b has a's photo", storage_get_setting_text(item_key) == item)
+    check_true("b has a's preview", storage_get_setting_text(preview_key) == preview)
+    check_int("b does not send a's library back",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 0)
+    // A later version's kind of record is kept and syncs on.
+    check_true("a later kind applies",
+        storage_apply_decrypted_record(MediaCollection, "cell.media.album.summer",
+            "{\"key\":\"cell.media.album.summer\",\"value\":\"{\\\"title\\\":\\\"Summer\\\"}\",\"updated_at\":\"2030-03-17T17:46:40Z\"}") != 0)
+    check_true("a later kind is kept", storage_get_setting_text("cell.media.album.summer").count > 0)
+    unreadable: [5]string = .[
+    "{\"key\":\"cell.mediax.1\",\"value\":\"{}\",\"updated_at\":\"2030-03-17T17:46:40Z\"}",
+    "{\"key\":\"cell.media.album.other\",\"value\":\"{}\",\"updated_at\":\"2030-03-17T17:46:40Z\"}",
+    "{\"key\":\"cell.media.album.summer\",\"value\":\"not json\",\"updated_at\":\"2030-03-17T17:46:41Z\"}",
+    "{\"key\":\"cell.media.album.summer\",\"value\":\"{}\"}",
+    "{\"key\":\"cell.media.album.summer\",\"value\":\"{}\",\"updated_at\":\"2030-03-17T17:46:42Z\"},{\"key\":\"cell.media.album.summer\",\"value\":\"{}\",\"updated_at\":\"2030-03-17T17:46:42Z\"}"
+    ]
+    for plaintext: unreadable {
+        check_true("an unreadable library record doesn't stop the sync",
+            storage_apply_decrypted_record(MediaCollection, "cell.media.album.summer", plaintext) != 0)
+    }
+    check_true("an unreadable record changes nothing",
+        storage_get_setting_text("cell.media.album.summer") == "{\"title\":\"Summer\"}")
+    check_int("a mismatched key stores nothing",
+        read_db_count("SELECT COUNT(*) FROM settings WHERE key IN ('cell.mediax.1','cell.media.album.other')"), 0)
+    // A collection this version does not know, as the library is to
+    // released versions, is skipped without stopping the sync.
+    check_true("an unknown collection is skipped", storage_decrypted_array_name("private.inbe.v1.media2").count == 0)
+    // Trash on b wins over a's older record.
+    trashed := "{\"hash\":\"1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\",\"size\":6000,\"type\":\"jpg\",\"name\":\"IMG_2041.jpg\",\"day\":\"2026-10-17\",\"taken\":\"2026-10-17T08:15:00\",\"added\":1792224000,\"trashed\":1}"
+    storage_set_setting_text(item_key, trashed)
+    exec_db_sql("UPDATE settings SET updated_at=1900000000 WHERE key GLOB 'cell.media.1f2e*'")
+    check_true("an older library record applies",
+        storage_apply_sync_response_json(response_with(5, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("the newer trash stays", storage_get_setting_text(item_key) == trashed)
+    PackageFree(item_key)
+    PackageFree(preview_key)
+    storage_close()
+}
+
+// Each node has its own media session on this device, apart from the
+// sync's; removing a node forgets it and which copies the node holds.
+test_node_media_sessions :: () {
+    root := make_root("sync-media-sessions")
+    check_true("init sessions device", storage_init(root) != 0)
+    set_account()
+    check_true("add the first node", SyncNodeAdd("https://one.example"))
+    check_true("add the second node", SyncNodeAdd("https://two.example"))
+    session: Session
+    unused AppCopyText("token-two", session.token[:])
+    session.expires_at_local = 4000000000
+    session.server_time = 1800000000
+    session.login_local_time = 1800000000
+    MediaSessionSave("https://two.example", *session)
+    loaded: Session
+    MediaSessionLoad("https://two.example", *loaded, 1800000100)
+    check_true("the node's media session is kept", TextUntilNul(loaded.token[:]) == "token-two")
+    MediaSessionLoad("https://one.example", *loaded, 1800000100)
+    check_true("another node has its own", loaded.token[0] == cast(u8)0)
+    sync: Session
+    LoadSavedSession(*sync, 1800000100)
+    check_true("the sync's session is apart", sync.token[0] == cast(u8)0)
+    MediaSessionLoad("https://two.example", *loaded, 4000000001)
+    check_true("an old session is not used", loaded.token[0] == cast(u8)0)
+    exec_db_sql("INSERT INTO diary_blobs(node,blob) VALUES('https://two.example','b1'),('https://one.example','b1')")
+    check_true("remove the second node", SyncNodeRemove(1))
+    MediaSessionLoad("https://two.example", *loaded, 1800000100)
+    check_true("a removed node's session is forgotten", loaded.token[0] == cast(u8)0)
+    check_int("a removed node's copies are forgotten",
+        read_db_count("SELECT COUNT(*) FROM diary_blobs WHERE node='https://two.example'"), 0)
+    check_int("other nodes' copies stay",
+        read_db_count("SELECT COUNT(*) FROM diary_blobs WHERE node='https://one.example'"), 1)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -2027,5 +2144,7 @@ Check :: () -> s32 {
     test_kept_records_upload_kept()
     test_app_choices_sync_between_devices()
     test_app_order_syncs_between_devices()
+    test_media_records_sync_between_devices()
+    test_node_media_sessions()
     return failures
 }

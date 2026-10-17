@@ -1,21 +1,25 @@
-// Diary photos and videos travel between a device and its node as sealed
-// copies (diary_records.zi), one request per copy, after each good sync:
+// The account's media pass: Diary photos and the media library's photos and
+// previews travel between this device and the account's nodes as sealed
+// copies (diary_records.zi), one request per copy, after each good sync.
 //
-// - A photo this device has whose entry names no copy yet is sealed and
-//   uploaded; its entry then names the copy, so the account's other devices
-//   can download it.
+// - Copies go to every node in the account's node list whose photo upload
+//   is on (sync_node_<sha>.media_upload, Profile › Data), not only the sync
+//   node. A copy this device has goes to each such node it is not known on
+//   yet (diary_blobs), so the same picture uploads once per node. Each pass
+//   starts with the node where the previous one stopped, so every node makes
+//   progress within the pass's limit.
 // - A photo whose copy is named but whose file is not on this device is
-//   downloaded, opened and saved as its file. A copy not uploaded yet (404)
-//   is tried again after a later sync.
-// - A copy this device has that the node does not, for example after
-//   switching nodes, is uploaded again.
+//   downloaded: from the sync node first, then the other nodes in list
+//   order. A 404 moves on to the next node; a copy found anywhere is
+//   remembered on that node. Diary photos and library previews always
+//   download; library originals only when wanted on this device
+//   (media_store.zi), such as when Photos opens one.
 // - A photo from before copies, kept as hex chunks, is uploaded the same
-//   way; its chunks then shrink to one byte each, freeing their room on the
-//   node.
+//   way; its chunks then shrink to one byte each, freeing their room.
 //
 // Nothing here stops a photo from saving: a node without photo upload, or
-// one that is full, only keeps its copy off that node. The host sends each
-// request (signed for the account and device) and passes the answer back.
+// one that is full (413), only keeps its copy off that node. The host sends
+// each request on the node's own media session and passes the answer back.
 #import "byte_text_linux"
 #import "vec"
 #import "text"
@@ -25,8 +29,10 @@
 #import "crypto"
 #import, file "diary_records.zi";
 #import, file "diary_store.zi";
+#import, file "media_store.zi";
 #import, file "package_files.zi";
 #import, file "../storage/cell_records.zi";
+#import, file "../storage/media_records.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/sqlite.zi";
 #import, file "../storage/db.zi";
@@ -40,36 +46,50 @@
 // is never held up for long; the next sync continues.
 DIARY_BLOB_PASS_FILES :: 8
 DIARY_BLOB_PASS_BYTES :: 33554432
+DIARY_BLOB_RECORD_KEY :: 181
+DIARY_BLOB_NODE_ADDRESS :: 256
 
 DIARY_BLOB_UPLOAD :: 1
 DIARY_BLOB_DOWNLOAD :: 2
 
+// Where the next pass starts uploading, on this device only.
+DIARY_BLOB_NEXT_NODE_KEY :: "media_pass_next_node"
+
 DiaryBlobJob :: struct {
     kind: s32
-    name: [201]u8
+    // The record that names the copy: cell.diary.file.<name>,
+    // cell.media.<sha256> or cell.media.preview.<sha256>.
+    key: [DIARY_BLOB_RECORD_KEY]u8
+    // The node an upload goes to; for a download, the node to ask next.
+    node: s32
 }
 
 DiaryBlobPass :: struct {
-    // The node's normalized address.
-    node: [256]u8
+    // The sync node first, then the account's other nodes in list order,
+    // each by its normalized address.
+    nodes: [SYNC_NODE_LIMIT][DIARY_BLOB_NODE_ADDRESS]u8
+    node_count: s32
+    // The node refused an upload for room, or failed; it gets no more
+    // uploads in this pass.
+    stopped: [SYNC_NODE_LIMIT]bool
     jobs: [DIARY_BLOB_PASS_FILES]DiaryBlobJob
     count: s32
     next: s32
-    // The node refused an upload for room; downloads go on.
-    uploads_stopped: bool
 }
 
-// One request: PUT stores body as the copy at path; GET answers with the
-// copy, which needs answer_bytes of room.
+// One request: PUT stores body as the copy at path on the node; GET answers
+// with the copy, which needs answer_bytes of room.
 DiaryBlobRequest :: struct {
     kind: s32
-    name: [201]u8
+    key: [DIARY_BLOB_RECORD_KEY]u8
+    node: [DIARY_BLOB_NODE_ADDRESS]u8
+    node_index: s32
     method: string
     path: [128]u8
     body: string
     answer_bytes: s64
     blob: [65]u8
-    key: [65]u8
+    key_hex: [65]u8
     // An entry from before copies: its hash, size and chunk count.
     chunked: bool
     hash: [65]u8
@@ -78,9 +98,11 @@ DiaryBlobRequest :: struct {
 }
 
 DiaryBlobEntriesSQL :: #string SQL_END
-SELECT substr(key,17),value FROM settings
-WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
-  AND key NOT GLOB '*.json' AND json_valid(value)
+SELECT key,value FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND ((key GLOB 'cell.diary.file.*' AND key NOT GLOB '*.json')
+    OR (key GLOB 'cell.media.*' AND (length(key)=75 OR length(key)=83)))
+  AND json_valid(value)
 ORDER BY updated_at DESC
 SQL_END;
 
@@ -110,6 +132,41 @@ DiaryBlobRemember :: (node: string, blob: string) {
     SqliteFinalize(statement)
 }
 
+// The Diary file a cell.diary.file.<name> key names, or empty.
+DiaryBlobDiaryName :: (key: string) -> string {
+    prefix := "cell.diary.file."
+    if key.count <= prefix.count || key[:prefix.count] != prefix ||
+    !DiaryStoreNameValid(key[prefix.count:]) {
+        return ""
+    }
+    return key[prefix.count:]
+}
+
+// The local file that holds the copy's plain bytes, to free with
+// PackageFree, or empty for a key that names no copy.
+DiaryBlobLocalPath :: (key: string) -> string {
+    name := DiaryBlobDiaryName(key)
+    if name.count > 0 {
+        return DiaryStorePath(name)
+    }
+    hash := MediaItemKeyHash(key)
+    if hash.count > 0 {
+        return MediaPath(hash, false)
+    }
+    hash = MediaPreviewKeyHash(key)
+    if hash.count > 0 {
+        return MediaPath(hash, true)
+    }
+    return ""
+}
+
+DiaryBlobEntryRead :: (key: string) -> string {
+    if DiaryBlobDiaryName(key).count > 0 {
+        return CellRecordRead(key)
+    }
+    return MediaRecordRead(key)
+}
+
 // An entry from before copies: a photo kept as chunks.
 DiaryBlobChunked :: (entry: string, request: *DiaryBlobRequest) -> bool {
     count := ReadNumber(entry, FieldAt(entry, 0, "count"))
@@ -126,67 +183,150 @@ DiaryBlobChunked :: (entry: string, request: *DiaryBlobRequest) -> bool {
     return true
 }
 
-DiaryBlobAdd :: (pass: *DiaryBlobPass, kind: s32, name: string) {
+DiaryBlobAdd :: (pass: *DiaryBlobPass, kind: s32, key: string, node: s32) {
     if pass.count >= DIARY_BLOB_PASS_FILES {
         return
     }
     pass.jobs[pass.count].kind = kind
-    unused AppCopyText(name, pass.jobs[pass.count].name[:])
+    pass.jobs[pass.count].node = node
+    unused AppCopyText(key, pass.jobs[pass.count].key[:])
     pass.count += 1
 }
 
-// Chooses this pass's files: downloads first, so a photo shows on this
-// device soon, then uploads while the node takes photos and the account can
-// seal them.
-DiaryBlobPlan :: (pass: *DiaryBlobPass, node: string) -> bool {
-    pass.* = DiaryBlobPass.{}
-    if !SyncNodeAddress(node, pass.node[:]) || storage_db_handle() == null {
+// Copies the address of the pass's node `index` into output.
+DiaryBlobNode :: (pass: *DiaryBlobPass, index: s32, output: []u8) -> bool {
+    output[0] = cast(u8)0
+    if index < 0 || index >= pass.node_count {
         return false
     }
-    address := TextUntilNul(pass.node[:])
+    return AppCopyText(TextUntilNul(pass.nodes[index][:]), output)
+}
+
+// The sync node first, then the account's other nodes in list order.
+DiaryBlobNodes :: (pass: *DiaryBlobPass, active: string) {
+    if SyncNodeAddress(active, pass.nodes[0][:]) {
+        pass.node_count = 1
+    }
+    count := SyncNodeCount()
+    index: s32 = 0
+    while index < count && pass.node_count < SYNC_NODE_LIMIT {
+        address := SyncNodeAt(index)
+        normalized: [DIARY_BLOB_NODE_ADDRESS]u8
+        known := false
+        if SyncNodeAddress(address, normalized[:]) {
+            seen: s32 = 0
+            while seen < pass.node_count {
+                if TextUntilNul(pass.nodes[seen][:]) == TextUntilNul(normalized[:]) {
+                    known = true
+                }
+                seen += 1
+            }
+            if !known {
+                pass.nodes[pass.node_count] = normalized
+                pass.node_count += 1
+            }
+        }
+        PackageFree(address)
+        index += 1
+    }
+}
+
+// Whether this device should fetch the copy an entry names; `wanted` lists
+// the library originals asked for here (MediaWantedRead).
+DiaryBlobWanted :: (key: string, wanted: string) -> bool {
+    if DiaryBlobDiaryName(key).count > 0 || MediaPreviewKeyHash(key).count > 0 {
+        return true
+    }
+    hash := MediaItemKeyHash(key)
+    return hash.count > 0 && MediaWantedIn(wanted, hash)
+}
+
+// Chooses this pass's files: downloads first, so a photo shows on this
+// device soon, then uploads to each node that takes photos and lacks them.
+DiaryBlobPlan :: (pass: *DiaryBlobPass, active: string) -> bool {
+    pass.* = DiaryBlobPass.{}
+    // A delegate (Telegram) account plans too, but its requests are never
+    // sent: the host sends copies for the account's owner only.
+    if storage_db_handle() == null {
+        return false
+    }
+    DiaryBlobNodes(pass, active)
+    if pass.node_count == 0 {
+        return false
+    }
     key: [32]u8
-    uploads := SyncNodeMediaUpload(address) &&
-        storage_private_record_key_for_context(DIARY_BLOB_CONTEXT, *key[0]) != 0
+    sealing := storage_private_record_key_for_context(DIARY_BLOB_CONTEXT, *key[0]) != 0
     SecureWipe(*key[0], 32)
     bytes: s64 = 0
-    for round: 0..1 {
-        statement: *void
-        if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1,
-            *statement, null) != SQLITE_OK {
-            return false
+    wanted: [MEDIA_WANTED_MAX * 65 + 1]u8
+    MediaWantedRead(wanted[:])
+    // Downloads, from the sync node first.
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    while pass.count < DIARY_BLOB_PASS_FILES && bytes < DIARY_BLOB_PASS_BYTES &&
+    SqliteStep(statement) == SQLITE_ROW {
+        record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+        entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        media := DiaryMediaParse(entry)
+        if !DiaryMediaUploaded(media) || !DiaryBlobWanted(record_key, TextUntilNul(wanted[:])) {
+            continue
+        }
+        path := DiaryBlobLocalPath(record_key)
+        local := PackageFileSize(path)
+        PackageFree(path)
+        if local != media.size {
+            DiaryBlobAdd(pass, DIARY_BLOB_DOWNLOAD, record_key, 0)
+            bytes += media.size
+        }
+    }
+    SqliteFinalize(statement)
+    if !sealing {
+        return pass.count > 0
+    }
+    // Uploads, one node after another, starting where the last pass stopped.
+    first := storage_get_setting_int(DIARY_BLOB_NEXT_NODE_KEY, 0)
+    if first < 0 || first >= pass.node_count {
+        first = 0
+    }
+    round: s32 = 0
+    while round < pass.node_count {
+        node := (first + round) % pass.node_count
+        address_bytes: [DIARY_BLOB_NODE_ADDRESS]u8
+        unused DiaryBlobNode(pass, node, address_bytes[:])
+        address := TextUntilNul(address_bytes[:])
+        round += 1
+        if !SyncNodeMediaUpload(address) {
+            continue
+        }
+        if pass.count >= DIARY_BLOB_PASS_FILES || bytes >= DIARY_BLOB_PASS_BYTES {
+            // The next pass starts with this node.
+            storage_set_setting_int(DIARY_BLOB_NEXT_NODE_KEY, node)
+            return pass.count > 0
+        }
+        if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
+            return pass.count > 0
         }
         while pass.count < DIARY_BLOB_PASS_FILES && bytes < DIARY_BLOB_PASS_BYTES &&
         SqliteStep(statement) == SQLITE_ROW {
-            name := AppTextFromCString(SqliteColumnText(statement, 0), 201)
+            record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
             entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
-            if !DiaryStoreNameValid(name) {
-                continue
-            }
-            path := DiaryStorePath(name)
+            path := DiaryBlobLocalPath(record_key)
             local := PackageFileSize(path)
             PackageFree(path)
             media := DiaryMediaParse(entry)
-            if round == 0 {
-                if DiaryMediaUploaded(media) && local != media.size {
-                    DiaryBlobAdd(pass, DIARY_BLOB_DOWNLOAD, name)
-                    bytes += media.size
-                }
-                continue
-            }
-            if !uploads {
-                continue
-            }
             if media.valid {
                 if local == media.size && (!DiaryMediaUploaded(media) ||
                     !DiaryBlobOnNode(address, TextFromBytes(media.blob[:64]))) {
-                    DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, name)
+                    DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, record_key, node)
                     bytes += media.size
                 }
                 continue
             }
             old: DiaryBlobRequest
-            if DiaryBlobChunked(entry, *old) {
-                DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, name)
+            if DiaryBlobDiaryName(record_key).count > 0 && DiaryBlobChunked(entry, *old) {
+                DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, record_key, node)
                 bytes += old.size
             }
         }
@@ -195,10 +335,10 @@ DiaryBlobPlan :: (pass: *DiaryBlobPass, node: string) -> bool {
     return pass.count > 0
 }
 
-// The bytes of a photo this device has, or "": its file, or for a photo
-// from before copies, its chunks when the file is gone.
-DiaryBlobLocalBytes :: (name: string, hash: string, size: s64, chunked: bool) -> string {
-    path := DiaryStorePath(name)
+// The bytes of a photo this device has, or "": its file, or for a Diary
+// photo from before copies, its chunks when the file is gone.
+DiaryBlobLocalBytes :: (key: string, hash: string, size: s64, chunked: bool) -> string {
+    path := DiaryBlobLocalPath(key)
     data := PackageRead(path, DIARY_FILE_LIMIT)
     PackageFree(path)
     if data.count == size {
@@ -210,7 +350,8 @@ DiaryBlobLocalBytes :: (name: string, hash: string, size: s64, chunked: bool) ->
         }
     }
     PackageFree(data)
-    if chunked {
+    name := DiaryBlobDiaryName(key)
+    if chunked && name.count > 0 {
         return DiaryRecordRead(name)
     }
     return ""
@@ -228,43 +369,45 @@ DiaryBlobPath :: (request: *DiaryBlobRequest) {
 DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
     while pass.next < pass.count {
         job := pass.jobs[pass.next]
-        pass.next += 1
+        record_key := TextUntilNul(job.key[:])
         request.* = DiaryBlobRequest.{}
         request.kind = job.kind
-        request.name = job.name
-        name := TextUntilNul(job.name[:])
-        key := DiaryRecordKey(name)
-        entry := CellRecordRead(key)
-        PackageFree(key)
+        request.key = job.key
+        request.node_index = job.node
+        entry := DiaryBlobEntryRead(record_key)
         media := DiaryMediaParse(entry)
         if job.kind == DIARY_BLOB_DOWNLOAD {
             PackageFree(entry)
-            if !DiaryMediaUploaded(media) {
+            if !DiaryMediaUploaded(media) || job.node >= pass.node_count {
+                pass.next += 1
                 continue
             }
+            unused DiaryBlobNode(pass, job.node, request.node[:])
             request.method = "GET"
             request.blob = media.blob
-            request.key = media.key
+            request.key_hex = media.key
             request.hash = media.hash
             request.size = media.size
             request.answer_bytes = media.size + DIARY_BLOB_TAG + 1
             DiaryBlobPath(request)
             return true
         }
-        if pass.uploads_stopped {
+        pass.next += 1
+        if job.node < 0 || job.node >= pass.node_count || pass.stopped[job.node] {
             PackageFree(entry)
             continue
         }
+        unused DiaryBlobNode(pass, job.node, request.node[:])
         if media.valid {
             request.hash = media.hash
             request.size = media.size
-        } else if !DiaryBlobChunked(entry, request) {
+        } else if DiaryBlobDiaryName(record_key).count == 0 || !DiaryBlobChunked(entry, request) {
             PackageFree(entry)
             continue
         }
         PackageFree(entry)
         hash := TextFromBytes(request.hash[:64])
-        data := DiaryBlobLocalBytes(name, hash, request.size, request.chunked)
+        data := DiaryBlobLocalBytes(record_key, hash, request.size, request.chunked)
         if data.count == 0 {
             continue
         }
@@ -284,12 +427,18 @@ DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
         }
         descriptor := cast(*TextDescriptor)(*sealed)
         storage_sha256_hex(descriptor.data, sealed.count, *request.blob[0])
-        unused BytesToHex(*file_key[0], 32, *request.key[0], 65)
+        unused BytesToHex(*file_key[0], 32, *request.key_hex[0], 65)
         SecureWipe(*file_key[0], 32)
         // A named copy is re-made only to reach another node; it must be
         // the same copy.
         if DiaryMediaUploaded(media) && TextFromBytes(request.blob[:64]) != TextFromBytes(media.blob[:64]) {
             PackageFree(sealed)
+            continue
+        }
+        // Another job of this pass may already have put it there.
+        if DiaryBlobOnNode(TextUntilNul(request.node[:]), TextFromBytes(request.blob[:64])) {
+            PackageFree(sealed)
+            DiaryBlobNamed(request)
             continue
         }
         request.method = "PUT"
@@ -312,54 +461,77 @@ DiaryBlobShrinkChunks :: (request: *DiaryBlobRequest) {
     }
 }
 
-// Applies one answer. False stops the pass: the node or the account cannot
-// take more now.
+// The entry still describes the uploaded file; it now names the copy, so
+// the account's other devices can download it.
+DiaryBlobNamed :: (request: *DiaryBlobRequest) {
+    record_key := TextUntilNul(request.key[:])
+    blob := TextFromBytes(request.blob[:64])
+    key_hex := TextFromBytes(request.key_hex[:64])
+    entry := DiaryBlobEntryRead(record_key)
+    media := DiaryMediaParse(entry)
+    if DiaryMediaUploaded(media) {
+        PackageFree(entry)
+        return
+    }
+    same := media.valid && TextFromBytes(media.hash[:64]) == TextFromBytes(request.hash[:64])
+    if DiaryBlobDiaryName(record_key).count == 0 {
+        // A library record keeps every other field, including a later
+        // version's.
+        if same {
+            unused MediaRecordSetCopy(record_key, entry, blob, key_hex)
+        }
+        PackageFree(entry)
+        return
+    }
+    PackageFree(entry)
+    if !same && !request.chunked {
+        return
+    }
+    described: DiaryMedia
+    described.valid = true
+    described.hash = request.hash
+    described.size = request.size
+    named := DiaryMediaUploadedEntry(described, blob, key_hex)
+    written := CellRecordWrite(record_key, named)
+    PackageFree(named)
+    if written && request.chunked {
+        DiaryBlobShrinkChunks(request)
+    }
+}
+
+// Applies one answer. False stops the pass: the account cannot move copies
+// now. A node that fails only stops its own uploads.
 DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s32,
     answer: []u8) -> bool {
-    name := TextUntilNul(request.name[:])
-    node := TextUntilNul(pass.node[:])
+    record_key := TextUntilNul(request.key[:])
+    node := TextUntilNul(request.node[:])
     blob := TextFromBytes(request.blob[:64])
     if request.kind == DIARY_BLOB_UPLOAD {
         PackageFree(request.body)
         request.body = ""
+        index := request.node_index
         if status == 413 {
-            pass.uploads_stopped = true
             unused SyncNodeStorageRecordFull(node, TextFromBytes(answer))
-            return true
         }
         if status != 204 && status != 200 {
-            return false
-        }
-        DiaryBlobRemember(node, blob)
-        media := DiaryMediaRead(name)
-        if DiaryMediaUploaded(media) {
+            if index >= 0 && index < pass.node_count {
+                pass.stopped[index] = true
+            }
             return true
         }
-        // The entry still describes this file; it now names the copy.
-        if (media.valid && TextFromBytes(media.hash[:64]) == TextFromBytes(request.hash[:64])) ||
-        request.chunked {
-            described: DiaryMedia
-            described.valid = true
-            described.hash = request.hash
-            described.size = request.size
-            entry := DiaryMediaUploadedEntry(described, blob, TextFromBytes(request.key[:64]))
-            key := DiaryRecordKey(name)
-            written := CellRecordWrite(key, entry)
-            PackageFree(key)
-            PackageFree(entry)
-            if written && request.chunked {
-                DiaryBlobShrinkChunks(request)
-            }
-        }
+        DiaryBlobRemember(node, blob)
+        DiaryBlobNamed(request)
         return true
     }
-    if status == 404 {
-        return true
-    }
+    // A download that found nothing on this node asks the next one.
     if status != 200 {
-        return false
+        DiaryBlobAskNext(pass)
+        return true
     }
-    media := DiaryMediaRead(name)
+    pass.next += 1
+    entry := DiaryBlobEntryRead(record_key)
+    media := DiaryMediaParse(entry)
+    PackageFree(entry)
     if !DiaryMediaUploaded(media) || TextFromBytes(media.blob[:64]) != blob {
         return true
     }
@@ -367,9 +539,9 @@ DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s3
     if plain.count == 0 {
         return true
     }
-    directory := DiaryStoreDirectory()
-    path := DiaryStorePath(name)
-    if storage_ensure_dir(directory) != 0 && PackageWrite(path, plain) {
+    path := DiaryBlobLocalPath(record_key)
+    directory := DiaryBlobDirectory(record_key)
+    if directory.count > 0 && storage_ensure_dir(directory) != 0 && PackageWrite(path, plain) {
         DiaryBlobRemember(node, blob)
         diary_blob_generation += 1
     }
@@ -379,7 +551,40 @@ DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s3
     return true
 }
 
+// A failed download moves on to the next node, or ends when every node
+// was asked.
+DiaryBlobAskNext :: (pass: *DiaryBlobPass) {
+    if pass.next >= pass.count {
+        return
+    }
+    pass.jobs[pass.next].node += 1
+    if pass.jobs[pass.next].node >= pass.node_count {
+        pass.next += 1
+    }
+}
+
+DiaryBlobDirectory :: (key: string) -> string {
+    if DiaryBlobDiaryName(key).count > 0 {
+        return DiaryStoreDirectory()
+    }
+    return MediaDirectory()
+}
+
+// Frees what a request still holds, after its answer or without one.
 DiaryBlobAbandon :: (request: *DiaryBlobRequest) {
     PackageFree(request.body)
     request.body = ""
+}
+
+// A request that got no answer: an upload stops that node's uploads for
+// this pass, and a download asks the next node.
+DiaryBlobFailed :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) {
+    if request.kind == DIARY_BLOB_DOWNLOAD {
+        DiaryBlobAskNext(pass)
+        return
+    }
+    index := request.node_index
+    if index >= 0 && index < pass.node_count {
+        pass.stopped[index] = true
+    }
 }

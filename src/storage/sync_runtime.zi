@@ -26,6 +26,7 @@
 #import, file "sync_account.zi";
 #import, file "storage_core.zi";
 #import, file "sync_node_storage.zi";
+#import, file "media_node_session.zi";
 #import, file "sync_result.zi";
 #import, file "../app/text_buffers.zi";
 
@@ -147,9 +148,57 @@ SyncStoredAccount :: (base_url: string) -> s32 {
     return outcome
 }
 
-// One signed request for a sealed Diary copy (cells/diary_blobs.zi): PUT
-// stores body at path, GET answers with the copy in output. The bearer
-// session is the sync's, renewed here when it has run out.
+// Signs in to a node for photo copies and registers this device there.
+MediaSessionOpen :: (client: Client, address: string, session: *Session,
+    material: *DeviceKeyMaterial, now: s64) -> AuthResult {
+    signed_in := Login(client, session)
+    if signed_in != cast(AuthResult)AuthResult.AUTH_OK {
+        return signed_in
+    }
+    SetExpiry(session, now)
+    registered := RegisterDevice(client, session, DeviceFromKey(material), now, null, NativeNonce)
+    if registered != cast(AuthResult)AuthResult.AUTH_OK {
+        session.* = Session.{}
+        return registered
+    }
+    MediaSessionSave(address, session)
+    return cast(AuthResult)AuthResult.AUTH_OK
+}
+
+// Sends one signed blob request on a session; false when no answer came.
+SendBlobOnce :: (client: Client, session: *Session, material: *DeviceKeyMaterial, now: s64,
+    method: string, path: string, body: string, url: string, output: []u8,
+    status: *s32, length: *s64, result: *s32) -> bool {
+    transaction: [8192]u8
+    prepared := PrepareRequestHeader(client, session, DeviceFromKey(material), now,
+        null, NativeNonce, method, path, body, transaction[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        result.* = cast(s32)prepared
+        return false
+    }
+    headers: [1]HttpHeader
+    headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(transaction[:])}
+    request := HttpRequest.{.method = method, .url = url,
+        .token = TextUntilNul(session.token[:]), .body = body, .headers = headers[:]}
+    if body.count > 0 {
+        request.content_type = "application/octet-stream"
+    }
+    // A copy of up to 16 MB needs longer than a sync's request.
+    answer := SendCurlWithin(request, output, 180000)
+    status.* = answer.status
+    length.* = answer.length
+    if answer.code != 0 || answer.truncated {
+        result.* = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+        return false
+    }
+    result.* = cast(s32)AuthResult.AUTH_OK
+    return true
+}
+
+// One signed request for a sealed photo copy (cells/diary_blobs.zi) on the
+// node at base_url: PUT stores body at path, GET answers with the copy in
+// output. It uses that node's own media session, opened here when there is
+// none and opened again once when the node answers 401.
 #program_export
 SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
     output: []u8, status: *s32, length: *s64) -> s32 {
@@ -158,6 +207,12 @@ SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
     if StoredAccountMode() != AccountModeOwner {
         return cast(s32)AuthResult.AUTH_NO_ACCOUNT
     }
+    server: [512]u8
+    url: [1024]u8
+    if !NormalizeUrl(base_url, server[:]) || !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
+        return cast(s32)AuthResult.AUTH_INVALID_URL
+    }
+    address := TextUntilNul(server[:])
     account: AccountKeys
     if sync_account_load(*account) == 0 {
         return cast(s32)AuthResult.AUTH_NO_ACCOUNT
@@ -169,46 +224,35 @@ SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
     }
     defer { WipeDeviceKey(*material) }
     client: Client
-    if !OpenAccountClient(base_url, *account, storage_sync_client_id(), *client) {
+    if !OpenAccountClient(address, *account, storage_sync_client_id(), *client) {
         return cast(s32)AuthResult.AUTH_NO_ACCOUNT
     }
     client.send = SendNative
     now := time(null)
     session: Session
-    LoadSavedSession(*session, now)
-    if !TokenValid(*session, now) {
-        signed_in := Login(client, *session)
-        if signed_in != cast(AuthResult)AuthResult.AUTH_OK {
-            return cast(s32)signed_in
+    MediaSessionLoad(address, *session, now)
+    result: s32 = cast(s32)AuthResult.AUTH_OK
+    attempt: s32 = 0
+    while attempt < 2 {
+        if !TokenValid(*session, now) {
+            opened := MediaSessionOpen(client, address, *session, *material, now)
+            if opened != cast(AuthResult)AuthResult.AUTH_OK {
+                return cast(s32)opened
+            }
         }
-        SaveSession(*session)
+        if !SendBlobOnce(client, *session, *material, now, method, path, body, TextUntilNul(url[:]),
+            output, status, length, *result) {
+            return result
+        }
+        if status.* != 401 {
+            return result
+        }
+        // The node no longer knows this session: sign in to it once more.
+        MediaSessionForget(address)
+        ClearSession(*session)
+        attempt += 1
     }
-    transaction: [8192]u8
-    prepared := PrepareRequestHeader(client, *session, DeviceFromKey(*material), now,
-        null, NativeNonce, method, path, body, transaction[:])
-    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
-        return cast(s32)prepared
-    }
-    server: [512]u8
-    url: [1024]u8
-    if !NormalizeUrl(base_url, server[:]) || !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
-        return cast(s32)AuthResult.AUTH_INVALID_URL
-    }
-    headers: [1]HttpHeader
-    headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(transaction[:])}
-    request := HttpRequest.{.method = method, .url = TextUntilNul(url[:]),
-        .token = TextUntilNul(session.token[:]), .body = body, .headers = headers[:]}
-    if body.count > 0 {
-        request.content_type = "application/octet-stream"
-    }
-    // A copy of up to 16 MB needs longer than a sync's request.
-    result := SendCurlWithin(request, output, 180000)
-    status.* = result.status
-    length.* = result.length
-    if result.code != 0 || result.truncated {
-        return cast(s32)AuthResult.AUTH_REQUEST_FAILED
-    }
-    return cast(s32)AuthResult.AUTH_OK
+    return result
 }
 
 // Expired context can perform only this key-bound challenge/session exchange.

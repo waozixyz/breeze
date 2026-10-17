@@ -1,0 +1,585 @@
+// Photos' screen: the library's photos newest first under the day each was
+// taken, one photo on its own, and Trash, composed from standard Kryon
+// widgets. The host keeps the library; Photos only lists, draws and
+// changes it through the media calls.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "text"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "image_props"
+#import "image_widget"
+#import "box_props"
+#import "box_widget"
+#import "press_props"
+#import "press_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "semantic"
+#import "tree"
+#import, file "../../src/cells/node_app_types.zi";
+host_api :: #system_library "host_api";
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+AppLocaleHost :: (key: string) -> string #foreign host_api;
+MediaQueryHost :: (day: string, trashed: bool) -> s32 #foreign host_api;
+MediaItemHost :: (index: s32) -> MediaEntry #foreign host_api;
+MediaAssetHost :: (hash: string, original: bool) -> string #foreign host_api;
+MediaPickHost :: () -> bool #foreign host_api;
+MediaStatusHost :: () -> MediaStatus #foreign host_api;
+MediaUpdateHost :: (hash: string, field: string, value: string) -> bool #foreign host_api;
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextAlign;
+using TextWrap;
+using ImageFit;
+using SemanticKind;
+
+PHOTOS_VIEW_GALLERY :: 0
+PHOTOS_VIEW_PHOTO :: 1
+// The most photos one list shows; the host lists as many.
+PHOTOS_ROWS :: 20000
+PHOTOS_NOTICE_SECONDS :: 4
+
+ICON_ADD :: "S1.8rr:M12 5V19M5 12H19"
+ICON_BACK :: "S1.8rr:M15 5L8 12L15 19"
+// The whole grid again, apart from the app bar's way out of Photos.
+ICON_ALL :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
+ICON_NEXT :: "S1.8rr:M9 5L16 12L9 19"
+ICON_TRASH :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+ICON_RESTORE :: "S1.6rr:M5 9C6.5 5.5 9 4 12 4C16.5 4 20 7.5 20 12C20 16.5 16.5 20 12 20C8.5 20 5.8 17.8 4.6 15M5 4V9H10"
+
+// A tile waiting for its preview: the app palette's mist, or a deep jade
+// in the dark.
+TILE_LIGHT :: Color.{221, 233, 229, 255}
+TILE_DARK :: Color.{38, 52, 49, 255}
+
+frame: AppUiFrame;
+state: AppMessage;
+status: MediaStatus;
+view: s32 = PHOTOS_VIEW_GALLERY;
+trash: bool;
+// Each list keeps its own place.
+library_scroll: s32;
+trash_scroll: s32;
+open_index: s32 = -1;
+open_hash: string;
+notice: string;
+notice_until: s64;
+picks_seen: s32 = -1;
+// The list as laid out: each photo's capture day as YYYYMMDD, and the
+// first photo of each day.
+layout_revision: s32 = -1;
+layout_trash: bool;
+row_count: s32;
+row_day: [PHOTOS_ROWS]s32;
+section_count: s32;
+section_first: [PHOTOS_ROWS]s32;
+
+Scale :: (pixels: s32) -> s32 {
+    return cast(s32)(cast(float32)pixels * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Finish :: () -> AppMessage {
+    state.succeeded = true
+    return state
+}
+
+Notice :: (key: string) {
+    notice = key
+    notice_until = state.time + PHOTOS_NOTICE_SECONDS
+}
+
+NoticeText :: () -> string {
+    if notice.count == 0 || state.time >= notice_until {
+        return ""
+    }
+    return AppLocaleHost(notice)
+}
+
+Line :: (key: u64, x: s32, y: s32, width: s32, height: s32, text: string, center: bool) {
+    Text(frame.session, TextProps.{.key = key, .bounds = Bounds(x, y, width, height),
+            .text = text, .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto,
+            .align = cast(TextAlign)(ifx center then TextAlignCenter else TextAlignStart),
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+// One line that ends in "..." when it does not fit, for names.
+Label :: (key: u64, x: s32, y: s32, width: s32, height: s32, text: string, center: bool) {
+    Text(frame.session, TextProps.{.key = key, .bounds = Bounds(x, y, width, height),
+            .text = text, .font = frame.font, .wrap = cast(TextWrap)TextWrapEllipsis,
+            .align = cast(TextAlign)(ifx center then TextAlignCenter else TextAlignStart),
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+ChoiceButton :: (id: s32, x: s32, y: s32, width: s32, height: s32, label: string, chosen: bool) -> bool {
+    return Button(frame.session, ButtonProps.{.id = id, .bounds = Bounds(x, y, width, height),
+            .label = label, .selected = chosen, .fit_content = true,
+            .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+}
+
+IconButton :: (id: s32, x: s32, y: s32, size: s32, label: string, icon: string, disabled: bool) -> bool {
+    return Button(frame.session, ButtonProps.{.id = id, .bounds = Bounds(x, y, size, size),
+            .label = label, .icon_shape = icon, .icon_only = true, .disabled = disabled,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0
+}
+
+// Dates.
+
+// 20261017 from "2026-10-17", or 0.
+DayNumber :: (day: string) -> s32 {
+    if day.count != 10 || day[4] != #char "-" || day[7] != #char "-" {
+        return 0
+    }
+    value: s32 = 0
+    index: s64 = 0
+    while index < 10 {
+        if index != 4 && index != 7 {
+            digit := day[index]
+            if digit < #char "0" || digit > #char "9" {
+                return 0
+            }
+            value = value * 10 + cast(s32)(digit - #char "0")
+        }
+        index += 1
+    }
+    return value
+}
+
+LeapYear :: (year: s32) -> bool {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+MonthDays :: (year: s32, month: s32) -> s32 {
+    if month == 2 {
+        return ifx LeapYear(year) then 29 else 28
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 {
+        return 30
+    }
+    return 31
+}
+
+// The day before, as YYYYMMDD.
+DayBefore :: (day: s32) -> s32 {
+    year := day / 10000
+    month := (day / 100) % 100
+    date := day % 100
+    if date > 1 {
+        return day - 1
+    }
+    if month > 1 {
+        return year * 10000 + (month - 1) * 100 + MonthDays(year, month - 1)
+    }
+    return (year - 1) * 10000 + 1231
+}
+
+Number :: (out: *Vec(u8), value: s32, digits: s32) {
+    if digits >= 2 && value < 10 {
+        BuilderPrint(out, "0")
+    }
+    BuilderPrint(out, "%", value)
+}
+
+MonthKey :: (month: s32) -> string {
+    keys: [12]string = .["photos_month_1", "photos_month_2", "photos_month_3", "photos_month_4",
+    "photos_month_5", "photos_month_6", "photos_month_7", "photos_month_8", "photos_month_9",
+    "photos_month_10", "photos_month_11", "photos_month_12"]
+    if month < 1 || month > 12 {
+        return keys[0]
+    }
+    return keys[month - 1]
+}
+
+// A day's heading: Today, Yesterday, or the date in the person's language,
+// whose template names {d} or {dd} for the day, {m} or {mm} for the
+// month's number, {M} for its name and {y} for the year.
+DayHeading :: (day: s32) -> string {
+    today := DayNumber(status.today)
+    if day == today && today != 0 {
+        return AppLocaleHost("photos_today")
+    }
+    if today != 0 && day == DayBefore(today) {
+        return AppLocaleHost("photos_yesterday")
+    }
+    template := AppLocaleHost("photos_date")
+    year := day / 10000
+    month := (day / 100) % 100
+    date := day % 100
+    out: Vec(u8)
+    at: s64 = 0
+    while at < template.count {
+        rest := template[at:]
+        if rest.count >= 4 && rest[:4] == "{dd}" {
+            Number(*out, date, 2)
+            at += 4
+        } else if rest.count >= 4 && rest[:4] == "{mm}" {
+            Number(*out, month, 2)
+            at += 4
+        } else if rest.count >= 3 && rest[:3] == "{d}" {
+            Number(*out, date, 1)
+            at += 3
+        } else if rest.count >= 3 && rest[:3] == "{m}" {
+            Number(*out, month, 1)
+            at += 3
+        } else if rest.count >= 3 && rest[:3] == "{M}" {
+            BuilderPrint(*out, "%", AppLocaleHost(MonthKey(month)))
+            at += 3
+        } else if rest.count >= 3 && rest[:3] == "{y}" {
+            Number(*out, year, 4)
+            at += 3
+        } else {
+            unused VecPush(out, template[at])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// The list.
+
+// Lists the photos of the view and lays them out again when they changed.
+Refresh :: () {
+    count := MediaQueryHost("", trash)
+    status = MediaStatusHost()
+    if count > PHOTOS_ROWS {
+        count = PHOTOS_ROWS
+    }
+    if layout_revision == status.revision && layout_trash == trash && row_count == count {
+        return
+    }
+    layout_revision = status.revision
+    layout_trash = trash
+    row_count = count
+    section_count = 0
+    index: s32 = 0
+    while index < count {
+        entry := MediaItemHost(index)
+        row_day[index] = DayNumber(entry.day)
+        if index == 0 || row_day[index] != row_day[index - 1] {
+            section_first[section_count] = index
+            section_count += 1
+        }
+        index += 1
+    }
+}
+
+SectionSize :: (section: s32) -> s32 {
+    last := ifx section + 1 < section_count then section_first[section + 1] else row_count
+    return last - section_first[section]
+}
+
+// Opens a photo of the list on its own.
+OpenPhoto :: (index: s32) {
+    if index < 0 || index >= row_count {
+        return
+    }
+    entry := MediaItemHost(index)
+    open_index = index
+    open_hash = entry.hash
+    view = PHOTOS_VIEW_PHOTO
+}
+
+// The open photo's place in the list, which may have moved since: a photo
+// added or arriving from another device, or the open one moved away.
+FindOpen :: () {
+    if open_index >= 0 && open_index < row_count && MediaItemHost(open_index).hash == open_hash {
+        return
+    }
+    index: s32 = 0
+    while index < row_count {
+        if MediaItemHost(index).hash == open_hash {
+            open_index = index
+            return
+        }
+        index += 1
+    }
+    // It left this list: show the one now in its place.
+    if row_count == 0 {
+        view = PHOTOS_VIEW_GALLERY
+        open_index = -1
+        return
+    }
+    if open_index >= row_count {
+        open_index = row_count - 1
+    }
+    if open_index < 0 {
+        open_index = 0
+    }
+    open_hash = MediaItemHost(open_index).hash
+}
+
+// What the last pick did, once it finished.
+FollowPicks :: () {
+    if picks_seen < 0 {
+        picks_seen = status.picks
+        return
+    }
+    if status.picks == picks_seen {
+        return
+    }
+    picks_seen = status.picks
+    if status.added {
+        Notice("photos_added")
+    } else if status.existed {
+        Notice("photos_already_added")
+    } else if status.failed {
+        Notice("photos_add_failed")
+    }
+    if status.added || status.existed {
+        // Show the photo where it now is, in the library.
+        trash = false
+        view = PHOTOS_VIEW_GALLERY
+        library_scroll = 0
+    }
+}
+
+ColumnLeft :: () -> s32 {
+    return (frame.width - ColumnWidth()) / 2
+}
+
+ColumnWidth :: () -> s32 {
+    width := frame.width - Scale(12) * 2
+    limit := Scale(1200)
+    return ifx width > limit then limit else width
+}
+
+TopBar :: (top: s32) -> s32 {
+    left := ColumnLeft()
+    width := ColumnWidth()
+    gap := Scale(8)
+    height := Scale(40)
+    add_width := Scale(148)
+    if add_width > width / 3 {
+        add_width = width / 3
+    }
+    tab_width := (width - add_width - gap * 2) / 2
+    if tab_width > Scale(120) {
+        tab_width = Scale(120)
+    }
+    if ChoiceButton(7001, left, top, tab_width, height, AppLocaleHost("photos_tab_library"), !trash) &&
+    trash {
+        trash = false
+        view = PHOTOS_VIEW_GALLERY
+    }
+    if ChoiceButton(7002, left + tab_width + gap, top, tab_width, height, AppLocaleHost("photos_tab_trash"),
+        trash) && !trash {
+        trash = true
+        view = PHOTOS_VIEW_GALLERY
+    }
+    label := AppLocaleHost(ifx status.picking then "photos_adding" else "photos_add")
+    if Button(frame.session, ButtonProps.{.id = 7003,
+            .bounds = Bounds(left + width - add_width, top, add_width, height),
+            .label = label, .icon_shape = ICON_ADD, .disabled = status.picking, .fit_content = true,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        unused MediaPickHost()
+    }
+    return top + height + Scale(8)
+}
+
+Tile :: (index: s32, x: s32, y: s32, size: s32) {
+    entry := MediaItemHost(index)
+    Box(frame.session, BoxProps.{.key = cast(u64)(300000 + index), .bounds = Bounds(x, y, size, size),
+            .fill = ifx frame.dark then TILE_DARK else TILE_LIGHT, .radius = cast(float32)Scale(4)})
+    path := MediaAssetHost(entry.hash, false)
+    if path.count > 0 {
+        Image(frame.session, ImageProps.{.key = cast(u64)(400000 + index), .asset_path = path,
+                .alt_text = entry.name, .bounds = Bounds(x, y, size, size),
+                .fit = cast(ImageFit)ImageFitCover, .smooth = true})
+    }
+    press := Press(frame.session, PressProps.{.key = cast(u64)(500000 + index), .id = 500000 + index,
+            .bounds = Bounds(x, y, size, size), .label = entry.name, .now = frame.now})
+    if press.clicked {
+        OpenPhoto(index)
+    }
+}
+
+GalleryView :: (top: s32) {
+    left := ColumnLeft()
+    width := ColumnWidth()
+    text := NoticeText()
+    if text.count > 0 {
+        Line(cast(u64)7010, left, top, width, Scale(32), text, false)
+        top += Scale(36)
+    }
+    if row_count == 0 {
+        key := ifx trash then "photos_trash_empty" else "photos_empty"
+        Line(cast(u64)7011, left, top + Scale(16), width, Scale(96), AppLocaleHost(key), true)
+        return
+    }
+    gap := Scale(4)
+    columns := width / Scale(116)
+    if columns < 3 {
+        columns = 3
+    }
+    if columns > 10 {
+        columns = 10
+    }
+    tile := (width - gap * (columns - 1)) / columns
+    heading := Scale(44)
+    note: s32 = 0
+    if trash {
+        note = Scale(52)
+    }
+    content := note
+    section: s32 = 0
+    while section < section_count {
+        rows := (SectionSize(section) + columns - 1) / columns
+        content += heading + rows * (tile + gap)
+        section += 1
+    }
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)7020,
+            .bounds = Bounds(left, top, width, frame.height - frame.bottom - top - Scale(4)),
+            .content_height = content, .scroll_offset = ifx trash then trash_scroll else library_scroll})
+    if trash {
+        trash_scroll = scroll.scroll_offset
+    } else {
+        library_scroll = scroll.scroll_offset
+    }
+    if !scroll.opened {
+        return
+    }
+    x := cast(s32)scroll.content.x
+    y := cast(s32)scroll.content.y
+    inner := cast(s32)scroll.content.width
+    visible_top := cast(s32)scroll.viewport.y
+    visible_bottom := visible_top + cast(s32)scroll.viewport.height
+    if trash {
+        Line(cast(u64)7021, x, y, inner, note, AppLocaleHost("photos_trash_note"), false)
+        y += note
+    }
+    section = 0
+    while section < section_count && y < visible_bottom {
+        first := section_first[section]
+        size := SectionSize(section)
+        rows := (size + columns - 1) / columns
+        height := heading + rows * (tile + gap)
+        if y + height >= visible_top {
+            if y + heading >= visible_top {
+                Text(frame.session, TextProps.{.key = cast(u64)(200000 + section),
+                        .bounds = Bounds(x, y, inner, heading), .text = DayHeading(row_day[first]),
+                        .font = frame.font, .wrap = cast(TextWrap)TextWrapEllipsis,
+                        .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2,
+                        .vertical_align = cast(TextAlign)TextAlignCenter})
+            }
+            row: s32 = 0
+            while row < rows {
+                row_y := y + heading + row * (tile + gap)
+                if row_y + tile >= visible_top && row_y <= visible_bottom {
+                    column: s32 = 0
+                    while column < columns && row * columns + column < size {
+                        Tile(first + row * columns + column, x + column * (tile + gap), row_y, tile)
+                        column += 1
+                    }
+                }
+                row += 1
+            }
+        }
+        y += height
+        section += 1
+    }
+    End(frame.session)
+}
+
+// When a photo was taken: its day's heading and, when known, its time.
+TakenText :: (entry: MediaEntry) -> string {
+    heading := DayHeading(DayNumber(entry.day))
+    if entry.taken.count < 16 || entry.taken[10] != #char "T" {
+        return heading
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "% · %", heading, entry.taken[11:16])
+    return BuilderFinish(out)
+}
+
+PhotoView :: (top: s32) {
+    entry := MediaItemHost(open_index)
+    left := ColumnLeft()
+    width := ColumnWidth()
+    button := Scale(44)
+    gap := Scale(8)
+    if IconButton(7101, left, top, button, AppLocaleHost("photos_all"), ICON_ALL, false) {
+        view = PHOTOS_VIEW_GALLERY
+        return
+    }
+    Label(cast(u64)7102, left + button + gap, top, width - button - gap, Scale(24), entry.name, false)
+    Label(cast(u64)7103, left + button + gap, top + Scale(22), width - button - gap, Scale(22),
+        TakenText(entry), false)
+    image_top := top + button + gap
+    controls := Scale(52)
+    image_height := frame.height - frame.bottom - image_top - controls - gap
+    if image_height < Scale(80) {
+        image_height = Scale(80)
+    }
+    path := MediaAssetHost(entry.hash, true)
+    if path.count == 0 {
+        Line(cast(u64)7104, left, image_top, width, image_height, AppLocaleHost("photos_not_here"), true)
+    } else {
+        Image(frame.session, ImageProps.{.key = cast(u64)7105, .asset_path = path, .alt_text = entry.name,
+                .bounds = Bounds(left, image_top, width, image_height),
+                .fit = cast(ImageFit)ImageFitContain, .smooth = true})
+        // The preview shows until the whole photo has arrived.
+        if path.count > 14 && path[:14] == "media/preview/" {
+            Line(cast(u64)7106, left, image_top + image_height - Scale(32), width, Scale(32),
+                AppLocaleHost("photos_loading_original"), true)
+        }
+    }
+    y := image_top + image_height + gap
+    text := NoticeText()
+    if text.count > 0 {
+        Line(cast(u64)7107, left, y - Scale(36), width, Scale(32), text, true)
+    }
+    if IconButton(7110, left, y, button, AppLocaleHost("photos_previous"), ICON_BACK, open_index <= 0) {
+        OpenPhoto(open_index - 1)
+    }
+    if IconButton(7111, left + width - button, y, button, AppLocaleHost("photos_next"), ICON_NEXT,
+        open_index >= row_count - 1) {
+        OpenPhoto(open_index + 1)
+    }
+    action_width := Scale(180)
+    if action_width > width - (button + gap) * 2 {
+        action_width = width - (button + gap) * 2
+    }
+    action_key := ifx entry.trashed then "photos_restore" else "photos_move_to_trash"
+    if Button(frame.session, ButtonProps.{.id = 7112,
+            .bounds = Bounds(left + (width - action_width) / 2, y, action_width, button),
+            .label = AppLocaleHost(action_key), .icon_shape = ifx entry.trashed then ICON_RESTORE else ICON_TRASH,
+            .fit_content = true, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        if MediaUpdateHost(entry.hash, "trashed", ifx entry.trashed then "0" else "1") {
+            Notice(ifx entry.trashed then "photos_restored" else "photos_moved_to_trash")
+        } else {
+            Notice("photos_change_failed")
+        }
+    }
+}
+
+PhotosView :: (message: AppMessage) -> AppMessage {
+    frame = ReadAppUiHost()
+    state = message
+    Refresh()
+    FollowPicks()
+    top := Scale(12)
+    if view == PHOTOS_VIEW_PHOTO {
+        FindOpen()
+    }
+    if view == PHOTOS_VIEW_PHOTO {
+        PhotoView(top)
+        return Finish()
+    }
+    top = TopBar(top)
+    GalleryView(top)
+    return Finish()
+}

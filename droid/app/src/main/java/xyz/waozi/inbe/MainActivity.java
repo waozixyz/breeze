@@ -320,6 +320,8 @@ public class MainActivity extends NativeActivity {
     private boolean notificationPermissionRequestInFlight = false;
     private int lastDeleteRepeatCount = -1;
     private int pendingImportKind = 0;
+    // A photo for the media library (android_import.zi), copied as picked.
+    private static final int MEDIA_IMPORT_KIND = 6;
     private int pendingQrScanKind = 5;
     String lastHealthConnectPath = null;
     private boolean pendingStartPractice = false;
@@ -662,7 +664,10 @@ public class MainActivity extends NativeActivity {
             @Override
             public void run() {
                 try {
-                    Intent intent = kind == DiaryPhotoImport.KIND
+                    // Diary photos and library photos both use the photo picker;
+                    // the library keeps the picked file's own bytes.
+                    boolean photo = kind == DiaryPhotoImport.KIND || kind == MEDIA_IMPORT_KIND;
+                    Intent intent = photo
                             ? DiaryPhotoImport.pickerIntent()
                             : new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     if (Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
@@ -678,7 +683,7 @@ public class MainActivity extends NativeActivity {
                     try {
                         startActivityForResult(intent, REQUEST_IMPORT_ZIP);
                     } catch (android.content.ActivityNotFoundException unavailable) {
-                        if (kind != DiaryPhotoImport.KIND
+                        if (!photo
                                 || Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
                             throw unavailable;
                         }

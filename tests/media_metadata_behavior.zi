@@ -1,0 +1,184 @@
+#import, file "../src/cells/media_metadata.zi";
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+Byte :: (out: *Vec(u8), value: s64) {
+    unused VecPush(out.*, cast(u8)(value & 255))
+}
+
+Word :: (out: *Vec(u8), value: s64, little: bool) {
+    if little {
+        Byte(out, value)
+        Byte(out, value >> 8)
+    } else {
+        Byte(out, value >> 8)
+        Byte(out, value)
+    }
+}
+
+Long :: (out: *Vec(u8), value: s64, little: bool) {
+    if little {
+        Word(out, value, true)
+        Word(out, value >> 16, true)
+    } else {
+        Word(out, value >> 16, false)
+        Word(out, value, false)
+    }
+}
+
+Chars :: (out: *Vec(u8), value: string) {
+    for byte: value {
+        unused VecPush(out.*, byte)
+    }
+}
+
+// Exif text ends with a NUL byte.
+Ascii :: (out: *Vec(u8), value: string) {
+    Chars(out, value)
+    Byte(out, 0)
+}
+
+// A TIFF whose Exif IFD holds the original date and, when given, its offset.
+Tiff :: (out: *Vec(u8), little: bool, date: string, offset: string, orientation: s64 = 0) {
+    if little {
+        Chars(out, "II")
+    } else {
+        Chars(out, "MM")
+    }
+    Word(out, 42, little)
+    Long(out, 8, little)
+    // IFD0 at 8: the orientation when given, then the Exif IFD pointer.
+    entries: s64 = ifx orientation > 0 then 2 else 1
+    exif := 8 + 2 + entries * 12 + 4
+    Word(out, entries, little)
+    if orientation > 0 {
+        Word(out, 274, little)
+        Word(out, 3, little)
+        Long(out, 1, little)
+        Word(out, orientation, little)
+        Word(out, 0, little)
+    }
+    Word(out, 34665, little)
+    Word(out, 4, little)
+    Long(out, 1, little)
+    Long(out, exif, little)
+    Long(out, 0, little)
+    // The Exif IFD.
+    fields: s64 = ifx offset.count > 0 then 2 else 1
+    Word(out, fields, little)
+    data := exif + 2 + fields * 12 + 4
+    Word(out, 36867, little)
+    Word(out, 2, little)
+    Long(out, cast(s64)date.count + 1, little)
+    Long(out, data, little)
+    if offset.count > 0 {
+        Word(out, 36881, little)
+        Word(out, 2, little)
+        Long(out, cast(s64)offset.count + 1, little)
+        Long(out, data + cast(s64)date.count + 1, little)
+    }
+    Long(out, 0, little)
+    Ascii(out, date)
+    if offset.count > 0 {
+        Ascii(out, offset)
+    }
+}
+
+Jpeg :: (date: string, offset: string, orientation: s64 = 0) -> string {
+    tiff: Vec(u8)
+    Tiff(*tiff, false, date, offset, orientation)
+    out: Vec(u8)
+    Byte(*out, 255)
+    Byte(*out, 216)
+    // A JFIF segment first, as cameras and editors write.
+    Byte(*out, 255)
+    Byte(*out, 224)
+    Word(*out, 4, false)
+    Word(*out, 0, false)
+    Byte(*out, 255)
+    Byte(*out, 225)
+    Word(*out, 2 + 6 + tiff.count, false)
+    Ascii(*out, "Exif")
+    Byte(*out, 0)
+    for byte: VecSlice(tiff, 0, tiff.count) {
+        unused VecPush(out, byte)
+    }
+    Byte(*out, 255)
+    Byte(*out, 217)
+    return BuilderFinish(out)
+}
+
+Png :: (date: string, orientation: s64 = 0) -> string {
+    tiff: Vec(u8)
+    Tiff(*tiff, true, date, "", orientation)
+    out: Vec(u8)
+    signature: [8]s64 = .[137, 80, 78, 71, 13, 10, 26, 10]
+    for value: signature {
+        Byte(*out, value)
+    }
+    Long(*out, 13, false)
+    Chars(*out, "IHDR")
+    for index: 1..13 {
+        Byte(*out, 0)
+    }
+    Long(*out, 0, false)
+    Long(*out, tiff.count, false)
+    Chars(*out, "eXIf")
+    for byte: VecSlice(tiff, 0, tiff.count) {
+        unused VecPush(out, byte)
+    }
+    Long(*out, 0, false)
+    return BuilderFinish(out)
+}
+
+Webp :: (date: string) -> string {
+    tiff: Vec(u8)
+    Tiff(*tiff, true, date, "+05:30")
+    out: Vec(u8)
+    Chars(*out, "RIFF")
+    Long(*out, 4 + 8 + 6 + tiff.count, true)
+    Chars(*out, "WEBP")
+    Chars(*out, "EXIF")
+    Long(*out, 6 + tiff.count, true)
+    Ascii(*out, "Exif")
+    Byte(*out, 0)
+    for byte: VecSlice(tiff, 0, tiff.count) {
+        unused VecPush(out, byte)
+    }
+    if (6 + tiff.count) % 2 == 1 {
+        Byte(*out, 0)
+    }
+    return BuilderFinish(out)
+}
+
+#program_export
+Answer :: () -> s32 {
+    capture := MediaCaptureOf(Jpeg("2024:06:15 08:30:05", "-03:00"), "jpg")
+    if !capture.valid || capture.year != 2024 || capture.month != 6 || capture.day != 15 ||
+    capture.hour != 8 || capture.minute != 30 || capture.second != 5 { return 1 }
+    if !capture.has_offset || capture.offset != -180 { return 2 }
+    capture = MediaCaptureOf(Jpeg("1969:12:31 23:59:59", ""), "jpg")
+    if !capture.valid || capture.year != 1969 || capture.has_offset { return 3 }
+    capture = MediaCaptureOf(Png("2024:02:29 12:00:00"), "png")
+    if !capture.valid || capture.month != 2 || capture.day != 29 { return 4 }
+    capture = MediaCaptureOf(Webp("2025:01:02 03:04:05"), "webp")
+    if !capture.valid || capture.day != 2 || !capture.has_offset || capture.offset != 330 { return 5 }
+    // Impossible dates and other formats are no capture time.
+    if MediaCaptureOf(Png("2023:02:29 12:00:00"), "png").valid { return 6 }
+    if MediaCaptureOf(Jpeg("2024-06-15 08:30:05", ""), "jpg").valid { return 7 }
+    if MediaCaptureOf(Jpeg("2024:06:15 08:30:05", ""), "gif").valid { return 8 }
+    // Cut files and files without Exif read as unknown, never past their end.
+    whole := Jpeg("2024:06:15 08:30:05", "-03:00")
+    for length: cast(s64)0..whole.count - 3 {
+        unused MediaCaptureOf(whole[:length], "jpg")
+    }
+    // The orientation, big- and little-endian; absent or invalid is 1.
+    rotated := Jpeg("2024:06:15 08:30:05", "", 6)
+    if MediaOrientationOf(rotated, "jpg") != 6 || !MediaCaptureOf(rotated, "jpg").valid { return 10 }
+    if MediaOrientationOf(Png("2024:02:29 12:00:00", 8), "png") != 8 { return 11 }
+    if MediaOrientationOf(whole, "jpg") != 1 || MediaOrientationOf(Jpeg("2024:06:15 08:30:05", "", 9), "jpg") != 1 { return 12 }
+    plain: [4]u8 = .[cast(u8)255, cast(u8)216, cast(u8)255, cast(u8)217]
+    if MediaCaptureOf(TextFromBytes(plain[:]), "jpg").valid { return 9 }
+    return 42
+}

@@ -31,6 +31,13 @@
 #import, file "../src/cells/diary_store.zi";
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/diary_blobs_native.zi";
+#import, file "../src/cells/diary_blobs.zi";
+#import, file "../src/cells/media_store.zi";
+#import, file "../src/storage/sync_nodes.zi";
+#import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/media_node_session.zi";
+#import, file "../src/storage/sync_session.zi";
+#import "auth"
 #import "file_linux"
 
 // Two clients, a friend, and fresh installs syncing through a real Daochi
@@ -207,6 +214,119 @@ expect_photo_copy :: (url: string, a: string, b: string) {
     PackageFree(name)
 }
 
+// The node's file for a sealed copy, under the server's data directory.
+server_blob_size :: (server: string, blob: string) -> s32 {
+    path: TextBuffer
+    append(*path, data_root())
+    append(*path, server)
+    append(*path, "server.db.blobs/")
+    append(*path, storage_get_setting_text("sync_public_id"))
+    append(*path, "/inbe/")
+    append(*path, blob)
+    return cast(s32)PackageFileSize(TextFromCString(*path.bytes[0]))
+}
+
+library_record_blob :: (key: string, output: []u8) -> string {
+    record := MediaRecordRead(key)
+    media := DiaryMediaParse(record)
+    PackageFree(record)
+    unused AppCopyText(TextFromBytes(media.blob[:64]), output)
+    if !DiaryMediaUploaded(media) {
+        output[0] = cast(u8)0
+    }
+    return TextUntilNul(output)
+}
+
+// A photo added to the library on one device appears on the other with its
+// preview, and opens its original there. Copies go to every node whose
+// photo upload is on and not to one where it is off, each node on its own
+// session; downloads fall back from the sync node to the next.
+expect_library_copies :: (url: string, second: string, a: string, b: string) {
+    open_client(a)
+    check_true("a adds a second node", SyncNodeAdd(second))
+    check_true("a keeps photos off the sync node", SyncNodeSetMediaUpload(url, false))
+    check_true("photos go to the second node", SyncNodeMediaUpload(second))
+    jpeg: [9000]u8
+    for index: cast(s32)0..cast(s32)8999 {
+        jpeg[index] = cast(u8)((index * 31 + 11) % 251)
+    }
+    jpeg[0] = cast(u8)255
+    jpeg[1] = cast(u8)216
+    jpeg[2] = cast(u8)255
+    jpeg[8998] = cast(u8)255
+    jpeg[8999] = cast(u8)217
+    image := TextFromBytes(jpeg[:])
+    source: TextBuffer
+    append(*source, data_root())
+    append(*source, "/IMG_0042.jpg")
+    source_path := TextFromCString(*source.bytes[0])
+    unused RemoveFile(source_path)
+    file := OpenExclusivePrivate(source_path)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    check_true("write the photo to add", CloseFile(file) && written)
+    added := MediaImportFile(source_path)
+    check_true("a adds the photo to the library", added.succeeded)
+    hash_bytes: [65]u8
+    unused AppCopyText(TextFromBytes(added.hash[:64]), hash_bytes[:])
+    hash := TextUntilNul(hash_bytes[:])
+    item_key := MediaRecordKey(hash)
+    preview_key := MediaPreviewKey(hash)
+    check_true("a made a preview", MediaRecordRead(preview_key).count > 0)
+    synchronize(url)
+    DiaryBlobsSendNative(url)
+    original_blob: [65]u8
+    preview_blob: [65]u8
+    check_int("the original's copy is named", cast(s32)library_record_blob(item_key, original_blob[:]).count, 64)
+    check_int("the preview's copy is named", cast(s32)library_record_blob(preview_key, preview_blob[:]).count, 64)
+    check_int("the second node keeps the original sealed",
+        server_blob_size("/second/", TextUntilNul(original_blob[:])), 9016)
+    check_true("the second node keeps the preview",
+        server_blob_size("/second/", TextUntilNul(preview_blob[:])) > 16)
+    check_true("the sync node, with photos off, keeps neither",
+        server_blob_size("/", TextUntilNul(original_blob[:])) <= 0 &&
+        server_blob_size("/", TextUntilNul(preview_blob[:])) <= 0)
+    pass: DiaryBlobPass
+    check_true("nothing is sent twice", !DiaryBlobPlan(*pass, url))
+    // Each node has its own session, apart from the sync's.
+    normalized: [256]u8
+    check_true("normalize the second node", SyncNodeAddress(second, normalized[:]))
+    media_session: Session
+    MediaSessionLoad(TextUntilNul(normalized[:]), *media_session, 1)
+    check_true("the second node has a media session", media_session.token[0] != cast(u8)0)
+    check_true("it is not the sync's session",
+        TextUntilNul(media_session.token[:]) != storage_get_setting_text("sync_auth_token"))
+    synchronize(url)
+
+    open_client(b)
+    check_true("b adds the second node", SyncNodeAdd(second))
+    synchronize(url)
+    check_int("the photo is in b's library", MediaQuery("", false), 1)
+    check_true("its preview waits on b", MediaAsset(hash, false) == "")
+    DiaryBlobsSendNative(url)
+    preview_asset := PackageText(MediaAsset(hash, false), "")
+    check_true("the preview arrives from the second node", preview_asset.count > 0 &&
+        preview_asset[:14] == "media/preview/")
+    check_true("the preview's bytes are whole", MediaAssetView(preview_asset).found)
+    check_true("opening the photo shows the preview first", MediaAsset(hash, true) == preview_asset)
+    DiaryBlobsSendNative(url)
+    original_asset := MediaAsset(hash, true)
+    check_true("the original arrives once opened", original_asset.count > 0 &&
+        original_asset[:14] != "media/preview/")
+    check_true("the original opens whole", MediaAssetView(original_asset).data == image)
+    PackageFree(preview_asset)
+
+    // Turning photos on for the sync node sends it the copies it lacks.
+    open_client(a)
+    check_true("a turns photos on for the sync node", SyncNodeSetMediaUpload(url, true))
+    DiaryBlobsSendNative(url)
+    check_int("the sync node now keeps the original", server_blob_size("/", TextUntilNul(original_blob[:])), 9016)
+    check_true("and the preview", server_blob_size("/", TextUntilNul(preview_blob[:])) > 16)
+    check_true("still nothing is sent twice", !DiaryBlobPlan(*pass, url))
+    PackageFree(item_key)
+    PackageFree(preview_key)
+    MediaStoreClose()
+}
+
 mood_is :: (id: string, want: s32) -> bool {
     loaded: SessionMoodCheckin
     return storage_load_session_checkin(id, *loaded) != 0 && loaded.mood_after == want
@@ -216,7 +336,8 @@ mood_is :: (id: string, want: s32) -> bool {
 Check :: () -> s32 {
     url := environment_text("SYNC_TEST_URL")
     fault := environment_text("SYNC_TEST_FAULT_URL")
-    if url.count == 0 || fault.count == 0 { return 90 }
+    second_url := environment_text("SYNC_TEST_SECOND_URL")
+    if url.count == 0 || fault.count == 0 || second_url.count == 0 { return 90 }
     guard := support_begin("/tmp/inbe-sync-server-")
     if guard != 0 { return guard }
     // Keep the URLs, which point into the environment, across storage calls.
@@ -224,8 +345,11 @@ Check :: () -> s32 {
     append(*server, url)
     proxy: TextBuffer
     append(*proxy, fault)
+    second_server: TextBuffer
+    append(*second_server, second_url)
     url = TextFromCString(*server.bytes[0])
     fault = TextFromCString(*proxy.bytes[0])
+    second_url = TextFromCString(*second_server.bytes[0])
 
     ask := SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK
     ok := SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK
@@ -362,6 +486,7 @@ Check :: () -> s32 {
     PackageFree(live_document)
     check_int("live activity does not duplicate results", storage_session_count(), 1)
     expect_photo_copy(url, a, b)
+    expect_library_copies(url, second_url, a, b)
     open_client(b)
     check_true("complete the item", storage_elist_update_item(item_text, "Pack bag", "Passport", 1, 0) != 0)
     synchronize(url)

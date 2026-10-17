@@ -1,0 +1,265 @@
+// The account's media library on a real database: a photo is kept once by
+// its hash with its capture day and a JPEG preview, Trash keeps it, queries
+// list it by day or all newest first, and only this account's photos draw.
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "file_linux"
+#import "json_scan"
+#import "text_buffer"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/media_records.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/diary_records.zi";
+#import, file "../src/cells/media_store.zi";
+
+Byte :: (out: *Vec(u8), value: s64) {
+    unused VecPush(out.*, cast(u8)(value & 255))
+}
+
+Word :: (out: *Vec(u8), value: s64) {
+    Byte(out, value >> 8)
+    Byte(out, value)
+}
+
+Long :: (out: *Vec(u8), value: s64) {
+    Word(out, value >> 16)
+    Word(out, value)
+}
+
+Chars :: (out: *Vec(u8), value: string) {
+    for byte: value {
+        unused VecPush(out.*, byte)
+    }
+}
+
+// A big-endian Exif block with the original date and the orientation.
+Tiff :: (out: *Vec(u8), date: string, orientation: s64) {
+    Chars(out, "MM")
+    Word(out, 42)
+    Long(out, 8)
+    exif := 8 + 2 + 2 * 12 + 4
+    Word(out, 2)
+    Word(out, 274)
+    Word(out, 3)
+    Long(out, 1)
+    Word(out, orientation)
+    Word(out, 0)
+    Word(out, 34665)
+    Word(out, 4)
+    Long(out, 1)
+    Long(out, exif)
+    Long(out, 0)
+    data := exif + 2 + 12 + 4
+    Word(out, 1)
+    Word(out, 36867)
+    Word(out, 2)
+    Long(out, cast(s64)date.count + 1)
+    Long(out, data)
+    Long(out, 0)
+    Chars(out, date)
+    Byte(out, 0)
+}
+
+// A JPEG-shaped file: its Exif segment, then `filler` bytes of a fake scan
+// (the test's decoder reads every file as the same gradient).
+Photo :: (date: string, orientation: s64, filler: s64, seed: s64) -> string {
+    tiff: Vec(u8)
+    Tiff(*tiff, date, orientation)
+    out: Vec(u8)
+    Byte(*out, 255)
+    Byte(*out, 216)
+    Byte(*out, 255)
+    Byte(*out, 225)
+    Word(*out, 2 + 6 + tiff.count)
+    Chars(*out, "Exif")
+    Byte(*out, 0)
+    Byte(*out, 0)
+    for byte: VecSlice(tiff, 0, tiff.count) {
+        unused VecPush(out, byte)
+    }
+    index: s64 = 0
+    while index < filler {
+        Byte(*out, (index * 7 + seed) % 251)
+        index += 1
+    }
+    Byte(*out, 255)
+    Byte(*out, 217)
+    return BuilderFinish(out)
+}
+
+Hash :: (data: string) -> string {
+    output: [65]u8
+    descriptor := cast(*TextDescriptor)(*data)
+    storage_sha256_hex(descriptor.data, data.count, *output[0])
+    return PackageText(TextFromCString(*output[0]), "")
+}
+
+RecordField :: (hash: string, field: string, output: []u8) -> string {
+    key := PackageText(MEDIA_RECORD_PREFIX, hash)
+    record := MediaRecordRead(key)
+    count := ReadStringText(record, FieldAt(record, 0, field), output)
+    PackageFree(key)
+    PackageFree(record)
+    if count <= 0 {
+        return ""
+    }
+    return TextFromBytes(output[:count])
+}
+
+WriteSource :: (name: string, data: string) -> string {
+    buffer: TextBuffer
+    append(*buffer, data_root())
+    append(*buffer, "/")
+    append(*buffer, name)
+    path := PackageText(TextFromCString(*buffer.bytes[0]), "")
+    unused RemoveFile(path)
+    file := OpenExclusivePrivate(path)
+    written := file.valid && WriteTextAt(file, data, 0) == data.count
+    check_true("write a photo to pick", CloseFile(file) && written)
+    return path
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-media-store-zi-test")
+    if guard != 0 { return guard }
+    root := make_root("media-library")
+    check_true("init library device", storage_init(root) != 0)
+    storage_set_setting_text("sync_public_id", "media-test-account")
+
+    morning := Photo("2026:10:17 08:15:00", 6, 60000, 1)
+    morning_hash := Hash(morning)
+    source := WriteSource("IMG_2041.jpg", morning)
+    added := MediaImportFile(source)
+    check_true("a picked photo is added", added.succeeded && !added.existed)
+    check_true("it is kept by its hash", TextFromBytes(added.hash[:64]) == morning_hash)
+    field: [256]u8
+    check_true("its capture day is the camera's", RecordField(morning_hash, "day", field[:]) == "2026-10-17")
+    check_true("its capture time is the camera's",
+        RecordField(morning_hash, "taken", field[:]) == "2026-10-17T08:15:00")
+    check_true("its name is the file's", RecordField(morning_hash, "name", field[:]) == "IMG_2041.jpg")
+    check_true("its type is read from its bytes", RecordField(morning_hash, "type", field[:]) == "jpg")
+    item := MediaRead(morning_hash)
+    check_true("the record reads back", item.valid && item.size == morning.count && !item.trashed)
+    check_int("the photo and its preview queue to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
+
+    // The preview: an upright JPEG at most 512 pixels on its longer side.
+    preview_path := MediaPath(morning_hash, true)
+    preview := PackageRead(preview_path, DIARY_FILE_LIMIT)
+    check_true("a preview is made", preview.count > 100 && preview.count < morning.count)
+    check_true("the preview is a JPEG", preview[0] == cast(u8)255 && preview[1] == cast(u8)216 &&
+        preview[preview.count - 2] == cast(u8)255 && preview[preview.count - 1] == cast(u8)217)
+    // SOF0 says height then width: a 600 by 400 photo turned by orientation
+    // 6 is 341 by 512 upright.
+    sof: s64 = 2
+    while sof + 9 < preview.count && !(preview[sof] == cast(u8)255 && preview[sof + 1] == cast(u8)192) {
+        sof += 1
+    }
+    preview_height := cast(s32)preview[sof + 5] * 256 + cast(s32)preview[sof + 6]
+    preview_width := cast(s32)preview[sof + 7] * 256 + cast(s32)preview[sof + 8]
+    check_int("the preview is upright and 512 tall", preview_height, 512)
+    check_int("the preview is 341 wide", preview_width, 341)
+    preview_key := PackageText(MEDIA_PREVIEW_PREFIX, morning_hash)
+    preview_record := MediaRecordRead(preview_key)
+    check_true("the preview's record names its bytes",
+        DiaryMediaMatches(DiaryMediaParse(preview_record), preview))
+    PackageFree(preview_record)
+
+    // Assets: the preview draws; asking for the original finds it here.
+    preview_asset := PackageText(MediaAsset(morning_hash, false), "")
+    check_true("the gallery draws the preview", preview_asset == PackageText("media/preview/",
+        PackageText(morning_hash, ".jpg")))
+    view := MediaAssetView(preview_asset)
+    check_true("the preview's bytes are served", view.found && view.mime == "image/jpeg" && view.data == preview)
+    original_asset := PackageText(MediaAsset(morning_hash, true), "")
+    check_true("the viewer draws the original", original_asset == PackageText("media/",
+        PackageText(morning_hash, ".jpg")))
+    check_true("the original's bytes are served", MediaAssetView(original_asset).data == morning)
+    check_true("a library photo may be drawn", MediaAssetAllowed(preview_asset) && MediaAssetAllowed(original_asset))
+    stranger := "media/0000000000000000000000000000000000000000000000000000000000000000.jpg"
+    check_true("a photo outside the library may not", !MediaAssetAllowed(stranger))
+    check_true("other paths may not", !MediaAssetAllowed("media/../inbe.db") &&
+        !MediaAssetAllowed(PackageText("media/", PackageText(morning_hash, ".exe"))))
+    check_true("a changed file is not served",
+        !MediaAssetView(PackageText("media/", PackageText(morning_hash, ".png"))).found)
+
+    // An original that is not on this device is asked for; the preview
+    // shows meanwhile.
+    original_path := MediaPath(morning_hash, false)
+    check_true("drop the original", RemoveFile(original_path))
+    MediaAssetsChanged()
+    check_true("not wanted before it is opened", !MediaOriginalWanted(morning_hash))
+    check_true("the preview stands in for a missing original",
+        MediaAsset(morning_hash, true) == preview_asset)
+    check_true("opening it asks for the original", MediaOriginalWanted(morning_hash))
+
+    // The same bytes again add nothing; the file comes back.
+    queued := read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'")
+    again := MediaImportBytes(morning, "copy of IMG_2041.jpg")
+    check_true("the same photo is added once", again.succeeded && again.existed)
+    check_int("nothing new is queued",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), queued)
+    check_true("its name stays", RecordField(morning_hash, "name", field[:]) == "IMG_2041.jpg")
+    check_true("the file is back", PackageRead(original_path, DIARY_FILE_LIMIT) == morning)
+
+    // Queries: newest first, by day or all, Trash apart.
+    evening := Photo("2026:10:17 19:40:00", 1, 60000, 2)
+    evening_hash := Hash(evening)
+    earlier := Photo("2026:10:15 12:00:00", 1, 60000, 3)
+    earlier_hash := Hash(earlier)
+    check_true("add the evening photo", MediaImportBytes(evening, "evening.jpg").succeeded)
+    check_true("add an earlier day's photo", MediaImportBytes(earlier, "earlier.jpg").succeeded)
+    check_int("all photos", MediaQuery("", false), 3)
+    first := MediaQueryRow(0)
+    second := MediaQueryRow(1)
+    third := MediaQueryRow(2)
+    check_true("the newest first", TextUntilNul(first.hash[:]) == evening_hash &&
+        TextUntilNul(second.hash[:]) == morning_hash && TextUntilNul(third.hash[:]) == earlier_hash)
+    check_true("each with its day", TextUntilNul(third.day[:]) == "2026-10-15")
+    check_int("one day's photos", MediaQuery("2026-10-17", false), 2)
+    check_int("another day's", MediaQuery("2026-10-15", false), 1)
+    check_int("a day without photos", MediaQuery("2026-10-16", false), 0)
+    check_int("a malformed day lists nothing", MediaQuery("2026-10", false), 0)
+    check_true("move a photo to Trash", MediaSetTrashed(evening_hash, true))
+    check_int("Trash leaves the gallery", MediaQuery("", false), 2)
+    check_int("Trash lists it", MediaQuery("", true), 1)
+    check_true("Trash keeps the photo", MediaRead(evening_hash).trashed &&
+        PackageFileSize(MediaPath(evening_hash, false)) == evening.count)
+    check_true("restore it", MediaSetTrashed(evening_hash, false))
+    check_int("it is back", MediaQuery("", false), 3)
+    check_true("trash it again", MediaSetTrashed(evening_hash, true))
+    check_true("adding it again brings it back", MediaImportBytes(evening, "evening.jpg").existed &&
+        !MediaRead(evening_hash).trashed)
+    check_true("rename a photo", MediaSetName(earlier_hash, "Lake \"walk\"\n.jpg"))
+    check_true("the name is one line", RecordField(earlier_hash, "name", field[:]) == "Lake \"walk\" .jpg")
+    // A sealed copy's name keeps every other field.
+    key := PackageText(MEDIA_RECORD_PREFIX, earlier_hash)
+    record := MediaRecordRead(key)
+    copy_blob := "abababababababababababababababababababababababababababababababab"
+    copy_key := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    check_true("name the sealed copy", MediaRecordSetCopy(key, record, copy_blob, copy_key))
+    check_true("the copy is named", RecordField(earlier_hash, "blob", field[:]) == copy_blob &&
+        DiaryMediaUploaded(DiaryMediaParse(MediaRecordRead(key))))
+    check_true("the other fields stay", RecordField(earlier_hash, "day", field[:]) == "2026-10-15")
+
+    // Files that are not photos are refused.
+    check_true("text is no photo", !MediaImportBytes("just some text", "notes.txt").succeeded)
+    check_true("an empty file is no photo", !MediaImportBytes("", "empty.jpg").succeeded)
+
+    // Another account on this device sees none of these.
+    storage_close()
+    other := make_root("media-library-other")
+    check_true("init another account", storage_init(other) != 0)
+    check_int("another account's library is empty", MediaQuery("", false), 0)
+    check_true("another account cannot draw them", MediaAsset(morning_hash, false) == "" &&
+        !MediaAssetAllowed(preview_asset))
+    storage_close()
+    return failures
+}

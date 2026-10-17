@@ -29,6 +29,8 @@ Clock :: #import "date_time";
 #import, file "../app/sync_recovery_policy.zi";
 #import, file "sync_node_storage.zi";
 #import, file "sync_result.zi";
+#import, file "media_node_session.zi";
+#import, file "../platform/network_transport.zi";
 
 c :: #system_library "c";
 AsyncAllocate :: (size: usize) -> *void #foreign c "malloc";
@@ -402,76 +404,125 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
     return true
 }
 
-// One signed request for a sealed Diary copy (cells/diary_blobs.zi),
-// advanced each frame like a sync: PUT stores the body at path, GET answers
-// with the copy in output. It uses the sync's saved session; without one it
-// does not start, and the next sync signs in again.
+// One signed request for a sealed photo copy (cells/diary_blobs.zi) on one
+// node, advanced each frame: PUT stores the body at path, GET answers with
+// the copy in output. It uses that node's own media session: without one,
+// it first signs in to the node and registers this device there; a 401
+// opens a new session once.
+STORED_BLOB_SIGN_IN :: 1
+STORED_BLOB_REGISTER :: 2
+STORED_BLOB_TRANSFER :: 3
+
 StoredBlob :: struct {
     active: bool
+    stage: s32
+    retried: bool
+    account: AccountKeys
+    client: Client
+    session: Session
+    material: DeviceKeyMaterial
+    pending: PendingRequest
+    network: NetworkTransfer
     transfer: HttpTransfer
+    registration: [6144]u8
+    registration_answer: [2048]u8
     transaction: [8192]u8
     token: [4096]u8
+    server: [512]u8
+    client_id: [128]u8
     url: [1024]u8
     method: [8]u8
+    path: [256]u8
     headers: [1]HttpHeader
+    body: string
+    output: []u8
     status: s32
     length: s64
     result: s32
+}
+
+StoredBlobRelease :: (blob: *StoredBlob) {
+    WipeDeviceKey(*blob.material)
+    SecureWipe(*blob.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*blob.token[0], 4096)
+    blob.session = Session.{}
+    blob.active = false
+}
+
+StoredBlobFinish :: (blob: *StoredBlob, result: s32) {
+    blob.result = result
+    StoredBlobRelease(blob)
+}
+
+// The account may have changed while a request was on its way.
+StoredBlobCurrent :: (blob: *StoredBlob) -> bool {
+    return StoredAccountMode() == AccountModeOwner && storage_get_setting_text("sync_public_id") ==
+    AccountFieldText(*blob.account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
+}
+
+StoredBlobSignIn :: (blob: *StoredBlob) -> bool {
+    blob.stage = STORED_BLOB_SIGN_IN
+    blob.session = Session.{}
+    return BeginSession(*blob.pending, blob.client, *blob.session, Clock.UnixNow(),
+        NetworkTransport(*blob.network))
+}
+
+StoredBlobStartTransfer :: (blob: *StoredBlob) -> bool {
+    blob.stage = STORED_BLOB_TRANSFER
+    blob.result = cast(s32)AuthResult.AUTH_SIGN_FAILED
+    if PrepareRequestHeader(blob.client, *blob.session, DeviceFromKey(*blob.material), Clock.UnixNow(),
+        null, NativeNonce, TextUntilNul(blob.method[:]), TextUntilNul(blob.path[:]), blob.body,
+        blob.transaction[:]) != cast(AuthResult)AuthResult.AUTH_OK ||
+    !AppCopyText(TextUntilNul(blob.session.token[:]), blob.token[:]) {
+        return false
+    }
+    blob.headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(blob.transaction[:])}
+    request := HttpRequest.{.method = TextUntilNul(blob.method[:]), .url = TextUntilNul(blob.url[:]),
+        .token = TextUntilNul(blob.token[:]), .body = blob.body, .headers = blob.headers[:]}
+    if blob.body.count > 0 {
+        request.content_type = "application/octet-stream"
+    }
+    blob.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    // A copy of up to 16 MB needs longer than a sync's request.
+    return HttpTransferStart(*blob.transfer, request, blob.output, 180000)
 }
 
 // The body and output must stay valid until PollStoredBlob finishes or
 // CancelStoredBlob returns.
 BeginStoredBlob :: (blob: *StoredBlob, server: string, method: string, path: string,
     body: string, output: []u8) -> bool {
-    if blob == null || blob.active || StoredAccountMode() != AccountModeOwner {
+    if blob == null || blob.active {
         return false
     }
     blob.* = StoredBlob.{}
     blob.result = cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
+    if StoredAccountMode() != AccountModeOwner || sync_account_load(*blob.account) == 0 {
         return false
     }
-    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
-    material: DeviceKeyMaterial
-    if !LoadOrCreateDeviceKey(*material) {
+    if !LoadOrCreateDeviceKey(*blob.material) ||
+    !AppCopyText(storage_sync_client_id(), blob.client_id[:]) ||
+    !NormalizeUrl(server, blob.server[:]) ||
+    !OpenAccountClient(TextUntilNul(blob.server[:]), *blob.account, TextUntilNul(blob.client_id[:]),
+        *blob.client) ||
+    !JoinUrl(TextUntilNul(blob.server[:]), path, blob.url[:]) ||
+    !AppCopyText(method, blob.method[:]) || !AppCopyText(path, blob.path[:]) {
+        StoredBlobRelease(blob)
         return false
     }
-    defer { WipeDeviceKey(*material) }
-    client: Client
-    client_id: [128]u8
-    normalized: [512]u8
-    if !AppCopyText(storage_sync_client_id(), client_id[:]) ||
-    !NormalizeUrl(server, normalized[:]) ||
-    !OpenAccountClient(TextUntilNul(normalized[:]), *account, TextUntilNul(client_id[:]), *client) {
-        return false
-    }
-    now := Clock.UnixNow()
-    session: Session
-    LoadSavedSession(*session, now)
-    if session.token[0] == cast(u8)0 {
-        return false
-    }
-    blob.result = cast(s32)AuthResult.AUTH_SIGN_FAILED
-    if PrepareRequestHeader(client, *session, DeviceFromKey(*material), now, null, NativeNonce,
-        method, path, body, blob.transaction[:]) != cast(AuthResult)AuthResult.AUTH_OK ||
-    !JoinUrl(TextUntilNul(normalized[:]), path, blob.url[:]) ||
-    !AppCopyText(TextUntilNul(session.token[:]), blob.token[:]) ||
-    !AppCopyText(method, blob.method[:]) {
-        return false
-    }
-    blob.headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(blob.transaction[:])}
-    request := HttpRequest.{.method = TextUntilNul(blob.method[:]), .url = TextUntilNul(blob.url[:]),
-        .token = TextUntilNul(blob.token[:]), .body = body, .headers = blob.headers[:]}
-    if body.count > 0 {
-        request.content_type = "application/octet-stream"
-    }
-    blob.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
-    // A copy of up to 16 MB needs longer than a sync's request.
-    if !HttpTransferStart(*blob.transfer, request, output, 180000) {
-        return false
-    }
+    blob.body = body
+    blob.output = output
     blob.active = true
+    MediaSessionLoad(TextUntilNul(blob.server[:]), *blob.session, Clock.UnixNow())
+    started := false
+    if blob.session.token[0] != cast(u8)0 {
+        started = StoredBlobStartTransfer(blob)
+    } else {
+        started = StoredBlobSignIn(blob)
+    }
+    if !started {
+        StoredBlobFinish(blob, blob.result)
+        return false
+    }
     return true
 }
 
@@ -481,12 +532,58 @@ PollStoredBlob :: (blob: *StoredBlob) -> bool {
     if blob == null || !blob.active {
         return true
     }
+    if !StoredBlobCurrent(blob) {
+        CancelStoredBlob(blob)
+        return true
+    }
+    address := TextUntilNul(blob.server[:])
+    if blob.stage == STORED_BLOB_SIGN_IN || blob.stage == STORED_BLOB_REGISTER {
+        blob.pending.now = Clock.UnixNow()
+        if !PollRequest(*blob.pending) {
+            return false
+        }
+        if blob.pending.result != cast(AuthResult)AuthResult.AUTH_OK {
+            StoredBlobFinish(blob, cast(s32)blob.pending.result)
+            return true
+        }
+        if blob.stage == STORED_BLOB_SIGN_IN {
+            blob.stage = STORED_BLOB_REGISTER
+            prepared := PrepareDeviceRegistration(blob.client, *blob.session, DeviceFromKey(*blob.material),
+                Clock.UnixNow(), null, NativeNonce, blob.registration[:])
+            if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+                StoredBlobFinish(blob, cast(s32)prepared)
+                return true
+            }
+            extra: [1]HttpHeader
+            if !BeginRequest(*blob.pending, blob.client, *blob.session, Clock.UnixNow(),
+                NetworkTransport(*blob.network), "POST", "/api/v1/account/devices",
+                TextUntilNul(blob.registration[:]), blob.registration_answer[:], extra[0:0]) {
+                StoredBlobFinish(blob, cast(s32)AuthResult.AUTH_REQUEST_FAILED)
+            }
+            return !blob.active
+        }
+        MediaSessionSave(address, *blob.session)
+        if !StoredBlobStartTransfer(blob) {
+            StoredBlobFinish(blob, blob.result)
+            return true
+        }
+        return false
+    }
     state := HttpTransferPollLength(*blob.transfer, *blob.status, *blob.length)
     if state < 0 {
         return false
     }
-    blob.active = false
-    blob.result = ifx (state == 1) then (cast(s32)AuthResult.AUTH_OK) else (cast(s32)AuthResult.AUTH_REQUEST_FAILED)
+    if state == 1 && blob.status == 401 && !blob.retried {
+        // The node no longer knows this session: sign in to it once more.
+        blob.retried = true
+        MediaSessionForget(address)
+        if !StoredBlobSignIn(blob) {
+            StoredBlobFinish(blob, cast(s32)AuthResult.AUTH_REQUEST_FAILED)
+            return true
+        }
+        return false
+    }
+    StoredBlobFinish(blob, ifx (state == 1) then (cast(s32)AuthResult.AUTH_OK) else (cast(s32)AuthResult.AUTH_REQUEST_FAILED))
     return true
 }
 
@@ -494,7 +591,10 @@ CancelStoredBlob :: (blob: *StoredBlob) {
     if blob == null || !blob.active {
         return
     }
-    HttpTransferCancel(*blob.transfer)
-    blob.active = false
-    blob.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    if blob.stage == STORED_BLOB_TRANSFER {
+        HttpTransferCancel(*blob.transfer)
+    } else {
+        CancelRequest(*blob.pending)
+    }
+    StoredBlobFinish(blob, cast(s32)AuthResult.AUTH_REQUEST_FAILED)
 }

@@ -33,9 +33,16 @@
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/db.zi";
 #import, file "profile_social.zi";
+#import, file "../cells/media_store.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/android/android_import.zi";
+#import "file_picker"
+#import "file_linux"
+#import "android_picker"
 
 using HostValueKind;
 using TextWrap;
+using AndroidImportKind;
 
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
@@ -97,6 +104,64 @@ NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
     return WidgetHostCall(context, module, function, arguments, count, result)
 }
 
+// The platform picker a granted app asked for (MediaPickHost): the
+// desktop's file dialog, or Android's photo picker, whose answer arrives on
+// a later frame. Each picked file is added to the library once.
+node_screen_media_waiting: bool;
+
+NodeScreenMediaAdd :: (path: string) {
+    if path.count == 0 {
+        NodeAppMediaPicked(MediaImport.{}, true)
+        return
+    }
+    NodeAppMediaPicked(MediaImportFile(path), true)
+}
+
+NodeScreenMediaPicker :: (app: *InnerBreeze) {
+    if node_screen_media_waiting {
+        path: [4096]u8
+        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_MEDIA, path[:])
+        if result == .AndroidPickerNone {
+            return
+        }
+        node_screen_media_waiting = false
+        app.file_dialog_active = 0
+        if result == .AndroidPickerSelected {
+            selected := AppTextFromCString(*path[0], cast(s32)path.count)
+            NodeScreenMediaAdd(selected)
+            // The picker's private copy; the library keeps its own file.
+            if selected.count > 0 {
+                unused RemoveFile(selected)
+            }
+        } else {
+            NodeAppMediaPicked(MediaImport.{}, false)
+        }
+        return
+    }
+    if !node_media_pick_requested {
+        return
+    }
+    node_media_pick_requested = false
+    app.file_dialog_active = 1
+    if AndroidPlatform() != 0 {
+        node_screen_media_waiting = AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_MEDIA, "image/*")
+        if !node_screen_media_waiting {
+            app.file_dialog_active = 0
+            NodeAppMediaPicked(MediaImport.{}, true)
+        }
+        return
+    }
+    path: [4096]u8
+    selected := PickFile(FilePickerProps.{.title = LocaleText("photos_add"),
+        .filter = "Images | *.png *.jpg *.jpeg *.webp *.gif"}, path[:])
+    app.file_dialog_active = 0
+    if selected == 1 {
+        NodeScreenMediaAdd(AppTextFromCString(*path[0], cast(s32)path.count))
+    } else {
+        NodeAppMediaPicked(MediaImport.{}, selected < 0)
+    }
+}
+
 // Opening the app reads friends and shared records again.
 #program_export
 node_app_screen_enter :: (app: *InnerBreeze) {
@@ -148,4 +213,5 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     unused NodeAppRunMessage(slot, message)
     NodeAppUiEnd()
     WidgetHostEnd()
+    NodeScreenMediaPicker(app)
 }
