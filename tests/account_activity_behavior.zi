@@ -171,6 +171,25 @@ Check :: () -> s32 {
     FixtureAdvance(ActivityFreshSeconds + 1)
     ActivityPump(*fixture_app)
     check_true("stale remote session cannot receive control", !ActivityRequestPause(*fixture_app, 0))
+    // A practice whose device stopped publishing long ago, for example
+    // because its app closed during it, no longer occupies Practice.
+    FixtureAdvance(ActivityAbandonedSeconds)
+    ActivityPump(*fixture_app)
+    check_true("abandoned remote session leaves Practice", !ActivityRemoteVisible() && ActivityStartAllowed())
+    // This device's own session left running by a closed app is ended for
+    // the account's other devices once the app runs again.
+    leftover := first
+    leftover.time = ActivityCurrentTime()
+    leftover.active = 1
+    check_true("serialize leftover record", ActivityWrite(leftover, output[:]))
+    check_true("keep leftover record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    leftover_document := CellRecordRead(ActivityRecordKey)
+    ended_leftover: AccountActivity
+    check_true("own leftover session is ended", ActivityRead(leftover_document, *ended_leftover) &&
+        ended_leftover.active == 0 && TextUntilNul(ended_leftover.session_id[:]) == TextUntilNul(first.session_id[:]))
+    PackageFree(leftover_document)
     storage_set_sync_data_owner_public_id("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
     check_true("switch clears prior remote account", ActivityInitialize() && account_activity.remote.active == 0)
     storage_set_sync_enabled(0)

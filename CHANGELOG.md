@@ -30,6 +30,7 @@
 - Android: closing the floating practice window with its X ends the practice.
 - Practice downloads show their real size, and each practice's pictures come only with its download.
 - Diary adds every photo you pick, online or offline, even when your sync node is full. A full node only keeps new photos from syncing there.
+- Practice no longer gets stuck showing another device's practice after that device closed during it: a session that stops updating for a minute is gone, and a device that closed mid-practice ends its session when it opens again.
 
 ## [2.1.33] - 2026-10-13
 ### Added
