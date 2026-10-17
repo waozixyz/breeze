@@ -1,7 +1,7 @@
 // Practice download management, rendered by the current supervising host.
 // One list of practices. Each row has one state menu: On Practice, On device
-// or Not downloaded, with what each choice does; a paid practice offers its
-// unlock instead. A row's handle drags it to another place in the order.
+// or Not downloaded, Uninstall once it is downloaded, with what each choice
+// does; a paid practice offers its unlock instead. A row's handle drags it to another place in the order.
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_settings.zi";
@@ -220,7 +220,7 @@ PracticeDownloadSizedText :: (app: *InnerBreeze, practice: s32, key: string) -> 
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
-// "Delete Sun Salutation? This frees 24 MB. Your progress stays."
+// "Uninstall Sun Salutation? This frees 24 MB. Your progress stays."
 PracticeDownloadDeleteText :: (app: *InnerBreeze, practice: s32) -> string {
     size: [32]u8
     PracticeDownloadSize(app, practice, size[:])
@@ -264,8 +264,7 @@ PracticeDownloadState :: (practice: s32) -> s32 {
     return PRACTICE_STATE_ABSENT
 }
 
-// The line under a practice's name: its size, whether it comes with the app,
-// or how its download is going.
+// The line under a practice's name: its size, or how its download is going.
 PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
     if PracticeDownloadIncluded(practice) {
         return LocaleText("practice_download_offline")
@@ -276,9 +275,6 @@ PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
     }
     if status == 3 {
         return LocaleText("practice_download_failed")
-    }
-    if PracticeShipped(practice) && !PracticeDownloadLocked(practice) {
-        return PracticeDownloadSizedText(app, practice, "practice_line_shipped")
     }
     size: [32]u8
     PracticeDownloadSize(app, practice, size[:])
@@ -345,12 +341,16 @@ PracticeDownloadChoicesFor :: (practice: s32) -> PracticeDownloadChoices {
     return choices
 }
 
-PracticeDownloadChoiceLabel :: (state: s32) -> string {
+// A downloaded practice is uninstalled; one that is not is Not downloaded.
+PracticeDownloadChoiceLabel :: (practice: s32, state: s32) -> string {
     if state == PRACTICE_STATE_ON_PRACTICE {
         return LocaleText("practice_state_on_practice")
     }
     if state == PRACTICE_STATE_ON_DEVICE {
         return LocaleText("practice_state_on_device")
+    }
+    if PracticeContentStatus(practice) == 2 {
+        return LocaleText("practice_uninstall")
     }
     return LocaleText("practice_state_not_downloaded")
 }
@@ -383,8 +383,8 @@ PracticeDownloadAdd :: (app: *InnerBreeze, practice: s32) {
     PracticeContentRequest(practice)
 }
 
-// Moves a practice where its menu says. Not downloaded stops a download, or
-// asks once before deleting a downloaded copy.
+// Moves a practice where its menu says. Not downloaded stops a download;
+// Uninstall asks once before deleting the downloaded copy.
 PracticeDownloadChoose :: (app: *InnerBreeze, practice: s32, state: s32) {
     current := PracticeDownloadState(practice)
     status := PracticeContentStatus(practice)
@@ -566,7 +566,7 @@ PracticeDownloadHandle :: (app: *InnerBreeze, practice: s32, row: Rectangle) {
     TreeSetDragCapture(app.ui.session, node, true)
 }
 
-// Delete asks once, in the row: Cancel keeps the copy, Delete frees it.
+// Uninstall asks once, in the row: Cancel keeps the copy, Uninstall frees it.
 PracticeDownloadDeleteQuestion :: (app: *InnerBreeze, practice: s32, shape: PracticeDownloadRowShape,
     x: s32, y: s32, width: s32) {
     Text(app.ui.session, TextProps.{
@@ -587,7 +587,7 @@ PracticeDownloadDeleteQuestion :: (app: *InnerBreeze, practice: s32, shape: Prac
             .id = 17450 + practice,
             .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
                 cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText("delete_button"),
+            .label = LocaleText("practice_uninstall"),
             .disabled = practice_active(app) != null,
             .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
         practice_delete_asked = -1
@@ -710,7 +710,7 @@ PracticeDownloadMenu :: (app: *InnerBreeze) {
             .id = 17600 + index,
             .bounds = Rectangle.{cast(float32)(menu_x + inset), cast(float32)(menu_y + inset + index * option_h),
                 cast(float32)(menu_w - inset * 2), cast(float32)option_h},
-            .label = PracticeDownloadChoiceLabel(state),
+            .label = PracticeDownloadChoiceLabel(practice, state),
             .detail = PracticeDownloadChoiceDetail(app, practice, state),
             .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
             .selected = state == current,
