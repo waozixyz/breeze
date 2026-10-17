@@ -210,6 +210,15 @@ def words_of(image):
                 row['left'] = str(int(row['left']) + left)
                 row['top'] = str(int(row['top']) + 60)
                 words.append(row)
+    # Text on a filled button reads best at twice the size.
+    enlarged = Path(str(image)[:-4] + '-ocr.png')
+    if enlarged.exists():
+        tsv = command('tesseract', str(enlarged), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
+        for row in csv.DictReader(io.StringIO(tsv), delimiter='\t'):
+            if row['text'].strip():
+                for field in ('left', 'top', 'width', 'height'):
+                    row[field] = str(int(row[field]) // 2)
+                words.append(row)
     light = Path(str(image)[:-4] + '-light-text.png')
     if light.exists():
         tsv = command('tesseract', str(light), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
@@ -229,23 +238,17 @@ def press(window, x, y):
     time.sleep(.6)
 
 
-def drag_row(window, name, practice_word, section_word):
-    """Drag a practice by the six-dot handle before its name onto a section's header.
-
-    Installed's header reads "Installed"; Not installed's is the only
-    lowercase "installed"."""
+def drag_row(window, name, practice_word, target_word):
+    """Drag a practice by the six-dot handle before its name onto another word."""
     image, text = capture(window, name)
     words = words_of(image)
     practice = [row for row in words if row['text'] == practice_word]
-    section = [row for row in words if row['text'] == section_word]
-    if section_word == 'installed':
-        # OCR sometimes splits it into "i nstalled".
-        section = [row for row in words if 'nstalled' in row['text'] and not row['text'].startswith('I')]
-    assert practice and section, text
+    target = [row for row in words if row['text'] == target_word]
+    assert practice and target, text
     x = int(practice[-1]['left']) - 20
     y = int(practice[-1]['top']) + int(practice[-1]['height']) // 2
-    to_x = int(section[0]['left']) + int(section[0]['width']) // 2
-    to_y = int(section[0]['top']) + int(section[0]['height']) // 2
+    to_x = int(target[0]['left']) + int(target[0]['width']) // 2
+    to_y = int(target[0]['top']) + int(target[0]['height']) // 2
     command('xdotool', 'mousemove', '--window', window, str(x), str(y))
     command('xdotool', 'mousedown', '1')
     time.sleep(.2)
@@ -256,6 +259,63 @@ def drag_row(window, name, practice_word, section_word):
     time.sleep(.4)
     command('xdotool', 'mouseup', '1')
     time.sleep(1)
+
+
+def filled_button(image, practice):
+    """The centre of the first wide filled button at or below a practice's
+    name, found by its fill where OCR cannot read the text on it."""
+    with Image.open(image) as picture:
+        rgb = picture.convert('RGB')
+    left = int(practice['left'])
+    top = int(practice['top'])
+    base = rgb.getpixel((max(0, left - 4), max(0, top - 4)))
+
+    def run(y):
+        start = None
+        for x in range(left, rgb.width):
+            colour = rgb.getpixel((x, y))
+            filled = sum(abs(colour[i] - base[i]) for i in range(3)) > 60
+            if filled and start is None:
+                start = x
+            elif not filled and start is not None:
+                if x - start >= 120:
+                    return start, x
+                start = None
+        return None
+
+    for y in range(max(0, top - 12), min(rgb.height - 8, top + 160), 2):
+        # A button is filled on several lines in a row; a separator is not.
+        found = run(y)
+        if found and run(y + 4) and run(y + 8):
+            return (found[0] + found[1]) // 2, y + 14
+    return None
+
+
+def choose(window, name, practice_word, detail_prefix):
+    """Open a practice's state menu by the first menu button after its name,
+    then press the choice whose explanation starts with detail_prefix."""
+    image, text = capture(window, name + '-row')
+    words = words_of(image)
+    practice = [row for row in words if row['text'] == practice_word]
+    assert practice, text
+    top = int(practice[-1]['top'])
+    pills = sorted((row for row in words if (row['text'] in ('Practice', 'device') or
+                                             row['text'].endswith('downloaded'))
+                    and int(row['top']) >= top - 12), key=lambda row: int(row['top']))
+    if pills:
+        press(window, int(pills[0]['left']) + int(pills[0]['width']) // 2,
+              int(pills[0]['top']) + int(pills[0]['height']) // 2)
+    else:
+        button = filled_button(image, practice[-1])
+        assert button, text
+        press(window, *button)
+    time.sleep(.4)
+    image, text = capture(window, name + '-menu')
+    matches = [row for row in words_of(image) if row['text'].startswith(detail_prefix)]
+    assert matches, text
+    press(window, int(matches[-1]['left']) + int(matches[-1]['width']) // 2,
+          int(matches[-1]['top']) + int(matches[-1]['height']) // 2)
+    time.sleep(.6)
 
 
 with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
@@ -290,18 +350,17 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         whm_kb = (sizes['whm'] + 1023) // 1024
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
-        # Two sections: Wim Hof is installed; Meditation and Breathing
-        # Patterns ship with the app, so they show their size before they are
-        # added; Sun Salutation downloads. No row has a Remove or trash button.
-        assert 'Installed' in text and 'Not installed' in text, text
+        # One list: Wim Hof is on Practice; Meditation and Breathing
+        # Patterns come with the app, so they are on this device before they
+        # are added; Sun Salutation downloads. Each row has one state menu.
+        assert 'On Practice' in text and 'On device' in text and 'downloaded' in text, text
         assert str(whm_kb) + ' KB' in text and 'Comes with the app' in text, text
-        assert str(meditation_kb) + ' KB' in text and str(sun_mb) + ' MB' in text, text
-        assert 'Not downloaded' in text and 'Remove' not in text, text
-        assert 'Included in this version' not in text, text
+        assert str(meditation_kb) + ' KB' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
+        assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
-        # Dragged by its handle into Installed, Meditation is added from the
-        # app's own copy at once, without a copy of its own.
-        drag_row(window, 'manager-drag-meditation', 'Meditation', 'Installed')
+        # Its menu's On Practice adds Meditation from the app's own copy at
+        # once, without a copy of its own.
+        choose(window, 'manager-add-meditation', 'Meditation', 'Shown')
         _, text = capture(window, 'manager-added')
         assert 'Downloading' not in text and str(meditation_kb) + ' KB' in text, text
         assert not (cache / 'practice-meditation.zib').exists()
@@ -310,18 +369,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         drag_row(window, 'manager-reorder', 'Meditation', 'Wim')
         _, text = capture(window, 'manager-reordered')
         assert 0 <= text.find('Meditation') < text.find('Wim'), text
-        # Tapping a row opens its one next step: Meditation comes off
-        # Practice. Wim Hof is dragged out, last.
-        click_word(window, 'manager-meditation', 'Meditation')
-        _, text = capture(window, 'manager-meditation-open')
-        assert 'Remove' in text and 'Practice' in text, text
-        click_word(window, 'manager-remove', 'Remove')
+        # On device takes both off Practice and keeps them in the app.
+        choose(window, 'manager-hide-meditation', 'Meditation', 'Hidden')
         assert (cache / 'practice-meditation.removed').exists()
-        drag_row(window, 'manager-drag-whm', 'Wim', 'installed')
+        choose(window, 'manager-hide-whm', 'Wim', 'Hidden')
         _, text = capture(window, 'removed')
-        # Removed, the shipped practices offer themselves again without a
-        # download, still in the app.
-        assert 'Drag a practice here' in text and 'Comes with the app' in text, text
+        assert 'On Practice' not in text and 'Comes with the app' in text, text
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
         assert not (cache / 'practice-meditation.added').exists()
@@ -342,15 +395,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'No practices installed' in text, text
         click_mint(window, 'empty-manage')
         _, text = capture(window, 'manager-removed')
-        assert 'Drag a practice here' in text and 'Remove' not in text, text
-        # Wim Hof's open row adds it back from the app's own copy, without a
-        # download.
-        click_word(window, 'manager-whm', 'Wim')
-        _, text = capture(window, 'manager-whm-open')
-        assert 'adds back' in text, text
-        click_mint(window, 'manager-restore')
+        assert 'On Practice' not in text and 'Remove' not in text, text
+        # Wim Hof's On Practice adds it back from the app's own copy, without
+        # a download.
+        choose(window, 'manager-restore', 'Wim', 'Shown')
         _, text = capture(window, 'manager-restored')
-        assert 'Comes with the app' in text and 'Drag a practice here' not in text, text
+        assert 'On Practice' in text and 'Comes with the app' in text, text
         close_manager(window)
         _, text = capture(window, 'restored')
         assert 'Start' in text and 'No practices installed' not in text, text
@@ -440,7 +490,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             click_word(window, name + '-open', 'Manage')
             time.sleep(1)
             text = read_manager(window, name + '-manager', width, height)
-            assert 'Tai Chi' in text and 'On this device' in text, text
+            assert 'Tai Chi' in text, text
             # Bought: no Dew price or unlock button is left.
             assert 'Dew' not in text and 'Unlock' not in text, text
             assert 'Voice narration' not in text and "Lumi's guide" not in text, text
@@ -480,8 +530,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert 'English' in text and 'Plays in' not in text, text
     finally:
         stop(process)
-    # Dragged out of Installed, a downloaded practice stays on this device;
-    # its open row deletes the copy and its narration after asking once.
+    # On device keeps a downloaded practice's copy off Practice; Not
+    # downloaded asks once, then deletes the copy and its narration.
     with sqlite3.connect(profile / 'inbe.db') as database:
         for key, value in {'exercise_type': 2, 'voice_narration_enabled': 0}.items():
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
@@ -491,14 +541,11 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         click_word(window, 'sun-delete-open', 'Manage')
         time.sleep(1)
         _, text = capture(window, 'sun-delete-manager')
-        assert 'Sun Salutation' in text and 'On this device' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
-        drag_row(window, 'sun-delete-drag', 'Sun', 'installed')
+        assert 'Sun Salutation' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
+        choose(window, 'sun-hide', 'Sun', 'Hidden')
         assert (cache / 'practice-sunsalutation.zib').exists()
         assert (cache / 'practice-sunsalutation.removed').exists()
-        click_word(window, 'sun-delete-row', 'Sun')
-        _, text = capture(window, 'sun-delete-row-open')
-        assert 'still on this device' in text and 'Delete files' in text, text
-        click_word(window, 'sun-delete-files', 'files')
+        choose(window, 'sun-delete', 'Sun', 'Frees')
         image, text = capture(window, 'sun-delete-asked')
         assert 'Delete Sun Salutation?' in text and 'Your progress stays.' in text, text
         assert (cache / 'practice-sunsalutation.zib').exists()
@@ -513,14 +560,14 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         press(window, cancel_x + 2 * (cancel_x - start_x) + 8,
               int(cancel[-1]['top']) + int(cancel[-1]['height']) // 2)
         _, text = capture(window, 'sun-deleted')
-        assert str(sun_mb) + 'MB' in text.replace(' ', '') and 'Not downloaded' in text, text
+        # The files are gone; the row still shows the download's size.
         assert not (cache / 'practice-sunsalutation.zib').exists()
+        assert str(sun_mb) + 'MB' in text.replace(' ', ''), text
         assert not (cache / 'practice-sunsalutation.en.male.zib').exists()
         assert not (cache / 'practice-sunsalutation.removed').exists()
     finally:
         stop(process)
-print('Private Practices modal: Installed and Not installed sections, real sizes, drag to add and '
-      'remove, reorder that Practice follows, rows that open their next step, removal that stays, '
-      'restore without download, '
-      'installed-only home, saved progress, owned Tai Chi without a price, narration languages, '
-      'narrow layout, Sun Salutation narration and delete passed')
+print('Private Practices modal: one state menu per practice, real sizes, On Practice / On device / '
+      'Not downloaded with what each does, reorder that Practice follows, removal that stays, '
+      'restore without download, installed-only home, saved progress, owned Tai Chi without a price, '
+      'narration languages, narrow layout, Sun Salutation narration and delete passed')
