@@ -88,6 +88,33 @@ diary_store_DiaryStoreClose(void)
     /* Closing the shared module host is allowed; no Diary was opened. */
 }
 
+/* The module host asks the node's apps for any other asset; no node app is
+   installed here. Lists must not validate a node app or read the account's
+   media library. */
+AssetView
+node_apps_NodeAppAsset(String path)
+{
+    (void)path;
+    return (AssetView){0};
+}
+
+bool
+node_apps_NodeAppValidate(int32_t slot, String bytes)
+{
+    (void)slot;
+    (void)bytes;
+    assert(!"Lists validated a node app package");
+    return false;
+}
+
+AssetView
+media_store_MediaAssetView(String path)
+{
+    (void)path;
+    assert(!"Lists requested a media library asset");
+    return (AssetView){0};
+}
+
 
 int32_t
 AppScale(int32_t pixels)

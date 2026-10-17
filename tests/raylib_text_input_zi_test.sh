@@ -23,6 +23,8 @@ mkdir -p "$work/c"
     "$root/tests/raylib_text_input_link_test.c" \
     "$work/c/platform/raylib_text_input.c" "$work/c/text_buffers.c" \
     "$work/c/byte_text_linux.c" \
+    "$work/c/test_driver.c" "$work/c/tree.c" "$work/c/tree_input.c" \
+    "$work/c/session.c" "$work/c/c_string.c" "$work/c/vec.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe raylib text input Ziran/native test passed"

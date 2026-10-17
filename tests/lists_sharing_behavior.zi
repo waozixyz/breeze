@@ -40,13 +40,14 @@ Reply :: (output: []u8) -> bool {
     writer := Writer.{output, 0, true}
     writer = WriteText(writer, "{\"lists\":[")
     if accepted {
-        writer = WriteText(writer, "{\"id\":\"shared-list\",\"owner\":\"")
+        // Shared lists have UUID ids; other apps' shared records are not lists.
+        writer = WriteText(writer, "{\"id\":\"5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6\",\"owner\":\"")
         writer = WriteText(writer, sender)
         writer = WriteText(writer, "\",\"title\":\"Weekend\",\"revision\":1,\"items\":[{\"id\":\"shared-task\",\"title\":\"Pack bag\",\"comment\":\"For Saturday\",\"done\":0}]}")
     }
     writer = WriteText(writer, "],\"invitations\":[")
     if !accepted {
-        writer = WriteText(writer, "{\"id\":\"invitation-1\",\"list_id\":\"shared-list\",\"owner\":\"")
+        writer = WriteText(writer, "{\"id\":\"invitation-1\",\"list_id\":\"5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6\",\"owner\":\"")
         writer = WriteText(writer, sender)
         writer = WriteText(writer, "\",\"target\":\"")
         writer = WriteText(writer, TextUntilNul(account.public_id[:]))
@@ -127,9 +128,9 @@ Check :: () -> s32 {
 
     message := ListsMessage.{.action = LISTS_ACCEPT}
     frame := ListsUiFrame.{.next_id = "accept-request"}
-    list := ListsUiRow.{.id = "shared-list", .title = "Weekend", .revision = 1}
+    list := ListsUiRow.{.id = "5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6", .title = "Weekend", .revision = 1}
     rows: [2]ListsUiRow
-    rows[0] = ListsUiRow.{.id = "shared-task", .parent_id = "shared-list", .title = "Pack bag", .comment = "For Saturday"}
+    rows[0] = ListsUiRow.{.id = "shared-task", .parent_id = "5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6", .title = "Pack bag", .comment = "For Saturday"}
     rows[1] = ListsUiRow.{.id = "private-task", .parent_id = "private-list", .title = "Private"}
     message.request_body = ListsBuildCommand(message, frame, list, rows[:], "", "invitation-1")
     accepted = true
@@ -139,20 +140,20 @@ Check :: () -> s32 {
     check_true("shared records load with private records", storage_elist_load(cast(*void)*app.elist) != 0)
     found: bool
     for index: cast(s32)0..app.elist.list_count - 1 {
-        if AppTextFromCString(*app.elist.lists[index].id[0], 37) == "shared-list" {
+        if AppTextFromCString(*app.elist.lists[index].id[0], 37) == "5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6" {
             found = app.elist.lists[index].shared && !app.elist.lists[index].owner &&
             !app.elist.lists[index].incomplete
         }
     }
     check_true("accepted list is a complete collaborator observation", found)
-    check_true("shared content is not a private DB copy", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='shared-list'") == 0)
-    check_true("old private projection fixture", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT 'shared-list',id,'Original',9,0,1 FROM users LIMIT 1") != 0)
-    check_true("old private item fixture", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'old-task',id,'shared-list','Original task','',0,0,0,1 FROM users LIMIT 1") != 0)
-    check_int("private writer cannot rename a shared projection", storage_elist_update_list("shared-list", "Stale rename", 0), 0)
-    check_int("private writer cannot add to a shared projection", storage_elist_create_item("shared-list", "Stale task", "", null), 0)
+    check_true("shared content is not a private DB copy", read_db_count("SELECT COUNT(*) FROM elist_lists WHERE id='5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6'") == 0)
+    check_true("old private projection fixture", elist_exec_sql("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) SELECT '5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6',id,'Original',9,0,1 FROM users LIMIT 1") != 0)
+    check_true("old private item fixture", elist_exec_sql("INSERT INTO elist_items(id,user_id,list_id,title,comment,done,sort_order,deleted_at,updated_at) SELECT 'old-task',id,'5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6','Original task','',0,0,0,1 FROM users LIMIT 1") != 0)
+    check_int("private writer cannot rename a shared projection", storage_elist_update_list("5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6", "Stale rename", 0), 0)
+    check_int("private writer cannot add to a shared projection", storage_elist_create_item("5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6", "Stale task", "", null), 0)
     check_int("private writer cannot edit a shared projection", storage_elist_update_item("old-task", "Stale task", "", 1, 0), 0)
     check_int("private writer cannot delete a shared item", storage_elist_delete_item("old-task"), 0)
-    check_int("private writer cannot delete a shared list", storage_elist_delete_list("shared-list"), 0)
+    check_int("private writer cannot delete a shared list", storage_elist_delete_list("5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6"), 0)
 
     frame.next_id = "save-request"
     frame.value = "A \"quoted\" task\n二"

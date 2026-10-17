@@ -9,6 +9,7 @@ static int queued_at;
 static bool control_down;
 static bool paste_pressed;
 static int32_t repeating_key;
+static int32_t pressed_key;
 static uint8_t clipboard[32] = "pasted";
 
 
@@ -24,7 +25,8 @@ GetCharPressed(void)
 bool
 IsKeyPressed(int32_t key)
 {
-    return paste_pressed && key == TextInputKeyV;
+    return (paste_pressed && key == TextInputKeyV) ||
+        (pressed_key != 0 && key == pressed_key);
 }
 
 /* The OS repeats a held key; only that key's repeat is reported. */
@@ -112,6 +114,22 @@ main(void)
     assert(!input.paste);
     repeating_key = 0;
     control_down = false;
+
+    /* End moves to the line's end; Control+End to the text's end, and a
+       text area must not see both. Home works the same way. */
+    pressed_key = TextInputKeyEnd;
+    TextAreaInput area = SampleTextAreaInput(true, typed_buffer);
+    assert(area.end && !area.document_end);
+    control_down = true;
+    area = SampleTextAreaInput(true, typed_buffer);
+    assert(area.document_end && !area.end);
+    pressed_key = TextInputKeyHome;
+    area = SampleTextAreaInput(true, typed_buffer);
+    assert(area.document_home && !area.home);
+    control_down = false;
+    area = SampleTextAreaInput(true, typed_buffer);
+    assert(area.home && !area.document_home);
+    pressed_key = 0;
     assert(TextInputWriteClipboard(StringView("copied", 6)));
     assert(strcmp((const char *)clipboard, "copied") == 0);
     return 0;
