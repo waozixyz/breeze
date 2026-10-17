@@ -72,9 +72,113 @@ for attempt in $(seq 1 100); do
 done
 expect "$baseline" 'Meditation|Yoga|Sit ups|Push ups|Cold Shower|Jumping Rope' 'initial order'
 
+# Whether the table's scrollbar shows beside the rows between two heights:
+# at the panel's right edge, its thumb is lighter than the table beside it.
+scrollbar_shown() {
+  python3 - "$test_dir/$1.png" "$2" "$3" <<'PY'
+import sys
+from PIL import Image
+
+image = Image.open(sys.argv[1]).convert("RGB")
+
+
+def distance(first, second):
+    return sum(abs(a - b) for a, b in zip(first, second))
+
+
+rows = 0
+shown = 0
+for y in range(int(sys.argv[2]), int(sys.argv[3]), 4):
+    page = image.getpixel((image.width - 3, y))
+    edge = image.width - 3
+    while edge > 12 and distance(image.getpixel((edge, y)), page) <= 12:
+        edge -= 1
+    rows += 1
+    if distance(image.getpixel((edge - 5, y)), image.getpixel((edge - 12, y))) > 60:
+        shown += 1
+sys.exit(0 if rows > 0 and shown * 5 >= rows * 4 else 1)
+PY
+}
+# Whether two screenshots show the same day names, pixel for pixel, in the
+# table's header around a height.
+same_header() {
+  python3 - "$test_dir/$1.png" "$test_dir/$2.png" "$3" <<'PY'
+import sys
+from PIL import Image, ImageChops
+
+first = Image.open(sys.argv[1]).convert("RGB")
+second = Image.open(sys.argv[2]).convert("RGB")
+y = int(sys.argv[3])
+box = (0, y - 14, first.width, y + 14)
+same = first.size == second.size and \
+    ImageChops.difference(first.crop(box), second.crop(box)).getbbox() is None
+sys.exit(0 if same else 1)
+PY
+}
+# A screenshot once the table has come to rest.
+rest_shot() {
+  shot "$1"
+  for attempt in $(seq 1 20); do
+    sleep 0.3
+    shot "$1-next"
+    if cmp -s "$test_dir/$1.png" "$test_dir/$1-next.png"; then
+      break
+    fi
+    mv "$test_dir/$1-next.png" "$test_dir/$1.png"
+  done
+  rm -f "$test_dir/$1-next.png"
+}
+yesterday="$(LC_ALL=C date -d yesterday +%a | lower)"
+# Opening a habit's details or the inactive habits never makes a scrollbar
+# appear and the day columns move or drop: when either would need room to
+# scroll, the scrollbar shows from the start. In a window this short, each
+# of them alone makes the table scroll; at a phone's width the rows then
+# show their icons alone from the start.
+steady_columns() {
+  local name="$3" header_y icon_x yoga_y inactive_x inactive_y
+  # The window starts centred; at the screen's corner a wide one stays whole.
+  xdotool windowmove --sync "$window" 0 0 || true
+  xdotool windowsize --sync "$window" "$1" "$2" || true
+  sleep 1
+  rest_shot "$name-closed"
+  read -r _ header_y < <(find_word "$name-closed" "$yesterday" "the $name table names yesterday")
+  scrollbar_shown "$name-closed" "$((header_y + 30))" "$((header_y + 200))" ||
+    { echo "FAIL the $name table shows no scrollbar before anything opens ($test_dir/$name-closed.png)"; exit 1; }
+  # Yoga's row is the second below the day names; its icon, at the start
+  # of the row as the inactive habits' name is, opens it.
+  read -r inactive_x inactive_y < <(find_word "$name-closed" inactive "the $name table has no inactive habits")
+  icon_x=$((inactive_x - 24))
+  yoga_y=$((header_y + 110))
+  tap "$icon_x" "$yoga_y"
+  rest_shot "$name-card"
+  find_word "$name-card" streak "Yoga's details did not open in the $name table" >/dev/null
+  same_header "$name-closed" "$name-card" "$header_y" ||
+    { echo "FAIL opening Yoga moved the $name table's day columns ($test_dir/$name-card.png)"; exit 1; }
+  tap "$icon_x" "$yoga_y"
+  rest_shot "$name-card-closed"
+  tap "$inactive_x" "$inactive_y"
+  rest_shot "$name-inactive"
+  find_word "$name-inactive" drag "the inactive habits did not open in the $name table" >/dev/null
+  same_header "$name-closed" "$name-inactive" "$header_y" ||
+    { echo "FAIL opening the inactive habits moved the $name table's day columns ($test_dir/$name-inactive.png)"; exit 1; }
+  tap "$inactive_x" "$inactive_y"
+}
+steady_columns 390 660 phone
+steady_columns 1024 660 desktop
+# A table that fits with everything open shows no scrollbar.
+xdotool windowsize --sync "$window" 411 1000 || true
+sleep 1
+rest_shot tall
+read -r _ tall_header_y < <(find_word tall "$yesterday" "the tall table names yesterday")
+if scrollbar_shown tall "$((tall_header_y + 30))" "$((tall_header_y + 200))"; then
+  echo "FAIL a table with room for everything shows a scrollbar ($test_dir/tall.png)"; exit 1
+fi
+xdotool windowsize --sync "$window" 411 760 || true
+sleep 1
+echo "PASS steady columns: opening a habit or the inactive habits keeps the day columns at a phone's and a desktop's width"
+
 # The day columns: today first, then yesterday and the day before, named
 # by their weekdays in the header.
-yesterday="$(LC_ALL=C date -d yesterday +%a | lower)"
 before_yesterday="$(LC_ALL=C date -d '2 days ago' +%a | lower)"
 for attempt in $(seq 1 20); do
   shot overview
@@ -111,8 +215,11 @@ find_word yoga-open streak "the open habit shows its streak" >/dev/null
 # Its editor opens from the last of the details' actions, at the table's
 # right edge above the figures, and gives Yoga an icon.
 read -r _ week_y < <(find_word yoga-open week "the open habit shows this week")
-# The open details make the table scroll, and its scroll bar moves the day
-# columns left; aim at the middle of the edit action from where they are now.
+# The open details make the table scroll; its scrollbar already showed, so
+# the day columns stay where they were. Aim at the middle of the edit action
+# from where they are.
+same_header overview yoga-open "$header_y" ||
+  { echo "FAIL opening Yoga moved the day columns ($test_dir/yoga-open.png)"; exit 1; }
 read -r open_day1_x _ < <(find_word yoga-open "$yesterday" "the open table names yesterday")
 read -r open_day2_x _ < <(find_word yoga-open "$before_yesterday" "the open table names the day before")
 day_w=$((open_day2_x - open_day1_x))
