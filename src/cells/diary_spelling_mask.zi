@@ -1,13 +1,13 @@
-// Photo embeds never go to the spelling service: their lines are sent empty
-// and put back into the corrected entry. A correction that moved lines
-// cannot be matched to the photos, so it is refused.
+// Images never go to the spelling service, wherever they stand in a line:
+// each `![...](...)` is sent as one object replacement character, U+FFFC,
+// so photo names, places and hashes stay on this device. The correction
+// gets each image back at its mark, in order. A correction that lost or
+// added a mark cannot be matched to the images, so it is refused.
 #import "vec"
 #import "text"
 #import "byte_text_linux"
 
-DiarySpellingBlank :: (byte: u8) -> bool {
-    return byte == cast(u8)32 || byte == cast(u8)9 || byte == cast(u8)13
-}
+DIARY_SPELLING_MARK :: "\xEF\xBF\xBC"
 
 DiarySpellingLineEnd :: (text: string, start: s64) -> s64 {
     end := start
@@ -17,80 +17,95 @@ DiarySpellingLineEnd :: (text: string, start: s64) -> s64 {
     return end
 }
 
-// A line holding only an image, `![...](...)`, as Diary photos are written.
-DiarySpellingImageLine :: (line: string) -> bool {
-    first: s64 = 0
-    last := line.count
-    while first < last && DiarySpellingBlank(line[first]) {
-        first += 1
+// Where an image that starts at `at` ends, after its closing parenthesis,
+// or -1. It is read generously, `![`, then `](` and `)` on the same line,
+// so that whatever a destination holds stays masked.
+DiarySpellingImageEnd :: (text: string, at: s64) -> s64 {
+    if at + 1 >= text.count || text[at] != cast(u8)33 || text[at + 1] != cast(u8)91 {
+        return -1
     }
-    while last > first && DiarySpellingBlank(line[last - 1]) {
-        last -= 1
+    line_end := DiarySpellingLineEnd(text, at)
+    cursor := at + 2
+    while cursor + 1 < line_end && (text[cursor] != cast(u8)93 || text[cursor + 1] != cast(u8)40) {
+        cursor += 1
     }
-    if last - first < 5 || line[first] != cast(u8)33 || line[first + 1] != cast(u8)91 ||
-    line[last - 1] != cast(u8)41 {
-        return false
+    if cursor + 1 >= line_end {
+        return -1
     }
-    for index: first + 2..last - 2 {
-        if line[index] == cast(u8)93 && line[index + 1] == cast(u8)40 {
-            return true
-        }
+    cursor += 2
+    while cursor < line_end && text[cursor] != cast(u8)41 {
+        cursor += 1
     }
-    return false
+    if cursor >= line_end {
+        return -1
+    }
+    return cursor + 1
 }
 
-// The entry as the spelling service sees it: image lines empty.
+// Whether a mark the text already holds starts at `at`.
+DiarySpellingMarkAt :: (text: string, at: s64) -> bool {
+    mark := DIARY_SPELLING_MARK
+    return at + mark.count <= text.count && text[at:at + mark.count] == mark
+}
+
+// The bytes the mark at `at` stands for, ending where the next byte to read
+// is, or -1 when no mark starts there. A mark the entry held itself stands
+// for itself.
+DiarySpellingMasks :: (text: string, at: s64) -> s64 {
+    if DiarySpellingMarkAt(text, at) {
+        return at + DIARY_SPELLING_MARK.count
+    }
+    return DiarySpellingImageEnd(text, at)
+}
+
+// The entry as the spelling service sees it: each image one mark.
 DiarySpellingMasked :: (text: string) -> string {
     out: Vec(u8)
-    start: s64 = 0
-    while start <= text.count {
-        end := DiarySpellingLineEnd(text, start)
-        if !DiarySpellingImageLine(text[start:end]) {
-            BuilderPrint(*out, "%", text[start:end])
+    at: s64 = 0
+    while at < text.count {
+        end := DiarySpellingMasks(text, at)
+        if end > at {
+            BuilderPrint(*out, "%", DIARY_SPELLING_MARK)
+            at = end
+            continue
         }
-        if end < text.count {
-            BuilderPrint(*out, "\n")
-        }
-        start = end + 1
+        unused VecPush(out, text[at])
+        at += 1
     }
     return BuilderFinish(out)
 }
 
-// The correction with the original image lines back, or "" when its lines
-// no longer line up with the entry's.
+// The correction with the original images back at their marks, or "" when
+// its marks no longer match the entry's.
 DiarySpellingRestored :: (original: string, corrected: string) -> string {
     out: Vec(u8)
-    start: s64 = 0
+    source: s64 = 0
     at: s64 = 0
-    while start <= original.count {
-        if at > corrected.count {
+    while at < corrected.count {
+        if !DiarySpellingMarkAt(corrected, at) {
+            unused VecPush(out, corrected[at])
+            at += 1
+            continue
+        }
+        // The next mark of the original and what it stands for.
+        while source < original.count && DiarySpellingMasks(original, source) < 0 {
+            source += 1
+        }
+        if source >= original.count {
             VecFree(out)
             return ""
         }
-        end := DiarySpellingLineEnd(original, start)
-        corrected_end := DiarySpellingLineEnd(corrected, at)
-        if DiarySpellingImageLine(original[start:end]) {
-            for byte: corrected[at:corrected_end] {
-                if !DiarySpellingBlank(byte) {
-                    VecFree(out)
-                    return ""
-                }
-            }
-            BuilderPrint(*out, "%", original[start:end])
-        } else {
-            BuilderPrint(*out, "%", corrected[at:corrected_end])
-        }
-        original_more := end < original.count
-        corrected_more := corrected_end < corrected.count
-        if original_more != corrected_more {
-            VecFree(out)
-            return ""
-        }
-        if original_more {
-            BuilderPrint(*out, "\n")
-        }
-        start = end + 1
-        at = corrected_end + 1
+        end := DiarySpellingMasks(original, source)
+        BuilderPrint(*out, "%", original[source:end])
+        source = end
+        at += DIARY_SPELLING_MARK.count
+    }
+    while source < original.count && DiarySpellingMasks(original, source) < 0 {
+        source += 1
+    }
+    if source < original.count {
+        VecFree(out)
+        return ""
     }
     return BuilderFinish(out)
 }

@@ -1,13 +1,14 @@
-// A Diary entry is Markdown. This module finds its whole-line photo embeds and
-// the CommonMark basics the editor previews, and makes the edits that add a
+// A Diary entry is Markdown. This module finds its photo embeds and the
+// CommonMark basics the editor previews, and makes the edits that add a
 // photo. It reads only the entry's text; files and the account's media
 // library belong to the host.
 //
-// An embed line is `![ALT](photos/YYYY/MM/DD/SHA256.EXT)` for a photo of the
-// account's media library, which Photos shows too: the photo's day, its
-// SHA-256 and its type. `![ALT](diary:FILE)` names a photo an older version
-// attached to the entry as a Diary file. An embed stands alone on its line
-// apart from spaces; anything else stays ordinary text.
+// An embed is a CommonMark image anywhere in a line whose destination is a
+// photo: `![ALT](photos/YYYY/MM/DD/SHA256.EXT)` for a photo of the account's
+// media library, which Photos shows too (the photo's day, its SHA-256 and
+// its type), or `![ALT](diary:FILE)` for a photo an older version attached
+// to the entry as a Diary file. Other images and text stay ordinary text.
+// An inserted photo gets a line of its own.
 #import "text"
 #import "vec"
 #import "byte_text_linux"
@@ -31,11 +32,17 @@ DIARY_LINE_RUNS :: 64
 
 DiaryEmbed :: struct {
     valid: bool
-    // The embed's line, without its line break.
+    // The image's bytes, from its `!` to its closing parenthesis.
+    start: s32
+    end: s32
+    // Its line, without the line break.
     line_start: s32
     line_end: s32
     alt_start: s32
     alt_end: s32
+    // The destination, without angle brackets, ends with its target: the
+    // Diary file's name after `diary:`, or the whole library place.
+    destination_start: s32
     target_start: s32
     target_end: s32
     // A photo of the account's media library (photos/...) or a Diary file
@@ -64,8 +71,9 @@ DiaryHeading :: struct {
     level: s32
 }
 
-// A photo drawn for an embed: in place of its hidden line (cover), or under
-// its source while the caret is on that line.
+// A photo drawn for an embed under its line, after the line's earlier
+// photos. On a line of photos alone, away from the caret, the first one
+// takes the hidden line's place (cover).
 DiaryPhotoBlock :: struct {
     embed: DiaryEmbed
     cover: bool
@@ -194,41 +202,70 @@ DiaryLibraryPath :: (day: string, hash: string, format: string) -> string {
     return path
 }
 
-// The embed on the line starting at line_start, or an invalid one.
-DiaryEmbedAt :: (text: string, line_start: s32) -> DiaryEmbed {
+// The photo at `at`, where an image's `!` stands, or an invalid embed. An
+// image follows CommonMark within one line: `![ALT](DESTINATION)`, with
+// spaces or tabs around the destination, an optional "title", 'title' or
+// (title) after it, and the destination in <angle brackets> or plain.
+// Escaped brackets may appear in ALT. Only a destination naming a photo, a
+// library place or a Diary file, makes it an embed.
+DiaryEmbedAt :: (text: string, at: s32) -> DiaryEmbed {
     embed: DiaryEmbed
-    if line_start < 0 || line_start > cast(s32)text.count {
+    if at < 0 || at + 1 >= cast(s32)text.count || text[at] != #char "!" ||
+    text[at + 1] != #char "[" {
         return embed
     }
-    line_end := DiaryLineEnd(text, line_start)
-    first := line_start
-    while first < line_end && DiaryBlank(text[first]) {
-        first += 1
-    }
-    last := line_end
-    if last > first && text[last - 1] == cast(u8)13 {
-        last -= 1
-    }
-    while last > first && DiaryBlank(text[last - 1]) {
-        last -= 1
-    }
-    if last - first < 6 || text[first] != #char "!" || text[first + 1] != #char "[" ||
-    text[last - 1] != #char ")" {
+    line_start := DiaryLineStart(text, at)
+    line_end := DiaryLineEnd(text, at)
+    if DiaryEscaped(text, at, line_start) {
         return embed
     }
-    close := first + 2
-    while close < last && text[close] != #char "]" {
+    close := at + 2
+    while close < line_end && text[close] != #char "]" {
         if text[close] == #char "[" {
             return embed
         }
+        if text[close] == cast(u8)92 && close + 1 < line_end {
+            close += 1
+        }
         close += 1
     }
-    if close + 1 >= last || text[close + 1] != #char "(" ||
-    close - (first + 2) > DIARY_EMBED_ALT_MAX {
+    if close + 1 >= line_end || text[close + 1] != #char "(" ||
+    close - (at + 2) > DIARY_EMBED_ALT_MAX {
         return embed
     }
-    destination_start := close + 2
-    destination_end := last - 1
+    cursor := DiarySkipBlank(text, close + 2, line_end)
+    destination_start := cursor
+    destination_end := cursor
+    if cursor < line_end && text[cursor] == #char "<" {
+        destination_start = cursor + 1
+        destination_end = destination_start
+        while destination_end < line_end && text[destination_end] != #char ">" &&
+        text[destination_end] != #char "<" {
+            destination_end += 1
+        }
+        if destination_end >= line_end || text[destination_end] != #char ">" {
+            return embed
+        }
+        cursor = destination_end + 1
+    } else {
+        while cursor < line_end && text[cursor] > cast(u8)32 && text[cursor] != #char "(" &&
+        text[cursor] != #char ")" {
+            cursor += 1
+        }
+        destination_end = cursor
+    }
+    after := DiarySkipBlank(text, cursor, line_end)
+    if after > cursor && after < line_end && (text[after] == cast(u8)34 ||
+        text[after] == cast(u8)39 || text[after] == #char "(") {
+        after = DiaryTitleEnd(text, after, line_end)
+        if after < 0 {
+            return embed
+        }
+        after = DiarySkipBlank(text, after, line_end)
+    }
+    if after >= line_end || text[after] != #char ")" {
+        return embed
+    }
     destination := text[destination_start:destination_end]
     target_start := destination_start
     library := false
@@ -243,27 +280,93 @@ DiaryEmbedAt :: (text: string, line_start: s32) -> DiaryEmbed {
         return embed
     }
     embed.valid = true
+    embed.start = at
+    embed.end = after + 1
     embed.line_start = line_start
     embed.line_end = line_end
-    embed.alt_start = first + 2
+    embed.alt_start = at + 2
     embed.alt_end = close
+    embed.destination_start = destination_start
     embed.target_start = target_start
     embed.target_end = destination_end
     embed.library = library
     return embed
 }
 
-// The first embed on or after the line starting at from.
-DiaryEmbedNext :: (text: string, from: s32) -> DiaryEmbed {
-    line := from
-    while line <= cast(s32)text.count {
-        embed := DiaryEmbedAt(text, line)
-        if embed.valid {
-            return embed
+DiarySkipBlank :: (text: string, at: s32, end: s32) -> s32 {
+    cursor := at
+    while cursor < end && DiaryBlank(text[cursor]) {
+        cursor += 1
+    }
+    return cursor
+}
+
+// Where an image's title that opens at `at` ends, after its closing quote
+// or parenthesis, or -1 when it does not close on the line.
+DiaryTitleEnd :: (text: string, at: s32, end: s32) -> s32 {
+    closing := text[at]
+    if closing == #char "(" {
+        closing = #char ")"
+    }
+    cursor := at + 1
+    while cursor < end {
+        if text[cursor] == cast(u8)92 && cursor + 1 < end {
+            cursor += 2
+            continue
         }
-        line = DiaryLineEnd(text, line) + 1
+        if text[cursor] == closing {
+            return cursor + 1
+        }
+        if text[at] == #char "(" && text[cursor] == #char "(" {
+            return -1
+        }
+        cursor += 1
+    }
+    return -1
+}
+
+// The first embed starting in text[from:to].
+DiaryEmbedIn :: (text: string, from: s32, to: s32) -> DiaryEmbed {
+    at := from
+    if at < 0 {
+        at = 0
+    }
+    while at + 1 < to {
+        if text[at] == #char "!" && text[at + 1] == #char "[" {
+            embed := DiaryEmbedAt(text, at)
+            if embed.valid {
+                return embed
+            }
+        }
+        at += 1
     }
     return DiaryEmbed.{}
+}
+
+// The first embed starting at or after `from`.
+DiaryEmbedNext :: (text: string, from: s32) -> DiaryEmbed {
+    return DiaryEmbedIn(text, from, cast(s32)text.count)
+}
+
+// Whether the line starting at line_start holds photos and nothing else but
+// spaces, as an inserted photo's line does.
+DiaryImageLine :: (text: string, line_start: s32) -> bool {
+    line_end := DiaryLineEnd(text, line_start)
+    found := false
+    at := line_start
+    while at < line_end {
+        if DiaryBlank(text[at]) || text[at] == cast(u8)13 {
+            at += 1
+            continue
+        }
+        embed := DiaryEmbedAt(text, at)
+        if !embed.valid {
+            return false
+        }
+        found = true
+        at = embed.end
+    }
+    return found
 }
 
 // A Diary file's name, or a library photo's whole path.
@@ -271,12 +374,9 @@ DiaryEmbedTarget :: (text: string, embed: DiaryEmbed) -> string {
     return text[embed.target_start:embed.target_end]
 }
 
-// What the embed links to as written: diary:FILE or the library path.
+// What the embed links to: diary:FILE or the library place.
 DiaryEmbedDestination :: (text: string, embed: DiaryEmbed) -> string {
-    if embed.library {
-        return DiaryEmbedTarget(text, embed)
-    }
-    return text[embed.target_start - 6:embed.target_end]
+    return text[embed.destination_start:embed.target_end]
 }
 
 DiaryEmbedAlt :: (text: string, embed: DiaryEmbed) -> string {
@@ -290,7 +390,7 @@ DiaryEmbedReferences :: (text: string, file: string) -> bool {
         if !embed.library && DiaryEmbedTarget(text, embed) == file {
             return true
         }
-        embed = DiaryEmbedNext(text, embed.line_end + 1)
+        embed = DiaryEmbedNext(text, embed.end)
     }
     return false
 }
@@ -361,12 +461,12 @@ DiaryEmbedAppend :: (text: string, line: string) -> string {
     }
     if text[count - 1] == cast(u8)10 {
         previous := DiaryLineStart(text, count - 1)
-        after_embed := DiaryEmbedAt(text, previous).valid
+        after_embed := DiaryImageLine(text, previous)
         blank := count >= 2 && text[count - 2] == cast(u8)10
         if !after_embed && !blank {
             BuilderPrint(*out, "\n")
         }
-    } else if DiaryEmbedAt(text, DiaryLineStart(text, count)).valid {
+    } else if DiaryImageLine(text, DiaryLineStart(text, count)) {
         BuilderPrint(*out, "\n")
     } else {
         BuilderPrint(*out, "\n\n")
@@ -376,10 +476,8 @@ DiaryEmbedAppend :: (text: string, line: string) -> string {
 }
 
 // The edit that puts an embed line at `at`, on a line of its own, with the
-// caret on the line after it. With snap, `at` first moves to its line's
-// start when it is there, or else to the line's end, so a photo dropped on
-// text never splits a word.
-DiaryEmbedInsertion :: (text: string, at: s32, line: string, snap: bool) -> DiaryEmbedEdit {
+// caret on the line after it.
+DiaryEmbedInsertion :: (text: string, at: s32, line: string) -> DiaryEmbedEdit {
     edit: DiaryEmbedEdit
     count := cast(s32)text.count
     start := at
@@ -391,12 +489,6 @@ DiaryEmbedInsertion :: (text: string, at: s32, line: string, snap: bool) -> Diar
     }
     while start > 0 && start < count && (text[start] & cast(u8)192) == cast(u8)128 {
         start -= 1
-    }
-    if snap {
-        line_start := DiaryLineStart(text, start)
-        if start != line_start {
-            start = DiaryLineEnd(text, start)
-        }
     }
     out: Vec(u8)
     if start > 0 && text[start - 1] != cast(u8)10 {
@@ -438,6 +530,8 @@ DiaryLink :: struct {
     text_end: s32
     end: s32
     image: bool
+    // An image whose destination is a photo: an embed.
+    photo: bool
 }
 
 // A run of `*` or `_` delimiters for emphasis.
@@ -593,12 +687,23 @@ DiaryPunctuation :: (byte: u8) -> bool {
     (byte >= cast(u8)91 && byte <= cast(u8)96) || (byte >= cast(u8)123 && byte <= cast(u8)126)
 }
 
-// Links and inline images on text[from:to]. Destinations hold no spaces, as
-// CommonMark's plain destinations; titles and angle brackets stay text.
+// Photos, links and other inline images on text[from:to]. A photo is read
+// as an embed; other destinations hold no spaces, as CommonMark's plain
+// destinations, and their titles and angle brackets stay text.
 DiaryFindLinks :: (text: string, from: s32, to: s32) {
     diary_link_count = 0
     at := from
     while at < to && diary_link_count < DIARY_LINE_LINKS {
+        if text[at] == #char "!" {
+            embed := DiaryEmbedAt(text, at)
+            if embed.valid && embed.end <= to {
+                diary_links[diary_link_count] = DiaryLink.{.open = at + 1, .text_end = embed.alt_end,
+                    .end = embed.end, .image = true, .photo = true}
+                diary_link_count += 1
+                at = embed.end
+                continue
+            }
+        }
         if text[at] != #char "[" || DiaryEscaped(text, at, from) {
             at += 1
             continue
@@ -755,6 +860,10 @@ DiaryInline :: (marks: *DiaryLineMarks, text: string, from: s32, to: s32, active
     DiaryEmphasis(marks, text, from, to, active)
     for index: cast(s32)0..link_count - 1 {
         link := links[index]
+        // A photo is drawn under its line; its Markdown hides like a link's.
+        if link.photo && !active {
+            DiaryMarkHidden(marks, link.open - 1, link.end)
+        }
         if link.image {
             continue
         }
@@ -910,16 +1019,26 @@ DiaryPreviewScan :: (preview: *DiaryPreview, text: string, cursor: s32, anchor: 
     while line <= count {
         end := DiaryLineEnd(text, line)
         active := editing && last >= line && first <= end
-        embed := DiaryEmbedAt(text, line)
-        if embed.valid {
-            if preview.photo_count >= DIARY_PREVIEW_PHOTOS ||
-            (!active && preview.hidden_count >= DIARY_PREVIEW_RANGES) {
+        // The line's photos are drawn under it, in order.
+        line_photos := preview.photo_count
+        embed := DiaryEmbedIn(text, line, end)
+        while embed.valid {
+            if preview.photo_count >= DIARY_PREVIEW_PHOTOS {
                 preview.truncated = true
                 return
             }
-            preview.photos[preview.photo_count] = DiaryPhotoBlock.{.embed = embed, .cover = !active}
+            preview.photos[preview.photo_count] = DiaryPhotoBlock.{.embed = embed}
             preview.photo_count += 1
-            if !active && end > line {
+            embed = DiaryEmbedIn(text, embed.end, end)
+        }
+        // A line of photos alone shows its first photo in its place.
+        if preview.photo_count > line_photos && DiaryImageLine(text, line) {
+            if !active {
+                if preview.hidden_count >= DIARY_PREVIEW_RANGES {
+                    preview.truncated = true
+                    return
+                }
+                preview.photos[line_photos].cover = true
                 preview.hidden[preview.hidden_count] = TextRange.{.start = line, .end = end}
                 preview.hidden_count += 1
             }

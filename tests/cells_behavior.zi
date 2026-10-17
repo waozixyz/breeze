@@ -309,6 +309,32 @@ CheckDiary :: () {
     kept.action = DIARY_SAVE
     kept = DiaryRun(kept)
     Expect(kept.saved && kept.document == "{\"version\":1,\"date\":\"2024-03-04\",\"text\":\"Walk\\n![p](diary:p.png)\",\"photos\":[{\"file\":\"p.png\",\"name\":\"p\"}]}", 469)
+    // Photos inside a line of text: an older list's photo embedded there is
+    // not added again, saving lists each one in text order, and a photo
+    // attached at the end of a photo's line gets a line of its own.
+    Expect(DiaryStoreSave("2024-03-05.json", "{\"version\":1,\"date\":\"2024-03-05\",\"text\":\"Walk ![q](diary:q.png) and ![p](diary:p.png) home\",\"photos\":[{\"file\":\"p.png\",\"name\":\"p\"}]}"), 470)
+    inline_day := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 5})
+    Expect(inline_day.text == "Walk ![q](diary:q.png) and ![p](diary:p.png) home", 471)
+    inline_day.action = DIARY_EDIT
+    inline_day.edit_start = cast(s32)inline_day.text.count
+    inline_day.edit_end = inline_day.edit_start
+    inline_day.replacement = " today"
+    inline_day = DiaryRun(inline_day)
+    inline_day.action = DIARY_ATTACH
+    inline_day.attachment_file = "diary:r.png"
+    inline_day.attachment_name = "r"
+    inline_day = DiaryRun(inline_day)
+    Expect(inline_day.saved && inline_day.document == "{\"version\":1,\"date\":\"2024-03-05\",\"text\":\"Walk ![q](diary:q.png) and ![p](diary:p.png) home today\\n![r](diary:r.png)\\n\",\"photos\":[{\"file\":\"q.png\",\"name\":\"q\"},{\"file\":\"p.png\",\"name\":\"p\"},{\"file\":\"r.png\",\"name\":\"r\"}]}", 472)
+    // Text typed right after a photo keeps it in "photos".
+    inline_day.action = DIARY_EDIT
+    inline_day.edit_start = cast(s32)inline_day.text.count - 1
+    inline_day.edit_end = inline_day.edit_start
+    inline_day.replacement = " later"
+    inline_day = DiaryRun(inline_day)
+    inline_day.action = DIARY_SAVE
+    inline_day = DiaryRun(inline_day)
+    Expect(inline_day.saved && inline_day.text == "Walk ![q](diary:q.png) and ![p](diary:p.png) home today\n![r](diary:r.png) later\n" &&
+        inline_day.document == "{\"version\":1,\"date\":\"2024-03-05\",\"text\":\"Walk ![q](diary:q.png) and ![p](diary:p.png) home today\\n![r](diary:r.png) later\\n\",\"photos\":[{\"file\":\"q.png\",\"name\":\"q\"},{\"file\":\"p.png\",\"name\":\"p\"},{\"file\":\"r.png\",\"name\":\"r\"}]}", 473)
     CheckDiaryPhotoOnFullNode()
     CheckDiaryPhotoCopies()
     Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)

@@ -42,12 +42,20 @@ def capture(window, name):
     raw.unlink()
 
 
-def red_pixels(path):
+def pixels_like(path, matches):
     with Image.open(path) as image:
         rgb = image.convert("RGB")
     pixels = rgb.load()
-    return [(x, y) for y in range(rgb.height) for x in range(rgb.width)
-            if pixels[x, y][0] > 200 and pixels[x, y][1] < 100 and pixels[x, y][2] < 120]
+    return [(x, y) for y in range(rgb.height) for x in range(rgb.width) if matches(pixels[x, y])]
+
+
+def red_pixels(path):
+    return pixels_like(path, lambda color: color[0] > 200 and color[1] < 100 and color[2] < 120)
+
+
+def purple_pixels(path):
+    return pixels_like(path, lambda color: abs(color[0] - 128) < 24 and abs(color[1] - 72) < 24 and
+                       abs(color[2] - 176) < 24)
 
 
 def wait_for_text(entry, matches, message):
@@ -145,10 +153,26 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         assert len(library) == 1 and library[0].read_bytes() == picked.read_bytes()
         time.sleep(0.5)
         capture(window, "picked-photo")
-        with Image.open(OUTPUT / "picked-photo.png") as image:
-            purple = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
-                         if abs(color[0] - 128) < 24 and abs(color[1] - 72) < 24 and abs(color[2] - 176) < 24)
-        assert purple > 20000, "The picked photo is not drawn inside the entry"
+        purple = purple_pixels(OUTPUT / "picked-photo.png")
+        assert len(purple) > 20000, "The picked photo is not drawn inside the entry"
+        # A click on the photo puts the caret at the end of its line; text
+        # typed there joins the photo's line, and the photo stays.
+        tap(window, sum(x for x, y in purple) // len(purple), sum(y for x, y in purple) // len(purple))
+        command("xdotool", "type", "--clearmodifiers", " right after")
+        wait_for_text(entry, lambda text: ") right after\n" in text, "Text typed after the photo was not saved")
+        after_photo = json.loads(entry.read_text())
+        assert after_photo["text"] == with_time + "\n![IMG_DIARY.jpg](" + place + ") right after\n", after_photo["text"]
+        time.sleep(0.5)
+        capture(window, "text-after-photo")
+        assert len(purple_pixels(OUTPUT / "text-after-photo.png")) > 20000, \
+            "The photo was not drawn while its line was edited"
+        # Away from that line its Markdown hides and the photo stays under
+        # the text.
+        command("xdotool", "key", "--clearmodifiers", "ctrl+End")
+        time.sleep(0.5)
+        capture(window, "text-beside-photo")
+        assert len(purple_pixels(OUTPUT / "text-beside-photo.png")) > 20000, \
+            "The photo was not drawn under the text typed after it"
         saved = json.loads(entry.read_text())
         tap(window, 288, 86)  # Calendar.
         capture(window, "calendar")
@@ -238,6 +262,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         with application(phone, f"sage-{dark}-restart", size=(390, 844)):
             assert json.loads(phone_entry.read_text()) == saved_photo
             assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
-    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, calendar, restart and day navigation passed")
+    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
     print("Diary photos: older photo lists inside the entry, a missing file, no writes on viewing, a tapped day photo embedded, and restart at phone width in light/dark sage passed")

@@ -70,16 +70,18 @@ CheckEmbeds :: () -> s32 {
     "photo-20261017081500-1.bin" { return 2 }
     if DiaryEmbedAlt("![IMG_2041.jpg](diary:photo-20261017081500-1.bin)", embed) != "IMG_2041.jpg" { return 3 }
     spaced := "  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg) \r"
-    embed = DiaryEmbedAt(spaced, 0)
+    embed = DiaryEmbedNext(spaced, 0)
     if !embed.valid || !embed.library || DiaryEmbedTarget(spaced, embed) != PLACE ||
-    DiaryEmbedDestination(spaced, embed) != PLACE ||
-    embed.alt_start != embed.alt_end { return 4 }
+    DiaryEmbedDestination(spaced, embed) != PLACE || embed.start != 2 || embed.end != 93 ||
+    embed.alt_start != embed.alt_end || !DiaryImageLine(spaced, 0) { return 4 }
     if DiaryEmbedAt("![a](photos/2026/10/17/9F2C4E1A7B3D5F60718293A4B5C6D7E8F90123456789ABCDEF0123456789ABCD.jpg)", 0).valid { return 5 }
     if DiaryEmbedAt("![a](diary:../outside)", 0).valid { return 6 }
-    if DiaryEmbedAt("look ![a](diary:x.bin)", 0).valid { return 7 }
+    // An image is a photo anywhere in a line, with text around it.
+    if DiaryEmbedAt("look ![a](diary:x.bin)", 0).valid || DiaryEmbedNext("look ![a](diary:x.bin)", 0).start != 5 ||
+    DiaryImageLine("look ![a](diary:x.bin)", 0) { return 7 }
     if DiaryEmbedAt("![a[b]](diary:x.bin)", 0).valid { return 8 }
     if DiaryEmbedAt("![a](https://example.com/x.png)", 0).valid { return 9 }
-    if DiaryEmbedAt("![a](diary:x.bin) more", 0).valid { return 10 }
+    if DiaryEmbedAt("![a](diary:x.bin) more", 0).end != 17 { return 10 }
     if DiaryEmbedAt("![a](diary:)", 0).valid { return 11 }
     if DiaryEmbedAt("![a](photos/2026/10/17/abc.jpg)", 0).valid { return 12 }
     // A place needs a real month and day, a known type and nothing more.
@@ -95,13 +97,36 @@ CheckEmbeds :: () -> s32 {
     if DiaryLibraryPath("2026-10-17", HASH, "bmp") != "" || DiaryLibraryPath("17.10.2026", HASH, "jpg") != "" { return 129 }
     // Brackets that are not the alt's own still make it plain text.
     if !DiaryEmbedAt("![(a) b](diary:x.bin)", 0).valid { return 13 }
+    // CommonMark's titles, angle brackets, spaces and escapes.
+    titled := "![a](diary:x.bin \"A title\")"
+    if DiaryEmbedAt(titled, 0).end != cast(s32)titled.count || DiaryEmbedTarget(titled, DiaryEmbedAt(titled, 0)) != "x.bin" { return 150 }
+    if DiaryEmbedAt("![a](diary:x.bin 'A title')", 0).end != 27 { return 151 }
+    if DiaryEmbedAt("![a](diary:x.bin (A title))", 0).end != 27 { return 152 }
+    angled := "![a](<photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg> \"t\")"
+    if !DiaryEmbedAt(angled, 0).valid || DiaryEmbedDestination(angled, DiaryEmbedAt(angled, 0)) != PLACE { return 153 }
+    if DiaryEmbedAt("![a](  diary:x.bin  )", 0).end != 21 { return 154 }
+    if DiaryEmbedAt("![a](diary:x.bin\"t\")", 0).valid || DiaryEmbedAt("![a](diary:x.bin \"t)", 0).valid { return 155 }
+    if DiaryEmbedAt("![a](<diary:x.bin)", 0).valid || DiaryEmbedAt("![a](diary:x.bin (t (u)))", 0).valid { return 156 }
+    if DiaryEmbedNext("\\![a](diary:x.bin)", 0).valid || !DiaryEmbedAt("\\\\![a](diary:x.bin)", 2).valid { return 157 }
+    if DiaryEmbedAlt("![a\\]b](diary:x.bin)", DiaryEmbedAt("![a\\]b](diary:x.bin)", 0)) != "a\\]b" { return 158 }
+    // Markup cut short is text, never a photo.
+    cut: [7]string = .["![a](diary:x.bi", "![a](diary:", "![a](", "![a]", "![", "!", "![a](diary:x.bin"]
+    for value: cut {
+        if DiaryEmbedNext(value, 0).valid || DiaryImageLine(value, 0) { return 159 }
+    }
+    // Several photos on one line, back to back or apart.
+    pair := "![a](diary:a.bin)![b](diary:b.bin)"
+    if DiaryEmbedNext(pair, 0).end != 17 || DiaryEmbedNext(pair, 17).start != 17 ||
+    DiaryEmbedNext(pair, 18).valid || !DiaryImageLine(pair, 0) { return 160 }
+    if !DiaryImageLine("![a](diary:a.bin) \t ![b](diary:b.bin)", 0) ||
+    DiaryImageLine("![a](diary:a.bin) x", 0) || DiaryImageLine("", 0) { return 161 }
 
     text := "Morning.\n![one](diary:a.bin)\nmiddle\n![two](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)\n"
     first := DiaryEmbedNext(text, 0)
-    if !first.valid || first.line_start != 9 || DiaryEmbedTarget(text, first) != "a.bin" { return 14 }
-    second := DiaryEmbedNext(text, first.line_end + 1)
+    if !first.valid || first.start != 9 || first.line_start != 9 || DiaryEmbedTarget(text, first) != "a.bin" { return 14 }
+    second := DiaryEmbedNext(text, first.end)
     if !second.valid || !second.library { return 15 }
-    if DiaryEmbedNext(text, second.line_end + 1).valid { return 16 }
+    if DiaryEmbedNext(text, second.end).valid { return 16 }
     if !DiaryEmbedReferences(text, "a.bin") || DiaryEmbedReferences(text, "b.bin") { return 17 }
     // A library photo never counts as a Diary file of the same name.
     if DiaryEmbedReferences(text, HASH) || DiaryEmbedReferences(text, PLACE) { return 18 }
@@ -138,26 +163,23 @@ CheckLines :: () -> s32 {
 
 CheckInsertion :: () -> s32 {
     line := "![p](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)"
-    edit := DiaryEmbedInsertion("", 0, line, false)
+    edit := DiaryEmbedInsertion("", 0, line)
     applied := Applied("", edit)
     if applied.count != line.count + 1 || edit.cursor != cast(s32)applied.count { return 50 }
     // At a caret inside a line the line splits around the photo.
-    edit = DiaryEmbedInsertion("Hello world", 5, "![p](diary:p.bin)", false)
+    edit = DiaryEmbedInsertion("Hello world", 5, "![p](diary:p.bin)")
     if Applied("Hello world", edit) != "Hello\n![p](diary:p.bin)\n world" || edit.cursor != 24 { return 51 }
-    // A drop on text goes after its line, or before it at its start.
-    edit = DiaryEmbedInsertion("Hello world", 5, "![p](diary:p.bin)", true)
-    if Applied("Hello world", edit) != "Hello world\n![p](diary:p.bin)\n" || edit.cursor != 30 { return 52 }
-    edit = DiaryEmbedInsertion("Hello world", 0, "![p](diary:p.bin)", true)
-    if Applied("Hello world", edit) != "![p](diary:p.bin)\nHello world" || edit.cursor != 18 { return 53 }
     // Before an existing line break no second break is added; the caret
     // lands at the start of the following line.
-    edit = DiaryEmbedInsertion("a\nb", 1, "![p](diary:p.bin)", false)
+    edit = DiaryEmbedInsertion("a\nb", 1, "![p](diary:p.bin)")
     if Applied("a\nb", edit) != "a\n![p](diary:p.bin)\nb" || edit.cursor != 20 { return 54 }
     // A caret inside a character moves to its start.
-    edit = DiaryEmbedInsertion("é", 1, "![p](diary:p.bin)", false)
+    edit = DiaryEmbedInsertion("é", 1, "![p](diary:p.bin)")
     if edit.start != 0 { return 55 }
-    edit = DiaryEmbedInsertion("a\n\nb", 2, "![p](diary:p.bin)", true)
-    if Applied("a\n\nb", edit) != "a\n![p](diary:p.bin)\nb" { return 56 }
+    // At the end of a photo's line, as after a click on the photo, the next
+    // photo gets its own line.
+    edit = DiaryEmbedInsertion("![a](diary:a.bin)", 17, "![p](diary:p.bin)")
+    if Applied("![a](diary:a.bin)", edit) != "![a](diary:a.bin)\n![p](diary:p.bin)\n" { return 56 }
     return 0
 }
 
@@ -204,8 +226,10 @@ CheckPreview :: () -> s32 {
     if preview.italic_count != 0 { return 96 }
     Preview("[**bold link**](u)")
     if !Strong(0, 3, 12) || !Tone(0, 1, 14, DIARY_TONE_LINK) { return 97 }
+    // A photo inside a line hides its Markdown and keeps the line's text.
     Preview("an ![inline](diary:x.bin) image *stays*")
-    if preview.photo_count != 0 || !Italic(0, 33, 38) { return 98 }
+    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 3, 25) ||
+    !Hidden(1, 32, 33) || !Hidden(2, 38, 39) || !Italic(0, 33, 38) { return 98 }
     if !PreviewOrdered() { return 99 }
     return 0
 }
@@ -251,27 +275,81 @@ CheckLimits :: () -> s32 {
     return 0
 }
 
-// Photo embeds never reach the spelling service: their lines go empty and
-// come back into the correction, which must keep its lines where they were.
+// Lines with photos inside them: the text stays, each photo's Markdown
+// hides away from the caret, and the photos follow the line in order.
+CheckInlinePhotos :: () -> s32 {
+    Preview("Walk ![p](diary:p.bin) home")
+    if preview.photo_count != 1 || preview.photos[0].cover || preview.hidden_count != 1 ||
+    !Hidden(0, 5, 22) { return 170 }
+    // Typed right after a photo, as after a click on it: the photo stays,
+    // and on the caret's line its source shows above it.
+    after := "![a](diary:a.bin) and more"
+    DiaryPreviewScan(*preview, after, 26, 26, true)
+    if preview.photo_count != 1 || preview.photos[0].cover || preview.hidden_count != 0 { return 171 }
+    Preview(after)
+    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 0, 17) { return 172 }
+    // Before it too.
+    Preview("Look: ![a](diary:a.bin)")
+    if preview.photo_count != 1 || !Hidden(0, 6, 23) { return 173 }
+    // Back to back on a line of their own: the first in the line's place.
+    pair := "![a](diary:a.bin)![b](diary:b.bin)"
+    Preview(pair)
+    if preview.photo_count != 2 || !preview.photos[0].cover || preview.photos[1].cover ||
+    preview.photos[1].embed.line_start != 0 || preview.hidden_count != 1 || !Hidden(0, 0, 34) { return 174 }
+    DiaryPreviewScan(*preview, pair, 34, 34, true)
+    if preview.photo_count != 2 || preview.photos[0].cover || preview.hidden_count != 0 { return 175 }
+    // In a list item and a quote, with their marks.
+    Preview("- ![a](diary:a.bin)")
+    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 2, 19) ||
+    !Tone(0, 0, 1, DIARY_TONE_MUTED) { return 176 }
+    Preview("> ![a](diary:a.bin) nice")
+    if preview.photo_count != 1 || !Hidden(0, 2, 19) || !Tone(0, 0, 24, DIARY_TONE_MUTED) { return 177 }
+    Preview("# Day ![a](diary:a.bin)")
+    if preview.photo_count != 1 || preview.heading_count != 1 || !Hidden(0, 0, 2) || !Hidden(1, 6, 23) { return 178 }
+    // Text on the next line without a blank line is its own line.
+    Preview("![a](diary:a.bin)\nHello *you*")
+    if preview.photo_count != 1 || !preview.photos[0].cover || !Hidden(0, 0, 17) ||
+    !Italic(0, 25, 28) { return 179 }
+    // Emphasis pairs around a photo, never inside its Markdown.
+    Preview("*a ![p_x](diary:p.bin) b*")
+    if preview.photo_count != 1 || preview.italic_count != 1 || !Italic(0, 1, 24) || !PreviewOrdered() { return 180 }
+    // Titles and angle brackets hide with the rest of the image.
+    Preview("x ![a](<diary:a.bin> \"Title\") y")
+    if preview.photo_count != 1 || !Hidden(0, 2, 29) { return 181 }
+    // Markup cut short is plain text and shows as typed.
+    Preview("![a](diary:a.bi and on")
+    if preview.photo_count != 0 || preview.hidden_count != 0 { return 182 }
+    // Other images are text; a link next to a photo keeps its color.
+    Preview("![x](https://example.com/x.png) [site](https://x.y) ![p](diary:p.bin)")
+    if preview.photo_count != 1 || !Tone(0, 33, 37, DIARY_TONE_LINK) || !PreviewOrdered() { return 183 }
+    return 0
+}
+
+// Images never reach the spelling service: each goes as one mark, wherever
+// it stands, and comes back at its mark in the correction.
 CheckSpelling :: () -> s32 {
-    entry := "I wnet out.\n![IMG_1.jpg](diary:photo-1.bin)\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)  \nIt was god."
-    if DiarySpellingMasked(entry) != "I wnet out.\n\n\nIt was god." { return 140 }
-    restored := DiarySpellingRestored(entry, "I went out.\n\n\nIt was good.")
-    if restored != "I went out.\n![IMG_1.jpg](diary:photo-1.bin)\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)  \nIt was good." { return 141 }
-    if DiarySpellingRestored(entry, "I went out.\n\nIt was good.") != "" { return 142 }
-    if DiarySpellingRestored(entry, "I went out.\nphoto\n\nIt was good.") != "" { return 143 }
-    if DiarySpellingRestored(entry, "I went out.\n\n\nIt was good.\n") != "" { return 144 }
-    if DiarySpellingMasked("see ![a](b) here") != "see ![a](b) here" { return 145 }
+    entry := "I wnet out ![IMG_1.jpg](diary:photo-1.bin) and saw\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg) ![b](<x> \"t\")\nIt was god."
+    if DiarySpellingMasked(entry) != "I wnet out \xEF\xBF\xBC and saw\n  \xEF\xBF\xBC \xEF\xBF\xBC\nIt was god." { return 140 }
+    restored := DiarySpellingRestored(entry, "I went out \xEF\xBF\xBC and saw\n  \xEF\xBF\xBC \xEF\xBF\xBC\nIt was good.")
+    if restored != "I went out ![IMG_1.jpg](diary:photo-1.bin) and saw\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg) ![b](<x> \"t\")\nIt was good." { return 141 }
+    // A correction that lost or added a mark is refused.
+    if DiarySpellingRestored(entry, "I went out and saw\n  \xEF\xBF\xBC \xEF\xBF\xBC\nIt was good.") != "" { return 142 }
+    if DiarySpellingRestored(entry, "\xEF\xBF\xBC I went out \xEF\xBF\xBC and saw \xEF\xBF\xBC \xEF\xBF\xBC") != "" { return 143 }
+    // A mark the entry held itself comes back as itself.
+    held := "a \xEF\xBF\xBC b ![p](diary:p.bin)"
+    if DiarySpellingMasked(held) != "a \xEF\xBF\xBC b \xEF\xBF\xBC" ||
+    DiarySpellingRestored(held, "A \xEF\xBF\xBC B \xEF\xBF\xBC") != "A \xEF\xBF\xBC B ![p](diary:p.bin)" { return 144 }
+    // Image markup cut short goes as typed; it holds no photo.
+    if DiarySpellingMasked("see ![a](b here") != "see ![a](b here" { return 145 }
     if DiarySpellingMasked("") != "" || DiarySpellingRestored("", "") != "" { return 146 }
     if DiarySpellingMasked("trailing\n") != "trailing\n" { return 147 }
-    if DiarySpellingRestored("a\n![x](diary:x.bin)\n", "b\n\n") != "b\n![x](diary:x.bin)\n" { return 148 }
     return 0
 }
 
 #program_export
 Answer :: () -> s32 {
-    checks: [7]s32 = .[CheckEmbeds(), CheckLines(), CheckInsertion(), CheckPreview(),
-    CheckPreviewPhotos(), CheckLimits(), CheckSpelling()]
+    checks: [8]s32 = .[CheckEmbeds(), CheckLines(), CheckInsertion(), CheckPreview(),
+    CheckPreviewPhotos(), CheckInlinePhotos(), CheckLimits(), CheckSpelling()]
     for result: checks {
         if result != 0 {
             return result

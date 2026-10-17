@@ -548,32 +548,36 @@ Failed or malformed reads never overwrite the original document. Native
 storage uses an exclusive directory lock and atomic writes.
 
 An entry's text is Markdown and the only source of truth
-(`apps/diary/diary_markdown.zi`). A photo is an embed line of its own,
-`![NAME](photos/YYYY/MM/DD/<sha256>.<type>)`: its place in the account's
-media library, under the day Photos groups it (the Exif capture day, or the
-day it was added), so Diary and Photos keep one library. The photo button
-adds the picked file to the library (`MediaImportFile`, once per hash, with
-its preview, synced as Photos' items are) and the package puts the embed at
-the caret. `![NAME](diary:FILE)` names a Diary file an older version
-attached. Loading a day appends the document's `photos` rows that no embed
+(`apps/diary/diary_markdown.zi`). A photo is a CommonMark image anywhere in
+a line, `![NAME](photos/YYYY/MM/DD/<sha256>.<type>)`, with an optional title
+and an optional `<angle>` destination: its place in the account's media
+library, under the day Photos groups it (the Exif capture day, or the day it
+was added), so Diary and Photos keep one library. The photo button adds the
+picked file to the library (`MediaImportFile`, once per hash, with its
+preview, synced as Photos' items are) and the package puts the embed on a
+line of its own at the caret. `![NAME](diary:FILE)` names a Diary file an
+older version attached; other images stay text. Loading a day appends the document's `photos` rows that no embed
 names yet as such lines, in memory only, so viewing writes nothing; saving
 writes `photos` again from the `diary:` embeds, so older versions keep
 showing those photos. Deleting an embed's line takes the photo out of the
 entry.
 
 The editor previews the Markdown through Kryon's `TextArea`: away from the
-caret's line, markers are hidden, emphasis is bold or slanted, headings are
-larger (`TextAreaLine`), links and list and quote marks take the theme's
-colors, and an embed line is covered by its photo (`TextAreaBlock`). On the
-caret's line the source shows with the photo under it. Under the entry, the
+caret's line, markers and each photo's Markdown are hidden, emphasis is bold
+or slanted, headings are larger (`TextAreaLine`), links and list and quote
+marks take the theme's colors, and a line's photos follow it in order
+(`TextAreaBlock`); on a line of photos alone, the first takes the line's
+place. On the caret's line the source shows with the photos under it, so
+text typed before or after a photo keeps it. Under the entry, the
 day's photos scroll sideways: the library's photos of that day, then the
 entry's other photos; a tap embeds one at the caret. The Diary view reaches
 the library through `MediaQueryHost` and `MediaItemHost`, and draws an
 embed through `DiaryPhotoHost(destination)`, which answers the library's
 preview (`media/preview/<sha256>.<type>`) or the Diary file
 (`diary/photos/<file>.<type>`), or `""` while the photo is not on this device
-(host interface 14). Spelling checks send embed lines empty and refuse a
-correction that moved lines (`diary_spelling_mask.zi`).
+(host interface 14). Spelling checks send each image as one U+FFFC mark and
+put it back at its mark, refusing a correction that lost or added marks
+(`diary_spelling_mask.zi`).
 
 For explicit migration, set `INBE_DIARY_IMPORT=/absolute/harmony/diary` when
 opening Diary. The importer copies safe regular filenames and skips existing
