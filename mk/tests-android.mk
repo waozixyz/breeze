@@ -1,0 +1,78 @@
+# Android tests: Ziran host modules, Gradle tests, smoke and device checks.
+
+.PHONY: android-text-input-zi-test
+android-text-input-zi-test: $(ZI2C_BIN)
+	sh tests/android_text_input_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
+.PHONY: android-text-selection-test
+android-text-selection-test:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		$(GRADLE) --no-daemon --project-dir tests/android-text-selection test
+
+.PHONY: android-jni-zi-test
+android-jni-zi-test: $(ZI2C_BIN)
+	@python3 tests/android_jni_zi_test.py $(abspath $(dir $(ZI2C_BIN)))
+
+.PHONY: android-health-zi-test
+android-health-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_health_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-push-zi-test
+android-push-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_push_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-wakelock-zi-test
+android-wakelock-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_wakelock_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-timer-zi-test
+android-timer-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_timer_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-import-zi-test
+android-import-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_import_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-lifecycle-zi-test
+android-lifecycle-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/android_lifecycle_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: android-http-transport-test
+android-http-transport-test:
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/android_http_transport_test.py
+
+# Explicit device check; never part of the CI or ordinary test target.
+# Inbe's Device settings must allow System orientation for real rotation.
+.PHONY: android-graphics-device-test
+android-graphics-device-test:
+	@python3 tests/android_graphics_recovery_device.py $(ANDROID_GRAPHICS_ARGS)
+
+.PHONY: android-package-assets-test
+android-package-assets-test: $(ZI2C_BIN)
+	sh tests/android_package_assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+android-smoke:
+	@mkdir -p build/android
+	sh scripts/android-smoke-test.sh "$(ANDROID_SDK)" "$(ANDROID_DEBUG_APP_ID)" "$(ANDROID_ACTIVITY)"
+
+.PHONY: android-smoke-script-test
+android-smoke-script-test:
+	python3 tests/android_smoke_script_test.py
+
+android-audio-e2e:
+	bash scripts/android-audio-e2e.sh
+
+.PHONY: android-diary-photo-test
+android-diary-photo-test:
+	sh tests/android_diary_photo_test.sh
+
+.PHONY: android-geometry-probe-test
+android-geometry-probe-test:
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS sh tests/android_geometry_probe_test.sh

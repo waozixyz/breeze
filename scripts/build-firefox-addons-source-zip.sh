@@ -33,6 +33,7 @@ for path in \
     ziran.lock \
     .github \
     Makefile \
+    mk \
     README.md \
     manifest.json \
     assets \

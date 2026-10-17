@@ -113,6 +113,7 @@ def validate(root, structure_only=False):
 
     # Inspect maintained application and release sources, never vendor/build output.
     sources = [root / path for path in ("Makefile", "mkfile", "update_version.sh", "site/build.sh")]
+    sources.extend(sorted((root / "mk").glob("*.mk")))
     for directory in ("src", "scripts", ".github"):
         sources.extend(path for path in (root / directory).rglob("*")
                        if path.suffix in (".c", ".h", ".zi", ".sh", ".py", ".yml", ".yaml", ".mjs"))

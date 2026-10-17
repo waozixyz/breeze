@@ -39,7 +39,10 @@ class VersionTest(unittest.TestCase):
             "scripts/check-site-release-assets.sh", "scripts/publish-openstore.sh",
             ".github/workflows/release.yml", "site/build.sh",
         )
-        for name in paths:
+        # The Makefile reads its rules from the files in mk/.
+        makefiles = tuple(path.relative_to(REPO).as_posix()
+                          for path in sorted((REPO / "mk").glob("*.mk")))
+        for name in paths + makefiles:
             destination = self.root / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / name, destination)
@@ -96,8 +99,7 @@ class VersionTest(unittest.TestCase):
         (self.root / "build/packages").mkdir(parents=True)
         # The package links below are already in place; the manifest and a
         # newer packages.mk keep Make from fetching them again.
-        for name in ("ziran.toml", "ziran.lock", "scripts/packages.sh",
-                "mk/sync.mk", "mk/package-freebsd.mk"):
+        for name in ("ziran.toml", "ziran.lock", "scripts/packages.sh"):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / name, self.root / name)
         (self.root / "build/packages.mk").write_text("PACKAGES_READY := 1\n")

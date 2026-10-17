@@ -28,7 +28,7 @@ def source_hash():
     paths = subprocess.check_output([
         "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
         "src", "apps", "assets/styles", "locales", "tests", "scripts", ".github",
-        "Makefile", "ziran.toml", "ziran.lock",
+        "Makefile", "mk", "ziran.toml", "ziran.lock",
     ], cwd=ROOT).split(b"\0")
     digest = hashlib.sha256()
     for name in sorted(set(paths) - {b""}):
