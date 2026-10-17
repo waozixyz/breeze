@@ -121,7 +121,8 @@ ActivityInitialize :: () -> bool {
 
 ActivityRemoteVisible :: () -> bool {
     return ActivityAvailable() && account_activity.remote.active == 1 &&
-    TextUntilNul(account_activity.remote.device_id[:]) != TextUntilNul(account_activity.device[:])
+    TextUntilNul(account_activity.remote.device_id[:]) != TextUntilNul(account_activity.device[:]) &&
+    !ActivityAbandoned(account_activity.remote, ActivityNow(null))
 }
 
 ActivityCanStart :: () -> bool {
@@ -237,6 +238,21 @@ ActivityPump :: (app: *InnerBreeze) {
     }
     running := app_is_session_screen(app_session_screen(app))
     if !running && !state.was_running {
+        // This device's practice ended without saying so, for example when
+        // the app closed during it: end it for the account's other devices.
+        if state.remote.active == 1 &&
+        TextUntilNul(state.remote.device_id[:]) == TextUntilNul(state.device[:]) {
+            ended := state.remote
+            ended.active = 0
+            ended.time = now
+            ended.revision += 1
+            payload: [2048]u8
+            if ActivityWrite(ended, payload[:]) &&
+            CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+                state.remote = ended
+                unused ActivityScheduleSync(app)
+            }
+        }
         return
     }
     replaced := running && state.was_running && app_session_screen(app) != state.local.screen
