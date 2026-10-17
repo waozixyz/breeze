@@ -298,6 +298,28 @@ ActivityPump :: (app: *InnerBreeze) {
     }
 }
 
+// Ends another device's session that stopped updating, for every device.
+// If that device is still running it and comes back, it publishes again.
+ActivityEndRemote :: (app: *InnerBreeze) -> bool {
+    state := *account_activity
+    now := ActivityNow(null)
+    if app == null || !ActivityRemoteVisible() || ActivityFresh(state.remote, now) {
+        return false
+    }
+    ended := state.remote
+    ended.active = 0
+    ended.time = now
+    ended.revision += 1
+    payload: [2048]u8
+    if !ActivityWrite(ended, payload[:]) ||
+    !CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+        return false
+    }
+    state.remote = ended
+    unused ActivityScheduleSync(app)
+    return true
+}
+
 ActivityRequestPause :: (app: *InnerBreeze, paused: s32) -> bool {
     state := *account_activity
     now := ActivityNow(null)
