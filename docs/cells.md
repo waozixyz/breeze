@@ -207,16 +207,22 @@ after them. The list shows icons, names and controls without status paragraphs.
 ## Practice content and narration
 
 `build/practice-content/*.zib` contains the separate practice data and language
-packs. Practice → Manage practices opens one scrolling modal for every practice,
-with sizes, offline status, download/retry/cancel, removal and selected-language
-narration. Start opens the manager when its practice needs content. Downloads
-continue inside the modal without changing the selected practice, and unselected
-downloads are verified and saved without mounting their artwork. Remove takes a
-practice off Practice and keeps its copy and narration on the device, so Add
-practice brings it back without a download. A downloaded practice also has a
-trash button that asks once, then deletes its local content and narration while
-preserving progress. Practices that ship with the app show their size as
-available offline; adding them uses the app's own copy. Only the selected practice and narration
+packs. Practice → Manage practices opens one scrolling modal with two sections,
+Installed and Not installed, each a dropdown like Habits' inactive habits. Each
+row shows a practice's size and where it is (comes with the app, on this
+device, not downloaded, or its download). Its six-dot handle drags it into the
+other section, or onto another practice to take that one's place in the order
+Practice and every practice list follow (saved as `practice_order`), and
+tapping it opens its one next step: Add to Practice,
+Download, Unlock, Retry, Cancel or Remove from Practice. Start opens the manager
+on its practice's open row when the practice needs content. Downloads continue
+inside the modal without changing the selected practice, and unselected
+downloads are verified and saved without mounting their artwork. Taking a
+practice off Practice keeps its copy and narration on the device, so adding it
+back needs no download. Only a downloaded copy's open row offers "Delete files",
+which asks once, then deletes its local content and narration while preserving
+progress. Practices that ship with the app add back from the app's own copy.
+Only the selected practice and narration
 language are mounted in memory. Changing language reuses artwork and loads or
 downloads the matching voice; switching back reuses its verified cache. Missing
 narration is shown explicitly and never falls back to another spoken language.

@@ -19,7 +19,7 @@
 - Top up Dew centers the Monero address under its QR code.
 - Profile shows how much of your storage is used, with a bar, next to your plan and in Storage plans.
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
-- Manage practices shows every practice's size, and practices that come with the app show as available offline. Remove takes a practice off Practice but keeps it on your device, so adding it back needs no download; a downloaded practice also has a trash button that asks once, then deletes it to free the space. Your progress stays either way.
+- Manage practices lists Installed and Not installed practices in two dropdowns, like Habits' inactive habits, with each practice's size and whether it comes with the app, is on your device or still needs a download. Drag a practice by its handle into the other section, or onto another practice to give it that place in the order Practice shows them in, or tap it to add it to Practice, take it off Practice, download it or unlock it. Taking a practice off Practice keeps it on your device, so adding it back needs no download; only a downloaded practice offers Delete files, which asks once, then frees the space. Your progress stays either way.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.
 ### Removed
 - Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
