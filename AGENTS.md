@@ -13,11 +13,14 @@
   The canonical macros are `APP_VERSION_STRING`, `APP_VERSION_MAJOR`,
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.
   Only the GitHub Actions release workflow creates or pushes release tags.
-- A new version publishes only with a passing phone check of its exact
-  sources: build the APK from the committed release, run
-  `make phone-check APK=...` with the development Moto connected through the
-  ThinkPad, and commit `releases/phone-checks/VERSION.json`. Changes to app
-  sources after the check require a new one.
+- A new version publishes only with a passing phone check of its exact app
+  content (`app_tree` over `APP_PATHS` in `scripts/phone-check.py`). Release
+  with `make release-ready` (CI's checks in its Ubuntu container), then
+  `make release` with the development Moto connected: it checks the APK and
+  makes the one "Release Inner Breeze X.Y.Z" commit. After a late fix, run
+  both again; the unpushed release commit moves above the fix, so there are
+  no "Record" commits. Tests, docs and tooling may change after the check,
+  app paths may not. See [docs/cells.md](docs/cells.md#verification).
 - Packages declare the oldest host interface they run on (`host_api` per app
   in `apps/versions.json`); the host runs `oldest_host_api` to `host_api`.
   Raise `host_api` when the host interface changes and `oldest_host_api` only

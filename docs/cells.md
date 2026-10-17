@@ -582,12 +582,38 @@ to native host capabilities still require a wrapper release.
 
 ## Verification
 
-A new app version is published only with a passing phone check of its
-exact sources. `make phone-check APK=...` installs that APK on the development
-Moto, runs the Wim Hof session for a minute while it reads SurfaceFlinger's
-frame times, checks resuming from the background and records
-`releases/phone-checks/VERSION.json`; the Release workflow refuses a new tag
-without it or when app sources changed after it.
+A new app version is published only with a passing phone check of its exact
+app content. The check installs the APK on the development Moto, runs the
+Wim Hof session for a minute while it reads SurfaceFlinger's frame times,
+checks resuming from the background and records
+`releases/phone-checks/VERSION.json` with `app_tree`, a hash of every app
+path (`APP_PATHS` in `scripts/phone-check.py`: sources, build rules, assets,
+locales, version files and the design files packages are built from, minus
+the `TOOLING` that only checks or publishes). The Release workflow refuses a
+new tag without it or when the pushed app content differs. Tests, docs and
+tooling may change after the check; any app change needs a new one.
+
+A release is one commit, made last:
+
+1. Add the numeric `CHANGELOG.md` entry and run `./update_version.sh` while
+   the release takes shape, as before.
+2. `make release-ready` runs CI's checks on HEAD in the Test job's Ubuntu
+   24.04 container with the locked packages: Secret Scan, package URLs, the
+   large-file guard, `make test`, `make visual-test` and
+   `make package-compat-test`. It does not run the browser add-on smoke
+   tests, shard 0's Daochi sync test or the platform builds. Outputs stay in
+   `build/release-ready/`, so later runs are incremental.
+3. With the development Moto connected (here or through the ThinkPad),
+   `make release` builds the debug APK for its ABI (or takes `APK=...`),
+   checks it and commits the receipt and any version files as
+   "Release Inner Breeze X.Y.Z". It refuses uncommitted app files, package
+   overrides that are not clean on their `ziran.lock` commit, and content
+   that `make release-ready` did not pass.
+4. A late fix is an ordinary commit followed by steps 2 and 3 again; the
+   unpushed release commit moves above the fix and takes the new receipt.
+   Pushed history is never rewritten.
+5. Push master only with the owner's say-so; the workflow tags and
+   publishes.
 
 Harmony Projects shows this wrapper release, every cell version and its Moto
 screenshots. Harmony's `make inbe-release-verify` checks the latest published
