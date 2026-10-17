@@ -50,7 +50,11 @@ def colour(value):
 # The rig's poses were placed for the painted parts. These ankles let the
 # drawn feet reach the floor in plank and upward-facing dog.
 POSE_CHANGES = {
-    "plank": {"ankles": [441, 395]},
+    # In plank the head stays in line with the spine, looking at the floor
+    # a little ahead of the hands, not up at the horizon. The hips sit a
+    # little lower, shoulders still over the wrists, so the line from the
+    # shoulders over the seat to the heels reads straight, not piked.
+    "plank": {"ankles": [441, 395], "gaze": -45, "hip": [623.6, 333.5], "spine": -21.5},
     "low": {"ankles": [441, 395]},
     "stepBack": {"farAnkle": [441, 395]},
     "upDog": {"ankles": [458, 421]},
@@ -202,7 +206,9 @@ def palette(colors):
 
 
 # Torsos: outlines as (distance up the spine from the hip, forward offset),
-# the hem band's top edge, the seat under the top and the base of the neck.
+# the hem band's top edge, the seat under the top, the base of the head, the
+# neck's back and front where they enter the top, and how far the back of
+# the hem settles against the hips when she lies with her back up.
 TORSOS = {
     "tunic": {
         "outline": [
@@ -213,6 +219,8 @@ TORSOS = {
         "hem": [(-9, -50), (-11.5, -2), (-7, 50)],
         "seat": ((-2, -8), 20),
         "neck": (114, 2),
+        "neckBase": [(106, -7.5), (104, 8.5)],
+        "drape": 6,
     },
     "male": {
         "outline": [
@@ -223,6 +231,8 @@ TORSOS = {
         "hem": [(-4.5, -50), (-6.5, -2), (-3, 50)],
         "seat": ((-2, -9), 18.5),
         "neck": (115, 1.5),
+        "neckBase": [(107, -9), (105, 10)],
+        "drape": 0,
     },
 }
 
@@ -245,7 +255,8 @@ SLEEVES = {
 }
 
 # Heads, in their own frame: the neck base at the origin, facing +x, up is
-# -y; the frame is scaled by "scale" about the neck base.
+# -y; the frame is scaled by "scale" about the neck base. "neck" holds where
+# the back and the front of the neck meet the head, inside its outline.
 FACES = {
     "female": {
         "outline": [
@@ -253,7 +264,7 @@ FACES = {
             (29.5, -35.6), (30.2, -32.2), (28.2, -30.4), (29, -28.2), (26.2, -23.4), (19, -19.6),
             (8, -21), (-12, -27), (-23, -40), (-22, -62),
         ],
-        "scale": 1.22, "neck": [((0.5, 5), 8.2), ((3, -17), 7.6)],
+        "scale": 1.22, "neck": [(-5, -29), (9, -24)],
         "blush": 0.55, "lash": True, "brow": [(17, -53), (21.5, -55), (26, -53.5)], "browWidth": 1.2,
         "mouth": [(28.6, -31.2), (25.6, -31.0)],
     },
@@ -263,11 +274,14 @@ FACES = {
             (30.6, -35), (30.8, -31.8), (28.8, -30.2), (29.8, -27.8), (28.8, -22.5), (24, -17.2),
             (10, -18.5), (-10, -26), (-23, -40), (-22, -62),
         ],
-        "scale": 1.2, "neck": [((0.5, 5), 9.4), ((3, -16), 8.8)],
+        "scale": 1.2, "neck": [(-6, -29), (10.5, -22.5)],
         "blush": 0.0, "lash": False, "brow": [(16.5, -53), (21.5, -54.5), (26.5, -54)], "browWidth": 2.0,
         "mouth": [(29.2, -31.4), (25.8, -31.2)],
     },
 }
+# The shade under the jaw: the head's outline turned down about the back of
+# the jaw (head frame, degrees), deepest under the chin, gone at the nape.
+JAW_SHADE = ((-12, -27), 12)
 EYE = (21, -45.5)
 BLUSH = ((16.5, -35.5), 4.6)
 CRANIUM = (2, -48)
@@ -603,8 +617,18 @@ class Figure:
         fill(ctx, shapes, colors["topFar" if far else "top"])
         fill(ctx, [cuff], colors["cuffFar" if far else "cuff"])
 
+    def torso_outline(self, p):
+        """The top's outline. Lying with her back up, the back of the hem
+        settles against the hips instead of flaring above them; upside down
+        it still falls open toward the chest."""
+        lying = max(0.0, math.cos(p.spine)) * (1 - smoothstep(0.25, 0.5, math.sin(p.spine)))
+        drape = self.torso["drape"] * lying
+        points = [(point[0], point[1] + drape * (1 - smoothstep(-14, 20, point[0])), *point[2:])
+                  if point[1] < 0 else point for point in self.torso["outline"]]
+        return smooth(points)
+
     def draw_torso(self, ctx, p):
-        torso = self.body_shape(p, smooth(self.torso["outline"]))
+        torso = self.body_shape(p, self.torso_outline(p))
         fill(ctx, [torso], self.colors["top"])
         ctx.save()
         outline_path(ctx, [torso])
@@ -615,8 +639,32 @@ class Figure:
         return torso
 
     def draw_neck(self, ctx, p):
-        neck = [mul(point, self.face["scale"]) for point in blob(self.face["neck"])]
-        fill(ctx, [place(neck, self.body(p, self.torso["neck"]), self.head_turn(p))], self.colors["skin"])
+        """The neck bends between the top, where its base turns with the
+        torso, and the head, where it turns with the skull, so a lifted head
+        never swings it out of the collar. A shade under the jaw sets the
+        head on it."""
+        back_base, front_base = [self.body(p, point) for point in self.torso["neckBase"]]
+        back_top, front_top = [self.head_point(p, point) for point in self.face["neck"]]
+        middle = mul(add(add(back_base, front_base), add(back_top, front_top)), 0.25)
+
+        def side(start, end):
+            # Each side curves in a little toward the middle of the neck.
+            control = mix(mix(start, end, 0.5), middle, 0.12)
+            return [add(add(mul(start, (1 - t) ** 2), mul(control, 2 * t * (1 - t))), mul(end, t * t))
+                    for t in [index / 8 for index in range(9)]]
+
+        # The ends run on inside the head and the top, which cover them.
+        neck = (side(back_base, back_top) + [self.head_point(p, (1, -42))]
+                + side(front_top, front_base) + [self.body(p, (96, 0))])
+        fill(ctx, [neck], self.colors["skin"])
+        ctx.save()
+        outline_path(ctx, [neck])
+        ctx.clip()
+        pivot, angle = JAW_SHADE
+        jaw = [self.head_point(p, add(pivot, rotate(sub(point, pivot), math.radians(angle))))
+               for point in smooth(self.face["outline"])]
+        fill(ctx, [jaw], self.colors["skinFar"])
+        ctx.restore()
 
     def draw_head(self, ctx, p):
         colors, face, hairstyle = self.colors, self.face, self.hairstyle
