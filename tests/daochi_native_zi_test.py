@@ -116,10 +116,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
         "--module-path", f"oqs={ROOT / 'build/packages/oqs/src'}",
+        "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
+        "--module-path", f"kryon={ROOT / 'build/packages/kryon/src/ui'}",
+        "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
+        "--module-path", str(ROOT / "build/packages/kss/src"),
+        "--module-path", str(ROOT / "build/packages/game2d/src"),
         "-o", str(generated), str(ROOT / "src/storage/daochi_native.zi"),
     ], check=True)
+    # Only the account path is linked; unused storage code is dropped.
     sources = [
-        "storage/daochi_native.c", "daochi_account.c", "client.c", "auth.c", "url.c", "wire.c",
+        "storage/daochi_native.c", "daochi_account.c", "delegate_store.c",
+        "client.c", "auth.c", "url.c", "wire.c",
         "sync.c", "transaction.c", "keys.c", "crypto.c", "Oqs.c",
         "net_http_curl_linux.c", "json_scan.c", "text.c", "text_buffer.c",
         "byte_text_linux.c", "c_string.c",
@@ -127,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",
         "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
+        "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
         f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}",
         str(ROOT / "tests/daochi_native_zi_test.c"),

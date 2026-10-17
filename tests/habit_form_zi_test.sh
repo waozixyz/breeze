@@ -40,7 +40,7 @@ C
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/build/ziran-toolchain/libziran.a" \
-    -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
+    -Wl,--gc-sections -l:libcurl.so.4 -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-habit-form-zi-test/data
 export APP_DATA_ROOT

@@ -42,7 +42,7 @@ C
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/build/ziran-toolchain/libziran.a" \
     "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
-    -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -ldl -lpthread -lz -lm -latomic -o "$work/test"
+    -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -l:libcurl.so.4 -ldl -lpthread -lz -lm -latomic -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-session-results-zi-test/data
 export APP_DATA_ROOT

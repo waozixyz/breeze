@@ -430,6 +430,16 @@ lumi-history-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		python3 tests/lumi_history_ui_test.py $(abspath $(TARGET))
 
+# Frame time and memory with a long Lumi history, saved per label to compare
+# runs: make lumi-performance-test LUMI_PERFORMANCE_LABEL=before
+LUMI_PERFORMANCE_LABEL ?= current
+.PHONY: lumi-performance-test
+lumi-performance-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/lumi_performance_test.py $(abspath $(TARGET)) $(LUMI_PERFORMANCE_LABEL)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/lumi_performance_test.py $(abspath $(TARGET)) $(LUMI_PERFORMANCE_LABEL)-mobile --mobile
+
 .PHONY: session-window-ui-test
 session-window-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
@@ -722,6 +732,12 @@ frame-pacing-zi-test: $(ZI2C_BIN)
 		sh tests/frame_pacing_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: frame-pacing-zi-test
+
+.PHONY: desktop-frame-pacing-policy-test
+desktop-frame-pacing-policy-test:
+	@bash tests/desktop_frame_pacing_policy_test.sh
+
+test: desktop-frame-pacing-policy-test
 
 .PHONY: breath-timing-test
 breath-timing-test: $(ZI2C_BIN)
@@ -1299,7 +1315,13 @@ storage-literals-check:
 	python3 tests/storage_literals_test.py
 	bash ./scripts/check-storage-literals.sh
 
+# Every test entry point in tests/ is run by a make target, workflow or script.
+.PHONY: test-references-check
+test-references-check:
+	python3 scripts/check-test-references.py
+
 test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check icon-sheets-check
+test: test-references-check
 test: screenshot-scene-test
 
 .PHONY: screenshot-scene-test
@@ -1428,6 +1450,13 @@ mood-average-zi-test: $(ZI2C_BIN)
 		sh tests/mood_average_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: mood-average-zi-test
+
+.PHONY: statistics-date-zi-test
+statistics-date-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/statistics_date_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: statistics-date-zi-test
 
 .PHONY: habit-session-rules-zi-test
 habit-session-rules-zi-test: $(ZI2C_BIN)
@@ -1572,6 +1601,17 @@ daochi-client-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 
 test: daochi-client-zi-test
 
+.PHONY: daochi-native-zi-test device-link-zi-test
+daochi-native-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/daochi_native_zi_test.py $(ZI2C_BIN)
+
+device-link-zi-test: $(ZIRAN_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/device_link_zi_test.py $(ZIRAN_BIN) $(abspath $(LIBOQS_A))
+
+test: daochi-native-zi-test device-link-zi-test
+
 .PHONY: habit-days-memory-zi-test
 habit-days-memory-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
@@ -1649,6 +1689,13 @@ update-transport-zi-test: $(ZI2C_BIN)
 		python3 tests/update_flow_zi_test.py
 
 test: plan9-host-zi-test android-jni-zi-test update-transport-zi-test
+
+.PHONY: update-policy-zi-test
+update-policy-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/update_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: update-policy-zi-test
 
 .PHONY: raylib-log-host-test
 raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
@@ -1735,6 +1782,13 @@ android-lifecycle-zi-test: $(ZI2C_BIN)
 		sh tests/android_lifecycle_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: android-lifecycle-zi-test
+
+.PHONY: android-http-transport-test
+android-http-transport-test:
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/android_http_transport_test.py
+
+test: android-http-transport-test
 
 .PHONY: raylib-graphics-test android-graphics-device-test
 raylib-graphics-test: $(ZI2C_BIN)
@@ -1850,6 +1904,12 @@ habit-schedule-tool-test: $(TARGET) $(INBE_FULL_BUNDLE)
 habit-tracking-tool-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	sh tests/habit_tracking_tool_test.sh $(abspath $(TARGET))
 
+.PHONY: lumi-habit-tools-test
+lumi-habit-tools-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	sh tests/lumi_habit_tools_test.sh $(abspath $(TARGET))
+
+VISUAL_TEST_TARGETS += lumi-habit-tools-test
+
 .PHONY: audio-settings-test
 audio-settings-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
@@ -1956,6 +2016,13 @@ meditation-timing-test: build-laws $(ZI2C_BIN)
 		sh tests/meditation_timing_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 test: meditation-timing-test
+
+.PHONY: meditation-audio-archive-zi-test
+meditation-audio-archive-zi-test: $(ZI2C_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/meditation_audio_archive_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: meditation-audio-archive-zi-test
 
 test: sun-salutation-test sun-salutation-assets-test
 
@@ -2999,6 +3066,15 @@ cells-navigation-test: $(TARGET)
 host-actions-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 python3 tests/host_actions_test.py $(abspath $(TARGET))
 
+.PHONY: hosted-feature-test
+hosted-feature-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
+		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
+		xvfb-run -a -n 300 -s '-screen 0 1280x1024x24 -nolisten tcp' \
+		python3 tests/hosted_feature_test.py $(abspath $(TARGET))
+
+VISUAL_TEST_TARGETS += hosted-feature-test
+
 .PHONY: cells-artifact-test
 cells-artifact-test: $(TARGET) $(CELL_BUNDLES)
 	python3 tests/cells_artifact_test.py $(abspath $(TARGET))
@@ -3021,6 +3097,11 @@ cells-android-probe: cells
 .PHONY: sync-review-ui-test
 sync-review-ui-test: $(TARGET)
 	@sh tests/sync_review_ui_test.sh $(TARGET)
+
+# Needs a Harmony checkout beside Inbe with its app-control test build.
+.PHONY: sync-review-harmony-test
+sync-review-harmony-test: $(TARGET)
+	sh tests/sync_review_harmony_test.sh $(abspath $(TARGET))
 
 .PHONY: app-click-block-zi-test data-back-ui-test
 app-click-block-zi-test: $(ZI2C_BIN)
@@ -3167,6 +3248,12 @@ package-upload-test:
 	python3 tests/package_content_repair_test.py
 
 test: package-upload-test
+
+.PHONY: package-receiver-test
+package-receiver-test:
+	python3 tests/package_receiver_test.py
+
+test: package-receiver-test
 
 .PHONY: device-key-test device-key-wasm-test
 device-key-test: $(ZI2C_BIN)

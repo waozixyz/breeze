@@ -76,6 +76,35 @@ void OQS_MEM_cleanse(void *output, size_t length)
     memset(output, 0, length);
 }
 
+/* Storage stays closed: no database and no stored account, so the account
+ * mode is the owner's own keys passed to each call. */
+void *storage_db_handle(void)
+{
+    return NULL;
+}
+
+String storage_get_setting_text(String key)
+{
+    (void)key;
+    return (String){0};
+}
+
+void *sqlite3_db_mutex(void *database)
+{
+    (void)database;
+    return NULL;
+}
+
+void sqlite3_mutex_enter(void *mutex)
+{
+    (void)mutex;
+}
+
+void sqlite3_mutex_leave(void *mutex)
+{
+    (void)mutex;
+}
+
 static bool sign_device(void *context, String message, Slice output)
 {
     assert(context == (void *)0x1);
