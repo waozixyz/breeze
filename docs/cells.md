@@ -301,8 +301,15 @@ Recommended feature versions follow the active signed root dependencies, and
 newer independently cached cells remain selected after restart.
 
 `apps/versions.json` records separate numeric versions and increasing sequences
-for every package. Add a numeric entry to the relevant module's
-`apps/<source>/CHANGELOG.md`, then run `./update_version.sh --cell NAME`.
+for every package. Every app release versions all bundled packages: bundles
+share host code and Kryon, so any release changes them, and the node refuses
+a changed package under an old version. `./update_version.sh` does this once
+per release, recorded as each package's `release`: a package whose changelog
+already has a newer entry takes it, the others get a "Maintenance release for
+Inner Breeze X.Y.Z." entry, and the root package's entry lists the versions it
+brings. To write a package's own notes, add a numeric entry to its
+`apps/<source>/CHANGELOG.md` before running `./update_version.sh`, or run
+`./update_version.sh --cell NAME` for a release of that package alone.
 Use `practices` as the module name; its source directory is `apps/practice/`.
 Changes to either nested recommended payload also require advancing the root
 package version. Advance the wrapper for compiled host or remaining compiled UI changes: add

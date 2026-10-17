@@ -116,6 +116,12 @@ else
 fi
 echo "✓ Updated $VERSION_ZI_FILE"
 
+# Every bundled package gets a version for this release, once, so the node
+# never receives a changed package under an old version.
+python3 scripts/update-package-version.py --release "$LATEST_VERSION"
+python3 scripts/generate-package-versions.py
+echo "✓ Updated package versions"
+
 if [ -f "$WINDOWS_RC_FILE" ]; then
     WINDOWS_VERSION="$MAJOR,$MINOR,$PATCH,0"
     replace_in_file "s/^ FILEVERSION .*/ FILEVERSION $WINDOWS_VERSION/" "$WINDOWS_RC_FILE"

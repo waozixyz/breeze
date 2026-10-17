@@ -34,6 +34,10 @@ def validate(root):
             raise ValueError(f"{name}: invalid release sequence")
         if component.get("bundled") is not True:
             raise ValueError(f"{name}: every cell must be bundled for offline use")
+        # The Inner Breeze release this version was made for, once per release.
+        if "release" in component and (not isinstance(component["release"], str) or
+                                       not re.fullmatch(VERSION, component["release"])):
+            raise ValueError(f"{name}: invalid release version")
         # A package declares the oldest host interface it runs on, so apps
         # that keep an older host still receive it.
         host = component.get("host_api", ledger["host_api"])

@@ -852,7 +852,8 @@ def main():
                     # because the node accepts every app together or none.
                     if unversioned and advanced:
                         raise ValueError(", ".join(unversioned) + " changed without a new version, "
-                                         "so " + ", ".join(advanced) + " cannot be published with it")
+                                         "so " + ", ".join(advanced) + " cannot be published with it; "
+                                         "./update_version.sh versions every package for the release")
                     if unversioned:
                         print("::notice title=App packages::Not published: " + ", ".join(unversioned) +
                               " changed without a new version and will publish with the next one")

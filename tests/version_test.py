@@ -21,7 +21,9 @@ class VersionTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         paths = (
             "CHANGELOG.md", "Makefile", "mkfile", "update_version.sh",
-            "apps/versions.json", "apps/practice/CHANGELOG.md",
+            "apps/versions.json", "apps/inbe/CHANGELOG.md", "apps/lists/CHANGELOG.md",
+            "apps/habits/CHANGELOG.md", "apps/practice/CHANGELOG.md", "apps/diary/CHANGELOG.md",
+            "apps/lumi/CHANGELOG.md", "apps/leaderboard/CHANGELOG.md",
             "src/cells/versions.zi",
             "scripts/update-package-version.py", "scripts/generate-package-versions.py",
             "src/core/version.h", "src/core/version.zi",
@@ -182,6 +184,35 @@ class VersionTest(unittest.TestCase):
         subprocess.run(["bash", str(script)], capture_output=True, text=True, check=True)
         self.assertEqual(self.check("--print-version").stdout, "9.8.7\n")
         self.assertIn(f"versionCode {initial_code + 1}", self.read("droid/app/build.gradle"))
+        before = self.snapshot()
+        subprocess.run(["bash", str(script)], capture_output=True, text=True, check=True)
+        self.assertEqual(before, self.snapshot())
+
+    def test_release_versions_every_package_once(self):
+        ledger = json.loads(self.read("apps/versions.json"))
+        self.write("CHANGELOG.md", self.read("CHANGELOG.md").replace(f"## [{self.version}]", "## [9.8.7]", 1))
+        # Lumi's notes for this release are already written; the rest get
+        # maintenance entries, and the root brings the new versions.
+        major, minor, _ = map(int, ledger["apps"]["lumi"]["version"].split("."))
+        lumi = f"{major}.{minor + 1}.0"
+        self.write("apps/lumi/CHANGELOG.md", self.read("apps/lumi/CHANGELOG.md").replace(
+            "# Changelog\n", f"# Changelog\n\n## [{lumi}] - 2026-10-17\n\n- Lumi learns a new trick.\n", 1))
+        script = self.root / "update_version.sh"
+        subprocess.run(["bash", str(script)], capture_output=True, text=True, check=True)
+        changed = json.loads(self.read("apps/versions.json"))
+        for name, previous in ledger["apps"].items():
+            with self.subTest(app=name):
+                current = changed["apps"][name]
+                self.assertEqual((current["sequence"], current["release"]), (previous["sequence"] + 1, "9.8.7"))
+        self.assertEqual(changed["apps"]["lumi"]["version"], lumi)
+        major, minor, patch = map(int, ledger["apps"]["habits"]["version"].split("."))
+        habits = f"{major}.{minor}.{patch + 1}"
+        self.assertEqual(changed["apps"]["habits"]["version"], habits)
+        self.assertIn(f"## [{habits}] - ", self.read("apps/habits/CHANGELOG.md"))
+        self.assertIn("- Maintenance release for Inner Breeze 9.8.7.", self.read("apps/habits/CHANGELOG.md"))
+        self.assertIn(f"Lumi {lumi}, Habits {habits}, ", self.read("apps/inbe/CHANGELOG.md"))
+        self.assertIn(f'"{habits}"', self.read("src/cells/versions.zi"))
+        # Running it again for the same release changes nothing.
         before = self.snapshot()
         subprocess.run(["bash", str(script)], capture_output=True, text=True, check=True)
         self.assertEqual(before, self.snapshot())
