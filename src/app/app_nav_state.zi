@@ -16,6 +16,7 @@
 #import, file "../platform/environment.zi";
 #import, file "route_list.zi";
 #import, file "bottom_nav_policy.zi";
+#import, file "launcher_policy.zi";
 #import, file "app_route_state.zi";
 #import, file "locale.zi";
 #import, file "text_buffers.zi";
@@ -67,6 +68,7 @@ app_nav_route_available :: (app: *InnerBreeze, route: s32) -> bool {
 c :: #system_library "c";
 app_leave_practice_config :: (app: *InnerBreeze) #foreign c;
 save_settings :: (app: *InnerBreeze) #foreign c;
+app_take_app_order :: (app: *InnerBreeze, order: string) -> bool #foreign c;
 sync_account_load :: (account: *AccountKeys) -> s32 #foreign c;
 storage_get_setting_text :: (key: string) -> string #foreign c;
 
@@ -797,6 +799,7 @@ app_update_app_navigation :: (app: *InnerBreeze, add_cells: s32 = 0) {
     app_sanitize_bottom_nav_routes(app)
 }
 
+// After a sync, the apps and pins the account's other devices changed.
 #program_export
 app_reload_app_choices :: (app: *InnerBreeze) {
     previous_mask := app.enabled_apps
@@ -810,7 +813,27 @@ app_reload_app_choices :: (app: *InnerBreeze) {
             mask &= ~bit
         }
     }
+    pins_changed := false
+    if SettingsReadInt(AppOrderReceivedKey, 0) != 0 {
+        pins_changed = app_take_app_order(app, storage_get_setting_text(AppOrderKey))
+    }
+    // An app removed on another device is unpinned here too, as when it
+    // is removed on this one.
+    removed := previous_mask & ~mask
+    routes := LauncherRoutes()
+    for index: cast(s32)0..cast(s32)routes.count - 1 {
+        route := routes[index]
+        if (app_nav_route_bit(route) & removed) != 0 &&
+        RouteListContains(app.launcher_favorites[:], app.launcher_favorite_count, route) {
+            app.launcher_favorite_count = LauncherToggleFavorite(
+                app.launcher_favorites[:], app.launcher_favorite_count, route)
+            pins_changed = true
+        }
+    }
     if mask == app.enabled_apps {
+        if pins_changed {
+            save_settings(app)
+        }
         return
     }
     app.enabled_apps = mask
@@ -826,4 +849,5 @@ app_reload_app_choices :: (app: *InnerBreeze) {
             app.breathing.screen = ScreenAppSelection
         }
     }
+    save_settings(app)
 }

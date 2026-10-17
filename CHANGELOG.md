@@ -23,6 +23,7 @@
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
 - Manage practices lists every practice with its size and one button: Install, Buy for a paid practice, Cancel while it downloads, or Uninstall once it is on Practice. Uninstalling a downloaded practice asks once, then frees the space; one that comes with the app just leaves Practice. Drag a practice by its handle onto another to change the order Practice shows them in. Your progress stays either way.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.
+- A new install comes with Lumi, Habits and Practice, in that order; add Lists, Diary and Leaderboard from More apps. The apps you install or remove and the order of your pinned apps follow your account to your other devices, and a newly signed-in device takes your account's apps instead of replacing them.
 ### Removed
 - Donations: the reminder, About's Donate button and Lumi's donation links. Dew is how you pay in Inner Breeze.
 ### Fixed

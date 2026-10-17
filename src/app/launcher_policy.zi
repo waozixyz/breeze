@@ -14,15 +14,83 @@ LauncherRoutes :: () -> [LAUNCHER_APP_COUNT]s32 {
         APP_NAV_ROUTE_LEADERBOARD}
 }
 
-// Leaderboard is installed with the other apps but is not pinned.
-LauncherDefaults :: (routes: []s32, desktop: bool) -> s32 {
-    defaults: [5]s32 = .{APP_NAV_ROUTE_LUMI,
-        APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_PRACTICE,
-        APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_DIARY}
-    count := cast(s32)(ifx desktop then 5 else 3)
+// A new profile comes with Lumi, Habits and Practice installed and pinned,
+// in this order. Every other app is added from More apps.
+LauncherDefaults :: (routes: []s32) -> s32 {
+    defaults: [3]s32 = .{APP_NAV_ROUTE_LUMI,
+        APP_NAV_ROUTE_HABITS, APP_NAV_ROUTE_PRACTICE}
+    count := cast(s32)defaults.count
     if routes.count < count { return 0 }
     for index: cast(s32)0..count - 1 {
         routes[index] = defaults[index]
+    }
+    return count
+}
+
+// The pinned order syncs between an account's devices as package names, the
+// names in src/cells/catalog.zi, so it means the same apps on every version.
+LAUNCHER_ORDER_TEXT_MAX :: 255
+
+LauncherRouteName :: (route: s32) -> string {
+    if route == APP_NAV_ROUTE_DIARY { return "diary" }
+    if route == APP_NAV_ROUTE_HABITS { return "habits" }
+    if route == APP_NAV_ROUTE_ELIST { return "lists" }
+    if route == APP_NAV_ROUTE_LUMI { return "lumi" }
+    if route == APP_NAV_ROUTE_PRACTICE { return "practices" }
+    if route == APP_NAV_ROUTE_LEADERBOARD { return "leaderboard" }
+    return ""
+}
+
+LauncherRouteForName :: (name: string) -> s32 {
+    if name.count == 0 { return APP_NAV_ROUTE_NONE }
+    routes := LauncherRoutes()
+    for index: cast(s32)0..cast(s32)routes.count - 1 {
+        if LauncherRouteName(routes[index]) == name { return routes[index] }
+    }
+    return APP_NAV_ROUTE_NONE
+}
+
+// Writes the pinned apps as names separated by commas and returns the
+// length. The output always ends with a zero byte.
+LauncherOrderText :: (routes: []s32, count: s32, output: []u8) -> s32 {
+    if output.count == 0 { return 0 }
+    length: s32 = 0
+    limit := count
+    if limit > cast(s32)routes.count { limit = cast(s32)routes.count }
+    for index: cast(s32)0..limit - 1 {
+        name := LauncherRouteName(routes[index])
+        if name.count == 0 { continue }
+        needed := cast(s32)name.count
+        if length > 0 { needed += 1 }
+        if length + needed >= cast(s32)output.count { break }
+        if length > 0 {
+            output[length] = cast(u8)44
+            length += 1
+        }
+        for byte: name {
+            output[length] = byte
+            length += 1
+        }
+    }
+    output[length] = cast(u8)0
+    return length
+}
+
+// Reads an order written by any version. Apps this version doesn't have
+// are left out, and the others keep their order.
+LauncherOrderRoutes :: (text: string, routes: []s32) -> s32 {
+    count: s32 = 0
+    start: s64 = 0
+    while start <= text.count {
+        end := start
+        while end < text.count && text[end] != cast(u8)44 { end += 1 }
+        route := LauncherRouteForName(text[start:end])
+        if route != APP_NAV_ROUTE_NONE && count < cast(s32)routes.count &&
+        !RouteListContains(routes, count, route) {
+            routes[count] = route
+            count += 1
+        }
+        start = end + 1
     }
     return count
 }

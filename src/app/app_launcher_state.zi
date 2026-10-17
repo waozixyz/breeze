@@ -20,20 +20,32 @@ app_launcher_is_favorite :: (app: *InnerBreeze, route: s32) -> bool {
         app.launcher_favorite_count, route)
 }
 
+// The owner pinned, moved or unpinned an app. The pins and their order go
+// to the account's other devices with the next sync.
+app_launcher_pins_changed :: (app: *InnerBreeze) {
+    app_save_app_order(app)
+    save_settings(app)
+}
+
 app_launcher_uninstall :: (app: *InnerBreeze, route: s32) {
     bit := app_nav_route_bit(route)
     if bit == 0 { return }
     mask := app.enabled_apps & ~bit
     if !CellsSetEnabled(mask) { return }
     app.enabled_apps = mask
-    if app_launcher_is_favorite(app, route) {
+    pinned := app_launcher_is_favorite(app, route)
+    if pinned {
         app.launcher_favorite_count = LauncherToggleFavorite(
             app.launcher_favorites[:], app.launcher_favorite_count, route)
     }
     app.launcher_drag_key = 0
     app.launcher_drag_moving = false
     app_update_app_navigation(app)
-    save_settings(app)
+    if pinned {
+        app_launcher_pins_changed(app)
+    } else {
+        save_settings(app)
+    }
     app_block_current_click(app)
 }
 

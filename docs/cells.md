@@ -381,12 +381,29 @@ configuration above; a checked build does not establish that configuration.
 
 ## Account app choices
 
+A new profile comes with Lumi, Habits and Practice installed and pinned, in
+that order; Lists, Diary and Leaderboard are added from More apps. Existing
+profiles keep their apps.
+
 Sync v6 uses `private.inbe.v1.app-preferences`. Each of the six `app_used_*`
 keys is a separate timestamped record, including explicit zero values for
 removals. Independent changes merge without overwriting unrelated selections.
 Pending local choices win equal timestamps; newer remote choices win.
-Invalid keys, values and timestamps cannot alter preferences. Versions, package
-paths, release sequence floors and the automatic-update preference stay local.
+Invalid keys, values and timestamps cannot alter preferences. Released
+versions reject an unknown key in this collection and stop syncing, so a new
+app's choice needs its own collection. A choice nobody made, such as a new
+profile's apps, is stored at time 1 (`AppDefaultTime`) and never uploaded, so
+a new device takes the account's apps instead of replacing them.
+
+The pinned apps and their order are one record, `app_order`, in
+`private.inbe.v1.app-order`: package names separated by commas, such as
+`lumi,habits,practices`, at most 255 bytes. It is sent only when the owner
+pins, moves or unpins an app. The newest order wins and a pending local order
+wins a tie; versions that don't know the collection skip it, and a record this
+version can't read changes nothing without stopping the sync. An arriving
+order sets `app_order_received`, and the pins take it once. An app removed on
+another device is unpinned here too. Versions, package paths, release
+sequence floors and the automatic-update preference stay local.
 All apps share the existing account, SQLite database and outbox. Diary entries
 and photos use the owner-only encrypted cell collection on that same sync
 account. Per-account files provide a local cache; they are not the only copy.

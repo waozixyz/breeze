@@ -84,10 +84,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         saved = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
         favorites = [int(saved[f"launcher_favorite_{i}"])
                      for i in range(int(saved.get("launcher_favorite_count", 0)))]
-        assert int(saved["enabled_apps"]) & 32, "Leaderboard is not installed for a new profile"
+        # A new profile adds Leaderboard from More apps.
+        assert not int(saved["enabled_apps"]) & 32, "Leaderboard was installed for a new profile"
         assert LEADERBOARD_ROUTE not in favorites, "Leaderboard was pinned by default"
         settings = {"language": "en", "language_system": 0, "language_setup_done": 1,
-                    "apps_setup_done": 1, "main_tab": 5, "tutorial_seen": 1,
+                    "apps_setup_done": 1, "app_used_leaderboard": 1, "main_tab": 5, "tutorial_seen": 1,
                     "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1, "package_updates_allowed": 0,
                     "apps_last_update_check": 1900000000,
                     # Pinned here, so the page has no "back to Apps" bar and

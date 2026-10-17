@@ -125,19 +125,19 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             saved = settings(profile)
             assert saved["enabled_apps"] == "22", "Startup changed saved app preferences"
             order = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
-            assert order == [12, 1, 2, 3, 11], "Desktop defaults omitted an installed app: " + str(order)
+            assert order == [12, 1, 2], "Defaults are not Lumi, Habits and Practice: " + str(order)
             deadline = time.monotonic() + 2
             while "->0" not in log.read_text():
                 assert time.monotonic() < deadline, "Practices click was ignored\n" + log.read_text()
                 time.sleep(.05)
             command("import", "-window", window, str(OUTPUT / "practices-open.png"))
-            # Diary is pinned but not installed, so the dock leaves it out;
-            # its card in the Apps library installs and opens it.
+            # Diary is not installed; its card in More apps installs and
+            # opens it.
             click(window, 44, 660)  # Apps, in the sidebar's bottom corner.
             time.sleep(.4)
-            # Diary, the fifth pinned card: Apps fits five 144 wide cards
-            # in a row at this width.
-            click(window, 804, 228)
+            # Diary, the first card in More apps, under the row of three
+            # pinned cards.
+            click(window, 160, 380)
             deadline = time.monotonic() + 2
             while "screen=0->22" not in log.read_text():
                 assert time.monotonic() < deadline, "Diary click was ignored\n" + log.read_text()

@@ -119,8 +119,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         saved = settings(profile)
         assert saved["apps_setup_done"] == "0"
         assert saved["language_setup_done"] == "1"
-        assert saved["enabled_apps"] == "63"
-        assert [int(saved[f"launcher_favorite_{i}"]) for i in range(5)] == [12, 1, 2, 3, 11]
+        # A new profile comes with Lumi, Habits and Practice, pinned in that
+        # order. They are defaults, not choices: stored at time 1 and not
+        # queued, so an account's apps replace them after sign-in.
+        assert saved["enabled_apps"] == "22"
+        assert saved["launcher_favorite_count"] == "3"
+        assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
+        with sqlite3.connect(profile / "inbe.db", timeout=5) as db:
+            defaults = {key: (value, updated) for key, value, updated in db.execute(
+                "SELECT key,value,updated_at FROM settings WHERE key LIKE 'app_used_%'")}
+            queued = db.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN "
+                                "('app_preference','app_order')").fetchone()[0]
+        assert defaults == {f"app_used_{name}": (str(int(name in ("habits", "practices", "lumi"))), 1)
+                            for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard")}, defaults
+        assert queued == 0, "a new profile queued its default apps"
+        assert "app_order" not in saved, "a new profile sent its default pins"
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
         capture(window, "resumed-apps")
@@ -146,7 +159,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         tap(window, 180, 104)
         command("xdotool", "type", "--clearmodifiers", "Lists")
         time.sleep(.3)
-        tap(window, 180, 228)
+        # Lists is not installed, so its card is the first in More apps.
+        tap(window, 180, 270)
         wait_setting(profile, "apps_setup_done", 1)
         wait_setting(profile, "main_tab", 2)
         assert "screen=21->16" in log.read_text(), log.read_text()
@@ -290,7 +304,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         capture(window, "existing-data-lists")
     result.update(
         first_start_apps_library=True, system_language=True,
-        default_favorites_lumi_habits_practices=True, restart_in_onboarding=True,
+        default_apps_lumi_habits_practice=True, default_apps_not_sent=True, restart_in_onboarding=True,
         open_tile_completes_setup=True, explicit_feature_cli=True,
         same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,
         mini_starts_practice_without_profile_writes=True,

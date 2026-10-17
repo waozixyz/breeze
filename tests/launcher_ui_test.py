@@ -274,7 +274,8 @@ with contextlib.ExitStack() as stack:
                     user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
                 assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the language picker"
                 assert settings(profile)["apps_setup_done"] == "0"
-                assert favorites(profile) == [12, 1, 2, 3, 11], "Desktop defaults omitted installed apps"
+                assert favorites(profile) == [12, 1, 2], "New profiles do not pin Lumi, Habits and Practice"
+                assert settings(profile)["enabled_apps"] == "22", "New profiles do not install Lumi, Habits and Practice"
                 assert settings(profile)["theme"] == "9" and settings(profile)["theme_source"] == "0"
                 assert settings(profile)["theme_mode"] == "2"
             # Merely opening and closing the picker does not complete setup.
