@@ -22,23 +22,8 @@ SyncNodeStorage :: struct {
     full: bool
 }
 
-SyncNodeMediaRoom :: struct {
-    fits: bool
-    needed_bytes: s64
-    free_bytes: s64
-}
-
 // A node at or above this share of its limit is reported as nearly full.
 SYNC_NODE_STORAGE_WARNING_PERCENT :: 80
-
-// Bytes a node stores for one Diary record beyond its key and hex value:
-// collection, key id, nonce and content hash, plus the sealed JSON wrapper
-// and tag, which the hex ciphertext doubles. See storage_core's encryption.
-SYNC_MEDIA_RECORD_OVERHEAD :: 125
-SYNC_MEDIA_SEALED_OVERHEAD :: 73
-SYNC_MEDIA_CHUNK_BYTES :: 1024
-SYNC_MEDIA_CHUNK_KEY_BYTES :: 86
-SYNC_MEDIA_MANIFEST_BYTES :: 610
 
 // Diary day documents are YYYY-MM-DD.json; every other Diary file is media.
 SyncMediaWithholdSQL :: #string SQL_END
@@ -66,16 +51,6 @@ SQL_END;
 SyncMediaLocalBytesSQL :: #string SQL_END
 SELECT COALESCE(SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)),0) FROM settings
 WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
-  AND substr(key,18,64) IN (
-    SELECT json_extract(value,'$.hash') FROM settings
-    WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
-      AND key NOT GLOB '*.json' AND json_valid(value))
-SQL_END;
-
-SyncMediaPendingBytesSQL :: #string SQL_END
-SELECT COALESCE(SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)),0) FROM settings
-WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
-  AND key IN (SELECT entity_id FROM sync_outbox WHERE entity_type='cell_record')
   AND substr(key,18,64) IN (
     SELECT json_extract(value,'$.hash') FROM settings
     WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
@@ -283,51 +258,9 @@ storage_withhold_node_media :: () -> s32 {
     return exec_sql(SyncMediaWithholdSQL)
 }
 
-// Bytes a node stores for a new media file of this size, including its
-// file entry. Hex chunks inside hex ciphertext make this about four times
-// the file size.
-SyncMediaNodeBytes :: (file_bytes: s64) -> s64 {
-    if file_bytes <= 0 {
-        return 0
-    }
-    chunks := (file_bytes + SYNC_MEDIA_CHUNK_BYTES - 1) / SYNC_MEDIA_CHUNK_BYTES
-    per_chunk := SYNC_MEDIA_RECORD_OVERHEAD + SYNC_MEDIA_CHUNK_KEY_BYTES +
-        2 * (SYNC_MEDIA_CHUNK_KEY_BYTES + SYNC_MEDIA_SEALED_OVERHEAD)
-    return chunks * per_chunk + file_bytes * 4 + SYNC_MEDIA_MANIFEST_BYTES
-}
-
 // Bytes this device's photos and videos take on a node that stores them.
 SyncMediaLocalBytes :: () -> s64 {
     return db_select_int64_text(SyncMediaLocalBytesSQL, cast(s64)0)
-}
-
-SyncMediaPendingBytes :: () -> s64 {
-    return db_select_int64_text(SyncMediaPendingBytesSQL, cast(s64)0)
-}
-
-// Whether a new media file still fits on the active node. Nodes without a
-// known limit, and nodes that do not store media, always have room.
-SyncNodeMediaFits :: (file_bytes: s64) -> SyncNodeMediaRoom {
-    result: SyncNodeMediaRoom
-    result.fits = true
-    result.needed_bytes = SyncMediaNodeBytes(file_bytes)
-    active := PackageText(storage_get_setting_text("sync_server_url"), "")
-    defer {
-        PackageFree(active)
-    }
-    if active.count == 0 || storage_sync_enabled() == 0 || !SyncNodeMediaUpload(active) {
-        return result
-    }
-    storage := SyncNodeStorageRead(active)
-    if !storage.known || storage.limit_bytes <= 0 {
-        return result
-    }
-    result.free_bytes = storage.limit_bytes - storage.used_bytes - SyncMediaPendingBytes()
-    if result.free_bytes < 0 {
-        result.free_bytes = 0
-    }
-    result.fits = result.needed_bytes <= result.free_bytes
-    return result
 }
 
 // Sizes read like file sizes elsewhere in the app: B, KB, then MB with one
