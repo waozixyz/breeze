@@ -14,7 +14,6 @@
 #import, file "../storage/paths.zi";
 #import, file "../storage/temporary_data.zi";
 #import, file "../platform/web_storage.zi";
-#import, file "../storage/sync_node_storage.zi";
 
 c :: #system_library "c";
 #if #defined(PLATFORM_WEB) {
@@ -39,8 +38,6 @@ diary_prepared: bool;
 diary_account: string;
 diary_preview_name: string;
 diary_preview_bytes: string;
-// Why the last attach failed when the sync node had no room for the photo.
-diary_attach_room: SyncNodeMediaRoom;
 #if !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
     DiaryLock :: (descriptor: s32, operation: s32) -> s32 #foreign c "flock";
 }
@@ -406,16 +403,13 @@ DiaryStorePreview :: (name: string) -> string {
 }
 
 // Only the picker-selected file is copied; the bundle never receives its path.
-// A photo that would not fit on a sync node that stores photos is refused,
-// so one photo cannot stop the account from syncing there.
+// A photo always saves on this device, whatever room a sync node has left:
+// a node's limit only decides whether the photo syncs there.
 DiaryStoreAttach :: (source: string) -> string {
-    diary_attach_room = SyncNodeMediaRoom.{.fits = true}
     if !DiaryStorePrepare() { return "" }
     data := PackageRead(source, 16777216)
     defer { PackageFree(data) }
     if DiaryImageFormat(data).count == 0 { return "" }
-    diary_attach_room = SyncNodeMediaFits(data.count)
-    if !diary_attach_room.fits { return "" }
     serial: s32 = 1
     while serial < 10000 {
         out: Vec(u8)

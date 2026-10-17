@@ -126,7 +126,7 @@ format_bytes :: (bytes: s64) -> string {
 }
 
 // A node set not to store photos receives each Diary file entry and the day
-// documents, never photo chunks. Reports, limits and the photo estimate.
+// documents, never photo chunks. Reports and limits.
 test_node_storage_and_media :: () {
     root := make_root("sync-node-media")
     check_true("init media device", storage_init(root) != 0)
@@ -149,11 +149,6 @@ test_node_storage_and_media :: () {
     check_int("photo entry names its content", cast(s32)photo_hash.count, 64)
     check_true("local photo bytes equal the node's chunk bytes",
         SyncMediaLocalBytes() == payload_file_bytes("photo-1-1.bin", photo_hash, true))
-    estimate := SyncMediaNodeBytes(3000)
-    actual := payload_file_bytes("photo-1-1.bin", photo_hash, false)
-    check_true("photo estimate covers its chunks", estimate >= SyncMediaLocalBytes())
-    check_true("photo estimate stays within five percent of a node's bytes",
-        estimate * 100 <= actual * 105 && estimate * 100 >= actual * 95)
     PackageFree(photo_hash)
 
     check_true("turn photos off for the node", SyncNodeSetMediaUpload(node, false))
@@ -166,23 +161,16 @@ test_node_storage_and_media :: () {
     storage_enqueue_all_sync_state()
     check_true("backfill payload builds", build_payload())
     check_int("a backfill does not send photos", record_count(), 3)
-    check_true("photo room is unlimited without photo upload", SyncNodeMediaFits(100000000).fits)
     check_true("turn photos back on", SyncNodeSetMediaUpload(node, true))
     check_int("photos queue again", queued_diary_chunks(), 4)
 
     check_true("unknown usage before a sync", !SyncNodeStorageRead(node).known)
-    check_true("unknown limit leaves room", SyncNodeMediaFits(100000000).fits)
     SyncNodeStorageRecordResponse(node, "{\"status\":\"ok\",\"account_storage\":{\"used_bytes\":9437184,\"limit_bytes\":10485760}}")
     storage := SyncNodeStorageRead("https://api.waozi.xyz/")
     check_true("usage is known", storage.known && !storage.full)
     check_true("usage is read", storage.used_bytes == 9437184 && storage.limit_bytes == 10485760)
     check_int("usage percent", SyncNodeStoragePercent(storage), 90)
     check_true("ninety percent is nearly full", SyncNodeStorageNearlyFull(storage))
-    check_true("a small photo fits", SyncNodeMediaFits(3000).fits)
-    room := SyncNodeMediaFits(1000000)
-    check_true("a large photo does not fit", !room.fits)
-    check_true("free space counts queued photos",
-        room.free_bytes == 10485760 - 9437184 - SyncMediaPendingBytes())
     check_true("other 413 replies are not storage full",
         !SyncNodeStorageRecordFull(node, "{\"error\":\"encrypted payload quota exceeded\"}"))
     check_true("storage full is recorded",

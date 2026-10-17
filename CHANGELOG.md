@@ -27,6 +27,7 @@
 - Sync no longer gets stuck on Review sync changes: Android merges large changes again, and a closed review stays closed until your account has newer data.
 - Android: closing the floating practice window with its X ends the practice.
 - Practice downloads show their real size, and each practice's pictures come only with its download.
+- Diary adds every photo you pick, online or offline, even when your sync node is full. A full node only keeps new photos from syncing there.
 
 ## [2.1.33] - 2026-10-13
 ### Added

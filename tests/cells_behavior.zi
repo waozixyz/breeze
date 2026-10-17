@@ -45,6 +45,8 @@ Dates :: #import, file "../apps/diary/diary_date.zi";
 #import "byte_text_linux"
 #import, file "../src/app/assets.zi";
 #import, file "../src/app/locale.zi";
+#import, file "../src/storage/sync_node_storage.zi";
+#import "file_linux"
 
 c :: #system_library "c";
 ModuleTestText :: (name: string) -> string #foreign c;
@@ -271,6 +273,7 @@ CheckDiary :: () {
     Expect(!photo.succeeded && photo.photo_count == 1, 104)
     photo = DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 1})
     Expect(photo.photo_count == 1 && photo.photo_name == "A second photo 🌿", 105)
+    CheckDiaryPhotoOnFullNode()
     Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)
     bad := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 2})
     bad.action = DIARY_SAVE
@@ -320,6 +323,34 @@ CheckDiary :: () {
     PackageFree(original_owner)
     PackageFree(legacy)
 
+}
+
+// A photo always saves on this device: a sync node that reports no room
+// only keeps the photo from syncing there.
+CheckDiaryPhotoOnFullNode :: () {
+    node := "https://api.waozi.xyz"
+    sync_was_enabled := storage_sync_enabled()
+    storage_set_sync_enabled(1)
+    storage_set_setting_text("sync_server_url", node)
+    Expect(SyncNodeStorageRecordFull(node, "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":10485000,\"limit_bytes\":10485760}}") &&
+        SyncNodeStorageRead(node).full, 419)
+    png: [4096]u8
+    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
+    for index: cast(s32)0..cast(s32)4095 {
+        png[index] = ifx index < 8 then header[index] else cast(u8)(index % 251)
+    }
+    image := TextFromBytes(png[:])
+    source := "full-node-photo.png"
+    unused RemoveFile(source)
+    file := OpenExclusivePrivate(source)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    Expect(CloseFile(file) && written, 420)
+    name := DiaryStoreAttach(source)
+    Expect(name.count > 0 && DiaryStoreRead(name).data == image, 421)
+    PackageFree(name)
+    unused RemoveFile(source)
+    storage_set_setting_text("sync_server_url", "")
+    storage_set_sync_enabled(sync_was_enabled)
 }
 
 CheckPackagedLocales :: () {
