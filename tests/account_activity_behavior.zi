@@ -190,6 +190,25 @@ Check :: () -> s32 {
     check_true("own leftover session is ended", ActivityRead(leftover_document, *ended_leftover) &&
         ended_leftover.active == 0 && TextUntilNul(ended_leftover.session_id[:]) == TextUntilNul(first.session_id[:]))
     PackageFree(leftover_document)
+    // Another device's session that stopped updating can be ended from here
+    // for every device; one still updating cannot.
+    other := remote
+    other.time = ActivityCurrentTime()
+    other.active = 1
+    other.revision = 5
+    check_true("serialize other record", ActivityWrite(other, output[:]))
+    check_true("receive other record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    FixtureAdvance(1)
+    ActivityPump(*fixture_app)
+    check_true("updating session cannot be ended here", ActivityRemoteVisible() && !ActivityEndRemote(*fixture_app))
+    FixtureAdvance(ActivityFreshSeconds + 1)
+    ActivityPump(*fixture_app)
+    check_true("stale session ends for every device", ActivityEndRemote(*fixture_app) && !ActivityRemoteVisible())
+    ended_document := CellRecordRead(ActivityRecordKey)
+    ended_other: AccountActivity
+    check_true("ended record is shared", ActivityRead(ended_document, *ended_other) && ended_other.active == 0 &&
+        TextUntilNul(ended_other.session_id[:]) == TextUntilNul(other.session_id[:]))
+    PackageFree(ended_document)
     storage_set_sync_data_owner_public_id("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
     check_true("switch clears prior remote account", ActivityInitialize() && account_activity.remote.active == 0)
     storage_set_sync_enabled(0)

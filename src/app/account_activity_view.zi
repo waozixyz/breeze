@@ -158,15 +158,28 @@ ActivityDrawRemote :: (app: *InnerBreeze, hosted: bool = false) -> bool {
     } else if value.paused != 0 {
         label = "play_button"
     }
-    if Button(session, ButtonProps.{.key = KeyHash("inbe/activity/pause"),
+    // A session that stopped updating can be ended for every device; one
+    // still updating is paused or resumed by its own device.
+    if !fresh {
+        if Button(session, ButtonProps.{.key = KeyHash("inbe/activity/end"),
+                .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(308)),
+                    cast(float32)width, cast(float32)AppScale(48)},
+                .label = LocaleText("activity_end_session")}) != 0 {
+            unused ActivityEndRemote(app)
+            account_activity.view_open = false
+        }
+    } else if Button(session, ButtonProps.{.key = KeyHash("inbe/activity/pause"),
             .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(308)),
                 cast(float32)width, cast(float32)AppScale(48)},
-            .label = LocaleText(label), .disabled = !fresh || pending, .loading = pending}) != 0 {
+            .label = LocaleText(label), .disabled = pending, .loading = pending}) != 0 {
         unused ActivityRequestPause(app, ifx value.paused != 0 then 0 else 1)
     }
-    if hosted && Button(session, ButtonProps.{.key = KeyHash("inbe/activity/lumi"),
+    // Close always returns to this device's own page; the corner button
+    // opens the session again.
+    if Button(session, ButtonProps.{.key = KeyHash("inbe/activity/close"),
             .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(372)),
-                cast(float32)width, cast(float32)AppScale(44)}, .label = "Lumi"}) != 0 {
+                cast(float32)width, cast(float32)AppScale(44)},
+            .label = ifx hosted then "Lumi" else LocaleText("close_button")}) != 0 {
         account_activity.view_open = false
     }
     return true
@@ -175,7 +188,7 @@ ActivityDrawRemote :: (app: *InnerBreeze, hosted: bool = false) -> bool {
 ActivityDrawIndicator :: (app: *InnerBreeze, hosted: bool = false) {
     if app == null || !ActivityRemoteVisible() || app.launcher_open ||
     app_is_session_screen(app_session_screen(app)) ||
-    (!hosted && app.breathing.screen == ScreenStart &&
+    (!hosted && account_activity.view_open && app.breathing.screen == ScreenStart &&
         app.main_tab == cast(s32)AppMainTab.APP_MAIN_TAB_PRACTICE) {
         return
     }
@@ -194,9 +207,8 @@ ActivityDrawIndicator :: (app: *InnerBreeze, hosted: bool = false) {
             .bounds = Rectangle.{cast(float32)(app.ui.view_width - width - AppScale(8)),
                 cast(float32)AppScale(72), cast(float32)width, cast(float32)AppScale(56)},
             .label = FrameTextHold(*app.ui.frame_text, text)}) != 0 {
-        if hosted {
-            account_activity.view_open = true
-        } else {
+        account_activity.view_open = true
+        if !hosted {
             app_apply_nav_route(app, APP_NAV_ROUTE_PRACTICE)
         }
     }
