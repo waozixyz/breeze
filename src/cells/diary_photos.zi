@@ -1,0 +1,74 @@
+// The photos a Diary entry embeds, as the host finds them. An embed links to
+// a photo of the account's media library by its place there,
+// photos/YYYY/MM/DD/<sha256>.<type>, or to a Diary file an older version
+// attached, diary:<file>. Diary draws each through an asset path the hosted
+// asset policy allows: the library's preview, or the Diary file itself.
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "diary_store.zi";
+#import, file "media_store.zi";
+#import, file "package_files.zi";
+#import, file "../app/text_buffers.zi";
+
+// Diary files' types, kept until a copy arrives from a node, so an entry's
+// photos are not read again every frame.
+DIARY_PHOTO_FORMATS :: 64
+
+DiaryPhotoFormat :: struct {
+    name: [201]u8
+    format: [8]u8
+    generation: s64
+}
+
+diary_photo_formats: [DIARY_PHOTO_FORMATS]DiaryPhotoFormat;
+diary_photo_formats_next: s32;
+diary_photo_asset: [256]u8;
+
+// The image type of a Diary file on this device, or "" while it is not here.
+DiaryPhotoFileFormat :: (name: string) -> string {
+    if !DiaryStoreNameValid(name) {
+        return ""
+    }
+    for index: cast(s32)0..DIARY_PHOTO_FORMATS - 1 {
+        entry := *diary_photo_formats[index]
+        if entry.generation == diary_blob_generation && TextUntilNul(entry.name[:]) == name {
+            return TextUntilNul(entry.format[:])
+        }
+    }
+    format := DiaryImageFormat(DiaryStorePreview(name))
+    slot := *diary_photo_formats[diary_photo_formats_next]
+    diary_photo_formats_next = (diary_photo_formats_next + 1) % DIARY_PHOTO_FORMATS
+    slot.* = DiaryPhotoFormat.{}
+    unused AppCopyText(name, slot.name[:])
+    unused AppCopyText(format, slot.format[:])
+    slot.generation = diary_blob_generation
+    return TextUntilNul(slot.format[:])
+}
+
+// The asset that draws an embed's photo, from what the embed links to, or ""
+// while the photo is not on this device. A library photo draws its preview.
+// The answer stays valid until the next call.
+DiaryPhotoAsset :: (destination: string) -> string {
+    diary_photo_asset[0] = cast(u8)0
+    if destination.count > 6 && destination[:6] == "diary:" {
+        name := destination[6:]
+        format := DiaryPhotoFileFormat(name)
+        if format.count == 0 {
+            return ""
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "diary/photos/%.%", name, format)
+        path := BuilderFinish(out)
+        unused AppCopyText(path, diary_photo_asset[:])
+        PackageFree(path)
+        return TextUntilNul(diary_photo_asset[:])
+    }
+    hash := MediaPlaceHash(destination)
+    if hash.count != 64 {
+        return ""
+    }
+    unused AppCopyText(MediaAsset(hash, false), diary_photo_asset[:])
+    return TextUntilNul(diary_photo_asset[:])
+}

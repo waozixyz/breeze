@@ -476,6 +476,42 @@ MediaImportFile :: (path: string) -> MediaImport {
     return MediaImportBytes(data, path)
 }
 
+// A photo's place in the library, as a Diary entry links to it:
+// photos/YYYY/MM/DD/<sha256>.<type>, under the day the gallery groups it.
+MediaPlace :: (item: MediaItem) -> string {
+    day := TextUntilNul(item.day[:])
+    format := TextUntilNul(item.format[:])
+    if !item.valid || day.count != 10 || format.count == 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "photos/%/%/%/", day[:4], day[5:7], day[8:10])
+    BuilderPrint(*out, "%.%", TextFromBytes(item.hash[:64]), format)
+    return BuilderFinish(out)
+}
+
+// The SHA-256 a place in the library names, or "" for anything else. The
+// day and type it names are not checked against the photo's record: the
+// hash alone finds the photo.
+MediaPlaceHash :: (place: string) -> string {
+    if place.count < 86 || place.count > 87 || place[:7] != "photos/" ||
+    place[11] != cast(u8)47 || place[14] != cast(u8)47 || place[17] != cast(u8)47 ||
+    place[82] != cast(u8)46 {
+        return ""
+    }
+    for index: 7..16 {
+        digit := place[index] >= cast(u8)48 && place[index] <= cast(u8)57
+        if !digit && index != 11 && index != 14 {
+            return ""
+        }
+    }
+    hash := place[18:82]
+    if !MediaHashValid(hash) {
+        return ""
+    }
+    return hash
+}
+
 // Queries.
 
 MediaQuerySQL :: #string SQL_END

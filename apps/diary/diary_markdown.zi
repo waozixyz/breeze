@@ -1,0 +1,982 @@
+// A Diary entry is Markdown. This module finds its whole-line photo embeds and
+// the CommonMark basics the editor previews, and makes the edits that add a
+// photo. It reads only the entry's text; files and the account's media
+// library belong to the host.
+//
+// An embed line is `![ALT](photos/YYYY/MM/DD/SHA256.EXT)` for a photo of the
+// account's media library, which Photos shows too: the photo's day, its
+// SHA-256 and its type. `![ALT](diary:FILE)` names a photo an older version
+// attached to the entry as a Diary file. An embed stands alone on its line
+// apart from spaces; anything else stays ordinary text.
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import "text_props"
+
+DIARY_EMBED_ALT_MAX :: 200
+DIARY_EMBED_NAME_MAX :: 200
+
+DIARY_TONE_MUTED :: 1
+DIARY_TONE_LINK :: 2
+
+// What the editor shows for one entry, rebuilt every frame.
+DIARY_PREVIEW_RANGES :: 512
+DIARY_PREVIEW_TONES :: 256
+DIARY_PREVIEW_HEADINGS :: 128
+DIARY_PREVIEW_PHOTOS :: 64
+// What one line may add; a line that would not fit ends the preview there.
+DIARY_LINE_MARKS :: 64
+DIARY_LINE_LINKS :: 16
+DIARY_LINE_RUNS :: 64
+
+DiaryEmbed :: struct {
+    valid: bool
+    // The embed's line, without its line break.
+    line_start: s32
+    line_end: s32
+    alt_start: s32
+    alt_end: s32
+    target_start: s32
+    target_end: s32
+    // A photo of the account's media library (photos/...) or a Diary file
+    // (diary:).
+    library: bool
+}
+
+// Replaces text[start:end]; the caret goes to cursor afterwards.
+DiaryEmbedEdit :: struct {
+    start: s32
+    end: s32
+    replacement: string
+    cursor: s32
+}
+
+// A color role for bytes of the entry.
+DiaryTone :: struct {
+    start: s32
+    end: s32
+    tone: s32
+}
+
+// A heading's line and level (1 to 6).
+DiaryHeading :: struct {
+    start: s32
+    level: s32
+}
+
+// A photo drawn for an embed: in place of its hidden line (cover), or under
+// its source while the caret is on that line.
+DiaryPhotoBlock :: struct {
+    embed: DiaryEmbed
+    cover: bool
+}
+
+// Every list is sorted by start and disjoint, as Kryon's TextArea requires.
+DiaryPreview :: struct {
+    hidden: [DIARY_PREVIEW_RANGES]TextRange
+    hidden_count: s32
+    strong: [DIARY_PREVIEW_RANGES]TextRange
+    strong_count: s32
+    italic: [DIARY_PREVIEW_RANGES]TextRange
+    italic_count: s32
+    tones: [DIARY_PREVIEW_TONES]DiaryTone
+    tone_count: s32
+    headings: [DIARY_PREVIEW_HEADINGS]DiaryHeading
+    heading_count: s32
+    photos: [DIARY_PREVIEW_PHOTOS]DiaryPhotoBlock
+    photo_count: s32
+    // Lines after the last one that fit are shown as plain text.
+    truncated: bool
+}
+
+// ---------------------------------------------------------------- lines
+
+DiaryLineEnd :: (text: string, start: s32) -> s32 {
+    end := start
+    while end < cast(s32)text.count && text[end] != cast(u8)10 {
+        end += 1
+    }
+    return end
+}
+
+DiaryLineStart :: (text: string, at: s32) -> s32 {
+    start := at
+    if start > cast(s32)text.count {
+        start = cast(s32)text.count
+    }
+    while start > 0 && text[start - 1] != cast(u8)10 {
+        start -= 1
+    }
+    return start
+}
+
+DiaryBlank :: (byte: u8) -> bool {
+    return byte == cast(u8)32 || byte == cast(u8)9
+}
+
+// ---------------------------------------------------------------- embeds
+
+// A Diary file name, as the host stores it.
+DiaryFileNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count > DIARY_EMBED_NAME_MAX || name == "." || name == ".." {
+        return false
+    }
+    for byte: name {
+        digit := byte >= cast(u8)48 && byte <= cast(u8)57
+        letter := byte >= cast(u8)97 && byte <= cast(u8)122
+        if !digit && !letter && byte != cast(u8)45 && byte != cast(u8)46 {
+            return false
+        }
+    }
+    return true
+}
+
+// A media library key: the photo's SHA-256 in lowercase hex.
+DiaryMediaKeyValid :: (key: string) -> bool {
+    if key.count != 64 {
+        return false
+    }
+    for byte: key {
+        digit := byte >= cast(u8)48 && byte <= cast(u8)57
+        letter := byte >= cast(u8)97 && byte <= cast(u8)102
+        if !digit && !letter {
+            return false
+        }
+    }
+    return true
+}
+
+DiaryDigits :: (value: string) -> bool {
+    for byte: value {
+        if byte < cast(u8)48 || byte > cast(u8)57 {
+            return false
+        }
+    }
+    return true
+}
+
+// The photo types the library keeps.
+DiaryPhotoTypeValid :: (format: string) -> bool {
+    return format == "jpg" || format == "png" || format == "webp" || format == "gif"
+}
+
+// A library photo's place: photos/YYYY/MM/DD/<sha256>.<type>, its day as the
+// Photos gallery groups it.
+DiaryLibraryPathValid :: (path: string) -> bool {
+    if path.count < 86 || path.count > 87 || path[:7] != "photos/" ||
+    path[11] != #char "/" || path[14] != #char "/" || path[17] != #char "/" ||
+    path[82] != #char "." {
+        return false
+    }
+    if !DiaryDigits(path[7:11]) || !DiaryDigits(path[12:14]) || !DiaryDigits(path[15:17]) {
+        return false
+    }
+    month := (cast(s32)path[12] - 48) * 10 + cast(s32)path[13] - 48
+    day := (cast(s32)path[15] - 48) * 10 + cast(s32)path[16] - 48
+    if month < 1 || month > 12 || day < 1 || day > 31 {
+        return false
+    }
+    return DiaryMediaKeyValid(path[18:82]) && DiaryPhotoTypeValid(path[83:])
+}
+
+// The place of a library photo taken or added on `day` (YYYY-MM-DD), or ""
+// when one of its parts is not valid.
+DiaryLibraryPath :: (day: string, hash: string, format: string) -> string {
+    if day.count != 10 || day[4] != #char "-" || day[7] != #char "-" {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "photos/%/%/%/%.%", day[:4], day[5:7], day[8:10], hash, format)
+    path := BuilderFinish(out)
+    if !DiaryLibraryPathValid(path) {
+        return ""
+    }
+    return path
+}
+
+// The embed on the line starting at line_start, or an invalid one.
+DiaryEmbedAt :: (text: string, line_start: s32) -> DiaryEmbed {
+    embed: DiaryEmbed
+    if line_start < 0 || line_start > cast(s32)text.count {
+        return embed
+    }
+    line_end := DiaryLineEnd(text, line_start)
+    first := line_start
+    while first < line_end && DiaryBlank(text[first]) {
+        first += 1
+    }
+    last := line_end
+    if last > first && text[last - 1] == cast(u8)13 {
+        last -= 1
+    }
+    while last > first && DiaryBlank(text[last - 1]) {
+        last -= 1
+    }
+    if last - first < 6 || text[first] != #char "!" || text[first + 1] != #char "[" ||
+    text[last - 1] != #char ")" {
+        return embed
+    }
+    close := first + 2
+    while close < last && text[close] != #char "]" {
+        if text[close] == #char "[" {
+            return embed
+        }
+        close += 1
+    }
+    if close + 1 >= last || text[close + 1] != #char "(" ||
+    close - (first + 2) > DIARY_EMBED_ALT_MAX {
+        return embed
+    }
+    destination_start := close + 2
+    destination_end := last - 1
+    destination := text[destination_start:destination_end]
+    target_start := destination_start
+    library := false
+    if destination.count > 6 && destination[:6] == "diary:" {
+        target_start += 6
+        if !DiaryFileNameValid(text[target_start:destination_end]) {
+            return embed
+        }
+    } else if DiaryLibraryPathValid(destination) {
+        library = true
+    } else {
+        return embed
+    }
+    embed.valid = true
+    embed.line_start = line_start
+    embed.line_end = line_end
+    embed.alt_start = first + 2
+    embed.alt_end = close
+    embed.target_start = target_start
+    embed.target_end = destination_end
+    embed.library = library
+    return embed
+}
+
+// The first embed on or after the line starting at from.
+DiaryEmbedNext :: (text: string, from: s32) -> DiaryEmbed {
+    line := from
+    while line <= cast(s32)text.count {
+        embed := DiaryEmbedAt(text, line)
+        if embed.valid {
+            return embed
+        }
+        line = DiaryLineEnd(text, line) + 1
+    }
+    return DiaryEmbed.{}
+}
+
+// A Diary file's name, or a library photo's whole path.
+DiaryEmbedTarget :: (text: string, embed: DiaryEmbed) -> string {
+    return text[embed.target_start:embed.target_end]
+}
+
+// What the embed links to as written: diary:FILE or the library path.
+DiaryEmbedDestination :: (text: string, embed: DiaryEmbed) -> string {
+    if embed.library {
+        return DiaryEmbedTarget(text, embed)
+    }
+    return text[embed.target_start - 6:embed.target_end]
+}
+
+DiaryEmbedAlt :: (text: string, embed: DiaryEmbed) -> string {
+    return text[embed.alt_start:embed.alt_end]
+}
+
+// Whether a diary: embed names this file.
+DiaryEmbedReferences :: (text: string, file: string) -> bool {
+    embed := DiaryEmbedNext(text, 0)
+    while embed.valid {
+        if !embed.library && DiaryEmbedTarget(text, embed) == file {
+            return true
+        }
+        embed = DiaryEmbedNext(text, embed.line_end + 1)
+    }
+    return false
+}
+
+// The bytes of the UTF-8 character at index, or 0 when it is not valid.
+DiaryCharacterSize :: (value: string, index: s32) -> s32 {
+    lead := value[index]
+    size: s32 = 0
+    if lead < cast(u8)128 {
+        return 1
+    }
+    if lead >= cast(u8)194 && lead <= cast(u8)223 {
+        size = 2
+    } else if lead >= cast(u8)224 && lead <= cast(u8)239 {
+        size = 3
+    } else if lead >= cast(u8)240 && lead <= cast(u8)244 {
+        size = 4
+    } else {
+        return 0
+    }
+    if index + size > cast(s32)value.count {
+        return 0
+    }
+    for offset: cast(s32)1..size - 1 {
+        if (value[index + offset] & cast(u8)192) != cast(u8)128 {
+            return 0
+        }
+    }
+    return size
+}
+
+// An embed line linking to `destination`, diary:FILE or a library path. Its
+// name keeps whole characters up to the length limit; brackets, line breaks
+// and invalid bytes become spaces.
+DiaryEmbedLine :: (destination: string, name: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "![")
+    written: s32 = 0
+    index: s32 = 0
+    while index < cast(s32)name.count {
+        size := DiaryCharacterSize(name, index)
+        step := ifx size == 0 then 1 else size
+        if written + step > DIARY_EMBED_ALT_MAX {
+            break
+        }
+        byte := name[index]
+        if size == 0 || (size == 1 && (byte == #char "[" || byte == #char "]" || byte < cast(u8)32)) {
+            BuilderPrint(*out, " ")
+        } else {
+            BuilderPrint(*out, "%", name[index:index + size])
+        }
+        written += step
+        index += step
+    }
+    BuilderPrint(*out, "](%)", destination)
+    return BuilderFinish(out)
+}
+
+// The text with an embed line added at its end. A blank line separates it
+// from text before it; embeds that follow each other share no blank line.
+DiaryEmbedAppend :: (text: string, line: string) -> string {
+    out: Vec(u8)
+    count := cast(s32)text.count
+    BuilderPrint(*out, "%", text)
+    if count == 0 {
+        BuilderPrint(*out, "%", line)
+        return BuilderFinish(out)
+    }
+    if text[count - 1] == cast(u8)10 {
+        previous := DiaryLineStart(text, count - 1)
+        after_embed := DiaryEmbedAt(text, previous).valid
+        blank := count >= 2 && text[count - 2] == cast(u8)10
+        if !after_embed && !blank {
+            BuilderPrint(*out, "\n")
+        }
+    } else if DiaryEmbedAt(text, DiaryLineStart(text, count)).valid {
+        BuilderPrint(*out, "\n")
+    } else {
+        BuilderPrint(*out, "\n\n")
+    }
+    BuilderPrint(*out, "%", line)
+    return BuilderFinish(out)
+}
+
+// The edit that puts an embed line at `at`, on a line of its own, with the
+// caret on the line after it. With snap, `at` first moves to its line's
+// start when it is there, or else to the line's end, so a photo dropped on
+// text never splits a word.
+DiaryEmbedInsertion :: (text: string, at: s32, line: string, snap: bool) -> DiaryEmbedEdit {
+    edit: DiaryEmbedEdit
+    count := cast(s32)text.count
+    start := at
+    if start < 0 {
+        start = 0
+    }
+    if start > count {
+        start = count
+    }
+    while start > 0 && start < count && (text[start] & cast(u8)192) == cast(u8)128 {
+        start -= 1
+    }
+    if snap {
+        line_start := DiaryLineStart(text, start)
+        if start != line_start {
+            start = DiaryLineEnd(text, start)
+        }
+    }
+    out: Vec(u8)
+    if start > 0 && text[start - 1] != cast(u8)10 {
+        BuilderPrint(*out, "\n")
+    }
+    BuilderPrint(*out, "%\n", line)
+    edit.start = start
+    edit.end = start
+    // At a line break the edit takes it over, so the caret, which an edit
+    // leaves after its replacement, starts the next line.
+    if start < count && text[start] == cast(u8)10 {
+        edit.end = start + 1
+    }
+    edit.replacement = BuilderFinish(out)
+    edit.cursor = start + cast(s32)edit.replacement.count
+    return edit
+}
+
+// ---------------------------------------------------------------- preview
+
+// One line's marks before they are sorted into the preview.
+DiaryLineMarks :: struct {
+    hidden: [DIARY_LINE_MARKS]TextRange
+    hidden_count: s32
+    strong: [DIARY_LINE_MARKS]TextRange
+    strong_count: s32
+    italic: [DIARY_LINE_MARKS]TextRange
+    italic_count: s32
+    tones: [DIARY_LINE_MARKS]DiaryTone
+    tone_count: s32
+    // A mark did not fit; the line is shown as plain text.
+    overflow: bool
+}
+
+// A link or inline image on a line: `[` at open, text up to text_end, then
+// `](destination)` up to end.
+DiaryLink :: struct {
+    open: s32
+    text_end: s32
+    end: s32
+    image: bool
+}
+
+// A run of `*` or `_` delimiters for emphasis.
+DiaryRun :: struct {
+    start: s32
+    length: s32
+    marker: u8
+    can_open: bool
+    can_close: bool
+    // Delimiters still unmatched, taken from its right as an opener and
+    // from its left as a closer.
+    left: s32
+    taken: s32
+    dead: bool
+}
+
+diary_line: DiaryLineMarks;
+diary_links: [DIARY_LINE_LINKS]DiaryLink;
+diary_link_count: s32;
+diary_runs: [DIARY_LINE_RUNS]DiaryRun;
+
+DiaryMarkHidden :: (marks: *DiaryLineMarks, start: s32, end: s32) {
+    if end <= start {
+        return
+    }
+    if marks.hidden_count >= DIARY_LINE_MARKS {
+        marks.overflow = true
+        return
+    }
+    marks.hidden[marks.hidden_count] = TextRange.{.start = start, .end = end}
+    marks.hidden_count += 1
+}
+
+DiaryMarkStrong :: (marks: *DiaryLineMarks, start: s32, end: s32) {
+    if end <= start {
+        return
+    }
+    if marks.strong_count >= DIARY_LINE_MARKS {
+        marks.overflow = true
+        return
+    }
+    marks.strong[marks.strong_count] = TextRange.{.start = start, .end = end}
+    marks.strong_count += 1
+}
+
+DiaryMarkItalic :: (marks: *DiaryLineMarks, start: s32, end: s32) {
+    if end <= start {
+        return
+    }
+    if marks.italic_count >= DIARY_LINE_MARKS {
+        marks.overflow = true
+        return
+    }
+    marks.italic[marks.italic_count] = TextRange.{.start = start, .end = end}
+    marks.italic_count += 1
+}
+
+DiaryMarkTone :: (marks: *DiaryLineMarks, start: s32, end: s32, tone: s32) {
+    if end <= start {
+        return
+    }
+    if marks.tone_count >= DIARY_LINE_MARKS {
+        marks.overflow = true
+        return
+    }
+    marks.tones[marks.tone_count] = DiaryTone.{.start = start, .end = end, .tone = tone}
+    marks.tone_count += 1
+}
+
+// Sorts ranges by start and joins those that overlap or touch, so nested
+// emphasis of one kind reads as one range.
+DiaryJoinRanges :: (ranges: []TextRange, count: s32) -> s32 {
+    for index: cast(s32)1..count - 1 {
+        value := ranges[index]
+        at := index
+        while at > 0 && ranges[at - 1].start > value.start {
+            ranges[at] = ranges[at - 1]
+            at -= 1
+        }
+        ranges[at] = value
+    }
+    joined: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if joined > 0 && ranges[index].start <= ranges[joined - 1].end {
+            if ranges[index].end > ranges[joined - 1].end {
+                ranges[joined - 1].end = ranges[index].end
+            }
+            continue
+        }
+        ranges[joined] = ranges[index]
+        joined += 1
+    }
+    return joined
+}
+
+// Sorts hidden markers by start. Markers never overlap; one that would is
+// shown instead.
+DiarySortHidden :: (ranges: []TextRange, count: s32) -> s32 {
+    for index: cast(s32)1..count - 1 {
+        value := ranges[index]
+        at := index
+        while at > 0 && ranges[at - 1].start > value.start {
+            ranges[at] = ranges[at - 1]
+            at -= 1
+        }
+        ranges[at] = value
+    }
+    kept: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if kept > 0 && ranges[index].start < ranges[kept - 1].end {
+            continue
+        }
+        ranges[kept] = ranges[index]
+        kept += 1
+    }
+    return kept
+}
+
+DiarySortTones :: (tones: []DiaryTone, count: s32) -> s32 {
+    for index: cast(s32)1..count - 1 {
+        value := tones[index]
+        at := index
+        while at > 0 && tones[at - 1].start > value.start {
+            tones[at] = tones[at - 1]
+            at -= 1
+        }
+        tones[at] = value
+    }
+    kept: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if kept > 0 && tones[index].start < tones[kept - 1].end {
+            continue
+        }
+        tones[kept] = tones[index]
+        kept += 1
+    }
+    return kept
+}
+
+// A byte escaped by an odd number of backslashes before it.
+DiaryEscaped :: (text: string, at: s32, from: s32) -> bool {
+    slashes: s32 = 0
+    cursor := at - 1
+    while cursor >= from && text[cursor] == cast(u8)92 {
+        slashes += 1
+        cursor -= 1
+    }
+    return slashes % 2 == 1
+}
+
+DiaryPunctuation :: (byte: u8) -> bool {
+    return (byte >= cast(u8)33 && byte <= cast(u8)47) || (byte >= cast(u8)58 && byte <= cast(u8)64) ||
+    (byte >= cast(u8)91 && byte <= cast(u8)96) || (byte >= cast(u8)123 && byte <= cast(u8)126)
+}
+
+// Links and inline images on text[from:to]. Destinations hold no spaces, as
+// CommonMark's plain destinations; titles and angle brackets stay text.
+DiaryFindLinks :: (text: string, from: s32, to: s32) {
+    diary_link_count = 0
+    at := from
+    while at < to && diary_link_count < DIARY_LINE_LINKS {
+        if text[at] != #char "[" || DiaryEscaped(text, at, from) {
+            at += 1
+            continue
+        }
+        image := at > from && text[at - 1] == #char "!" && !DiaryEscaped(text, at - 1, from)
+        close := at + 1
+        while close < to && text[close] != #char "]" && text[close] != #char "[" {
+            close += 1
+        }
+        if close >= to || text[close] != #char "]" || close + 1 >= to || text[close + 1] != #char "(" {
+            at += 1
+            continue
+        }
+        end := close + 2
+        while end < to && text[end] != #char ")" && !DiaryBlank(text[end]) {
+            end += 1
+        }
+        if end >= to || text[end] != #char ")" || end == close + 2 {
+            at += 1
+            continue
+        }
+        diary_links[diary_link_count] = DiaryLink.{.open = at, .text_end = close, .end = end + 1, .image = image}
+        diary_link_count += 1
+        at = end + 1
+    }
+}
+
+// Whether at lies inside a link or inline image found on the line. Emphasis
+// around a link treats it as one piece; its text pairs on its own.
+DiaryLinkSyntax :: (at: s32) -> bool {
+    for index: cast(s32)0..diary_link_count - 1 {
+        link := diary_links[index]
+        start := link.open
+        if link.image {
+            start -= 1
+        }
+        if at >= start && at < link.end {
+            return true
+        }
+    }
+    return false
+}
+
+// Emphasis on text[from:to] with CommonMark's flanking rules and its rule of
+// three, within one line. Matched markers hide away from the caret's line.
+DiaryEmphasis :: (marks: *DiaryLineMarks, text: string, from: s32, to: s32, active: bool) {
+    count: s32 = 0
+    at := from
+    while at < to {
+        byte := text[at]
+        if (byte != #char "*" && byte != #char "_") || DiaryEscaped(text, at, from) || DiaryLinkSyntax(at) {
+            at += 1
+            continue
+        }
+        end := at
+        while end < to && text[end] == byte && !DiaryLinkSyntax(end) {
+            end += 1
+        }
+        if count >= DIARY_LINE_RUNS {
+            marks.overflow = true
+            return
+        }
+        before: u8 = 32
+        if at > from {
+            before = text[at - 1]
+        }
+        after: u8 = 32
+        if end < to {
+            after = text[end]
+        }
+        before_space := DiaryBlank(before)
+        after_space := DiaryBlank(after)
+        left_flanking := !after_space &&
+            (!DiaryPunctuation(after) || before_space || DiaryPunctuation(before))
+        right_flanking := !before_space &&
+            (!DiaryPunctuation(before) || after_space || DiaryPunctuation(after))
+        run: DiaryRun
+        run.start = at
+        run.length = end - at
+        run.left = run.length
+        run.marker = byte
+        if byte == #char "*" {
+            run.can_open = left_flanking
+            run.can_close = right_flanking
+        } else {
+            run.can_open = left_flanking && (!right_flanking || DiaryPunctuation(before))
+            run.can_close = right_flanking && (!left_flanking || DiaryPunctuation(after))
+        }
+        diary_runs[count] = run
+        count += 1
+        at = end
+    }
+    for closer: cast(s32)0..count - 1 {
+        if !diary_runs[closer].can_close {
+            continue
+        }
+        while diary_runs[closer].left > 0 {
+            opener: s32 = -1
+            candidate := closer - 1
+            while candidate >= 0 {
+                run := diary_runs[candidate]
+                if !run.dead && run.can_open && run.left > 0 && run.marker == diary_runs[closer].marker {
+                    both := run.can_close || diary_runs[closer].can_open
+                    sum := run.length + diary_runs[closer].length
+                    three := both && sum % 3 == 0 &&
+                        !(run.length % 3 == 0 && diary_runs[closer].length % 3 == 0)
+                    if !three {
+                        opener = candidate
+                        break
+                    }
+                }
+                candidate -= 1
+            }
+            if opener < 0 {
+                break
+            }
+            // Openers between the pair can no longer match.
+            for between: opener + 1..closer - 1 {
+                diary_runs[between].dead = true
+            }
+            use: s32 = 1
+            if diary_runs[opener].left >= 2 && diary_runs[closer].left >= 2 {
+                use = 2
+            }
+            content_start := diary_runs[opener].start + diary_runs[opener].left
+            content_end := diary_runs[closer].start + diary_runs[closer].taken
+            if !active {
+                DiaryMarkHidden(marks, content_start - use, content_start)
+                DiaryMarkHidden(marks, content_end, content_end + use)
+            }
+            if use == 2 {
+                DiaryMarkStrong(marks, content_start, content_end)
+            } else {
+                DiaryMarkItalic(marks, content_start, content_end)
+            }
+            diary_runs[opener].left -= use
+            diary_runs[closer].left -= use
+            diary_runs[closer].taken += use
+        }
+        if diary_runs[closer].left > 0 && !diary_runs[closer].can_open {
+            diary_runs[closer].dead = true
+        }
+    }
+}
+
+// Links, then emphasis around and inside them, on text[from:to].
+DiaryInline :: (marks: *DiaryLineMarks, text: string, from: s32, to: s32, active: bool, quoted: bool) {
+    DiaryFindLinks(text, from, to)
+    links: [DIARY_LINE_LINKS]DiaryLink
+    link_count := diary_link_count
+    for index: cast(s32)0..link_count - 1 {
+        links[index] = diary_links[index]
+    }
+    DiaryEmphasis(marks, text, from, to, active)
+    for index: cast(s32)0..link_count - 1 {
+        link := links[index]
+        if link.image {
+            continue
+        }
+        if !active {
+            DiaryMarkHidden(marks, link.open, link.open + 1)
+            DiaryMarkHidden(marks, link.text_end, link.end)
+        }
+        if !quoted {
+            DiaryMarkTone(marks, link.open + 1, link.text_end, DIARY_TONE_LINK)
+        }
+        // Emphasis inside a link's text pairs only there.
+        diary_link_count = 0
+        DiaryEmphasis(marks, text, link.open + 1, link.text_end, active)
+    }
+}
+
+// A heading's level and where its text starts, or level 0.
+DiaryHeadingAt :: (text: string, start: s32, end: s32) -> DiaryHeading {
+    heading: DiaryHeading
+    at := start
+    while at < end && at - start < 3 && text[at] == cast(u8)32 {
+        at += 1
+    }
+    level: s32 = 0
+    while at < end && text[at] == #char "#" && level < 7 {
+        level += 1
+        at += 1
+    }
+    if level < 1 || level > 6 || (at < end && !DiaryBlank(text[at])) {
+        return heading
+    }
+    heading.level = level
+    heading.start = at
+    return heading
+}
+
+// Where a list item's marker ends (before its spaces), or -1.
+DiaryListMarkerEnd :: (text: string, start: s32, end: s32) -> s32 {
+    at := start
+    while at < end && DiaryBlank(text[at]) {
+        at += 1
+    }
+    if at >= end {
+        return -1
+    }
+    marker := text[at]
+    if marker == #char "-" || marker == #char "*" || marker == #char "+" {
+        at += 1
+    } else {
+        digits: s32 = 0
+        while at < end && text[at] >= cast(u8)48 && text[at] <= cast(u8)57 && digits < 10 {
+            at += 1
+            digits += 1
+        }
+        if digits < 1 || digits > 9 || at >= end || (text[at] != #char "." && text[at] != #char ")") {
+            return -1
+        }
+        at += 1
+    }
+    if at < end && !DiaryBlank(text[at]) {
+        return -1
+    }
+    return at
+}
+
+// Where a quote's text starts after `>` and one space, or -1.
+DiaryQuoteStart :: (text: string, start: s32, end: s32) -> s32 {
+    at := start
+    while at < end && at - start < 3 && text[at] == cast(u8)32 {
+        at += 1
+    }
+    if at >= end || text[at] != #char ">" {
+        return -1
+    }
+    at += 1
+    if at < end && DiaryBlank(text[at]) {
+        at += 1
+    }
+    return at
+}
+
+// A heading's closing `#` run with the spaces before it, hidden like its
+// opening marker: the start of that tail, or end when there is none.
+DiaryHeadingTail :: (text: string, from: s32, end: s32) -> s32 {
+    last := end
+    while last > from && DiaryBlank(text[last - 1]) {
+        last -= 1
+    }
+    hashes := last
+    while hashes > from && text[hashes - 1] == #char "#" {
+        hashes -= 1
+    }
+    if hashes == last {
+        return end
+    }
+    if hashes == from {
+        return from
+    }
+    if !DiaryBlank(text[hashes - 1]) {
+        return end
+    }
+    tail := hashes
+    while tail > from && DiaryBlank(text[tail - 1]) {
+        tail -= 1
+    }
+    return tail
+}
+
+DiaryPreviewAdd :: (preview: *DiaryPreview, marks: *DiaryLineMarks) -> bool {
+    marks.hidden_count = DiarySortHidden(marks.hidden[:], marks.hidden_count)
+    marks.strong_count = DiaryJoinRanges(marks.strong[:], marks.strong_count)
+    marks.italic_count = DiaryJoinRanges(marks.italic[:], marks.italic_count)
+    marks.tone_count = DiarySortTones(marks.tones[:], marks.tone_count)
+    if preview.hidden_count + marks.hidden_count > DIARY_PREVIEW_RANGES ||
+    preview.strong_count + marks.strong_count > DIARY_PREVIEW_RANGES ||
+    preview.italic_count + marks.italic_count > DIARY_PREVIEW_RANGES ||
+    preview.tone_count + marks.tone_count > DIARY_PREVIEW_TONES {
+        return false
+    }
+    for index: cast(s32)0..marks.hidden_count - 1 {
+        preview.hidden[preview.hidden_count] = marks.hidden[index]
+        preview.hidden_count += 1
+    }
+    for index: cast(s32)0..marks.strong_count - 1 {
+        preview.strong[preview.strong_count] = marks.strong[index]
+        preview.strong_count += 1
+    }
+    for index: cast(s32)0..marks.italic_count - 1 {
+        preview.italic[preview.italic_count] = marks.italic[index]
+        preview.italic_count += 1
+    }
+    for index: cast(s32)0..marks.tone_count - 1 {
+        preview.tones[preview.tone_count] = marks.tones[index]
+        preview.tone_count += 1
+    }
+    return true
+}
+
+// Builds the preview of text for the caret and selection between cursor and
+// anchor. While editing, the lines they touch show their Markdown as typed.
+DiaryPreviewScan :: (preview: *DiaryPreview, text: string, cursor: s32, anchor: s32, editing: bool) {
+    preview.hidden_count = 0
+    preview.strong_count = 0
+    preview.italic_count = 0
+    preview.tone_count = 0
+    preview.heading_count = 0
+    preview.photo_count = 0
+    preview.truncated = false
+    first := ifx cursor < anchor then cursor else anchor
+    last := ifx cursor < anchor then anchor else cursor
+    line: s32 = 0
+    count := cast(s32)text.count
+    while line <= count {
+        end := DiaryLineEnd(text, line)
+        active := editing && last >= line && first <= end
+        embed := DiaryEmbedAt(text, line)
+        if embed.valid {
+            if preview.photo_count >= DIARY_PREVIEW_PHOTOS ||
+            (!active && preview.hidden_count >= DIARY_PREVIEW_RANGES) {
+                preview.truncated = true
+                return
+            }
+            preview.photos[preview.photo_count] = DiaryPhotoBlock.{.embed = embed, .cover = !active}
+            preview.photo_count += 1
+            if !active && end > line {
+                preview.hidden[preview.hidden_count] = TextRange.{.start = line, .end = end}
+                preview.hidden_count += 1
+            }
+            line = end + 1
+            continue
+        }
+        diary_line = DiaryLineMarks.{}
+        content := line
+        quoted := false
+        heading := DiaryHeadingAt(text, line, end)
+        if heading.level > 0 {
+            if preview.heading_count >= DIARY_PREVIEW_HEADINGS {
+                preview.truncated = true
+                return
+            }
+            preview.headings[preview.heading_count] = DiaryHeading.{.start = line, .level = heading.level}
+            text_start := heading.start
+            while text_start < end && DiaryBlank(text[text_start]) {
+                text_start += 1
+            }
+            tail := DiaryHeadingTail(text, text_start, end)
+            if !active {
+                DiaryMarkHidden(*diary_line, line, text_start)
+                DiaryMarkHidden(*diary_line, tail, end)
+            }
+            DiaryMarkStrong(*diary_line, text_start, tail)
+            DiaryInline(*diary_line, text, text_start, tail, active, false)
+        } else {
+            quote := DiaryQuoteStart(text, line, end)
+            if quote >= 0 {
+                quoted = true
+                DiaryMarkTone(*diary_line, line, end, DIARY_TONE_MUTED)
+                content = quote
+            } else {
+                marker := DiaryListMarkerEnd(text, line, end)
+                if marker >= 0 {
+                    marker_start := line
+                    while DiaryBlank(text[marker_start]) {
+                        marker_start += 1
+                    }
+                    DiaryMarkTone(*diary_line, marker_start, marker, DIARY_TONE_MUTED)
+                    content = marker
+                }
+            }
+            DiaryInline(*diary_line, text, content, end, active, quoted)
+        }
+        if diary_line.overflow {
+            // The whole line shows as typed rather than half styled.
+            diary_line = DiaryLineMarks.{}
+        }
+        if !DiaryPreviewAdd(preview, *diary_line) {
+            preview.truncated = true
+            return
+        }
+        if heading.level > 0 {
+            preview.heading_count += 1
+        }
+        line = end + 1
+    }
+}

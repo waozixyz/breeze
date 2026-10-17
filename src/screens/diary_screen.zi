@@ -12,6 +12,10 @@
 #import, file "../cells/diary_store.zi";
 #import, file "../cells/diary_history.zi";
 #import, file "../cells/diary_spelling.zi";
+#import, file "../cells/diary_spelling_mask.zi";
+#import, file "../cells/diary_photos.zi";
+#import, file "../cells/media_store.zi";
+#import, file "../cells/node_apps.zi";
 #import "file_picker"
 #import "file_linux"
 #import, file "../platform/environment.zi";
@@ -26,6 +30,7 @@
 #import "button_widget"
 #import "control_props"
 #import "text"
+#import "text_buffer"
 #import "vec"
 #import "scroll_props"
 #import "scroll_widget"
@@ -34,6 +39,8 @@
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/locale.zi";
+#import, file "../app/app_style.zi";
+#import, file "../app/theme_catalog.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/module_host.zi";
@@ -77,8 +84,21 @@ diary_spelling_day: s32;
 diary_spelling_sent: string;
 diary_spelling_notice: string;
 diary_spelling_notice_until: float64;
+// The theme's colors, read again only when the theme changes.
+diary_theme_id: s32 = -1;
+diary_theme_dark: bool;
+diary_theme_colors: StyleColors;
 c :: #system_library "c";
 DiaryNow :: () -> float64 #foreign c "GetTime";
+
+DiaryThemeColors :: (theme_id: s32, dark: bool) -> StyleColors {
+    if theme_id != diary_theme_id || dark != diary_theme_dark {
+        diary_theme_colors = StyleColorsFor(ThemeCatalogLoad(theme_id, dark), dark)
+        diary_theme_id = theme_id
+        diary_theme_dark = dark
+    }
+    return diary_theme_colors
+}
 
 DiaryPump :: () {
     if !diary_pending {
@@ -155,6 +175,9 @@ app_diary_reset :: () {
     diary_focused = false
 }
 
+// A picked photo goes to the account's media library, the one Photos shows,
+// once by its hash and with its preview, then into the entry as an embed
+// linking to its place in the library, photos/YYYY/MM/DD/<sha256>.<type>.
 DiaryAcceptPhoto :: (path: string) {
     if path.count == 0 || diary_state.load_error || !diary_loaded ||
     diary_photo_owner != AppTextFromCString(storage_user_id_buffer(), 64) ||
@@ -163,14 +186,25 @@ DiaryAcceptPhoto :: (path: string) {
         diary_photo_error = true
         return
     }
-    filename := DiaryStoreAttach(path)
-    defer { PackageFree(filename) }
-    if filename.count == 0 { diary_photo_error = true; return }
-    at := path.count - 1
-    while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 { at -= 1 }
+    added := MediaImportFile(path)
+    item := MediaRead(TextFromBytes(added.hash[:64]))
+    if !added.succeeded || !item.valid {
+        diary_photo_error = true
+        return
+    }
+    destination := MediaPlace(item)
+    name := PackageText(TextUntilNul(item.name[:]), "")
+    defer {
+        PackageFree(destination)
+        PackageFree(name)
+    }
+    if destination.count == 0 {
+        diary_photo_error = true
+        return
+    }
     diary_state.action = DIARY_ATTACH
-    diary_state.attachment_file = filename
-    diary_state.attachment_name = path[at + 1:]
+    diary_state.attachment_file = destination
+    diary_state.attachment_name = name
     diary_state = DiaryRun(diary_state)
     diary_photo_error = !diary_state.succeeded
 }
@@ -178,15 +212,14 @@ DiaryAcceptPhoto :: (path: string) {
 DiaryPhotoPicker :: (app: *InnerBreeze) {
     if diary_photo_waiting {
         path: [4096]u8
-        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_DIARY_PHOTO, path[:])
+        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_MEDIA, path[:])
         if result == .AndroidPickerNone { return }
         diary_photo_waiting = false
         app.file_dialog_active = 0
         if result == .AndroidPickerSelected {
             selected := AppTextFromCString(*path[0], cast(s32)path.count)
             DiaryAcceptPhoto(selected)
-            // This is the Android picker's disposable compressed copy, never
-            // the original photo or the account's saved attachment.
+            // The picker's private copy; the library keeps its own file.
             if selected.count > 0 {
                 unused RemoveFile(selected)
             }
@@ -203,7 +236,7 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
     if !app_diary_save() { diary_photo_error = true; return }
     app.file_dialog_active = 1
     if AndroidPlatform() != 0 {
-        diary_photo_waiting = AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_DIARY_PHOTO, "image/*")
+        diary_photo_waiting = AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_MEDIA, "image/*")
         if !diary_photo_waiting { app.file_dialog_active = 0; diary_photo_error = true }
         return
     }
@@ -235,6 +268,7 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
         diary_ui.scroll = observed.scroll
         diary_ui.calendar_scroll = observed.calendar_scroll
         diary_ui.page_scroll = observed.page_scroll
+        diary_ui.photos_scroll = observed.photos_scroll
         diary_ui.save_at = observed.save_at
         diary_photo_requested = observed.photo_requested
         diary_undo_requested = observed.undo_requested
@@ -251,6 +285,17 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(text), .length = cast(usize)text.count}
         return 1
+    }
+    if name == "DiaryPhotoHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        asset := DiaryPhotoAsset(NodeAppText(arguments[0]))
+        result.* = NodeAppString(asset)
+        return 1
+    }
+    // The day's photos of the account's media library, read as Photos
+    // reads them.
+    if name == "MediaQueryHost" || name == "MediaItemHost" {
+        return NodeAppMediaCall(name, arguments, count, result)
     }
     return 0
 }
@@ -296,7 +341,10 @@ DiaryUndoRedo :: () {
 
 DiarySpelling :: () {
     if diary_spelling_requested && !DiarySpellingWaiting() && DiaryHistoryCurrent() {
-        notice := DiarySpellingStart(diary_state.text)
+        // Photo embeds stay on this device: their lines go empty.
+        masked := DiarySpellingMasked(diary_state.text)
+        notice := DiarySpellingStart(masked)
+        PackageFree(masked)
         if notice == "" {
             PackageFree(diary_spelling_sent)
             diary_spelling_sent = PackageText(diary_state.text, "")
@@ -333,11 +381,19 @@ DiarySpelling :: () {
         DiaryNotice("diary_spelling_error")
         return
     }
-    if result.text == diary_state.text {
+    // The embeds go back on their lines; a correction that moved lines
+    // cannot be matched to them and is refused.
+    corrected := DiarySpellingRestored(diary_state.text, result.text)
+    defer { PackageFree(corrected) }
+    if corrected.count == 0 && result.text.count > 0 {
+        DiaryNotice("diary_spelling_error")
+        return
+    }
+    if corrected == diary_state.text {
         DiaryNotice("diary_spelling_none")
         return
     }
-    DiaryShowText(result.text)
+    DiaryShowText(corrected)
     // The correction is one step, which undo reverts as a whole.
     DiaryHistoryObserve(*diary_history, diary_state.year, diary_state.month, diary_state.day,
         diary_state.text, DiaryNow(), false)
@@ -361,7 +417,9 @@ diary_screen_draw :: (app: *InnerBreeze) {
     diary_ui.font = AppFontSize()
     diary_ui.now = DiaryNow()
     diary_ui.photo_error = diary_photo_error
-    diary_ui.photo_format = DiaryImageFormat(DiaryStorePreview(diary_state.photo_file))
+    colors := DiaryThemeColors(app.theme_id, app.dark_mode != 0)
+    diary_ui.link_color = colors.link
+    diary_ui.muted_color = colors.text_muted
     diary_ui.photo_requested = false
     diary_ui.undo_requested = false
     diary_ui.redo_requested = false

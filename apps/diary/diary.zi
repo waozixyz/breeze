@@ -1,8 +1,15 @@
 // Date arithmetic and per-day documents moved from Harmony's original Diary.
 // File effects belong to the host; this bundle has no OS or database access.
+//
+// A day's document keeps Harmony's version 1:
+// {"version":1,"date":"YYYY-MM-DD","text":"...","photos":[...]}. The text is
+// the entry, in Markdown, and the only source of truth: its photos are embed
+// lines (diary_markdown.zi). "photos" lists the Diary files the text embeds,
+// for older versions, which show those photos below the entry.
 #import "json_scan"
 #import, file "diary_view.zi";
 #import, file "diary_date.zi";
+#import, file "diary_markdown.zi";
 #import "text"
 #import "vec"
 #import "byte_text_linux"
@@ -86,94 +93,87 @@ Document :: (message: DiaryMessage) -> string {
     BuilderPrint(*out, ",\"text\":")
     Json(*out, message.text)
     BuilderPrint(*out, ",\"photos\":")
-    photos := FieldAt(message.document, 0, "photos")
-    if photos >= 0 && ArrayCount(message.document, photos) >= 0 {
-        end := ValueEnd(message.document, photos, 0)
-        BuilderPrint(*out, "%", message.document[photos:end])
-    } else {
-        BuilderPrint(*out, "[]")
-    }
+    PhotoMirror(*out, message.text)
     BuilderPrint(*out, "}")
     return BuilderFinish(out)
 }
 
-SafePhoto :: (file: string) -> bool {
-    if file.count == 0 || file.count > 200 || file == "." || file == ".." {
-        return false
-    }
-    for byte: file {
-        if !((byte >= cast(u8)48 && byte <= cast(u8)57) ||
-            (byte >= cast(u8)97 && byte <= cast(u8)122) ||
-            byte == cast(u8)45 || byte == cast(u8)46) {
-            return false
+// The "photos" list older versions show: each Diary file the text embeds,
+// once, in the order the text first names it. Photos of the media library
+// are no Diary files; older versions show their embed lines as text.
+PhotoMirror :: (out: *Vec(u8), text: string) {
+    BuilderPrint(out, "[")
+    written: s32 = 0
+    embed := DiaryEmbedNext(text, 0)
+    while embed.valid {
+        file := DiaryEmbedTarget(text, embed)
+        first := !embed.library
+        earlier := DiaryEmbedNext(text, 0)
+        while first && earlier.valid && earlier.line_start < embed.line_start {
+            if !earlier.library && DiaryEmbedTarget(text, earlier) == file {
+                first = false
+            }
+            earlier = DiaryEmbedNext(text, earlier.line_end + 1)
         }
+        if first {
+            if written > 0 {
+                BuilderPrint(out, ",")
+            }
+            BuilderPrint(out, "{\"file\":")
+            Json(out, file)
+            BuilderPrint(out, ",\"name\":")
+            Json(out, DiaryEmbedAlt(text, embed))
+            BuilderPrint(out, "}")
+            written += 1
+        }
+        embed = DiaryEmbedNext(text, embed.line_end + 1)
     }
-    return true
+    BuilderPrint(out, "]")
 }
 
-PhotoSelection :: (message: DiaryMessage) -> DiaryMessage {
-    rows := FieldAt(message.document, 0, "photos")
-    message.photo_count = ArrayCount(message.document, rows)
-    if message.photo_count < 0 {
-        message.photo_count = 0
+// Photos an older version attached as Diary files and the text does not
+// embed yet, as embed lines after the text, in the document's order. Only
+// the text in memory changes: viewing a day writes nothing, and its first
+// real edit saves the embeds.
+Migrated :: (text: string, document: string) -> string {
+    rows := FieldAt(document, 0, "photos")
+    result := text
+    for index: cast(s32)0..ArrayCount(document, rows) - 1 {
+        row := ElementAt(document, rows, index)
+        file := Decode(document, FieldAt(document, row, "file"))
+        if DiaryEmbedReferences(result, file) {
+            continue
+        }
+        destination: Vec(u8)
+        BuilderPrint(*destination, "diary:%", file)
+        line := DiaryEmbedLine(BuilderFinish(destination),
+            Decode(document, FieldAt(document, row, "name")))
+        result = DiaryEmbedAppend(result, line)
     }
-    message.photo_file = ""
-    message.photo_name = ""
-    if message.photo_count == 0 {
-        message.photo_index = 0
-        return message
-    }
-    if message.photo_index < 0 || message.photo_index >= message.photo_count {
-        message.photo_index = 0
-    }
-    row := ElementAt(message.document, rows, message.photo_index)
-    message.photo_file = Decode(message.document, FieldAt(message.document, row, "file"))
-    message.photo_name = Decode(message.document, FieldAt(message.document, row, "name"))
-    return message
+    return result
 }
 
-PhotoChange :: (message: DiaryMessage, remove: bool) -> DiaryMessage {
+// Puts the photo the host named, a library photo it just added or a Diary
+// file, on its own line at the caret: one edit, saved at once. The caret
+// starts at the end of a day's entry, so without a click the photo follows
+// the text.
+AttachPhoto :: (message: DiaryMessage) -> DiaryMessage {
+    line := DiaryEmbedLine(message.attachment_file, message.attachment_name)
     if !OnOrBefore(Date.{message.year, message.month, message.day}, Today()) ||
-    message.load_error || (!remove && !SafePhoto(message.attachment_file)) {
+    message.load_error || !DiaryEmbedAt(line, 0).valid {
         message.succeeded = false
         return message
     }
-    rows := FieldAt(message.document, 0, "photos")
-    count := ArrayCount(message.document, rows)
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"photos\":[")
-    written: s32 = 0
-    for index: cast(s32)0..count - 1 {
-        if remove && index == message.photo_index {
-            continue
-        }
-        row := ElementAt(message.document, rows, index)
-        end := ValueEnd(message.document, row, 0)
-        if written > 0 { BuilderPrint(*out, ",") }
-        BuilderPrint(*out, "%", message.document[row:end])
-        written += 1
-    }
-    if !remove {
-        if written > 0 { BuilderPrint(*out, ",") }
-        BuilderPrint(*out, "{\"file\":")
-        Json(*out, message.attachment_file)
-        BuilderPrint(*out, ",\"name\":")
-        Json(*out, message.attachment_name)
-        BuilderPrint(*out, "}")
-        message.photo_index = written
-    }
-    BuilderPrint(*out, "]}")
-    previous := message
-    message.document = BuilderFinish(out)
-    message.saved = false
+    edit := DiaryEmbedInsertion(message.text, message.cursor, line, false)
+    message.action = DIARY_EDIT
+    message.edit_start = edit.start
+    message.edit_end = edit.end
+    message.replacement = edit.replacement
+    message = Apply(message)
+    message.replacement = ""
+    // An entry that cannot save keeps the photo and saves with its next edit.
     message = Save(message)
-    if !message.saved {
-        previous.succeeded = false
-        return previous
-    }
-    // Removing a reference keeps its private original bytes. A damaged entry
-    // or another imported document can still refer to that same photo.
-    return PhotoSelection(message)
+    return message
 }
 
 Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
@@ -187,10 +187,6 @@ Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
     message.day = date.day
     message.text = ""
     message.document = loaded.data
-    message.photo_index = 0
-    message.photo_count = 0
-    message.photo_file = ""
-    message.photo_name = ""
     message.cursor = 0
     message.anchor = 0
     message.load_error = !loaded.succeeded
@@ -214,13 +210,15 @@ Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
         row := ElementAt(loaded.data, rows, index)
         file := Decode(loaded.data, FieldAt(loaded.data, row, "file"))
         label := FieldAt(loaded.data, row, "name")
-        if !SafePhoto(file) || label < 0 || loaded.data[label] != cast(u8)34 {
+        if !DiaryFileNameValid(file) || label < 0 || loaded.data[label] != cast(u8)34 {
             message.load_error = true
             return message
         }
     }
-    message.text = Decode(loaded.data, text)
-    return PhotoSelection(message)
+    message.text = Migrated(Decode(loaded.data, text), loaded.data)
+    message.cursor = cast(s32)message.text.count
+    message.anchor = message.cursor
+    return message
 }
 
 Save :: (message: DiaryMessage) -> DiaryMessage {
@@ -255,7 +253,7 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
         return Save(message)
     }
     if message.action == DIARY_ATTACH {
-        return PhotoChange(message, false)
+        return AttachPhoto(message)
     }
     if message.action == DIARY_EDIT {
         if !OnOrBefore(Date.{message.year, message.month, message.day}, Today()) ||
@@ -276,19 +274,6 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
     }
     if message.action != DIARY_CONTROL {
         message.succeeded = false;
-        return message
-    }
-    if message.control == 29008 || message.control == 29009 {
-        if message.photo_count > 0 {
-            message.photo_index = (message.photo_index + message.photo_count +
-                (ifx message.control == 29008 then -1 else 1)) % message.photo_count
-        }
-        return PhotoSelection(message)
-    }
-    if message.control == 29010 {
-        if message.photo_count > 0 {
-            return PhotoChange(message, true)
-        }
         return message
     }
     if message.control == 29013 {

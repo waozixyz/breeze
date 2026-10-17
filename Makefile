@@ -3240,14 +3240,17 @@ lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 
 test: lumi-connection-test
 
-.PHONY: diary-spelling-test diary-history-test
+.PHONY: diary-spelling-test diary-history-test diary-markdown-test
 diary-spelling-test: $(ZIRAN_BIN) $(LIBOQS_A) | build-laws
 	@sh tests/diary_spelling_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 diary-history-test: $(ZI2C_BIN)
 	@sh tests/diary_history_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-test: diary-spelling-test diary-history-test
+diary-markdown-test: $(ZI2C_BIN) $(ZIRAN_BIN)
+	@sh tests/diary_markdown_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+test: diary-spelling-test diary-history-test diary-markdown-test
 
 # Lumi reports name the device, system and version (no identifiers).
 .PHONY: device-info-test

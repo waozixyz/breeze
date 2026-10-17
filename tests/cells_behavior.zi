@@ -246,8 +246,13 @@ CheckDiary :: () {
     loaded = DiaryRun(loaded)
     Expect(loaded.succeeded && !loaded.calendar && loaded.day == 29, 88)
     Expect(!DiaryStoreSave("../outside.json", "invalid"), 89)
-    Expect(DiaryStoreSave("2024-03-01.json", "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}"), 90)
+    older := "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}"
+    Expect(DiaryStoreSave("2024-03-01.json", older), 90)
+    // An older entry's photo is an embed after its text. Viewing the day
+    // writes nothing.
     photo := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 1})
+    Expect(photo.saved && photo.text == "Before\n\n![Family](diary:photo.png)" &&
+        photo.cursor == cast(s32)photo.text.count && DiaryStoreRead("2024-03-01.json").data == older, 460)
     photo.action = DIARY_EDIT
     photo.edit_start = 6
     photo.edit_end = 6
@@ -255,29 +260,55 @@ CheckDiary :: () {
     photo = DiaryRun(photo)
     photo.action = DIARY_SAVE
     photo = DiaryRun(photo)
-    Expect(photo.saved && photo.document == "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before after\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}", 91)
-    Expect(photo.photo_count == 1 && photo.photo_name == "Family", 100)
+    // Saving keeps the photo for older versions in "photos", derived from
+    // the embeds.
+    Expect(photo.saved && photo.document == "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before after\\n\\n![Family](diary:photo.png)\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}", 91)
+    // A photo added to the media library is embedded by its place there, on
+    // its own line at the caret, and saved at once. Older versions do not
+    // list it: it is no Diary file.
     photo.action = DIARY_ATTACH
-    photo.attachment_file = "photo-two.bin"
+    photo.cursor = 12
+    photo.anchor = 12
+    photo.attachment_file = "photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png"
     photo.attachment_name = "A second photo 🌿"
     photo = DiaryRun(photo)
-    Expect(photo.succeeded && photo.saved && photo.photo_count == 2 &&
-        photo.photo_index == 1 && photo.photo_name == "A second photo 🌿", 101)
-    photo.action = DIARY_CONTROL
-    photo.control = 29008
+    Expect(photo.succeeded && photo.saved &&
+        photo.text == "Before after\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)\n\n![Family](diary:photo.png)" &&
+        photo.document == "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before after\\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)\\n\\n![Family](diary:photo.png)\",\"photos\":[{\"file\":\"photo.png\",\"name\":\"Family\"}]}", 461)
+    // Deleting an embed's line takes the photo out of the entry everywhere.
+    photo.action = DIARY_EDIT
+    photo.edit_start = 12 + 1 + 110
+    photo.edit_end = cast(s32)photo.text.count
+    photo.replacement = ""
     photo = DiaryRun(photo)
-    Expect(photo.photo_file == "photo.png" && photo.photo_index == 0, 102)
-    photo.control = 29010
+    photo.action = DIARY_SAVE
     photo = DiaryRun(photo)
-    Expect(photo.succeeded && photo.saved && photo.photo_count == 1 &&
-        photo.photo_file == "photo-two.bin" && photo.text == "Before after", 103)
+    Expect(photo.saved && photo.text == "Before after\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)" &&
+        photo.document == "{\"version\":1,\"date\":\"2024-03-01\",\"text\":\"Before after\\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)\",\"photos\":[]}", 463)
     photo.action = DIARY_ATTACH
-    photo.attachment_file = "../outside.bin"
+    photo.attachment_file = "diary:../outside.bin"
     photo.attachment_name = "Invalid"
     photo = DiaryRun(photo)
-    Expect(!photo.succeeded && photo.photo_count == 1, 104)
+    Expect(!photo.succeeded && photo.text == "Before after\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)", 464)
     photo = DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 1})
-    Expect(photo.photo_count == 1 && photo.photo_name == "A second photo 🌿", 105)
+    Expect(photo.text == "Before after\n![A second photo 🌿](photos/2024/03/01/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.png)", 465)
+    // Older photo lists: brackets in names become spaces, a file listed
+    // twice is embedded once, and one the text embeds already is not added
+    // again. A photo an older version removed while its embed stayed comes
+    // back in "photos" on the next save.
+    Expect(DiaryStoreSave("2024-03-03.json", "{\"version\":1,\"date\":\"2024-03-03\",\"text\":\"x\\n![b](diary:b.png)\",\"photos\":[{\"file\":\"a.png\",\"name\":\"Fam[ily]\"},{\"file\":\"b.png\",\"name\":\"b\"},{\"file\":\"a.png\",\"name\":\"again\"}]}"), 466)
+    listed := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 3})
+    Expect(listed.text == "x\n![b](diary:b.png)\n![Fam ily ](diary:a.png)", 467)
+    Expect(DiaryStoreSave("2024-03-04.json", "{\"version\":1,\"date\":\"2024-03-04\",\"text\":\"![p](diary:p.png)\",\"photos\":[]}"), 468)
+    kept := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 4})
+    kept.action = DIARY_EDIT
+    kept.edit_start = 0
+    kept.edit_end = 0
+    kept.replacement = "Walk\n"
+    kept = DiaryRun(kept)
+    kept.action = DIARY_SAVE
+    kept = DiaryRun(kept)
+    Expect(kept.saved && kept.document == "{\"version\":1,\"date\":\"2024-03-04\",\"text\":\"Walk\\n![p](diary:p.png)\",\"photos\":[{\"file\":\"p.png\",\"name\":\"p\"}]}", 469)
     CheckDiaryPhotoOnFullNode()
     CheckDiaryPhotoCopies()
     Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)

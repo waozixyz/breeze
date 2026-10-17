@@ -19,9 +19,13 @@
 #import "byte_text_linux"
 #import "scroll_props"
 #import "scroll_widget"
+#import "press_props"
+#import "press_widget"
 #import "tree"
+#import, file "diary_markdown.zi";
 #import, file "../../src/cells/diary_types.zi";
 #import, file "../../src/cells/diary_ui_types.zi";
+#import, file "../../src/cells/node_app_types.zi";
 
 using ImageFit;
 using TextAlign;
@@ -32,6 +36,12 @@ host_api :: #system_library "host_api";
 ReadDiaryUiHost :: () -> DiaryUiFrame #foreign host_api;
 WriteDiaryUiHost :: (frame: DiaryUiFrame) #foreign host_api;
 DiaryLocaleHost :: (key: string) -> string #foreign host_api;
+// The asset that draws an embed's photo, from what the embed links to, or ""
+// while the photo is not on this device.
+DiaryPhotoHost :: (destination: string) -> string #foreign host_api;
+// The account's media library, which Photos shows too: one day's photos.
+MediaQueryHost :: (day: string, trashed: bool) -> s32 #foreign host_api;
+MediaItemHost :: (index: s32) -> MediaEntry #foreign host_api;
 state: DiaryMessage;
 frame: DiaryUiFrame;
 pending: bool;
@@ -53,51 +63,183 @@ DiarySaveDue :: () -> bool {
     return frame.now >= frame.save_at
 }
 
-// Markdown bold reads as bold text. Its ** markers stay in the entry but are
-// hidden, except on the lines holding the caret or a selection, where they
-// can be edited directly.
-DIARY_EMPHASIS_MAX :: 256
-emphasis_hidden: [DIARY_EMPHASIS_MAX * 2]TextRange;
-emphasis_strong: [DIARY_EMPHASIS_MAX]TextRange;
-emphasis_hidden_count: s32;
-emphasis_strong_count: s32;
+// The entry previews its Markdown (diary_markdown.zi): away from the lines
+// holding the caret or a selection, markers are hidden, emphasis is bold or
+// slanted, headings are larger, links and list and quote marks take their
+// colors, and a photo's embed line shows the photo in its place. On the
+// caret's line the Markdown shows as typed, with the photo under it.
+DIARY_HEADING_SCALES: [6]float32 = .[1.6, 1.4, 1.25, 1.1, 1.0, 1.0];
+editor_preview: DiaryPreview;
+editor_blocks: [DIARY_PREVIEW_PHOTOS]TextAreaBlock;
+editor_lines: [DIARY_PREVIEW_HEADINGS]TextAreaLine;
+editor_colors: [DIARY_PREVIEW_TONES]TextAreaColorSpan;
 
-DiaryEmphasis :: (value: string, cursor: s32, anchor: s32, editing: bool) {
-    emphasis_hidden_count = 0
-    emphasis_strong_count = 0
-    first := ifx cursor < anchor then cursor else anchor
-    last := ifx cursor < anchor then anchor else cursor
-    line: s32 = 0
-    while line <= cast(s32)value.count && emphasis_strong_count < DIARY_EMPHASIS_MAX {
-        end := line
-        while end < cast(s32)value.count && value[end] != cast(u8)10 { end += 1 }
-        active := editing && last >= line && first <= end
-        at := line
-        while at + 1 < end && emphasis_strong_count < DIARY_EMPHASIS_MAX {
-            if value[at] != cast(u8)42 || value[at + 1] != cast(u8)42 {
-                at += 1
-                continue
-            }
-            close := at + 2
-            while close + 1 < end && (value[close] != cast(u8)42 || value[close + 1] != cast(u8)42) {
-                close += 1
-            }
-            if close + 1 >= end {
-                break
-            }
-            if close > at + 2 {
-                emphasis_strong[emphasis_strong_count] = TextRange.{.start = at + 2, .end = close}
-                emphasis_strong_count += 1
-                if !active {
-                    emphasis_hidden[emphasis_hidden_count] = TextRange.{.start = at, .end = at + 2}
-                    emphasis_hidden[emphasis_hidden_count + 1] = TextRange.{.start = close, .end = close + 2}
-                    emphasis_hidden_count += 2
-                }
-            }
-            at = close + 2
-        }
-        line = end + 1
+// A copy the view owns of text a host call answered. The host answers in its
+// own buffers, which its next call may overwrite.
+DiaryKept :: (value: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// A photo's height in the entry: three quarters of its width, within limits
+// that keep a few lines of text in view on a phone.
+DiaryPhotoHeight :: (width: float32) -> s32 {
+    height := cast(s32)(width * 0.75)
+    if height > Scale(360) {
+        height = Scale(360)
     }
+    if height < Scale(120) {
+        height = Scale(120)
+    }
+    return height
+}
+
+DiaryEditorStyle :: (area: *TextAreaProps, text: string, editing: bool) {
+    DiaryPreviewScan(*editor_preview, text, area.cursor, area.anchor, editing)
+    area.hidden = editor_preview.hidden[:editor_preview.hidden_count]
+    area.strong = editor_preview.strong[:editor_preview.strong_count]
+    area.italic = editor_preview.italic[:editor_preview.italic_count]
+    colors: s32 = 0
+    for index: cast(s32)0..editor_preview.tone_count - 1 {
+        tone := editor_preview.tones[index]
+        color := ifx tone.tone == DIARY_TONE_LINK then frame.link_color else frame.muted_color
+        if color == cast(u32)0 {
+            continue
+        }
+        editor_colors[colors] = TextAreaColorSpan.{.start = tone.start, .end = tone.end, .color = color}
+        colors += 1
+    }
+    area.colors = editor_colors[:colors]
+    lines: s32 = 0
+    for index: cast(s32)0..editor_preview.heading_count - 1 {
+        heading := editor_preview.headings[index]
+        scale := DIARY_HEADING_SCALES[heading.level - 1]
+        if scale <= 1.0 {
+            continue
+        }
+        editor_lines[lines] = TextAreaLine.{.start = heading.start, .scale = scale}
+        lines += 1
+    }
+    area.lines = editor_lines[:lines]
+    height := DiaryPhotoHeight(area.bounds.width)
+    unavailable := DiaryLocaleHost("diary_photo_unavailable")
+    for index: cast(s32)0..editor_preview.photo_count - 1 {
+        block := editor_preview.photos[index]
+        embed := block.embed
+        editor_blocks[index] = TextAreaBlock.{.start = embed.line_start, .height = height,
+            .cover = block.cover, .image = DiaryKept(DiaryPhotoHost(DiaryEmbedDestination(text, embed))),
+            .label = unavailable}
+    }
+    area.blocks = editor_blocks[:editor_preview.photo_count]
+}
+
+// Under the entry, every photo of the day in one row that scrolls sideways:
+// the media library's photos of that day, newest first, then the entry's
+// other photos in its order. A tap puts a photo's embed at the caret.
+DIARY_DAY_PHOTOS :: 64
+DIARY_TILE :: 88
+
+DiaryDayPhoto :: struct {
+    // What an embed of the photo links to.
+    destination: string
+    name: string
+    // Its preview, or "" while the photo is not on this device.
+    asset: string
+}
+
+day_photos: [DIARY_DAY_PHOTOS]DiaryDayPhoto;
+day_photo_count: s32;
+
+DiaryDayPhotoKnown :: (destination: string) -> bool {
+    for index: cast(s32)0..day_photo_count - 1 {
+        if day_photos[index].destination == destination {
+            return true
+        }
+    }
+    return false
+}
+
+DiaryDayPhotoAdd :: (destination: string, name: string) {
+    if destination.count == 0 || day_photo_count >= DIARY_DAY_PHOTOS ||
+    DiaryDayPhotoKnown(destination) {
+        return
+    }
+    day_photos[day_photo_count] = DiaryDayPhoto.{.destination = destination,
+        .name = DiaryKept(name), .asset = DiaryKept(DiaryPhotoHost(destination))}
+    day_photo_count += 1
+}
+
+DiaryDayPhotos :: (text: string) {
+    day_photo_count = 0
+    if state.load_error || state.year <= 0 {
+        return
+    }
+    count := MediaQueryHost(ISO(Date.{state.year, state.month, state.day}), false)
+    for index: cast(s32)0..count - 1 {
+        if day_photo_count >= DIARY_DAY_PHOTOS {
+            break
+        }
+        entry := MediaItemHost(index)
+        DiaryDayPhotoAdd(DiaryLibraryPath(entry.day, entry.hash, entry.format), entry.name)
+    }
+    embed := DiaryEmbedNext(text, 0)
+    while embed.valid && day_photo_count < DIARY_DAY_PHOTOS {
+        DiaryDayPhotoAdd(DiaryEmbedDestination(text, embed), DiaryEmbedAlt(text, embed))
+        embed = DiaryEmbedNext(text, embed.line_end + 1)
+    }
+}
+
+// The room the photos take under the entry, or 0 on a day without photos.
+DiaryDayPhotosHeight :: () -> s32 {
+    if day_photo_count == 0 {
+        return 0
+    }
+    return Scale(DIARY_TILE) + Scale(12)
+}
+
+// Puts a photo's embed on its own line at the caret: one edit, saved at once.
+DiaryInsertPhoto :: (destination: string, name: string) {
+    line := DiaryEmbedLine(destination, name)
+    edit := DiaryEmbedInsertion(state.text, state.cursor, line, false)
+    state.action = DIARY_EDIT
+    state.edit_start = edit.start
+    state.edit_end = edit.end
+    state.replacement = edit.replacement
+    pending = true
+    frame.save_at = frame.now
+}
+
+DiaryDayPhotoStrip :: (left: float32, top: float32, width: float32, editable: bool) {
+    tile := cast(float32)Scale(DIARY_TILE)
+    gap := cast(float32)Scale(8)
+    content := cast(s32)(cast(float32)day_photo_count * (tile + gap) - gap)
+    strip := Scroll(frame.session, ScrollProps.{.key = cast(u64)290302, .horizontal = true,
+            .bounds = Rectangle.{left, top, width, tile}, .content_width = content,
+            .content_height = cast(s32)tile, .scroll_offset = frame.photos_scroll})
+    frame.photos_scroll = strip.scroll_offset
+    if !strip.opened {
+        return
+    }
+    for index: cast(s32)0..day_photo_count - 1 {
+        photo := day_photos[index]
+        bounds := Rectangle.{strip.content.x + cast(float32)index * (tile + gap),
+            strip.content.y, tile, tile}
+        Box(frame.session, BoxProps.{.key = cast(u64)(292000 + index), .bounds = bounds,
+                .fill = Color.{156, 156, 156, 36}, .radius = cast(float32)Scale(6)})
+        if photo.asset.count > 0 {
+            Image(frame.session, ImageProps.{.key = cast(u64)(292100 + index),
+                    .asset_path = photo.asset, .alt_text = photo.name, .bounds = bounds,
+                    .fit = cast(ImageFit)ImageFitCover, .smooth = true})
+        }
+        press := Press(frame.session, PressProps.{.key = cast(u64)(292200 + index),
+                .id = 292200 + index, .bounds = bounds, .label = photo.name, .now = frame.now,
+                .disabled = !editable})
+        if press.clicked && !pending {
+            DiaryInsertPhoto(photo.destination, photo.name)
+        }
+    }
+    End(frame.session)
 }
 
 DateTitle :: (year: s32, month: s32, day: s32) -> string {
@@ -176,6 +318,7 @@ DiaryAction :: ( id: s32, label: string, bounds: Rectangle, enabled: bool = true
         state.control = id
         pending = true
         frame.scroll = 0
+        frame.photos_scroll = 0
     }
 }
 
@@ -286,18 +429,20 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         End(frame.session)
         return FinishView()
     }
-    // The editor reaches the bottom; a notice takes room below it only while
-    // it is shown.
+    // The editor reaches the bottom; a notice and the day's photos take room
+    // below it only while they are shown.
     notice := frame.photo_error || state.load_error || frame.spelling_notice != ""
     notice_room := ifx notice then Scale(60) else 0
-    editor_height := cast(s32)content_height - notice_room
+    DiaryDayPhotos(state.text)
+    photos_room := DiaryDayPhotosHeight()
+    editor_height := cast(s32)content_height - notice_room - photos_room
     if editor_height < Scale(120) {
         editor_height = Scale(120)
     }
     page := Scroll(frame.session, ScrollProps.{.key = cast(u64)290301,
             .bounds = Rectangle.{left, content, width, content_height},
-            .content_height = editor_height + notice_room +
-            (ifx state.photo_count > 0 then Scale(392) else 0), .scroll_offset = frame.page_scroll})
+            .content_height = editor_height + notice_room + photos_room,
+            .scroll_offset = frame.page_scroll})
     frame.page_scroll = page.scroll_offset
     if !page.opened {
         return FinishView()
@@ -320,9 +465,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     area.max_bytes = 2147483646
     area.max_codepoints = 2147483646
     area.input = frame.input
-    DiaryEmphasis(state.text, state.cursor, state.anchor, frame.focused && !area.read_only)
-    area.hidden = emphasis_hidden[:emphasis_hidden_count]
-    area.strong = emphasis_strong[:emphasis_strong_count]
+    DiaryEditorStyle(*area, state.text, frame.focused && !area.read_only)
     edited := TextArea(frame.session, area)
     state.cursor = edited.cursor
     state.anchor = edited.anchor
@@ -354,39 +497,9 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
                     area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
                 .text = DiaryLocaleHost(status), .font = frame.font})
     }
-    if state.photo_count > 0 {
-        photo_top := area.bounds.y + area.bounds.height + cast(float32)(notice_room + Scale(12))
-        photo_bounds := Rectangle.{left, photo_top, width, cast(float32)Scale(240)}
-        if frame.photo_format.count > 0 {
-            path: Vec(u8)
-            BuilderPrint(*path, "diary/photos/%.%", state.photo_file, frame.photo_format)
-            image := BuilderFinish(path)
-            Image(frame.session, ImageProps.{.asset_path = image,
-                    .alt_text = state.photo_name,
-                    .bounds = photo_bounds,
-                    .fit = cast(ImageFit)ImageFitContain})
-        } else {
-            // The entry names a photo whose bytes are not on this device, for
-            // example when a sync node keeps photos off. The entry still works.
-            Box(frame.session, BoxProps.{.key = cast(u64)29011, .bounds = photo_bounds,
-                    .fill = Color.{156, 156, 156, 36}, .radius = cast(float32)Scale(12)})
-            Text(frame.session, TextProps.{.key = cast(u64)29012,
-                    .text = DiaryLocaleHost("diary_photo_unavailable"),
-                    .bounds = Rectangle.{left + cast(float32)Scale(16), photo_top,
-                        width - cast(float32)Scale(32), cast(float32)Scale(240)},
-                    .font = frame.font, .align = cast(TextAlign)TextAlignCenter,
-                    .vertical_align = cast(TextAlign)TextAlignCenter})
-        }
-        Text(frame.session, TextProps.{.text = state.photo_name,
-                .bounds = Rectangle.{left, photo_top + cast(float32)Scale(248), width,
-                    cast(float32)Scale(32)}, .font = frame.font})
-        DiaryAction(29008, "‹", Rectangle.{left, photo_top + cast(float32)Scale(288),
-                part, cast(float32)Scale(44)})
-        DiaryAction(29010, DiaryLocaleHost("diary_remove_photo"),
-            Rectangle.{left + part + cast(float32)Scale(6), photo_top + cast(float32)Scale(288),
-                part, cast(float32)Scale(44)})
-        DiaryAction(29009, "›", Rectangle.{left + 2.0 * (part + cast(float32)Scale(6)),
-                photo_top + cast(float32)Scale(288), part, cast(float32)Scale(44)})
+    if photos_room > 0 {
+        DiaryDayPhotoStrip(left, area.bounds.y + area.bounds.height +
+            cast(float32)(notice_room + Scale(12)), width, editable && !frame.spelling_busy)
     }
     End(frame.session)
     return FinishView()

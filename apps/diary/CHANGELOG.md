@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0] - 2026-10-17
+
+### Changed
+- An entry is Markdown. Headings, **bold**, *italic*, links, lists and quotes show styled, and their marks appear on the line you are editing.
+- Photos sit inside the entry, where you add them. Each one is saved to your photo library, the one Photos shows, under the day it was taken, and the entry links to it there. Delete a photo's line to take it out of the entry.
+- Each day's photos scroll sideways under its entry. Tap one to put it in the entry at the cursor.
+- Photos from older entries appear inside the entry, after its text.
+
 ## [1.1.12] - 2026-10-17
 
 - Maintenance release for Inner Breeze 2.1.35.

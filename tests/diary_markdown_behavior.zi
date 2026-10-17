@@ -1,0 +1,281 @@
+// Diary's Markdown: photo embeds and their places in the media library,
+// inserted photos, the editor's preview, and the spelling check's masking.
+#import, file "../apps/diary/diary_markdown.zi";
+#import, file "../src/cells/diary_spelling_mask.zi";
+#import "text_props"
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+HASH :: "9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd"
+PLACE :: "photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg"
+
+preview: DiaryPreview;
+
+Applied :: (text: string, edit: DiaryEmbedEdit) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", text[:edit.start])
+    BuilderPrint(*out, "%", edit.replacement)
+    BuilderPrint(*out, "%", text[edit.end:])
+    return BuilderFinish(out)
+}
+
+RangeIs :: (range: TextRange, start: s32, end: s32) -> bool {
+    return range.start == start && range.end == end
+}
+
+Hidden :: (index: s32, start: s32, end: s32) -> bool {
+    return index < preview.hidden_count && RangeIs(preview.hidden[index], start, end)
+}
+
+Strong :: (index: s32, start: s32, end: s32) -> bool {
+    return index < preview.strong_count && RangeIs(preview.strong[index], start, end)
+}
+
+Italic :: (index: s32, start: s32, end: s32) -> bool {
+    return index < preview.italic_count && RangeIs(preview.italic[index], start, end)
+}
+
+Tone :: (index: s32, start: s32, end: s32, tone: s32) -> bool {
+    return index < preview.tone_count && preview.tones[index].start == start &&
+    preview.tones[index].end == end && preview.tones[index].tone == tone
+}
+
+Preview :: (text: string) {
+    DiaryPreviewScan(*preview, text, 0, 0, false)
+}
+
+// Every list must satisfy Kryon's sorted, disjoint, non-empty rule.
+Ordered :: (ranges: []TextRange, count: s32) -> bool {
+    previous: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if ranges[index].start < previous || ranges[index].end <= ranges[index].start {
+            return false
+        }
+        previous = ranges[index].end
+    }
+    return true
+}
+
+PreviewOrdered :: () -> bool {
+    return Ordered(preview.hidden[:], preview.hidden_count) &&
+    Ordered(preview.strong[:], preview.strong_count) &&
+    Ordered(preview.italic[:], preview.italic_count)
+}
+
+CheckEmbeds :: () -> s32 {
+    embed := DiaryEmbedAt("![IMG_2041.jpg](diary:photo-20261017081500-1.bin)", 0)
+    if !embed.valid || embed.library { return 1 }
+    if DiaryEmbedTarget("![IMG_2041.jpg](diary:photo-20261017081500-1.bin)", embed) !=
+    "photo-20261017081500-1.bin" { return 2 }
+    if DiaryEmbedAlt("![IMG_2041.jpg](diary:photo-20261017081500-1.bin)", embed) != "IMG_2041.jpg" { return 3 }
+    spaced := "  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg) \r"
+    embed = DiaryEmbedAt(spaced, 0)
+    if !embed.valid || !embed.library || DiaryEmbedTarget(spaced, embed) != PLACE ||
+    DiaryEmbedDestination(spaced, embed) != PLACE ||
+    embed.alt_start != embed.alt_end { return 4 }
+    if DiaryEmbedAt("![a](photos/2026/10/17/9F2C4E1A7B3D5F60718293A4B5C6D7E8F90123456789ABCDEF0123456789ABCD.jpg)", 0).valid { return 5 }
+    if DiaryEmbedAt("![a](diary:../outside)", 0).valid { return 6 }
+    if DiaryEmbedAt("look ![a](diary:x.bin)", 0).valid { return 7 }
+    if DiaryEmbedAt("![a[b]](diary:x.bin)", 0).valid { return 8 }
+    if DiaryEmbedAt("![a](https://example.com/x.png)", 0).valid { return 9 }
+    if DiaryEmbedAt("![a](diary:x.bin) more", 0).valid { return 10 }
+    if DiaryEmbedAt("![a](diary:)", 0).valid { return 11 }
+    if DiaryEmbedAt("![a](photos/2026/10/17/abc.jpg)", 0).valid { return 12 }
+    // A place needs a real month and day, a known type and nothing more.
+    if DiaryEmbedAt("![a](photos/2026/13/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)", 0).valid { return 120 }
+    if DiaryEmbedAt("![a](photos/2026/10/00/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)", 0).valid { return 121 }
+    if DiaryEmbedAt("![a](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.tif)", 0).valid { return 122 }
+    if DiaryEmbedAt("![a](photos/2026-10-17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)", 0).valid { return 123 }
+    if DiaryEmbedAt("![a](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg/x)", 0).valid { return 124 }
+    if DiaryEmbedAt("![a](photos:9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd)", 0).valid { return 125 }
+    if !DiaryEmbedAt("![a](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.webp)", 0).valid { return 126 }
+    if DiaryEmbedDestination("![a](diary:x.bin)", DiaryEmbedAt("![a](diary:x.bin)", 0)) != "diary:x.bin" { return 127 }
+    if DiaryLibraryPath("2026-10-17", HASH, "jpg") != PLACE { return 128 }
+    if DiaryLibraryPath("2026-10-17", HASH, "bmp") != "" || DiaryLibraryPath("17.10.2026", HASH, "jpg") != "" { return 129 }
+    // Brackets that are not the alt's own still make it plain text.
+    if !DiaryEmbedAt("![(a) b](diary:x.bin)", 0).valid { return 13 }
+
+    text := "Morning.\n![one](diary:a.bin)\nmiddle\n![two](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)\n"
+    first := DiaryEmbedNext(text, 0)
+    if !first.valid || first.line_start != 9 || DiaryEmbedTarget(text, first) != "a.bin" { return 14 }
+    second := DiaryEmbedNext(text, first.line_end + 1)
+    if !second.valid || !second.library { return 15 }
+    if DiaryEmbedNext(text, second.line_end + 1).valid { return 16 }
+    if !DiaryEmbedReferences(text, "a.bin") || DiaryEmbedReferences(text, "b.bin") { return 17 }
+    // A library photo never counts as a Diary file of the same name.
+    if DiaryEmbedReferences(text, HASH) || DiaryEmbedReferences(text, PLACE) { return 18 }
+    if DiaryEmbedNext("", 0).valid { return 19 }
+    return 0
+}
+
+CheckLines :: () -> s32 {
+    if DiaryEmbedLine("diary:x.bin", "Fam[ily]\n🌿") != "![Fam ily  🌿](diary:x.bin)" { return 30 }
+    if DiaryEmbedLine(PLACE, "") != "![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)" { return 31 }
+    long: Vec(u8)
+    for index: cast(s32)1..199 {
+        BuilderPrint(*long, "a")
+    }
+    BuilderPrint(*long, "🌿tail")
+    line := DiaryEmbedLine("diary:x.bin", BuilderFinish(long))
+    embed := DiaryEmbedAt(line, 0)
+    // 199 letters fit; the four-byte leaf would pass 200 bytes.
+    if !embed.valid || embed.alt_end - embed.alt_start != 199 { return 32 }
+    // An invalid byte becomes a space and the line still parses.
+    broken: [3]u8 = .[cast(u8)97, cast(u8)200, cast(u8)98]
+    if DiaryEmbedLine("diary:x.bin", TextFromBytes(broken[:])) != "![a b](diary:x.bin)" { return 33 }
+
+    embed_line := "![p](diary:p.bin)"
+    if DiaryEmbedAppend("", embed_line) != embed_line { return 34 }
+    if DiaryEmbedAppend("Hello", embed_line) != "Hello\n\n![p](diary:p.bin)" { return 35 }
+    if DiaryEmbedAppend("Hello\n", embed_line) != "Hello\n\n![p](diary:p.bin)" { return 36 }
+    if DiaryEmbedAppend("Hello\n\n", embed_line) != "Hello\n\n![p](diary:p.bin)" { return 37 }
+    if DiaryEmbedAppend("Hello\n\n![o](diary:o.bin)", embed_line) !=
+    "Hello\n\n![o](diary:o.bin)\n![p](diary:p.bin)" { return 38 }
+    if DiaryEmbedAppend("![o](diary:o.bin)\n", embed_line) != "![o](diary:o.bin)\n![p](diary:p.bin)" { return 39 }
+    return 0
+}
+
+CheckInsertion :: () -> s32 {
+    line := "![p](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)"
+    edit := DiaryEmbedInsertion("", 0, line, false)
+    applied := Applied("", edit)
+    if applied.count != line.count + 1 || edit.cursor != cast(s32)applied.count { return 50 }
+    // At a caret inside a line the line splits around the photo.
+    edit = DiaryEmbedInsertion("Hello world", 5, "![p](diary:p.bin)", false)
+    if Applied("Hello world", edit) != "Hello\n![p](diary:p.bin)\n world" || edit.cursor != 24 { return 51 }
+    // A drop on text goes after its line, or before it at its start.
+    edit = DiaryEmbedInsertion("Hello world", 5, "![p](diary:p.bin)", true)
+    if Applied("Hello world", edit) != "Hello world\n![p](diary:p.bin)\n" || edit.cursor != 30 { return 52 }
+    edit = DiaryEmbedInsertion("Hello world", 0, "![p](diary:p.bin)", true)
+    if Applied("Hello world", edit) != "![p](diary:p.bin)\nHello world" || edit.cursor != 18 { return 53 }
+    // Before an existing line break no second break is added; the caret
+    // lands at the start of the following line.
+    edit = DiaryEmbedInsertion("a\nb", 1, "![p](diary:p.bin)", false)
+    if Applied("a\nb", edit) != "a\n![p](diary:p.bin)\nb" || edit.cursor != 20 { return 54 }
+    // A caret inside a character moves to its start.
+    edit = DiaryEmbedInsertion("é", 1, "![p](diary:p.bin)", false)
+    if edit.start != 0 { return 55 }
+    edit = DiaryEmbedInsertion("a\n\nb", 2, "![p](diary:p.bin)", true)
+    if Applied("a\n\nb", edit) != "a\n![p](diary:p.bin)\nb" { return 56 }
+    return 0
+}
+
+CheckPreview :: () -> s32 {
+    Preview("**bold** end")
+    if preview.hidden_count != 2 || !Hidden(0, 0, 2) || !Hidden(1, 6, 8) || !Strong(0, 2, 6) { return 80 }
+    DiaryPreviewScan(*preview, "**bold** end", 3, 3, true)
+    if preview.hidden_count != 0 || !Strong(0, 2, 6) { return 81 }
+    // Only the caret's line shows its markers.
+    DiaryPreviewScan(*preview, "**a**\n**b**", 1, 1, true)
+    if preview.hidden_count != 2 || !Hidden(0, 6, 8) || !Hidden(1, 9, 11) || preview.strong_count != 2 { return 82 }
+    Preview("*it* and _it_")
+    if preview.italic_count != 2 || !Italic(0, 1, 3) || !Italic(1, 10, 12) || preview.hidden_count != 4 { return 83 }
+    Preview("snake_case_word and 2 * 3 * 4")
+    if preview.italic_count != 0 || preview.hidden_count != 0 { return 84 }
+    Preview("\\*not\\* emphasis")
+    if preview.italic_count != 0 { return 85 }
+    Preview("***x***")
+    if !Strong(0, 3, 4) || !Italic(0, 1, 6) || preview.hidden_count != 4 ||
+    !Hidden(0, 0, 1) || !Hidden(1, 1, 3) || !Hidden(2, 4, 6) || !Hidden(3, 6, 7) { return 86 }
+    Preview("**a **b** c**")
+    if preview.strong_count != 1 || !Strong(0, 2, 11) || preview.hidden_count != 4 { return 87 }
+    Preview("# Title")
+    if preview.heading_count != 1 || preview.headings[0].level != 1 || preview.headings[0].start != 0 ||
+    !Hidden(0, 0, 2) || !Strong(0, 2, 7) { return 88 }
+    Preview("## Title ##")
+    if preview.headings[0].level != 2 || !Hidden(0, 0, 3) || !Hidden(1, 8, 11) || !Strong(0, 3, 8) { return 89 }
+    Preview("#hashtag")
+    if preview.heading_count != 0 || preview.hidden_count != 0 { return 90 }
+    DiaryPreviewScan(*preview, "### Kept", 4, 4, true)
+    if preview.heading_count != 1 || preview.headings[0].level != 3 || preview.hidden_count != 0 { return 91 }
+    Preview("- item\n12. next\n* star\n-5 degrees")
+    if preview.tone_count != 3 || !Tone(0, 0, 1, DIARY_TONE_MUTED) || !Tone(1, 7, 10, DIARY_TONE_MUTED) ||
+    !Tone(2, 16, 17, DIARY_TONE_MUTED) || preview.italic_count != 0 { return 92 }
+    Preview("> quoted *words*")
+    if preview.tone_count != 1 || !Tone(0, 0, 16, DIARY_TONE_MUTED) || !Italic(0, 10, 15) { return 93 }
+    link := "see [site](https://x.y/a_b_c) now"
+    Preview(link)
+    if !Hidden(0, 4, 5) || !Hidden(1, 9, 29) || !Tone(0, 5, 9, DIARY_TONE_LINK) || preview.italic_count != 0 { return 94 }
+    Preview("*see [x](y)*")
+    if !Italic(0, 1, 11) || !Tone(0, 6, 7, DIARY_TONE_LINK) || preview.hidden_count != 4 { return 95 }
+    // Emphasis never pairs across a link's edge.
+    Preview("*a [b*](c)")
+    if preview.italic_count != 0 { return 96 }
+    Preview("[**bold link**](u)")
+    if !Strong(0, 3, 12) || !Tone(0, 1, 14, DIARY_TONE_LINK) { return 97 }
+    Preview("an ![inline](diary:x.bin) image *stays*")
+    if preview.photo_count != 0 || !Italic(0, 33, 38) { return 98 }
+    if !PreviewOrdered() { return 99 }
+    return 0
+}
+
+CheckPreviewPhotos :: () -> s32 {
+    text := "# Day\n![one](diary:a.bin)\n**bold**\n![two](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)"
+    Preview(text)
+    if preview.photo_count != 2 || !preview.photos[0].cover || !preview.photos[1].cover { return 110 }
+    if !Hidden(0, 0, 2) || !Hidden(1, 6, 25) || !Hidden(2, 26, 28) || !Hidden(3, 32, 34) || !Hidden(4, 35, 129) { return 111 }
+    if !PreviewOrdered() { return 112 }
+    // On the caret's line a photo keeps its source above it.
+    DiaryPreviewScan(*preview, text, 10, 10, true)
+    if preview.photo_count != 2 || preview.photos[0].cover || !preview.photos[1].cover { return 113 }
+    if preview.photos[0].embed.line_start != 6 || preview.photos[0].embed.line_end != 25 { return 114 }
+    for index: cast(s32)0..preview.hidden_count - 1 {
+        if preview.hidden[index].start == 6 { return 115 }
+    }
+    // A selection over several lines shows all of them as typed.
+    DiaryPreviewScan(*preview, text, 0, 30, true)
+    if preview.photos[0].cover || preview.hidden_count != 1 || !Hidden(0, 35, 129) { return 116 }
+    // Not editing, every line is shown styled.
+    DiaryPreviewScan(*preview, text, 10, 10, false)
+    if !preview.photos[0].cover { return 117 }
+    return 0
+}
+
+CheckLimits :: () -> s32 {
+    many: Vec(u8)
+    for index: cast(s32)1..80 {
+        BuilderPrint(*many, "![p](diary:p%.bin)\n", index)
+    }
+    text := BuilderFinish(many)
+    Preview(text)
+    if preview.photo_count != DIARY_PREVIEW_PHOTOS || !preview.truncated || !PreviewOrdered() { return 130 }
+    // A line with more emphasis than one line holds is shown as typed.
+    busy: Vec(u8)
+    for index: cast(s32)1..40 {
+        BuilderPrint(*busy, "*a* ")
+    }
+    BuilderPrint(*busy, "\n**after**")
+    Preview(BuilderFinish(busy))
+    if preview.italic_count != 0 || preview.strong_count != 1 || !PreviewOrdered() { return 131 }
+    return 0
+}
+
+// Photo embeds never reach the spelling service: their lines go empty and
+// come back into the correction, which must keep its lines where they were.
+CheckSpelling :: () -> s32 {
+    entry := "I wnet out.\n![IMG_1.jpg](diary:photo-1.bin)\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)  \nIt was god."
+    if DiarySpellingMasked(entry) != "I wnet out.\n\n\nIt was god." { return 140 }
+    restored := DiarySpellingRestored(entry, "I went out.\n\n\nIt was good.")
+    if restored != "I went out.\n![IMG_1.jpg](diary:photo-1.bin)\n  ![](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)  \nIt was good." { return 141 }
+    if DiarySpellingRestored(entry, "I went out.\n\nIt was good.") != "" { return 142 }
+    if DiarySpellingRestored(entry, "I went out.\nphoto\n\nIt was good.") != "" { return 143 }
+    if DiarySpellingRestored(entry, "I went out.\n\n\nIt was good.\n") != "" { return 144 }
+    if DiarySpellingMasked("see ![a](b) here") != "see ![a](b) here" { return 145 }
+    if DiarySpellingMasked("") != "" || DiarySpellingRestored("", "") != "" { return 146 }
+    if DiarySpellingMasked("trailing\n") != "trailing\n" { return 147 }
+    if DiarySpellingRestored("a\n![x](diary:x.bin)\n", "b\n\n") != "b\n![x](diary:x.bin)\n" { return 148 }
+    return 0
+}
+
+#program_export
+Answer :: () -> s32 {
+    checks: [7]s32 = .[CheckEmbeds(), CheckLines(), CheckInsertion(), CheckPreview(),
+    CheckPreviewPhotos(), CheckLimits(), CheckSpelling()]
+    for result: checks {
+        if result != 0 {
+            return result
+        }
+    }
+    return 42
+}

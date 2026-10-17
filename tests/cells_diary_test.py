@@ -1,5 +1,6 @@
 """Verify standalone Diary editing, restart and calendar on an owned test window."""
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,14 @@ def capture(window, name):
     command("xwd", "-silent", "-id", window, "-out", str(raw))
     command("convert", str(raw), str(OUTPUT / f"{name}.png"))
     raw.unlink()
+
+
+def red_pixels(path):
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+    pixels = rgb.load()
+    return [(x, y) for y in range(rgb.height) for x in range(rgb.width)
+            if pixels[x, y][0] > 200 and pixels[x, y][1] < 100 and pixels[x, y][2] < 120]
 
 
 def wait_for_text(entry, matches, message):
@@ -88,6 +97,14 @@ def application(profile, label, import_source=None, size=(900, 720)):
 
 with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     profile = Path(temporary)
+    # The desktop picker runs zenity, which answers with the picked file.
+    picked = profile / "IMG_DIARY.jpg"
+    Image.new("RGB", (400, 300), (128, 72, 176)).save(picked, "JPEG", quality=90)
+    tools = profile / "bin"
+    tools.mkdir()
+    (tools / "zenity").write_text(f"#!/bin/sh\nprintf '%s\\n' '{picked}'\n")
+    (tools / "zenity").chmod(0o755)
+    ENV["PATH"] = f"{tools}:{ENV['PATH']}"
     with application(profile, "edit") as window:
         capture(window, "standalone")
         tap(window, 430, 280)
@@ -114,6 +131,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         time.sleep(0.5)
         capture(window, "spelling-without-account")
         assert json.loads(entry.read_text())["text"] == with_time, "Spelling changed the entry without an account"
+        # The photo button adds the picked photo to the account's photo
+        # library, under the day it was added, and embeds its place there on
+        # its own line at the caret, which is at the entry's end.
+        tap(window, 748, 86)
+        wait_for_text(entry, lambda text: "](photos/" in text, "A picked photo was not embedded")
+        digest = hashlib.sha256(picked.read_bytes()).hexdigest()
+        place = time.strftime("photos/%Y/%m/%d/") + digest + ".jpg"
+        with_photo = json.loads(entry.read_text())
+        assert with_photo["text"] == with_time + "\n![IMG_DIARY.jpg](" + place + ")\n", with_photo["text"]
+        assert with_photo["photos"] == [], "A library photo was listed as a Diary file"
+        library = list((profile / "media").glob("*/" + digest))
+        assert len(library) == 1 and library[0].read_bytes() == picked.read_bytes()
+        time.sleep(0.5)
+        capture(window, "picked-photo")
+        with Image.open(OUTPUT / "picked-photo.png") as image:
+            purple = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
+                         if abs(color[0] - 128) < 24 and abs(color[1] - 72) < 24 and abs(color[2] - 176) < 24)
+        assert purple > 20000, "The picked photo is not drawn inside the entry"
         saved = json.loads(entry.read_text())
         tap(window, 288, 86)  # Calendar.
         capture(window, "calendar")
@@ -154,14 +189,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     with application(migrated, "migration-restart", source):
         assert json.loads(target.read_text()) == original, "import overwrote an existing Inbe entry"
 
-    # Render the same stored attachments at phone width and the reporter's
-    # scale in both sage modes, including an unavailable photo. The fixture
-    # contains three references; navigation and removal must preserve text.
+    # An older entry's photo list reads as photos inside the entry at phone
+    # width and the reporter's scale in both sage modes, one of them not on
+    # this device. Viewing writes nothing; a tap on a photo under the entry
+    # embeds it at the caret, which starts at the entry's end.
     blue_path = source / "photo-blue.bin"
     Image.new("RGB", (100, 60), (24, 90, 220)).save(blue_path, format="JPEG")
     (source / entry.name).write_text(json.dumps(dict(original, photos=[
         *original["photos"], dict(file=blue_path.name, name="Blue photo"),
         dict(file="photo-missing.bin", name="Missing photo")])))
+    files = ["photo-local.bin", blue_path.name, "photo-missing.bin"]
     for dark in (0, 1):
         phone = profile / f"phone-{dark}"
         phone_source = profile / f"phone-source-{dark}"
@@ -180,33 +217,27 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
                                  (owner, key, str(value), int(time.time())))
         with application(phone, f"sage-{dark}", size=(390, 844)) as window:
             phone_entry = next((phone / "diary").glob("*/" + entry.name))
-            command("xdotool", "mousemove", "--window", window, "200", "800")
-            command("xdotool", "click", "--repeat", "16", "--delay", "70", "5")
+            stored = phone_entry.read_text()
             time.sleep(0.5)
-            capture(window, f"sage-{dark}-first")
-            with Image.open(OUTPUT / f"sage-{dark}-first.png") as image:
-                red = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
-                          if color[0] > 200 and color[1] < 100 and color[2] < 120)
-                assert red > 1000, "First photo not visible at phone scale"
-            # The page's bottom is stable: its last row has the three controls.
-            tap(window, 310, 763)
-            capture(window, f"sage-{dark}-second")
-            with Image.open(OUTPUT / f"sage-{dark}-second.png") as image:
-                blue = sum(count for count, color in image.convert("RGB").getcolors(image.width * image.height)
-                           if color[2] > 180 and color[0] < 100 and color[1] < 140)
-                assert blue > 1000, "Next photo not visible at phone scale"
-            tap(window, 310, 763)
-            capture(window, f"sage-{dark}-missing")
-            assert json.loads(phone_entry.read_text())["text"] == original["text"]
-            tap(window, 195, 763)
+            capture(window, f"sage-{dark}-inline")
+            red = red_pixels(OUTPUT / f"sage-{dark}-inline.png")
+            # The photo inside the entry is far larger than its tile below.
+            assert len(red) > 20000, "Photo not drawn inside the entry at phone scale"
+            bottom = max(y for x, y in red)
+            tile = [(x, y) for x, y in red if y > bottom - 60]
+            assert 1000 < len(tile) < 20000, "The day's photos are not shown under the entry"
+            assert phone_entry.read_text() == stored, "Viewing the day rewrote its entry"
+            tap(window, sum(x for x, y in tile) // len(tile), sum(y for x, y in tile) // len(tile))
             deadline = time.monotonic() + 5
-            while len(json.loads(phone_entry.read_text())["photos"]) != 2:
-                assert time.monotonic() < deadline, "Photo removal was not saved"
+            while json.loads(phone_entry.read_text())["text"].count("](diary:photo-local.bin)") != 2:
+                assert time.monotonic() < deadline, "A tapped photo was not embedded in the entry"
                 time.sleep(0.1)
-            assert json.loads(phone_entry.read_text())["text"] == original["text"]
+            saved_photo = json.loads(phone_entry.read_text())
+            assert saved_photo["text"].startswith(original["text"] + "\n\n![A photo](diary:photo-local.bin)")
+            assert [row["file"] for row in saved_photo["photos"]] == files
         with application(phone, f"sage-{dark}-restart", size=(390, 844)):
-            assert len(json.loads(phone_entry.read_text())["photos"]) == 2
+            assert json.loads(phone_entry.read_text()) == saved_photo
             assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
-    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, calendar, restart and day navigation passed")
+    print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
-    print("Diary photos: multiple images, missing files, navigation, removal and restart at phone width in light/dark sage passed")
+    print("Diary photos: older photo lists inside the entry, a missing file, no writes on viewing, a tapped day photo embedded, and restart at phone width in light/dark sage passed")

@@ -404,7 +404,7 @@ the package manager with the same signature, hash, size, interface, trial
 and cache rules as the bundled apps. Such an app is never part of the root
 package or its dependencies. It runs in its own VM through one generic
 interface (`src/cells/node_app_types.zi`, host interface 12, and 13 for the
-media library): frame and
+media library, which Diary also reads from 14): frame and
 route messages, hosted Kryon widgets, `AppLocaleHost`, private records,
 friends and records shared with friends. It may draw only its own
 `assets/<name>/` resources and supplies its icon as
@@ -465,8 +465,9 @@ nothing and never stops a sync. `media` is a reserved app name, so these keys
 are never taken for an app's records.
 
 Apps reach the library only through the media calls, which the host grants
-to Photos alone (`NodeAppMediaGranted`); a package of another name that
-imports them cannot start. `MediaQueryHost(day, trashed)` lists one capture
+to Photos alone among the apps the node offers (`NodeAppMediaGranted`); a
+package of another name that imports them cannot start. Diary's view may
+read a day of the library with `MediaQueryHost` and `MediaItemHost`. `MediaQueryHost(day, trashed)` lists one capture
 day or all, newest first, and `MediaItemHost(index)` reads an item of that
 list. `MediaAssetHost(hash, original)` answers the asset path to draw,
 `media/preview/<sha256>.jpg` or `media/<sha256>.<fmt>`, or `""` while neither
@@ -542,10 +543,37 @@ account. Per-account files provide a local cache; they are not the only copy.
 
 Diary owns date arithmetic, entry editing, JSON documents and calendar marks in
 its own VM. Its bounded host capabilities provide only its private files and
-clock. Entries use Harmony's existing version-1 per-day document format;
-text edits preserve attached photo metadata. Failed or malformed reads never
-overwrite the original document. Native storage uses an exclusive directory
-lock and atomic writes.
+clock. Entries use Harmony's existing version-1 per-day document format.
+Failed or malformed reads never overwrite the original document. Native
+storage uses an exclusive directory lock and atomic writes.
+
+An entry's text is Markdown and the only source of truth
+(`apps/diary/diary_markdown.zi`). A photo is an embed line of its own,
+`![NAME](photos/YYYY/MM/DD/<sha256>.<type>)`: its place in the account's
+media library, under the day Photos groups it (the Exif capture day, or the
+day it was added), so Diary and Photos keep one library. The photo button
+adds the picked file to the library (`MediaImportFile`, once per hash, with
+its preview, synced as Photos' items are) and the package puts the embed at
+the caret. `![NAME](diary:FILE)` names a Diary file an older version
+attached. Loading a day appends the document's `photos` rows that no embed
+names yet as such lines, in memory only, so viewing writes nothing; saving
+writes `photos` again from the `diary:` embeds, so older versions keep
+showing those photos. Deleting an embed's line takes the photo out of the
+entry.
+
+The editor previews the Markdown through Kryon's `TextArea`: away from the
+caret's line, markers are hidden, emphasis is bold or slanted, headings are
+larger (`TextAreaLine`), links and list and quote marks take the theme's
+colors, and an embed line is covered by its photo (`TextAreaBlock`). On the
+caret's line the source shows with the photo under it. Under the entry, the
+day's photos scroll sideways: the library's photos of that day, then the
+entry's other photos; a tap embeds one at the caret. The Diary view reaches
+the library through `MediaQueryHost` and `MediaItemHost`, and draws an
+embed through `DiaryPhotoHost(destination)`, which answers the library's
+preview (`media/preview/<sha256>.<type>`) or the Diary file
+(`diary/photos/<file>.<type>`), or `""` while the photo is not on this device
+(host interface 14). Spelling checks send embed lines empty and refuse a
+correction that moved lines (`diary_spelling_mask.zi`).
 
 For explicit migration, set `INBE_DIARY_IMPORT=/absolute/harmony/diary` when
 opening Diary. The importer copies safe regular filenames and skips existing
@@ -554,9 +582,9 @@ first importing account with an owner marker. There is no automatic migration
 from an unrelated live profile. Harmony's Diary catalog entry opens the Inbe
 child inside the existing supervised parent window and passes its own data
 root as `HARMONY_DATA_ROOT` for a safe import. Old saved native-renderer
-metadata does not restore a second Diary engine. Inbe's Diary package includes
-photo attachment, previews, navigation and removal; removal retains original
-photo bytes. Native and Android use their ordinary file pickers.
+metadata does not restore a second Diary engine. Native and Android use
+their ordinary photo pickers; Android's keeps the picked file's own bytes,
+as for Photos.
 
 The desktop wrapper accepts `--bundle /path/to/inbe.zib`, or an individual
 Lumi, Habits, Practices, Lists or Diary ZIB. A feature bundle opens its own app using
@@ -629,7 +657,10 @@ resource availability, provider replacement and fallback restoration.
 
 `make cells-test` exercises the root and all five actual feature bundles,
 typed capability rejection, shared SQLite/identity, a 1.8.9 upgrade fixture,
-practice timing, all selection masks and Diary Unicode/calendar/document edits.
+practice timing, all selection masks and Diary Unicode/calendar/document edits,
+older photo lists as embeds and inserted library photos.
+`make diary-markdown-test` checks Diary's embeds, library places, inserted
+photos, the editor preview and spelling masking natively and in the VM.
 `make package-release-test` checks Ed25519 metadata, payloads, signed nested
 content, rollback rejection, cache repair, manual checking with auto-update off
 and cancellation that preserves manual requests. Account preference tests
