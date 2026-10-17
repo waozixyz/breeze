@@ -1,8 +1,11 @@
-"""Exercise Lumi's real cell chat against a disposable, account-scoped profile."""
+"""Exercise Lumi's real cell chat against a disposable, account-scoped profile.
+
+The app runs on a private display and is driven through Kryon's test driver:
+widgets are found in its committed tree and pressed, typed into and read
+through the app's own input path.
+"""
 import ast
 import contextlib
-import csv
-import io
 import json
 import os
 import re
@@ -14,11 +17,18 @@ import sys
 import tempfile
 import time
 
+from ui_driver import UiDriver
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/lumi-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 ENV = os.environ.copy()
+# Made when the first app starts, in the OUTPUT of the test that runs it.
+driver = None
+# Lumi's command list and chart bars, from apps/lumi/lumi_view.zi.
+COMMAND_LIST_KEY = 360001
+CHART_BAR_KEYS = range(310000, 330000)
 
 
 def command(*args):
@@ -26,56 +36,27 @@ def command(*args):
                           check=True, timeout=5).stdout.strip()
 
 
-def tap(window, x, y):
-    command("xdotool", "windowfocus", window)
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.15)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.18)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.2)
-
-
-def press(key):
-    command("xdotool", "keydown", "--clearmodifiers", key)
-    time.sleep(0.15)
-    command("xdotool", "keyup", key)
-
-
-def capture(window, label):
-    raw = OUTPUT / f"{label}.xwd"
-    command("xwd", "-silent", "-id", window, "-out", str(raw))
-    command("convert", str(raw), str(OUTPUT / f"{label}.png"))
-    raw.unlink()
-
-
-def tap_rendered_button(window, label):
-    """Find an action's one-word label in the owned window, after layout."""
-    capture(window, "action-" + label.lower())
-    result = command("tesseract", str(OUTPUT / ("action-" + label.lower() + ".png")),
-                     "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1")
-    lines = {}
-    for word in csv.DictReader(io.StringIO(result), delimiter="\t"):
-        if (word.get("text") or "").strip():
-            key = (word["block_num"], word["par_num"], word["line_num"])
-            lines.setdefault(key, []).append(word)
-    matches = [words[0] for words in lines.values()
-               if len(words) == 1 and words[0]["text"].lower() == label.lower()]
-    assert matches, f"No rendered {label} button in the owned Lumi window"
-    word = min(matches, key=lambda item: int(item["top"]))
-    tap(window, int(word["left"]) + int(word["width"]) // 2,
-        int(word["top"]) + int(word["height"]) // 2)
+def save_tree(label):
+    """Keep what the app showed when a step failed, for the CI artifact."""
+    with contextlib.suppress(Exception):
+        (OUTPUT / f"failure-{label}.json").write_text(json.dumps(driver.tree(), indent=1) + "\n")
 
 
 @contextlib.contextmanager
 def application(profile, label, standalone=False, recommended=False):
+    global driver
+    if driver is None:
+        driver = UiDriver(OUTPUT / "driver")
     bundle = ROOT / ("build/cells/lumi.zib" if standalone else
                      "build/inbe.zib" if recommended else "build/inbe-full.zib")
-    with (OUTPUT / f"{label}.log").open("w") as log:
+    log_path = OUTPUT / f"{label}.log"
+    with log_path.open("w") as log:
         app = subprocess.Popen([sys.argv[1], "--bundle", str(bundle)], cwd=ROOT,
-                               env=ENV | {"APP_DATA_ROOT": str(profile),
-                                          "KRYON_TEST_OPEN_URI_CAPTURE": str(OUTPUT / (label + "-uri.txt"))},
+                               env=ENV | driver.environment() | {
+                                   "APP_DATA_ROOT": str(profile),
+                                   "KRYON_TEST_OPEN_URI_CAPTURE": str(OUTPUT / (label + "-uri.txt"))},
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, log_path)
         try:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -89,15 +70,15 @@ def application(profile, label, standalone=False, recommended=False):
             else:
                 raise AssertionError("Lumi window did not appear")
             command("xdotool", "windowsize", window, "900", "720")
-            command("xdotool", "windowfocus", window)
             wait_for(lambda: " = " in command("xprop", "-id", window, "_HARMONY_APP_STATE"),
                      "Owned app UI did not become ready")
-            time.sleep(0.4)
+            driver.wait(role="screen")
+            driver.wait_idle(frames=3)
             yield window
             assert app.poll() is None, "Lumi crashed"
         except BaseException:
-            if app.poll() is None and 'window' in locals():
-                capture(window, "failure-" + label)
+            if app.poll() is None:
+                save_tree(label)
             raise
         finally:
             if app.poll() is None:
@@ -132,52 +113,47 @@ def chat(profile):
     return [{key: value for key, value in json.loads(row[0]).items() if key != "time"} for row in rows]
 
 
-def send(window, profile, text, *, button=False, attempts=2):
+def draft():
+    """The text in Lumi's message field."""
+    return driver.wait(role="text_area")["value"]
+
+
+def wait_draft(text):
+    """Wait until the draft contains text, as a chosen suggestion leaves it."""
+    deadline = time.monotonic() + 8
+    while text not in draft():
+        assert time.monotonic() < deadline, f"The draft is {draft()!r}, without {text!r}"
+        time.sleep(0.05)
+
+
+def start_draft(text=""):
+    """Put the keyboard in an empty draft and type text into it."""
+    driver.press(role="text_area")
+    driver.key("a", control=True)
+    driver.key("backspace")
+    driver.wait(role="text_area", value="")
+    if text:
+        driver.type(text)
+        driver.wait(role="text_area", value=text)
+
+
+def send(window, profile, text, *, button=False):
     before = chat(profile)
-    for attempt in range(attempts):
-        type_message(window, profile, before, text, button)
-        # A slow runner can drop the keystrokes of an app that just started;
-        # nothing was sent then, so typing the message again is safe.
-        if attempt + 1 < attempts and not wait_quietly(
-                lambda: chat(profile) != before, 6.0):
-            continue
-        break
-    confirm_exchange(window, profile, before, text)
-
-
-def wait_quietly(condition, seconds):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if condition():
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def type_message(window, profile, before, text, button):
-    tap(window, 490, 676)
-    command("xdotool", "keydown", "--clearmodifiers", "ctrl+a")
-    time.sleep(0.15)
-    command("xdotool", "keyup", "ctrl+a")
+    start_draft()
     for index, line in enumerate(text.split("\n")):
         if index:
-            command("xdotool", "keydown", "--clearmodifiers", "shift+Return")
-            time.sleep(0.15)
-            command("xdotool", "keyup", "shift+Return")
-            time.sleep(0.15)
+            driver.key("enter", shift=True)
             assert chat(profile) == before, "Shift+Enter sent the draft"
-        command("xdotool", "type", "--clearmodifiers", "--delay", "18", line)
-        time.sleep(0.15)
-    time.sleep(0.3)
+        driver.type(line)
+    assert draft() == text, f"The draft is {draft()!r}, not {text!r}"
     if button:
-        tap(window, 850, 676)
+        driver.press(label="Send", role="button", enabled=True)
     else:
-        command("xdotool", "keydown", "--clearmodifiers", "Return")
-        time.sleep(0.15)
-        command("xdotool", "keyup", "Return")
+        driver.key("enter")
+    confirm_exchange(profile, before, text)
 
 
-def confirm_exchange(window, profile, before, text):
+def confirm_exchange(profile, before, text):
     def exchange_saved():
         rows = chat(profile)
         return (rows != before and len(rows) >= 2 and
@@ -189,11 +165,39 @@ def confirm_exchange(window, profile, before, text):
         rows = chat(profile)
         assert rows[:-2] == before, "Chat lost earlier conversation"
     except AssertionError:
-        capture(window, "failure")
+        save_tree("exchange")
         (OUTPUT / "failure-exchange.json").write_text(json.dumps({
             "expected": text.strip(), "recent": chat(profile)[-3:]
         }, indent=2) + "\n")
         raise
+
+
+def command_list():
+    """The /names the command list over the draft shows, top to bottom."""
+    menu = driver.wait(key=COMMAND_LIST_KEY)
+    return [node for node in driver.find(role="text", visible=True)
+            if menu["y"] <= node["y"] < menu["y"] + menu["height"] and node["label"].startswith("/")]
+
+
+def command_list_entry(name):
+    """A command's row in the list over the draft, by its /name."""
+    rows = []
+    deadline = time.monotonic() + 8
+    while not rows:
+        assert time.monotonic() < deadline, f"{name} is not in the command list"
+        rows = [node for node in command_list() if node["label"] == name]
+    return rows[0]
+
+
+def latest_chart_bars():
+    """The bars of the newest progress chart, oldest day first."""
+    bars = [node for node in driver.tree()
+            if node["kind"] == "button" and node["key"] in CHART_BAR_KEYS and node["visible"]]
+    assert bars, "No progress chart is on screen"
+    newest = max((node["key"] - CHART_BAR_KEYS.start) // 32 for node in bars)
+    return newest, sorted((node for node in bars
+                           if (node["key"] - CHART_BAR_KEYS.start) // 32 == newest),
+                          key=lambda node: node["key"])
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
@@ -201,7 +205,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     with application(profile, "standalone", standalone=True) as window:
         tool_names = {tool["name"] for tool in state(window)["mcp"]["tools"]}
         assert "show_progress_chart" in tool_names and "show_donation_links" not in tool_names
-        capture(window, "standalone")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
         for key, value in {
@@ -229,10 +232,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         chart_data = json.loads(chart_row["payload"])
         assert chart_data["metric"] == 0 and len(chart_data["points"]) == 7
         assert all(point["value"] == 0 for point in chart_data["points"])
-        capture(window, "progress-empty")
+        driver.wait(label="No recorded activity in this period.")
         send(window, profile, "/progress habits 30")
         assert len(json.loads(chat(profile)[-1]["payload"])["points"]) == 30
-        capture(window, "progress-habits")
         with sqlite3.connect(profile / "inbe.db") as db:
             today = db.execute("SELECT CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)").fetchone()[0]
             for identity, activity, seconds in [("chart-whm", 0, 95), ("chart-meditation", 1, 120)]:
@@ -244,12 +246,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             points = json.loads(chat(profile)[-1]["payload"])["points"]
             assert points[-1] == {"date": today, "value": expected}
             assert sum(point["value"] for point in points[:-1]) == 0
-        time.sleep(0.5)
-        capture(window, "progress-recorded")
-        # Select the latest day in the seven-bar chart.
-        tap(window, 797, 425)
-        time.sleep(0.4)
-        capture(window, "progress-selected")
+        # Select the latest day in the seven-bar chart: its summary shows
+        # that day's value instead of the first day's.
+        driver.wait_idle(frames=3)
+        row, bars = latest_chart_bars()
+        assert len(bars) == 7, bars
+        summary_key = 330000 + row * 64 + 32
+        first_day = str(points[0]["date"])
+        driver.wait(key=summary_key, label=f"{first_day[:4]}-{first_day[4:6]}-{first_day[6:]} · 0")
+        driver.press(key=bars[-1]["key"])
+        today_text = str(today)
+        driver.wait(key=summary_key, label=f"{today_text[:4]}-{today_text[4:6]}-{today_text[6:]} · 95")
         # Donations are gone: /donate is no command and adds no card.
         send(window, profile, "/donate")
         assert all(row.get("kind") != 2 for row in chat(profile))
@@ -259,35 +266,36 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         db.execute("DELETE FROM session_rounds WHERE session_id IN ('chart-whm','chart-meditation')")
         db.execute("DELETE FROM sessions WHERE id IN ('chart-whm','chart-meditation')")
     with application(profile, "chat") as window:
-        capture(window, "welcome")
+        driver.wait(role="text_area")
         assert query(profile, "SELECT value FROM settings WHERE key='main_tab'")[0][0] == "4"
         # As in Telegram, the empty draft offers a command button whose list
         # narrows while typing. Enter picks the highlighted command, and one
         # that needs text waits in the draft with the keyboard still in it.
         before = len(chat(profile))
-        tap(window, 830, 680)
-        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "h")
-        time.sleep(0.4)
-        capture(window, "command-list")
-        press("Return")
+        driver.press(label="Commands", role="button")
+        driver.wait(role="text_area", value="/")
+        driver.type("h")
+        command_list_entry("/help")
+        driver.key("enter")
         wait_for(lambda: len(chat(profile)) == before + 2, "Enter did not send the highlighted command")
         assert chat(profile)[-2]["text"] == "/help" and "I can help" in chat(profile)[-1]["text"]
-        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/to")
-        time.sleep(0.4)
-        press("Return")
-        time.sleep(0.4)
+        driver.type("/to")
+        command_list_entry("/todo")
+        driver.key("enter")
+        driver.wait(role="text_area", value="/todo ")
+        driver.wait_idle(frames=3)
         assert len(chat(profile)) == before + 2, "A command that needs text was sent without it"
-        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "Water plants")
-        time.sleep(0.3)
-        press("Return")
+        driver.type("Water plants")
+        driver.wait(role="text_area", value="/todo Water plants")
+        driver.key("enter")
         wait_for(lambda: len(chat(profile)) == before + 4, "The completed command was not sent")
         assert chat(profile)[-2]["text"] == "/todo Water plants"
         assert query(profile, "SELECT done FROM elist_items WHERE title='Water plants'") == [(0,)]
-        command("xdotool", "type", "--clearmodifiers", "--delay", "60", "/he")
-        time.sleep(0.4)
-        capture(window, "command-filter")
+        driver.type("/he")
         # The only match, /help, sits next to the draft: tap it.
-        tap(window, 490, 626)
+        wait_for(lambda: [node["label"] for node in command_list()] == ["/help"],
+                 "The command list did not narrow to /help")
+        driver.press(key=command_list_entry("/help")["key"])
         wait_for(lambda: len(chat(profile)) == before + 6, "A tapped command was not sent")
         assert chat(profile)[-2]["text"] == "/help" and "I can help" in chat(profile)[-1]["text"]
         send(window, profile, "/todo Read five pages", button=True)
@@ -300,39 +308,35 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         send(window, profile, "/done Read five")
         assert "Several items match" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT SUM(done) FROM elist_items WHERE title LIKE 'Read five%'") == [(0,)]
-        tap(window, 490, 676)
-        command("xdotool", "type", "--clearmodifiers", "--delay", "18", "/done Read five p")
-        time.sleep(0.4)
-        capture(window, "autocomplete")
+        start_draft("/done Read five p")
+        driver.wait(label="Read five pages", role="button")
         assert query(profile, "SELECT SUM(done) FROM elist_items WHERE title LIKE 'Read five%'") == [(0,)]
-        tap(window, 390, 628)
+        driver.press(label="Read five pages", role="button")
+        wait_draft("Read five pages")
         assert query(profile, "SELECT SUM(done) FROM elist_items WHERE title LIKE 'Read five%'") == [(0,)]
         before = len(chat(profile))
-        tap(window, 850, 676)
+        driver.press(label="Send", role="button", enabled=True)
         wait_for(lambda: len(chat(profile)) == before + 2, "Selected completion was not sent")
         assert query(profile, "SELECT done FROM elist_items WHERE title='Read five pages'") == [(1,)]
-        capture(window, "conversation")
         send(window, profile, "How can you help?")
         assert "Add todo" in chat(profile)[-1]["text"]
         assert "Complete habit" in chat(profile)[-1]["text"]
         send(window, profile, "complete habit Read")
         assert "Several items match" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT count FROM habit_days WHERE habit_id='lumi-counting-habit'") == []
-        tap(window, 490, 676)
-        command("xdotool", "type", "--clearmodifiers", "--delay", "18", "/habit Read d")
-        time.sleep(0.4)
-        capture(window, "habit-autocomplete")
+        start_draft("/habit Read d")
+        driver.wait(label="Read daily", role="button")
         assert query(profile, "SELECT count FROM habit_days WHERE habit_id='lumi-counting-habit'") == []
-        tap(window, 390, 628)
+        driver.press(label="Read daily", role="button")
+        wait_draft("Read daily")
         assert query(profile, "SELECT count FROM habit_days WHERE habit_id='lumi-counting-habit'") == []
         before = len(chat(profile))
-        tap(window, 850, 676)
+        driver.press(label="Send", role="button", enabled=True)
         wait_for(lambda: len(chat(profile)) == before + 2, "Selected habit was not completed")
         assert query(profile, "SELECT completed,count FROM habit_days WHERE habit_id='lumi-counting-habit'") == [(1, 3)]
         send(window, profile, "COMPLETE HABIT")
         assert "Which habit" in chat(profile)[-1]["text"]
         assert "Read daily" in chat(profile)[-1]["text"] and "Read poetry" in chat(profile)[-1]["text"]
-        capture(window, "choose-habit")
         send(window, profile, "READ DAILY")
         assert "habit is complete for today" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT completed,count FROM habit_days WHERE habit_id='lumi-counting-habit'") == [(1, 3)]
@@ -353,18 +357,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         diary_text = json.loads(entry.read_text())["text"]
         assert re.fullmatch(r"\*\*\d{2}:\d{2}\*\*\nA calm morning\nThen a walk"
                             r"\n\n\*\*\d{2}:\d{2}\*\*\nAnother thought\nA second line", diary_text)
-        capture(window, "diary-chat")
         send(window, profile, "theme forest")
         assert state(window)['settings']['theme'] == 'forest'
         send(window, profile, "/dark")
         assert state(window)['settings']['theme_mode'] == 2
         assert query(profile, "SELECT value FROM settings WHERE key='theme'") == [('2',)]
+        # A phone-wide window still fits the chat and its draft.
         command("xdotool", "windowsize", window, "390", "720")
-        time.sleep(0.6)
-        capture(window, "narrow-chat")
+        screen = driver.wait(role="screen", visible=None)
+        deadline = time.monotonic() + 5
+        while screen["width"] != 390:
+            assert time.monotonic() < deadline, f"The chat did not narrow: {screen}"
+            time.sleep(0.05)
+            screen = driver.wait(role="screen", visible=None)
+        driver.wait_idle(frames=3)
+        field = driver.wait(role="text_area")
+        assert screen["x"] <= field["x"] and field["x"] + field["width"] <= screen["x"] + screen["width"], field
         transcript = chat(profile)
     with application(profile, "restart") as window:
-        capture(window, "restart")
         assert chat(profile) == transcript
         assert json.loads(entry.read_text())["text"] == diary_text
         assert state(window)['settings']['theme'] == 'forest'
@@ -379,11 +389,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         help_text = chat(profile)[-1]["text"]
         assert "Start WHM" in help_text and "Complete habit" in help_text
         assert "todo" not in help_text and "Lists" not in help_text and "Diary" not in help_text
-        capture(window, "installed-cells-help")
-        tap(window, 490, 676)
-        command("xdotool", "type", "--clearmodifiers", "--delay", "18", "add")
-        time.sleep(0.4)
-        capture(window, "lists-unavailable-suggestions")
+        # Without Lists, typing "add" suggests no todo.
+        start_draft("add")
+        driver.wait_idle(frames=3)
+        chips = [node["label"] for node in driver.find(role="button", visible=True)
+                 if node["label"].lower().startswith("add")]
+        assert not chips, f"Lists is not installed, yet Lumi suggests {chips}"
         send(window, profile, "/todo This must not be added")
         assert "unavailable" in chat(profile)[-1]["text"]
         send(window, profile, "/done Read five poems")
@@ -396,7 +407,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         breath = state(window)["breath"]
         wait_for(lambda: state(window)["breath"] > breath, "WHM did not advance")
         assert state(window)["screen"] == 1 and not state(window)["paused"]
-        capture(window, "whm-started")
     # Without a practice on this device Lumi asks first: no drops the offer,
     # yes opens Manage practices at it, and nothing starts either way.
     with sqlite3.connect(profile / "inbe.db") as db:
@@ -416,9 +426,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert chat(profile)[-1]["text"].endswith("Download it now?")
         send(window, profile, "yes")
         assert chat(profile)[-1]["text"] == "Opening Manage practices."
+        # Nothing may start in the moments after the answer.
         time.sleep(0.6)
         assert not state(window)["practice_running"]
-        capture(window, "practice-offer")
     # Practices other than Wim Hof are downloads; install them as Manage
     # practices would before Lumi starts them.
     (profile / "packages").mkdir(exist_ok=True)
@@ -438,7 +448,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             wait_for(lambda: state(window)["practice_running"] and state(window)["practice"] == practice_id,
                      f"{command_text} did not start its practice")
             assert not state(window)["paused"]
-            capture(window, label)
     with sqlite3.connect(profile / "inbe.db") as db:
         for key, value in {"enabled_apps": "16", "app_used_habits": "0", "app_used_practices": "0",
                            "app_used_leaderboard": "0", "main_tab": "4"}.items():
@@ -454,7 +463,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         send(window, profile, "complete habit Read poetry")
         assert "unavailable" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT habit_id,local_date,completed,count FROM habit_days ORDER BY habit_id,local_date") == before_habits
-        capture(window, "lumi-only")
     (OUTPUT / "result.json").write_text(json.dumps({
         "passed": True, "exchanges": len(transcript) // 2,
         "checked": ["standalone cell", "default Lumi home", "add todo", "unique completion",
@@ -464,8 +472,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "meditation transposition", "case-insensitive commands", "all four practice starts",
                     "brief unknown reply", "Diary follow-up", "timestamp before entry", "Shift+Enter",
                     "multiline Diary append", "Diary restart persistence", "durable history retention",
-                    "progress zero and recorded values", "no donations", "download offer", "large tool catalog",
-                    "command button and list", "Enter picks a command", "command waits for its text",
-                    "tapped command"],
+                    "progress zero and recorded values", "chart day selection", "no donations", "download offer",
+                    "large tool catalog", "command button and list", "Enter picks a command",
+                    "command waits for its text", "tapped command", "no todo suggestions without Lists",
+                    "narrow chat fits"],
     }, indent=2) + "\n")
 print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")

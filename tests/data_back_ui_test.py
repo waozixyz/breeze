@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Back from navigation Data exits once; Profile Data returns to its hub, whose Back returns to Apps.
-Data lives in Profile, so the Settings hub no longer lists it."""
-import csv
-import io
+Data lives in Profile, so the Settings hub no longer lists it.
+
+Titles, buttons and the navigation are found in the app's widget tree
+through Kryon's test driver; routes are read from the app's debug log."""
 import os
 from pathlib import Path
 import re
@@ -11,74 +12,60 @@ import subprocess
 import sys
 import time
 
-from PIL import Image, ImageOps
-from native_visual_test import read_text
+from ui_driver import UiDriver
 
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 root = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
 output = root / "build/data-back-ui-test"
 output.mkdir(parents=True, exist_ok=True)
+driver = UiDriver(output / "driver")
+# The navigation's buttons share one focus group: the rail on wide windows,
+# the dock on phones.
+NAVIGATION = 6600
 
 
-def command(*args):
-    return subprocess.check_output(args, text=True, timeout=5).strip()
+def wait_for(predicate, message, timeout=20):
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            driver.tree()
+            raise driver._failure(message)
+        time.sleep(0.05)
 
 
-def click(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y),
-            "mousedown", "1", "sleep", "0.12", "mouseup", "1")
-    time.sleep(0.5)
+def switches(logfile, baseline):
+    return re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)", logfile.read_text()[baseline:])
 
 
-def capture_title(window, name, width):
-    path = output / (name + ".png")
-    command("import", "-window", window, str(path))
-    with Image.open(path) as image:
-        left = 88 if width >= 640 else 0
-        return read_text(image.crop((left, 0, width, 64)), name)
+def title(expected):
+    """Waits for the title bar to name the screen, then for it to settle."""
+    driver.wait(label=expected, role="title_bar")
+    driver.wait_idle(frames=3)
 
 
-def screen_words(window, path, width, height):
-    """Rendered words with positions at three times the window size."""
-    ocr_path = path.with_name(path.stem + "-ocr.png")
-    command("import", "-window", window, str(path))
-    with Image.open(path) as image:
-        gray = ImageOps.autocontrast(ImageOps.grayscale(image))
-        gray.resize((width * 3, height * 3)).save(ocr_path)
-    text = command("tesseract", str(ocr_path), "stdout", "--psm", "11",
-                   "-c", "tessedit_create_tsv=1")
-    ocr_path.unlink()
-    return list(csv.DictReader(io.StringIO(text), delimiter="\t"))
+def settings_lists_data():
+    return [node["label"] for node in driver.tree()
+            if node["visible"] and re.search(r"\bdata\b", node["label"], re.IGNORECASE)]
 
 
-def click_word(window, word):
-    click(window, (int(word["left"]) + int(word["width"]) // 2) // 3,
-          (int(word["top"]) + int(word["height"]) // 2) // 3)
-
-
-def settings_lists_data(window, name, width, height):
-    return any(word.get("text", "").lower() == "data"
-               for word in screen_words(window, output / (name + "-overview.png"), width, height))
-
-
-def open_practice(window, name, width, height):
-    path = output / (name + "-navigation.png")
-    words = [word for word in screen_words(window, path, width, height)
-             # An unselected favorite can be partially offscreen in the
-             # scrolling dock. Selecting it must then reveal the whole label.
-             if word.get("text", "").lower().startswith("pract")
-             and (int(word["left"]) < 88 * 3 if width >= 640
-                  else int(word["top"]) > (height - 84) * 3)]
-    assert len(words) == 1, "The rendered Practice navigation shortcut is missing or ambiguous"
-    click_word(window, words[0])
-    command("import", "-window", window, str(path))
-    with Image.open(path) as image:
-        # On phones read only the label row: CI's tesseract 5.3.4 misreads
-        # the dock when its icons and the selection outline are included.
-        dock = image.crop((0, 0, 88, height)) if width >= 640 else image.crop((0, height - 24, width, height - 4))
-        assert "practice" in read_text(dock, name + "-selected-navigation"), \
-            "Selecting Practice did not reveal its complete navigation label"
+def open_practice(name):
+    shortcuts = driver.find(label="Practice", role="button", focus_id=NAVIGATION, visible=True)
+    assert len(shortcuts) == 1, f"{name}: the Practice navigation shortcut is missing or ambiguous: {shortcuts}"
+    driver.press(label="Practice", role="button", focus_id=NAVIGATION)
+    # An unselected favorite can be partially offscreen in the scrolling
+    # dock. Selecting it must then reveal the whole label.
+    shortcut = wait_for(lambda: next(iter(node for node in driver.find(
+        label="Practice", role="button", focus_id=NAVIGATION, visible=True) if node["selected"]), None),
+        f"{name}: selecting Practice did not select its navigation shortcut")
+    driver.wait_idle(frames=3)
+    shortcut = driver.find(key=shortcut["key"], visible=True)[0]
+    whole = (shortcut["visible_x"], shortcut["visible_y"], shortcut["visible_width"], shortcut["visible_height"]) == \
+        (shortcut["x"], shortcut["y"], shortcut["width"], shortcut["height"])
+    assert whole, f"{name}: selecting Practice did not reveal its complete navigation label: {shortcut}"
 
 
 for scene in ("data_from_navigation", "profile_data", "settings_overview"):
@@ -90,14 +77,16 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
         env = os.environ.copy()
         env.update(APP_SHOT_WINDOW="1", APP_NO_TRAY="1", INBE_DEBUG_ROUTE="1",
                    SDL_VIDEODRIVER="x11", YUE_DESKTOP_RECOVERY="0")
+        env.update(driver.environment())
         with logfile.open("w") as log:
             app = subprocess.Popen([str(binary), "--screenshot", str(initial),
                 "--bundle", str(root / "build/inbe-full.zib"),
                 "--screenshot-scene", scene, "--screenshot-width", str(width),
                 "--screenshot-height", str(height), "--screenshot-ui-scale", "10"],
                 cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT)
+            driver.attach(app, logfile)
             try:
-                deadline = time.monotonic() + 15
+                deadline = time.monotonic() + 30
                 window = ""
                 while time.monotonic() < deadline:
                     assert app.poll() is None, logfile.read_text()[-2000:]
@@ -109,37 +98,36 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                         break
                     time.sleep(0.1)
                 assert window, "private child did not become ready"
-                command("xdotool", "windowfocus", "--sync", window)
-                time.sleep(0.5)
                 if scene == "settings_overview":
-                    assert "settings" in capture_title(window, name + "-initial", width)
-                    assert not settings_lists_data(window, name, width, height), "Settings still lists Data"
+                    title("Settings")
+                    driver.wait(label="Appearance", role="button")
+                    assert not settings_lists_data(), f"Settings still lists Data: {settings_lists_data()}"
                     continue
-                title = capture_title(window, name + "-data", width)
-                assert "data" in title, (name, "Data did not render before Back", title)
+                title("Data")
                 baseline = len(logfile.read_text())
-                back_x = 88 + 26 if width >= 640 else 26
-                click(window, back_x, 24)
-                after = logfile.read_text()[baseline:]
-                switches = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)", after)
+                driver.press(label="Back", role="button")
                 if scene == "data_from_navigation":
-                    assert switches == [("10", "16")], (name, switches, after[-1200:])
+                    wait_for(lambda: switches(logfile, baseline), f"{name}: Back did not leave Data")
+                    driver.wait_idle(frames=3)
+                    after = logfile.read_text()[baseline:]
+                    assert switches(logfile, baseline) == [("10", "16")], (name, switches(logfile, baseline),
+                                                                           after[-1200:])
                 else:
-                    assert switches == [], (name, "Profile Data skipped its parent", switches)
-                    command("import", "-window", window, str(output / f"{name}-hub.png"))
-                    assert "profile" in capture_title(window, name + "-parent", width)
+                    title("Profile")
+                    assert switches(logfile, baseline) == [], (name, "Profile Data skipped its parent",
+                                                               switches(logfile, baseline))
                     # The Profile hub's Back returns to Apps: one switch
                     # leaves Profile, and Data was not skipped on the way.
-                    click(window, back_x, 24)
-                    left = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)",
-                                      logfile.read_text()[baseline:])
-                    assert len(left) == 1 and left[0][0] == "10", (name, "Profile hub Back did not leave Profile once", left)
-                    open_practice(window, name, width, height)
-                    after = logfile.read_text()[baseline:]
-                    switches = re.findall(r"ROUTE switch frame=\d+ screen=(\d+)->(\d+)", after)
-                    assert switches[-1][1] == "0", (name, switches, after[-1200:])
-                time.sleep(0.5)
-                command("import", "-window", window, str(output / f"{name}-after.png"))
+                    driver.press(label="Back", role="button")
+                    wait_for(lambda: switches(logfile, baseline), f"{name}: Profile hub Back did not leave Profile")
+                    driver.wait(label="Apps", role="text")
+                    driver.wait_idle(frames=3)
+                    left = switches(logfile, baseline)
+                    assert len(left) == 1 and left[0][0] == "10", (name, "Profile hub Back did not leave Profile once",
+                                                                   left)
+                    open_practice(name)
+                    wait_for(lambda: switches(logfile, baseline)[-1][1] == "0",
+                             f"{name}: Practice did not open: {switches(logfile, baseline)}")
                 assert "APP: frame rejected with status" not in logfile.read_text()
             finally:
                 app.terminate()

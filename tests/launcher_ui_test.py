@@ -1,4 +1,8 @@
-"""Exercise the app launcher with disposable data on a private Xvfb display."""
+"""Exercise the app launcher with disposable data on a private Xvfb display.
+
+The app runs with Kryon's test driver: cards, pins and actions are found in
+its widget tree by label and pressed through its own pointer path.
+"""
 
 import contextlib
 import argparse
@@ -10,7 +14,9 @@ import subprocess
 import tempfile
 import time
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageDraw
+
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/launcher-ui-test"
@@ -26,6 +32,9 @@ arguments = parser.parse_args()
 BINARY = Path(arguments.binary).resolve()
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
+# Each favorite route's name in the navigation and on its Apps card.
+ROUTE_LABELS = {12: "Lumi", 1: "Habits", 2: "Practice", 3: "Lists", 11: "Diary"}
+TRANSITION = re.compile(r"ROUTE switch.*screen=\d+->(\d+)")
 
 
 def stop(process):
@@ -38,10 +47,22 @@ def stop(process):
         process.wait(timeout=5)
 
 
+def wait_for(predicate, message, timeout=10):
+    deadline = time.monotonic() + timeout
+    while True:
+        result = predicate()
+        if result:
+            return result
+        assert time.monotonic() < deadline, message() if callable(message) else message
+        time.sleep(.05)
+
+
 with contextlib.ExitStack() as stack:
+    driver = UiDriver(OUTPUT / "driver")
     env = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV}
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
                INBE_DEBUG_ROUTE="1")
+    env.update(driver.environment())
     if arguments.with_tray:
         env.pop("APP_NO_TRAY", None)
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
@@ -63,37 +84,34 @@ with contextlib.ExitStack() as stack:
         with Image.open(path) as image:
             return image.convert("RGB").copy()
 
-    def click(window, x, y, hold=.12):
-        command("xdotool", "mousemove", "--window", window, str(x), str(y))
-        time.sleep(.12)
-        command("xdotool", "mousedown", "1")
-        time.sleep(hold)
-        command("xdotool", "mouseup", "1")
-        time.sleep(.4)
+    def key(window, name, changed):
+        """Press a key the app reads from raylib directly, not through the
+        test driver, until the screen shows its effect."""
+        for attempt in range(3):
+            command("xdotool", "windowfocus", window)
+            command("xdotool", "keydown", "--clearmodifiers", name)
+            time.sleep(.15)
+            command("xdotool", "keyup", name)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if changed():
+                    return
+                time.sleep(.05)
+        raise AssertionError(f"{name} had no effect: {driver.text()}")
 
-    def key(window, name):
-        command("xdotool", "windowfocus", window)
-        command("xdotool", "keydown", "--clearmodifiers", name)
-        time.sleep(.12)
-        command("xdotool", "keyup", name)
-        time.sleep(.4)
-
-    def drag(window, start, end, name):
-        command("xdotool", "mousemove", "--window", window, *map(str, start))
-        time.sleep(.12)
-        command("xdotool", "mousedown", "1")
-        time.sleep(.12)
-        for step in range(1, 13):
-            point = [round(a + (b - a) * step / 12) for a, b in zip(start, end)]
-            command("xdotool", "mousemove", "--window", window, *map(str, point))
-            time.sleep(.035)
-        capture(window, name + "-dragging")
-        command("xdotool", "mouseup", "1")
-        time.sleep(.4)
+    def database(profile):
+        # Read-only: a read-write connection that closes while the app has
+        # lost its own lock would checkpoint and delete the WAL it writes to.
+        uri = (profile / "inbe.db").as_uri() + "?mode=ro"
+        return contextlib.closing(sqlite3.connect(uri, uri=True, timeout=3))
 
     def settings(profile):
-        with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
+        with database(profile) as db:
             return dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
+
+    def wait_setting(profile, name, expected, message=None):
+        wait_for(lambda: settings(profile).get(name) == str(expected),
+                 lambda: message or f"{name} is {settings(profile).get(name)!r}, not {expected!r}")
 
     def favorites(profile):
         saved = settings(profile)
@@ -105,22 +123,133 @@ with contextlib.ExitStack() as stack:
         if "enabled_apps" in values:
             for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi")):
                 values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
-        with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
+        with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=3)) as db, db:
             for name, value in values.items():
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
                            (user, name, str(value)))
 
+    def transitions(log):
+        return TRANSITION.findall(log.read_text())
+
+    def wait_transition(log, before, screen, message):
+        """A new route switch, the last of which opens screen."""
+        wait_for(lambda: len(transitions(log)) > before and transitions(log)[-1] == str(screen),
+                 lambda: f"{message}: {transitions(log)}")
+
+    def by_index(tree):
+        return {node["index"]: node for node in tree}
+
+    def under(tree, node, kind):
+        nodes = by_index(tree)
+        parent = nodes.get(node["parent"])
+        while parent is not None:
+            if parent["kind"] == kind:
+                return True
+            parent = nodes.get(parent["parent"])
+        return False
+
+    def navigation(tree=None):
+        """The visible navigation's buttons in order, Apps last."""
+        tree = tree if tree is not None else driver.tree()
+        return [node for node in tree if node["kind"] == "button" and node["visible"]
+                and under(tree, node, "navigation_bar")]
+
+    def pin(label):
+        matches = [node for node in navigation() if node["label"] == label]
+        assert matches, f"No {label} in the navigation: {driver.text()}"
+        return matches[0]
+
+    def cards():
+        """The Apps cards in Pinned and in More apps, in order."""
+        tree = driver.tree()
+        headings = {node["label"]: node for node in tree
+                    if node["kind"] == "text" and node["label"] in ("Pinned", "More apps")}
+        grid = [node for node in tree if node["kind"] == "button"
+                and by_index(tree).get(node["parent"], {}).get("kind") == "scroll"
+                and node["label"] not in ("Install", "Uninstall")]
+        more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
+        pinned = [node for node in grid if node["y"] < more_top]
+        more = [node for node in grid if node["y"] >= more_top]
+        return pinned, more, tree
+
+    def corner(card, tree):
+        """The install or remove symbol in a card's top-right corner."""
+        inside = [node for node in tree if node["label"] in ("Install", "Uninstall")
+                  and card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"]
+                  and card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
+        assert len(inside) == 1, f"{card['label']} has no corner symbol: {inside}"
+        assert inside[0]["x"] + inside[0]["width"] / 2 > card["x"] + card["width"] / 2, "Symbol is not at the right"
+        assert inside[0]["y"] + inside[0]["height"] / 2 < card["y"] + card["height"] / 2, "Symbol is not at the top"
+        return inside[0]
+
+    def press(node, hold=0.0):
+        """Press one widget found in the tree, held for a while if asked."""
+        if hold <= 0:
+            selector = dict(key=node["key"])
+            if node["label"]:
+                selector["label"] = node["label"]
+            driver.press(**selector)
+            return
+        x, y = UiDriver.center(node)
+        driver.pointer(x, y)
+        driver.pointer(x, y, down=True)
+        time.sleep(hold)
+        driver.pointer(x, y, down=False)
+        driver.release_pointer()
+
+    def drag(start, end):
+        driver.drag(UiDriver.center(start), end, steps=12)
+        driver.wait_idle(frames=2, timeout=2)
+
+    def to_pixels(node, tree):
+        """A node's bounds in window pixels; the tree is in zoomed units,
+        offset by the camera."""
+        screen = tree[0]
+        scale = window_size[0] / screen["width"]
+        return ((node["x"] - screen["x"]) * scale, (node["y"] - screen["y"]) * scale,
+                node["width"] * scale, node["height"] * scale)
+
+    def tap_pixel(x, y):
+        """Press and release at a window pixel where no widget may be."""
+        screen = driver.tree()[0]
+        scale = screen["width"] / window_size[0]
+        point = (screen["x"] + x * scale, screen["y"] + y * scale)
+        driver.pointer(*point)
+        driver.pointer(*point, down=True)
+        driver.pointer(*point, down=False)
+        driver.release_pointer()
+
+    def apps_open():
+        return bool(driver.find(label="Pinned", visible=True))
+
+    def open_apps(hold=0.0):
+        press(pin("Apps"), hold)
+        driver.wait(label="Pinned")
+
+    def open_profile(log):
+        """Profile, an Apps action, replaces Apps with its own page."""
+        before = len(transitions(log))
+        driver.press(label="Profile", role="button")
+        driver.wait_gone(label="Pinned")
+        driver.wait(label="Profile", role="title_bar")
+        wait_for(lambda: transitions(log) and transitions(log)[-1] == "10",
+                 lambda: f"Apps did not open Profile: {transitions(log)[before:]}")
+
+    # The window's size in pixels, for widgets' bounds in zoomed units.
+    window_size = [0, 0]
+
     @contextlib.contextmanager
-    def application(profile, name, width=900, height=720):
+    def application(profile, name, width=900, height=720, scale=1.0):
         app_env = env | {"APP_DATA_ROOT": str(profile)}
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
             app = subprocess.Popen([str(BINARY)], cwd=ROOT, env=app_env,
                                    stdout=log, stderr=subprocess.STDOUT)
-            window = ""
+            driver.attach(app, log_path)
             try:
                 deadline = time.monotonic() + 20
+                window = ""
                 while time.monotonic() < deadline:
                     assert app.poll() is None, log_path.read_text()
                     found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
@@ -132,33 +261,27 @@ with contextlib.ExitStack() as stack:
                 assert window, "App did not map its own window"
                 command("xdotool", "windowsize", window, str(width), str(height))
                 command("xdotool", "windowmove", window, "0", "0")
-                command("xdotool", "windowfocus", window)
-                time.sleep(.8)
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    image = capture(window, name + "-ready")
-                    extrema = image.getextrema()
-                    if image.size == (width, height) and any(low != high for low, high in extrema):
-                        break
-                    time.sleep(.1)
-                else:
-                    raise AssertionError("App did not render its resized window")
+                window_size[:] = [width, height]
+
+                def resized():
+                    screen = driver.tree()[0]
+                    return (abs(screen["width"] * scale - width) < 1 and
+                            abs(screen["height"] * scale - height) < 1)
+                wait_for(resized, "App did not lay out its resized window")
+                driver.wait_idle(frames=3)
                 yield window, log_path
                 assert app.poll() is None, log_path.read_text()
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
                 assert "portable subset" not in log_path.read_text(), log_path.read_text()
-            except BaseException:
-                if window and app.poll() is None:
-                    capture(window, name + "-failure")
-                raise
             finally:
                 stop(app)
 
     if arguments.dock_only:
         with tempfile.TemporaryDirectory(prefix="inbe-dock-") as temporary:
             profile = Path(temporary)
+            user = None
             with application(profile, "dock-initialize"):
-                with sqlite3.connect(profile / "inbe.db") as db:
+                with database(profile) as db:
                     user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
             routes = [12, 1, 2, 3, 11]
             seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
@@ -179,86 +302,67 @@ with contextlib.ExitStack() as stack:
                 seed(profile, {"navigation_placement": placement, "ui_scale": zoom,
                                "main_tab": 3, "launcher_favorite_count": count} |
                      {f"launcher_favorite_{i}": route for i, route in enumerate(routes[:count])})
-                with application(profile, name, width, height) as (window, log):
-                    image = capture(window, name)
+                with application(profile, name, width, height, zoom / 10) as (window, log):
                     scale = zoom / 10
                     vertical = placement in (1, 3)
-                    if vertical:
-                        step = min(int(84 * scale), int((height - 36 * scale) / (count + 1)))
-                        item_height = step * 72 // 84
-                        points = [(44 if placement == 1 else width - 44,
-                                   int(24 * scale + i * step + item_height / 2))
-                                  for i in range(count)]
-                        points.append((points[0][0], int(height - 12 * scale - step + item_height / 2)))
-                    else:
-                        margin = min(int(12 * scale), width // 16)
-                        gap = min(int(8 * scale), (width - margin * 2) // ((count + 1) * 4))
-                        item_width = min(int(144 * scale), (width - margin * 2 - gap * count) // (count + 1))
-                        group_width = (count + 1) * (item_width + gap) - gap
-                        start = (width - group_width) / 2
-                        dock_height = round((52 if count + 1 > 4 else 56) * scale)
-                        y = dock_height // 2 if placement == 4 else height - dock_height // 2
-                        points = [(int(start + i * (item_width + gap) + item_width / 2), y)
-                                  for i in range(count + 1)]
-                        edge = dock_height if placement == 4 else height
+                    tree = driver.tree()
+                    items = navigation(tree)
+                    expected = [ROUTE_LABELS[route] for route in routes[:count]] + ["Apps"]
+                    assert [item["label"] for item in items] == expected, \
+                        f"{name}: the navigation shows {[item['label'] for item in items]}"
+                    # Every pin and Apps fits whole in the window, side by side.
+                    placed = [to_pixels(item, tree) for item in items]
+                    for item, (x, y, w, h) in zip(items, placed):
+                        assert item["visible_width"] >= item["width"] - 1 and \
+                            item["visible_height"] >= item["height"] - 1, f"{name}: {item['label']} is cut off"
+                        assert x >= -1 and y >= -1 and x + w <= width + 1 and y + h <= height + 1, \
+                            f"{name}: {item['label']} lies outside the window at {(x, y, w, h)}"
+                    for first, second in zip(placed, placed[1:]):
+                        if vertical:
+                            assert first[1] + first[3] <= second[1] + 0.5, f"{name}: pins overlap"
+                        else:
+                            assert first[0] + first[2] <= second[0] + 0.5, f"{name}: pins overlap"
+                    if not vertical:
+                        image = capture(window, name)
+                        bar = [node for node in tree if node["kind"] == "navigation_bar"][0]
+                        _, bar_y, _, bar_height = to_pixels(bar, tree)
+                        edge = round(bar_y + bar_height) if placement == 4 else height
                         strip = image.crop((round(12 * scale), edge - max(1, round(5 * scale)),
                                             width - round(12 * scale), edge))
                         if 11 in routes[:count]:
-                            active = routes[:count].index(11)
-                            center = points[active][0] - round(12 * scale)
-                            radius = item_width / 2 + round(4 * scale)
+                            active_x, _, active_width, _ = placed[routes[:count].index(11)]
+                            center = active_x + active_width / 2 - round(12 * scale)
+                            radius = active_width / 2 + round(4 * scale)
                             ImageDraw.Draw(strip).rectangle(
                                 (round(center - radius), 0, round(center + radius), strip.height),
                                 fill=strip.getpixel((0, 0)))
                         assert all(low == high for low, high in strip.getextrema()), \
                             f"{name}: dock still draws an underline or scrollbar"
-                    for route, point in zip(routes[:count], points):
-                        before = len(re.findall(r"ROUTE switch", log.read_text()))
-                        click(window, *point)
-                        transitions = re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())
-                        assert len(transitions) > before and int(transitions[-1]) == screens[route], \
-                            f"{name}: pin {route} is not reachable at {point}: {log.read_text()}"
-                    click(window, *points[-1])
-                    capture(window, name + "-apps")
-                    footer_y = height - (dock_height if not vertical and placement != 4 else 0) - round(36 * scale)
-                    click(window, 170 if vertical else width // 4, footer_y)
-                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
-                        f"{name}: Apps or its Profile action is unreachable"
+                    for route, item in zip(routes[:count], items):
+                        before = len(transitions(log))
+                        press(item)
+                        wait_transition(log, before, screens[route],
+                                        f"{name}: pin {route} is not reachable")
+                        # Opening another app, with or without Diary's
+                        # return bar, never moves the pins or Apps.
+                        tree = driver.tree()
+                        moved = [to_pixels(node, tree) for node in navigation(tree)]
+                        assert moved == placed, f"{name}: the navigation moved: {placed} -> {moved}"
+                    open_apps()
+                    open_profile(log)
                     assert favorites(profile) == routes[:count], "Dock clicks changed pins"
                 if vertical and count == 3:
                     # The pins above were reached under Diary's return bar;
                     # its Back arrow opening Apps proves the bar was shown.
                     seed(profile, {"main_tab": 3})
                     with application(profile, name + "-back", width, height) as (window, log):
-                        content_left = round(88 * scale) if placement == 1 else 0
-                        click(window, content_left + round(24 * scale), round(24 * scale))
-                        capture(window, name + "-back-apps")
-                        click(window, 170, height - round(36 * scale))
-                        assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", \
-                            f"{name}: Diary's return bar did not lead to Apps"
+                        driver.press(label="Back to Apps", role="button")
+                        driver.wait(label="Pinned")
+                        open_profile(log)
             print("Fitted dock: 3–5 pins, narrow windows, zoom, top/bottom and both rails passed")
         raise SystemExit(0)
 
     layouts = ((900, 720), (390, 844))
-
-    def grid_cell(width, mobile, index, row_top):
-        """A card's left, top and width in Apps' grid, which reflows its
-        columns: at least 140 wide, 12 apart, at most six."""
-        left = 20 if mobile else 108
-        content = width - (40 if mobile else 128)
-        columns = max(1, min(6, (content + 12) // 152))
-        cell = (content - 12 * (columns - 1)) // columns
-        return (left + (index % columns) * (cell + 12),
-                row_top + (index // columns) * 100, cell)
-
-    def card(width, mobile, index, row_top=184):
-        x, y, cell = grid_cell(width, mobile, index, row_top)
-        return (x + cell // 2, y + 44)
-
-    def card_corner(width, mobile, index, row_top=184):
-        # The install or remove symbol sits in the card's top-right corner.
-        x, y, cell = grid_cell(width, mobile, index, row_top)
-        return (x + cell - 22, y + 22)
     if arguments.layout == "desktop":
         layouts = layouts[:1]
     elif arguments.layout == "mobile":
@@ -268,9 +372,10 @@ with contextlib.ExitStack() as stack:
         name = "mobile" if mobile else "desktop"
         with tempfile.TemporaryDirectory(prefix="inbe-launcher-") as temporary:
             profile = Path(temporary)
+            user = None
             with application(profile, name + "-language", width, height) as (window, log):
-                first = capture(window, name + "-first-language")
-                with sqlite3.connect(profile / "inbe.db") as db:
+                driver.wait(label="Choose Language")
+                with database(profile) as db:
                     user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
                 assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the language picker"
                 assert settings(profile)["apps_setup_done"] == "0"
@@ -281,30 +386,27 @@ with contextlib.ExitStack() as stack:
             # Merely opening and closing the picker does not complete setup.
             with application(profile, name + "-language-restart", width, height) as (window, log):
                 assert settings(profile)["language_setup_done"] == "0"
-                click(window, width // 2, height // 2 + 63)
-                assert settings(profile)["language_setup_done"] == "1", log.read_text()
-                capture(window, name + "-first-apps")
+                driver.press(label="Next", role="button")
+                wait_setting(profile, "language_setup_done", 1, log.read_text())
+                driver.wait(label="Pinned")
                 assert settings(profile).get("launcher_guide_seen", "0") == "0"
-                for step in range(3):
-                    capture(window, name + f"-apps-guide-{step + 1}")
-                    key(window, "Right")
-                assert settings(profile)["launcher_guide_seen"] == "1", "Apps guide did not finish"
+                for step in range(1, 4):
+                    driver.wait(label=f"Step {step} of 3")
+                    key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
+                wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
                 # Apps then asks once whether packages may update themselves.
-                # Declining is the first "allow" read: left of, or above, Allow.
-                capture(window, name + "-apps-updates-question")
+                driver.wait(label="Allow", role="button")
                 assert "package_updates_allowed" not in settings(profile)
-                decline = subprocess.run(
-                    ["python3", str(ROOT / "tests/rendered_word.py"),
-                     str(OUTPUT / (name + "-apps-updates-question.png")), "allow", "--leftmost"],
-                    text=True, capture_output=True, timeout=60)
-                assert decline.returncode == 0, "Apps did not ask about app updates"
-                click(window, *map(int, decline.stdout.split()))
-                assert settings(profile).get("package_updates_allowed") == "0", log.read_text()
-                capture(window, name + "-apps-after-updates-question")
-                # Practices is the third pinned card in the same grid as the rest.
-                click(window, *card(width, mobile, 2))
-                assert settings(profile)["apps_setup_done"] == "1", log.read_text()
-                assert settings(profile)["main_tab"] == "1", log.read_text()
+                driver.press(label="Don't allow", role="button")
+                wait_setting(profile, "package_updates_allowed", 0, log.read_text())
+                driver.wait_gone(label="Don't allow")
+                # Practice is the third pinned card in the same grid as the rest.
+                pinned, more, tree = cards()
+                assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
+                assert len({card["parent"] for card in pinned + more}) == 1, "Pinned cards are in another grid"
+                press(pinned[2])
+                wait_setting(profile, "apps_setup_done", 1, log.read_text())
+                wait_setting(profile, "main_tab", 1, log.read_text())
             seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
                            "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                            "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127,
@@ -313,93 +415,107 @@ with contextlib.ExitStack() as stack:
                            "apps_last_update_check": 1900000000,
                            "launcher_favorite_count": 2, "launcher_favorite_0": 1,
                            "launcher_favorite_1": 2})
-            # Desktop keeps Apps in the sidebar's bottom corner.
-            apps_point = (330, height - 42) if mobile else (44, height - 60)
-            pinned_first = card(width, mobile, 0)
-            more_first = card(width, mobile, 0, 320)
             with application(profile, name, width, height) as (window, log):
-                page = capture(window, name + "-practice")
+                driver.wait(label="Start Practice")
                 if not mobile:
+                    # Desktop keeps Apps in the sidebar's bottom corner.
+                    tree = driver.tree()
+                    apps_x, apps_y, apps_width, apps_height = to_pixels(pin("Apps"), tree)
+                    assert apps_x < 88 and apps_y + apps_height > height - 100, "Apps left the sidebar's bottom corner"
+                    driver.wait_idle(frames=3)
+                    page = capture(window, name + "-practice")
                     assert page.getpixel((3, height - 80)) == page.getpixel((width - 3, height - 80)), "Navigation and page use different default palettes"
-                    before = log.read_text()
+                    before = len(transitions(log))
                     # The bottom corner opens Apps; Profile is no longer
                     # hard-pinned there and is an Apps action instead.
-                    click(window, *apps_point)
-                    assert log.read_text().count("ROUTE switch") == before.count("ROUTE switch"), "Profile remains hard-pinned at the bottom"
-                    capture(window, name + "-profile-entry")
-                    click(window, 170, height - 36)
-                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Apps did not open Profile"
-                    capture(window, name + "-profile")
-                    before = log.read_text()
-                    click(window, 110, 28)
+                    open_apps()
+                    assert len(transitions(log)) == before, "Profile remains hard-pinned at the bottom"
+                    open_profile(log)
+                    driver.press(label="Back", role="button")
+                    driver.wait(label="Pinned")
                     assert settings(profile)["main_tab"] == "1", "Profile Back changed the selected app"
-                    capture(window, name + "-profile-back-to-apps")
-                    click(window, 170, height - 36)
-                click(window, *apps_point, hold=.35)
-                capture(window, name + "-apps")
-                click(window, width - 42, 44)
-                click(window, 100 if mobile else 170, height - (92 if mobile else 36))
-                assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "The Apps title corner still dismisses the page"
-                click(window, *apps_point)
+                    open_profile(log)
+                else:
+                    tree = driver.tree()
+                    apps_x, apps_y, apps_width, apps_height = to_pixels(pin("Apps"), tree)
+                    assert apps_y + apps_height > height - 60 and apps_x > width / 2, "Apps left the dock's end"
+                open_apps(hold=.35)
+                # The title's corner no longer closes Apps.
+                tap_pixel(width - 42, 44)
+                driver.wait_idle(frames=3)
+                assert apps_open(), "The Apps title corner still dismisses the page"
+                open_profile(log)
+                open_apps()
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
                 if not mobile:
                     # The grid fills the page, beyond the old drawer.
-                    click(window, *card(width, mobile, 1))
+                    pinned, more, tree = cards()
+                    grid = by_index(tree)[pinned[0]["parent"]]
+                    content = tree[0]["width"] - [node for node in tree if node["kind"] == "navigation_bar"][0]["width"]
+                    assert grid["width"] >= content - 40, "Apps did not fill the desktop content area"
+                    assert pinned[1]["label"] == "Practice"
+                    press(pinned[1])
+                    driver.wait_gone(label="Pinned")
                     assert settings(profile)["main_tab"] == "1", "Apps did not fill the desktop content area"
-                    click(window, *apps_point)
-                    key(window, "Escape")
+                    open_apps()
+                    key(window, "Escape", lambda: not apps_open())
                     assert settings(profile)["main_tab"] == "1", "Closing Apps changed the current page"
-                    click(window, *apps_point)
+                    open_apps()
                 # Holding is an ordinary click. It opens the app and never pins it.
-                click(window, *more_first, hold=.85)
+                pinned, more, tree = cards()
+                assert more[0]["label"] == "Diary", more
+                press(more[0], hold=.85)
+                wait_setting(profile, "main_tab", 3, log.read_text())
                 assert favorites(profile) == [1, 2], "Holding an app changed its pin"
-                assert settings(profile)["main_tab"] == "3", log.read_text()
-                click(window, *apps_point)
-                drag(window, more_first, pinned_first, name + "-pin-diary")
-                assert favorites(profile) == [11, 1, 2], "Dragging into Pinned did not place Diary first"
-                capture(window, name + "-pinned-diary")
-                # Pinned has one extra row; More now begins at y=384.
-                drag(window, pinned_first, (100 if mobile else 170, 400), name + "-unpin-diary")
-                assert favorites(profile) == [1, 2], "Dragging into More did not remove the shortcut"
-                dock_target = (30, height - 42) if mobile else (44, 55)
-                drag(window, more_first, dock_target, name + "-dock-diary")
-                assert favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it"
-                capture(window, name + "-dock-placed")
-                if not mobile:
-                    # Profile stays in Apps after favorite changes.
-                    click(window, 170, height - 36)
-                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Favorite changes hid Profile"
-                    assert not "frame rejected" in log.read_text()
-                    capture(window, name + "-profile-after-drag")
-                else:
-                    click(window, 100, height - 92)
-                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Mobile Apps did not open Profile"
-                    capture(window, name + "-profile")
+                open_apps()
+                pinned, more, tree = cards()
+                drag(more[0], UiDriver.center(pinned[0]))
+                wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging into Pinned did not place Diary first")
+                pinned, more, tree = cards()
+                assert [card["label"] for card in pinned] == ["Diary", "Habits", "Practice"], pinned
+                # Pinned has one extra row; drop Diary on the first of More.
+                drag(pinned[0], UiDriver.center(more[0]))
+                wait_for(lambda: favorites(profile) == [1, 2], "Dragging into More did not remove the shortcut")
+                pinned, more, tree = cards()
+                assert more[0]["label"] == "Diary", more
+                drag(more[0], UiDriver.center(navigation(tree)[0]))
+                wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it")
+                assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
+                # Profile stays in Apps after favorite changes.
+                assert apps_open(), "Dragging closed Apps"
+                open_profile(log)
+                assert "frame rejected" not in log.read_text()
             with application(profile, name + "-restart", width, height) as (window, log):
                 assert favorites(profile) == [11, 1, 2], "Restart changed personal pins"
                 assert settings(profile)["language_setup_done"] == "1"
-                capture(window, name + "-preserved-pins")
+                assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
             with application(profile, name + "-manage", width, height) as (window, log):
-                click(window, *((330, height - 28) if mobile else apps_point))
-                with sqlite3.connect(profile / "inbe.db") as db:
+                open_apps()
+                with database(profile) as db:
                     habit_count = db.execute("SELECT COUNT(*) FROM habits").fetchone()[0]
                 selected_tab = settings(profile)["main_tab"]
                 # Habits is the second pinned card. The trash symbol in its
                 # top-right corner removes only the installation and shortcut,
                 # retaining local data.
-                click(window, *card_corner(width, mobile, 1))
-                assert settings(profile)["app_used_habits"] == "0", "Trash did not uninstall Habits"
+                pinned, more, tree = cards()
+                assert pinned[1]["label"] == "Habits", pinned
+                trash = corner(pinned[1], tree)
+                assert trash["label"] == "Uninstall"
+                press(trash)
+                wait_setting(profile, "app_used_habits", 0, "Trash did not uninstall Habits")
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
-                with sqlite3.connect(profile / "inbe.db") as db:
+                with database(profile) as db:
                     assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
-                capture(window, name + "-uninstalled")
                 # The same app is now first in More, with an install symbol in
                 # the same corner of its card.
-                click(window, *card_corner(width, mobile, 0, 320))
-                assert settings(profile)["app_used_habits"] == "1", "Install did not restore Habits"
+                pinned, more, tree = cards()
+                assert more[0]["label"] == "Habits", more
+                install = corner(more[0], tree)
+                assert install["label"] == "Install"
+                press(install)
+                wait_setting(profile, "app_used_habits", 1, "Install did not restore Habits")
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
                 assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
-                capture(window, name + "-reinstalled")
             if not mobile:
                 # Overflow must leave Apps reachable on either side.
                 all_favorites = [12, 1, 2, 3, 11]
@@ -408,17 +524,17 @@ with contextlib.ExitStack() as stack:
                                    "launcher_favorite_count": len(all_favorites)} |
                          {f"launcher_favorite_{i}": route for i, route in enumerate(all_favorites)})
                     with application(profile, name + "-short-" + side, width, 500) as (window, log):
-                        capture(window, name + "-short-" + side)
-                        click(window, 44 if placement == 1 else width - 44, 440)
-                        capture(window, name + "-short-apps-" + side)
-                        click(window, 170, 464)
-                        assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Overflow hid Profile in Apps"
+                        tree = driver.tree()
+                        apps = pin("Apps")
+                        x, y, w, h = to_pixels(apps, tree)
+                        assert (x < 88) == (side == "left") and y + h <= 500, "Overflow hid Apps"
+                        open_apps()
+                        open_profile(log)
                         assert favorites(profile) == all_favorites
                 seed(profile, {"navigation_placement": 1, "launcher_favorite_count": 0})
                 with application(profile, name + "-empty", width, height) as (window, log):
-                    capture(window, name + "-empty")
-                    click(window, *apps_point)
-                    click(window, 170, height - 36)
-                    assert re.findall(r"ROUTE switch.*screen=\d+->(\d+)", log.read_text())[-1] == "10", "Empty favorites hid Apps or Profile"
+                    assert [item["label"] for item in navigation()] == ["Apps"], "Empty favorites hid Apps"
+                    open_apps()
+                    open_profile(log)
                     assert favorites(profile) == []
     print("Launcher: first-run language, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")

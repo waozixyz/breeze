@@ -37,17 +37,10 @@ REFERENCE_ROOTS = (
 # Entry points allowed to stay unreferenced, each with its reason. Files they
 # use count as referenced through them. Remove an entry as soon as a make
 # target, workflow or script runs the file; the check reports stale entries.
-UI_DRIVER_WORK = "converted to the test driver; wired by the UI test work"
+PHONE = "runs by hand against a connected phone or emulator, not in CI"
 ALLOWED_UNREFERENCED = {
-    # Converted to the test driver; wired by the UI test work.
-    "tests/customize_nav_ui_test.sh": UI_DRIVER_WORK,
-    "tests/device_link_ui_test.py": UI_DRIVER_WORK,
-    "tests/lumi_emphasis_ui_test.py": UI_DRIVER_WORK,
-    "tests/lumi_guide_ui_test.py": UI_DRIVER_WORK,
-    "tests/lumi_harness_ui_test.sh": UI_DRIVER_WORK,
-    "tests/lumi_selection_ui_test.sh": UI_DRIVER_WORK,
-    "tests/android_picture_window_emulator.py": UI_DRIVER_WORK,
-    "tests/android_text_selection_device.py": UI_DRIVER_WORK,
+    "tests/android_picture_window_emulator.py": PHONE,
+    "tests/android_text_selection_device.py": PHONE,
 }
 
 

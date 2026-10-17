@@ -1,7 +1,9 @@
-"""Select Lumi messages like Telegram on an owned window: hold, sweep, copy, delete."""
+"""Select Lumi messages like Telegram on an owned window: hold, sweep, copy, delete.
+
+The app is driven through Kryon's test driver: messages are found in its
+widget tree and held, swept and pressed through its own pointer path.
+"""
 import contextlib
-import csv
-import io
 import json
 import os
 from pathlib import Path
@@ -11,14 +13,16 @@ import sys
 import tempfile
 import time
 
+from ui_driver import UiDriver
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/lumi-selection-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 ENV = os.environ.copy()
-# The chat column is 720 wide in a 900 wide window; the selection bar's
-# controls are 44 square in its top row.
-LEFT, WIDTH, BAR_Y = 90, 720, 34
+driver = UiDriver(OUTPUT / "driver")
+# A hold selects a message after half a second.
+HOLD_SECONDS = 0.9
 
 
 def command(*args):
@@ -26,72 +30,55 @@ def command(*args):
                           check=True, timeout=5).stdout.strip()
 
 
-def capture(window, label):
-    raw = OUTPUT / f"{label}.xwd"
-    command("xwd", "-silent", "-id", window, "-out", str(raw))
-    command("convert", str(raw), str(OUTPUT / f"{label}.png"))
-    raw.unlink()
-    return OUTPUT / f"{label}.png"
+def place(label):
+    """The centre of the message that says label."""
+    return UiDriver.center(driver.wait(label=label, role="text"))
 
 
-def tap(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.15)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.15)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.4)
-
-
-def hold(window, start, end=None):
+def hold(start, end=None):
     """Hold a message past half a second, then sweep to another one."""
-    command("xdotool", "mousemove", "--window", window, str(start[0]), str(start[1]))
-    time.sleep(0.15)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.9)
+    driver.pointer(*start)
+    driver.pointer(*start, down=True)
+    time.sleep(HOLD_SECONDS)
     if end is not None:
         for step in range(1, 6):
-            x = start[0] + (end[0] - start[0]) * step // 5
-            y = start[1] + (end[1] - start[1]) * step // 5
-            command("xdotool", "mousemove", "--window", window, str(x), str(y))
-            time.sleep(0.1)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.4)
+            driver.pointer(start[0] + (end[0] - start[0]) * step / 5,
+                           start[1] + (end[1] - start[1]) * step / 5, down=True)
+    finish = end if end is not None else start
+    driver.pointer(*finish, down=False)
+    driver.release_pointer()
+    driver.wait(role="button", label="Copy")
 
 
-def word_at(window, label, word):
-    """Where a rendered word is, found with OCR."""
-    result = command("tesseract", str(capture(window, label)), "stdout", "--psm", "11",
-                     "-c", "tessedit_create_tsv=1")
-    for item in csv.DictReader(io.StringIO(result), delimiter="\t"):
-        if (item.get("text") or "").strip().lower() == word:
-            return (int(item["left"]) + int(item["width"]) // 2,
-                    int(item["top"]) + int(item["height"]) // 2)
-    raise AssertionError(f"{word!r} is not on screen")
+def selected_messages():
+    return [node for node in driver.find(role="checkbox", visible=True) if node["selected"]]
 
 
-def lowest_word(window, label, word):
-    """The lowest place a rendered word appears, found with OCR."""
-    result = command("tesseract", str(capture(window, label)), "stdout", "--psm", "11",
-                     "-c", "tessedit_create_tsv=1")
-    places = [(int(item["left"]) + int(item["width"]) // 2, int(item["top"]) + int(item["height"]) // 2)
-              for item in csv.DictReader(io.StringIO(result), delimiter="\t")
-              if (item.get("text") or "").strip().lower() == word]
-    assert places, f"{word!r} is not on screen"
-    return max(places, key=lambda place: place[1])
+def clipboard(expected=None):
+    """The clipboard's text, once the app has written it."""
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            copied = command("xclip", "-selection", "clipboard", "-o")
+        except subprocess.CalledProcessError:
+            copied = None
+        if copied is not None and (expected is None or expected(copied)):
+            return copied
+        assert time.monotonic() < deadline, f"The clipboard holds {copied!r}"
+        time.sleep(0.1)
 
 
-def send(window, text):
-    command("xdotool", "mousemove", "--window", window, "400", "680")
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.1)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.3)
-    command("xdotool", "type", "--delay", "20", text)
-    command("xdotool", "keydown", "Return")
-    time.sleep(0.1)
-    command("xdotool", "keyup", "Return")
-    time.sleep(0.6)
+def send(profile, text):
+    before = len(records(profile))
+    driver.press(role="text_area")
+    driver.type(text)
+    driver.wait(role="text_area", value=text)
+    driver.key("enter")
+    deadline = time.monotonic() + 8
+    while len(records(profile)) < before + 2:
+        assert time.monotonic() < deadline, f"Lumi did not answer {text!r}"
+        time.sleep(0.1)
+    driver.wait(label=text, role="text")
 
 
 def records(profile):
@@ -103,10 +90,13 @@ def records(profile):
 
 @contextlib.contextmanager
 def application(profile, label):
-    with (OUTPUT / f"{label}.log").open("w") as log:
+    log_path = OUTPUT / f"{label}.log"
+    with log_path.open("w") as log:
         app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/cells/lumi.zib")],
-                               cwd=ROOT, env=ENV | {"APP_DATA_ROOT": str(profile), "APP_NO_TRAY": "1"},
+                               cwd=ROOT, env=ENV | driver.environment() |
+                               {"APP_DATA_ROOT": str(profile), "APP_NO_TRAY": "1"},
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, log_path)
         try:
             deadline = time.monotonic() + 20
             while True:
@@ -119,8 +109,8 @@ def application(profile, label):
                 assert time.monotonic() < deadline, "Lumi window did not appear"
                 time.sleep(0.1)
             command("xdotool", "windowsize", window, "900", "720")
-            command("xdotool", "windowfocus", "--sync", window)
-            time.sleep(1.5)
+            driver.wait(role="screen")
+            driver.wait_idle(frames=3)
             yield window
             assert app.poll() is None, "Lumi crashed"
         finally:
@@ -146,24 +136,26 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:
         pass
     keep_offline(profile)
     with application(profile, "select") as window:
-        send(window, "alpha note")
-        send(window, "omega note")
+        send(profile, "alpha note")
+        send(profile, "omega note")
         texts = [record["text"] for record in records(profile)]
         assert texts[0] == "alpha note" and texts[2] == "omega note" and len(texts) == 4, texts
 
         # Holding a message selects it; sweeping selects through another.
-        hold(window, word_at(window, "before-hold", "alpha"), word_at(window, "before-sweep", "omega"))
-        capture(window, "selected")
-        tap(window, LEFT + WIDTH - 2 * 44 - 4 + 22, BAR_Y)  # Copy.
-        copied = command("xclip", "-selection", "clipboard", "-o")
+        hold(place("alpha note"), place("omega note"))
+        assert len(selected_messages()) == 3, selected_messages()
+        driver.press(label="Copy", role="button")
+        copied = clipboard(lambda text: text == "\n\n".join(texts[:3]))
         assert copied == "\n\n".join(texts[:3]), copied
-        capture(window, "copied")
+        driver.wait_gone(label="Copy", role="button")
 
         # Delete asks first, then removes only the held message everywhere.
-        hold(window, word_at(window, "before-delete", "alpha"))
-        tap(window, LEFT + WIDTH - 22, BAR_Y)  # Delete.
-        capture(window, "confirm-delete")
-        tap(window, LEFT + WIDTH - 50, BAR_Y)  # Confirm.
+        hold(place("alpha note"))
+        assert len(selected_messages()) == 1, selected_messages()
+        driver.press(label="Delete", role="button")
+        driver.wait(contains="Delete the selected messages?")
+        assert not records(profile)[0].get("deleted"), "Delete did not ask first"
+        driver.press(label="Delete", role="button")
         deadline = time.monotonic() + 5
         while not records(profile)[0].get("deleted"):
             assert time.monotonic() < deadline, "Delete did not reach the archive"
@@ -171,15 +163,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:
         after = records(profile)
         assert after[0]["deleted"] is True and after[0]["text"] == "—"
         assert [record["text"] for record in after[1:]] == texts[1:]
-        capture(window, "deleted")
+        driver.wait_gone(label="alpha note", role="text")
+        driver.wait(label="omega note", role="text")
     with application(profile, "restart") as window:
-        capture(window, "restarted")
-        try:
-            word_at(window, "restarted-check", "alpha")
-            raise AssertionError("A deleted message came back after restart")
-        except AssertionError as error:
-            if "came back" in str(error):
-                raise
+        driver.wait(label="omega note", role="text")
+        driver.wait_idle(frames=3)
+        assert not driver.find(label="alpha note"), "A deleted message came back after restart"
 # Dragging to the top edge scrolls through older pages while selecting.
 with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-scroll-") as temporary:
     profile = Path(temporary)
@@ -198,21 +187,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-scroll-") as tempor
                        (user, f"cell.lumi.message.test-{index:03}", value))
     with application(profile, "scroll") as window:
         # The newest message is the lowest one in the chat.
-        newest = lowest_word(window, "scroll-start", "history")
-        command("xdotool", "mousemove", "--window", window, str(newest[0]), str(newest[1]))
-        time.sleep(0.15)
-        command("xdotool", "mousedown", "1")
-        time.sleep(0.9)
-        for y in range(newest[1], 20, -40):
-            command("xdotool", "mousemove", "--window", window, str(newest[0]), str(y))
-            time.sleep(0.05)
-        command("xdotool", "mousemove", "--window", window, str(newest[0]), "20")
-        time.sleep(6.0)
-        command("xdotool", "mouseup", "1")
-        time.sleep(0.4)
-        capture(window, "scroll-selected")
-        tap(window, LEFT + WIDTH - 2 * 44 - 4 + 22, BAR_Y)  # Copy.
-        copied = command("xclip", "-selection", "clipboard", "-o")
+        newest = place("History message 045")
+        top = driver.wait(role="screen")["y"] + 20
+        driver.pointer(*newest)
+        driver.pointer(*newest, down=True)
+        time.sleep(HOLD_SECONDS)
+        y = newest[1]
+        while y > top:
+            driver.pointer(newest[0], y, down=True)
+            y -= 40
+        driver.pointer(newest[0], top, down=True)
+        # Held at the top edge, the chat scrolls on through the older pages
+        # until the oldest message shows and the sweep has reached it.
+        driver.wait(label="History message 001", role="text", timeout=30)
+        driver.wait_idle(frames=5, timeout=10, required=True)
+        driver.pointer(newest[0], top, down=False)
+        driver.release_pointer()
+        driver.press(label="Copy", role="button")
+        copied = clipboard(lambda text: "History message 001" in text)
         assert "History message 045" in copied and "History message 001" in copied, copied[:200]
         assert copied.count("History message") == 45, copied.count("History message")
 print("Lumi selection: hold, sweep, edge scrolling through older pages, copy, delete with confirmation, synced deletion and restart passed")

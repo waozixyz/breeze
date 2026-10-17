@@ -1,24 +1,28 @@
-"""KSS editor and app-owned Lumi tools on an owned private Xvfb window."""
+"""KSS editor and app-owned Lumi tools on an owned private Xvfb window.
+
+The app runs with Kryon's test driver: the editor's controls are found in
+its widget tree, pressed and typed into through its own input path.
+"""
 import ast
 import contextlib
-import csv
-import io
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 
+from ui_driver import UiDriver
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/appearance-ui-test'
 OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ['DISPLAY'].split(':')[-1].split('.')[0]) >= 300
+driver = UiDriver(OUTPUT / 'driver')
 ENV = os.environ | dict(APP_NO_TRAY='1', SDL_AUDIODRIVER='dummy',
-                        YUE_DESKTOP_RECOVERY='0')
+                        YUE_DESKTOP_RECOVERY='0') | driver.environment()
 for key in ('WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER'):
     ENV.pop(key, None)
 sequence = 0
@@ -41,10 +45,12 @@ def wait_for(predicate, message):
 
 @contextlib.contextmanager
 def application(profile, label, width=900, height=720):
-    with (OUTPUT / (label + '.log')).open('w') as log:
+    log_path = OUTPUT / (label + '.log')
+    with log_path.open('w') as log:
         app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')],
                                cwd=ROOT, env=ENV | dict(APP_DATA_ROOT=str(profile)),
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, log_path)
         try:
             def find():
                 assert app.poll() is None, 'Owned application exited: ' + label
@@ -53,9 +59,10 @@ def application(profile, label, width=900, height=720):
                 return found.stdout.strip().splitlines()[0] if found.returncode == 0 else ''
             window = wait_for(find, 'Owned app window did not appear')
             command('xdotool', 'windowsize', window, str(width), str(height))
-            command('xdotool', 'windowfocus', window)
             wait_for(lambda: ' = ' in command('xprop', '-id', window, '_HARMONY_APP_STATE'),
                      'App state did not become ready')
+            wait_for(lambda: driver.tree()[0]['width'] == width, 'App did not take its window size')
+            driver.wait_idle(frames=3)
             yield window
             assert app.poll() is None, 'Owned app crashed'
         finally:
@@ -96,52 +103,31 @@ def change(window, name, scope='all', **arguments):
     return tool(window, name, dict(scope=scope, revision=revision, **arguments))
 
 
-def capture(window, label):
-    path = OUTPUT / (label + '.png')
-    command('import', '-window', window, str(path))
-    return path
+def previewed_radius(window, radius):
+    """The Button inspection once the editor's draft previews `radius`."""
+    inspected = tool(window, 'inspect_style', dict(scope='all', widget='Button', state='normal'))
+    if f'radius: {radius}' in inspected.get('inspection', ''):
+        return inspected
+    return None
 
 
-def words(window):
-    path = capture(window, 'current')
-    enlarged = OUTPUT / 'ocr.png'
-    command('convert', str(path), '-resize', '300%', str(enlarged))
-    tsv = command('tesseract', str(enlarged), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-    rows = [row for row in csv.DictReader(io.StringIO(tsv), delimiter='\t')
-            if row.get('text', '').strip()]
-    for row in rows:
-        for key in ('left', 'top', 'width', 'height'):
-            row[key] = str(int(row[key]) // 3)
-    return rows
+def reveal(**selector):
+    """Scroll the Settings panel down until a widget shows, as a wheel would."""
+    for attempt in range(14):
+        found = driver.find(visible=True, **selector)
+        if found:
+            return found[0]
+        panel = [node for node in driver.tree() if node['kind'] == 'scroll' and node['visible']]
+        assert panel, 'Settings has no scrolling panel'
+        x, y = UiDriver.center(panel[-1])
+        driver.pointer(x, y, wheel=-3)
+        driver.release_pointer()
+    raise AssertionError(f'Control not found: {selector}\n{driver.text()}')
 
 
-def tap(window, x, y):
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    command('xdotool', 'mousedown', '1')
-    time.sleep(.12)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(.3)
-
-
-def locate(window, phrase, scroll=False):
-    expected = phrase.lower().split()
-    for attempt in range(14 if scroll else 1):
-        rows = words(window)
-        for i in range(len(rows) - len(expected) + 1):
-            if [re.sub(r'[^a-z0-9:]', '', row['text'].lower())
-                for row in rows[i:i + len(expected)]] == expected:
-                first = rows[i]
-                if phrase == 'save':
-                    line = [row for row in rows if all(row[key] == first[key]
-                            for key in ('block_num', 'par_num', 'line_num'))]
-                    if len(line) != 1:
-                        continue
-                return int(first['left']) + int(first['width']) // 2, int(first['top']) + int(first['height']) // 2
-        if scroll:
-            width = int(re.search(r'WIDTH=(\d+)', command('xdotool', 'getwindowgeometry', '--shell', window))[1])
-            command('xdotool', 'mousemove', '--window', window, str(width - 60), '500', 'click', '--repeat', '3', '5')
-            time.sleep(.2)
-    raise AssertionError('Rendered control not found: ' + phrase + '\n' + ' '.join(row['text'] for row in rows))
+def press(**selector):
+    reveal(**selector)
+    driver.press(**selector)
 
 
 with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
@@ -182,35 +168,34 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         assert change(window, 'reset_style', scope='habits')['ok']
         assert change(window, 'reset_style')['ok']
         tool(window, 'open_view', dict(view='appearance'))
-        tap(window, *locate(window, 'advanced appearance', scroll=True))
+        press(label='Advanced appearance (KSS)', role='button')
         wait_for(lambda: state(window)['appearance']['open'], 'Advanced editor did not open')
-        capture(window, 'desktop-editor')
-        tap(window, *locate(window, 'radius:', scroll=True))
-        command('xdotool', 'key', '--clearmodifiers', 'ctrl+a')
-        command('xdotool', 'type', '--clearmodifiers', '--delay', '10', 'Button { radius: 19; }')
+        press(label='Custom KSS', role='text_area')
+        wait_for(lambda: driver.find(label='Custom KSS', role='text_area')[0]['focused'],
+                 'The KSS editor did not take focus')
+        driver.key('a', control=True)
+        driver.type('Button { radius: 19; }')
         wait_for(lambda: state(window)['appearance']['source'] == 'Button { radius: 19; }',
                  'Manual typing did not update KSS draft')
-        time.sleep(.5)
-        inspected = tool(window, 'inspect_style', dict(scope='all', widget='Button', state='normal'))
+        driver.wait(label='Custom KSS', role='text_area', value='Button { radius: 19; }')
+        # The typed draft previews live once the editor pauses.
+        inspected = wait_for(lambda: previewed_radius(window, 19), 'Typed KSS did not preview')
         assert inspected['ok'] and 'radius: 19' in inspected['inspection'], inspected
-        tap(window, *locate(window, 'save', scroll=True))
+        press(label='Save', role='button')
         wait_for(lambda: read(window)['saved_source'] == 'Button { radius: 19; }', 'UI save did not persist')
-        capture(window, 'saved-preview')
     with application(profile, 'restart') as window:
         assert read(window)['saved_source'] == 'Button { radius: 19; }'
         assert change(window, 'reset_style')['ok']
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
-        tap(window, *locate(window, 'advanced appearance', scroll=True))
-        tap(window, *locate(window, 'ask lumi', scroll=True))
-        capture(window, 'lumi-handoff')
-        assert state(window)['feature'] == 16
+        press(label='Advanced appearance (KSS)', role='button')
+        press(label='Ask Lumi', role='button')
+        wait_for(lambda: state(window)['feature'] == 16, 'Ask Lumi did not hand off to Lumi')
     with application(profile, 'phone', width=390, height=844) as window:
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
-        tap(window, *locate(window, 'advanced appearance', scroll=True))
-        locate(window, 'radius:', scroll=True)
-        capture(window, 'phone-editor')
+        press(label='Advanced appearance (KSS)', role='button')
+        reveal(label='Custom KSS', role='text_area')
     with sqlite3.connect(profile / 'inbe.db') as db:
         assert db.execute("SELECT value FROM settings WHERE key='appearance.kss.all'").fetchone()[0] == ''
 

@@ -5,11 +5,16 @@ holds an account. A shows its code to a new device C, both show the same six
 digits, and A sends the account. Then a new device B shows its code, A scans
 it and sends the account. Codes are read back from screenshots with zbar,
 so they are checked as scannable images. Desktops have no camera; a scanned
-code reaches a window through INBE_TEST_DEVICE_LINK_SCAN."""
+code reaches a window through INBE_TEST_DEVICE_LINK_SCAN.
+
+Each window answers Kryon's test driver in its own directory: buttons, the
+account and the six digits are found in its widget tree, and presses go
+through its own pointer path. Profiles are read only while no app runs on
+them: an app that has shown Profile no longer holds SQLite's file locks (its
+storage size check opens and closes inbe.db), so a reader closing its
+connection would take the app's write-ahead log away from it."""
 
 import contextlib
-import csv
-import io
 import json
 import os
 from pathlib import Path
@@ -23,12 +28,20 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 import device_link_mailbox  # noqa: E402
+from ui_driver import UiDriver  # noqa: E402
 
 BINARY = sys.argv[1]
 DETECT = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT.parent / "photos/build/detect-qr/detect_qr"
 OUTPUT = ROOT / "build/device-link-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
+# The navigation's buttons share one focus group, here the rail.
+NAVIGATION = 6600
+# Device link buttons by stage: the code's Cancel while it shows, Connect
+# after comparing digits, and Connect when asked to send to a scanned device.
+SHOWING_CANCEL = 5280
+CONFIRM_CONNECT = 5281
+ASK_CONNECT = 5283
 
 
 def command(*args):
@@ -45,16 +58,6 @@ def wait_for(predicate, description, seconds=15):
         time.sleep(0.2)
 
 
-def tap(window, x, y):
-    command("xdotool", "windowfocus", window)
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.15)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.18)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.4)
-
-
 def capture(window, label):
     raw = OUTPUT / f"{label}.xwd"
     command("xwd", "-silent", "-id", window, "-out", str(raw))
@@ -63,8 +66,12 @@ def capture(window, label):
     return OUTPUT / f"{label}.png"
 
 
-def scan(window, label):
-    """The code the window shows, read from a screenshot."""
+def scan(device, label):
+    """The code the window shows, read from a screenshot once it shows."""
+    driver, window = device
+    driver.wait(key=SHOWING_CANCEL, role="button")
+    driver.wait_idle(frames=3)
+
     def read():
         found = json.loads(command(str(DETECT), str(capture(window, label))) or "{}")
         codes = [code["text"] for code in found.get("qr_codes", []) if code.get("text", "").startswith("inbe-link:1:")]
@@ -72,46 +79,64 @@ def scan(window, label):
     return wait_for(read, f"No connection code on {label}")
 
 
-def tap_label(window, label, word, region):
-    """Taps a rendered word inside region (left, top, right, bottom), so the
-    test follows layout changes such as where the rail places Apps."""
-    path = capture(window, label)
-    left, top, right, bottom = region
-    command("convert", str(path), "-crop", f"{right - left}x{bottom - top}+{left}+{top}",
-            "+repage", "-colorspace", "Gray", "-normalize", "-resize", "300%", str(path))
-    text = command("tesseract", str(path), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1")
-    found = [row for row in csv.DictReader(io.StringIO(text), delimiter="\t")
-             if row.get("text", "").strip().lower() == word]
-    assert len(found) == 1, f"{word} is missing or ambiguous on {label}"
-    row = found[0]
-    tap(window, left + (int(row["left"]) + int(row["width"]) // 2) // 3,
-        top + (int(row["top"]) + int(row["height"]) // 2) // 3)
+def digits(device):
+    """The six digits a window shows to compare, once it shows them."""
+    driver, _ = device
+    deadline = time.monotonic() + 15
+    while True:
+        for label in driver.labels():
+            found = re.fullmatch(r"\s*(\d{3}) ?(\d{3})\s*", label)
+            if found:
+                return found.group(1) + found.group(2)
+        if time.monotonic() >= deadline:
+            raise driver._failure("No six digits to compare")
+        time.sleep(0.05)
 
 
-def digits(window, label):
-    path = capture(window, label)
-    text = command("tesseract", str(path), "stdout", "--psm", "11")
-    # OCR may drop the gap between the two groups of three.
-    found = re.findall(r"\b(\d{3}) ?(\d{3})\b", text)
-    return found[0][0] + found[0][1] if found else ""
+def shown_account(device):
+    """The account a window shows, shortened to its first and last digits."""
+    driver, _ = device
+    for label in driver.labels():
+        if re.fullmatch(r"[0-9a-f]{8}…[0-9a-f]{8}", label):
+            return label
+    return ""
+
+
+def connected(device, account):
+    """Waits until a window says it is connected and shows the account."""
+    driver, _ = device
+    driver.wait(label="Device connected.")
+    deadline = time.monotonic() + 15
+    while shown_account(device) != account:
+        if time.monotonic() >= deadline:
+            raise driver._failure(f"The window does not show the account {account}")
+        time.sleep(0.05)
 
 
 def setting(profile, key):
-    with sqlite3.connect(profile / "inbe.db", timeout=5) as database:
+    """A saved setting, read while no app has the profile open."""
+    with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=5)) as database:
         row = database.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return row[0] if row else ""
 
 
 def prepare(profile, server):
     """Creates a fresh profile and points it at the local mailbox."""
+    driver = UiDriver(OUTPUT / "driver-first-start")
     first = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/cells/lumi.zib")], cwd=ROOT,
-                             env=os.environ | {"APP_DATA_ROOT": str(profile)},
+                             env=os.environ | {"APP_DATA_ROOT": str(profile)} | driver.environment(),
                              stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    driver.attach(first)
     wait_for(lambda: (profile / "inbe.db").exists(), "Profile was not created")
-    time.sleep(2)
+    # The first start has created its schema once it draws settled frames.
+    driver.wait_idle(frames=3, timeout=30, required=True)
     first.terminate()
-    first.wait(timeout=10)
-    with sqlite3.connect(profile / "inbe.db", timeout=5) as database:
+    try:
+        first.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        first.kill()
+        first.wait(timeout=5)
+    with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=5)) as database, database:
         user = database.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
         for key, value in dict(sync_enabled=0, sync_server_url=server, language="en",
                                language_setup_done=1, apps_setup_done=1, enabled_apps=31,
@@ -124,38 +149,39 @@ def prepare(profile, server):
 
 @contextlib.contextmanager
 def application(profile, label, left, scan_file):
-    with (OUTPUT / f"{label}.log").open("w") as log:
+    log_path = OUTPUT / f"{label}.log"
+    driver = UiDriver(OUTPUT / f"driver-{label}")
+    with log_path.open("w") as log:
         app = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/inbe-full.zib")], cwd=ROOT,
                                env=os.environ | {"APP_DATA_ROOT": str(profile),
-                                                 "INBE_TEST_DEVICE_LINK_SCAN": str(scan_file)},
+                                                 "INBE_TEST_DEVICE_LINK_SCAN": str(scan_file)} |
+                               driver.environment(),
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, log_path)
         try:
             def find():
                 assert app.poll() is None, f"{label} exited"
                 found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                        text=True, capture_output=True, timeout=5)
                 return found.stdout.split()[0] if found.returncode == 0 and found.stdout.strip() else ""
-            window = wait_for(find, f"{label} window did not appear")
+            window = wait_for(find, f"{label} window did not appear", 30)
             command("xdotool", "windowsize", window, "900", "720")
             command("xdotool", "windowmove", window, str(left), "0")
-            time.sleep(1.5)
-            # Apps, Profile, then the account view.
-            tap_label(window, f"{label}-rail", "apps", (0, 0, 88, 720))
-            tap(window, 297, 683)
-            tap(window, 541, 195)
-            time.sleep(0.6)
-            yield window
+            driver.wait_idle(frames=3)
+            # Apps in the rail, Profile, then the account view.
+            driver.press(label="Apps", role="button", focus_id=NAVIGATION)
+            driver.press(label="Profile", role="button")
+            driver.press(label="Connect Account", role="button")
+            driver.wait(label="Sync", role="title_bar")
+            yield driver, window
             assert app.poll() is None, f"{label} crashed"
-        except BaseException:
-            if app.poll() is None and "window" in locals():
-                capture(window, f"failure-{label}")
-            raise
         finally:
             app.terminate()
             try:
                 app.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 app.kill()
+                app.wait(timeout=5)
 
 
 server, mailbox = device_link_mailbox.start()
@@ -167,46 +193,40 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-link-") as directory:
     for profile in profiles.values():
         prepare(profile, address)
     with application(profiles["a"], "a", 0, scans["a"]) as a:
-        tap(a, 494, 87)
-        account = wait_for(lambda: setting(profiles["a"], "sync_public_id"), "A did not create an account")
-        time.sleep(1)
-        capture(a, "a-account")
+        a[0].press(label="Create New Account", role="button")
+        a[0].wait(label="Sync now", role="button")
+        account = wait_for(lambda: shown_account(a), "A did not create an account")
         # A holds the account: it shows a code, and the new device C scans it.
-        tap(a, 494, 355)
+        a[0].press(label="Show code", role="button")
         code = scan(a, "a-code")
         assert code.endswith(":s:" + address), code
         with application(profiles["c"], "c", 960, scans["c"]) as c:
             scans["c"].write_text(code)
             wait_for(lambda: not scans["c"].exists(), "C did not read the scanned code")
-            shown = wait_for(lambda: digits(c, "c-digits"), "C did not show digits")
-            confirm = wait_for(lambda: digits(a, "a-digits"), "A did not show digits")
+            shown = digits(c)
+            confirm = digits(a)
             assert shown == confirm, (shown, confirm)
-            capture(a, "a-confirm")
-            capture(c, "c-waiting")
-            tap(a, 381, 414)
-            wait_for(lambda: setting(profiles["c"], "sync_public_id") == account,
-                     "C did not receive A's account")
-            time.sleep(1)
-            capture(c, "c-connected")
-            capture(a, "a-connected")
+            a[0].press(label="Connect", key=CONFIRM_CONNECT, role="button")
+            connected(c, account)
         assert ("/api/v1/link/close", "") in mailbox.requests, "The link was not closed"
+        received = setting(profiles["c"], "sync_public_id")
+        assert received and received[:8] + "…" + received[-8:] == account, "C did not receive A's account"
         # A new device B shows its code; A scans it and sends the account.
         with application(profiles["b"], "b", 960, scans["b"]) as b:
-            tap(b, 494, 278)
+            b[0].press(label="Show code", role="button")
             code = scan(b, "b-code")
             assert code.endswith(":r:" + address), code
             # B keeps polling through a node restart.
             mailbox.outage = 3
             scans["a"].write_text(code)
             wait_for(lambda: not scans["a"].exists(), "A did not read the scanned code")
-            time.sleep(1)
-            capture(a, "a-ask")
-            tap(a, 380, 355)
-            wait_for(lambda: setting(profiles["b"], "sync_public_id") == account,
-                     "B did not receive A's account")
+            a[0].press(label="Connect", key=ASK_CONNECT, role="button")
+            connected(b, account)
             assert mailbox.outage == 0, "B stopped polling during the outage"
-            time.sleep(1)
-            capture(b, "b-connected")
+    # Every device holds A's account, saved.
+    account = setting(profiles["a"], "sync_public_id")
+    assert account and setting(profiles["c"], "sync_public_id") == account, "C did not keep A's account"
+    assert setting(profiles["b"], "sync_public_id") == account, "B did not receive A's account"
     # Private keys never pass through the mailbox in the clear.
     private = setting(profiles["a"], "sync_private_key")
     assert private and len(mailbox.messages) == 3, len(mailbox.messages)

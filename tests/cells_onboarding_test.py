@@ -1,4 +1,8 @@
-"""Verify first-start Apps, existing profiles and temporary mini practices."""
+"""Verify first-start Apps, existing profiles and temporary mini practices.
+
+The app runs with Kryon's test driver: controls are found in its widget tree
+and pressed through its own pointer path.
+"""
 
 import contextlib
 import json
@@ -10,14 +14,16 @@ import sys
 import tempfile
 import time
 
-from PIL import Image, ImageChops
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "build/cells-onboarding-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
+driver = UiDriver(OUTPUT / "driver")
 ENV = os.environ.copy()
 ENV.update(APP_NO_TRAY="1", INBE_DEBUG_ROUTE="1", YUE_DESKTOP_RECOVERY="0")
+ENV.update(driver.environment())
 
 
 def command(*args):
@@ -26,40 +32,60 @@ def command(*args):
     ).stdout.strip()
 
 
-def capture(window, name):
-    raw = OUTPUT / f"{name}.xwd"
-    png = OUTPUT / f"{name}.png"
-    command("xwd", "-silent", "-id", window, "-out", str(raw))
-    command("convert", str(raw), str(png))
-    raw.unlink()
-    with Image.open(png) as image:
-        return image.convert("RGB").copy()
+def wait_for(predicate, message, timeout=10):
+    deadline = time.monotonic() + timeout
+    while True:
+        result = predicate()
+        if result:
+            return result
+        assert time.monotonic() < deadline, message() if callable(message) else message
+        time.sleep(0.05)
 
 
-def tap(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.08)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.5)
+def key(window, name, changed):
+    """Press a key the app reads from raylib directly, not through the test
+    driver, until its effect shows; a dropped key is sent again."""
+    for attempt in range(3):
+        command("xdotool", "windowfocus", window)
+        command("xdotool", "keydown", "--clearmodifiers", name)
+        time.sleep(0.15)
+        command("xdotool", "keyup", name)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if changed():
+                return
+            time.sleep(0.05)
+    raise AssertionError(f"{name} had no effect")
+
+
+def database(profile):
+    # Read-only while the app runs: a read-write connection that closes
+    # while the app has lost its own lock would checkpoint and delete the WAL
+    # the app still writes to.
+    uri = (profile / "inbe.db").as_uri() + "?mode=ro"
+    return contextlib.closing(sqlite3.connect(uri, uri=True, timeout=5))
 
 
 def settings(profile):
-    with sqlite3.connect(profile / "inbe.db", timeout=5) as db:
+    with database(profile) as db:
         return dict(db.execute("SELECT key,value FROM settings"))
 
 
 def wait_setting(profile, key, expected):
-    deadline = time.monotonic() + 10
-    while settings(profile).get(key) != str(expected):
-        assert time.monotonic() < deadline, (key, expected, settings(profile))
-        time.sleep(0.1)
+    wait_for(lambda: settings(profile).get(key) == str(expected),
+             lambda: (key, expected, settings(profile)))
 
 
-def scroll_picker(window, bottom):
-    command("xdotool", "mousemove", "--window", window, "450", "500")
-    command("xdotool", "click", "--repeat", "10", "--delay", "70", "5" if bottom else "4")
-    time.sleep(0.4)
+def wait_log(log, text):
+    wait_for(lambda: text in log.read_text(), lambda: log.read_text())
+
+
+def practice_counter():
+    """The breath count in the practice's circle."""
+    counts = [node for node in driver.tree() if node["kind"] == "text" and node["visible"]
+              and node["label"].isdecimal() and node["height"] >= 100]
+    assert counts, "Expanded practice counter missing"
+    return counts[0]["label"]
 
 
 @contextlib.contextmanager
@@ -73,6 +99,7 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
              *(["--feature", feature] if feature else [])], cwd=ROOT, env=environment,
             stdout=log, stderr=subprocess.STDOUT,
         )
+        driver.attach(app, log_path)
         try:
             deadline = time.monotonic() + 20
             window = ""
@@ -88,10 +115,11 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
                     break
                 time.sleep(0.1)
             assert window, (log_path.read_text(), found.stdout, found.stderr, list(profile.iterdir()))
-            width = "393" if mobile else "400" if mini else "900"
-            command("xdotool", "windowsize", window, width, "800" if mobile else "720")
-            command("xdotool", "windowfocus", window)
-            time.sleep(1)
+            width = 393 if mobile else 400 if mini else 900
+            height = 800 if mobile else 720
+            command("xdotool", "windowsize", window, str(width), str(height))
+            wait_for(lambda: driver.tree()[0]["width"] == width, "The app did not take its window size")
+            driver.wait_idle(frames=3)
             yield window, log_path
             if graceful_close:
                 assert app.wait(timeout=10) == 0, log_path.read_text()
@@ -112,10 +140,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     profile = Path(temporary)
     # First start requires language confirmation before opening the Apps library.
     with application(profile, "fresh-apps") as (window, log):
-        capture(window, "fresh-language")
+        driver.wait(label="Choose Language")
         assert settings(profile)["language_setup_done"] == "0"
-        tap(window, 450, 423)
-        capture(window, "fresh-apps")
+        driver.press(label="Next", role="button")
+        wait_setting(profile, "language_setup_done", 1)
+        driver.wait(label="Pinned")
         saved = settings(profile)
         assert saved["apps_setup_done"] == "0"
         assert saved["language_setup_done"] == "1"
@@ -125,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         assert saved["enabled_apps"] == "22"
         assert saved["launcher_favorite_count"] == "3"
         assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
-        with sqlite3.connect(profile / "inbe.db", timeout=5) as db:
+        with database(profile) as db:
             defaults = {key: (value, updated) for key, value, updated in db.execute(
                 "SELECT key,value,updated_at FROM settings WHERE key LIKE 'app_used_%'")}
             queued = db.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN "
@@ -136,43 +165,39 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         assert "app_order" not in saved, "a new profile sent its default pins"
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
-        capture(window, "resumed-apps")
-        # A tap on Lumi's guide goes on with it rather than closing it; Right
-        # steps through its three steps to the end.
-        for _ in range(3):
-            command("xdotool", "windowfocus", window)
-            command("xdotool", "keydown", "--clearmodifiers", "Right")
-            time.sleep(0.12)
-            command("xdotool", "keyup", "Right")
-            time.sleep(0.4)
+        driver.wait(label="Pinned")
+        # Right steps through Lumi's guide's three steps to the end.
+        for step in range(1, 4):
+            driver.wait(label=f"Step {step} of 3")
+            key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
-        # With the guide finished, Apps asks once about app updates. The first
-        # "allow" read belongs to Don't allow, left of or above Allow.
-        capture(window, "resumed-apps-updates-question")
-        decline = subprocess.run(
-            [sys.executable, str(ROOT / "tests/rendered_word.py"),
-             str(OUTPUT / "resumed-apps-updates-question.png"), "allow"],
-            text=True, capture_output=True, timeout=60)
-        assert decline.returncode == 0, "Apps did not ask about app updates"
-        tap(window, *map(int, decline.stdout.split()))
+        # With the guide finished, Apps asks once about app updates.
+        driver.wait(label="Allow", role="button")
+        driver.press(label="Don't allow", role="button")
         wait_setting(profile, "package_updates_allowed", 0)
-        tap(window, 180, 104)
-        command("xdotool", "type", "--clearmodifiers", "Lists")
-        time.sleep(.3)
+        driver.wait_gone(label="Don't allow")
+        driver.press(label="Find an app", role="text_field")
+        driver.type("Lists")
+        driver.wait(label="Find an app", role="text_field", value="Lists")
         # Lists is not installed, so its card is the first in More apps.
-        tap(window, 180, 270)
+        more_apps = driver.wait(label="More apps")
+        cards = [node for node in driver.find(role="button", visible=True)
+                 if node["y"] > more_apps["y"] and node["label"] not in ("Install", "Uninstall")
+                 and node["y"] < driver.wait(label="Profile", role="button")["y"]]
+        assert cards and cards[0]["label"] == "Lists", cards
+        driver.press(key=cards[0]["key"], label="Lists")
         wait_setting(profile, "apps_setup_done", 1)
         wait_setting(profile, "main_tab", 2)
-        assert "screen=21->16" in log.read_text(), log.read_text()
+        wait_log(log, "screen=21->16")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0]
         db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?,?,?,0,0,1)",
                    ("choice-preserved-list", user, "Saved while Lists is enabled"))
         values = {"habits_guide_seen": 1, "lumi_guides_seen": 127, "tutorial_seen": 1, "package_updates_allowed": 0,
                   "apps_last_update_check": 1900000000}
-        for key, value in values.items():
+        for key_name, value in values.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key_name, str(value)))
     # Mini is explicitly temporary Practice, independently of saved choices.
     for mask in (1, 0):
         with sqlite3.connect(profile / "inbe.db") as db:
@@ -182,13 +207,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             db.execute("UPDATE settings SET value='1' WHERE key='advanced_session_controls'")
             before = list(db.iterdump())
         with application(profile, f"mini-mask-{mask}", mini=True) as (window, log):
-            capture(window, f"mini-mask-{mask}-menu")
-            tap(window, 200, 614)
-            deadline = time.monotonic() + 10
-            while "screen=0->1" not in log.read_text():
-                assert time.monotonic() < deadline, log.read_text()
-                time.sleep(0.1)
-            capture(window, f"mini-mask-{mask}-practice")
+            driver.press(label="Start Practice", role="button")
+            wait_log(log, "screen=0->1")
+            driver.wait(label="Pause", role="button")
         with sqlite3.connect(profile / "inbe.db") as db:
             assert list(db.iterdump()) == before, "Mini changed the persisted profile"
         assert settings(profile)["enabled_apps"] == str(mask)
@@ -197,62 +218,43 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         with application(
             profile, f"mini-expand-{mask}", mini=True, graceful_close=True
         ) as (window, log):
-            tap(window, 200, 614)
-            assert "screen=0->1" in log.read_text(), log.read_text()
-            tap(window, 366, 34)
+            driver.press(label="Start Practice", role="button")
+            wait_log(log, "screen=0->1")
+            driver.press(label="Open full app", role="button")
             command("xdotool", "windowmove", window, "0", "0")
-            time.sleep(1)
-            command("xdotool", "mousemove", "--window", window, "20", "20")
-            first = capture(window, f"mini-expanded-{mask}-session")
+            # The practice goes on in the full window, which can shrink it again.
+            driver.wait(label="Minimize", role="button")
+            wait_for(lambda: driver.tree()[0]["width"] == 900, lambda: driver.tree()[0])
             # Breathing displays its countdown/breath count in the circle,
-            # rather than Patterns' top elapsed-time status. Isolate its dark
-            # numeral from the light animated circle and require it to change.
-            counter = (425, 330, 475, 390)
-            first_count = first.crop(counter).convert("L").point(
-                lambda value: 255 if value < 130 else 0
-            )
-            assert first_count.getbbox(), "Expanded practice counter missing"
-            deadline = time.monotonic() + 10
-            while True:
-                time.sleep(1.1)
-                advanced = capture(window, f"mini-expanded-{mask}-advanced")
-                advanced_count = advanced.crop(counter).convert("L").point(
-                    lambda value: 255 if value < 130 else 0
-                )
-                if ImageChops.difference(first_count, advanced_count).getbbox():
-                    break
-                assert time.monotonic() < deadline, "Expanded mini practice counter stopped advancing"
-            geometry = command("xdotool", "getwindowgeometry", "--shell", window)
-            assert "WIDTH=900" in geometry, geometry
+            # rather than Patterns' top elapsed-time status; it must change.
+            first_count = practice_counter()
+            wait_for(lambda: practice_counter() != first_count,
+                     "Expanded mini practice counter stopped advancing")
             assert settings(profile)["enabled_apps"] == str(mask)
             # Active practice uses the whole window. Its established pause
             # then close action returns to the full profile before Settings.
-            tap(window, 450, 692)  # The enabled breathing controls' Pause.
-            tap(window, 866, 38)
-            deadline = time.monotonic() + 10
-            while log.read_text().count("APP PROBE: app init complete") < 2:
-                assert time.monotonic() < deadline, log.read_text()
-                time.sleep(0.1)
-            capture(window, f"mini-expanded-{mask}-exited")
-            # A real full-app settings action saves the unchanged selection.
-            tap(window, 110, 670)
-            capture(window, f"mini-expanded-{mask}-apps")
+            driver.press(label="Pause", role="button")
+            driver.wait(contains="play", role="button")
+            driver.press(label="Close", role="button")
+            driver.wait(label="Apps", role="button")
+            assert [node for node in driver.tree() if node["kind"] == "navigation_bar"], \
+                "Closing the practice did not return to the full app"
+            # A real full-app settings action, zooming in and back, saves
+            # the unchanged selection with every other setting.
+            scale = settings(profile).get("ui_scale")
+            driver.key("=", control=True)
+            wait_for(lambda: settings(profile).get("ui_scale") != scale, "Zooming saved nothing")
+            driver.key("0", control=True)
+            wait_setting(profile, "ui_scale", 10)
             assert settings(profile)["enabled_apps"] == str(mask)
             # Ctrl+Q follows the owned window's normal quit and app_destroy
             # path, rather than relying on process termination for this check.
-            command("xdotool", "keydown", "ctrl+q")
-            time.sleep(0.15)
-            command("xdotool", "keyup", "ctrl+q")
-            deadline = time.monotonic() + 10
-            while "APP: quit requested" not in log.read_text():
-                assert time.monotonic() < deadline, log.read_text()
-                time.sleep(0.1)
+            key(window, "ctrl+q", lambda: "APP: quit requested" in log.read_text())
         assert settings(profile)["enabled_apps"] == str(mask)
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
             assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
         with application(profile, f"restart-after-expand-{mask}") as (window, log):
-            capture(window, f"restart-after-expand-{mask}")
             assert settings(profile)["enabled_apps"] == str(mask)
     # One host runtime can explicitly open disabled children, preserving data.
     with sqlite3.connect(profile / "inbe.db") as db:
@@ -260,22 +262,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         db.execute("UPDATE settings SET value='0' WHERE key='enabled_apps'")
     with application(profile, "explicit-habits", feature="habits") as (window, log):
         wait_setting(profile, "enabled_apps", 2)
-        assert "screen=6->11" in log.read_text(), log.read_text()
-        capture(window, "explicit-habits")
+        wait_log(log, "screen=6->11")
+        driver.wait(label="+ New Habit", role="button")
         command("xprop", "-id", window, "-f", "_HARMONY_APP_FEATURE", "32c",
                 "-set", "_HARMONY_APP_FEATURE", "4")
         wait_setting(profile, "enabled_apps", 6)
-        assert "screen=11->0" in log.read_text(), log.read_text()
+        wait_log(log, "screen=11->0")
         assert "not found" in command("xprop", "-id", window, "_HARMONY_APP_FEATURE")
-        capture(window, "same-runtime-practices")
+        driver.wait(label="Start Practice", role="button")
         command("xprop", "-id", window, "-f", "_HARMONY_APP_FEATURE", "32c",
                 "-set", "_HARMONY_APP_FEATURE", "2")
-        deadline = time.monotonic() + 10
-        while "screen=0->11" not in log.read_text():
-            assert time.monotonic() < deadline, log.read_text()
-            time.sleep(0.1)
-        capture(window, "same-runtime-habits")
-        with sqlite3.connect(profile / "inbe.db") as db:
+        wait_log(log, "screen=0->11")
+        with database(profile) as db:
             assert db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0] == user
             assert db.execute("SELECT title FROM elist_lists WHERE id='choice-preserved-list'").fetchone()[0] == "Saved while Lists is enabled"
     # Upgrading keeps the selected page and repairs missing selected shortcuts.
@@ -286,7 +284,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         db.execute("UPDATE settings SET value='1' WHERE key IN ('tutorial_seen','habits_guide_seen')")
         db.execute("UPDATE settings SET value='0' WHERE key='main_tab'")
     with application(profile, "existing-profile") as (window, log):
-        capture(window, "existing-profile-all-apps")
         # Upgrading also installs Leaderboard once, without pinning it.
         wait_setting(profile, "enabled_apps", 55)
         wait_setting(profile, "main_tab", 0)
@@ -297,11 +294,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         # same app route rather than assuming a fixed shortcut position.
         command("xprop", "-id", window, "-f", "_HARMONY_APP_FEATURE", "32c",
                 "-set", "_HARMONY_APP_FEATURE", "1")
-        wait_for_lists = time.monotonic() + 10
-        while "->16" not in log.read_text():
-            assert time.monotonic() < wait_for_lists, log.read_text()
-            time.sleep(0.1)
-        capture(window, "existing-data-lists")
+        wait_log(log, "->16")
     result.update(
         first_start_apps_library=True, system_language=True,
         default_apps_lumi_habits_practice=True, default_apps_not_sent=True, restart_in_onboarding=True,

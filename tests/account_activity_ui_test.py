@@ -1,4 +1,8 @@
-"""Observe and control a synthetic account session on an owned Xvfb window."""
+"""Observe and control a synthetic account session on an owned Xvfb window.
+
+What the window says is read from its widget tree through Kryon's test
+driver; host controls go through the window's app-state properties.
+"""
 import ast
 import json
 import os
@@ -9,6 +13,8 @@ import sys
 import tempfile
 import time
 
+from ui_driver import UiDriver
+
 assert os.environ.get('INBE_ACTIVITY_PRIVATE_DISPLAY') == '1'
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/account-activity-ui-test'
@@ -17,6 +23,7 @@ ENV = os.environ | dict(APP_NO_TRAY='1', SDL_AUDIODRIVER='dummy',
                         SDL_VIDEODRIVER='x11', YUE_DESKTOP_RECOVERY='0')
 for key in ('WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER'):
     ENV.pop(key, None)
+driver = UiDriver(OUTPUT / 'driver')
 
 
 def command(*args):
@@ -52,14 +59,9 @@ def action(window, control):
                     'App did not acknowledge activity control')
 
 
-def capture(window, label):
-    path = OUTPUT / (label + '.png')
-    command('import', '-window', window, str(path))
-    from PIL import Image
-    enlarged = OUTPUT / 'ocr.png'
-    with Image.open(path) as source:
-        source.resize((source.width * 3, source.height * 3)).save(enlarged)
-    return command('tesseract', str(enlarged), 'stdout', '--psm', '11').lower()
+def shows(text):
+    """The visible widget whose label contains text, once it shows."""
+    return driver.wait(contains=text)
 
 
 with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
@@ -93,8 +95,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
     publish()
     with (OUTPUT / 'app.log').open('w') as log:
         app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')],
-                               cwd=ROOT, env=ENV | dict(APP_DATA_ROOT=str(profile)),
+                               cwd=ROOT, env=ENV | dict(APP_DATA_ROOT=str(profile)) | driver.environment(),
                                stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, OUTPUT / 'app.log')
         try:
             def find_window():
                 assert app.poll() is None, 'Owned test app exited'
@@ -109,9 +112,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
                      'App state did not appear')
             wait_for(lambda: state(window).get('account_activity_fresh'), 'Remote session did not load')
             assert action(window, 'open.practices')['last_request_ok']
-            time.sleep(.4)
-            text = capture(window, 'running')
-            assert 'meditation' in text and 'running on another device' in text, text
+            shows('meditation')
+            shows('running on another device')
             report = state(window)
             assert not report['practice_running'], 'Observer started a duplicate practice'
             assert report['account_activity']['session_id'] == remote['session_id']
@@ -122,15 +124,15 @@ with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
             assert control['session_id'] == remote['session_id'] and control['paused'] == 1
             publish(paused=1, revision=2, control_id=control['id'], time=int(time.time()))
             wait_for(lambda: state(window)['account_activity']['paused'] == 1, 'Pause acknowledgement did not load')
-            assert 'paused on another device' in capture(window, 'paused')
+            shows('paused on another device')
             publish(time=int(time.time()) - 25)
             wait_for(lambda: not state(window)['account_activity_fresh'], 'Stale session remained fresh')
             report = state(window)
             assert not next(item for item in report['controls'] if item['control'] == 'practice.resume')['enabled']
-            assert 'last known session' in capture(window, 'stale')
+            shows('last known session')
             command('xdotool', 'windowsize', window, '411', '813')
-            time.sleep(.4)
-            assert 'last known session' in capture(window, 'phone-stale')
+            wait_for(lambda: driver.tree()[0]['width'] == 411, 'The phone-sized window was not laid out')
+            shows('last known session')
             publish(active=0, revision=3, time=int(time.time()))
             wait_for(lambda: state(window)['account_activity'] is None, 'Completed session remained active')
             assert database.execute('SELECT COUNT(*) FROM sessions').fetchone()[0] == 0

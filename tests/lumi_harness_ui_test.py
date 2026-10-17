@@ -9,13 +9,14 @@ receives nothing. The title bar's connection button opens the terms; after
 agreeing, the provider gets the request with the key only in its
 Authorization header. Switched off, nothing is sent again. The title bar's
 wrench opens Lumi's own settings page, which shows the provider and
-reopens the terms, and one tap on its Back returns to the chat. Screenshots of each step are kept in build/lumi-harness-ui-test.
+reopens the terms, and one tap on its Back returns to the chat.
+
+The app is driven through Kryon's test driver: buttons are found in its
+widget tree and pressed, and messages typed, through its own input path.
 """
 import ast
 import contextlib
-import csv
 import http.server
-import io
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,8 @@ import sys
 import tempfile
 import threading
 import time
+
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/lumi-harness-ui-test'
@@ -37,6 +40,10 @@ for name in ('WAYLAND_DISPLAY',):
 KEY = 'sk-test-harness-provider-4242'
 REPLY = 'Here is a joke from the test provider.'
 SIZES = {'phone': (1080, 1920, 25), 'desktop': (900, 720, 10)}
+driver = UiDriver(OUTPUT / 'driver')
+# Lumi's title bar buttons, from apps/lumi/lumi_view.zi.
+CONNECTION_KEY = 300401
+WRENCH_KEY = 300390
 
 
 class Provider(http.server.BaseHTTPRequestHandler):
@@ -73,54 +80,6 @@ def wait_for(predicate, description, seconds=12):
         time.sleep(0.1)
 
 
-def capture(window, label):
-    raw = OUTPUT / (label + '.xwd')
-    command('xwd', '-silent', '-id', window, '-out', str(raw))
-    command('convert', str(raw), str(OUTPUT / (label + '.png')))
-    raw.unlink()
-    return OUTPUT / (label + '.png')
-
-
-def tap(window, x, y):
-    command('xdotool', 'windowfocus', window)
-    command('xdotool', 'mousemove', '--window', window, str(x), str(y))
-    time.sleep(0.15)
-    command('xdotool', 'mousedown', '1')
-    time.sleep(0.15)
-    command('xdotool', 'mouseup', '1')
-    time.sleep(0.4)
-
-
-def words(window, label):
-    """Words OCR reads in the owned window: light on dark and dark on light,
-    enlarged so small desktop text reads too. Positions are the window's."""
-    image = capture(window, label)
-    found = []
-    for variant, options in (('plain', []), ('negated', ['-negate', '-level', '10%,70%'])):
-        source = OUTPUT / (label + '-' + variant + '.png')
-        command('convert', str(image), '-colorspace', 'Gray', *options, '-resize', '200%', str(source))
-        result = command('tesseract', str(source), 'stdout', '--psm', '11', '-c', 'tessedit_create_tsv=1')
-        for row in csv.DictReader(io.StringIO(result), delimiter='\t'):
-            if (row.get('text') or '').strip():
-                for key in ('left', 'top', 'width', 'height'):
-                    row[key] = str(int(row[key]) // 2)
-                found.append(row)
-        source.unlink()
-    return found
-
-
-def tap_word(window, word, label, lowest=False, highest=False):
-    """Taps a rendered word in the owned window, found by OCR."""
-    found = [row for row in words(window, label) if row['text'].strip(' .,…').lower() == word.lower()]
-    assert found, f'{word!r} is not on screen ({label})'
-    if lowest:
-        found.sort(key=lambda row: -int(row['top']))
-    elif highest:
-        found.sort(key=lambda row: int(row['top']))
-    row = found[0]
-    tap(window, int(row['left']) + int(row['width']) // 2, int(row['top']) + int(row['height']) // 2)
-
-
 def state(window):
     value = command('xprop', '-id', window, '_HARMONY_APP_STATE')
     return json.loads(ast.literal_eval(value.split(' = ', 1)[1]))
@@ -153,58 +112,35 @@ def setting(profile, key):
     return row[0] if row else None
 
 
-def tap_title_button(window, size, button):
-    """Lumi's title bar ends 12 units from the right with two 40-unit
-    buttons 4 apart: the connection button, then the wrench."""
-    width, _, scale = size
-    scale /= 10
-    centre = 12 + 20 if button == 'wrench' else 12 + 40 + 4 + 20
-    tap(window, width - round(centre * scale), round(26 * scale))
+def terms_open():
+    return bool(driver.find(label='Agree and go online', role='button', visible=True))
 
 
-def tap_back(window, size):
-    """Back leads the settings page's title bar, 52 units tall, right of
-    the 88-unit navigation rail of a desktop window."""
-    width, height, scale = size
-    scale /= 10
-    rail = 88 if width > height else 0
-    tap(window, round((rail + 32) * scale), round(26 * scale))
-
-
-def terms_open(window, label):
-    return any(row['text'] == 'Agree' for row in words(window, label))
-
-
-def tap_composer(window, size, label):
-    """The composer sits at the bottom, above a bottom navigation bar."""
-    width, height, scale = size
-    scale /= 10
-    labels = [row for row in words(window, label) if row['text'] == 'Habits']
-    bottom_bar = [row for row in labels if int(row['top']) > height * 0.8]
-    y = int(bottom_bar[0]['top']) - round(76 * scale) if bottom_bar else height - round(40 * scale)
-    tap(window, round(width * 0.4), y)
-
-
-def send(window, profile, text, label):
+def send(profile, text):
     before = len(chat(profile))
-    tap_composer(window, current_size, label + '-composer')
-    command('xdotool', 'type', '--clearmodifiers', '--delay', '18', text)
-    time.sleep(0.3)
-    command('xdotool', 'keydown', '--clearmodifiers', 'Return')
-    time.sleep(0.15)
-    command('xdotool', 'keyup', 'Return')
+    driver.press(role='text_area')
+    driver.type(text)
+    driver.wait(role='text_area', value=text)
+    driver.key('enter')
     rows = wait_for(lambda: (rows if len(rows := chat(profile)) >= before + 2 and not rows[-1]['user'] else None),
                     'Lumi did not answer: ' + text)
     return rows[-1]['text']
 
 
+def connection(state):
+    """Lumi's title bar connection button, once its label says state."""
+    return driver.wait(key=CONNECTION_KEY, label=state)
+
+
 @contextlib.contextmanager
 def application(profile, size, label):
-    width, height, scale = size
+    width, height, _ = size
     log_path = OUTPUT / (label + '.log')
     with log_path.open('w') as log:
         app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')], cwd=ROOT,
-                               env=ENV | dict(APP_DATA_ROOT=str(profile)), stdout=log, stderr=subprocess.STDOUT)
+                               env=ENV | driver.environment() | dict(APP_DATA_ROOT=str(profile)),
+                               stdout=log, stderr=subprocess.STDOUT)
+        driver.attach(app, log_path)
         try:
             def find():
                 assert app.poll() is None, 'Owned app exited: ' + label
@@ -215,12 +151,17 @@ def application(profile, size, label):
             command('xdotool', 'windowsize', window, str(width), str(height))
             wait_for(lambda: ' = ' in command('xprop', '-id', window, '_HARMONY_APP_STATE'),
                      'App state did not become ready')
-            time.sleep(1.0)
+            # The app lays out at the window's shape, whatever its scale.
+            wait_for(lambda: abs((screen := driver.wait(role='screen'))['width'] * height -
+                                 screen['height'] * width) <= width * height // 100,
+                     'The app did not take the window size')
+            driver.wait_idle(frames=3)
             yield window
             assert app.poll() is None, 'Owned app crashed'
         except BaseException:
-            if app.poll() is None and 'window' in locals():
-                capture(window, 'failure-' + label)
+            if app.poll() is None:
+                with contextlib.suppress(Exception):
+                    (OUTPUT / ('failure-' + label + '.json')).write_text(json.dumps(driver.tree(), indent=1))
             raise
         finally:
             app.terminate()
@@ -240,12 +181,7 @@ def seed(profile, values):
                        'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user, key, str(value)))
 
 
-current_size = None
-
-
 def run(name, size, port):
-    global current_size
-    current_size = size
     Provider.requests.clear()
     with tempfile.TemporaryDirectory(prefix='inbe-lumi-harness-') as directory:
         profile = Path(directory)
@@ -260,50 +196,46 @@ def run(name, size, port):
                            lumi_provider_model='test-model', lumi_provider_key=KEY))
         with application(profile, size, name) as window:
             # Opening Lumi asks right away; "Not now" keeps it offline.
-            wait_for(lambda: terms_open(window, name + '-prompt-wait'), 'Opening Lumi did not show the terms')
-            capture(window, name + '-prompt-on-open')
+            wait_for(terms_open, 'Opening Lumi did not show the terms')
             assert not Provider.requests, 'Showing the terms sent something'
-            tap_word(window, 'Not', name + '-not-now', lowest=True)
-            time.sleep(0.8)
-            assert not terms_open(window, name + '-after-not-now'), 'The terms stayed open'
-            capture(window, name + '-title-offline')
+            driver.press(label='Not now', role='button')
+            driver.wait_gone(label='Agree and go online', role='button')
+            connection('Offline')
             # Once a run: leaving Lumi and coming back doesn't ask again.
             action(window, 'mcp.open_view', dict(view='settings'))
-            time.sleep(1.5)
+            driver.wait(label='Device', role='button')
             action(window, 'mcp.open_view', dict(view='lumi'))
-            time.sleep(0.8)
-            assert not terms_open(window, name + '-reopened'), 'The terms showed twice in one run'
-            answer = send(window, profile, 'tell me a joke', name + '-1')
+            driver.wait(role='text_area')
+            driver.wait_idle(frames=3)
+            assert not terms_open(), 'The terms showed twice in one run'
+            answer = send(profile, 'tell me a joke')
             assert 'offline' in answer.lower() or 'title bar' in answer, answer
-            answer = send(window, profile, 'add a habit stretching every day at 8', name + '-2')
+            answer = send(profile, 'add a habit stretching every day at 8')
             assert 'Stretching' in answer, answer
             habits = {item['title'] for item in action(window, 'mcp.read_context')['tool_result']['habits']}
             assert 'Stretching' in habits, habits
-            send(window, profile, 'new habit jumping rope', name + '-2a')
-            answer = send(window, profile, 'jumping rope should ask how many I did, higher is better',
-                          name + '-2b')
+            send(profile, 'new habit jumping rope')
+            answer = send(profile, 'jumping rope should ask how many I did, higher is better')
             assert 'How many I did?' in answer, answer
-            answer = send(window, profile, 'delete the habit stretching', name + '-2c')
+            answer = send(profile, 'delete the habit stretching')
             assert 'Stretching' in answer and 'yes' in answer.lower(), answer
             habits = {item['title'] for item in action(window, 'mcp.read_context')['tool_result']['habits']}
             assert 'Stretching' in habits, 'Deleted before the person answered'
-            answer = send(window, profile, 'yes', name + '-2d')
+            answer = send(profile, 'yes')
             habits = {item['title'] for item in action(window, 'mcp.read_context')['tool_result']['habits']}
             assert 'Stretching' not in habits, habits
-            capture(window, name + '-habits-offline')
             assert not Provider.requests, 'Lumi reached the provider while offline'
 
-            tap_title_button(window, size, 'connection')
-            wait_for(lambda: terms_open(window, name + '-terms-wait'), 'The terms did not open')
-            capture(window, name + '-agreement')
+            driver.press(key=CONNECTION_KEY)
+            wait_for(terms_open, 'The terms did not open')
             assert not Provider.requests, 'Opening the terms sent something'
-            tap_word(window, 'Agree', name + '-agree', lowest=True)
-            time.sleep(0.8)
-            capture(window, name + '-title-online')
+            driver.press(label='Agree and go online', role='button')
+            driver.wait_gone(label='Agree and go online', role='button')
+            assert connection('Online')['selected'], 'The connection button does not show online'
             assert setting(profile, 'lumi_provider_agreement') == f'1 http://127.0.0.1:{port}/v1'
             assert '"agreed":true' in setting(profile, 'cell.lumi.agreement')
 
-            answer = send(window, profile, 'tell me a joke', name + '-3')
+            answer = send(profile, 'tell me a joke')
             assert answer == REPLY, answer
             assert len(Provider.requests) == 1, Provider.requests
             request = Provider.requests[0]
@@ -316,37 +248,28 @@ def run(name, size, port):
             assert body['messages'][-1] == dict(role='user', content='tell me a joke'), body['messages'][-1]
             assert any(tool['function']['name'] == 'create_habit' for tool in body['tools'])
             assert KEY not in json.dumps(body)
-            capture(window, name + '-online-answer')
+            driver.wait(label=REPLY, role='text')
 
-            tap_title_button(window, size, 'connection')
-            time.sleep(0.4)
-            capture(window, name + '-title-offline-again')
-            answer = send(window, profile, 'another joke please', name + '-4')
+            driver.press(key=CONNECTION_KEY)
+            assert not connection('Offline')['selected'], 'The connection button still shows online'
+            answer = send(profile, 'another joke please')
             assert len(Provider.requests) == 1, 'Lumi reached the provider while switched off'
 
             # The wrench opens Lumi's settings page; one tap on Back returns
             # to the chat.
-            tap_title_button(window, size, 'wrench')
-            time.sleep(0.8)
-            found = words(window, name + '-settings-lumi-words')
-            assert any(row['text'] == 'Read' for row in found), "The wrench did not open Lumi's settings"
-            assert any(row['text'] == 'Model' for row in found), "Lumi's settings show no provider"
-            assert not any(row['text'] == 'Device' for row in found), "The wrench opened the app's Settings"
-            capture(window, name + '-settings-lumi')
-            tap_back(window, size)
-            time.sleep(0.8)
-            found = words(window, name + '-settings-back-words')
-            assert not any(row['text'] == 'Model' for row in found), 'One tap on Back did not leave the settings'
-            assert any(row['text'] == 'another' for row in found), 'Back did not return to the chat'
-            capture(window, name + '-settings-back')
-            tap_title_button(window, size, 'wrench')
-            time.sleep(0.8)
+            driver.press(key=WRENCH_KEY)
+            driver.wait(label='Read the terms', role='button')
+            assert driver.find(label='Model', visible=True), "Lumi's settings show no provider"
+            assert not driver.find(label='Device', visible=True), "The wrench opened the app's Settings"
+            assert KEY not in json.dumps(driver.tree()), 'The settings page shows the provider key'
+            driver.press(label='Back', role='button')
+            driver.wait_gone(label='Model')
+            driver.wait(label='another joke please', role='text')
+            driver.press(key=WRENCH_KEY)
+            driver.wait(label='Read the terms', role='button')
             assert setting(profile, 'lumi_provider_key') == KEY
-            tap_word(window, 'Read', name + '-read-terms')
-            time.sleep(0.8)
-            capture(window, name + '-agreement-read')
-            assert any(row['text'] == 'Withdraw' for row in words(window, name + '-withdraw')), \
-                'The agreed terms do not offer Withdraw'
+            driver.press(label='Read the terms', role='button')
+            driver.wait(label='Withdraw agreement', role='button')
 
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
@@ -357,4 +280,4 @@ try:
 finally:
     server.shutdown()
 print('Lumi harness UI: terms on opening once a run, offline until agreed, connection button, '
-      f"own provider request, and the wrench to Lumi's settings and Back passed; screenshots in {OUTPUT.relative_to(ROOT)}")
+      "own provider request, and the wrench to Lumi's settings and Back passed")

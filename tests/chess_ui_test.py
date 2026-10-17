@@ -2,7 +2,9 @@
 """Chess from More apps on a private display: install, play the computer, restart.
 
 The node's offer comes from a local package (INBE_NODE_APP_FILE), so nothing
-is downloaded or published. Taps find their buttons by the words drawn.
+is downloaded or published. Buttons, squares and pieces are found in the
+app's widget tree through Kryon's test driver; pixels are read once, to see
+that the moved piece is really drawn.
 """
 import os
 from pathlib import Path
@@ -14,6 +16,8 @@ import time
 
 from PIL import Image
 
+from ui_driver import UiDriver
+
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(sys.argv[1]).resolve()
@@ -21,8 +25,14 @@ PACKAGE = Path(sys.argv[2]).resolve()
 OUTPUT = ROOT / "build/chess-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
-FRAME_EDGE = (110, 76, 54)
 IVORY = (246, 241, 231)
+# Chess keys each square's box and the piece drawn on it by the square's
+# index on the board as drawn, from a8 (0) to h1 (63).
+SQUARE_KEY = 8010
+PIECE_KEY = 8400
+START = {"a": "Rook", "b": "Knight", "c": "Bishop", "d": "Queen",
+         "e": "King", "f": "Bishop", "g": "Knight", "h": "Rook"}
+driver = UiDriver(OUTPUT / "driver")
 
 
 def command(*args):
@@ -36,79 +46,72 @@ def capture(window, name):
         return image.convert("RGB").copy()
 
 
-def click(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.12)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.15)
-    command("xdotool", "mouseup", "1")
-    time.sleep(0.5)
+def wait_for(predicate, message, timeout=20):
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            driver.tree()
+            raise driver._failure(message)
+        time.sleep(0.05)
 
 
-def words(window, name):
-    """Each word drawn and the center of its box, read at three times the size."""
-    image = capture(window, name)
-    gray = image.convert("L").resize((image.width * 3, image.height * 3))
-    path = OUTPUT / (name + "-ocr.png")
-    gray.save(path)
-    result = subprocess.run(["tesseract", str(path), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1"],
-                            check=True, text=True, capture_output=True, timeout=20)
-    found = []
-    for line in result.stdout.splitlines()[1:]:
-        fields = line.split("\t")
-        if len(fields) == 12 and fields[11].strip():
-            left, top, width, height = map(int, fields[6:10])
-            found.append((fields[11].strip(), (left + width // 2) // 3, (top + height // 2) // 3))
-    return found
-
-
-def tap_word(window, word, name, attempts=20):
-    """Taps the first drawn word equal to `word`, waiting for it to appear."""
-    for attempt in range(attempts):
-        for text, x, y in words(window, f"{name}-{attempt}"):
-            if text.strip(".,:;!").lower() == word.lower():
-                click(window, x, y)
-                return
-        time.sleep(0.5)
-    raise AssertionError(f"no '{word}' to tap; see {OUTPUT / name}")
-
-
-def wait_for(window, word, name, attempts=40):
-    for attempt in range(attempts):
-        if any(text.strip(".,:;!").lower() == word.lower() for text, _, _ in words(window, f"{name}-{attempt}")):
-            return
-        time.sleep(0.5)
-    raise AssertionError(f"'{word}' never appeared; see {OUTPUT / name}")
-
-
-def board_bounds(image):
-    """The board inside its brown frame: left, top and square size."""
-    width, height = image.size
-    rows = [y for y in range(height) if sum(1 for x in range(0, width, 2)
-                                             if image.getpixel((x, y)) == FRAME_EDGE) > 40]
-    columns = [x for x in range(width) if sum(1 for y in range(0, height, 2)
-                                              if image.getpixel((x, y)) == FRAME_EDGE) > 40]
-    assert rows and columns, "no board frame drawn"
-    top, bottom = rows[0], rows[-1]
-    left, right = columns[0], columns[-1]
-    edge = 3
-    size = min(right - left, bottom - top) - edge * 2
-    return left + edge, top + edge, size // 8
-
-
-def square_center(bounds, square, flipped=False):
-    left, top, cell = bounds
+def square_index(square, flipped=False):
     file = ord(square[0]) - ord("a")
     rank = int(square[1]) - 1
     column = 7 - file if flipped else file
     row = rank if flipped else 7 - rank
-    return left + column * cell + cell // 2, top + row * cell + cell // 2
+    return row * 8 + column
 
 
-def ivory_share(image, bounds, square):
-    """How much of a square is the ivory of the white pieces."""
-    x, y = square_center(bounds, square)
-    cell = bounds[2]
+def square_name(index):
+    return "abcdefgh"[index % 8] + str(8 - index // 8)
+
+
+def board():
+    """Every piece drawn, by the square it stands on."""
+    return {square_name(node["key"] - PIECE_KEY): node["label"] for node in driver.tree()
+            if node["kind"] == "image" and node["visible"] and PIECE_KEY <= node["key"] < PIECE_KEY + 64}
+
+
+def start_position():
+    pieces = {}
+    for file, piece in START.items():
+        pieces[file + "1"] = piece
+        pieces[file + "8"] = piece
+        pieces[file + "2"] = "Pawn"
+        pieces[file + "7"] = "Pawn"
+    return pieces
+
+
+def play(pieces, move):
+    """The board after a move in coordinate notation, such as e2e4."""
+    after = dict(pieces)
+    after[move[2:4]] = after.pop(move[0:2])
+    return after
+
+
+def selected(label):
+    return driver.find(label=label, role="button", visible=True)[0]["selected"]
+
+
+def window_point(x, y):
+    """Where a point of the widget tree is drawn in the window.
+
+    While a node app shows, the tree's screen starts above the window by
+    the title bar's height, so its bounds are shifted from the pixels.
+    """
+    screen = driver.tree()[0]
+    return round(x - screen["x"]), round(y - screen["y"])
+
+
+def ivory_share(image, square):
+    """How much of a square's middle is the ivory of the white pieces."""
+    node = driver.find(key=SQUARE_KEY + square_index(square))[0]
+    x, y = window_point(*UiDriver.center(node))
+    cell = round(node["width"])
     pixels = [image.getpixel((x + dx, y + dy)) for dx in range(-cell // 4, cell // 4)
               for dy in range(-cell // 4, cell // 4)]
     return sum(1 for pixel in pixels if all(abs(a - b) < 12 for a, b in zip(pixel, IVORY))) / len(pixels)
@@ -125,19 +128,23 @@ def stop(process):
 
 
 def launch(profile, name):
-    log = (OUTPUT / (name + ".log")).open("w")
+    log_path = OUTPUT / (name + ".log")
+    log = log_path.open("w")
     app = subprocess.Popen([str(BINARY)], cwd=ROOT,
-                           env=os.environ | {"APP_DATA_ROOT": str(profile), "INBE_NODE_APP_FILE": str(PACKAGE)},
+                           env=os.environ | {"APP_DATA_ROOT": str(profile), "INBE_NODE_APP_FILE": str(PACKAGE)} |
+                           driver.environment(),
                            stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(300):
-        assert app.poll() is None, (OUTPUT / (name + ".log")).read_text()
+    driver.attach(app, log_path)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        assert app.poll() is None, log_path.read_text()
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                capture_output=True, text=True)
         if found.returncode == 0 and (profile / "inbe.db").exists():
             window = found.stdout.splitlines()[0]
             command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
             command("xdotool", "windowmove", window, "0", "0")
-            time.sleep(1.5)
+            driver.wait_idle(frames=3)
             return app, window
         time.sleep(0.1)
     stop(app)
@@ -148,6 +155,11 @@ def settings(profile, user):
     with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
         return {key: (value, updated) for key, value, updated in
                 db.execute("SELECT key,value,updated_at FROM settings WHERE user_id=?", (user,))}
+
+
+def saved_moves(profile, user):
+    record = settings(profile, user).get("cell.chess.computer", ("", 0))[0]
+    return record.split("moves=")[1].split() if "moves=" in record else []
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-chess-") as directory:
@@ -169,33 +181,40 @@ with tempfile.TemporaryDirectory(prefix="inbe-chess-") as directory:
     app, window = launch(profile, "install")
     try:
         # More apps lists Chess because the node (here, the local file) offers it.
-        tap_word(window, "Apps", "open-apps")
-        tap_word(window, "Chess", "more-apps")
-        # The selected level (Medium) is drawn filled, which OCR misses.
-        wait_for(window, "Hard", "setup")
-        capture(window, "setup")
-        tap_word(window, "Easy", "choose-easy")
-        tap_word(window, "Start", "start")
-        wait_for(window, "move", "your-move")
-        before = capture(window, "board")
-        bounds = board_bounds(before)
-        assert ivory_share(before, bounds, "e2") > 0.2 and ivory_share(before, bounds, "e4") < 0.05, "start position"
-        click(window, *square_center(bounds, "e2"))
-        click(window, *square_center(bounds, "e4"))
-        time.sleep(1.0)
-        after = capture(window, "after-move")
-        assert ivory_share(after, bounds, "e4") > 0.2 and ivory_share(after, bounds, "e2") < 0.05, "e4 was not played"
+        driver.press(label="Apps", role="button")
+        driver.press(label="Chess", role="button")
+        # A new game starts on Medium until another level is chosen.
+        driver.wait(label="Hard", role="button")
+        assert selected("Medium") and not selected("Easy"), "Medium is not the starting level"
+        driver.press(label="Easy", role="button")
+        wait_for(lambda: selected("Easy") and not selected("Medium"), "Easy was not chosen")
+        driver.press(label="Start", role="button")
+        driver.wait(label="Your move")
+        driver.wait(label="Chessboard", role="button")
+        position = start_position()
+        assert board() == position, f"start position: {board()}"
+        driver.press(key=SQUARE_KEY + square_index("e2"))
+        driver.press(key=SQUARE_KEY + square_index("e4"))
+        position = play(position, "e2e4")
         # The computer answers, then it is our move again.
-        wait_for(window, "move", "reply")
+        moves = wait_for(lambda: (found if len(found := saved_moves(profile, user)) == 2 else None),
+                         "the computer did not answer e4")
+        assert moves[0] == "e2e4", moves
+        position = play(position, moves[1])
+        wait_for(lambda: board() == position, f"the board does not show {moves}")
+        driver.wait(label="Your move")
+        driver.wait_idle(frames=3)
+        after = capture(window, "after-move")
+        assert ivory_share(after, "e4") > 0.2 and ivory_share(after, "e2") < 0.05, \
+            f"e4 was not drawn; see {OUTPUT / 'after-move.png'}"
         stored = settings(profile, user)
         assert stored["app_used_chess"][0] == "1" and stored["app_used_chess"][1] > 1, stored.get("app_used_chess")
         assert stored["node_app_slot_0"][0] == "chess", stored.get("node_app_slot_0")
         record = stored["cell.chess.computer"][0]
         assert "level=0;color=w;" in record and len(record.split("moves=")[1].split()) == 2, record
         # Friends need an account; without one the tab says how to sign in.
-        tap_word(window, "Friends", "friends")
-        wait_for(window, "Sign", "sign-in")
-        capture(window, "friends")
+        driver.press(label="Friends", role="button")
+        driver.wait(contains="Sign in")
         log = (OUTPUT / "install.log").read_text()
         assert "frame rejected" not in log and app.poll() is None, log
     finally:
@@ -203,11 +222,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-chess-") as directory:
     # After a restart Chess is still installed and the game continues.
     app, window = launch(profile, "restart")
     try:
-        tap_word(window, "Apps", "reopen-apps")
-        tap_word(window, "Chess", "reopen-chess")
-        wait_for(window, "move", "restored")
-        restored = capture(window, "restored")
-        assert ivory_share(restored, board_bounds(restored), "e4") > 0.2, "the saved game was not restored"
+        driver.press(label="Apps", role="button")
+        driver.press(label="Chess", role="button")
+        driver.wait(label="Your move")
+        wait_for(lambda: board() == position, f"the saved game was not restored: {board()}")
         log = (OUTPUT / "restart.log").read_text()
         assert "frame rejected" not in log and app.poll() is None, log
     finally:

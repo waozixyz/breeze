@@ -1,8 +1,10 @@
-"""Scroll archived chat and open Profile's Telegram page on an owned private display."""
+"""Scroll archived chat and open Profile's Telegram page on an owned private display.
+
+The app is driven through Kryon's test driver: it reports its widget tree and
+takes wheel turns and presses through its own input path.
+"""
 import ast
 import contextlib
-import csv
-import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/lumi-history-ui-test"
@@ -33,7 +37,9 @@ def stop(process):
 
 with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, contextlib.ExitStack() as stack:
     profile = Path(directory)
+    driver = UiDriver(OUTPUT / "driver")
     env = {key: value for key, value in os.environ.items() if key not in DISPLAY_KEYS}
+    env.update(driver.environment())
     env.update(APP_DATA_ROOT=str(profile), HOME=directory, XDG_CONFIG_HOME=directory,
                APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy", SDL_VIDEODRIVER="x11",
                LIBGL_ALWAYS_SOFTWARE="1", YUE_DESKTOP_RECOVERY="0")
@@ -52,9 +58,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
 
     @contextlib.contextmanager
     def application(label):
-        with (OUTPUT / (label + ".log")).open("w") as log:
+        log_path = OUTPUT / (label + ".log")
+        with log_path.open("w") as log:
             app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zib")],
                                    cwd=ROOT, env=env, stdout=log, stderr=log)
+            driver.attach(app, log_path)
             try:
                 deadline = time.monotonic() + 20
                 while True:
@@ -67,42 +75,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
                     assert time.monotonic() < deadline, "Owned app window did not appear"
                     time.sleep(.1)
                 command("xdotool", "windowsize", window, "900", "720")
-                time.sleep(.8)
+                driver.wait(role="screen")
+                driver.wait_idle(frames=3)
                 yield window
                 assert app.poll() is None, "Chat crashed"
             finally:
                 stop(app)
-
-    def capture(window, label):
-        path = OUTPUT / (label + ".png")
-        command("import", "-window", window, str(path))
-        ocr = OUTPUT / "ocr.png"
-        command("convert", str(path), "-resize", "200%", str(ocr))
-        text = command("tesseract", str(ocr), "stdout", "-l", "eng", "--psm", "6")
-        (OUTPUT / (label + ".txt")).write_text(text)
-        return text
-
-    def click_word(window, label, word, region):
-        """Clicks a rendered word whose center lies in region (left, top, right, bottom)."""
-        path = OUTPUT / (label + ".png")
-        command("import", "-window", window, str(path))
-        ocr = OUTPUT / "ocr.png"
-        command("convert", str(path), "-resize", "200%", str(ocr))
-        found = []
-        for row in csv.DictReader(io.StringIO(command("tesseract", str(ocr), "stdout", "-l", "eng", "--psm", "11",
-                                                      "-c", "tessedit_create_tsv=1")), delimiter="\t"):
-            if (row.get("text") or "").strip().lower() != word:
-                continue
-            x = (int(row["left"]) + int(row["width"]) // 2) // 2
-            y = (int(row["top"]) + int(row["height"]) // 2) // 2
-            if region[0] <= x < region[2] and region[1] <= y < region[3]:
-                found.append((x, y))
-        assert len(found) == 1, (label, word, found)
-        command("xdotool", "mousemove", "--window", window, str(found[0][0]), str(found[0][1]))
-        command("xdotool", "mousedown", "1")
-        time.sleep(.15)
-        command("xdotool", "mouseup", "1")
-        time.sleep(.6)
 
     def state(window):
         prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
@@ -118,7 +96,19 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
             assert time.monotonic() < deadline, "View did not open"
             time.sleep(.1)
         assert state(window)["last_request_ok"]
-        time.sleep(.5)
+        driver.wait_idle(frames=3)
+
+    def history_numbers():
+        """The numbers of the archived messages the chat shows."""
+        return [int(match.group(1)) for label in driver.labels()
+                if (match := re.fullmatch(r"History message (\d{3})", label))]
+
+    def wait_screen_width(width):
+        deadline = time.monotonic() + 5
+        while driver.wait(role="screen", visible=None)["width"] != width:
+            assert time.monotonic() < deadline, f"The window did not become {width} wide"
+            time.sleep(.05)
+        driver.wait_idle(frames=3)
 
     with application("initialize"):
         pass
@@ -141,37 +131,40 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
 
     with application("history") as window:
         action(window, "lumi")
-        latest = capture(window, "latest")
-        assert "140" in latest, latest
+        driver.wait(label="History message 140")
+        latest = driver.text()
         assert not re.search(r"\bOlder\b|\bNewer\b|Chat on Telegram", latest), latest
-        command("xdotool", "mousemove", "--window", window, "550", "280")
-        earliest = 140
-        for batch in range(10):
-            command("xdotool", "click", "--repeat", "40", "--delay", "25", "4")
-            time.sleep(.3)
-            text = capture(window, "scrolled")
-            values = [int(value) for value in re.findall(r"History message\s+(\d{1,3})", text)]
-            if values:
-                earliest = min(earliest, *values)
+        chat_area = driver.wait(key=300100)  # Lumi's chat, from apps/lumi/lumi_view.zi.
+        x, y = UiDriver.center(chat_area)
+        earliest = min(history_numbers())
+        for batch in range(20):
+            driver.pointer(x, y, wheel=40)
+            driver.wait_idle(frames=2, timeout=2)
+            earliest = min(earliest, *history_numbers())
             if earliest == 1:
                 break
+        driver.release_pointer()
         assert earliest == 1, ("Could not scroll through both older batches", earliest)
         with sqlite3.connect(profile / "inbe.db") as db:
             assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.message.%'").fetchone()[0] == 140
         # Telegram lives in Profile: Apps, Profile, then its Telegram card.
-        click_word(window, "rail", "apps", (0, 0, 88, 720))
-        click_word(window, "apps", "profile", (88, 600, 900, 720))
-        command("xdotool", "mousemove", "--window", window, "450", "400")
+        driver.press(label="Apps", role="button")
+        driver.press(label="Profile", role="button")
+        driver.wait(label="No account")
+        page = driver.wait(role="scroll")
+        x, y = UiDriver.center(page)
         for _ in range(10):
-            command("xdotool", "click", "5")
-        time.sleep(.6)
-        click_word(window, "profile", "telegram", (88, 60, 900, 720))
-        text = capture(window, "telegram")
-        normalized = " ".join(text.split())
-        assert "Telegram input" in normalized and "Connect your sync account first" in normalized, text
+            driver.pointer(x, y, wheel=-1)
+        driver.release_pointer()
+        # The card's button has no label of its own; press its title.
+        driver.press(contains="Telegram input", role="text")
+        driver.wait(contains="Connect your sync account first")
+        driver.wait(contains="Telegram input", role="title_bar")
+        normalized = " ".join(driver.text().split())
+        assert "Telegram input" in normalized and "Connect your sync account first" in normalized, normalized
         command("xdotool", "windowsize", window, "390", "720")
-        time.sleep(.5)
-        text = capture(window, "telegram-narrow")
+        wait_screen_width(390)
+        text = driver.text()
         assert "Connect your sync account first" in " ".join(text.split()), text
     (OUTPUT / "result.json").write_text(json.dumps(dict(passed=True, archived=140, earliest_visible=earliest)) + "\n")
 print("Scrolling to the oldest archived message and Profile's Telegram page passed")

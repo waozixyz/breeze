@@ -430,6 +430,23 @@ lumi-history-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		python3 tests/lumi_history_ui_test.py $(abspath $(TARGET))
 
+.PHONY: lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test
+lumi-selection-ui-test: $(TARGET) $(CELL_BUNDLES)
+	sh tests/lumi_selection_ui_test.sh $(abspath $(TARGET))
+
+lumi-harness-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	sh tests/lumi_harness_ui_test.sh $(abspath $(TARGET))
+
+lumi-guide-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		dbus-run-session -- python3 tests/lumi_guide_ui_test.py $(abspath $(TARGET))
+
+lumi-emphasis-ui-test: $(TARGET) $(CELL_BUNDLES) $(INBE_FULL_BUNDLE)
+	env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 APP_NO_TRAY=1 SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 \
+		xvfb-run -a -n 300 -s '-screen 0 1280x900x24' \
+		python3 tests/lumi_emphasis_ui_test.py $(abspath $(TARGET))
+
 # Frame time and memory with a long Lumi history, saved per label to compare
 # runs: make lumi-performance-test LUMI_PERFORMANCE_LABEL=before
 LUMI_PERFORMANCE_LABEL ?= current
@@ -976,11 +993,16 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test
+VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/visual_test.py $(abspath $(TARGET)) $(VISUAL_TEST_TARGETS)
+
+.PHONY: customize-nav-ui-test
+customize-nav-ui-test: $(TARGET)
+	sh tests/customize_nav_ui_test.sh $(abspath $(TARGET))
+	INBE_TEST_NARROW=1 sh tests/customize_nav_ui_test.sh $(abspath $(TARGET))
 
 .PHONY: settings-sidebar-ui-test
 settings-sidebar-ui-test: $(TARGET)
@@ -3097,6 +3119,16 @@ cells-android-probe: cells
 .PHONY: sync-review-ui-test
 sync-review-ui-test: $(TARGET)
 	@sh tests/sync_review_ui_test.sh $(TARGET)
+
+# Two devices link through scanned QR codes; needs detect_qr from the
+# Photos repository's build.
+DEVICE_LINK_DETECT_QR ?= ../photos/build/detect-qr/detect_qr
+.PHONY: device-link-ui-test
+device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/cells/lumi.zib
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
+		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
+		timeout 300s xvfb-run -a -n 340 -s '-screen 0 1920x900x24' \
+		python3 tests/device_link_ui_test.py $(abspath $(TARGET)) $(abspath $(DEVICE_LINK_DETECT_QR))
 
 # Needs a Harmony checkout beside Inbe with its app-control test build.
 .PHONY: sync-review-harmony-test
