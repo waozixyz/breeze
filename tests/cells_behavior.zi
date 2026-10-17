@@ -20,6 +20,9 @@ ModuleTestFailRun :: () #foreign c_cache;
 #import, file "../src/cells/diary_types.zi";
 Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/cells/diary_store.zi";
+#import, file "../src/cells/diary_records.zi";
+#import, file "../src/cells/diary_blobs.zi";
+#import, file "../src/storage/cell_records.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/core/types.zi";
@@ -43,6 +46,8 @@ Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_size.zi";
 #import "byte_text_linux"
+#import "text_buffer"
+#import "crypto"
 #import, file "../src/app/assets.zi";
 #import, file "../src/app/locale.zi";
 #import, file "../src/storage/sync_node_storage.zi";
@@ -274,6 +279,7 @@ CheckDiary :: () {
     photo = DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 1})
     Expect(photo.photo_count == 1 && photo.photo_name == "A second photo 🌿", 105)
     CheckDiaryPhotoOnFullNode()
+    CheckDiaryPhotoCopies()
     Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)
     bad := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 2})
     bad.action = DIARY_SAVE
@@ -349,6 +355,168 @@ CheckDiaryPhotoOnFullNode :: () {
     Expect(name.count > 0 && DiaryStoreRead(name).data == image, 421)
     PackageFree(name)
     unused RemoveFile(source)
+    storage_set_setting_text("sync_server_url", "")
+    storage_set_sync_enabled(sync_was_enabled)
+}
+
+DiaryTestImage :: (bytes: []u8, seed: s32) -> string {
+    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
+    for index: cast(s32)0..cast(s32)bytes.count - 1 {
+        bytes[index] = ifx index < 8 then header[index] else cast(u8)((index * 7 + seed) % 251)
+    }
+    return TextFromBytes(bytes)
+}
+
+DiaryTestBytes :: (text: string) -> []u8 {
+    descriptor := cast(*TextDescriptor)(*text)
+    return BytesFromPointer(descriptor.data, cast(u64)text.count)
+}
+
+DiaryTestHash :: (data: []u8, output: []u8) -> string {
+    storage_sha256_hex(*data[0], cast(s64)data.count, *output[0])
+    return TextFromCString(*output[0])
+}
+
+// The pass's job for one photo, or 0; other Diary tests leave photos too.
+DiaryTestJob :: (pass: *DiaryBlobPass, name: string) -> s32 {
+    for index: cast(s32)0..pass.count - 1 {
+        if TextUntilNul(pass.jobs[index].name[:]) == name {
+            return pass.jobs[index].kind
+        }
+    }
+    return 0
+}
+
+// The pass's request for one photo, skipping the others.
+DiaryTestNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, name: string) -> bool {
+    while DiaryBlobNext(pass, request) {
+        if TextUntilNul(request.name[:]) == name {
+            return true
+        }
+        DiaryBlobAbandon(request)
+    }
+    return false
+}
+
+// A photo is its file: only its entry syncs, and its sealed copy, the file's
+// size plus 16 bytes, travels to a node and back to the account's devices.
+CheckDiaryPhotoCopies :: () {
+    node := "https://copies.test"
+    sync_was_enabled := storage_sync_enabled()
+    storage_set_sync_enabled(1)
+    storage_set_setting_text("sync_server_url", node)
+    // The account key lets this device seal copies.
+    private: [5121]u8
+    for index: cast(s32)0..cast(s32)5119 {
+        private[index] = ifx index % 2 == 0 then #char "a" else #char "7"
+    }
+    storage_set_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY, TextFromBytes(private[:5120]))
+    png: [3000]u8
+    image := DiaryTestImage(png[:], 3)
+    source := "copied-photo.png"
+    unused RemoveFile(source)
+    file := OpenExclusivePrivate(source)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    Expect(CloseFile(file) && written, 430)
+    name := DiaryStoreAttach(source)
+    unused RemoveFile(source)
+    Expect(name.count > 0, 431)
+    media := DiaryMediaRead(name)
+    hash_text: [65]u8
+    hash := DiaryTestHash(png[:], hash_text[:])
+    Expect(media.valid && !DiaryMediaUploaded(media) && media.size == 3000 &&
+        TextFromBytes(media.hash[:64]) == hash, 432)
+    no_chunks := PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.", hash), ".*'")
+    Expect(ModuleTestCount(no_chunks) == 0, 433)
+    PackageFree(no_chunks)
+    // A pass seals and uploads it, then its entry names the copy.
+    pass: DiaryBlobPass
+    request: DiaryBlobRequest
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, name) == DIARY_BLOB_UPLOAD, 434)
+    Expect(DiaryTestNext(*pass, *request, name) && request.method == "PUT" &&
+        request.body.count == image.count + DIARY_BLOB_TAG && request.body != image, 435)
+    sealed := PackageText(request.body, "")
+    blob_text: [65]u8
+    blob := DiaryTestHash(DiaryTestBytes(sealed), blob_text[:])
+    blob_path := PackageText("/api/v1/blobs/inbe/", blob)
+    Expect(TextUntilNul(request.path[:]) == blob_path, 436)
+    Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]), 437)
+    media = DiaryMediaRead(name)
+    Expect(DiaryMediaUploaded(media) && TextFromBytes(media.blob[:64]) == blob, 438)
+    unused DiaryBlobPlan(*pass, node)
+    Expect(DiaryTestJob(*pass, name) == 0, 439)
+    // Another device of the account has only the entry: the photo shows as
+    // not on the device until its copy arrives, opened and checked.
+    path := DiaryStorePath(name)
+    unused RemoveFile(path)
+    Expect(!DiaryStoreRead(name).succeeded && DiaryStorePreview(name).count == 0, 440)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, name) == DIARY_BLOB_DOWNLOAD, 441)
+    Expect(DiaryTestNext(*pass, *request, name) && request.method == "GET" &&
+        request.answer_bytes == sealed.count + 1, 442)
+    tampered := PackageText(sealed, "")
+    changed := DiaryTestBytes(tampered)
+    changed[20] = cast(u8)((cast(s32)changed[20] + 1) % 256)
+    generation := diary_blob_generation
+    Expect(DiaryBlobFinish(*pass, *request, 200, changed) &&
+        !PathExists(path) && diary_blob_generation == generation, 443)
+    Expect(DiaryBlobFinish(*pass, *request, 404, png[0:0]) && !PathExists(path), 444)
+    Expect(DiaryBlobFinish(*pass, *request, 200, DiaryTestBytes(sealed)) &&
+        diary_blob_generation > generation, 445)
+    Expect(DiaryStoreRead(name).data == image && DiaryStorePreview(name) == image, 446)
+    // A new node gets the same copy once.
+    other := "https://other-copies.test"
+    Expect(DiaryBlobPlan(*pass, other) && DiaryTestJob(*pass, name) == DIARY_BLOB_UPLOAD, 447)
+    Expect(DiaryTestNext(*pass, *request, name) && request.body == sealed, 448)
+    Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]), 449)
+    unused DiaryBlobPlan(*pass, other)
+    Expect(DiaryTestJob(*pass, name) == 0, 459)
+    // A node without photo upload receives none; a full one stops uploads.
+    third := "https://third-copies.test"
+    Expect(SyncNodeSetMediaUpload(third, false) && !DiaryBlobPlan(*pass, third), 450)
+    Expect(SyncNodeSetMediaUpload(third, true) && DiaryBlobPlan(*pass, third) &&
+        DiaryTestNext(*pass, *request, name), 451)
+    full := "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":20971000,\"limit_bytes\":20971520}}"
+    full_text := PackageText(full, "")
+    Expect(DiaryBlobFinish(*pass, *request, 413, DiaryTestBytes(full_text)) &&
+        pass.uploads_stopped && SyncNodeStorageRead(third).full, 452)
+    PackageFree(full_text)
+    // A photo from before copies, kept as hex chunks, uploads the same copy
+    // and its chunks shrink to one byte each.
+    older: [2500]u8
+    old_image := DiaryTestImage(older[:], 9)
+    old_name := "photo-20240301000000-1.bin"
+    old_hash_text: [65]u8
+    old_hash := DiaryTestHash(older[:], old_hash_text[:])
+    for index: cast(s32)0..2 {
+        start := index * 1024
+        size: s32 = 1024
+        if start + size > 2500 {
+            size = 2500 - start
+        }
+        hex: [2049]u8
+        unused BytesToHex(*older[start], cast(s64)size, *hex[0], 2049)
+        chunk := DiaryChunkKey(old_hash, index)
+        Expect(CellRecordWrite(chunk, TextFromCString(*hex[0])), 453)
+        PackageFree(chunk)
+    }
+    old_entry := PackageText(PackageText("{\"hash\":\"", old_hash), "\",\"count\":3,\"size\":2500}")
+    old_key := DiaryRecordKey(old_name)
+    Expect(CellRecordWrite(old_key, old_entry) && DiaryStoreRead(old_name).data == old_image, 454)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, old_name) == DIARY_BLOB_UPLOAD &&
+        DiaryTestNext(*pass, *request, old_name) && request.chunked && request.body.count == 2500 + DIARY_BLOB_TAG, 455)
+    Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]) && DiaryMediaUploaded(DiaryMediaRead(old_name)), 456)
+    shrunk := PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.", old_hash), ".*' AND value='-'")
+    Expect(ModuleTestCount(shrunk) == 3, 457)
+    PackageFree(shrunk)
+    Expect(DiaryStoreRead(old_name).data == old_image, 458)
+    PackageFree(old_key)
+    PackageFree(old_entry)
+    PackageFree(tampered)
+    PackageFree(blob_path)
+    PackageFree(sealed)
+    PackageFree(path)
+    PackageFree(name)
+    storage_set_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY, "")
     storage_set_setting_text("sync_server_url", "")
     storage_set_sync_enabled(sync_was_enabled)
 }

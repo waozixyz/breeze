@@ -12,6 +12,9 @@
 #import, file "delegate_storage_types.zi";
 #import, file "delegate_storage.zi";
 #import "net_ws_curl_linux"
+#import "net_http"
+#import "net_http_curl_linux"
+#import "url"
 #import "byte_text_linux"
 #import "text_buffer"
 #import, file "account_types.zi";
@@ -142,6 +145,70 @@ SyncStoredAccount :: (base_url: string) -> s32 {
         return SyncStoredAccount(base_url)
     }
     return outcome
+}
+
+// One signed request for a sealed Diary copy (cells/diary_blobs.zi): PUT
+// stores body at path, GET answers with the copy in output. The bearer
+// session is the sync's, renewed here when it has run out.
+#program_export
+SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
+    output: []u8, status: *s32, length: *s64) -> s32 {
+    status.* = 0
+    length.* = 0
+    if StoredAccountMode() != AccountModeOwner {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    account: AccountKeys
+    if sync_account_load(*account) == 0 {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    material: DeviceKeyMaterial
+    if !LoadOrCreateDeviceKey(*material) {
+        return cast(s32)AuthResult.AUTH_SIGN_FAILED
+    }
+    defer { WipeDeviceKey(*material) }
+    client: Client
+    if !OpenAccountClient(base_url, *account, storage_sync_client_id(), *client) {
+        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    }
+    client.send = SendNative
+    now := time(null)
+    session: Session
+    LoadSavedSession(*session, now)
+    if !TokenValid(*session, now) {
+        signed_in := Login(client, *session)
+        if signed_in != cast(AuthResult)AuthResult.AUTH_OK {
+            return cast(s32)signed_in
+        }
+        SaveSession(*session)
+    }
+    transaction: [8192]u8
+    prepared := PrepareRequestHeader(client, *session, DeviceFromKey(*material), now,
+        null, NativeNonce, method, path, body, transaction[:])
+    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+        return cast(s32)prepared
+    }
+    server: [512]u8
+    url: [1024]u8
+    if !NormalizeUrl(base_url, server[:]) || !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
+        return cast(s32)AuthResult.AUTH_INVALID_URL
+    }
+    headers: [1]HttpHeader
+    headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(transaction[:])}
+    request := HttpRequest.{.method = method, .url = TextUntilNul(url[:]),
+        .token = TextUntilNul(session.token[:]), .body = body, .headers = headers[:]}
+    if body.count > 0 {
+        request.content_type = "application/octet-stream"
+    }
+    // A copy of up to 16 MB needs longer than a sync's request.
+    result := SendCurlWithin(request, output, 180000)
+    status.* = result.status
+    length.* = result.length
+    if result.code != 0 || result.truncated {
+        return cast(s32)AuthResult.AUTH_REQUEST_FAILED
+    }
+    return cast(s32)AuthResult.AUTH_OK
 }
 
 // Expired context can perform only this key-bound challenge/session exchange.

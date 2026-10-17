@@ -19,6 +19,7 @@
 - Top up Dew centers the Monero address under its QR code.
 - Profile shows how much of your storage is used, with a bar, next to your plan and in Storage plans.
 - Free storage is 20 MB. Profile shows the free storage your sync node gives instead of a fixed size.
+- Diary photos sync as one encrypted copy each, about the photo's own size on your sync node instead of about four and a half times, and are no longer stored twice on your device. Photos added before upload the same way and free their old space on the node.
 - Every practice is optional: Practice shows only installed ones. Wim Hof comes installed and can be removed; Meditation and Breathing Patterns come with the app and are added without a download.
 - Manage practices lists every practice with its size and one menu that says where it is: On Practice, On device or Not downloaded, each with what choosing it does. On device takes a practice off Practice but keeps it on your device, so adding it back needs no download; once a practice is downloaded, Uninstall asks once, then frees the space. A paid practice offers its unlock instead. Drag a practice by its handle onto another to change the order Practice shows them in. Your progress stays either way.
 - Lumi asks to download or unlock a practice before starting one that isn't on your device.

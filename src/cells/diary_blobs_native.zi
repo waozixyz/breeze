@@ -1,0 +1,46 @@
+// The desktop moves Diary photo copies (diary_blobs.zi) on its sync worker,
+// right after a good sync, one blocking request at a time.
+#if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
+#import "auth"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "diary_blobs.zi";
+#import, file "../storage/sync_runtime.zi";
+
+diary_blobs_native_c :: #system_library "c";
+DiaryBlobsAllocate :: (size: usize) -> *void #foreign diary_blobs_native_c "malloc";
+DiaryBlobsRelease :: (pointer: *void) #foreign diary_blobs_native_c "free";
+
+// A failed request ends the pass; the next sync tries again.
+DiaryBlobsSendNative :: (url: string) {
+    pass: DiaryBlobPass
+    if !DiaryBlobPlan(*pass, url) {
+        return
+    }
+    request: DiaryBlobRequest
+    while DiaryBlobNext(*pass, *request) {
+        capacity: s64 = 4096
+        if request.answer_bytes > capacity {
+            capacity = request.answer_bytes
+        }
+        output := cast(*u8)DiaryBlobsAllocate(cast(usize)capacity)
+        if output == null {
+            DiaryBlobAbandon(*request)
+            return
+        }
+        status: s32 = 0
+        length: s64 = 0
+        sent := SendStoredBlob(url, request.method, TextUntilNul(request.path[:]), request.body,
+            BytesFromPointer(output, cast(u64)capacity), *status, *length)
+        keep := false
+        if sent == cast(s32)AuthResult.AUTH_OK && length >= 0 && length < capacity {
+            keep = DiaryBlobFinish(*pass, *request, status, BytesFromPointer(output, cast(u64)length))
+        }
+        DiaryBlobAbandon(*request)
+        DiaryBlobsRelease(cast(*void)output)
+        if !keep {
+            return
+        }
+    }
+}
+}

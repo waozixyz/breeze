@@ -2,7 +2,8 @@
 // any. This device keeps the last report per account and node, and whether
 // Diary photos and videos upload to that node. A Diary file entry always
 // syncs, so other devices see that a photo exists even where its bytes are
-// withheld; only the photo's chunks stay off the node.
+// withheld; only the photo's sealed copy (cells/diary_blobs.zi), or for a
+// photo from before copies its chunks, stays off the node.
 #import "json_scan"
 #import "byte_text_linux"
 #import "text"
@@ -48,13 +49,18 @@ WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at
 SQL_END;
 
+// A sealed copy is its file plus a 16-byte tag; a photo from before copies
+// still costs its chunks.
 SyncMediaLocalBytesSQL :: #string SQL_END
-SELECT COALESCE(SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)),0) FROM settings
-WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
-  AND substr(key,18,64) IN (
-    SELECT json_extract(value,'$.hash') FROM settings
-    WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
-      AND key NOT GLOB '*.json' AND json_valid(value))
+SELECT COALESCE((SELECT SUM(json_extract(value,'$.size')+16) FROM settings
+  WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+    AND key NOT GLOB '*.json' AND json_valid(value) AND json_type(value,'$.count') IS NULL),0)
++COALESCE((SELECT SUM(125+LENGTH(key)+2*(LENGTH(key)+LENGTH(value)+73)) FROM settings
+  WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.chunk.*'
+    AND substr(key,18,64) IN (
+      SELECT json_extract(value,'$.hash') FROM settings
+      WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.diary.file.*'
+        AND key NOT GLOB '*.json' AND json_valid(value) AND json_type(value,'$.count') IS NOT NULL)),0)
 SQL_END;
 
 // Keys follow the node's normalized address, so a report and a setting made
