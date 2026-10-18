@@ -20,6 +20,7 @@ zi-c-plan9: $(KRY_GEN_STAMP)
 		--module-path $(GAME2D_DIR)/src \
 		--module-path qrcode=build/packages/qrcode/src \
 		--module-path plot=build/packages/plot/src \
+		--module-path self=build/packages/self/src \
 		--module-path $(ZIRAN_DIR)/std \
 		--include-dir build/packages/kryon/include --include-dir src \
 		--include-dir $(KRY_GEN_DIR) --include-dir vendor-builds/sqlite \

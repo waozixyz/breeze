@@ -20,6 +20,12 @@ python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
 python3 scripts/practice_content.py "$ziran"
 mkdir -p "$output" build/bundled-cells
+self_dir="$root/build/packages/self"
+mkdir -p build/self
+"$ziran" bundle --root "$self_dir" --module-path "$self_dir/src" \
+    --module-path kryon=build/packages/kryon/src/backend --module-path build/packages/kryon/src/ui \
+    --module-path build/packages/ziran/std --define KRYON_HOSTED_UI \
+    --asset-dir "assets=$self_dir/assets" --entry self:Main -o build/self/self.zib "$self_dir/src/self.zi"
 rm -f "$output/practice.zib"
 for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
@@ -51,6 +57,7 @@ done
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
+    --asset-dir "assets/self=$self_dir/assets/self" --asset-dir "assets/self/bundles=build/self" \
     --asset-dir "cells=build/bundled-cells" -o build/inbe.zib apps/inbe/inbe.zi
 "$ziran" bundle --root . --module-path src \
     --module-path build/packages/ziran/std --module-path kryon=build/packages/kryon/src/backend \
@@ -61,4 +68,5 @@ done
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
+    --asset-dir "assets/self=$self_dir/assets/self" --asset-dir "assets/self/bundles=build/self" \
     --asset-dir "cells=$output" -o build/inbe-full.zib apps/inbe/inbe.zi

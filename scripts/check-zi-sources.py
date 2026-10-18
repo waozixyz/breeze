@@ -42,6 +42,8 @@ result = subprocess.run(
         "--module-path",
         "src",
         "--module-path",
+        f"self={root / 'build/packages/self/src'}",
+        "--module-path",
         str(ui),
         "--module-path",
         str(kss),

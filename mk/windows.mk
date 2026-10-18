@@ -20,7 +20,7 @@ $(1): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 endef
 $(eval $(call WINDOWS_RAYLIB_RULE,$(WIN64_RAYLIB_A),$(WIN64_RAYLIB_BUILD_DIR),$(WIN64_CC),$(WIN64_AR),$(WIN64_RANLIB)))
 
-$(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/self/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -33,7 +33,7 @@ $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODU
 		--module-path qrcode=build/packages/qrcode/src \
 		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client \
+		--module-path build/packages/daochi-client --module-path self=build/packages/self/src \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +

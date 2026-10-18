@@ -1,6 +1,6 @@
 # Web build: the canvas app, its smoke test, and the Chrome and Firefox extensions.
 
-$(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/self/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
@@ -12,7 +12,7 @@ $(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 		--module-path qrcode=build/packages/qrcode/src \
 		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client \
+		--module-path build/packages/daochi-client --module-path self=build/packages/self/src \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
 	touch $@
 	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +

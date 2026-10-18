@@ -1,0 +1,212 @@
+// Self owns the common profile UI. Inner Breeze keeps its database, account
+// keys and specialized screens behind this preferences-only adapter.
+Self :: #import "self/model";
+#import "kryon/app_context_host"
+Portable :: #import "kryon/app_protocol";
+#import "hosted_values"
+#import "std/bundle_host"
+#import "geometry"
+#import "widget_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/text_buffer"
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_settings.zi";
+#import, file "route_types.zi";
+#import, file "text_buffers.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "assets.zi";
+#import, file "profile_picture_policy.zi";
+#import, file "../storage/sync_nodes.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../platform/raylib_text_input.zi";
+
+self_context: AppContext;
+self_opened: bool;
+self_document: string;
+self_inner_breeze: bool;
+self_reload_after_route: bool;
+
+InbeSelfRead :: (app: *InnerBreeze) -> string {
+    Self.SelfFree(self_document)
+    state := Self.SelfDefault()
+    state.controls = Self.SELF_IDENTITY | Self.SELF_INTENTION | Self.SELF_NODES
+    state.pictures &= ~((1 << 21) | (1 << 22) | (1 << 23))
+    state.name = app.profile_display_name
+    state.intention = app.profile_intention
+    icon := app.profile_picture_icon
+    state.picture = ifx icon >= 124 && icon <= 126 then 25 + icon - 124 else icon - 41
+    if state.picture < 0 || state.picture > 27 { state.picture = 0 }
+    count := SyncNodeCount()
+    if count > 0 {
+        state.node_count = count
+        preferred: [256]u8
+        unused CopyCString(storage_get_setting_text("sync_preferred_node"), preferred[:])
+        if preferred[0] == cast(u8)0 { unused CopyCString(storage_get_setting_text("sync_server_url"), preferred[:]) }
+        for index: 0..count - 1 {
+            address := SyncNodeAt(cast(s32)index)
+            unused CopyCString(address, state.nodes[index][:])
+            if address == TextUntilNul(preferred[:]) { state.preferred = cast(s32)index }
+            Self.SelfFree(address)
+        }
+    }
+    Self.SelfAddExtension(*state, "account", LocaleText("sync_account_title"))
+    Self.SelfAddExtension(*state, "inbe", LocaleText("profile_progress_title"))
+    Self.SelfAddExtension(*state, "data", LocaleText("profile_data"))
+    Self.SelfAddExtension(*state, "friends", LocaleText("profile_friends_title"))
+    Self.SelfAddExtension(*state, "telegram", "Telegram")
+    self_document = Self.SelfEncode(state)
+    return self_document
+}
+
+InbeSelfWrite :: (app: *InnerBreeze, document: string) -> bool {
+    state: Self.SelfState
+    if !Self.SelfDecode(document, *state) { return false }
+    picture := ifx state.picture >= 25 then 124 + state.picture - 25 else 41 + state.picture
+    if !ProfilePictureValid(picture) { return false }
+    for byte: state.name { if byte == cast(u8)10 || byte == cast(u8)13 { return false } }
+    for byte: state.intention { if byte == cast(u8)10 || byte == cast(u8)13 { return false } }
+    // Existing node operations retain per-node cursors and do not opt an
+    // account into synchronization.
+    for index: 0..state.node_count - 1 {
+        if !SyncNodeAdd(TextUntilNul(state.nodes[index][:])) { return false }
+    }
+    preferred := TextUntilNul(state.nodes[state.preferred][:])
+    current: [256]u8
+    unused CopyCString(storage_get_setting_text("sync_server_url"), current[:])
+    if preferred != TextUntilNul(current[:]) && !SyncNodePrefer(preferred) { return false }
+    index := SyncNodeCount() - 1
+    while index >= 0 {
+        address := SyncNodeAt(index)
+        retained := false
+        for next: 0..state.node_count - 1 {
+            if address == TextUntilNul(state.nodes[next][:]) { retained = true }
+        }
+        Self.SelfFree(address)
+        if !retained && !SyncNodeRemove(index) { return false }
+        index -= 1
+    }
+    app.profile_display_name = state.name
+    app.profile_intention = state.intention
+    app.profile_picture_icon = picture
+    save_settings(app)
+    return true
+}
+
+SelfHostAllows :: (context: *void, name: string) -> bool {
+    return name == "ReadStoreHost" || name == "WriteStoreHost" ||
+    name == "AppLocaleHost" || name == "ClipboardCopyHost"
+}
+
+SelfHostText :: (text: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(text), .length = cast(usize)text.count}
+}
+
+SelfHostLocale :: (key: string) -> string {
+    if key == "self.title" { return LocaleText("tab_profile") }
+    if key == "self.name_placeholder" { return LocaleText("profile_name_label") }
+    if key == "self.name" { return LocaleText("profile_name_label") }
+    if key == "self.intention" { return LocaleText("profile_intention_label") }
+    if key == "self.nodes" { return LocaleText("sync_nodes_title") }
+    if key == "self.node_address" { return LocaleText("sync_remote_label") }
+    if key == "self.add" { return LocaleText("sync_nodes_add") }
+    if key == "self.remove" { return LocaleText("launcher_uninstall") }
+    if key == "self.picture" || key == "self.change_picture" { return LocaleText("profile_picture_title") }
+    if key == "self.done" { return LocaleText("close_button") }
+    if key == "self.node_invalid" { return LocaleText("sync_server_url_invalid") }
+    if key == "self.node_limit" { return LocaleText("sync_nodes_limit") }
+    return key
+}
+
+SelfHostCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    app := cast(*InnerBreeze)context
+    name := TextFromCString(function)
+    if name == "AppLocaleHost" && count == 1 {
+        result.* = SelfHostText(SelfHostLocale(AppArgumentText(arguments[0])))
+        return 1
+    }
+    if name == "ClipboardCopyHost" && count == 2 {
+        result.* = HostScalar("bool", ifx TextInputWriteClipboard(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
+    if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
+        document := InbeSelfRead(app)
+        output := arguments[1]
+        if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)document.count { return 0 }
+        for index: 0..document.count {
+            byte := ifx index < document.count then document[index] else cast(u8)0
+            output.elements[index].bits = cast(u64)byte
+            output.elements[index].integer = cast(s64)byte
+        }
+        result.* = HostScalar("s32", document.count)
+        return 1
+    }
+    if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
+        result.* = HostScalar("bool", ifx InbeSelfWrite(app, AppArgumentText(arguments[1])) then 1 else 0)
+        return 1
+    }
+    return 0
+}
+
+SelfHostAssetAllowed :: (path: string) -> bool {
+    return path == "" || path == "assets/self/pfp.png" || path == "assets/self/flowers.png"
+}
+
+SelfHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    if self_inner_breeze { return false }
+    if !self_opened {
+        bundle := AssetRead("assets/self/bundles/self.zib")
+        if !bundle.found { return false }
+        self_context.expected_id = "self"
+        self_context.context = cast(*void)app
+        self_context.allows = SelfHostAllows
+        self_context.services = SelfHostCall
+        self_context.widgets = WidgetHostCall
+        if !AppContextOpen(*self_context, bundle.data) { return false }
+        self_opened = true
+    }
+    typed: [1024]u8
+    if self_reload_after_route {
+        self_context.command = "reload"
+        unused AppContextRun(*self_context, Portable.APP_COMMAND)
+        self_reload_after_route = false
+    }
+    self_context.session = app.ui.session
+    self_context.bounds = bounds
+    self_context.scale = MetricsScale()
+    self_context.font = AppFontSize()
+    self_context.input = SampleTextFieldInput(true, typed[:])
+    WidgetHostBegin(app.ui.session, SelfHostAssetAllowed)
+    ran := AppContextRun(*self_context, Portable.APP_FRAME)
+    WidgetHostEnd()
+    if !ran { return false }
+    route := self_context.reply
+    if route != "" { self_reload_after_route = true }
+    if route == "inbe" { self_inner_breeze = true; app.profile_scroll = 0 }
+    else if route == "account" { app.profile_tab = PROFILE_TAB_SYNC; app.profile_scroll = 0 }
+    else if route == "data" { app.profile_tab = PROFILE_TAB_DATA; app.profile_scroll = 0 }
+    else if route == "friends" { app.profile_tab = PROFILE_TAB_FRIENDS; app.profile_scroll = 0 }
+    else if route == "telegram" { app.profile_tab = PROFILE_TAB_TELEGRAM; app.profile_scroll = 0 }
+    return true
+}
+
+SelfHostBack :: (app: *InnerBreeze) -> bool {
+    if !self_inner_breeze || app.profile_view != PROFILE_VIEW_MAIN || app.profile_tab != PROFILE_TAB_OVERVIEW { return false }
+    self_inner_breeze = false
+    return true
+}
+
+SelfHostSave :: (app: *InnerBreeze) -> bool {
+    if !self_opened || self_inner_breeze || app.breathing.screen != ScreenProfile ||
+    app.profile_view != PROFILE_VIEW_MAIN || app.profile_tab != PROFILE_TAB_OVERVIEW { return true }
+    return AppContextRun(*self_context, Portable.APP_SAVE)
+}
+
+SelfHostReset :: () {
+    self_inner_breeze = false
+    self_reload_after_route = true
+}

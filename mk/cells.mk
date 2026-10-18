@@ -9,10 +9,12 @@ src/cells/app_codec.zi: scripts/generate-app-codec.py $(APP_CODEC_SCHEMAS)
 src/cells/node_app_codec.zi: scripts/generate-node-app-codec.py src/cells/node_app_types.zi $(KRYON_DIR)/scripts/generate-widget-codecs.py $(KRYON_DIR)/src/backend/widget_codec.zi
 	python3 scripts/generate-node-app-codec.py
 
+SELF_DIR := build/packages/self
+SELF_SOURCES = $(wildcard $(SELF_DIR)/src/*.zi $(SELF_DIR)/assets/self/*)
 .PHONY: cells
 cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
-$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
+$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(SELF_SOURCES) $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 
 # Apps the node offers build on their own, never into the root package.

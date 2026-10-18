@@ -89,6 +89,7 @@ link game2d game2d
 link qrcode qrcode
 link plot plot
 link mingcute mingcute
+link self self
 link daochi-client daochi_client
 link sqlite sqlite
 link curl curl
