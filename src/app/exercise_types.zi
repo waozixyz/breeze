@@ -6,9 +6,10 @@ ExerciseType :: enum {
     EXERCISE_SUN_SALUTATION :: 2
     EXERCISE_PATTERNS :: 3
     EXERCISE_TAI_CHI :: 4
+    EXERCISE_ASTRAL_PROJECTION :: 5
 }
 
-EXERCISE_COUNT :: 5
+EXERCISE_COUNT :: 6
 
 practice_count :: () -> s32 {
     return EXERCISE_COUNT
@@ -43,27 +44,36 @@ practice_order_code :: () -> s32 {
     return code
 }
 
-// Reads a saved order; anything but each practice once keeps the default.
+// Older orders keep their relative order, with newly added practices last.
 practice_order_load :: (code: s32) {
     practice_order_custom = false
     ids: [EXERCISE_COUNT]s32
     seen: s32 = 0
     value := code
-    index := EXERCISE_COUNT - 1
-    while index >= 0 {
+    count: s32 = 0
+    while value > 1 && count < EXERCISE_COUNT {
         id := value % 10
         value = value / 10
         if id >= EXERCISE_COUNT || (seen & (cast(s32)1 << id)) != 0 {
             return
         }
         seen |= cast(s32)1 << id
-        ids[index] = id
-        index -= 1
+        ids[count] = id
+        count += 1
     }
-    if value != 1 {
+    if value != 1 || count < 5 || (count == 5 && seen != 31) {
         return
     }
-    practice_order_ids = ids
+    for index: cast(s32)0..count - 1 {
+        practice_order_ids[index] = ids[count - index - 1]
+    }
+    for index: cast(s32)0..EXERCISE_COUNT - 1 {
+        id := practice_default_ordered_id(index)
+        if (seen & (cast(s32)1 << id)) == 0 {
+            practice_order_ids[count] = id
+            count += 1
+        }
+    }
     practice_order_custom = true
 }
 
@@ -109,7 +119,10 @@ practice_default_ordered_id :: (index: s32) -> s32 {
     if index == 3 {
         return EXERCISE_SUN_SALUTATION
     }
-    return EXERCISE_TAI_CHI
+    if index == 4 {
+        return EXERCISE_TAI_CHI
+    }
+    return EXERCISE_ASTRAL_PROJECTION
 }
 
 practice_clamp_id :: (id: s32) -> s32 {

@@ -25,6 +25,7 @@ fonts = {
 }
 LATIN_LOCALES = ["en", "es", "cs", "de", "fr", "id", "it", "pt", "ru"]
 CJK_LOCALES = ["ja", "ko", "zh"]
+GUIDANCE = root / "assets/practices/astral_projection/text"
 
 
 def is_cjk(cp):
@@ -60,7 +61,8 @@ if cmaps["latin"] is None:
 
 latin_needed = codepoints(
     root / "assets/fonts/input_common.txt", root / "locales/index.txt",
-    *[root / f"locales/{name}.txt" for name in LATIN_LOCALES])
+    *[root / f"locales/{name}.txt" for name in LATIN_LOCALES],
+    *[GUIDANCE / f"{name}.txt" for name in LATIN_LOCALES])
 for cp in sorted(latin_needed):
     if not is_cjk(cp) and cp not in cmaps["latin"]:
         print(f"FAIL: U+{cp:04X} has no glyph in the Latin font", file=sys.stderr)
@@ -68,7 +70,8 @@ for cp in sorted(latin_needed):
 print(f"Latin font: {len(latin_needed)} required codepoints, {failures} missing")
 
 cjk_needed = codepoints(
-    root / "locales/index.txt", *[root / f"locales/{name}.txt" for name in CJK_LOCALES])
+    root / "locales/index.txt", *[root / f"locales/{name}.txt" for name in CJK_LOCALES],
+    *[GUIDANCE / f"{name}.txt" for name in CJK_LOCALES])
 opened = [cmap for cmap in cmaps.values() if cmap is not None]
 if not opened:
     print("FAIL: cannot parse any shipped font cmap", file=sys.stderr)
@@ -91,7 +94,7 @@ print(f"CJK/picker: {len(cjk_needed)} required codepoints checked against "
 # A locale's selected face must cover its own text. Another bundled font
 # cannot hide a stale primary subset, especially on mobile hosts.
 for locale, face in (("ja", "jp"), ("ko", "kr"), ("zh", "sc")):
-    needed = codepoints(root / f"locales/{locale}.txt")
+    needed = codepoints(root / f"locales/{locale}.txt", GUIDANCE / f"{locale}.txt")
     cmap = cmaps[face] or {}
     before = failures
     for cp in sorted(needed):

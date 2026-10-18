@@ -1,0 +1,285 @@
+// Astral Projection owns its guidance and session; the host supplies the
+// existing audio, storage and platform lifecycle effects.
+#import, file "astral_projection_rules.zi";
+#import, file "../../src/app/app_types.zi";
+#import, file "../../src/app/app_modal_state.zi";
+#import, file "../../src/app/app_nav_state.zi";
+#import, file "../../src/app/app_route_state.zi";
+#import, file "../../src/app/activity_start.zi";
+#import, file "../../src/app/assets.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "../../src/app/locale.zi";
+#import, file "../../src/app/manual_seen_actions.zi";
+#import, file "../../src/app/metrics.zi";
+#import, file "../../src/app/modal_rules.zi";
+#import, file "../../src/app/practice_title_bar.zi";
+#import, file "../../src/app/session_screen.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/app/app_notifications.zi";
+#import, file "../../src/core/types.zi";
+#import, file "../../src/practices/meditation/meditation_music.zi";
+#import, file "../../src/practices/practice_audio_controls.zi";
+#import, file "../../src/practices/practice_downloads.zi";
+#import, file "../../src/practices/practice_narration.zi";
+#import, file "../../src/practices/session_results.zi";
+#import, file "../../src/storage/data.zi";
+#import "locale_parser"
+#import "locale_policy"
+#import "byte_text_linux"
+#import "text_buffer"
+#import "layout"
+#import "session"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_align"
+#import "text_props"
+#import "text_widget"
+#import "tree"
+
+c :: #system_library "c";
+GetFrameTime :: () -> float32 #foreign c;
+practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c;
+practice_active_background_stop :: (app: *InnerBreeze) #foreign c;
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
+sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c;
+app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32,
+    save_message: string, discard_message: string) -> SessionExitModalResult #foreign c;
+
+using ExerciseType;
+using ModalType;
+using SessionExitModalResult;
+using TextAlign;
+using ButtonTone;
+using ButtonEmphasis;
+
+astral_course: AstralCourse;
+astral_clock: AstralClock;
+astral_frame_carry: float64;
+astral_scroll: s32;
+astral_last_cue: s32 = -1;
+astral_exit_was_paused: s32;
+
+AstralActive :: (app: *InnerBreeze) -> s32 {
+    return ifx app != null && app_session_screen(app) == ScreenAstralProjection then 1 else 0
+}
+
+AstralStart :: (app: *InnerBreeze) {
+    if app == null || !ActivityStartAllowed() {
+        return
+    }
+    asset := AssetRead("assets/practices/astral_projection/session.json")
+    if !asset.found || !AstralCourseParse(asset.data, *astral_course) {
+        return
+    }
+    mark_exercise_manual_seen(app, EXERCISE_ASTRAL_PROJECTION)
+    astral_clock = AstralClock.{astral_course.duration, 0}
+    astral_frame_carry = 0.0
+    astral_scroll = 0
+    astral_last_cue = -1
+    app.session_paused = 0
+    PracticeNarrationStop()
+    app_close_modal(app)
+    app_switch_screen(app, ScreenAstralProjection)
+    meditation_music_start_session(app)
+    practice_background_start(app, EXERCISE_ASTRAL_PROJECTION)
+}
+
+AstralElapsed :: () -> s32 {
+    return astral_course.duration - astral_clock.remaining
+}
+
+AstralDuration :: () -> s32 {
+    return astral_course.duration
+}
+
+AstralRemaining :: () -> s32 {
+    return astral_clock.remaining
+}
+
+AstralSave :: (app: *InnerBreeze, output: *u8, capacity: s64) {
+    seconds := AstralElapsed()
+    if seconds >= 60 && data_save_session_path_for_activity(*seconds, 1, 0,
+        EXERCISE_ASTRAL_PROJECTION, output, capacity) != 0 {
+        sync_habits_for_activity(app, EXERCISE_ASTRAL_PROJECTION)
+        unused app_auto_sync(app)
+    }
+}
+
+AstralStop :: (app: *InnerBreeze) {
+    PracticeNarrationStop()
+    meditation_music_stop(app)
+    practice_active_background_stop(app)
+    app.session_paused = 0
+    app.volume_popup_active = 0
+    app.music_volume_popup_active = 0
+    app_close_modal(app)
+}
+
+AstralEnd :: (app: *InnerBreeze) {
+    AstralSave(app, null, 0)
+    AstralStop(app)
+    app_switch_screen(app, ScreenStart)
+}
+
+AstralFinish :: (app: *InnerBreeze) {
+    result_path: [FS_PATH_MAX]u8
+    result_path[0] = cast(u8)0
+    AstralSave(app, *result_path[0], size_of(type_of(result_path)))
+    send_session_complete(app)
+    AstralStop(app)
+    app_prepare_session_results(app, EXERCISE_ASTRAL_PROJECTION,
+        AstralElapsed(), 0, null, null, 0, *result_path[0])
+    app_switch_screen(app, ScreenResults)
+}
+
+AstralAdvanceElapsed :: (app: *InnerBreeze, milliseconds: s32) {
+    if AstralActive(app) == 0 {
+        return
+    }
+    astral_clock = AstralAdvance(astral_clock, milliseconds, app.session_paused != 0)
+    if astral_clock.remaining <= 0 {
+        AstralFinish(app)
+    }
+}
+
+AstralCueKey :: () -> string {
+    index := AstralCueAt(*astral_course, AstralElapsed())
+    if index < 0 {
+        return ""
+    }
+    return TextFromCString(*astral_course.cues[index].key[0])
+}
+
+AstralUpdate :: (app: *InnerBreeze) {
+    if AstralActive(app) == 0 {
+        return
+    }
+    meditation_music_update(app)
+    PracticeNarrationUpdate(app, "astral_projection", AstralCueKey())
+}
+
+AstralRequestExit :: (app: *InnerBreeze) {
+    astral_exit_was_paused = app.session_paused
+    app.session_paused = 1
+    app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
+}
+
+AstralExitPrompt :: (app: *InnerBreeze) -> s32 {
+    if app.modal.active == 0 || app.modal.type != cast(ModalType)ModalConfirmExitSession {
+        return 0
+    }
+    result := app_draw_session_exit_modal(app, ifx AstralElapsed() >= 60 then 1 else 0,
+        LocaleText("meditation_save_elapsed_message"), LocaleText("meditation_under_minute_exit_message"))
+    if result == cast(SessionExitModalResult)SessionExitModalCancel {
+        app_close_modal(app)
+        app.session_paused = astral_exit_was_paused
+    } else if result == cast(SessionExitModalResult)SessionExitModalSave ||
+    result == cast(SessionExitModalResult)SessionExitModalDiscard {
+        if result == cast(SessionExitModalResult)SessionExitModalSave {
+            AstralSave(app, null, 0)
+        }
+        AstralStop(app)
+        app_switch_screen(app, ScreenStart)
+        return 2
+    }
+    return 1
+}
+
+AstralTextAsset :: (code: string) -> AssetView {
+    path: [128]u8
+    if !AppCopyText("assets/practices/astral_projection/text/", path[:]) ||
+    !AppAppendText(code, path[:]) || !AppAppendText(".txt", path[:]) {
+        return AssetView.{}
+    }
+    return AssetRead(TextUntilNul(path[:]))
+}
+
+AstralCueText :: () -> string {
+    localized := AstralTextAsset(LocaleActiveCode())
+    english := AstralTextAsset("en")
+    return LocaleResolveCatalog(localized.data, english.data, AstralCueKey())
+}
+
+AstralTimeText :: (output: []u8) -> string {
+    cursor: s32 = 0
+    output[0] = cast(u8)0
+    unused TextBufferAppendNumber(output, *cursor, astral_clock.remaining / 60)
+    unused TextBufferAppendByte(output, *cursor, cast(u8)58)
+    seconds := astral_clock.remaining % 60
+    if seconds < 10 {
+        unused TextBufferAppendByte(output, *cursor, cast(u8)48)
+    }
+    unused TextBufferAppendNumber(output, *cursor, seconds)
+    return TextUntilNul(output)
+}
+
+AstralDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> string {
+    Text(app.ui.session, TextProps.{.text = AstralCueText(), .bounds = picture,
+            .font = AppScale(14), .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    return AstralTimeText(output)
+}
+
+AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    unused center_y
+    top := PracticeTitleBarHeight()
+    if PracticeTitleBar(app, LocaleText("exercise_astral_projection"), top) {
+        AstralRequestExit(app)
+    }
+    if AstralExitPrompt(app) != 0 {
+        return
+    }
+    practice_draw_audio_controls(app)
+    pad := AppScale(24)
+    width := app.ui.view_width - pad * 2
+    time: [32]u8
+    Text(app.ui.session, TextProps.{
+            .text = FrameTextHold(*app.ui.frame_text, AstralTimeText(time[:])),
+            .bounds = Rectangle.{cast(float32)pad, cast(float32)(top + AppScale(12)),
+                cast(float32)width, cast(float32)AppScale(48)},
+            .font = AppScale(28), .align = cast(TextAlign)TextAlignCenter})
+    cue := AstralCueAt(*astral_course, AstralElapsed())
+    if cue != astral_last_cue {
+        astral_scroll = 0
+        astral_last_cue = cue
+    }
+    text := AstralCueText()
+    text_top := top + AppScale(80)
+    button_y := app.ui.view_height - AppScale(76)
+    height := button_y - text_top - AppScale(16)
+    if height < AppScale(40) {
+        height = AppScale(40)
+    }
+    text_h := AppParagraphHeight(text, width, AppFontSize(), 0)
+    scroll := Scroll(app.ui.session, ScrollProps.{.key = KeyHash("astral/guidance"),
+            .bounds = Rectangle.{cast(float32)pad, cast(float32)text_top,
+                cast(float32)width, cast(float32)height},
+            .content_height = text_h, .scroll_offset = astral_scroll})
+    astral_scroll = scroll.scroll_offset
+    Text(app.ui.session, TextProps.{.text = text, .bounds = Rectangle.{
+                scroll.content.x, scroll.content.y, cast(float32)width, cast(float32)text_h},
+            .font = AppFontSize(), .align = cast(TextAlign)TextAlignCenter})
+    unused End(app.ui.session)
+    button_w := AppScale(220)
+    if button_w > width {
+        button_w = width
+    }
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("astral/pause"),
+            .label = LocaleText(ifx app.session_paused != 0 then "patterns_resume_button" else "pause_button"),
+            .bounds = Rectangle.{cast(float32)(center_x - button_w / 2), cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(48)},
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        app.session_paused = ifx app.session_paused != 0 then 0 else 1
+    }
+    if app.backgrounded == 0 {
+        total := cast(float64)GetFrameTime() * 1000.0 + astral_frame_carry
+        milliseconds := cast(s32)total
+        astral_frame_carry = total - cast(float64)milliseconds
+        AstralAdvanceElapsed(app, milliseconds)
+    }
+}

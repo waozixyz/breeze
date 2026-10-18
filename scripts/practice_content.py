@@ -14,7 +14,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = 'assets/practices/catalog.json'
-NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi')
+NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'astral_projection')
 GUIDE = 'guide'
 MAXIMUM = 64 * 1024 * 1024
 
@@ -149,7 +149,7 @@ def catalog_from_bundle(data):
         return []
     catalog = json.loads(assets[CATALOG])
     packs = catalog.get('packs')
-    if catalog.get('schema') != 1 or not isinstance(packs, list) or len(packs) > 65:
+    if catalog.get('schema') != 1 or not isinstance(packs, list) or len(packs) > 96:
         raise ValueError('invalid practice catalog')
     seen = set()
     for pack in packs:
@@ -168,7 +168,7 @@ def catalog_from_bundle(data):
                 not isinstance(pack.get('product', ''), str)):
             raise ValueError('invalid or duplicate practice pack')
         seen.add((practice, language, voice))
-    if {(name, '', '') for name in NAMES} - seen:
+    if {(name, '', '') for name in NAMES[:5]} - seen:
         raise ValueError('practice catalog lacks base content')
     guide = catalog.get('guide', [])
     if not isinstance(guide, list) or len(guide) > 32:
@@ -197,6 +197,10 @@ def prepare(compiler):
     declared = json.loads((ROOT / speech['keys_file']).read_text())
     if course_narration_keys((ROOT / 'assets/practices/taichi/course.bin').read_bytes()) != declared:
         raise ValueError('export Tai Chi again to update its narration inventory')
+    astral = json.loads((ROOT / 'assets/practices/astral_projection/session.json').read_text())
+    astral_speech = json.loads((ROOT / configuration['narration']['astral_projection']['config']).read_text())
+    if [cue['key'] for cue in astral['cues']] != astral_speech['keys']:
+        raise ValueError('Astral Projection guidance and narration inventory differ')
     output = ROOT / 'build/practice-content'
     output.mkdir(parents=True, exist_ok=True)
     packs = []

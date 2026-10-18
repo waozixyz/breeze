@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0] - 2026-10-18
+
+- Download Astral Projection and follow a 15-minute guided visualization, from relaxation and imagined floating to a gentle return.
+- Keep its guidance offline and use narration when its language pack is installed.
+- Keep your saved practice order when Astral Projection is added.
+- Requires Inner Breeze 2.1.36 or later.
+
 ## [1.2.2] - 2026-10-18
 
 - Maintenance release for Inner Breeze 2.1.36.

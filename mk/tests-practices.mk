@@ -90,6 +90,10 @@ practice-narration-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	sh tests/practice_narration_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: practice-narration-keys-test
+.PHONY: astral-projection-test
+astral-projection-test: $(ZI2C_BIN)
+	sh tests/astral_projection_test.sh $(ZIRAN_BUILD_DIR)/bin
+
 practice-narration-keys-test:
 	python3 tests/practice_narration_keys_test.py
 

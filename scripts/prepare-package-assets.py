@@ -23,7 +23,7 @@ if OUTPUT.exists():
     shutil.rmtree(OUTPUT)
 for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard',
              'practice-whm', 'practice-meditation', 'practice-sunsalutation',
-             'practice-patterns', 'practice-taichi') + NODE_APPS:
+             'practice-patterns', 'practice-taichi', 'practice-astral_projection') + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
@@ -34,6 +34,7 @@ patterns = (
     'assets/practices/*/banner-dark.png',
     'assets/practices/sunsalutation/characters/*/*.png',
     'assets/practices/sunsalutation/voice/**/*', 'assets/practices/sunsalutation/voice-male/**/*',
+    'assets/practices/astral_projection/**/*',
     'assets/practices/taichi/**/*', 'assets/practices/guide/voice/**/*',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',

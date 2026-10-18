@@ -1,0 +1,97 @@
+// Bounded downloadable guidance and the same clock used by Meditation.
+#import "json_scan"
+#import "byte_text_linux"
+#import, file "../../src/practices/meditation/meditation_timing.zi";
+
+AstralCueCapacity :: 32
+
+AstralCue :: struct {
+    second: s32
+    key: [64]u8
+}
+
+AstralCourse :: struct {
+    duration: s32
+    count: s32
+    cues: [AstralCueCapacity]AstralCue
+}
+
+AstralClock :: struct {
+    remaining: s32
+    remainder_ms: s32
+}
+
+AstralInteger :: (data: string, at: s32, maximum: s32) -> s32 {
+    if at < 0 || at >= cast(s32)data.count || data[at] < cast(u8)48 || data[at] > cast(u8)57 {
+        return -1
+    }
+    number := ReadNumber(data, at)
+    if !number.valid || number.value < 0.0 || number.value > cast(float64)maximum ||
+    number.value != cast(float64)cast(s32)number.value {
+        return -1
+    }
+    return cast(s32)number.value
+}
+
+AstralCourseParse :: (data: string, course: *AstralCourse) -> bool {
+    course.* = AstralCourse.{}
+    end := ValueEnd(data, 0, 0)
+    if data.count > 8192 || end < 0 || Space(data, end) != cast(s32)data.count ||
+    AstralInteger(data, FieldAt(data, 0, "schema"), 1) != 1 {
+        return false
+    }
+    duration := AstralInteger(data, FieldAt(data, 0, "duration"), 3600)
+    cues := FieldAt(data, 0, "cues")
+    count := ArrayCount(data, cues)
+    if duration < 60 || count < 2 || count > AstralCueCapacity {
+        return false
+    }
+    parsed: AstralCourse
+    parsed.duration = duration
+    parsed.count = count
+    previous: s32 = -1
+    for index: cast(s32)0..count - 1 {
+        at := ElementAt(data, cues, index)
+        second := AstralInteger(data, FieldAt(data, at, "second"), duration - 1)
+        length := ReadStringText(data, FieldAt(data, at, "key"), parsed.cues[index].key[:])
+        key := TextFromCString(*parsed.cues[index].key[0])
+        if second <= previous || (index == 0 && second != 0) ||
+        length <= 12 || length >= 64 || key[:12] != "astral_text_" {
+            return false
+        }
+        for byte: key {
+            if !((byte >= cast(u8)97 && byte <= cast(u8)122) ||
+                byte == cast(u8)95 || (byte >= cast(u8)48 && byte <= cast(u8)57)) {
+                return false
+            }
+        }
+        for earlier: cast(s32)0..index - 1 {
+            if key == TextFromCString(*parsed.cues[earlier].key[0]) {
+                return false
+            }
+        }
+        parsed.cues[index].second = second
+        previous = second
+    }
+    course.* = parsed
+    return true
+}
+
+AstralCueAt :: (course: *AstralCourse, elapsed: s32) -> s32 {
+    if course.count < 1 {
+        return -1
+    }
+    index: s32 = 0
+    while index + 1 < course.count && course.cues[index + 1].second <= elapsed {
+        index += 1
+    }
+    return index
+}
+
+AstralAdvance :: (clock: AstralClock, elapsed_ms: s32, paused: bool) -> AstralClock {
+    if paused || clock.remaining <= 0 || elapsed_ms <= 0 {
+        return clock
+    }
+    step := AdvanceMeditationTime(clock.remaining, clock.remainder_ms, elapsed_ms)
+    return AstralClock.{step.remaining_seconds, ifx step.completed then 0 else step.remainder_ms}
+}
