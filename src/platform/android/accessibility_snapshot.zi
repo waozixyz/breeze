@@ -1,0 +1,116 @@
+// Translate the accepted widget tree into Android accessibility data.
+// Actions use Kryon's retained identities and normal modal/input routing.
+#import "geometry"
+#import "session"
+#import "semantic"
+#import "widget_kind"
+#import "tree"
+#import "tree_input"
+#import "scroll_device"
+#import "vec"
+
+using SemanticKind;
+using WidgetKind;
+
+AccessibilityClick :: 1
+AccessibilityFocus :: 2
+AccessibilityForward :: 3
+AccessibilityBackward :: 4
+
+AccessibilityBounds :: (node: TreeEntry) -> Rectangle {
+    if node.clipped {
+        return RectangleIntersection(node.bounds, node.clip)
+    }
+    return node.bounds
+}
+
+AccessibilityVisible :: (session: Session, index: s32, node: TreeEntry) -> bool {
+    bounds := AccessibilityBounds(node)
+    return bounds.width > 0.0 && bounds.height > 0.0 &&
+    TreeInputAllowedAt(session, index) &&
+    (node.semantic_label.count > 0 || node.has_text || node.interactive ||
+        node.kind == WidgetKindScroll)
+}
+
+AccessibilityQuote :: (out: *Vec(u8), value: string) {
+    hex := "0123456789abcdef"
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == cast(u8)34 || byte == cast(u8)92 {
+            unused VecPush(out.*, cast(u8)92)
+            unused VecPush(out.*, byte)
+        } else if byte < cast(u8)32 {
+            BuilderPrint(out, "\\u00")
+            unused VecPush(out.*, hex[byte / 16])
+            unused VecPush(out.*, hex[byte % 16])
+        } else {
+            unused VecPush(out.*, byte)
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+AccessibilitySnapshot :: (session: Session, camera: Camera,
+    width: s32, height: s32) -> Vec(u8) {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"width\":%,\"height\":%,\"nodes\":[", width, height)
+    first := true
+    for index: cast(s32)0..TreeCount(session) - 1 {
+        node := TreeNodeAt(session, index)
+        if !AccessibilityVisible(session, index, node) {
+            continue
+        }
+        bounds := AccessibilityBounds(node)
+        top := WorldToScreen(Vector2.{bounds.x, bounds.y}, camera)
+        bottom := WorldToScreen(Vector2.{bounds.x + bounds.width,
+                bounds.y + bounds.height}, camera)
+        flags: s32 = 0
+        if node.interactive { flags |= 1 }
+        if node.disabled || node.loading { flags |= 2 }
+        if node.selected { flags |= 4 }
+        if node.secure { flags |= 8 }
+        if node.has_text { flags |= 16 }
+        if TreeFocusedAt(session, index) { flags |= 32 }
+        BuilderPrint(*out, "%[%,%,%,%,%,%,%,%,", ifx first then "" else ",",
+            cast(s64)node.identity_generation, node.kind, cast(s32)node.semantic_kind,
+            cast(s32)top.x, cast(s32)top.y, cast(s32)bottom.x,
+            cast(s32)bottom.y, flags)
+        // Password values never enter Java's accessibility snapshot.
+        AccessibilityQuote(*out, ifx node.secure then "" else node.semantic_label)
+        BuilderPrint(*out, "]")
+        first = false
+    }
+    BuilderPrint(*out, "]}")
+    return out
+}
+
+AccessibilityApply :: (session: Session, identity: u64, action: s32,
+    now: float64) -> bool {
+    for index: cast(s32)0..TreeCount(session) - 1 {
+        node := TreeNodeAt(session, index)
+        if node.identity_generation != identity || node.disabled || node.loading ||
+        !AccessibilityVisible(session, index, node) {
+            continue
+        }
+        if action == AccessibilityFocus ||
+        (action == AccessibilityClick && node.has_text) {
+            return TreeFocusAt(session, index)
+        }
+        if action == AccessibilityClick {
+            return TreeActivateAt(session, index)
+        }
+        if node.kind == WidgetKindScroll &&
+        (action == AccessibilityForward || action == AccessibilityBackward) {
+            bounds := AccessibilityBounds(node)
+            center := Vector2.{bounds.x + bounds.width / 2,
+                bounds.y + bounds.height / 2}
+            if TreeScrollAt(session, center.x, center.y, true) != node.key {
+                return false
+            }
+            BeginScrollFrame(session, center, false, false, false,
+                ifx action == AccessibilityForward then -6.0 else 6.0, now)
+            return true
+        }
+    }
+    return false
+}

@@ -1,0 +1,98 @@
+#if #defined(ANDROID_BUILD) {
+    #import "android_jni"
+    #import "geometry"
+    #import "session"
+    #import "vec"
+    #import, file "android_mutex.zi";
+    #import, file "accessibility_snapshot.zi";
+
+    AccessibilityRequest :: struct {
+        identity: u64
+        action: s32
+    }
+    accessibility_mutex: AndroidMutex;
+    accessibility_requests: [16]AccessibilityRequest;
+    accessibility_request_count: s32;
+    accessibility_next_update: float64;
+
+    AndroidAccessibilityRequest :: (env: *JniEnv, activity: *void,
+        identity: s64, action: s32) -> u8 {
+        unused env
+        unused activity
+        if action < AccessibilityClick || action > AccessibilityBackward {
+            return 0
+        }
+        AndroidMutexLock(*accessibility_mutex)
+        accepted := accessibility_request_count < 16
+        if accepted {
+            accessibility_requests[accessibility_request_count] =
+            AccessibilityRequest.{cast(u64)identity, action}
+            accessibility_request_count += 1
+        }
+        AndroidMutexUnlock(*accessibility_mutex)
+        return ifx accepted then 1 else 0
+    }
+
+    // JNI callbacks only queue identities. The frame thread validates them
+    // against the current tree, preventing stale or obscured controls acting.
+    AndroidAccessibilityInput :: (session: Session, now: float64) -> bool {
+        AndroidMutexLock(*accessibility_mutex)
+        if accessibility_request_count == 0 {
+            AndroidMutexUnlock(*accessibility_mutex)
+            return false
+        }
+        request := accessibility_requests[0]
+        accessibility_request_count -= 1
+        for index: cast(s32)0..accessibility_request_count - 1 {
+            accessibility_requests[index] = accessibility_requests[index + 1]
+        }
+        AndroidMutexUnlock(*accessibility_mutex)
+        // One action per frame preserves ordering and lets each accepted
+        // route change invalidate callbacks from the former screen.
+        changed := AccessibilityApply(session, request.identity, request.action, now)
+        if changed {
+            accessibility_next_update = 0.0
+        }
+        return changed
+    }
+
+    AndroidAccessibilityFrame :: (session: Session, camera: Camera,
+        width: s32, height: s32, now: float64) {
+        if now < accessibility_next_update {
+            return
+        }
+        accessibility_next_update = now + 0.25
+        jni: AndroidJniSession
+        if AndroidJniAttachCurrent(*jni) == 0 {
+            return
+        }
+        defer { AndroidJniDetachCurrent(*jni) }
+        enabled := AndroidJniMethod(*jni, "accessibilityEnabled", "()Z")
+        update := AndroidJniMethod(*jni, "updateAccessibility", "([B)V")
+        if enabled == null || update == null {
+            return
+        }
+        env := jni.env
+        if env.functions.CallBooleanMethodA(env, jni.activity, enabled, null) == 0 ||
+        env.functions.ExceptionCheck(env) != 0 {
+            return
+        }
+        snapshot := AccessibilitySnapshot(session, camera, width, height)
+        defer { VecFree(snapshot) }
+        bytes := env.functions.NewByteArray(env, cast(s32)snapshot.count)
+        if bytes == null {
+            return
+        }
+        defer { env.functions.DeleteLocalRef(env, bytes) }
+        {
+            data := VecSlice(snapshot, 0, snapshot.count)
+            env.functions.SetByteArrayRegion(env, bytes, 0, cast(s32)data.count, *data[0])
+        }
+        if env.functions.ExceptionCheck(env) != 0 {
+            return
+        }
+        arguments: [1]JniValue
+        arguments[0].reference = bytes
+        env.functions.CallVoidMethodA(env, jni.activity, update, *arguments[0])
+    }
+}

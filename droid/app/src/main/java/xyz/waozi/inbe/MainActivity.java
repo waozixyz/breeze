@@ -60,6 +60,7 @@ public class MainActivity extends NativeActivity {
     private boolean firstFrameReady;
     private long startupStarted;
     private TextInputView textInputView;
+    private AccessibilityView accessibilityView;
     private volatile TextSelectionMenu textSelectionMenu;
     private boolean textInputVisible;
     private volatile int pictureWindowState;
@@ -358,6 +359,7 @@ public class MainActivity extends NativeActivity {
     private native void nativeTextInputCommit(int codepoint);
     private native void nativeTextInputBackspace();
     private native void nativeTextInputEnter();
+    private native boolean nativeAccessibilityAction(long identity, int action);
     private native void nativeTextInputState(long target, long revision, byte[] value, int cursor, int anchor);
     private native void nativeInvalidateGraphicsResources();
     private native boolean nativeStartPractice(int practiceId);
@@ -1119,6 +1121,9 @@ public class MainActivity extends NativeActivity {
             }
         });
         addContentView(textInputView, new ViewGroup.LayoutParams(1, 1));
+        accessibilityView = new AccessibilityView(this, this::nativeAccessibilityAction);
+        addContentView(accessibilityView, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         textSelectionMenu = new TextSelectionMenu(getWindow().getDecorView());
         showStartup();
 
@@ -1148,6 +1153,16 @@ public class MainActivity extends NativeActivity {
         configureSystemBars();
         pushDeviceConfiguration();
         requestInsetRefresh();
+    }
+
+    public boolean accessibilityEnabled() {
+        return accessibilityView != null && accessibilityView.enabled();
+    }
+
+    public void updateAccessibility(byte[] snapshot) {
+        runOnUiThread(() -> {
+            if (accessibilityView != null) accessibilityView.update(snapshot);
+        });
     }
 
     private void configureSystemBars() {

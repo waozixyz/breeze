@@ -1,0 +1,74 @@
+#import "session"
+#import "tree"
+#import "tree_input"
+#import "widget_kind"
+#import "geometry"
+#import "vec"
+#import "byte_text_linux"
+#import "text"
+#import, file "../src/platform/android/accessibility_snapshot.zi";
+
+using WidgetKind;
+
+#program_export
+main :: () -> s32 {
+    session := SessionOpen()
+    bounds := Rectangle.{0.0, 0.0, 400.0, 800.0}
+    unused TreeStart(session, cast(u64)1, bounds)
+    button := TreeSubmit(session, cast(u64)2, 0, WidgetKindButton,
+        Rectangle.{10.0, 20.0, 100.0, 48.0})
+    TreeSetLabel(session, button, "Back 🌿\nEspañol")
+    TreeSetInteractive(session, button, false, false, 2)
+    password := TreeSubmit(session, cast(u64)3, 0, WidgetKindTextField, bounds)
+    TreeSetLabel(session, password, "secret-key")
+    TreeSetTextValue(session, password, "secret-key", 0, 0, false, true)
+    disabled := TreeSubmit(session, cast(u64)4, 0, WidgetKindButton, bounds)
+    TreeSetLabel(session, disabled, "Disabled")
+    TreeSetInteractive(session, disabled, true, false, 4)
+    if !TreeFinish(session) { return 1 }
+    identity := TreeNodeAt(session, button).identity_generation
+    bytes := AccessibilitySnapshot(session, Camera.{.zoom = 2.0}, 800, 1600)
+    {
+        snapshot := TextFromBytes(VecSlice(bytes, 0, bytes.count))
+        if !ContainsFoldASCII(snapshot, "Back 🌿\\u000aEspañol") ||
+        ContainsFoldASCII(snapshot, "secret-key") ||
+        !ContainsFoldASCII(snapshot, "20,40,220,136") {
+            return 2
+        }
+    }
+    VecFree(bytes)
+    if !AccessibilityApply(session, identity, AccessibilityClick, 0.0) ||
+    !TreeTakeActivationAt(session, button) ||
+    AccessibilityApply(session, TreeNodeAt(session, disabled).identity_generation,
+        AccessibilityClick, 0.0) {
+        return 3
+    }
+    // An open modal removes the page from the exported tree and blocks it.
+    unused TreeStart(session, cast(u64)1, bounds)
+    button = TreeSubmit(session, cast(u64)2, 0, WidgetKindButton, bounds)
+    TreeSetLabel(session, button, "Hidden page")
+    TreeSetInteractive(session, button, false, false, 2)
+    modal := TreeSubmit(session, cast(u64)5, 0, WidgetKindModal, bounds)
+    close := TreeSubmit(session, cast(u64)6, modal, WidgetKindButton, bounds)
+    TreeSetLabel(session, close, "Close")
+    TreeSetInteractive(session, close, false, false, 6)
+    if !TreeFinish(session) { return 4 }
+    bytes = AccessibilitySnapshot(session, Camera.{.zoom = 1.0}, 400, 800)
+    {
+        snapshot := TextFromBytes(VecSlice(bytes, 0, bytes.count))
+        if ContainsFoldASCII(snapshot, "Hidden page") ||
+        !ContainsFoldASCII(snapshot, "Close") ||
+        AccessibilityApply(session, identity, AccessibilityClick, 0.0) {
+            return 5
+        }
+    }
+    VecFree(bytes)
+    // Removed controls cannot receive a delayed Android callback.
+    unused TreeStart(session, cast(u64)1, bounds)
+    if !TreeFinish(session) || AccessibilityApply(session, identity, AccessibilityClick, 0.0) {
+        return 6
+    }
+    TreeDispose(session)
+    unused SessionClose(session)
+    return 0
+}

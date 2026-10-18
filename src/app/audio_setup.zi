@@ -1,0 +1,82 @@
+// First-run audio decisions. Screens draw the choices; this module owns
+// transitions, persistence and which narration is requested.
+#import, file "app_types.zi";
+#import, file "app_settings.zi";
+#import, file "app_route_state.zi";
+#import, file "language_selection.zi";
+#import, file "locale.zi";
+#import, file "../core/types.zi";
+#import, file "../practices/practice_downloads.zi";
+
+using AudioSetupStep;
+
+AudioSetupBegin :: (app: *InnerBreeze) {
+    if app.audio_setup_step != cast(AudioSetupStep)AudioSetupLanguage {
+        return
+    }
+    app.audio_setup_step = cast(AudioSetupStep)AudioSetupChoices
+    app.audio_setup_scroll = 0
+    save_settings(app)
+}
+
+AudioSetupSelect :: (app: *InnerBreeze, guide: bool, selected: bool) {
+    if app.audio_setup_step != cast(AudioSetupStep)AudioSetupChoices {
+        return
+    }
+    value: s32 = ifx selected then 1 else 0
+    if guide {
+        app.guide_narration_enabled = value
+        app.guide_narration_muted = 0
+    } else {
+        app.voice_narration_enabled = value
+    }
+    save_settings(app)
+}
+
+AudioSetupSummary :: (app: *InnerBreeze) -> NarrationSummary {
+    summary: NarrationSummary
+    if app.guide_narration_enabled != 0 {
+        guide := PracticeNarrationSummary(true, LocaleActiveCode())
+        summary.pending += guide.pending
+        summary.failed += guide.failed
+        summary.bytes += guide.bytes
+    }
+    if app.voice_narration_enabled != 0 {
+        practice := PracticeNarrationSummary(false, LocaleActiveCode())
+        summary.pending += practice.pending
+        summary.failed += practice.failed
+        summary.bytes += practice.bytes
+    }
+    return summary
+}
+
+AudioSetupStart :: (app: *InnerBreeze) {
+    if app.audio_setup_step != cast(AudioSetupStep)AudioSetupChoices &&
+    app.audio_setup_step != cast(AudioSetupStep)AudioSetupDownloading {
+        return
+    }
+    if app.guide_narration_enabled == 0 && app.voice_narration_enabled == 0 {
+        return
+    }
+    if app.guide_narration_enabled != 0 {
+        PracticeNarrationRequest(true, LocaleActiveCode())
+    }
+    if app.voice_narration_enabled != 0 {
+        PracticeNarrationRequest(false, LocaleActiveCode())
+    }
+    app.audio_setup_step = cast(AudioSetupStep)AudioSetupDownloading
+    save_settings(app)
+}
+
+AudioSetupFinish :: (app: *InnerBreeze, skip: bool) {
+    if app.audio_setup_step == cast(AudioSetupStep)AudioSetupLanguage {
+        return
+    }
+    if skip {
+        app.guide_narration_enabled = 0
+        app.voice_narration_enabled = 0
+    }
+    app.audio_setup_step = cast(AudioSetupStep)AudioSetupLanguage
+    app_accept_language_selection(app)
+    app_switch_screen(app, ScreenAppSelection)
+}

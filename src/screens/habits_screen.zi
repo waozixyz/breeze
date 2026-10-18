@@ -1,6 +1,7 @@
 #import, file "../cells/shared_state.zi";
 #import, file "../cells/habits_types.zi";
 #import, file "../cells/habits_ui_types.zi";
+#import, file "../cells/habits_ui.zi";
 #import, file "../cells/app_codec.zi";
 #import, file "../cells/hosted_assets.zi";
 #import "widget_host"
@@ -738,7 +739,7 @@ HabitScreenIconFor :: (app: *InnerBreeze, index: s32) -> s32 {
         return HABIT_ICON_YIN_YANG
     }
     breathing := habit_activity_mask_for(EXERCISE_WIM_HOF) |
-        habit_activity_mask_for(EXERCISE_PATTERNS)
+    habit_activity_mask_for(EXERCISE_PATTERNS)
     if (habit.sync_activity & breathing) != 0 {
         return HABIT_ICON_LUNGS
     }
@@ -933,8 +934,8 @@ HABITS_DETAIL_PADDING :: 12
 
 HabitScreenRowDetailHeight :: (app: *InnerBreeze, index: s32) -> s32 {
     height := AppScale(4) + AppScale(HABITS_DETAIL_PADDING) * 2 +
-        AppScale(HABITS_DETAIL_ACTION_SIZE) + AppScale(12) +
-        AppScale(FIGURE_CARD_HEIGHT) + AppScale(12)
+    AppScale(HABITS_DETAIL_ACTION_SIZE) + AppScale(12) +
+    AppScale(FIGURE_CARD_HEIGHT) + AppScale(12)
     if app.habits.items[index].description[0] != cast(u8)0 {
         height += AppScale(30)
     }
@@ -1059,8 +1060,8 @@ HabitScreenOpenHeight :: (app: *InnerBreeze, active: []s32,
     }
     if app.habits.count > 0 {
         height += AppScale(HABITS_INACTIVE_HEADER_HEIGHT) +
-            AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
-            deactivated_count * AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
+        AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
+        deactivated_count * AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
     }
     return height
 }
@@ -1331,7 +1332,7 @@ HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
     point := app.habits.drag_pointer
     // Over the inactive habits, a habit is dropped among them.
     in_section := app.habits.drag_moving != 0 && section.height > 0.0 &&
-        PointInBounds(point.x, point.y, section)
+    PointInBounds(point.x, point.y, section)
     target: s32 = -1
     if app.habits.drag_moving != 0 && !in_section &&
     PointInBounds(point.x, point.y, list.viewport) {
@@ -1522,7 +1523,7 @@ HabitScreenOverview :: (app: *InnerBreeze,
         section_h = AppScale(HABITS_INACTIVE_HEADER_HEIGHT)
         if app.habits.show_deactivated != 0 {
             section_h += AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
-                deactivated_count * inactive_row_h
+            deactivated_count * inactive_row_h
         }
     }
     content_h := active_h + section_h
@@ -1910,36 +1911,6 @@ HabitScreenSpanTap :: (app: *InnerBreeze, index: s32, day_index: s32) {
     HabitScreenOpenEntry(app, index, day_index, "")
 }
 
-habits_ui: HabitsUiFrame;
-habits_ui_codec: WidgetHabitsUiFrameCodec;
-
-// The Habits package's calls while it draws: its frame and locale text,
-// and Kryon's hosted widgets.
-HabitsUiCall :: (context: *void, module: *u8, function: *u8,
-    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
-    if TextFromCString(module) != "habits_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
-    }
-    name := TextFromCString(function)
-    if name == "ReadHabitsUiHost" && count == 0 {
-        result.* = WidgetEncodeHabitsUiFrame(habits_ui, *habits_ui_codec)
-        return 1
-    }
-    if name == "WriteHabitsUiHost" && count == 1 && WidgetValidHabitsUiFrame(arguments[0]) {
-        habits_ui.action = WidgetDecodeHabitsUiFrame(arguments[0], *habits_ui_codec).action
-        return 1
-    }
-    if name == "HabitsLocaleHost" && count == 1 &&
-    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
-        return 1
-    }
-    return 0
-}
-
 // The count dialog: the day's count with large steps down and up. Linked
 // practice sessions are the floor, and their sessions open from here. The
 // Habits package draws it (habits_view.zi); the host applies its step or
@@ -1955,7 +1926,7 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
         return
     }
     habit := *app.habits.items[index]
-    habits_ui = HabitsUiFrame.{
+    frame := HabitsUiFrame.{
         .session = app.ui.session,
         .scale = MetricsScale(),
         .small_font = AppSmallFontSize(),
@@ -1967,17 +1938,12 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
         .target = habit_counter_target(habit),
         .linked_count = HabitScreenLinkedCount(app, index, day_index),
         .asks = habit.question_count > 0}
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    CellsUiBegin(HabitsUiCall, cast(*void)app)
-    drawn := HabitsRun(HabitsMessage.{.action = HABITS_COUNT_DIALOG})
-    CellsUiEnd()
-    WidgetHostEnd()
-    action := habits_ui.action
-    habits_ui = HabitsUiFrame.{}
-    if !drawn.succeeded {
+    result := HabitsUiDraw(frame, HABITS_COUNT_DIALOG, cast(*void)app)
+    if !result.drawn {
         app_close_modal(app)
         return
     }
+    action := result.action
     if action == HABITS_COUNT_DECREMENT {
         HabitScreenAdjustCount(app, index, day_index, -1)
     } else if action == HABITS_COUNT_INCREMENT {

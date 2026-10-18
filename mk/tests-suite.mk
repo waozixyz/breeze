@@ -64,6 +64,8 @@ test: locale-zi-test
 test: text-buffers-zi-test
 test: raylib-text-input-zi-test
 test: android-text-input-zi-test
+test: android-text-selection-test
+test: accessibility-test
 test: main-platform-zi-test
 test: web-window-zi-test
 test: plan9-host-zi-test android-jni-zi-test update-transport-zi-test

@@ -16,6 +16,7 @@
 #import, file "../platform/environment.zi";
 #import "text_context_menu"
 #import, file "../platform/android/graphics_context.zi";
+#import, file "../platform/android/android_accessibility.zi";
 #import "layout"
 #import, file "fonts.zi";
 #import, file "app_nav_state.zi";
@@ -56,6 +57,8 @@
 #import "frame_pacing"
 #import, file "application.zi";
 #import, file "application_update.zi";
+
+using AudioSetupStep;
 c :: #system_library "c";
 raylib_log :: #system_library "raylib";
 #if #defined(PLATFORM_WEB) {
@@ -69,6 +72,10 @@ using ModalType;
 using ExerciseType;
 
 GetTime :: () -> float64 #foreign c;
+#if #defined(ANDROID_BUILD) {
+    GetScreenWidth :: () -> s32 #foreign c;
+    GetScreenHeight :: () -> s32 #foreign c;
+}
 PackageNow :: () -> s64 #foreign c "now_seconds";
 BeginMode2D :: (camera: Camera) #foreign raylib_log "BeginMode2D";
 EndMode2D :: () #foreign raylib_log "EndMode2D";
@@ -142,6 +149,12 @@ app_finish_frame :: (app: *InnerBreeze) {
     }
     app_last_frame_status = status
     app.ui.retained_frame_unchanged = status == 0 && paint_unchanged
+    #if #defined(ANDROID_BUILD) {
+        if status == 0 {
+            AndroidAccessibilityFrame(app.ui.session, app.camera,
+                GetScreenWidth(), GetScreenHeight(), GetTime())
+        }
+    }
 }
 #program_export
 app_update_draw :: (vapp: *void, viewport: Rectangle) {
@@ -300,6 +313,11 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         logical_frame) != 0 {
         return
     }
+    #if #defined(ANDROID_BUILD) {
+        if AndroidAccessibilityInput(app.ui.session, GetTime()) {
+            app.ui.pointer_active = true
+        }
+    }
     // The canvas under the whole viewport comes first, under every widget.
     // The camera maps the logical frame onto the viewport; a preview draws
     // without the camera.
@@ -380,7 +398,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         if practice_paid_allowed {
             UnlockSync()
         }
-        audio_confirmed := app.language_selected != 0 || app.audio_setup_step == 2
+        audio_confirmed := app.language_selected != 0 || app.audio_setup_step == cast(AudioSetupStep)AudioSetupDownloading
         PracticeDownloadsPump(app.exercise_type, audio_confirmed && app.voice_narration_enabled != 0,
             audio_confirmed && app.guide_narration_enabled != 0,
             practice_active(app) == null && (app.modal.active == 0 ||

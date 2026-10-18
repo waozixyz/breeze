@@ -1,3 +1,6 @@
+#import, file "../../../apps/habits/editor_dialogs.zi";
+#import, file "../../cells/habits_ui.zi";
+#import, file "../../cells/habits_ui_types.zi";
 #import, file "../../cells/shared_state.zi";
 #import, file "../../cells/habits_types.zi";
 #import, file "../../cells/module_host.zi";
@@ -1991,40 +1994,39 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
         viewport_h, content_h)
 }
 
+habit_edit_confirmation :: (app: *InnerBreeze, deleting: bool) -> s32 {
+    result := HabitsUiDraw(HabitsUiFrame.{.session = app.ui.session},
+        ifx deleting then HABITS_DELETE_DIALOG else HABITS_UNSAVED_DIALOG,
+        cast(*void)app)
+    if result.drawn {
+        return result.action
+    }
+    // Keep editor confirmations working with an older installed Habits
+    // package. Both paths use the same package-owned composition.
+    native := HabitEditorDialog(HabitEditorDialogProps.{
+            .session = app.ui.session, .deleting = deleting,
+            .title = LocaleText(ifx deleting then "habit_delete_title" else "habit_unsaved_title"),
+            .message = LocaleText(ifx deleting then "habit_delete_message" else "habit_unsaved_message"),
+            .keep_editing = LocaleText("habit_keep_editing"),
+            .save = LocaleText("save_button"), .discard = LocaleText("discard_button"),
+            .cancel = LocaleText("cancel_button"), .delete_label = LocaleText("delete_button")})
+    return native.action
+}
+
 habit_edit_modal :: (app: *InnerBreeze) -> bool {
     if app.modal.active == 0 { return false }
     if app.modal.type == cast(ModalType)ModalHabitUnsaved {
-        actions: [3]ActionModalAction = .[
-        ActionModalAction.{.label = LocaleText("habit_keep_editing"),
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
-        ActionModalAction.{.label = LocaleText("save_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
-        ActionModalAction.{.label = LocaleText("discard_button"),
-            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}]
-        result := ActionModal(app.ui.session, ActionModalProps.{
-                .title = LocaleText("habit_unsaved_title"),
-                .message = LocaleText("habit_unsaved_message")}, actions[:])
-        if result.action != 0 {
-            habit_edit_resolve_leave(app, result.action)
+        action := habit_edit_confirmation(app, false)
+        if action != 0 {
+            habit_edit_resolve_leave(app, action)
         }
     } else if app.modal.type == cast(ModalType)ModalHabitPracticePicker {
         if practice_picker(app) != 0 { app_close_modal(app) }
     } else if app.modal.type == cast(ModalType)ModalConfirmDeleteHabit {
-        actions: [2]ActionModalAction = .[
-        ActionModalAction.{
-            .label = LocaleText("cancel_button"),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
-        ActionModalAction.{
-            .label = LocaleText("delete_button"),
-            .tone = cast(ButtonTone)ButtonToneDanger,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}]
-        result := ActionModal(app.ui.session, ActionModalProps.{
-                .title = LocaleText("habit_delete_title"),
-                .message = LocaleText("habit_delete_message")}, actions[:])
-        if result.action != 0 {
+        action := habit_edit_confirmation(app, true)
+        if action != 0 {
             app_close_modal(app)
-            if result.action == 2 {
+            if action == 2 {
                 index := app.habit_edit.index
                 habit_edit_cancel(app)
                 habits_delete(*app.habits, index)

@@ -99,8 +99,13 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             saved(profile, "voice_narration_enabled", 1)
             capture(window, name + "-optional-audio")
             driver.press(label="Practice voice", role="toggle")
+            driver.press(label="Guide voice", role="toggle")
+            driver.wait(label="Continue", role="button")
+            assert not driver.find(label="Download selected", role="button", visible=True)
+            assert not driver.find(label="Skip for now", role="button", visible=True)
+            driver.press(label="Guide voice", role="toggle")
             back = driver.wait(label="Back", role="button")
-            assert back["width"] >= 44 and back["height"] >= 44
+            assert back["width"] >= 48 and back["height"] >= 48
             driver.press(label="Back", role="button")
             driver.wait(label="Choose Language")
             saved(profile, "audio_setup_step", 0)

@@ -1,5 +1,14 @@
 # Android tests: Ziran host modules, Gradle tests, smoke and device checks.
 
+.PHONY: accessibility-test
+accessibility-test: $(ZIRAN_BIN)
+	$(ZIRAN_BIN) build --target=c --exe --root tests --module-path src \
+		--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_DIR)/std \
+		--entry accessibility_behavior:main -o $(BUILD_DIR)/accessibility-test \
+		tests/accessibility_behavior.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		$(BUILD_DIR)/accessibility-test/accessibility_behavior
+
 .PHONY: android-text-input-zi-test
 android-text-input-zi-test: $(ZI2C_BIN)
 	sh tests/android_text_input_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))

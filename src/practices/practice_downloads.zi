@@ -795,6 +795,58 @@ PracticeNarrationFollowingBytes :: (content: s32) -> s64 {
     return ifx index < 0 || practice_packs[index].declined then 0 else practice_packs[index].size
 }
 
+NarrationSummary :: struct {
+    bytes: s64
+    pending: s32
+    failed: s32
+}
+
+// Available narration excludes locked practices, but can be prepared before
+// adding an available practice. The download service owns catalog details.
+PracticeNarrationAvailablePack :: (content: s32, language: string) -> s32 {
+    if content != PracticeGuide {
+        product := PracticeProduct(content)
+        if product.count > 0 && (!practice_paid_allowed ||
+            practice_owned == null || !practice_owned(product)) {
+            return -1
+        }
+    }
+    return PracticeNarrationPack(content, language, PracticeVoiceFor(content))
+}
+
+PracticeNarrationSummary :: (guide: bool, language: string) -> NarrationSummary {
+    summary: NarrationSummary
+    for content: cast(s32)0..PracticeContentCount - 1 {
+        if (content == PracticeGuide) != guide {
+            continue
+        }
+        index := PracticeNarrationAvailablePack(content, language)
+        if index < 0 {
+            continue
+        }
+        summary.bytes += practice_packs[index].size
+        state := PracticeNarrationState(index)
+        if state == 3 {
+            summary.failed += 1
+        } else if state != 2 {
+            summary.pending += 1
+        }
+    }
+    return summary
+}
+
+PracticeNarrationRequest :: (guide: bool, language: string) {
+    for content: cast(s32)0..PracticeContentCount - 1 {
+        if (content == PracticeGuide) != guide {
+            continue
+        }
+        index := PracticeNarrationAvailablePack(content, language)
+        if index >= 0 {
+            PracticeNarrationDownload(index)
+        }
+    }
+}
+
 // Narration downloads by itself in the language it should speak, unless the
 // person removed that language. A failed download waits for the next start.
 PracticeNarrationEnsure :: (content: s32) {
