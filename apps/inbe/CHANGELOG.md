@@ -2,7 +2,7 @@
 
 ## [2.1.34] - 2026-10-17
 
-- Bring Diary 1.2.0, with Markdown entries and photos inside them, for Inner Breeze 2.1.35.
+- Bring Diary 1.2.0, with Markdown entries and photos inside them, and Habits 1.1.0, with its count dialog, for Inner Breeze 2.1.35.
 - Requires Inner Breeze 2.1.35 or later.
 
 ## [2.1.33] - 2026-10-17

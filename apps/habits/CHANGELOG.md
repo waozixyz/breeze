@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.0] - 2026-10-17
+
+- A counting habit's count dialog now comes with Habits, so it can improve with a Habits update, without a new Inner Breeze.
+- Requires Inner Breeze 2.1.35 or later.
+
 ## [1.0.7] - 2026-10-17
 
 - Maintenance release for Inner Breeze 2.1.35.

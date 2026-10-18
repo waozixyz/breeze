@@ -1,5 +1,12 @@
 #import, file "../cells/shared_state.zi";
 #import, file "../cells/habits_types.zi";
+#import, file "../cells/habits_ui_types.zi";
+#import, file "../cells/app_codec.zi";
+#import, file "../cells/hosted_assets.zi";
+#import "widget_host"
+#import "hosted_values"
+#import "bundle_host"
+#import "byte_text_linux"
 #import, file "../cells/module_host.zi";
 // Habit navigation and presentation. Habit persistence and counting rules live
 // in the habit modules; this screen composes them with Kryon's current widgets.
@@ -77,6 +84,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import, file "../platform/raylib_text_input.zi";
 
 using ModalType;
+using HostValueKind;
 using ButtonTone;
 using ArrowDirection;
 using ButtonEmphasis;
@@ -399,36 +407,6 @@ HabitScreenDayCount :: (app: *InnerBreeze, index: s32,
     day_index: s32) -> s32 {
     return HabitEffectiveDayCount(*app.habits.items[index], day_index,
         habit_cached_linked_entries(app, index, day_index))
-}
-
-// A step button draws its minus or plus as bars sized to the button, which
-// read clearly where a "-" or "+" glyph is thin and small.
-HabitScreenStepButton :: (app: *InnerBreeze, id: s32, bounds: Rectangle,
-    plus: bool, disabled: bool) -> bool {
-    props: ButtonProps
-    props.id = id
-    props.bounds = bounds
-    props.tone = cast(ButtonTone)ButtonToneNeutral
-    props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    props.disabled = disabled
-    clicked := Button(app.ui.session, props) != 0
-    side := bounds.height
-    if bounds.width < side { side = bounds.width }
-    length := side * 0.36
-    thickness := cast(float32)AppScale(3)
-    center_x := bounds.x + bounds.width * 0.5
-    center_y := bounds.y + bounds.height * 0.5
-    color := StyleTokenColor("text")
-    if disabled { color = color_with_alpha(color, 0.35) }
-    PaintRoundedFill(app.ui.session, -1, Rectangle.{
-            center_x - length * 0.5, center_y - thickness * 0.5,
-            length, thickness}, thickness * 0.5, 6, color)
-    if plus {
-        PaintRoundedFill(app.ui.session, -1, Rectangle.{
-                center_x - thickness * 0.5, center_y - length * 0.5,
-                thickness, length}, thickness * 0.5, 6, color)
-    }
-    return clicked
 }
 
 HabitScreenAdjustCount :: (app: *InnerBreeze, index: s32,
@@ -1932,8 +1910,40 @@ HabitScreenSpanTap :: (app: *InnerBreeze, index: s32, day_index: s32) {
     HabitScreenOpenEntry(app, index, day_index, "")
 }
 
+habits_ui: HabitsUiFrame;
+habits_ui_codec: WidgetHabitsUiFrameCodec;
+
+// The Habits package's calls while it draws: its frame and locale text,
+// and Kryon's hosted widgets.
+HabitsUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "habits_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadHabitsUiHost" && count == 0 {
+        result.* = WidgetEncodeHabitsUiFrame(habits_ui, *habits_ui_codec)
+        return 1
+    }
+    if name == "WriteHabitsUiHost" && count == 1 && WidgetValidHabitsUiFrame(arguments[0]) {
+        habits_ui.action = WidgetDecodeHabitsUiFrame(arguments[0], *habits_ui_codec).action
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
 // The count dialog: the day's count with large steps down and up. Linked
-// practice sessions are the floor, and their sessions open from here.
+// practice sessions are the floor, and their sessions open from here. The
+// Habits package draws it (habits_view.zi); the host applies its step or
+// opens the day.
 HabitScreenCountDialog :: (app: *InnerBreeze) {
     if app.modal.active == 0 ||
     app.modal.type != cast(ModalType)ModalHabitCount { return }
@@ -1945,124 +1955,38 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
         return
     }
     habit := *app.habits.items[index]
-    count := HabitScreenDayCount(app, index, day_index)
-    linked_count := HabitScreenLinkedCount(app, index, day_index)
-    gap := AppScale(12)
-    step_h := AppScale(56)
-    button_h := AppScale(44)
-    content_h := AppScale(24) + AppScale(64) + AppScale(24) + gap +
-    step_h + gap + button_h
-    if linked_count > 0 { content_h += button_h + gap }
-    // A counting habit that asks questions keeps their answers as the
-    // day's entries, opened from here.
-    asks := habit.question_count > 0
-    if asks { content_h += button_h + gap }
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-            .key = KeyHash("habits/count-dialog"),
-            .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
-            .strong_title = true,
-            .width = AppScale(340), .height = content_h + AppScale(74),
-            .scale = MetricsScale(),
-            .has_right_action = true,
-            .right_label = LocaleText("close_button")})
-    if frame.dismissed || frame.right_clicked {
+    habits_ui = HabitsUiFrame.{
+        .session = app.ui.session,
+        .scale = MetricsScale(),
+        .small_font = AppSmallFontSize(),
+        .text_color = StyleTokenColor("text"),
+        .name = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+        .day = day_index,
+        .today = day_index == habits_today_index(),
+        .count = HabitScreenDayCount(app, index, day_index),
+        .target = habit_counter_target(habit),
+        .linked_count = HabitScreenLinkedCount(app, index, day_index),
+        .asks = habit.question_count > 0}
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(HabitsUiCall, cast(*void)app)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_COUNT_DIALOG})
+    CellsUiEnd()
+    WidgetHostEnd()
+    action := habits_ui.action
+    habits_ui = HabitsUiFrame.{}
+    if !drawn.succeeded {
         app_close_modal(app)
         return
     }
-    if !frame.opened {
-        return
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-
-    day_text := HabitScreenDate(app, day_index)
-    if day_index == habits_today_index() {
-        day_text = LocaleText("habits_today")
-    }
-    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
-        day_text, AppSmallFontSize())
-    y += AppScale(24)
-    count_text := HabitScreenNumber(app, count)
-    count_strong := StrongWhole(count_text)
-    Text(app.ui.session, TextProps.{
-            .bounds = HabitScreenRect(x, y, width, AppScale(64)),
-            .text = count_text, .font = AppScale(Text48),
-            .strong = count_strong[:],
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapNone})
-    y += AppScale(64)
-    target_text: [96]u8
-    target_args: [2]FormatArg
-    target_args[0].text = LocaleText("habit_counter_target")
-    target_args[0].is_text = true
-    target_args[1].number = habit_counter_target(habit)
-    unused FormatTemplate("%s  %d", target_args[:], target_text[:])
-    HabitScreenCountText(app, HabitScreenRect(x, y, width, AppScale(24)),
-        FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*target_text[0], cast(s32)target_text.count)),
-        AppSmallFontSize())
-    y += AppScale(24) + gap
-
-    step_w := (width - gap) / 2
-    if HabitScreenStepButton(app, 5720000,
-        HabitScreenRect(x, y, step_w, step_h), false, count <= linked_count) {
+    if action == HABITS_COUNT_DECREMENT {
         HabitScreenAdjustCount(app, index, day_index, -1)
-    }
-    if HabitScreenStepButton(app, 5720001,
-        HabitScreenRect(x + width - step_w, y, step_w, step_h), true, false) {
+    } else if action == HABITS_COUNT_INCREMENT {
         HabitScreenAdjustCount(app, index, day_index, 1)
-    }
-    y += step_h + gap
-    if asks {
-        entries: ButtonProps
-        entries.id = 5720004
-        entries.bounds = HabitScreenRect(x, y, width, button_h)
-        entries.label = LocaleText("habit_day_entries")
-        entries.tone = cast(ButtonTone)ButtonToneNeutral
-        entries.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
-        if Button(app.ui.session, entries) != 0 {
-            unused End(app.ui.session)
-            habit_open_linked_edit_page(app, index, day_index)
-            return
-        }
-        y += button_h + gap
-    }
-
-    if linked_count > 0 {
-        sessions_text: [96]u8
-        sessions_args: [1]FormatArg
-        sessions_args[0].number = linked_count
-        unused FormatTemplate(LocaleText(ifx (linked_count == 1)
-            then ("session_count_singular") else ("session_count_plural")),
-            sessions_args[:], sessions_text[:])
-        sessions: ButtonProps
-        sessions.id = 5720002
-        sessions.bounds = HabitScreenRect(x, y, width, button_h)
-        sessions.label = FrameTextHold(*app.ui.frame_text,
-            AppTextFromCString(*sessions_text[0],
-            cast(s32)sessions_text.count))
-        sessions.tone = cast(ButtonTone)ButtonToneNeutral
-        sessions.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
-        if Button(app.ui.session, sessions) != 0 {
-            unused End(app.ui.session)
-            habit_open_linked_edit_page(app, index, day_index)
-            return
-        }
-        y += button_h + gap
-    }
-    done: ButtonProps
-    done.id = 5720003
-    done.bounds = HabitScreenRect(x, y, width, button_h)
-    done.label = LocaleText("done_button")
-    done.tone = cast(ButtonTone)ButtonToneAccent
-    done.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    if Button(app.ui.session, done) != 0 {
+    } else if action == HABITS_COUNT_OPEN_DAY {
+        habit_open_linked_edit_page(app, index, day_index)
+    } else if action == HABITS_COUNT_CLOSE {
         app_close_modal(app)
     }
-    unused End(app.ui.session)
 }
 
 #program_export

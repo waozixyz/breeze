@@ -15,7 +15,9 @@ or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
 standard Kryon widgets inside their ZIBs. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
-account sync and native input stay in the wrapper. Habits and Practices
+account sync and native input stay in the wrapper. Habits draws a counting
+habit's count dialog in its package (`apps/habits/habits_view.zi`); its
+table, editor, entries, history and statistics, and Practices' screens,
 still use compiled screen compositions; migrating those screens is required
 before every visual change can ship without rebuilding the wrapper.
 
@@ -607,9 +609,14 @@ These bundles currently need Inbe's capabilities and are not complete
 standalone UI applications in the generic Kryon player. The cell picker, Lists
 and Diary compose standard widgets through the same raylib and canvas host.
 Their layouts and all packaged graphics, fonts, styles and translations can
-update without a wrapper release. Habits and Practices still contain compiled
-screen compositions; moving those compositions into their bundles is required
-to finish the entirely portable architecture. Changes to their compiled UI or
+update without a wrapper release. Habits draws its count dialog the same
+way, through `ReadHabitsUiHost`, `WriteHabitsUiHost` and `HabitsLocaleHost`
+(host interface 14, so Habits 1.1.0 needs Inner Breeze 2.1.35): the host
+supplies the day's count, target, linked sessions and the theme's text
+colour, and applies the step, the opened day or the closing the dialog asks
+for. Habits' other screens and Practices still contain compiled screen
+compositions; moving those compositions into their bundles is required to
+finish the entirely portable architecture. Changes to their compiled UI or
 to native host capabilities still require a wrapper release.
 
 ## Verification

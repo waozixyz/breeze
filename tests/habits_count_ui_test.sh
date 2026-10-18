@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Runs habits_count_ui_test.py on its own private Xvfb display; screenshot
+# mode seeds its own temporary database.
+if [[ -z "${INBE_UI_TEST_XVFB:-}" ]]; then
+  exec env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY -u SESSION_MANAGER \
+    -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 xvfb-run -a \
+    env -u WAYLAND_DISPLAY -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
+    SDL_VIDEODRIVER=x11 INBE_UI_TEST_XVFB=1 bash "$0" "$@"
+fi
+binary="${1:?native binary required}"
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+test_dir="$root/build/habits-count-ui-test"
+mkdir -p "$test_dir"
+exec 9>"$test_dir/lock"
+flock 9
+exec python3 "$root/tests/habits_count_ui_test.py" "$binary"
