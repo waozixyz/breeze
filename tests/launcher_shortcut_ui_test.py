@@ -103,15 +103,44 @@ with contextlib.ExitStack() as stack:
 
     with application("pin") as window:
         driver.press(label="Apps", role="button")
-        driver.wait(label="Pin to launcher", role="button")
-        # Match each pin to its app card by geometry, so identical action labels
-        # do not accidentally test a different installed app.
-        cards = driver.find(label="Diary", role="button")
-        card = next(node for node in cards if node["width"] > 100)
-        pins = driver.find(label="Pin to launcher", role="button")
-        pin = next(node for node in pins if abs(node["x"] - card["x"]) < 1 and
-                   0 < node["y"] - card["y"] < card["height"] + 10)
-        driver.press(key=pin["key"], label="Pin to launcher")
+        driver.wait(label="App options", role="button")
+        assert not driver.find(label="Clear search"), "Clear is visible for an empty search"
+        driver.press(label="Find an app", role="text_field")
+        driver.type("diary")
+        driver.wait(label="Clear search", role="button")
+        driver.press(label="Clear search", role="button")
+        wait(lambda: not driver.find(label="Clear search"), "Clear did not empty the search")
+        assert driver.find(label="Habits", role="button"), "Clear did not restore all apps"
+        assert not driver.find(label="Install to launcher"), "Pin action is visible outside the menu"
+        card = next(node for node in driver.find(label="Diary", role="button") if node["width"] > 100)
+        assert card["height"] < 100, "The app card still reserves space for a pin button"
+        def options(card):
+            return next(node for node in driver.find(label="App options", role="button")
+                        if card["x"] <= node["x"] < card["x"] + card["width"]
+                        and card["y"] <= node["y"] < card["y"] + card["height"])
+        action = options(card)
+        driver.press(key=action["key"], label="App options")
+        driver.wait(label="Install to launcher", role="selectable")
+        driver.wait(label="Uninstall", role="selectable")
+        # An outside click only dismisses the menu, keeping the app installed
+        # and its Apps drawer open. It must not activate an underlying card.
+        driver.pointer(5, 5, down=True)
+        driver.pointer(5, 5)
+        driver.release_pointer()
+        wait(lambda: not driver.find(label="Install to launcher"), "Menu did not dismiss")
+        assert driver.find(label="Find an app"), "Dismissing the menu opened an app"
+        driver.press(key=action["key"], label="App options")
+        driver.press(label="Pin", role="selectable")
+        driver.press(key=action["key"], label="App options")
+        driver.wait(label="Unpin", role="selectable")
+        with sqlite3.connect((profile / "inbe.db").as_uri() + "?mode=ro", uri=True) as db:
+            saved = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
+            assert "11" in [saved["launcher_favorite_" + str(i)]
+                            for i in range(int(saved["launcher_favorite_count"]))]
+        driver.press(label="Unpin", role="selectable")
+        driver.press(key=action["key"], label="App options")
+        driver.wait(label="Pin", role="selectable")
+        driver.press(label="Install to launcher", role="selectable")
         driver.wait(label="Added to your launcher.", role="text")
         entry = data / "applications/xyz.waozi.inbe.diary.desktop"
         assert entry.is_file()
@@ -121,7 +150,8 @@ with contextlib.ExitStack() as stack:
         icon_path = Path(next(line[5:] for line in text.splitlines() if line.startswith("Icon=")))
         with Image.open(icon_path) as icon:
             assert icon.size == (128, 128) and icon.convert("RGB").getextrema()[0][0] < 100
-        driver.press(key=pin["key"], label="Pin to launcher")
+        driver.press(key=action["key"], label="App options")
+        driver.press(label="Install to launcher", role="selectable")
         assert len(list((data / "applications").glob("*.desktop"))) == 1
         subprocess.run(["import", "-window", window, str(OUTPUT / "apps.png")],
                        env=env, check=True, capture_output=True)
@@ -190,11 +220,10 @@ with contextlib.ExitStack() as stack:
         driver.wait(label="Apps", role="button")
         driver.press(label="Apps", role="button")
         card = wait(chess_card, "The installed Chess package did not appear")
-        pin = next(node for node in driver.find(label="Pin to launcher", role="button")
-                   if abs(node["x"] - card["x"]) < 1 and
-                   0 < node["y"] - card["y"] < card["height"] + 10)
         node_title = card["label"]
-        driver.press(key=pin["key"], label="Pin to launcher")
+        action = options(card)
+        driver.press(key=action["key"], label="App options")
+        driver.press(label="Install to launcher", role="selectable")
         driver.wait(label="Added to your launcher.", role="text")
         entry = data / "applications/xyz.waozi.inbe.chess.desktop"
         assert "--app chess\n" in entry.read_text()

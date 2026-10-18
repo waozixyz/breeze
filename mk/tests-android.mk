@@ -76,3 +76,8 @@ android-diary-photo-test:
 .PHONY: android-geometry-probe-test
 android-geometry-probe-test:
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS sh tests/android_geometry_probe_test.sh
+
+# Moto debug-profile isolation is explicit; this never runs in the CI suite.
+.PHONY: android-launcher-device-test
+android-launcher-device-test:
+	@python3 tests/android_launcher_device.py $(ANDROID_LAUNCHER_ARGS)

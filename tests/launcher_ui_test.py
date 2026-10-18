@@ -167,15 +167,15 @@ with contextlib.ExitStack() as stack:
                     if node["kind"] == "text" and node["label"] in ("Pinned", "More apps")}
         grid = [node for node in tree if node["kind"] == "button"
                 and by_index(tree).get(node["parent"], {}).get("kind") == "scroll"
-                and node["label"] not in ("Install", "Uninstall", "Pin to launcher")]
+                and node["label"] not in ("Install", "App options")]
         more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
         more = [node for node in grid if node["y"] >= more_top]
         return pinned, more, tree
 
     def corner(card, tree):
-        """The install or remove symbol in a card's top-right corner."""
-        inside = [node for node in tree if node["label"] in ("Install", "Uninstall")
+        """The install or options symbol in a card's top-right corner."""
+        inside = [node for node in tree if node["label"] in ("Install", "App options")
                   and card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"]
                   and card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
         assert len(inside) == 1, f"{card['label']} has no corner symbol: {inside}"
@@ -496,14 +496,14 @@ with contextlib.ExitStack() as stack:
                 with database(profile) as db:
                     habit_count = db.execute("SELECT COUNT(*) FROM habits").fetchone()[0]
                 selected_tab = settings(profile)["main_tab"]
-                # Habits is the second pinned card. The trash symbol in its
-                # top-right corner removes only the installation and shortcut,
-                # retaining local data.
+                # Habits is the second pinned card. Uninstall in its options
+                # menu removes the installation and shortcut, retaining data.
                 pinned, more, tree = cards()
                 assert pinned[1]["label"] == "Habits", pinned
-                trash = corner(pinned[1], tree)
-                assert trash["label"] == "Uninstall"
-                press(trash)
+                action = corner(pinned[1], tree)
+                assert action["label"] == "App options"
+                press(action)
+                driver.press(label="Uninstall", role="selectable")
                 wait_setting(profile, "app_used_habits", 0, "Trash did not uninstall Habits")
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with database(profile) as db:

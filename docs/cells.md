@@ -661,8 +661,12 @@ to native host capabilities still require a wrapper release.
 
 ## Device launcher entries
 
-Installed apps in Apps offer **Pin to launcher** on Android 8 and later when
-its launcher supports pinned shortcuts, on Windows, and in native Linux and
+Each installed app card has a compact **⋮** menu with **Pin** or **Unpin** for
+Inbe's navigation and **Uninstall**. The Apps search field shows **×** at its
+right only while it contains text; clearing it restores the full app list.
+
+The menu also offers **Install to launcher** on Android 8 and later when the
+launcher supports pinned shortcuts, on Windows, and in native Linux and
 AppImage builds. Android asks for confirmation on the home screen. Windows
 adds a per-user Start menu shortcut; Linux adds a per-user application entry.
 Each uses the app's name and mark and opens it without Inbe's surrounding
@@ -682,7 +686,9 @@ Flatpak, where installing launchers needs a separate portal integration.
 `make launcher-shortcut-ui-test` checks pinning, icons, repeated pinning,
 the desktop's actual entry parser, profile selection, bundled app launches and
 a node app after its slot changes, on a private display. Android shortcut behavior is covered by
-`make android-text-selection-test`.
+`make android-text-selection-test`. The explicit `android-launcher-device-test`
+uses only the development Moto's debug app, saves its existing profile before
+preparing test data, and restores it with a byte-for-byte check afterward.
 
 ## Verification
 
