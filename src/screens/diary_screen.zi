@@ -1,18 +1,20 @@
 #import "geometry"
 #import "bundle_host"
 #import "byte_text_linux"
-#import, file "../cells/diary_ui_types.zi";
+#import, file "../../apps/diary/diary_ui_types.zi";
 #import "widget_host"
 #import "hosted_values"
+#import "kryon/app_context_host"
+#import, file "../../apps/diary/diary_wire.zi";
 #import, file "../cells/hosted_assets.zi";
 #import, file "../cells/app_codec.zi";
 #import, file "../cells/value_codec.zi";
 #import "image_props"
 #import "image_widget"
 #import, file "../cells/diary_store.zi";
-#import, file "../cells/diary_history.zi";
+#import, file "../../apps/diary/diary_history.zi";
 #import, file "../cells/diary_spelling.zi";
-#import, file "../cells/diary_spelling_mask.zi";
+#import, file "../../apps/diary/diary_spelling_mask.zi";
 #import, file "../cells/diary_photos.zi";
 #import, file "../cells/media_store.zi";
 #import, file "../cells/node_apps.zi";
@@ -44,7 +46,7 @@
 #import, file "../app/text_buffers.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/module_host.zi";
-#import, file "../cells/diary_types.zi";
+#import, file "../../apps/diary/diary_types.zi";
 #import, file "../cells/package_files.zi";
 #import, file "../storage/state.zi";
 
@@ -70,6 +72,8 @@ diary_photo_month: s32;
 diary_photo_day: s32;
 diary_photo_owner: string;
 diary_photo_error: bool;
+diary_photo_result: string;
+diary_service_value: string;
 diary_pending_replacement: string;
 diary_frame_text: string;
 diary_history: DiaryHistory;
@@ -116,6 +120,11 @@ DiaryPump :: () {
 
 #program_export
 app_diary_save :: () -> bool {
+    if DiaryPortable() {
+        diary_state.action = DIARY_SAVE
+        diary_state = DiaryRun(diary_state)
+        return diary_state.saved || diary_state.load_error || diary_state.year == 0
+    }
     DiaryPump()
     if !diary_loaded || diary_state.saved || diary_state.load_error {
         return true
@@ -156,8 +165,18 @@ app_diary_append :: (text: string) -> bool {
 }
 
 app_diary_reset :: () {
+    DiaryPortableReset()
     diary_loaded = false
     diary_pending = false
+    diary_photo_requested = false
+    diary_photo_waiting = false
+    diary_photo_error = false
+    PackageFree(diary_photo_owner)
+    diary_photo_owner = ""
+    PackageFree(diary_photo_result)
+    diary_photo_result = ""
+    PackageFree(diary_service_value)
+    diary_service_value = ""
     DiarySpellingCancel()
     PackageFree(diary_spelling_sent)
     diary_spelling_sent = ""
@@ -202,6 +221,17 @@ DiaryAcceptPhoto :: (path: string) {
         diary_photo_error = true
         return
     }
+    if DiaryPortable() {
+        result: Vec(u8)
+        BuilderPrint(*result, "{\"status\":\"done\",\"destination\":")
+        DiaryWireQuote(*result, destination)
+        BuilderPrint(*result, ",\"name\":")
+        DiaryWireQuote(*result, name)
+        BuilderPrint(*result, "}")
+        PackageFree(diary_photo_result)
+        diary_photo_result = BuilderFinish(result)
+        return
+    }
     diary_state.action = DIARY_ATTACH
     diary_state.attachment_file = destination
     diary_state.attachment_name = name
@@ -216,6 +246,8 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
         if result == .AndroidPickerNone { return }
         diary_photo_waiting = false
         app.file_dialog_active = 0
+        PackageFree(diary_photo_result)
+        diary_photo_result = PackageText("{\"status\":\"cancelled\"}", "")
         if result == .AndroidPickerSelected {
             selected := AppTextFromCString(*path[0], cast(s32)path.count)
             DiaryAcceptPhoto(selected)
@@ -228,22 +260,36 @@ DiaryPhotoPicker :: (app: *InnerBreeze) {
     if !diary_photo_requested { return }
     diary_photo_requested = false
     diary_photo_error = false
+    if DiaryPortable() && !app_diary_save() {
+        diary_photo_error = true
+        return
+    }
     diary_photo_year = diary_state.year
     diary_photo_month = diary_state.month
     diary_photo_day = diary_state.day
     PackageFree(diary_photo_owner)
     diary_photo_owner = PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
-    if !app_diary_save() { diary_photo_error = true; return }
+    if !app_diary_save() {
+        diary_photo_error = true
+        return
+    }
     app.file_dialog_active = 1
     if AndroidPlatform() != 0 {
         diary_photo_waiting = AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_MEDIA, "image/*")
-        if !diary_photo_waiting { app.file_dialog_active = 0; diary_photo_error = true }
+        if !diary_photo_waiting {
+            app.file_dialog_active = 0
+            diary_photo_error = true
+        }
         return
     }
     path: [4096]u8
     selected := PickFile(FilePickerProps.{.title = LocaleText("diary_attach_photo"),
-        .filter = "Images | *.png *.jpg *.jpeg *.webp *.gif"}, path[:])
+            .filter = "Images | *.png *.jpg *.jpeg *.webp *.gif"}, path[:])
     app.file_dialog_active = 0
+    if DiaryPortable() {
+        PackageFree(diary_photo_result)
+        diary_photo_result = PackageText("{\"status\":\"cancelled\"}", "")
+    }
     if selected == 1 { DiaryAcceptPhoto(AppTextFromCString(*path[0], cast(s32)path.count)) }
     if selected < 0 { diary_photo_error = true }
 }
@@ -253,6 +299,9 @@ using HostValueKind;
 
 DiaryUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if AppModule(TextFromCString(module)) {
+        return DiaryPortableUiCall(context, module, function, arguments, count, result)
+    }
     if TextFromCString(module) != "diary_view" {
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
@@ -402,6 +451,25 @@ DiarySpelling :: () {
 
 #program_export
 diary_screen_draw :: (app: *InnerBreeze) {
+    if DiaryPortable() {
+        DiaryPhotoPicker(app)
+        typed: [512]u8
+        input := SampleTextAreaInput(diary_focused, typed[:])
+        input.now_seconds = DiaryNow()
+        DiaryPortableFrame(app.ui.session,
+            Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
+            app.dark_mode != 0, MetricsScale(), AppFontSize(), input)
+        WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+        CellsUiBegin(DiaryUiCall, cast(*void)app)
+        diary_state.action = DIARY_FRAME
+        diary_state = DiaryRun(diary_state)
+        diary_loaded = diary_state.succeeded
+        diary_focused = DiaryPortableKeyboard()
+        CellsUiEnd()
+        WidgetHostEnd()
+        return
+    }
     DiaryPump()
     if !diary_loaded {
         diary_state = DiaryRun(DiaryMessage.{.action = DIARY_LOAD})
@@ -446,4 +514,88 @@ diary_screen_draw :: (app: *InnerBreeze) {
         DiaryHistoryObserve(*diary_history, diary_state.year, diary_state.month, diary_state.day,
             diary_state.text, DiaryNow(), true)
     }
+}
+
+
+DiaryPortableUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    name := TextFromCString(function)
+    if name == "AppLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = NodeAppString(LocaleText(AppArgumentText(arguments[0])))
+        return 1
+    }
+    if name == "ClipboardCopyHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = HostScalar("bool", ifx TextInputWriteClipboard(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
+    if name != "AppServiceHost" || count != 2 { return 0 }
+    service := AppArgumentText(arguments[0])
+    request := AppArgumentText(arguments[1])
+    if service == "media.asset" {
+        result.* = NodeAppString(DiaryPhotoAsset(request))
+        return 1
+    }
+    if service == "media.pick" {
+        diary_photo_requested = true
+        PackageFree(diary_photo_result)
+        diary_photo_result = PackageText("{\"status\":\"pending\"}", "")
+        result.* = NodeAppString(diary_photo_result)
+        return 1
+    }
+    if service == "media.pick.status" {
+        value := ifx diary_photo_error then "{\"status\":\"failed\"}" else diary_photo_result
+        result.* = NodeAppString(value)
+        return 1
+    }
+    if service == "media.query" {
+        rows := MediaQuery(request, false)
+        output: Vec(u8)
+        BuilderPrint(*output, "[")
+        limit := ifx rows > 128 then 128 else rows
+        for index: cast(s32)0..limit - 1 {
+            item := NodeAppMediaEntry(index)
+            if index > 0 { BuilderPrint(*output, ",") }
+            BuilderPrint(*output, "{\"hash\":")
+            DiaryWireQuote(*output, item.hash)
+            BuilderPrint(*output, ",\"name\":")
+            DiaryWireQuote(*output, item.name)
+            BuilderPrint(*output, ",\"day\":")
+            DiaryWireQuote(*output, item.day)
+            BuilderPrint(*output, ",\"format\":")
+            DiaryWireQuote(*output, item.format)
+            BuilderPrint(*output, "}")
+        }
+        BuilderPrint(*output, "]")
+        PackageFree(diary_service_value)
+        diary_service_value = BuilderFinish(output)
+        result.* = NodeAppString(diary_service_value)
+        return 1
+    }
+    if service == "text.correct.start" {
+        notice := DiarySpellingStart(request)
+        output: Vec(u8)
+        BuilderPrint(*output, "{\"busy\":%,\"notice\":", ifx DiarySpellingWaiting() then "true" else "false")
+        DiaryWireQuote(*output, notice)
+        BuilderPrint(*output, "}")
+        PackageFree(diary_service_value)
+        diary_service_value = BuilderFinish(output)
+        result.* = NodeAppString(diary_service_value)
+        return 1
+    }
+    if service == "text.correct.poll" {
+        polled := DiarySpellingPoll()
+        output: Vec(u8)
+        BuilderPrint(*output, "{\"finished\":%,\"text\":", ifx polled.finished then "true" else "false")
+        DiaryWireQuote(*output, polled.text)
+        BuilderPrint(*output, ",\"notice\":")
+        DiaryWireQuote(*output, polled.notice)
+        BuilderPrint(*output, "}")
+        PackageFree(diary_service_value)
+        diary_service_value = BuilderFinish(output)
+        result.* = NodeAppString(diary_service_value)
+        return 1
+    }
+    return 0
 }

@@ -74,3 +74,15 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
             archive.writestr(member, file.read_bytes(), compresslevel=9)
         continue
     shutil.copyfile(file, target)
+
+# Diary's own translations travel with its bundle for other harnesses and
+# the generic player; it does not need the Inner Breeze root package.
+for locale in sorted((ROOT / 'locales').glob('*.txt')):
+    entries = []
+    for block in locale.read_text().split('---\n'):
+        first = block.splitlines()[0] if block.splitlines() else ''
+        if first.startswith(('[diary_', '[tab_diary', '[habit_day_', '[habit_month_')):
+            entries.append(block.rstrip() + '\n---\n')
+    target = OUTPUT / 'diary/locales' / locale.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(''.join(entries))

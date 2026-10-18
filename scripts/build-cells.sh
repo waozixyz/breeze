@@ -25,7 +25,10 @@ for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
     entry=$feature
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
-    "$ziran" bundle --root . --module-path src \
+    locale_args=
+    if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
+    "$ziran" bundle --root . --module-path src $locale_args \
+        --module-path kryon=build/packages/kryon/src/backend \
         --module-path build/packages/kryon/src/ui \
         --module-path mingcute=build/packages/mingcute/src \
         --define KRYON_HOSTED_UI \
@@ -40,7 +43,8 @@ for feature in lists habits practices diary lumi leaderboard; do
     cp "$output/$feature.zib" build/bundled-cells/
 done
 "$ziran" bundle --root . --module-path src \
-    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
+    --module-path build/packages/ziran/std --module-path kryon=build/packages/kryon/src/backend \
+        --module-path build/packages/kryon/src/ui \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
@@ -49,7 +53,8 @@ done
     --asset-dir "icons=build/package-assets/inbe/icons" \
     --asset-dir "cells=build/bundled-cells" -o build/inbe.zib apps/inbe/inbe.zi
 "$ziran" bundle --root . --module-path src \
-    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
+    --module-path build/packages/ziran/std --module-path kryon=build/packages/kryon/src/backend \
+        --module-path build/packages/kryon/src/ui \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \

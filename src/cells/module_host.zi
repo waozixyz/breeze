@@ -11,7 +11,14 @@
 #import "hosted_values"
 #import "widget_host"
 #import "hosted_app"
-#import, file "diary_types.zi";
+#import "kryon/app_context_host"
+Portable :: #import "kryon/app_protocol";
+#import "geometry"
+#import "session"
+#import "text_input_props"
+#import "date_parse"
+#import, file "../../apps/diary/diary_wire.zi";
+#import, file "../../apps/diary/diary_types.zi";
 #import, file "lumi_types.zi";
 #import, file "leaderboard_types.zi";
 #import, file "diary_store.zi";
@@ -33,6 +40,9 @@ using HostValueKind;
 
 ModuleSlot :: struct {
     app: HostedApp
+    portable: AppContext
+    generic: bool
+    document_status: s32
     bundle_bytes: s64
     kind: s32
     received: bool
@@ -445,6 +455,46 @@ CellsClose :: () {
 }
 
 ModuleRun :: (slot: *ModuleSlot) -> bool {
+    if slot.generic {
+        if identifying { return AppContextIdentify(cast(*void)(*slot.portable)) }
+        if diary_routing {
+            diary_route_allowed = diary_route_screen == 22
+            return true
+        }
+        mode: s32 = Portable.APP_COMMAND
+        command: string
+        if diary_message.action == DIARY_FRAME {
+            mode = Portable.APP_FRAME
+        } else if diary_message.action == DIARY_SAVE {
+            mode = Portable.APP_SAVE
+        } else {
+            command = DiaryMessageEncode(diary_message)
+            slot.portable.command = command
+        }
+        defer { PackageFree(command) }
+        if !AppContextRun(*slot.portable, mode) { return false }
+        if mode == Portable.APP_FRAME {
+            diary_message.succeeded = true
+            slot.received = true
+            return true
+        }
+        if slot.portable.reply == "" { return false }
+        message := DiaryMessageDecode(slot.portable.reply)
+        next_text := PackageText(message.text, "")
+        next_document := PackageText(message.document, "")
+        PackageFree(diary_text)
+        PackageFree(diary_document)
+        diary_text = next_text
+        diary_document = next_document
+        message.text = diary_text
+        message.document = diary_document
+        message.replacement = ""
+        message.attachment_file = ""
+        message.attachment_name = ""
+        diary_message = message
+        slot.received = true
+        return true
+    }
     answer: s64
     slot.received = false
     if !HostedAppRun(*slot.app, *answer) {
@@ -549,6 +599,27 @@ ModuleProtocolComplete :: (slot: *ModuleSlot) -> bool {
 }
 
 ModuleInstantiate :: (slot: *ModuleSlot) -> bool {
+    slot.generic = false
+    if slot.kind == MODULE_DIARY {
+        for index: cast(u64)0..BundleCapabilities(slot.app.bundle) - 1 {
+            if AppModule(TextFromCString(BundleCapabilityModuleName(slot.app.bundle, index))) {
+                slot.generic = true
+            }
+        }
+    }
+    if slot.generic {
+        slot.portable = AppContext.{}
+        slot.portable.borrowed = *slot.app
+        slot.portable.expected_id = "inbe.diary"
+        slot.portable.services = DiaryServiceCall
+        slot.portable.widgets = DiaryServiceCall
+        slot.portable.allows = DiaryServiceAllowed
+        slot.portable.context = cast(*void)slot
+        slot.has_read = true
+        slot.has_write = true
+        return HostedAppStart(*slot.app, AppContextAllows, AppContextCall, cast(*void)(*slot.portable)) &&
+        AppContextIdentify(cast(*void)(*slot.portable))
+    }
     slot.has_read = false
     slot.has_write = false
     return HostedAppStart(*slot.app, ModuleAllows, ModuleHostCall, cast(*void)slot) &&
@@ -572,6 +643,9 @@ ModuleHandshake :: (context: *void) -> bool {
 // Keep the working instance until its replacement passes the handshake.
 // A failed UI reset must not make CellsReady false and stop every screen.
 ModuleRestart :: (slot: *ModuleSlot) -> bool {
+    if slot.generic {
+        return AppContextRestart(*slot.portable)
+    }
     slot.has_read = false
     slot.has_write = false
     return HostedAppRestart(*slot.app, ModuleAllows, ModuleHostCall, cast(*void)slot, ModuleHandshake)
@@ -1226,4 +1300,86 @@ LeaderboardRun :: (message: LeaderboardMessage) -> LeaderboardMessage {
         return message
     }
     return leaderboard_message
+}
+
+
+DiaryServiceAllowed :: (context: *void, name: string) -> bool {
+    return name == "DocumentReadHost" || name == "DocumentStatusHost" ||
+    name == "DocumentWriteHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
+    name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
+    name == "media.asset" || name == "media.query" || name == "media.pick" ||
+    name == "media.pick.status" || name == "text.correct.start" || name == "text.correct.poll"
+}
+
+DiaryServiceCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    slot := cast(*ModuleSlot)context
+    name := TextFromCString(function)
+    if name == "DocumentReadHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        file := DiaryStoreRead(AppArgumentText(arguments[0]))
+        slot.document_status = Portable.DOCUMENT_ERROR
+        if file.missing { slot.document_status = Portable.DOCUMENT_MISSING }
+        else if file.succeeded { slot.document_status = Portable.DOCUMENT_READY }
+        result.* = NodeAppString(file.data)
+        return 1
+    }
+    if name == "DocumentStatusHost" && count == 0 {
+        result.* = HostScalar("s32", cast(s64)slot.document_status)
+        return 1
+    }
+    if name == "DocumentWriteHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        saved := DiaryStoreSave(AppArgumentText(arguments[0]), AppArgumentText(arguments[1]))
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    if name == "AppNowHost" && count == 0 {
+        clock := DiaryStoreClock()
+        seconds: s64
+        if clock.count >= 16 {
+            seconds = UtcSeconds(DateNumber(clock, 0, 4), DateNumber(clock, 5, 2),
+                DateNumber(clock, 8, 2), DateNumber(clock, 11, 2), DateNumber(clock, 14, 2), 0)
+        }
+        result.* = HostValue.{.kind = cast(s32)HostReal, .type_name = HostTextData("float64"),
+            .real = cast(float64)seconds}
+        return 1
+    }
+    if name == "AppLocalOffsetHost" && count == 0 {
+        result.* = HostScalar("s32", 0)
+        return 1
+    }
+    if ui_active && ui_call != null {
+        return ui_call(ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+#program_export
+DiaryPortable :: () -> bool {
+    return slots[4].generic
+}
+
+#program_export
+DiaryPortableFrame :: (session: Session, bounds: Rectangle, dark: bool, scale: float32, font: s32, input: TextAreaInput) {
+    app := *slots[4].portable
+    app.session = session
+    app.bounds = bounds
+    app.dark = dark
+    app.scale = scale
+    app.font = font
+    app.area_input = input
+}
+
+#program_export
+DiaryPortableKeyboard :: () -> bool {
+    return slots[4].portable.keyboard
+}
+
+#program_export
+DiaryPortableReset :: () {
+    if slots[4].generic {
+        unused ModuleRestart(*slots[4])
+    }
 }

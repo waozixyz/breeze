@@ -1,5 +1,5 @@
-// Undo and redo for the Diary entry on screen. The host keeps copies of the
-// entry's text because the Diary package's values last only one run. Typing
+// Undo and redo for the Diary entry on screen. The app retains immutable
+// snapshots; native callers own copies of their snapshots. Typing
 // within a moment is one step; a spelling correction, an undo and a redo are
 // steps of their own.
 #import "vec"
@@ -34,21 +34,29 @@ DiaryEdit :: struct {
     replacement: string
 }
 
-c :: #system_library "c";
-DiaryHistoryFreeBytes :: (bytes: *u8) #foreign c "free";
+#if !#defined(KRYON_HOSTED_UI) {
+    c :: #system_library "c";
+    DiaryHistoryFreeBytes :: (bytes: *u8) #foreign c "free";
+}
 
 DiaryHistoryCopy :: (text: string) -> string {
-    copy: Vec(u8)
-    BuilderPrint(*copy, "%", text)
-    return BuilderFinish(copy)
+    #if #defined(KRYON_HOSTED_UI) {
+        return text
+    } else {
+        copy: Vec(u8)
+        BuilderPrint(*copy, "%", text)
+        return BuilderFinish(copy)
+    }
 }
 
 DiaryHistoryFree :: (value: string) {
-    if value.count == 0 {
-        return
+    #if !#defined(KRYON_HOSTED_UI) {
+        if value.count == 0 {
+            return
+        }
+        bytes := cast(*TextDescriptor)(*value)
+        DiaryHistoryFreeBytes(bytes.data)
     }
-    bytes := cast(*TextDescriptor)(*value)
-    DiaryHistoryFreeBytes(bytes.data)
 }
 
 DiaryHistoryPush :: (steps: []string, count: *s32, snapshot: string) {

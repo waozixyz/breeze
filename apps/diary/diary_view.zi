@@ -23,9 +23,11 @@
 #import "press_widget"
 #import "tree"
 #import, file "diary_markdown.zi";
-#import, file "../../src/cells/diary_types.zi";
-#import, file "../../src/cells/diary_ui_types.zi";
-#import, file "../../src/cells/node_app_types.zi";
+#import, file "diary_types.zi";
+#import, file "diary_ui_types.zi";
+#import "kryon/app_context"
+#import "json_scan"
+#import, file "diary_wire.zi";
 
 using ImageFit;
 using TextAlign;
@@ -34,16 +36,31 @@ using ButtonTone;
 using ButtonEmphasis;
 using IconPlacement;
 using ContentAlignment;
-host_api :: #system_library "host_api";
-ReadDiaryUiHost :: () -> DiaryUiFrame #foreign host_api;
-WriteDiaryUiHost :: (frame: DiaryUiFrame) #foreign host_api;
-DiaryLocaleHost :: (key: string) -> string #foreign host_api;
-// The asset that draws an embed's photo, from what the embed links to, or ""
-// while the photo is not on this device.
-DiaryPhotoHost :: (destination: string) -> string #foreign host_api;
-// The account's media library, which Photos shows too: one day's photos.
-MediaQueryHost :: (day: string, trashed: bool) -> s32 #foreign host_api;
-MediaItemHost :: (index: s32) -> MediaEntry #foreign host_api;
+library_json: string;
+
+DiaryPhoto :: (destination: string) -> string {
+    if !AppSupports("media.asset") { return "" }
+    return AppService("media.asset", destination)
+}
+
+DiaryMediaQuery :: (day: string, trashed: bool) -> s32 {
+    library_json = "[]"
+    if AppSupports("media.query") {
+        library_json = AppService("media.query", day)
+    }
+    count := ArrayCount(library_json, 0)
+    return ifx count >= 0 then count else 0
+}
+
+DiaryMediaItem :: (index: s32) -> DiaryMediaEntry {
+    item := ElementAt(library_json, 0, index)
+    return DiaryMediaEntry.{
+        .hash = DiaryWireString(library_json, FieldAt(library_json, item, "hash")),
+        .name = DiaryWireString(library_json, FieldAt(library_json, item, "name")),
+        .day = DiaryWireString(library_json, FieldAt(library_json, item, "day")),
+        .format = DiaryWireString(library_json, FieldAt(library_json, item, "format"))}
+}
+
 state: DiaryMessage;
 frame: DiaryUiFrame;
 pending: bool;
@@ -60,8 +77,8 @@ DIARY_SPELLING_ICON :: "S2rr:M3 14L7.5 3L12 14M4.8 10H10.2M12 17L15.5 20.5L21.5 
 DIARY_SHOW_ICON :: "S1.8rr:M6 9L12 15L18 9"
 DIARY_HIDE_ICON :: "S1.8rr:M6 15L12 9L18 15"
 
-DiaryObserve :: () -> DiaryUiFrame {
-    return ReadDiaryUiHost()
+DiaryObservedFrame :: () -> DiaryUiFrame {
+    return frame
 }
 
 DiarySaveDue :: () -> bool {
@@ -128,12 +145,12 @@ DiaryEditorStyle :: (area: *TextAreaProps, text: string, editing: bool) {
     }
     area.lines = editor_lines[:lines]
     height := DiaryPhotoHeight(area.bounds.width)
-    unavailable := DiaryLocaleHost("diary_photo_unavailable")
+    unavailable := AppLocale("diary_photo_unavailable")
     for index: cast(s32)0..editor_preview.photo_count - 1 {
         block := editor_preview.photos[index]
         embed := block.embed
         editor_blocks[index] = TextAreaBlock.{.start = embed.line_start, .height = height,
-            .cover = block.cover, .image = DiaryKept(DiaryPhotoHost(DiaryEmbedDestination(text, embed))),
+            .cover = block.cover, .image = DiaryKept(DiaryPhoto(DiaryEmbedDestination(text, embed))),
             .label = unavailable}
     }
     area.blocks = editor_blocks[:editor_preview.photo_count]
@@ -179,7 +196,7 @@ DiaryDayPhotoAdd :: (destination: string, name: string) {
     if destination.count == 0 || day_photo_count >= DIARY_DAY_PHOTOS {
         return
     }
-    asset := DiaryPhotoHost(destination)
+    asset := DiaryPhoto(destination)
     if DiaryDayPhotoKnown(destination, asset) {
         return
     }
@@ -193,12 +210,12 @@ DiaryDayPhotos :: (text: string) {
     if state.load_error || state.year <= 0 {
         return
     }
-    count := MediaQueryHost(ISO(Date.{state.year, state.month, state.day}), false)
+    count := DiaryMediaQuery(ISO(Date.{state.year, state.month, state.day}), false)
     for index: cast(s32)0..count - 1 {
         if day_photo_count >= DIARY_DAY_PHOTOS {
             break
         }
-        entry := MediaItemHost(index)
+        entry := DiaryMediaItem(index)
         DiaryDayPhotoAdd(DiaryLibraryPath(entry.day, entry.hash, entry.format), entry.name)
     }
     embed := DiaryEmbedNext(text, 0)
@@ -246,9 +263,9 @@ DiaryInsertPhoto :: (destination: string, name: string) {
 DiaryDayGallery :: (left: float32, top: float32, width: float32, editable: bool) {
     open := DiaryGalleryOpen()
     row := cast(float32)Scale(DIARY_GALLERY_ROW)
-    label := DiaryLocaleHost("diary_show_gallery")
+    label := AppLocale("diary_show_gallery")
     if open {
-        label = DiaryLocaleHost("diary_hide_gallery")
+        label = AppLocale("diary_hide_gallery")
     }
     if Button(frame.session, ButtonProps.{.id = 29017, .bounds = Rectangle.{left, top, width, row},
             .label = label, .icon_shape = ifx open then DIARY_HIDE_ICON else DIARY_SHOW_ICON,
@@ -302,7 +319,7 @@ DateTitle :: (year: s32, month: s32, day: s32) -> string {
     keys: [12]string = .["habit_month_1", "habit_month_2", "habit_month_3",
     "habit_month_4", "habit_month_5", "habit_month_6", "habit_month_7",
     "habit_month_8", "habit_month_9", "habit_month_10", "habit_month_11", "habit_month_12"]
-    month_text := DiaryLocaleHost(keys[month - 1])
+    month_text := AppLocale(keys[month - 1])
     title: Vec(u8)
     eastern := month_text.count >= 2 && month_text[:2] == "%d"
     if day > 0 && !eastern { BuilderPrint(*title, "% ", day) }
@@ -338,7 +355,6 @@ Scale :: (value: s32) -> s32 {
 }
 
 FinishView :: () -> DiaryMessage {
-    WriteDiaryUiHost(frame)
     return state
 }
 
@@ -382,11 +398,11 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     state = message
     frame = observed
     column := CenteredColumnFor(frame.width, Scale(640), Scale(16))
-    left := cast(float32)column.x
+    left := cast(float32)(column.x + frame.origin_x)
     width := cast(float32)column.width
     part := (width - cast(float32)Scale(12)) / 3.0
     compact := frame.height < Scale(480)
-    top := cast(float32)(ifx compact then Scale(4) else Scale(12))
+    top := cast(float32)(frame.origin_y + ifx compact then Scale(4) else Scale(12))
     control := cast(float32)Scale(44)
     gap := cast(float32)Scale(8)
 
@@ -419,28 +435,28 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     if today_width > cast(float32)Scale(128) {
         today_width = cast(float32)Scale(128)
     }
-    DiaryAction(29004, DiaryLocaleHost("diary_today"), Rectangle.{left, tools, today_width, control})
-    DiaryAction(29003, DiaryLocaleHost("tab_diary_calendar"),
+    DiaryAction(29004, AppLocale("diary_today"), Rectangle.{left, tools, today_width, control})
+    DiaryAction(29003, AppLocale("tab_diary_calendar"),
         Rectangle.{left + today_width + gap, tools, tool, control},
         true, DIARY_CALENDAR_ICON, state.calendar)
     editable := !state.load_error && state.year > 0
     if !state.calendar {
         idle := editable && !frame.spelling_busy
-        DiaryAction(29014, DiaryLocaleHost("diary_undo"),
+        DiaryAction(29014, AppLocale("diary_undo"),
             Rectangle.{left + width - 5.0 * tool - 4.0 * tool_gap, tools, tool, control},
             idle && frame.can_undo, DIARY_UNDO_ICON)
-        DiaryAction(29015, DiaryLocaleHost("diary_redo"),
+        DiaryAction(29015, AppLocale("diary_redo"),
             Rectangle.{left + width - 4.0 * tool - 3.0 * tool_gap, tools, tool, control},
             idle && frame.can_redo, DIARY_REDO_ICON)
-        DiaryAction(29016, DiaryLocaleHost("diary_check_spelling"),
+        DiaryAction(29016, AppLocale("diary_check_spelling"),
             Rectangle.{left + width - 3.0 * tool - 2.0 * tool_gap, tools, tool, control},
-            idle && HasWords(state.text), DIARY_SPELLING_ICON, false, frame.spelling_busy)
-        DiaryAction(29013, DiaryLocaleHost("diary_insert_time"),
+            idle && HasWords(state.text) && AppSupports("text.correct.start"), DIARY_SPELLING_ICON, false, frame.spelling_busy)
+        DiaryAction(29013, AppLocale("diary_insert_time"),
             Rectangle.{left + width - 2.0 * tool - tool_gap, tools, tool, control},
             !frame.spelling_busy, DIARY_TIME_ICON)
-        DiaryAction(29005, DiaryLocaleHost("diary_attach_photo"),
+        DiaryAction(29005, AppLocale("diary_attach_photo"),
             Rectangle.{left + width - tool, tools, tool, control},
-            true, DIARY_PHOTO_ICON)
+            AppSupports("media.pick"), DIARY_PHOTO_ICON)
     }
     content := tools + control + cast(float32)Scale(12)
     content_height := cast(float32)(frame.height - frame.bottom) - content - cast(float32)Scale(16)
@@ -467,7 +483,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         for day: cast(s32)0..cast(s32)6 {
             Text(frame.session, TextProps.{.bounds = Rectangle.{left + cast(float32)day * width / 7.0,
                         origin + cast(float32)Scale(52), width / 7.0, cast(float32)Scale(24)},
-                    .text = DiaryLocaleHost(weekdays[day]), .font = frame.font})
+                    .text = AppLocale(weekdays[day]), .font = frame.font})
         }
         for day: cast(s32)1..state.month_days {
             position := state.month_weekday + day - 1
@@ -508,7 +524,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     area.focus_id = 29020
     area.bounds = Rectangle.{left, page.content.y, width, cast(float32)editor_height}
     area.value = state.text
-    area.label = DiaryLocaleHost("tab_diary")
+    area.label = AppLocale("tab_diary")
     area.wrap = true
     area.cursor = state.cursor
     area.anchor = state.anchor
@@ -551,7 +567,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         }
         Text(frame.session, TextProps.{.bounds = Rectangle.{left,
                     area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
-                .text = DiaryLocaleHost(status), .font = frame.font})
+                .text = AppLocale(status), .font = frame.font})
     }
     if photos_room > 0 {
         DiaryDayGallery(left, area.bounds.y + area.bounds.height +

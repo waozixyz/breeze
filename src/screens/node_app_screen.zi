@@ -15,6 +15,8 @@
 #import "hosted_values"
 #import "widget_host"
 #import "widget_codec"
+#import "kryon/app_context_host"
+#import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/node_apps.zi";
 #import, file "../cells/node_app_types.zi";
 #import, file "../cells/node_app_codec.zi";
@@ -46,6 +48,7 @@ using AndroidImportKind;
 
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
+NodePressedKey :: () -> s32 #foreign c "GetKeyPressed";
 app_request_social_refresh :: (app: *InnerBreeze) #foreign c;
 
 node_screen_frame: AppUiFrame;
@@ -86,6 +89,11 @@ NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     app := cast(*InnerBreeze)context
     name := TextFromCString(function)
+    if AppModule(TextFromCString(module)) && name == "ClipboardCopyHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = HostScalar("bool", ifx TextInputWriteClipboard(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
     if name == "ReadAppUiHost" && count == 0 {
         result.* = WidgetEncodeAppUiFrame(node_screen_frame, *node_screen_frame_codec)
         return 1
@@ -153,7 +161,7 @@ NodeScreenMediaPicker :: (app: *InnerBreeze) {
     }
     path: [4096]u8
     selected := PickFile(FilePickerProps.{.title = LocaleText("photos_add"),
-        .filter = "Images | *.png *.jpg *.jpeg *.webp *.gif"}, path[:])
+            .filter = "Images | *.png *.jpg *.jpeg *.webp *.gif"}, path[:])
     app.file_dialog_active = 0
     if selected == 1 {
         NodeScreenMediaAdd(AppTextFromCString(*path[0], cast(s32)path.count))
@@ -208,6 +216,19 @@ node_app_screen_draw :: (app: *InnerBreeze) {
         .shared_count = NodeAppSharedCount(name), .invitation_count = NodeAppInvitationCount(name),
         .shared_revision = ListsSharedRevision(), .shared_status = lists_status,
         .time = now_seconds()}
+    typed: [1024]u8
+    if NodeAppPortable(slot) {
+        input := SampleTextFieldInput(true, typed[:])
+        modifiers: s32 = 0
+        if input.shift { modifiers |= 1 }
+        if TextInputKeyDown(TextInputKeyLeftControl) || TextInputKeyDown(TextInputKeyRightControl) {
+            modifiers |= 2
+        }
+        NodeAppPortableFrame(slot, app.ui.session,
+            Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
+            app.dark_mode != 0, MetricsScale(), AppFontSize(), NodePressedKey(), modifiers, input)
+    }
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     NodeAppUiBegin(NodeScreenUiCall, cast(*void)app)
     unused NodeAppRunMessage(slot, message)

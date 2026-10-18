@@ -12,6 +12,13 @@
 #import "hosted_values"
 #import "widget_host"
 #import "hosted_app"
+#import "kryon/app_context_host"
+Portable :: #import "kryon/app_protocol";
+Time :: #import "date_time_linux";
+#import "date_parse"
+#import "session"
+#import "geometry"
+#import "text_input_props"
 #import "file_download"
 #import "text_buffer"
 #import "file_linux"
@@ -82,6 +89,8 @@ NodeAppSetBetaShown :: (shown: bool) {
 
 NodeAppRunner :: struct {
     app: HostedApp
+    portable: AppContext
+    generic: bool
     bundle_bytes: s64
     received: bool
     has_read: bool
@@ -783,6 +792,19 @@ NodeAppCall :: (context: *void, module: *u8, function: *u8,
 }
 
 NodeAppRun :: (runner: *NodeAppRunner) -> bool {
+    if runner.generic {
+        if node_identifying { return AppContextIdentify(cast(*void)(*runner.portable)) }
+        if node_message.action == APP_ROUTE {
+            node_message.succeeded = true
+            return true
+        }
+        if node_message.action == APP_BACK {
+            node_message.succeeded = false
+            return true
+        }
+        node_message.succeeded = AppContextRun(*runner.portable, Portable.APP_FRAME)
+        return node_message.succeeded
+    }
     answer: s64
     runner.received = false
     if !HostedAppRun(*runner.app, *answer) {
@@ -797,8 +819,24 @@ NodeAppRun :: (runner: *NodeAppRunner) -> bool {
 NodeAppStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
     runner.has_read = false
     runner.has_write = false
-    if !HostedAppOpen(*runner.app, bytes) ||
-    !HostedAppStart(*runner.app, NodeAppAllows, NodeAppCall, cast(*void)runner) {
+    if !HostedAppOpen(*runner.app, bytes) { return false }
+    for index: cast(u64)0..BundleCapabilities(runner.app.bundle) - 1 {
+        if AppModule(TextFromCString(BundleCapabilityModuleName(runner.app.bundle, index))) {
+            runner.generic = true
+        }
+    }
+    if runner.generic {
+        runner.portable.borrowed = *runner.app
+        runner.portable.expected_id = NodeAppName(NodeAppSlotOf(runner))
+        runner.portable.services = NodePortableCall
+        runner.portable.widgets = NodePortableCall
+        runner.portable.allows = NodePortableAllows
+        runner.portable.context = cast(*void)runner
+        runner.bundle_bytes = bytes.count
+        return HostedAppStart(*runner.app, AppContextAllows, AppContextCall,
+            cast(*void)(*runner.portable)) && AppContextIdentify(cast(*void)(*runner.portable))
+    }
+    if !HostedAppStart(*runner.app, NodeAppAllows, NodeAppCall, cast(*void)runner) {
         return false
     }
     if !runner.has_read || !runner.has_write {
@@ -919,6 +957,7 @@ NodeAppAccepts :: (context: *void) -> bool {
 // A trapped app gets a fresh instance, kept only once it identifies itself.
 NodeAppRestart :: (slot: s32) -> bool {
     runner := *node_runners[slot]
+    if runner.generic { return AppContextRestart(*runner.portable) }
     runner.has_read = false
     runner.has_write = false
     return HostedAppRestart(*runner.app, NodeAppAllows, NodeAppCall, cast(*void)runner, NodeAppAccepts)
@@ -1411,4 +1450,90 @@ NodeAppsPump :: (now: s32, catalog_wanted: bool) {
         node_reconciled_at = now
         NodeAppsReconcile()
     }
+}
+
+
+NodePortableAllows :: (context: *void, name: string) -> bool {
+    return name == "ReadStoreHost" || name == "WriteStoreHost" ||
+    name == "AppNowHost" || name == "AppLocalOffsetHost" ||
+    name == "AppLocaleHost" || name == "ClipboardCopyHost"
+}
+
+NodePortableCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    runner := cast(*NodeAppRunner)context
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 { return 0 }
+    name := TextFromCString(function)
+    if name == "ReadStoreHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    arguments[1].kind == cast(s32)HostSlice && arguments[1].elements != null {
+        record := AppArgumentText(arguments[0])
+        used: s64 = -1
+        if NodeAppRecordNameValid(record) {
+            key := NodeAppRecordKey(NodeAppName(slot), record)
+            value := NodeAppRecordRead(key)
+            if value.count > 0 && cast(usize)value.count < arguments[1].length {
+                for index: 0..value.count {
+                    byte := ifx index < value.count then value[index] else cast(u8)0
+                    arguments[1].elements[index].bits = cast(u64)byte
+                    arguments[1].elements[index].integer = cast(s64)byte
+                }
+                used = value.count
+            }
+            PackageFree(value)
+            PackageFree(key)
+        }
+        result.* = HostScalar("s32", used)
+        return 1
+    }
+    if name == "WriteStoreHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        record := AppArgumentText(arguments[0])
+        text := AppArgumentText(arguments[1])
+        saved := false
+        if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
+            key := NodeAppRecordKey(NodeAppName(slot), record)
+            storage_set_setting_text(key, text)
+            saved = storage_setting_text_equals(key, text) != 0
+            PackageFree(key)
+        }
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    if name == "AppNowHost" && count == 0 {
+        result.* = HostValue.{.kind = cast(s32)HostReal, .type_name = HostTextData("float64"),
+            .real = cast(float64)Time.UnixMilliseconds() / 1000.0}
+        return 1
+    }
+    if name == "AppLocalOffsetHost" && count == 0 {
+        now := Time.UnixNow()
+        date := Time.LocalAt(now)
+        seconds := DaysFromCivil(date.year, date.month, date.day) * 86400 +
+        cast(s64)(date.hour * 3600 + date.minute * 60 + date.second)
+        result.* = HostScalar("s32", seconds - now)
+        return 1
+    }
+    if node_ui_active && node_ui_call != null {
+        return node_ui_call(node_ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+NodeAppPortable :: (slot: s32) -> bool {
+    return slot >= 0 && slot < NodeAppSlots && node_runners[slot].generic
+}
+
+NodeAppPortableFrame :: (slot: s32, session: Session, bounds: Rectangle, dark: bool,
+    scale: float32, font: s32, key: s32, modifiers: s32, input: TextFieldInput) {
+    context := *node_runners[slot].portable
+    context.session = session
+    context.bounds = bounds
+    context.dark = dark
+    context.scale = scale
+    context.font = font
+    context.key = key
+    context.modifiers = modifiers
+    context.input = input
 }

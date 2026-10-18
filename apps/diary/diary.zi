@@ -13,19 +13,41 @@
 #import "text"
 #import "vec"
 #import "byte_text_linux"
-#import, file "../../src/cells/diary_types.zi";
-#import, file "../../src/cells/module_types.zi";
-#import, file "../../src/core/types.zi";
+#import, file "diary_types.zi";
+#import "kryon/app_context"
+#import "kryon/app_protocol"
+#import "date_parse"
+#import, file "diary_history.zi";
+#import, file "diary_spelling_mask.zi";
+#import, file "diary_ui_types.zi";
+#import, file "diary_wire.zi";
 
-host_api :: #system_library "host_api";
-ReadDiaryHost :: () -> DiaryMessage #foreign host_api;
-WriteDiaryHost :: (message: DiaryMessage) #foreign host_api;
-ReadDiaryFileHost :: (name: string) -> DiaryFileResult #foreign host_api;
-SaveDiaryFileHost :: (name: string, data: string) -> bool #foreign host_api;
-DiaryClockHost :: () -> string #foreign host_api;
+
+ReadDiaryFile :: (name: string) -> DiaryFileResult {
+    data := DocumentRead(name)
+    status := DocumentStatus()
+    return DiaryFileResult.{.data = data, .missing = status == DOCUMENT_MISSING,
+        .succeeded = status != DOCUMENT_ERROR}
+}
+
+DiaryClock :: () -> string {
+    seconds := cast(s64)AppNow() + cast(s64)AppLocalOffset()
+    date := CivilFromUnix(seconds)
+    buffer: [19]u8
+    unused WriteIsoDay(seconds, buffer[:10])
+    buffer[10] = cast(u8)32
+    unused DateWriteDigits(buffer[:], 11, date.hour, 2)
+    buffer[13] = cast(u8)58
+    unused DateWriteDigits(buffer[:], 14, date.minute, 2)
+    buffer[16] = cast(u8)58
+    unused DateWriteDigits(buffer[:], 17, date.second, 2)
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextFromBytes(buffer[:]))
+    return BuilderFinish(out)
+}
 
 Today :: () -> Date {
-    clock := DiaryClockHost()
+    clock := DiaryClock()
     if clock.count < 10 {
         return Date.{}
     }
@@ -181,7 +203,7 @@ Load :: (message: DiaryMessage, date: Date) -> DiaryMessage {
         message.succeeded = false;
         return message
     }
-    loaded := ReadDiaryFileHost(Filename(date))
+    loaded := ReadDiaryFile(Filename(date))
     message.year = date.year
     message.month = date.month
     message.day = date.day
@@ -230,7 +252,7 @@ Save :: (message: DiaryMessage) -> DiaryMessage {
         return message
     }
     message.document = Document(message)
-    message.saved = SaveDiaryFileHost(Filename(Date.{message.year, message.month, message.day}),
+    message.saved = DocumentWrite(Filename(Date.{message.year, message.month, message.day}),
         message.document)
     message.succeeded = message.saved
     return message
@@ -239,7 +261,7 @@ Save :: (message: DiaryMessage) -> DiaryMessage {
 Apply :: (message: DiaryMessage) -> DiaryMessage {
     message.succeeded = true
     if message.action == DIARY_ROUTE {
-        message.succeeded = message.screen == ScreenDiary
+        message.succeeded = true
         return message
     }
     if message.action == DIARY_LOAD {
@@ -277,7 +299,7 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
         return message
     }
     if message.control == 29013 {
-        clock := DiaryClockHost()
+        clock := DiaryClock()
         if message.load_error || message.calendar || clock.count < 16 {
             message.succeeded = false
             return message
@@ -353,7 +375,7 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
             message.marks[day] = cast(u8)0
         }
         for day: cast(s32)1..Days(message.month_year, message.month_number) {
-            file := ReadDiaryFileHost(Filename(Date.{message.month_year, message.month_number, day}))
+            file := ReadDiaryFile(Filename(Date.{message.month_year, message.month_number, day}))
             text := FieldAt(file.data, 0, "text")
             has_text := text >= 0 && text + 1 < file.data.count && file.data[text + 1] != cast(u8)34
             message.marks[day] = ifx has_text ||
@@ -363,28 +385,177 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
     return message
 }
 
+entry: DiaryMessage;
+editor: DiaryUiFrame;
+loaded: bool;
+history: DiaryHistory;
+photo_waiting: bool;
+photo_day: Date;
+spelling_sent: string;
+spelling_day: Date;
+spelling_notice_until: float64;
+
+DiarySpellingNotice :: (key: string) {
+    editor.spelling_notice = key
+    spelling_notice_until = editor.now + 6.0
+}
+
+DiarySpellingPollService :: () {
+    if !editor.spelling_busy || !AppSupports("text.correct.poll") { return }
+    result := AppService("text.correct.poll", "")
+    if !DiaryWireBool(result, "finished") { return }
+    editor.spelling_busy = false
+    same_day := entry.year == spelling_day.year && entry.month == spelling_day.month &&
+    entry.day == spelling_day.day
+    if !same_day { return }
+    notice := DiaryWireString(result, FieldAt(result, 0, "notice"))
+    if notice != "" {
+        DiarySpellingNotice(notice)
+        return
+    }
+    if entry.text != spelling_sent {
+        DiarySpellingNotice("diary_spelling_error")
+        return
+    }
+    corrected := DiarySpellingRestored(entry.text, DiaryWireString(result, FieldAt(result, 0, "text")))
+    if corrected == "" && entry.text != "" {
+        DiarySpellingNotice("diary_spelling_error")
+        return
+    }
+    if corrected == entry.text {
+        DiarySpellingNotice("diary_spelling_none")
+        return
+    }
+    edit := DiaryHistoryEdit(entry.text, corrected)
+    entry.action = DIARY_EDIT
+    entry.edit_start = edit.start
+    entry.edit_end = edit.end
+    entry.replacement = edit.replacement
+    entry = Apply(entry)
+    entry.replacement = ""
+    editor.save_at = editor.now
+    DiaryHistoryObserve(*history, entry.year, entry.month, entry.day, entry.text, editor.now, false)
+}
+
+DiarySpellingRequest :: () {
+    if !editor.spelling_requested || editor.spelling_busy || !AppSupports("text.correct.start") { return }
+    result := AppService("text.correct.start", DiarySpellingMasked(entry.text))
+    notice := DiaryWireString(result, FieldAt(result, 0, "notice"))
+    if notice != "" {
+        DiarySpellingNotice(notice)
+        return
+    }
+    editor.spelling_busy = DiaryWireBool(result, "busy")
+    if editor.spelling_busy {
+        spelling_sent = entry.text
+        spelling_day = Date.{entry.year, entry.month, entry.day}
+        editor.spelling_notice = ""
+    }
+}
+
+DiaryEnsureLoaded :: () {
+    if !loaded {
+        entry = Apply(DiaryMessage.{.action = DIARY_LOAD})
+        loaded = entry.succeeded
+    }
+}
+
+DiaryHistoryApply :: (redo: bool) {
+    changed := ifx redo then DiaryHistoryRedo(*history) else DiaryHistoryUndo(*history)
+    if !changed { return }
+    edit := DiaryHistoryEdit(entry.text, history.current)
+    entry.action = DIARY_EDIT
+    entry.edit_start = edit.start
+    entry.edit_end = edit.end
+    entry.replacement = edit.replacement
+    entry = Apply(entry)
+    entry.replacement = ""
+    editor.save_at = editor.now
+}
+
+DiaryPicked :: (result: string) {
+    status := DiaryWireString(result, FieldAt(result, 0, "status"))
+    photo_waiting = status == "pending"
+    if status != "done" {
+        editor.photo_error = status == "failed"
+        return
+    }
+    if entry.year != photo_day.year || entry.month != photo_day.month || entry.day != photo_day.day {
+        return
+    }
+    entry.action = DIARY_ATTACH
+    entry.attachment_file = DiaryWireString(result, FieldAt(result, 0, "destination"))
+    entry.attachment_name = DiaryWireString(result, FieldAt(result, 0, "name"))
+    entry = Apply(entry)
+    editor.photo_error = !entry.succeeded
+}
+
 #program_export "DiaryMain"
 Main :: () -> s32 {
-    message := ReadDiaryHost()
-    if message.abi != MODULE_ABI {
-        return -1
+    mode := AppMode()
+    if mode == APP_IDENTIFY {
+        AppIdentity("inbe.diary")
+        AppDescribe("Diary", "S1.8rr:M5 3H19V21H5ZM8 7H16M8 11H16M8 15H13")
+        return APP_PROTOCOL
     }
-    if message.action == MODULE_IDENTIFY {
-        return MODULE_DIARY
+    if mode == APP_COMMAND {
+        entry = Apply(DiaryMessageDecode(AppCommand()))
+        loaded = entry.year > 0
+        AppReply(DiaryMessageEncode(entry))
+        return 0
     }
-    if message.action == DIARY_FRAME {
-        message.succeeded = true
-        message = DiaryView(message, DiaryObserve(), Today())
-        if message.action != DIARY_FRAME {
-            message = Apply(message)
+    if mode == APP_SAVE {
+        if loaded { entry = Save(entry) }
+        AppReply(DiaryMessageEncode(entry))
+        return ifx !loaded || entry.saved || entry.load_error then 0 else 1
+    }
+    if mode != APP_FRAME { return 0 }
+    DiaryEnsureLoaded()
+    bounds := AppBounds()
+    editor.session = AppSession()
+    editor.width = cast(s32)bounds.width
+    editor.height = cast(s32)(bounds.y + bounds.height)
+    editor.origin_x = cast(s32)bounds.x
+    editor.origin_y = cast(s32)bounds.y
+    editor.scale = AppScale()
+    editor.font = AppFont()
+    editor.now = AppAreaInput().now_seconds
+    editor.input = AppAreaInput()
+    editor.link_color = ifx AppDark() then cast(u32)0x9bc5e8ff else cast(u32)0x286d9cff
+    editor.muted_color = ifx AppDark() then cast(u32)0xaaaeb3ff else cast(u32)0x62686eff
+    editor.can_undo = history.undo_count > 0
+    editor.can_redo = history.redo_count > 0
+    editor.photo_requested = false
+    editor.undo_requested = false
+    editor.redo_requested = false
+    editor.spelling_requested = false
+    if editor.now >= spelling_notice_until { editor.spelling_notice = "" }
+    DiarySpellingPollService()
+    editor.clipboard_write = false
+    if photo_waiting && AppSupports("media.pick.status") {
+        DiaryPicked(AppService("media.pick.status", ""))
+    }
+    entry.action = DIARY_FRAME
+    entry = DiaryView(entry, editor, Today())
+    editor = DiaryObservedFrame()
+    if entry.action != DIARY_FRAME { entry = Apply(entry) }
+    if editor.undo_requested { DiaryHistoryApply(false) }
+    if editor.redo_requested { DiaryHistoryApply(true) }
+    DiarySpellingRequest()
+    if editor.photo_requested && AppSupports("media.pick") {
+        entry = Save(entry)
+        if entry.saved {
+            photo_day = Date.{entry.year, entry.month, entry.day}
+            DiaryPicked(AppService("media.pick", AppLocale("diary_attach_photo")))
         }
-        // A quiet editor saves after its typing delay; file errors stay visible.
-        if !message.saved && DiarySaveDue() {
-            message = Save(message)
-        }
-        WriteDiaryHost(message)
-    } else {
-        WriteDiaryHost(Apply(message))
     }
+    if editor.clipboard_write {
+        unused ClipboardCopy(editor.clipboard_text, 0)
+    }
+    if !entry.saved && editor.now >= editor.save_at { entry = Save(entry) }
+    if loaded && !entry.load_error {
+        DiaryHistoryObserve(*history, entry.year, entry.month, entry.day, entry.text, editor.now, true)
+    }
+    AppKeyboard(editor.focused)
     return 0
 }

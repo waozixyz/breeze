@@ -54,7 +54,7 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
 "$ziran" build --target=c --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "kryon=$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     -o "$work/generated" "$root/tests/cells_behavior.zi" "$root/tests/sync_test_host.zi"
@@ -65,7 +65,7 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
     "$root/tests/cells_host_test.c" "$work/generated"/*.c \
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
-    "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "$root/build/ziran-toolchain/libziran.a" \
+    "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "${ZIRAN_LIB:-$(dirname "$(dirname "$ziran")")/libziran.a}" \
     -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun -Wl,--wrap=BundleInstantiate -Wl,--wrap=BundleOpenBytes \
     -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.

@@ -7,7 +7,7 @@ mkdir -p "$work/c"
 "$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" \
+    --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "kryon=$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \

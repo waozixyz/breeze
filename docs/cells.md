@@ -21,6 +21,30 @@ table, editor, entries, history and statistics, and Practices' screens,
 still use compiled screen compositions; migrating those screens is required
 before every visual change can ship without rebuilding the wrapper.
 
+## Shared app interface
+
+Inner Breeze is a harness for awareness and personal growth. Diary is the
+first bundled app using Kryon's shared `app_context` interface: its editor,
+calendar, undo/redo and document rules live in `apps/diary/`. The wrapper
+provides account-scoped documents, sync, input, locales and optional photo
+and spelling services. Older compatible Diary packages keep their existing
+host interface.
+
+The same `diary.zib` can run in Werkzeug with `werk --bundle diary.zib` or
+in Kryon's desktop player with `kryon run diary.zib`, without `inbe.zib`.
+The desktop providers keep private local documents and support photo picking;
+online spelling is available only where the harness supplies it. Documents
+outside Inner Breeze do not automatically join its account sync. Other
+bundled apps still use their existing interface while they migrate.
+
+Downloaded apps can also use the shared contract. Werkzeug's Calculator is
+the first reverse check; offer its local bundle through the existing
+`INBE_NODE_APP_FILE` mechanism. Capability and identity validation still run.
+
+`tests/portable_apps_ui_test.py` checks the same Diary bundle in Werkzeug and
+the standalone player, including editing, photo bytes and rendering, saving
+on close and restart, on a private display with disposable profiles.
+
 ## Lumi
 
 Lumi is the default home for new profiles and for the first launch after her

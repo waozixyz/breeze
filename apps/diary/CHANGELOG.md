@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.0] - 2026-10-18
+
+- Run the same Diary package in Inner Breeze, Werkzeug, or its own desktop window.
+- Keep entry editing, undo and redo with Diary, while the host provides private documents and available photo and spelling services.
+
 ## [1.2.0] - 2026-10-17
 
 ### Changed

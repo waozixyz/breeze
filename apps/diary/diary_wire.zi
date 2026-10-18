@@ -1,0 +1,151 @@
+// App-owned commands shared with callers. Documents retain their existing schema.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import, file "diary_types.zi";
+
+DiaryWireString :: (text: string, at: s32) -> string {
+    if at < 0 { return "" }
+    bytes: Vec(u8)
+    for index: 0..text.count - 1 { unused VecPush(bytes, cast(u8)0) }
+    count := ReadStringText(text, at, VecSlice(bytes, 0, bytes.count))
+    if count < 0 {
+        VecFree(bytes)
+        return ""
+    }
+    result: Vec(u8)
+    BuilderPrint(*result, "%", TextFromBytes(VecSlice(bytes, 0, count)))
+    VecFree(bytes)
+    return BuilderFinish(result)
+}
+
+DiaryWireQuote :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for index: 0..value.count - 1 {
+        byte := value[index]
+        if byte == cast(u8)34 { BuilderPrint(out, "\\\"") }
+        else if byte == cast(u8)92 { BuilderPrint(out, "\\\\") }
+        else if byte == cast(u8)10 { BuilderPrint(out, "\\n") }
+        else if byte == cast(u8)13 { BuilderPrint(out, "\\r") }
+        else if byte == cast(u8)9 { BuilderPrint(out, "\\t") }
+        else if byte < cast(u8)32 {
+            hex := "0123456789abcdef"
+            BuilderPrint(out, "\\u00")
+            unused VecPush(out.*, hex[cast(s64)(byte / cast(u8)16)])
+            unused VecPush(out.*, hex[cast(s64)(byte % cast(u8)16)])
+        }
+        else { BuilderPrint(out, "%", value[index:index + 1]) }
+    }
+    BuilderPrint(out, "\"")
+}
+
+DiaryWireNumber :: (text: string, key: string) -> s32 {
+    value := ReadNumber(text, FieldAt(text, 0, key))
+    if !value.valid || value.value < -2147483648.0 || value.value > 2147483647.0 { return 0 }
+    result := cast(s32)value.value
+    return ifx cast(float64)result == value.value then result else 0
+}
+
+DiaryWireBool :: (text: string, key: string) -> bool {
+    at := FieldAt(text, 0, key)
+    return at >= 0 && at + 4 <= text.count && text[at:at + 4] == "true"
+}
+
+DiaryMessageDecode :: (text: string) -> DiaryMessage {
+    message: DiaryMessage
+    if text.count == 0 || text[0] != cast(u8)123 ||
+    Space(text, ValueEnd(text, 0, 0)) != text.count { return message }
+    message.abi = DiaryWireNumber(text, "abi")
+    message.action = DiaryWireNumber(text, "action")
+    message.control = DiaryWireNumber(text, "control")
+    message.year = DiaryWireNumber(text, "year")
+    message.month = DiaryWireNumber(text, "month")
+    message.day = DiaryWireNumber(text, "day")
+    message.month_year = DiaryWireNumber(text, "month_year")
+    message.month_number = DiaryWireNumber(text, "month_number")
+    message.month_days = DiaryWireNumber(text, "month_days")
+    message.month_weekday = DiaryWireNumber(text, "month_weekday")
+    message.screen = DiaryWireNumber(text, "screen")
+    message.text = DiaryWireString(text, FieldAt(text, 0, "text"))
+    message.document = DiaryWireString(text, FieldAt(text, 0, "document"))
+    message.replacement = DiaryWireString(text, FieldAt(text, 0, "replacement"))
+    message.edit_start = DiaryWireNumber(text, "edit_start")
+    message.edit_end = DiaryWireNumber(text, "edit_end")
+    message.cursor = DiaryWireNumber(text, "cursor")
+    message.anchor = DiaryWireNumber(text, "anchor")
+    message.attachment_file = DiaryWireString(text, FieldAt(text, 0, "attachment_file"))
+    message.attachment_name = DiaryWireString(text, FieldAt(text, 0, "attachment_name"))
+    message.calendar = DiaryWireBool(text, "calendar")
+    message.saved = DiaryWireBool(text, "saved")
+    message.load_error = DiaryWireBool(text, "load_error")
+    message.succeeded = DiaryWireBool(text, "succeeded")
+    marks := FieldAt(text, 0, "marks")
+    if ArrayCount(text, marks) == 32 {
+        for index: cast(s32)0..cast(s32)31 {
+            value := ReadNumber(text, ElementAt(text, marks, index))
+            message.marks[index] = ifx value.valid && value.value == 1.0 then cast(u8)1 else cast(u8)0
+        }
+    }
+    return message
+}
+
+DiaryMessageEncode :: (message: DiaryMessage) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{")
+    BuilderPrint(*out, "\"abi\":")
+    BuilderPrint(*out, "%", message.abi)
+    BuilderPrint(*out, ",\"action\":")
+    BuilderPrint(*out, "%", message.action)
+    BuilderPrint(*out, ",\"control\":")
+    BuilderPrint(*out, "%", message.control)
+    BuilderPrint(*out, ",\"year\":")
+    BuilderPrint(*out, "%", message.year)
+    BuilderPrint(*out, ",\"month\":")
+    BuilderPrint(*out, "%", message.month)
+    BuilderPrint(*out, ",\"day\":")
+    BuilderPrint(*out, "%", message.day)
+    BuilderPrint(*out, ",\"month_year\":")
+    BuilderPrint(*out, "%", message.month_year)
+    BuilderPrint(*out, ",\"month_number\":")
+    BuilderPrint(*out, "%", message.month_number)
+    BuilderPrint(*out, ",\"month_days\":")
+    BuilderPrint(*out, "%", message.month_days)
+    BuilderPrint(*out, ",\"month_weekday\":")
+    BuilderPrint(*out, "%", message.month_weekday)
+    BuilderPrint(*out, ",\"screen\":")
+    BuilderPrint(*out, "%", message.screen)
+    BuilderPrint(*out, ",\"text\":")
+    DiaryWireQuote(*out, message.text)
+    BuilderPrint(*out, ",\"document\":")
+    DiaryWireQuote(*out, message.document)
+    BuilderPrint(*out, ",\"replacement\":")
+    DiaryWireQuote(*out, message.replacement)
+    BuilderPrint(*out, ",\"edit_start\":")
+    BuilderPrint(*out, "%", message.edit_start)
+    BuilderPrint(*out, ",\"edit_end\":")
+    BuilderPrint(*out, "%", message.edit_end)
+    BuilderPrint(*out, ",\"cursor\":")
+    BuilderPrint(*out, "%", message.cursor)
+    BuilderPrint(*out, ",\"anchor\":")
+    BuilderPrint(*out, "%", message.anchor)
+    BuilderPrint(*out, ",\"attachment_file\":")
+    DiaryWireQuote(*out, message.attachment_file)
+    BuilderPrint(*out, ",\"attachment_name\":")
+    DiaryWireQuote(*out, message.attachment_name)
+    BuilderPrint(*out, ",\"calendar\":")
+    BuilderPrint(*out, "%", ifx message.calendar then "true" else "false")
+    BuilderPrint(*out, ",\"saved\":")
+    BuilderPrint(*out, "%", ifx message.saved then "true" else "false")
+    BuilderPrint(*out, ",\"load_error\":")
+    BuilderPrint(*out, "%", ifx message.load_error then "true" else "false")
+    BuilderPrint(*out, ",\"succeeded\":")
+    BuilderPrint(*out, "%", ifx message.succeeded then "true" else "false")
+    BuilderPrint(*out, ",\"marks\":[")
+    for index: cast(s32)0..cast(s32)31 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "%", cast(s32)message.marks[index])
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}

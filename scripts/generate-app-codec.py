@@ -27,11 +27,11 @@ command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
 for module in KRYON_MODULES:
     command += ['--source', str(KRYON / 'src/ui' / (module + '.zi'))]
 for name in APP_TYPES:
-    command += ['--source', str(ROOT / 'src/cells' / (name + '.zi'))]
+    command += ['--source', str(ROOT / ('apps/diary' if name == 'diary_ui_types' else 'src/cells') / (name + '.zi'))]
 for root in ROOTS:
     command += ['--root', root]
 for line in ['"std/bundle_host"', '"std/byte_text_linux"', '"hosted_values"', '"widget_codec"',
-             *(f', file "{name}.zi";' for name in APP_TYPES), *(f'"{module}"' for module in KRYON_MODULES)]:
+             *(f', file "../../apps/diary/{name}.zi";' if name == 'diary_ui_types' else f', file "{name}.zi";' for name in APP_TYPES), *(f'"{module}"' for module in KRYON_MODULES)]:
     command += ['--import', line]
 command += sys.argv[1:]
 sys.exit(subprocess.run(command).returncode)

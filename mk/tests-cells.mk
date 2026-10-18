@@ -15,6 +15,16 @@ cells-platform-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
 cells-android-probe: cells
 	sh tests/cells_platform_test.sh $(ZIRAN_BIN) android
 
+# Optional interoperability check against the current Kryon and Werkzeug builds.
+.PHONY: portable-apps-ui-test
+portable-apps-ui-test: $(TARGET) cells
+	@test -n "$(APP_PLAYER)" -a -n "$(WERK_BINARY)" -a -n "$(CALCULATOR_BUNDLE)" || { \
+		echo 'Set APP_PLAYER, WERK_BINARY and CALCULATOR_BUNDLE to the tested builds.' >&2; exit 2; }
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER \
+		python3 tests/portable_apps_ui_test.py --inbe $(abspath $(TARGET)) \
+		--player "$(APP_PLAYER)" --werk "$(WERK_BINARY)" \
+		--diary $(abspath build/cells/diary.zib) --calculator "$(CALCULATOR_BUNDLE)"
+
 .PHONY: chess-engine-test chess-app-test node-app-records-test node-app-codec-check
 .PHONY: photos-app-test media-store-test media-metadata-test
 # Photos and the account's media library it shows.

@@ -13,8 +13,9 @@
 
 # Inner Breeze
 
-Inner Breeze is a free, open-source practice app for breathing, meditation, and
-habit tracking. It works offline, stores data locally in SQLite, and can
+Inner Breeze brings together free, open-source apps for awareness and personal
+growth: breathing, meditation, habits, reflection and everyday intentions.
+It works offline, stores data locally in SQLite, and can
 optionally sync user-owned data through a Daochi-compatible sync server.
 
 [Account activity](docs/ACCOUNT_ACTIVITY.md) explains persistent Telegram linking,
