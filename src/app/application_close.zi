@@ -1,0 +1,138 @@
+// Closing the desktop window: the configured close behaviour, the prompt to
+// keep running or quit, and the dialog that asks whether to save a session.
+#import, file "app_types.zi";
+#import "control_props"
+#import "layout"
+#import, file "app_modal_state.zi";
+#import, file "mini_mode.zi";
+#import, file "locale.zi";
+#import "modal_props"
+#import "modal_widget"
+#if #defined(DESKTOP_TRAY_ENABLED) {
+    #import, file "../platform/desktop_tray.zi";
+}
+
+using SessionExitModalResult;
+using AppClosePromptResult;
+using ButtonTone;
+using ButtonEmphasis;
+
+#program_export
+app_request_desktop_close :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // The mini window has no tray or close prompt.
+    if AppMiniMode() {
+        app.request_quit = 1
+        return
+    }
+    // Configured close behaviour overrides the ask prompt (desktop only).
+    if app.desktop_close_action == CLOSE_QUIT {
+        app.request_quit = 1
+        return
+    }
+    #if #defined(DESKTOP_TRAY_ENABLED) {
+        if desktop_tray_ready() == 0 {
+            app.request_quit = 1
+            return
+        }
+    }
+    if app.desktop_close_action == CLOSE_KEEP_RUNNING {
+        #if #defined(DESKTOP_TRAY_ENABLED) {
+            if desktop_tray_keep_running() == 0 {
+                app.request_quit = 1
+            }
+        } else {
+            app.request_quit = 1
+        }
+        return
+    }
+    app.close_prompt_open = 1
+    app_block_current_click(app)
+    app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptNone
+}
+//
+// Desktop quit request from an explicit command such as Ctrl+Q. Window-close
+// requests may still ask whether to keep running, but a quit command should
+// always terminate the app.
+//
+
+#program_export
+app_request_desktop_quit :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    app.request_quit = 1
+}
+#program_export
+app_consume_close_prompt_result :: (app: *InnerBreeze) -> AppClosePromptResult {
+    result: AppClosePromptResult
+    if app == null {
+        return cast(AppClosePromptResult)AppClosePromptNone
+    }
+    result = app.close_prompt_result
+    app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptNone
+    return result
+}
+#program_export
+app_draw_session_exit_modal :: (app: *InnerBreeze, can_save: s32, save_message: string, discard_message: string) -> SessionExitModalResult {
+    modal_result: s32
+    if can_save != 0 {
+        actions: [3] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("save_button"), .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("discard_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ]
+        modal_result = ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = save_message}, actions[:3]).action
+        if modal_result == 2 {
+            return cast(SessionExitModalResult)SessionExitModalSave
+        }
+        if modal_result == 3 {
+            return cast(SessionExitModalResult)SessionExitModalDiscard
+        }
+    } else {
+        actions: [2] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("exit_button"), .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ]
+        modal_result = ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("exit_session_title"), .message = discard_message}, actions[:2]).action
+        if modal_result == 2 {
+            return cast(SessionExitModalResult)SessionExitModalDiscard
+        }
+    }
+    return ifx (modal_result == 1) then (cast(SessionExitModalResult)SessionExitModalCancel) else (cast(SessionExitModalResult)SessionExitModalNone)
+}
+app_draw_close_prompt :: (app: *InnerBreeze) {
+    modal_result: s32
+    actions: [2] ActionModalAction = .[ActionModalAction.{}, ActionModalAction.{}]
+    props: ActionModalProps = .{}
+    if app == null || app.close_prompt_open == 0 {
+        return
+    }
+    if app.blocked_input_frame == app.breathing.frame {
+        return
+    }
+    actions[0].label = LocaleText("desktop_close_keep_running_button")
+    actions[0].tone = cast(ButtonTone)ButtonToneAccent
+    actions[0].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    actions[1].label = LocaleText("desktop_close_quit_button")
+    actions[1].tone = cast(ButtonTone)ButtonToneDanger
+    actions[1].emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    props.key = KeyHash("inbe/desktop-close")
+    props.title = LocaleText("desktop_close_prompt_title")
+    props.message = LocaleText("desktop_close_prompt_message")
+    props.max_width = 420
+    modal_result = ActionModal(app.ui.session, props, actions[:2]).action
+    if modal_result == {
+        case -1;
+        app.close_prompt_open = 0
+        case 1;
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptKeepRunning
+        case 2;
+        app.close_prompt_open = 0
+        app.close_prompt_result = cast(AppClosePromptResult)AppClosePromptQuit
+        app_request_desktop_quit(app)
+    }
+}

@@ -1,0 +1,463 @@
+// Starting the app: its configuration and first screen, reloading after an
+// import, restoring a mini window's selection and opening a feature.
+#import, file "../storage/practice_unlocks.zi";
+#import, file "../cells/shared_state.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../platform/trace_log.zi";
+#import "raylib_trace"
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "exercise_types.zi";
+#import, file "../platform/environment.zi";
+#import "android_device"
+#import, file "../platform/android/graphics_context.zi";
+#import, file "fonts.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "navigation_routes.zi";
+#import, file "app_nav_state.zi";
+#import, file "../breaks/break_rules.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../storage/data.zi";
+#import, file "audio.zi";
+#import, file "app_launcher_state.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../screens/elist_screen.zi";
+#import, file "app_sync.zi";
+#import, file "telegram_account_flow.zi";
+#import, file "app_route_state.zi";
+#import, file "app_route_url.zi";
+#import, file "app_frame_pacing.zi";
+#import, file "app_chrome.zi";
+#import, file "mini_mode.zi";
+#import, file "app_settings.zi";
+#import, file "../habits/view_settings.zi";
+#import, file "locale.zi";
+#import, file "update_check.zi";
+#import, file "text_buffers.zi";
+#import "c_string"
+#import, file "app_notifications.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../cells/package_manager.zi";
+#import, file "../practices/practice_downloads.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../cells/inbe_types.zi";
+#import, file "app_style.zi";
+#import, file "../screens/manual_screen.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../screens/habits/habit_session_screen.zi";
+#import, file "device_preferences.zi";
+#import, file "dpi_state.zi";
+#import "geometry"
+#import "session"
+#import, file "application.zi";
+#import, file "application_modals.zi";
+#if #defined(ANDROID_BUILD) {
+    #import, file "../platform/android/android_wakelock.zi";
+}
+
+using AppMainTab;
+using HabitSyncMode;
+
+LOG_INFO :: 3
+LOG_WARNING :: 4
+LOG_ERROR :: 5
+
+#program_export
+refresh_locale_dependent_text :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    if config.title_custom == 0 {
+        CopyCString(LocaleText("app_title"), config.title[:])
+    }
+    manual_screen_reset_layouts(app)
+    app.language_index = LocaleActiveIndex()
+    if app.language_index < 0 {
+        app.language_index = 0
+    }
+}
+load_config :: () {
+    if config.loaded != 0 {
+        return
+    }
+    if config.title[0] == #char "\0" {
+        AppCopyText(LocaleText("app_title"), config.title[:])
+        config.title_custom = 0
+    }
+    #if #defined(PLATFORM_WEB) {
+        refresh_theme_colors(0, 1)
+    } else {
+        refresh_theme_colors(0, 0)
+    }
+    config.loaded = 1
+}
+#program_export
+app_reload_after_import :: (app: *InnerBreeze, reload_settings: s32) {
+    detail_habit_id: [HABIT_ID_SIZE] u8 = .[0]
+    detail_index: s32 = -1
+    view_mode: s32 = HABIT_VIEW_CALENDAR
+    habit_tab: s32 = HABIT_TAB_WEEKLY
+    month_offset: s32 = 0
+    scroll: s32 = 0
+    weekly_days: s32 = 0
+    hold_stats_range_days: s32 = 0
+    i: s32
+    if app == null {
+        return
+    }
+    if reload_settings == 0 {
+        app.app_choices_pending = true
+        if app.habit_detail_index >= 0 && app.habit_detail_index < app.habits.count {
+            AppCopyText(AppTextFromCString(
+                *app.habits.items[app.habit_detail_index].id[0],
+                HABIT_ID_SIZE), detail_habit_id[:])
+        }
+        detail_index = app.habit_detail_index
+        view_mode = app.habits.view_mode
+        habit_tab = app.habits.tab
+        month_offset = app.habits.month_offset
+        scroll = app.habits.scroll
+        weekly_days = app.habits.weekly_days
+        hold_stats_range_days = app.habits.hold_stats_range_days
+    }
+    if reload_settings != 0 {
+        settings_missing := app_load_settings(app)
+        refresh_locale_dependent_text(app)
+        app_device_preferences_init(app)
+        if settings_missing != 0 {
+            save_settings(app)
+        }
+        app_apply_style(app)
+        reset_settings_preview(app)
+        practice_update_session_sounds(app)
+    }
+    if !TelegramAccountFlowOwnsContext() {
+        habits_init_with_defaults(*app.habits, app.language_selected)
+    }
+    if reload_settings != 0 {
+        app_restore_habits_view_settings(app)
+    }
+    if reload_settings == 0 {
+        app.habits.selected = -1
+        app.habit_detail_index = -1
+        {
+            i: s32 = 0
+            while i < app.habits.count {
+                if detail_habit_id[0] != cast(u8)0 &&
+                AppTextFromCString(*app.habits.items[i].id[0], HABIT_ID_SIZE) ==
+                AppTextFromCString(*detail_habit_id[0], HABIT_ID_SIZE) {
+                    app.habit_detail_index = i
+                    break
+                }
+                i += 1
+            }
+        }
+        if app.habit_detail_index < 0 && detail_index >= 0 && detail_index < app.habits.count {
+            app.habit_detail_index = detail_index
+        }
+        app.habits.view_mode = view_mode
+        app.habits.tab = habit_tab
+        app.habits.month_offset = month_offset
+        app.habits.scroll = scroll
+        app.habits.weekly_days = weekly_days
+        app.habits.hold_stats_range_days = ifx (hold_stats_range_days == 31) then (31) else (7)
+    }
+    if app.habit_detail_index >= app.habits.count {
+        app.habit_detail_index = -1
+    }
+    if app.habits.selected >= app.habits.count {
+        app.habits.selected = -1
+    }
+    app.habit_session_edit.active = 0
+    app.habit_edit.active = 0
+}
+#if #defined(ANDROID_BUILD) {
+    #program_export
+    app_request_graphics_reload :: (app: *InnerBreeze) {
+        if app != null {
+            app.graphics_reload_requested = 1
+        }
+    }
+}
+app_apply_initial_screen :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // Mini mode uses the root's temporary Practice selection and skips the
+    // full app's onboarding without bypassing its route policy.
+    if AppMiniMode() {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+    }
+    initial := InbeRun(InbeMessage.{.action = INBE_INITIAL_SCREEN,
+            .enabled_apps = ifx AppMiniMode() then APP_PRACTICE else app.enabled_apps,
+            .language_selected = AppMiniMode() || app.language_selected != 0,
+            .apps_selected = AppMiniMode() || app.apps_selected != 0,
+            .screen = app_screen_for_main_tab(app.main_tab)})
+    if !initial.succeeded {
+        app.request_quit = 1
+        return
+    }
+    app.breathing.screen = initial.screen
+    if initial.screen == ScreenAppSelection && !app.launcher_open {
+        app_launcher_toggle(app)
+    }
+    app.habits.focus_selected_tab = ifx (app.breathing.screen == ScreenHabits) then (1) else (0)
+}
+#program_export
+app_mini_restore_selection :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    // An active mini practice continues when the full window opens, while
+    // the stored selection still controls full-app navigation and saving.
+    active := practice_active(app) != null
+    mask := app.enabled_apps
+    if active {
+        mask |= APP_PRACTICE
+    }
+    if !CellsSetEnabled(mask) {
+        app.request_quit = 1
+        return
+    }
+    if !active {
+        app_apply_initial_screen(app)
+    }
+}
+// Host feature IDs use the app-selection bits; zero restores the parent route.
+#program_export
+app_open_feature :: (vapp: *void, feature: s32) -> s32 {
+    app := cast(*InnerBreeze)vapp
+    if app == null || !CellsReady() || AppMiniMode() {
+        return 0
+    }
+    before := app_current_route(app)
+    if feature == 0 {
+        app_apply_initial_screen(app)
+        app_observe_direct_route_change(app, before)
+        return cast(s32)(app.request_quit == 0)
+    }
+    bit: s32 = 0
+    tab: s32 = APP_MAIN_TAB_NONE
+    if feature == APP_PRACTICE {
+        bit = APP_PRACTICE
+        tab = APP_MAIN_TAB_PRACTICE
+    } else if feature == APP_HABITS {
+        bit = APP_HABITS
+        tab = APP_MAIN_TAB_HABITS
+    } else if feature == APP_LISTS {
+        bit = APP_LISTS
+        tab = APP_MAIN_TAB_ELIST
+    } else if feature == APP_LUMI {
+        bit = APP_LUMI
+        tab = APP_MAIN_TAB_LUMI
+    } else if feature == APP_DIARY {
+
+        bit = APP_DIARY
+        tab = APP_MAIN_TAB_DIARY
+    } else if feature == APP_LEADERBOARD {
+        bit = APP_LEADERBOARD
+        tab = APP_MAIN_TAB_LEADERBOARD
+    } else {
+        return 0
+    }
+    if app.breathing.screen == ScreenDiary && !app_diary_save() {
+        return 0
+    }
+    selected := InbeRun(InbeMessage.{.action = INBE_TOGGLE_APP,
+            .enabled_apps = app.enabled_apps, .app = bit, .checked = true})
+    if !selected.succeeded || !CellsSetEnabled(selected.enabled_apps) {
+        return 0
+    }
+    app.enabled_apps = selected.enabled_apps
+    app.apps_selected = 1
+    if (CellsInstalledMask() & bit) == 0 {
+        for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+            if PackageBit(index) == bit {
+                PackageRequest(index)
+            }
+        }
+        app_update_app_navigation(app, bit)
+        app_switch_screen(app, ScreenAppSelection)
+        save_settings(app)
+        return 0
+    }
+    // The opened app shows above the Apps overlay.
+    if app.launcher_open {
+        app_launcher_close(app)
+    }
+    app.main_tab = tab
+    app_update_app_navigation(app, bit)
+    app_switch_screen(app, app_screen_for_main_tab(tab))
+    app_observe_direct_route_change(app, before)
+    save_settings(app)
+    return cast(s32)(app.breathing.screen == app_screen_for_main_tab(tab))
+}
+#program_export
+app_init :: (vapp: *void) {
+    app: *InnerBreeze = cast(*InnerBreeze)vapp
+    i: s32
+    if app == null {
+        return
+    }
+    FramePacingReset()
+    app.ui.session = SessionOpen()
+    if !SessionValid(app.ui.session) { return }
+    AndroidTextInputOpen(app.ui.session)
+    #if #defined(ANDROID_BUILD) {
+        app.graphics_context = AndroidGraphicsContext()
+        if practice_active(app) != null {
+            android_allow_screen_off()
+        }
+        practice_active_background_stop(app)
+    }
+    InitDPI()
+    TraceLogInit(LOG_INFO, "APP: app init width=%d height=%d embedded=%d",
+        config.width, config.height, config.loaded)
+    load_config()
+    app_notifications_init(app)
+    view_width = ifx (config.width > 0) then (config.width) else (APP_DEFAULT_WIDTH)
+    view_height = ifx (config.height > 0) then (config.height) else (APP_DEFAULT_HEIGHT)
+    UpdateDPI(view_width, view_height)
+    view_width = GetLayoutWidth()
+    view_height = GetLayoutHeight()
+    TraceLogScale(LOG_INFO, "APP: render scale=%.2f layout=%dx%d",
+        GetRenderScale(), view_width, view_height)
+    app_capture_navigation_viewport(app, view_width, view_height)
+    app.breathing = BreathSessionInit()
+    app.breaks = BreakInit()
+    app.breaks_enabled = 0
+    app.desktop_startup_mode = STARTUP_SHOW
+    app.desktop_close_action = CLOSE_ASK
+    app.break_hud_x = -1
+    app.break_hud_y = -1
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        app.break_sounds_enabled = 1
+    } else {
+        app.break_sounds_enabled = 0
+    }
+    data_init()
+    TelegramAccountFlowStart()
+    if !CellsStart(app) {
+        TraceLog(LOG_ERROR, "APP: required Lists, Habits or Practice bundle failed validation")
+        app.request_quit = 1
+        return
+    }
+    TraceLog(LOG_INFO, "APP PROBE: data initialized")
+    // Purchases are known from the first frame, so a paid practice the
+    // account owns keeps its place instead of giving way at start.
+    practice_owned = UnlockOwned
+    practice_grant = UnlockPackGrant
+    practice_grant_forget = UnlockForgetGrant
+    practice_log = PracticeTraceLog
+    lumi_practice_status = LumiPracticeStatus
+    settings_missing := app_load_settings(app)
+    configuration_action: s32 = INBE_CONFIGURE
+    if AppMiniMode() {
+        configuration_action = INBE_MINI_CONFIGURE
+    }
+    selection := InbeRun(InbeMessage.{.action = configuration_action,
+            .enabled_apps = app.enabled_apps})
+    if !selection.succeeded || !CellsSetEnabled(selection.enabled_apps) {
+        app.request_quit = 1
+        return
+    }
+    if !AppMiniMode() {
+        app.enabled_apps = selection.enabled_apps
+        previous_routes := app.bottom_nav_routes
+        previous_count := app.bottom_nav_route_count
+        app_update_app_navigation(app, app.enabled_apps)
+        navigation_changed := previous_count != app.bottom_nav_route_count
+        for index: cast(s32)0..previous_count - 1 {
+            navigation_changed = navigation_changed ||
+            previous_routes[index] != app.bottom_nav_routes[index]
+        }
+        if navigation_changed {
+            save_settings(app)
+        }
+        if app.apps_selected != 0 {
+            for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+                bit := PackageBit(index)
+                if (app.enabled_apps & bit) != 0 && (CellsInstalledMask() & bit) == 0 {
+                    PackageRequest(index)
+                }
+            }
+        }
+    }
+    refresh_locale_dependent_text(app)
+    app_device_preferences_init(app)
+    if settings_missing != 0 {
+        save_settings(app)
+    }
+    app_apply_style(app)
+    if !LoadLocaleFont(app) {
+        TraceLog(LOG_WARNING, "FONT: Failed to load Noto UI font -> using built-in default")
+    }
+    TraceLog(LOG_INFO, "APP PROBE: locale font initialized")
+    if !AppMiniMode() {
+        update_check_start()
+    }
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app.practice_config_tab = 0
+    app.session_result = SessionResult.{}
+    if app.language_needs_save != 0 {
+        save_settings(app)
+        app.language_needs_save = 0
+    }
+    if !TelegramAccountFlowOwnsContext() {
+        habits_init_with_defaults(*app.habits, app.language_selected)
+    }
+    app_restore_habits_view_settings(app)
+    app.habit_detail_index = -1
+    elist_state: *EListState = *app.elist
+    elist_state.editing_item = -1
+    app.habit_session_edit = HabitSessionEditState.{}
+    app.habit_session_edit.round = -1
+    app_apply_initial_screen(app)
+    practice_update_circle_bounds(app, app_content_top_reserved(app),
+        app_content_bottom_reserved(app))
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
+        if PreviewMode() == 0 {
+            init_audio(app)
+        }
+    }
+    TraceLog(LOG_INFO, "APP PROBE: audio setup complete")
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice: *PracticeDefinition = practice_get(i)
+            if practice.init != null {
+                practice.init(app)
+            }
+            i += 1
+        }
+    }
+    app.camera = Camera.{}
+    app.camera.zoom = 1.0
+    app.play_circle_hover = 0
+    app.play_circle_scale = 1.0f
+    app.settings_tab = SETTINGS_TAB_DEVICE
+    app.settings_overview = 1
+    app.habit_edit = HabitEditState.{}
+    app.habit_edit.index = -1
+    app.habit_edit.color.r = 99
+    app.habit_edit.color.g = 196
+    app.habit_edit.color.b = 165
+    app.habit_edit.color.a = 255
+    app.habit_edit.sync_mode = HABIT_SYNC_NONE
+    practice_update_session_sounds(app)
+    reset_settings_preview(app)
+    app.start_speed_preview = BreathSessionInit()
+    // Icons resolve from Kryon's embedded sheets; no app-side textures.
+    app.modal = AppModal.{}
+    app.meditation.duration_seconds = 0
+    app.meditation.remaining_seconds = 0
+    app.meditation.frame_ticks = 0
+    if !AppMiniMode() {
+        unused app_request_sync(app)
+    }
+    TraceLog(LOG_INFO, "APP PROBE: app init complete")
+}

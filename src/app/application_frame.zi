@@ -1,0 +1,488 @@
+// Drawing each frame: the current screen and its chrome, the Android
+// picture-in-picture window, and reloading graphics after a lost context.
+#import, file "../storage/dew.zi";
+#import, file "../platform/dew_payment.zi";
+#import, file "../storage/practice_unlocks.zi";
+#import, file "../cells/lumi_online.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../platform/trace_log.zi";
+#import "raylib_trace"
+#import, file "modal_rules.zi";
+#import, file "../practices/tai_chi/tai_chi_rules.zi";
+#import, file "../practices/sun_salutation/sun_salutation_rules.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "exercise_types.zi";
+#import, file "../platform/environment.zi";
+#import "text_context_menu"
+#import, file "../platform/android/graphics_context.zi";
+#import "layout"
+#import, file "fonts.zi";
+#import, file "app_nav_state.zi";
+#import, file "return_bar.zi";
+#import, file "session_window_view.zi";
+#import, file "../platform/android/android_picture_window.zi";
+#import, file "app_sync.zi";
+#import, file "sync_safety.zi";
+#import, file "telegram_account_flow.zi";
+#import, file "app_route_state.zi";
+#import, file "app_route_url.zi";
+#import, file "app_profile.zi";
+#import, file "app_frame_pacing.zi";
+#import, file "app_frame_transition.zi";
+#import, file "app_persistence.zi";
+#import, file "app_chrome.zi";
+#import, file "update_check.zi";
+#import, file "text_buffers.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../cells/node_apps.zi";
+#import, file "../cells/package_manager.zi";
+#import, file "../practices/practice_downloads.zi";
+#import, file "assets.zi";
+#import, file "app_style.zi";
+#import, file "../breaks/app_breaks.zi";
+#import, file "../screens/settings/settings_sync_account_impl.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../screens/session_results_screen.zi";
+#import, file "device_preferences.zi";
+#import, file "metrics.zi";
+#import, file "dpi_state.zi";
+#import "box_props"
+#import "box_widget"
+#import "drawing_props"
+#import "geometry"
+#import "tree_draw"
+#import "tree"
+#import "frame_pacing"
+#import, file "application.zi";
+#import, file "application_update.zi";
+c :: #system_library "c";
+raylib_log :: #system_library "raylib";
+#if #defined(PLATFORM_WEB) {
+    #import "kryon/canvas_host"
+} else {
+    #import "kryon/raylib_runtime"
+}
+
+using NavigationPlacement;
+using ModalType;
+using ExerciseType;
+
+GetTime :: () -> float64 #foreign c;
+PackageNow :: () -> s64 #foreign c "now_seconds";
+BeginMode2D :: (camera: Camera) #foreign raylib_log "BeginMode2D";
+EndMode2D :: () #foreign raylib_log "EndMode2D";
+BeginScissorMode :: (x: s32, y: s32, width: s32, height: s32) #foreign raylib_log "BeginScissorMode";
+EndScissorMode :: () #foreign raylib_log "EndScissorMode";
+
+LOG_INFO :: 3
+LOG_WARNING :: 4
+
+app_reload_graphics_resources :: (app: *InnerBreeze) -> bool {
+    if app == null {
+        return false
+    }
+    context_lost: bool = false
+    #if #defined(ANDROID_BUILD) {
+        context := AndroidGraphicsContext()
+        if context == null {
+            // EndDrawing continues polling Android events until the surface
+            // is rebound. Do not populate any GPU caches in the meantime.
+            return false
+        }
+        context_lost = app.graphics_context != null &&
+        app.graphics_context != context
+        app.graphics_context = context
+    }
+    if app.graphics_reload_requested == 0 && !context_lost {
+        return true
+    }
+    app.graphics_reload_requested = 0
+    if PreviewMode() != 0 {
+        return true
+    }
+    TraceLog(LOG_INFO, "ANDROID: Reloading graphics resources")
+    #if #defined(ANDROID_BUILD) {
+        ResetRaylibGraphics(context_lost)
+        // Retained frames are gone even when the context survived. A route
+        // fade must not keep a borrowed texture from the discarded frame.
+        app_route_transition_cancel(app, context_lost)
+        app.ui.retained_target_active = false
+        app.ui.retained_frame_unchanged = false
+    }
+    if !LoadLocaleFont(app) {
+        TraceLog(LOG_WARNING, "FONT: Failed to reload Noto UI font")
+    }
+    return true
+}
+app_update_draw_last_full_w: s32 = -1;
+app_update_draw_last_full_h: s32 = -1;
+app_update_draw_last_content_x: s32 = -1;
+app_update_draw_last_content_w: s32 = -1;
+app_update_draw_last_log_time: float64 = -1.0;
+app_last_frame_status: s32;
+app_finish_frame :: (app: *InnerBreeze) {
+    status: s32
+    paint_unchanged: bool = false
+    // Everything the frame draws is widget paint, so the previous frame is
+    // presented again whenever that paint matches it.
+    if app.ui.retained_target_active {
+        result := EndFrameRetained(app.ui.session, true)
+        status = cast(s32)result.status
+        paint_unchanged = result.paint_unchanged
+    } else {
+        status = cast(s32)EndFrame(app.ui.session)
+    }
+    if status != 0 && status != app_last_frame_status {
+        TraceLogResult(LOG_WARNING, "APP: frame rejected with status %d", status)
+        TraceLogResult(LOG_WARNING, "APP: rejected widget key %d",
+            cast(s32)TreeFrameErrorKey(app.ui.session))
+        TraceLogResult(LOG_WARNING, "APP: rejected widget kind %d",
+            TreeFrameErrorKind(app.ui.session))
+    }
+    app_last_frame_status = status
+    app.ui.retained_frame_unchanged = status == 0 && paint_unchanged
+}
+#program_export
+app_update_draw :: (vapp: *void, viewport: Rectangle) {
+    app: *InnerBreeze = cast(*InnerBreeze)vapp
+    profile_frame_start: float64
+    profile_update_start: float64
+    profile_habits_start: float64
+    profile_sync_start: float64
+    full_width: s32
+    full_height: s32
+    content_x: s32 = 0
+    rail_width: s32 = 0
+    top_height: s32 = 0
+    content_w: s32
+    layout_width: s32
+    layout_height: s32
+    layout_content_x: s32
+    layout_content_w: s32
+    render_scale: float32
+    if app == null || !CellsReady() {
+        return
+    }
+    if viewport.width <= 0 || viewport.height <= 0 {
+        return
+    }
+    profile_frame_start = app_profile_now()
+    FrameTextReset(*app.ui.frame_text)
+    // Styles follow the current app route, with cached parsing between edits.
+    unused app_apply_style(app)
+    frame_sample: FrameActivitySample
+    frame_sample.mouse_x = app.ui.mouse_x
+    frame_sample.mouse_y = app.ui.mouse_y
+    frame_sample.pointer_active = app.ui.pointer_active
+    frame_sample.keyboard_active = app.ui.keyboard_active
+    frame_sample.text_input_active = app.ui.text_input_active
+    frame_decision := app_update_frame_pacing(app, frame_sample)
+    app.ui.frame_target_fps = frame_decision.state.target_fps
+    app.ui.frame_target_changed = frame_decision.apply_target
+    if !app_reload_graphics_resources(app) {
+        return
+    }
+    #if #defined(ANDROID_BUILD) {
+        picture_state := AndroidPictureWindowState()
+        app.session_window.system_visible = (picture_state & 2) != 0
+        generation := picture_state >> 4
+        if generation != app.session_window.system_generation {
+            app.session_window.system_generation = generation
+            app.session_window.system_last_tick = GetTime()
+        }
+        // Opening the floating window back into the app shows its practice,
+        // not the page that was open behind the practice's in-app window.
+        // Like other window input from outside the frame, the window tick
+        // applies it after the frame has read the current route.
+        returned := (picture_state & 4) != 0
+        if returned != app.session_window.system_returned {
+            app.session_window.system_returned = returned
+            app.session_window.restore_requested = true
+        }
+        if app.session_window.system_visible {
+            app_draw_android_picture_window(app, viewport)
+            return
+        }
+        app.session_window.system_last_tick = GetTime()
+    }
+    full_width = cast(s32)viewport.width
+    full_height = cast(s32)viewport.height
+    view_width = full_width
+    view_height = full_height
+    // Update DPI cache
+    UpdateDPI(view_width, view_height)
+    if !(GetDPIScale() > 0.0f) || GetDPIScale() > 8.0f {
+        TraceLogScale(LOG_WARNING, "APP_EMBED: repairing invalid dpi %.2f for %dx%d",
+            GetDPIScale(), view_width, view_height)
+        InitDPI()
+        UpdateDPI(view_width, view_height)
+    }
+    // The layout is already in density-independent units and the render
+    // scale applies the density, so app metrics must not scale it again.
+    AppMetricsConfigure(1.0)
+    layout_width = GetLayoutWidth()
+    layout_height = GetLayoutHeight()
+    render_scale = GetRenderScale()
+    if !(render_scale > 0.0f) {
+        render_scale = 1.0f
+    }
+    app_full_view_width = layout_width
+    view_width = layout_width
+    view_height = layout_height
+    app.ui.view_width = view_width
+    app.ui.view_height = view_height
+    // Freeze responsive navigation from the full viewport before narrowing content.
+    app_capture_navigation_viewport(app, view_width, view_height)
+    rail_width = ifx (app_nav_desktop_rail_enabled(app) != 0) then (app_nav_desktop_rail_width(app)) else (0)
+    layout_content_x = ifx (app_navigation_placement(app) == NAVIGATION_LEFT) then (rail_width) else (0)
+    layout_content_w = layout_width - rail_width
+    if layout_content_w < 1 {
+        layout_content_w = 1
+    }
+    content_x = cast(s32)(cast(float32)layout_content_x * render_scale + 0.5f)
+    rail_width = cast(s32)(cast(float32)rail_width * render_scale + 0.5f)
+    top_layout := app_return_bar_height(app)
+    if app_navigation_placement(app) == NAVIGATION_TOP {
+        top_layout += app_navigation_height(app)
+    }
+    top_height = cast(s32)(cast(float32)top_layout * render_scale + 0.5f)
+    practice_update_circle_bounds(app, app_content_top_reserved(app),
+        app_content_bottom_reserved(app))
+    app_device_preferences_update(app)
+    update_check_poll()
+    app_refresh_theme(app)
+    content_w = full_width - rail_width
+    if content_w < 1 {
+        content_w = 1
+    }
+    {
+        now: float64 = GetTime()
+        changed := full_width != app_update_draw_last_full_w ||
+        full_height != app_update_draw_last_full_h ||
+        content_x != app_update_draw_last_content_x ||
+        content_w != app_update_draw_last_content_w
+        if changed && (app_update_draw_last_log_time < 0.0 || now - app_update_draw_last_log_time >= 0.25) {
+            TraceLogGeometry(LOG_INFO, "APP_EMBED: geometry viewport=%dx%d layout=%dx%d content_x=%d content=%dx%d render_scale=%.2f",
+                full_width, full_height, layout_width, layout_height,
+                layout_content_x, layout_content_w, layout_height,
+                GetRenderScale())
+            app_update_draw_last_log_time = now
+        }
+        if changed {
+            app_update_draw_last_full_w = full_width
+            app_update_draw_last_full_h = full_height
+            app_update_draw_last_content_x = content_x
+            app_update_draw_last_content_w = content_w
+        }
+    }
+    view_width = layout_content_w
+    view_height = layout_height - cast(s32)(cast(float32)top_height / render_scale + 0.5f)
+    app.ui.view_width = view_width
+    app.ui.view_height = view_height
+    app.camera = Camera.{}
+    app.camera.zoom = render_scale
+    app.camera.offset.x = ifx (PreviewMode() != 0) then (0.0f) else (viewport.x + cast(float32)content_x)
+    app.camera.offset.y = ifx (PreviewMode() != 0) then (0.0f) else (viewport.y + cast(float32)top_height)
+    #if #defined(ANDROID_BUILD) {
+        TextMenuSetTransform(render_scale, app.camera.offset.x, app.camera.offset.y)
+    }
+    // Retained hit testing and widget bounds use the same logical coordinates
+    // as the camera. A left navigation rail occupies negative content x.
+    frame_origin := Vector2.{0.0, 0.0}
+    if PreviewMode() == 0 {
+        frame_origin = ScreenToWorld(Vector2.{viewport.x, viewport.y}, app.camera)
+    }
+    logical_frame := Rectangle.{frame_origin.x, frame_origin.y,
+        viewport.width / render_scale, viewport.height / render_scale}
+    app.ui.retained_frame_unchanged = false
+    if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/frame"),
+        logical_frame) != 0 {
+        return
+    }
+    // The canvas under the whole viewport comes first, under every widget.
+    // The camera maps the logical frame onto the viewport; a preview draws
+    // without the camera.
+    canvas_bounds := logical_frame
+    if PreviewMode() != 0 {
+        canvas_bounds = viewport
+    }
+    Box(app.ui.session, BoxProps.{.bounds = canvas_bounds,
+            .fill = StyleTokenColor("canvas")})
+    content_canvas := BoxProps.{
+        .bounds = Rectangle.{0.0, 0.0, cast(float32)view_width,
+            cast(float32)view_height},
+        .fill = StyleTokenColor("canvas")}
+    if PreviewMode() != 0 {
+        Box(app.ui.session, content_canvas)
+        profile_update_start = app_profile_now()
+        updateapp(app)
+        app_profile_record_update(profile_update_start)
+        app_breaks_draw_toast(app,
+            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
+        app_route_transition_draw(app, logical_frame, GetTime())
+        app_finish_frame(app)
+    } else {
+        BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
+            full_width, full_height)
+        BeginMode2D(app.camera)
+        Box(app.ui.session, content_canvas)
+        profile_update_start = app_profile_now()
+        updateapp(app)
+        app_profile_record_update(profile_update_start)
+        app_breaks_draw_toast(app,
+            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
+        app_route_transition_draw(app, logical_frame, GetTime())
+        app_finish_frame(app)
+        EndMode2D()
+        EndScissorMode()
+    }
+    profile_habits_start = app_profile_now()
+    if app.request_quit != 0 {
+        return
+    }
+    if TelegramAccountFlowOwnsContext() {
+        TelegramAccountFlowPump(app)
+        app_activity_pump(app)
+        app_profile_frame_end(profile_frame_start)
+        return
+    }
+    app_flush_habits_after_frame(app)
+    app_profile_record_habits(profile_habits_start)
+    profile_sync_start = app_profile_now()
+    if DewAvailable() {
+        // The balance stays current on the Profile overview and while a gift is chosen.
+        dew_visible := (app.breathing.screen == ScreenProfile && app.profile_tab == PROFILE_TAB_OVERVIEW) ||
+        (app.modal.active != 0 && app.modal.type == cast(ModalType)ModalDewGift)
+        DewTick(dew_visible, GetTime())
+        if DewTakeSyncRequest() {
+            unused app_request_sync(app)
+        }
+    }
+    settings_sync_account_pump(app)
+    app_network_pump(app)
+    // Lumi and package requests run on the frame thread on every platform.
+    if !app_practice_holds_frame_work(app) {
+        app_lumi_pump(app)
+        PackagePump(app.enabled_apps, cast(s32)PackageNow())
+        NodeAppsPump(cast(s32)PackageNow(), app.launcher_open)
+        content_generation := AssetGeneration()
+        // Paid practices need Dew, which the Google Play build does not offer.
+        practice_paid_allowed = DewAvailable()
+        // Each narrated practice's voice, for its downloads and playback.
+        tai_chi_male := TaiChiMaleVoice(app.tai_chi) && PracticeVoiceRecorded(EXERCISE_TAI_CHI, "male")
+        PracticeVoiceSelect(EXERCISE_TAI_CHI, ifx tai_chi_male then "male" else "")
+        salutation_male := SalutationMaleVoice(app.sun_salutation_voice, app.sun_salutation.character) &&
+        PracticeVoiceRecorded(EXERCISE_SUN_SALUTATION, "male")
+        PracticeVoiceSelect(EXERCISE_SUN_SALUTATION, ifx salutation_male then "male" else "")
+        PracticeNarrationPrefer(EXERCISE_TAI_CHI, AppTextFromCString(*app.tai_chi_narration_language[0], 8))
+        PracticeNarrationPrefer(EXERCISE_SUN_SALUTATION, AppTextFromCString(*app.sun_salutation_narration_language[0], 8))
+        if practice_paid_allowed {
+            UnlockSync()
+        }
+        PracticeDownloadsPump(app.exercise_type, app.voice_narration_enabled != 0,
+            practice_active(app) == null && (app.modal.active == 0 ||
+            app.modal.type == cast(ModalType)ModalPracticeDownloads ||
+            app.modal.type == cast(ModalType)ModalPracticeConfig ||
+            app.modal.type == cast(ModalType)ModalTaiChiCustomize))
+        if content_generation != AssetGeneration() {
+            #if #defined(PLATFORM_WEB) {
+                InvalidateCanvasAssets()
+            } else {
+                InvalidateRaylibAssets()
+            }
+        }
+    }
+    if app.app_choices_pending && practice_active(app) == null && app.modal.active == 0 &&
+    app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&
+    app_diary_save() {
+        app_reload_app_choices(app)
+        app.app_choices_pending = false
+    }
+    if app.package_revision != PackageRevision() && app.modal.active == 0 &&
+    practice_active(app) == null &&
+    app.breathing.screen != ScreenHabitEdit && app.breathing.screen != ScreenHabitSessionEdit &&
+    app_diary_save() {
+        if CellsReloadFeatures(app.enabled_apps) {
+            #if #defined(PLATFORM_WEB) {
+                InvalidateCanvasAssets()
+            } else {
+                InvalidateRaylibAssets()
+            }
+            app.package_revision = PackageRevision()
+            app_diary_reset()
+            app_update_app_navigation(app)
+        }
+    }
+    app_profile_record_sync(profile_sync_start)
+    app_profile_frame_end(profile_frame_start)
+}
+// Android supplies the floating activity surface. Draw only the live practice,
+// with a stable 200-unit layout while the OS moves and resizes it.
+app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
+    #if #defined(ANDROID_BUILD) {
+        now := GetTime()
+        elapsed := now - app.session_window.system_last_tick
+        app.session_window.system_last_tick = now
+        // The in-app card must not replay the whole PiP interval on return.
+        app.session_window.last_tick = now
+        // A finished practice leaves the in-app card for its results, as the
+        // card's tick decides; that tick does not run behind this window.
+        if app.breathing.screen == ScreenResults {
+            app.session_window.screen = ScreenStart
+        }
+        practice := practice_active(app)
+        if practice != null {
+            screen := app.session_window.screen
+            if screen == ScreenStart {
+                screen = app.breathing.screen
+            }
+            app.session_window.system_screen = screen
+            if app.backgrounded == 0 && elapsed > 0.0 && practice.advance_elapsed != null {
+                total := elapsed * 1000.0 + app.session_window.system_elapsed_carry
+                milliseconds := cast(s32)total
+                app.session_window.system_elapsed_carry = total - cast(float64)milliseconds
+                before := app_current_route(app)
+                practice.advance_elapsed(app, milliseconds)
+                // A practice that finishes here opens its results outside the
+                // app's frame. Reporting the change keeps the frame after the
+                // window opens back into the app from returning to the
+                // practice's page.
+                app_observe_direct_route_change(app, before)
+            }
+        }
+        scale := viewport.width / 200.0
+        bounds := Rectangle.{0.0, 0.0, 200.0, viewport.height / scale}
+        camera: Camera
+        camera.zoom = scale
+        camera.offset = Vector2.{viewport.x, viewport.y}
+        AppMetricsConfigure(1.0)
+        // A practice that finishes here shows that it has finished and its
+        // results instead of its last picture, also while its screen waits
+        // to be extended.
+        result := *app.session_result
+        waiting: SessionResult
+        finished := app.breathing.screen == ScreenResults && result.active != 0
+        if !finished && practice != null && practice.window_result != null &&
+        practice.window_result(app, *waiting) != 0 {
+            result = *waiting
+            finished = true
+        }
+        if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/picture-window"), bounds) == 0 {
+            BeginMode2D(camera)
+            // The camera maps the bounds onto the whole window.
+            Box(app.ui.session, BoxProps.{.bounds = bounds,
+                    .fill = StyleTokenColor("surface")})
+            if finished {
+                practice_draw_results_window(app, bounds, result)
+            } else {
+                app_session_window_picture(app, app.session_window.system_screen, bounds, 0.0)
+            }
+            app_finish_frame(app)
+            EndMode2D()
+        }
+        app_network_pump(app)
+    }
+    unused app
+    unused viewport
+}

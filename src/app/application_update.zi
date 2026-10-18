@@ -1,0 +1,475 @@
+// Each frame's update: input, routes, the screen being shown, practices,
+// and the network and account activity that run between frames.
+#import, file "modal_rules.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "exercise_types.zi";
+#import "open_uri"
+#import "image_props"
+#import "control_props"
+#import, file "app_nav_state.zi";
+#import, file "../widgets/bottom_nav.zi";
+#import, file "../breaks/break_rules.zi";
+#import, file "lumi_guide.zi";
+#import, file "screen_guides.zi";
+#import, file "app_nav.zi";
+#import, file "app_launcher.zi";
+#import, file "app_launcher_state.zi";
+#import, file "return_bar.zi";
+#import, file "session_window.zi";
+#import, file "session_window_view.zi";
+#import, file "account_activity.zi";
+#import, file "account_activity_view.zi";
+#import "tree_input"
+#import, file "../screens/habits/edit.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../screens/elist_screen.zi";
+#import, file "app_sync.zi";
+#import, file "../cells/lists_network.zi";
+#import, file "telegram_account_flow.zi";
+#import, file "../platform/telegram_bridge.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "app_route_state.zi";
+#import, file "app_route_url.zi";
+#import, file "app_persistence.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_chrome.zi";
+#import, file "mini_mode.zi";
+#import, file "mini_mode_expand.zi";
+#import, file "app_settings.zi";
+#import, file "app_notifications.zi";
+#import, file "../screens/language_screen.zi";
+#import, file "../screens/app_selection_screen.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../screens/leaderboard_screen.zi";
+#import, file "../screens/node_app_screen.zi";
+#import, file "../cells/inbe_types.zi";
+#import, file "../screens/manual_dispatch.zi";
+#import, file "../screens/break_overlay.zi";
+#import, file "../breaks/app_breaks.zi";
+#import, file "../screens/profile_screen.zi";
+#import, file "../screens/settings/settings_screen.zi";
+#import, file "../screens/settings/settings_audio.zi";
+#import, file "../screens/practice_screen.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../screens/session_results_screen.zi";
+#import, file "../screens/habits/habit_session_screen.zi";
+#import, file "metrics.zi";
+#import, file "current_app.zi";
+#import "button_widget"
+#import "image_widget"
+#import "geometry"
+#import "button_props"
+#import "tree"
+#import, file "application.zi";
+#import, file "application_close.zi";
+#import, file "application_modals.zi";
+c :: #system_library "c";
+raylib_log :: #system_library "raylib";
+#if #defined(ANDROID_BUILD) {
+    #import, file "../platform/android/android_insets.zi";
+    android_network_pump_begin :: () -> bool #foreign c;
+    android_network_pump_end :: () #foreign c;
+}
+
+using ModalType;
+using AppMainTab;
+using ExerciseType;
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+
+GetTime :: () -> float64 #foreign c;
+IsKeyPressed :: (key: s32) -> bool #foreign raylib_log "IsKeyPressed";
+IsKeyDown :: (key: s32) -> bool #foreign raylib_log "IsKeyDown";
+
+app_draw_blank_home_easteregg :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    available_h := view_height - app_content_bottom_reserved(app)
+    if available_h < AppScale(120) {
+        available_h = view_height
+    }
+    Image(CurrentApp().ui.session, ImageProps.{
+            .asset_path = "assets/easteregg/art.png",
+            .bounds = Rectangle.{0, 0, cast(float32)view_width, cast(float32)available_h},
+            .fit = cast(ImageFit)ImageFitCover
+        })
+    logo_size := cast(float32)view_width * 0.58f
+    if logo_size > cast(float32)available_h * 0.58f {
+        logo_size = cast(float32)available_h * 0.58f
+    }
+    if logo_size > cast(float32)AppScale(320) {
+        logo_size = cast(float32)AppScale(320)
+    }
+    bounds := Rectangle.{(cast(float32)view_width - logo_size) / 2,
+        (cast(float32)available_h - logo_size) / 2, logo_size, logo_size
+    }
+    if Button(CurrentApp().ui.session, ButtonProps.{
+            .bounds = bounds,
+            .image = ImageProps.{
+                .asset_path = "assets/easteregg/waozi.png",
+                .bounds = bounds, .fit = cast(ImageFit)ImageFitContain
+            },
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        }) != 0 {
+        OpenUri("https://waozi.xyz")
+    }
+}
+updateapp :: (app: *InnerBreeze) {
+    app_activity_pump(app)
+    hover: s32 = 0
+    center_x: s32 = view_width / 2
+    frame_view_height: s32 = view_height
+    center_y: s32
+    i: s32
+    frame_route: AppRoute
+    first_run_guide_active: s32 = 0
+    habits_guide_active: s32 = 0
+    screen_guide_active: s32 = SCREEN_GUIDE_NONE
+    practice_fullscreen_modal: bool = false
+    global_modal_drawn: bool = false
+    if TelegramAccountFlowOwnsContext() {
+        // Host identity must still be current before exposing any cached
+        // plaintext or actions, rather than waiting until the post-draw pump.
+        if !TelegramContextCurrent() && telegram_account_flow.phase != 90 &&
+        telegram_account_flow.phase != 91 {
+            TelegramFlowFail(*telegram_account_flow)
+        }
+        if TelegramContextCurrent() && StoredDelegateAvailable() != 0 &&
+        (app.enabled_apps & APP_LUMI) != 0 {
+            if account_activity.view_open && ActivityRemoteVisible() {
+                unused ActivityDrawRemote(app, true)
+            } else {
+                lumi_screen_draw(app)
+                ActivityDrawIndicator(app, true)
+            }
+        }
+        DrawTelegramAccountFlow(app)
+        app.breathing.frame += 1
+        return
+    }
+    app_sync_route_from_url(app)
+    frame_route = app_current_route(app)
+    #if #defined(ANDROID_BUILD) {
+        {
+            practice_id: s32 = android_take_pending_practice_start()
+            if practice_id >= 0 {
+                active_break: s32
+                practice: *PracticeDefinition
+                app.exercise_type = practice_clamp_id(practice_id)
+                if app.modal.active != 0 {
+                    app_close_modal(app)
+                }
+                active_break = BreakActive(app.breaks)
+                if active_break >= 0 {
+                    app_breaks_start_practice(app, active_break, app.exercise_type)
+                } else {
+                    app.main_tab = APP_MAIN_TAB_PRACTICE
+                    app.practice_tab = PRACTICE_TAB_PLAY
+                    practice = practice_get(app.exercise_type)
+                    if practice != null && practice.start != null {
+                        practice.start(app)
+                    }
+                }
+            }
+        }
+    }
+    // Mini mode is only the practices: no break or reminder prompts.
+    if !AppMiniMode() {
+        app_breaks_update(app)
+        if app_notifications_tick(app) {
+            save_settings(app)
+        }
+    }
+    {
+        i: s32 = 0
+        while i < practice_count() {
+            practice: *PracticeDefinition = practice_get(i)
+            if practice.update != null {
+                practice.update(app)
+            }
+            i += 1
+        }
+    }
+    // Streams need fresh buffers even when their controls are on another tab.
+    settings_audio_update_preview(app)
+    if app.practice_coming_soon_ticks > 0 {
+        app.practice_coming_soon_ticks -= 1
+    }
+    practice_screen_prepare_first_run_guide(app)
+    habits_screen_prepare_first_run_guide(app)
+    first_run_guide_active = practice_screen_first_run_guide_active(app)
+    habits_guide_active = habits_screen_first_run_guide_active(app)
+    screen_guide_active = ScreenGuideActive(app)
+    app_clear_invalid_screen_local_modal(app)
+    // These modals cover the practice page, which must then not draw the
+    // same manual or configuration a second time with the same widget keys.
+    practice_fullscreen_modal = app.modal.active != 0 &&
+    (app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed ||
+        app.modal.type == cast(ModalType)ModalPracticeManual ||
+        app.modal.type == cast(ModalType)ModalPracticeConfig)
+    view_height = app_page_height(app, view_height)
+    center_y = view_height / 2
+    // A practice in its small window keeps running, and the navigation
+    // slides toward where it belongs on this screen.
+    app_session_window_tick(app)
+    app_session_nav_update(app)
+    // Resolve dock input before drawing the page on every viewport. A
+    // bottom-dock click must draw its destination in this frame, just like
+    // the desktop rail, so a cold page cannot swallow the next tap.
+    app_draw_bottom_nav(app)
+    app_draw_return_bar(app)
+    back_requested := IsKeyPressed(APP_KEY_BACK) ||
+    ((app.launcher_open || (app.modal.active != 0 &&
+        (app.modal.type == cast(ModalType)ModalPracticeDownloads ||
+        app.modal.type == cast(ModalType)ModalStoragePlans ||
+        app.modal.type == cast(ModalType)ModalDewTopUp ||
+        app.modal.type == cast(ModalType)ModalDewGift))) && IsKeyPressed(APP_KEY_ESCAPE))
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if IsKeyPressed(KEY_BACKSPACE)  && ((app.breathing.screen == ScreenStart && app.practice_tab != PRACTICE_TAB_PLAY)  || app.breathing.screen == ScreenSession || app.breathing.screen == ScreenMeditation  || app.breathing.screen == ScreenSunSalutation || app.breathing.screen == ScreenPatterns || app.breathing.screen == ScreenTaiChi) {
+            back_requested = true
+        }
+    }
+    if back_requested {
+        if app.launcher_open {
+            if app.breathing.screen != ScreenAppSelection {
+                app_launcher_close(app)
+            }
+        } else if app.close_prompt_open != 0 {
+            app.close_prompt_open = 0
+        } else if first_run_guide_active != 0 || habits_guide_active != 0 ||
+        screen_guide_active != SCREEN_GUIDE_NONE {
+            if first_run_guide_active != 0 {
+                practice_screen_dismiss_first_run_guide(app)
+            }
+            if habits_guide_active != 0 {
+                habits_screen_dismiss_first_run_guide(app)
+            }
+            if screen_guide_active != SCREEN_GUIDE_NONE {
+                ScreenGuideDismiss(app)
+            }
+        } else if app.modal.active != 0 {
+            app_close_modal(app)
+        } else {
+            handle_back_button(app)
+        }
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        // Ctrl+Q quits from any screen; Esc quits only from idle home.
+        if IsKeyPressed(KEY_Q)  && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
+            app_request_desktop_quit(app)
+        } else if !back_requested && IsKeyPressed(APP_KEY_ESCAPE) &&
+        app.breathing.screen == ScreenStart &&
+        app.practice_tab == PRACTICE_TAB_PLAY &&
+        app.modal.active == 0 && first_run_guide_active == 0 &&
+        habits_guide_active == 0 {
+            app_request_desktop_quit(app)
+        }
+    }
+    launcher_input: InputSnapshot
+    launcher_owns_input := app.launcher_open
+    if launcher_owns_input { launcher_input = TreeInputSuspend(app.ui.session) }
+    handled_screen: bool = false
+    if app.launcher_open {
+        handled_screen = true
+    } else if app.breathing.screen == ScreenSettings {
+        settings_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenProfile {
+        profile_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenCustomizeNav {
+        app_draw_customize_nav_page(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenLanguage {
+        language_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenAppSelection {
+        app_selection_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenHabits {
+        draw_habits_screen(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenLumi {
+        lumi_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenDiary {
+
+        diary_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenLeaderboard {
+        leaderboard_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenNodeApp {
+        node_app_screen_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenEList {
+        draw_elist_screen(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenHabitEdit {
+        habit_edit_draw(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenHabitSessionEdit {
+        habit_session_draw_edit_screen(app)
+        handled_screen = true
+    } else if app.breathing.screen == ScreenBreak {
+        break_overlay_draw(app)
+        handled_screen = true
+    }
+    if !handled_screen {
+        if app.breathing.screen == ScreenStart {
+            practice_update_circle_bounds(app, app_content_top_reserved(app),
+                app_content_bottom_reserved(app))
+        } else if app.breathing.screen == ScreenSession {
+            practice_update_circle_bounds(app, AppTitleBarHeight(), 84)
+        }
+        if app.breathing.screen == ScreenSession {
+            practice_draw_active_breathing(app, center_x, center_y)
+        }
+        if app.breathing.screen == ScreenStart {
+            {
+                if !practice_fullscreen_modal  && app.main_tab == APP_MAIN_TAB_NONE {
+                    app_draw_blank_home_easteregg(app)
+                } else if !practice_fullscreen_modal  && app.main_tab != APP_MAIN_TAB_NONE {
+                    if app.practice_tab == PRACTICE_TAB_MANUAL {
+                        manual_screen_draw(app)
+                    } else if app.practice_tab == PRACTICE_TAB_CONFIG {
+                        practice: *PracticeDefinition = practice_get(app.exercise_type)
+                        if practice.draw_config != null {
+                            practice.draw_config(app)
+                        }
+                    } else {
+                        practice_screen_draw_home(app)
+                    }
+                }
+            }
+            // Skip drawing on the same frame modal opens to prevent click propagation
+            if app.modal.active != 0 &&
+            app.modal.type == cast(ModalType)ModalMeditationSetup &&
+            app.blocked_input_frame != app.breathing.frame {
+                practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+                if practice.draw_setup_modal != null {
+                    practice.draw_setup_modal(app)
+                }
+            }
+        } else if app.breathing.screen == ScreenSession {
+            practice_update_active_breathing(app, center_x, center_y, *hover)
+        } else if app.breathing.screen == ScreenMeditation {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenSunSalutation {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_SUN_SALUTATION)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenTaiChi {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_TAI_CHI)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenPatterns {
+            {
+                practice: *PracticeDefinition = practice_get(EXERCISE_PATTERNS)
+                if practice.draw_active_session != null {
+                    practice.draw_active_session(app, center_x, center_y)
+                }
+            }
+        } else if app.breathing.screen == ScreenResults {
+            practice_draw_results(app, center_x, center_y, *hover)
+        }
+    }
+    if practice_fullscreen_modal {
+        draw_global_modal(app)
+        global_modal_drawn = true
+    }
+    if launcher_owns_input { unused TreeInputResume(app.ui.session, launcher_input) }
+    view_height = frame_view_height
+    app_draw_session_nav(app)
+    // The Apps screen covers the page, so the practice window is drawn on it
+    // while it is open.
+    launcher_covers_page := app.launcher_open
+    if !launcher_covers_page {
+        app_session_window_draw(app)
+    }
+    ActivityDrawIndicator(app)
+    app_draw_mini_expand_button(app)
+    practice_screen_draw_first_run_guide(app)
+    habits_screen_draw_first_run_guide(app)
+    ScreenGuideDraw(app)
+    if !global_modal_drawn {
+        draw_global_modal(app)
+    }
+    if !launcher_covers_page {
+        app_draw_close_prompt(app)
+    }
+    app_draw_launcher(app)
+    if launcher_covers_page {
+        // Apps is an overlay above the page, so the window and the close
+        // prompt are drawn inside its panel, above the apps. If Apps closed
+        // during this frame, they are drawn over the page instead.
+        inside_launcher := app.launcher_panel_node >= 0 &&
+        TreePushScope(app.ui.session, app.launcher_panel_node)
+        app_session_window_draw(app)
+        app_draw_close_prompt(app)
+        if inside_launcher {
+            unused End(app.ui.session)
+        }
+    }
+    app_flush_deferred_settings(app)
+    app_observe_direct_route_change(app, frame_route)
+    LumiGuideFrameEnd(app)
+    app.breathing.frame += 1
+}
+// Exchanges live activity records and sync. On Android the frame and the
+// background practice timer both call this, and around picture-in-picture
+// both run at once: only one exchanges at a time, so a finished sync is
+// applied and released by one thread only.
+app_network_pump :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if !android_network_pump_begin() {
+            return
+        }
+    }
+    ActivityPump(app)
+    app_sync_pump(app)
+    ListsNetworkTick(app, GetTime(), app.breathing.screen == ScreenEList ||
+        app.breathing.screen == ScreenNodeApp)
+    #if #defined(ANDROID_BUILD) {
+        android_network_pump_end()
+    }
+}
+// Exchanges live activity records alone, under the same one-thread rule.
+app_activity_pump :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if !android_network_pump_begin() {
+            return
+        }
+    }
+    ActivityPump(app)
+    #if #defined(ANDROID_BUILD) {
+        android_network_pump_end()
+    }
+}
+// Android's practice timer exchanges live records while a practice continues
+// in the background; drawing and result ownership remain on their existing
+// paths.
+#program_export
+app_activity_background_sync :: (vapp: *void) {
+    app := cast(*InnerBreeze)vapp
+    if app == null {
+        return
+    }
+    app_network_pump(app)
+}

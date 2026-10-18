@@ -1,0 +1,272 @@
+// The back button, and the dialogs drawn above every screen.
+#import, file "../storage/practice_unlocks.zi";
+#import "raylib_trace"
+#import, file "modal_rules.zi";
+#import, file "../practices/tai_chi/tai_chi_practice.zi";
+#import, file "../../apps/practice/downloads_view.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_types.zi";
+#import, file "route_types.zi";
+#import, file "exercise_types.zi";
+#import "control_props"
+#import, file "navigation_routes.zi";
+#import, file "app_nav_state.zi";
+#import, file "profile_image_picker.zi";
+#import, file "../habits/habit_sessions.zi";
+#import, file "return_bar.zi";
+#import, file "../screens/habits/edit.zi";
+#import, file "../screens/habits_screen.zi";
+#import, file "../screens/settings/settings_status.zi";
+#import, file "app_route_state.zi";
+#import, file "app_modal_state.zi";
+#import, file "app_settings.zi";
+#import, file "locale.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../practices/practice_downloads.zi";
+#import, file "../screens/manual_dispatch.zi";
+#import, file "../screens/profile_screen.zi";
+#import, file "../screens/profile_dew.zi";
+#import, file "../screens/profile_dew_gift.zi";
+#import, file "../screens/settings/settings_data_ui.zi";
+#import, file "../screens/settings/settings_sync_account_impl.zi";
+#import, file "../screens/settings/settings_theme.zi";
+#import, file "../screens/practice_screen.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../practices/meditation/meditation_music.zi";
+#import "modal_props"
+#import "modal_widget"
+#import, file "application.zi";
+#if #defined(ANDROID_BUILD) {
+    #import, file "../platform/android/android_wakelock.zi";
+}
+
+using ModalType;
+using AppMainTab;
+using ExerciseType;
+using ButtonTone;
+using ButtonEmphasis;
+
+LOG_INFO :: 3
+LOG_WARNING :: 4
+
+handle_back_button :: (app: *InnerBreeze) {
+    // If modal is active, let modal drawing handle it
+    if app.modal.active != 0 {
+        return
+    }
+    if app_lumi_settings_back(app) {
+        return
+    }
+    if app_return_bar_takes_back(app) {
+        app_return_to_apps(app)
+        return
+    }
+    screen := app.breathing.screen
+    if screen == ScreenStart {
+        if app.practice_tab == PRACTICE_TAB_CONFIG {
+            app_leave_practice_config(app)
+        }
+        if app.practice_tab != PRACTICE_TAB_PLAY {
+            route: AppRoute = app_current_route(app)
+            route.practice_tab = PRACTICE_TAB_PLAY
+            app.manual_scroll = 0
+            app.settings_scroll = 0
+            app.tutorial_step = 0
+            app_switch_route(app, route)
+        }
+    } else if screen == ScreenSettings {
+        app_settings_back(app)
+    } else if screen == ScreenProfile {
+        profile_screen_back(app)
+    } else if screen == ScreenCustomizeNav {
+        app_return_from_customize_nav(app)
+    } else if screen == ScreenPracticeConfig {
+        app_leave_practice_config(app)
+        app_switch_screen(app, ScreenStart)
+    } else if screen == ScreenHabits {
+        if app.habits.screen_mode == HABITS_SCREEN_HISTORY  || app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
+            app.habits.screen_mode = HABITS_SCREEN_OVERVIEW
+            app.habits.selected = -1
+            app.habits.tab = HABIT_TAB_WEEKLY
+            app.habits.view_mode = HABIT_VIEW_WEEKLY
+            app.habits.scroll = 0
+            save_settings(app)
+        } else if app.habits.tab == HABIT_TAB_EDIT && app.habit_edit.active != 0 {
+            habit_edit_cancel(app)
+        } else {
+            app_switch_screen(app, ScreenStart)
+        }
+    } else if screen == ScreenEList {
+        app_switch_screen(app, app_screen_for_main_tab(APP_MAIN_TAB_PRACTICE))
+    } else if screen == ScreenHabitEdit {
+        habit_edit_cancel(app)
+        app_switch_screen(app, ScreenHabits)
+    } else if screen == ScreenHabitSessionEdit {
+        habit_session_cancel_edit(app)
+        app_switch_screen(app, ScreenHabits)
+    } else if screen == ScreenLanguage || screen == ScreenManual {
+        manual_screen_close_tutorial(app, 0)
+    } else if screen == ScreenResults {
+        practice_ensure_results_saved(app)
+        #if #defined(ANDROID_BUILD) {
+            android_allow_screen_off()
+            android_wakelock_release()
+        }
+        app.session_result = SessionResult.{}
+        app_switch_screen(app, ScreenStart)
+    } else if screen == ScreenSession {
+        // Paused, it leaves at once; otherwise it asks first.
+        practice: *PracticeDefinition = practice_get(EXERCISE_WIM_HOF)
+        if practice.request_exit != null {
+            practice.request_exit(app)
+        }
+    } else if screen == ScreenMeditation {
+        {
+            practice: *PracticeDefinition = practice_get(EXERCISE_MEDITATION)
+            if practice.request_exit != null {
+                practice.request_exit(app)
+            }
+        }
+    } else if screen == ScreenPatterns {
+        {
+            practice: *PracticeDefinition = practice_get(EXERCISE_PATTERNS)
+            if practice.request_exit != null {
+                practice.request_exit(app)
+            }
+        }
+    }
+}
+draw_profile_picture_picker_modal :: (app: *InnerBreeze) {
+    if app == null {
+        return
+    }
+    props: ProfileImagePickerProps
+    props.title = LocaleText("profile_picture_title")
+    props.selected_icon_type = app.profile_picture_icon
+    props.max_width = 520
+    props.scroll_offset = app.profile_picture_picker_scroll
+    props.view_width = app.ui.view_width
+    props.view_height = app.ui.view_height
+    result := ProfileImagePicker(app.ui.session, props)
+    app.profile_picture_picker_scroll = result.scroll_offset
+    if result.changed {
+        app.profile_picture_icon = result.selected_icon_type
+        save_settings(app)
+    }
+    if result.closed {
+        app_close_modal(app)
+    }
+}
+PracticeTraceLog :: (warning: bool, message: string) {
+    TraceLog(ifx warning then LOG_WARNING else LOG_INFO, message)
+}
+// What Lumi must ask before starting a practice on this device.
+LumiPracticeStatus :: (practice: s32) -> s32 {
+    if PracticeHidden(practice) {
+        return LUMI_PRACTICE_HIDDEN
+    }
+    if PracticeInstalled(practice) {
+        return LUMI_PRACTICE_INSTALLED
+    }
+    product := PracticeProduct(practice)
+    if product.count > 0 && !UnlockOwned(product) {
+        return LUMI_PRACTICE_LOCKED
+    }
+    return LUMI_PRACTICE_DOWNLOAD
+}
+draw_global_modal :: (app: *InnerBreeze) {
+    modal_result: s32
+    if app == null || app.modal.active == 0 {
+        return
+    }
+    if app.blocked_input_frame == app.breathing.frame {
+        return
+    }
+    if settings_data_draw_modals(app) != 0 {
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalMeditationNetworkError {
+        actions: [2] ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("retry_button"), .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ]
+        modal_result = ActionModal(app.ui.session, ActionModalProps.{.title = LocaleText("meditation_music_network_error_title"), .message = LocaleText("meditation_music_network_error_message")}, actions[:2]).action
+        if modal_result == 1 {
+            TraceLog(LOG_INFO, "AUDIO: Network error download cancelled")
+            app_close_modal(app)
+        } else if modal_result == 2 {
+            TraceLog(LOG_INFO, "AUDIO: Network error download retry requested")
+            app_close_modal(app)
+            meditation_music_start_download(app)
+        }
+    }
+    if app.modal.type == cast(ModalType)ModalPracticeDownloads {
+        PracticeDownloadsModalDraw(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalStoragePlans {
+        ProfileStoragePlansModalDraw(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalDewTopUp {
+        ProfileTopUpModalDraw(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalDewGift {
+        ProfileDewGiftModalDraw(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalTaiChiCourse ||
+    app.modal.type == cast(ModalType)ModalTaiChiCustomize {
+        tai_chi_modal_draw(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalAppIconPicker {
+        settings_screen_draw_app_icon_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalThemePicker {
+        settings_screen_draw_theme_picker_modal(app)
+    }
+    if app.modal.type == cast(ModalType)ModalProfilePicturePicker {
+        draw_profile_picture_picker_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalConfirmRemoveFriend {
+        profile_screen_draw_remove_friend_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalPracticeManual  || app.modal.type == cast(ModalType)ModalPracticeConfig  || app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
+        practice_screen_draw_modal(app)
+        return
+    }
+    if app.modal.type == cast(ModalType)ModalSyncAlias {
+        modal_result = settings_sync_account_draw_alias_modal(app)
+        if modal_result == {
+            case 1;
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            settings_screen_set_status_success(LocaleText("sync_alias_saved"), "")
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
+            case 2;
+            settings_screen_set_status_error(LocaleText("sync_alias_failed"))
+            case 3;
+            then_backup: s32 = app.sync_alias_then_backup
+            app.sync_alias_then_backup = 0
+            app_close_modal(app)
+            if then_backup != 0 {
+                app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
+            }
+        }
+    }
+    if app.modal.type == cast(ModalType)ModalSyncPublicId {
+        modal_result = settings_sync_account_draw_public_id_modal(app)
+        if modal_result != 0 {
+            app_close_modal(app)
+        }
+    }
+}
