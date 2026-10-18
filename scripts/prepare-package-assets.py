@@ -5,6 +5,9 @@ import argparse
 import json
 import shutil
 import zipfile
+import os
+import hashlib
+import re
 from animation_inventory import inventory
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +85,31 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
             archive.writestr(member, file.read_bytes(), compresslevel=9)
         continue
     shutil.copyfile(file, target)
+
+# Root launcher cards share the reviewed Apps controller. A node-only build
+# can omit it; the root bundle build below requires this asset explicitly.
+apps_bundle = os.environ.get('APPS_BUNDLE')
+if not apps_bundle and os.environ.get('APPS_SOURCE'):
+    apps_bundle = str(Path(os.environ['APPS_SOURCE']) / 'build/ui/apps.zib')
+if apps_bundle:
+    controller = Path(apps_bundle).read_bytes()
+    source = (ROOT / 'src/cells/apps_controller.zi').read_text()
+    expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
+    if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
+        raise SystemExit('Apps controller differs from the reviewed native digest')
+    destination = OUTPUT / 'inbe/assets/apps/apps.zib'
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(controller)
+
+# Preserve the existing launcher atlas art as complete packed images. The
+# portable card needs no native atlas handle or renderer-specific crop state.
+from PIL import Image
+with Image.open(OUTPUT / 'inbe/icons/ui.png') as atlas:
+    for name, x, y in (('diary', 64, 448), ('lists', 320, 0), ('habits', 128, 448),
+                       ('practices', 192, 448), ('leaderboard', 192, 320)):
+        destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.png')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        atlas.crop((x, y, x + 64, y + 64)).save(destination)
 
 # Each app owns its bounded achievement catalog and translations, including
 # optional node apps. Source presence never determines device visibility.

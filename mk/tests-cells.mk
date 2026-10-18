@@ -26,6 +26,20 @@ portable-apps-ui-test: $(TARGET) cells
 		--diary $(abspath build/cells/diary.zib) --calculator "$(CALCULATOR_BUNDLE)"
 
 .PHONY: node-app-records-test node-app-codec-check
+
+# Explicit local Apps handoff checks while Apps has no public dependency pin.
+# Callers provide the same retained compiler/runtime/map used by their gate.
+.PHONY: app-locations-test node-app-snapshot-test
+app-locations-test:
+	@test -n "$(APPS_SOURCE)" -a -n "$(APPS_TEST_TOOLCHAIN)" || { echo 'Set APPS_SOURCE and APPS_TEST_TOOLCHAIN'; exit 2; }
+	python3 tests/app_locations_test.py --ziran '$(APPS_TEST_TOOLCHAIN)/build/bin/ziran' \
+		--toolchain '$(APPS_TEST_TOOLCHAIN)' --apps '$(APPS_SOURCE)' \
+		--daochi-client '$(abspath build/packages/daochi-client)'
+
+node-app-snapshot-test:
+	@test -n "$(APPS_TEST_MAP)" -a -n "$(APPS_TEST_TOOLCHAIN)" -a -n "$(APPS_TEST_RUNTIME)" -a -n "$(CRYPTO_SOURCE)" || { echo 'Set APPS_TEST_MAP, APPS_TEST_TOOLCHAIN, APPS_TEST_RUNTIME and CRYPTO_SOURCE'; exit 2; }
+	python3 tests/node_app_snapshot_test.py --module-map '$(APPS_TEST_MAP)' \
+		--toolchain '$(APPS_TEST_TOOLCHAIN)' --runtime '$(APPS_TEST_RUNTIME)' --crypto-source '$(CRYPTO_SOURCE)'
 .PHONY: photos-app-test media-store-test media-metadata-test
 # Photos and the account's media library it shows.
 media-metadata-test: $(ZI2C_BIN)

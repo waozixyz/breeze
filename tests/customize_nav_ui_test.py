@@ -81,9 +81,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         tree = driver.tree()
         parents = {node["index"]: node for node in tree}
         more_top = [node for node in tree if node["label"] == "More apps"][0]["y"]
+        def in_scroll(node):
+            # Each section's shared Apps group sits inside the page's scroll.
+            parent = parents.get(node["parent"])
+            while parent is not None and parent["kind"] != "navigation_bar":
+                if parent["kind"] == "scroll":
+                    return True
+                parent = parents.get(parent["parent"])
+            return False
         grid = [node for node in tree if node["kind"] == "button" and node["visible"]
-                and parents.get(node["parent"], {}).get("kind") == "scroll"
-                and node["label"] not in ("Install", "Uninstall")]
+                and in_scroll(node) and node["label"] not in ("Install", "Uninstall", "App options")]
         return ([node for node in grid if node["y"] < more_top],
                 [node for node in grid if node["y"] >= more_top])
 

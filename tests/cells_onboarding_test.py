@@ -173,18 +173,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             driver.wait(label=f"Step {step} of 3")
             key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
-        # With the guide finished, Apps asks once about app updates.
-        driver.wait(label="Allow", role="button")
-        driver.press(label="Don't allow", role="button")
-        wait_setting(profile, "package_updates_allowed", 0)
-        driver.wait_gone(label="Don't allow")
+        # Apps never asks about automatic updates; cards show available ones.
+        assert not driver.find(label="Don't allow", visible=True), "Apps asked about automatic updates"
         driver.press(label="Find an app", role="text_field")
         driver.type("Lists")
         driver.wait(label="Find an app", role="text_field", value="Lists")
         # Lists is not installed, so its card is the first in More apps.
         more_apps = driver.wait(label="More apps")
         cards = [node for node in driver.find(role="button", visible=True)
-                 if node["y"] > more_apps["y"] and node["label"] not in ("Install", "Uninstall")
+                 if node["y"] > more_apps["y"] and node["label"] not in ("Install", "Uninstall", "App options")
                  and node["y"] < driver.wait(label="Profile", role="button")["y"]]
         assert cards and cards[0]["label"] == "Lists", cards
         driver.press(key=cards[0]["key"], label="Lists")

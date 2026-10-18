@@ -3,11 +3,14 @@
 #import "keys"
 #import "json_scan"
 #import "byte_text_linux"
+#import "std/text_buffer"
+#import "std/c_string"
 #import "file_linux"
 #import, file "catalog.zi";
 #import, file "inbe_types.zi";
 #import, file "package_release.zi";
 #import, file "package_files.zi";
+#import, file "package_history.zi";
 #import, file "../storage/app_records.zi";
 #import, file "versions.zi";
 #import, file "host_api.zi";
@@ -25,6 +28,24 @@ package_download: FileDownload;
 package_index: s32 = -1;
 package_phase: s32;
 package_requested: [PackageSlots]bool;
+package_requested_check_only: [PackageSlots]bool;
+package_check_only: bool;
+package_available_releases: [PackageSlots]PackageRelease;
+package_available_ids: [PackageSlots][128]u8;
+package_requested_target: [PackageSlots]bool;
+package_requested_version: [PackageSlots][32]u8;
+package_requested_digest: [PackageSlots][65]u8;
+package_requested_account: [PackageSlots][65]u8;
+package_requested_identity: [PackageSlots][128]u8;
+package_requested_current: [PackageSlots][32]u8;
+package_requested_retained: [PackageSlots]string;
+package_target: bool;
+package_target_version: [32]u8;
+package_target_digest: [65]u8;
+package_target_account: [65]u8;
+package_target_identity: [128]u8;
+package_target_current: [32]u8;
+package_rollback: bool;
 package_automatic: bool;
 package_requested_automatic: [PackageSlots]bool;
 package_initialized: bool;
@@ -51,6 +72,11 @@ PACKAGE_TRIAL_STARTS :: 3
 PACKAGE_TRIAL_SECONDS :: 10
 c :: #system_library "c";
 PackageSettingText :: (key: string) -> string #foreign c "storage_get_setting_text";
+PackageAccountBytes :: () -> *u8 #foreign c "storage_user_id_buffer";
+
+PackageAccount :: () -> string {
+    return AppTextFromCString(PackageAccountBytes(), 64)
+}
 
 // 0 idle, 1 downloading, 2 installed, 3 failure, 4 publisher not configured.
 PackageStatus :: (index: s32) -> s32 {
@@ -155,11 +181,12 @@ PackageInstalledBytes :: (index: s32) -> string {
         return ""
     }
     high_water := PackageSequence(index)
-    if release.sequence < high_water {
+    approved := PackageRollbackAllows(index, release)
+    if release.sequence < high_water && !approved {
         return ""
     }
     if PackageBundledSequence(index) > 0 &&
-    PackageVersionCompare(TextFromCString(*release.version[0]), PackageFallbackVersion(index)) < 0 {
+    PackageVersionCompare(TextFromCString(*release.version[0]), PackageFallbackVersion(index)) < 0 && !approved {
         return ""
     }
     path := PackagePayloadPath(index, TextFromCString(*release.hash[0]))
@@ -293,8 +320,57 @@ PackageRequest :: (index: s32) {
         return
     }
     package_requested_automatic[index] = false
+    package_requested_check_only[index] = false
+    package_requested_target[index] = false
+    PackageFree(package_requested_retained[index])
+    package_requested_retained[index] = ""
     package_requested[index] = true
     package_status[index] = 0
+}
+
+// A manual modal authorizes only this signed version/hash for this account.
+// A later node response cannot silently substitute a different release.
+PackageRequestVersion :: (index: s32, version: string, digest: string, account: string) -> bool {
+    if !PackageUpdateAvailable(index) || account != PackageAccount() ||
+    version != PackageAvailableVersion(index) ||
+    digest != TextUntilNul(package_available_releases[index].hash[:]) {
+        return false
+    }
+    PackageRequest(index)
+    if !package_requested[index] { return false }
+    unused CopyCString(version, package_requested_version[index][:])
+    unused CopyCString(digest, package_requested_digest[index][:])
+    unused CopyCString(account, package_requested_account[index][:])
+    unused CopyCString(PackageID(index), package_requested_identity[index][:])
+    unused CopyCString(PackageVersion(index), package_requested_current[index][:])
+    package_requested_target[index] = true
+    return true
+}
+
+PackageRequestRetained :: (index: s32, metadata: string, account: string) -> bool {
+    if index < 0 || index >= PackageSlots || account != PackageAccount() { return false }
+    release := PackageTrustedRelease(metadata, index)
+    if !release.valid || release.sequence > PackageSequence(index) ||
+    PackageVersionCompare(TextUntilNul(release.version[:]), PackageVersion(index)) >= 0 { return false }
+    PackageRequest(index)
+    if !package_requested[index] { return false }
+    package_requested_retained[index] = PackageText(metadata, "")
+    unused CopyCString(TextUntilNul(release.version[:]), package_requested_version[index][:])
+    unused CopyCString(TextUntilNul(release.hash[:]), package_requested_digest[index][:])
+    unused CopyCString(account, package_requested_account[index][:])
+    unused CopyCString(PackageID(index), package_requested_identity[index][:])
+    unused CopyCString(PackageVersion(index), package_requested_current[index][:])
+    package_requested_target[index] = true
+    return true
+}
+
+PackageCheckForUpdate :: (index: s32) {
+    if index < 0 || index >= PackageSlots || DataTemporary() || package_requested[index] {
+        return
+    }
+    package_requested[index] = true
+    package_requested_automatic[index] = false
+    package_requested_check_only[index] = true
 }
 
 PackageRequestAll :: (desired: s32) {
@@ -315,7 +391,15 @@ PackageCancel :: () {
     package_automatic = false
     for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
         package_requested[index] = false
+        package_requested_check_only[index] = false
+        package_requested_target[index] = false
+        PackageFree(package_requested_retained[index])
+        package_requested_retained[index] = ""
+        package_history_pending[index] = false
     }
+    package_check_only = false
+    package_target = false
+    package_rollback = false
 }
 
 // Packages come from Waozi's node, not from the store that installed the
@@ -414,8 +498,12 @@ PackageBucket :: () -> s32 {
 
 // The node answers with the newest release this host can run.
 PackageLatestQuery :: () -> string {
+    return PackageReleaseQuery("/latest")
+}
+
+PackageReleaseQuery :: (route: string) -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "/latest?host_api=%&module_api=%&bucket=%", cast(s32)PackageHostAPI,
+    BuilderPrint(*out, "%?host_api=%&module_api=%&bucket=%", route, cast(s32)PackageHostAPI,
         cast(s32)PackageModuleAPI, PackageBucket())
     return BuilderFinish(out)
 }
@@ -423,7 +511,8 @@ PackageLatestQuery :: () -> string {
 PackageStartTransfer :: (suffix: string, destination: string) -> bool {
     latest := suffix == "/latest"
     path := PackageText("/api/v2/packages/", PackageID(package_index))
-    query := ifx latest then PackageLatestQuery() else PackageText(suffix, "")
+    history := suffix == "/history"
+    query := ifx latest || history then PackageReleaseQuery(suffix) else PackageText(suffix, "")
     route := PackageText(path, query)
     url := PackageText(TextFromCString(*package_origin[0]), route)
     defer {
@@ -434,17 +523,20 @@ PackageStartTransfer :: (suffix: string, destination: string) -> bool {
     }
     FileDownloadRelease(*package_download)
     package_download = FileDownload.{}
-    package_download.maximum_bytes = cast(u64)(ifx latest then 65536 else package_release.size)
+    maximum := ifx history then 262144 else (ifx latest then 65536 else package_release.size)
+    package_download.maximum_bytes = cast(u64)maximum
     return FileDownloadStart(*package_download, url, destination)
 }
 
 PackageFinish :: (ok: bool) {
     FileDownloadRelease(*package_download)
-    package_status[package_index] = ifx ok then 2 else 3
+    if package_phase != 3 { package_status[package_index] = ifx ok then 2 else 3 }
     PackageFree(package_metadata)
     package_metadata = ""
     package_index = -1
     package_phase = 0
+    package_target = false
+    package_rollback = false
 }
 
 // Validating includes the module capability allowlist and identity handshake.
@@ -556,12 +648,13 @@ PackagePump :: (desired: s32, now: s32) {
     }
     PackageTrialsProve(now)
     if package_index < 0 {
-        if PackageAutomaticEnabled() && PackagePublisherConfigured() && now > 0 &&
+        if PackagePublisherConfigured() && now > 0 &&
         PackageCheckDue(now) {
             for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
                 if PackageWanted(index, desired) && !package_requested[index] {
                     package_requested[index] = true
-                    package_requested_automatic[index] = true
+                    package_requested_automatic[index] = PackageAutomaticEnabled()
+                    package_requested_check_only[index] = !PackageAutomaticEnabled() || PackageRollbackPinned(index)
                 }
             }
             unused SettingsStoreInt("apps_last_update_check", now)
@@ -571,9 +664,41 @@ PackagePump :: (desired: s32, now: s32) {
             if package_requested[index] {
                 package_requested[index] = false
                 package_automatic = package_requested_automatic[index]
+                package_check_only = package_requested_check_only[index]
+                package_target = package_requested_target[index]
+                package_target_version = package_requested_version[index]
+                package_target_digest = package_requested_digest[index]
+                package_target_account = package_requested_account[index]
+                package_target_identity = package_requested_identity[index]
+                package_target_current = package_requested_current[index]
+                package_requested_target[index] = false
+                package_requested_check_only[index] = false
                 package_requested_automatic[index] = false
                 package_index = index
                 package_status[index] = 1
+                if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
+                    TextUntilNul(package_target_identity[:]) != PackageID(index) ||
+                    TextUntilNul(package_target_current[:]) != PackageVersion(index)) {
+                    PackageFree(package_requested_retained[index])
+                    package_requested_retained[index] = ""
+                    PackageFinish(false)
+                    return
+                }
+                package_rollback = package_requested_retained[index].count > 0
+                if package_rollback {
+                    package_metadata = package_requested_retained[index]
+                    package_requested_retained[index] = ""
+                    package_release = PackageTrustedRelease(package_metadata, index)
+                    if !package_release.valid || package_release.sequence > PackageSequence(index) ||
+                    TextUntilNul(package_release.version[:]) != TextUntilNul(package_target_version[:]) ||
+                    TextUntilNul(package_release.hash[:]) != TextUntilNul(package_target_digest[:]) ||
+                    PackageVersionCompare(TextUntilNul(package_release.version[:]), PackageVersion(index)) >= 0 {
+                        PackageFinish(false)
+                        return
+                    }
+                    PackageBeginPayload()
+                    return
+                }
                 destination := PackagePath(index, ".download.json")
                 defer {
                     PackageFree(destination)
@@ -587,6 +712,13 @@ PackagePump :: (desired: s32, now: s32) {
             }
         }
         package_automatic = false
+        unused PackageHistoryBegin()
+        return
+    }
+    if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
+        TextUntilNul(package_target_identity[:]) != PackageID(package_index) ||
+        TextUntilNul(package_target_current[:]) != PackageVersion(package_index)) {
+        PackageFinish(false)
         return
     }
     downloading := package_download.status == FileDownloadStatus.Downloading
@@ -597,10 +729,24 @@ PackagePump :: (desired: s32, now: s32) {
         }
     }
     if status == cast(FileDownloadStatus)Error {
+        if package_phase == 3 { PackageHistoryComplete(package_index) }
         PackageFinish(false);
         return
     }
     if status != cast(FileDownloadStatus)Ready {
+        return
+    }
+    if package_phase == 3 {
+        path := PackagePath(package_index, ".history.download.json")
+        text := PackageRead(path, 262144)
+        if TextUntilNul(package_history_requested_id[package_index][:]) == PackageID(package_index) {
+            unused PackageHistoryAccept(package_index, text)
+        }
+        PackageFree(text)
+        unused RemoveFile(path)
+        PackageFree(path)
+        PackageHistoryComplete(package_index)
+        PackageFinish(true)
         return
     }
     if package_phase == 1 {
@@ -622,6 +768,11 @@ PackagePump :: (desired: s32, now: s32) {
             TextFromCString(*public_key[0]))
         if !package_release.valid {
             PackageFinish(false);
+            return
+        }
+        if package_target && (TextUntilNul(package_release.version[:]) != TextUntilNul(package_target_version[:]) ||
+            TextUntilNul(package_release.hash[:]) != TextUntilNul(package_target_digest[:])) {
+            PackageFinish(false)
             return
         }
         bad_key := PackageTrialKey("package_bad_", package_index)
@@ -656,26 +807,23 @@ PackagePump :: (desired: s32, now: s32) {
                 PackageFinish(false);
                 return
             }
-            usable := PackageInstalledMatches(package_index, TextFromCString(*package_release.hash[0]))
+            usable := PackageInstalledMatches(package_index, TextFromCString(*package_release.hash[0])) &&
+                PackageVersion(package_index) == TextUntilNul(package_release.version[:])
             if usable {
                 PackageFinish(true);
                 return
             }
             // Repair a missing/corrupt cache only with the same signed hash.
         }
-        suffix := PackageText("/", TextFromCString(*package_release.hash[0]))
-        full_suffix := PackageText(suffix, ".zib")
-        destination := PackagePath(package_index, ".download.zib")
-        defer {
-            PackageFree(suffix);
-            PackageFree(full_suffix);
-            PackageFree(destination)
-        }
-        if !PackageStartTransfer(full_suffix, destination) {
-            PackageFinish(false);
+        // Availability checks fetch and verify metadata only. Disabled
+        // automatic updates never download or replace an app payload.
+        package_available_releases[package_index] = package_release
+        unused CopyCString(PackageID(package_index), package_available_ids[package_index][:])
+        if package_check_only {
+            PackageFinish(true)
             return
         }
-        package_phase = 2
+        PackageBeginPayload()
         return
     }
     path := PackagePath(package_index, ".download.zib")
@@ -699,7 +847,9 @@ PackagePump :: (desired: s32, now: s32) {
         PackageFree(immutable);
         PackageFree(pointer)
     }
-    if !PackageWrite(immutable, bytes) || !PackageWrite(pointer, package_metadata) {
+    if !PackageWrite(immutable, bytes) ||
+    (package_rollback && !PackageRollbackStore(package_index, package_release)) ||
+    !PackageWrite(pointer, package_metadata) {
         PackageFinish(false)
         return
     }
@@ -707,13 +857,64 @@ PackagePump :: (desired: s32, now: s32) {
     defer {
         PackageFree(key)
     }
-    unused SettingsStoreInt(key, package_release.sequence)
+    high_water := PackageSequence(package_index)
+    if package_release.sequence >= high_water {
+        unused SettingsStoreInt(key, package_release.sequence)
+    }
     hash_key := PackageText("package_hash_", PackageName(package_index))
     defer {
         PackageFree(hash_key)
     }
-    unused SettingsStoreText(hash_key, package_release.hash[:])
+    if package_release.sequence >= high_water {
+        unused SettingsStoreText(hash_key, package_release.hash[:])
+    }
     unused AppCopyText(TextFromCString(*package_release.version[0]), package_versions[package_index][:])
     package_revision += 1
     PackageFinish(true)
+}
+
+// Only verified, compatible node metadata may make an update badge appear.
+PackageUpdateAvailable :: (index: s32) -> bool {
+    if index < 0 || index >= PackageSlots {
+        return false
+    }
+    release := package_available_releases[index]
+    return release.valid && TextUntilNul(package_available_ids[index][:]) == PackageID(index) &&
+    (release.sequence > PackageSequence(index) || PackageHighWaterMatches(index, release)) &&
+    PackageVersionCompare(TextUntilNul(release.version[:]), PackageVersion(index)) > 0
+}
+
+PackageHighWaterMatches :: (index: s32, release: PackageRelease) -> bool {
+    if release.sequence != PackageSequence(index) { return false }
+    key := PackageText("package_hash_", PackageName(index))
+    defer { PackageFree(key) }
+    return PackageSettingText(key) == TextUntilNul(release.hash[:])
+}
+
+PackageBeginPayload :: () {
+    suffix := PackageText("/", TextUntilNul(package_release.hash[:]))
+    full_suffix := PackageText(suffix, ".zib")
+    destination := PackagePath(package_index, ".download.zib")
+    defer {
+        PackageFree(suffix)
+        PackageFree(full_suffix)
+        PackageFree(destination)
+    }
+    if !PackageStartTransfer(full_suffix, destination) {
+        PackageFinish(false)
+        return
+    }
+    package_phase = 2
+}
+
+PackageAvailableVersion :: (index: s32) -> string {
+    if !PackageUpdateAvailable(index) {
+        return ""
+    }
+    return TextUntilNul(package_available_releases[index].version[:])
+}
+
+PackageAvailableDigest :: (index: s32) -> string {
+    if !PackageUpdateAvailable(index) { return "" }
+    return TextUntilNul(package_available_releases[index].hash[:])
 }

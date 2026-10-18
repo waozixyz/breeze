@@ -35,6 +35,7 @@
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/app_records.zi";
 #import, file "../src/cells/catalog.zi";
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
@@ -1921,6 +1922,40 @@ app_order_received :: () -> s32 {
 // collection, which older versions skip. The newest order wins, a pending
 // local order wins a tie, and a record this version can't read changes
 // nothing without stopping the sync.
+test_nested_app_records_sync_between_devices :: () {
+    first := make_root("sync-nested-a")
+    second := make_root("sync-nested-b")
+    key := "nested.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.position"
+    check_true("init nested app device a", storage_init(first) != 0)
+    set_account()
+    storage_set_setting_text(key, "saved nested game")
+    check_int("nested record queues once",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='app_record'"), 1)
+    check_true("nested app payload builds", build_payload())
+    check_true("nested record uses its own encrypted collection", contains(payload(), NestedAppRecordsCollection))
+    check_true("nested game remains encrypted", !contains(payload(), "saved nested game"))
+    copy: TextBuffer
+    append(*copy, records_array())
+    exec_db_sql("DELETE FROM sync_outbox")
+    storage_enqueue_all_sync_state()
+    check_int("backfill retains nested app records",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='app_record'"), 1)
+    storage_close()
+
+    check_true("init nested app device b", storage_init(second) != 0)
+    set_account()
+    check_true("device b restores nested app record",
+        storage_apply_sync_response_json(response_with(4, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("nested game survives another device", storage_get_setting_text(key) == "saved nested game")
+    check_int("restored nested record is not sent back",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='app_record'"), 0)
+    check_true("nested record in legacy collection is ignored without stopping sync",
+        storage_apply_decrypted_record("private.inbe.v1.app.chess", key,
+            "{\"key\":\"nested.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.position\",\"value\":\"wrong collection\",\"updated_at\":\"2030-03-17T17:46:40Z\"}") != 0)
+    check_true("wrong collection cannot replace nested game", storage_get_setting_text(key) == "saved nested game")
+    storage_close()
+}
+
 test_app_order_syncs_between_devices :: () {
     first := make_root("sync-order-a")
     second := make_root("sync-order-b")
@@ -2152,6 +2187,7 @@ Check :: () -> s32 {
     test_questions_and_entries_sync()
     test_kept_records_upload_kept()
     test_app_choices_sync_between_devices()
+    test_nested_app_records_sync_between_devices()
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
     test_node_media_sessions()

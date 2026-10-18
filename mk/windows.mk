@@ -33,7 +33,7 @@ $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODU
 		--module-path qrcode=build/packages/qrcode/src \
 		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client --module-path self=build/packages/self/src \
+		--module-path build/packages/daochi-client --module-path self=build/packages/self/src $(ZI_HANDOFF_PATHS) \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +

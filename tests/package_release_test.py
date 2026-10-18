@@ -9,6 +9,9 @@ import sys
 import tempfile
 import time
 import tarfile
+import argparse
+import re
+import shutil
 from io import BytesIO
 
 from cryptography.hazmat.primitives import serialization
@@ -21,8 +24,38 @@ spec.loader.exec_module(release_tool)
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--toolchain', type=Path)
+    parser.add_argument('--module-map', type=Path)
+    parser.add_argument('--runtime', type=Path)
+    parser.add_argument('--bundle-build-dir', type=Path, default=ROOT / 'build')
+    options = parser.parse_args()
     work = ROOT / "build/package-release-test"
     work.mkdir(parents=True, exist_ok=True)
+    toolchain = options.toolchain or ROOT / 'build/packages/ziran'
+    runtime = options.runtime or ROOT / 'build/ziran-toolchain/libziran.a'
+    def stage(*arguments):
+        return release_tool.stage(*arguments, build_directory=options.bundle_build_dir)
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')}
+    if options.module_map:
+        rows = options.module_map.read_text().splitlines()
+        for name in ('package_release_behavior', 'package_manager_behavior'):
+            rows.append(f'M\troot\t{name}\t{ROOT / "tests" / (name + ".zi")}')
+        mapping = work / 'module-map.tsv'
+        mapping.write_text('\n'.join(dict.fromkeys(rows)) + '\n')
+        environment['ZIRAN_PACKAGE_MAP'] = str(mapping.resolve())
+
+    def generate(target, fixture, paths):
+        if target.exists():
+            shutil.rmtree(target)
+        if options.module_map:
+            command = [str(toolchain / 'build/bin/zi2c')]
+        else:
+            command = [str(ROOT / 'build/ziran-toolchain/bin/ziran'), 'build', '--target=c']
+        subprocess.run([*command, '--no-main', '--root', str(ROOT / 'tests'),
+                        *[argument for path in paths for argument in ('--module-path', str(path))],
+                        '-o', str(target), str(ROOT / 'tests' / fixture)], env=environment, check=True)
     with tempfile.TemporaryDirectory(prefix="inbe-release-test-") as directory:
         fixtures = Path(directory)
         key = Ed25519PrivateKey.generate()
@@ -38,8 +71,8 @@ def main():
         publishers = fixtures / "publishers.json"
         publishers.write_text(json.dumps([dict(key_id="test-key", public_key=public, app_ids=ids)]))
         store = fixtures / "store"
-        values = release_tool.stage(store, private, "test-key", publishers)
-        release_tool.stage(store, private, "test-key", publishers)  # idempotent
+        values = stage(store, private, "test-key", publishers)
+        stage(store, private, "test-key", publishers)  # idempotent
 
         def served(url, timeout):
             assert timeout == 30
@@ -143,7 +176,7 @@ def main():
         release_tool.NAMES = tuple(name for name in names if name != "leaderboard")
         try:
             older = fixtures / "older-store"
-            release_tool.stage(older, private, "test-key", publishers)
+            stage(older, private, "test-key", publishers)
             staging = fixtures / "older-upload"
             staging.mkdir()
             archive = staging / "packages.tar"
@@ -204,7 +237,7 @@ def main():
         root["dependencies"][0]["sha256"] = "0" * 64
         root["signature"] = key.sign(release_tool.signing_message(root)).hex()
         (fixtures / "wrong-nested").write_text(json.dumps(root))
-        root_data = (ROOT / "build/inbe.zib").read_bytes()
+        root_data = (options.bundle_build_dir / "inbe.zib").read_bytes()
         (fixtures / "root-bytes").write_bytes(root_data)
         updated_root = json.loads(json.dumps(values["inbe"]))
         root_version = list(map(int, values["inbe"]["version"].split(".")))
@@ -218,62 +251,74 @@ def main():
                 dependency["version"] = "1.2.0"
         updated_root["signature"] = key.sign(release_tool.signing_message(updated_root)).hex()
         (fixtures / "root-new").write_text(json.dumps(updated_root))
-        data = (ROOT / "build/cells/habits.zib").read_bytes()
+        data = (options.bundle_build_dir / "cells/habits.zib").read_bytes()
         (fixtures / "habits-bytes").write_bytes(data)
         (fixtures / "corrupt-bytes").write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
-        (fixtures / "diary-bytes").write_bytes((ROOT / "build/cells/diary.zib").read_bytes())
+        (fixtures / "diary-bytes").write_bytes((options.bundle_build_dir / "cells/diary.zib").read_bytes())
         updated = json.loads(json.dumps(values["diary"]))
         diary_version = list(map(int, updated["version"].split(".")))
         diary_version[2] += 1
         updated.update(sequence=updated["sequence"] + 1, version=".".join(map(str, diary_version)))
         updated["signature"] = key.sign(release_tool.signing_message(updated)).hex()
         (fixtures / "diary-new").write_text(json.dumps(updated))
+        older = json.loads(json.dumps(values["diary"]))
+        older.update(sequence=older["sequence"] - 1, version="1.2.9")
+        older["signature"] = key.sign(release_tool.signing_message(older)).hex()
+        history = dict(versions=[updated, values["diary"], older])
+        (fixtures / "diary-history").write_text(json.dumps(history))
+        (fixtures / "diary-history-many").write_text(json.dumps(dict(versions=history["versions"] + [older])))
+        (fixtures / "diary-history-order").write_text(json.dumps(dict(versions=list(reversed(history["versions"])))))
+        (fixtures / "diary-history-owner").write_text(json.dumps(dict(versions=[values["habits"]])))
+        bad_history = json.loads(json.dumps(history))
+        bad_history["versions"][1]["version"] = "0.0.1"
+        (fixtures / "diary-history-forged").write_text(json.dumps(bad_history))
         diary_version[2] += 1
         updated["version"] = ".".join(map(str, diary_version))
         (fixtures / "diary-bad").write_text(json.dumps(updated))
-        ziran = ROOT / "build/ziran-toolchain/bin/ziran"
-        subprocess.run([str(ziran), "build", "--target=c", "--no-main", "--root", str(ROOT / "tests"),
-                        "--module-path", str(ROOT / "src"), "--module-path", str(ROOT / "build/packages/ziran/std"),
-                        "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
-                        "--module-path", str(ROOT / "build/packages/daochi-client"),
-                        "-o", str(work / "generated"), str(ROOT / "tests/package_release_behavior.zi")], check=True)
+        generate(work / 'generated', 'package_release_behavior.zi',
+                 [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
+                  ROOT / 'build/packages/daochi-client'])
         sources = list((work / "generated").rglob("*.c"))
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
                         "-ffunction-sections", "-fdata-sections", "-I" + str(work / "generated"),
-                        "-I" + str(ROOT / "build/packages/ziran/include"),
+                        "-I" + str(toolchain / "include"),
                         "-I" + str(ROOT / "build/packages/monocypher/src"),
                         "-I" + str(ROOT / "build/packages/monocypher/src/optional"),
                         str(ROOT / "tests/package_release_host.c"), *(str(path) for path in sources),
                         str(ROOT / "build/packages/monocypher/src/monocypher.c"),
                         str(ROOT / "build/packages/monocypher/src/optional/monocypher-ed25519.c"),
-                        str(ROOT / "build/ziran-toolchain/libziran.a"), "-Wl,--gc-sections", "-lm",
+                        str(runtime), "-Wl,--gc-sections", "-lm",
                         "-o", str(work / "test")], check=True)
-        subprocess.run([str(work / "test"), str(fixtures)], check=True)
+        subprocess.run([str(work / "test"), str(fixtures)], env=environment, check=True)
         generated = work / "manager"
-        subprocess.run([str(ziran), "build", "--target=c", "--no-main", "--root", str(ROOT / "tests"),
-                        "--module-path", str(ROOT / "src"), "--module-path", str(ROOT / "build/packages/ziran/std"),
-                        "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
-                        "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
-                        "--module-path", str(ROOT / "build/packages/daochi-client"),
-                        "--module-path", str(ROOT / "build/packages/kss/src"),
-                        "--module-path", str(ROOT / "build/packages/game2d/src"),
-                        "--module-path", "oqs=" + str(ROOT / "build/packages/oqs/src"),
-                        "-o", str(generated), str(ROOT / "tests/package_manager_behavior.zi")], check=True)
+        generate(generated, 'package_manager_behavior.zi',
+                 [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
+                  ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/daochi-client',
+                  ROOT / 'build/packages/kss/src', ROOT / 'build/packages/game2d/src',
+                  'oqs=' + str(ROOT / 'build/packages/oqs/src')])
+        # Package scoping changes generated C names, not the download API.
+        # Bind this fixture's wrappers to the actual declared symbols.
+        wrappers = []
+        for name in ('Start', 'Poll', 'Release'):
+            legacy = 'file_download_FileDownload' + name
+            symbol = legacy
+            if options.module_map:
+                header = next(generated.glob('*file_download.h')).read_text()
+                symbol = re.search(r'(\w*file_download_FileDownload' + name + r')\(', header)[1]
+            wrappers.extend(('-D__wrap_' + legacy + '=__wrap_' + symbol, '-Wl,--wrap=' + symbol))
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
                         "-ffunction-sections", "-fdata-sections", "-I" + str(generated),
-                        "-I" + str(ROOT / "build/packages/ziran/include"),
+                        "-I" + str(toolchain / "include"),
                         "-I" + str(ROOT / "build/packages/monocypher/src"),
                         "-I" + str(ROOT / "build/packages/monocypher/src/optional"),
                         str(ROOT / "tests/package_manager_host.c"),
                         *(str(path) for path in generated.rglob("*.c")),
                         str(ROOT / "build/packages/monocypher/src/monocypher.c"),
                         str(ROOT / "build/packages/monocypher/src/optional/monocypher-ed25519.c"),
-                        str(ROOT / "build/ziran-toolchain/libziran.a"),
-                        "-Wl,--wrap=file_download_FileDownloadStart", "-Wl,--wrap=file_download_FileDownloadPoll",
-                        "-Wl,--wrap=file_download_FileDownloadRelease", "-Wl,--wrap=storage_db_path",
+                        str(runtime), *wrappers, "-Wl,--wrap=storage_db_path", "-Wl,--wrap=storage_user_id_buffer",
                         "-Wl,--wrap=SecureRandom",
                         "-Wl,--gc-sections", "-lm", "-o", str(work / "manager-test")], check=True)
-        subprocess.run([str(work / "manager-test"), str(fixtures)], check=True)
+        subprocess.run([str(work / "manager-test"), str(fixtures)], env=environment, check=True)
     print("Signed package identity, API, canonical metadata, payload and nested-dependency and update lifecycle tests passed")
 
 

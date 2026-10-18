@@ -1,0 +1,218 @@
+// Retained signed releases and explicit, account-scoped rollback approvals.
+// The sequence high-water mark remains independent of the selected version.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+Rules :: #import "apps/protocol";
+#import, file "package_manager.zi";
+#import, file "package_release.zi";
+#import, file "package_files.zi";
+#import, file "catalog.zi";
+#import, file "../app/settings_store.zi";
+
+c :: #system_library "c";
+PackageHistorySettingText :: (key: string) -> string #foreign c "storage_get_setting_text";
+
+package_history: [PackageSlots][3]PackageRelease;
+package_history_metadata: [PackageSlots][3]string;
+package_history_count: [PackageSlots]s32;
+package_history_id: [PackageSlots][128]u8;
+package_history_pending: [PackageSlots]bool;
+package_history_checked: [PackageSlots]bool;
+package_history_generation: [PackageSlots]s32;
+package_history_check_day: [PackageSlots]s32;
+package_history_requested_id: [PackageSlots][128]u8;
+
+PackageHistoryRequest :: (index: s32) {
+    if index < 0 || index >= PackageSlots || PackageID(index) == "" ||
+    package_history_pending[index] || (package_index == index && package_phase == 3) { return }
+    if package_history_checked[index] && package_history_generation[index] == PackageRevision() &&
+    package_history_check_day[index] == package_last_check / 86400 &&
+    TextUntilNul(package_history_requested_id[index][:]) == PackageID(index) { return }
+    unused CopyCString(PackageID(index), package_history_requested_id[index][:])
+    package_history_pending[index] = true
+}
+
+PackageHistoryComplete :: (index: s32) {
+    package_history_checked[index] = true
+    package_history_generation[index] = PackageRevision()
+    package_history_check_day[index] = package_last_check / 86400
+}
+
+PackageHistoryAccept :: (index: s32, text: string) -> bool {
+    fields: [1]string = .["versions"]
+    if index < 0 || index >= PackageSlots || text.count > 262144 ||
+    !Rules.AppsObjectValid(text, 0, fields[:]) || Space(text, ValueEnd(text, 0, 0)) != text.count {
+        return false
+    }
+    array := FieldAt(text, 0, "versions")
+    count := ArrayCount(text, array)
+    if count < 0 || count > 3 { return false }
+    releases: [3]PackageRelease
+    metadata: [3]string
+    previous: s64 = 2147483648
+    cursor := Space(text, array + 1)
+    for at: cast(s32)0..count - 1 {
+        end := ValueEnd(text, cursor, 0)
+        if end <= cursor || end - cursor > 65536 { return false }
+        releases[at] = PackageTrustedRelease(text[cursor:end], index)
+        if !releases[at].valid || releases[at].sequence >= previous { return false }
+        previous = releases[at].sequence
+        metadata[at] = text[cursor:end]
+        cursor = Space(text, end + 1)
+    }
+    // Only after every descriptor verifies do we replace the working snapshot.
+    for at: cast(s32)0..2 {
+        PackageFree(package_history_metadata[index][at])
+        package_history_metadata[index][at] = ""
+        package_history[index][at] = releases[at]
+        if at < count { package_history_metadata[index][at] = PackageText(metadata[at], "") }
+    }
+    package_history_count[index] = count
+    unused CopyCString(PackageID(index), package_history_id[index][:])
+    return true
+}
+
+PackageHistoryEligible :: (index: s32, at: s32) -> bool {
+    if index < 0 || index >= PackageSlots || at < 0 || at >= package_history_count[index] ||
+    TextUntilNul(package_history_id[index][:]) != PackageID(index) { return false }
+    release := package_history[index][at]
+    return release.valid && PackageVersionCompare(TextUntilNul(release.version[:]), PackageVersion(index)) < 0 &&
+    (release.sequence < PackageSequence(index) || PackageHighWaterMatches(index, release))
+}
+
+PackageHistoryRow :: (index: s32, row: s32) -> s32 {
+    for at: cast(s32)0..2 {
+        if !PackageHistoryEligible(index, at) { continue }
+        if row == 0 { return at }
+        row -= 1
+    }
+    return -1
+}
+
+PackageHistoryCount :: (index: s32) -> s32 {
+    count: s32
+    for at: cast(s32)0..2 { if PackageHistoryEligible(index, at) { count += 1 } }
+    return count
+}
+
+PackageHistoryVersion :: (index: s32, row: s32) -> string {
+    at := PackageHistoryRow(index, row)
+    if at < 0 { return "" }
+    return TextUntilNul(package_history[index][at].version[:])
+}
+
+PackageHistoryDigest :: (index: s32, row: s32) -> string {
+    at := PackageHistoryRow(index, row)
+    if at < 0 { return "" }
+    return TextUntilNul(package_history[index][at].hash[:])
+}
+
+PackageRollbackRequest :: (index: s32, version: string, digest: string, account: string) -> bool {
+    if account != PackageAccount() { return false }
+    for at: cast(s32)0..2 {
+        if !PackageHistoryEligible(index, at) { continue }
+        if TextUntilNul(package_history[index][at].version[:]) == version &&
+        TextUntilNul(package_history[index][at].hash[:]) == digest {
+            return PackageRequestRetained(index, package_history_metadata[index][at], account)
+        }
+    }
+    return false
+}
+
+PackageRollbackDocumentAllows :: (index: s32, release: PackageRelease, text: string) -> bool {
+    if index < 0 || index >= PackageSlots || !release.valid { return false }
+    fields: [6]string = .["v", "id", "account", "sequence", "version", "sha256"]
+    if text.count > 511 || !Rules.AppsObjectValid(text, 0, fields[:]) ||
+    Space(text, ValueEnd(text, 0, 0)) != text.count ||
+    PackageNumber(text, 0, "v") != 1 || PackageNumber(text, 0, "sequence") != release.sequence { return false }
+    id: [128]u8
+    account: [65]u8
+    version: [32]u8
+    digest: [65]u8
+    return Rules.AppsReadText(text, 0, "id", id[:]) && TextUntilNul(id[:]) == PackageID(index) &&
+    Rules.AppsReadText(text, 0, "account", account[:]) && TextUntilNul(account[:]) == PackageAccount() &&
+    Rules.AppsReadText(text, 0, "version", version[:]) && TextUntilNul(version[:]) == TextUntilNul(release.version[:]) &&
+    Rules.AppsReadText(text, 0, "sha256", digest[:]) && TextUntilNul(digest[:]) == TextUntilNul(release.hash[:])
+}
+
+PackageRollbackKey :: (index: s32, slot: s32) -> string {
+    key: Vec(u8)
+    BuilderPrint(*key, "package_rollback%_%", slot, PackageName(index))
+    return BuilderFinish(key)
+}
+
+PackageRollbackAllows :: (index: s32, release: PackageRelease) -> bool {
+    for slot: cast(s32)0..2 {
+        key := PackageRollbackKey(index, slot)
+        allowed := PackageRollbackDocumentAllows(index, release, PackageHistorySettingText(key))
+        PackageFree(key)
+        if allowed { return true }
+    }
+    return false
+}
+
+PackageRollbackPinned :: (index: s32) -> bool {
+    path := PackagePath(index, ".current.json")
+    defer { PackageFree(path) }
+    metadata := PackageRead(path, 65536)
+    defer { PackageFree(metadata) }
+    return PackageRollbackAllows(index, PackageTrustedRelease(metadata, index))
+}
+
+PackageRollbackStore :: (index: s32, release: PackageRelease) -> bool {
+    if !release.valid { return false }
+    document: Vec(u8)
+    BuilderPrint(*document, "{\"v\":1,\"sequence\":%,\"id\":", release.sequence)
+    Rules.AppsWriteQuoted(*document, PackageID(index))
+    BuilderPrint(*document, ",\"account\":")
+    Rules.AppsWriteQuoted(*document, PackageAccount())
+    BuilderPrint(*document, ",\"version\":")
+    Rules.AppsWriteQuoted(*document, TextUntilNul(release.version[:]))
+    BuilderPrint(*document, ",\"sha256\":")
+    Rules.AppsWriteQuoted(*document, TextUntilNul(release.hash[:]))
+    BuilderPrint(*document, "}")
+    text := BuilderFinish(document)
+    defer { PackageFree(text) }
+    bytes: [512]u8
+    // Keep the working pointer's approval until the replacement pointer is
+    // safely published. A failed write must leave the previous rollback usable.
+    pointer := PackagePath(index, ".current.json")
+    current := PackageRead(pointer, 65536)
+    active := PackageTrustedRelease(current, index)
+    PackageFree(current)
+    PackageFree(pointer)
+    selected: s32 = -1
+    for slot: cast(s32)0..2 {
+        key := PackageRollbackKey(index, slot)
+        old := PackageHistorySettingText(key)
+        if old == text {
+            PackageFree(key)
+            return true
+        }
+        if !PackageRollbackDocumentAllows(index, active, old) { selected = slot }
+        PackageFree(key)
+    }
+    if selected < 0 { return false }
+    key := PackageRollbackKey(index, selected)
+    defer { PackageFree(key) }
+    return CopyCString(text, bytes[:]) && SettingsStoreText(key, bytes[:]) && PackageHistorySettingText(key) == text
+}
+
+PackageHistoryBegin :: () -> bool {
+    for index: cast(s32)0..PackageSlots - 1 {
+        if !package_history_pending[index] { continue }
+        package_history_pending[index] = false
+        if TextUntilNul(package_history_requested_id[index][:]) != PackageID(index) { continue }
+        package_index = index
+        package_phase = 3
+        path := PackagePath(index, ".history.download.json")
+        defer { PackageFree(path) }
+        if !PackageStartTransfer("/history", path) {
+            PackageHistoryComplete(index)
+            PackageFinish(false)
+        }
+        return true
+    }
+    return false
+}

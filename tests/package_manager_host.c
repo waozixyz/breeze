@@ -7,15 +7,21 @@
 
 static const char *fixtures;
 static char database[4096];
-static char keys[32][128];
-static char values[32][128];
+static char keys[64][128];
+static char values[64][512];
 static int setting_count;
 static int starts;
 static int releases;
 static bool held;
+static bool deny_approval;
 static const char *manifest = "diary";
+static char account[65] = "fixture-account";
 static EmbeddedAssetEntry publisher;
 extern int32_t FixtureHabitsSequence(void);
+
+uint8_t *__wrap_storage_user_id_buffer(void) {
+    return (uint8_t *)account;
+}
 
 static String load(const char *name) {
     char path[4096];
@@ -36,7 +42,7 @@ static int setting(String key) {
             return index;
         }
     }
-    assert(setting_count < 32 && key.length < sizeof(keys[0]));
+    assert(setting_count < 64 && key.length < sizeof(keys[0]));
     int index = setting_count++;
     memcpy(keys[index], key.data, key.length);
     return index;
@@ -54,6 +60,7 @@ void storage_set_setting_int(String key, int32_t value) {
     snprintf(values[setting(key)], sizeof(values[0]), "%d", value);
 }
 void storage_set_setting_text(String key, String value) {
+    if (deny_approval && key.length >= 16 && !memcmp(key.data, "package_rollback", 16)) return;
     assert(value.length < sizeof(values[0]));
     snprintf(values[setting(key)], sizeof(values[0]), "%.*s", (int)value.length, value.data);
 }
@@ -89,7 +96,12 @@ bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, 
     /* Release checks name this host's interfaces and keep one device bucket. */
     char target[512];
     snprintf(target, sizeof(target), "%.*s", (int)destination.length, destination.data);
-    if (strstr(target, ".download.json")) {
+    if (strstr(target, ".history.download.json")) {
+        char text[512];
+        snprintf(text, sizeof(text), "%.*s", (int)url.length, url.data);
+        assert(strstr(text, "/history?host_api=") && strstr(text, "&module_api=") && strstr(text, "&bucket="));
+        assert(download->maximum_bytes == 262144);
+    } else if (strstr(target, ".download.json")) {
         char text[512];
         snprintf(text, sizeof(text), "%.*s", (int)url.length, url.data);
         const char *query = strstr(text, "/latest?host_api=");
@@ -107,7 +119,8 @@ FileDownloadStatus __wrap_file_download_FileDownloadPoll(FileDownload *download)
         return FileDownloadStatus_Downloading;
     }
     const char *destination = (char *)download->destination;
-    const char *name = strstr(destination, ".download.json") ? manifest :
+    const char *name = strstr(destination, ".history.download.json") ? "diary-history" :
+                       strstr(destination, ".download.json") ? manifest :
                        (package_index == 0 ? "root-bytes" : "diary-bytes");
     String data = load(name);
     assert(data.length <= download->maximum_bytes);
@@ -136,11 +149,16 @@ static void request(void) {
 
 int32_t RunPackageManagerFixture(void) {
     pump();
-    assert(starts == 0); /* Unasked means no implicit request. */
+    assert(starts == 1 && package_index == 0 && package_check_only && !package_automatic);
     assert(!package_manager_PackageAutomaticEnabled());
+    /* Unasked/off permits signed metadata checks, never an implicit payload. */
+    package_manager_PackageCancel();
+    package_last_check = 200000;
+    package_launch_checked = true;
+    starts = 0;
     package_manager_PackageSetAutomatic(false);
     pump();
-    assert(starts == 0); /* Off means no implicit request. */
+    assert(starts == 0); /* Availability checks remain scheduled, not every frame. */
     int32_t baseline = FixtureHabitsSequence();
     assert(package_manager_PackageSequence(2) == baseline);
     storage_set_setting_int(StringLiteral("package_sequence_habits"), -10);
@@ -153,11 +171,109 @@ int32_t RunPackageManagerFixture(void) {
     assert(installed.length == 0); /* The offline bundle needs no disk cache. */
     assert(package_manager_PackageAvailable(4));
     manifest = "diary-new";
-    request();
+    int before_probe = starts;
+    package_manager_PackageCheckForUpdate(4);
+    pump();
+    pump();
+    assert(starts == before_probe + 1 && package_manager_PackageUpdateAvailable(4));
+    assert(package_manager_PackageSequence(4) == installed_sequence);
+    assert(package_manager_PackageVersionCompare(package_manager_PackageAvailableVersion(4),
+        package_manager_PackageVersion(4)) > 0);
+    String version = package_manager_PackageAvailableVersion(4);
+    String digest = package_manager_PackageAvailableDigest(4);
+    assert(!package_manager_PackageRequestVersion(4, version, StringLiteral("wrong"), StringLiteral("fixture-account")));
+    assert(!package_manager_PackageRequestVersion(4, version, digest, StringLiteral("another-account")));
+    assert(package_manager_PackageRequestVersion(4, version, digest, StringLiteral("fixture-account")));
+    pump();
+    strcpy(account, "another-account");
+    pump(); /* An account switch cancels the approved request before payload. */
+    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence);
+    strcpy(account, "fixture-account");
+    assert(package_manager_PackageRequestVersion(4, version, digest, StringLiteral("fixture-account")));
+    manifest = "diary";
+    pump();
+    pump(); /* The server cannot substitute another signed version. */
+    assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence);
+    manifest = "diary-new";
+    assert(package_manager_PackageRequestVersion(4, version, digest, StringLiteral("fixture-account")));
+    pump();
+    pump();
+    pump(); /* Only the confirmed exact target may fetch the payload. */
     assert(package_manager_PackageSequence(4) == installed_sequence + 1);
+    assert(!package_manager_PackageUpdateAvailable(4));
     installed = package_manager_PackageInstalledBytes(4);
     assert(installed.length > 8);
     free((void *)installed.data);
+    /* The node supplies at most three fully signed, ordered releases. A
+       rejected replacement cannot erase the last verified history. */
+    package_history_PackageHistoryRequest(4);
+    int before_history = starts;
+    pump();
+    assert(package_phase == 3 && starts == before_history + 1);
+    pump();
+    assert(package_history_PackageHistoryCount(4) == 2);
+    const char *invalid_histories[] = {"diary-history-many", "diary-history-order",
+        "diary-history-owner", "diary-history-forged"};
+    for (size_t at = 0; at < sizeof(invalid_histories) / sizeof(*invalid_histories); at++) {
+        String bad = load(invalid_histories[at]);
+        assert(!package_history_PackageHistoryAccept(4, bad));
+        free((void *)bad.data);
+        assert(package_history_PackageHistoryCount(4) == 2);
+    }
+    String older_version = package_history_PackageHistoryVersion(4, 1);
+    String older_digest = package_history_PackageHistoryDigest(4, 1);
+    assert(!package_history_PackageRollbackRequest(4, older_version, StringLiteral("wrong"), StringLiteral("fixture-account")));
+    assert(!package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("another-account")));
+    assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
+    pump();
+    strcpy(account, "another-account");
+    pump();
+    assert(package_manager_PackageStatus(4) == 3);
+    strcpy(account, "fixture-account");
+    assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
+    deny_approval = true;
+    pump();
+    pump();
+    deny_approval = false;
+    assert(package_manager_PackageStatus(4) == 3 && !package_history_PackageRollbackPinned(4));
+    assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
+    before_history = starts;
+    pump();
+    assert(package_phase == 2 && starts == before_history + 1); /* Exact retained metadata, no latest substitution. */
+    pump();
+    assert(package_manager_PackageStatus(4) == 2 && package_history_PackageRollbackPinned(4));
+    assert(package_manager_PackageSequence(4) == installed_sequence + 1); /* High-water never falls. */
+    assert(StringEqual(package_manager_PackageVersion(4), older_version));
+    installed = package_manager_PackageInstalledBytes(4); /* Restart accepts only the explicit signed approval. */
+    assert(installed.length > 8);
+    free((void *)installed.data);
+    strcpy(account, "another-account");
+    installed = package_manager_PackageInstalledBytes(4);
+    assert(installed.length == 0); /* The approval does not cross accounts. */
+    strcpy(account, "fixture-account");
+    installed = package_manager_PackageInstalledBytes(4);
+    assert(installed.length > 8);
+    free((void *)installed.data);
+    held = true;
+    package_manager_PackageSetAutomatic(true);
+    package_last_check = 0;
+    package_launch_checked = false;
+    pump();
+    assert(package_requested[4] && package_requested_check_only[4]); /* Auto checks respect the rollback pin. */
+    package_manager_PackageCancel();
+    held = false;
+    package_manager_PackageSetAutomatic(false);
+    package_last_check = 200000;
+    package_manager_PackageCheckForUpdate(4);
+    pump();
+    pump();
+    assert(package_manager_PackageUpdateAvailable(4)); /* Returning to the retained high-water release is a manual update. */
+    assert(package_manager_PackageRequestVersion(4, package_manager_PackageAvailableVersion(4),
+        package_manager_PackageAvailableDigest(4), StringLiteral("fixture-account")));
+    pump();
+    pump();
+    pump();
+    assert(!package_history_PackageRollbackPinned(4) && !package_manager_PackageUpdateAvailable(4));
     manifest = "diary";
     request(); /* A correctly signed older manifest must still fail. */
     assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence + 1);
@@ -189,6 +305,8 @@ int32_t RunPackageManagerFixture(void) {
     assert(StringEqual(package_manager_PackageVersion(3), StringLiteral("1.2.0")));
     held = true;
     package_manager_PackageSetAutomatic(true);
+    package_last_check = 0;
+    package_launch_checked = false;
     pump(); /* Starts root automatic check. */
     assert(package_automatic && package_index == 0);
     package_manager_PackageRequest(4); /* A manual request survives disabling updates. */

@@ -402,6 +402,10 @@ include mk/tests-lumi.mk
 
 EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
+# Packages without a public pin yet come only from an explicit local checkout,
+# never from a guessed sibling path; scripts/check-zi-sources.py reads the same.
+ZI_HANDOFF_PATHS := $(if $(APPS_SOURCE),--module-path apps=$(abspath $(APPS_SOURCE))/src) \
+	$(if $(CRYPTO_SOURCE),--module-path crypto=$(abspath $(CRYPTO_SOURCE))/src)
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/downloads_view.zi $(wildcard apps/practice/astral_projection*.zi)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
@@ -692,7 +696,7 @@ $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 		--module-path qrcode=build/packages/qrcode/src \
 		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client --module-path self=build/packages/self/src \
+		--module-path build/packages/daochi-client --module-path self=build/packages/self/src $(ZI_HANDOFF_PATHS) \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 

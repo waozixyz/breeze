@@ -165,8 +165,9 @@ with contextlib.ExitStack() as stack:
         tree = driver.tree()
         headings = {node["label"]: node for node in tree
                     if node["kind"] == "text" and node["label"] in ("Pinned", "More apps")}
+        # Each section's shared Apps group sits inside the page's scroll.
         grid = [node for node in tree if node["kind"] == "button"
-                and by_index(tree).get(node["parent"], {}).get("kind") == "scroll"
+                and under(tree, node, "scroll") and not under(tree, node, "navigation_bar")
                 and node["label"] not in ("Install", "App options")]
         more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
@@ -396,16 +397,16 @@ with contextlib.ExitStack() as stack:
                     driver.wait(label=f"Step {step} of 3")
                     key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
                 wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
-                # Apps then asks once whether packages may update themselves.
-                driver.wait(label="Allow", role="button")
+                # Opening Apps never asks about automatic updates; available
+                # updates appear on each app's card instead.
+                driver.wait_idle(frames=3)
+                assert not driver.find(label="Don't allow", visible=True), "Apps asked about automatic updates"
                 assert "package_updates_allowed" not in settings(profile)
-                driver.press(label="Don't allow", role="button")
-                wait_setting(profile, "package_updates_allowed", 0, log.read_text())
-                driver.wait_gone(label="Don't allow")
                 # Practice is the third pinned card in the same grid as the rest.
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
-                assert len({card["parent"] for card in pinned + more}) == 1, "Pinned cards are in another grid"
+                assert [round(card["x"]) for card in pinned] == [round(card["x"]) for card in more[:len(pinned)]], \
+                    "Pinned and More apps cards use different columns"
                 press(pinned[2])
                 wait_setting(profile, "apps_setup_done", 1, log.read_text())
                 wait_setting(profile, "main_tab", 1, log.read_text())
@@ -508,13 +509,14 @@ with contextlib.ExitStack() as stack:
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with database(profile) as db:
                     assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
-                # The same app is now first in More, with an install symbol in
-                # the same corner of its card.
+                # The same app is now first in More; Install is in the same
+                # options menu in its card's corner.
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Habits", more
-                install = corner(more[0], tree)
-                assert install["label"] == "Install"
-                press(install)
+                action = corner(more[0], tree)
+                assert action["label"] == "App options"
+                press(action)
+                driver.press(label="Install", role="selectable")
                 wait_setting(profile, "app_used_habits", 1, "Install did not restore Habits")
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
                 assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"

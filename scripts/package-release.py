@@ -74,7 +74,8 @@ def atomic_write(path, data):
         Path(name).unlink(missing_ok=True)
 
 
-def stage(store, key_path, key_id, publishers_path=None):
+def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None):
+    build_directory = Path(build_directory) if build_directory is not None else ROOT / 'build'
     if not IDENTIFIER.fullmatch(key_id) or key_id in (".", ".."):
         raise ValueError("invalid publisher key ID")
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
@@ -96,7 +97,7 @@ def stage(store, key_path, key_id, publishers_path=None):
         sequence = component["sequence"]
         if not VERSION.fullmatch(component["version"]) or not 0 < sequence <= 2**31 - 1:
             raise ValueError(f"invalid {name} version or sequence")
-        path = ROOT / "build" / ("inbe.zib" if name == "inbe" else f"cells/{name}.zib")
+        path = build_directory / ("inbe.zib" if name == "inbe" else f"cells/{name}.zib")
         data = path.read_bytes()
         if not data.startswith(b"ZIB\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
             raise ValueError(f"invalid {name} bundle")
@@ -122,7 +123,7 @@ def stage(store, key_path, key_id, publishers_path=None):
     for pack in catalog_from_bundle(payloads['practices']):
         filename = (pack['practice'] + ('.' + pack['language'] if pack['language'] else '') +
                     ('.' + pack['voice'] if pack.get('voice') else '') + '.zib')
-        data = (ROOT / 'build/practice-content' / filename).read_bytes()
+        data = (build_directory / 'practice-content' / filename).read_bytes()
         if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
             raise ValueError('practice content differs from its signed catalog')
         value = dict(releases['practices'])

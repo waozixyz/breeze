@@ -5,6 +5,7 @@
 #import, file "app_modal_state.zi";
 #import, file "app_launcher_state.zi";
 #import, file "app_launcher_pins.zi";
+#import, file "app_launcher_apps.zi";
 #import, file "../platform/launcher_shortcut.zi";
 #import, file "app_settings.zi";
 #import, file "launcher_policy.zi";
@@ -113,7 +114,7 @@ app_launcher_update_drag :: (app: *InnerBreeze, point: Vector2) {
 // can move to another favorite slot without becoming a content scroll.
 app_launcher_drag_card :: (app: *InnerBreeze, card: ButtonProps,
     route: s32, vertical: bool) -> bool {
-    key := cast(u64)card.id
+    key := ifx card.key != cast(u64)0 then card.key else cast(u64)card.id
     previous := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session),
         key, WidgetKindButton)
     drag := TreeTakeDragAt(app.ui.session, previous)
@@ -467,15 +468,14 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 route := ifx section == 0 then pinned[index] else more[index]
                 bounds := GridCellBounds(section_cells, index, tile_height)
                 if section == 0 { pinned_slots[index] = bounds }
-                app_launcher_draw_card(app, route, bounds, true)
             }
-            if section == 1 {
-                for offer: cast(s32)0..offer_count - 1 {
-                    bounds := GridCellBounds(section_cells, count + offer, tile_height)
-                    app_launcher_draw_offer(app, offers[offer], bounds)
-                }
-                count += offer_count
-            }
+            group_routes := ifx section == 0 then pinned[:count] else more[:count]
+            group_offers := offers[:ifx section == 1 then offer_count else 0]
+            group_count := count + cast(s32)group_offers.count
+            group_bounds := Rectangle.{cast(float32)x, cast(float32)y,
+                cast(float32)width, cast(float32)(GridRowCount(section_cells, group_count) * (tile_height + gap))}
+            unused app_launcher_shared_group(app, section, group_routes, group_offers, group_bounds)
+            count = group_count
             y += GridRowCount(section_cells, count) * (tile_height + gap)
         }
         if match_count + offer_count == 0 {
@@ -601,43 +601,8 @@ app_draw_launcher :: (app: *InnerBreeze) {
             save_settings(app)
             app_block_current_click(app)
         }
-    } else {
-        app_launcher_ask_package_updates(app)
     }
 }
 
-// Apps is where packages are chosen and installed, so it asks once whether
-// they may update by themselves. Both answers are one equal tap; closing the
-// question without an answer asks again on a later start.
-launcher_package_updates_closed: bool;
-
-app_launcher_ask_package_updates :: (app: *InnerBreeze) {
-    if launcher_package_updates_closed || !PackageAutomaticUnasked() {
-        return
-    }
-    actions: [2]ActionModalAction = .[
-    ActionModalAction.{.label = LocaleText("package_updates_decline"),
-        .tone = cast(ButtonTone)ButtonToneNeutral,
-        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
-    ActionModalAction.{.label = LocaleText("package_updates_allow"),
-        .tone = cast(ButtonTone)ButtonToneNeutral,
-        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
-    ]
-    props: ActionModalProps = .{}
-    props.key = KeyHash("inbe/apps/package-updates")
-    props.title = LocaleText("package_updates_title")
-    props.message = LocaleText("package_updates_message")
-    props.max_width = 420
-    answer := ActionModal(app.ui.session, props, actions[:2]).action
-    if answer == 0 {
-        return
-    }
-    if answer == 1 {
-        PackageSetAutomatic(false)
-    } else if answer == 2 {
-        PackageSetAutomatic(true)
-    } else {
-        launcher_package_updates_closed = true
-    }
-    app_block_current_click(app)
-}
+// Automatic updates remain an explicit Settings choice. Availability is
+// shown on each verified app's card; opening Apps never prompts for consent.

@@ -18,6 +18,10 @@ python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
+if [ ! -s build/package-assets/inbe/assets/apps/apps.zib ]; then
+    echo 'Root Apps requires the reviewed APPS_BUNDLE or explicit APPS_SOURCE handoff' >&2
+    exit 1
+fi
 python3 scripts/release_notes.py CHANGELOG.md build/package-assets/inbe/assets/app/release-notes.json
 python3 scripts/practice_content.py "$ziran"
 mkdir -p "$output" build/bundled-cells
@@ -25,7 +29,8 @@ self_dir="$root/build/packages/self"
 mkdir -p build/self
 "$ziran" bundle --root "$self_dir" --module-path "$self_dir/src" \
     --module-path kryon=build/packages/kryon/src/backend --module-path build/packages/kryon/src/ui \
-    --module-path build/packages/ziran/std --define KRYON_HOSTED_UI \
+    --module-path build/packages/ziran/std --module-path qrcode=build/packages/qrcode/src \
+    --define KRYON_HOSTED_UI \
     --asset-dir "assets=$self_dir/assets" --entry self:Main -o build/self/self.zib "$self_dir/src/self.zi"
 rm -f "$output/practice.zib"
 for feature in lists habits practices diary lumi leaderboard; do
