@@ -14,6 +14,8 @@ SELF_SOURCES = $(wildcard $(SELF_DIR)/src/*.zi $(SELF_DIR)/assets/self/*)
 .PHONY: cells
 cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
+$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): CHANGELOG.md scripts/release_notes.py
+
 $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(SELF_SOURCES) $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 

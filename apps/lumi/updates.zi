@@ -1,0 +1,51 @@
+// A short update message from the installed root package's changelog.
+#import "json_scan"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import, file "../../src/cells/lumi_types.zi";
+
+LumiChangelogURL :: "https://github.com/waozixyz/inbe/blob/master/CHANGELOG.md"
+
+LumiUpdateVersion :: (document: string, output: []u8) -> string {
+    count := ReadStringText(document, FieldAt(document, 0, "version"), output)
+    if count <= 0 || count >= output.count {
+        return ""
+    }
+    parts: s32 = 1
+    digits: s32 = 0
+    for byte: output[:count] {
+        if byte == cast(u8)46 && digits > 0 {
+            parts += 1
+            digits = 0
+        } else if byte >= cast(u8)48 && byte <= cast(u8)57 {
+            digits += 1
+        } else {
+            return ""
+        }
+    }
+    if parts != 3 || digits == 0 {
+        return ""
+    }
+    return TextFromBytes(output[:count])
+}
+
+LumiUpdateMessage :: (document: string, introduction: string, more: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", introduction)
+    footer_length := more.count + LumiChangelogURL.count + 3
+    notes := FieldAt(document, 0, "notes")
+    bytes: [LUMI_INPUT_MAX]u8
+    for index: cast(s32)0..ArrayCount(document, notes) - 1 {
+        length := ReadStringText(document, ElementAt(document, notes, index), bytes[:])
+        // Keep whole changelog entries and UTF-8 characters within the chat's
+        // existing size. The link always provides the complete release notes.
+        if length <= 0 || length >= bytes.count ||
+        out.count + length + 4 + footer_length >= LUMI_INPUT_MAX {
+            break
+        }
+        BuilderPrint(*out, "\n\n- %", TextFromBytes(bytes[:length]))
+    }
+    BuilderPrint(*out, "\n\n%\n%", more, LumiChangelogURL)
+    return BuilderFinish(out)
+}

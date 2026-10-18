@@ -18,6 +18,7 @@ python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
+python3 scripts/release_notes.py CHANGELOG.md build/package-assets/inbe/assets/app/release-notes.json
 python3 scripts/practice_content.py "$ziran"
 mkdir -p "$output" build/bundled-cells
 self_dir="$root/build/packages/self"

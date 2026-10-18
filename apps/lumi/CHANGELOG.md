@@ -2,6 +2,8 @@
 
 ## [1.5.2] - 2026-10-18
 
+- Receive Inner Breeze changelog highlights in chat after an update, once
+  per version, with a link to the full notes.
 - Maintenance release for Inner Breeze 2.1.36.
 
 ## [1.5.1] - 2026-10-17

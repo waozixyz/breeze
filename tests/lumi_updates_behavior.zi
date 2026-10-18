@@ -1,0 +1,112 @@
+// Real conversation storage, restart, sync records and per-account receipts.
+#import, file "../src/cells/lumi_updates.zi";
+#import, file "../src/cells/lumi_store.zi";
+#import, file "../src/cells/lumi_types.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../apps/lumi/updates.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/delegate_store.zi";
+#import, file "storage_test_support.zi";
+#import "vec"
+#import "text"
+
+update_document: string = "{\"version\":\"2.1.36\",\"notes\":[\"Lumi’s update message.\",\"Visible paragraphs.\"]}";
+
+UpdateAsset :: (path: string) -> AssetView {
+    if path == "assets/app/release-notes.json" {
+        return AssetView.{.found = true, .data = update_document}
+    }
+    return AssetView.{}
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-lumi-updates-test/")
+    if guard != 0 {
+        return guard
+    }
+    english_catalog = "[lumi_update_intro]\nInner Breeze has been updated to %s.\n---\n[lumi_update_full_changelog]\nFull changelog:\n---\n"
+    install_english_catalog()
+    root := data_root()
+    check_true("fixture storage initialized", storage_init(root) != 0)
+    AssetBindProvider(UpdateAsset)
+    LumiStoreAppend("Existing conversation", true)
+    LumiAnnounceUpdate()
+    check_int("one release message preserves existing chat", LumiStoreCount(), 2)
+    row := LumiStoreRow(1)
+    check_true("update is a normal Lumi message", !row.user && row.kind == LUMI_CHAT_TEXT)
+    check_true("localized introduction includes the installed version",
+        contains(row.text, "Inner Breeze has been updated to 2.1.36."))
+    check_true("whole notes keep visible blank lines and Unicode",
+        contains(row.text, "\n\n- Lumi’s update message.\n\n- Visible paragraphs."))
+    check_true("full changelog remains available",
+        contains(row.text, "Full changelog:\nhttps://github.com/waozixyz/inbe/blob/master/CHANGELOG.md"))
+    receipt := CellRecordRead("cell.lumi.message.release-inbe-2.1.36")
+    check_true("update has a deterministic synced record", receipt.count > 0)
+    PackageFree(receipt)
+    LumiAnnounceUpdate()
+    AssetNotifyChanged()
+    LumiAnnounceUpdate()
+    check_int("frames and resource refresh do not repeat the update", LumiStoreCount(), 2)
+
+    LumiStoreReset()
+    storage_close()
+    lumi_update_announced = false
+    check_true("fixture reopens", storage_init(root) != 0)
+    LumiAnnounceUpdate()
+    check_int("update receipt survives restart", LumiStoreCount(), 2)
+    check_true("release message can be deleted", LumiStoreDelete(1))
+    lumi_update_announced = false
+    LumiAnnounceUpdate()
+    check_int("deleted release messages stay deleted", LumiStoreCount(), 1)
+
+    // Switching to another account creates only that account's update.
+    saved_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
+    unused AppCopyText("another-account", g_storage.user_id[:])
+    LumiAnnounceUpdate()
+    check_int("other account gets its own message", LumiStoreCount(), 1)
+    check_true("other account cannot see the first account's chat", !LumiStoreRow(0).user)
+    unused AppCopyText(AppTextFromCString(*saved_owner[0], 64), g_storage.user_id[:])
+    LumiAnnounceUpdate()
+    check_int("switching back respects the deleted receipt", LumiStoreCount(), 1)
+
+    update_document = "{\"version\":\"2.1.37\",\"notes\":[\"A new release.\"]}"
+    AssetNotifyChanged()
+    delegate_environment = true
+    LumiAnnounceUpdate()
+    check_int("delegated chat creates no owner update", LumiStoreCount(), 1)
+    delegate_environment = false
+    exec_db_sql("CREATE TRIGGER reject_release BEFORE INSERT ON settings WHEN NEW.key='cell.lumi.message.release-inbe-2.1.37' BEGIN SELECT RAISE(IGNORE); END;")
+    LumiAnnounceUpdate()
+    check_int("failed write does not add an in-memory message", LumiStoreCount(), 1)
+    exec_db_sql("DROP TRIGGER reject_release;")
+    LumiAnnounceUpdate()
+    check_int("failed write retries without losing the update", LumiStoreCount(), 2)
+    check_true("next version has its own record", contains(LumiStoreRow(1).text, "2.1.37"))
+
+    // Long notes stop at a whole entry; the full-notes link still fits.
+    long: Vec(u8)
+    BuilderPrint(*long, "{\"version\":\"2.1.38\",\"notes\":[\"Short note.\",\"")
+    for index: cast(s32)0..1999 {
+        BuilderPrint(*long, "é")
+    }
+    BuilderPrint(*long, "\"]}")
+    document := BuilderFinish(long)
+    message := LumiUpdateMessage(document, "Inner Breeze 2.1.38", "Full changelog:")
+    check_true("long release notes stay within chat storage and rendering limits",
+        message.count < LUMI_INPUT_MAX && contains(message, "Short note.") &&
+        contains(message, "CHANGELOG.md") && !contains(message, "é"))
+    PackageFree(document)
+    PackageFree(message)
+    check_true("invalid versions create no message",
+        !LumiUpdateAppend("{\"version\":\"next\",\"notes\":[\"Invalid\"]}", "Invalid", "Full changelog:"))
+    LumiStoreReset()
+    storage_close()
+    return failures
+}

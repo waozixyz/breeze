@@ -1,5 +1,11 @@
 # Lumi tests, and the session window and WHM frame tests that run the app.
 
+.PHONY: lumi-updates-test
+test: lumi-updates-test
+lumi-updates-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
+	python3 tests/release_notes_test.py
+	sh tests/lumi_updates_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
 .PHONY: lumi-test
 lumi-test: cells
 	sh tests/lumi_engine_test.sh

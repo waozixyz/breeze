@@ -2,6 +2,8 @@
 
 ## [2.1.36] - 2026-10-18
 
+- Lumi shares changelog highlights in chat after an update, once per version,
+  with a link to the full notes.
 - Manage your name, picture and sync nodes in the redesigned Self profile.
 - Install Radio to listen to three live ambient stations while using other
   apps and practices, with separate volume controls.

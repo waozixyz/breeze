@@ -1,0 +1,83 @@
+// Installed release notes become one ordinary, encrypted account message.
+#import, file "../../apps/lumi/updates.zi";
+#import, file "lumi_store.zi";
+#import, file "lumi_types.zi";
+#import, file "package_files.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/state.zi";
+#import "text_buffer"
+
+lumi_update_owner: [64]u8;
+lumi_update_assets: u64;
+lumi_update_announced: bool;
+
+LumiUpdateAppend :: (document: string, introduction: string, more: string) -> bool {
+    // A delegate must not create owner records or mark an update as announced.
+    if StoredAccountMode() == AccountModeDelegate {
+        return false
+    }
+    version_bytes: [32]u8
+    version := LumiUpdateVersion(document, version_bytes[:])
+    if version.count == 0 {
+        return false
+    }
+    id := PackageText("release-inbe-", version)
+    key := PackageText("cell.lumi.message.", id)
+    defer {
+        PackageFree(id)
+        PackageFree(key)
+    }
+    existing := CellRecordRead(key)
+    defer {
+        PackageFree(existing)
+    }
+    // The message itself is its receipt, including a synced deletion. No
+    // separate marker can get lost between a successful write and a restart.
+    if existing.count > 0 {
+        return true
+    }
+    message := LumiUpdateMessage(document, introduction, more)
+    defer {
+        PackageFree(message)
+    }
+    if lumi_next_message_id.count != 0 {
+        return false
+    }
+    lumi_next_message_id = id
+    saved := LumiStoreAppendCard(message, false, LUMI_CHAT_TEXT, "")
+    lumi_next_message_id = ""
+    return saved
+}
+
+LumiAnnounceUpdate :: () {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    assets := AssetGeneration()
+    if owner.count == 0 || (lumi_update_announced && lumi_update_assets == assets &&
+        owner == AppTextFromCString(*lumi_update_owner[0], 64)) {
+        return
+    }
+    resource := AssetRead("assets/app/release-notes.json")
+    if !resource.found {
+        return
+    }
+    version_bytes: [32]u8
+    version := LumiUpdateVersion(resource.data, version_bytes[:])
+    if version.count == 0 {
+        return
+    }
+    args: [1]FormatArg
+    args[0].text = version
+    args[0].is_text = true
+    introduction: [256]u8
+    unused FormatTemplate(LocaleText("lumi_update_intro"), args[:], introduction[:])
+    if LumiUpdateAppend(resource.data, TextUntilNul(introduction[:]),
+        LocaleText("lumi_update_full_changelog")) {
+        unused AppCopyText(owner, lumi_update_owner[:])
+        lumi_update_assets = assets
+        lumi_update_announced = true
+    }
+}
