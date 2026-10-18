@@ -20,7 +20,7 @@ ANDROID_SDK ?= $(if $(ANDROID_SDK_ROOT),$(ANDROID_SDK_ROOT),$(if $(ANDROID_HOME)
 ANDROID_CMAKE_DIR ?= $(ANDROID_SDK)/cmake/3.22.1
 ANDROID_AAPT2 ?= $(shell if [ -n "$(ANDROID_SDK)" ]; then find "$(ANDROID_SDK)/build-tools" -mindepth 2 -maxdepth 2 -type f -name aapt2 -perm -111 2>/dev/null | sort | tail -n 1; fi)
 ANDROID_GRADLE_ARGS := $(if $(ANDROID_AAPT2),-Pandroid.aapt2FromMavenOverride="$(ANDROID_AAPT2)",)
-ANDROID_JAVA_HOME ?= $(shell for dir in /usr/local/openjdk17 /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk; do if [ -x "$$dir/bin/java" ]; then printf "%s\n" "$$dir"; break; fi; done)
+ANDROID_JAVA_HOME ?= $(shell for dir in "$(JAVA_HOME)" /usr/local/openjdk21 /usr/lib/jvm/java-21-openjdk-amd64 /usr/lib/jvm/java-21-openjdk /usr/local/openjdk17 /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk; do if [ -x "$$dir/bin/java" ]; then printf "%s\n" "$$dir"; break; fi; done)
 ANDROID_GRADLE_ENV := unset ANDROID_HOME; $(if $(ANDROID_JAVA_HOME),JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH")
 ANDROID_KEYSTORE ?= $(HOME)/.android/kryon-release.keystore
 ANDROID_KEY_ALIAS ?= breathing-key

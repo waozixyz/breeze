@@ -13,6 +13,7 @@ rm -rf "$work"
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
+    --module-path "self=$root/build/packages/self/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "kryon=$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kryon/src/backend" \
