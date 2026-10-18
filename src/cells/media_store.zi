@@ -255,9 +255,28 @@ MediaTwo :: (value: s32) -> string {
     return TextFromBytes(media_two[:2])
 }
 
+// A day as YYYY-MM-DD.
+MediaDayValid :: (day: string) -> bool {
+    if day.count != 10 {
+        return false
+    }
+    for index: cast(s64)0..9 {
+        dash := index == 4 || index == 7
+        digit := day[index] >= cast(u8)48 && day[index] <= cast(u8)57
+        if dash && day[index] != cast(u8)45 {
+            return false
+        }
+        if !dash && !digit {
+            return false
+        }
+    }
+    return true
+}
+
 // The capture day and time for a new photo: the camera's own when the file
-// has them, otherwise this device's clock.
-MediaWhen :: (data: string, format: string, day: []u8, taken: []u8) -> bool {
+// has them, otherwise `fallback_day` without a time when it names a day,
+// otherwise this device's clock.
+MediaWhen :: (data: string, format: string, fallback_day: string, day: []u8, taken: []u8) -> bool {
     capture := MediaCaptureOf(data, format)
     out: Vec(u8)
     // A four-digit camera year; anything earlier is a camera's unset clock.
@@ -279,6 +298,8 @@ MediaWhen :: (data: string, format: string, day: []u8, taken: []u8) -> bool {
             BuilderPrint(*out, "%:", MediaTwo(minutes / 60))
             BuilderPrint(*out, "%", MediaTwo(minutes % 60))
         }
+    } else if MediaDayValid(fallback_day) {
+        BuilderPrint(*out, "%", fallback_day)
     } else {
         clock := DiaryStoreClock()
         if clock.count < 19 {
@@ -290,7 +311,7 @@ MediaWhen :: (data: string, format: string, day: []u8, taken: []u8) -> bool {
     }
     value := BuilderFinish(out)
     defer { PackageFree(value) }
-    if value.count < 19 {
+    if value.count < 10 {
         return false
     }
     return AppCopyText(value[:10], day) && AppCopyText(value, taken)
@@ -329,6 +350,25 @@ MediaWriteFile :: (path: string, data: string) -> bool {
         }
     }
     return PackageWrite(path, data)
+}
+
+// Puts the photo's bytes in its library file. A file on this device that
+// holds the same bytes is linked where the platform allows, so the photo
+// takes its room once; a link that turns out to hold other bytes is
+// replaced by a copy. Files are only ever replaced whole, never written in
+// place, so a link never changes the other file.
+MediaPlaceFile :: (path: string, data: string, source: string) -> bool {
+    #if !#defined(PLATFORM_WEB) {
+        if source.count > 0 && !PathExists(path) && LinkFile(source, path) {
+            linked := PackageRead(path, DIARY_FILE_LIMIT)
+            same := linked == data
+            PackageFree(linked)
+            if same {
+                return true
+            }
+        }
+    }
+    return MediaWriteFile(path, data)
 }
 
 // A record with one field set to a JSON value, keeping every other field,
@@ -371,10 +411,31 @@ MediaRecordSetCopy :: (key: string, record: string, blob: string, key_hex: strin
     return written
 }
 
+// How a photo joins the library.
+MediaAddition :: struct {
+    // The name the photo came with; folders are dropped.
+    name: string
+    // The day for a photo without a camera date (YYYY-MM-DD), or "" for the
+    // day it is added.
+    day: string
+    // A file on this device with the same bytes, linked rather than copied
+    // where the platform allows, or "".
+    source: string
+    // Whether a photo the library has in Trash comes back, as when the
+    // person picks it again.
+    restore: bool
+}
+
 // Adds the photo's bytes to the library once: a photo it already has keeps
 // its record, and one in Trash comes back. The bytes always land in this
 // device's file, so a photo known from another device needs no download.
 MediaImportBytes :: (data: string, name: string) -> MediaImport {
+    return MediaAddBytes(data, MediaAddition.{.name = name, .restore = true})
+}
+
+// Adds the photo's bytes to the library once. A photo it already has keeps
+// its record, and leaves Trash only when the addition says so.
+MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
     result: MediaImport
     if DataTemporary() || data.count <= 0 || data.count > DIARY_FILE_LIMIT {
         return result
@@ -392,7 +453,8 @@ MediaImportBytes :: (data: string, name: string) -> MediaImport {
         PackageFree(directory)
         PackageFree(path)
     }
-    if directory.count == 0 || storage_ensure_dir(directory) == 0 || !MediaWriteFile(path, data) {
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 ||
+    !MediaPlaceFile(path, data, addition.source) {
         return result
     }
     key := MediaRecordKey(hash)
@@ -404,7 +466,7 @@ MediaImportBytes :: (data: string, name: string) -> MediaImport {
     existing := MediaParse(record)
     if existing.valid {
         result.existed = true
-        if existing.trashed {
+        if existing.trashed && addition.restore {
             restored := MediaRecordWith(record, "trashed", "0")
             written := restored.count > 0 && MediaRecordWrite(key, restored)
             PackageFree(restored)
@@ -419,13 +481,13 @@ MediaImportBytes :: (data: string, name: string) -> MediaImport {
     }
     day: [11]u8
     taken: [26]u8
-    if !MediaWhen(data, format, day[:], taken[:]) {
+    if !MediaWhen(data, format, addition.day, day[:], taken[:]) {
         return result
     }
     MediaWritePreview(hash, data, format)
     out: Vec(u8)
     BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\",\"name\":", hash, data.count, format)
-    MediaJson(*out, MediaName(name))
+    MediaJson(*out, MediaName(addition.name))
     BuilderPrint(*out, ",\"day\":\"%\",\"taken\":\"%\",\"added\":%,\"trashed\":0}",
         TextUntilNul(day[:]), TextUntilNul(taken[:]), CellRecordClock() / 1000000)
     entry := BuilderFinish(out)

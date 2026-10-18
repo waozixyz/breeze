@@ -8,6 +8,7 @@
 - Settings › About › Show beta apps lists apps in testing.
 - Photos (beta): your photos by day on all devices, encrypted and kept once.
 - Diary is Markdown with photos inline, kept in your photo library; each day has a photo gallery.
+- Photos already in Diary entries also appear in Photos.
 
 ### Changed
 - Photos go to every node with photo upload on.

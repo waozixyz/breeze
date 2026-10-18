@@ -7,34 +7,39 @@
 #import "text"
 #import "byte_text_linux"
 #import "text_buffer"
+#import, file "diary_records.zi";
 #import, file "diary_store.zi";
 #import, file "media_store.zi";
 #import, file "package_files.zi";
+#import, file "../storage/sync_apply.zi";
 #import, file "../app/text_buffers.zi";
 
-// Diary files' types, kept until a copy arrives from a node, so an entry's
-// photos are not read again every frame.
+// Diary files' types, kept until a copy arrives from a node or the library
+// changes through a sync, so an entry's photos are not read again every
+// frame.
 DIARY_PHOTO_FORMATS :: 64
 
 DiaryPhotoFormat :: struct {
     name: [201]u8
     format: [8]u8
+    // The file's hash when the account's library keeps the same photo.
+    library: [65]u8
     generation: s64
+    media_changes: s32
 }
 
 diary_photo_formats: [DIARY_PHOTO_FORMATS]DiaryPhotoFormat;
 diary_photo_formats_next: s32;
 diary_photo_asset: [256]u8;
 
-// The image type of a Diary file on this device, or "" while it is not here.
-DiaryPhotoFileFormat :: (name: string) -> string {
-    if !DiaryStoreNameValid(name) {
-        return ""
-    }
+// What this device knows of a Diary file: its image type, or "" while it is
+// not here, and whether the library keeps it too.
+DiaryPhotoFile :: (name: string) -> *DiaryPhotoFormat {
     for index: cast(s32)0..DIARY_PHOTO_FORMATS - 1 {
         entry := *diary_photo_formats[index]
-        if entry.generation == diary_blob_generation && TextUntilNul(entry.name[:]) == name {
-            return TextUntilNul(entry.format[:])
+        if entry.generation == diary_blob_generation && entry.media_changes == storage_media_changes &&
+        TextUntilNul(entry.name[:]) == name {
+            return entry
         }
     }
     format := DiaryImageFormat(DiaryStorePreview(name))
@@ -43,20 +48,35 @@ DiaryPhotoFileFormat :: (name: string) -> string {
     slot.* = DiaryPhotoFormat.{}
     unused AppCopyText(name, slot.name[:])
     unused AppCopyText(format, slot.format[:])
+    media := DiaryMediaRead(name)
+    if format.count > 0 && media.valid && MediaRead(TextFromBytes(media.hash[:64])).valid {
+        slot.library = media.hash
+    }
     slot.generation = diary_blob_generation
-    return TextUntilNul(slot.format[:])
+    slot.media_changes = storage_media_changes
+    return slot
 }
 
 // The asset that draws an embed's photo, from what the embed links to, or ""
-// while the photo is not on this device. A library photo draws its preview.
-// The answer stays valid until the next call.
+// while the photo is not on this device. A library photo draws its preview,
+// and so does a Diary file the library keeps too, so the day's photos list
+// that picture once. The answer stays valid until the next call.
 DiaryPhotoAsset :: (destination: string) -> string {
     diary_photo_asset[0] = cast(u8)0
     if destination.count > 6 && destination[:6] == "diary:" {
         name := destination[6:]
-        format := DiaryPhotoFileFormat(name)
+        if !DiaryStoreNameValid(name) {
+            return ""
+        }
+        file := DiaryPhotoFile(name)
+        format := TextUntilNul(file.format[:])
         if format.count == 0 {
             return ""
+        }
+        library := TextUntilNul(file.library[:])
+        if library.count == 64 && AppCopyText(MediaAsset(library, false), diary_photo_asset[:]) &&
+        diary_photo_asset[0] != cast(u8)0 {
+            return TextUntilNul(diary_photo_asset[:])
         }
         out: Vec(u8)
         BuilderPrint(*out, "diary/photos/%.%", name, format)

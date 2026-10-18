@@ -78,6 +78,11 @@ def ink_bottom(path, box):
     return lowest
 
 
+def library_has(profile, digest):
+    """Whether the profile's photo library keeps the photo with this hash."""
+    return bool(list((profile / "media").glob("*/" + digest)))
+
+
 def wait_for_text(entry, matches, message):
     deadline = time.monotonic() + 10
     while not matches(json.loads(entry.read_text())["text"]):
@@ -281,6 +286,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         with application(phone, f"sage-{dark}", size=(390, 844)) as window:
             phone_entry = next((phone / "diary").glob("*/" + entry.name))
             stored = phone_entry.read_text()
+            # The entry's photos join the photo library, the one Photos
+            # shows, under the entry's day, without rewriting the entry.
+            local_digest = hashlib.sha256(photo_bytes).hexdigest()
+            library_place = "photos/{}/{}/{}/{}.png".format(entry.name[:4], entry.name[5:7],
+                                                            entry.name[8:10], local_digest)
+            deadline = time.monotonic() + 20
+            while not library_has(phone, local_digest):
+                assert time.monotonic() < deadline, "The entry's photo did not join the photo library"
+                time.sleep(0.2)
             time.sleep(0.5)
             capture(window, f"sage-{dark}-inline")
             red = red_pixels(OUTPUT / f"sage-{dark}-inline.png")
@@ -292,17 +306,21 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             driver.press(label="Show gallery")
             driver.wait(label="Hide gallery")
             driver.wait(label="A photo", role="image")
+            # The entry's Diary file and its library photo are one picture,
+            # listed once; a tap embeds the library's.
+            assert len(driver.find(label="A photo", role="image")) == 1, "The gallery listed a photo twice"
             driver.press(label="A photo")
             deadline = time.monotonic() + 5
-            while json.loads(phone_entry.read_text())["text"].count("](diary:photo-local.bin)") != 2:
+            while "](" + library_place + ")" not in json.loads(phone_entry.read_text())["text"]:
                 assert time.monotonic() < deadline, "A tapped photo was not embedded in the entry"
                 time.sleep(0.1)
             saved_photo = json.loads(phone_entry.read_text())
             assert saved_photo["text"].startswith(original["text"] + "\n\n![A photo](diary:photo-local.bin)")
+            assert saved_photo["text"].count("](diary:photo-local.bin)") == 1
             assert [row["file"] for row in saved_photo["photos"]] == files
             # Undo takes the tapped photo out again; redo puts it back.
             driver.press(label="Undo")
-            wait_for_text(phone_entry, lambda text: text.count("](diary:photo-local.bin)") == 1, "Undo kept the tapped photo")
+            wait_for_text(phone_entry, lambda text: library_place not in text, "Undo kept the tapped photo")
             driver.press(label="Redo")
             wait_for_text(phone_entry, lambda text: text == saved_photo["text"], "Redo did not restore the tapped photo")
             # Another day opens with its gallery closed, and so does this one
@@ -319,4 +337,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
     print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, one caret while typing, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
-    print("Diary photos: older photo lists inside the entry, a missing file, no writes on viewing, the gallery dropdown closed on every day it opens, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")
+    print("Diary photos: older photo lists inside the entry and in the photo library, a missing file, no writes on viewing, the gallery dropdown closed on every day it opens, each picture listed once, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")

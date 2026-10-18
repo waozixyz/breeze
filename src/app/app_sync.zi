@@ -35,6 +35,7 @@ GetTime :: () -> float64 #foreign c;
 #import, file "app.zi";
 #import, file "sync_safety.zi";
 #import, file "../cells/diary_blobs.zi";
+#import, file "../cells/media_diary_photos.zi";
 #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
     #import, file "../storage/sync_runtime.zi";
     #import, file "../cells/diary_blobs_native.zi";
@@ -663,6 +664,8 @@ app_collect_finished_sync :: () {
     app_sync_record_result(result)
     if result == SYNC_OK {
         SyncLog(LOG_INFO, "SYNC: background sync complete")
+        // Entries from other devices may include photos the library lacks.
+        MediaDiaryPhotosDue()
         app_queue_social_refresh()
         if changed != 0 {
             g_sync.data_refresh_pending = 1
@@ -1247,6 +1250,17 @@ app_sync_queue_status :: (status: *SyncStatus, now: float64) -> bool {
     return sync_queue_cache_valid
 }
 
+// Photos Diary entries include join the account's media library a few at a
+// time, while the person is idle and no practice is on screen
+// (cells/media_diary_photos.zi).
+app_add_diary_photos_to_library :: (app: *InnerBreeze, now: float64) {
+    if app_background_sync_safe(app) == 0 || SyncScreenBlocksRefresh(app.breathing.screen) ||
+    SyncScreenBlocksRefresh(app.session_window.screen) || app_sync_user_idle(app, now) == 0 {
+        return
+    }
+    unused MediaDiaryPhotosStep()
+}
+
 app_sync_pump :: (app: *InnerBreeze) {
     now: float64
     should_sync: s32 = 0
@@ -1287,6 +1301,7 @@ app_sync_pump :: (app: *InnerBreeze) {
     }
     app_apply_pending_sync_refresh(app, now)
     app_apply_pending_social_refresh(app)
+    app_add_diary_photos_to_library(app, now)
     if app_sync_url(*url[0], size_of(type_of(url))) == 0 {
         app_clear_disconnected_sync_work()
         return

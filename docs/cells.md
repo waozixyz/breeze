@@ -461,6 +461,21 @@ their own collection, `private.inbe.v1.media`, which released versions skip:
 | `cell.media.<sha256>` | `{"hash","size","type","name","day","taken","added","trashed"[,"blob","key"]}` |
 | `cell.media.preview.<sha256>` | `{"hash","size","type"[,"blob","key"]}` |
 
+Diary photos older versions attached as Diary files belong to the library
+too (`media_diary_photos.zi`): each Diary file a day's entry still includes,
+by a `photos` row or a `diary:` embed, joins it once by its hash through the
+photo button's path (`MediaAddBytes`), named as the entry names it and,
+without an Exif date, under the entry's day (`taken` is then the day
+alone). The entry is not rewritten. A Diary file no entry includes stays
+out, and an existing `cell.media.<sha256>` record, in Trash or not, is left
+as it is. The library file is a hard link to the Diary file where the
+platform allows (a copy on the web), and its sealed copy is the Diary
+photo's, so nothing is kept or uploaded twice. A check is due at start, for
+another account, after each good sync and when a photo's file arrives; it
+reads the day entries only when the Diary files outside the library or the
+entries changed, and adds four photos per frame while the person is idle
+and no practice shows.
+
 The apply branch accepts any `cell.media.*` key with a JSON value, so a later
 version can add kinds of records; a record this version cannot read changes
 nothing and never stops a sync. `media` is a reserved app name, so these keys
@@ -577,9 +592,10 @@ the library through `MediaQueryHost` and `MediaItemHost`, and draws an
 embed through `DiaryPhotoHost(destination)`, which answers the library's
 preview (`media/preview/<sha256>.<type>`) or the Diary file
 (`diary/photos/<file>.<type>`), or `""` while the photo is not on this device
-(host interface 14). Spelling checks send each image as one U+FFFC mark and
-put it back at its mark, refusing a correction that lost or added marks
-(`diary_spelling_mask.zi`).
+(host interface 14). A Diary file the library keeps too draws as the
+library's photo, and the day's photos list one picture once. Spelling
+checks send each image as one U+FFFC mark and put it back at its mark,
+refusing a correction that lost or added marks (`diary_spelling_mask.zi`).
 
 For explicit migration, set `INBE_DIARY_IMPORT=/absolute/harmony/diary` when
 opening Diary. The importer copies safe regular filenames and skips existing

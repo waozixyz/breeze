@@ -22,6 +22,9 @@ Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/cells/diary_store.zi";
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/diary_blobs.zi";
+#import, file "../src/cells/diary_photos.zi";
+#import, file "../src/cells/media_store.zi";
+#import, file "../src/cells/media_diary_photos.zi";
 #import, file "../src/storage/cell_records.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/app/app_types.zi";
@@ -339,6 +342,7 @@ CheckDiary :: () {
         inline_day.document == "{\"version\":1,\"date\":\"2024-03-05\",\"text\":\"Walk ![q](diary:q.png) and ![p](diary:p.png) home today\\n![r](diary:r.png) later\\n\",\"photos\":[{\"file\":\"q.png\",\"name\":\"q\"},{\"file\":\"p.png\",\"name\":\"p\"},{\"file\":\"r.png\",\"name\":\"r\"}]}", 473)
     CheckDiaryPhotoOnFullNode()
     CheckDiaryPhotoCopies()
+    CheckDiaryPhotosInLibrary()
     Expect(DiaryStoreSave("2024-03-02.json", "damaged"), 92)
     bad := DiaryRun(DiaryMessage.{.action = DIARY_LOAD, .year = 2024, .month = 3, .day = 2})
     bad.action = DIARY_SAVE
@@ -592,6 +596,159 @@ CheckDiaryPhotoCopies :: () {
     storage_set_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY, "")
     storage_set_setting_text("sync_server_url", "")
     storage_set_sync_enabled(sync_was_enabled)
+}
+
+// A Diary photo attached to a Diary file, saved, as older versions attach
+// them; the caller frees its name.
+DiaryLibraryAttach :: (bytes: []u8, seed: s32, source: string) -> string {
+    image := DiaryTestImage(bytes, seed)
+    unused RemoveFile(source)
+    file := OpenExclusivePrivate(source)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    Expect(CloseFile(file) && written, 480)
+    name := DiaryStoreAttach(source)
+    unused RemoveFile(source)
+    Expect(name.count > 0, 481)
+    return name
+}
+
+DiaryLibraryRun :: () {
+    for step: 0..63 {
+        unused step
+        unused MediaDiaryPhotosStep()
+    }
+}
+
+DiaryLibraryRecord :: (hash: string) -> string {
+    key := MediaRecordKey(hash)
+    defer { PackageFree(key) }
+    return MediaRecordRead(key)
+}
+
+// Photos older versions attached to Diary entries join the media library,
+// which Photos shows, under the entry's day and with the entry's name. A
+// Diary file no entry includes stays out, a photo in Trash stays there, and
+// looking again changes nothing.
+CheckDiaryPhotosInLibrary :: () {
+    first: [2600]u8
+    second: [2700]u8
+    orphan: [2800]u8
+    trashed: [2900]u8
+    later: [3100]u8
+    first_name := DiaryLibraryAttach(first[:], 11, "library-first.png")
+    second_name := DiaryLibraryAttach(second[:], 12, "library-second.png")
+    orphan_name := DiaryLibraryAttach(orphan[:], 13, "library-orphan.png")
+    trashed_name := DiaryLibraryAttach(trashed[:], 14, "library-trashed.png")
+    later_name := DiaryLibraryAttach(later[:], 15, "library-later.png")
+    first_hash_text: [65]u8
+    second_hash_text: [65]u8
+    orphan_hash_text: [65]u8
+    trashed_hash_text: [65]u8
+    later_hash_text: [65]u8
+    first_hash := DiaryTestHash(first[:], first_hash_text[:])
+    second_hash := DiaryTestHash(second[:], second_hash_text[:])
+    orphan_hash := DiaryTestHash(orphan[:], orphan_hash_text[:])
+    trashed_hash := DiaryTestHash(trashed[:], trashed_hash_text[:])
+    later_hash := DiaryTestHash(later[:], later_hash_text[:])
+    // One entry lists its photo, as older versions save it; another only
+    // embeds one in its text, as after an older version's Remove button.
+    first_out: Vec(u8)
+    BuilderPrint(*first_out, "{\"version\":1,\"date\":\"2024-04-02\",\"text\":\"Walk\",\"photos\":[{\"file\":\"%\",\"name\":\"IMG_2041.png\"}]}", first_name)
+    first_entry := BuilderFinish(first_out)
+    second_out: Vec(u8)
+    BuilderPrint(*second_out, "{\"version\":1,\"date\":\"2024-04-03\",\"text\":\"Tea\\n\\n![Tea cup](diary:%)\",\"photos\":[]}", second_name)
+    second_entry := BuilderFinish(second_out)
+    third_out: Vec(u8)
+    BuilderPrint(*third_out, "{\"version\":1,\"date\":\"2024-04-04\",\"text\":\"Rain\",\"photos\":[{\"file\":\"%\",\"name\":\"Rain\"},{\"file\":\"%\",\"name\":\"Later\"}]}", trashed_name, later_name)
+    third_entry := BuilderFinish(third_out)
+    Expect(DiaryStoreSave("2024-04-02.json", first_entry) && DiaryStoreSave("2024-04-03.json", second_entry) &&
+        DiaryStoreSave("2024-04-04.json", third_entry), 482)
+    // A photo the person moved to Trash in Photos stays there.
+    trashed_image := TextFromBytes(trashed[:])
+    Expect(MediaImportBytes(trashed_image, "Rain in Photos.png").succeeded &&
+        MediaSetTrashed(trashed_hash, true), 483)
+    trashed_record := DiaryLibraryRecord(trashed_hash)
+    // A photo whose file has not arrived on this device waits for it.
+    later_path := DiaryStorePath(later_name)
+    unused RemoveFile(later_path)
+    DiaryLibraryRun()
+    first_item := MediaRead(first_hash)
+    Expect(first_item.valid && !first_item.trashed && TextUntilNul(first_item.day[:]) == "2024-04-02" &&
+        TextUntilNul(first_item.taken[:]) == "2024-04-02" &&
+        TextUntilNul(first_item.name[:]) == "IMG_2041.png", 484)
+    second_item := MediaRead(second_hash)
+    Expect(second_item.valid && TextUntilNul(second_item.day[:]) == "2024-04-03" &&
+        TextUntilNul(second_item.name[:]) == "Tea cup", 485)
+    first_path := MediaPath(first_hash, false)
+    Expect(PackageRead(first_path, DIARY_FILE_LIMIT) == TextFromBytes(first[:]), 486)
+    Expect(!MediaRead(orphan_hash).valid && !MediaRead(later_hash).valid, 487)
+    trashed_now := DiaryLibraryRecord(trashed_hash)
+    Expect(trashed_now == trashed_record && MediaRead(trashed_hash).trashed, 488)
+    // Diary files of other checks belong to no entry either.
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*' AND length(key)=75") == 3, 489)
+    Expect(DiaryStoreRead("2024-04-02.json").data == first_entry &&
+        DiaryStoreRead("2024-04-03.json").data == second_entry, 490)
+    // The entry's Diary file draws as the library's photo, so Diary's day
+    // lists that picture once.
+    diary_asset := PackageText(DiaryPhotoAsset(PackageText("diary:", first_name)), "")
+    place := MediaPlace(first_item)
+    Expect(diary_asset.count > 0 && diary_asset[:6] == "media/" && DiaryPhotoAsset(place) == diary_asset, 491)
+    // Its file arrives from a node.
+    Expect(PackageWrite(later_path, TextFromBytes(later[:])), 492)
+    diary_blob_generation += 1
+    DiaryLibraryRun()
+    later_item := MediaRead(later_hash)
+    Expect(later_item.valid && TextUntilNul(later_item.day[:]) == "2024-04-04" &&
+        TextUntilNul(later_item.name[:]) == "Later", 493)
+    // Looking again, as after a sync or a restart, changes nothing.
+    first_record := DiaryLibraryRecord(first_hash)
+    second_record := DiaryLibraryRecord(second_hash)
+    later_record := DiaryLibraryRecord(later_hash)
+    MediaDiaryPhotosDue()
+    DiaryLibraryRun()
+    media_diary_seen_valid = false
+    MediaDiaryPhotosDue()
+    DiaryLibraryRun()
+    first_again := DiaryLibraryRecord(first_hash)
+    second_again := DiaryLibraryRecord(second_hash)
+    later_again := DiaryLibraryRecord(later_hash)
+    trashed_again := DiaryLibraryRecord(trashed_hash)
+    Expect(first_again == first_record && second_again == second_record && later_again == later_record &&
+        trashed_again == trashed_record, 494)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*' AND length(key)=75") == 4, 495)
+    // The library's file is the Diary file, linked, not a second copy: a
+    // byte changed in place in one shows in the other.
+    diary_path := DiaryStorePath(first_name)
+    handle := OpenUpdate(diary_path)
+    marked: [1]u8 = .[cast(u8)7]
+    Expect(handle.valid && first[100] != cast(u8)7 && WriteAt(handle, marked[:], 100) == 1, 496)
+    linked := PackageRead(first_path, DIARY_FILE_LIMIT)
+    Expect(linked.count == first.count && linked[100] == cast(u8)7, 497)
+    marked[0] = first[100]
+    Expect(WriteAt(handle, marked[:], 100) == 1 && CloseFile(handle), 498)
+    PackageFree(linked)
+    PackageFree(diary_path)
+    PackageFree(first_again)
+    PackageFree(second_again)
+    PackageFree(later_again)
+    PackageFree(trashed_again)
+    PackageFree(first_record)
+    PackageFree(second_record)
+    PackageFree(later_record)
+    PackageFree(diary_asset)
+    PackageFree(place)
+    PackageFree(first_path)
+    PackageFree(trashed_now)
+    PackageFree(trashed_record)
+    PackageFree(later_path)
+    PackageFree(first_entry)
+    PackageFree(second_entry)
+    PackageFree(third_entry)
+    PackageFree(first_name)
+    PackageFree(second_name)
+    PackageFree(orphan_name)
+    PackageFree(trashed_name)
+    PackageFree(later_name)
 }
 
 CheckPackagedLocales :: () {

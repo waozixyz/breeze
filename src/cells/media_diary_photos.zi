@@ -1,0 +1,358 @@
+// Diary photos in the account's media library. A photo an older version
+// attached to a Diary entry is a Diary file (diary_records.zi), which Photos
+// does not list. Each Diary file that a day's entry still includes, by a row
+// of its "photos" list or a diary: embed in its text, joins the library once
+// by its hash, as a photo the photo button adds does (MediaAddBytes): named
+// as the entry names it and, without a camera date, under the entry's day.
+// The entry keeps its diary: embed and is never rewritten.
+//
+// A Diary file no entry names stays out, and a photo the library already
+// has, in Trash or not, is left as it is. Its library file is a link to the
+// Diary file where the platform allows, and its copy on a node is the Diary
+// photo's own copy (the same key and address), so nothing is kept or
+// uploaded twice.
+//
+// A check is due at start, for another account, after each good sync and
+// whenever a photo's file arrives. It reads the day entries only when the
+// Diary files outside the library or the entries changed since the last
+// check, and adds a few photos at a time.
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+#import "text_buffer"
+#import "json_scan"
+#import, file "diary_records.zi";
+#import, file "diary_store.zi";
+#import, file "media_store.zi";
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../app/text_buffers.zi";
+DiaryMarkdown :: #import, file "../../apps/diary/diary_markdown.zi";
+
+MEDIA_DIARY_PHOTOS_MAX :: 1024
+// Photos one step adds; each one makes a preview.
+MEDIA_DIARY_PHOTOS_PER_STEP :: 4
+
+MediaDiaryPhoto :: struct {
+    file: [201]u8
+    hash: [65]u8
+    // This device has its bytes: its file, or its chunks from before copies.
+    local: bool
+    // The first entry that includes it gives its day and its name.
+    named: bool
+    day: [11]u8
+    name: [MEDIA_NAME_MAX + 1]u8
+}
+
+// Diary files the library does not have, from the last look.
+media_diary_photos: [MEDIA_DIARY_PHOTOS_MAX]MediaDiaryPhoto;
+media_diary_photo_count: s32;
+media_diary_due: bool = true;
+media_diary_owner: [72]u8;
+media_diary_generation: s64 = -1;
+// What the last finished check saw, so an unchanged account is not read
+// again.
+media_diary_seen: u64;
+media_diary_seen_valid: bool;
+// A check is adding its photos, from media_diary_next on.
+media_diary_adding: bool;
+media_diary_next: s32;
+
+MediaDiaryPhotosSQL :: #string SQL_END
+SELECT substr(d.key,17),d.value FROM settings d
+WHERE d.user_id=?1 AND d.key GLOB 'cell.diary.file.*' AND d.key NOT GLOB '*.json'
+  AND json_valid(d.value)
+  AND NOT EXISTS (SELECT 1 FROM settings m WHERE m.user_id=?1
+    AND m.key='cell.media.'||json_extract(d.value,'$.hash'))
+ORDER BY d.key
+SQL_END;
+
+MediaDiaryEntriesSQL :: #string SQL_END
+SELECT key,value FROM settings
+WHERE user_id=?1 AND key GLOB 'cell.diary.file.????-??-??.json'
+ORDER BY key
+SQL_END;
+
+// Asks for a check, such as after a sync brought entries.
+MediaDiaryPhotosDue :: () {
+    media_diary_due = true
+}
+
+// An FNV-1a style checksum step, with a separator after the text.
+MediaDiaryMix :: (checksum: u64, text: string) -> u64 {
+    value := checksum
+    for byte: text {
+        value = (value ^ cast(u64)byte) * 1099511628211
+    }
+    return (value ^ cast(u64)255) * 1099511628211
+}
+
+MediaDiaryBytesMatch :: (data: string, hash: string) -> bool {
+    if data.count == 0 {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    actual: [65]u8
+    storage_sha256_hex(descriptor.data, data.count, *actual[0])
+    return TextFromCString(*actual[0]) == hash
+}
+
+// A Diary file's entry as a photo to look at, or false for one that is not.
+MediaDiaryPhotoRead :: (file: string, entry: string, photo: *MediaDiaryPhoto) -> bool {
+    if !DiaryStoreNameValid(file) || !AppCopyText(file, photo.file[:]) {
+        return false
+    }
+    media := DiaryMediaParse(entry)
+    if media.valid {
+        photo.hash = media.hash
+        path := DiaryStorePath(file)
+        photo.local = PackageFileSize(path) == media.size
+        PackageFree(path)
+        return true
+    }
+    // A photo from before copies, kept as chunks.
+    if FieldAt(entry, 0, "count") < 0 ||
+    ReadStringText(entry, FieldAt(entry, 0, "hash"), photo.hash[:]) != 64 ||
+    !DiaryHex64(TextFromBytes(photo.hash[:64])) {
+        return false
+    }
+    photo.local = true
+    return true
+}
+
+// Lists the Diary files the library does not have and answers a checksum
+// of what decides the check: those files, whether their bytes are here,
+// and, when there are any, every day entry.
+MediaDiaryPhotosCollect :: () -> u64 {
+    media_diary_photo_count = 0
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    checksum := MediaDiaryMix(1469598103934665603, owner)
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), MediaDiaryPhotosSQL, -1, *statement, null) != SQLITE_OK {
+        return checksum
+    }
+    unused bind_text(statement, 1, owner)
+    while SqliteStep(statement) == SQLITE_ROW {
+        file := AppTextFromCString(SqliteColumnText(statement, 0), 201)
+        entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        photo := MediaDiaryPhoto.{}
+        if !MediaDiaryPhotoRead(file, entry, *photo) {
+            continue
+        }
+        checksum = MediaDiaryMix(checksum, file)
+        checksum = MediaDiaryMix(checksum, TextUntilNul(photo.hash[:]))
+        checksum = MediaDiaryMix(checksum, ifx photo.local then "1" else "0")
+        if media_diary_photo_count < MEDIA_DIARY_PHOTOS_MAX {
+            media_diary_photos[media_diary_photo_count] = photo
+            media_diary_photo_count += 1
+        }
+    }
+    SqliteFinalize(statement)
+    if media_diary_photo_count == 0 {
+        return checksum
+    }
+    // An entry's record names the hash of its document, so any change to
+    // an entry changes it.
+    if SqlitePrepareText(storage_db_handle(), MediaDiaryEntriesSQL, -1, *statement, null) != SQLITE_OK {
+        return checksum
+    }
+    unused bind_text(statement, 1, owner)
+    while SqliteStep(statement) == SQLITE_ROW {
+        checksum = MediaDiaryMix(checksum, AppTextFromCString(SqliteColumnText(statement, 0), 181))
+        checksum = MediaDiaryMix(checksum, AppTextFromCString(SqliteColumnText(statement, 1), 65536))
+    }
+    SqliteFinalize(statement)
+    return checksum
+}
+
+// The JSON string at `at`, to free with PackageFree, or "".
+MediaDiaryDecode :: (document: string, at: s32) -> string {
+    if at < 0 {
+        return ""
+    }
+    bytes: Vec(u8)
+    for index: 0..document.count {
+        if !VecPush(bytes, cast(u8)0) {
+            VecFree(bytes)
+            return ""
+        }
+    }
+    count := ReadStringText(document, at, VecSlice(bytes, 0, bytes.count))
+    if count <= 0 {
+        VecFree(bytes)
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextFromBytes(VecSlice(bytes, 0, count)))
+    VecFree(bytes)
+    return BuilderFinish(out)
+}
+
+// The first entry, in day order, that includes a Diary file gives the
+// photo its day and name.
+MediaDiaryNamed :: (file: string, name: string, day: string) {
+    for index: cast(s32)0..media_diary_photo_count - 1 {
+        photo := *media_diary_photos[index]
+        if photo.named || TextUntilNul(photo.file[:]) != file {
+            continue
+        }
+        photo.named = true
+        unused AppCopyText(day, photo.day[:])
+        if !AppCopyText(MediaNameCut(name), photo.name[:]) {
+            photo.name[0] = cast(u8)0
+        }
+    }
+}
+
+// Marks the photos one day's entry includes, as Diary shows them: its
+// "photos" rows, then the diary: embeds in its text. A document Diary
+// cannot open, which it shows without photos, includes none.
+MediaDiaryEntryRead :: (name: string) {
+    day := name[:10]
+    document := DiaryRecordRead(name)
+    defer { PackageFree(document) }
+    if document.count == 0 || !MediaDayValid(day) {
+        return
+    }
+    version := ReadNumber(document, FieldAt(document, 0, "version"))
+    date: [11]u8
+    text := FieldAt(document, 0, "text")
+    rows := FieldAt(document, 0, "photos")
+    count := ArrayCount(document, rows)
+    if !version.valid || version.value != 1.0 ||
+    ReadStringText(document, FieldAt(document, 0, "date"), date[:]) != 10 ||
+    TextFromBytes(date[:10]) != day || text < 0 || document[text] != cast(u8)34 || count < 0 ||
+    cast(s64)Space(document, ValueEnd(document, 0, 0)) != document.count {
+        return
+    }
+    for index: cast(s32)0..count - 1 {
+        row := ElementAt(document, rows, index)
+        file := FieldAt(document, row, "file")
+        label := FieldAt(document, row, "name")
+        if file < 0 || document[file] != cast(u8)34 || label < 0 || document[label] != cast(u8)34 {
+            return
+        }
+    }
+    for index: cast(s32)0..count - 1 {
+        row := ElementAt(document, rows, index)
+        file := MediaDiaryDecode(document, FieldAt(document, row, "file"))
+        label := MediaDiaryDecode(document, FieldAt(document, row, "name"))
+        MediaDiaryNamed(file, label, day)
+        PackageFree(file)
+        PackageFree(label)
+    }
+    body := MediaDiaryDecode(document, text)
+    defer { PackageFree(body) }
+    embed := DiaryMarkdown.DiaryEmbedNext(body, 0)
+    while embed.valid {
+        if !embed.library {
+            MediaDiaryNamed(DiaryMarkdown.DiaryEmbedTarget(body, embed),
+                DiaryMarkdown.DiaryEmbedAlt(body, embed), day)
+        }
+        embed = DiaryMarkdown.DiaryEmbedNext(body, embed.end)
+    }
+}
+
+MediaDiaryEntriesRead :: () {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), MediaDiaryEntriesSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    while SqliteStep(statement) == SQLITE_ROW {
+        key: [181]u8
+        if !AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), 181), key[:]) {
+            continue
+        }
+        MediaDiaryEntryRead(TextUntilNul(key[:])[16:])
+    }
+}
+
+// Adds one photo an entry includes, unless the library has its record.
+MediaDiaryPhotoAdd :: (photo: *MediaDiaryPhoto) -> bool {
+    hash := TextUntilNul(photo.hash[:])
+    record_key := MediaRecordKey(hash)
+    record := MediaRecordRead(record_key)
+    present := record.count > 0
+    PackageFree(record_key)
+    PackageFree(record)
+    if present {
+        return false
+    }
+    file := TextUntilNul(photo.file[:])
+    path := DiaryStorePath(file)
+    defer { PackageFree(path) }
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    source := path
+    if !MediaDiaryBytesMatch(data, hash) {
+        // A photo from before copies: its chunks, checked by their hash.
+        PackageFree(data)
+        data = DiaryRecordRead(file)
+        source = ""
+    }
+    defer { PackageFree(data) }
+    if !MediaDiaryBytesMatch(data, hash) {
+        return false
+    }
+    addition := MediaAddition.{.name = TextUntilNul(photo.name[:]), .day = TextUntilNul(photo.day[:]),
+        .source = source}
+    return MediaAddBytes(data, addition).succeeded
+}
+
+// Does a little of the work while a check is due or adding photos; true
+// while more is waiting.
+MediaDiaryPhotosStep :: () -> bool {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if TextUntilNul(media_diary_owner[:]) != owner {
+        unused AppCopyText(owner, media_diary_owner[:])
+        media_diary_seen_valid = false
+        media_diary_adding = false
+        media_diary_due = true
+    }
+    if media_diary_generation != diary_blob_generation {
+        media_diary_generation = diary_blob_generation
+        media_diary_due = true
+    }
+    if owner.count == 0 || DataTemporary() || storage_db_handle() == null {
+        media_diary_adding = false
+        return false
+    }
+    if media_diary_adding {
+        added: s32 = 0
+        while media_diary_next < media_diary_photo_count && added < MEDIA_DIARY_PHOTOS_PER_STEP {
+            photo := *media_diary_photos[media_diary_next]
+            media_diary_next += 1
+            if photo.named && photo.local {
+                unused MediaDiaryPhotoAdd(photo)
+                added += 1
+            }
+        }
+        if media_diary_next < media_diary_photo_count {
+            return true
+        }
+        // What is left waits for a change: its bytes, or an entry naming it.
+        media_diary_adding = false
+        media_diary_seen = MediaDiaryPhotosCollect()
+        media_diary_seen_valid = true
+        return false
+    }
+    if !media_diary_due {
+        return false
+    }
+    media_diary_due = false
+    seen := MediaDiaryPhotosCollect()
+    if media_diary_photo_count == 0 || (media_diary_seen_valid && seen == media_diary_seen) {
+        media_diary_seen = seen
+        media_diary_seen_valid = true
+        return false
+    }
+    MediaDiaryEntriesRead()
+    media_diary_adding = true
+    media_diary_next = 0
+    return true
+}
