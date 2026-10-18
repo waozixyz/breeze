@@ -184,6 +184,8 @@ def main():
                 assert len(stored) == 1 and stored[0].read_bytes() == picked.read_bytes()
                 tap(window, 400, 250 + offset)
                 command("xdotool", "key", "ctrl+End")
+                # Move the caret in a separate input frame before typing.
+                time.sleep(.1)
                 command("xdotool", "type", "--clearmodifiers", " saved on exit")
                 quit_window(window)
                 assert child.wait(timeout=10) == 0, host + " failed to close cleanly"
@@ -239,7 +241,7 @@ def main():
             for key, value in settings.items():
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
-        with inbe("inbe-calculator-install"):
+        with inbe("inbe-calculator-install") as child:
             driver.press(label="Apps", role="button")
             def calculator_card():
                 return next((node for node in driver.find(role="button")
@@ -250,10 +252,16 @@ def main():
             for label in ("2", "+", "3", "="):
                 driver.press(label=label, role="button")
             driver.wait(label="5", role="text")
+            driver.press(label="C", role="button")
+            window = command("xdotool", "search", "--onlyvisible", "--pid", str(child.pid)).splitlines()[0]
+            command("xdotool", "windowfocus", window)
+            command("xdotool", "type", "--clearmodifiers", "7*6")
+            command("xdotool", "key", "Return")
+            driver.wait(label="42", role="text")
         with inbe("inbe-calculator-restart", "--app", "calculator"):
             driver.wait(label="C", role="button")
         print("One unchanged Diary bundle: standalone and Werkzeug editing, photo bytes/rendering, save on close and restart passed without inbe.zib")
-        print("Werkzeug Calculator opened standalone and in Inbe, calculated 2+3, and reopened after restart")
+        print("Werkzeug Calculator opened standalone and in Inbe, calculated by keypad and keyboard, and reopened after restart")
 
 
 if __name__ == "__main__":
