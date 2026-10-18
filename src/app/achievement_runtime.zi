@@ -1,0 +1,240 @@
+#import, file "achievement_locale.zi";
+#import, file "assets.zi";
+// Account-scoped, bounded source reconciliation and quiet presentation.
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "toast_widget"
+#import "toast_props"
+#import "geometry"
+#import "notification"
+#import, file "achievement_host.zi";
+#import, file "app_types.zi";
+#import, file "current_app.zi";
+#import, file "../../apps/lumi/lumi_achievements.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_memory.zi";
+#import, file "session_screen.zi";
+#import, file "metrics.zi";
+#import, file "locale.zi";
+#import, file "../storage/achievements.zi";
+#import, file "../storage/achievement_sources.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/storage_habits.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../cells/module_host.zi";
+#import, file "../cells/node_apps.zi";
+#import, file "../cells/node_app_snapshot.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../practices/practice_downloads.zi";
+#import, file "../../apps/practice/practice_achievements.zi";
+#import, file "../../apps/diary/diary_achievements.zi";
+#import, file "../../apps/habits/habits_achievements.zi";
+#import, file "../../apps/lists/lists_achievements.zi";
+#import, file "../../apps/photos/photos_achievements.zi";
+#import, file "../../apps/radio/radio_achievements.zi";
+
+c :: #system_library "c";
+AchievementFrameTime :: () -> float64 #foreign c "GetTime";
+achievement_scan_revision: s64 = -1;
+achievement_scan_phase: s32;
+achievement_scan_offset: s32;
+achievement_scan_owner: [65]u8;
+achievement_scan_profile_revision: u64;
+achievement_scan_restart: bool;
+achievement_snapshot_revision: u64 = 18446744073709551615;
+achievement_habits: Habits;
+achievement_toast: ToastState;
+achievement_toast_message: string;
+
+AchievementInstalled :: (id: string) -> bool {
+    for index: cast(s32)1..PackageCount - 1 {
+        if PackageID(index) == id { return (CellsInstalledMask() & PackageBit(index)) != 0 }
+    }
+    count := NodeAppInstalledLeafCount()
+    if count > 64 { count = 64 }
+    for slot: cast(s32)0..count - 1 {
+        owner := NodeAppInstalledLeafName(slot)
+        if owner == "" { continue }
+        canonical := PackageText("inbe.", owner)
+        installed := canonical == id
+        PackageFree(canonical)
+        if installed { return true }
+    }
+    return false
+}
+
+AchievementPracticeReady :: (practice: s32) -> bool {
+    return PracticeInstalled(practice) && PracticeContentReady(practice)
+}
+
+AchievementRadioVerified :: (owner: s32) -> bool {
+    return NodeAppVerifiedLeafName(owner) == "radio"
+}
+
+AchievementNodeCatalogs :: () {
+    count := NodeAppInstalledLeafCount()
+    if count > 64 { count = 64 }
+    for slot: cast(s32)0..count - 1 {
+        owner := NodeAppInstalledLeafName(slot)
+        if owner == "" { continue }
+        path := NodeAppAssetPath(owner, "achievements.json")
+        app := PackageText("inbe.", owner)
+        defer { PackageFree(path); PackageFree(app) }
+        asset := NodeAppInstalledLeafAsset(slot, owner, path)
+        if asset.found { unused AchievementCatalog(asset.data, app) }
+    }
+}
+
+AchievementLocaleAsset :: (app: string, path: string) -> AssetView {
+    count := NodeAppInstalledLeafCount()
+    if count > 64 { count = 64 }
+    for slot: cast(s32)0..count - 1 {
+        owner := NodeAppInstalledLeafName(slot)
+        if owner == "" { continue }
+        id := PackageText("inbe.", owner)
+        match := app == id
+        PackageFree(id)
+        if match { return NodeAppInstalledLeafAsset(slot, owner, path) }
+    }
+    return AssetRead(path)
+}
+
+AchievementLumiPracticeSaved :: (id: string, activity: s32, day: s32) {
+    app := CurrentApp()
+    if app != null && app.lumi_practice != 0 {
+        AchievementLumiEffect(id, "lumi.practice", achievement_lumi_practice_offline)
+    }
+    // The same committed session may materialize a linked habit day.
+    AchievementMarkLive("habit.completed")
+    AchievementMarkLive("habit.counter")
+    AchievementMarkLive("habit.scheduled")
+}
+
+AchievementFrame :: (app: *InnerBreeze) {
+    if app == null { return }
+    AchievementBindHost(AchievementInstalled, AchievementPracticeReady, AchievementNodeCatalogs)
+    achievement_radio_owner = AchievementRadioVerified
+    achievement_practice_observer = AchievementLumiPracticeSaved
+    owner := AchievementOwner()
+    if owner != TextUntilNul(achievement_scan_owner[:]) ||
+    achievement_scan_profile_revision != achievement_profile_revision {
+        achievement_scan_profile_revision = achievement_profile_revision
+        achievement_scan_phase = 0
+        achievement_scan_offset = 0
+        achievement_scan_revision = -1
+        achievement_scan_restart = false
+        unused CopyCString(owner, achievement_scan_owner[:])
+        achievement_toast = .{}
+        PackageFree(achievement_toast_message)
+        achievement_toast_message = ""
+        achievement_radio_account = .{}
+        achievement_radio_seconds = 0.0
+        achievement_radio_audible = false
+    }
+    snapshot := NodeAppInstalledLeafRevision()
+    if achievement_snapshot_revision != snapshot {
+        achievement_snapshot_revision = snapshot
+        achievement_catalog_generation = 18446744073709551615
+    }
+    live := achievement_live
+    live_count := ifx owner == TextUntilNul(achievement_owner[:]) then achievement_live_count else 0
+    AchievementCatalogsLoad()
+    if live_count > 0 && achievement_live_count == 0 {
+        achievement_live = live
+        achievement_live_count = live_count
+        achievement_dirty = true
+    }
+    achievement_locale_asset = AchievementLocaleAsset
+    AchievementLocaleFrame()
+    AchievementVisibility()
+    revision := storage_data_revision()
+    if !achievement_reconciling && revision == achievement_scan_revision {
+        AchievementEvaluate()
+        achievement_scan_revision = storage_data_revision()
+        return
+    }
+    if !achievement_reconciling {
+        achievement_scan_phase = 0
+        achievement_scan_offset = 0
+        achievement_reconciling = true
+    }
+    if revision != achievement_scan_revision && achievement_scan_phase > 0 { achievement_scan_restart = true }
+    rows: s32 = 0
+    phase := achievement_scan_phase
+    offset := achievement_scan_offset
+    if phase < 5 { rows = AchievementPracticeBackfill(phase, offset) }
+    else if phase == 5 { rows = AchievementMeditationLegacy(offset) }
+    else if phase == 6 { rows = AchievementDiaryBackfill(offset) }
+    else if phase == 7 { rows = AchievementHabitCreatedBackfill(offset) }
+    else if phase == 8 {
+        if offset == 0 {
+            habits_free(*achievement_habits)
+            achievement_habits = .{}
+            unused storage_habits_load(cast(*void)*achievement_habits)
+        }
+        rows = AchievementHabitDaysBackfill(*achievement_habits, offset)
+    }
+    else if phase == 9 { rows = AchievementHabitAnswersBackfill(offset) }
+    else if phase == 10 { rows = AchievementHabitSpansBackfill(offset) }
+    else if phase == 11 { rows = AchievementListBackfill(offset) }
+    else if phase == 12 { rows = AchievementListItemBackfill(offset) }
+    else if phase == 13 { rows = AchievementPhotoBackfill(offset) }
+    if rows < 0 { return }
+    if rows >= AchievementSourceBatch { achievement_scan_offset += rows }
+    else {
+        achievement_scan_phase += 1
+        achievement_scan_offset = 0
+    }
+    if achievement_scan_phase >= 14 {
+        if achievement_scan_restart {
+            achievement_scan_restart = false
+            achievement_scan_phase = 0
+        } else {
+            achievement_reconciling = false
+            achievement_dirty = true
+            AchievementEvaluate()
+        }
+    }
+    achievement_scan_revision = storage_data_revision()
+}
+
+AchievementDrawAlerts :: (app: *InnerBreeze) {
+    if app == null { return }
+    if !AchievementAlerts() {
+        achievement_toast = .{}
+        PackageFree(achievement_toast_message)
+        achievement_toast_message = ""
+        unused AchievementConsumeAlerts()
+        return
+    }
+    if app_is_session_screen(app.breathing.screen) || app_is_session_screen(app.session_window.screen) ||
+    app.modal.active != 0 || app.launcher_open { return }
+    if achievement_dirty || achievement_reconciling { return }
+    earned := AchievementConsumeAlerts()
+    if earned > 0 {
+        PackageFree(achievement_toast_message)
+        out: Vec(u8)
+        BuilderPrint(*out, "% · %", LocaleText("achievements_title"), earned)
+        achievement_toast_message = BuilderFinish(out)
+    }
+    if app.backgrounded != 0 {
+        if earned > 0 && NotificationsAllowed() {
+            unused Notify(NotificationProps.{
+                    .title = LocaleText("achievements_title"), .body = achievement_toast_message,
+                    .tag = "inbe.achievements", .id = 8,
+                    .priority = NotificationPriority.NotificationPriorityLow,
+                    .suppress_when_focused = true})
+        }
+        achievement_toast = .{}
+        PackageFree(achievement_toast_message)
+        achievement_toast_message = ""
+        return
+    }
+    if achievement_toast.message.count == 0 && earned == 0 { return }
+    achievement_toast = Toast(app.ui.session, ToastProps.{
+            .key = cast(u64)0x61636869657665,
+            .viewport = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width, cast(float32)app.ui.view_height},
+            .state = achievement_toast, .message = ifx earned > 0 then achievement_toast_message else "",
+            .seconds = 4.0, .now_seconds = AchievementFrameTime(), .scale = 1.0}).state
+}

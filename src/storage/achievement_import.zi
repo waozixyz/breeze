@@ -1,0 +1,56 @@
+// Legacy data archives merge permanent awards and facts that cannot be
+// reconstructed from activity tables. Full Self backups preserve the whole
+// profile; presentation receipts are never copied by this selective importer.
+#import "std/json_scan"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import, file "achievement_records.zi";
+#import, file "cell_records.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+AchievementArchiveFact :: (key: string, value: string) -> bool {
+    if !AchievementRecordPayloadValid(key, value) || key == AchievementAlertsKey { return false }
+    if key.count > 23 && key[:23] == "cell.achievement.award." { return true }
+    metric: [97]u8
+    if ReadStringText(value, FieldAt(value, 0, "metric"), metric[:]) < 1 { return false }
+    name := TextUntilNul(metric[:])
+    return name == "radio.playback" || name == "leaderboard" || (name.count > 5 && name[:5] == "lumi.")
+}
+
+AchievementArchiveRecords :: (source: *void, apply: bool = false) -> s32 {
+    if source == null { return 0 }
+    statement: *void
+    // New achievement records always have an owning user. A multi-user
+    // legacy database is not a single profile archive and proves no owner.
+    users: *void
+    if SqlitePrepareText(source, "SELECT COUNT(*) FROM users", -1, *users, null) != SQLITE_OK { return 0 }
+    single := SqliteStep(users) == SQLITE_ROW && SqliteColumnInt(users, 0) == 1
+    SqliteFinalize(users)
+    if !single { return 0 }
+    if SqlitePrepareText(source,
+        "SELECT key,value FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key LIKE 'cell.achievement.%' ORDER BY key",
+        -1, *statement, null) != SQLITE_OK { return 0 }
+    defer { SqliteFinalize(statement) }
+    count: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        key := AppTextFromCString(SqliteColumnText(statement, 0), 181)
+        value := AppTextFromCString(SqliteColumnText(statement, 1), 2049)
+        if !AchievementArchiveFact(key, value) { continue }
+        count += 1
+        if !apply { continue }
+        current := CellRecordRead(key)
+        defer { PackageFree(current) }
+        if current == value { continue }
+        if key.count > 23 && key[:23] == "cell.achievement.award." && AchievementRecordPayloadValid(key, current) {
+            prior := ReadNumber(current, FieldAt(current, 0, "earned")).value
+            incoming := ReadNumber(value, FieldAt(value, 0, "earned")).value
+            if incoming == 0 || (prior > 0 && prior <= incoming) { continue }
+        }
+        if !CellRecordWrite(key, value) { return -1 }
+    }
+    return count
+}

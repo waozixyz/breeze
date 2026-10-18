@@ -1,0 +1,28 @@
+// Validate optional achievement metadata before an installed package replaces
+// its previous working version. Older packages may omit the catalog entirely.
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/json_scan"
+#import "std/vec"
+#import, file "../storage/achievements.zi";
+#import, file "package_files.zi";
+
+AchievementBundleValid :: (bundle: *void, app: string, directory: string) -> bool {
+    if bundle == null { return false }
+    out: Vec(u8)
+    BuilderPrint(*out, "assets/%/achievements.json", directory)
+    path := BuilderFinish(out)
+    defer { PackageFree(path) }
+    count := BundleAssets(bundle)
+    if count > cast(u64)8192 { return false }
+    if count == cast(u64)0 { return true }
+    for index: cast(u64)0..count - cast(u64)1 {
+        if TextFromCString(BundleAssetPath(bundle, index)) != path { continue }
+        size := BundleAssetLength(bundle, index)
+        if size > cast(u64)262144 { return false }
+        document := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, index), size))
+        return AchievementCatalog(document, app, false)
+    }
+    return true
+}

@@ -1,6 +1,14 @@
 # Inner Breeze achievements implementation plan
 
-Date: 18 October 2026. Status: proposed product and implementation plan.
+Date: 18 October 2026. Status: implementation in progress; final application
+integration and device verification remain pending.
+
+The 160 catalogs, app earning adapters, shared Self view and alert control are
+implemented. Facts and permanent awards use validated account-owned settings
+records in their own encrypted collection, rather than a second database.
+Presentation receipts remain local. Native SQLite checks cover earning,
+source deletion and purge, sync merging, archive restore and profile replacement.
+Successful focused checks do not establish that the final application is released.
 
 Achievements live in the shared **Self** profile app. Each installed Inner
 Breeze app supplies its own achievements, and Practices supplies an additional

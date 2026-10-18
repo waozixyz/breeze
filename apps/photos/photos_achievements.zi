@@ -1,0 +1,40 @@
+#import "std/json_scan"
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/achievement_sources.zi";
+#import, file "../../src/storage/sqlite.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/cells/media_store.zi";
+#import "std/date_parse"
+#import, file "../../src/storage/achievement_records.zi";
+#import "std/text_buffer"
+
+AchievementPhotoBackfill :: (offset: s32) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value FROM settings WHERE user_id=?1 AND key GLOB 'cell.media.*' AND length(key)=75 ORDER BY key LIMIT 128 OFFSET ?2",
+        -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        document := AppTextFromCString(SqliteColumnText(statement, 0), 65536)
+        item := MediaParse(document)
+        if item.valid {
+            capture := ReadNumber(document, FieldAt(document, 0, "capture"))
+            day := ifx capture.valid && capture.value == 1 then AchievementParseDay(TextUntilNul(item.day[:])) else 0
+            unused AchievementRecord("photo.original", TextUntilNul(item.hash[:]), day, 1, "", "", false, false, item.trashed)
+        }
+        rows += 1
+    }
+    return rows
+}
+
+AchievementPhotoImported :: (hash: string) {
+    day := AchievementToday()
+    unused AchievementRecord("photo.import", hash, day)
+    AchievementMarkLive("photo.original")
+}

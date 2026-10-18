@@ -8,6 +8,7 @@ somewhere (or is one of the keys chosen at run time, listed below).
 """
 from pathlib import Path
 import re
+import json
 import sys
 
 root = Path(__file__).resolve().parent.parent
@@ -65,6 +66,11 @@ def tai_chi_course_keys():
 
 
 DYNAMIC_KEYS += tai_chi_course_keys()
+# Achievement titles and descriptions are declarative app-owned locale keys.
+for catalog in sorted((root / "apps").glob("*/achievements.json")):
+    for achievement in json.loads(catalog.read_text())["achievements"]:
+        DYNAMIC_KEYS += [achievement["title_key"], achievement["description_key"],
+                         "achievement_group_" + achievement["group"]]
 
 
 def load_keys(path):
@@ -105,7 +111,7 @@ english_set = set(english)
 check_practice_labels(english, "en.txt")
 
 sources = []
-for directory in (root / "src", root / "apps", root / "build/packages/kryon/src"):
+for directory in (root / "src", root / "apps", root / "build/packages/kryon/src", root / "build/packages/self/src"):
     if directory.is_dir():
         sources += sorted(p for p in directory.rglob("*") if p.suffix in (".zi", ".c", ".h"))
 

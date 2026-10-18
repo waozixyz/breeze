@@ -4,6 +4,8 @@
 
 
 #import, file "../habits/habit_types.zi";
+#import, file "achievement_import.zi";
+#import, file "achievement_records.zi";
 c :: #system_library "c";
 StorageImportInfo :: struct {
     valid: s32
@@ -179,6 +181,7 @@ import_launcher_favorite_key :: (key: string) -> bool {
 
 setting_key_importable :: (key: string) -> s32 {
     if key.count == 0 { return 0 }
+    if key == AchievementAlertsKey { return 1 }
     if import_launcher_favorite_key(key) { return 1 }
     if import_custom_audio_key(key, "audio_custom_sound_") ||
     import_custom_audio_key(key, "audio_custom_music_") {
@@ -553,6 +556,7 @@ import_settings_from_source :: (src: *void) -> s32 {
         if setting_key_importable(key) == 0 {
             continue
         }
+        if key == AchievementAlertsKey && !AchievementRecordPayloadValid(key, value) { continue }
         sqlite3_reset(write_stmt)
         sqlite3_clear_bindings(write_stmt)
         bind_text(write_stmt, 1, AppTextFromCString(storage_user_id_buffer(), 128))
@@ -594,7 +598,7 @@ inspect_sqlite_db_file :: (db_path: string, info: *StorageImportInfo) -> s32 {
         info.has_sessions = ifx (info.session_count > 0) then (1) else (0)
         info.has_habits = ifx (info.habit_count > 0) then (1) else (0)
         info.has_settings = ifx (info.setting_count > 0) then (1) else (0)
-        info.valid = ifx (info.has_sessions != 0 || info.has_habits != 0 || info.has_settings != 0) then (1) else (0)
+        info.valid = ifx (info.has_sessions != 0 || info.has_habits != 0 || info.has_settings != 0 || AchievementArchiveRecords(src) > 0) then (1) else (0)
         ok = info.valid
     } else if source_table_has_column(src, "tracks", "name") != 0  && source_table_has_column(src, "ticks", "_track_id") != 0 {
         info.habit_count = source_count_rows(src, "SELECT COUNT(*) FROM tracks WHERE enabled!=0")
@@ -796,6 +800,11 @@ import_sqlite_db_file :: (db_path: string, mode: StorageImportMode) -> s32 {
                 day_write_stmt = null
             }
 
+            if failed == 0 {
+                milestones := AchievementArchiveRecords(src, true)
+                if milestones > 0 { ok = 1 }
+                if milestones < 0 { failed = 1 }
+            }
             if failed == 0 && mode == cast(StorageImportMode)STORAGE_IMPORT_DATA_AND_SETTINGS {
                 imported_settings = import_settings_from_source(src)
             }

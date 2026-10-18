@@ -1,3 +1,4 @@
+#import, file "achievement_packages.zi";
 // Independently versioned feature VMs share persistence and platform effects.
 #import "bundle_host"
 #import "byte_text_linux"
@@ -1054,7 +1055,11 @@ CellsInstalledMask :: () -> s32 {
 #program_export
 CellsValidatePackage :: (index: s32, bytes: string) -> bool {
     if index >= PackageCount && index < PackageSlots {
-        return NodeAppValidate(index - PackageCount, bytes)
+        if !NodeAppValidate(index - PackageCount, bytes) { return false }
+        bundle := OpenBundleBytes(HostTextData(bytes), cast(u64)bytes.count)
+        if bundle == null { return false }
+        defer { CloseBundle(bundle) }
+        return AchievementBundleValid(bundle, PackageID(index), PackageName(index))
     }
     if index < 0 || index >= PackageCount {
         return false
@@ -1077,6 +1082,9 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
 }
 
 ModuleFeatureAssetsValid :: (bundle: *void, kind: s32) -> bool {
+    for index: cast(s32)1..PackageCount - 1 {
+        if ModuleKindForPackage(index) == kind && !AchievementBundleValid(bundle, PackageID(index), PackageName(index)) { return false }
+    }
     count := BundleAssets(bundle)
     if count > cast(u64)8192 {
         return false
@@ -1099,6 +1107,7 @@ ModuleFeatureAssetsValid :: (bundle: *void, kind: s32) -> bool {
 }
 
 ModulePackageAssetsValid :: (bundle: *void, validate_features: bool) -> bool {
+    if !AchievementBundleValid(bundle, "inbe", "app") { return false }
     count := BundleAssets(bundle)
     if count < cast(u64)2 || count > cast(u64)8192 {
         return false

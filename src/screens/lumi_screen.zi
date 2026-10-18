@@ -1,3 +1,6 @@
+#import "std/json_scan"
+#import, file "../../apps/lumi/lumi_achievements.zi";
+#import, file "../storage/achievements.zi";
 // The wrapper handles input, storage and existing app tools. Lumi's portable
 // cell owns the chat layout, autocomplete and interpretation of requests.
 #import "bundle_host"
@@ -477,7 +480,7 @@ LumiTaskAt :: (index: s32) -> LumiTask {
 }
 
 // Every proposed action is checked again against live state at execution.
-LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
+LumiPerformAction :: (app: *InnerBreeze, action: LumiAction) -> bool {
     if !LumiToolsAvailable() {
         return false
     }
@@ -598,6 +601,44 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
     app.elist.loaded = 0
     app.elist.visibility_valid = false
     unused storage_elist_load(cast(*void)*lumi_tasks)
+    return true
+}
+
+// Capture execution, not a proposal or a successful no-op.
+LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
+    if app == null { return false }
+    already_done := false
+    if action.kind == LUMI_COMPLETE_HABIT {
+        for index: cast(s32)0..LumiHabitCount(app) - 1 {
+            habit := LumiHabitAt(app, index)
+            if habit.id == action.id && habit.done { already_done = true }
+        }
+    }
+    offline := LumiAiRoute() == LUMI_AI_OFFLINE
+    succeeded := LumiPerformAction(app, action)
+    if !succeeded { return false }
+    if action.kind == LUMI_START_PRACTICE { achievement_lumi_practice_offline = offline }
+    if action.kind == LUMI_SHOW_PROGRESS {
+        out: Vec(u8)
+        BuilderPrint(*out, "chart.%.%.%", action.practice, action.route, AchievementToday())
+        source := BuilderFinish(out)
+        chart := LumiProgressJson(app, action.practice, action.route)
+        points := FieldAt(chart, 0, "points")
+        evidence := false
+        for index: cast(s32)0..ArrayCount(chart, points) - 1 {
+            point := ElementAt(chart, points, index)
+            value := ReadNumber(chart, FieldAt(chart, point, "value"))
+            if value.valid && value.value > 0 { evidence = true }
+        }
+        if evidence { AchievementLumiCommand("lumi.chart", offline, source) }
+        PackageFree(chart)
+        PackageFree(source)
+    } else if action.kind == LUMI_WRITE_DIARY {
+        AchievementLumiCommand("lumi.diary", offline)
+    } else if (action.kind == LUMI_COMPLETE_HABIT && !already_done) || action.kind == LUMI_ADD_TODO ||
+    action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO {
+        AchievementLumiCommand("", offline)
+    }
     return true
 }
 

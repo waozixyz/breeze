@@ -1,0 +1,71 @@
+// Sample the host's real audible playback state; connection time is excluded.
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/cells/package_files.zi";
+
+c :: #system_library "c";
+AchievementRadioTime :: () -> float64 #foreign c "GetTime";
+AchievementRadioOwnerFn :: #type (owner: s32) -> bool;
+achievement_radio_owner: AchievementRadioOwnerFn;
+achievement_radio_account: [65]u8;
+achievement_radio_station: [2048]u8;
+achievement_radio_session: [37]u8;
+achievement_radio_previous: float64;
+achievement_radio_seconds: float64;
+achievement_radio_start: s64;
+achievement_radio_day: s32;
+achievement_radio_sequence: s32;
+achievement_radio_audible: bool;
+
+AchievementRadioFlush :: () {
+    seconds := cast(s64)achievement_radio_seconds
+    if seconds < 1 || achievement_radio_day == 0 { return }
+    source: Vec(u8)
+    BuilderPrint(*source, "%.%", TextUntilNul(achievement_radio_session[:]), achievement_radio_sequence)
+    key := BuilderFinish(source)
+    defer { PackageFree(key) }
+    if AchievementRecord("radio.playback", key, achievement_radio_day, seconds,
+        subject = TextUntilNul(achievement_radio_station[:]), active = false, started = achievement_radio_start,
+        ended = achievement_radio_start + seconds) {
+        achievement_radio_sequence += 1
+        achievement_radio_start += seconds
+        achievement_radio_seconds -= cast(float64)seconds
+    }
+}
+
+AchievementRadioSample :: (owner: s32, station: string, playing: bool, volume: s32, verified: bool,
+    now: float64, stamp: s64, day: s32) {
+    account := AchievementOwner()
+    same := account == TextUntilNul(achievement_radio_account[:]) &&
+    station == TextUntilNul(achievement_radio_station[:])
+    eligible := owner >= 0 && verified && playing && volume > 0
+    elapsed := now - achievement_radio_previous
+    if same && achievement_radio_audible && eligible && elapsed > 0.0 && elapsed <= 2.0 &&
+    day == achievement_radio_day {
+        achievement_radio_seconds += elapsed
+    }
+    gap := achievement_radio_audible && (elapsed <= 0.0 || elapsed > 2.0)
+    if !same || !eligible || !achievement_radio_audible || day != achievement_radio_day || gap {
+        // Never write a previous account's interval into the new account.
+        if account == TextUntilNul(achievement_radio_account[:]) { AchievementRadioFlush() }
+        achievement_radio_seconds = 0.0
+        achievement_radio_start = stamp
+        achievement_radio_day = day
+        unused CopyCString(account, achievement_radio_account[:])
+        unused CopyCString(station, achievement_radio_station[:])
+        storage_make_uuid(*achievement_radio_session[0])
+        achievement_radio_sequence = 0
+    }
+    if achievement_radio_seconds >= 15.0 { AchievementRadioFlush() }
+    achievement_radio_previous = now
+    achievement_radio_audible = eligible
+}
+
+AchievementRadioTick :: (owner: s32, station: string, playing: bool, volume: s32, verified: bool) {
+    AchievementRadioSample(owner, station, playing, volume, verified,
+        AchievementRadioTime(), now_seconds(), AchievementToday())
+}

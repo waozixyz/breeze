@@ -1,0 +1,88 @@
+// Session qualification belongs to Practices. A source row records completed
+// rounds/repetitions, not interchangeable wall-clock seconds.
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/achievement_sources.zi";
+#import, file "../../src/storage/sqlite.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import "std/text_buffer"
+
+AchievementPracticeObserver :: #type (id: string, activity: s32, day: s32) -> ();
+achievement_practice_observer: AchievementPracticeObserver;
+
+AchievementPracticeMetric :: (activity: s32) -> string {
+    if activity == 0 { return "practice.whm" }
+    if activity == 1 { return "practice.meditation" }
+    if activity == 2 { return "practice.sunsalutation" }
+    if activity == 3 { return "practice.patterns" }
+    if activity == 4 { return "practice.taichi" }
+    return ""
+}
+
+AchievementPracticeSaved :: (id: string, activity: s32, day: s32, values: []s32, live: bool = true) {
+    metric := AchievementPracticeMetric(activity)
+    if metric == "" || id.count == 0 { return }
+    amount: s64 = 0
+    for value: values { if value > 0 { amount += value } }
+    if amount < 1 || ((activity == 1 || activity == 3) && amount < 60) { return }
+    // Only meditation stores duration for its cumulative-time achievements.
+    if activity != 1 { amount = 1 }
+    unused AchievementRecord(metric, id, day, amount, "", "", true, live)
+    if live && achievement_practice_observer != null { achievement_practice_observer(id, activity, day) }
+}
+
+AchievementPracticeBackfill :: (activity: s32, offset: s32) -> s32 {
+    statement: *void
+    sql := "SELECT s.id,s.local_date,COALESCE((SELECT SUM(r.seconds) FROM session_rounds r WHERE r.session_id=s.id AND r.seconds>0),0),s.deleted_at,s.source FROM sessions s WHERE s.user_id=?1 AND s.activity=?2 ORDER BY s.id LIMIT 128 OFFSET ?3"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, activity)
+    SqliteBindInt(statement, 3, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        amount := SqliteColumnInt64(statement, 2)
+        source := AppTextFromCString(SqliteColumnText(statement, 4), 96)
+        // Legacy WHM rounds and real meditation durations are evidence. The
+        // movement activities need the app's own known save representation.
+        proven := activity == 0 || activity == 1 || source == "app"
+        if activity == 1 || activity == 3 { proven = proven && amount >= 60 }
+        qualified := proven && amount > 0
+        if activity != 1 || amount < 1 { amount = 1 }
+        unused AchievementRecord(AchievementPracticeMetric(activity), id,
+            SqliteColumnInt(statement, 1), amount, "", "", true, false,
+            !qualified || SqliteColumnInt64(statement, 3) != 0)
+        rows += 1
+    }
+    return rows
+}
+
+AchievementMeditationLegacy :: (offset: s32) -> s32 {
+    return AchievementSourceRows("practice.meditation",
+        "SELECT COALESCE(NULLIF(m.session_id,''),m.id),0,m.duration_seconds,'',COALESCE(NULLIF(m.session_id,''),m.id),0,0 FROM meditation_logs m WHERE m.user_id=?1 AND m.duration_seconds>=60 AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.id=m.session_id) ORDER BY m.id LIMIT 128 OFFSET ?2", offset)
+}
+
+AchievementPracticeDeleted :: () -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT id,activity FROM sessions WHERE user_id=?1 AND deleted_at>0",
+        -1, *statement, null) != SQLITE_OK { return false }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    while SqliteStep(statement) == SQLITE_ROW {
+        metric := AchievementPracticeMetric(SqliteColumnInt(statement, 1))
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        if metric != "" && !AchievementRetract(metric, id) { return false }
+    }
+    return true
+}
+
+// Preset provenance exists only for a verified native save, never inferred
+// from a generic duration imported from an older client.
+AchievementPatternSaved :: (id: string, preset: s32) {
+    variant := ifx preset == 0 then "box" else (ifx preset == 2 then "coherent" else "other")
+    if id.count == 0 { return }
+    unused AchievementRecord("practice.patterns", id, AchievementToday(), 1, variant)
+}

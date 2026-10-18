@@ -245,3 +245,49 @@ OR (excluded.updated_at = settings.updated_at AND excluded.value != settings.val
  AND entity_id=settings.key AND local_date=0
 ))
 SQL
+
+// Award identity is a grow-only set. A known earlier earning date wins even
+// when an offline device uploads later; unknown backfill time never erases it.
+SyncAchievementAwardsSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),
+ CAST(strftime('%s',json_extract(value,'$.updated_at')) AS INTEGER)
+FROM json_each(?1,'$.changes.cell_records')
+WHERE strftime('%s',json_extract(value,'$.updated_at')) IS NOT NULL
+ON CONFLICT(user_id,key) DO UPDATE SET value=CASE
+ WHEN NOT json_valid(settings.value) THEN excluded.value
+ WHEN CAST(json_extract(excluded.value,'$.earned') AS INTEGER)>0 AND
+  (CAST(json_extract(settings.value,'$.earned') AS INTEGER)=0 OR
+   CAST(json_extract(excluded.value,'$.earned') AS INTEGER)<CAST(json_extract(settings.value,'$.earned') AS INTEGER))
+ THEN excluded.value ELSE settings.value END,
+ updated_at=MAX(settings.updated_at,excluded.updated_at)
+WHERE excluded.updated_at>settings.updated_at OR NOT json_valid(settings.value) OR
+ (CAST(json_extract(excluded.value,'$.earned') AS INTEGER)>0 AND
+  (CAST(json_extract(settings.value,'$.earned') AS INTEGER)=0 OR
+   CAST(json_extract(excluded.value,'$.earned') AS INTEGER)<CAST(json_extract(settings.value,'$.earned') AS INTEGER)))
+SQL
+
+// A newer source state may delete or restore a fact, while still retaining
+// first-completion dates and native preset provenance learned on another device.
+SyncAchievementFactsSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),
+ CAST(strftime('%s',json_extract(value,'$.updated_at')) AS INTEGER)
+FROM json_each(?1,'$.changes.cell_records')
+WHERE strftime('%s',json_extract(value,'$.updated_at')) IS NOT NULL
+ON CONFLICT(user_id,key) DO UPDATE SET value=CASE
+ WHEN NOT json_valid(settings.value) THEN excluded.value
+ WHEN json_extract(settings.value,'$.metric') IN ('list.completed','list.comment')
+  AND CAST(json_extract(settings.value,'$.day') AS INTEGER)>0
+  AND (CAST(json_extract(excluded.value,'$.day') AS INTEGER)=0 OR
+   CAST(json_extract(settings.value,'$.day') AS INTEGER)<CAST(json_extract(excluded.value,'$.day') AS INTEGER))
+ THEN json_set(excluded.value,'$.day',json_extract(settings.value,'$.day'),
+  '$.civil',json_extract(settings.value,'$.civil'),'$.active',json_extract(settings.value,'$.active'))
+ WHEN json_extract(settings.value,'$.metric')='practice.patterns'
+  AND length(json_extract(settings.value,'$.variant'))>0 AND json_extract(excluded.value,'$.variant')=''
+ THEN json_set(excluded.value,'$.variant',json_extract(settings.value,'$.variant'))
+ ELSE excluded.value END,updated_at=excluded.updated_at
+WHERE excluded.updated_at>settings.updated_at OR
+ (excluded.updated_at=settings.updated_at AND excluded.value!=settings.value AND NOT EXISTS(
+  SELECT 1 FROM sync_outbox WHERE entity_type='cell_record' AND entity_id=settings.key AND local_date=0))
+SQL

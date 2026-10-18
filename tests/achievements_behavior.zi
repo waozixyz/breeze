@@ -1,12 +1,40 @@
+#import "std/byte_text_linux"
+#import, file "../src/storage/json.zi";
 // Exercise achievement rules against the actual account-owned SQLite store.
 #import, file "storage_test_support.zi";
 #import, file "../src/storage/achievements.zi";
 #import, file "../src/storage/achievement_records.zi";
 #import, file "../src/storage/cell_records.zi";
 #import, file "../src/storage/db.zi";
+#import, file "../src/storage/sync_apply.zi";
+#import, file "../src/storage/storage_json_sql.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/sync_collections.zi";
+#import, file "../src/cells/package_files.zi";
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/bundle_host"
+#import, file "../src/cells/achievement_packages.zi";
+#import, file "../src/storage/import.zi";
+#import, file "../src/storage/import_types.zi";
+#import, file "../src/app/text_buffers.zi";
 #import "std/c_string"
+#import "drawing_props"
+#import, file "../apps/radio/radio_achievements.zi";
+#import, file "../apps/diary/diary_achievements.zi";
+#import, file "../apps/lists/lists_achievements.zi";
+#import, file "../src/storage/storage_elist.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/sync_state.zi";
+#import, file "../src/storage/meta.zi";
+#import, file "../src/storage/storage_habits.zi";
+#import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_memory.zi";
+#import, file "../apps/habits/habits_achievements.zi";
 
 test_entry: AchievementDefinition;
+test_habits: Habits;
 
 metric_value :: (metric: string, rule: string, variant: string = "") -> s32 {
     test_entry = .{}
@@ -14,6 +42,53 @@ metric_value :: (metric: string, rule: string, variant: string = "") -> s32 {
     unused CopyCString(rule, test_entry.rule[:])
     unused CopyCString(variant, test_entry.variant[:])
     return cast(s32)AchievementMetric(*test_entry)
+}
+
+open_fixture :: (path: string) -> *void {
+    bytes: [128]u8
+    if !CopyCString(path, bytes[:]) { return null }
+    return OpenBundle(*bytes[0])
+}
+
+apply_record :: (key: string, value: string, date: string,
+    collection: string = AchievementCollection) -> s32 {
+    out: StorageJsonBuilder
+    out.ok = 1
+    storage_json_builder_append_text(*out, "{")
+    storage_json_builder_key_value_text(*out, "key", key)
+    storage_json_builder_append_text(*out, ",")
+    storage_json_builder_key_value_text(*out, "value", value)
+    storage_json_builder_append_text(*out, ",")
+    storage_json_builder_key_value_text(*out, "updated_at", date)
+    storage_json_builder_append_text(*out, "}")
+    document := TextFromCString(out.data)
+    ok := storage_apply_decrypted_record(collection, key, document)
+    storage_json_builder_free(*out)
+    return ok
+}
+
+fact_document :: (metric: string, day: s32, variant: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"metric\":\"%\",\"subject\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"day\":%,\"civil\":%,\"amount\":1,\"variant\":\"%\",\"active\":1,\"deleted\":0,\"start\":0,\"end\":0}",
+        metric, day, AchievementDayIndex(day), variant)
+    return BuilderFinish(out)
+}
+
+catalogs_check :: () {
+    AchievementReset()
+    names: [9]string = .["inbe", "lists", "habits", "practice", "diary", "lumi", "leaderboard", "photos", "radio"]
+    owners: [9]string = .["inbe", "inbe.lists", "inbe.habits", "inbe.practices", "inbe.diary", "inbe.lumi", "inbe.leaderboard", "inbe.photos", "inbe.radio"]
+    for index: cast(s32)0..8 {
+        suffix := PackageText(names[index], "/achievements.json")
+        path := PackageText("apps/", suffix)
+        PackageFree(suffix)
+        document := PackageRead(path, 262144)
+        check_true("all shipped catalogs validate", AchievementCatalog(document, owners[index]))
+        check_true("validate update without changing catalog", AchievementCatalog(document, owners[index], false))
+        PackageFree(path)
+        PackageFree(document)
+    }
+    check_int("ship the full 160 achievement catalog", achievement_count, 160)
 }
 
 #program_export
@@ -56,6 +131,7 @@ Check :: () -> s32 {
     check_true("overlapping second device", AchievementRecord("radio.playback", "radio-two", 20261001, 120, subject = "station-one", started = 1060, ended = 1180))
     check_int("radio unions overlapping device intervals", metric_value("radio.playback", "minutes"), 3)
     check_int("radio day needs a minute", metric_value("radio.playback", "days"), 1)
+    check_int("count each sufficiently heard station once", metric_value("radio.playback", "station_minutes"), 1)
     check_true("reject fabricated radio duration", !AchievementRecord("radio.playback", "invalid-radio", 20261001, 100, started = 1000, ended = 1001))
     AchievementReset()
     check_true("reload durable catalog", AchievementCatalog(catalog, "inbe"))
@@ -63,5 +139,258 @@ Check :: () -> s32 {
     AchievementEvaluate()
     check_true("award survives engine reload", achievement_definitions[0].awarded)
     check_int("reload stays silent", AchievementConsumeAlerts(), 0)
+    check_true("seed unknown legacy task date", AchievementRecord("list.completed", "old-task", 0, active = false, live = false))
+    check_true("recomplete legacy task", AchievementRecord("list.completed", "old-task", 20261018))
+    check_int("recompletion cannot invent first date", metric_value("list.completed", "days"), 0)
+    check_int("old item is still counted once", metric_value("list.completed", "count"), 1)
+    check_true("save a box breathing preset", AchievementRecord("practice.patterns", "box-session", 20261018, variant = "box"))
+    check_true("generic backfill keeps preset", AchievementRecord("practice.patterns", "box-session", 20261018, live = false))
+    check_int("box preset survives reconciliation", metric_value("practice.patterns", "count", "box"), 1)
+    check_true("Sunday diary", AchievementRecord("diary", "sunday", 20261004))
+    check_true("Monday diary", AchievementRecord("diary", "monday", 20261005))
+    check_true("different month diary", AchievementRecord("diary", "september", 20260930))
+    check_int("calendar weeks start Monday", metric_value("diary", "weeks"), 2)
+    check_int("calendar months stay distinct", metric_value("diary", "months"), 2)
+    check_true("habit scheduled date one", AchievementRecord("habit.scheduled", "h-one", 20261001, subject = "habit-one"))
+    check_true("habit scheduled date two", AchievementRecord("habit.scheduled", "h-two", 20261002, subject = "habit-one"))
+    check_true("other habit date", AchievementRecord("habit.scheduled", "h-three", 20261003, subject = "habit-two"))
+    check_int("same-habit milestones group by stable subject", metric_value("habit.scheduled", "max_days"), 2)
+    award_key := "cell.achievement.award.self.merge"
+    check_true("apply known remote award", apply_record(award_key, "{\"version\":1,\"earned\":1000,\"day\":20261001,\"rule\":1}", "2026-10-01T00:00:00Z") != 0)
+    check_true("late remote upload cannot erase earlier date", apply_record(award_key, "{\"version\":1,\"earned\":2000,\"day\":20261002,\"rule\":1}", "2026-10-18T00:00:00Z") != 0)
+    merged := CellRecordRead(award_key)
+    check_int("keep earliest known earned time", cast(s32)ReadNumber(merged, FieldAt(merged, 0, "earned")).value, 1000)
+    PackageFree(merged)
+    check_true("achievement records reject wrong collection", apply_record(award_key, "{\"version\":1,\"earned\":500,\"day\":20261001,\"rule\":1}", "2026-10-18T00:00:00Z", "private.inbe.v1.cells") == 0)
+    check_true("remote alert setting uses dedicated collection", apply_record(AchievementAlertsKey, "0", "2099-01-01T00:00:00Z") != 0 && !AchievementAlerts())
+    check_true("collection routes achievements", storage_encrypted_collection_for_entity("cell_record", award_key) == AchievementCollection)
+    pattern_key := AchievementKey("practice.patterns", "box-session")
+    pattern_fact := fact_document("practice.patterns", 20261018, "")
+    check_true("merge generic pattern fact from another device", apply_record(pattern_key, pattern_fact, "2099-01-01T00:00:00Z") != 0)
+    check_int("sync keeps native breathing preset", metric_value("practice.patterns", "count", "box"), 1)
+    check_true("replay merged pattern fact", apply_record(pattern_key, pattern_fact, "2099-01-01T00:00:00Z") != 0)
+    check_int("replaying sync never duplicates a session", metric_value("practice.patterns", "count"), 1)
+    PackageFree(pattern_key)
+    PackageFree(pattern_fact)
+    check_true("known first task date", AchievementRecord("list.completed", "dated-task", 20261001))
+    task_key := AchievementKey("list.completed", "dated-task")
+    task_fact := fact_document("list.completed", 20261018, "")
+    check_true("merge later task completion", apply_record(task_key, task_fact, "2099-01-01T00:00:00Z") != 0)
+    task_merged := CellRecordRead(task_key)
+    check_int("sync preserves first task completion date", cast(s32)ReadNumber(task_merged, FieldAt(task_merged, 0, "day")).value, 20261001)
+    PackageFree(task_key)
+    PackageFree(task_fact)
+    PackageFree(task_merged)
+    catalogs_check()
+    valid := open_fixture("build/achievements-test/valid.zib")
+    invalid := open_fixture("build/achievements-test/invalid.zib")
+    empty := open_fixture("build/achievements-test/empty.zib")
+    check_true("valid fixture loads", valid != null)
+    check_true("invalid fixture loads before metadata rejection", invalid != null)
+    check_true("empty fixture loads", empty != null)
+    check_true("real bundle accepts valid app-owned rules", AchievementBundleValid(valid, "inbe", "app"))
+    check_true("real bundle rejects unsupported rules", !AchievementBundleValid(invalid, "inbe", "app"))
+    check_true("older bundle without catalog remains supported", AchievementBundleValid(empty, "inbe", "app"))
+    check_int("package validation never mutates working definitions", achievement_count, 160)
+    CloseBundle(valid)
+    CloseBundle(invalid)
+    CloseBundle(empty)
+    storage_close()
+    check_true("open muted account", storage_init(make_root("muted")) != 0)
+    AchievementReset()
+    check_true("load muted account catalog", AchievementCatalog(catalog, "inbe"))
+    achievement_definitions[0].visible = true
+    check_true("mute before earning", AchievementSetAlerts(false))
+    check_true("earn while muted", AchievementRecord("diary", "muted-diary", 20261018))
+    AchievementEvaluate()
+    check_true("muting preserves awards", achievement_definitions[0].awarded)
+    check_int("muted birth is silent", AchievementConsumeAlerts(), 0)
+    check_true("unmute after earning", AchievementSetAlerts(true))
+    check_int("unmute has no historical replay", AchievementConsumeAlerts(), 0)
+    storage_close()
+    check_true("open independent profile", storage_init(make_root("other-profile")) != 0)
+    AchievementReset()
+    check_true("load independent profile catalog", AchievementCatalog(catalog, "inbe"))
+    achievement_definitions[0].visible = true
+    AchievementEvaluate()
+    check_true("profiles never share achievements", !achievement_definitions[0].awarded)
+    check_true("profiles do not share alert settings", AchievementAlerts())
+    check_true("historical source qualifies without alert", AchievementRecord("diary", "backfill-diary", 20261001, live = false))
+    AchievementEvaluate()
+    check_true("backfill awards existing progress", achievement_definitions[0].awarded)
+    check_int("backfill stays silent", AchievementConsumeAlerts(), 0)
+    archive: TextBuffer
+    append(*archive, make_root("archive"))
+    append(*archive, "/profile.zip")
+    check_true("save archive alert preference", AchievementSetAlerts(false))
+    check_true("export achievements with profile data", storage_export_zip(TextFromCString(*archive.bytes[0])) != 0)
+    storage_close()
+    check_true("open restore profile", storage_init(make_root("restored")) != 0)
+    check_true("restore permanent awards in data-only mode", storage_import_zip_ex(TextFromCString(*archive.bytes[0]), cast(StorageImportMode)StorageImportMode.STORAGE_IMPORT_DATA_ONLY) != 0)
+    AchievementReset()
+    check_true("load restored catalog", AchievementCatalog(catalog, "inbe"))
+    achievement_definitions[0].visible = true
+    AchievementEvaluate()
+    check_true("restored milestone survives missing original activity", achievement_definitions[0].awarded)
+    check_int("restored milestone remains silent", AchievementConsumeAlerts(), 0)
+    check_true("data-only import preserves device preference", AchievementAlerts())
+    check_true("restore settings when requested", storage_import_zip_ex(TextFromCString(*archive.bytes[0]), cast(StorageImportMode)StorageImportMode.STORAGE_IMPORT_DATA_AND_SETTINGS) != 0)
+    check_true("settings import restores alert choice", !AchievementAlerts())
+    storage_close()
+    check_true("open radio sampling profile", storage_init(make_root("radio-sampling")) != 0)
+    AchievementReset()
+    AchievementRadioSample(0, "station", true, 50, true, 100.0, 1000, 20261018)
+    for index: cast(s32)1..10 {
+        AchievementRadioSample(0, "station", true, 50, true, 100.0 + cast(float64)index,
+            1000 + cast(s64)index, 20261018)
+    }
+    AchievementRadioSample(0, "station", true, 50, true, 200.0, 1100, 20261018)
+    check_true("clock gap starts a fresh interval", achievement_radio_start == 1100)
+    check_int("gap flushes only observed seconds", cast(s32)achievement_radio_seconds, 0)
+    for index: cast(s32)1..15 {
+        AchievementRadioSample(0, "station", true, 50, true, 200.0 + cast(float64)index,
+            1100 + cast(s64)index, 20261018)
+    }
+    check_int("fresh segment checkpoints observed seconds", cast(s32)achievement_radio_start, 1115)
+    AchievementRadioSample(0, "station", true, 0, true, 216.0, 1116, 20261018)
+    for index: cast(s32)1..70 {
+        AchievementRadioSample(0, "station", true, 0, true, 216.0 + cast(float64)index,
+            1116 + cast(s64)index, 20261018)
+    }
+    check_int("muted playback adds no minute", metric_value("radio.playback", "minutes"), 0)
+    for index: cast(s32)1..70 {
+        AchievementRadioSample(0, "station", true, 50, false, 286.0 + cast(float64)index,
+            1186 + cast(s64)index, 20261018)
+    }
+    check_int("unverified guest playback adds no minute", metric_value("radio.playback", "minutes"), 0)
+    for index: cast(s32)0..60 {
+        AchievementRadioSample(0, "station", true, 50, true, 356.0 + cast(float64)index,
+            1256 + cast(s64)index, 20261018)
+    }
+    AchievementRadioSample(0, "station", false, 50, true, 417.0, 1317, 20261018)
+    check_int("verified audible playback earns actual minutes", metric_value("radio.playback", "minutes"), 1)
+    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"# A real entry\"}")
+    check_int("authored diary text qualifies", metric_value("diary", "days"), 1)
+    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"  ** _ # > ` ~ --- \\n\"}")
+    check_int("formatting-only edit retracts diary progress", metric_value("diary", "days"), 0)
+    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![missing](diary:missing.jpg)\"}")
+    check_int("broken photo cannot qualify a diary day", metric_value("diary", "days"), 0)
+    check_true("legacy photo metadata saves", CellRecordWrite("cell.diary.file.real.jpg", "{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":100}"))
+    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![photo](diary:real.jpg)\"}")
+    check_int("verified photo-only diary day qualifies", metric_value("diary", "days"), 1)
+    check_int("verified photo gets its own diary metric", metric_value("diary", "days", "photo"), 1)
+    AchievementDiarySaved("2026-10-18.json", "")
+    check_int("removed diary document retracts progress", metric_value("diary", "days"), 0)
+    check_true("whitespace is not a saved task comment", !AchievementListComment("  \t\n"))
+    check_true("authored task comments qualify", AchievementListComment("A useful detail"))
+    storage_close()
+    check_true("open list action profile", storage_init(make_root("list-actions")) != 0)
+    AchievementReset()
+    list_id: [37]u8
+    items: [3][37]u8
+    check_true("create actual private list", storage_elist_create_list("A list", *list_id[0]) != 0)
+    for index: cast(s32)0..2 {
+        check_true("create actual private task", storage_elist_create_item(TextUntilNul(list_id[:]), "Task", "", *items[index][0]) != 0)
+        check_true("commit actual task completion", storage_elist_update_item(TextUntilNul(items[index][:]), "Task",
+            ifx index == 0 then "A detail" else "", 1, index) != 0)
+    }
+    check_int("count actual task transitions", metric_value("list.completed", "count"), 3)
+    check_int("count saved task comment", metric_value("list.comment", "count"), 1)
+    check_int("finishing the final task clears a list", metric_value("list.cleared", "count"), 1)
+    check_true("repeat completed task update", storage_elist_update_item(TextUntilNul(items[0][:]), "Renamed", "A detail", 1, 0) != 0)
+    check_int("editing a completed task adds no transition", metric_value("list.completed", "count"), 3)
+    check_true("delete completed task", storage_elist_delete_item(TextUntilNul(items[0][:])) != 0)
+    unused AchievementListItemBackfill(0)
+    check_int("deleted tasks leave locked progress", metric_value("list.completed", "count"), 2)
+    check_int("deleted task comments leave locked progress", metric_value("list.comment", "count"), 0)
+    check_true("delete private list", storage_elist_delete_list(TextUntilNul(list_id[:])) != 0)
+    unused AchievementListBackfill(0)
+    unused AchievementListItemBackfill(0)
+    check_int("deleted list removes its clearing contribution", metric_value("list.cleared", "count"), 0)
+    check_int("deleted list removes task contributions", metric_value("list.completed", "count"), 0)
+    shared_before := "{\"lists\":[{\"id\":\"shared-list\",\"revision\":1,\"items\":[{\"id\":\"mine\",\"done\":0},{\"id\":\"theirs\",\"done\":1}]}]}"
+    shared_after := "{\"lists\":[{\"id\":\"shared-list\",\"revision\":2,\"items\":[{\"id\":\"mine\",\"done\":1,\"comment\":\"Detail\"},{\"id\":\"theirs\",\"done\":1}]}]}"
+    shared_request := "{\"action\":\"save\",\"list\":{\"id\":\"shared-list\",\"revision\":1,\"items\":[{\"id\":\"mine\",\"done\":1},{\"id\":\"theirs\",\"done\":1}]}}"
+    AchievementSharedListReconcile(shared_before, shared_after)
+    check_int("observing another actor creates no task credit", metric_value("list.completed", "count"), 0)
+    AchievementSharedListConfirmed(shared_request, shared_before, shared_after)
+    check_int("confirmed own transition earns shared task credit", metric_value("list.completed", "count"), 1)
+    check_int("another actor's completed task stays uncredited", metric_value("list.completed", "subjects"), 1)
+    check_int("shared confirmation saves authored comment credit", metric_value("list.comment", "count"), 1)
+    AchievementSharedListConfirmed(shared_request, shared_after, shared_after)
+    check_int("shared response replay earns no duplicate credit", metric_value("list.completed", "count"), 1)
+    AchievementSharedListReconcile(shared_after, shared_before)
+    check_int("shared undo retracts locked progress", metric_value("list.completed", "count"), 0)
+    check_int("shared undo retracts comment progress", metric_value("list.comment", "count"), 0)
+    storage_close()
+    check_true("open local history profile", storage_init(make_root("history-clear")) != 0)
+    AchievementReset()
+    check_true("load history profile catalog", AchievementCatalog(catalog, "inbe"))
+    duration: [1]s32 = .[60]
+    check_true("save actual meditation history", storage_save_session_for_activity(*duration[0], 1, 0, 1, null, 0) != 0)
+    check_true("save derived habit contribution", AchievementRecord("habit.completed", "cleared-day", 20261018))
+    AchievementEvaluate()
+    check_true("earn before clearing source history", achievement_definitions[0].awarded)
+    check_true("clear local session and habit history", storage_delete_all_sessions() > 0)
+    check_int("cleared local sessions leave no orphan progress", metric_value("practice", "count"), 0)
+    check_int("cleared local habits leave no orphan progress", metric_value("habit.completed", "count"), 0)
+    AchievementReset()
+    check_true("reload permanent catalog after source clear", AchievementCatalog(catalog, "inbe"))
+    AchievementEvaluate()
+    check_true("source history clearing retains earned awards", achievement_definitions[0].awarded)
+    check_true("disable alerts before profile replacement", AchievementSetAlerts(false))
+    storage_set_setting_int("achievement.receipt.self.first", 1)
+    storage_set_setting_int("unrelated_preference", 7)
+    check_true("replace profile clears achievement storage", storage_clear_local_sync_data() != 0)
+    AchievementEvaluate()
+    check_true("replace profile clears visible awards", !achievement_definitions[0].awarded)
+    check_true("replace profile clears alert preference", AchievementAlerts())
+    check_int("replace profile clears local presentation receipts", storage_get_setting_int("achievement.receipt.self.first", 0), 0)
+    check_int("achievement reset preserves unrelated preferences", storage_get_setting_int("unrelated_preference", 0), 7)
+    storage_close()
+    check_true("open purge profile", storage_init(make_root("source-purge")) != 0)
+    AchievementReset()
+    saved_id: [96]u8
+    check_true("save session before deletion", storage_save_session_for_activity(*duration[0], 1, 0, 1, *saved_id[0], 96) != 0)
+    check_true("delete actual saved session", storage_delete_session(TextUntilNul(saved_id[:])) != 0)
+    meta_key: [64]u8
+    unused CopyCString("sync_full_upload_done", meta_key[:])
+    set_meta_int64(*meta_key[0], 1)
+    check_true("acknowledge deleted source upload", exec_sql("DELETE FROM sync_outbox") != 0)
+    storage_purge_synced_deleted_data()
+    check_int("purged source cannot leave progress behind", metric_value("practice", "count"), 0)
+    check_int("synced source tombstone is physically purged", read_db_count("SELECT COUNT(*) FROM sessions"), 0)
+    check_int("create actual counter habit", habits_add_custom(*test_habits, "Counter", Color.{}, 0, 0), 0)
+    counter := *test_habits.items[0]
+    counter.counter_enabled = 1
+    counter.counter_target = 5
+    storage_habits_save(cast(*void)*test_habits)
+    habit_set_day_count(*test_habits, 0, 20261018, 5)
+    storage_habits_save(cast(*void)*test_habits)
+    counter.counter_target = 10
+    storage_habits_save(cast(*void)*test_habits)
+    unused AchievementHabitDaysBackfill(*test_habits, 0)
+    check_int("historical counter target survives later increase", metric_value("habit.counter", "count"), 1)
+    none: [1]HabitAnswer
+    answers: [1]HabitAnswer
+    answers[0].id = 1
+    answers[0].answer_type = HABIT_ANSWER_TEXT
+    unused CopyCString("  \t\n", answers[0].value[:])
+    entry_id: [HABIT_ID_SIZE]u8
+    check_true("save whitespace answer", storage_habit_entry_save("", TextUntilNul(counter.id[:]), 20261018,
+        1000, 1000, answers[:], 1, entry_id[:]) != 0)
+    unused AchievementHabitAnswersBackfill(0)
+    check_int("whitespace-only habit answer does not count", metric_value("habit.answer", "count"), 0)
+    unused CopyCString("A real answer", answers[0].value[:])
+    updated_entry: [HABIT_ID_SIZE]u8
+    check_true("save authored habit answer", storage_habit_entry_save(TextUntilNul(entry_id[:]), TextUntilNul(counter.id[:]), 20261018,
+        1000, 1000, answers[:], 1, updated_entry[:]) != 0)
+    unused AchievementHabitAnswersBackfill(0)
+    check_int("actual authored habit answer counts once", metric_value("habit.answer", "count"), 1)
+    check_true("save a finished historical span", storage_habit_entry_save("", TextUntilNul(counter.id[:]), 20261018,
+        2000, 2060, none[:], 0, entry_id[:]) != 0)
+    unused AchievementHabitSpansBackfill(0)
+    check_int("saved span survives a current tracking-mode change", metric_value("habit.span", "count"), 1)
+    habits_free(*test_habits)
     return failures
 }

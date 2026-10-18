@@ -1,3 +1,6 @@
+#import, file "../../apps/lists/lists_achievements.zi";
+#import, file "achievements.zi";
+#import "std/text_buffer"
 c3 :: #system_library "c";
 sqlite3_bind_int :: (stmt: *void, index: s32, value: s32) -> s32 #foreign c3;
 sqlite3_changes :: (db: *void) -> s32 #foreign c3;
@@ -322,6 +325,7 @@ storage_elist_create_list :: (title: string, out_id: *u8) -> s32 {
     if result != 0 {
         result = storage_enqueue_sync_elist_list(AppTextFromCString(*id[0], 37))
     }
+    if result != 0 { AchievementMarkLive("list.created") }
     if result != 0 && out_id != null {
         AppCopyText(AppTextFromCString(*id[0], 37), BytesFromPointer(out_id, 37))
     }
@@ -480,6 +484,12 @@ storage_elist_update_item :: (id: string, title: string,
     if elist_item_is_shared(id) {
         return 0
     }
+    prior := AchievementListBefore(id)
+    if prior.valid && prior.done {
+        // Preserve the explicit unknown first date before an old completed
+        // task can be reopened, even before the background scan reaches it.
+        unused AchievementRecord("list.completed", id, 0, active = false, live = false)
+    }
     if SqlitePrepareText(storage_db_handle(), "UPDATE elist_items SET title=?3,comment=?4,done=?5,sort_order=?6,updated_at=?7 WHERE id=?1 AND user_id=?2 AND deleted_at=0",
         -1, *statement, null) != SQLITE_OK {
         return 0
@@ -493,7 +503,11 @@ storage_elist_update_item :: (id: string, title: string,
     SqliteBindInt64(statement, 7, storage_next_change_time())
     result = ifx (SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0) then (1) else (0)
     SqliteFinalize(statement)
-    return ifx (result != 0 && storage_enqueue_sync_elist_item(id) != 0) then (1) else (0)
+    if result == 0 || storage_enqueue_sync_elist_item(id) == 0 { return 0 }
+    if prior.valid && !prior.done && done != 0 {
+        AchievementListCompleted(id, comment, TextUntilNul(prior.list_id[:]))
+    }
+    return 1
 }
 
 #program_export

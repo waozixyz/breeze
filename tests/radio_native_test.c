@@ -73,6 +73,9 @@ int main(int argc, char **argv) {
     assert(fabsf(last_volume - 0.35f) < 0.001f);
     fixture(argv[2], 2);
     assert(released >= 1);
+    assert(radio_native_NativeRadioState() == 2);
+    clock_offset += 2;
+    assert(radio_native_NativeRadioState() == 1);
     radio_native_NativeRadioStop();
     assert(radio_length == 0 && radio_samples == 0 && !radio_wanted);
     unsigned char *burst = calloc(131072, 1);

@@ -98,6 +98,7 @@
     radio_retry_at: float64;
     radio_retry_seconds: float64 = 2.0;
     radio_last_audio: float64;
+    radio_audible_until: float64;
     radio_url: [2048]u8;
 
     ReceiveRadio :: (data: *u8, size: usize, count: usize, context: *void) -> usize {
@@ -138,6 +139,7 @@
         radio_paused = false
         radio_rate = 0
         radio_channels = 0
+        radio_audible_until = 0.0
         Mp3Init(*radio_decoder)
     }
 
@@ -287,6 +289,15 @@
             UpdateStream(radio_stream, cast(*void)*radio_pcm[0], 4096)
             radio_samples -= chunk
             unused MoveBytes(cast(*void)*radio_pcm[0], cast(*void)*radio_pcm[chunk], cast(usize)(radio_samples * 2))
+            // The two stream buffers cover only submitted PCM. A decoder
+            // stall must report buffering as soon as that audio runs out.
+            now := Clock()
+            if radio_audible_until < now { radio_audible_until = now }
+            duration := 4096.0 / cast(float64)radio_rate
+            radio_audible_until += duration
+            if radio_audible_until > now + duration * 2.0 {
+                radio_audible_until = now + duration * 2.0
+            }
             radio_state = 2
             radio_retry_seconds = 2.0
         }
@@ -300,6 +311,7 @@
     }
 
     NativeRadioState :: () -> s32 {
+        if radio_state == 2 && Clock() >= radio_audible_until { return 1 }
         return radio_state
     }
 }

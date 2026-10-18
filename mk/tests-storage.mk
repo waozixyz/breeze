@@ -37,6 +37,14 @@ storage-habits-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/storage_habits_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 
+.PHONY: achievements-test achievement-catalog-test
+achievements-test: build-laws $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		sh tests/achievements_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
+achievement-catalog-test:
+	python3 tests/achievement_catalogs_test.py
+
 .PHONY: storage-settings-threads-zi-test
 storage-settings-threads-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \

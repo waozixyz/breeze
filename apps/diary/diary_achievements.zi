@@ -1,0 +1,100 @@
+// Diary decides whether a saved document contains a real entry or a valid
+// account photo. Achievement facts contain only its date and photo flag.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import, file "diary_markdown.zi";
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/achievement_records.zi";
+#import, file "../../src/storage/sqlite.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/storage/cell_records.zi";
+#import, file "../../src/cells/diary_records.zi";
+#import, file "../../src/cells/media_store.zi";
+#import, file "../../src/cells/package_files.zi";
+#import, file "../../src/app/text_buffers.zi";
+
+AchievementDiaryPhoto :: (target: string, library: bool) -> bool {
+    if library {
+        hash := MediaPlaceHash(target)
+        if hash == "" { return false }
+        item := MediaRead(hash)
+        return item.valid && !item.trashed
+    }
+    if !DiaryFileNameValid(target) { return false }
+    key := DiaryRecordKey(target)
+    record := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(record) }
+    return DiaryMediaParse(record).valid
+}
+
+AchievementDiarySaved :: (name: string, document: string, live: bool = true) {
+    if name.count != 15 || name[10:] != ".json" { return }
+    day := AchievementParseDay(name[:10])
+    if day == 0 || document.count > 16777216 { return }
+    photo := false
+    qualified := false
+    defer {
+        unused AchievementRecord("diary", name, day, 1, ifx photo then "photo" else "", "", true, live, !qualified)
+    }
+    end := ValueEnd(document, Space(document, 0), 0)
+    if end < 0 || Space(document, end) != document.count { return }
+    version := ReadNumber(document, FieldAt(document, 0, "version"))
+    date: [11]u8
+    if !version.valid || version.value != 1 ||
+    ReadStringText(document, FieldAt(document, 0, "date"), date[:]) != 10 ||
+    TextUntilNul(date[:]) != name[:10] { return }
+    decoded := ReadStringValue(document, FieldAt(document, 0, "text"), 16777216)
+    if !decoded.valid { return }
+    text := BuilderFinish(decoded.value)
+    defer { PackageFree(text) }
+    authored := false
+    offset: s32 = 0
+    while offset < text.count {
+        embed := DiaryEmbedAt(text, offset)
+        if embed.valid {
+            if AchievementDiaryPhoto(DiaryEmbedTarget(text, embed), embed.library) { photo = true }
+            offset = embed.end
+            continue
+        }
+        // A broken image by itself is not authored journal text.
+        if text[offset] == #char "!" && offset + 1 < text.count && text[offset + 1] == #char "[" {
+            while offset < text.count && text[offset] != cast(u8)10 { offset += 1 }
+            continue
+        }
+        byte := text[offset]
+        if byte > cast(u8)32 && byte != #char "*" && byte != #char "_" && byte != #char "#" &&
+        byte != #char ">" && byte != #char "`" && byte != #char "~" && byte != #char "-" { authored = true }
+        offset += 1
+    }
+    old_photos := FieldAt(document, 0, "photos")
+    for index: cast(s32)0..ArrayCount(document, old_photos) - 1 {
+        row := ElementAt(document, old_photos, index)
+        file: [201]u8
+        if ReadStringText(document, FieldAt(document, row, "file"), file[:]) > 0 &&
+        AchievementDiaryPhoto(TextUntilNul(file[:]), false) { photo = true }
+    }
+    qualified = authored || photo
+}
+
+AchievementDiaryBackfill :: (offset: s32) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT substr(key,17) FROM settings WHERE user_id=?1 AND key GLOB 'cell.diary.file.????-??-??.json' ORDER BY key LIMIT 128 OFFSET ?2",
+        -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        name := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        document := DiaryRecordRead(name)
+        AchievementDiarySaved(name, document, false)
+        PackageFree(document)
+        rows += 1
+    }
+    return rows
+}

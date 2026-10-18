@@ -1,0 +1,33 @@
+// Bounded source reconciliation. App-owned adapters supply fixed queries of
+// their own records; package manifests never supply executable SQL.
+#import, file "achievements.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "state.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+#import "std/text_buffer"
+
+AchievementSourceBatch :: 128
+
+AchievementSourceRows :: (metric: string, sql: string, offset: s32, live: bool = false) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        source := AppTextFromCString(SqliteColumnText(statement, 0), 4096)
+        day := SqliteColumnInt(statement, 1)
+        amount := SqliteColumnInt64(statement, 2)
+        variant := AppTextFromCString(SqliteColumnText(statement, 3), 96)
+        subject := AppTextFromCString(SqliteColumnText(statement, 4), 4096)
+        active := SqliteColumnInt(statement, 5) != 0
+        deleted := SqliteColumnInt(statement, 6) != 0
+        if !AchievementRecord(metric, source, day, amount, variant, subject, active, live, deleted) { return -1 }
+        rows += 1
+        if rows >= AchievementSourceBatch { break }
+    }
+    return rows
+}

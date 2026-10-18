@@ -1,0 +1,78 @@
+// Copy only decoded text from app-owned assets. Nested VM asset bytes are
+// borrowed for this call and are never retained across frame collection.
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import, file "assets.zi";
+#import, file "locale.zi";
+#import, file "../storage/achievements.zi";
+#import, file "../cells/package_files.zi";
+
+AchievementLocaleAssetFn :: #type (app: string, path: string) -> AssetView;
+achievement_locale_asset: AchievementLocaleAssetFn;
+
+AchievementTranslation :: struct {
+    title: string
+    description: string
+}
+achievement_translations: [AchievementMaximum]AchievementTranslation;
+achievement_translation_language: [32]u8;
+achievement_translation_revision: u64 = 18446744073709551615;
+achievement_translation_at: s32;
+
+AchievementLocaleRead :: (app: string, code: string, key: string, maximum: s32) -> string {
+    directory := ifx app == "inbe" then "app" else (ifx app.count > 5 && app[:5] == "inbe." then app[5:] else "")
+    if directory == "" { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "assets/%/achievement-locales/%.json", directory, code)
+    path := BuilderFinish(out)
+    defer { PackageFree(path) }
+    asset := ifx achievement_locale_asset != null then achievement_locale_asset(app, path) else AssetRead(path)
+    if !asset.found || asset.data.count > 262144 { return "" }
+    decoded := ReadStringValue(asset.data, FieldAt(asset.data, 0, key), maximum)
+    if !decoded.valid { return "" }
+    return BuilderFinish(decoded.value)
+}
+
+AchievementLocaleText :: (key: string) -> string {
+    if key.count < 12 || key[:12] != "achievement_" { return "" }
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := *achievement_definitions[index]
+        if key == TextUntilNul(entry.title_key[:]) { return achievement_translations[index].title }
+        if key == TextUntilNul(entry.description_key[:]) { return achievement_translations[index].description }
+    }
+    return ""
+}
+
+AchievementLocaleFrame :: () {
+    code := LocaleActiveCode()
+    if achievement_translation_revision != achievement_catalog_revision ||
+    TextUntilNul(achievement_translation_language[:]) != code {
+        for index: cast(s32)0..AchievementMaximum - 1 {
+            PackageFree(achievement_translations[index].title)
+            PackageFree(achievement_translations[index].description)
+        }
+        achievement_translations = .{}
+        unused CopyCString(code, achievement_translation_language[:])
+        achievement_translation_revision = achievement_catalog_revision
+        achievement_translation_at = 0
+    }
+    last := achievement_translation_at + 15
+    if last >= achievement_count { last = achievement_count - 1 }
+    for index: achievement_translation_at..last {
+        entry := *achievement_definitions[index]
+        app := TextUntilNul(entry.app[:])
+        title := TextUntilNul(entry.title_key[:])
+        description := TextUntilNul(entry.description_key[:])
+        translated := *achievement_translations[index]
+        translated.title = AchievementLocaleRead(app, code, title, 512)
+        translated.description = AchievementLocaleRead(app, code, description, 2048)
+        if code != "en" {
+            if translated.title == "" { translated.title = AchievementLocaleRead(app, "en", title, 512) }
+            if translated.description == "" { translated.description = AchievementLocaleRead(app, "en", description, 2048) }
+        }
+    }
+    achievement_translation_at = last + 1
+    locale_extension = AchievementLocaleText
+}

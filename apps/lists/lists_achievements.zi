@@ -1,0 +1,220 @@
+#import "std/c_string"
+#import "std/json_scan"
+#import, file "../../src/storage/cell_records.zi";
+#import, file "../../src/storage/lists_shared_storage.zi";
+#import, file "../../src/cells/package_files.zi";
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/achievement_sources.zi";
+#import, file "../../src/storage/sqlite.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/storage/storage_settings.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import "std/text_buffer"
+
+AchievementListBackfill :: (offset: s32) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT id,deleted_at!=0 FROM elist_lists WHERE user_id=?1 ORDER BY id LIMIT 128 OFFSET ?2",
+        -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        deleted := SqliteColumnInt(statement, 1) != 0
+        if !ListsSharedId(id) {
+            unused AchievementRecord("list.created", id, 0, subject = id, active = false, live = false, deleted = deleted)
+            if deleted { AchievementListRetract("list.cleared", id) }
+        }
+        rows += 1
+    }
+    return rows
+}
+
+AchievementListRetract :: (metric: string, id: string) {
+    key := AchievementKey(metric, id)
+    previous := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(previous) }
+    if previous.count > 0 {
+        unused AchievementRecord(metric, id, 0, active = false, live = false, deleted = true)
+    }
+}
+
+AchievementListComment :: (comment: string) -> bool {
+    for byte: comment {
+        if byte > cast(u8)32 { return true }
+    }
+    return false
+}
+
+AchievementListItemBackfill :: (offset: s32) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT i.id,i.list_id,i.done,(i.deleted_at!=0 OR l.deleted_at!=0),i.comment FROM elist_items i JOIN elist_lists l ON l.id=i.list_id WHERE i.user_id=?1 AND l.user_id=?1 ORDER BY i.id LIMIT 128 OFFSET ?2",
+        -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        list_id := AppTextFromCString(SqliteColumnText(statement, 1), 96)
+        done := SqliteColumnInt(statement, 2) != 0
+        deleted := SqliteColumnInt(statement, 3) != 0
+        if !ListsSharedId(list_id) {
+            key := AchievementKey("list.completed", id)
+            previous := CellRecordRead(key)
+            if done || previous.count > 0 {
+                unused AchievementRecord("list.completed", id, 0, active = false, live = false, deleted = deleted || !done)
+            }
+            PackageFree(key)
+            PackageFree(previous)
+            comment := AppTextFromCString(SqliteColumnText(statement, 4), 4096)
+            if deleted || !done || !AchievementListComment(comment) { AchievementListRetract("list.comment", id) }
+        }
+        rows += 1
+    }
+    return rows
+}
+
+AchievementListCompleted :: (id: string, comment: string, list_id: string, shared: bool = false) {
+    day := AchievementToday()
+    if day == 0 { return }
+    unused AchievementRecord("list.completed", id, day)
+    if AchievementListComment(comment) { unused AchievementRecord("list.comment", id, day) }
+    if shared || ListsSharedId(list_id) { return }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT COUNT(*),SUM(CASE WHEN done=0 THEN 1 ELSE 0 END) FROM elist_items WHERE user_id=?1 AND list_id=?2 AND deleted_at=0",
+        -1, *statement, null) != SQLITE_OK { return }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    bind_text(statement, 2, list_id)
+    if SqliteStep(statement) == SQLITE_ROW && SqliteColumnInt64(statement, 0) >= 3 && SqliteColumnInt64(statement, 1) == 0 {
+        unused AchievementRecord("list.cleared", list_id, day)
+    }
+}
+
+AchievementListPrior :: struct {
+    valid: bool
+    done: bool
+    list_id: [97]u8
+}
+
+AchievementListBefore :: (id: string) -> AchievementListPrior {
+    prior: AchievementListPrior
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT list_id,done FROM elist_items WHERE user_id=?1 AND id=?2 AND deleted_at=0", -1, *statement, null) != SQLITE_OK { return prior }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    bind_text(statement, 2, id)
+    if SqliteStep(statement) == SQLITE_ROW {
+        prior.valid = CopyCString(AppTextFromCString(SqliteColumnText(statement, 0), 96), prior.list_id[:])
+        prior.done = SqliteColumnInt(statement, 1) != 0
+    }
+    return prior
+}
+
+AchievementListJsonRow :: (document: string, array: s32, id: string) -> s32 {
+    for index: cast(s32)0..ArrayCount(document, array) - 1 {
+        row := ElementAt(document, array, index)
+        identity: [97]u8
+        if ReadStringText(document, FieldAt(document, row, "id"), identity[:]) > 0 &&
+        TextUntilNul(identity[:]) == id { return row }
+    }
+    return -1
+}
+
+// A shared projection may retract this profile's earlier contribution, but
+// observing someone else's edit can never create a new contribution.
+AchievementSharedListReconcile :: (previous: string, response: string) {
+    lists := FieldAt(previous, 0, "lists")
+    for index: cast(s32)0..ArrayCount(previous, lists) - 1 {
+        row := ElementAt(previous, lists, index)
+        id: [97]u8
+        if ReadStringText(previous, FieldAt(previous, row, "id"), id[:]) < 1 { continue }
+        identity := TextUntilNul(id[:])
+        after := AchievementListJsonRow(response, FieldAt(response, 0, "lists"), identity)
+        removed := after < 0 || ReadNumber(response, FieldAt(response, after, "deleted")).value != 0
+        if removed {
+            AchievementListRetract("list.created", identity)
+            AchievementListRetract("list.cleared", identity)
+        }
+        old_items := FieldAt(previous, row, "items")
+        new_items := FieldAt(response, after, "items")
+        for item: cast(s32)0..ArrayCount(previous, old_items) - 1 {
+            before := ElementAt(previous, old_items, item)
+            item_id: [97]u8
+            if ReadStringText(previous, FieldAt(previous, before, "id"), item_id[:]) < 1 { continue }
+            name := TextUntilNul(item_id[:])
+            current := AchievementListJsonRow(response, new_items, name)
+            done := ReadNumber(response, FieldAt(response, current, "done"))
+            if removed || current < 0 || !done.valid || done.value != 1 {
+                AchievementListRetract("list.completed", name)
+                AchievementListRetract("list.comment", name)
+            } else {
+                comment: [4096]u8
+                unused ReadStringText(response, FieldAt(response, current, "comment"), comment[:])
+                if !AchievementListComment(TextUntilNul(comment[:])) { AchievementListRetract("list.comment", name) }
+            }
+        }
+    }
+}
+
+AchievementSharedListConfirmed :: (request: string, previous: string, response: string) {
+    action: [32]u8
+    if ReadStringText(request, FieldAt(request, 0, "action"), action[:]) < 1 ||
+    TextUntilNul(action[:]) != "save" { return }
+    proposed := FieldAt(request, 0, "list")
+    list_id: [97]u8
+    if ReadStringText(request, FieldAt(request, proposed, "id"), list_id[:]) < 1 { return }
+    identity := TextUntilNul(list_id[:])
+    before := AchievementListJsonRow(previous, FieldAt(previous, 0, "lists"), identity)
+    after := AchievementListJsonRow(response, FieldAt(response, 0, "lists"), identity)
+    if after < 0 { return }
+    expected := ReadNumber(request, FieldAt(request, proposed, "revision"))
+    prior_revision := ReadNumber(previous, FieldAt(previous, before, "revision"))
+    confirmed_revision := ReadNumber(response, FieldAt(response, after, "revision"))
+    proven := before >= 0 && expected.valid && prior_revision.valid && confirmed_revision.valid &&
+    expected.value == prior_revision.value && confirmed_revision.value > prior_revision.value
+    old_items := FieldAt(previous, before, "items")
+    new_items := FieldAt(response, after, "items")
+    requested_items := FieldAt(request, proposed, "items")
+    completed := false
+    all_done := ArrayCount(response, new_items) >= 3
+    for index: cast(s32)0..ArrayCount(response, new_items) - 1 {
+        row := ElementAt(response, new_items, index)
+        value := ReadNumber(response, FieldAt(response, row, "done"))
+        if !value.valid || value.value != 1 { all_done = false }
+    }
+    for index: cast(s32)0..ArrayCount(request, requested_items) - 1 {
+        row := ElementAt(request, requested_items, index)
+        id: [97]u8
+        if ReadStringText(request, FieldAt(request, row, "id"), id[:]) < 1 { continue }
+        wanted := ReadNumber(request, FieldAt(request, row, "done"))
+        if !wanted.valid || wanted.value != 1 { continue }
+        item_id := TextUntilNul(id[:])
+        old := AchievementListJsonRow(previous, old_items, item_id)
+        confirmed := AchievementListJsonRow(response, new_items, item_id)
+        if confirmed < 0 { continue }
+        was_done := ReadNumber(previous, FieldAt(previous, old, "done"))
+        now_done := ReadNumber(response, FieldAt(response, confirmed, "done"))
+        if !proven || old < 0 || !was_done.valid || was_done.value != 0 ||
+        !now_done.valid || now_done.value != 1 { continue }
+        comment: [4096]u8
+        unused ReadStringText(response, FieldAt(response, confirmed, "comment"), comment[:])
+        AchievementListCompleted(item_id, TextUntilNul(comment[:]), identity, true)
+        completed = true
+    }
+    if completed && all_done { unused AchievementRecord("list.cleared", identity, AchievementToday()) }
+    if before < 0 && expected.valid && expected.value == 0 {
+        owner: [97]u8
+        unused ReadStringText(response, FieldAt(response, after, "owner"), owner[:])
+        if TextUntilNul(owner[:]) == storage_get_setting_text("sync_public_id") && owner[0] != cast(u8)0 {
+            unused AchievementRecord("list.created", identity, AchievementToday(), active = false)
+        }
+    }
+}

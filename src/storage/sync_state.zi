@@ -8,6 +8,9 @@
 #import, file "sql_query.zi";
 #import, file "storage_core.zi";
 #import, file "storage_settings.zi";
+#import, file "achievements.zi";
+#import, file "../../apps/practice/practice_achievements.zi";
+#import, file "../../apps/habits/habits_achievements.zi";
 c :: #system_library "c";
 storage_clear_local_sync_data_impl :: () -> s32 #foreign c "storage_clear_local_sync_data";
 
@@ -121,7 +124,7 @@ storage_has_sync_account :: () -> s32 {
     return 0
 }
 
-storage_clear_local_sync_data_sqls: [12] string = .[
+storage_clear_local_sync_data_sqls: [13] string = .[
 "DELETE FROM sync_record_copies",
 "DELETE FROM habit_entries",
 "DELETE FROM habit_changes",
@@ -133,6 +136,7 @@ storage_clear_local_sync_data_sqls: [12] string = .[
 "DELETE FROM habit_days",
 "DELETE FROM habits",
 "DELETE FROM social_snapshots",
+"DELETE FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key GLOB 'cell.achievement.*' OR key='notification_achievements' OR key GLOB 'achievement.receipt.*')",
 "DELETE FROM sync_outbox"
 ];
 
@@ -160,6 +164,7 @@ storage_clear_local_sync_data :: () -> s32 {
         exec_sql("RELEASE sync_clear_local")
         return 0
     }
+    AchievementProfileCleared()
     return 1
 }
 
@@ -214,6 +219,10 @@ storage_purge_synced_deleted_data :: () {
         return
     }
     if exec_sql("BEGIN IMMEDIATE") == 0 {
+        return
+    }
+    if !AchievementPracticeDeleted() || !AchievementHabitsDeleted() {
+        exec_sql("ROLLBACK")
         return
     }
     {

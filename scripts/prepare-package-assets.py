@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Stage deterministic package resources, keeping large practice art in Practices."""
 from pathlib import Path
+import argparse
 import json
 import shutil
 import zipfile
 from animation_inventory import inventory
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / 'build/package-assets'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--output', default='build/package-assets',
+                    help='Build directory for staged package assets')
+options = parser.parse_args()
+OUTPUT = (ROOT / options.output).resolve()
+if not OUTPUT.is_relative_to(ROOT / 'build') or OUTPUT == ROOT / 'build':
+    parser.error('output must be a directory below the project build directory')
 _, _, unique_animation = inventory()
 unique_animation = set(unique_animation)
 # Apps the node offers each keep their assets/<name>/ in their own package.
@@ -74,6 +81,20 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
             archive.writestr(member, file.read_bytes(), compresslevel=9)
         continue
     shutil.copyfile(file, target)
+
+# Each app owns its bounded achievement catalog and translations, including
+# optional node apps. Source presence never determines device visibility.
+for catalog in sorted((ROOT / 'apps').glob('*/achievements.json')):
+    source_name = catalog.parent.name
+    owner = 'practices' if source_name == 'practice' else source_name
+    resource_name = 'app' if owner == 'inbe' else owner
+    destination = OUTPUT / owner / 'assets' / resource_name
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(catalog, destination / 'achievements.json')
+    for translation in sorted((catalog.parent / 'achievement-locales').glob('*.json')):
+        target = destination / 'achievement-locales' / translation.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(translation, target)
 
 # Diary's own translations travel with its bundle for other harnesses and
 # the generic player; it does not need the Inner Breeze root package.

@@ -1,3 +1,4 @@
+#import, file "../../apps/practice/practice_achievements.zi";
 c :: #system_library "c";
 STORAGE_ID_SIZE :: 64
 time :: (t: *s64) -> s64 #foreign c;
@@ -55,7 +56,7 @@ hash_rounds :: (round_times: *s32, round_count: s32) -> u32 {
 }
 
 make_session_id :: (started_at: s64, round_times: *s32,
-                   round_count: s32, out: *u8, out_size: s64) {
+    round_count: s32, out: *u8, out_size: s64) {
     if out == null || out_size <= 0 {
         return
     }
@@ -122,7 +123,7 @@ parse_db_id :: (path_or_id: string, out: *u8, out_size: s64) -> s32 {
 }
 
 filter_positive_rounds :: (round_times: *s32, round_count: s32,
-                          out: *s32, out_max: s32) -> s32 {
+    out: *s32, out_max: s32) -> s32 {
     saved_count: s32 = 0
 
     if round_times == null || out == null || round_count < 0 || out_max <= 0 {
@@ -142,7 +143,7 @@ filter_positive_rounds :: (round_times: *s32, round_count: s32,
 }
 
 write_session_rounds :: (session_id: string, round_times: *s32,
-                        round_count: s32, replace: s32) -> s32 {
+    round_count: s32, replace: s32) -> s32 {
     stmt: *void = null
 
     if session_id.count == 0 || round_count <= 0 {
@@ -177,9 +178,9 @@ write_session_rounds :: (session_id: string, round_times: *s32,
 }
 
 insert_session_at_ex :: (started_at: s64, local_date: s32,
-                            round_times: *s32, round_count: s32,
-                            topic: s32, activity: s32, source: string,
-                            out_id: *u8, out_id_size: s64, out_inserted: *s32) -> s32 {
+    round_times: *s32, round_count: s32,
+    topic: s32, activity: s32, source: string,
+    out_id: *u8, out_id_size: s64, out_inserted: *s32) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
     rc: s32
@@ -248,14 +249,14 @@ insert_session_at_ex :: (started_at: s64, local_date: s32,
 
 #program_export
 storage_insert_legacy_session :: (started_at: s64, local_date: s32,
-                                  round_times: *s32, round_count: s32) -> s32 {
+    round_times: *s32, round_count: s32) -> s32 {
     return insert_session_at_ex(started_at, local_date, round_times, round_count,
-                                0, 0, "legacy-file-import", null, 0, null)
+        0, 0, "legacy-file-import", null, 0, null)
 }
 
 storage_save_session_for_activity :: (round_times: *s32, round_count: s32,
-                                         topic: s32, activity: s32,
-                                         out_id: *u8, out_id_size: s64) -> s32 {
+    topic: s32, activity: s32,
+    out_id: *u8, out_id_size: s64) -> s32 {
     now: s64 = time(null)
     tm: *Tm = localtime(*now)
     saved: [MaxRounds] s32
@@ -270,16 +271,24 @@ storage_save_session_for_activity :: (round_times: *s32, round_count: s32,
         return 0
     }
     local_date = (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 +                  tm.tm_mday
-    return insert_session_at_ex(now, local_date, *saved[0], saved_count,
-                                topic, activity, "app", out_id, out_id_size, null)
+    identity: [96]u8
+    ok := insert_session_at_ex(now, local_date, *saved[0], saved_count,
+        topic, activity, "app", *identity[0], 96, null)
+    if ok != 0 {
+        if out_id != null && out_id_size > 0 {
+            unused AppCopyText(AppTextFromCString(*identity[0], 96), BytesFromPointer(out_id, cast(u64)out_id_size))
+        }
+        AchievementPracticeSaved(AppTextFromCString(*identity[0], 96), activity, local_date, saved[:saved_count])
+    }
+    return ok
 }
 
 storage_save_session_at_for_activity :: (local_date: s32, hour: s32,
-                                            minute: s32, second: s32,
-                                            round_times: *s32,
-                                            round_count: s32, topic: s32,
-                                            activity: s32, out_id: *u8,
-                                            out_id_size: s64) -> s32 {
+    minute: s32, second: s32,
+    round_times: *s32,
+    round_count: s32, topic: s32,
+    activity: s32, out_id: *u8,
+    out_id_size: s64) -> s32 {
     tm: Tm = Tm.{}
     started_at: s64
     saved: [MaxRounds] s32
@@ -306,20 +315,20 @@ storage_save_session_at_for_activity :: (local_date: s32, hour: s32,
     }
 
     return insert_session_at_ex(started_at, local_date, *saved[0],
-                                saved_count, topic, activity, "app", out_id,
-                                out_id_size, null)
+        saved_count, topic, activity, "app", out_id,
+        out_id_size, null)
 }
 
 storage_save_session :: (round_times: *s32, round_count: s32,
-                            out_id: *u8, out_id_size: s64) -> s32 {
+    out_id: *u8, out_id_size: s64) -> s32 {
     return storage_save_session_for_activity(round_times, round_count, 0, 0,
-                                             out_id, out_id_size)
+        out_id, out_id_size)
 }
 
 storage_load_session :: (path_or_id: string, round_times: *s32,
-                            max_rounds: s32, year: *s32, month: *s32,
-                            day: *s32, hour: *s32, minute: *s32,
-                            second: *s32) -> s32 {
+    max_rounds: s32, year: *s32, month: *s32,
+    day: *s32, hour: *s32, minute: *s32,
+    second: *s32) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
     count: s32 = 0
@@ -386,7 +395,7 @@ storage_load_session :: (path_or_id: string, round_times: *s32,
 }
 
 storage_save_session_checkin :: (path_or_id: string,
-                                    checkin: *SessionMoodCheckin) -> s32 {
+    checkin: *SessionMoodCheckin) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
 
@@ -419,7 +428,7 @@ storage_save_session_checkin :: (path_or_id: string,
 }
 
 storage_load_session_checkin :: (path_or_id: string,
-                                    checkin: *SessionMoodCheckin) -> s32 {
+    checkin: *SessionMoodCheckin) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
 
@@ -450,7 +459,7 @@ storage_load_session_checkin :: (path_or_id: string,
 }
 
 storage_mood_stats :: (activity_mask: s32, days: s32,
-                          stats: *StorageMoodStats) -> s32 {
+    stats: *StorageMoodStats) -> s32 {
     stmt: *void = null
     cutoff: s64 = 0
     after_total: s64 = 0
@@ -514,7 +523,7 @@ storage_mood_stats :: (activity_mask: s32, days: s32,
 }
 
 storage_replace_session :: (path_or_id: string, round_times: *s32,
-                               round_count: s32) -> s32 {
+    round_count: s32) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
     saved: [MaxRounds] s32
@@ -557,7 +566,7 @@ storage_replace_session :: (path_or_id: string, round_times: *s32,
 }
 
 storage_rename_session_time :: (path_or_id: string, hour: s32,
-                                   minute: s32) -> s32 {
+    minute: s32) -> s32 {
     stmt: *void = null
     id: [STORAGE_ID_SIZE] u8
     started_at: s64 = 0
@@ -633,7 +642,7 @@ storage_delete_session :: (path_or_id: string) -> s32 {
 }
 
 storage_list_session_records :: (callback: StorageSessionRecordCallback,
-                                    user: *void) {
+    user: *void) {
     stmt: *void = null
 
     if storage_db_handle() == null {
@@ -669,7 +678,7 @@ storage_list_session_records :: (callback: StorageSessionRecordCallback,
         }
         dbid_text: string = ifx (id.count > 0) then (id) else ("")
         count = storage_load_session(dbid_text, *rounds[0], MaxRounds, null, null, null,
-                                     null, null, null)
+            null, null, null)
         if count > 0 {
             callback(dbid_text, y, m, d, hh, mm, ss, topic, activity, rounds[:], count, cast(s64)user)
         }
@@ -745,7 +754,7 @@ storage_delete_all_sessions :: () -> s64 {
     }
 
     habit_day_count =
-        db_select_int_text("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0", 0)
+    db_select_int_text("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0", 0)
     if count <= 0 && habit_day_count <= 0 && habit_count <= 0 {
         return 0
     }
@@ -754,7 +763,7 @@ storage_delete_all_sessions :: () -> s64 {
         if exec_sql("BEGIN IMMEDIATE") == 0 {
             return 0
         }
-        if exec_sql("DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM meditation_logs WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sync_outbox;") == 0 {
+        if exec_sql("DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM meditation_logs WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key LIKE 'cell.achievement.fact.%' AND json_valid(value) AND (json_extract(value,'$.metric') LIKE 'practice.%' OR json_extract(value,'$.metric') LIKE 'habit.%');DELETE FROM sync_outbox;") == 0 {
             exec_sql("ROLLBACK")
             return 0
         }
@@ -781,7 +790,7 @@ storage_delete_all_sessions :: () -> s64 {
         return 0
     }
     if SqlitePrepareText(storage_db_handle(), "SELECT id FROM sessions WHERE user_id=?1 AND deleted_at=0",
-                          -1, *stmt, null) == SQLITE_OK {
+        -1, *stmt, null) == SQLITE_OK {
         bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
         while SqliteStep(stmt) == SQLITE_ROW {
             storage_enqueue_sync_session(AppTextFromCString(SqliteColumnText(stmt, 0), 4096))
@@ -790,17 +799,17 @@ storage_delete_all_sessions :: () -> s64 {
         stmt = null
     }
     if SqlitePrepareText(storage_db_handle(), "SELECT habit_id,local_date FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=?1) AND (completed!=0 OR count>0 OR session_count>0)",
-                          -1, *stmt, null) == SQLITE_OK {
+        -1, *stmt, null) == SQLITE_OK {
         bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
         while SqliteStep(stmt) == SQLITE_ROW {
             storage_enqueue_sync_habit_day(AppTextFromCString(SqliteColumnText(stmt, 0), 4096),
-                                           sqlite3_column_int(stmt, 1))
+                sqlite3_column_int(stmt, 1))
         }
         SqliteFinalize(stmt)
         stmt = null
     }
     if SqlitePrepareText(storage_db_handle(), "SELECT id FROM habits WHERE user_id=?1 AND deleted_at=0",
-                          -1, *stmt, null) == SQLITE_OK {
+        -1, *stmt, null) == SQLITE_OK {
         bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
         while SqliteStep(stmt) == SQLITE_ROW {
             storage_enqueue_sync_habit(AppTextFromCString(SqliteColumnText(stmt, 0), 4096))

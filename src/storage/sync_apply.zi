@@ -1,3 +1,4 @@
+#import, file "achievements.zi";
 // Applying received records: each decrypted record to its local table,
 // after checking that it is a record this version can read.
 #import, file "../app/text_buffers.zi";
@@ -158,11 +159,24 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         achievement_key := TextFromBytes(key_bytes[:key_count])
         if (collection == AchievementCollection && (!AchievementRecordValid(achievement_key) ||
             !AchievementRecordPayloadValid(achievement_key, TextFromBytes(value_bytes[:value_count])))) ||
-            (collection != AchievementCollection && AchievementRecordValid(achievement_key)) {
+        (collection != AchievementCollection && AchievementRecordValid(achievement_key)) {
             storage_json_builder_free(*response)
             return 0
         }
-        ok = storage_exec_json_user_sql(SyncCellRecordsSQL, record_response)
+        award := collection == AchievementCollection && achievement_key.count > 23 &&
+        achievement_key[:23] == "cell.achievement.award."
+        fact := collection == AchievementCollection && achievement_key.count == 86 &&
+        achievement_key[:22] == "cell.achievement.fact."
+        query := ifx award then SyncAchievementAwardsSQL else (ifx fact then SyncAchievementFactsSQL else SyncCellRecordsSQL)
+        ok = storage_exec_json_user_sql(query, record_response)
+        if ok != 0 && achievement_key == AchievementAlertsKey && storage_setting_text_equals(AchievementAlertsKey, "0") != 0 {
+            AchievementDiscardAlerts()
+        }
+        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 && (award || fact) && storage_setting_text_equals(achievement_key, TextFromBytes(value_bytes[:value_count])) == 0 {
+            // Reconcile a later/unknown remote timestamp with the earlier
+            // local award through the ordinary encrypted outbox.
+            ok = storage_enqueue_sync_entity("cell_record", achievement_key, 0)
+        }
         if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 && collection == LegacyPrivateCellsCollection &&
         LumiCellRecordValid(TextFromBytes(key_bytes[:key_count])) {
             // An older device may upload legacy Lumi after the local migration.

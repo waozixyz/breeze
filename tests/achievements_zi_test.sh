@@ -4,7 +4,22 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/achievements-test
+exec 9>"$work.lock"
+flock 9
 mkdir -p "$work/generated"
+mkdir -p "$work/valid/assets/app" "$work/invalid/assets/app"
+cp "$root/apps/inbe/achievements.json" "$work/valid/assets/app/achievements.json"
+printf '%s\n' '{"schema":1,"app":"inbe","achievements":[{"id":"invalid","metric":"*","rule":"execute-sql","target":1}]}' > "$work/invalid/assets/app/achievements.json"
+for fixture in valid invalid empty; do
+    if [ "$fixture" = empty ]; then
+        "$ziran" bundle --root "$root/tests" --entry achievement_package_fixture:Main \
+            -o "$work/$fixture.zib" "$root/tests/achievement_package_fixture.zi"
+    else
+        "$ziran" bundle --root "$root/tests" --entry achievement_package_fixture:Main \
+            --asset-dir "assets=$work/$fixture/assets" -o "$work/$fixture.zib" \
+            "$root/tests/achievement_package_fixture.zi"
+    fi
+done
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
@@ -32,6 +47,7 @@ C
     -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$root/build/ziran-toolchain/libziran.a" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     APP_DATA_ROOT=/tmp/inbe-achievements-test/data "$work/test"

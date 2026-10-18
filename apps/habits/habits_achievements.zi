@@ -1,0 +1,120 @@
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/text"
+#import, file "../../src/storage/achievements.zi";
+#import, file "../../src/storage/achievement_sources.zi";
+#import, file "../../src/storage/sqlite.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_core.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/habits/habit_types.zi";
+#import, file "../../src/habits/habit_calendar.zi";
+#import, file "../../src/habits/habit_schedule.zi";
+#import, file "../../src/cells/package_files.zi";
+
+AchievementHabitCreatedBackfill :: (offset: s32) -> s32 {
+    return AchievementSourceRows("habit.created", "SELECT id,0,1,'',id,0,deleted_at!=0 FROM habits WHERE user_id=?1 ORDER BY id LIMIT 128 OFFSET ?2", offset)
+}
+
+AchievementHabitDaysBackfill :: (habits: *Habits, offset: s32) -> s32 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT h.id,d.local_date,d.completed,d.count,h.counter_enabled,h.counter_target,h.deleted_at,h.span,COALESCE((SELECT c.old_value FROM habit_changes c WHERE c.user_id=h.user_id AND c.habit_id=h.id AND c.kind=8 AND c.deleted_at=0 AND c.changed_at>d.updated_at ORDER BY c.changed_at,c.rowid LIMIT 1),'') FROM habit_days d JOIN habits h ON h.id=d.habit_id WHERE h.user_id=?1 ORDER BY h.id,d.local_date LIMIT 128 OFFSET ?2",
+        -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    SqliteBindInt(statement, 2, offset)
+    rows: s32 = 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        day := SqliteColumnInt(statement, 1)
+        value := HabitDay.{.day_index = day, .completed = SqliteColumnInt(statement, 2), .count = SqliteColumnInt(statement, 3)}
+        counter := SqliteColumnInt(statement, 4) != 0
+        target := SqliteColumnInt(statement, 5)
+        historical := AppTextFromCString(SqliteColumnText(statement, 8), 256)
+        known := true
+        if historical == "check" || historical == "span" {
+            counter = false
+            target = 1
+        } else if historical.count > 0 {
+            known = historical.count > 6 && historical[:6] == "count:"
+            target = 0
+            if known {
+                for byte: historical[6:] {
+                    if byte < #char "0" || byte > #char "9" || target > 1000000 {
+                        known = false
+                        break
+                    }
+                    target = target * 10 + cast(s32)(byte - #char "0")
+                }
+                counter = true
+                known = known && target > 0
+            }
+        }
+        complete := known && HabitDayComplete(value, counter, target)
+        deleted := SqliteColumnInt64(statement, 6) != 0
+        source_bytes: Vec(u8)
+        BuilderPrint(*source_bytes, "%.%", id, day)
+        source := BuilderFinish(source_bytes)
+        defer { PackageFree(source) }
+        unused AchievementRecord("habit.completed", source, day, 1, "", id, true, false, deleted || !complete)
+        unused AchievementRecord("habit.counter", source, day, 1, "", id, false, false, deleted || !complete || !counter)
+        scheduled := false
+        if habits != null {
+            for index: cast(s32)0..habits.count - 1 {
+                habit := *habits.items[index]
+                if TextUntilNul(habit.id[:]) != id { continue }
+                // Pausing a habit today does not erase its historical schedule.
+                if habit.schedule_count > 0 {
+                    scheduled = HabitScheduleMatches(HabitScheduleFor(habit, day), day)
+                } else {
+                    copy := habit.*
+                    copy.deactivated = 0
+                    scheduled = habit_scheduled_day(*copy, day) != 0
+                }
+            }
+        }
+        unused AchievementRecord("habit.scheduled", source, day, 1, "", id, false, false, deleted || !complete || !scheduled)
+        rows += 1
+    }
+    return rows
+}
+
+AchievementHabitAnswersBackfill :: (offset: s32) -> s32 {
+    return AchievementSourceRows("habit.answer", "SELECT e.id,e.local_date,1,'',e.habit_id,0,(e.deleted_at!=0 OR h.deleted_at!=0 OR NOT EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(e.answers) THEN e.answers ELSE '[]' END) a WHERE length(trim(CASE WHEN a.type='object' THEN COALESCE(json_extract(a.value,'$.value'),'') ELSE '' END,char(9)||char(10)||char(13)||' '))>0)) FROM habit_entries e JOIN habits h ON h.id=e.habit_id WHERE e.user_id=?1 ORDER BY e.id LIMIT 128 OFFSET ?2", offset)
+}
+
+AchievementHabitSpansBackfill :: (offset: s32) -> s32 {
+    return AchievementSourceRows("habit.span", "SELECT e.id,e.local_date,1,'',e.habit_id,0,(e.deleted_at!=0 OR h.deleted_at!=0 OR e.started_at<=0 OR e.ended_at<=e.started_at) FROM habit_entries e JOIN habits h ON h.id=e.habit_id WHERE e.user_id=?1 ORDER BY e.id LIMIT 128 OFFSET ?2", offset)
+}
+
+AchievementHabitRetractRows :: (sql: string, kind: s32) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return false }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    while SqliteStep(statement) == SQLITE_ROW {
+        id := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+        if kind == 0 {
+            if !AchievementRetract("habit.created", id) { return false }
+        } else if kind == 1 {
+            out: Vec(u8)
+            BuilderPrint(*out, "%.%", id, SqliteColumnInt(statement, 1))
+            source := BuilderFinish(out)
+            defer { PackageFree(source) }
+            if !AchievementRetract("habit.completed", source) || !AchievementRetract("habit.counter", source) ||
+            !AchievementRetract("habit.scheduled", source) { return false }
+        } else {
+            if !AchievementRetract("habit.answer", id) || !AchievementRetract("habit.span", id) { return false }
+        }
+    }
+    return true
+}
+
+AchievementHabitsDeleted :: () -> bool {
+    return AchievementHabitRetractRows("SELECT id FROM habits WHERE user_id=?1 AND deleted_at>0", 0) &&
+    AchievementHabitRetractRows("SELECT h.id,d.local_date FROM habit_days d JOIN habits h ON h.id=d.habit_id WHERE h.user_id=?1 AND (h.deleted_at>0 OR (d.completed=0 AND d.count=0 AND d.session_count=0))", 1) &&
+    AchievementHabitRetractRows("SELECT e.id FROM habit_entries e JOIN habits h ON h.id=e.habit_id WHERE e.user_id=?1 AND (e.deleted_at>0 OR h.deleted_at>0)", 2)
+}
