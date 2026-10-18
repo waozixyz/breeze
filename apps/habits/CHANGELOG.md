@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.1] - 2026-10-18
+
+- Leaving a habit with unsaved changes asks whether to save, discard, or
+  keep editing. Unchanged habits close without a prompt.
+
 ## [1.1.0] - 2026-10-17
 
 - A counting habit's count dialog now comes with Habits, so it can improve with a Habits update, without a new Inner Breeze.

@@ -82,6 +82,7 @@ using SemanticKind;
 
 save_settings :: (app: *InnerBreeze) #foreign c "save_settings";
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c "app_auto_sync";
+app_apply_nav_route :: (app: *InnerBreeze, route: s32) #foreign c;
 
 habit_edit_practice_label :: (id: s32) -> string {
     if id == EXERCISE_MEDITATION { return LocaleText("exercise_meditation") }
@@ -111,6 +112,10 @@ habit_edit_begin_new :: (app: *InnerBreeze) {
     app.habit_edit.focused = 0
     app.habits.scroll = 0
     app.habits.tab = HABIT_TAB_EDIT
+    habit_edit_counter_text(app)
+    habit_edit_span_fill(app)
+    habit_edit_goal_fill_all(app)
+    app.habit_edit_original = app.habit_edit
     app_switch_screen(app, ScreenHabitEdit)
 }
 
@@ -146,7 +151,105 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
         *app.habit_edit.description[0], HABIT_DESCRIPTION_SIZE).count
     app.habits.tab = HABIT_TAB_EDIT
     app.habits.scroll = 0
+    habit_edit_counter_text(app)
+    app.habit_edit_original = app.habit_edit
     app_switch_screen(app, ScreenHabitEdit)
+}
+
+habit_edit_goal_same :: (first: HabitGoal, second: HabitGoal) -> bool {
+    return first.kind == second.kind && first.low == second.low && first.high == second.high
+}
+
+#program_export
+habit_edit_changed :: (app: *InnerBreeze) -> bool {
+    if app == null || app.habit_edit.active == 0 {
+        return false
+    }
+    edit := *app.habit_edit
+    original := *app.habit_edit_original
+    if AppTextFromCString(*edit.text[0], HABIT_NAME_SIZE) !=
+    AppTextFromCString(*original.text[0], HABIT_NAME_SIZE) ||
+    AppTextFromCString(*edit.description[0], HABIT_DESCRIPTION_SIZE) !=
+    AppTextFromCString(*original.description[0], HABIT_DESCRIPTION_SIZE) ||
+    edit.color.r != original.color.r || edit.color.g != original.color.g ||
+    edit.color.b != original.color.b || edit.color.a != original.color.a ||
+    edit.sync_activity != original.sync_activity || edit.sync_mode != original.sync_mode ||
+    edit.counter_enabled != original.counter_enabled || edit.counter_target != original.counter_target ||
+    edit.reminder_hour != original.reminder_hour || edit.icon != original.icon ||
+    edit.span != original.span || !habit_edit_goal_same(edit.span_goal, original.span_goal) ||
+    !HabitScheduleSame(*edit.schedule, *original.schedule) ||
+    edit.question_count != original.question_count {
+        return true
+    }
+    if edit.counter_focused != 0 &&
+    AppTextFromCString(*edit.counter_text[0], 8) != AppTextFromCString(*original.counter_text[0], 8) {
+        return true
+    }
+    for index: cast(s32)0..edit.question_count - 1 {
+        question := *edit.questions[index]
+        before := *original.questions[index]
+        if question.id != before.id || question.answer_type != before.answer_type ||
+        HabitQuestionText(question) != HabitQuestionText(before) ||
+        !habit_edit_goal_same(question.goal, before.goal) {
+            return true
+        }
+        if edit.goal_focused != 0 &&
+        (AppTextFromCString(*edit.goal_low[index][0], 16) != AppTextFromCString(*original.goal_low[index][0], 16) ||
+            AppTextFromCString(*edit.goal_high[index][0], 16) != AppTextFromCString(*original.goal_high[index][0], 16)) {
+            return true
+        }
+    }
+    if edit.span != 0 {
+        for index: cast(s32)0..cast(s32)3 {
+            if AppTextFromCString(*edit.span_typed[index][0], 8) !=
+            AppTextFromCString(*original.span_typed[index][0], 8) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+#program_export
+habit_edit_request_leave :: (app: *InnerBreeze, route: s32) -> bool {
+    if !habit_edit_changed(app) {
+        return false
+    }
+    if app.modal.active != 0 && app.modal.type == cast(ModalType)ModalHabitUnsaved {
+        return true
+    }
+    app.habit_edit_exit_route = route
+    app_open_modal(app, cast(ModalType)ModalHabitUnsaved)
+    return true
+}
+
+#program_export
+habit_edit_back :: (app: *InnerBreeze) {
+    if habit_edit_request_leave(app, HABIT_EDIT_EXIT_BACK) {
+        return
+    }
+    habit_edit_cancel(app)
+    app_switch_screen(app, ScreenHabits)
+}
+
+#program_export
+habit_edit_resolve_leave :: (app: *InnerBreeze, action: s32) {
+    route := app.habit_edit_exit_route
+    app_close_modal(app)
+    if action == 2 {
+        habit_edit_commit(app)
+        if app.habit_edit.active != 0 {
+            return
+        }
+    } else if action == 3 {
+        habit_edit_cancel(app)
+        app_switch_screen(app, ScreenHabits)
+    } else {
+        return
+    }
+    if route != HABIT_EDIT_EXIT_BACK {
+        app_apply_nav_route(app, route)
+    }
 }
 
 habit_edit_cancel :: (app: *InnerBreeze) {
@@ -657,7 +760,7 @@ habit_edit_goal_bound :: (app: *InnerBreeze, slot: s32, high: bool,
             typed = edit.goal_high[slot][:]
         }
         unused habit_edit_goal_field(app, code, Rectangle.{cast(float32)x,
-            cast(float32)y, cast(float32)AppScale(120), cast(float32)AppScale(44)},
+                cast(float32)y, cast(float32)AppScale(120), cast(float32)AppScale(44)},
             typed, 9)
         number := HabitTimeTypedNumber(AppTextFromCString(*typed[0],
             cast(s32)typed.count))
@@ -824,7 +927,7 @@ habit_edit_questions :: (app: *InnerBreeze, x: s32, y: s32, width: s32,
     while index < edit.question_count {
         card_h := habit_edit_question_card_height(app, index)
         Box(app.ui.session, CardProps(Rectangle.{cast(float32)x,
-                    cast(float32)y, cast(float32)width, cast(float32)card_h}))
+                cast(float32)y, cast(float32)width, cast(float32)card_h}))
         card_bottom := y + card_h
         y += question_pad
         text_bounds := Rectangle.{cast(float32)inner_x, cast(float32)y,
@@ -1890,7 +1993,21 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
 
 habit_edit_modal :: (app: *InnerBreeze) -> bool {
     if app.modal.active == 0 { return false }
-    if app.modal.type == cast(ModalType)ModalHabitPracticePicker {
+    if app.modal.type == cast(ModalType)ModalHabitUnsaved {
+        actions: [3]ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("habit_keep_editing"),
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = LocaleText("save_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled},
+        ActionModalAction.{.label = LocaleText("discard_button"),
+            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}]
+        result := ActionModal(app.ui.session, ActionModalProps.{
+                .title = LocaleText("habit_unsaved_title"),
+                .message = LocaleText("habit_unsaved_message")}, actions[:])
+        if result.action != 0 {
+            habit_edit_resolve_leave(app, result.action)
+        }
+    } else if app.modal.type == cast(ModalType)ModalHabitPracticePicker {
         if practice_picker(app) != 0 { app_close_modal(app) }
     } else if app.modal.type == cast(ModalType)ModalConfirmDeleteHabit {
         actions: [2]ActionModalAction = .[
@@ -1926,8 +2043,7 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
     footer := AppScale(ifx (app.habit_edit.name_error != 0)
         then (92) else (64))
     if TextInputKeyPressed(TextInputKeyEscape) {
-        habit_edit_cancel(app)
-        app_switch_screen(app, ScreenHabits)
+        habit_edit_back(app)
         return
     }
     options: [1]DropdownOption
@@ -1942,8 +2058,7 @@ habit_edit_draw_form :: (app: *InnerBreeze) {
     title.leading_label = LocaleText("back_button")
     title_result := TitleBar(app.ui.session, title, options[0:0])
     if title_result.clicked_leading {
-        habit_edit_cancel(app)
-        app_switch_screen(app, ScreenHabits)
+        habit_edit_back(app)
         return
     }
 

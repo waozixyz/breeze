@@ -46,6 +46,13 @@ def command(*args):
     return subprocess.check_output(args, text=True, timeout=10).strip()
 
 
+def system_back(window):
+    command("xdotool", "windowfocus", window)
+    command("xdotool", "keydown", "Escape")
+    time.sleep(0.1)
+    command("xdotool", "keyup", "Escape")
+
+
 def capture(window, name):
     path = OUTPUT / (name + ".png")
     command("import", "-window", window, str(path))
@@ -178,6 +185,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
             seed_photo(db, user, folder, COLORS[2], "2026-09-03", "2026-09-03T12:00:00", NAMES[2], (1000, 1000)),
             seed_photo(db, user, folder, COLORS[3], "2026-09-03", "2026-09-03T08:00:00", NAMES[3], (1600, 900)),
         ]
+        # A synced preview whose original has not reached this device yet.
+        (folder / photos[2]).unlink()
     # A camera's portrait photo: stored 1200 by 800, Exif orientation 6.
     picked = profile / PICKED_NAME
     sideways = Image.new("RGB", (1200, 800), PICKED)
@@ -230,6 +239,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
         for node, color in zip(tiles + [added], COLORS + [PICKED]):
             share = share_of(gallery, node, color)
             assert share > 0.3, f"{node['label']} is not drawn ({share:.2f}); see {OUTPUT / 'gallery.png'}"
+        driver.press(label=NAMES[2], role="image")
+        driver.wait(label="All photos", role="button")
+        assert not driver.find(contains="Loading the full photo"), "loading text covers the preview"
+        assert driver.wait(label=NAMES[2], role="image")["height"] > tiles[2]["height"] * 2
+        driver.press(label="Back", role="button")
+        driver.wait(label="Add photo", role="button")
+        assert driver.find(label=NAMES[2], role="image"), "Back lost the gallery"
         # Its tile opens it whole and upright: portrait, white band on top.
         driver.press(label=PICKED_NAME, role="image")
         driver.wait(label="All photos", role="button")
@@ -243,9 +259,51 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
         assert (whole[3] - whole[1]) > added["height"] * 2, "the photo is not shown whole"
         band = viewer.getpixel(((whole[0] + whole[2]) // 2, max(0, whole[1] - 12)))
         assert near(band, (250, 250, 250), 24), f"the original is not upright: {band}"
+        system_back(window)
+        driver.wait(label="Add photo", role="button")
+        assert driver.find(label=PICKED_NAME, role="image"), "system Back did not return to the gallery"
+        driver.press(label="Back", role="button")
+        driver.wait(label="Find an app", role="text_field")
         log = (OUTPUT / "gallery.log").read_text()
         assert "frame rejected" not in log and app.poll() is None, log
     finally:
         stop(app)
+
+    # A saved Photos pin must survive restart and draw in either dock layout.
+    with sqlite3.connect(profile / "inbe.db") as db:
+        slot = db.execute("SELECT key FROM settings WHERE user_id=? AND key LIKE 'node_app_slot_%' "
+                          "AND value='photos'", (user,)).fetchone()[0]
+        route = 14 + int(slot.rsplit("_", 1)[1])
+        pins = {"launcher_favorite_count": 1, "launcher_favorite_0": route,
+                "navigation_placement": 1}
+        for key, value in pins.items():
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+    app, window = launch(profile, "pinned")
+    try:
+        command("xdotool", "windowsize", window, "900", "720")
+        driver.wait_idle(frames=3)
+        pin = driver.wait(label="Photos", role="button")
+        assert pin["visible"], "Photos pin is missing from the sidebar"
+        driver.press(label="Photos", role="button")
+        driver.wait(label="Add photo", role="button")
+        assert not driver.find(label="Back", role="button"), "pinned Photos still has an Apps return bar"
+        driver.press(label=PICKED_NAME, role="image")
+        driver.wait(label="All photos", role="button")
+        system_back(window)
+        driver.wait(label="Add photo", role="button")
+        capture(window, "pinned-sidebar")
+    finally:
+        stop(app)
+    with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("UPDATE settings SET value='0' WHERE user_id=? AND key='navigation_placement'", (user,))
+    app, window = launch(profile, "pinned-mobile")
+    try:
+        pin = driver.wait(label="Photos", role="button")
+        assert window_box(pin)[1] > HEIGHT - 100, "Photos pin is missing from bottom navigation"
+        capture(window, "pinned-mobile")
+    finally:
+        stop(app)
 print(f"Photos: offered in More apps, a gallery of previews by day, a sideways camera photo added upright "
-      f"through the desktop picker and opened whole; see {OUTPUT}")
+      f"through the desktop picker and opened whole; Back returns to the gallery, previews stay clear, "
+      f"and saved pins appear in the sidebar and bottom navigation; see {OUTPUT}")

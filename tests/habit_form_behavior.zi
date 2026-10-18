@@ -3,6 +3,7 @@
 #import, file "storage_test_support.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_types.zi";
+#import, file "../src/app/modal_rules.zi";
 #import, file "../src/storage/data.zi";
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/storage_core.zi";
@@ -20,6 +21,7 @@ using HabitSyncMode;
 
 app_state: InnerBreeze;
 syncs: s32;
+left_route: s32 = -1;
 // Application hooks the form calls when it saves.
 #program_export "app_auto_sync"
 host_auto_sync :: (app: *InnerBreeze) -> s32 {
@@ -30,6 +32,17 @@ host_auto_sync :: (app: *InnerBreeze) -> s32 {
 
 #program_export "save_settings"
 host_save_settings :: (app: *InnerBreeze) {
+    unused app
+}
+
+#program_export "app_apply_nav_route"
+host_apply_nav_route :: (app: *InnerBreeze, route: s32) {
+    unused app
+    left_route = route
+}
+
+#program_export "meditation_music_stop"
+host_stop_music :: (app: *InnerBreeze) {
     unused app
 }
 
@@ -58,6 +71,7 @@ Check :: () -> s32 {
     check_true("a new habit is planned on every weekday",
         app.habit_edit.schedule.repeat == HABIT_REPEAT_WEEKLY &&
         app.habit_edit.schedule.weekdays == 127)
+    check_true("an untouched new habit has no changes", !habit_edit_changed(app))
 
     habit_edit_commit(app)
     check_true("an empty name keeps the form open", app.habit_edit.active != 0 && app.habit_edit.name_error == 1)
@@ -100,13 +114,31 @@ Check :: () -> s32 {
 
     habit_edit_begin(app, 0)
     check_true("editing opens the form for the habit", app.breathing.screen == ScreenHabitEdit && app.habit_edit.is_new == 0)
+    check_true("an unchanged habit needs no prompt", !habit_edit_changed(app))
+    app.habit_edit.focused = 1
+    app.habit_edit.cursor = 2
+    app.habit_edit.more_colors = 1
+    check_true("moving the cursor and opening controls do not change the habit", !habit_edit_changed(app))
     check_true("the form shows the habit's settings", app.habit_edit.counter_enabled != 0 &&
         app.habit_edit.counter_target == 250 && app.habit_edit.sync_activity == 3 &&
         app.habit_edit.schedule.repeat == HABIT_REPEAT_WEEKLY &&
         app.habit_edit.schedule.weekdays == 31)
     set_text(app.habit_edit.text[:], "Unsaved edit")
-    habit_edit_cancel(app)
+    check_true("typing changes the habit", habit_edit_changed(app))
+    set_text(app.habit_edit.text[:], "Test counter")
+    check_true("reverting the edit clears its changes", !habit_edit_changed(app))
+    set_text(app.habit_edit.text[:], "Unsaved edit")
+    habit_edit_back(app)
+    check_true("Back asks about unsaved changes", app.modal.active != 0 &&
+        app.modal.type == ModalType.ModalHabitUnsaved && app.habit_edit.active != 0 &&
+        app.breathing.screen == ScreenHabitEdit)
+    habit_edit_resolve_leave(app, 1)
+    check_true("keep editing preserves the draft", app.modal.active == 0 &&
+        TextFromCString(*app.habit_edit.text[0]) == "Unsaved edit" && app.habit_edit.active != 0)
+    habit_edit_back(app)
+    habit_edit_resolve_leave(app, 3)
     check_true("cancelling an edit keeps the habit", TextFromCString(*app.habits.items[0].name[0]) == "Test counter")
+    check_true("discard returns to the overview", app.breathing.screen == ScreenHabits && app.habit_edit.active == 0)
 
     habit_edit_begin(app, 0)
     app.habit_edit.counter_enabled = 0
@@ -132,6 +164,29 @@ Check :: () -> s32 {
         app.habit_edit.active != 0 && app.habits.items[0].schedule_count == 2)
     habit_edit_cancel(app)
     check_int("sync ran for the edit", syncs, 2)
+
+    habit_edit_begin(app, 0)
+    set_text(app.habit_edit.text[:], "")
+    habit_edit_back(app)
+    habit_edit_resolve_leave(app, 2)
+    check_true("Save validates before leaving", app.habit_edit.active != 0 &&
+        app.habit_edit.name_error == 1 && app.breathing.screen == ScreenHabitEdit)
+    set_text(app.habit_edit.text[:], "Saved changes")
+    habit_edit_back(app)
+    habit_edit_resolve_leave(app, 2)
+    check_true("Save keeps changes and returns to the overview", app.habit_edit.active == 0 &&
+        app.breathing.screen == ScreenHabits &&
+        TextFromCString(*app.habits.items[0].name[0]) == "Saved changes")
+    check_int("saving from the prompt syncs once", syncs, 3)
+
+    habit_edit_begin(app, 0)
+    set_text(app.habit_edit.description[:], "A navigation draft")
+    check_true("leaving for another app asks first", habit_edit_request_leave(app, 4))
+    habit_edit_resolve_leave(app, 1)
+    check_true("Keep editing cancels the destination", left_route == -1 && app.habit_edit.active != 0)
+    check_true("another navigation attempt asks again", habit_edit_request_leave(app, 4))
+    habit_edit_resolve_leave(app, 3)
+    check_true("Discard continues to the requested destination", left_route == 4 && app.habit_edit.active == 0)
     habits_free(*app.habits)
     CloseTestCells()
     storage_close()

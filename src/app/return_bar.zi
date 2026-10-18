@@ -20,6 +20,7 @@
 #import, file "locale.zi";
 #import, file "mini_mode.zi";
 #import, file "../cells/module_host.zi";
+#import, file "../cells/node_apps.zi";
 #import, file "../platform/environment.zi";
 
 using AppNavRoute;
@@ -36,9 +37,8 @@ app_return_bar_route :: (app: *InnerBreeze) -> s32 {
     if !RouteListContains(apps[:], cast(s32)apps.count, route) {
         return APP_NAV_ROUTE_NONE
     }
-    visible := app.enabled_apps & CellsInstalledMask()
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
-        if app.launcher_favorites[index] == route && (app_nav_route_bit(route) & visible) != 0 {
+        if app.launcher_favorites[index] == route && app_nav_route_available(app, route) {
             return APP_NAV_ROUTE_NONE
         }
     }
@@ -60,6 +60,14 @@ app_return_to_apps :: (app: *InnerBreeze) {
     }
 }
 
+app_node_app_back :: (app: *InnerBreeze) -> bool {
+    if app.breathing.screen != ScreenNodeApp || !NodeAppBack(app.node_app_slot) {
+        return false
+    }
+    app_block_current_click(app)
+    return true
+}
+
 // Back at an unpinned app's first page returns to Apps; inner pages keep
 // their own Back.
 app_return_bar_takes_back :: (app: *InnerBreeze) -> bool {
@@ -69,8 +77,8 @@ app_return_bar_takes_back :: (app: *InnerBreeze) -> bool {
     }
     if route == APP_NAV_ROUTE_HABITS {
         return app.habits.screen_mode != HABITS_SCREEN_HISTORY &&
-            app.habits.screen_mode != HABITS_SCREEN_STATISTICS &&
-            !(app.habits.tab == HABIT_TAB_EDIT && app.habit_edit.active != 0)
+        app.habits.screen_mode != HABITS_SCREEN_STATISTICS &&
+        !(app.habits.tab == HABIT_TAB_EDIT && app.habit_edit.active != 0)
     }
     if route == APP_NAV_ROUTE_PRACTICE {
         return app.practice_tab == PRACTICE_TAB_PLAY
@@ -92,10 +100,11 @@ app_draw_return_bar :: (app: *InnerBreeze) {
     bar.bounds = Rectangle.{0.0, -cast(float32)height,
         cast(float32)app.ui.view_width, cast(float32)height}
     bar.has_leading_action = app.modal.active == 0
-    bar.leading_label = LocaleText("return_to_apps")
+    bar.leading_label = LocaleText(ifx app.breathing.screen == ScreenNodeApp then "back_button"
+        else "return_to_apps")
     options: [1]DropdownOption
     result := TitleBar(app.ui.session, bar, options[0:0])
-    if result.clicked_leading {
+    if result.clicked_leading && !app_node_app_back(app) {
         app_return_to_apps(app)
     }
 }

@@ -178,6 +178,10 @@ leaderboard-ui-test: $(TARGET)
 photos-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
 	@sh tests/photos_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/photos.zib)
 
+.PHONY: habit-unsaved-ui-test
+habit-unsaved-ui-test: $(TARGET)
+	@sh tests/habit_unsaved_ui_test.sh $(abspath $(TARGET))
+
 .PHONY: chess-ui-test
 chess-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
 	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/chess.zib)

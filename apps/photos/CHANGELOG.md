@@ -1,5 +1,12 @@
 # Photos changelog
 
+## [1.0.1] - 2026-10-18
+
+- Back from an open photo returns to the gallery and keeps your place.
+- Pinning Photos shows its icon in the sidebar and bottom navigation.
+- Photos stay unobstructed while the full image arrives, without a loading
+  message over the preview.
+
 ## [1.0.0] - 2026-10-17
 
 - Keep your photos in Inner Breeze: add them from your device, and see them
