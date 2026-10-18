@@ -14,6 +14,7 @@ static int seeds;
 static int web_flushes;
 static int web_platform;
 static int setup_done;
+static int audio_cancellations;
 
 static bool
 equals(String value, const char *literal)
@@ -108,6 +109,13 @@ save_settings(InnerBreeze *app)
     saves++;
 }
 
+void
+practice_downloads_PracticeNarrationCancelLanguage(String language)
+{
+    assert(equals(language, "es"));
+    audio_cancellations++;
+}
+
 int32_t
 settings_store_SettingsReadInt(String key, int32_t fallback)
 {
@@ -200,5 +208,21 @@ main(void)
 
     app_accept_language_selection(NULL);
     assert(saves == 5 && seeds == 1 && web_flushes == 1);
+
+    app_return_to_language_selection(NULL);
+    app_return_to_language_selection(&app);
+    assert(saves == 5 && audio_cancellations == 0);
+    for (int step = 1; step <= 2; step++) {
+        app.audio_setup_step = step;
+        app.audio_setup_scroll = 180;
+        app.guide_narration_enabled = 1;
+        app.voice_narration_enabled = 0;
+        app_return_to_language_selection(&app);
+        assert(app.audio_setup_step == 0 && app.audio_setup_scroll == 0);
+        assert(app.language_selected == 0 && app.language_index == 1);
+        assert(app.guide_narration_enabled == 1 && app.voice_narration_enabled == 0);
+        assert(saves == 5 + step && audio_cancellations == step);
+        assert(web_flushes == 1 + step && seeds == 1);
+    }
     return 0;
 }

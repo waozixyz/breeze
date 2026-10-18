@@ -399,7 +399,7 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("break_daily_state_skipped",
         ifx app.breaks.timers[BREAK_DAILY].skipped_today != 0 then 1 else 0)
 
-    if app.language_selected != 0 && app.language_system == 0  && app.language[0] != 0 {
+    if app.language_system == 0 && app.language[0] != 0 {
         SettingsStoreText("language", app.language[:])
     } else {
         empty_language: [1]u8
@@ -431,10 +431,10 @@ load_language_setting :: (app: *InnerBreeze, settings_missing: s32) {
         ifx settings_missing != 0 then 0 else 1)
 
     had_saved_code := app.language[0] != 0
+    app.language_selected = ifx setup_done != 0 then 1 else 0
     app.language_needs_save = 0
     if had_saved_code  && LocaleUse(AppTextFromCString(*app.language[0], 16)) {
         app.language_system = 0
-        app.language_selected = 1
     } else {
         preferred := LocalePreferred(LocaleSystemPreferences())
         if !LocaleUse(preferred) {
@@ -442,7 +442,6 @@ load_language_setting :: (app: *InnerBreeze, settings_missing: s32) {
         }
         CopyCString(LocaleActiveCode(), app.language[:])
         app.language_system = 1
-        app.language_selected = ifx had_saved_code || setup_done != 0 then 1 else 0
         app.language_needs_save = ifx had_saved_code then 1 else 0
     }
     app.language_index = LocaleActiveIndex()
@@ -805,11 +804,11 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     app.exercise_manual_seen_mask =
     manual_seen_mask & ((1 << EXERCISE_COUNT) - 1)
     load_language_setting(app, settings_missing)
-    // Keep existing audio choices; a new profile opts in after language selection.
-    narration_default: s32 = ifx app.language_selected != 0 then 1 else 0
-    load_bool_setting(*app.voice_narration_enabled, "voice_narration_enabled", narration_default)
+    // Preselect audio for new profiles, preserving every saved choice.
+    // Downloads still wait for confirmation in optional audio setup.
+    load_bool_setting(*app.voice_narration_enabled, "voice_narration_enabled", 1)
     load_bool_setting(*app.guide_narration_enabled, "guide_narration_enabled",
-        ifx app.language_selected != 0 then app.voice_narration_enabled else 0)
+        app.voice_narration_enabled)
     load_bool_setting(*app.guide_narration_muted, "guide_narration_muted", 0)
     // Existing profiles retain their app choices. A new profile comes with
     // Lumi, Habits and Practice; the other apps are added from More apps.

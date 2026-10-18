@@ -1,4 +1,4 @@
-"""First-run audio consent and persistent guide mute on a private display."""
+"""First-run audio choices, language corrections and guide mute privately."""
 import contextlib
 import os
 from pathlib import Path
@@ -93,12 +93,50 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             assert len(sizes) == 2, driver.text()
             assert "Choose voices" not in driver.text()
             assert "Voice instructions download" not in driver.text()
-            assert not driver.wait(label="Guide voice", role="toggle")["selected"]
-            assert not driver.wait(label="Practice voice", role="toggle")["selected"]
-            driver.press(label="Guide voice", role="toggle")
+            assert driver.wait(label="Guide voice", role="toggle")["selected"]
+            assert driver.wait(label="Practice voice", role="toggle")["selected"]
             saved(profile, "guide_narration_enabled", 1)
-            assert "downloading pack guide/" not in log.read_text(), log.read_text()
+            saved(profile, "voice_narration_enabled", 1)
             capture(window, name + "-optional-audio")
+            driver.press(label="Practice voice", role="toggle")
+            back = driver.wait(label="Back", role="button")
+            assert back["width"] >= 44 and back["height"] >= 44
+            driver.press(label="Back", role="button")
+            driver.wait(label="Choose Language")
+            saved(profile, "audio_setup_step", 0)
+            saved(profile, "language_setup_done", 0)
+            driver.press(key=260, role="dropdown")
+            driver.press(label="Español", role="option")
+            driver.press(key=261, role="button")
+            driver.wait(key=262, role="toggle")
+            saved(profile, "language", "es")
+            saved(profile, "audio_setup_step", 1)
+            assert driver.wait(key=262, role="toggle")["selected"]
+            assert not driver.wait(key=263, role="toggle")["selected"]
+            assert not re.findall(r"downloading pack [^\s]+", log.read_text())
+        # A language preview survives restart without completing first-run setup.
+        with application(profile, name + "-language-restart", width, height) as (window, log):
+            driver.wait(key=266, role="button")
+            saved(profile, "language", "es")
+            saved(profile, "language_setup_done", 0)
+            assert driver.wait(key=262, role="toggle")["selected"]
+            assert not driver.wait(key=263, role="toggle")["selected"]
+            driver.press(key=264, role="button")
+            saved(profile, "audio_setup_step", 2)
+            # Back is available even after downloads have started.
+            driver.press(key=266, role="button")
+            driver.wait(key=260, role="dropdown")
+            saved(profile, "audio_setup_step", 0)
+            saved(profile, "language_setup_done", 0)
+            driver.press(key=260, role="dropdown")
+            driver.press(label="English", role="option")
+            driver.press(label="Next", role="button")
+            driver.wait(label="Optional audio")
+            saved(profile, "language", "en")
+            saved(profile, "guide_narration_enabled", 1)
+            saved(profile, "voice_narration_enabled", 0)
+            downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
+            assert downloads <= {"guide/es"}, downloads
         # An interrupted selection returns to optional audio without downloading.
         with application(profile, name + "-restart", width, height) as (window, log):
             driver.wait(label="Optional audio")
@@ -163,7 +201,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-audio-") as temporary:
         driver.wait(label="Choose Language")
         driver.press(label="Next", role="button")
         driver.wait(label="Optional audio")
-        driver.press(label="Practice voice", role="toggle")
+        driver.press(label="Guide voice", role="toggle")
         driver.press(label="Download selected", role="button")
         driver.wait(label="Retry downloads", role="button", timeout=30)
         downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
@@ -171,4 +209,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-audio-") as temporary:
         saved(profile, "guide_narration_enabled", 0)
         saved(profile, "voice_narration_enabled", 1)
 
-print("Optional audio consent, offline retry, restart, and independent guide mute passed on desktop and mobile")
+print("Default audio choices, Back, language persistence, offline retry and guide mute passed on desktop and mobile")
