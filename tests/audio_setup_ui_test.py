@@ -71,6 +71,7 @@ def application(profile, name, width, height):
 
 
 def capture(window, name):
+    driver.wait_idle(frames=3, timeout=2)
     subprocess.run(["import", "-window", window, str(OUTPUT / (name + ".png"))],
         env=ENV, check=True)
 
@@ -87,6 +88,11 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             saved(profile, "audio_setup_step", 1)
             driver.wait(label="Guide voice", role="text")
             driver.wait(label="Practice voice", role="text")
+            sizes = [node["label"] for node in driver.find(role="text", visible=True)
+                     if re.fullmatch(r"[1-9][0-9]* (?:KB|MB)", node["label"])]
+            assert len(sizes) == 2, driver.text()
+            assert "Choose voices" not in driver.text()
+            assert "Voice instructions download" not in driver.text()
             assert not driver.wait(label="Guide voice", role="toggle")["selected"]
             assert not driver.wait(label="Practice voice", role="toggle")["selected"]
             driver.press(label="Guide voice", role="toggle")
@@ -112,7 +118,8 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             button = driver.wait(label="Mute guide voice", role="button")
             assert button["width"] >= 44 and button["height"] >= 44
             driver.press(label="Mute guide voice", role="button", settle=False)
-            saved(profile, "guide_narration_enabled", 0)
+            saved(profile, "guide_narration_muted", 1)
+            saved(profile, "guide_narration_enabled", 1)
             driver.wait(label="Step 1 of 3")
             saved(profile, "voice_narration_enabled", 0)
             driver.press(contains="Hi, I'm Lumi", role="text", settle=False)
@@ -121,6 +128,7 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             driver.wait(label="Step 1 of 3")
             driver.wait(label="Enable guide voice", role="button")
             driver.press(label="Enable guide voice", role="button", settle=False)
+            saved(profile, "guide_narration_muted", 0)
             saved(profile, "guide_narration_enabled", 1)
             saved(profile, "voice_narration_enabled", 0)
     with tempfile.TemporaryDirectory(prefix="inbe-audio-skip-") as temporary:
@@ -132,7 +140,8 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             driver.press(label="Skip for now", role="button")
             saved(profile, "language_setup_done", 1)
             driver.wait(label="Step 1 of 3")
-            driver.wait(label="Enable guide voice", role="button")
+            assert not driver.find(key=83113, role="button", visible=True)
+            capture(window, name + "-guide-without-voice")
             assert "downloading pack guide/" not in log.read_text()
         if name == "desktop":
             # A profile from before the separate guide setting inherits its
@@ -143,6 +152,23 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
                     db.execute("UPDATE settings SET value=? WHERE key='voice_narration_enabled'", (str(enabled),))
                 with application(profile, "existing-" + str(enabled), width, height):
                     driver.wait(label="Step 1 of 3")
-                    driver.wait(label="Mute guide voice" if enabled else "Enable guide voice", role="button")
+                    if enabled:
+                        driver.wait(label="Mute guide voice", role="button")
+                    else:
+                        assert not driver.find(key=83113, role="button", visible=True)
+
+with tempfile.TemporaryDirectory(prefix="inbe-practice-audio-") as temporary:
+    profile = Path(temporary)
+    with application(profile, "practice-only", 900, 720) as (window, log):
+        driver.wait(label="Choose Language")
+        driver.press(label="Next", role="button")
+        driver.wait(label="Optional audio")
+        driver.press(label="Practice voice", role="toggle")
+        driver.press(label="Download selected", role="button")
+        driver.wait(label="Retry downloads", role="button", timeout=30)
+        downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
+        assert downloads == {"sunsalutation/en"}, downloads
+        saved(profile, "guide_narration_enabled", 0)
+        saved(profile, "voice_narration_enabled", 1)
 
 print("Optional audio consent, offline retry, restart, and independent guide mute passed on desktop and mobile")

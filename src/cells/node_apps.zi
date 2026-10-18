@@ -57,6 +57,7 @@ NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 1
 NodeAppOffer :: struct {
     name: [NODE_APP_NAME_MAX + 1]u8
     title: [65]u8
+    size: s64
     // Published as beta: listed only while beta apps are shown.
     beta: bool
 }
@@ -203,10 +204,22 @@ NodeAppRunning :: (slot: s32) -> bool {
 }
 
 NodeAppPackageSize :: (slot: s32) -> s64 {
-    if !NodeAppRunning(slot) {
+    if slot < 0 || slot >= NodeAppSlots {
         return 0
     }
-    return node_runners[slot].bundle_bytes
+    if NodeAppRunning(slot) {
+        return node_runners[slot].bundle_bytes
+    }
+    release := package_cached_releases[NodeAppIndex(slot)]
+    if release.valid {
+        return release.size
+    }
+    for index: cast(s32)0..node_offer_count - 1 {
+        if NodeAppOfferName(index) == NodeAppName(slot) {
+            return NodeAppOfferSize(index)
+        }
+    }
+    return 0
 }
 
 // What the launcher calls the app: its translated name when the root
@@ -257,6 +270,13 @@ NodeAppOfferName :: (index: s32) -> string {
     return TextUntilNul(node_offers[index].name[:])
 }
 
+NodeAppOfferSize :: (index: s32) -> s64 {
+    if index < 0 || index >= node_offer_count {
+        return 0
+    }
+    return node_offers[index].size
+}
+
 // Whether More apps lists an offer: beta ones only while beta apps are shown.
 NodeAppOfferShown :: (index: s32) -> bool {
     return index >= 0 && index < node_offer_count && (!node_offers[index].beta || NodeAppBetaShown())
@@ -285,12 +305,17 @@ NodeAppSaveOffers :: () {
             BuilderPrint(*out, "|beta")
         }
         BuilderPrint(*out, "\n")
+        size_key := PackageText("node_app_size_", TextUntilNul(node_offers[index].name[:]))
+        unused SettingsStoreInt(size_key, cast(s32)node_offers[index].size)
+        PackageFree(size_key)
         index += 1
     }
     text := BuilderFinish(out)
+    // This bounded catalog can exceed the 512-byte single-setting helper.
     bytes: [2048]u8
-    unused AppCopyText(text, bytes[:])
-    unused SettingsStoreText("node_apps_offers", bytes[:])
+    if AppCopyText(text, bytes[:]) {
+        storage_set_setting_text("node_apps_offers", TextUntilNul(bytes[:]))
+    }
     PackageFree(text)
 }
 
@@ -322,6 +347,18 @@ NodeAppLoadOffers :: () {
         }
         at = end + 1
     }
+    // Setting reads share a storage buffer: finish parsing the names before
+    // reading their sizes, so the next read cannot replace an unread line.
+    for index: cast(s32)0..node_offer_count - 1 {
+        offer := *node_offers[index]
+        size_key := PackageText("node_app_size_", TextUntilNul(offer.name[:]))
+        offer.size = SettingsReadInt(size_key, 0)
+        PackageFree(size_key)
+        // Older cached offers did not retain their signed download size.
+        if offer.size <= 0 {
+            node_catalog_checked_at = 0
+        }
+    }
 }
 
 NodeAppLocal :: (name: string) -> bool {
@@ -337,6 +374,7 @@ NodeAppLocalOffer :: () {
     offer.* = NodeAppOffer.{}
     unused AppCopyText(TextUntilNul(node_local_name[:]), offer.name[:])
     unused AppCopyText(TextUntilNul(node_local_name[:]), offer.title[:])
+    offer.size = PackageFileSize(TextUntilNul(node_local_path[:]))
     node_offer_count += 1
 }
 
@@ -1333,8 +1371,14 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
         metadata := PackageRead(path, 65536)
         id := PackageText("inbe.", TextUntilNul(node_candidates[node_candidate_next].name[:]))
         key: [65]u8
-        node_runnable[node_candidate_next] = PackageTrustedKeyFor(metadata, id, key[:]) &&
-        PackageParseReleaseFor(metadata, id, -1, TextFromCString(*key[0])).valid
+        release: PackageRelease
+        if PackageTrustedKeyFor(metadata, id, key[:]) {
+            release = PackageParseReleaseFor(metadata, id, -1, TextFromCString(*key[0]))
+        }
+        node_runnable[node_candidate_next] = release.valid
+        if release.valid {
+            node_candidates[node_candidate_next].size = release.size
+        }
         channel: [16]u8
         node_candidates[node_candidate_next].beta = NodeAppJsonText(metadata, 0, "channel", channel[:]) == "beta"
         PackageFree(id)

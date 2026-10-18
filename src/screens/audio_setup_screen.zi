@@ -28,8 +28,14 @@ using ButtonEmphasis;
 using TextWrap;
 
 AudioSetupPack :: (content: s32) -> s32 {
-    if content != PracticeGuide && !PracticeInstalled(content) {
-        return -1
+    // Optional audio can be prepared before its practice is added. Locked
+    // practices stay out of both the displayed size and the download choice.
+    if content != PracticeGuide {
+        product := PracticeProduct(content)
+        if product.count > 0 && (!practice_paid_allowed ||
+            practice_owned == null || !practice_owned(product)) {
+            return -1
+        }
     }
     return PracticeNarrationPack(content, LocaleActiveCode(), PracticeVoiceFor(content))
 }
@@ -89,6 +95,9 @@ AudioSetupChoice :: (app: *InnerBreeze, guide: bool, x: s32, y: *s32,
                 .disabled = app.audio_setup_step == 2})
         if result.changed {
             value.* = ifx result.value then 1 else 0
+            if guide {
+                app.guide_narration_muted = 0
+            }
             save_settings(app)
         }
     }
@@ -103,34 +112,23 @@ AudioSetupChoice :: (app: *InnerBreeze, guide: bool, x: s32, y: *s32,
             bytes += practice_packs[index].size
         }
     }
-    if bytes > 0 {
-        amount := cast(s32)((bytes + 1023) / 1024)
-        format := "practice_size_kb"
-        if bytes >= 1024 * 1024 {
-            amount = cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
-            format = "practice_size_mb"
-        }
-        buffer: [64]u8
-        args: [1]FormatArg = .[FormatArg.{.number = amount}]
-        unused FormatTemplate(LocaleText(format), args[:], buffer[:])
-        AudioSetupParagraph(app, TextUntilNul(buffer[:]), x, y, width,
-            AppSmallFontSize(), draw)
-    } else {
-        AudioSetupParagraph(app, LocaleText(ifx guide then "optional_audio_unavailable"
-            else "optional_audio_practice_hint"), x, y, width, AppSmallFontSize(), draw)
+    amount := cast(s32)((bytes + 1023) / 1024)
+    format := "practice_size_kb"
+    if bytes >= 1024 * 1024 {
+        amount = cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
+        format = "practice_size_mb"
     }
+    buffer: [64]u8
+    args: [1]FormatArg = .[FormatArg.{.number = amount}]
+    unused FormatTemplate(LocaleText(format), args[:], buffer[:])
+    AudioSetupParagraph(app, TextUntilNul(buffer[:]), x, y, width,
+        AppSmallFontSize(), draw)
     y.* += AppScale(8)
 }
 
 AudioSetupContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
     title := LocaleText("optional_audio_title")
     AudioSetupParagraph(app, title, x, y, width, AppTitleFontSize(title, width), draw)
-    args: [1]FormatArg = .[FormatArg.{
-        .text = PracticeLanguageLabel(LocaleActiveCode()), .is_text = true}]
-    intro: [512]u8
-    unused FormatTemplate(LocaleText("optional_audio_intro"), args[:], intro[:])
-    AudioSetupParagraph(app, TextUntilNul(intro[:]), x, y, width, AppFontSize(), draw)
-    y.* += AppScale(8)
     AudioSetupChoice(app, true, x, y, width, draw)
     AudioSetupChoice(app, false, x, y, width, draw)
 

@@ -264,10 +264,24 @@ Check :: () -> s32 {
     storage_set_setting_text("sync_public_id", "photos-test-account")
     NodeAppsInitialize()
     check_true("the local package is offered", NodeAppOffered("photos"))
+    expected_size := PackageFileSize(TextUntilNul(node_local_path[:]))
+    check_true("the offered package shows its size before installation", expected_size > 0 && NodeAppOfferSize(0) == expected_size)
+    node_offer_count = 2
+    node_offers[1] = NodeAppOffer.{.size = 1234, .beta = true}
+    unused AppCopyText("chess", node_offers[1].name[:])
+    unused AppCopyText("Chess", node_offers[1].title[:])
+    NodeAppSaveOffers()
+    node_offers[0].size = 0
+    NodeAppLoadOffers()
+    check_true("the offered size survives an offline catalog reload", NodeAppOfferSize(0) == expected_size)
+    check_true("all cached offers keep their names, sizes and beta status", node_offer_count == 2 &&
+        NodeAppOfferName(1) == "chess" && NodeAppOfferSize(1) == 1234 && node_offers[1].beta)
     slot := NodeAppInstall("photos")
     check_true("Photos installs into a slot", slot >= 0)
+    check_true("an installed package shows its size before opening", NodeAppPackageSize(slot) == expected_size)
     check_true("its installed mark syncs", storage_get_setting_text("app_used_photos") == "1")
     check_true("it opens", NodeAppOpen(slot))
+    check_true("the running package retains its exact size", NodeAppPackageSize(slot) == expected_size)
     // The library is the account's; an app the host does not grant it to
     // cannot start with the same code.
     bytes := PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
