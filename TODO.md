@@ -16,12 +16,17 @@ belong in `docs/`, marketing outside this repository.
 
 ## Codebase
 
-- Move the Habits screens (`src/screens/habits*`) into `apps/habits/`, so
+- Move the rest of Habits (`src/screens/habits*`) into `apps/habits/`, so
   Habits updates through its package without an APK; Practices after it.
-- Split `src/storage/storage_core.zi` (3,300 lines) and
-  `src/app/application.zi` (1,900 lines) into focused modules.
-- Split the 3,300-line `Makefile`. With its test targets in their own file,
-  test-only edits would no longer count as app changes for the phone check.
+  The count dialog moved in Habits 1.1.0 (`habits_view.zi`). The editor
+  needs hosted Kryon Dropdown, Fieldset and SegmentedControl, the table
+  hosted paint primitives and drag capture, statistics hosted Plot charts,
+  and all of them typed host calls for habits, days and entries.
+- Lumi's UI tests (`mk/tests-lumi.mk`) are read before `TARGET` is set, so
+  they don't build the app first, and editing an `mk/` area file does not
+  rebuild the artifacts whose rules list only `Makefile`.
+- `make music-navigation-test` includes `src/platform/audio_runtime.h`,
+  which the generator writes as `audio_runtime.h`; it does not build.
 - `make release-ready` does not cover CI's browser add-on smoke tests or
   shard 0's Daochi sync test yet.
 
