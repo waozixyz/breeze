@@ -119,7 +119,7 @@ test: android-smoke-script-test
 test: sync-recovery-test
 test: sync-record-fields-test
 test: media-metadata-test media-store-test photos-app-test
-test: chess-engine-test node-app-records-test chess-app-test node-app-codec-check
+test: node-app-records-test node-app-codec-check
 test: app-click-block-zi-test
 test: phone-check-gate-test
 test: release-tooling-test

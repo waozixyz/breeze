@@ -25,7 +25,7 @@ portable-apps-ui-test: $(TARGET) cells
 		--player "$(APP_PLAYER)" --werk "$(WERK_BINARY)" \
 		--diary $(abspath build/cells/diary.zib) --calculator "$(CALCULATOR_BUNDLE)"
 
-.PHONY: chess-engine-test chess-app-test node-app-records-test node-app-codec-check
+.PHONY: node-app-records-test node-app-codec-check
 .PHONY: photos-app-test media-store-test media-metadata-test
 # Photos and the account's media library it shows.
 media-metadata-test: $(ZI2C_BIN)
@@ -37,14 +37,8 @@ media-store-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 photos-app-test: $(ZIRAN_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	sh tests/photos_app_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
-chess-engine-test: $(ZI2C_BIN)
-	sh tests/chess_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
 node-app-records-test: $(ZI2C_BIN)
 	sh tests/node_app_records_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-chess-app-test: $(ZIRAN_BIN)
-	sh tests/chess_app_test.sh $(ZIRAN_BIN)
 
 node-app-codec-check:
 	python3 scripts/generate-node-app-codec.py --check

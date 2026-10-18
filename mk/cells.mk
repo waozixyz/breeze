@@ -16,8 +16,9 @@ $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(CELL_SOURCES) $(CELL_RES
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 
 # Apps the node offers build on their own, never into the root package.
-NODE_APP_BUNDLES := $(BUILD_DIR)/node-apps/chess.zib $(BUILD_DIR)/node-apps/photos.zib
-$(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files assets/chess assets/photos 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py $(ZIRAN_BIN)
+NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
+NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zib,$(NODE_APP_NAMES)))
+$(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files $(addprefix assets/,$(NODE_APP_NAMES)) 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py $(ZIRAN_BIN)
 	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
 
 .PHONY: node-apps

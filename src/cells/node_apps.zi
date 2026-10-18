@@ -662,6 +662,47 @@ NodeAppString :: (text: string) -> HostValue {
         .data = HostTextData(text), .length = cast(usize)text.count}
 }
 
+// Text belongs to the downloaded app, so a game update can bring its own
+// translations without requiring an Inner Breeze update. Older packages
+// still fall back to the host's existing translations.
+NodeAppLocaleText :: (slot: s32, locale: string, key: string) -> string {
+    if slot < 0 || slot >= NodeAppSlots { return "" }
+    path_bytes: Vec(u8)
+    BuilderPrint(*path_bytes, "assets/%/locales/%.txt", NodeAppName(slot), locale)
+    path := BuilderFinish(path_bytes)
+    resource := HostedAppAsset(*node_runners[slot].app, path)
+    PackageFree(path)
+    if !resource.found {
+        english: Vec(u8)
+        BuilderPrint(*english, "assets/%/locales/en.txt", NodeAppName(slot))
+        path = BuilderFinish(english)
+        resource = HostedAppAsset(*node_runners[slot].app, path)
+        PackageFree(path)
+    }
+    text := resource.data
+    at: s64 = 0
+    while at < text.count {
+        end := at
+        while end < text.count && text[end] != cast(u8)10 { end += 1 }
+        line := text[at:end]
+        if line.count == key.count + 2 && line[0] == cast(u8)91 &&
+        line[line.count - 1] == cast(u8)93 && line[1:line.count - 1] == key {
+            start := end + 1
+            last := start
+            while last < text.count {
+                next := last
+                while next < text.count && text[next] != cast(u8)10 { next += 1 }
+                if text[last:next] == "---" {
+                    return text[start:ifx last > start then last - 1 else last]
+                }
+                last = next + 1
+            }
+        }
+        at = end + 1
+    }
+    return ""
+}
+
 NodeAppRecordKey :: (app: string, record: string) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "cell.%.%", app, record)

@@ -631,15 +631,15 @@ def import_archive(archive, store, publishers_path=None):
     archive.parent.rmdir()
 
 
-def node_app_release(name, key, key_id, beta=False):
+def node_app_release(name, key, key_id, beta=False, ledger_path=None, bundle_directory=None):
     """The signed release of build/node-apps/NAME.zib from its ledger entry."""
-    versions = json.loads((ROOT / "apps/versions.json").read_text())
+    versions = json.loads((ledger_path or ROOT / "apps/versions.json").read_text())
     component = versions.get("node_apps", {}).get(name)
     if component is None or not node_app_id(component["id"]) or component["id"] != "inbe." + name:
         raise ValueError(f"{name} is not an app the node offers")
     if not VERSION.fullmatch(component["version"]) or not 0 < component["sequence"] <= 2**31 - 1:
         raise ValueError(f"invalid {name} version or sequence")
-    data = (ROOT / "build/node-apps" / f"{name}.zib").read_bytes()
+    data = ((bundle_directory or ROOT / "build/node-apps") / f"{name}.zib").read_bytes()
     if not data.startswith(b"ZIB\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
         raise ValueError(f"invalid {name} bundle")
     value = dict(app_id=component["id"], sequence=component["sequence"], version=component["version"],
@@ -653,14 +653,15 @@ def node_app_release(name, key, key_id, beta=False):
     return value, data
 
 
-def stage_node_app(store, name, key_path, key_id, publishers_path=None, beta=False):
+def stage_node_app(store, name, key_path, key_id, publishers_path=None, beta=False,
+                   ledger_path=None, bundle_directory=None):
     if not IDENTIFIER.fullmatch(key_id) or key_id in (".", ".."):
         raise ValueError("invalid publisher key ID")
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError("publisher key must be Ed25519")
     publishers = json.loads((publishers_path or ROOT / "apps/publishers.json").read_text())
-    value, data = node_app_release(name, key, key_id, beta)
+    value, data = node_app_release(name, key, key_id, beta, ledger_path, bundle_directory)
     validate_release(value, value["app_id"], publishers)
     directory = store / value["app_id"]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -797,6 +798,8 @@ def main():
                         help='restore only the missing Sun Salutation picture pack')
     parser.add_argument('--repair-release', type=Path, help='existing signed Practices metadata for a content repair')
     parser.add_argument("--node-app", help="stage, and with --ssh-target publish, only this app the node offers")
+    parser.add_argument("--app-ledger", type=Path, help="owning project's node-app version ledger")
+    parser.add_argument("--bundle-directory", type=Path, help="owning project's built node-app bundles")
     parser.add_argument("--beta", action="store_true",
                         help="with --node-app: publish it as beta, listed only where beta apps are shown")
     args = parser.parse_args()
@@ -804,7 +807,8 @@ def main():
         if args.node_app:
             if not args.key or not args.key_id or args.rollout is not None:
                 parser.error("--node-app needs --key and --key-id, without --rollout")
-            stage_node_app(args.store, args.node_app, args.key, args.key_id, args.publishers, args.beta)
+            stage_node_app(args.store, args.node_app, args.key, args.key_id, args.publishers, args.beta,
+                           args.app_ledger, args.bundle_directory)
             if args.ssh_target:
                 if not args.remote_store or not args.verify_origin:
                     parser.error("publishing an app the node offers needs --remote-store and --verify-origin")

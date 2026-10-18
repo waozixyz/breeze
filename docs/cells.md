@@ -451,11 +451,15 @@ with revisions and removal follow the shared-list rules, so a friend accepts
 or declines and a stale save is refused. Their content is not end-to-end
 encrypted, like shared lists.
 
-Chess (`apps/chess/`) is the first such app: the computer at three levels
+Chess (`inbe.chess`) is owned by Arcade, including its source, assets,
+translations, tests and independent release ledger. Inbe consumes its signed
+node package and preserves existing installations, records and friend games.
+It no longer builds or versions Chess. The game offers the computer at three levels
 (search depth 1, 3 and 5 with bounded positions, a few positions per frame
 so the app keeps drawing) and games with friends, one shared record per game
-with its moves in coordinates. `python3 scripts/package-release.py --node-app
-chess --store ... --key ... --key-id ...` stages its release; with
+with its moves in coordinates. From the Arcade repository,
+`python3 scripts/package-release.py --store ... --key ... --key-id ...`
+stages its release through Inbe's existing signed publisher; with
 `--ssh-target`, `--remote-store` and `--verify-origin` it publishes it. The
 App packages workflow never publishes these apps. For a local preview or a
 test, `INBE_NODE_APP_FILE=/absolute/path/chess.zib` offers that package as if

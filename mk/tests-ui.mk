@@ -183,8 +183,10 @@ habit-unsaved-ui-test: $(TARGET)
 	@sh tests/habit_unsaved_ui_test.sh $(abspath $(TARGET))
 
 .PHONY: chess-ui-test
-chess-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
-	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/chess.zib)
+CHESS_BUNDLE ?=
+chess-ui-test: $(TARGET)
+	@test -n "$(CHESS_BUNDLE)" || { echo "Set CHESS_BUNDLE to the Chess package built by Arcade"; exit 2; }
+	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(CHESS_BUNDLE))
 
 # Missing practice pictures fail the visual gate in CI and releases.
 .PHONY: practice-images-ui-test
