@@ -1,0 +1,77 @@
+// Generic audio capability for installable apps. The owner slot is checked
+// on every operation; closing/uninstalling that app cancels its stream.
+#import, file "../platform/radio_runtime.zi";
+#import, file "current_app.zi";
+#import, file "app_types.zi";
+#import, file "../practices/meditation/meditation_music.zi";
+#import, file "../screens/settings/settings_audio.zi";
+#import, file "../storage/state.zi";
+#import, file "text_buffers.zi";
+c :: #system_library "c";
+app_audio_ensure_ready :: (app: *InnerBreeze) #foreign c;
+
+background_audio_owner: s32 = -1;
+background_audio_account: [64]u8;
+
+BackgroundAudioStart :: (owner: s32, url: string) -> bool {
+    app := CurrentApp()
+    if app == null || owner < 0 || url.count <= 8 || url.count >= 2048 || url[0:8] != "https://" {
+        return false
+    }
+    app_audio_ensure_ready(app)
+    if app.audio_ready == 0 {
+        return false
+    }
+    BackgroundAudioStop(background_audio_owner)
+    settings_audio_stop_preview(app)
+    meditation_music_unload(app)
+    if !RadioOpen(url) {
+        return false
+    }
+    background_audio_owner = owner
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), background_audio_account[:])
+    RadioPlay()
+    return true
+}
+
+BackgroundAudioStop :: (owner: s32) {
+    if owner < 0 || owner != background_audio_owner {
+        return
+    }
+    RadioStop()
+    background_audio_owner = -1
+}
+
+BackgroundAudioVolume :: (owner: s32, percent: s32) -> bool {
+    if owner < 0 || owner != background_audio_owner || percent < 0 || percent > 100 {
+        return false
+    }
+    RadioVolume(percent)
+    return true
+}
+
+BackgroundAudioState :: (owner: s32) -> s32 {
+    if owner != background_audio_owner || owner < 0 {
+        return 0
+    }
+    return RadioState()
+}
+
+BackgroundAudioActive :: () -> bool {
+    return background_audio_owner >= 0 && RadioState() > 0
+}
+
+BackgroundAudioUpdate :: () {
+    if background_audio_owner >= 0 {
+        if AppTextFromCString(storage_user_id_buffer(), 64) !=
+        AppTextFromCString(*background_audio_account[0], 64) {
+            BackgroundAudioStop(background_audio_owner)
+            return
+        }
+        RadioUpdate()
+    }
+}
+
+BackgroundAudioInterrupt :: () {
+    BackgroundAudioStop(background_audio_owner)
+}

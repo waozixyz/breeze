@@ -1035,7 +1035,33 @@ public class MainActivity extends NativeActivity {
         PaymentBridge.purchaseTokens(this, productId, accountId, authToken);
     }
 
+    private RadioPlayer radioPlayer;
+    private volatile boolean radioBackgroundActive;
+    private volatile boolean sessionWakeLockRequested;
+
+    public synchronized int radioCommand(int action, String url, int volume) {
+        if (radioPlayer == null) {
+            if (action != 1) return 0;
+            radioPlayer = new RadioPlayer(this, this::setRadioBackground);
+        }
+        return radioPlayer.command(action, url, volume);
+    }
+
+    private void setRadioBackground(boolean active) {
+        radioBackgroundActive = active;
+        if (active) {
+            startAudioForeground();
+        } else if (!sessionWakeLockRequested) {
+            stopService(new Intent(this, SessionForegroundService.class));
+        }
+    }
+
     public void acquireWakeLock() {
+        sessionWakeLockRequested = true;
+        startAudioForeground();
+    }
+
+    private void startAudioForeground() {
         requestNotificationPermissionIfNeeded();
         Log.d(TAG, "Starting session foreground service");
         Intent intent = new Intent(this, SessionForegroundService.class);
@@ -1048,6 +1074,8 @@ public class MainActivity extends NativeActivity {
     }
 
     public void releaseWakeLock() {
+        sessionWakeLockRequested = false;
+        if (radioBackgroundActive) return;
         Log.d(TAG, "Stopping session foreground service");
         stopService(new Intent(this, SessionForegroundService.class));
     }
@@ -1379,7 +1407,7 @@ public class MainActivity extends NativeActivity {
             + " windowFocused=" + windowFocused
             + " backgroundActive=" + backgroundExecutionActive);
 
-        if (activityPaused && !pictureVisible && !backgroundExecutionActive) {
+        if (activityPaused && !pictureVisible && !backgroundExecutionActive && !radioBackgroundActive) {
             stopService(new Intent(this, SessionForegroundService.class));
         }
     }
@@ -1457,6 +1485,7 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        radioCommand(0, "", 0);
         httpTransport.close();
         NotificationPresence.setActivityVisible(false);
         super.onDestroy();

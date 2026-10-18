@@ -74,3 +74,23 @@ package-upload-test:
 .PHONY: package-receiver-test
 package-receiver-test:
 	python3 tests/package_receiver_test.py
+
+# Radio's installable bundle, live decoder and browser audio effect.
+.PHONY: radio-test radio-app-test radio-native-test radio-web-test radio-android-test
+radio-app-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
+	sh tests/radio_app_test.sh $(ZIRAN_BIN) $(ZIRAN_DIR)/std $(KRYON_DIR)/src/ui
+
+radio-native-test: $(ZI2C_BIN) $(RAYLIB_A)
+	sh tests/radio_native_test.sh $(ZIRAN_BUILD_DIR)/bin $(ZIRAN_DIR)/std
+	@nm -g $(RAYLIB_A) | rg -q ' T drmp3dec_decode_frame$$'
+
+radio-web-test:
+	node tests/radio_web_test.mjs
+
+radio-android-test:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		$(ANDROID_GRADLE_ENV) YUE_DESKTOP_RECOVERY=0 $(GRADLE) --no-daemon \
+		--project-dir tests/android-text-selection test --tests xyz.waozi.inbe.RadioPlayerTest
+
+radio-test: radio-app-test radio-native-test radio-web-test radio-android-test
+test: radio-app-test radio-native-test radio-web-test

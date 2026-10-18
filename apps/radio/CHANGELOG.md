@@ -1,0 +1,9 @@
+# Radio
+
+## [1.0.0] - 2026-10-18
+
+- Listen to Ambient Sleeping Pill, a.m. ambient and Ambient Modern inside
+  Inner Breeze, with a station selector, play/stop and volume controls.
+- Keep listening while using other Inner Breeze apps or running Android in
+  the background. Radio reconnects after interrupted connections.
+- Remember the selected station and volume without starting automatically.

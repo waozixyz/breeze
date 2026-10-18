@@ -5,6 +5,7 @@
 // through the generic app interface (node_app_types.zi), so a new app needs
 // no host code. Whether an app is installed syncs with the account.
 #import "bundle_host"
+#import, file "../app/background_audio.zi";
 #import "byte_text_linux"
 #import "json_scan"
 #import "text"
@@ -475,6 +476,7 @@ NodeAppUninstall :: (slot: s32) {
 }
 
 NodeAppClose :: (slot: s32) {
+    BackgroundAudioStop(slot)
     HostedAppClose(*node_runners[slot].app)
     node_runners[slot] = NodeAppRunner.{}
 }
@@ -520,7 +522,8 @@ NodeAppCapability :: (name: string) -> bool {
     name == "AppLocaleHost" || name == "AppRecordHost" || name == "SaveAppRecordHost" ||
     name == "AppFriendHost" || name == "AppSharedHost" || name == "AppSharedItemHost" ||
     name == "AppInvitationHost" || name == "SendAppSharedHost" || name == "RefreshAppSharedHost" ||
-    name == "SmoothFramesHost"
+    name == "SmoothFramesHost" || name == "AudioStartHost" ||
+    name == "AudioStopHost" || name == "AudioStateHost" || name == "AudioVolumeHost"
 }
 
 // A node app may call the generic interface from any of its modules, and
@@ -753,6 +756,27 @@ NodeAppCall :: (context: *void, module: *u8, function: *u8,
     }
     if node_identifying {
         return 0
+    }
+    if name == "AudioStartHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        started := BackgroundAudioStart(slot, NodeAppText(arguments[0]))
+        result.* = HostScalar("bool", ifx started then 1 else 0)
+        return 1
+    }
+    if name == "AudioStopHost" && count == 0 {
+        BackgroundAudioStop(slot)
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AudioStateHost" && count == 0 {
+        result.* = HostScalar("s32", BackgroundAudioState(slot))
+        return 1
+    }
+    if name == "AudioVolumeHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        changed := BackgroundAudioVolume(slot, cast(s32)arguments[0].integer)
+        result.* = HostScalar("bool", ifx changed then 1 else 0)
+        return 1
     }
     if name == "SmoothFramesHost" && count == 1 &&
     HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {

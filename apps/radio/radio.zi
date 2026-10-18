@@ -1,0 +1,179 @@
+// Radio is an installable node app. Selection, saved preferences and UI
+// live in this bundle; the host owns the stream after the screen is left.
+#import "session"
+#import "geometry"
+#import "text"
+#import "vec"
+#import "text_props"
+#import "text_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../../src/cells/node_app_types.zi";
+#import, file "../../src/cells/module_types.zi";
+#import, file "stations.zi";
+
+host_api :: #system_library "host_api";
+ReadAppHost :: () -> AppMessage #foreign host_api;
+WriteAppHost :: (message: AppMessage) #foreign host_api;
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+AppLocaleHost :: (key: string) -> string #foreign host_api;
+AppRecordHost :: (record: string) -> string #foreign host_api;
+SaveAppRecordHost :: (record: string, value: string) -> bool #foreign host_api;
+AudioStartHost :: (url: string) -> bool #foreign host_api;
+AudioStopHost :: () -> bool #foreign host_api;
+AudioStateHost :: () -> s32 #foreign host_api;
+AudioVolumeHost :: (percent: s32) -> bool #foreign host_api;
+
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+loaded: bool;
+loaded_account: string;
+selected: s32;
+volume: s32 = 60;
+failed: bool;
+scroll_offset: s32;
+
+ReadPercent :: (value: string) -> s32 {
+    if value.count == 0 || value.count > 3 { return 60 }
+    answer: s32 = 0
+    for index: cast(s64)0..value.count - 1 {
+        if value[index] < cast(u8)48 || value[index] > cast(u8)57 { return 60 }
+        answer = answer * 10 + cast(s32)value[index] - 48
+    }
+    if answer > 100 { return 60 }
+    return answer
+}
+
+RadioLoad :: (account: string) {
+    if loaded && loaded_account == account { return }
+    loaded_account = account
+    selected = 0
+    failed = false
+    saved := AppRecordHost("station")
+    for index: cast(s32)0..RADIO_STATION_COUNT - 1 {
+        if saved == StationStream(index) { selected = index }
+    }
+    volume = ReadPercent(AppRecordHost("volume"))
+    loaded = true
+}
+
+RadioStart :: () {
+    failed = !AudioStartHost(StationStream(selected))
+    if !failed { unused AudioVolumeHost(volume) }
+}
+
+RadioView :: (message: AppMessage) -> AppMessage {
+    RadioLoad(message.account)
+    frame := ReadAppUiHost()
+    margin := cast(s32)(20.0 * frame.scale)
+    width := frame.width - margin * 2
+    maximum := cast(s32)(560.0 * frame.scale)
+    if width > maximum { width = maximum }
+    x := (frame.width - width) / 2
+    y := frame.top + margin
+    step := cast(s32)(64.0 * frame.scale)
+    viewport := Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+        cast(float32)(frame.height - frame.bottom - y)}
+    scroll := Scroll(frame.session, ScrollProps.{.key = 26000, .bounds = viewport,
+            .content_height = cast(s32)(620.0 * frame.scale), .scroll_offset = scroll_offset,
+            .scale = frame.scale})
+    scroll_offset = scroll.scroll_offset
+    if !scroll.opened { message.succeeded = true; return message }
+    defer { unused End(frame.session) }
+    bounds := Rectangle.{scroll.content.x, scroll.content.y, scroll.content.width, cast(float32)step}
+    Text(frame.session, TextProps.{.bounds = bounds, .text = "Radio", .font = frame.font})
+    bounds.y += cast(float32)step
+    bounds.height = cast(float32)(28.0 * frame.scale)
+    Text(frame.session, TextProps.{.bounds = bounds, .text = AppLocaleHost("radio_station"), .font = frame.font})
+    bounds.y += bounds.height
+    bounds.height = cast(float32)(48.0 * frame.scale)
+    state := AudioStateHost()
+    for index: cast(s32)0..RADIO_STATION_COUNT - 1 {
+        if Button(frame.session, ButtonProps.{.id = 26010 + index, .bounds = bounds,
+                .label = StationName(index), .selected = selected == index,
+                .tone = ifx selected == index then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            selected = index
+            unused SaveAppRecordHost("station", StationStream(selected))
+            if state > 0 { RadioStart() }
+        }
+        bounds.y += cast(float32)(56.0 * frame.scale)
+    }
+    bounds.y += cast(float32)step
+    bounds.height = cast(float32)(36.0 * frame.scale)
+    status := "radio_stopped"
+    if failed || state < 0 { status = "radio_error" }
+    else if state == 1 { status = "radio_connecting" }
+    else if state == 2 { status = "radio_playing" }
+    else if state == 3 { status = "radio_reconnecting" }
+    Text(frame.session, TextProps.{.bounds = bounds, .text = AppLocaleHost(status),
+            .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+    bounds.y += bounds.height
+    bounds.height = cast(float32)(48.0 * frame.scale)
+    label := AppLocaleHost("play_button")
+    if state > 0 { label = AppLocaleHost("radio_stop") }
+    if Button(frame.session, ButtonProps.{.id = 26002, .bounds = bounds, .label = label,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        if state > 0 {
+            unused AudioStopHost()
+            failed = false
+        } else {
+            RadioStart()
+        }
+    }
+    bounds.y += cast(float32)step
+    bounds.height = cast(float32)step
+    value: Vec(u8)
+    BuilderPrint(*value, "%: %%%", AppLocaleHost("music_volume_label"), volume)
+    Text(frame.session, TextProps.{.bounds = bounds, .text = BuilderFinish(value), .font = frame.font})
+    bounds.y += cast(float32)(32.0 * frame.scale)
+    bounds.height = cast(float32)(48.0 * frame.scale)
+    original := bounds
+    gap := cast(float32)(12.0 * frame.scale)
+    bounds.width = (bounds.width - gap) / 2.0
+    previous := volume
+    if Button(frame.session, ButtonProps.{.id = 26003, .bounds = bounds,
+            .label = AppLocaleHost("radio_quieter"), .disabled = volume <= 0,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        volume -= 5
+        if volume < 0 { volume = 0 }
+    }
+    bounds.x += bounds.width + gap
+    if Button(frame.session, ButtonProps.{.id = 26004, .bounds = bounds,
+            .label = AppLocaleHost("radio_louder"), .disabled = volume >= 100,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        volume += 5
+        if volume > 100 { volume = 100 }
+    }
+    bounds = original
+    if volume != previous {
+        unused AudioVolumeHost(volume)
+        saved: Vec(u8)
+        BuilderPrint(*saved, "%", volume)
+        unused SaveAppRecordHost("volume", BuilderFinish(saved))
+    }
+    bounds.y += cast(float32)step
+    bounds.height = cast(float32)(80.0 * frame.scale)
+    Text(frame.session, TextProps.{.bounds = bounds, .text = AppLocaleHost("radio_hint"),
+            .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+    message.succeeded = true
+    return message
+}
+
+#program_export "RadioMain"
+Main :: () -> s32 {
+    message := ReadAppHost()
+    if message.abi != MODULE_ABI { return -1 }
+    if message.action == MODULE_IDENTIFY { return MODULE_NODE_APP }
+    message.succeeded = message.action == APP_ROUTE
+    if message.action == APP_FRAME { message = RadioView(message) }
+    WriteAppHost(message)
+    return 0
+}

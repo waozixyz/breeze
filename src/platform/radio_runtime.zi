@@ -1,0 +1,88 @@
+// Platform effects for one live audio stream. A node app owns its lifetime;
+// changing screens never stops it. Pause resumes at the live broadcast.
+#import "c_string"
+#import, file "radio_native.zi";
+
+radio_address: [2048]u8;
+radio_gain: s32 = 60;
+
+#if #defined(PLATFORM_WEB) {
+    web :: #system_library "web";
+    BrowserRadio :: (action: s32, url: *u8, volume: s32) -> s32 #foreign web "browser_radio";
+}
+#if #defined(ANDROID_BUILD) {
+    #import "android_jni"
+    AndroidRadio :: (action: s32) -> s32 {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 {
+            return -1
+        }
+        defer { AndroidJniDetachCurrent(*session) }
+        method := AndroidJniMethod(*session, "radioCommand", "(ILjava/lang/String;I)I")
+        if method == null {
+            return -1
+        }
+        env := session.env
+        arguments: [3]JniValue
+        arguments[0].integer = action
+        arguments[1].reference = AndroidJniString(env, *radio_address[0])
+        arguments[2].integer = radio_gain
+        if arguments[1].reference == null {
+            return -1
+        }
+        answer := env.functions.CallIntMethodA(env, session.activity, method, *arguments[0])
+        env.functions.DeleteLocalRef(env, arguments[1].reference)
+        if env.functions.ExceptionCheck(env) != 0 {
+            env.functions.ExceptionClear(env)
+            return -1
+        }
+        return answer
+    }
+}
+
+RadioOpen :: (url: string) -> bool {
+    RadioStop()
+    if url.count <= 8 || url[0:8] != "https://" || !CopyCString(url, radio_address[:]) {
+        return false
+    }
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(PLAN9_BUILD) && !#defined(KRYON_BACKEND_LIBDRAW) {
+        return NativeRadioOpen(url)
+    }
+    #if #defined(PLAN9_BUILD) || #defined(KRYON_BACKEND_LIBDRAW) {
+        return false
+    }
+    return true
+}
+
+RadioEffect :: (action: s32) -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        return BrowserRadio(action, *radio_address[0], radio_gain)
+    }
+    #if #defined(ANDROID_BUILD) {
+        return AndroidRadio(action)
+    }
+    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(PLAN9_BUILD) && !#defined(KRYON_BACKEND_LIBDRAW) {
+        if action == 0 {
+            NativeRadioStop()
+        } else if action == 1 {
+            NativeRadioPlay()
+        } else if action == 2 {
+            NativeRadioVolume(cast(float32)radio_gain / 100.0)
+        } else if action == 4 {
+            NativeRadioUpdate()
+        }
+        return NativeRadioState()
+    }
+    return -1
+}
+
+RadioPlay :: () { unused RadioEffect(1) }
+RadioStop :: () { unused RadioEffect(0) }
+RadioUpdate :: () { unused RadioEffect(4) }
+RadioState :: () -> s32 { return RadioEffect(3) }
+RadioVolume :: (percent: s32) {
+    radio_gain = percent
+    if radio_gain < 0 { radio_gain = 0 }
+    if radio_gain > 100 { radio_gain = 100 }
+    unused RadioEffect(2)
+}

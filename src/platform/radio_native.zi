@@ -1,0 +1,305 @@
+// A bounded live MP3 buffer. curl's multi API and decoder run on the same
+// thread as the player; callbacks never touch app state or the audio thread.
+#import "c_string"
+#import, file "audio_runtime.zi";
+
+#if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(PLAN9_BUILD) && !#defined(KRYON_BACKEND_LIBDRAW) {
+    #import "net_http_curl_linux"
+    curl :: #system_library "curl";
+    raylib :: #system_library "raylib";
+    c :: #system_library "c";
+    EasyInit :: () -> *void #foreign curl "curl_easy_init";
+    EasyCleanup :: (easy: *void) #foreign curl "curl_easy_cleanup";
+    EasyOption :: (easy: *void, option: s32, args: ..any) -> s32 #foreign curl "curl_easy_setopt";
+    MultiInit :: () -> *void #foreign curl "curl_multi_init";
+    MultiAdd :: (multi: *void, easy: *void) -> s32 #foreign curl "curl_multi_add_handle";
+    MultiRemove :: (multi: *void, easy: *void) -> s32 #foreign curl "curl_multi_remove_handle";
+    MultiPerform :: (multi: *void, running: *s32) -> s32 #foreign curl "curl_multi_perform";
+    MultiCleanup :: (multi: *void) -> s32 #foreign curl "curl_multi_cleanup";
+    EasyPause :: (easy: *void, mask: s32) -> s32 #foreign curl "curl_easy_pause";
+    MoveBytes :: (to: *void, from: *void, length: usize) -> *void #foreign c "memmove";
+    Clock :: () -> float64 #foreign raylib "GetTime";
+    LoadStream :: (rate: u32, bits: u32, channels: u32) -> NativeAudioStream #foreign raylib "LoadAudioStream";
+    UnloadStream :: (stream: NativeAudioStream) #foreign raylib "UnloadAudioStream";
+    PlayStream :: (stream: NativeAudioStream) #foreign raylib "PlayAudioStream";
+    StreamProcessed :: (stream: NativeAudioStream) -> bool #foreign raylib "IsAudioStreamProcessed";
+    UpdateStream :: (stream: NativeAudioStream, data: *void, frames: s32) #foreign raylib "UpdateAudioStream";
+    StreamVolume :: (stream: NativeAudioStream, volume: float32) #foreign raylib "SetAudioStreamVolume";
+    StreamBufferSize :: (frames: s32) #foreign raylib "SetAudioStreamBufferSizeDefault";
+
+    // Public dr_mp3 low-level push API, already compiled by raylib.
+    Mp3Bits :: struct {
+        buffer: *u8
+        position: s32
+        limit: s32
+    }
+    Mp3Granule :: struct {
+        table: *u8
+        part_length: u16
+        big_values: u16
+        scale_compress: u16
+        gain: u8
+        block_type: u8
+        mixed: u8
+        long_count: u8
+        short_count: u8
+        tables: [3]u8
+        regions: [3]u8
+        gains: [3]u8
+        preflag: u8
+        scale: u8
+        count_table: u8
+        scfsi: u8
+    }
+    Mp3Scratch :: struct {
+        bits: Mp3Bits
+        data: [2815]u8
+        granules: [4]Mp3Granule
+        buffer: [2][576]float32
+        scale: [40]float32
+        synthesis: [33][64]float32
+        positions: [2][39]u8
+    }
+    Mp3Decoder :: struct {
+        overlap: [2][288]float32
+        qmf: [960]float32
+        reservoir: s32
+        free_bytes: s32
+        header: [4]u8
+        saved: [511]u8
+        scratch: Mp3Scratch
+    }
+    Mp3Frame :: struct {
+        bytes: s32
+        channels: s32
+        rate: s32
+        layer: s32
+        bitrate: s32
+    }
+    Mp3Init :: (decoder: *Mp3Decoder) #foreign raylib "drmp3dec_init";
+    Mp3Decode :: (decoder: *Mp3Decoder, input: *u8, length: s32,
+        pcm: *s16, info: *Mp3Frame) -> s32 #foreign raylib "drmp3dec_decode_frame";
+    WriteCallback :: #type (data: *u8, size: usize, count: usize, context: *void) -> usize #c_call;
+
+    radio_multi: *void;
+    radio_easy: *void;
+    radio_bytes: [131072]u8;
+    radio_length: s32;
+    radio_paused: bool;
+    radio_decoder: Mp3Decoder;
+    radio_stream: NativeAudioStream;
+    radio_pcm: [12288]s16;
+    radio_samples: s32;
+    radio_rate: s32;
+    radio_channels: s32;
+    radio_volume: float32 = 1.0;
+    radio_wanted: bool;
+    radio_state: s32;
+    radio_retry_at: float64;
+    radio_retry_seconds: float64 = 2.0;
+    radio_last_audio: float64;
+    radio_url: [2048]u8;
+
+    ReceiveRadio :: (data: *u8, size: usize, count: usize, context: *void) -> usize {
+        unused context
+        length := size * count
+        if length > 131072 {
+            return 0
+        }
+        if length > cast(usize)(131072 - radio_length) {
+            radio_paused = true
+            return cast(usize)268435457
+        }
+        for index: cast(s32)0..cast(s32)length - 1 {
+            radio_bytes[radio_length + index] = data[index]
+        }
+        radio_length += cast(s32)length
+        return length
+    }
+
+    NativeRadioDisconnect :: () {
+        if radio_easy != null {
+            if radio_multi != null {
+                unused MultiRemove(radio_multi, radio_easy)
+            }
+            EasyCleanup(radio_easy)
+            radio_easy = null
+        }
+        if radio_multi != null {
+            unused MultiCleanup(radio_multi)
+            radio_multi = null
+        }
+        if radio_stream.buffer != null {
+            UnloadStream(radio_stream)
+            radio_stream = NativeAudioStream.{}
+        }
+        radio_length = 0
+        radio_samples = 0
+        radio_paused = false
+        radio_rate = 0
+        radio_channels = 0
+        Mp3Init(*radio_decoder)
+    }
+
+    NativeRadioRetry :: () {
+        NativeRadioDisconnect()
+        radio_state = 3
+        radio_retry_at = Clock() + radio_retry_seconds
+        radio_retry_seconds *= 2.0
+        if radio_retry_seconds > 30.0 {
+            radio_retry_seconds = 30.0
+        }
+    }
+
+    RadioIntegerOption :: (option: s32, value: s32) -> bool {
+        #if #defined(_WIN32) {
+            return EasyOption(radio_easy, option, value) == 0
+        } else {
+            return EasyOption(radio_easy, option, cast(s64)value) == 0
+        }
+    }
+
+    NativeRadioConnect :: () {
+        if !CurlReady() {
+            NativeRadioRetry()
+            return
+        }
+        radio_multi = MultiInit()
+        radio_easy = EasyInit()
+        if radio_multi == null || radio_easy == null {
+            NativeRadioRetry()
+            return
+        }
+        callback: WriteCallback = ReceiveRadio
+        // Redirects stay HTTPS; curl validates certificates by default.
+        options_ok := EasyOption(radio_easy, 10002, *radio_url[0]) == 0 &&
+        EasyOption(radio_easy, 20011, callback) == 0 &&
+        RadioIntegerOption(99, 1) &&
+        RadioIntegerOption(52, 1) &&
+        RadioIntegerOption(68, 3) &&
+        RadioIntegerOption(156, 10000) &&
+        RadioIntegerOption(45, 1) &&
+        RadioIntegerOption(46, 15) &&
+        RadioIntegerOption(80, 1) &&
+        RadioIntegerOption(181, 2) &&
+        RadioIntegerOption(182, 2)
+        if !options_ok || MultiAdd(radio_multi, radio_easy) != 0 {
+            NativeRadioRetry()
+            return
+        }
+        radio_state = 1
+        radio_last_audio = Clock()
+    }
+
+    NativeRadioOpen :: (url: string) -> bool {
+        NativeRadioStop()
+        return CopyCString(url, radio_url[:])
+    }
+
+    NativeRadioStop :: () {
+        radio_wanted = false
+        NativeRadioDisconnect()
+        radio_state = 0
+        radio_retry_at = 0.0
+        radio_retry_seconds = 2.0
+    }
+
+    NativeRadioPlay :: () {
+        if radio_wanted {
+            return
+        }
+        radio_wanted = true
+        NativeRadioConnect()
+    }
+
+    NativeRadioUpdate :: () {
+        if !radio_wanted {
+            return
+        }
+        if radio_multi == null {
+            if Clock() >= radio_retry_at {
+                NativeRadioConnect()
+            }
+            return
+        }
+        if radio_paused && radio_length < 65536 {
+            radio_paused = false
+            unused EasyPause(radio_easy, 0)
+        }
+        running: s32
+        result := MultiPerform(radio_multi, *running)
+        if result != 0 || running == 0 || Clock() - radio_last_audio > 20.0 {
+            NativeRadioRetry()
+            return
+        }
+        DecodeNativeRadio()
+    }
+
+    DecodeNativeRadio :: () {
+        // Decode at most one output buffer per frame. The byte buffer and
+        // PCM queue stay bounded even when the server sends a large burst.
+        attempts: s32 = 0
+        while radio_length >= 4096 && radio_samples < 8192 && attempts < 32 {
+            info: Mp3Frame
+            pcm: [2304]s16
+            frames := Mp3Decode(*radio_decoder, *radio_bytes[0], radio_length, *pcm[0], *info)
+            if info.bytes <= 0 || info.bytes > radio_length {
+                break
+            }
+            radio_length -= info.bytes
+            if radio_length > 0 {
+                unused MoveBytes(cast(*void)*radio_bytes[0], cast(*void)*radio_bytes[info.bytes], cast(usize)radio_length)
+            }
+            attempts += 1
+            if frames <= 0 {
+                continue
+            }
+            if frames > 1152 || info.channels < 1 || info.channels > 2 || info.rate < 8000 || info.rate > 48000 {
+                NativeRadioRetry()
+                return
+            }
+            if radio_stream.buffer == null || info.rate != radio_rate || info.channels != radio_channels {
+                if radio_stream.buffer != null {
+                    UnloadStream(radio_stream)
+                }
+                StreamBufferSize(4096)
+                radio_stream = LoadStream(cast(u32)info.rate, 16, cast(u32)info.channels)
+                StreamBufferSize(0)
+                if radio_stream.buffer == null {
+                    NativeRadioRetry()
+                    return
+                }
+                radio_rate = info.rate
+                radio_channels = info.channels
+                radio_samples = 0
+                StreamVolume(radio_stream, radio_volume)
+                PlayStream(radio_stream)
+            }
+            samples := frames * info.channels
+            for index: cast(s32)0..samples - 1 {
+                radio_pcm[radio_samples + index] = pcm[index]
+            }
+            radio_samples += samples
+            radio_last_audio = Clock()
+        }
+        chunk := 4096 * radio_channels
+        if chunk > 0 && radio_samples >= chunk && StreamProcessed(radio_stream) {
+            UpdateStream(radio_stream, cast(*void)*radio_pcm[0], 4096)
+            radio_samples -= chunk
+            unused MoveBytes(cast(*void)*radio_pcm[0], cast(*void)*radio_pcm[chunk], cast(usize)(radio_samples * 2))
+            radio_state = 2
+            radio_retry_seconds = 2.0
+        }
+    }
+
+    NativeRadioVolume :: (volume: float32) {
+        radio_volume = volume
+        if radio_stream.buffer != null {
+            StreamVolume(radio_stream, volume)
+        }
+    }
+
+    NativeRadioState :: () -> s32 {
+        return radio_state
+    }
+}
