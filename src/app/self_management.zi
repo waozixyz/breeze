@@ -1,0 +1,346 @@
+// Self presents the account workflow; Inbe retains its verified key store,
+// local-data choices, sync state and platform file/device operations.
+Manage :: #import "self/management";
+Provider :: #import "self/native_management";
+Recovery :: #import "self/recovery";
+Native :: #import "self/native_files";
+Self :: #import "self/model";
+Pairing :: #import "self/pairing_client";
+PairingTypes :: #import "self/pairing";
+#import "keys"
+#import "crypto"
+#import "client"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/file"
+#import "file_picker"
+#import "file_export"
+#import "android_picker"
+#import, file "app_types.zi";
+#import, file "locale.zi";
+#import, file "../storage/account_types.zi";
+#import, file "../storage/sync_account.zi";
+#import, file "../storage/sync_state.zi";
+#import, file "../storage/sync_status.zi";
+#import, file "../storage/sync_nodes.zi";
+#import, file "../storage/sync_node_storage.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/daochi_account.zi";
+#import, file "../storage/data.zi";
+#import, file "../platform/environment.zi";
+#import, file "../platform/android/android_import.zi";
+
+using SyncAccountSaveResult;
+using SyncAccountLocalDataChoice;
+using AndroidImportKind;
+
+c :: #system_library "c";
+SelfSyncLoading :: () -> s32 #foreign c "app_sync_loading";
+SelfRequestSync :: (app: *InnerBreeze) -> s32 #foreign c "app_request_sync";
+SelfSyncStatusKey :: () -> string #foreign c "app_sync_status_key";
+SelfReloadData :: (app: *InnerBreeze, settings: s32) #foreign c "app_reload_after_import";
+
+self_management: Provider.ManagementProvider;
+self_management_started: bool;
+self_management_picker: bool;
+self_management_scan: bool;
+self_management_delivered: bool;
+self_management_link_owner: [65]u8;
+self_management_selected: [4096]u8;
+self_management_signing: AccountKeys;
+self_management_server: [256]u8;
+self_management_client: [64]u8;
+
+InbeSelfOwner :: (output: []u8) -> bool {
+    account: AccountKeys
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    if sync_account_load(*account) != 0 && ValidateAccountKeys(*account) != 0 {
+        return CopyCString(TextUntilNul(account.public_id[:]), output)
+    }
+    if StoredAccountMode() == AccountModeDelegate {
+        return CopyCString(StoredDelegateIdentity(), output)
+    }
+    return CopyCString("", output)
+}
+
+InbeRecoveryPath :: (id: string, output: []u8) -> string {
+    if !Native.NativeAccountId(id) {
+        return ""
+    }
+    name: Vec(u8)
+    BuilderPrint(*name, "self-context.%.key", id)
+    filename := BuilderFinish(name)
+    defer { Self.SelfFree(filename) }
+    return Native.NativeJoin(output, data_root(), filename)
+}
+
+InbeRecoveryLoad :: (context: *void, output: *Recovery.Recovery) -> bool {
+    if StoredAccountMode() == AccountModeDelegate || sync_account_load(*output.keys) == 0 || ValidateAccountKeys(*output.keys) == 0 {
+        return false
+    }
+    path: [4096]u8
+    unused Native.NativeRead(InbeRecoveryPath(TextUntilNul(output.keys.public_id[:]), path[:]), output.context[:])
+    return true
+}
+
+InbeRecoveryApply :: (context: *void, incoming: *Recovery.Recovery, choice: s32) -> s32 {
+    app := cast(*InnerBreeze)context
+    if StoredAccountMode() == AccountModeDelegate || ValidateAccountKeys(*incoming.keys) == 0 {
+        return 0
+    }
+    if incoming.context[0] != cast(u8)0 {
+        path: [4096]u8
+        if !Native.NativeWrite(InbeRecoveryPath(TextUntilNul(incoming.keys.public_id[:]), path[:]), TextUntilNul(incoming.context[:])) {
+            return 0
+        }
+    }
+    enabled := storage_sync_enabled()
+    data_choice := cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK
+    if choice == 1 {
+        data_choice = cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_MERGE
+    } else if choice == 2 {
+        data_choice = cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_REPLACE
+    }
+    saved := sync_account_save(*incoming.keys, data_choice)
+    if saved == cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_NEEDS_CLEAR {
+        return 2
+    }
+    if saved != cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK {
+        return 0
+    }
+    storage_set_sync_enabled(enabled)
+    SelfReloadData(app, 0)
+    if enabled != 0 {
+        unused SelfRequestSync(app)
+    }
+    return 1
+}
+
+InbeManagementServer :: (context: *void, output: []u8) -> bool {
+    address := storage_get_setting_text("sync_server_url")
+    if address == "" {
+        address = Self.SELF_DEFAULT_NODE
+    }
+    return CopyCString(address, output)
+}
+
+InbeManagementSnapshot :: (context: *void, output: *Manage.Management) {
+    output.available = true
+    unused InbeSelfOwner(output.public_id[:])
+    output.account = output.public_id[0] != cast(u8)0
+    output.enabled = storage_sync_enabled() != 0
+    output.busy = SelfSyncLoading() != 0
+    output.capabilities = Manage.ACCOUNT_SYNC | Manage.NODE_MEDIA
+    if output.account {
+        output.capabilities |= Manage.ACCOUNT_LOGOUT
+    }
+    if StoredAccountMode() != AccountModeDelegate {
+        output.capabilities |= Manage.ACCOUNT_CREATE | Manage.ACCOUNT_IMPORT | Manage.ACCOUNT_SWITCH | Manage.ACCOUNT_LINK
+        if output.account {
+            output.capabilities |= Manage.ACCOUNT_BACKUP | Manage.ACCOUNT_ALIAS | Manage.ACCOUNT_CLEAR_REMOTE
+        }
+        if AndroidPlatform() != 0 {
+            output.capabilities |= Manage.ACCOUNT_SCAN
+        }
+    }
+    unused CopyCString(storage_get_setting_text("sync_account_alias"), output.alias[:])
+    unused CopyCString(LocaleText(SelfSyncStatusKey()), output.status[:])
+    status: SyncStatus
+    if SyncStatusRead(*status) {
+        output.queued = cast(s32)status.queued_changes
+        if status.queued_changes > 2147483646 {
+            output.queued = 2147483646
+        }
+    }
+    output.node_count = SyncNodeCount()
+    for index: cast(s32)0..output.node_count - 1 {
+        address := SyncNodeAt(index)
+        node := *output.nodes[index]
+        unused CopyCString(address, node.address[:])
+        node.active = address == storage_get_setting_text("sync_server_url")
+        usage := SyncNodeStorageRead(address)
+        node.known = usage.known
+        node.used = usage.used_bytes
+        node.limit = usage.limit_bytes
+        node.full = usage.full
+        node.media_supported = true
+        node.media = SyncNodeMediaUpload(address)
+        Self.SelfFree(address)
+    }
+    output.link_stage = cast(s32)Pairing.device_link.stage
+    unused CopyCString(Pairing.DeviceLinkCodeShown(), output.link_code[:])
+    if output.link_stage == 2 || output.link_stage == 3 {
+        text: Vec(u8)
+        BuilderPrint(*text, "%: %", LocaleText("device_link_compare"), Pairing.device_link.confirmation)
+        message := BuilderFinish(text)
+        unused CopyCString(message, output.link_message[:])
+        Self.SelfFree(message)
+    } else if output.link_stage == 4 {
+        unused CopyCString(LocaleText("device_link_ask"), output.link_message[:])
+    } else if output.link_stage == 7 {
+        unused CopyCString(LocaleText(Pairing.device_link.error), output.link_message[:])
+    }
+}
+
+InbeManagementChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
+    if AndroidPlatform() != 0 {
+        if save {
+            return ifx Native.NativeJoin(output, data_root(), "self-account.key") != "" then 1 else -1
+        }
+        if !self_management_picker {
+            if !AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, "*/*") {
+                return -1
+            }
+            self_management_picker = true
+            return 2
+        }
+        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, output)
+        if result == .AndroidPickerNone {
+            return 2
+        }
+        self_management_picker = false
+        if result == .AndroidPickerCancelled {
+            return 0
+        }
+        unused CopyCString(TextUntilNul(output), self_management_selected[:])
+        return 1
+    }
+    picked := PickFile(FilePickerProps.{.title = LocaleText(ifx save then "sync_save_key_dialog_title" else "sync_import_key_dialog_title"),
+            .filter = "Key files | *.key *.json", .suggested_name = ifx save then "self-account.key" else "", .save = save}, output)
+    if picked == 1 && WebPlatform() != 0 {
+        unused CopyCString(TextUntilNul(output), self_management_selected[:])
+    }
+    return picked
+}
+
+InbeManagementDeliver :: (context: *void, path: string) -> bool {
+    if AndroidPlatform() == 0 && WebPlatform() == 0 {
+        return true
+    }
+    result := ExportFile(path, "self-account.key", "application/octet-stream", LocaleText("share_sheet_title"))
+    unused RemoveFile(path)
+    return result
+}
+
+InbeManagementClient :: (context: *void, output: *Client) -> bool {
+    if !InbeManagementServer(context, self_management_server[:]) ||
+    sync_account_load(*self_management_signing) == 0 ||
+    !CopyCString(storage_sync_client_id(), self_management_client[:]) {
+        return false
+    }
+    return OpenAccountClient(TextUntilNul(self_management_server[:]), *self_management_signing,
+        TextUntilNul(self_management_client[:]), output)
+}
+
+InbeManagementAction :: (context: *void, request: *Manage.ManagementRequest) -> s32 {
+    app := cast(*InnerBreeze)context
+    operation := TextUntilNul(request.operation[:])
+    if operation == "sync" {
+        return SelfRequestSync(app)
+    }
+    if operation == "set_sync" {
+        storage_set_sync_enabled(ifx request.choice == 1 then 1 else 0)
+        if request.choice == 1 {
+            unused SelfRequestSync(app)
+        }
+        return 1
+    }
+    if operation == "media" {
+        return ifx SyncNodeSetMediaUpload(TextUntilNul(request.target[:]), request.choice == 1) then 1 else 0
+    }
+    if operation == "logout" || operation == "remote_cleared" {
+        storage_set_sync_enabled(0)
+        Pairing.DeviceLinkCancel()
+        return sync_account_clear()
+    }
+    if operation == "alias_saved" {
+        storage_set_setting_text("sync_account_alias", TextUntilNul(request.value[:]))
+        return 1
+    }
+    if operation == "link_show" {
+        unused InbeSelfOwner(self_management_link_owner[:])
+        self_management_delivered = false
+        return ifx Pairing.DeviceLinkShow() then 1 else 0
+    }
+    if operation == "link_join" {
+        unused InbeSelfOwner(self_management_link_owner[:])
+        self_management_delivered = false
+        return ifx Pairing.DeviceLinkScan(TextUntilNul(request.value[:])) then 1 else 0
+    }
+    if operation == "link_confirm" {
+        Pairing.DeviceLinkAccept()
+        return 1
+    }
+    if operation == "link_cancel" {
+        Pairing.DeviceLinkCancel()
+        return 1
+    }
+    if operation == "link_scan" {
+        unused InbeSelfOwner(self_management_link_owner[:])
+        self_management_scan = AndroidScannerOpen(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, LocaleText("device_link_scan_prompt"))
+        return ifx self_management_scan then 1 else 0
+    }
+    return 0
+}
+
+InbeManagementStart :: (app: *InnerBreeze) {
+    if self_management_started {
+        self_management.context = cast(*void)app
+        return
+    }
+    self_management = Provider.ManagementProvider.{.context = cast(*void)app,
+        .snapshot = InbeManagementSnapshot, .load = InbeRecoveryLoad,
+        .apply = InbeRecoveryApply, .action = InbeManagementAction,
+        .client = InbeManagementClient, .choose_file = InbeManagementChooseFile,
+        .deliver_file = InbeManagementDeliver}
+    Pairing.pairing_context = cast(*void)app
+    Pairing.pairing_load = InbeRecoveryLoad
+    Pairing.pairing_server = InbeManagementServer
+    self_management_started = true
+}
+
+InbeManagementPump :: (app: *InnerBreeze) {
+    InbeManagementStart(app)
+    if self_management_picker && self_management.queue.pending {
+        self_management.delegated = false
+    }
+    Provider.ProviderPump(*self_management)
+    if !self_management.queue.pending && self_management_selected[0] != cast(u8)0 {
+        unused RemoveFile(TextUntilNul(self_management_selected[:]))
+        self_management_selected = .{}
+    }
+    if cast(s32)Pairing.device_link.stage != 0 || self_management_scan {
+        link_owner: [65]u8
+        unused InbeSelfOwner(link_owner[:])
+        if TextUntilNul(link_owner[:]) != TextUntilNul(self_management_link_owner[:]) {
+            Pairing.DeviceLinkCancel()
+            self_management_scan = false
+        }
+    }
+    if !self_management.asynchronous {
+        SecureWipe(*self_management_signing.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    }
+    Pairing.DeviceLinkPump()
+    if self_management_scan {
+        scanned: [1024]u8
+        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, scanned[:])
+        if result != .AndroidPickerNone {
+            self_management_scan = false
+            if result == .AndroidPickerSelected {
+                self_management_delivered = false
+                unused Pairing.DeviceLinkScan(TextUntilNul(scanned[:]))
+            }
+        }
+    }
+    if cast(s32)Pairing.device_link.stage == 8 && !self_management_delivered {
+        self_management.incoming.keys = Pairing.device_link_pending.account
+        self_management.incoming.context = Pairing.device_link_pending.context
+        unused InbeSelfOwner(self_management.incoming_owner[:])
+        self_management.has_incoming = true
+        self_management_delivered = true
+        Provider.ProviderApplyIncoming(*self_management, 0)
+        Pairing.DeviceLinkImported()
+    }
+}

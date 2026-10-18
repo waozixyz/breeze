@@ -1,6 +1,7 @@
 // Self owns the common profile UI. Inner Breeze keeps its database, account
-// keys and specialized screens behind this preferences-only adapter.
+// keys and specialized screens behind its native host services.
 Self :: #import "self/model";
+Provider :: #import "self/native_management";
 #import "kryon/app_context_host"
 Portable :: #import "kryon/app_protocol";
 #import "hosted_values"
@@ -19,7 +20,11 @@ Portable :: #import "kryon/app_protocol";
 #import, file "metrics.zi";
 #import, file "assets.zi";
 #import, file "profile_picture_policy.zi";
+#import, file "achievement_host.zi";
+#import, file "self_management.zi";
+Shared :: #import "self/native_files";
 #import, file "../storage/sync_nodes.zi";
+#import, file "../storage/delegate_store.zi";
 #import, file "../storage/storage_settings.zi";
 #import, file "../platform/raylib_text_input.zi";
 
@@ -28,6 +33,7 @@ self_opened: bool;
 self_document: string;
 self_inner_breeze: bool;
 self_reload_after_route: bool;
+self_account_route: bool;
 
 InbeSelfRead :: (app: *InnerBreeze) -> string {
     Self.SelfFree(self_document)
@@ -52,11 +58,18 @@ InbeSelfRead :: (app: *InnerBreeze) -> string {
             Self.SelfFree(address)
         }
     }
+    owner: [65]u8
+    unused InbeSelfOwner(owner[:])
+    state.owner_id = owner
+    if StoredAccountMode() != AccountModeDelegate {
+        unused Shared.SharedProfileLoad(TextUntilNul(owner[:]), *state)
+    }
     Self.SelfAddExtension(*state, "account", LocaleText("sync_account_title"))
     Self.SelfAddExtension(*state, "inbe", LocaleText("profile_progress_title"))
     Self.SelfAddExtension(*state, "data", LocaleText("profile_data"))
     Self.SelfAddExtension(*state, "friends", LocaleText("profile_friends_title"))
     Self.SelfAddExtension(*state, "telegram", "Telegram")
+    Self.SelfAddExtension(*state, "achievements", LocaleText("achievements_title"))
     self_document = Self.SelfEncode(state)
     return self_document
 }
@@ -64,6 +77,9 @@ InbeSelfRead :: (app: *InnerBreeze) -> string {
 InbeSelfWrite :: (app: *InnerBreeze, document: string) -> bool {
     state: Self.SelfState
     if !Self.SelfDecode(document, *state) { return false }
+    owner: [65]u8
+    unused InbeSelfOwner(owner[:])
+    if TextUntilNul(state.owner_id[:]) != TextUntilNul(owner[:]) { return false }
     picture := ifx state.picture >= 25 then 124 + state.picture - 25 else 41 + state.picture
     if !ProfilePictureValid(picture) { return false }
     for byte: state.name { if byte == cast(u8)10 || byte == cast(u8)13 { return false } }
@@ -88,6 +104,9 @@ InbeSelfWrite :: (app: *InnerBreeze, document: string) -> bool {
         if !retained && !SyncNodeRemove(index) { return false }
         index -= 1
     }
+    if StoredAccountMode() != AccountModeDelegate && !Shared.SharedProfileSave(TextUntilNul(owner[:]), state) {
+        return false
+    }
     app.profile_display_name = state.name
     app.profile_intention = state.intention
     app.profile_picture_icon = picture
@@ -97,7 +116,8 @@ InbeSelfWrite :: (app: *InnerBreeze, document: string) -> bool {
 
 SelfHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" ||
-    name == "AppLocaleHost" || name == "ClipboardCopyHost"
+    name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
+    name == "AppServiceHost" || name == "self.management" || name == "self.text_height"
 }
 
 SelfHostText :: (text: string) -> HostValue {
@@ -106,6 +126,9 @@ SelfHostText :: (text: string) -> HostValue {
 }
 
 SelfHostLocale :: (key: string) -> string {
+    if key == "achievements_title" || (key.count >= 12 && key[:12] == "achievement_") {
+        return LocaleText(key)
+    }
     if key == "self.title" { return LocaleText("tab_profile") }
     if key == "self.name_placeholder" { return LocaleText("profile_name_label") }
     if key == "self.name" { return LocaleText("profile_name_label") }
@@ -118,6 +141,43 @@ SelfHostLocale :: (key: string) -> string {
     if key == "self.done" { return LocaleText("close_button") }
     if key == "self.node_invalid" { return LocaleText("sync_server_url_invalid") }
     if key == "self.node_limit" { return LocaleText("sync_nodes_limit") }
+    if key == "self.account" { return LocaleText("sync_account_title") }
+    if key == "self.manage_account" { return LocaleText("sync_account_title") }
+    if key == "self.connect_account" { return LocaleText("sync_connect_account_button") }
+    if key == "self.account_local" { return LocaleText("sync_no_account") }
+    if key == "self.public_id" { return LocaleText("sync_public_id_label") }
+    if key == "self.copy_id" { return LocaleText("sync_copy_id_button") }
+    if key == "self.alias" { return LocaleText("sync_alias_title") }
+    if key == "self.save" { return LocaleText("save_button") }
+    if key == "self.sync" { return LocaleText("sync_status_title") }
+    if key == "self.sync_now" { return LocaleText("sync_now_button") }
+    if key == "self.backup_key" { return LocaleText("sync_backup_title") }
+    if key == "self.create_account" { return LocaleText("sync_create_account_button") }
+    if key == "self.import_key" { return LocaleText("sync_import_key_dialog_title") }
+    if key == "self.logout" { return LocaleText("sync_logout_button") }
+    if key == "self.clear_remote" { return LocaleText("sync_clear_remote_data_button") }
+    if key == "self.switch_account" { return LocaleText("sync_account_switch_title") }
+    if key == "self.merge" { return LocaleText("sync_account_switch_merge_button") }
+    if key == "self.replace" { return LocaleText("sync_account_switch_clear_button") }
+    if key == "self.cancel" { return LocaleText("cancel_button") }
+    if key == "self.back" { return LocaleText("back_button") }
+    if key == "self.choose_file" { return LocaleText("sync_import_key_button") }
+    if key == "self.passphrase" { return LocaleText("telegram_account_passphrase") }
+    if key == "self.logout_help" { return LocaleText("sync_logged_out_local_data_kept") }
+    if key == "self.clear_remote_help" { return LocaleText("sync_clear_remote_data_message") }
+    if key == "self.switch_help" { return LocaleText("sync_account_switch_message") }
+    if key == "self.key_file_help" { return LocaleText("sync_backup_warning") }
+    if key == "self.working" { return LocaleText("device_link_working") }
+    if key == "self.connect_device" { return LocaleText("device_link_title") }
+    if key == "self.connect" { return LocaleText("device_link_connect") }
+    if key == "self.scan_code" { return LocaleText("device_link_scan") }
+    if key == "self.show_code" { return LocaleText("device_link_show") }
+    if key == "self.confirm_device" { return LocaleText("device_link_connect") }
+    if key == "self.cancel_connection" { return LocaleText("cancel_button") }
+    if key == "self.active_node" { return LocaleText("profile_node_storage_active") }
+    if key == "self.storage_unknown" { return LocaleText("profile_node_storage_unknown") }
+    if key == "self.storage_full" { return LocaleText("profile_node_storage_full") }
+    if key == "self.node_media" { return LocaleText("profile_node_storage_media") }
     return key
 }
 
@@ -125,6 +185,20 @@ SelfHostCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     app := cast(*InnerBreeze)context
     name := TextFromCString(function)
+    if AchievementSelfCall(cast(*void)app, name, arguments, count, result) {
+        return 1
+    }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "self.management" {
+        InbeManagementStart(app)
+        request := AppArgumentText(arguments[1])
+        if request == "" {
+            Provider.ProviderRefresh(*self_management)
+            result.* = SelfHostText(self_management.document)
+        } else {
+            result.* = SelfHostText(ifx Provider.ProviderEnqueue(*self_management, request) then "queued" else "rejected")
+        }
+        return 1
+    }
     if name == "AppLocaleHost" && count == 1 {
         result.* = SelfHostText(SelfHostLocale(AppArgumentText(arguments[0])))
         return 1
@@ -156,6 +230,12 @@ SelfHostAssetAllowed :: (path: string) -> bool {
     return path == "" || path == "assets/self/pfp.png" || path == "assets/self/flowers.png"
 }
 
+SelfHostRoute :: (app: *InnerBreeze) -> bool {
+    return app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT ||
+    (app.profile_view == PROFILE_VIEW_MAIN &&
+        (app.profile_tab == PROFILE_TAB_OVERVIEW || app.profile_tab == PROFILE_TAB_SYNC))
+}
+
 SelfHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     if self_inner_breeze { return false }
     if !self_opened {
@@ -169,12 +249,19 @@ SelfHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         if !AppContextOpen(*self_context, bundle.data) { return false }
         self_opened = true
     }
+    InbeManagementPump(app)
     typed: [1024]u8
     if self_reload_after_route {
         self_context.command = "reload"
         unused AppContextRun(*self_context, Portable.APP_COMMAND)
         self_reload_after_route = false
     }
+    account_route := app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT || app.profile_tab == PROFILE_TAB_SYNC
+    if account_route && !self_account_route {
+        self_context.command = "account"
+        unused AppContextRun(*self_context, Portable.APP_COMMAND)
+    }
+    self_account_route = account_route
     self_context.session = app.ui.session
     self_context.bounds = bounds
     self_context.scale = MetricsScale()
@@ -183,6 +270,8 @@ SelfHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     WidgetHostBegin(app.ui.session, SelfHostAssetAllowed)
     ran := AppContextRun(*self_context, Portable.APP_FRAME)
     WidgetHostEnd()
+    self_context.input = .{}
+    InbeManagementPump(app)
     if !ran { return false }
     route := self_context.reply
     if route != "" { self_reload_after_route = true }
@@ -195,6 +284,18 @@ SelfHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
 }
 
 SelfHostBack :: (app: *InnerBreeze) -> bool {
+    if self_opened && !self_inner_breeze && SelfHostRoute(app) {
+        self_context.command = "back"
+        unused AppContextRun(*self_context, Portable.APP_COMMAND)
+        if self_context.reply == "handled" {
+            if self_account_route {
+                app.profile_view = PROFILE_VIEW_MAIN
+                app.profile_tab = PROFILE_TAB_OVERVIEW
+                self_account_route = false
+            }
+            return true
+        }
+    }
     if !self_inner_breeze || app.profile_view != PROFILE_VIEW_MAIN || app.profile_tab != PROFILE_TAB_OVERVIEW { return false }
     self_inner_breeze = false
     return true
@@ -202,11 +303,12 @@ SelfHostBack :: (app: *InnerBreeze) -> bool {
 
 SelfHostSave :: (app: *InnerBreeze) -> bool {
     if !self_opened || self_inner_breeze || app.breathing.screen != ScreenProfile ||
-    app.profile_view != PROFILE_VIEW_MAIN || app.profile_tab != PROFILE_TAB_OVERVIEW { return true }
+    !SelfHostRoute(app) { return true }
     return AppContextRun(*self_context, Portable.APP_SAVE)
 }
 
 SelfHostReset :: () {
     self_inner_breeze = false
+    self_account_route = false
     self_reload_after_route = true
 }
