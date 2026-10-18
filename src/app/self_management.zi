@@ -45,6 +45,7 @@ SelfReloadData :: (app: *InnerBreeze, settings: s32) #foreign c "app_reload_afte
 self_management: Provider.ManagementProvider;
 self_management_started: bool;
 self_management_picker: bool;
+self_management_picker_abandoned: bool;
 self_management_scan: bool;
 self_management_delivered: bool;
 self_management_link_owner: [65]u8;
@@ -189,6 +190,8 @@ InbeManagementChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         if save {
             return ifx Native.NativeJoin(output, data_root(), "self-account.key") != "" then 1 else -1
         }
+        InbeManagementDiscardPicker()
+        if self_management_picker_abandoned { return -1 }
         if !self_management_picker {
             if !AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, "*/*") {
                 return -1
@@ -301,12 +304,30 @@ InbeManagementStart :: (app: *InnerBreeze) {
     self_management_started = true
 }
 
+// A chooser can finish after the request's owner changes. Discard its
+// copied document before another request is allowed to consume that result.
+InbeManagementDiscardPicker :: () {
+    if !self_management_picker { return }
+    if !self_management.queue.pending { self_management_picker_abandoned = true }
+    if !self_management_picker_abandoned { return }
+    abandoned: [4096]u8
+    result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, abandoned[:])
+    if result == .AndroidPickerNone { return }
+    self_management_picker = false
+    self_management_picker_abandoned = false
+    self_management.delegated = false
+    if result == .AndroidPickerSelected && abandoned[0] != cast(u8)0 {
+        unused RemoveFile(TextUntilNul(abandoned[:]))
+    }
+}
+
 InbeManagementPump :: (app: *InnerBreeze) {
     InbeManagementStart(app)
     if self_management_picker && self_management.queue.pending {
         self_management.delegated = false
     }
     Provider.ProviderPump(*self_management)
+    InbeManagementDiscardPicker()
     if !self_management.queue.pending && self_management_selected[0] != cast(u8)0 {
         unused RemoveFile(TextUntilNul(self_management_selected[:]))
         self_management_selected = .{}
