@@ -335,6 +335,116 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         with application(phone, f"sage-{dark}-restart", size=(390, 844)):
             assert json.loads(phone_entry.read_text()) == saved_photo
             assert (phone_entry.parent / "photo-local.bin").read_bytes() == photo_bytes
+    # A day with more photos than the gallery shows at once and an entry
+    # longer than its box, with large photos between its lines. The wheel
+    # over the entry scrolls it, over its photos too, and the page around it
+    # stays, and a sideways swipe leaves it; the gallery's photos show whole
+    # above its scrollbar; the wheel, a sideways swipe and a drag move the
+    # gallery sideways, a drag does not embed the photo it starts on, and a
+    # tap on a photo scrolled into view embeds it.
+    many_source = profile / "many-source"
+    many_source.mkdir()
+    many_names = [f"many-{index:02d}.png" for index in range(12)]
+    lines = []
+    for index, name in enumerate(many_names):
+        Image.new("RGB", (400, 300), (20 * index, 140, 220 - 15 * index)).save(many_source / name)
+        lines += [f"Line {index} of a long day" for _ in range(3)]
+        if index < 4:
+            lines.append(f"![Photo {index}](diary:{name})")
+    many_text = "\n".join(lines) + "\n"
+    (many_source / entry.name).write_text(json.dumps(dict(original, text=many_text, photos=[
+        dict(file=name, name=f"Photo {index}") for index, name in enumerate(many_names)])))
+    many = profile / "many-photos"
+    with application(many, "many-photos", many_source) as window:
+        many_entry = next((many / "diary").glob("*/" + entry.name))
+        deadline = time.monotonic() + 20
+        while not all(library_has(many, hashlib.sha256((many_source / name).read_bytes()).hexdigest())
+                      for name in many_names):
+            assert time.monotonic() < deadline, "The day's photos did not join the photo library"
+            time.sleep(0.2)
+        area = driver.wait(role="text_area")
+        probe = (area["x"] + 40, area["y"] + 30)
+
+        def top_line():
+            """The entry's line at the top of its box: where a click there puts the caret."""
+            driver.pointer(*probe)
+            driver.pointer(*probe, down=True)
+            driver.pointer(*probe)
+            driver.release_pointer()
+            driver.wait_idle(frames=2, timeout=2)
+            node = driver.find(role="text_area")[0]
+            return node["value"][:node["cursor"]].count("\n")
+
+        def wheel(point, amount, times, sideways=False):
+            for _ in range(times):
+                if sideways:
+                    driver.pointer(*point, wheel_x=amount)
+                else:
+                    driver.pointer(*point, wheel=amount)
+            driver.release_pointer()
+            driver.wait_idle(frames=3, timeout=3)
+
+        def page_top():
+            return driver.find(role="text_area")[0]["y"]
+
+        assert top_line() == 0, "The entry did not open at its start"
+        entry_page = page_top()
+        middle = (area["x"] + area["width"] / 2, area["y"] + area["height"] / 2)
+        wheel(middle, -2.0, 4)
+        scrolled = top_line()
+        assert scrolled > 0, "The wheel over the entry did not scroll it"
+        assert page_top() == entry_page, "The page moved instead of the entry"
+        wheel(middle, -3.0, 40)
+        end = top_line()
+        assert end > scrolled, f"The wheel did not scroll on through the photos: {scrolled} -> {end}"
+        wheel(middle, 3.0, 60)
+        assert top_line() == 0, "The wheel did not scroll the entry back to its start"
+        wheel(middle, 2.0, 4, sideways=True)
+        assert top_line() == 0, "A sideways swipe scrolled the entry"
+        assert json.loads(many_entry.read_text())["text"].count("](") == 4, "Scrolling changed the entry"
+
+        driver.press(label="Show gallery")
+        driver.wait(label="Hide gallery")
+        driver.wait_idle(frames=3, timeout=5)
+
+        def tiles():
+            return sorted((node for node in driver.find(role="image") if node["label"].startswith("Photo ")),
+                          key=lambda node: node["x"])
+
+        strip = [node for node in driver.tree() if node["kind"] == "scroll" and node["key"] == 290302][0]
+        shown = tiles()
+        assert len(shown) == 12, [node["label"] for node in shown]
+        assert shown[-1]["x"] + shown[-1]["width"] > strip["x"] + strip["width"], "The gallery fits its row"
+        # The gallery's scrollbar sits under its photos, not over them.
+        assert shown[0]["visible_height"] == shown[0]["height"], \
+            f"The scrollbar covers the photos: {shown[0]['visible_height']} of {shown[0]['height']} show"
+        first_x = shown[0]["x"]
+        over_strip = (strip["x"] + strip["width"] / 2, strip["y"] + strip["height"] / 2)
+        wheel(over_strip, -1.0, 2)
+        assert tiles()[0]["x"] < first_x, "The wheel did not move the gallery sideways"
+        wheel(over_strip, 1.0, 4)
+        assert tiles()[0]["x"] == first_x, "The wheel did not move the gallery back"
+        # A sideways swipe to the right shows the photos further right.
+        wheel(over_strip, 1.0, 2, sideways=True)
+        assert tiles()[0]["x"] < first_x, "A sideways swipe did not move the gallery toward its end"
+        wheel(over_strip, -1.0, 4, sideways=True)
+        assert tiles()[0]["x"] == first_x, "A sideways swipe did not move the gallery back"
+        before_drag = json.loads(many_entry.read_text())["text"]
+        driver.drag((over_strip[0] + 150, over_strip[1]), (over_strip[0] - 150, over_strip[1]))
+        driver.wait_idle(frames=3, timeout=3)
+        assert tiles()[0]["x"] < first_x - 100, "A drag did not move the gallery"
+        time.sleep(0.5)
+        assert json.loads(many_entry.read_text())["text"] == before_drag, "A drag embedded a photo"
+        wheel(over_strip, -3.0, 20)
+        last = tiles()[-1]
+        assert last["visible"] and last["visible_x"] + last["visible_width"] <= strip["x"] + strip["width"], \
+            "The wheel did not reach the gallery's end"
+        driver.press(label=last["label"])
+        number = int(last["label"].split()[-1])
+        digest = hashlib.sha256((many_source / many_names[number]).read_bytes()).hexdigest()
+        wait_for_text(many_entry, lambda text: digest + ".png)" in text, "A tap on a scrolled photo did not embed it")
+
     print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, one caret while typing, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
     print("Diary photos: older photo lists inside the entry and in the photo library, a missing file, no writes on viewing, the gallery dropdown closed on every day it opens, each picture listed once, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")
+    print("Diary scrolling: the wheel scrolls a long entry through its photos and back without moving the page, a sideways swipe leaves it, and the wheel, a sideways swipe and a drag move a full gallery, whose photos show whole above its scrollbar, where a drag embeds nothing and a tap on a photo scrolled into view embeds it")

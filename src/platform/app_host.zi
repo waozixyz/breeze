@@ -40,7 +40,7 @@ IsMouseButtonPressed :: (button: s32) -> bool #foreign raylib;
 IsMouseButtonDown :: (button: s32) -> bool #foreign raylib;
 IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib;
 GetTime :: () -> float64 #foreign raylib;
-GetMouseWheelMove :: () -> float32 #foreign raylib;
+GetMouseWheelMoveV :: () -> Vector2 #foreign raylib;
 SetMouseCursor :: (cursor: s32) #foreign raylib;
 BeginDrawing :: () #foreign raylib;
 EndDrawing :: () #foreign raylib;
@@ -444,8 +444,19 @@ app_frame :: (app: *InnerBreeze) {
             zoom_index += 1
         }
     }
+    // The wheel's two axes: a sideways swipe on a touchpad or a tilted wheel
+    // scrolls sideways scrolls, such as Diary's gallery, and nothing else.
+    // SDL's sideways wheel is positive to the right; the web canvas's, as
+    // raylib's other platforms, to the left.
+    wheel := GetMouseWheelMoveV()
+    wheel_y := TestDriverWheel(wheel.y)
+    wheel_x := wheel.x
+    #if #defined(PLATFORM_WEB) {
+        wheel_x = 0.0 - wheel_x
+    }
+    wheel_x = TestDriverWheelX(wheel_x)
     zoomed := app_zoom_frame(app.ui.session, CurrentDPIPlatform(),
-        app.ui_scale_tenths, TestDriverWheel(GetMouseWheelMove()), modifiers,
+        app.ui_scale_tenths, wheel_y, modifiers,
         zoom_key)
     if zoomed.changed {
         app.ui_scale_tenths = zoomed.tenths
@@ -453,9 +464,14 @@ app_frame :: (app: *InnerBreeze) {
         save_settings(app)
     }
     SetDPIZoom(UserScale(app.ui_scale_tenths))
+    // A wheel the zoom took scrolls nothing.
+    if wheel_y != 0.0 && zoomed.wheel == 0.0 {
+        wheel_x = 0.0
+    }
     BeginScrollFrame(app.ui.session, mouse, pointer.pressed, pointer.down,
         pointer.released, zoomed.wheel,
         GetTime())
+    ScrollDeviceSideways(app.ui.session, wheel_x)
 
     frame_bounds := Rectangle.{0.0, 0.0,
         cast(float32)width, cast(float32)height}

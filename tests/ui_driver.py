@@ -201,10 +201,14 @@ class UiDriver:
             raise self._failure(f"key {name}: {reply['error']}")
         return reply
 
-    def pointer(self, x, y, down=False, wheel=None):
-        """Hold the app's pointer at x, y for the following frames."""
+    def pointer(self, x, y, down=False, wheel=None, wheel_x=None):
+        """Hold the app's pointer at x, y for the following frames.
+
+        wheel turns the wheel up (positive) or down; wheel_x is a sideways
+        wheel, positive to the right, as a touchpad swipe sends it.
+        """
         return self.send("pointer", x=round(x, 1), y=round(y, 1), down=down,
-                         wheel=wheel)
+                         wheel=wheel, wheel_x=wheel_x)
 
     def release_pointer(self):
         return self.send("pointer", real=True)
