@@ -53,7 +53,7 @@ int main(void)
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(reads == 0 && plays == 0);
 
-    app.voice_narration_enabled = 1;
+    app.guide_narration_enabled = 1;
     app.sound_volume = 0;
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(reads == 0 && plays == 0);
@@ -63,14 +63,14 @@ int main(void)
     assert(reads == 1 && plays == 1 && volume > 0.599f && volume < 0.601f);
     lumi_guide.shown = true;
     lumi_guide.drawn_frame = app.breathing.frame;
-    app.voice_narration_enabled = 0;
+    app.guide_narration_enabled = 0;
     LumiGuideFrameEnd(&app);
     assert(stops == 1 && unloads == 1 && !lumi_guide.voice_playing);
     assert(lumi_guide.shown); /* Muting voice keeps the written guide. */
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(plays == 1);
 
-    app.voice_narration_enabled = 1;
+    app.guide_narration_enabled = 1;
     available = false;
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(plays == 1);

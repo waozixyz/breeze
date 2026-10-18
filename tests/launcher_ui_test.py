@@ -387,6 +387,8 @@ with contextlib.ExitStack() as stack:
             with application(profile, name + "-language-restart", width, height) as (window, log):
                 assert settings(profile)["language_setup_done"] == "0"
                 driver.press(label="Next", role="button")
+                driver.wait(label="Optional audio")
+                driver.press(label="Skip for now", role="button")
                 wait_setting(profile, "language_setup_done", 1, log.read_text())
                 driver.wait(label="Pinned")
                 assert settings(profile).get("launcher_guide_seen", "0") == "0"

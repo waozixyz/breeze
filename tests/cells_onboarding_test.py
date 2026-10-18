@@ -143,6 +143,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         driver.wait(label="Choose Language")
         assert settings(profile)["language_setup_done"] == "0"
         driver.press(label="Next", role="button")
+        driver.wait(label="Optional audio")
+        driver.press(label="Skip for now", role="button")
         wait_setting(profile, "language_setup_done", 1)
         driver.wait(label="Pinned")
         saved = settings(profile)

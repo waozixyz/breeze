@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from PIL import Image, ImageChops
+from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/locale-render-ui-test"
@@ -42,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
     for language in languages:
         profile = Path(temporary) / language
         profile.mkdir()
-        environment = os.environ | {"APP_DATA_ROOT": str(profile), "LANGUAGE": language,
+        driver = UiDriver(OUTPUT / (language + "-driver"))
+        environment = os.environ | driver.environment() | {"APP_DATA_ROOT": str(profile), "LANGUAGE": language,
                                     "APP_NO_TRAY": "1"}
         log_path = OUTPUT / f"{language}.log"
         with log_path.open("w") as log:
@@ -74,6 +76,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                 command(environment, "xdotool", "mousedown", "1")
                 time.sleep(0.08)
                 command(environment, "xdotool", "mouseup", "1")
+                driver.attach(app, log_path)
+                driver.wait(role="toggle")
+                driver.wait_idle(frames=3, timeout=5, required=True)
+                capture(environment, window, f"{language}-optional-audio")
+                driver.press(key=265, role="button")
                 deadline = time.monotonic() + 5
                 while True:
                     with sqlite3.connect(profile / "inbe.db") as db:

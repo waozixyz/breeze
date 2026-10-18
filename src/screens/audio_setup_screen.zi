@@ -1,0 +1,214 @@
+// The second half of first-run language setup. Audio stays optional, and no
+// narration is requested until Download selected confirms these choices.
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "geometry"
+#import "layout"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_buffer"
+#import "text_props"
+#import "text_widget"
+#import "toggle_props"
+#import "toggle_widget"
+#import "tree"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/language_selection.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../core/types.zi";
+#import, file "../practices/practice_downloads.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+
+AudioSetupPack :: (content: s32) -> s32 {
+    if content != PracticeGuide && !PracticeInstalled(content) {
+        return -1
+    }
+    return PracticeNarrationPack(content, LocaleActiveCode(), PracticeVoiceFor(content))
+}
+
+AudioSetupSelected :: (app: *InnerBreeze, content: s32) -> bool {
+    if content == PracticeGuide {
+        return app.guide_narration_enabled != 0
+    }
+    return app.voice_narration_enabled != 0
+}
+
+AudioSetupStart :: (app: *InnerBreeze) {
+    for content: cast(s32)0..PracticeContentCount - 1 {
+        index := AudioSetupPack(content)
+        if index >= 0 && AudioSetupSelected(app, content) {
+            PracticeNarrationDownload(index)
+        }
+    }
+    app.audio_setup_step = 2
+    save_settings(app)
+}
+
+AudioSetupFinish :: (app: *InnerBreeze, skip: bool) {
+    if skip {
+        app.guide_narration_enabled = 0
+        app.voice_narration_enabled = 0
+    }
+    app.audio_setup_step = 0
+    app_accept_language_selection(app)
+    app_switch_screen(app, ScreenAppSelection)
+}
+
+AudioSetupParagraph :: (app: *InnerBreeze, text: string, x: s32, y: *s32,
+    width: s32, font: s32, draw: bool) {
+    height := AppParagraphHeight(text, width, font, AppScale(3))
+    if draw {
+        Text(app.ui.session, TextProps.{.text = text, .font = font,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)height},
+                .wrap = cast(TextWrap)TextWrapAuto})
+    }
+    y.* += height + AppScale(12)
+}
+
+AudioSetupChoice :: (app: *InnerBreeze, guide: bool, x: s32, y: *s32,
+    width: s32, draw: bool) {
+    value := ifx guide then *app.guide_narration_enabled else *app.voice_narration_enabled
+    label := LocaleText(ifx guide then "guide_narration_label" else "practice_narration_label")
+    AudioSetupParagraph(app, label, x, y, width, AppFontSize(), draw)
+    if draw {
+        result := Toggle(app.ui.session, ToggleProps.{
+                .id = ifx guide then 262 else 263,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)AppScale(44)},
+                .label = label, .value = value.* != 0,
+                .off_label = LocaleText("toggle_off"), .on_label = LocaleText("toggle_on"),
+                .disabled = app.audio_setup_step == 2})
+        if result.changed {
+            value.* = ifx result.value then 1 else 0
+            save_settings(app)
+        }
+    }
+    y.* += AppScale(52)
+    bytes: s64 = 0
+    for content: cast(s32)0..PracticeContentCount - 1 {
+        if (content == PracticeGuide) != guide {
+            continue
+        }
+        index := AudioSetupPack(content)
+        if index >= 0 {
+            bytes += practice_packs[index].size
+        }
+    }
+    if bytes > 0 {
+        amount := cast(s32)((bytes + 1023) / 1024)
+        format := "practice_size_kb"
+        if bytes >= 1024 * 1024 {
+            amount = cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
+            format = "practice_size_mb"
+        }
+        buffer: [64]u8
+        args: [1]FormatArg = .[FormatArg.{.number = amount}]
+        unused FormatTemplate(LocaleText(format), args[:], buffer[:])
+        AudioSetupParagraph(app, TextUntilNul(buffer[:]), x, y, width,
+            AppSmallFontSize(), draw)
+    } else {
+        AudioSetupParagraph(app, LocaleText(ifx guide then "optional_audio_unavailable"
+            else "optional_audio_practice_hint"), x, y, width, AppSmallFontSize(), draw)
+    }
+    y.* += AppScale(8)
+}
+
+AudioSetupContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
+    title := LocaleText("optional_audio_title")
+    AudioSetupParagraph(app, title, x, y, width, AppTitleFontSize(title, width), draw)
+    args: [1]FormatArg = .[FormatArg.{
+        .text = PracticeLanguageLabel(LocaleActiveCode()), .is_text = true}]
+    intro: [512]u8
+    unused FormatTemplate(LocaleText("optional_audio_intro"), args[:], intro[:])
+    AudioSetupParagraph(app, TextUntilNul(intro[:]), x, y, width, AppFontSize(), draw)
+    y.* += AppScale(8)
+    AudioSetupChoice(app, true, x, y, width, draw)
+    AudioSetupChoice(app, false, x, y, width, draw)
+
+    pending: s32 = 0
+    failed: s32 = 0
+    for content: cast(s32)0..PracticeContentCount - 1 {
+        index := AudioSetupPack(content)
+        if index < 0 || !AudioSetupSelected(app, content) {
+            continue
+        }
+        state := PracticeNarrationState(index)
+        if state == 3 {
+            failed += 1
+        } else if state != 2 {
+            pending += 1
+        }
+    }
+    if app.audio_setup_step == 2 {
+        status := "optional_audio_ready"
+        if failed > 0 {
+            status = "optional_audio_failed"
+        } else if pending > 0 {
+            status = "practice_download_busy"
+        }
+        AudioSetupParagraph(app, LocaleText(status), x, y, width, AppSmallFontSize(), draw)
+    }
+    selected := app.guide_narration_enabled != 0 || app.voice_narration_enabled != 0
+    start := app.audio_setup_step == 1
+    retry := app.audio_setup_step == 2 && failed > 0
+    primary := "optional_audio_continue"
+    if start {
+        primary = "optional_audio_download"
+    } else if retry {
+        primary = "optional_audio_retry"
+    }
+    if draw {
+        if Button(app.ui.session, ButtonProps.{.id = 264,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)AppScale(44)},
+                .label = LocaleText(primary), .fit_content = true,
+                .disabled = start && !selected,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            if start || retry {
+                AudioSetupStart(app)
+            } else {
+                AudioSetupFinish(app, false)
+            }
+        }
+    }
+    y.* += AppScale(56)
+    secondary := ifx app.audio_setup_step == 1 then "optional_audio_skip" else "optional_audio_continue"
+    if draw && (start || retry) {
+        if Button(app.ui.session, ButtonProps.{.id = 265,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                    cast(float32)width, cast(float32)AppScale(44)},
+                .label = LocaleText(secondary), .fit_content = true,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            AudioSetupFinish(app, app.audio_setup_step == 1)
+        }
+    }
+    y.* += AppScale(56)
+}
+
+AudioSetupScreen :: (app: *InnerBreeze) {
+    column := CenteredColumnFor(app.ui.view_width, AppScale(380), AppScale(16))
+    width := column.width - AppScale(12)
+    height: s32 = AppScale(16)
+    AudioSetupContent(app, 0, *height, width, false)
+    scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)82600,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)AppScale(16),
+                cast(float32)column.width, cast(float32)(app.ui.view_height - AppScale(32))},
+            .content_height = height, .scroll_offset = app.audio_setup_scroll})
+    app.audio_setup_scroll = scroll.scroll_offset
+    if scroll.opened {
+        y := cast(s32)scroll.content.y
+        AudioSetupContent(app, cast(s32)scroll.content.x, *y, width, true)
+        End(app.ui.session)
+    }
+}

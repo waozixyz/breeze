@@ -90,6 +90,7 @@ practice_voices: [PracticeContentCount][8]u8;
 practice_narration_choices: [PracticeContentCount][16]u8;
 practice_voice_selected: [8]u8;
 practice_narration_selected: bool;
+practice_guide_narration_selected: bool;
 practice_catalog_invalid: bool;
 
 PracticeContentName :: (practice: s32) -> string {
@@ -439,6 +440,8 @@ PracticeDownloadsClose :: () {
     practice_catalog = ""
     practice_catalog_generation = 0
     practice_selected = -1
+    practice_narration_selected = false
+    practice_guide_narration_selected = false
     practice_catalog_invalid = false
     AssetNotifyChanged()
 }
@@ -695,7 +698,7 @@ PracticeNarrationState :: (index: s32) -> s32 {
 
 // Narration speaks the language chosen for it when that one is on this
 // device, then the app's, then another downloaded language in the app's
-// language order; "" without any.
+// language order; "" without any. Guides stay in the selected language.
 PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
     PracticeCatalogLoad()
     preferred := PracticeNarrationPreferred(content)
@@ -717,6 +720,9 @@ PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
             best = index
             best_rank = rank
         }
+    }
+    if content == PracticeGuide {
+        return ""
     }
     return ifx best < 0 then "" else TextFromCString(*practice_packs[best].language[0])
 }
@@ -1077,19 +1083,20 @@ PracticePackWanted :: (pack: *PracticePack) -> bool {
     if pack.language[0] == cast(u8)0 {
         return pack.practice == practice_selected
     }
-    if !practice_narration_selected {
-        return false
-    }
     language := TextFromCString(*pack.language[0])
     voice := TextFromCString(*pack.voice[0])
     if pack.practice == PracticeGuide {
-        return voice.count == 0 && language == TextFromCString(*practice_guide_language[0])
+        return practice_guide_narration_selected && voice.count == 0 &&
+            language == TextFromCString(*practice_guide_language[0])
+    }
+    if !practice_narration_selected {
+        return false
     }
     return pack.practice == practice_selected && voice == TextFromCString(*practice_voice_selected[0]) &&
     language == TextFromCString(*practice_narration_language[0])
 }
 
-PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
+PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool, idle: bool) {
     // Never replace borrowed animation/course/audio data during a session.
     if !idle {
         return
@@ -1102,12 +1109,14 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     spoken := PracticeNarrationLanguage(selected, voice)
     guide_spoken := PracticeNarrationLanguage(PracticeGuide, "")
     changed := selected != practice_selected || narration != practice_narration_selected ||
+    guide_narration != practice_guide_narration_selected ||
     voice != TextFromCString(*practice_voice_selected[0]) ||
     spoken != TextFromCString(*practice_narration_language[0]) ||
     guide_spoken != TextFromCString(*practice_guide_language[0])
     if changed {
         practice_selected = selected
         practice_narration_selected = narration
+        practice_guide_narration_selected = guide_narration
         unused AppCopyText(voice, practice_voice_selected[:])
         unused AppCopyText(spoken, practice_narration_language[:])
         unused AppCopyText(guide_spoken, practice_guide_language[:])
@@ -1143,10 +1152,14 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, idle: bool) {
     // only the practice shown keeps what it downloads.
     if narration {
         for content: cast(s32)0..PracticeContentCount - 1 {
-            if content == PracticeGuide || (PracticeInstalled(content) && (!DataTemporary() || content == selected)) {
+            if content != PracticeGuide && PracticeInstalled(content) &&
+            (!DataTemporary() || content == selected) {
                 PracticeNarrationEnsure(content)
             }
         }
+    }
+    if guide_narration {
+        PracticeNarrationEnsure(PracticeGuide)
     }
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := *practice_packs[index]

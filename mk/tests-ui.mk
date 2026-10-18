@@ -201,3 +201,10 @@ practice-downloads-ui-test: $(TARGET)
 		YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
 		xvfb-run -a -n 900 -s '-screen 0 1600x1000x24 -nolisten tcp' \
 		python3 tests/practice_downloads_ui_test.py $(abspath $(TARGET))
+
+.PHONY: audio-setup-ui-test
+audio-setup-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		YUE_DESKTOP_RECOVERY=0 LIBGL_ALWAYS_SOFTWARE=1 \
+		xvfb-run -a -n 300 -s '-screen 0 1280x1000x24' \
+		python3 tests/audio_setup_ui_test.py $(abspath $(TARGET))
