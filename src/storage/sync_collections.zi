@@ -1,0 +1,153 @@
+// Which encrypted collection and record ID each synced entity travels
+// under, and which local array a received collection applies to.
+#import, file "../app/text_buffers.zi";
+#import "byte_text_linux"
+#import, file "../cells/catalog.zi";
+#import, file "cell_records.zi";
+#import, file "app_records.zi";
+#import, file "media_records.zi";
+#import, file "storage_layout.zi";
+#import, file "storage_core.zi";
+
+// The collection of a node app's record key, such as
+// private.inbe.v1.app.chess, held until the next call.
+storage_node_app_collection: [64]u8;
+
+storage_node_app_records_collection :: (key: string) -> string {
+    owner := NodeAppRecordOwner(key)
+    if owner.count == 0 {
+        return ""
+    }
+    unused AppCopyText(NodeAppRecordsCollectionPrefix, storage_node_app_collection[:])
+    unused AppAppendText(owner, storage_node_app_collection[:])
+    return AppTextFromCString(*storage_node_app_collection[0], 64)
+}
+
+storage_encrypted_collection_for_entity :: (entity_type: string, entity_id: string) -> string {
+    if entity_type == "cell_record" {
+        if LumiCellRecordValid(entity_id) {
+            return LumiPrivateCollection
+        }
+        if !CellRecordValid(entity_id) {
+            return ""
+        }
+        return LegacyPrivateCellsCollection
+    }
+    if entity_type == "app_preference" {
+        return "private.inbe.v1.app-preferences"
+    }
+    if entity_type == "app_order" {
+        return AppOrderCollection
+    }
+    if entity_type == "app_install" {
+        return ifx NodeAppInstallKeyValid(entity_id) then NodeAppInstallsCollection else ""
+    }
+    if entity_type == "app_record" {
+        return storage_node_app_records_collection(entity_id)
+    }
+    if entity_type == "media_record" {
+        return ifx MediaRecordKeyAccepted(entity_id) then MediaCollection else ""
+    }
+    if entity_type.count == 0 {
+        return ""
+    }
+    if storage_compare_text(entity_type, "habit") == 0 {
+        return "private.inbe.v1.habits"
+    }
+    if storage_compare_text(entity_type, "habit_day") == 0 {
+        return "private.inbe.v1.habit-days"
+    }
+    if storage_compare_text(entity_type, "session") == 0 {
+        return "private.inbe.v1.sessions"
+    }
+    if storage_compare_text(entity_type, "elist_list") == 0 {
+        return "private.inbe.v1.elist-lists"
+    }
+    if storage_compare_text(entity_type, "elist_item") == 0 {
+        return "private.inbe.v1.elist-items"
+    }
+    if storage_compare_text(entity_type, "habit_entry") == 0 {
+        return "private.inbe.v1.habit-entries"
+    }
+    if storage_compare_text(entity_type, "habit_change") == 0 {
+        return "private.inbe.v1.habit-changes"
+    }
+    return ""
+}
+
+storage_encrypted_record_id :: (entity_type: string, entity_id: string, local_date: s32, out: *u8, out_size: s64) -> s32 {
+    written: s32
+    if out_size == 0 || entity_type.count == 0  || entity_id.count == 0 {
+        return 0
+    }
+    out[0] = cast(u8)0
+    written = 0
+    if storage_compare_text(entity_type, "habit_day") == 0 {
+        AppCopyText(entity_id, BytesFromPointer(out, cast(u64)out_size))
+        date_text: [16] u8
+        AppFormatS32(local_date, date_text[:])
+        AppAppendText(":", BytesFromPointer(out, cast(u64)out_size))
+        AppAppendText(AppTextFromCString(*date_text[0], 16),
+            BytesFromPointer(out, cast(u64)out_size))
+    } else {
+        AppCopyText(entity_id, BytesFromPointer(out, cast(u64)out_size))
+    }
+    written = 0
+    while written < 512 && out[written] != cast(u8)0 {
+        written += 1
+    }
+    if written > 0 && cast(s64)written < out_size {
+        return 1
+    }
+    return 0
+}
+
+storage_encrypted_collection_key_id :: (collection: string) -> string {
+    if collection == LumiPrivateCollection {
+        return LumiPrivateKeyID
+    }
+    return STORAGE_SYNC_RECORD_KEY_ID
+}
+
+storage_decrypted_array_name :: (collection: string) -> string {
+    if collection == LegacyPrivateCellsCollection || collection == LumiPrivateCollection {
+        return "cell_records"
+    }
+    if collection == "private.inbe.v1.app-preferences" {
+        return "app_preferences"
+    }
+    if collection == AppOrderCollection {
+        return "app_order"
+    }
+    if collection == NodeAppInstallsCollection {
+        return "app_installs"
+    }
+    if NodeAppRecordsCollectionValid(collection) {
+        return "app_records"
+    }
+    if collection == MediaCollection {
+        return "media_records"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.habits") == 0 {
+        return "habits"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.habit-days") == 0 {
+        return "habit_days"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.sessions") == 0 {
+        return "sessions"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.elist-lists") == 0 {
+        return "elist_lists"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.elist-items") == 0 {
+        return "elist_items"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.habit-entries") == 0 {
+        return "habit_entries"
+    }
+    if storage_compare_text(collection, "private.inbe.v1.habit-changes") == 0 {
+        return "habit_changes"
+    }
+    return ""
+}

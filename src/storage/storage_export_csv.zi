@@ -1,0 +1,129 @@
+// Exports of the active user's sessions as CSV files, including the
+// minimal list Health Connect imports.
+#import, file "../app/text_buffers.zi";
+#import "file_linux"
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "export_sql.zi";
+c :: #system_library "c";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+
+storage_export_sessions_csv_topic_names: [5] string = .[
+"wim_hof", "meditation", "sun_salutation", "patterns", "tai_chi"
+];
+
+storage_csv_write :: (file: FileHandle, offset: *s64, value: string) -> bool {
+    if offset == null { return false }
+    count := WriteTextAt(file, value, offset.*)
+    if count != cast(s64)value.count { return false }
+    offset.* += count
+    return true
+}
+
+storage_csv_write_s32 :: (file: FileHandle, offset: *s64, value: s32) -> bool {
+    buffer: [16]u8
+    if !AppFormatS32(value, buffer[:]) { return false }
+    return storage_csv_write(file, offset, AppTextFromCString(*buffer[0], 16))
+}
+
+storage_csv_write_s64 :: (file: FileHandle, offset: *s64, value: s64) -> bool {
+    buffer: [24]u8
+    if !AppFormatS64(value, buffer[:]) { return false }
+    return storage_csv_write(file, offset, AppTextFromCString(*buffer[0], 24))
+}
+
+#program_export
+storage_export_sessions_csv :: (path: string) -> s32 {
+    stmt: *void = null
+    if path.count == 0 || storage_db_handle() == null {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), ExportSessionsSQL, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    file := OpenReplace(path)
+    if !file.valid {
+        SqliteFinalize(stmt)
+        return 0
+    }
+    offset: s64 = 0
+    ok := storage_csv_write(file, *offset,
+        "date,practice,source,rounds,total_hold_seconds,meditation_seconds\n")
+    rc := SqliteStep(stmt)
+    while ok && rc == SQLITE_ROW {
+        date: *u8 = SqliteColumnText(stmt, 0)
+        topic: s32 = sqlite3_column_int(stmt, 1)
+        source: *u8 = SqliteColumnText(stmt, 2)
+        topic_name: string = "other"
+        if topic >= 0 && topic < 5 {
+            topic_name = storage_export_sessions_csv_topic_names[topic]
+        }
+        if sqlite3_column_int(stmt, 5) > 0 {
+            topic_name = "meditation"
+        }
+        ok = storage_csv_write(file, *offset,
+            ifx (date != null) then (AppTextFromCString(date, 32)) else ("")) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write(file, *offset, topic_name) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write(file, *offset,
+            ifx (source != null) then (AppTextFromCString(source, 64)) else ("")) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 4)) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 3)) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, sqlite3_column_int(stmt, 5)) &&
+        storage_csv_write(file, *offset, "\n")
+        if ok { rc = SqliteStep(stmt) }
+    }
+    closed := CloseFile(file)
+    SqliteFinalize(stmt)
+    return ifx (ok && rc == SQLITE_DONE && closed) then (1) else (0)
+}
+
+// Minimal session list for Health Connect: epoch start/end plus the
+// activity id. Duration prefers meditation_logs (activity 1) and falls
+// back to the sum of session_rounds (breathwork, sun salutation,
+// patterns).
+
+#program_export
+storage_export_health_connect_csv :: (path: string) -> s32 {
+    stmt: *void = null
+    rows: s32 = 0
+    if path.count == 0 || storage_db_handle() == null {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), ExportHealthConnectSQL, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    file := OpenReplace(path)
+    if !file.valid {
+        SqliteFinalize(stmt)
+        return 0
+    }
+    offset: s64 = 0
+    ok := storage_csv_write(file, *offset, "start,end,practice\n")
+    rc := SqliteStep(stmt)
+    while ok && rc == SQLITE_ROW {
+        start: s64 = SqliteColumnInt64(stmt, 0)
+        activity: s32 = sqlite3_column_int(stmt, 1)
+        duration: s64 = SqliteColumnInt64(stmt, 2)
+        if start <= 0 || duration <= 0 {
+            rc = SqliteStep(stmt)
+            continue
+        }
+        ok = storage_csv_write_s64(file, *offset, start) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s64(file, *offset, start + duration) &&
+        storage_csv_write(file, *offset, ",") &&
+        storage_csv_write_s32(file, *offset, activity) &&
+        storage_csv_write(file, *offset, "\n")
+        if !ok { break }
+        rows += 1
+        rc = SqliteStep(stmt)
+    }
+    closed := CloseFile(file)
+    SqliteFinalize(stmt)
+    return ifx (ok && rc == SQLITE_DONE && closed && rows > 0) then (1) else (0)
+}

@@ -176,12 +176,12 @@ mutate $restore storage/sync_restore_laws.zi \
 
 # The real restore SQL must fail the same statements when it leaves data out.
 mkdir -p "$work/restore/src/storage"
-cp "$root"/src/storage/storage_core.zi "$root"/src/storage/schema_sql.zi \
+cp "$root"/src/storage/sync_outbox.zi "$root"/src/storage/schema_sql.zi \
     "$work/restore/src/storage/"
 SYNC_RESTORE_ROOT="$work/restore" python3 \
     "$root/tests/sync_restore_sql_test.py" > /dev/null
 sed -i "s/FROM elist_items WHERE user_id/FROM elist_items WHERE 0=1 AND user_id/" \
-    "$work/restore/src/storage/storage_core.zi"
+    "$work/restore/src/storage/sync_outbox.zi"
 if SYNC_RESTORE_ROOT="$work/restore" python3 \
     "$root/tests/sync_restore_sql_test.py" > /dev/null 2>&1; then
     echo "restore test accepted a restore that leaves local data unqueued" >&2

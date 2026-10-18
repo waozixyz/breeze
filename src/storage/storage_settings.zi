@@ -1,0 +1,358 @@
+// The active user's settings and cached social snapshots. Settings that
+// are app choices or app records are queued for sync when they change.
+#import, file "../app/text_buffers.zi";
+#import "byte_text_linux"
+#import, file "setting_visitor.zi";
+#import, file "../cells/catalog.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "cell_records.zi";
+#import, file "app_records.zi";
+#import, file "media_records.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "sync_outbox.zi";
+#import, file "storage_json_sql.zi";
+c :: #system_library "c";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+sqlite3_get_autocommit :: (database: *void) -> s32 #foreign c "sqlite3_get_autocommit";
+sqlite3_db_mutex :: (database: *void) -> *void #foreign c "sqlite3_db_mutex";
+sqlite3_mutex_enter :: (mutex: *void) #foreign c "sqlite3_mutex_enter";
+sqlite3_mutex_leave :: (mutex: *void) #foreign c "sqlite3_mutex_leave";
+sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
+storage_setting_text_buffer :: () -> *u8 #foreign c "storage_setting_text_buffer_host";
+
+#program_export
+storage_settings_empty :: () -> s32 {
+    stmt: *void = null
+    count: s32 = 0
+    if storage_db_handle() == null {
+        return 1
+    }
+    sql_cw1: [64] u8
+    AppCopyText("SELECT COUNT(*) FROM settings WHERE user_id=?1", sql_cw1[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cw1[0], -1, *stmt, null) != SQLITE_OK {
+        return 1
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(stmt) == SQLITE_ROW {
+        count = sqlite3_column_int(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    if count == 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_get_social_cache_json :: (kind: string, out: *u8, out_size: s64) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+    if out == null || out_size <= 0 || out_size > 2147483647 {
+        return 0
+    }
+    out[0] = cast(u8)0
+    if storage_db_handle() == null || kind.count == 0 {
+        return 0
+    }
+    sql_cx2: [70] u8
+    AppCopyText("SELECT json FROM social_snapshots WHERE user_id=?1 AND kind=?2", sql_cx2[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx2[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, kind)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        json: string = AppTextFromCString(SqliteColumnText(stmt, 0), cast(s32)out_size)
+        AppCopyText(ifx (json.count > 0) then (json) else (""),
+            BytesFromPointer(out, cast(u64)out_size))
+        found = 0
+        if out[0] != cast(u8)0 {
+            found = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return found
+}
+
+#program_export
+storage_set_social_cache_json :: (kind: string, json: string) -> s32 {
+    stmt: *void = null
+    updated_at: s64
+    rc: s32
+    same: s32 = 0
+    if storage_db_handle() == null || kind.count == 0  || json.count == 0 || storage_json_valid(json) == 0 {
+        return 0
+    }
+    sql_cx11: [66] u8
+    AppCopyText("SELECT json=?3 FROM social_snapshots WHERE user_id=?1 AND kind=?2", sql_cx11[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx11[0], -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(stmt, 2, kind)
+        bind_text(stmt, 3, json)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            same = 0
+            if sqlite3_column_int(stmt, 0) != 0 {
+                same = 1
+            }
+        }
+    }
+    SqliteFinalize(stmt)
+    stmt = null
+    if same != 0 {
+        return 1
+    }
+    updated_at = storage_next_change_time()
+    sql_cx3: [176] u8
+    AppCopyText("INSERT INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,kind) DO UPDATE SET json=excluded.json,updated_at=excluded.updated_at", sql_cx3[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx3[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, kind)
+    bind_text(stmt, 3, json)
+    SqliteBindInt64(stmt, 4, updated_at)
+    rc = SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    if rc != SQLITE_DONE {
+        return 0
+    }
+    storage_schedule_persist()
+    return 2
+}
+
+#program_export
+storage_get_setting_int :: (key: string, fallback: s32) -> s32 {
+    text: string = storage_get_setting_text(key)
+    if text.count > 0 {
+        return storage_parse_setting_int(text)
+    }
+    return fallback
+}
+
+#program_export
+storage_get_setting_text :: (key: string) -> string {
+    stmt: *void = null
+    text_value: *u8 = storage_setting_text_buffer()
+    if text_value == null {
+        return ""
+    }
+    text_value[0] = cast(u8)0
+    if storage_db_handle() == null || key.count == 0 {
+        return ""
+    }
+    settings_sql: [128] u8
+    AppCopyText("SELECT value FROM settings WHERE user_id=?1 AND key=?2", settings_sql[:])
+    if SqlitePrepare(storage_db_handle(), *settings_sql[0], -1, *stmt, null) != SQLITE_OK {
+        return ""
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, key)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        text: string = AppTextFromCString(SqliteColumnText(stmt, 0), 8192)
+        AppCopyText(ifx (text.count > 0) then (text) else (""),
+            BytesFromPointer(text_value, 8192))
+    }
+    SqliteFinalize(stmt)
+    if text_value[0] != cast(u8)0 {
+        return AppTextFromCString(text_value, 8192)
+    }
+    return ""
+}
+
+#program_export
+storage_setting_text_equals :: (key: string, value: string) -> s32 {
+    stmt: *void = null
+    ok: s32 = 0
+    if storage_db_handle() == null || key.count == 0 || value.count == 0 {
+        return 0
+    }
+    sql_cx4: [71] u8
+    AppCopyText("SELECT 1 FROM settings WHERE user_id=?1 AND key=?2 AND value=?3", sql_cx4[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx4[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, key)
+    bind_text(stmt, 3, value)
+    ok = 0
+    if SqliteStep(stmt) == SQLITE_ROW {
+        ok = 1
+    }
+    SqliteFinalize(stmt)
+    return ok
+}
+
+#program_export
+storage_list_settings :: (callback: SettingVisitor, user: *void) -> s32 {
+    stmt: *void = null
+    if storage_db_handle() == null {
+        return 0
+    }
+    sql_cx5: [64] u8
+    AppCopyText("SELECT key,value FROM settings WHERE user_id=?1", sql_cx5[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx5[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    while SqliteStep(stmt) == SQLITE_ROW {
+        key: string = AppTextFromCString(SqliteColumnText(stmt, 0), 8192)
+        value: string = AppTextFromCString(SqliteColumnText(stmt, 1), 8192)
+        callback(ifx (key.count > 0) then (key) else (""), ifx (value.count > 0) then (value) else (""), cast(s64)user)
+    }
+    SqliteFinalize(stmt)
+    return 1
+}
+
+#program_export
+storage_set_setting_text :: (key: string, value: string) {
+    stmt: *void = null
+    rc: s32
+    if storage_db_handle() == null || key.count == 0 {
+        return
+    }
+    sql_cx6: [206] u8
+    AppCopyText("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at WHERE settings.value<>excluded.value", sql_cx6[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx6[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, key)
+    bind_text(stmt, 3, ifx (value.count > 0) then (value) else (""))
+    SqliteBindInt64(stmt, 4, now_seconds())
+    rc = SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        if CellRecordValid(key) {
+            unused storage_enqueue_sync_entity("cell_record", key, 0)
+        }
+        if AppPreferenceValid(key) {
+            unused storage_enqueue_sync_entity("app_preference", key, 0)
+        }
+        if key == AppOrderKey {
+            unused storage_enqueue_sync_entity("app_order", key, 0)
+        }
+        if NodeAppInstallKeyValid(key) {
+            unused storage_enqueue_sync_entity("app_install", key, 0)
+        }
+        if NodeAppRecordKeyValid(key) {
+            unused storage_enqueue_sync_entity("app_record", key, 0)
+        }
+        if MediaRecordKeyAccepted(key) {
+            unused storage_enqueue_sync_entity("media_record", key, 0)
+        }
+        if storage_state_handle().settings_write_depth <= 0 {
+            storage_schedule_persist()
+        }
+    }
+}
+
+// Stores a default the owner didn't choose, such as a new profile's apps.
+// It never replaces a saved value, is never uploaded, and is stored at
+// AppDefaultTime, so a choice from the account's other devices replaces it.
+#program_export
+storage_set_setting_default_text :: (key: string, value: string) {
+    statement: *void = null
+    if storage_db_handle() == null || key.count == 0 {
+        return
+    }
+    if SqlitePrepareText(storage_db_handle(),
+        "INSERT INTO settings(user_id,key,value,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,key) DO NOTHING",
+        -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    bind_text(statement, 3, value)
+    SqliteBindInt64(statement, 4, AppDefaultTime)
+    rc := SqliteStep(statement)
+    SqliteFinalize(statement)
+    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 &&
+    storage_state_handle().settings_write_depth <= 0 {
+        storage_schedule_persist()
+    }
+}
+
+#program_export
+storage_settings_begin_write :: () {
+    database := storage_db_handle()
+    if database == null {
+        return
+    }
+    // A batch belongs to the thread that begins it. The connection's
+    // recursive mutex stays held until the batch ends, so another thread's
+    // batch waits here instead of joining this one: a shared depth let a
+    // second thread skip its BEGIN, and the first thread could then return
+    // without COMMIT while its open transaction still held the connection.
+    mutex := sqlite3_db_mutex(database)
+    if mutex != null {
+        sqlite3_mutex_enter(mutex)
+    }
+    storage_state_handle().settings_write_depth += 1
+    if storage_state_handle().settings_write_depth == 1 {
+        exec_sql("BEGIN IMMEDIATE")
+    }
+}
+
+#program_export
+storage_settings_end_write :: () {
+    database := storage_db_handle()
+    if database == null {
+        return
+    }
+    mutex := sqlite3_db_mutex(database)
+    if mutex != null {
+        sqlite3_mutex_enter(mutex)
+    }
+    if storage_state_handle().settings_write_depth <= 0 {
+        if mutex != null {
+            sqlite3_mutex_leave(mutex)
+        }
+        return
+    }
+    storage_state_handle().settings_write_depth -= 1
+    if storage_state_handle().settings_write_depth == 0 {
+        // A failed COMMIT must not leave the transaction, and with it the
+        // connection, held after this thread returns.
+        if exec_sql("COMMIT") == 0 && sqlite3_get_autocommit(database) == 0 {
+            exec_sql("ROLLBACK")
+        }
+        storage_schedule_persist()
+    }
+    if mutex != null {
+        // Release this call's enter and the one its batch began with.
+        sqlite3_mutex_leave(mutex)
+        sqlite3_mutex_leave(mutex)
+    }
+}
+
+#program_export
+storage_set_setting_int :: (key: string, value: s32) {
+    text: [32] u8
+    AppFormatS32(value, text[:])
+    storage_set_setting_text(key, AppTextFromCString(*text[0], 32))
+}
+
+storage_setting_exists :: (key: string) -> s32 {
+    stmt: *void = null
+    exists: s32 = 0
+    if storage_db_handle() == null || key.count == 0 {
+        return 0
+    }
+    sql_cx7: [73] u8
+    AppCopyText("SELECT EXISTS(SELECT 1 FROM settings WHERE user_id=?1 AND key=?2)", sql_cx7[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx7[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, key)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        exists = 0
+        if sqlite3_column_int(stmt, 0) != 0 {
+            exists = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return exists
+}

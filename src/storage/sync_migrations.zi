@@ -1,0 +1,91 @@
+// One-time upgrades of an account's sync data: Lumi's own collection
+// and the connected-server flag of accounts that synced before it.
+#import "string_range"
+#import, file "state.zi";
+#import, file "storage_layout.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "sync_state.zi";
+#import, file "storage_settings.zi";
+LOG_INFO :: 3
+
+#program_export
+// The outbox and marker commit together. The old settings and server history
+// remain intact; new writes and queued copies use the separate Lumi scope.
+storage_migrate_lumi_collection :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    if storage_meta_int64(LumiCollectionMigrationKey, 0) != 0 ||
+    storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY).count == 0 {
+        return 1
+    }
+    if exec_sql("SAVEPOINT inbe_lumi_collection_migration") == 0 {
+        return 0
+    }
+    queued := exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.lumi.*' AND length(key) BETWEEN 12 AND 180 AND key NOT GLOB '*[^a-z0-9.-]*' ON CONFLICT(entity_type,entity_id,local_date) DO NOTHING")
+    marked: s32 = 0
+    if queued != 0 {
+        marked = exec_sql("INSERT INTO meta(key,value) VALUES('sync_lumi_collection_v2_done','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    }
+    if queued == 0 || marked == 0 {
+        unused exec_sql("ROLLBACK TO inbe_lumi_collection_migration")
+        unused exec_sql("RELEASE inbe_lumi_collection_migration")
+        return 0
+    }
+    if exec_sql("RELEASE inbe_lumi_collection_migration") == 0 {
+        unused exec_sql("ROLLBACK TO inbe_lumi_collection_migration")
+        unused exec_sql("RELEASE inbe_lumi_collection_migration")
+        return 0
+    }
+    storage_schedule_persist()
+    return 1
+}
+
+storage_sync_url_looks_valid :: (url: string) -> s32 {
+    if url.count == 0 {
+        return 0
+    }
+    if url.count >= 8 && Substring(url, 0, 8) == "https://" {
+        if url.count > 8 {
+            return 1
+        }
+        return 0
+    }
+    if url.count >= 7 && Substring(url, 0, 7) == "http://" {
+        if url.count > 7 {
+            return 1
+        }
+        return 0
+    }
+    return 0
+}
+
+#program_export
+storage_migrate_sync_enabled_flag :: () -> s32 {
+    url: string
+    if storage_db_handle() == null {
+        return 0
+    }
+    if storage_setting_exists(STORAGE_SYNC_ENABLED_KEY) != 0 {
+        return 1
+    }
+    if storage_setting_exists("sync_server_connected") != 0 {
+        storage_set_setting_int(STORAGE_SYNC_ENABLED_KEY,
+            storage_get_setting_int("sync_server_connected", 0))
+        return 1
+    }
+    if storage_has_sync_account() == 0 {
+        return 1
+    }
+    url = storage_get_setting_text(STORAGE_SYNC_SERVER_URL_KEY)
+    if storage_sync_url_looks_valid(url) == 0 {
+        return 1
+    }
+    if storage_meta_int64("sync_last_server_version", 0) <= 0  && storage_meta_int64("sync_full_upload_done", 0) == cast(s64)0 {
+        return 1
+    }
+    storage_set_setting_int(STORAGE_SYNC_ENABLED_KEY, 1)
+    LogStorage(LOG_INFO, "SYNC: migrated existing synced account to connected server state")
+    return 1
+}

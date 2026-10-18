@@ -1,0 +1,207 @@
+// JSON reads through SQLite's json functions, and running a sync SQL
+// statement over a JSON document for the active user.
+#import, file "../app/text_buffers.zi";
+#import "byte_text_linux"
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "schema.zi";
+#import, file "db.zi";
+c :: #system_library "c";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+sqlite3_column_double :: (statement: *void, column: s32) -> float64 #foreign c "sqlite3_column_double";
+sqlite3_bind_parameter_count :: (statement: *void) -> s32 #foreign c "sqlite3_bind_parameter_count";
+sqlite3_errmsg :: (database: *void) -> *u8 #foreign c "sqlite3_errmsg";
+
+storage_json_valid :: (json: string) -> s32 {
+    stmt: *void = null
+    valid: s32 = 0
+    if storage_db_handle() == null || json.count == 0 {
+        return 0
+    }
+    sql_cx20: [64] u8
+    AppCopyText("SELECT json_valid(?1)", sql_cx20[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx20[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, json)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        valid = 0
+        if sqlite3_column_int(stmt, 0) != 0 {
+            valid = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return valid
+}
+
+storage_json_extract_int64 :: (json: string, path: string, fallback: s64) -> s64 {
+    stmt: *void = null
+    value: s64 = fallback
+    if storage_db_handle() == null || json.count == 0 || path.count == 0 {
+        return fallback
+    }
+    sql_cx21: [96] u8
+    AppCopyText("SELECT CAST(COALESCE(json_extract(?1,?2),?3) AS INTEGER)", sql_cx21[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx21[0], -1, *stmt, null) != SQLITE_OK {
+        return fallback
+    }
+    bind_text(stmt, 1, json)
+    bind_text(stmt, 2, path)
+    SqliteBindInt64(stmt, 3, fallback)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        value = SqliteColumnInt64(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return value
+}
+
+storage_json_extract_text :: (json: string, path: string, out: *u8, out_size: s64) -> s32 {
+    stmt: *void = null
+    text: *u8
+    ok: s32 = 0
+    if out == null || out_size == 0 {
+        return 0
+    }
+    out[0] = cast(u8)0
+    if storage_db_handle() == null || json.count == 0 || path.count == 0 {
+        return 0
+    }
+    sql_cw2: [64] u8
+    AppCopyText("SELECT COALESCE(json_extract(?1,?2),'')", sql_cw2[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cw2[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, json)
+    bind_text(stmt, 2, path)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        text = SqliteColumnText(stmt, 0)
+        if text != null {
+            AppCopyText(AppTextFromCString(text, 8192),
+                BytesFromPointer(out, cast(u64)out_size))
+            ok = 0
+            if out[0] != cast(u8)0 {
+                ok = 1
+            }
+        }
+    }
+    SqliteFinalize(stmt)
+    return ok
+}
+
+storage_json_array_has_items :: (json: string, path: string) -> s32 {
+    if storage_json_array_count(json, path) > 0 {
+        return 1
+    }
+    return 0
+}
+
+storage_json_array_count :: (json: string, path: string) -> s32 {
+    stmt: *void = null
+    count: s32 = 0
+    if storage_db_handle() == null || json.count == 0 || path.count == 0 {
+        return 0
+    }
+    sql_cx22: [96] u8
+    AppCopyText("SELECT COALESCE(json_array_length(json_extract(?1,?2)),0)", sql_cx22[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx22[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, json)
+    bind_text(stmt, 2, path)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        count = sqlite3_column_int(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return count
+}
+
+#program_export
+storage_json_array_count_path :: (json: string, path: string) -> s32 {
+    return storage_json_array_count(json, path)
+}
+
+#program_export
+storage_json_array_object_text :: (json: string, array_path: string, index: s32, key: string, out: *u8, out_size: s64) -> s32 {
+    path: [128] u8
+    if out == null || out_size == 0 {
+        return 0
+    }
+    out[0] = cast(u8)0
+    if array_path.count == 0 || key.count == 0 || index < 0 {
+        return 0
+    }
+    index_text: [16] u8
+    AppFormatS32(index, index_text[:])
+    AppCopyText(array_path, path[:])
+    AppAppendText("[", path[:])
+    AppAppendText(AppTextFromCString(*index_text[0], 16), path[:])
+    AppAppendText("].", path[:])
+    AppAppendText(key, path[:])
+    return storage_json_extract_text(json, AppTextFromCString(*path[0], 128), out, out_size)
+}
+
+#program_export
+storage_json_array_object_number :: (json: string, array_path: string, index: s32, key: string) -> float64 {
+    path: [128] u8
+    stmt: *void = null
+    value: float64 = 0.0
+    if storage_db_handle() == null || json.count == 0 || array_path.count == 0  || key.count == 0 || index < 0 {
+        return 0.0
+    }
+    index_text: [16] u8
+    AppFormatS32(index, index_text[:])
+    AppCopyText(array_path, path[:])
+    AppAppendText("[", path[:])
+    AppAppendText(AppTextFromCString(*index_text[0], 16), path[:])
+    AppAppendText("].", path[:])
+    AppAppendText(key, path[:])
+    sql_cx9: [64] u8
+    AppCopyText("SELECT CAST(COALESCE(json_extract(?1,?2),0) AS REAL)", sql_cx9[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx9[0], -1, *stmt, null) != SQLITE_OK {
+        return 0.0
+    }
+    bind_text(stmt, 1, json)
+    bind_text(stmt, 2, AppTextFromCString(*path[0], 128))
+    if SqliteStep(stmt) == SQLITE_ROW {
+        value = sqlite3_column_double(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return value
+}
+
+#program_export
+storage_exec_json_user_sql :: (sql: string, json: string) -> s32 {
+    stmt: *void = null
+    rc: s32
+    attempt: s32
+    if storage_db_handle() == null || sql.count == 0 || json.count == 0 {
+        return 0
+    }
+    {
+        attempt: s32 = 0
+        while attempt < 2 {
+            if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) == SQLITE_OK {
+                break
+            }
+            if attempt == 0 && migrate_schema() != 0 {
+                attempt += 1; continue
+            }
+            LogStorage(LOG_WARNING, "SYNC: changes SQL prepare failed")
+            return 0
+            attempt += 1
+        }
+    }
+    bind_text(stmt, 1, json)
+    if sqlite3_bind_parameter_count(stmt) >= 2 {
+        bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    }
+    rc = SqliteStep(stmt)
+    if rc != SQLITE_DONE {
+        LogStorageText(LOG_WARNING, "SYNC: changes SQL step failed: ",
+            AppTextFromCString(sqlite3_errmsg(storage_db_handle()), 200))
+        SqliteFinalize(stmt)
+        return 0
+    }
+    SqliteFinalize(stmt)
+    return 1
+}

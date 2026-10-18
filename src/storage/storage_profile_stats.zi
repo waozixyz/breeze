@@ -1,0 +1,192 @@
+// Profile statistics: an activity's streak and average hold, and the
+// active days and practice sessions of the last week.
+#import, file "../app/text_buffers.zi";
+#import "date_parse"
+#import, file "time_parts.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+c :: #system_library "c";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+sqlite3_column_double :: (statement: *void, column: s32) -> float64 #foreign c "sqlite3_column_double";
+gmtime :: (t: *s64) -> *Tm #foreign c;
+
+// Civil day arithmetic: C time_t is 32-bit on 32-bit Android, so mktime and
+// difftime cannot be declared with one integer type for every target.
+storage_profile_day_number :: (local_date: s32) -> s64 {
+    year := local_date / 10000
+    month := (local_date / 100) % 100
+    day := local_date % 100
+    if !DateValid(year, month, day) {
+        return -1
+    }
+    return DaysFromCivil(year, month, day)
+}
+
+storage_profile_day_offset :: (local_date: s32, today_date: s32) -> s32 {
+    if local_date <= 0 || today_date <= 0 {
+        return -1
+    }
+    day := storage_profile_day_number(local_date)
+    today := storage_profile_day_number(today_date)
+    if day < 0 || today < 0 {
+        return -1
+    }
+    offset := today - day
+    if offset < 0 || offset > 370 {
+        return -1
+    }
+    return cast(s32)offset
+}
+
+storage_profile_date_from_epoch :: (epoch: s64) -> s32 {
+    value: s64 = cast(s64)epoch
+    tm_value: *Tm
+    if epoch <= 0 {
+        return 0
+    }
+    tm_value = gmtime(*value)
+    if tm_value == null {
+        return 0
+    }
+    return (tm_value.tm_year + 1900) * 10000 +     (tm_value.tm_mon + 1) * 100 + tm_value.tm_mday
+}
+
+#program_export
+storage_profile_activity_stats :: (activity: s32, today_date: s32, streak_out: *s32, avg_hold_out: *s64) -> s32 {
+    stmt: *void = null
+    seen: [371] s32
+    streak: s32 = 0
+    avg_value: s64 = 0
+    if streak_out != null {
+        streak_out.* = 0
+    }
+    if avg_hold_out != null {
+        avg_hold_out.* = 0
+    }
+    if storage_db_handle() == null || activity < 0 || activity >= 30 {
+        return 0
+    }
+    sql_cx10: [108] u8
+    AppCopyText("SELECT local_date FROM sessions WHERE user_id=?1 AND deleted_at=0 AND activity=?2   AND local_date>0", sql_cx10[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx10[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    sqlite3_bind_int(stmt, 2, activity)
+    while SqliteStep(stmt) == SQLITE_ROW {
+        offset: s32 = storage_profile_day_offset(sqlite3_column_int(stmt, 0), today_date)
+        if offset >= 0 && offset <= 370 {
+            seen[offset] = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    stmt = null
+    sql_cx15: [88] u8
+    AppCopyText("SELECT completed_at FROM meditation_logs WHERE user_id=?1 AND duration_seconds>0", sql_cx15[:])
+    if activity == 1  && SqlitePrepare(storage_db_handle(), *sql_cx15[0], -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            local_date: s32 = storage_profile_date_from_epoch(SqliteColumnInt64(stmt, 0))
+            offset: s32 = storage_profile_day_offset(local_date, today_date)
+            if offset >= 0 && offset <= 370 {
+                seen[offset] = 1
+            }
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+    }
+    while streak <= 370 && seen[streak] != 0 {
+        streak += 1
+    }
+    if activity == 0 {
+        sql_cx16: [171] u8
+        AppCopyText("SELECT COALESCE(AVG(sr.seconds),0) FROM sessions s JOIN session_rounds sr ON sr.session_id=s.id WHERE s.user_id=?1 AND s.deleted_at=0 AND s.activity=?2   AND sr.seconds>0", sql_cx16[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cx16[0], -1, *stmt, null) == SQLITE_OK {
+            bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+            sqlite3_bind_int(stmt, 2, activity)
+            if SqliteStep(stmt) == SQLITE_ROW {
+                avg_value = cast(s64)sqlite3_column_double(stmt, 0)
+            }
+            SqliteFinalize(stmt)
+        }
+    } else if activity == 1 {
+        sql_cx17: [621] u8
+        AppCopyText("WITH session_totals AS (  SELECT s.id, SUM(sr.seconds) AS seconds   FROM sessions s JOIN session_rounds sr ON sr.session_id=s.id   WHERE s.user_id=?1 AND s.deleted_at=0 AND s.activity=?2     AND sr.seconds>0   GROUP BY s.id),log_totals AS (  SELECT ml.session_id AS id, ml.duration_seconds AS seconds   FROM meditation_logs ml   WHERE ml.user_id=?1 AND ml.duration_seconds>0     AND NOT EXISTS (SELECT 1 FROM session_totals st                     WHERE st.id=ml.session_id)),all_totals AS (  SELECT seconds FROM session_totals   UNION ALL   SELECT seconds FROM log_totals) SELECT COALESCE(AVG(seconds),0) FROM all_totals", sql_cx17[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cx17[0], -1, *stmt, null) == SQLITE_OK {
+            bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+            sqlite3_bind_int(stmt, 2, activity)
+            if SqliteStep(stmt) == SQLITE_ROW {
+                avg_value = cast(s64)sqlite3_column_double(stmt, 0)
+            }
+            SqliteFinalize(stmt)
+        }
+    }
+    if streak_out != null {
+        streak_out.* = streak
+    }
+    if avg_hold_out != null {
+        avg_hold_out.* = avg_value
+    }
+    return 1
+}
+
+#program_export
+storage_profile_week_stats :: (today_date: s32, active_days_out: *s32, practice_sessions_out: *s32) -> s32 {
+    stmt: *void = null
+    active_days: [7] s32
+    practice_sessions: s32 = 0
+    active_count: s32 = 0
+    if active_days_out != null {
+        active_days_out.* = 0
+    }
+    if practice_sessions_out != null {
+        practice_sessions_out.* = 0
+    }
+    if storage_db_handle() == null || today_date <= 0 {
+        return 0
+    }
+    sql_cx18: [83] u8
+    AppCopyText("SELECT local_date FROM sessions WHERE user_id=?1 AND deleted_at=0 AND local_date>0", sql_cx18[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx18[0], -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            offset: s32 = storage_profile_day_offset(sqlite3_column_int(stmt, 0),
+                today_date)
+            if offset >= 0 && offset < 7 {
+                active_days[offset] = 1
+                practice_sessions += 1
+            }
+        }
+        SqliteFinalize(stmt)
+        stmt = null
+    }
+    sql_cx19: [157] u8
+    AppCopyText("SELECT DISTINCT hd.local_date FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=?1 AND h.deleted_at=0 AND (hd.completed!=0 OR hd.count>0)", sql_cx19[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx19[0], -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        while SqliteStep(stmt) == SQLITE_ROW {
+            offset: s32 = storage_profile_day_offset(sqlite3_column_int(stmt, 0),
+                today_date)
+            if offset >= 0 && offset < 7 {
+                active_days[offset] = 1
+            }
+        }
+        SqliteFinalize(stmt)
+    }
+    {
+        i: s32 = 0
+        while i < 7 {
+            active_count += active_days[i]
+            i += 1
+        }
+    }
+    if active_days_out != null {
+        active_days_out.* = active_count
+    }
+    if practice_sessions_out != null {
+        practice_sessions_out.* = practice_sessions
+    }
+    return 1
+}

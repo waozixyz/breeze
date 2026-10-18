@@ -1,0 +1,186 @@
+// The sync outbox: which local records wait to go to the node, queued
+// with each change and cleared once the node has them.
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "sql_query.zi";
+#import, file "storage_core.zi";
+#import, file "sync_state.zi";
+c :: #system_library "c";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_get_autocommit :: (database: *void) -> s32 #foreign c "sqlite3_get_autocommit";
+storage_sync_review_delete_json :: () #foreign c "storage_sync_review_delete_json";
+
+storage_enqueue_sync_entity :: (entity_type: string, entity_id: string, local_date: s32) -> s32 {
+    stmt: *void = null
+    rc: s32
+    if storage_db_handle() == null || entity_type.count == 0 || entity_id.count == 0 {
+        return 0
+    }
+    query := "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at"
+    if entity_type == "cell_record" {
+        // Cell receipts name the exact submitted sequence. Replacing a cell
+        // allocates a fresh sequence even for edits within the same second.
+        // Owner habit/session saves retain their existing queue behaviour.
+        query = "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4)"
+    }
+    if SqlitePrepareText(storage_db_handle(), query,
+        -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, entity_type)
+    bind_text(stmt, 2, entity_id)
+    sqlite3_bind_int(stmt, 3, local_date)
+    SqliteBindInt64(stmt, 4, now_seconds())
+    rc = SqliteStep(stmt)
+    SqliteFinalize(stmt)
+    if rc == SQLITE_DONE {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_enqueue_sync_habit :: (habit_id: string) -> s32 {
+    return storage_enqueue_sync_entity("habit", habit_id, 0)
+}
+
+#program_export
+storage_enqueue_sync_habit_day :: (habit_id: string, local_date: s32) -> s32 {
+    return storage_enqueue_sync_entity("habit_day", habit_id, local_date)
+}
+
+#program_export
+storage_enqueue_sync_session :: (session_id: string) -> s32 {
+    return storage_enqueue_sync_entity("session", session_id, 0)
+}
+
+#program_export
+storage_enqueue_sync_elist_list :: (list_id: string) -> s32 {
+    return storage_enqueue_sync_entity("elist_list", list_id, 0)
+}
+
+#program_export
+storage_enqueue_sync_elist_item :: (item_id: string) -> s32 {
+    return storage_enqueue_sync_entity("elist_item", item_id, 0)
+}
+
+storage_enqueue_sync_habit_entry :: (entry_id: string) -> s32 {
+    return storage_enqueue_sync_entity("habit_entry", entry_id, 0)
+}
+
+storage_enqueue_sync_habit_change :: (change_id: string) -> s32 {
+    return storage_enqueue_sync_entity("habit_change", change_id, 0)
+}
+
+#program_export
+storage_enqueue_all_sync_state :: () {
+    owns_transaction: s32
+    if storage_db_handle() == null {
+        return
+    }
+    owns_transaction = 0
+    if sqlite3_get_autocommit(storage_db_handle()) != 0 {
+        owns_transaction = 1
+    }
+    if owns_transaction != 0 && exec_sql("BEGIN IMMEDIATE") == 0 {
+        return
+    }
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit',id,0,strftime('%s','now') FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_day',hd.habit_id,hd.local_date,strftime('%s','now') FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'session',id,0,strftime('%s','now') FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_list',id,0,strftime('%s','now') FROM elist_lists WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'elist_item',id,0,strftime('%s','now') FROM elist_items WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,strftime('%s','now') FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_change',id,0,strftime('%s','now') FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    // A default app choice (stored at AppDefaultTime) is not a choice and
+    // never goes out, so a new device cannot replace the account's apps.
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi','app_used_leaderboard') AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_order',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key='app_order' AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_install',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'app_used_[a-z]*' AND length(key) BETWEEN 11 AND 33 AND substr(key,10) NOT GLOB '*[^a-z0-9]*' AND key NOT IN ('app_used_inbe','app_used_lists','app_used_habits','app_used_practices','app_used_practice','app_used_diary','app_used_lumi','app_used_leaderboard','app_used_feedback','app_used_app','app_used_apps','app_used_media') AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.[a-z]*.?*' AND length(key)<=180 AND key NOT GLOB '*[^a-z0-9.-]*' AND instr(substr(key,6),'.') BETWEEN 3 AND 25 AND substr(key,6,instr(substr(key,6),'.')-1) NOT GLOB '*[^a-z0-9]*' AND substr(key,6,instr(substr(key,6),'.')-1) NOT IN ('inbe','lists','habits','practices','practice','diary','lumi','leaderboard','feedback','app','apps','media') AND length(key)-5-instr(substr(key,6),'.') BETWEEN 1 AND 64 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    // The account's media library, in its own collection.
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'media_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.media.?*' AND length(key)<=180 AND key NOT GLOB '*[^a-z0-9.-]*' ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
+    if owns_transaction != 0 {
+        exec_sql("COMMIT")
+    }
+}
+
+#program_export
+storage_reset_sync_state :: () {
+    if storage_db_handle() == null {
+        return
+    }
+    storage_set_meta_int64("sync_last_server_version", 0)
+    storage_set_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0)
+    storage_set_meta_int64("sync_last_upload_at", 0)
+    storage_set_meta_int64("sync_full_upload_done", 0)
+    set_meta_buf(STORAGE_SYNC_LAST_SERVER_HASH_KEY, "")
+    set_meta_buf(STORAGE_SYNC_PENDING_REVIEW_KEY, "")
+    set_meta_int64_buf(STORAGE_SYNC_FULL_REPLACE_KEY, 0)
+    storage_sync_review_delete_json()
+    storage_set_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 0)
+    storage_set_meta_int64(STORAGE_SYNC_HABIT_NAME_REPAIR_KEY, 0)
+    storage_set_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, 0)
+    exec_sql("DELETE FROM sync_outbox")
+    exec_sql("DELETE FROM sync_record_copies")
+    if storage_has_sync_account() != 0 {
+        storage_enqueue_all_sync_state()
+    }
+    storage_schedule_persist()
+}
+
+storage_max_sync_outbox_seq :: () -> s64 {
+    return db_select_int64_text("SELECT COALESCE(MAX(seq),0) FROM sync_outbox", 0)
+}
+
+storage_sync_outbox_batch_seq :: (limit: s32) -> s64 {
+    stmt: *void = null
+    seq: s64 = 0
+    if storage_db_handle() == null {
+        return 0
+    }
+    if limit <= 0 {
+        return storage_max_sync_outbox_seq()
+    }
+    sql_cx14: [64] u8
+    AppCopyText("SELECT seq FROM sync_outbox ORDER BY seq LIMIT 1 OFFSET ?1", sql_cx14[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx14[0], -1, *stmt, null) == SQLITE_OK {
+        sqlite3_bind_int(stmt, 1, limit - 1)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            seq = SqliteColumnInt64(stmt, 0)
+        }
+    }
+    if stmt != null {
+        SqliteFinalize(stmt)
+    }
+    if seq > 0 {
+        return seq
+    }
+    return storage_max_sync_outbox_seq()
+}
+
+storage_has_pending_sync_outbox :: () -> s32 {
+    if db_select_int64_text("SELECT EXISTS(SELECT 1 FROM sync_outbox LIMIT 1)", 0) != 0 {
+        return 1
+    }
+    return 0
+}
+
+storage_clear_uploaded_outbox :: (through_seq: s64) {
+    stmt: *void = null
+    if storage_db_handle() == null || through_seq <= 0 {
+        return
+    }
+    sql_cx21: [64] u8
+    AppCopyText("DELETE FROM sync_outbox WHERE seq<=?1", sql_cx21[:])
+    if SqlitePrepare(storage_db_handle(), *sql_cx21[0], -1, *stmt, null) !=
+    SQLITE_OK {
+        return
+    }
+    SqliteBindInt64(stmt, 1, through_seq)
+    SqliteStep(stmt)
+    SqliteFinalize(stmt)
+}

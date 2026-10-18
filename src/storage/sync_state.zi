@@ -1,0 +1,236 @@
+// This device's sync account and state: whether an account is set up and
+// syncing, its client ID and data owner, the status the app shows, and
+// clearing or purging local synced data.
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "sql_query.zi";
+#import, file "storage_core.zi";
+#import, file "storage_settings.zi";
+c :: #system_library "c";
+storage_clear_local_sync_data_impl :: () -> s32 #foreign c "storage_clear_local_sync_data";
+
+#program_export
+storage_sync_data_owner_public_id :: () -> string {
+    owner: string = storage_meta_text(STORAGE_SYNC_DATA_OWNER_PUBLIC_ID_KEY)
+    if owner.count > 0 {
+        return owner
+    }
+    return ""
+}
+
+#program_export
+storage_set_sync_data_owner_public_id :: (public_id: string) {
+    if storage_db_handle() == null {
+        return
+    }
+    set_meta_buf(STORAGE_SYNC_DATA_OWNER_PUBLIC_ID_KEY,
+        ifx (public_id.count > 0) then (public_id) else (""))
+    storage_schedule_persist()
+}
+
+#program_export
+storage_has_local_syncable_data :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    exists_sql: [512] u8
+    AppCopyText("SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1) AND deleted_at=0 LIMIT 1) OR EXISTS(SELECT 1 FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1) AND deleted_at=0 LIMIT 1) OR EXISTS(SELECT 1 FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=(SELECT id FROM users LIMIT 1) AND (hd.completed!=0 OR hd.count>0) LIMIT 1)", exists_sql[:])
+    if db_select_int64_text(AppTextFromCString(*exists_sql[0], 512), 0) != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_clear_local_syncable_data :: () -> s32 {
+    ok: s32 = storage_clear_local_sync_data_impl()
+    if ok != 0 {
+        storage_schedule_persist()
+    }
+    return ok
+}
+
+storage_sync_client_id_buffer: [64] u8;
+
+#program_export
+storage_sync_client_id :: () -> string {
+    stored: string = ""
+    storage_sync_client_id_buffer[0] = cast(u8)0
+    if storage_db_handle() != null {
+        stmt: *void = null
+        client_id_sql: [64] u8
+        AppCopyText("SELECT value FROM meta WHERE key='sync_client_id'", client_id_sql[:])
+        if SqlitePrepare(storage_db_handle(), *client_id_sql[0], -1,
+            *stmt, null) == SQLITE_OK  && SqliteStep(stmt) == SQLITE_ROW {
+            stored = AppTextFromCString(SqliteColumnText(stmt, 0), 64)
+            if stored.count > 0 {
+                AppCopyText(stored, storage_sync_client_id_buffer[:])
+            }
+        }
+        SqliteFinalize(stmt)
+    }
+    if storage_sync_client_id_buffer[0] == cast(u8)0 {
+        make_client_uuid(*storage_sync_client_id_buffer[0])
+        if storage_sync_client_id_buffer[0] == cast(u8)0 { return "" }
+        set_meta_buf("sync_client_id", AppTextFromCString(*storage_sync_client_id_buffer[0], 64))
+        storage_schedule_persist()
+    }
+    return AppTextFromCString(*storage_sync_client_id_buffer[0], 64)
+}
+
+#program_export
+storage_sync_enabled :: () -> s32 {
+    if storage_has_sync_account() != 0 && storage_get_setting_int(STORAGE_SYNC_ENABLED_KEY, 0) != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_set_sync_enabled :: (enabled: s32) {
+    storage_set_setting_int(STORAGE_SYNC_ENABLED_KEY, ifx (enabled != 0) then (1) else (0))
+    storage_set_setting_int("sync_last_result", 0)
+    storage_set_setting_int("sync_retry_attempt", 0)
+}
+
+storage_has_orphan_habit_days :: () -> s32 {
+    if db_select_int64_text(
+        "SELECT EXISTS(SELECT 1 FROM habit_days hd WHERE hd.habit_id<>'' AND NOT EXISTS (SELECT 1 FROM habits h WHERE h.id=hd.habit_id) LIMIT 1)",
+        0) != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_has_sync_account :: () -> s32 {
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        if storage_delegate_available == null {
+            return 0
+        }
+        return storage_delegate_available()
+    }
+    public_id: string = storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY)
+    public_key: string = storage_get_setting_text(STORAGE_SYNC_PUBLIC_KEY_KEY)
+    private_key: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)
+    if public_id.count > 0 && public_key.count > 0  && private_key.count > 0 {
+        return 1
+    }
+    return 0
+}
+
+storage_clear_local_sync_data_sqls: [12] string = .[
+"DELETE FROM sync_record_copies",
+"DELETE FROM habit_entries",
+"DELETE FROM habit_changes",
+"DELETE FROM elist_items",
+"DELETE FROM elist_lists",
+"DELETE FROM meditation_logs",
+"DELETE FROM session_rounds",
+"DELETE FROM sessions",
+"DELETE FROM habit_days",
+"DELETE FROM habits",
+"DELETE FROM social_snapshots",
+"DELETE FROM sync_outbox"
+];
+
+#program_export
+storage_clear_local_sync_data :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    if exec_sql("SAVEPOINT sync_clear_local") == 0 {
+        return 0
+    }
+    {
+        i: s64 = 0
+        while i < size_of(type_of(storage_clear_local_sync_data_sqls)) / size_of(type_of(storage_clear_local_sync_data_sqls[0])) {
+            if exec_sql(storage_clear_local_sync_data_sqls[i]) == 0 {
+                exec_sql("ROLLBACK TO sync_clear_local")
+                exec_sql("RELEASE sync_clear_local")
+                return 0
+            }
+            i += 1
+        }
+    }
+    if exec_sql("RELEASE sync_clear_local") == 0 {
+        exec_sql("ROLLBACK TO sync_clear_local")
+        exec_sql("RELEASE sync_clear_local")
+        return 0
+    }
+    return 1
+}
+
+#program_export
+storage_last_sync_changed :: () -> s32 {
+    return storage_state_handle().last_sync_changed
+}
+
+StorageSyncStatus :: struct {
+    has_account: s32
+    enabled: s32
+    review_pending: s32
+    repair_pending: s32
+    full_upload_done: s32
+    server_version: s64
+    server_clock: s64
+    queued_changes: s64
+}
+
+#program_export
+storage_sync_status :: (status: *StorageSyncStatus) -> s32 {
+    if status == null {
+        return 0
+    }
+    status.* = StorageSyncStatus.{}
+    if storage_db_handle() == null {
+        return 0
+    }
+    status.has_account = storage_has_sync_account()
+    status.enabled = storage_sync_enabled()
+    status.review_pending = ifx (storage_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 0) != 0) then (1) else (0)
+    status.repair_pending = ifx (storage_meta_int64(STORAGE_SYNC_ZERO_HABIT_DAY_REPAIR_KEY, 0) == 0) then (1) else (0)
+    status.full_upload_done = ifx (storage_meta_int64("sync_full_upload_done", 0) != 0) then (1) else (0)
+    status.server_version = storage_meta_int64("sync_last_server_version", 0)
+    status.server_clock = storage_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, 0)
+    status.queued_changes = db_select_int64_text("SELECT COUNT(*) FROM sync_outbox", cast(s64)0)
+    return 1
+}
+
+storage_purge_synced_deleted_data_sqls: [6] string = .[
+"DELETE FROM habit_entries WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit_entry')",
+"DELETE FROM habit_changes WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit_change')",
+"DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at>0 AND id NOT IN  (SELECT entity_id FROM sync_outbox WHERE entity_type='session'))",
+"DELETE FROM sessions WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='session')",
+"DELETE FROM habit_days WHERE completed=0 AND count=0 AND session_count=0 AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.entity_type='habit_day' AND o.entity_id=habit_days.habit_id AND o.local_date=habit_days.local_date)",
+"DELETE FROM habits WHERE deleted_at>0 AND id NOT IN (SELECT entity_id FROM sync_outbox WHERE entity_type='habit')"
+];
+
+#program_export
+storage_purge_synced_deleted_data :: () {
+    if storage_db_handle() == null || storage_meta_int64("sync_full_upload_done", 0) == 0 {
+        return
+    }
+    if exec_sql("BEGIN IMMEDIATE") == 0 {
+        return
+    }
+    {
+        i: s64 = 0
+        failed := 0
+        while i < size_of(type_of(storage_purge_synced_deleted_data_sqls)) / size_of(type_of(storage_purge_synced_deleted_data_sqls[0])) {
+            if exec_sql(storage_purge_synced_deleted_data_sqls[i]) == 0 {
+                failed = 1
+                break
+            }
+            i += 1
+        }
+        if failed != 0 {
+            exec_sql("ROLLBACK")
+            return
+        }
+    }
+    exec_sql("COMMIT")
+    storage_schedule_persist()
+}

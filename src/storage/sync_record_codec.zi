@@ -1,0 +1,531 @@
+// Local rows as synced record payloads: each entity type's row as the
+// JSON object that travels, encrypted, to the node.
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/catalog.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "json.zi";
+#import, file "cell_records.zi";
+#import, file "app_records.zi";
+#import, file "media_records.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+c :: #system_library "c";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+
+// Appends `,"name":value` for a whole number.
+storage_json_append_int_field :: (json: *StorageJsonBuilder, name: string, value: s64) {
+    digits: [24] u8
+    storage_json_builder_append_text(json, ",\"")
+    storage_json_builder_append_text(json, name)
+    storage_json_builder_append_text(json, "\":")
+    AppFormatS64(value, digits[:])
+    storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+}
+
+// Appends `,"name":true` or `,"name":false`.
+storage_json_append_bool_field :: (json: *StorageJsonBuilder, name: string, value: bool) {
+    storage_json_builder_append_text(json, ",\"")
+    storage_json_builder_append_text(json, name)
+    if value {
+        storage_json_builder_append_text(json, "\":true")
+    } else {
+        storage_json_builder_append_text(json, "\":false")
+    }
+}
+
+storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id", AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "name", AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "color_r", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "color_g", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_append_int_field(json, "color_b", cast(s64)sqlite3_column_int(stmt, 4))
+    storage_json_append_int_field(json, "sync_mode", cast(s64)sqlite3_column_int(stmt, 5))
+    storage_json_append_int_field(json, "sync_activity", cast(s64)sqlite3_column_int(stmt, 6))
+    storage_json_append_int_field(json, "counter_enabled",
+        ifx (sqlite3_column_int(stmt, 7) != 0) then (cast(s64)1) else (cast(s64)0))
+    storage_json_append_int_field(json, "counter_target", cast(s64)sqlite3_column_int(stmt, 8))
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 9))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 10))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 11))
+    storage_json_append_int_field(json, "weekdays", cast(s64)sqlite3_column_int(stmt, 12))
+    storage_json_append_int_field(json, "reminder_hour", cast(s64)sqlite3_column_int(stmt, 13))
+    storage_json_append_int_field(json, "deactivated",
+        ifx (sqlite3_column_int(stmt, 14) != 0) then (cast(s64)1) else (cast(s64)0))
+    storage_json_append_int_field(json, "icon", cast(s64)sqlite3_column_int(stmt, 15))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "schedule", AppTextFromCString(SqliteColumnText(stmt, 16), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "questions", AppTextFromCString(SqliteColumnText(stmt, 17), 65536))
+    storage_json_append_int_field(json, "span", cast(s64)sqlite3_column_int(stmt, 18))
+    storage_json_append_int_field(json, "span_goal", cast(s64)sqlite3_column_int(stmt, 19))
+    storage_json_append_int_field(json, "span_low", cast(s64)sqlite3_column_int(stmt, 20))
+    storage_json_append_int_field(json, "span_high", cast(s64)sqlite3_column_int(stmt, 21))
+    storage_json_builder_append_text(json, "}")
+}
+
+storage_append_habit_day_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "habit_id", AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_append_int_field(json, "local_date", cast(s64)sqlite3_column_int(stmt, 1))
+    storage_json_append_bool_field(json, "completed", sqlite3_column_int(stmt, 2) != 0)
+    storage_json_append_int_field(json, "count", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, "}")
+}
+
+storage_append_elist_list_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "title",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 3))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, "}")
+}
+
+storage_append_elist_item_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "list_id",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "title",
+        AppTextFromCString(SqliteColumnText(stmt, 2), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "comment",
+        AppTextFromCString(SqliteColumnText(stmt, 3), 8192))
+    storage_json_append_bool_field(json, "done", sqlite3_column_int(stmt, 4) != 0)
+    storage_json_append_int_field(json, "sort_order", cast(s64)sqlite3_column_int(stmt, 5))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 6))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 7))
+    storage_json_builder_append_text(json, "}")
+}
+
+// An entry's start and end are Unix seconds, its answers a JSON array.
+storage_append_habit_entry_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "habit_id",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "local_date", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "started_at", SqliteColumnInt64(stmt, 3))
+    storage_json_append_int_field(json, "ended_at", SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "answers",
+        AppTextFromCString(SqliteColumnText(stmt, 5), 65536))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 6))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 7))
+    storage_json_builder_append_text(json, "}")
+}
+
+// A change of a habit's settings: when it was made, what changed, and the
+// values before and after as text.
+storage_append_habit_change_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "habit_id",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "changed_at", SqliteColumnInt64(stmt, 2))
+    storage_json_append_int_field(json, "kind", cast(s64)sqlite3_column_int(stmt, 3))
+    storage_json_append_int_field(json, "question", SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "question_text",
+        AppTextFromCString(SqliteColumnText(stmt, 5), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "before",
+        AppTextFromCString(SqliteColumnText(stmt, 6), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "after",
+        AppTextFromCString(SqliteColumnText(stmt, 7), 8192))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 8))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 9))
+    storage_json_builder_append_text(json, "}")
+}
+
+storage_append_session_rounds_json :: (json: *StorageJsonBuilder, session_id: string) {
+    stmt: *void = null
+    first: s32 = 1
+    storage_json_builder_append_text(json, "\"rounds\":[")
+    sql_cx12: [96] u8
+    AppCopyText("SELECT round_index,seconds FROM session_rounds WHERE session_id=?1 ORDER BY round_index", sql_cx12[:])
+    if storage_db_handle() != null && session_id.count > 0 && SqlitePrepare(storage_db_handle(), *sql_cx12[0], -1, *stmt, null) == SQLITE_OK {
+        bind_text(stmt, 1, session_id)
+        while SqliteStep(stmt) == SQLITE_ROW {
+            seconds: s32 = sqlite3_column_int(stmt, 1)
+            if first == 0 {
+                storage_json_builder_append_text(json, ",")
+            }
+            first = 0
+            storage_json_builder_append_text(json, "{")
+            storage_json_builder_append_text(json, "\"round_index\":")
+            digits: [24] u8
+            AppFormatS32(sqlite3_column_int(stmt, 0), digits[:])
+            storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+            storage_json_builder_append_text(json, ",\"breaths\":0,\"hold_seconds\":")
+            AppFormatS32(seconds, digits[:])
+            storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+            storage_json_builder_append_text(json, "}")
+        }
+    }
+    if stmt != null {
+        SqliteFinalize(stmt)
+    }
+    storage_json_builder_append_text(json, "]")
+}
+
+storage_append_session_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    id: string = AppTextFromCString(SqliteColumnText(stmt, 0), 8192)
+    started_at: s64 = SqliteColumnInt64(stmt, 1)
+    updated_at: s64 = SqliteColumnInt64(stmt, 14)
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id", id)
+    storage_json_builder_append_text(json, ",\"started_at\":")
+    storage_json_builder_append_epoch(json, started_at)
+    storage_json_append_int_field(json, "local_date", cast(s64)sqlite3_column_int(stmt, 2))
+    // The topic travels as a string.
+    digits: [24] u8
+    AppFormatS32(sqlite3_column_int(stmt, 3), digits[:])
+    storage_json_builder_append_text(json, ",\"topic\":\"")
+    storage_json_builder_append_text(json, AppTextFromCString(*digits[0], 24))
+    storage_json_builder_append_text(json, "\"")
+    storage_json_append_int_field(json, "activity", cast(s64)sqlite3_column_int(stmt, 4))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "source", AppTextFromCString(SqliteColumnText(stmt, 5), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "rounds_hash", AppTextFromCString(SqliteColumnText(stmt, 6), 8192))
+    storage_json_append_int_field(json, "mood_before", cast(s64)sqlite3_column_int(stmt, 7))
+    storage_json_append_int_field(json, "mood_after", cast(s64)sqlite3_column_int(stmt, 8))
+    storage_json_append_int_field(json, "energy", cast(s64)sqlite3_column_int(stmt, 9))
+    storage_json_append_int_field(json, "stress", cast(s64)sqlite3_column_int(stmt, 10))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "note", AppTextFromCString(SqliteColumnText(stmt, 11), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "tags", AppTextFromCString(SqliteColumnText(stmt, 12), 8192))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 13))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, ifx (updated_at > 0) then (updated_at) else (started_at))
+    storage_json_builder_append_text(json, ",")
+    storage_append_session_rounds_json(json, id)
+    storage_json_builder_append_text(json, "}")
+}
+
+StorageJsonRowFn :: #type (json_handle: s64, stmt_handle: s64) -> ();
+
+storage_append_id_payload_json :: (json: *StorageJsonBuilder, sql: string, id: string, append_row: StorageJsonRowFn) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+    if storage_db_handle() == null || id.count == 0 {
+        return 0
+    }
+    sql_buf: [1024] u8
+    AppCopyText(sql, sql_buf[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, id)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        found = 1
+        append_row(cast(s64)json, cast(s64)stmt)
+    }
+    SqliteFinalize(stmt)
+    return found
+}
+
+storage_append_dated_payload_json :: (json: *StorageJsonBuilder, sql: string, id: string, local_date: s32, append_row: StorageJsonRowFn) -> s32 {
+    stmt: *void = null
+    found: s32 = 0
+    if storage_db_handle() == null || id.count == 0 {
+        return 0
+    }
+    sql_buf2: [1024] u8
+    AppCopyText(sql, sql_buf2[:])
+    if SqlitePrepare(storage_db_handle(), *sql_buf2[0], -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, id)
+    sqlite3_bind_int(stmt, 3, local_date)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        found = 1
+        append_row(cast(s64)json, cast(s64)stmt)
+    }
+    SqliteFinalize(stmt)
+    return found
+}
+
+storage_append_habit_payload_json :: (json: *StorageJsonBuilder, habit_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high FROM habits WHERE user_id=?1 AND id=?2",
+        habit_id, storage_append_habit_row_json)
+}
+
+storage_append_habit_day_payload_json :: (json: *StorageJsonBuilder, habit_id: string, local_date: s32) -> s32 {
+    return storage_append_dated_payload_json(
+        json,
+        "SELECT hd.habit_id,hd.local_date,hd.completed,hd.count,hd.updated_at FROM habit_days hd JOIN habits h ON h.id=hd.habit_id WHERE h.user_id=?1 AND hd.habit_id=?2 AND hd.local_date=?3",
+        habit_id, local_date, storage_append_habit_day_row_json)
+}
+
+storage_append_session_payload_json :: (json: *StorageJsonBuilder, session_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,started_at,local_date,topic,activity,source,rounds_hash,mood_before,mood_after,energy,stress,note,tags,deleted_at,updated_at FROM sessions WHERE user_id=?1 AND id=?2",
+        session_id, storage_append_session_row_json)
+}
+
+storage_append_elist_list_payload_json :: (json: *StorageJsonBuilder, list_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,title,sort_order,deleted_at,updated_at FROM elist_lists WHERE user_id=?1 AND id=?2",
+        list_id, storage_append_elist_list_row_json)
+}
+
+storage_append_habit_entry_payload_json :: (json: *StorageJsonBuilder, entry_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at FROM habit_entries WHERE user_id=?1 AND id=?2",
+        entry_id, storage_append_habit_entry_row_json)
+}
+
+storage_append_habit_change_payload_json :: (json: *StorageJsonBuilder, change_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at FROM habit_changes WHERE user_id=?1 AND id=?2",
+        change_id, storage_append_habit_change_row_json)
+}
+
+storage_append_elist_item_payload_json :: (json: *StorageJsonBuilder, item_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,list_id,title,comment,done,sort_order,deleted_at,updated_at FROM elist_items WHERE user_id=?1 AND id=?2",
+        item_id, storage_append_elist_item_row_json)
+}
+
+storage_sync_op_is_delete :: (entity_type: string, entity_id: string, local_date: s32) -> s32 {
+    stmt: *void = null
+    deleted: s32 = 0
+    if storage_db_handle() == null || entity_type.count == 0 || entity_id.count == 0 {
+        return 1
+    }
+    if storage_compare_text(entity_type, "habit") == 0 {
+        sql_cz1: [64] u8
+        AppCopyText("SELECT deleted_at FROM habits WHERE user_id=?1 AND id=?2", sql_cz1[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cz1[0], -1, *stmt, null) != SQLITE_OK {
+            return 0
+        }
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(stmt, 2, entity_id)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            deleted = 0
+            if SqliteColumnInt64(stmt, 0) > 0 {
+                deleted = 1
+            }
+        } else {
+            deleted = 1
+        }
+    } else if storage_compare_text(entity_type, "session") == 0 {
+        sql_cz2: [96] u8
+        AppCopyText("SELECT deleted_at FROM sessions WHERE user_id=?1 AND id=?2", sql_cz2[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cz2[0], -1, *stmt, null) != SQLITE_OK {
+            return 0
+        }
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(stmt, 2, entity_id)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            deleted = 0
+            if SqliteColumnInt64(stmt, 0) > 0 {
+                deleted = 1
+            }
+        } else {
+            deleted = 1
+        }
+    } else if storage_compare_text(entity_type, "habit_day") == 0 {
+        sql_cx8: [82] u8
+        AppCopyText("SELECT completed,count FROM habit_days WHERE habit_id=?1 AND local_date=?2", sql_cx8[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cx8[0], -1, *stmt, null) != SQLITE_OK {
+            return 0
+        }
+        bind_text(stmt, 1, entity_id)
+        sqlite3_bind_int(stmt, 2, local_date)
+        if SqliteStep(stmt) != SQLITE_ROW {
+            deleted = 1
+        }
+    } else if storage_compare_text(entity_type, "elist_list") == 0  || storage_compare_text(entity_type, "elist_item") == 0 ||
+    storage_compare_text(entity_type, "habit_entry") == 0 ||
+    storage_compare_text(entity_type, "habit_change") == 0 {
+        // A list, item, entry or change is a deletion only once it is
+        // marked deleted or is gone.
+        sql := "SELECT deleted_at FROM elist_items WHERE user_id=?1 AND id=?2"
+        if storage_compare_text(entity_type, "elist_list") == 0 {
+            sql = "SELECT deleted_at FROM elist_lists WHERE user_id=?1 AND id=?2"
+        } else if storage_compare_text(entity_type, "habit_entry") == 0 {
+            sql = "SELECT deleted_at FROM habit_entries WHERE user_id=?1 AND id=?2"
+        } else if storage_compare_text(entity_type, "habit_change") == 0 {
+            sql = "SELECT deleted_at FROM habit_changes WHERE user_id=?1 AND id=?2"
+        }
+        if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+            return 0
+        }
+        bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(stmt, 2, entity_id)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            deleted = 0
+            if SqliteColumnInt64(stmt, 0) > 0 {
+                deleted = 1
+            }
+        } else {
+            deleted = 1
+        }
+    }
+    SqliteFinalize(stmt)
+    return deleted
+}
+
+storage_append_app_preference_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !AppPreferenceValid(key) {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 16)
+}
+
+storage_append_app_install_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !NodeAppInstallKeyValid(key) {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 8)
+}
+
+storage_append_app_record_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !NodeAppRecordKeyValid(key) {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 65536)
+}
+
+storage_append_media_record_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !MediaRecordKeyAccepted(key) {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 65536)
+}
+
+storage_append_app_order_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if key != AppOrderKey {
+        return 0
+    }
+    return storage_append_setting_record_json(json, key, 256)
+}
+
+// One setting as a synced record: its key, value and the time it changed.
+storage_append_setting_record_json :: (json: *StorageJsonBuilder, key: string, value_capacity: s32) -> s32 {
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value,updated_at FROM settings WHERE user_id=?1 AND key=?2", -1,
+        *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer {
+        unused SqliteFinalize(statement)
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return 0
+    }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "key", key)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), value_capacity))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(statement, 1))
+    storage_json_builder_append_text(json, "}")
+    return json.ok
+}
+
+storage_append_cell_payload_json :: (json: *StorageJsonBuilder, key: string) -> s32 {
+    if !CellRecordValid(key) { return 0 }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,updated_at FROM settings WHERE user_id=?1 AND key=?2", -1, *statement, null) != SQLITE_OK { return 0 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW { return 0 }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "key", key)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "value", AppTextFromCString(SqliteColumnText(statement, 0), 65536))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(statement, 1))
+    storage_json_builder_append_text(json, "}")
+    return json.ok
+}
+
+storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: string, entity_id: string, local_date: s32) {
+    found: s32 = 0
+    if entity_type == "cell_record" {
+        found = storage_append_cell_payload_json(json, entity_id)
+    } else if entity_type == "app_preference" {
+        found = storage_append_app_preference_payload_json(json, entity_id)
+    } else if entity_type == "app_order" {
+        found = storage_append_app_order_payload_json(json, entity_id)
+    } else if entity_type == "app_install" {
+        found = storage_append_app_install_payload_json(json, entity_id)
+    } else if entity_type == "app_record" {
+        found = storage_append_app_record_payload_json(json, entity_id)
+    } else if entity_type == "media_record" {
+        found = storage_append_media_record_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit") == 0 {
+
+        found = storage_append_habit_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_day") == 0 {
+        found = storage_append_habit_day_payload_json(json, entity_id, local_date)
+    } else if storage_compare_text(entity_type, "session") == 0 {
+        found = storage_append_session_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "elist_list") == 0 {
+        found = storage_append_elist_list_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "elist_item") == 0 {
+        found = storage_append_elist_item_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_entry") == 0 {
+        found = storage_append_habit_entry_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_change") == 0 {
+        found = storage_append_habit_change_payload_json(json, entity_id)
+    }
+    if found == 0 {
+        storage_json_builder_append_text(json, "{}")
+    }
+}

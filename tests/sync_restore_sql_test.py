@@ -3,7 +3,7 @@
 
 src/storage/sync_restore_laws.zi proves that restoring an account cannot leave
 a local change out of the upload queue, for a model of the restore. This test
-runs the actual statements from storage_core.zi (clear the outbox, then queue
+runs the actual statements from sync_outbox.zi (clear the outbox, then queue
 all local data) on every subset of already-queued entities, and requires that
 every local entity, including soft-deleted ones, is queued afterward and that
 nothing else is.
@@ -17,7 +17,7 @@ import sys
 
 ROOT = pathlib.Path(os.environ.get("SYNC_RESTORE_ROOT") or
                     pathlib.Path(__file__).resolve().parent.parent)
-CORE = (ROOT / "src/storage/storage_core.zi").read_text()
+OUTBOX = (ROOT / "src/storage/sync_outbox.zi").read_text()
 SCHEMA = (ROOT / "src/storage/schema_sql.zi").read_text()
 
 TABLES = ["users", "habits", "habit_days", "habit_entries", "habit_changes", "sessions", "elist_lists",
@@ -32,12 +32,12 @@ def table_sql(name):
 
 
 def restore_statements():
-    reset = re.search(r"storage_reset_sync_state :: \(\) \{(.*?)\n\}", CORE, re.S)
+    reset = re.search(r"storage_reset_sync_state :: \(\) \{(.*?)\n\}", OUTBOX, re.S)
     assert reset, "storage_reset_sync_state"
     clear = re.findall(r'exec_sql\("(DELETE FROM sync_outbox)"\)', reset.group(1))
     assert clear == ["DELETE FROM sync_outbox"], clear
     enqueue = re.search(r"storage_enqueue_all_sync_state :: \(\) \{(.*?)\n\}",
-                        CORE, re.S)
+                        OUTBOX, re.S)
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))

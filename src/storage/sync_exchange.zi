@@ -1,0 +1,339 @@
+// One sync exchange with the node: the request payload, and applying its
+// response, including a full snapshot that may need review first.
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "json.zi";
+#import, file "schema.zi";
+#import, file "storage_habit_materialize.zi";
+#import, file "sync_node_storage.zi";
+#import "keys"
+#import, file "db.zi";
+#import, file "storage_sessions.zi";
+#import, file "sync_review.zi";
+// Its own set_meta_buf would be ambiguous with the core's.
+Habits :: #import, file "storage_habits.zi";
+#import, file "sql_query.zi";
+#import, file "storage_core.zi";
+#import, file "sync_outbox.zi";
+#import, file "sync_migrations.zi";
+#import, file "sync_state.zi";
+#import, file "storage_settings.zi";
+#import, file "sync_record_crypto.zi";
+#import, file "storage_json_sql.zi";
+#import, file "sync_apply.zi";
+c :: #system_library "c";
+malloc :: (size: usize) -> *void #foreign c;
+free :: (ptr: *void) #foreign c;
+storage_sync_review_delete_json :: () #foreign c "storage_sync_review_delete_json";
+set_meta :: (key: *u8, value: *u8) #foreign c "set_meta";
+LOG_INFO :: 3
+
+#program_export
+storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string) -> *u8 {
+    json: StorageJsonBuilder
+    since_server_version: s64
+    through_seq: s64
+    full_upload_done: s32
+    force_zero_day_repair: s32
+    shadow_key: [32] u8
+    can_shadow_encrypt: s32
+    if storage_db_handle() == null || user_id_hash.count == 0 {
+        return null
+    }
+    if migrate_schema() == 0 || storage_migrate_lumi_collection() == 0 {
+        return null
+    }
+    if storage_materialize_session_habit_days() == 0 {
+        return null
+    }
+    if storage_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 0) == 0 {
+        storage_enqueue_all_sync_state()
+    }
+    // A node set not to store photos must not receive them from any queue.
+    if storage_withhold_node_media() == 0 {
+        return null
+    }
+    can_shadow_encrypt = storage_private_record_key(*shadow_key[0])
+    SecureWipe(*shadow_key[0], 32)
+    if can_shadow_encrypt == 0 {
+        return null
+    }
+    since_server_version = storage_meta_int64("sync_last_server_version", 0)
+    full_upload_done = 0
+    if storage_meta_int64("sync_full_upload_done", 0) != 0 {
+        full_upload_done = 1
+    }
+    if storage_meta_int64(STORAGE_SYNC_HABIT_NAME_REPAIR_KEY, 0) == 0 || storage_has_orphan_habit_days() != 0 {
+        since_server_version = 0
+    }
+    force_zero_day_repair = 0
+    if storage_meta_int64(STORAGE_SYNC_ZERO_HABIT_DAY_REPAIR_KEY, 0) == 0 {
+        force_zero_day_repair = 1
+    }
+    if force_zero_day_repair != 0 {
+        since_server_version = 0
+    }
+    if storage_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, 0) < STORAGE_SYNC_RECORD_FIELDS {
+        since_server_version = 0
+    }
+    // Chunked diary photos must stay within the public node's 1 MiB request.
+    batch_limit: s32 = cast(s32)STORAGE_SYNC_OP_BATCH_LIMIT
+    if db_select_int64_text("SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='cell_record')", 0) != 0 {
+        batch_limit = 64
+    }
+    through_seq = storage_sync_outbox_batch_seq(batch_limit)
+    if storage_sync_records_download_first() {
+        through_seq = 0
+    }
+    storage_state_handle().pending_sync_outbox_seq = through_seq
+    json.ok = 1
+    protocol_text: [32] u8
+    storage_json_builder_append_text(*json, "{")
+    AppFormatS32(SYNC_PROTOCOL_VERSION, protocol_text[:])
+    storage_json_builder_append_text(*json, "\"protocol_version\":")
+    storage_json_builder_append_text(*json, AppTextFromCString(*protocol_text[0], 32))
+    storage_json_builder_append_text(*json, ",")
+    storage_json_builder_append_text(*json, "\"app_id\":\"inbe\",")
+    storage_json_builder_append_text(*json, "\"client_capabilities\":[\"v6-device-transactions\",\"encrypted-primary\"],")
+    storage_json_builder_key_value_text(*json, "user_id_hash", user_id_hash)
+    storage_json_builder_append_text(*json, ",")
+    storage_json_builder_key_value_text(*json, "client_id", storage_sync_client_id())
+    server_version_text: [24] u8
+    AppFormatS32(cast(s32)since_server_version, server_version_text[:])
+    storage_json_builder_append_text(*json, ",\"since_server_version\":")
+    storage_json_builder_append_text(*json, AppTextFromCString(*server_version_text[0], 24))
+    client_clock_text: [24] u8
+    AppFormatS32(cast(s32)storage_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, 0), client_clock_text[:])
+    storage_json_builder_append_text(*json, ",\"client_clock\":")
+    storage_json_builder_append_text(*json, AppTextFromCString(*client_clock_text[0], 24))
+    if storage_meta_int64(STORAGE_SYNC_FULL_REPLACE_KEY, 0) != 0 {
+        storage_json_builder_append_text(*json, ",\"full_sync_requested\":true")
+    }
+    {
+        last_server_hash: string = storage_meta_text(STORAGE_SYNC_LAST_SERVER_HASH_KEY)
+        if force_zero_day_repair == 0 && last_server_hash.count > 0 {
+            storage_json_builder_append_text(*json, ",")
+            storage_json_builder_key_value_text(*json, "last_server_state_hash", last_server_hash)
+        }
+    }
+    if since_server_version <= 0 || full_upload_done == 0 {
+        storage_json_builder_append_text(*json, ",\"bootstrap\":true")
+    }
+    if public_key_hex.count > 0 {
+        storage_json_builder_append_text(*json, ",")
+        storage_json_builder_key_value_text(*json, "public_key", public_key_hex)
+    }
+    storage_json_builder_append_text(*json, ",")
+    storage_append_encrypted_records_json(*json, through_seq)
+    storage_json_builder_append_text(*json, "}")
+    if json.ok == 0 || json.data == null {
+        free(cast(*void)json.data)
+        return null
+    }
+    LogStorage(LOG_INFO, "SYNC: payload built")
+    return json.data
+}
+
+#program_export
+storage_free_sync_payload_json :: (payload: *u8) {
+    free(cast(*void)payload)
+}
+
+storage_sync_response_has_changes :: (json: string) -> s32 {
+    if storage_json_array_has_items(json, "$.changes.encrypted_records") != 0 {
+        return 1
+    }
+    if storage_json_array_has_items(json, "$.data.encrypted_records") != 0 {
+        return 1
+    }
+    if storage_json_array_has_items(json, "$.data.social") != 0 {
+        return 1
+    }
+    if storage_json_array_has_items(json, "$.changes.social_cache") != 0 {
+        return 1
+    }
+    return 0
+}
+
+#program_export
+storage_apply_sync_response_json :: (response_json: string) -> s32 {
+    server_version: s64
+    server_clock: s64
+    old_server_version: s64
+    protocol_version: s64
+    server_hash: [80] u8
+    account_alias: [40] u8
+    if storage_db_handle() == null || response_json.count == 0 || response_json[0] == #char "\0" {
+        return 0
+    }
+    if migrate_schema() == 0 {
+        LogStorage(LOG_WARNING, "SYNC: response migration failed")
+        return 0
+    }
+    storage_state_handle().last_sync_changed = 0
+    if storage_json_valid(response_json) == 0 {
+        LogStorage(LOG_WARNING, "SYNC: response JSON invalid")
+        return 0
+    }
+    protocol_version = storage_json_extract_int64(response_json, "$.protocol_version", 0)
+    if protocol_version != SYNC_PROTOCOL_VERSION {
+        protocol_text: [24]u8
+        if AppFormatS64(protocol_version, protocol_text[:]) {
+            LogStorageText(LOG_WARNING, "SYNC: unsupported response protocol: ",
+                AppTextFromCString(*protocol_text[0], 24))
+        }
+        return 0
+    }
+    if storage_json_extract_text(response_json, "$.account_alias", *account_alias[0],
+        size_of(type_of(account_alias))) != 0 {
+        storage_set_setting_text(STORAGE_SYNC_ACCOUNT_ALIAS_KEY, AppTextFromCString(*account_alias[0], 40))
+    }
+    // The newest server version this device has heard of, even when a full
+    // snapshot waits for review and the applied version stays behind. Live
+    // updates compare against it, so a waiting review is not news each time.
+    seen_server_version := storage_json_extract_int64(response_json, "$.server_version", 0)
+    if seen_server_version > storage_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0) {
+        storage_set_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, seen_server_version)
+    }
+    if storage_json_extract_int64(response_json, "$.full_snapshot_required", 0) != 0  && storage_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 0) == 0 {
+        if storage_has_any() == 0 {
+            return storage_apply_remote_full_snapshot(response_json)
+        }
+        if storage_has_pending_sync_outbox() != 0 {
+            LogStorage(LOG_INFO, "SYNC: merging full snapshot with pending local edits")
+        } else if storage_sync_review_json_should_auto_apply_remote(response_json) != 0 {
+            return storage_apply_remote_full_snapshot(response_json)
+        } else if storage_sync_review_json_has_visible_diff(response_json) == 0 {
+            // The same merge preview shown to the user has no changes. Apply
+            // its bookkeeping without replacing or removing local records.
+            LogStorage(LOG_INFO, "SYNC: full snapshot has no visible merge changes")
+        } else {
+            if storage_sync_review_write_json(response_json) == 0 {
+                LogStorage(LOG_WARNING, "SYNC: response review save failed")
+                return 0
+            }
+            {
+                meta_key_buffer: [64] u8
+                meta_val_buffer: [4] u8
+                AppCopyText(STORAGE_SYNC_PENDING_REVIEW_KEY, meta_key_buffer[:])
+                AppCopyText("1", meta_val_buffer[:])
+                set_meta(*meta_key_buffer[0], *meta_val_buffer[0])
+            }
+            storage_state_handle().pending_sync_outbox_seq = 0
+            storage_schedule_persist()
+            LogStorage(LOG_WARNING, "SYNC: full snapshot review required")
+            return 1
+        }
+    }
+    old_server_version = storage_meta_int64("sync_last_server_version", 0)
+    if exec_sql("SAVEPOINT sync_apply") == 0 {
+        return 0
+    }
+    storage_clear_uploaded_outbox(storage_state_handle().pending_sync_outbox_seq)
+    if storage_apply_sync_records(response_json) == 0 {
+        exec_sql("ROLLBACK TO sync_apply")
+        exec_sql("RELEASE sync_apply")
+        return 0
+    }
+    if exec_sql("RELEASE sync_apply") == 0 {
+        // An unreleased savepoint keeps the transaction, and the connection,
+        // held by this worker thread after it returns.
+        exec_sql("ROLLBACK TO sync_apply")
+        exec_sql("RELEASE sync_apply")
+        return 0
+    }
+    server_version = storage_json_extract_int64(response_json, "$.server_version", 0)
+    server_clock = storage_json_extract_int64(response_json, "$.server_clock", 0)
+    storage_log_number("SYNC: response server_version=", server_version)
+    storage_log_number("SYNC: previous server_version=", old_server_version)
+    storage_log_number("SYNC: encrypted records=", cast(s64)(
+        storage_json_array_count(response_json, "$.changes.encrypted_records") +
+        storage_json_array_count(response_json, "$.data.encrypted_records")))
+    storage_log_number("SYNC: social records=", cast(s64)(
+        storage_json_array_count(response_json, "$.changes.social_cache") +
+        storage_json_array_count(response_json, "$.data.social")))
+    if server_version > old_server_version && storage_sync_response_has_changes(response_json) != 0 {
+        storage_state_handle().last_sync_changed = 1
+    }
+    if server_version > 0 {
+        storage_set_meta_int64("sync_last_server_version", server_version)
+    }
+    if server_clock > 0 {
+        storage_set_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, server_clock)
+    }
+    if storage_json_extract_text(response_json, "$.server_state_hash", *server_hash[0],
+        size_of(type_of(server_hash))) != 0 {
+        {
+            meta_key_buffer: [64] u8
+            AppCopyText(STORAGE_SYNC_LAST_SERVER_HASH_KEY, meta_key_buffer[:])
+            set_meta(*meta_key_buffer[0], *server_hash[0])
+        }
+    }
+    set_meta_buf(STORAGE_SYNC_PENDING_REVIEW_KEY, "")
+    if storage_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 0) == 0 {
+        storage_sync_review_delete_json()
+    }
+    storage_set_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 0)
+    set_meta_int64_buf(STORAGE_SYNC_FULL_REPLACE_KEY, 0)
+    storage_state_handle().pending_sync_outbox_seq = 0
+    storage_set_meta_int64("sync_full_upload_done", 1)
+    storage_set_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 1)
+    storage_set_meta_int64(STORAGE_SYNC_HABIT_NAME_REPAIR_KEY, 1)
+    storage_set_meta_int64(STORAGE_SYNC_ZERO_HABIT_DAY_REPAIR_KEY, 1)
+    storage_set_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, STORAGE_SYNC_RECORD_FIELDS)
+    Habits.storage_mark_habits_initialized()
+    storage_schedule_persist()
+    return 1
+}
+
+storage_apply_remote_full_snapshot :: (response_json: string) -> s32 {
+    copy: *u8
+    ok: s32
+    previous_pending_seq: s64 = storage_state_handle().pending_sync_outbox_seq
+    previous_last_sync_changed: s32 = storage_state_handle().last_sync_changed
+
+    if response_json.count == 0 || response_json.count >= 2147483647 {
+        return 0
+    }
+    copy = cast(*u8)malloc(cast(usize)response_json.count + 1)
+    if copy == null {
+        return 0
+    }
+    index: s32 = 0
+    while index < cast(s32)response_json.count {
+        copy[index] = response_json[index]
+        index += 1
+    }
+    copy[index] = 0
+    if exec_sql("SAVEPOINT sync_replace") == 0 {
+        free(cast(*void)copy)
+        return 0
+    }
+    if storage_clear_local_sync_data() == 0 {
+        LogStorage(LOG_WARNING, "SYNC: full snapshot local clear failed")
+        exec_sql("ROLLBACK TO sync_replace")
+        exec_sql("RELEASE sync_replace")
+        free(cast(*void)copy)
+        return 0
+    }
+    storage_set_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 1)
+    ok = storage_apply_sync_response_json(
+        AppTextFromCString(copy, cast(s32)response_json.count + 1))
+    if ok == 0 {
+        exec_sql("ROLLBACK TO sync_replace")
+        exec_sql("RELEASE sync_replace")
+        storage_state_handle().pending_sync_outbox_seq = previous_pending_seq
+        storage_state_handle().last_sync_changed = previous_last_sync_changed
+    } else if exec_sql("RELEASE sync_replace") == 0 {
+        exec_sql("ROLLBACK TO sync_replace")
+        exec_sql("RELEASE sync_replace")
+        storage_state_handle().pending_sync_outbox_seq = previous_pending_seq
+        storage_state_handle().last_sync_changed = previous_last_sync_changed
+        ok = 0
+    }
+    if ok != 0 {
+        storage_sync_review_delete_json()
+    }
+    free(cast(*void)copy)
+    return ok
+}

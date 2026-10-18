@@ -1,0 +1,338 @@
+// Sealing and opening synced records: the account's record keys, the
+// encrypted records of an upload, and the kept copy of each record.
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "json.zi";
+#import, file "storage_layout.zi";
+#import "crypto"
+#import "keys"
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "storage_settings.zi";
+#import, file "sync_record_codec.zi";
+#import, file "sync_collections.zi";
+c :: #system_library "c";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+malloc :: (size: usize) -> *void #foreign c;
+free :: (ptr: *void) #foreign c;
+
+storage_private_record_key_for_context :: (context: string, out: *u8) -> s32 {
+    if out == null {
+        return 0
+    }
+    SecureWipe(out, 32)
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        return 0
+    }
+    private_key_hex: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)
+    // The whole account private key (an ML-DSA-44 secret key) feeds the HMAC.
+    private_key: [(ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2] u8
+    key_size: s64 = (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2
+    ok: s32
+    if private_key_hex.count == 0 {
+        return 0
+    }
+    ok = HexToBytes(private_key_hex, *private_key[0], key_size)
+    if ok != 0 {
+        HmacSha256Text(*private_key[0], key_size, context, out)
+    }
+    SecureWipe(*private_key[0], key_size)
+    return ok
+}
+
+storage_private_record_key :: (out: *u8) -> s32 {
+    return storage_private_record_key_for_context(STORAGE_SYNC_RECORD_KEY_CONTEXT,
+        out)
+}
+
+// The collection and generation must agree. In particular, no legacy key can
+// decrypt Lumi v2, and the Lumi key cannot decrypt Diary, feedback or sessions.
+#program_export
+storage_private_collection_key :: (collection: string, key_id: string, out: *u8) -> s32 {
+    if out == null {
+        return 0
+    }
+    SecureWipe(out, 32)
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        if collection != LumiPrivateCollection || key_id != LumiPrivateKeyID ||
+        storage_delegate_key == null {
+            return 0
+        }
+        result := storage_delegate_key(collection, key_id, out)
+        if result == 0 {
+            SecureWipe(out, 32)
+        }
+        return result
+    }
+    if collection == LumiPrivateCollection {
+        if key_id != LumiPrivateKeyID {
+            return 0
+        }
+        return storage_private_record_key_for_context(LumiPrivateKeyContext, out)
+    }
+    if key_id != STORAGE_SYNC_RECORD_KEY_ID ||
+    storage_decrypted_array_name(collection).count == 0 {
+        return 0
+    }
+    return storage_private_record_key(out)
+}
+
+storage_encrypted_record_cleanup :: (plain: *StorageJsonBuilder, aad: *StorageJsonBuilder,
+    sealed: *u8, sealed_hex: *u8, ok: s32) -> s32 {
+    storage_json_builder_free(plain)
+    storage_json_builder_free(aad)
+    free(cast(*void)sealed)
+    free(cast(*void)sealed_hex)
+    return ok
+}
+
+// Keeps a synced record with every field it has, as it arrived or left.
+storage_sync_record_copy_store :: (collection: string, record_id: string, json: string) {
+    stmt: *void = null
+    if storage_db_handle() == null || collection.count == 0 || record_id.count == 0 {
+        return
+    }
+    sql: [256]u8
+    AppCopyText("INSERT INTO sync_record_copies(collection,id,json) SELECT ?1,?2,?3 WHERE json_valid(?3) ON CONFLICT(collection,id) DO UPDATE SET json=excluded.json", sql[:])
+    if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, collection)
+    bind_text(stmt, 2, record_id)
+    bind_text(stmt, 3, json)
+    unused SqliteStep(stmt)
+    SqliteFinalize(stmt)
+}
+
+// A record goes out with every field it last had, under this version's own
+// fields, so an older version never removes fields a newer one added. The
+// merged record becomes the kept copy.
+storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, record_id: string) {
+    stmt: *void = null
+    if storage_db_handle() == null || plain.ok == 0 || plain.data == null {
+        return
+    }
+    own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+    sql: [256]u8
+    AppCopyText("SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
+    if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
+        return
+    }
+    bind_text(stmt, 1, collection)
+    bind_text(stmt, 2, record_id)
+    bind_text(stmt, 3, own)
+    merged: StorageJsonBuilder
+    merged.ok = 1
+    if SqliteStep(stmt) == SQLITE_ROW {
+        value := SqliteColumnText(stmt, 0)
+        if value != null {
+            storage_json_builder_append(*merged, value)
+        }
+    }
+    SqliteFinalize(stmt)
+    if merged.ok != 0 && merged.data != null && merged.len > 0 {
+        storage_json_builder_free(plain)
+        plain.* = merged
+    } else {
+        storage_json_builder_free(*merged)
+    }
+    storage_sync_record_copy_store(collection, record_id,
+        AppTextFromCString(plain.data, cast(s32)(plain.len + 1)))
+}
+
+storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
+    plain: StorageJsonBuilder
+    aad: StorageJsonBuilder
+    nonce: [12] u8
+    sealed: *u8 = null
+    sealed_hex: *u8 = null
+    nonce_hex: [25] u8
+    content_hash: [ACCOUNT_PUBLIC_ID_HEX_SIZE] u8
+    sealed_len: s64
+    ok: s32 = 0
+    if collection.count == 0 || key_id.count == 0 || record_id.count == 0 {
+        return 0
+    }
+    plain.ok = 1
+    storage_append_sync_op_payload(*plain, entity_type, entity_id, local_date)
+    if plain.ok == 0 || plain.data == null {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    storage_sync_record_merge(*plain, collection, record_id)
+    if plain.ok == 0 || plain.data == null {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    storage_sha256_hex(plain.data, plain.len, *content_hash[0])
+    sealed_len = plain.len + 16
+    sealed = cast(*u8)malloc(cast(usize)sealed_len)
+    sealed_hex = cast(*u8)malloc(cast(usize)(sealed_len * 2 + 1))
+    if sealed == null || sealed_hex == null {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    aad.ok = 1
+    storage_json_builder_append_text(*aad, collection)
+    storage_json_builder_append_text(*aad, "\n")
+    storage_json_builder_append_text(*aad, record_id)
+    storage_json_builder_append_text(*aad, "\n")
+    storage_json_builder_append_text(*aad, key_id)
+    if aad.ok == 0 || aad.data == null {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    if SecureRandom(*nonce[0], 12) == 0 {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    if ChaCha20Poly1305Seal(key, *nonce[0], plain.data,
+        plain.len, aad.data,
+        aad.len, sealed, sealed_len) == 0 {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    if BytesToHex(*nonce[0], 12, *nonce_hex[0], 25) == 0  || BytesToHex(sealed, sealed_len, sealed_hex, sealed_len * 2 + 1) == 0 {
+        return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+    }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "collection", collection)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "id", record_id)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "key_id", key_id)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "nonce", AppTextFromCString(*nonce_hex[0], 25))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "ciphertext", AppTextFromCString(sealed_hex, cast(s32)(sealed_len * 2 + 1)))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, queued_at)
+    if deleted != 0 {
+        storage_json_append_int_field(json, "deleted_at",
+            ifx (queued_at > 0) then (queued_at) else (now_seconds()))
+    }
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
+    storage_json_builder_append_text(json, ",\"schema_version\":1")
+    storage_json_builder_append_text(json, "}")
+    ok = json.ok
+    return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
+}
+
+storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq: s64) {
+    stmt: *void = null
+    key: [32] u8
+    first: s32 = 1
+    step_result: s32 = SQLITE_DONE
+    storage_json_builder_append_text(json, "\"encrypted_records\":[")
+    if storage_db_handle() == null {
+        json.ok = 0
+    } else {
+        sql_cx13: [98] u8
+        AppCopyText("SELECT seq,entity_type,entity_id,local_date,queued_at FROM sync_outbox WHERE seq<=?1 ORDER BY seq", sql_cx13[:])
+        if SqlitePrepare(storage_db_handle(), *sql_cx13[0], -1, *stmt, null) == SQLITE_OK {
+            SqliteBindInt64(stmt, 1, through_seq)
+            while true {
+                step_result = SqliteStep(stmt)
+                if step_result != SQLITE_ROW {
+                    break
+                }
+                entity_type: string = AppTextFromCString(SqliteColumnText(stmt, 1), 8192)
+                entity_id: string = AppTextFromCString(SqliteColumnText(stmt, 2), 8192)
+                local_date: s32 = sqlite3_column_int(stmt, 3)
+                queued_at: s64 = SqliteColumnInt64(stmt, 4)
+                collection: string = storage_encrypted_collection_for_entity(entity_type, entity_id)
+                key_id: string = storage_encrypted_collection_key_id(collection)
+                is_delete: s32 = storage_sync_op_is_delete(entity_type, entity_id, local_date)
+                record_id: [180] u8
+                if collection.count == 0  || storage_encrypted_record_id(entity_type, entity_id, local_date,
+                    *record_id[0], size_of(type_of(record_id))) == 0 {
+                    json.ok = 0
+                    break
+                }
+                if first == 0 {
+                    storage_json_builder_append_text(json, ",")
+                }
+                first = 0
+                if storage_private_collection_key(collection, key_id, *key[0]) == 0 {
+                    json.ok = 0
+                    break
+                }
+                if storage_append_encrypted_record_json(json, *key[0], collection, key_id, AppTextFromCString(*record_id[0], 180),
+                    entity_type, entity_id, local_date,
+                    queued_at, is_delete) == 0 {
+                    SecureWipe(*key[0], 32)
+                    json.ok = 0
+                    break
+                }
+                SecureWipe(*key[0], 32)
+            }
+            if step_result != SQLITE_DONE {
+                json.ok = 0
+            }
+        } else {
+            json.ok = 0
+        }
+        if stmt != null {
+            SqliteFinalize(stmt)
+        }
+        SecureWipe(*key[0], 32)
+        storage_json_builder_append_text(json, "]")
+    }
+}
+
+storage_decrypted_record_cleanup :: (aad: *StorageJsonBuilder, sealed: *u8,
+    plaintext: *u8, key: *u8) {
+    storage_json_builder_free(aad)
+    free(cast(*void)sealed)
+    free(cast(*void)plaintext)
+    SecureWipe(key, 32)
+}
+
+storage_decrypt_record :: (collection: string, record_id: string, key_id: string, nonce_hex: string, ciphertext_hex: string, content_hash: string, plaintext_out: **u8) -> s32 {
+    aad: StorageJsonBuilder = StorageJsonBuilder.{}
+    key: [32] u8
+    nonce: [12] u8
+    sealed: *u8 = null
+    plaintext: *u8 = null
+    actual_hash: [ACCOUNT_PUBLIC_ID_HEX_SIZE] u8
+    sealed_len: s64
+    plaintext_out.* = null
+    if ciphertext_hex.count < 32 || ciphertext_hex.count % 2 != 0  || HexToBytes(nonce_hex, *nonce[0], size_of(type_of(nonce))) == 0  || storage_private_collection_key(collection, key_id, *key[0]) == 0 {
+        return 0
+    }
+    sealed_len = cast(s64)ciphertext_hex.count / 2
+    sealed = cast(*u8)malloc(cast(usize)sealed_len)
+    plaintext = cast(*u8)malloc(cast(usize)(sealed_len - 16 + 1))
+    if sealed == null || plaintext == null {
+        storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
+        return 0
+    }
+    if HexToBytes(ciphertext_hex, sealed, sealed_len) == 0 {
+        storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
+        return 0
+    }
+    aad.ok = 1
+    storage_json_builder_append_text(*aad, collection)
+    storage_json_builder_append_text(*aad, "\n")
+    storage_json_builder_append_text(*aad, record_id)
+    storage_json_builder_append_text(*aad, "\n")
+    storage_json_builder_append_text(*aad, key_id)
+    if aad.ok == 0 || aad.data == null {
+        storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
+        return 0
+    }
+    if ChaCha20Poly1305Open(*key[0], *nonce[0], sealed, sealed_len,
+        cast(*u8)aad.data, aad.len,
+        plaintext, sealed_len - 16) == 0 {
+        storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
+        return 0
+    }
+    plaintext[sealed_len - 16] = cast(u8)0
+    if content_hash.count > 0 && content_hash[0] != #char "\0" {
+        storage_sha256_hex(plaintext, sealed_len - 16, *actual_hash[0])
+        if storage_compare_text(AppTextFromCString(*actual_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), content_hash) != 0 {
+            storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
+            return 0
+        }
+    }
+    plaintext_out.* = plaintext
+    plaintext = null
+    storage_decrypted_record_cleanup(*aad, sealed, null, *key[0])
+    return 1
+}

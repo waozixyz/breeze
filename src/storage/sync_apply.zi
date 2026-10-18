@@ -1,0 +1,396 @@
+// Applying received records: each decrypted record to its local table,
+// after checking that it is a record this version can read.
+#import, file "../app/text_buffers.zi";
+#import "byte_text_linux"
+Scan :: #import "json_scan"
+#import, file "../cells/catalog.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "json.zi";
+#import, file "storage_habit_materialize.zi";
+#import, file "sync_sql.zi";
+#import, file "cell_records.zi";
+#import, file "app_records.zi";
+#import, file "media_records.zi";
+#import, file "storage_layout.zi";
+#import, file "db.zi";
+#import, file "storage_habit_sync.zi";
+#import, file "storage_elist.zi";
+#import, file "storage_core.zi";
+#import, file "sync_outbox.zi";
+#import, file "storage_settings.zi";
+#import, file "sync_collections.zi";
+#import, file "sync_record_crypto.zi";
+#import, file "storage_json_sql.zi";
+c :: #system_library "c";
+calloc :: (count: usize, size: usize) -> *void #foreign c;
+sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
+free :: (ptr: *void) #foreign c;
+
+// Counts library records that arrived from other devices, so the media
+// library lists them again (cells/media_store.zi).
+storage_media_changes: s32;
+
+storage_apply_sync_sessions_json :: (response_json: string) -> s32 {
+    return storage_exec_json_user_sql(SyncSessionsSQL, response_json)
+}
+
+storage_apply_sync_session_rounds_json :: (response_json: string) -> s32 {
+    return ifx (storage_exec_json_user_sql(SyncSessionRoundDeleteSQL, response_json) != 0 &&
+        storage_exec_json_user_sql(SyncSessionRoundsSQL, response_json) != 0) then (1) else (0)
+}
+
+storage_apply_sync_meditation_logs_json :: (response_json: string) -> s32 {
+    return storage_exec_json_user_sql(SyncMeditationLogsSQL, response_json)
+}
+
+storage_apply_sync_social_json :: (response_json: string) -> s32 {
+    return ifx (storage_exec_json_user_sql(SyncSocialSQL, response_json) != 0 &&
+        storage_exec_json_user_sql(SyncSocialCacheSQL, response_json) != 0) then (1) else (0)
+}
+
+// Cell plaintext has one object with one occurrence of each known string
+// field. Decode member names when checking uniqueness, including escapes.
+storage_cell_plaintext_fields_valid :: (plaintext: string) -> bool {
+    cursor := Scan.Space(plaintext, 0)
+    if cursor < 0 || cursor >= cast(s32)plaintext.count ||
+    plaintext[cursor] != cast(u8)123 {
+        return false
+    }
+    cursor = Scan.Space(plaintext, cursor + 1)
+    seen: s32 = 0
+    while cursor < cast(s32)plaintext.count {
+        field_bytes: [32]u8
+        field_count := Scan.ReadStringText(plaintext, cursor, field_bytes[:])
+        field_span := Scan.ReadString(plaintext, cursor)
+        if field_count <= 0 || !field_span.valid {
+            return false
+        }
+        field := TextFromBytes(field_bytes[:field_count])
+        flag: s32 = 0
+        if field == "key" {
+            flag = 1
+        } else if field == "value" {
+            flag = 2
+        } else if field == "updated_at" {
+            flag = 4
+        } else {
+            return false
+        }
+        if (seen & flag) != 0 {
+            return false
+        }
+        seen = seen | flag
+        cursor = Scan.Space(plaintext, field_span.after)
+        if cursor >= cast(s32)plaintext.count || plaintext[cursor] != cast(u8)58 {
+            return false
+        }
+        cursor = Scan.Space(plaintext, cursor + 1)
+        if cursor >= cast(s32)plaintext.count || plaintext[cursor] != cast(u8)34 {
+            return false
+        }
+        value_span := Scan.ReadString(plaintext, cursor)
+        if !value_span.valid {
+            return false
+        }
+        cursor = Scan.Space(plaintext, value_span.after)
+        if cursor >= cast(s32)plaintext.count {
+            return false
+        }
+        if plaintext[cursor] == cast(u8)125 {
+            return seen == 7 && Scan.Space(plaintext, cursor + 1) == cast(s32)plaintext.count
+        }
+        if plaintext[cursor] != cast(u8)44 {
+            return false
+        }
+        cursor = Scan.Space(plaintext, cursor + 1)
+    }
+    return false
+}
+
+storage_apply_decrypted_record :: (collection: string, record_id: string, plaintext: string) -> s32 {
+    array_name: string = storage_decrypted_array_name(collection)
+    response: StorageJsonBuilder = StorageJsonBuilder.{}
+    record_response: string
+    ok: s32
+    if array_name.count == 0 || plaintext.count == 0 {
+        return 0
+    }
+    response.ok = 1
+    storage_json_builder_append_text(*response, "{\"changes\":{\"")
+    storage_json_builder_append_text(*response, array_name)
+    storage_json_builder_append_text(*response, "\":[")
+    storage_json_builder_append_text(*response, plaintext)
+    storage_json_builder_append_text(*response, "]}}")
+    if response.ok == 0 || response.data == null {
+        storage_json_builder_free(*response)
+        return 0
+    }
+    record_response = AppTextFromCString(response.data, cast(s32)(response.len + 1))
+    // `plaintext` is one record, or several separated by commas.
+    if storage_json_valid(record_response) == 0 {
+        storage_json_builder_free(*response)
+        return 0
+    }
+    if array_name == "cell_records" {
+        if record_id.count == 0 || !storage_cell_plaintext_fields_valid(plaintext) {
+            storage_json_builder_free(*response)
+            return 0
+        }
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "cell_records")
+        if Scan.ArrayCount(record_response, records) != 1 {
+            storage_json_builder_free(*response)
+            return 0
+        }
+        at := Scan.ElementAt(record_response, records, 0)
+        key_bytes: [181]u8
+        value_bytes: [65536]u8
+        key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
+        value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "value"), value_bytes[:])
+        if key_count <= 0 || key_count >= 181 || value_count <= 0 || value_count >= 65536 ||
+        TextFromBytes(key_bytes[:key_count]) != record_id ||
+        !CellRecordValid(TextFromBytes(key_bytes[:key_count])) ||
+        (collection == LumiPrivateCollection && !LumiCellRecordValid(TextFromBytes(key_bytes[:key_count]))) {
+            storage_json_builder_free(*response)
+            return 0
+        }
+        ok = storage_exec_json_user_sql(SyncCellRecordsSQL, record_response)
+        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 && collection == LegacyPrivateCellsCollection &&
+        LumiCellRecordValid(TextFromBytes(key_bytes[:key_count])) {
+            // An older device may upload legacy Lumi after the local migration.
+            // Queue a copy only when the legacy record changes local history;
+            // replaying an unchanged snapshot must not keep uploads pending.
+            ok = storage_enqueue_sync_entity("cell_record", TextFromBytes(key_bytes[:key_count]), 0)
+        }
+    } else if array_name == "app_preferences" {
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_preferences")
+        count := Scan.ArrayCount(record_response, records)
+        if count <= 0 || count > 4 {
+            storage_json_builder_free(*response);
+            return 0
+        }
+        valid := true
+        for index: cast(s32)0..count - 1 {
+            record := Scan.ElementAt(record_response, records, index)
+            key: [64]u8
+            value: [8]u8
+            key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, record, "key"), key[:])
+            value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, record, "value"), value[:])
+            if key_count <= 0 || key_count >= 64 || value_count != 1 {
+                valid = false;
+                break
+            }
+            if !AppPreferenceValid(TextFromBytes(key[:key_count])) ||
+            (value[0] != cast(u8)48 && value[0] != cast(u8)49) {
+                valid = false
+                break
+            }
+        }
+        if !valid {
+            storage_json_builder_free(*response);
+            return 0
+        }
+        ok = storage_exec_json_user_sql(SyncAppPreferencesSQL, record_response)
+        if ok != 0 {
+            storage_set_setting_int("apps_setup_done", 1)
+        }
+    } else if array_name == "media_records" {
+        // A record of a kind or shape this version cannot read changes
+        // nothing and doesn't stop the sync.
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), array_name)
+        ok = 1
+        if Scan.ArrayCount(record_response, records) == 1 && storage_cell_plaintext_fields_valid(plaintext) {
+            at := Scan.ElementAt(record_response, records, 0)
+            key_bytes: [181]u8
+            key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
+            key := ifx key_count > 0 && key_count < 181 then TextFromBytes(key_bytes[:key_count]) else ""
+            if key == record_id && MediaRecordKeyAccepted(key) {
+                ok = storage_exec_json_user_sql(SyncMediaRecordsSQL, record_response)
+                if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                    storage_media_changes += 1
+                }
+            }
+        }
+    } else if array_name == "app_installs" || array_name == "app_records" {
+        // A record this version cannot read, such as a mark or record of a
+        // name it refuses, changes nothing and doesn't stop the sync.
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), array_name)
+        ok = 1
+        if Scan.ArrayCount(record_response, records) == 1 && storage_cell_plaintext_fields_valid(plaintext) {
+            at := Scan.ElementAt(record_response, records, 0)
+            key_bytes: [181]u8
+            key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
+            key := ifx key_count > 0 && key_count < 181 then TextFromBytes(key_bytes[:key_count]) else ""
+            if key == record_id && array_name == "app_installs" && NodeAppInstallKeyValid(key) {
+                ok = storage_exec_json_user_sql(SyncAppInstallsSQL, record_response)
+            } else if key == record_id && array_name == "app_records" && NodeAppRecordKeyValid(key) &&
+            collection == storage_node_app_records_collection(key) {
+                ok = storage_exec_json_user_sql(SyncAppRecordsSQL, record_response)
+            }
+        }
+    } else if array_name == "app_order" {
+        // A record this version can't read, such as another key a newer
+        // version adds here, changes nothing and doesn't stop the sync.
+        records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), "app_order")
+        ok = 1
+        if Scan.ArrayCount(record_response, records) == 1 {
+            ok = storage_exec_json_user_sql(SyncAppOrderSQL, record_response)
+            if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                storage_set_setting_int(AppOrderReceivedKey, 1)
+            }
+        }
+    } else if storage_compare_text(array_name, "habits") == 0 {
+
+        ok = ifx (storage_reconcile_remote_habit_ids(record_response) != 0  && storage_apply_sync_habits_json(record_response) != 0) then (1) else (0)
+        if ok != 0 && storage_sync_records_outdated() {
+            ok = storage_fill_sync_habits_json(record_response)
+        }
+    } else if storage_compare_text(array_name, "habit_days") == 0 {
+        ok = storage_apply_sync_habit_days_json(record_response)
+    } else if storage_compare_text(array_name, "elist_lists") == 0 {
+        ok = storage_apply_sync_elist_lists_json(record_response)
+    } else if storage_compare_text(array_name, "elist_items") == 0 {
+        ok = storage_apply_sync_elist_items_json(record_response)
+    } else if storage_compare_text(array_name, "habit_entries") == 0 {
+        ok = storage_apply_sync_habit_entries_json(record_response)
+    } else if storage_compare_text(array_name, "habit_changes") == 0 {
+        ok = storage_apply_sync_habit_changes_json(record_response)
+    } else {
+        ok = ifx (storage_apply_sync_session_rounds_json(record_response) != 0  && storage_apply_sync_sessions_json(record_response) != 0) then (1) else (0)
+    }
+    storage_json_builder_free(*response)
+    return ok
+}
+
+storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),'')FROM json_each(?1,?2)";
+
+storage_apply_encrypted_records :: (response_json: string) -> s32 {
+    habit_batch_storage: StorageJsonBuilder = StorageJsonBuilder.{}
+    habit_batch: *StorageJsonBuilder = *habit_batch_storage
+    habit_batch_count: s32 = 0
+    habit_batch_collection: string = ""
+    habit_batch_storage.ok = 1
+    statement: *void = null
+    ok: s32 = 1
+    array_path: string = "$.data.encrypted_records"
+    count: s32 = storage_json_array_count(response_json, array_path)
+    fields: **u8 = null
+    loaded: s32 = 0
+    if count <= 0 {
+        array_path = "$.changes.encrypted_records"
+        count = storage_json_array_count(response_json, array_path)
+    }
+    if count <= 0 {
+        return 1
+    }
+    fields = cast(**u8)calloc(cast(usize)count * 6,
+        cast(usize)size_of(type_of(<<fields)))
+    if fields == null {
+        return 0
+    }
+    if SqlitePrepareText(storage_db_handle(), storage_apply_encrypted_records_query, -1, *statement, null) != SQLITE_OK {
+        free(cast(*void)fields)
+        return 0
+    }
+    bind_text(statement, 1, response_json)
+    bind_text(statement, 2, array_path)
+    while loaded < count && SqliteStep(statement) == SQLITE_ROW {
+        {
+            column: s32 = 0
+            while column < 6 {
+                value: *u8 = SqliteColumnText(statement, column)
+                if value == null {
+                    fields[loaded * 6 + column] = cast(*u8)calloc(1, 1)
+                } else {
+                    fields[loaded * 6 + column] = storage_duplicate_cstring(value)
+                }
+                if fields[loaded * 6 + column] == null {
+                    ok = 0
+                    break
+                }
+                column += 1
+            }
+        }
+        if ok == 0 {
+            break
+        }
+        loaded += 1
+    }
+    SqliteFinalize(statement)
+    if loaded != count {
+        ok = 0
+    }
+    {
+        index: s32 = 0
+        while ok != 0 && index < loaded {
+            collection: string = AppTextFromCString(fields[index * 6], 2147483647)
+            record_id: string = AppTextFromCString(fields[index * 6 + 1], 2147483647)
+            key_id: string = AppTextFromCString(fields[index * 6 + 2], 2147483647)
+            nonce: string = AppTextFromCString(fields[index * 6 + 3], 2147483647)
+            ciphertext: string = AppTextFromCString(fields[index * 6 + 4], 2147483647)
+            content_hash: string = AppTextFromCString(fields[index * 6 + 5], 2147483647)
+            plaintext: *u8 = null
+            if collection.count == 0 || storage_decrypted_array_name(collection).count == 0 {
+                index += 1; continue
+            }
+            ok = ifx (record_id.count > 0 && key_id.count > 0 && nonce.count > 0  && ciphertext.count > 0  && storage_decrypt_record(collection, record_id, key_id, nonce,
+                ciphertext, content_hash, *plaintext) != 0) then (1) else (0)
+            if ok != 0 {
+                storage_sync_record_copy_store(collection, record_id,
+                    AppTextFromCString(plaintext, 2147483647))
+            }
+            if ok == 0 {
+                LogStorageText(LOG_WARNING, "SYNC: encrypted record decrypt failed: ",
+                    collection)
+            } else if storage_compare_text(storage_decrypted_array_name(collection), "habits") == 0 {
+                // Habits are applied together, once every record has arrived, so
+                // habits that share a name are merged rather than replacing
+                // each other before their days are in.
+                if habit_batch_count > 0 {
+                    storage_json_builder_append_text(habit_batch, ",")
+                }
+                storage_json_builder_append_text(habit_batch,
+                    AppTextFromCString(plaintext, 2147483647))
+                habit_batch_count += 1
+                habit_batch_collection = collection
+            } else {
+                ok = storage_apply_decrypted_record(collection, record_id,
+                    AppTextFromCString(plaintext, 2147483647))
+                if ok == 0 {
+                    LogStorageText(LOG_WARNING, "SYNC: encrypted record apply failed: ",
+                        collection)
+                }
+            }
+            free(cast(*void)plaintext)
+            index += 1
+        }
+        if ok != 0 && habit_batch_count > 0 && habit_batch.ok != 0 && habit_batch.data != null {
+            ok = storage_apply_decrypted_record(habit_batch_collection, "",
+                AppTextFromCString(habit_batch.data, cast(s32)(habit_batch.len + 1)))
+            if ok == 0 {
+                LogStorage(LOG_WARNING, "SYNC: encrypted habit records apply failed")
+            }
+        }
+        storage_json_builder_free(habit_batch)
+    }
+    {
+        index: s32 = 0
+        while index < count * 6 {
+            free(cast(*void)fields[index])
+            index += 1
+        }
+    }
+    free(cast(*void)fields)
+    return ok
+}
+
+// Shared by sync application and its rollback-only review preview.
+storage_apply_sync_records :: (response_json: string) -> s32 {
+    if storage_apply_encrypted_records(response_json) == 0 ||
+    storage_merge_duplicate_habit_names() == 0 ||
+    storage_apply_sync_social_json(response_json) == 0 ||
+    storage_materialize_session_habit_days() == 0 {
+        return 0
+    }
+    return 1
+}
