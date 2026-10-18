@@ -18,6 +18,8 @@
 #import "kryon/app_context_host"
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/node_apps.zi";
+#import, file "../cells/node_app_runner.zi";
+#import, file "../cells/node_app_tree.zi";
 #import, file "../cells/node_app_types.zi";
 #import, file "../cells/node_app_codec.zi";
 #import, file "../cells/lists_network.zi";
@@ -219,7 +221,7 @@ node_app_screen_draw :: (app: *InnerBreeze) {
         .shared_revision = ListsSharedRevision(), .shared_status = lists_status,
         .time = now_seconds()}
     typed: [1024]u8
-    if NodeAppPortable(slot) {
+    if NodeAppPortable(slot) || node_runners[slot].nested != null {
         input := SampleTextFieldInput(true, typed[:])
         key := NodePressedKey()
         // Native and IME commands are sampled with the field input. Keep
@@ -232,12 +234,20 @@ node_app_screen_draw :: (app: *InnerBreeze) {
         if TextInputKeyDown(TextInputKeyLeftControl) || TextInputKeyDown(TextInputKeyRightControl) {
             modifiers |= 2
         }
-        NodeAppPortableFrame(slot, app.ui.session,
-            Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
-                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
-            app.dark_mode != 0, MetricsScale(), AppFontSize(), key, modifiers, input)
+        if node_runners[slot].nested != null {
+            NodeTreeFrame(slot, node_screen_frame, key, modifiers, input)
+        } else {
+            NodeAppPortableFrame(slot, app.ui.session,
+                Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+                    cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
+                app.dark_mode != 0, MetricsScale(), AppFontSize(), key, modifiers, input)
+        }
     }
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    if node_runners[slot].nested != null {
+        WidgetHostBegin(app.ui.session, NodeTreeAssetAllowed, NodeTreeAssetPath)
+    } else {
+        WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    }
     NodeAppUiBegin(NodeScreenUiCall, cast(*void)app)
     unused NodeAppRunMessage(slot, message)
     NodeAppUiEnd()

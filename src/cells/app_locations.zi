@@ -1,0 +1,129 @@
+// Persistent nested-app addresses contain verified identities and payload
+// revisions. Runtime handles, node slots and filesystem paths never go here.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "apps/tree"
+Rules :: #import "apps/protocol";
+
+APP_LOCATION_BYTES_MAX :: 1048576
+
+AppLocationEqual :: (left: *AppLocator, right: *AppLocator) -> bool {
+    if !Rules.AppIdentityEqual(*left.identity, *right.identity) || left.chain.count != right.chain.count {
+        return false
+    }
+    for index: cast(s64)0..left.chain.count - 1 {
+        if TextUntilNul(left.chain[index].id[:]) != TextUntilNul(right.chain[index].id[:]) ||
+        TextUntilNul(left.chain[index].sha256[:]) != TextUntilNul(right.chain[index].sha256[:]) {
+            return false
+        }
+    }
+    return true
+}
+
+AppLocationAuthorityValid :: (authority: string) -> bool {
+    if authority.count == 0 || authority.count >= 256 {
+        return false
+    }
+    for byte: authority {
+        if byte < #char "!" || byte > #char "~" || byte == #char "\"" || byte == #char "\\" {
+            return false
+        }
+    }
+    return true
+}
+
+AppLocationValid :: (locator: *AppLocator) -> bool {
+    if !AppLocationAuthorityValid(TextUntilNul(locator.identity.authority[:])) ||
+    !Rules.AppIdValid(TextUntilNul(locator.identity.id[:])) || locator.chain.count == 0 {
+        return false
+    }
+    for index: cast(s64)0..locator.chain.count - 1 {
+        entry := locator.chain[index]
+        if !Rules.AppIdValid(TextUntilNul(entry.id[:])) ||
+        !Rules.AppDigestValid(TextUntilNul(entry.sha256[:])) {
+            return false
+        }
+        for previous: cast(s64)0..index - 1 {
+            if TextUntilNul(locator.chain[previous].id[:]) == TextUntilNul(entry.id[:]) {
+                return false
+            }
+        }
+    }
+    return TextUntilNul(locator.chain[locator.chain.count - 1].id[:]) ==
+    TextUntilNul(locator.identity.id[:])
+}
+
+AppLocationWrite :: (locator: *AppLocator) -> string {
+    if !AppLocationValid(locator) {
+        return ""
+    }
+    // Every field has a validated ASCII alphabet without JSON metacharacters.
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"v\":1,\"authority\":\"%\",\"id\":\"%\",\"chain\":[",
+        TextUntilNul(locator.identity.authority[:]), TextUntilNul(locator.identity.id[:]))
+    for index: cast(s64)0..locator.chain.count - 1 {
+        if index > 0 {
+            BuilderPrint(*out, ",")
+        }
+        entry := locator.chain[index]
+        BuilderPrint(*out, "{\"id\":\"%\",\"sha256\":\"%\"}",
+            TextUntilNul(entry.id[:]), TextUntilNul(entry.sha256[:]))
+        if out.count > APP_LOCATION_BYTES_MAX - 2 {
+            VecFree(out)
+            return ""
+        }
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
+
+// Decode a candidate first. Malformed sync or shortcut input must not erase
+// the last working route. This does not grant trust: the host re-verifies
+// the account, authority, every parent payload and the leaf before opening.
+AppLocationRead :: (text: string, locator: *AppLocator) -> bool {
+    if text.count == 0 || text.count > APP_LOCATION_BYTES_MAX ||
+    Space(text, ValueEnd(text, 0, 0)) != text.count {
+        return false
+    }
+    keys: [4]string = .["v", "authority", "id", "chain"]
+    version := ReadNumber(text, FieldAt(text, 0, "v"))
+    if !Rules.AppsObjectValid(text, 0, keys[:]) || !version.valid || version.value != 1.0 {
+        return false
+    }
+    candidate: AppLocator
+    if !Rules.AppsReadText(text, 0, "authority", candidate.identity.authority[:]) ||
+    !Rules.AppsReadText(text, 0, "id", candidate.identity.id[:]) {
+        return false
+    }
+    chain := FieldAt(text, 0, "chain")
+    count := ArrayCount(text, chain)
+    if count < 1 {
+        return false
+    }
+    cursor := Space(text, chain + 1)
+    entry_keys: [2]string = .["id", "sha256"]
+    for index: cast(s32)0..count - 1 {
+        entry: AppLocation
+        if !Rules.AppsObjectValid(text, cursor, entry_keys[:]) ||
+        !Rules.AppsReadText(text, cursor, "id", entry.id[:]) ||
+        !Rules.AppsReadText(text, cursor, "sha256", entry.sha256[:]) ||
+        !VecPush(candidate.chain, entry) {
+            AppLocatorClear(*candidate)
+            return false
+        }
+        cursor = Space(text, ValueEnd(text, cursor, 0))
+        if index + 1 < count {
+            cursor = Space(text, cursor + 1)
+        }
+    }
+    if !AppLocationValid(*candidate) {
+        AppLocatorClear(*candidate)
+        return false
+    }
+    AppLocatorClear(locator)
+    locator.identity = candidate.identity
+    VecSwap(locator.chain, candidate.chain)
+    VecFree(candidate.chain)
+    return true
+}

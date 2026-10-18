@@ -1,0 +1,220 @@
+// Verified installed leaf metadata outlives the VM that supplied it. These
+// account-local, owned copies are never serialized as handles or synced data.
+#import "apps/tree"
+#import "apps/host"
+#import "kryon/hosted_app"
+#import, file "catalog.zi";
+#import "apps/catalog"
+#import "apps/protocol"
+#import "std/vec"
+#import "std/option"
+#import "std/c_string"
+#import "std/text_buffer"
+#import, file "node_apps.zi";
+#import, file "node_app_runner.zi";
+#import, file "node_app_tree.zi";
+#import, file "package_files.zi";
+#import, file "../app/assets.zi";
+#import, file "../storage/achievements.zi";
+
+NodeInstalledLeaf :: struct {
+    identity: AppIdentity
+    root: [25]u8
+    owner: [25]u8
+    nested: bool
+    assets: [13]string
+}
+NodeSnapshotStep :: struct { handle: AppHandle; next: s64 }
+node_installed_leaves: Vec(NodeInstalledLeaf);
+node_installed_account: [65]u8;
+node_snapshot_scanning: bool;
+node_installed_revision: u64 = 1;
+node_installed_visibility: u64;
+node_installed_observed_account: [65]u8;
+
+NodeInstalledClear :: () {
+    for entry: node_installed_leaves {
+        for text: entry.assets { PackageFree(text) }
+    }
+    while node_installed_leaves.count > 0 { unused VecPop(node_installed_leaves) }
+    node_installed_account[0] = 0
+    node_installed_revision += 1
+}
+
+NodeInstalledPath :: (owner: string, index: s32) -> string {
+    if index == 0 { return NodeAppAssetPath(owner, "achievements.json") }
+    languages: [12]string = .["cs", "de", "en", "es", "fr", "id", "it", "ja", "ko", "pt", "ru", "zh"]
+    if index < 1 || index > 12 { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "assets/%/achievement-locales/%.json", owner, languages[index - 1])
+    return BuilderFinish(out)
+}
+
+NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
+    account := NodeTreeAccount()
+    if account != TextUntilNul(node_installed_account[:]) {
+        NodeInstalledClear()
+        unused CopyCString(account, node_installed_account[:])
+    }
+    runner := *node_runners[slot]
+    owner := ifx node != null then NodeTreeLegacyOwner(runner, node) else NodeAppVerifiedLeafName(slot)
+    if owner == "" { return true }
+    entry: NodeInstalledLeaf
+    unused CopyCString(owner, entry.owner[:])
+    unused CopyCString(NodeAppName(slot), entry.root[:])
+    entry.nested = node != null
+    if node != null { entry.identity = node.identity }
+    else {
+        if !NodeTreeAuthority(runner, entry.identity.authority[:]) { return false }
+        unused CopyCString(PackageID(NodeAppIndex(slot)), entry.identity.id[:])
+    }
+    canonical := TextUntilNul(entry.identity.id[:])
+    for index: cast(s32)0..12 {
+        path := NodeInstalledPath(TextUntilNul(entry.owner[:]), index)
+        asset := ifx node != null then AppHostAsset(node, path) else HostedAppAsset(*runner.app, path)
+        PackageFree(path)
+        if !asset.found { continue }
+        if asset.data.count > 262144 || (index == 0 && !AchievementCatalog(asset.data, canonical, false)) {
+            for text: entry.assets { PackageFree(text) }
+            return false
+        }
+        bytes: Vec(u8)
+        BuilderPrint(*bytes, "%", asset.data)
+        entry.assets[index] = BuilderFinish(bytes)
+    }
+    for index: cast(s64)0..node_installed_leaves.count - 1 {
+        saved := *node_installed_leaves[index]
+        if AppIdentityEqual(*saved.identity, *entry.identity) &&
+        TextUntilNul(saved.root[:]) == TextUntilNul(entry.root[:]) {
+            for text: saved.assets { PackageFree(text) }
+            saved.* = entry
+            node_installed_revision += 1
+            return true
+        }
+    }
+    if node_installed_leaves.count >= 64 || !VecPush(node_installed_leaves, entry) {
+        for text: entry.assets { PackageFree(text) }
+        return false
+    }
+    node_installed_revision += 1
+    return true
+}
+
+// Run before any frame is queued, when opening a verified installed root.
+// The explicit stack supports arbitrary nesting without a native call stack.
+NodeInstalledScan :: (slot: s32) -> bool {
+    host := node_runners[slot].nested
+    if host == null { return NodeInstalledCapture(slot, null) }
+    stack: Vec(NodeSnapshotStep)
+    if !VecPush(stack, NodeSnapshotStep.{AppHandle.{0, 1}, 0}) { return false }
+    previous := node_snapshot_scanning
+    node_snapshot_scanning = true
+    ok := true
+    while stack.count > 0 {
+        step := *stack[stack.count - 1]
+        node := AppTreeNode(*host.tree, step.handle)
+        if node == null { ok = false; break }
+        if !node.collection || step.next >= node.catalog.count {
+            if !node.collection {
+                state: AppState
+                if !NodeTreeState(cast(*void)(*node_runners[slot]), NodeTreeAccount(), *node.identity, *state) ||
+                (state.installed && !NodeInstalledCapture(slot, node)) { ok = false; break }
+            }
+            handle := step.handle
+            unused VecPop(stack)
+            if handle.slot != 0 { AppTreeDrop(*host.tree, handle); AppHostCollect(host) }
+            continue
+        }
+        entry := AppCatalogAt(*node.catalog, step.next)
+        step.next += 1
+        handle := AppTreeOpenChild(*host.tree, step.handle, entry)
+        if handle.slot < 0 { ok = false; break }
+        if !VecPush(stack, NodeSnapshotStep.{handle, 0}) { AppTreeDrop(*host.tree, handle); ok = false; break }
+    }
+    while stack.count > 0 {
+        step := VecPop(stack)
+        if step.has_value && step.value.handle.slot != 0 { AppTreeDrop(*host.tree, step.value.handle) }
+    }
+    AppHostCollect(host)
+    VecFree(stack)
+    node_snapshot_scanning = previous
+    return ok
+}
+
+NodeInstalledVisible :: (entry: *NodeInstalledLeaf) -> bool {
+    if NodeTreeAccount() != TextUntilNul(node_installed_account[:]) ||
+    !NodeAppMarked(TextUntilNul(entry.root[:])) { return false }
+    if !entry.nested { return true }
+    state: AppState
+    return NodeTreeState(null, NodeTreeAccount(), *entry.identity, *state) && state.installed
+}
+
+// Keep independent verified copies for each installed root, and project one
+// visible definition per identity. Removing one root never hides another.
+NodeInstalledRepresentative :: (at: s64) -> bool {
+    entry := *node_installed_leaves[at]
+    if !NodeInstalledVisible(entry) { return false }
+    for previous: cast(s64)0..at - 1 {
+        other := *node_installed_leaves[previous]
+        if AppIdentityEqual(*entry.identity, *other.identity) && NodeInstalledVisible(other) {
+            return false
+        }
+    }
+    return true
+}
+
+NodeAppInstalledLeafCount :: () -> s32 {
+    count: s32 = 0
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        if NodeInstalledRepresentative(at) { count += 1 }
+    }
+    return count
+}
+
+NodeAppInstalledLeafName :: (index: s32) -> string {
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        entry := *node_installed_leaves[at]
+        if !NodeInstalledRepresentative(at) { continue }
+        if index == 0 { return TextUntilNul(entry.owner[:]) }
+        index -= 1
+    }
+    return ""
+}
+
+NodeAppInstalledLeafAsset :: (index: s32, owner: string, path: string) -> AssetView {
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        entry := *node_installed_leaves[at]
+        if !NodeInstalledRepresentative(at) { continue }
+        if index > 0 { index -= 1; continue }
+        if TextUntilNul(entry.owner[:]) != owner { return AssetView.{} }
+        for asset: cast(s32)0..12 {
+            candidate := NodeInstalledPath(owner, asset)
+            matches := candidate == path
+            PackageFree(candidate)
+            if matches && entry.assets[asset] != "" {
+                return AssetView.{.found = true, .data = entry.assets[asset], .mime = "application/json"}
+            }
+        }
+        return AssetView.{}
+    }
+    return AssetView.{}
+}
+
+// Scan only visibility booleans (at most64), never catalog/translation bytes.
+// This catches account sync install changes as well as native menu actions.
+NodeAppInstalledLeafRevision :: () -> u64 {
+    account := NodeTreeAccount()
+    if account != TextUntilNul(node_installed_observed_account[:]) {
+        unused CopyCString(account, node_installed_observed_account[:])
+        node_installed_revision += 1
+    }
+    mask: u64 = 0
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        if NodeInstalledVisible(*node_installed_leaves[at]) { mask |= cast(u64)1 << cast(u64)at }
+    }
+    if mask != node_installed_visibility {
+        node_installed_visibility = mask
+        node_installed_revision += 1
+    }
+    return node_installed_revision
+}

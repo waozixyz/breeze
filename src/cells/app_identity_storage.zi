@@ -1,0 +1,28 @@
+// Native account storage keys for verified nested app identities.
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "crypto"
+#import, file "../storage/app_records.zi";
+#import, file "app_locations.zi";
+Rules :: #import "apps/protocol";
+
+AppIdentityRecordKey :: (authority: string, id: string, record: string) -> string {
+    if !AppLocationAuthorityValid(authority) || !Rules.AppIdValid(id) ||
+    !NodeAppRecordNameValid(record) {
+        return ""
+    }
+    identity: Vec(u8)
+    BuilderPrint(*identity, "%\n%", authority, id)
+    bytes := BuilderFinish(identity)
+    descriptor := cast(*TextDescriptor)(*bytes)
+    digest: [65]u8
+    Sha256Hex(descriptor.data, bytes.count, *digest[0])
+    AppIdentityStorageFree(descriptor.data)
+    out: Vec(u8)
+    BuilderPrint(*out, "nested.%.%", TextUntilNul(digest[:]), record)
+    return BuilderFinish(out)
+}
+
+c :: #system_library "c";
+AppIdentityStorageFree :: (memory: *u8) #foreign c "free";

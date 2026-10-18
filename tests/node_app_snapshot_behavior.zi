@@ -1,0 +1,57 @@
+// A canonical leaf can be installed through more than one verified root.
+// Removing one root must preserve the remaining copy and its owned metadata.
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/byte_text_linux"
+#import, file "delegate_account_host.zi";
+#import, file "../src/cells/node_app_snapshot.zi";
+#import, file "../src/cells/node_app_tree.zi";
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_settings.zi";
+
+#program_export
+Check :: () -> s32 {
+    root: [14]u8
+    unused CopyCString("APP_DATA_ROOT", root[:])
+    if storage_init(TextFromCString(DelegateFixtureEnvironment(*root[0]))) == 0 { return 1 }
+    NodeInstalledClear()
+    unused CopyCString(NodeTreeAccount(), node_installed_account[:])
+    first: NodeInstalledLeaf
+    unused CopyCString("publisher", first.identity.authority[:])
+    unused CopyCString("inbe.photos", first.identity.id[:])
+    unused CopyCString("photos", first.owner[:])
+    unused CopyCString("photos", first.root[:])
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "%", "{\"fixture\":1}")
+    first.assets[0] = BuilderFinish(bytes)
+    second: NodeInstalledLeaf
+    second.identity = first.identity
+    second.owner = first.owner
+    unused CopyCString("arcade", second.root[:])
+    other: Vec(u8)
+    BuilderPrint(*other, "%", "{\"fixture\":2}")
+    second.assets[0] = BuilderFinish(other)
+    if !VecPush(node_installed_leaves, first) || !VecPush(node_installed_leaves, second) { return 2 }
+    NodeAppSetMark("photos", true)
+    NodeAppSetMark("arcade", true)
+    before := NodeAppInstalledLeafRevision()
+    if NodeAppInstalledLeafCount() != 1 || NodeAppInstalledLeafName(0) != "photos" { return 3 }
+    NodeAppSetMark("arcade", false)
+    if NodeAppInstalledLeafCount() != 1 || NodeAppInstalledLeafRevision() == before { return 4 }
+    asset := NodeAppInstalledLeafAsset(0, "photos", "assets/photos/achievements.json")
+    if !asset.found || asset.data != "{\"fixture\":1}" { return 5 }
+    NodeAppSetMark("arcade", true)
+    NodeAppSetMark("photos", false)
+    if NodeAppInstalledLeafCount() != 1 { return 6 }
+    asset = NodeAppInstalledLeafAsset(0, "photos", "assets/photos/achievements.json")
+    if !asset.found || asset.data != "{\"fixture\":2}" { return 7 }
+    NodeAppSetMark("arcade", false)
+    if NodeAppInstalledLeafCount() != 0 { return 8 }
+    before = NodeAppInstalledLeafRevision()
+    NodeInstalledClear()
+    if NodeAppInstalledLeafRevision() == before { return 9 }
+    storage_close()
+    return 0
+}

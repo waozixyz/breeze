@@ -1,0 +1,550 @@
+// Inbe supplies account storage and platform services to the shared Apps
+// runtime. The shared package alone owns nested VM lifecycle and navigation.
+#import "apps/host"
+#import "apps/tree"
+#import "apps/protocol"
+#import "kryon/app_context_host"
+#import "kryon/hosted_values"
+#import "kryon/hosted_app"
+#import "kryon/widget_host"
+#import "std/byte_text_linux"
+#import "std/bundle_host"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/json_scan"
+#import "std/option"
+#import "std/date_parse"
+Portable :: #import "kryon/app_protocol";
+#import, file "app_locations.zi";
+
+#import "std/date_time_linux"
+#import "crypto"
+#import "geometry"
+#import "session"
+#import "text_input_props"
+#import, file "apps_controller.zi";
+#import, file "../app/assets.zi";
+Node :: #import "apps/node_types";
+Codec :: #import "apps/node_codec";
+#import, file "node_apps.zi";
+#import, file "node_app_runner.zi";
+#import, file "node_app_snapshot.zi";
+Legacy :: #import, file "node_app_types.zi";
+#import, file "package_manager.zi";
+#import, file "package_release.zi";
+#import, file "package_files.zi";
+#import, file "catalog.zi";
+#import, file "../storage/app_records.zi";
+#import, file "../app/smooth_frames.zi";
+#import, file "app_identity_storage.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/db.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+
+using HostValueKind;
+
+// Set by the build from the reviewed shared controller, never from the
+// container being opened. Empty means collection support is unavailable.
+// Runtime storage is native-owned and stable; validating a replacement has
+// its own instance and never overwrites a live slot or persists its handles.
+node_tree_hosts: [NodeAppSlots * 2]AppHost;
+node_tree_validating: bool;
+node_tree_widget_node: *AppNode;
+NodeTreeImage :: struct {
+    path: string
+    packed: string
+    node: *AppNode
+}
+node_tree_images: Vec(NodeTreeImage);
+node_tree_person_codec: Codec.WidgetAppPersonCodec;
+node_tree_shared_codec: Codec.WidgetAppSharedCodec;
+node_tree_item_codec: Codec.WidgetAppSharedItemCodec;
+node_tree_invitation_codec: Codec.WidgetAppInvitationCodec;
+node_tree_record: string;
+node_tree_owner: [25]u8;
+
+NodeTreeAccount :: () -> string {
+    return AppTextFromCString(storage_user_id_buffer(), 64)
+}
+
+NodeTreeAuthority :: (runner: *NodeAppRunner, output: []u8) -> bool {
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 {
+        return false
+    }
+    // Local fixtures have a separate trust domain and cannot impersonate a
+    // publisher or silently acquire that publisher's historical save namespace.
+    if NodeAppLocal(NodeAppName(slot)) {
+        return CopyCString("local-development", output)
+    }
+    release := package_cached_releases[NodeAppIndex(slot)]
+    if !release.valid {
+        return false
+    }
+    metadata: Vec(u8)
+    BuilderPrint(*metadata, "{\"key_id\":\"%\"}", TextUntilNul(release.key_id[:]))
+    text := BuilderFinish(metadata)
+    defer { PackageFree(text) }
+    return PackageTrustedKeyFor(text, PackageID(NodeAppIndex(slot)), output)
+}
+
+// The old record name is retained only for a canonical legacy app carried
+// by the same verified publisher that was allowed to offer that app before.
+NodeTreeLegacyOwner :: (runner: *NodeAppRunner, node: *AppNode) -> string {
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 {
+        return ""
+    }
+    name := TextUntilNul(node.entry.expected_id[:])
+    if !NodeAppNameValid(name) {
+        return ""
+    }
+    expected := PackageText("inbe.", name)
+    defer { PackageFree(expected) }
+    if TextUntilNul(node.identity.id[:]) != expected {
+        return ""
+    }
+    release := package_cached_releases[NodeAppIndex(slot)]
+    if !release.valid {
+        return ""
+    }
+    metadata: Vec(u8)
+    BuilderPrint(*metadata, "{\"key_id\":\"%\"}", TextUntilNul(release.key_id[:]))
+    text := BuilderFinish(metadata)
+    defer { PackageFree(text) }
+    authority: [65]u8
+    if !PackageTrustedKeyFor(text, expected, authority[:]) ||
+    TextUntilNul(authority[:]) != TextUntilNul(node.identity.authority[:]) {
+        return ""
+    }
+    unused CopyCString(name, node_tree_owner[:])
+    return TextUntilNul(node_tree_owner[:])
+}
+
+NodeTreeRecordKey :: (runner: *NodeAppRunner, node: *AppNode, record: string) -> string {
+    legacy := NodeTreeLegacyOwner(runner, node)
+    if legacy != "" {
+        return NodeAppRecordKey(legacy, record)
+    }
+    return AppIdentityRecordKey(TextUntilNul(node.identity.authority[:]),
+        TextUntilNul(node.identity.id[:]), record)
+}
+
+NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
+    runner := cast(*NodeAppRunner)context
+    if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
+        return false
+    }
+    if name == "AppRecordHost" || name == "SaveAppRecordHost" || name == "AppLocaleHost" ||
+    name == "SmoothFramesHost" || name == "ClipboardCopyHost" || name == "ReadStoreHost" ||
+    name == "WriteStoreHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
+    name == "AppFriendHost" || name == "AppSharedHost" || name == "AppSharedItemHost" ||
+    name == "AppInvitationHost" || name == "SendAppSharedHost" || name == "RefreshAppSharedHost" {
+        return true
+    }
+    // Shared lists and media grants keep their historical names only for
+    // identities bound to that legacy publisher. Other guests get no grant.
+    owner := NodeTreeLegacyOwner(runner, node)
+    if owner == "" {
+        return false
+    }
+    if NodeAppMediaCapability(name) {
+        return NodeAppMediaGranted(owner)
+    }
+    return NodeAppCapability(name)
+}
+
+NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    runner := cast(*NodeAppRunner)context
+    name := TextFromCString(function)
+    if !NodeTreeAllows(context, node, name) {
+        return 0
+    }
+    if (name == "AppRecordHost" && count == 1) || (name == "ReadStoreHost" && count == 2) {
+        return NodeTreeRead(runner, node, name, arguments, count, result)
+    }
+    if (name == "SaveAppRecordHost" || name == "WriteStoreHost") && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        record := AppArgumentText(arguments[0])
+        text := AppArgumentText(arguments[1])
+        saved := false
+        if !node_tree_validating && !node_snapshot_scanning && NodeAppRecordNameValid(record) && text.count < Node.APP_RECORD_TEXT_MAX {
+            key := NodeTreeRecordKey(runner, node, record)
+            storage_set_setting_text(key, text)
+            saved = storage_setting_text_equals(key, text) != 0
+            PackageFree(key)
+        }
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = NodeAppString(LocaleText(AppArgumentText(arguments[0])))
+        return 1
+    }
+    if name == "SmoothFramesHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        AppRequestSmoothFrames(cast(s32)arguments[0].integer)
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppNowHost" && count == 0 {
+        result.* = HostValue.{.kind = cast(s32)HostReal, .type_name = HostTextData("float64"),
+            .real = cast(float64)UnixMilliseconds() / 1000.0}
+        return 1
+    }
+    if name == "AppLocalOffsetHost" && count == 0 {
+        now := UnixNow()
+        date := LocalAt(now)
+        seconds := DaysFromCivil(date.year, date.month, date.day) * 86400 +
+        cast(s64)(date.hour * 3600 + date.minute * 60 + date.second)
+        result.* = HostScalar("s32", seconds - now)
+        return 1
+    }
+    owner := NodeTreeLegacyOwner(runner, node)
+    if owner != "" {
+        return NodeAppCallFor(runner, owner, module, function, arguments, count, result)
+    }
+    if name == "AppFriendHost" && count == 1 {
+        result.* = Codec.WidgetEncodeAppPerson(Node.AppPerson.{}, *node_tree_person_codec)
+        return 1
+    }
+    if name == "AppSharedHost" && count == 1 {
+        result.* = Codec.WidgetEncodeAppShared(Node.AppShared.{}, *node_tree_shared_codec)
+        return 1
+    }
+    if name == "AppSharedItemHost" && count == 2 {
+        result.* = Codec.WidgetEncodeAppSharedItem(Node.AppSharedItem.{}, *node_tree_item_codec)
+        return 1
+    }
+    if name == "AppInvitationHost" && count == 1 {
+        result.* = Codec.WidgetEncodeAppInvitation(Node.AppInvitation.{}, *node_tree_invitation_codec)
+        return 1
+    }
+    if (name == "RefreshAppSharedHost" && count == 0) || (name == "SendAppSharedHost" && count == 2) {
+        result.* = HostScalar("bool", 0)
+        return 1
+    }
+    if name == "ClipboardCopyHost" && node_ui_active && node_ui_call != null {
+        return node_ui_call(node_ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+NodeTreeWidgets :: (context: *void, node: *AppNode, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    runner := cast(*NodeAppRunner)context
+    if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
+        return 0
+    }
+    node_tree_widget_node = node
+    if node_ui_active && node_ui_call != null {
+        return node_ui_call(node_ui_context, module, function, arguments, count, result)
+    }
+    return 0
+}
+
+NodeTreeSave :: (context: *void, node: *AppNode) -> bool {
+    runner := cast(*NodeAppRunner)context
+    return runner.nested != null && NodeTreeAccount() == TextUntilNul(runner.nested.tree.account[:]) &&
+    storage_db_handle() != null && NodeTreeFlush(storage_db_handle()) == 0
+}
+
+c :: #system_library "c";
+NodeTreeFlush :: (database: *void) -> s32 #foreign c "sqlite3_db_cacheflush";
+
+NodeTreeRead :: (runner: *NodeAppRunner, node: *AppNode, name: string,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if !HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        return 0
+    }
+    record := AppArgumentText(arguments[0])
+    if !NodeAppRecordNameValid(record) {
+        return 0
+    }
+    key := NodeTreeRecordKey(runner, node, record)
+    defer { PackageFree(key) }
+    PackageFree(node_tree_record)
+    node_tree_record = NodeAppRecordRead(key)
+    if name == "AppRecordHost" {
+        result.* = NodeAppString(node_tree_record)
+        return 1
+    }
+    if count != 2 || arguments[1].kind != cast(s32)HostSlice || arguments[1].elements == null {
+        return 0
+    }
+    used: s64 = -1
+    if node_tree_record.count > 0 && cast(usize)node_tree_record.count < arguments[1].length {
+        for index: 0..node_tree_record.count {
+            byte := ifx index < node_tree_record.count then node_tree_record[index] else cast(u8)0
+            arguments[1].elements[index].bits = cast(u64)byte
+            arguments[1].elements[index].integer = cast(s64)byte
+        }
+        used = node_tree_record.count
+    }
+    result.* = HostScalar("s32", used)
+    return 1
+}
+
+// Control state has its own authority domain. A guest's chosen record name
+// cannot reach install marks, favorites or their verified locators.
+NodeTreeStateKey :: (identity: *AppIdentity, record: string) -> string {
+    authority := PackageText("host:", TextUntilNul(identity.authority[:]))
+    defer { PackageFree(authority) }
+    return AppIdentityRecordKey(authority, TextUntilNul(identity.id[:]), record)
+}
+
+NodeTreeState :: (context: *void, account: string, identity: *AppIdentity, state: *AppState) -> bool {
+    if account != NodeTreeAccount() {
+        return false
+    }
+    key := NodeTreeStateKey(identity, "state")
+    defer { PackageFree(key) }
+    text := NodeAppRecordRead(key)
+    defer { PackageFree(text) }
+    state.* = AppState.{}
+    if text == "" {
+        return true
+    }
+    fields: [3]string = .["v", "installed", "favorite"]
+    if !AppsObjectValid(text, 0, fields[:]) || Space(text, ValueEnd(text, 0, 0)) != text.count ||
+    ReadNumber(text, FieldAt(text, 0, "v")).value != 1.0 {
+        return false
+    }
+    installed := ReadNumber(text, FieldAt(text, 0, "installed"))
+    favorite := ReadNumber(text, FieldAt(text, 0, "favorite"))
+    if !installed.valid || !favorite.valid ||
+    (installed.value != 0.0 && installed.value != 1.0) ||
+    (favorite.value != 0.0 && favorite.value != 1.0) ||
+    (favorite.value == 1.0 && installed.value != 1.0) {
+        return false
+    }
+    state.installed = installed.value == 1.0
+    state.favorite = favorite.value == 1.0
+    return true
+}
+
+NodeTreeEffect :: (context: *void, account: string, locator: *AppLocator,
+    operation: s32, reply: *AppsReply) -> bool {
+    runner := cast(*NodeAppRunner)context
+    if runner.nested == null || account != NodeTreeAccount() ||
+    account != TextUntilNul(runner.nested.tree.account[:]) || !AppLocationValid(locator) {
+        return false
+    }
+    // The tree opened and verified this temporary child before invoking us.
+    candidate: *AppNode
+    host := cast(*AppHost)runner.nested
+    for at: cast(s64)0..host.tree.nodes.count - 1 {
+        saved: AppSlot = host.tree.nodes[at]
+        if saved.node != null && AppIdentityEqual(*saved.node.identity, *locator.identity) {
+            found: AppLocator
+            located := AppTreeLocate(*host.tree, AppHandle.{at, saved.node.generation}, *found)
+            matches := located && AppLocationEqual(*found, locator)
+            AppLocatorClear(*found)
+            if matches {
+                candidate = saved.node
+                break
+            }
+        }
+    }
+    if candidate == null { return false }
+    state: AppState
+    if !NodeTreeState(context, account, *locator.identity, *state) {
+        return false
+    }
+    if operation == APPS_INSTALL { state.installed = true }
+    else if operation == APPS_UNINSTALL { state.installed = false; state.favorite = false }
+    else if operation == APPS_PIN && state.installed { state.favorite = true }
+    else if operation == APPS_UNPIN { state.favorite = false }
+    else { return false }
+    location := AppLocationWrite(locator)
+    defer { PackageFree(location) }
+    location_key := NodeTreeStateKey(*locator.identity, "locator")
+    state_key := NodeTreeStateKey(*locator.identity, "state")
+    defer { PackageFree(location_key); PackageFree(state_key) }
+    value: Vec(u8)
+    BuilderPrint(*value, "{\"v\":1,\"installed\":%,\"favorite\":%}",
+        ifx state.installed then 1 else 0, ifx state.favorite then 1 else 0)
+    text := BuilderFinish(value)
+    defer { PackageFree(text) }
+    if state.installed && !NodeInstalledCapture(NodeAppSlotOf(runner), candidate) { return false }
+    storage_set_setting_text(location_key, location)
+    if storage_setting_text_equals(location_key, location) == 0 {
+        return false
+    }
+    storage_set_setting_text(state_key, text)
+    if storage_setting_text_equals(state_key, text) == 0 || !NodeTreeSave(context, null) {
+        return false
+    }
+    reply.status = APPS_APPLIED
+    return true
+}
+
+NodeTreeStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
+    authority: [256]u8
+    if runner.nested != null || !NodeTreeAuthority(runner, authority[:]) {
+        return false
+    }
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 {
+        return false
+    }
+    index := slot + ifx node_tree_validating then NodeAppSlots else 0
+    host := *node_tree_hosts[index]
+    runner.nested = host
+    digest: [65]u8
+    payload := cast(*TextDescriptor)(*bytes)
+    Sha256Hex(payload.data, bytes.count, *digest[0])
+    ready := AppHostStart(host, bytes, TextUntilNul(authority[:]), PackageID(NodeAppIndex(slot)),
+        NodeAppName(slot), TextUntilNul(digest[:]), NodeTreeAccount(),
+        AppPlatform.{.context = cast(*void)runner, .allows = NodeTreeAllows, .call = NodeTreeCall,
+            .widgets = NodeTreeWidgets, .save = NodeTreeSave, .state = NodeTreeState,
+            .effect = NodeTreeEffect}, AppsControllerSha256, LocaleActiveCode())
+    if !ready {
+        runner.nested = null
+        return false
+    }
+    runner.bundle_bytes = bytes.count
+    return true
+}
+
+NodeTreeRuntime :: (slot: s32) -> *AppRuntime {
+    if slot < 0 || slot >= NodeAppSlots || node_runners[slot].nested == null {
+        return null
+    }
+    return AppHostActiveRuntime(node_runners[slot].nested)
+}
+
+NodeTreeRunMessage :: (slot: s32, message: Legacy.AppMessage) -> Legacy.AppMessage {
+    message.succeeded = false
+    host := node_runners[slot].nested
+    if host == null || NodeTreeAccount() != TextUntilNul(host.tree.account[:]) {
+        return message
+    }
+    if message.action == Node.APP_ROUTE {
+        message.succeeded = AppHostRoute(host)
+        return message
+    }
+    if message.action == Node.APP_BACK {
+        // A failed save consumes outer Back so the current page is preserved.
+        message.succeeded = AppHostBack(host) != 0
+        return message
+    }
+    runtime := AppHostActiveRuntime(host)
+    if runtime == null {
+        return message
+    }
+    owner := NodeTreeLegacyOwner(*node_runners[slot], runtime.node)
+    if runtime.protocol == APPS_NODE_PROTOCOL {
+        runtime.legacy.message.locale = message.locale
+        runtime.legacy.message.screen = message.screen
+        runtime.legacy.message.account = message.account
+        runtime.legacy.message.signed_in = owner != "" && message.signed_in
+        runtime.legacy.message.friend_count = ifx owner != "" then message.friend_count else 0
+        runtime.legacy.message.shared_count = ifx owner != "" then NodeAppSharedCount(owner) else 0
+        runtime.legacy.message.invitation_count = ifx owner != "" then NodeAppInvitationCount(owner) else 0
+        runtime.legacy.message.shared_revision = message.shared_revision
+        runtime.legacy.message.shared_status = ifx owner != "" then message.shared_status else Node.APP_SHARED_UNAVAILABLE
+        runtime.legacy.message.time = message.time
+    }
+    message.succeeded = AppHostRun(host, Portable.APP_FRAME)
+    return message
+}
+
+NodeTreeFrame :: (slot: s32, frame: Legacy.AppUiFrame, key: s32, modifiers: s32, input: TextFieldInput) {
+    runtime := NodeTreeRuntime(slot)
+    if runtime == null {
+        return
+    }
+    runtime.app.session = frame.session
+    runtime.app.bounds = Rectangle.{0.0, cast(float32)frame.top, cast(float32)frame.width,
+        cast(float32)(frame.height - frame.top - frame.bottom)}
+    runtime.app.dark = frame.dark
+    runtime.app.scale = frame.scale
+    runtime.app.font = frame.font
+    runtime.app.key = key
+    runtime.app.modifiers = modifiers
+    runtime.app.input = input
+    if runtime.protocol == APPS_NODE_PROTOCOL {
+        runtime.legacy.frame.session = frame.session
+        runtime.legacy.frame.width = frame.width
+        runtime.legacy.frame.height = frame.height
+        runtime.legacy.frame.bottom = frame.bottom
+        runtime.legacy.frame.top = frame.top
+        runtime.legacy.frame.scale = frame.scale
+        runtime.legacy.frame.font = frame.font
+        runtime.legacy.frame.now = frame.now
+        runtime.legacy.frame.dark = frame.dark
+    }
+}
+
+NodeTreeAssetAllowed :: (path: string) -> bool {
+    return path == "" || (node_tree_widget_node != null && AppHostAsset(node_tree_widget_node, path).found)
+}
+
+NodeTreeAssetPath :: (packed: string) -> string {
+    if packed == "" || node_tree_widget_node == null || !AppHostAsset(node_tree_widget_node, packed).found {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "apps/%/%", TextUntilNul(node_tree_widget_node.entry.sha256[:]), packed)
+    path := BuilderFinish(out)
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "%", packed)
+    owned := BuilderFinish(bytes)
+    if !VecPush(node_tree_images, NodeTreeImage.{path, owned, node_tree_widget_node}) {
+        PackageFree(path)
+        PackageFree(owned)
+        return ""
+    }
+    return path
+}
+
+NodeTreeAsset :: (path: string) -> AssetView {
+    for entry: node_tree_images {
+        if entry.path != path {
+            continue
+        }
+        asset := AppHostAsset(entry.node, entry.packed)
+        if !asset.found {
+            return AssetView.{}
+        }
+        mime := "image/png"
+        if path.count > 4 && path[path.count - 4:] == ".jpg" { mime = "image/jpeg" }
+        else if path.count > 5 && path[path.count - 5:] == ".jpeg" { mime = "image/jpeg" }
+        else if path.count > 5 && path[path.count - 5:] == ".webp" { mime = "image/webp" }
+        return AssetView.{.found = true, .mime = mime, .data = asset.data}
+    }
+    return AssetView.{}
+}
+
+NodeTreeCollect :: () {
+    // Painting must finish before retired runtimes and borrowed assets go away.
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        if node_runners[slot].nested != null {
+            AppHostCollect(node_runners[slot].nested)
+        }
+    }
+    for entry: node_tree_images {
+        PackageFree(entry.path)
+        PackageFree(entry.packed)
+    }
+    while node_tree_images.count > 0 { unused VecPop(node_tree_images) }
+    node_tree_widget_node = null
+}
+
+NodeTreeClose :: (runner: *NodeAppRunner) -> bool {
+    if runner.nested == null {
+        return true
+    }
+    if !AppHostStop(runner.nested) {
+        return false
+    }
+    runner.nested = null
+    return true
+}

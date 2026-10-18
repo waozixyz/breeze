@@ -27,6 +27,10 @@ Time :: #import "date_time_linux";
 #import, file "module_types.zi";
 #import, file "node_app_types.zi";
 #import, file "node_app_codec.zi";
+#import, file "node_app_tree.zi";
+#import, file "node_app_snapshot.zi";
+#import, file "achievement_media.zi";
+Nested :: #import "apps/host";
 #import, file "package_manager.zi";
 #import, file "package_files.zi";
 #import, file "package_release.zi";
@@ -88,15 +92,7 @@ NodeAppSetBetaShown :: (shown: bool) {
     }
 }
 
-NodeAppRunner :: struct {
-    app: HostedApp
-    portable: AppContext
-    generic: bool
-    bundle_bytes: s64
-    received: bool
-    has_read: bool
-    has_write: bool
-}
+#import, file "node_app_runner.zi";
 
 node_offers: [NODE_APP_OFFERS]NodeAppOffer;
 node_offer_count: s32;
@@ -210,7 +206,8 @@ NodeAppAssign :: (slot: s32, name: string) {
 }
 
 NodeAppRunning :: (slot: s32) -> bool {
-    return slot >= 0 && slot < NodeAppSlots && node_runners[slot].app.instance != null
+    return slot >= 0 && slot < NodeAppSlots &&
+    (node_runners[slot].nested != null || node_runners[slot].app.instance != null)
 }
 
 NodeAppPackageSize :: (slot: s32) -> s64 {
@@ -467,18 +464,20 @@ NodeAppUninstall :: (slot: s32) {
         return
     }
     name := NodeAppName(slot)
+    if !NodeAppClose(slot) { return }
     if name.count > 0 && NodeAppMarked(name) {
         NodeAppSetMark(name, false)
     }
-    NodeAppClose(slot)
     PackageSetNodeAppWanted(slot, false)
     NodeAppAssign(slot, "")
 }
 
-NodeAppClose :: (slot: s32) {
+NodeAppClose :: (slot: s32) -> bool {
+    if !NodeTreeClose(*node_runners[slot]) { return false }
     BackgroundAudioStop(slot)
     HostedAppClose(*node_runners[slot].app)
     node_runners[slot] = NodeAppRunner.{}
+    return true
 }
 
 // Follows choices synced from the account's other devices.
@@ -487,7 +486,7 @@ NodeAppsReconcile :: () {
     while slot < NodeAppSlots {
         name := NodeAppName(slot)
         if name.count > 0 && !NodeAppMarked(name) {
-            NodeAppClose(slot)
+            if !NodeAppClose(slot) { slot += 1; continue }
             PackageSetNodeAppWanted(slot, false)
             NodeAppAssign(slot, "")
         }
@@ -594,7 +593,8 @@ NodeAppMediaEntry :: (index: s32) -> MediaEntry {
 }
 
 // The library calls of a granted app; 0 when `name` is none of them.
-NodeAppMediaCall :: (name: string, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+NodeAppMediaCall :: (name: string, arguments: *HostValue, count: s32,
+    result: *HostValue, photos: bool) -> s32 {
     if name == "MediaQueryHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
@@ -612,6 +612,9 @@ NodeAppMediaCall :: (name: string, arguments: *HostValue, count: s32, result: *H
     HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
         unused AppCopyText(MediaAsset(NodeAppText(arguments[0]), arguments[1].integer != 0),
             node_media_asset[:])
+        if photos && arguments[1].integer != 0 && node_media_asset[0] != cast(u8)0 {
+            AchievementPhotoOpened(NodeAppText(arguments[0]))
+        }
         result.* = NodeAppString(TextUntilNul(node_media_asset[:]))
         return 1
     }
@@ -738,7 +741,17 @@ NodeAppCall :: (context: *void, module: *u8, function: *u8,
     if slot < 0 {
         return 0
     }
-    app_name := NodeAppName(slot)
+    return NodeAppCallFor(runner, NodeAppName(slot), module, function, arguments, count, result)
+}
+
+// Nested callers supply a host-verified record owner. A guest's message.name
+// is never used to select its records, shared games or platform permissions.
+NodeAppCallFor :: (runner: *NodeAppRunner, app_name: string, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    slot := NodeAppSlotOf(runner)
+    if slot < 0 || !NodeAppNameValid(app_name) {
+        return 0
+    }
     name := TextFromCString(function)
     if name == "ReadAppHost" && count == 0 {
         message := ifx node_identifying then AppMessage.{.abi = MODULE_ABI} else node_message
@@ -848,7 +861,7 @@ NodeAppCall :: (context: *void, module: *u8, function: *u8,
         if !NodeAppMediaGranted(app_name) {
             return 0
         }
-        return NodeAppMediaCall(name, arguments, count, result)
+        return NodeAppMediaCall(name, arguments, count, result, app_name == "photos")
     }
     if node_ui_active && node_ui_call != null {
         return node_ui_call(node_ui_context, module, function, arguments, count, result)
@@ -885,6 +898,10 @@ NodeAppStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
     runner.has_read = false
     runner.has_write = false
     if !HostedAppOpen(*runner.app, bytes) { return false }
+    if HostedAppAsset(*runner.app, "assets/apps/catalog.json").found {
+        HostedAppClose(*runner.app)
+        return NodeTreeStart(runner, bytes)
+    }
     for index: cast(s64)0..cast(s64)BundleCapabilities(runner.app.bundle) - 1 {
         if AppModule(TextFromCString(BundleCapabilityModuleName(runner.app.bundle, cast(u64)index))) {
             runner.generic = true
@@ -947,9 +964,13 @@ NodeAppValidate :: (slot: s32, bytes: string) -> bool {
     // checked against the right name.
     saved := node_runners[slot]
     node_runners[slot] = NodeAppRunner.{}
+    previous_validation := node_tree_validating
+    node_tree_validating = true
     ok := NodeAppStart(*node_runners[slot], bytes) &&
-    NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))
+    (node_runners[slot].nested != null || NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot)))
+    if !NodeTreeClose(*node_runners[slot]) { ok = false }
     HostedAppClose(*node_runners[slot].app)
+    node_tree_validating = previous_validation
     node_runners[slot] = saved
     return ok
 }
@@ -975,10 +996,14 @@ NodeAppOpen :: (slot: s32) -> bool {
     if bytes.count == 0 {
         return false
     }
-    NodeAppClose(slot)
+    if !NodeAppClose(slot) { return false }
     if !NodeAppStart(*node_runners[slot], bytes) ||
-    !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot)) {
-        NodeAppClose(slot)
+    (node_runners[slot].nested == null && !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))) {
+        unused NodeAppClose(slot)
+        return false
+    }
+    if !NodeInstalledScan(slot) {
+        unused NodeAppClose(slot)
         return false
     }
     return true
@@ -992,6 +1017,7 @@ NodeAppRunMessage :: (slot: s32, message: AppMessage) -> AppMessage {
         return message
     }
     runner := *node_runners[slot]
+    if runner.nested != null { return NodeTreeRunMessage(slot, message) }
     if runner.app.failed && !NodeAppRestart(slot) {
         return message
     }
@@ -1063,6 +1089,8 @@ NodeAppAssetAllowed :: (path: string) -> bool {
 }
 
 NodeAppAsset :: (path: string) -> AssetView {
+    nested := NodeTreeAsset(path)
+    if nested.found { return nested }
     slot := NodeAppAssetSlot(path)
     if slot < 0 {
         return AssetView.{}
@@ -1601,4 +1629,44 @@ NodeAppPortableFrame :: (slot: s32, session: Session, bounds: Rectangle, dark: b
     context.key = key
     context.modifiers = modifiers
     context.input = input
+}
+
+// Native consumers use this verified identity binding for feature visibility
+// and ownership checks. Guest-reported names and transient slot numbers never
+// establish a Photos/Radio identity.
+NodeAppVerifiedLeafName :: (slot: s32) -> string {
+    if !NodeAppRunning(slot) {
+        return ""
+    }
+    runtime := NodeTreeRuntime(slot)
+    if runtime != null {
+        return NodeTreeLegacyOwner(*node_runners[slot], runtime.node)
+    }
+    name := NodeAppName(slot)
+    if NodeAppLocal(name) {
+        return ""
+    }
+    authority: [256]u8
+    if !NodeTreeAuthority(*node_runners[slot], authority[:]) {
+        return ""
+    }
+    return name
+}
+
+NodeAppVerifiedLeafAsset :: (slot: s32, owner: string, path: string) -> AssetView {
+    if NodeAppVerifiedLeafName(slot) != owner || owner == "" {
+        return AssetView.{}
+    }
+    prefix := NodeAppAssetPath(owner, "")
+    defer { PackageFree(prefix) }
+    if path.count <= prefix.count || path[:prefix.count] != prefix ||
+    !PackageResourceValid(path, MODULE_INBE) {
+        return AssetView.{}
+    }
+    runtime := NodeTreeRuntime(slot)
+    if runtime != null {
+        asset := Nested.AppHostAsset(runtime.node, path)
+        return AssetView.{.found = asset.found, .data = asset.data, .mime = "application/json"}
+    }
+    return NodeAppAsset(path)
 }

@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 13, inserts
+    assert len(inserts) == 14, inserts
     return clear + inserts
 
 
@@ -70,7 +70,9 @@ ENTITIES = [
 
 # Apps the node offers and the account's media library: queued all or none,
 # alternating over the cases above, so the exhaustive check stays small.
+NESTED = "nested." + "ab" * 32 + ".position"
 EXTRA = [
+    ("app_record", NESTED, 0),
     ("app_install", "app_used_chess", 0),
     ("app_record", "cell.chess.computer", 0),
     ("media_record", "cell.media." + "ab" * 32, 0),
@@ -108,7 +110,12 @@ def open_database():
     insert_row(database, "settings", {"user_id": "u1", "key": "cell.chess.computer", "value": "x", "updated_at": 2})
     for key in ("cell.media." + "ab" * 32, "cell.media.preview." + "ab" * 32):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "{}", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": NESTED, "value": "saved", "updated_at": 2})
+    for key in ("nested." + "ag" * 32 + ".position", "nested." + "ab" * 32 + ".",
+                "nested." + "ab" * 32 + ".Big", "app_used_achievement"):
+        insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "1", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})
+    insert_row(database, "settings", {"user_id": "u2", "key": "nested." + "cd" * 32 + ".position", "value": "foreign", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "cell.lumi.message.foreign", "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "telegram.sent.local", "value": "1", "updated_at": 2})
     return database
@@ -121,6 +128,15 @@ def outbox(database):
 
 def main():
     statements = restore_statements()
+    # Dedicated achievement records never become generic installed-app data.
+    database = open_database()
+    insert_row(database, "settings", {"user_id": "u1", "key": "cell.achievement.photo", "value": "{}", "updated_at": 2})
+    for statement in statements:
+        if "SELECT 'app_record'" in statement or "SELECT 'app_install'" in statement:
+            database.execute(statement)
+    assert not any(identifier in ("cell.achievement.photo", "app_used_achievement")
+                   for _, identifier, _ in outbox(database))
+    database.close()
     local = set(ENTITIES) | set(EXTRA)
     cases = 0
     for flags in itertools.product((0, 1), repeat=len(ENTITIES)):

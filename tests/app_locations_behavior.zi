@@ -1,0 +1,116 @@
+#import, file "../src/cells/app_locations.zi";
+#import, file "../src/cells/app_identity_storage.zi";
+#import, file "../src/storage/app_records.zi";
+#import "std/text"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/c_string"
+Rules :: #import "apps/protocol";
+#import "apps/tree"
+
+c :: #system_library "c";
+Free :: (memory: *u8) #foreign c "free";
+
+Release :: (text: string) {
+    descriptor := cast(*TextDescriptor)(*text)
+    Free(descriptor.data)
+}
+
+AppLocationAppendFixture :: (locator: *AppLocator, id: string) -> bool {
+    entry: AppLocation
+    return CopyCString(id, entry.id[:]) &&
+    CopyCString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", entry.sha256[:]) &&
+    VecPush(locator.chain, entry)
+}
+
+#program_export
+Check :: () -> s32 {
+    original: AppLocator
+    unused CopyCString("verified.publisher", original.identity.authority[:])
+    unused CopyCString("inbe.chess", original.identity.id[:])
+    if !AppLocationAppendFixture(*original, "inbe.arcade") || !AppLocationAppendFixture(*original, "inbe.chess") {
+        return 1
+    }
+    text := AppLocationWrite(*original)
+    defer {
+        Release(text)
+        AppLocatorClear(*original)
+    }
+    decoded: AppLocator
+    defer { AppLocatorClear(*decoded) }
+    if !AppLocationRead(text, *decoded) || decoded.chain.count != 2 ||
+    !Rules.AppIdentityEqual(*original.identity, *decoded.identity) ||
+    TextUntilNul(decoded.chain[1].id[:]) != "inbe.chess" {
+        return 2
+    }
+    if !AppLocationEqual(*original, *decoded) { return 9 }
+    decoded.chain[0].sha256[0] = #char "f"
+    if AppLocationEqual(*original, *decoded) { return 10 }
+    decoded.chain[0].sha256 = original.chain[0].sha256
+    invalid: [10]string = .[
+    "{}",
+    "{\"v\":2,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[]}",
+    "{\"v\":1,\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[]}",
+    "{\"v\":1,\"authority\":\"\",\"id\":\"inbe.chess\",\"chain\":[]}",
+    "{\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[],\"slot\":3}",
+    "{\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[{\"id\":\"inbe.chess\",\"sha256\":\"bad\"}]}",
+    "{\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[{\"id\":\"../chess\",\"sha256\":\"bad\"}]}",
+    "{\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[]}{\"v\":1}",
+    "{\"v\":1,\"authority\":\"bad\\nvalue\",\"id\":\"inbe.chess\",\"chain\":[]}",
+    "{\"v\":1,\"authority\":\"verified.publisher\",\"id\":\"inbe.chess\",\"chain\":[{\"id\":\"inbe.chess\",\"sha256\":\"bad\",\"handle\":4}]}"
+    ]
+    for malformed: invalid {
+        if AppLocationRead(malformed, *decoded) || decoded.chain.count != 2 ||
+        TextUntilNul(decoded.identity.id[:]) != "inbe.chess" {
+            return 3
+        }
+    }
+    // The leaf and ancestry must agree, and a cycle is invalid even when
+    // every individual identity and digest has the right shape.
+    decoded.chain[1].id = decoded.chain[0].id
+    if AppLocationWrite(*decoded) != "" {
+        return 4
+    }
+    decoded.chain[1] = original.chain[1]
+    unused CopyCString("other.game", decoded.identity.id[:])
+    if AppLocationWrite(*decoded) != "" {
+        return 5
+    }
+    // Deeper containers need no persisted slot and no fixed hierarchy array.
+    AppLocatorClear(*decoded)
+    unused CopyCString("verified.publisher", decoded.identity.authority[:])
+    for index: cast(s32)0..79 {
+        name: Vec(u8)
+        BuilderPrint(*name, "level.%", index)
+        id := BuilderFinish(name)
+        if !AppLocationAppendFixture(*decoded, id) {
+            return 6
+        }
+        Release(id)
+    }
+    decoded.identity.id = decoded.chain[79].id
+    deep := AppLocationWrite(*decoded)
+    defer { Release(deep) }
+    if !AppLocationRead(deep, *original) || original.chain.count != 80 ||
+    TextUntilNul(original.identity.id[:]) != "level.79" {
+        return 7
+    }
+    saved := AppIdentityRecordKey("publisher.one", "inbe.chess", "computer")
+    same := AppIdentityRecordKey("publisher.one", "inbe.chess", "computer")
+    other_authority := AppIdentityRecordKey("publisher.two", "inbe.chess", "computer")
+    other_app := AppIdentityRecordKey("publisher.one", "arcade.pushy", "computer")
+    defer {
+        Release(saved)
+        Release(same)
+        Release(other_authority)
+        Release(other_app)
+    }
+    if !NestedAppRecordKeyValid(saved) || saved != same || saved == other_authority ||
+    saved == other_app || !NodeAppRecordKeyValid("cell.chess.computer") ||
+    AppIdentityRecordKey("publisher.one", "../chess", "computer") != "" ||
+    AppIdentityRecordKey("publisher.one", "inbe.chess", "../computer") != "" ||
+    AppIdentityRecordKey("publisher\none", "inbe.chess", "computer") != "" {
+        return 8
+    }
+    return 0
+}
