@@ -1,0 +1,60 @@
+// Rasterize the same app mark as Apps, without a window or graphics context.
+#import "svg_shape"
+#import "file_linux"
+#import "c_string"
+#import "byte_text_linux"
+#import, file "raylib_host.zi";
+#import, file "../cells/package_files.zi";
+
+#if !#defined(PLATFORM_WEB) {
+    raylib :: #system_library "raylib";
+    IconPng :: (image: RaylibImage, extension: *u8, size: *s32) -> *u8 #foreign raylib "ExportImageToMemory";
+    IconFree :: (memory: *void) #foreign raylib "MemFree";
+}
+
+LauncherIconWrite :: (path: string, shape: string, windows: bool) -> bool {
+    #if !#defined(PLATFORM_WEB) {
+        coverage: [9216]u8
+        if !ShapeRaster(shape, 96, coverage[:]) { return false }
+        pixels: [65536]u8
+        for y: cast(s32)0..127 {
+            for x: cast(s32)0..127 {
+                alpha: s32 = 0
+                if x >= 16 && x < 112 && y >= 16 && y < 112 {
+                    alpha = cast(s32)coverage[(y - 16) * 96 + x - 16]
+                }
+                at := (y * 128 + x) * 4
+                pixels[at] = cast(u8)(226 + (40 - 226) * alpha / 255)
+                pixels[at + 1] = cast(u8)(240 + (91 - 240) * alpha / 255)
+                pixels[at + 2] = cast(u8)(234 + (83 - 234) * alpha / 255)
+                pixels[at + 3] = 255
+            }
+        }
+        image: RaylibImage = .{cast(*void)*pixels[0], 128, 128, 1, 7}
+        extension: [8]u8
+        unused CopyCString(".png", extension[:])
+        size: s32
+        png := IconPng(image, *extension[0], *size)
+        if png == null || size <= 0 { return false }
+        defer { IconFree(cast(*void)png) }
+        file := OpenReplace(path)
+        if !file.valid { return false }
+        offset: s64 = 0
+        ok := true
+        if windows {
+            // One PNG-backed ICO entry, supported by the Windows Shell.
+            header: [22]u8 = .[0, 0, 1, 0, 1, 0, 128, 128, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 22, 0, 0, 0]
+            index: s32 = 0
+            while index < 4 {
+                header[14 + index] = cast(u8)((cast(u32)size >> cast(u32)(index * 8)) & 255)
+                index += 1
+            }
+            ok = WriteAt(file, header[:], 0) == 22
+            offset = 22
+        }
+        ok = ok && WriteAt(file, BytesFromPointer(png, cast(u64)size), offset) == size && SyncFile(file)
+        closed := CloseFile(file)
+        return ok && closed
+    }
+    return false
+}

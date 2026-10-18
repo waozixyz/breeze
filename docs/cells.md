@@ -635,6 +635,31 @@ compositions; moving those compositions into their bundles is required to
 finish the entirely portable architecture. Changes to their compiled UI or
 to native host capabilities still require a wrapper release.
 
+## Device launcher entries
+
+Installed apps in Apps offer **Pin to launcher** on Android 8 and later when
+its launcher supports pinned shortcuts, on Windows, and in native Linux and
+AppImage builds. Android asks for confirmation on the home screen. Windows
+adds a per-user Start menu shortcut; Linux adds a per-user application entry.
+Each uses the app's name and mark and opens it without Inbe's surrounding
+navigation. Repeating the action updates the same entry.
+
+These entries use the existing Inbe executable, packages, account and data;
+Inbe must stay installed. They do not install another APK or a separate copy
+of the data. Downloaded apps are addressed by their package name, so changing
+their device-local slot does not change a saved shortcut. An app removed from
+the account must be added again in Inbe before its shortcut can open it.
+
+Desktop entries invoke `--app NAME`; the older `--feature` option remains
+available. Native Linux entries respect `XDG_DATA_HOME` and preserve an
+explicit `APP_DATA_ROOT`. The action is hidden on the web, in Snap and in
+Flatpak, where installing launchers needs a separate portal integration.
+`make launcher-entry-test` checks identifier and desktop escaping rules;
+`make launcher-shortcut-ui-test` checks pinning, icons, repeated pinning,
+the desktop's actual entry parser, profile selection, bundled app launches and
+a node app after its slot changes, on a private display. Android shortcut behavior is covered by
+`make android-text-selection-test`.
+
 ## Verification
 
 A new app version is published only with a passing phone check of its exact

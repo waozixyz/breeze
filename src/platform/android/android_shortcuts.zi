@@ -1,0 +1,67 @@
+#import "android_jni"
+#import "c_string"
+#import "text_buffer"
+#import "byte_text_linux"
+
+#if #defined(ANDROID_BUILD) {
+    pending_app: [25]u8;
+
+    AndroidLauncherSupported :: () -> bool {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return false }
+        defer { AndroidJniDetachCurrent(*session) }
+        method := AndroidJniMethod(*session, "launcherPinSupported", "()Z")
+        if method == null { return false }
+        env := session.env
+        result := env.functions.CallBooleanMethodA(env, session.activity, method, null)
+        return env.functions.ExceptionCheck(env) == 0 && result != 0
+    }
+
+    AndroidLauncherPin :: (name: string, label: string, icon: string) -> s32 {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return 0 }
+        defer { AndroidJniDetachCurrent(*session) }
+        method := AndroidJniMethod(*session, "pinLauncherApp", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I")
+        if method == null { return 0 }
+        name_bytes: [25]u8
+        label_bytes: [256]u8
+        icon_bytes: [4096]u8
+        if !CopyCString(name, name_bytes[:]) || !CopyCString(label, label_bytes[:]) ||
+        !CopyCString(icon, icon_bytes[:]) { return 0 }
+        env := session.env
+        arguments: [3]JniValue
+        arguments[0].reference = AndroidJniString(env, *name_bytes[0])
+        arguments[1].reference = AndroidJniString(env, *label_bytes[0])
+        arguments[2].reference = AndroidJniString(env, *icon_bytes[0])
+        for argument: arguments {
+            if argument.reference == null { return 0 }
+        }
+        result := env.functions.CallIntMethodA(env, session.activity, method, *arguments[0])
+        if env.functions.ExceptionCheck(env) != 0 { return 0 }
+        return result
+    }
+
+    // Called on the native frame thread after the host is initialized, so cold
+    // and warm launch intents never touch app state from Android's UI thread.
+    AndroidLauncherTakeApp :: () -> string {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return "" }
+        defer { AndroidJniDetachCurrent(*session) }
+        method := AndroidJniMethod(*session, "takeLauncherApp", "()Ljava/lang/String;")
+        if method == null { return "" }
+        env := session.env
+        value := env.functions.CallObjectMethodA(env, session.activity, method, null)
+        if value == null || env.functions.ExceptionCheck(env) != 0 { return "" }
+        bytes := env.functions.GetStringUTFChars(env, value, null)
+        if bytes == null { return "" }
+        defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+        count: s32 = 0
+        while count < 24 && bytes[count] != 0 {
+            pending_app[count] = bytes[count]
+            count += 1
+        }
+        if bytes[count] != 0 { return "" }
+        pending_app[count] = 0
+        return TextUntilNul(pending_app[:])
+    }
+}

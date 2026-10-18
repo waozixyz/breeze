@@ -324,6 +324,20 @@ public class MainActivity extends NativeActivity {
     private static final int MEDIA_IMPORT_KIND = 6;
     private int pendingQrScanKind = 5;
     String lastHealthConnectPath = null;
+    private final AppShortcuts appShortcuts = new AppShortcuts(this);
+
+    public boolean launcherPinSupported() {
+        return appShortcuts.supported();
+    }
+
+    public int pinLauncherApp(String name, String label, String iconPath) {
+        return appShortcuts.pin(name, label, iconPath);
+    }
+
+    public String takeLauncherApp() {
+        return appShortcuts.take();
+    }
+
     private boolean pendingStartPractice = false;
     private int pendingStartPracticeId = -1;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -1121,6 +1135,7 @@ public class MainActivity extends NativeActivity {
         nativeWakeLockReady();
 
         // Widget/tile/shortcut launch: the intent that started this activity.
+        appShortcuts.accept(getIntent());
         handleStartPracticeIntent(getIntent());
         AppUpdate.onStart(this, getIntent() != null && ACTION_START_PRACTICE.equals(getIntent().getAction()));
         handleAudioE2EIntent(getIntent());
@@ -1401,6 +1416,7 @@ public class MainActivity extends NativeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        appShortcuts.accept(intent);
         configureSystemBars();
         requestInsetRefresh();
         syncLifecycleState("onNewIntent");

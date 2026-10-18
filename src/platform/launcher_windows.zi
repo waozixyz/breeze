@@ -1,0 +1,134 @@
+// Create a real per-user Start menu shortcut through the Windows Shell.
+#import "c_string"
+#import "text_buffer"
+#import "byte_text_linux"
+#import, file "../cells/package_files.zi";
+#import, file "../storage/paths.zi";
+
+#if #defined(_WIN32) {
+    kernel :: #system_library "kernel32";
+    shell :: #system_library "shell32";
+    ole :: #system_library "ole32";
+    ModulePath :: (module: *void, path: *u16, size: u32) -> u32 #foreign kernel "GetModuleFileNameW";
+    ToWide :: (page: u32, flags: u32, text: *u8, count: s32, output: *u16, size: s32) -> s32 #foreign kernel "MultiByteToWideChar";
+    FromWide :: (page: u32, flags: u32, text: *u16, count: s32, output: *u8, size: s32, fallback: *u8, used: *s32) -> s32 #foreign kernel "WideCharToMultiByte";
+    SpecialFolder :: (window: *void, folder: s32, token: *void, flags: u32, output: *u16) -> s32 #foreign shell "SHGetFolderPathW";
+    ComInit :: (reserved: *void, flags: u32) -> s32 #foreign ole "CoInitializeEx";
+    ComEnd :: () #foreign ole "CoUninitialize";
+    ComCreate :: (class: *Guid, outer: *void, context: u32, iid: *Guid, output: **ShellLink) -> s32 #foreign ole "CoCreateInstance";
+    Guid :: struct {
+        first: u32
+        second: u16
+        third: u16
+        bytes: [8]u8
+    }
+    QueryFn :: #type (*ShellLink, *Guid, **PersistFile) -> s32 #c_call;
+    ReleaseFn :: #type (*void) -> u32 #c_call;
+    SetTextFn :: #type (*ShellLink, *u16) -> s32 #c_call;
+    SetIconFn :: #type (*ShellLink, *u16, s32) -> s32 #c_call;
+    SaveFn :: #type (*PersistFile, *u16, s32) -> s32 #c_call;
+    ShellTable :: struct {
+        query: QueryFn
+        add_ref: *void
+        release: ReleaseFn
+        getters: [4]*void
+        description: SetTextFn
+        get_directory: *void
+        directory: SetTextFn
+        get_arguments: *void
+        arguments: SetTextFn
+        middle: [5]*void
+        icon: SetIconFn
+        relative_path: *void
+        resolve: *void
+        path: SetTextFn
+    }
+    ShellLink :: struct { table: *ShellTable }
+    PersistTable :: struct {
+        query: *void
+        add_ref: *void
+        release: ReleaseFn
+        class_id: *void
+        dirty: *void
+        load: *void
+        save: SaveFn
+    }
+    PersistFile :: struct { table: *PersistTable }
+
+    WindowsGuid :: (first: u32) -> Guid {
+        value: Guid
+        value.first = first
+        value.bytes[0] = 0xC0
+        value.bytes[7] = 0x46
+        return value
+    }
+
+    WindowsWide :: (text: string, output: []u16) -> bool {
+        input: [4096]u8
+        return CopyCString(text, input[:]) &&
+        ToWide(65001, 8, *input[0], -1, *output[0], cast(s32)output.count) > 0
+    }
+
+    WindowsLauncherExecutable :: (output: []u8) -> string {
+        wide: [4096]u16
+        count := ModulePath(null, *wide[0], cast(u32)wide.count)
+        if count == 0 || count >= cast(u32)wide.count { return "" }
+        if FromWide(65001, 0, *wide[0], -1, *output[0], cast(s32)output.count, null, null) <= 0 {
+            return ""
+        }
+        return TextUntilNul(output)
+    }
+
+    WindowsLauncherInstall :: (name: string, label: string, icon: string) -> s32 {
+        executable_bytes: [4096]u8
+        executable := WindowsLauncherExecutable(executable_bytes[:])
+        if executable.count == 0 { return 0 }
+        programs: [260]u16
+        // CSIDL_PROGRAMS | CSIDL_FLAG_CREATE, resolved by Windows even when relocated.
+        if SpecialFolder(null, 0x8002, null, 0, *programs[0]) < 0 { return 0 }
+        folder: [4096]u8
+        if FromWide(65001, 0, *programs[0], -1, *folder[0], 4096, null, null) <= 0 { return 0 }
+        stem := PackageText(TextUntilNul(folder[:]), "/Inner Breeze")
+        defer { PackageFree(stem) }
+        if storage_ensure_dir(stem) == 0 { return 0 }
+        display: [25]u8
+        unused CopyCString(name, display[:])
+        if display[0] >= 97 && display[0] <= 122 { display[0] -= cast(u8)32 }
+        if name == "practices" { unused CopyCString("Practice", display[:]) }
+        suffix := PackageText("/", TextUntilNul(display[:]))
+        defer { PackageFree(suffix) }
+        base := PackageText(stem, suffix)
+        defer { PackageFree(base) }
+        filename := PackageText(base, ".lnk")
+        defer { PackageFree(filename) }
+        argument := PackageText("--app ", name)
+        defer { PackageFree(argument) }
+        path_wide: [4096]u16
+        exe_wide: [4096]u16
+        argument_wide: [256]u16
+        icon_wide: [4096]u16
+        label_wide: [256]u16
+        if !WindowsWide(filename, path_wide[:]) || !WindowsWide(executable, exe_wide[:]) ||
+        !WindowsWide(argument, argument_wide[:]) || !WindowsWide(icon, icon_wide[:]) ||
+        !WindowsWide(label, label_wide[:]) { return 0 }
+        initialized := ComInit(null, 2)
+        // RPC_E_CHANGED_MODE: COM was already initialized in another apartment.
+        if initialized < 0 && initialized != -2147417850 { return 0 }
+        defer { if initialized >= 0 { ComEnd() } }
+        class := WindowsGuid(0x00021401)
+        iid := WindowsGuid(0x000214F9)
+        persist_iid := WindowsGuid(0x0000010B)
+        link: *ShellLink
+        if ComCreate(*class, null, 1, *iid, *link) < 0 || link == null { return 0 }
+        defer { unused link.table.release(cast(*void)link) }
+        if link.table.path(link, *exe_wide[0]) < 0 ||
+        link.table.arguments(link, *argument_wide[0]) < 0 ||
+        link.table.description(link, *label_wide[0]) < 0 ||
+        link.table.icon(link, *icon_wide[0], 0) < 0 { return 0 }
+        persist: *PersistFile
+        if link.table.query(link, *persist_iid, *persist) < 0 || persist == null { return 0 }
+        defer { unused persist.table.release(cast(*void)persist) }
+        if persist.table.save(persist, *path_wide[0], 1) < 0 { return 0 }
+        return 2
+    }
+}

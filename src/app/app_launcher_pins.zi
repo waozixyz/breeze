@@ -1,0 +1,90 @@
+#import, file "app_types.zi";
+#import, file "app_nav_state.zi";
+#import, file "app_launcher_state.zi";
+#import, file "launcher_policy.zi";
+#import, file "app_route_state.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../platform/launcher_shortcut.zi";
+#import, file "../platform/launcher_icon.zi";
+#import, file "../platform/environment.zi";
+#import, file "../widgets/bottom_nav.zi";
+#import, file "../core/types.zi";
+#import, file "../storage/paths.zi";
+#import "c_string"
+#import, file "text_buffers.zi";
+#import, file "route_types.zi";
+#import, file "../platform/launcher_entry.zi";
+#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    raylib :: #system_library "raylib";
+    LauncherWindowTitle :: (title: *u8) #foreign raylib "SetWindowTitle";
+}
+
+launcher_pin_status: s32 = -1;
+launcher_pending_name: [25]u8;
+launcher_request_attempted: bool;
+
+app_launcher_pin :: (app: *InnerBreeze, route: s32) {
+    launcher_pin_status = 0
+    name := LauncherRouteName(route)
+    if !LauncherAppNameValid(name) || !app_nav_route_available(app, route) { return }
+    packages := PackageDirectory()
+    defer { PackageFree(packages) }
+    directory := PackageText(packages, "/launcher")
+    defer { PackageFree(directory) }
+    if storage_ensure_dir(directory) == 0 { return }
+    stem := PackageText("/", name)
+    defer { PackageFree(stem) }
+    path := PackageText(directory, stem)
+    defer { PackageFree(path) }
+    icon := PackageText(path, ifx WindowsPlatform() != 0 then ".ico" else ".png")
+    defer { PackageFree(icon) }
+    if LauncherIconWrite(icon, app_nav_route_shape(route), WindowsPlatform() != 0) {
+        launcher_pin_status = LauncherShortcutInstall(name, app_nav_route_label(route), icon)
+    }
+}
+
+// Keep an unresolved cold launch while its already installed package loads.
+// A launcher never silently reinstalls an app removed from this account.
+app_launcher_request_app :: (name: string) {
+    if LauncherAppNameValid(name) {
+        unused CopyCString(name, launcher_pending_name[:])
+        launcher_request_attempted = false
+    }
+}
+
+app_launcher_pump_request :: (app: *InnerBreeze) {
+    incoming := LauncherShortcutTakeApp()
+    if incoming.count > 0 { app_launcher_request_app(incoming) }
+    name := AppTextFromCString(*launcher_pending_name[0], 25)
+    if name.count == 0 { return }
+    if name == "inbe" {
+        app.host_feature = 0
+        launcher_pending_name[0] = 0
+        return
+    }
+    if app.language_selected == 0 || app.apps_selected == 0 { return }
+    route := LauncherRouteForName(name)
+    if route == cast(s32)AppNavRoute.APP_NAV_ROUTE_NONE || !app_nav_route_available(app, route) { return }
+    if app.modal.active != 0 { return }
+    if !launcher_request_attempted {
+        app_launcher_close(app)
+        app_apply_nav_route(app, route)
+        launcher_request_attempted = true
+    } else if app_current_nav_route(app) != route {
+        // The person dismissed an unsaved-changes dialog and stayed here.
+        launcher_pending_name[0] = 0
+        return
+    }
+    if app_current_nav_route(app) == route {
+        // The host uses a nonzero feature to hide surrounding harness navigation.
+        bit := app_nav_route_bit(route)
+        app.host_feature = ifx bit != 0 then bit else route
+        #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+            title: [256]u8
+            if CopyCString(app_nav_route_label(route), title[:]) {
+                LauncherWindowTitle(*title[0])
+            }
+        }
+        launcher_pending_name[0] = 0
+    }
+}

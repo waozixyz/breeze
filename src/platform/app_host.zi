@@ -79,6 +79,9 @@ SetTargetFPS :: (fps: s32) #foreign raylib;
 #import, file "../app/screenshot_arguments.zi";
 #import, file "../app/mini_mode.zi";
 #import, file "feature_request.zi";
+#import, file "../app/app_launcher_pins.zi";
+#import, file "launcher_entry.zi";
+#import, file "../cells/package_files.zi";
 #import, file "host_actions.zi";
 #import, file "../app/exercise_types.zi";
 #import, file "../app/route_types.zi";
@@ -186,6 +189,23 @@ Prepare :: (argc: s32, argv: **u8) {
             override_root := HostEnv("APP_DATA_ROOT")
             debug_profile := override_root != null && override_root[0] != cast(u8)0
             identity := DesktopIdentity(debug_profile)
+            // Match a desktop entry before SDL creates its window.
+            launch_name: string
+            argument: s32 = 1
+            while argument + 1 < arg_count {
+                if args[argument] == "--app" && LauncherAppNameValid(args[argument + 1]) {
+                    launch_name = args[argument + 1]
+                    break
+                }
+                argument += 1
+            }
+            launch_id: string
+            if launch_name.count > 0 {
+                launch_id = PackageText("xyz.waozi.inbe.", launch_name)
+                identity.app_id = launch_id
+                config.title_custom = 1
+            }
+            defer { PackageFree(launch_id) }
             AppCopyText(identity.display_name, config.title[:])
             if debug_profile {
                 config.title_custom = 1
@@ -310,6 +330,7 @@ app_frame :: (app: *InnerBreeze) {
             app.host_feature = requested_feature
         }
     }
+    app_launcher_pump_request(app)
     PollHostActions(app)
     ReportHostState(app)
     first_frame := app_frame_probe_count == 0
@@ -681,6 +702,11 @@ native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
         argi: s32 = 1
         while argi < argc {
             option := AppTextFromCString(argv[argi], 16)
+            if option == "--app" && argi + 1 < argc {
+                app_launcher_request_app(AppTextFromCString(argv[argi + 1], 25))
+                argi += 2
+                continue
+            }
             if (option == "--cell" || option == "--feature") && argi + 1 < argc {
                 name := AppTextFromCString(argv[argi + 1], 16)
                 feature: s32 = -1
@@ -693,6 +719,8 @@ native_after_app_init :: (app: *InnerBreeze, argc: s32, argv: **u8) {
                 } else if name == "diary" {
 
                     feature = 8
+                } else if name == "leaderboard" {
+                    feature = 32
                 } else if name == "lumi" {
                     feature = 16
                 }

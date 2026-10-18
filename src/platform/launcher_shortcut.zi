@@ -1,0 +1,121 @@
+// Native launch entries share Inbe's executable, packages and account data.
+#import "c_string"
+#import "text_buffer"
+#import "file_linux"
+#import "byte_text_linux"
+#import, file "launcher_entry.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../storage/paths.zi";
+#if #defined(_WIN32) {
+    #import, file "launcher_windows.zi";
+}
+#if #defined(ANDROID_BUILD) {
+    #import, file "android/android_shortcuts.zi";
+}
+
+#scope_file
+libc :: #system_library "c";
+Environment :: (name: *u8) -> *u8 #foreign libc "getenv";
+launcher_android_supported: s32 = -1;
+#if !#defined(_WIN32) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    ExecutableLink :: (path: *u8, output: *u8, size: usize) -> isize #foreign libc "readlink";
+}
+#scope_export
+
+LauncherEnvironment :: (name: string) -> string {
+    bytes: [64]u8
+    if !CopyCString(name, bytes[:]) { return "" }
+    value := Environment(*bytes[0])
+    if value == null { return "" }
+    return TextFromCString(value)
+}
+
+LauncherShortcutSupported :: () -> bool {
+    #if #defined(PLATFORM_WEB) || #defined(__APPLE__) || #defined(__FreeBSD__) {
+        return false
+    }
+    #if !#defined(_WIN32) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if LauncherEnvironment("FLATPAK_ID").count > 0 || LauncherEnvironment("SNAP").count > 0 {
+            return false
+        }
+    }
+    #if #defined(ANDROID_BUILD) {
+        if launcher_android_supported < 0 {
+            launcher_android_supported = cast(s32)AndroidLauncherSupported()
+        }
+        return launcher_android_supported != 0
+    }
+    return true
+}
+
+LauncherExecutable :: (output: []u8) -> string {
+    #if #defined(_WIN32) {
+        return WindowsLauncherExecutable(output)
+    }
+    #if !#defined(_WIN32) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        appimage := LauncherEnvironment("APPIMAGE")
+        if appimage.count > 0 && appimage[0] == 47 {
+            if CopyCString(appimage, output) { return TextUntilNul(output) }
+            return ""
+        }
+        path: [32]u8
+        unused CopyCString("/proc/self/exe", path[:])
+        length := ExecutableLink(*path[0], *output[0], cast(usize)(output.count - 1))
+        if length > 0 && cast(s64)length < output.count - 1 {
+            output[length] = 0
+            return TextUntilNul(output)
+        }
+    }
+    return ""
+}
+
+// 1 means Android's confirmation was requested; 2 means the entry exists.
+// No Android request is reported as a completed installation.
+LauncherShortcutInstall :: (name: string, label: string, icon: string) -> s32 {
+    if !LauncherAppNameValid(name) || label.count == 0 { return 0 }
+    #if #defined(ANDROID_BUILD) {
+        return AndroidLauncherPin(name, label, icon)
+    }
+    #if #defined(_WIN32) {
+        return WindowsLauncherInstall(name, label, icon)
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
+        // Sandboxed distributions need a portal rather than a path into their
+        // private mount. Do not create a launcher that cannot be executed.
+        if LauncherEnvironment("FLATPAK_ID").count > 0 || LauncherEnvironment("SNAP").count > 0 {
+            return 0
+        }
+        executable_bytes: [4096]u8
+        executable := LauncherExecutable(executable_bytes[:])
+        directory := LauncherEnvironment("XDG_DATA_HOME")
+        owned: string
+        if directory.count == 0 || directory[0] != 47 {
+            home := LauncherEnvironment("HOME")
+            if home.count == 0 || home[0] != 47 { return 0 }
+            owned = PackageText(home, "/.local/share")
+            directory = owned
+        }
+        defer { PackageFree(owned) }
+        applications := PackageText(directory, "/applications")
+        defer { PackageFree(applications) }
+        if storage_ensure_dir(applications) == 0 { return 0 }
+        filename := PackageText("/xyz.waozi.inbe.", name)
+        defer { PackageFree(filename) }
+        stem := PackageText(applications, filename)
+        defer { PackageFree(stem) }
+        path := PackageText(stem, ".desktop")
+        defer { PackageFree(path) }
+        entry := LauncherDesktopEntry(executable, name, label, icon, LauncherEnvironment("APP_DATA_ROOT"))
+        defer { PackageFree(entry) }
+        if entry.count == 0 || !PackageWrite(path, entry) { return 0 }
+        return 2
+    }
+    return 0
+}
+
+LauncherShortcutTakeApp :: () -> string {
+    #if #defined(ANDROID_BUILD) {
+        return AndroidLauncherTakeApp()
+    }
+    return ""
+}

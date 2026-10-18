@@ -167,7 +167,7 @@ with contextlib.ExitStack() as stack:
                     if node["kind"] == "text" and node["label"] in ("Pinned", "More apps")}
         grid = [node for node in tree if node["kind"] == "button"
                 and by_index(tree).get(node["parent"], {}).get("kind") == "scroll"
-                and node["label"] not in ("Install", "Uninstall")]
+                and node["label"] not in ("Install", "Uninstall", "Pin to launcher")]
         more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
         more = [node for node in grid if node["y"] >= more_top]

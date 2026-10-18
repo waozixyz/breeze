@@ -173,3 +173,7 @@ diary-history-test: $(ZI2C_BIN)
 
 diary-markdown-test: $(ZI2C_BIN) $(ZIRAN_BIN)
 	@sh tests/diary_markdown_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: launcher-entry-test
+launcher-entry-test: $(ZI2C_BIN)
+	sh tests/launcher_entry_zi_test.sh $(ZIRAN_BUILD_DIR)/bin

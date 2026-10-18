@@ -1,0 +1,72 @@
+// Desktop entry encoding is independent of the platform and never invokes a shell.
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+c :: #system_library "c";
+LauncherFree :: (memory: *u8) #foreign c "free";
+
+LauncherAppNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count > 24 { return false }
+    for byte: name {
+        if !((byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45 || byte == 95) {
+            return false
+        }
+    }
+    return true
+}
+
+LauncherEntryValue :: (out: *Vec(u8), value: string) {
+    for byte: value {
+        if byte == 10 { BuilderPrint(out, "\\n") }
+        else if byte == 13 { BuilderPrint(out, "\\r") }
+        else if byte == 9 { BuilderPrint(out, "\\t") }
+        else if byte == 92 { BuilderPrint(out, "\\\\") }
+        else if byte == 0 { continue }
+        else { unused VecPush(out.*, byte) }
+    }
+}
+
+// Exec quoting is decoded after desktop-string escaping. Percent is a field
+// code even inside quotes, so literal percentages must be doubled too.
+LauncherExecArgument :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for byte: value {
+        if byte == 37 {
+            unused VecPush(out.*, cast(u8)37)
+            unused VecPush(out.*, cast(u8)37)
+        }
+        else if byte == 92 { BuilderPrint(out, "\\\\\\\\") }
+        else if byte == 34 || byte == 36 || byte == 96 {
+            BuilderPrint(out, "\\\\")
+            unused VecPush(out.*, byte)
+        } else if byte == 10 { BuilderPrint(out, "\\n") }
+        else if byte == 13 { BuilderPrint(out, "\\r") }
+        else if byte == 9 { BuilderPrint(out, "\\t") }
+        else { unused VecPush(out.*, byte) }
+    }
+    BuilderPrint(out, "\"")
+}
+
+LauncherDesktopEntry :: (executable: string, name: string, label: string,
+    icon: string, profile: string) -> string {
+    if executable.count == 0 || !LauncherAppNameValid(name) { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "[Desktop Entry]\nType=Application\nVersion=1.0\nName=")
+    LauncherEntryValue(*out, label)
+    BuilderPrint(*out, "\nExec=")
+    if profile.count > 0 {
+        BuilderPrint(*out, "env ")
+        environment: Vec(u8)
+        BuilderPrint(*environment, "APP_DATA_ROOT=%", profile)
+        value := BuilderFinish(environment)
+        LauncherExecArgument(*out, value)
+        descriptor := cast(*TextDescriptor)(*value)
+        LauncherFree(descriptor.data)
+        BuilderPrint(*out, " ")
+    }
+    LauncherExecArgument(*out, executable)
+    BuilderPrint(*out, " --app %\nIcon=", name)
+    LauncherEntryValue(*out, icon)
+    BuilderPrint(*out, "\nTerminal=false\nCategories=Utility;\nStartupWMClass=xyz.waozi.inbe.%\n", name)
+    return BuilderFinish(out)
+}

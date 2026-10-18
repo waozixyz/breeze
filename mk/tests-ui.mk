@@ -208,3 +208,10 @@ audio-setup-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 		YUE_DESKTOP_RECOVERY=0 LIBGL_ALWAYS_SOFTWARE=1 \
 		xvfb-run -a -n 300 -s '-screen 0 1280x1000x24' \
 		python3 tests/audio_setup_ui_test.py $(abspath $(TARGET))
+
+.PHONY: launcher-shortcut-ui-test
+launcher-shortcut-ui-test: $(TARGET) node-apps
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/launcher_shortcut_ui_test.py $(abspath $(TARGET))
+
+VISUAL_TEST_TARGETS += launcher-shortcut-ui-test

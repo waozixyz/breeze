@@ -4,6 +4,8 @@
 #import, file "app_route_state.zi";
 #import, file "app_modal_state.zi";
 #import, file "app_launcher_state.zi";
+#import, file "app_launcher_pins.zi";
+#import, file "../platform/launcher_shortcut.zi";
 #import, file "app_settings.zi";
 #import, file "launcher_policy.zi";
 #import, file "app_nav_state.zi";
@@ -99,6 +101,8 @@ app_launcher_drag_card :: (app: *InnerBreeze, card: ButtonProps,
 // Every app card has the same click and drag behavior in both sections.
 app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     bounds: Rectangle, vertical: bool) {
+    full_bounds := bounds
+    if LauncherShortcutSupported() { bounds.height -= cast(float32)AppScale(44) }
     blocked := app.blocked_input_frame == app.breathing.frame
     card: ButtonProps
     card.id = 6900 + route
@@ -154,6 +158,19 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     }
     if activated && !app.launcher_drag_moving {
         app_launcher_activate(app, route)
+    }
+    if installed && LauncherShortcutSupported() {
+        pin: ButtonProps
+        pin.id = 7600 + route
+        pin.bounds = Rectangle.{full_bounds.x, full_bounds.y + bounds.height + cast(float32)AppScale(4),
+            full_bounds.width, cast(float32)AppScale(40)}
+        pin.label = LocaleText("launcher_pin_system")
+        pin.fit_content = true
+        pin.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+        pin.disabled = blocked
+        if Button(app.ui.session, pin) != 0 {
+            app_launcher_pin(app, route)
+        }
     }
     // The install or remove symbol sits inside the card's top-right corner.
     // It is submitted after the card, so a tap on it reaches only the action.
@@ -352,7 +369,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
             offer_count += 1
         }
     }
-    tile_height := AppScale(88)
+    tile_height := AppScale(ifx LauncherShortcutSupported() then 132 else 88)
     gap := AppScale(12)
     // The tiles reflow into as many columns as the panel's width allows.
     columns := MeasureGrid(GridProps.{.bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0},
@@ -369,6 +386,14 @@ app_draw_launcher :: (app: *InnerBreeze) {
     bottom_dock := app_content_bottom_reserved(app)
     footer_y := app.ui.view_height - bottom_dock - AppScale(72)
     body_y := search_y + AppScale(68)
+    if launcher_pin_status >= 0 {
+        status_key := ifx launcher_pin_status == 2 then "launcher_pin_added" else "launcher_pin_requested"
+        if launcher_pin_status == 0 { status_key = "launcher_pin_failed" }
+        Text(app.ui.session, TextProps.{.text = LocaleText(status_key),
+            .bounds = Rectangle.{cast(float32)x, cast(float32)body_y,
+                cast(float32)width, cast(float32)AppScale(44)}, .font = AppSmallFontSize()})
+        body_y += AppScale(48)
+    }
     scroll: ScrollProps
     scroll.key = KeyHash("inbe/apps/library")
     scroll.bounds = Rectangle.{cast(float32)x, cast(float32)body_y,
