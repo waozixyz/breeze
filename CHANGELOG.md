@@ -4,18 +4,17 @@
 
 ### Added
 - Chess in More apps: play the computer or a friend.
-- More apps lists your node's apps without an app update.
+- More apps shows new node apps without updating.
 - Settings › About › Show beta apps lists apps in testing.
-- Photos (beta): your photos by day on all devices, encrypted and kept once.
-- Diary is Markdown with photos inline, kept in your photo library; each day has a photo gallery.
-- Photos already in Diary entries also appear in Photos.
+- Photos (beta): your photos by day, encrypted, on all devices.
+- Diary is Markdown with inline photos, kept in Photos; each day has a gallery.
 
 ### Changed
 - Photos go to every node with photo upload on.
-- Lumi offers to send your answer to a developer's reply back to the developer.
+- Answer a developer's reply through Lumi.
 
 ### Fixed
-- Sideways camera photos show upright in Diary on desktop.
+- Sideways camera photos are upright in Diary on desktop.
 
 ## [2.1.34] - 2026-10-15
 
