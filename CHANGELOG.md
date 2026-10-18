@@ -11,6 +11,7 @@
 
 ### Changed
 - Photos go to every node with photo upload on.
+- Lumi offers to send your answer to a developer's reply back to the developer.
 
 ### Fixed
 - Sideways camera photos show upright in Diary on desktop.
