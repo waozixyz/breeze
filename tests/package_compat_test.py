@@ -8,8 +8,9 @@ Reverse: the last released app runs each package built here that declares a
 host interface the released app accepts, so a package update that claims to
 support older apps cannot break them.
 
-Each package is loaded with --bundle, which validates it and fails the run when
-the host rejects it, and its app is opened and rendered once.
+Bundled packages are loaded with --bundle, which validates them and fails the
+run when the host rejects them. Published Chess is installed through More apps,
+played against the computer and restarted to check its saved game.
 """
 import argparse
 import hashlib
@@ -125,6 +126,31 @@ def forward(binary, origin, ledger, output):
     return checked
 
 
+def published_chess(binary, origin, ledger, output):
+    """Install and play the node's Chess, independently of Arcade's checkout."""
+    oldest, current = host_range(ledger)
+    route = f"{origin}/api/v2/packages/inbe.chess"
+    metadata = json.loads(fetch(
+        f"{route}/latest?host_api={current}&module_api={ledger['module_api']}", 65536))
+    if not oldest <= metadata["host_api"] <= current or metadata["module_api"] != ledger["module_api"]:
+        raise AssertionError("The published Chess package does not support this host")
+    artifact = metadata["artifacts"][0]
+    data = fetch(f"{route}/{artifact['sha256']}.zib", artifact["size"])
+    if len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
+        raise AssertionError("The node's Chess bytes differ from its release")
+    directory = output / "published-chess"
+    directory.mkdir(parents=True, exist_ok=True)
+    bundle = directory / "chess.zib"
+    bundle.write_bytes(data)
+    (directory / "release.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    environment = {key: value for key, value in os.environ.items() if key not in SCRUBBED}
+    environment["YUE_DESKTOP_RECOVERY"] = "0"
+    subprocess.run(["sh", str(ROOT / "tests/chess_ui_test.sh"), str(binary), str(bundle)],
+                   env=environment, check=True, timeout=300)
+    print(f"forward inbe.chess {metadata['version']}: install, play, board and saved restart passed")
+    return 1
+
+
 def released_app(tag, output):
     """Unpack the release's Linux AppImage without FUSE."""
     image = output / "released.AppImage"
@@ -171,7 +197,10 @@ def main():
     if not args.skip_forward:
         if args.binary is None:
             parser.error("the forward check needs this build's app binary")
-        checked += forward(args.binary.resolve(strict=True), args.origin.rstrip("/"), ledger, output)
+        binary = args.binary.resolve(strict=True)
+        origin = args.origin.rstrip("/")
+        checked += forward(binary, origin, ledger, output)
+        checked += published_chess(binary, origin, ledger, output)
     if not args.skip_reverse:
         tag = args.release
         if tag is None:

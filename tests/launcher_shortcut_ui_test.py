@@ -93,7 +93,7 @@ with contextlib.ExitStack() as stack:
         settings = dict(language="en", language_system=0, language_setup_done=1,
                         apps_setup_done=1, enabled_apps=63, lumi_introduced=1,
                         tutorial_seen=1, habits_guide_seen=1, launcher_guide_seen=1,
-                        lumi_guides_seen=127, main_tab=3, package_updates_allowed=0,
+                        lumi_guides_seen=127, main_tab=3, package_updates_allowed=0, node_apps_beta=1,
                         apps_last_update_check=1900000000)
         for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard"):
             settings["app_used_" + name] = 1
@@ -207,33 +207,35 @@ with contextlib.ExitStack() as stack:
                 subprocess.run(["import", "-window", window, str(OUTPUT / "diary.png")],
                                env=env, check=True, capture_output=True)
 
-    node_bundle = ROOT / "build/node-apps/chess.zib"
+    # Use an app owned by this repository; Chess is built and released by
+    # Arcade, and its published package is checked by the release suite.
+    node_bundle = ROOT / "build/node-apps/photos.zib"
     assert node_bundle.is_file(), "Run make node-apps before this check"
     env["INBE_NODE_APP_FILE"] = str(node_bundle)
     with application("install-node-app"):
         driver.press(label="Apps", role="button")
-        def chess_card():
+        def photos_card():
             return next((node for node in driver.find(role="button")
-                         if node["label"].lower() == "chess" and node["width"] > 100), None)
-        card = wait(chess_card, "The locally offered Chess package did not appear")
+                         if node["label"].lower() == "photos" and node["width"] > 100), None)
+        card = wait(photos_card, "The locally offered Photos package did not appear")
         driver.press(key=card["key"], label=card["label"])
         driver.wait(label="Apps", role="button")
         driver.press(label="Apps", role="button")
-        card = wait(chess_card, "The installed Chess package did not appear")
+        card = wait(photos_card, "The installed Photos package did not appear")
         node_title = card["label"]
         action = options(card)
         driver.press(key=action["key"], label="App options")
         driver.press(label="Install to launcher", role="selectable")
         driver.wait(label="Added to your launcher.", role="text")
-        entry = data / "applications/xyz.waozi.inbe.chess.desktop"
-        assert "--app chess\n" in entry.read_text()
+        entry = data / "applications/xyz.waozi.inbe.photos.desktop"
+        assert "--app photos\n" in entry.read_text()
 
     # A shortcut names the package, rather than its transient slot number.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("UPDATE settings SET value='' WHERE user_id=? AND key='node_app_slot_0'", (user,))
-        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?, 'node_app_slot_3', 'chess',1) "
+        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?, 'node_app_slot_3', 'photos',1) "
                    "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user,))
-    with application("launch-node-after-slot-change", "--app", "chess") as window:
+    with application("launch-node-after-slot-change", "--app", "photos") as window:
         def node_opened():
             result = subprocess.run(["xdotool", "getwindowname", window], env=env,
                                     capture_output=True, text=True, timeout=5)
