@@ -1,0 +1,271 @@
+// Self's read-only achievement projection and owner-guarded alert preference.
+// The shared Self package owns the collection's UI, not this native adapter.
+SelfAchievements :: #import "self/model";
+#import "std/json_scan"
+#import "std/date_parse"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/text"
+#import "std/vec"
+#import "hosted_values"
+#import "std/bundle_host"
+#import "geometry"
+#import "text_widget"
+#import "text_props"
+#import, file "locale.zi";
+#import, file "assets.zi";
+#import, file "../storage/achievements.zi";
+#import, file "../storage/achievement_records.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../cells/package_files.zi";
+
+achievement_projection: string;
+achievement_measure_response: string;
+achievement_catalog_generation: u64 = 18446744073709551615;
+
+AchievementPackIndex :: (name: string) -> s32 {
+    if name == "whm" { return 0 }
+    if name == "meditation" { return 1 }
+    if name == "sunsalutation" { return 2 }
+    if name == "patterns" { return 3 }
+    if name == "taichi" { return 4 }
+    return -1
+}
+
+AchievementInstalledFn :: #type (id: string) -> bool;
+AchievementPackFn :: #type (practice: s32) -> bool;
+AchievementCatalogFn :: #type () -> ();
+achievement_installed: AchievementInstalledFn;
+achievement_pack_ready: AchievementPackFn;
+achievement_node_catalogs: AchievementCatalogFn;
+
+AchievementBindHost :: (installed: AchievementInstalledFn, pack: AchievementPackFn, catalogs: AchievementCatalogFn) {
+    achievement_installed = installed
+    achievement_pack_ready = pack
+    achievement_node_catalogs = catalogs
+}
+
+AchievementAppInstalled :: (id: string) -> bool {
+    if id == "inbe" { return true }
+    return achievement_installed != null && achievement_installed(id)
+}
+
+AchievementPackReady :: (practice: s32) -> bool {
+    return practice >= 0 && achievement_pack_ready != null && achievement_pack_ready(practice)
+}
+
+AchievementCatalogsLoad :: () {
+    changed_owner := AchievementOwner() != TextUntilNul(achievement_owner[:])
+    if !changed_owner && achievement_catalog_generation == AssetGeneration() { return }
+    // Preserve pending presentations across an unrelated resource refresh.
+    pending: [AchievementMaximum][97]u8
+    pending_count: s32 = 0
+    if !changed_owner {
+        for index: cast(s32)0..achievement_count - 1 {
+            if achievement_definitions[index].pending {
+                pending[pending_count] = achievement_definitions[index].id
+                pending_count += 1
+            }
+        }
+    }
+    AchievementReset()
+    for index: cast(s32)0..PackageCount - 1 {
+        name := PackageName(index)
+        directory := ifx index == 0 then "app" else name
+        path: Vec(u8)
+        BuilderPrint(*path, "assets/%/achievements.json", directory)
+        key := BuilderFinish(path)
+        asset := AssetRead(key)
+        PackageFree(key)
+        if asset.found { unused AchievementCatalog(asset.data, PackageID(index)) }
+    }
+    if achievement_node_catalogs != null { achievement_node_catalogs() }
+    for index: cast(s32)0..achievement_count - 1 {
+        for prior: cast(s32)0..pending_count - 1 {
+            if TextUntilNul(achievement_definitions[index].id[:]) == TextUntilNul(pending[prior][:]) {
+                achievement_definitions[index].pending = true
+            }
+        }
+    }
+    achievement_catalog_generation = AssetGeneration()
+}
+
+AchievementVisibility :: () {
+    installed_practices: s32 = 0
+    for index: cast(s32)0..4 {
+        if AchievementPackReady(index) { installed_practices += 1 }
+    }
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := *achievement_definitions[index]
+        entry.visible = AchievementAppInstalled(TextUntilNul(entry.app[:]))
+        pack := TextUntilNul(entry.pack[:])
+        if pack != "" {
+            practice := AchievementPackIndex(pack)
+            entry.visible = entry.visible && AchievementPackReady(practice)
+        }
+        needs := TextUntilNul(entry.needs[:])
+        if needs == "two_practices" { entry.visible = entry.visible && installed_practices >= 2 }
+        else if needs == "practices" { entry.visible = entry.visible && AchievementAppInstalled("inbe.practices") && installed_practices >= 1 }
+        else if needs != "" {
+            id := PackageText("inbe.", needs)
+            entry.visible = entry.visible && AchievementAppInstalled(id)
+            PackageFree(id)
+        }
+    }
+}
+
+AchievementPageDocument :: (page: s32) -> string {
+    AchievementCatalogsLoad()
+    AchievementVisibility()
+    AchievementEvaluate()
+    PackageFree(achievement_projection)
+    total: s32 = 0
+    earned: s32 = 0
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := achievement_definitions[index]
+        if !entry.visible { continue }
+        total += 1
+        if entry.awarded { earned += 1 }
+    }
+    pages := (total + 19) / 20
+    if pages < 1 { pages = 1 }
+    selected := page
+    if selected < 0 { selected = 0 }
+    if selected >= pages { selected = pages - 1 }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"owner\":")
+    SelfAchievements.SelfQuote(*out, AchievementOwner())
+    BuilderPrint(*out, ",\"page\":%,\"pages\":%,\"total\":%,\"earned\":%,\"alerts\":%,\"rows\":[", selected, pages, total, earned, ifx AchievementAlerts() then 1 else 0)
+    position: s32 = 0
+    written: s32 = 0
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := achievement_definitions[index]
+        if !entry.visible { continue }
+        position += 1
+        if position <= selected * 20 || position > (selected + 1) * 20 { continue }
+        if written > 0 { BuilderPrint(*out, ",") }
+        written += 1
+        group_key := PackageText("achievement_group_", TextUntilNul(entry.group[:]))
+        group_title := LocaleText(group_key)
+        group_total: s32 = 0
+        group_earned: s32 = 0
+        for other: cast(s32)0..achievement_count - 1 {
+            candidate := achievement_definitions[other]
+            if !candidate.visible || TextUntilNul(candidate.group[:]) != TextUntilNul(entry.group[:]) { continue }
+            group_total += 1
+            if candidate.awarded { group_earned += 1 }
+        }
+        group: Vec(u8)
+        BuilderPrint(*group, "% · % / %", group_title, group_earned, group_total)
+        group_text := BuilderFinish(group)
+        BuilderPrint(*out, "{\"group\":")
+        SelfAchievements.SelfQuote(*out, group_text)
+        PackageFree(group_text)
+        PackageFree(group_key)
+        BuilderPrint(*out, ",\"title\":")
+        SelfAchievements.SelfQuote(*out, LocaleText(TextUntilNul(entry.title_key[:])))
+        BuilderPrint(*out, ",\"description\":")
+        SelfAchievements.SelfQuote(*out, LocaleText(TextUntilNul(entry.description_key[:])))
+        BuilderPrint(*out, ",\"earned\":%,\"progress\":", ifx entry.awarded then 1 else 0)
+        progress: Vec(u8)
+        if TextUntilNul(entry.rule[:]) == "return" {
+            BuilderPrint(*progress, "%", LocaleText(ifx entry.awarded then "achievement_earned" else "achievement_locked"))
+        } else {
+            current := entry.progress
+            if current > entry.target { current = entry.target }
+            if entry.awarded { current = entry.target }
+            BuilderPrint(*progress, "% / %", current, entry.target)
+        }
+        progress_text := BuilderFinish(progress)
+        SelfAchievements.SelfQuote(*out, progress_text)
+        PackageFree(progress_text)
+        BuilderPrint(*out, ",\"date\":")
+        date: [11]u8
+        if entry.earned_day > 0 {
+            unused WriteIsoDay(AchievementDayIndex(entry.earned_day) * 86400, date[:10])
+        }
+        date_text := ifx entry.earned_day > 0 then TextFromBytes(date[:10]) else (ifx entry.awarded then LocaleText("achievement_earlier") else "")
+        SelfAchievements.SelfQuote(*out, date_text)
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]}")
+    achievement_projection = BuilderFinish(out)
+    return achievement_projection
+}
+
+AchievementSelfText :: (value: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(value), .length = cast(usize)value.count}
+}
+
+AchievementSelfArgument :: (value: HostValue) -> string {
+    if value.kind != cast(s32)HostValueKind.HostString || value.data == null || value.length > cast(usize)65536 { return "" }
+    return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
+}
+
+AchievementSelfCall :: (app: *void, name: string,
+    arguments: *HostValue, count: s32, result: *HostValue) -> bool {
+    if count != 2 || app == null { return false }
+    key := AchievementSelfArgument(arguments[0])
+    if name == "ReadStoreHost" && key.count > 23 && key[:18] == "achievements/page." && key[key.count - 5:] == ".json" {
+        page: s32 = 0
+        for byte: key[18:key.count - 5] {
+            if byte < #char "0" || byte > #char "9" || page > 10000 {
+                result.* = HostScalar("s32", -1)
+                return true
+            }
+            page = page * 10 + cast(s32)(byte - #char "0")
+        }
+        document := AchievementPageDocument(page)
+        output := arguments[1]
+        if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)document.count {
+            result.* = HostScalar("s32", -1)
+            return true
+        }
+        for index: 0..document.count {
+            byte := ifx index < document.count then document[index] else cast(u8)0
+            output.elements[index].bits = cast(u64)byte
+            output.elements[index].integer = cast(s64)byte
+        }
+        result.* = HostScalar("s32", document.count)
+        return true
+    }
+    if name == "WriteStoreHost" && key == "achievements/settings.json" {
+        document := AchievementSelfArgument(arguments[1])
+        owner: [97]u8
+        alerts := ReadNumber(document, FieldAt(document, 0, "alerts"))
+        version := ReadNumber(document, FieldAt(document, 0, "version"))
+        end := ValueEnd(document, Space(document, 0), 0)
+        valid := document.count < 1024 && end >= 0 && Space(document, end) == document.count &&
+            version.valid && version.value == 1 && alerts.valid && (alerts.value == 0 || alerts.value == 1) &&
+            ReadStringText(document, FieldAt(document, 0, "owner"), owner[:]) > 0 && TextUntilNul(owner[:]) == AchievementOwner()
+        saved := valid && AchievementSetAlerts(alerts.value == 1)
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return true
+    }
+    if name == "AppServiceHost" && key == "self.text_height" {
+        document := AchievementSelfArgument(arguments[1])
+        text: [4096]u8
+        width := ReadNumber(document, FieldAt(document, 0, "width"))
+        font := ReadNumber(document, FieldAt(document, 0, "font"))
+        size := ReadStringText(document, FieldAt(document, 0, "text"), text[:])
+        if !width.valid || !font.valid || width.value < 1 || width.value > 10000 || font.value < 1 || font.value > 256 || size < 0 {
+            result.* = AchievementSelfText("0")
+            return true
+        }
+        value := TextUntilNul(text[:])
+        prepared := PrepareText(TextProps.{.text = value,
+                .bounds = Rectangle.{0.0, 0.0, cast(float32)width.value, 0.0},
+                .font = cast(s32)font.value, .wrap = TextWrap.TextWrapAuto}, DefaultTextFace())
+        height := cast(s32)prepared.bounds.height
+        if height < cast(s32)font.value { height = cast(s32)font.value }
+        response: Vec(u8)
+        BuilderPrint(*response, "%", height)
+        PackageFree(achievement_measure_response)
+        achievement_measure_response = BuilderFinish(response)
+        result.* = AchievementSelfText(achievement_measure_response)
+        return true
+    }
+    return false
+}

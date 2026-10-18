@@ -1,0 +1,299 @@
+// Durable personal milestones. Package catalogs supply the rules; the host
+// accepts only canonical, committed source facts. Records reuse account export,
+// deletion and encrypted sync rather than keeping a second user database.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import "std/text"
+#import "std/date_time"
+#import "std/date_parse"
+#import, file "achievement_records.zi";
+#import, file "sqlite.zi";
+#import, file "state.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "storage_settings.zi";
+#import, file "cell_records.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+AchievementMaximum :: 512
+AchievementDefinition :: struct {
+    id: [97]u8
+    app: [97]u8
+    group: [97]u8
+    metric: [97]u8
+    rule: [32]u8
+    variant: [97]u8
+    pack: [32]u8
+    needs: [32]u8
+    title_key: [128]u8
+    description_key: [128]u8
+    target: s64
+    progress: s64
+    earned: s64
+    earned_day: s32
+    awarded: bool
+    visible: bool
+    pending: bool
+}
+
+achievement_definitions: [AchievementMaximum]AchievementDefinition;
+achievement_count: s32;
+achievement_owner: [65]u8;
+achievement_dirty: bool;
+achievement_live: [32][97]u8;
+achievement_live_count: s32;
+
+AchievementOwner :: () -> string {
+    return AppTextFromCString(storage_user_id_buffer(), 64)
+}
+
+AchievementReset :: () {
+    achievement_count = 0
+    achievement_definitions = .{}
+    achievement_live_count = 0
+    achievement_dirty = true
+    unused CopyCString(AchievementOwner(), achievement_owner[:])
+}
+
+AchievementCatalog :: (document: string, app: string) -> bool {
+    if document.count < 2 || document.count > 262144 || !AchievementNameValid(app) { return false }
+    end := ValueEnd(document, Space(document, 0), 0)
+    version := ReadNumber(document, FieldAt(document, 0, "schema"))
+    owner: [97]u8
+    if end < 0 || Space(document, end) != document.count || !version.valid || version.value != 1 ||
+        ReadStringText(document, FieldAt(document, 0, "app"), owner[:]) < 1 || TextUntilNul(owner[:]) != app {
+        return false
+    }
+    at := FieldAt(document, 0, "achievements")
+    count := ArrayCount(document, at)
+    if count < 1 || count > AchievementMaximum - achievement_count { return false }
+    // Validate all rows before changing the working catalog.
+    staged: [AchievementMaximum]AchievementDefinition
+    for index: 0..count - 1 {
+        row := ElementAt(document, at, cast(s32)index)
+        entry := *staged[index]
+        if ReadStringText(document, FieldAt(document, row, "id"), entry.id[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, row, "group"), entry.group[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, row, "metric"), entry.metric[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, row, "rule"), entry.rule[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, row, "title_key"), entry.title_key[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, row, "description_key"), entry.description_key[:]) < 1 {
+            return false
+        }
+        unused ReadStringText(document, FieldAt(document, row, "variant"), entry.variant[:])
+        unused ReadStringText(document, FieldAt(document, row, "pack"), entry.pack[:])
+        unused ReadStringText(document, FieldAt(document, row, "needs"), entry.needs[:])
+        target := ReadNumber(document, FieldAt(document, row, "target"))
+        if !target.valid || target.value < 1 || target.value > 1000000 || target.value != cast(float64)cast(s64)target.value ||
+            !AchievementNameValid(TextUntilNul(entry.id[:])) || !AchievementNameValid(TextUntilNul(entry.group[:])) {
+            return false
+        }
+        metric := TextUntilNul(entry.metric[:])
+        if metric != "*" && !AchievementNameValid(metric) { return false }
+        rule := TextUntilNul(entry.rule[:])
+        if rule != "count" && rule != "days" && rule != "weeks" && rule != "months" &&
+            rule != "minutes" && rule != "return" && rule != "max_days" && rule != "subjects" && rule != "station_minutes" {
+            return false
+        }
+        for prior: 0..index - 1 {
+            if TextUntilNul(staged[prior].id[:]) == TextUntilNul(entry.id[:]) { return false }
+        }
+        for prior: cast(s32)0..achievement_count - 1 {
+            if TextUntilNul(achievement_definitions[prior].id[:]) == TextUntilNul(entry.id[:]) { return false }
+        }
+        entry.target = cast(s64)target.value
+        unused CopyCString(app, entry.app[:])
+    }
+    for index: 0..count - 1 {
+        achievement_definitions[achievement_count] = staged[index]
+        achievement_count += 1
+    }
+    achievement_dirty = true
+    return true
+}
+
+AchievementDigest :: (text: string, output: []u8) {
+    descriptor := cast(*TextDescriptor)(*text)
+    storage_sha256_hex(descriptor.data, text.count, *output[0])
+}
+
+AchievementKey :: (kind: string, source: string) -> string {
+    data: Vec(u8)
+    BuilderPrint(*data, "%:%", kind, source)
+    input := BuilderFinish(data)
+    defer { PackageFree(input) }
+    digest: [65]u8
+    AchievementDigest(input, digest[:])
+    return PackageText("cell.achievement.fact.", TextUntilNul(digest[:]))
+}
+
+AchievementMarkLive :: (metric: string) {
+    for index: cast(s32)0..achievement_live_count - 1 {
+        if TextUntilNul(achievement_live[index][:]) == metric { return }
+    }
+    if achievement_live_count < 32 && CopyCString(metric, achievement_live[achievement_live_count][:]) {
+        achievement_live_count += 1
+    }
+}
+
+AchievementRecord :: (metric: string, source: string, day: s32, amount: s64 = 1,
+    variant: string = "", subject: string = "", active: bool = true,
+    live: bool = true, deleted: bool = false, started: s64 = 0, ended: s64 = 0) -> bool {
+    if storage_db_handle() == null || source.count < 1 || source.count > 4096 ||
+        !AchievementNameValid(metric) || (variant.count > 0 && !AchievementNameValid(variant)) ||
+        amount < 0 || amount > 86400000 { return false }
+    civil: s64 = 0
+    if day != 0 {
+        if day / 10000 < 1 || !DateValid(day / 10000, (day / 100) % 100, day % 100) { return false }
+        civil = AchievementDayIndex(day)
+    }
+    key := AchievementKey(metric, source)
+    defer { PackageFree(key) }
+    identity: [65]u8
+    AchievementDigest(ifx subject.count > 0 then subject else source, identity[:])
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "{\"version\":1,\"metric\":\"%\",\"subject\":\"%\",\"day\":%,\"civil\":%,\"amount\":%,\"variant\":\"%\",\"active\":%,\"deleted\":%,\"start\":%,\"end\":%}",
+        metric, TextUntilNul(identity[:]), day, civil, amount, variant, ifx active then 1 else 0, ifx deleted then 1 else 0, started, ended)
+    value := BuilderFinish(bytes)
+    defer { PackageFree(value) }
+    if !AchievementRecordPayloadValid(key, value) { return false }
+    if storage_setting_text_equals(key, value) != 0 { return true }
+    if !CellRecordWrite(key, value) { return false }
+    achievement_dirty = true
+    if live && !deleted && amount > 0 { AchievementMarkLive(metric) }
+    return true
+}
+
+AchievementToday :: () -> s32 {
+    day := LocalNow()
+    if !day.valid { return 0 }
+    return day.year * 10000 + day.month * 100 + day.day
+}
+
+AchievementMetric :: (entry: *AchievementDefinition) -> s64 {
+    // Both metric and variant are bound data. No package-supplied SQL executes.
+    prefix := #string SQL
+WITH facts AS (
+ SELECT json_extract(value,'$.metric') metric,json_extract(value,'$.subject') subject,
+ CAST(json_extract(value,'$.day') AS INTEGER) day,CAST(json_extract(value,'$.civil') AS INTEGER) civil,
+ CAST(json_extract(value,'$.amount') AS INTEGER) amount,json_extract(value,'$.variant') variant,
+ CAST(json_extract(value,'$.active') AS INTEGER) active,
+ CAST(json_extract(value,'$.start') AS INTEGER) started,CAST(json_extract(value,'$.end') AS INTEGER) ended
+ FROM settings WHERE user_id=?1 AND key LIKE 'cell.achievement.fact.%'
+ AND json_valid(value) AND COALESCE(json_extract(value,'$.deleted'),0)=0
+), eligible AS (
+ SELECT * FROM facts WHERE amount>0 AND
+ ((?2='*' AND active=1) OR metric=?2 OR (?2='practice' AND metric LIKE 'practice.%'))
+ AND (?3='' OR variant=?3)
+)
+SQL
+    rule := TextUntilNul(entry.rule[:])
+    metric := TextUntilNul(entry.metric[:])
+    suffix := "SELECT COUNT(*) FROM eligible"
+    if rule == "subjects" { suffix = "SELECT COUNT(DISTINCT subject) FROM eligible" }
+    else if rule == "days" { suffix = "SELECT COUNT(DISTINCT day) FROM eligible WHERE day>0" }
+    else if rule == "weeks" { suffix = "SELECT COUNT(DISTINCT ((civil+3)/7)) FROM eligible WHERE day>0" }
+    else if rule == "months" { suffix = "SELECT COUNT(DISTINCT (day/100)) FROM eligible WHERE day>0" }
+    else if rule == "minutes" { suffix = "SELECT COALESCE(SUM(amount),0)/60 FROM eligible" }
+    else if rule == "return" { suffix = "SELECT MAX(0,COALESCE(MAX(civil-previous-1),0)) FROM (SELECT civil,LAG(civil) OVER(ORDER BY civil) previous FROM (SELECT DISTINCT civil FROM eligible WHERE day>0))" }
+    else if rule == "max_days" { suffix = "SELECT COALESCE(MAX(total),0) FROM (SELECT COUNT(DISTINCT day) total FROM eligible WHERE day>0 GROUP BY subject)" }
+    else if rule == "station_minutes" { suffix = "SELECT COUNT(*) FROM (SELECT subject FROM eligible GROUP BY subject HAVING SUM(amount)>=60)" }
+    if metric == "radio.playback" && rule == "minutes" {
+        suffix = "SELECT COALESCE(SUM(MAX(0,ended-MAX(started,COALESCE(previous,started)))),0)/60 FROM (SELECT started,ended,MAX(ended) OVER(ORDER BY started,ended ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) previous FROM eligible WHERE ended>started)"
+    }
+    if metric == "radio.playback" && rule == "days" {
+        suffix = "SELECT COUNT(*) FROM (SELECT day FROM (SELECT day,started,ended,MAX(ended) OVER(PARTITION BY day ORDER BY started,ended ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) previous FROM eligible WHERE day>0 AND ended>started) GROUP BY day HAVING SUM(MAX(0,ended-MAX(started,COALESCE(previous,started))))>=60)"
+    }
+    sql := PackageText(prefix, suffix)
+    defer { PackageFree(sql) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AchievementOwner())
+    bind_text(statement, 2, metric)
+    bind_text(statement, 3, TextUntilNul(entry.variant[:]))
+    if SqliteStep(statement) != SQLITE_ROW { return -1 }
+    return SqliteColumnInt64(statement, 0)
+}
+
+AchievementAlerts :: () -> bool {
+    return storage_get_setting_int(AchievementAlertsKey, 1) != 0
+}
+
+AchievementSetAlerts :: (enabled: bool) -> bool {
+    value := ifx enabled then "1" else "0"
+    if !CellRecordWrite(AchievementAlertsKey, value) { return false }
+    if !enabled {
+        for index: cast(s32)0..achievement_count - 1 { achievement_definitions[index].pending = false }
+    }
+    return true
+}
+
+AchievementLiveMetric :: (metric: string) -> bool {
+    for index: cast(s32)0..achievement_live_count - 1 {
+        source := TextUntilNul(achievement_live[index][:])
+        if metric == "*" || metric == source ||
+            (metric == "practice" && source.count > 9 && source[:9] == "practice.") { return true }
+    }
+    return false
+}
+
+AchievementEvaluate :: () {
+    if !achievement_dirty { return }
+    failed := false
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := *achievement_definitions[index]
+        value := AchievementMetric(entry)
+        if value < 0 {
+            failed = true
+            continue
+        }
+        entry.progress = value
+        key := PackageText("cell.achievement.award.", TextUntilNul(entry.id[:]))
+        defer { PackageFree(key) }
+        award := CellRecordRead(key)
+        defer { PackageFree(award) }
+        if award.count > 0 && AchievementRecordPayloadValid(key, award) {
+            entry.awarded = true
+            entry.earned = cast(s64)ReadNumber(award, FieldAt(award, 0, "earned")).value
+            day_value := ReadNumber(award, FieldAt(award, 0, "day"))
+            if day_value.valid { entry.earned_day = cast(s32)day_value.value }
+        } else if value >= entry.target {
+            live := AchievementLiveMetric(TextUntilNul(entry.metric[:]))
+            time := ifx live then now_seconds() else cast(s64)0
+            out: Vec(u8)
+            BuilderPrint(*out, "{\"version\":1,\"earned\":%,\"day\":%,\"rule\":1}", time, ifx live then AchievementToday() else 0)
+            document := BuilderFinish(out)
+            defer { PackageFree(document) }
+            if CellRecordWrite(key, document) {
+                entry.awarded = true
+                entry.earned = time
+                entry.earned_day = ifx live then AchievementToday() else 0
+                entry.pending = live && entry.visible && AchievementAlerts()
+            } else { failed = true }
+        }
+    }
+    achievement_live_count = 0
+    achievement_dirty = failed
+}
+
+AchievementConsumeAlerts :: () -> s32 {
+    count: s32 = 0
+    enabled := AchievementAlerts()
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := *achievement_definitions[index]
+        if !entry.pending { continue }
+        entry.pending = false
+        if !enabled || !entry.visible { continue }
+        key := PackageText("achievement.receipt.", TextUntilNul(entry.id[:]))
+        defer { PackageFree(key) }
+        if storage_get_setting_int(key, 0) != 0 { continue }
+        storage_set_setting_int(key, 1)
+        if storage_get_setting_int(key, 0) == 1 { count += 1 }
+    }
+    return count
+}

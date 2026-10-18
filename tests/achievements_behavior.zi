@@ -1,0 +1,67 @@
+// Exercise achievement rules against the actual account-owned SQLite store.
+#import, file "storage_test_support.zi";
+#import, file "../src/storage/achievements.zi";
+#import, file "../src/storage/achievement_records.zi";
+#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/db.zi";
+#import "std/c_string"
+
+test_entry: AchievementDefinition;
+
+metric_value :: (metric: string, rule: string, variant: string = "") -> s32 {
+    test_entry = .{}
+    unused CopyCString(metric, test_entry.metric[:])
+    unused CopyCString(rule, test_entry.rule[:])
+    unused CopyCString(variant, test_entry.variant[:])
+    return cast(s32)AchievementMetric(*test_entry)
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin("/tmp/inbe-achievements-test/")
+    if guard != 0 { return guard }
+    check_true("open achievements account", storage_init(make_root("rules")) != 0)
+    defer { storage_close() }
+    AchievementReset()
+    catalog := "{\"schema\":1,\"app\":\"inbe\",\"achievements\":[{\"id\":\"self.first\",\"group\":\"self\",\"metric\":\"*\",\"rule\":\"days\",\"target\":1,\"title_key\":\"first\",\"description_key\":\"first_desc\",\"variant\":\"\",\"pack\":\"\",\"needs\":\"\"}]}"
+    check_true("accept valid catalog", AchievementCatalog(catalog, "inbe"))
+    check_true("reject duplicate catalog atomically", !AchievementCatalog(catalog, "inbe") && achievement_count == 1)
+    check_true("reject wrong app identity", !AchievementCatalog(catalog, "inbe.diary"))
+    achievement_definitions[0].visible = true
+    check_true("new accounts enable alerts", AchievementAlerts())
+    check_true("record canonical practice", AchievementRecord("practice.meditation", "session-one", 20261001, 120))
+    check_true("same source is idempotent", AchievementRecord("practice.meditation", "session-one", 20261001, 120))
+    check_true("record another day", AchievementRecord("practice.meditation", "session-two", 20261016, 60))
+    check_int("count sessions once", metric_value("practice", "count"), 2)
+    check_int("sum actual meditation minutes", metric_value("practice.meditation", "minutes"), 3)
+    check_int("count distinct days", metric_value("practice", "days"), 2)
+    check_int("count intervening return days", metric_value("*", "return"), 14)
+    check_true("reject invalid date", !AchievementRecord("diary", "bad-day", 20260230))
+    check_true("reject corrupt record namespace", !AchievementRecordValid("cell.achievement.other"))
+    check_true("separate Lumi and achievements", !LumiCellRecordValid(AchievementAlertsKey))
+    AchievementEvaluate()
+    check_true("award earned milestone", achievement_definitions[0].awarded)
+    check_int("present live milestone once", AchievementConsumeAlerts(), 1)
+    check_int("do not replay milestone", AchievementConsumeAlerts(), 0)
+    check_true("disable alerts", AchievementSetAlerts(false) && !AchievementAlerts())
+    achievement_definitions[0].pending = true
+    check_int("disabled alerts are discarded", AchievementConsumeAlerts(), 0)
+    check_true("enable alerts", AchievementSetAlerts(true))
+    check_int("enabling creates no backlog", AchievementConsumeAlerts(), 0)
+    check_true("remove a source fact", AchievementRecord("practice.meditation", "session-one", 20261001, 120, live = false, deleted = true))
+    AchievementEvaluate()
+    check_int("unearned progress follows source deletion", metric_value("practice", "count"), 1)
+    check_true("earned achievements stay earned", achievement_definitions[0].awarded)
+    check_true("radio interval one", AchievementRecord("radio.playback", "radio-one", 20261001, 120, subject = "station-one", started = 1000, ended = 1120))
+    check_true("overlapping second device", AchievementRecord("radio.playback", "radio-two", 20261001, 120, subject = "station-one", started = 1060, ended = 1180))
+    check_int("radio unions overlapping device intervals", metric_value("radio.playback", "minutes"), 3)
+    check_int("radio day needs a minute", metric_value("radio.playback", "days"), 1)
+    check_true("reject fabricated radio duration", !AchievementRecord("radio.playback", "invalid-radio", 20261001, 100, started = 1000, ended = 1001))
+    AchievementReset()
+    check_true("reload durable catalog", AchievementCatalog(catalog, "inbe"))
+    achievement_definitions[0].visible = true
+    AchievementEvaluate()
+    check_true("award survives engine reload", achievement_definitions[0].awarded)
+    check_int("reload stays silent", AchievementConsumeAlerts(), 0)
+    return failures
+}
