@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.2] - 2026-10-18
+
+- Save, discard and delete confirmations use consistent controls and can
+  improve with Habits updates while preserving existing habit data.
+- Requires Inner Breeze 2.1.36 or later.
+
 ## [1.1.1] - 2026-10-18
 
 - Leaving a habit with unsaved changes asks whether to save, discard, or

@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.1.36] - 2026-10-18
+
+- Manage your name, picture and sync nodes in the redesigned Self profile.
+- Install Radio to listen to three live ambient stations while using other
+  apps and practices, with separate volume controls.
+- Open installed apps directly from Android, Windows and Linux launcher
+  shortcuts, using each app's existing account and data.
+- Manage apps through a compact three-dot menu with Pin, Unpin and Install
+  to launcher. Clear Apps search with the × shown while it contains text.
+- Choose guide and practice voices during setup, with download sizes for the
+  selected language. Both start selected; you can turn them off or skip audio.
+- Go back from optional audio to correct the language, including during a
+  download. Your choices survive restarting the app.
+- Use larger setup controls and continue directly when both voices are off.
+- Android accessibility services can read controls and activate, focus and
+  scroll them. Password values stay hidden.
+- Habits' save, discard and delete confirmations can improve through Habits
+  updates while keeping existing data and older installed packages working.
+
 ## [2.1.35] - 2026-10-17
 
 ### Added
