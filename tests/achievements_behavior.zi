@@ -32,9 +32,36 @@
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../apps/habits/habits_achievements.zi";
+#import, file "../src/app/achievement_host.zi";
+#import, file "../src/app/assets.zi";
 
 test_entry: AchievementDefinition;
 test_habits: Habits;
+test_apps: s32;
+test_packs: s32;
+
+installed :: (id: string) -> bool {
+    names: [8]string = .["inbe.practices", "inbe.diary", "inbe.habits", "inbe.lists", "inbe.lumi", "inbe.photos", "inbe.radio", "inbe.leaderboard"]
+    for index: cast(s32)0..7 {
+        if names[index] == id { return (test_apps & (cast(s32)1 << index)) != 0 }
+    }
+    return false
+}
+
+pack_ready :: (id: s32) -> bool {
+    return id >= 0 && id < 5 && (test_packs & (cast(s32)1 << id)) != 0
+}
+
+no_catalogs :: () {}
+
+visible_count :: () -> s32 {
+    AchievementVisibility()
+    count: s32 = 0
+    for index: cast(s32)0..achievement_count - 1 {
+        if achievement_definitions[index].visible { count += 1 }
+    }
+    return count
+}
 
 metric_value :: (metric: string, rule: string, variant: string = "") -> s32 {
     test_entry = .{}
@@ -89,6 +116,23 @@ catalogs_check :: () {
         PackageFree(document)
     }
     check_int("ship the full 160 achievement catalog", achievement_count, 160)
+    AchievementBindHost(installed, pack_ready, no_catalogs)
+    check_int("uninstalled apps contribute no visible achievements", visible_count(), 10)
+    test_apps = 1
+    check_int("installed Practices shows its general set", visible_count(), 20)
+    test_packs = 1
+    check_int("only installed practice content contributes its set", visible_count(), 30)
+    test_apps = 255
+    test_packs = 31
+    check_int("all installed apps and practice packs expose full catalog", visible_count(), 160)
+    test_apps &= ~(cast(s32)1 << 5)
+    check_int("uninstalling Photos immediately fixes visible totals", visible_count(), 150)
+    test_apps = 255
+    achievement_catalog_generation = AssetGeneration()
+    document := AchievementPageDocument(999)
+    check_int("projection clamps a stale page index", cast(s32)ReadNumber(document, FieldAt(document, 0, "page")).value, 7)
+    check_int("projection is bounded to twenty rows", ArrayCount(document, FieldAt(document, 0, "rows")), 20)
+    check_int("projection counts installed achievements", cast(s32)ReadNumber(document, FieldAt(document, 0, "total")).value, 160)
 }
 
 #program_export
