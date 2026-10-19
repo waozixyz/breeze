@@ -35,6 +35,8 @@ node_snapshot_scanning: bool;
 node_installed_revision: u64 = 1;
 node_installed_visibility: u64;
 node_installed_observed_account: [65]u8;
+// The release whose saved leaves each slot holds for the current account.
+node_installed_releases: [NodeAppSlots][65]u8;
 
 NodeInstalledClear :: () {
     for entry: node_installed_leaves {
@@ -42,7 +44,16 @@ NodeInstalledClear :: () {
     }
     while node_installed_leaves.count > 0 { unused VecPop(node_installed_leaves) }
     node_installed_account[0] = 0
+    for slot: cast(s32)0..NodeAppSlots - 1 { node_installed_releases[slot][0] = 0 }
     node_installed_revision += 1
+}
+
+// Whether the slot's leaves for this release are already held, so opening
+// it needs no scan of every child it contains.
+NodeInstalledCurrent :: (slot: s32, hash: string) -> bool {
+    return slot >= 0 && slot < NodeAppSlots && hash.count == 64 &&
+    TextUntilNul(node_installed_releases[slot][:]) == hash &&
+    TextUntilNul(node_installed_account[:]) == NodeTreeAccount()
 }
 
 NodeInstalledPath :: (owner: string, index: s32) -> string {
@@ -204,7 +215,7 @@ NodeInstalledSave :: (slot: s32) {
     }
     text := BuilderFinish(out)
     path := PackagePath(NodeAppIndex(slot), ".leaves")
-    unused PackageWrite(path, text)
+    if PackageWrite(path, text) && captured { unused CopyCString(hash, node_installed_releases[slot][:]) }
     PackageFree(path)
     PackageFree(text)
 }
@@ -253,6 +264,7 @@ NodeInstalledLoad :: (slot: s32) -> bool {
         NodeInstalledClear()
         unused CopyCString(account, node_installed_account[:])
     }
+    unused CopyCString(hash, node_installed_releases[slot][:])
     while cursor.at < text.count {
         entry: NodeInstalledLeaf
         unused CopyCString(NodeSnapshotNext(text, *cursor), entry.identity.authority[:])
