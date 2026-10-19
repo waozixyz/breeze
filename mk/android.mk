@@ -164,6 +164,13 @@ android-install: android-copy-assets android-local-properties
 	echo "Android target ABI: $$abi"; \
 	$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleDebug -Papp.onlyAbi="$$abi" $(ANDROID_GRADLE_ARGS)
 	$(MAKE) android-copy-debug-apks
+# The app downloads practices by the exact hashes this build lists, and a
+# toolchain change gives every pack a new hash. With the publisher key here,
+# the missing packs go to the node before the phone asks for them.
+	@if [ -f backup/package-publisher/2026-10/publisher.pem ]; then \
+		python3 scripts/upload-practice-packs.py || \
+		echo "WARNING: this build's practice packs are not all on the node; downloads fail until scripts/upload-practice-packs.py succeeds" >&2; \
+	fi
 	ADB='$(ADB)' sh scripts/android-install-apk.sh \
 		"$(ANDROID_DEBUG_APP_ID)" "$(ANDROID_ACTIVITY)" \
 		droid/app/build/outputs/apk debug
