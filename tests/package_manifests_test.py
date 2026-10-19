@@ -73,6 +73,47 @@ class RegistrationTest(unittest.TestCase):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 self.manifest(dict(existing, manifest_version=version))
 
+    def test_suspension_keeps_the_registration_and_raises_its_sequence(self):
+        public = manifests.public_hex(self.publisher)
+        existing = manifests.manifest_for(dict(name="chess", id="inbe.chess", version="1.0.1", title="Chess"),
+                                          {}, "publisher", public)
+        suspended = manifests.suspension_for("inbe.chess", existing, "publisher", public, 1)
+        self.assertEqual(suspended["status"], "suspended")
+        self.assertEqual(suspended["manifest_sequence"], 1)
+        for field in ("app_id", "display_name", "keys", "current_client_version", "source_url"):
+            self.assertEqual(suspended[field], existing[field])
+        # Daochi signs its own field order: the sequence follows the version.
+        self.assertEqual(list(suspended)[:3], ["manifest_version", "manifest_sequence", "app_id"])
+        self.assertEqual(list(json.loads(manifests.canonical_bytes(suspended)))[:3],
+                         ["manifest_version", "manifest_sequence", "app_id"])
+        request = manifests.signed_registration(suspended, self.publisher, self.authority)
+        self.publisher.public_key().verify(bytes.fromhex(request["manifest_signature"]),
+                                           b"daochi-app-manifest-v1\n" + manifests.canonical_bytes(suspended))
+        for app_id, registered, key_id, sequence in (
+                ("inbe.chess", {}, "publisher", 1),
+                ("inbe.chess", dict(existing, status="suspended"), "publisher", 2),
+                ("inbe.chess", existing, "publisher", 0),
+                ("inbe.chess", existing, "other", 1),
+                ("inbe.arcade", existing, "publisher", 1)):
+            with self.subTest(app_id=app_id, key_id=key_id, sequence=sequence), self.assertRaises(ValueError):
+                manifests.suspension_for(app_id, registered, key_id, public, sequence)
+
+    def test_one_app_from_an_owning_ledger(self):
+        ledger = ROOT / "build/package-manifests-test/versions.json"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps({"node_apps": {
+            "arcade": {"id": "inbe.arcade", "title": "Arcade", "version": "0.5.0", "sequence": 1},
+            "chess": {"id": "inbe.chess", "title": "Chess", "version": "1.2.0", "sequence": 5},
+            "pushy": {"id": "arcade.pushy", "title": "Pushy", "version": "0.3.0", "sequence": 4}}}))
+        versions = json.loads((ROOT / "apps/versions.json").read_text())
+        # Games inside a collection are not registered on their own.
+        self.assertEqual([name for name, _ in manifests.ledger_components(versions, ledger, None)],
+                         ["arcade", "chess"])
+        self.assertEqual(manifests.ledger_components(versions, ledger, "arcade")[0][1]["id"], "inbe.arcade")
+        with self.assertRaisesRegex(ValueError, "not an app"):
+            manifests.ledger_components(versions, ledger, "pushy")
+        self.assertEqual(manifests.ledger_components(versions, None, "lists")[0][1]["id"], "inbe.lists")
+
     def test_optional_apps_do_not_claim_root_account_collections(self):
         self.component = dict(name="lists", id="inbe.lists", version="1.0.1")
         manifest = self.manifest({})
