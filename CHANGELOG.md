@@ -3,6 +3,8 @@
 ## [2.1.36] - 2026-10-18
 
 - Download Astral Projection for a 15-minute guided visualization, with offline text and optional narration.
+- Manage practices opens on Installed, the practices on this device, with
+  tabs for Meditation (breathing practices included), Yoga and Martial arts.
 - Leaderboard lists every practice you have installed, including Tai Chi and
   Astral Projection, in your Practice order, and leaves out the others.
 - Lumi shares a few changelog highlights in chat after an update, once per version.

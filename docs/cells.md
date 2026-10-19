@@ -249,13 +249,19 @@ after them. The list shows icons, names and controls without status paragraphs.
 ## Practice content and narration
 
 `build/practice-content/*.zib` contains the separate practice data and language
-packs. Practice → Manage practices opens one scrolling list of practices in the
-order Practice shows them. Each row shows the practice's size (or how its
+packs. Practice → Manage practices has four tabs and opens on the first,
+Installed, which lists every practice on this device. Meditation (breathing
+practices included), Yoga and Martial arts list each kind of practice whether
+it is installed or not. A practice's kind is `kind` in its
+`PracticeDefinition`; one without a kind is listed only under Installed. Each
+tab lists its practices in the order Practice shows them. Each row shows the
+practice's size (or how its
 download is going) and one button: Install, Buy for a paid practice, Cancel
 while it downloads, or Uninstall once it is on Practice. Its six-dot handle
 drags it onto another practice to take that one's place in the order Practice
-and every practice list follow (saved as `practice_order`). Start opens the
-manager scrolled to its practice when the practice needs content. Downloads
+and every practice list follow (saved as `practice_order`), also within a
+tab. Start opens the manager scrolled to its practice, in a tab that lists it,
+when the practice needs content. Downloads
 continue inside the modal without changing the selected practice, and
 unselected downloads are verified and saved without mounting their artwork.
 Uninstall asks once and then deletes a downloaded copy and its narration while

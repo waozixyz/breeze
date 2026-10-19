@@ -1,7 +1,8 @@
 // Practice download management, rendered by the current supervising host.
-// One list of practices. Each row has one button for what it needs: Install,
-// Buy for a paid practice, Cancel while it downloads, or Uninstall once it is
-// on Practice. A row's handle drags it to another place in the order.
+// Tabs list the practices on this device first, then each kind of practice.
+// Each row has one button for what it needs: Install, Buy for a paid
+// practice, Cancel while it downloads, or Uninstall once it is on Practice.
+// A row's handle drags it to another place in the order.
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_settings.zi";
@@ -31,6 +32,8 @@
 #import "reorder_widget"
 #import "scroll_props"
 #import "scroll_widget"
+#import "tab_bar_props"
+#import "tab_bar_widget"
 #import "text_props"
 #import "text_align"
 #import "text_widget"
@@ -60,6 +63,22 @@ PRACTICE_ACTION_INSTALL :: 1
 PRACTICE_ACTION_BUY :: 2
 PRACTICE_ACTION_CANCEL :: 3
 PRACTICE_ACTION_UNINSTALL :: 4
+
+// The tabs, in order: every practice on this device, then each kind of
+// practice, on this device or not.
+PRACTICE_MANAGE_TAB_INSTALLED :: 0
+PRACTICE_MANAGE_TAB_MEDITATION :: 1
+PRACTICE_MANAGE_TAB_YOGA :: 2
+PRACTICE_MANAGE_TAB_MARTIAL_ARTS :: 3
+PRACTICE_MANAGE_TAB_COUNT :: 4
+PRACTICE_MANAGE_TAB_HEIGHT :: 44
+
+// The selected tab and how far the tab bar is scrolled, kept while the
+// dialog stays open. It opens on Installed again.
+practice_manage_tab: s32 = PRACTICE_MANAGE_TAB_INSTALLED;
+practice_manage_tab_scroll: s32;
+// The frame the dialog was last drawn in, so a new opening is seen.
+practice_manage_drawn_frame: s32 = -2;
 
 // The practice whose row asks whether to delete its downloaded copy, or -1.
 practice_delete_asked: s32 = -1;
@@ -332,6 +351,103 @@ PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
     }
 }
 
+// On this device: on Practice, on its way there, or kept here off Practice,
+// as a practice that ships with the app always is. A paid practice this
+// account has not unlocked is not, even with its pack here.
+PracticeDownloadOnDevice :: (practice: s32) -> bool {
+    if PracticeDownloadLocked(practice) {
+        return false
+    }
+    if PracticeDownloadOnPractice(practice) {
+        return true
+    }
+    if PracticeShipped(practice) {
+        return true
+    }
+    return PracticeContentStatus(practice) == 2
+}
+
+PracticeDownloadTabLabel :: (tab: s32) -> string {
+    if tab == PRACTICE_MANAGE_TAB_MEDITATION {
+        return LocaleText("practice_manage_meditation")
+    }
+    if tab == PRACTICE_MANAGE_TAB_YOGA {
+        return LocaleText("practice_manage_yoga")
+    }
+    if tab == PRACTICE_MANAGE_TAB_MARTIAL_ARTS {
+        return LocaleText("practice_manage_martial_arts")
+    }
+    return LocaleText("practice_manage_installed")
+}
+
+// The kind of practice a tab lists. Installed lists by where a practice is
+// instead.
+PracticeDownloadTabKind :: (tab: s32) -> s32 {
+    if tab == PRACTICE_MANAGE_TAB_MEDITATION {
+        return PRACTICE_KIND_MEDITATION
+    }
+    if tab == PRACTICE_MANAGE_TAB_YOGA {
+        return PRACTICE_KIND_YOGA
+    }
+    if tab == PRACTICE_MANAGE_TAB_MARTIAL_ARTS {
+        return PRACTICE_KIND_MARTIAL_ARTS
+    }
+    return PRACTICE_KIND_NONE
+}
+
+// Installed lists every practice on this device; each other tab lists the
+// practices of its kind, from the practice's own definition.
+PracticeDownloadListed :: (practice: s32, tab: s32) -> bool {
+    if PracticeHidden(practice) {
+        return false
+    }
+    if tab == PRACTICE_MANAGE_TAB_INSTALLED {
+        return PracticeDownloadOnDevice(practice)
+    }
+    return practice_get(practice).kind == PracticeDownloadTabKind(tab)
+}
+
+// Installed is always offered. A kind's tab is left out while it has no
+// practice to list, such as Martial arts where paid practices are not
+// offered.
+PracticeDownloadTabOffered :: (tab: s32) -> bool {
+    if tab == PRACTICE_MANAGE_TAB_INSTALLED {
+        return true
+    }
+    for index: cast(s32)0..practice_count() - 1 {
+        if PracticeDownloadListed(practice_ordered_id(index), tab) {
+            return true
+        }
+    }
+    return false
+}
+
+// The tab to show a practice in: the selected one when it lists the
+// practice, otherwise the first one that does.
+PracticeDownloadTabFor :: (practice: s32, selected: s32) -> s32 {
+    if PracticeDownloadListed(practice, selected) {
+        return selected
+    }
+    for tab: cast(s32)0..PRACTICE_MANAGE_TAB_COUNT - 1 {
+        if PracticeDownloadListed(practice, tab) {
+            return tab
+        }
+    }
+    return selected
+}
+
+// Another tab starts its list at the top, with no question or drag left
+// over from the one before.
+PracticeDownloadSelectTab :: (app: *InnerBreeze, tab: s32) {
+    if tab == practice_manage_tab {
+        return
+    }
+    practice_manage_tab = tab
+    practice_delete_asked = -1
+    PracticeDownloadEndDrag()
+    app.practice_downloads_scroll = 0
+}
+
 // Rows drag to another place unless a practice is running.
 PracticeDownloadMovable :: (app: *InnerBreeze) -> bool {
     return practice_active(app) == null
@@ -580,7 +696,7 @@ PracticeDownloadAreas :: struct {
     focus_y: s32
 }
 
-// Every practice in order, measured or drawn.
+// The selected tab's practices in order, measured or drawn.
 PracticeDownloadsContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool,
     focus: s32) -> PracticeDownloadAreas {
     areas: PracticeDownloadAreas
@@ -588,7 +704,7 @@ PracticeDownloadsContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, dra
     line := color_with_alpha(StyleTokenColor("text"), 0.12)
     for index: cast(s32)0..practice_count() - 1 {
         practice := practice_ordered_id(index)
-        if PracticeHidden(practice) {
+        if !PracticeDownloadListed(practice, practice_manage_tab) {
             continue
         }
         if draw && y.* > top {
@@ -616,7 +732,7 @@ PracticeDownloadsContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, dra
 
 // While a practice is dragged it follows the pointer, and the practice whose
 // place it would take is outlined; releasing it there moves it in the order
-// Practice follows.
+// Practice follows. Within a tab, it moves among that tab's practices.
 PracticeDownloadDrop :: (app: *InnerBreeze, scroll: ScrollResult, areas: PracticeDownloadAreas, width: s32) {
     if practice_drag < 0 {
         return
@@ -720,19 +836,59 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
     if !frame.opened {
         return
     }
-    // Opened for one practice, its row is in view.
+    // Each opening starts on Installed.
+    if app.breathing.frame - practice_manage_drawn_frame > 1 {
+        practice_manage_tab = PRACTICE_MANAGE_TAB_INSTALLED
+        practice_manage_tab_scroll = 0
+    }
+    practice_manage_drawn_frame = app.breathing.frame
+    // Opened for one practice, its row is in view, in its kind's tab when
+    // it is not on this device.
     focus: s32 = -1
     if app.practice_downloads_scroll < 0 {
         focus = -app.practice_downloads_scroll - 1
+        practice_manage_tab = PracticeDownloadTabFor(focus, practice_manage_tab)
     }
-    row_width := cast(s32)frame.layout.content.width - AppScale(10)
+    content := frame.layout.content
+    tab_h := AppScale(PRACTICE_MANAGE_TAB_HEIGHT)
+    tabs: [PRACTICE_MANAGE_TAB_COUNT]Tab
+    tab_ids: [PRACTICE_MANAGE_TAB_COUNT]s32
+    tab_count: s32 = 0
+    // A selected tab that is no longer offered gives way to Installed.
+    selected_index: s32 = 0
+    for tab: cast(s32)0..PRACTICE_MANAGE_TAB_COUNT - 1 {
+        if !PracticeDownloadTabOffered(tab) {
+            continue
+        }
+        if tab == practice_manage_tab {
+            selected_index = tab_count
+        }
+        tab_ids[tab_count] = tab
+        tabs[tab_count] = Tab.{.label = PracticeDownloadTabLabel(tab)}
+        tab_count += 1
+    }
+    bar := TabBar(app.ui.session, TabBarProps.{
+            .key = KeyHash("practices/downloads/tabs"),
+            .bounds = Rectangle.{content.x, content.y, content.width, cast(float32)tab_h},
+            .selected_index = selected_index, .min_tab_width = AppScale(44),
+            .max_tab_width = AppScale(220), .content_sized = true,
+            .scroll_offset = practice_manage_tab_scroll, .scale = MetricsScale(),
+            .focus_selected = practice_manage_tab_scroll == 0}, tabs[:tab_count])
+    practice_manage_tab_scroll = bar.scroll_offset
+    if bar.selected_index >= 0 && bar.selected_index < tab_count {
+        PracticeDownloadSelectTab(app, tab_ids[bar.selected_index])
+    }
+    list_top := tab_h + AppScale(8)
+    list := Rectangle.{content.x, content.y + cast(float32)list_top, content.width,
+        content.height - cast(float32)list_top}
+    row_width := cast(s32)content.width - AppScale(10)
     content_h: s32 = 0
     measured := PracticeDownloadsContent(app, 0, *content_h, row_width, false, focus)
     if app.practice_downloads_scroll < 0 {
         app.practice_downloads_scroll = measured.focus_y
     }
     scroll := Scroll(app.ui.session, ScrollProps.{
-            .key = KeyHash("practices/downloads/scroll"), .bounds = frame.layout.content,
+            .key = KeyHash("practices/downloads/scroll"), .bounds = list,
             .content_height = content_h, .scroll_offset = app.practice_downloads_scroll})
     app.practice_downloads_scroll = scroll.scroll_offset
     areas: PracticeDownloadAreas

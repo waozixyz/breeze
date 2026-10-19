@@ -111,6 +111,35 @@ def row_text(row):
     return '\n'.join(node['label'] for node in row['nodes'] if node['label'])
 
 
+def row_names():
+    return [row['name'] for row in manager_rows()]
+
+
+# Installed comes first and is selected on opening; breathing practices are
+# under Meditation.
+TABS = ['Installed', 'Meditation', 'Yoga', 'Martial arts']
+
+
+def manager_tabs():
+    """The dialog's tabs in order, as label and whether it is selected."""
+    return [(node['label'], node['selected']) for node in manager_nodes() if node['role'] == 'tab']
+
+
+def selected_tab():
+    selected = [label for label, chosen in manager_tabs() if chosen]
+    assert len(selected) == 1, manager_tabs()
+    return selected[0]
+
+
+def select_tab(label):
+    """Show one tab's practices."""
+    tabs = [node for node in manager_nodes() if node['role'] == 'tab' and node['label'] == label]
+    assert tabs, f'No {label} tab: ' + manager_text()
+    driver.press(key=tabs[0]['key'])
+    driver.wait_idle(frames=2)
+    assert selected_tab() == label, manager_tabs()
+
+
 def act(name, label):
     """Press the button of a practice's row."""
     # Install and Uninstall carry the size, such as "Install · 449 KB".
@@ -189,24 +218,43 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.wait(label='Start Practice', role='button')
         assert not any(re.fullmatch(r'\d+ / \d+', label) for label in driver.labels()), screen_text()
         open_manager()
+        # Manage practices opens on Installed: Wim Hof, which ships
+        # installed, and Breathing Patterns and Meditation, which come with
+        # the app. Sun Salutation, Tai Chi and Astral Projection are not on
+        # this device, so only their own tabs list them.
+        assert manager_tabs() == [(label, label == 'Installed') for label in TABS], manager_tabs()
+        assert row_names() == ['Wim Hof Breathing', 'Breathing Patterns', 'Meditation'], row_names()
         text = manager_text()
         whm_kb = (sizes['whm'] + 1023) // 1024
         meditation_kb = (sizes['meditation'] + 1023) // 1024
         sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
-        # One list: Wim Hof is on Practice, so its button uninstalls it;
-        # Meditation, Breathing Patterns and Sun Salutation install. Each row
-        # has its size and one button, and no menu.
+        # Wim Hof is on Practice, so its button uninstalls it; Meditation and
+        # Breathing Patterns install. Each row has its size and one button,
+        # and no menu.
         assert 'Uninstall' in row_text(manager_row('Wim')), text
         assert 'On Practice' not in text and 'On device' not in text, text
         assert str(whm_kb) + ' KB' in row_text(manager_row('Wim')) and 'Comes with' not in text, text
         assert str(meditation_kb) + ' KB' in row_text(manager_row('Meditation')), text
-        assert str(sun_mb) + 'MB' in row_text(manager_row('Sun')).replace(' ', ''), text
         for row in manager_rows():
             buttons = [node for node in row['nodes'] if node['kind'] == 'button']
             assert len(buttons) == 1, (row['name'], 'has more than one button', buttons)
-        # Every practice has a row, also the last one in the order.
-        assert 'Install' in row_text(manager_row('Astral Projection')), text
         assert 'Remove' not in text and 'Included in this version' not in text, text
+        # Each kind's tab lists its practices in order, on this device or
+        # not; breathing practices are under Meditation.
+        kinds = {'Meditation': ['Wim Hof Breathing', 'Breathing Patterns', 'Meditation', 'Astral Projection'],
+                 'Yoga': ['Sun Salutation'], 'Martial arts': ['Tai Chi']}
+        for label, names in kinds.items():
+            select_tab(label)
+            assert row_names() == names, (label, row_names())
+            for row in manager_rows():
+                buttons = [node for node in row['nodes'] if node['kind'] == 'button']
+                assert len(buttons) == 1, (label, row['name'], 'has more than one button', buttons)
+            if label == 'Meditation':
+                # Every practice has a row, also the last one in the order.
+                assert 'Install' in row_text(manager_row('Astral Projection')), manager_text()
+            if label == 'Yoga':
+                assert str(sun_mb) + 'MB' in row_text(manager_row('Sun')).replace(' ', ''), manager_text()
+        select_tab('Installed')
         assert not (cache / 'practice-meditation.zib').exists()
         # Install adds Meditation from the app's own copy at once, without a
         # copy of its own.
@@ -224,11 +272,26 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.wait_idle(frames=3)
         names = [row['name'] for row in manager_rows()]
         assert names.index('Meditation') < names.index('Wim Hof Breathing'), names
+        # Within the Meditation tab, Astral Projection dropped on Breathing
+        # Patterns takes its place in the same order, also while it is not
+        # installed; Installed keeps its own practices in that order.
+        select_tab('Meditation')
+        assert row_names() == ['Meditation', 'Wim Hof Breathing', 'Breathing Patterns', 'Astral Projection'], \
+            row_names()
+        astral = manager_row('Astral Projection')
+        patterns = next(node for node in manager_row('Breathing')['nodes'] if node['label'].startswith('Breathing'))
+        driver.drag(UiDriver.center(astral['handle']), UiDriver.center(patterns), steps=12)
+        driver.wait_idle(frames=3)
+        assert row_names() == ['Meditation', 'Wim Hof Breathing', 'Astral Projection', 'Breathing Patterns'], \
+            row_names()
+        select_tab('Installed')
+        assert row_names() == ['Meditation', 'Wim Hof Breathing', 'Breathing Patterns'], row_names()
         # Uninstall takes both off Practice; they come with the app, so
-        # nothing is deleted and nothing asks.
+        # nothing is deleted, nothing asks and both stay under Installed.
         act('Meditation', 'Uninstall')
         wait_file(cache / 'practice-meditation.removed')
         act('Wim', 'Uninstall')
+        assert row_names() == ['Meditation', 'Wim Hof Breathing', 'Breathing Patterns'], row_names()
         text = manager_text()
         assert 'Uninstall' not in text and str(whm_kb) + ' KB' in text, text
         assert 'Remove' not in text and 'Included in this version' not in text, text
@@ -240,11 +303,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     finally:
         stop(process)
     assert (cache / 'practice-whm.removed').exists()
-    # The order is saved: Meditation, Wim Hof, then the default order.
+    # The order is saved: Meditation, Wim Hof, Astral Projection, then the
+    # default order.
     with sqlite3.connect(profile / 'inbe.db') as database:
         order = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'practice_order')).fetchone()
-        assert order and order[0] == '1103245', order
+        assert order and order[0] == '1105324', order
     process, window = launch(profile, 'still-removed')
     try:
         driver.wait(contains='No practices installed')
@@ -257,6 +321,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         act('Wim', 'Install')
         text = manager_text()
         assert 'Uninstall' in row_text(manager_row('Wim')) and str(whm_kb) + ' KB' in text, text
+        # The chosen tab lasts while the dialog is open; it opens on
+        # Installed again.
+        select_tab('Yoga')
+        close_manager()
+        open_manager()
+        assert selected_tab() == 'Installed', manager_tabs()
         close_manager()
         driver.wait(label='Start Practice', role='button')
         assert not visible_label('No practices installed'), screen_text()
@@ -287,9 +357,12 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.wait(label='Manage practices', role='button')
         driver.wait(label='Start Practice', role='button')
         open_manager()
-        driver.wait(label='Meditation')
+        # In a narrow dialog a tab's last row scrolls into view.
+        select_tab('Meditation')
         scroll_manager(10)
-        driver.wait(label='Tai Chi')
+        driver.wait(label='Astral Projection')
+        select_tab('Yoga')
+        driver.wait(label='Sun Salutation')
     finally:
         stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -306,10 +379,15 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.wait(label='Start Practice', role='button')
         assert not visible_label('Tai Chi'), screen_text()
         open_manager()
-        scroll_manager(16)
+        # Locked, it is not installed even with its pack here; Martial arts
+        # offers it.
+        assert 'Tai Chi' not in row_names(), row_names()
+        select_tab('Martial arts')
         driver.wait(label='Tai Chi')
+        # Its Unlock button says the price. Its row shows no size: the old
+        # single list passed a size check only through other rows' buttons.
         text = row_text(manager_row('Tai Chi'))
-        assert 'Dew' in text and 'MB' in manager_text(), manager_text()
+        assert 'Dew' in text, manager_text()
         # Narration is chosen in each practice's Customize, never here.
         text = manager_text()
         assert 'Voice narration' not in text and 'Female voice' not in text, text
@@ -339,7 +417,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             # The account's purchase is known from the first frame: Tai Chi stays selected.
             driver.wait(label='Tai Chi')
             open_manager()
-            # The whole list, also the rows scrolled out of the dialog.
+            # Bought and on this device, Tai Chi is under Installed, also
+            # when its row is scrolled out of the dialog.
             text = manager_text()
             assert 'Tai Chi' in [row['name'] for row in manager_rows()], text
             # Bought: no Dew price or unlock button is left.
@@ -395,6 +474,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     process, window = launch(profile, 'sun-delete', 1280, 900)
     try:
         open_manager()
+        # Downloaded, Sun Salutation is under Installed; its row in Yoga has
+        # the same button and question.
+        assert 'Sun Salutation' in row_names(), row_names()
+        select_tab('Yoga')
         text = row_text(manager_row('Sun'))
         assert 'Sun Salutation' in text and str(sun_mb) + 'MB' in text.replace(' ', ''), text
         act('Sun', 'Uninstall')
@@ -424,9 +507,13 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert not (cache / 'practice-sunsalutation.removed').exists()
         # Its button installs again: Uninstall left the row.
         assert 'Uninstall' not in text and 'Install' in text, text
+        # No longer on this device, it left Installed.
+        select_tab('Installed')
+        assert 'Sun Salutation' not in row_names(), row_names()
     finally:
         stop(process)
-print('Private Practices modal: one Install, Buy, Cancel or Uninstall button per practice, real sizes, '
-      'reorder that Practice follows, removal that stays, '
+print('Private Practices modal: Installed, Meditation, Yoga and Martial arts tabs, '
+      'one Install, Buy, Cancel or Uninstall button per practice, real sizes, '
+      'reorder that Practice follows within a tab, removal that stays, '
       'restore without download, installed-only home, saved progress, owned Tai Chi without a price, '
       'narration languages, narrow layout, Sun Salutation narration and delete passed')
